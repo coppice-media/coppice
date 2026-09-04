@@ -108,6 +108,14 @@ in but the catalog routes (`/v1/folders`, `/v1/books/*`) were never implemented
 and `/v1/works/{id}/annotations` has a SQL bug — worker `LiseurCatalog` is
 implementing both against the pinned Liseur client.
 
+## Landed 2026-09-04 (late): `stump_scanner` + lazy lifecycle; repo checkpointed
+
+- `crates/scanner` (`stump_scanner`): ScanOptions, `ScanSource` trait (existing_series/existing_media with scanner-owned `ScanStatus`, stored_dir_mtimes), pure walker + mtime reconciliation, TagCache; 12 contract tests. Core keeps jobs/utils/watcher and the SeaORM `ScanSource` adapter (`core/src/filesystem/scanner/store.rs`).
+- Lazy lifecycle: `Ctx` unconditionally owns config/conn/events only. `JobRuntime` (storage/state/Apalis monitor + shutdown Notify) created on first enqueue; watcher constructed only when jobs enabled and a library watches (or first add_watcher); scheduler only for enabled scheduled-job rows, reloads on config mutation; server stops only what it created. `/api/v2/health` reports `jobs` (disabled/enabled/idle/running) and `watcher` (disabled/inactive/active). Verified live: health enabled→idle across the first post-boot scanLibrary, job COMPLETED without restart.
+- Idle RSS delta from the lifecycle change is noise (62→66 MB debug on a copied fixture, same 19 threads); the win is structural, not the RAM number.
+- Gate on the tip: workspace check all-targets, clippy -D warnings on our crates, media 134 / scanner 12 / core 146 / komga 68 / liseur 8 / graphql 91 / server 81 tests, headless build; four replays green on the deployed build.
+- Git: 10 commits on `headless-modular` (ahead of origin/nightly), omp identity, nothing pushed. Upstream `.gitignore` `lib/`/`static` patterns had excluded 118 editor sources — negated. `/input/` (personal books) ignored.
+
 ## Landed 2026-09-04 (night): `stump_media` crate
 
 - `crates/media` (`stump_media`): format processors, ContentType/FileError, hashing, Readium, EPUB search, image primitives, `MediaConfig`; features `pdf`/`rar` (default on). No dependency on core/jobs/DB. 134 tests default, 121 with `--no-default-features` (feature-off contracts covered).

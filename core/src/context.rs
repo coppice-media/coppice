@@ -219,8 +219,6 @@ impl Ctx {
 		Arc::new(self.clone())
 	}
 
-	/// Returns the shared shutdown signal used by lazily-started background work.
-
 	/// Returns whether the Apalis runtime has already been initialized.
 	pub fn job_runtime_initialized(&self) -> bool {
 		self.job_runtime.get().is_some()
