@@ -1,0 +1,22 @@
+[package]
+name = "stump_liseur_sync"
+version.workspace = true
+edition = "2021"
+description = "Native liseur-sync protocol contracts and router"
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+stump_api_types = { path = "../api-types" }
+stump_auth = { path = "../auth" }
+thiserror.workspace = true
+tower-http = { version = "0.5.2", features = ["fs"] }
+
+[dev-dependencies]
+tower = "0.5"
+axum-test = "17.2.0"
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full", "test-util"] }

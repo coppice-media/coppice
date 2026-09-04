@@ -1,0 +1,21 @@
+[package]
+name = "stump_komga"
+version.workspace = true
+edition = "2021"
+description = "Serde contract types for the profile-scoped Komga compatibility API"
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+axum-extra = { version = "0.10.0", features = ["query"] }
+chrono.workspace = true
+futures-util.workspace = true
+models = { path = "../models", default-features = false }
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+stump_auth = { path = "../auth" }
+thiserror.workspace = true
+tokio.workspace = true
+tracing = { workspace = true }

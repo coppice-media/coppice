@@ -1,0 +1,11 @@
+[package]
+name = "stump_koreader"
+version.workspace = true
+edition = "2021"
+description = "KOReader synchronization compatibility routes for Stump"
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+serde.workspace = true
+stump_auth = { path = "../auth" }
