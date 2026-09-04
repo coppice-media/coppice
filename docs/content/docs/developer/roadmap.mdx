@@ -1,0 +1,150 @@
+---
+title: Roadmap
+description: Ordered implementation phases for the Stump fork, with rationale, dependencies, and source evidence
+---
+
+This is the fork's implementation roadmap. Every phase names the doc or study
+it is derived from; it states intent, not shipped status.
+
+## Phase 1 — Komf compatibility
+
+Derived from `local://komf-compat-study.md` (Komf pinned at
+`428dac6028cc22db47b41ff9f979d253d2095715`) and
+`docs/content/docs/developer/provider-status.mdx`.
+
+1. **API-mode manual identification.** Implement the remaining Komf client
+   operations against our Komga profile: series/book metadata PATCH coverage,
+   thumbnail upload/delete (`crates/komga/src/routes/media.rs` currently
+   GET-only), and Komf's manual identify/search/match routes
+   (`komf-app/src/main/kotlin/snd/komf/app/api/MetadataRoutes.kt`).
+2. **Thumbnails.** Match Komf's `MetadataUpdater`: thumbnails are replaced
+   after either API or COMIC_INFO mode, unconditionally on refresh.
+3. **Automatic mode.** Komf's `KomgaEventHandler` buffers `BookAdded` /
+   `BookDeleted` / `SeriesDeleted` and flushes only on a `TaskQueueStatus`
+   with count 0. Stump cannot flush a Komf automatic pass without emitting
+   that event, so SSE `TaskQueueStatus` emission (`crates/komga/src/routes/sse.rs`)
+   is the gate for automatic mode.
+
+Rationale: Komf is the most common metadata sidecar for Komga users;
+completing it makes our device-verified Komga profile
+(`docs/content/docs/developer/client-verification.mdx`) a full drop-in.
+Dependencies: none.
+
+## Phase 2 — Remaining crate split
+
+Derived from `local://scanner-split-plan.md` (facts with source-line evidence)
+and `.omp/PROJECT_STATE.md`.
+
+- Per-file orchestration moves behind the `ScanStore` / `ScanReporter`
+  traits; `stump_watcher` owns notify/debounce/lifecycle behind
+  `WatchedLibraries` and `ScanSubmitter` — neither crate sees `JobContext`,
+  `StumpJob`, `CoreEvent`, or `MemoryStorage`.
+- Jobs, watcher, metadata, and email become Cargo features on `core`
+  (`jobs`, `watcher`, `metadata`, `email`), cutting apalis, notify, and the
+  email/metadata dependency trees from builds that do not need them.
+
+Rationale: this makes kobo-only and comics-only builds real — `core/Cargo.toml`
+still links PDFium, unrar, apalis, and notify unconditionally — and is a
+precondition for phase 3; PR order/tests: scanner split plan section 4.
+
+## Phase 3 — Provider host
+
+Derived from `docs/content/docs/developer/server-architecture.mdx` and
+`local://feature-gaps.md` (comparator capability table). The provider host is
+a `stump_provider` trait on the Mihon `Source` shape (browse, search, latest,
+details, chapters, page fetch) — not a compat profile.
+
+- **Keiyoushi catalog at runtime.** The extension catalog is fetched at
+  runtime and never bundled; sources run on demand. Bundling third-party
+  scraper sources is a hard non-goal.
+- **MangaDex first.** A first provider against the MangaDex API gives the
+  trait a real, non-scraper reference implementation.
+- **Komga/Kavita federation provider.** Existing Komga-compat work is reused
+  as a client-side provider so remote Stump/Komga/Kavita hosts appear as
+  sources.
+- **Page cache / virtual CBZ.** Fetched chapter pages persist as a virtual
+  CBZ so existing archive readers, OPDS, and Kobo delivery work unchanged.
+- **wasmtime sandbox later.** WASM source execution is deferred until the
+  trait and catalog flow are stable.
+
+Rationale: the fork's differentiating capability (Suwayomi-style source execution inside Stump); depends on phase 2 (feature-gated core).
+
+## Phase 4 — Comics-for-Kobo transform pipeline
+
+Derived from `docs/content/docs/developer/kobo-sync-capabilities.mdx` and
+`docs/content/docs/developer/kobo-device-database.mdx`.
+
+Kobo devices have no WebP decoding; comics are typically WebP. The pipeline
+transforms delivered files per device profile: grayscale JPEG re-encode,
+per-device resolution profiles, and fixed-layout KEPUB output (the current
+KEPUB path targets reflowable EPUB; full `kepubify` parity is a listed future
+item there). Rationale: makes comics readable on Kobo hardware. Dependencies:
+phase 2 (transform as a feature-gated job) and the Kobo delivery path in
+`apps/server/src/routers/kobo_backend/`.
+
+## Phase 5 — Native Rust metadata engine
+
+Derived from `local://komf-compat-study.md` and
+`docs/content/docs/developer/modular-ingest.mdx` (staged ingest proposal).
+
+After Komf compatibility works, replace reliance on the external Komf process
+with a native engine following Komf's provider model (per-provider search,
+match scoring, metadata apply in API or ComicInfo mode). The existing
+`crates/integrations/metadata/` provider cache and rate limiter are the
+starting point; books/comics engine separation is as proposed in the
+modular-ingest doc. Dependencies: phases 1 (wire contract proven) and 2
+(metadata feature gate).
+
+## Phase 6 — Kavita client profile
+
+Derived from `local://kavita-profile-study.md` (Kavita pinned at
+`d77d956b9551227d8be2ee488b08f14aa3a341e5`). The `/api` contract with
+`x-api-key` auth covers browse, reader, progress, and download for all five
+inspected Kavita clients. The core S profile is practical; annotations are
+read-only in Inkita only and lossy to map, so annotation write parity is out
+of scope for this phase. Dependencies: none hard; benefits from phase 2
+identity/translation work.
+
+## Phase 7 — First-party Mihon extension
+
+Derived from `docs/content/docs/developer/client-verification.mdx` (Mihon is
+currently verified only as a Komga client) and the phase 3 provider host. A
+first-party Mihon extension talks to a Stump-specific endpoint, bypassing the
+Komga compat layer where it limits us (e.g. unified reading state projections
+from `docs/content/docs/developer/unified-reading-state.mdx`).
+Dependencies: phase 3.
+
+## Phase 8 — Federation via peer tokens
+
+Derived from `docs/content/docs/developer/server-architecture.mdx` (remote
+worker / second-brain proposal) and `local://feature-gaps.md`. Stump instances
+grant each other scoped access with peer tokens: a remote host's provider
+(phase 3 federation provider) authenticates with a revocable token, not a user
+account. No ActivityPub — federation is token-scoped API access between
+willing peers. Dependencies: phases 3 and 6.
+
+## Phase 9 — Deferred operations work
+
+Derived from `.omp/NEXT_STEPS.md` and `local://feature-gaps.md` (robustness
+table); deliberately last, none block the phases above.
+
+- **Rate limiting** on inbound API routes (login, media, protocol endpoints —
+  provider-only throttling already exists in
+  `crates/integrations/metadata/src/rate_limit.rs`).
+- **CI matrix** for `minimal`, `headless+liseur-sync`, full/default, and
+  compatibility replay (`.github/workflows/ci.yaml` currently runs default
+  checks only).
+- **Backups/metrics**: backup/restore surface, `/metrics` or OpenTelemetry
+  export, and dependency-specific readiness checks.
+
+## Non-goals
+
+Explicitly out of scope for this fork; do not open tracks for them.
+
+- **ActivityPub federation.** Peer-token API access (phase 8) is the whole
+  federation story.
+- **Full Komga API parity.** The Komelia/Mihon target profile
+  (`docs/content/docs/developer/komga-compat.mdx`) is the contract; persisted
+  settings, artwork CRUD, and event parity beyond Komf's needs are not goals.
+- **Upstream PRs for now.** Fork-local changes may diverge from upstream
+  Stump; contribution is deferred until phases 2–3 settle.

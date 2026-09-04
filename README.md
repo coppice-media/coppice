@@ -1,131 +1,109 @@
 <p align="center">
   <img alt="Stump's logo. It depicts a young individual sitting on a tree stump reading a book. Inspired by the developer's childhood, where they spent a significant amount of time reading on a tree stump in their backyard" src="./.github/images/logo.png" style="width: 30%" />
   <br />
-  <a href="https://github.com/awesome-selfhosted/awesome-selfhosted#document-management---e-books">
-    <img src="https://cdn.rawgit.com/sindresorhus/awesome/d7305f38d29fed78fa85652e3a63e154dd8e8829/media/badge.svg" alt="Awesome Self-Hosted">
-  </a>
-  <a href="https://discord.gg/63Ybb7J3as">
-    <img src="https://img.shields.io/discord/972593831172272148?label=Discord&color=5865F2" />
-  </a>
   <a href="https://github.com/stumpapp/stump/blob/main/LICENSE">
     <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=CF9977" />
   </a>
-  <a href="https://hub.docker.com/r/aaronleopold/stump">
-    <img src="https://img.shields.io/docker/pulls/aaronleopold/stump?logo=docker&color=0aa8d2&logoColor=fff" alt="Docker Pulls">
-  </a>
 </p>
 
-<p align='center'>
+## What this fork is
 
-Stump is a free and open source comics, manga, and digital book server with OPDS support, created with <a href="https://www.rust-lang.org/">Rust</a>, <a href='https://github.com/tokio-rs/axum'>Axum</a>, <a href='https://www.sea-ql.org/SeaORM/'>SeaORM</a> and <a href='https://reactjs.org/'>React</a>.
+This is a fork of [stumpapp/stump](https://github.com/stumpapp/stump) (nightly branch) focused on **headless, modular, protocol-compatible** operation. It is still one Rust server process with one database and the same authentication system: `stump_server` adapts HTTP/WebSocket requests with Axum, `stump_core` owns orchestration and filesystem/job behavior, and `crates/models` owns entities, domain types, and services. The web UI is a separately built Vite application whose static assets may be served by the same process — but are not required. See [Server architecture](docs/content/docs/developer/server-architecture.mdx) for the full source map.
 
-</p>
+This is a fork for personal/protocol-compatibility work. It is not a claim of upstream support; consult [stumpapp/stump](https://github.com/stumpapp/stump) for the upstream project.
 
-<p align='center'>
-<img alt="Screenshot of Stump" src="./docs/public/images/landing-dark.png" style="width: 90%" />
-</p>
+## What works today
 
-<!-- prettier-ignore: I hate you sometimes prettier -->
-<details>
-  <summary><b>Table of Contents</b></summary>
-  <p>
+Every claim below traces to the linked page; verification levels (device-verified vs. harness-only) are defined in [Client verification](docs/content/docs/developer/client-verification.mdx).
 
-- [Disclaimer](#disclaimer)
-- [Features](#features)
-- [Roadmap](#roadmap)
-- [Getting Started](#getting-started)
-- [Developer Guide](#developer-guide)
-  - [Contributing](#contributing)
-- [Repository Structure](#repository-structure)
-- [Similar Projects](#similar-projects)
-- [License](#license)
-- [Attribution](#attribution)
-</details>
+- **Komga compatibility adapter** (`/komga/api/*`), used by Komelia, Grimmory, and Mihon/Tachiyomi — [Komga compatibility](docs/content/docs/developer/komga-compat.mdx)
+- **OPDS 1.2** (with OPDS-PSE) and **OPDS 2.0** (including progression) — [Provider status](docs/content/docs/developer/provider-status.mdx)
+- **KOReader sync** (`/koreader/{api_key}`) — [Provider status](docs/content/docs/developer/provider-status.mdx)
+- **Kobo sync** (`/kobo/{api_key}`) with optional KEPUB conversion — [Kobo sync capabilities](docs/content/docs/developer/kobo-sync-capabilities.mdx)
+- **Native liseur-sync** (`/v1/*` sync routes) — [liseur-sync integration](docs/content/docs/developer/liseur-sync-integration.mdx)
+- **Readium EPUB web publication** routes (`/api/v2/epub/*`) — [Server architecture](docs/content/docs/developer/server-architecture.mdx)
+- **Unified reading state** across protocols — [Unified reading state](docs/content/docs/developer/unified-reading-state.mdx)
+- **Staged ingest** with drop folders, immutable staging, and progress events — [Modular ingest](docs/content/docs/developer/modular-ingest.mdx)
 
-## Disclaimer
+Cross-app support matrices and verification levels: [Clients](docs/content/docs/developer/clients.mdx) · [Standards/protocols](docs/content/docs/developer/standards.mdx) · [Sync platforms](docs/content/docs/developer/sync-platforms.mdx).
 
-Stump is under active development and should be treated as **beta software** until it reaches a stable `1.0` release. I do my best to avoid breaking changes, or changes which might cause data loss, but there are no guarantees.
+## Build profiles
 
-I develop and maintain Stump in my free time. In other words, this is not my job and there is no guarantee of any timeline for features or bug fixes.
+The server Cargo graph exposes three aggregates: default `full` = `headless + webui`; `headless` contains every backend route feature (including the optional `liseur-sync` provider); the no-default `minimal` composition keeps REST/auth/database and omits optional protocol route trees. `formats = ["pdf", "rar"]` is part of every profile so defaults stay behavior-identical. Commands from [Server architecture](docs/content/docs/developer/server-architecture.mdx):
 
-## Features
+```sh
+# full/default (compatibility baseline; compiles SPA routes)
+cargo run --package stump_server --bin stump_server
 
-- [OPDS](https://opds.io/) [v1.2](https://specs.opds.io/opds-1.2) (including [OPDS PSE](https://github.com/anansi-project/opds-pse)) and [v2.0](https://specs.opds.io/opds-2.0.html) support
-- EPUB, PDF, CBZ/ZIP, and CBR/RAR support
-- Built-in readers for all supported formats
-- Annotations and highlights for EPUB books
-- OIDC authentication
-- Translations with [Weblate](https://weblate.org/en/)
-- Multi-user account management with permissions, age restrictions, and other access control features
-- Theming support with a handful of [built-in themes](https://www.stumpapp.dev/docs/apps/web/themes)
-- [Kobo](https://www.stumpapp.dev/docs/guides/integrations/kobo) and [KoReader](https://www.stumpapp.dev/docs/guides/integrations/koreader) sync integrations
-- Multiple different installation methods, including Docker and pre-built binaries
+# headless: every backend route capability, no SPA routes
+cargo run --package stump_server --no-default-features --features headless
 
-And more not mentioned. The [documentation](https://www.stumpapp.dev) will provide additional details about features, installation, and usage guides.
+# minimal: REST/auth/database route profile only
+cargo run --package stump_server --no-default-features
 
-## Roadmap
-
-You can track the [project boards](https://github.com/stumpapp/stump/projects?query=is%3Aopen) to see what efforts are currently being worked on or planned.
-
-Feel free to create an issue or discussion if you have anything else you'd like to see!
-
-## Getting Started
-
-The installation guides are available in the [documentation](https://www.stumpapp.dev/docs/getting-started/installation) (or [the markdown](/docs/content/docs/getting-started/installation/index.mdx), if you prefer).
-
-## Developer Guide
-
-The developer guide is available in the [documentation](https://www.stumpapp.dev/docs/developer/contributing) (or [the markdown](/docs/content/docs/developer/contributing.mdx), if you prefer). To not have to maintain two copies of the same information, please refer to those links for the most up-to-date information.
-
-## Contributing
-
-Contributions are very **welcome**! Please review the [CONTRIBUTING.md](./.github/CONTRIBUTING.md) before getting started.
-
-I recommend taking a look at [open issues](https://github.com/stumpapp/stump/issues). You can also check out the [project boards](https://github.com/stumpapp/stump/projects?query=is%3Aopen) to see what efforts are active or planned.
-
-In general, the following areas could always use help:
-
-- Translations via [Weblate](https://hosted.weblate.org/engage/stump/), so Stump is accessible to as many people as possible
-- Writing comprehensive tests
-- Improving the UI/UX, even small changes can go a long way
-- CI pipelines, automated release processes, and other devops-related efforts
-- Addressing `TODO` or `FIXME` comments in the codebase
-
-### Repository Structure
-
-The repository is managed via yarn workspaces and cargo workspaces:
-
-```bash
-# The primary applications all grouped together
-apps/
-  desktop/   # Tauri wrapping the web UI
-  expo/      # React Native app
-  server/    # Axum server
-  web/       # UI served by the server
-# The primary internals, like file processing etc
-core/
-# Supporting Rust crates (cli, graphql, integrations, etc)
-crates/
-  migrations/  # Database migrations
-  models/      # Database models
-docs/
-# Shared TypeScript packages
-packages/
+# release build (needs a usable PDFium library: PDFIUM_PATH or system lib)
+yarn web build && cargo build --package stump_server --release
 ```
 
-## Translations
+Docker has two final targets:
 
-[![Translation status](https://hosted.weblate.org/widgets/stump/-/stump/horizontal-auto.svg)](https://hosted.weblate.org/engage/stump/)
+```sh
+docker buildx build -f docker/Dockerfile --target full .
+docker buildx build -f docker/Dockerfile --target headless .
+```
 
-## Similar Projects
+## Runtime switches
 
-There are a number of other projects that are similar to Stump, it certainly isn't the first or only digital book media server out there. If Stump isn't for you, or you want to check out similar projects in this space, here are some other projects you might be interested in:
+Any compiled profile can be tuned without rebuilding (from [Server configuration](docs/content/docs/guides/configuration/server-config.mdx)):
 
-- [audiobookshelf](https://github.com/advplyr/audiobookshelf) (_Audiobooks, Podcasts_)
-- [Codex](https://github.com/ajslater/codex)
-- [Kavita](https://github.com/Kareadita/Kavita)
-- [Komga](https://github.com/gotson/komga)
-- [Storyteller](https://gitlab.com/storyteller-platform/storyteller)
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `STUMP_ENABLE_WEBUI` | `true` | Serves the web UI/SPA. Only effective when compiled with the `webui` feature; a headless build cannot re-enable it. |
+| `STUMP_ENABLE_BACKGROUND_JOBS` | `true` | Scheduled jobs, library watcher, Apalis worker. `false` keeps HTTP/database up; job/watcher calls return an explicit disabled error. |
+| `STUMP_ENABLE_KOMGA` | `false` (`true` in debug builds) | Mounts the Komga compatibility routes (requires the `komga` Cargo feature). |
+| `STUMP_ENABLE_UPLOAD` | `false` | Enables the file upload interface. |
+| `ENABLE_KOBO_SYNC` | `false` in release (debug differs) | Mounts Kobo sync routes. |
+| `ENABLE_KOREADER_SYNC` | `false` in release (debug differs) | Mounts KOReader sync routes. |
+| `ENABLE_OPDS_PROGRESSION` | `false` | OPDS page access updates reading progress. |
+| `KOBO_KEPUB_CONVERSION` | `false` | Converts Kobo EPUB downloads to KEPUB with pagination wrappers and `koboSpan` anchors. |
+| `KOBO_KEPUB_PRECONVERT` | `false` | Warms the KEPUB cache after each library scan (needs `KOBO_KEPUB_CONVERSION`). |
+| `KOBO_KEPUB_CACHE_MAX_AGE_DAYS` | `90` | Retention for unused KEPUB cache files. |
+| `KOBO_KEPUB_DEFLATE_LEVEL` | `6` (1–12) | libdeflate compression level; part of the cache key. |
+| `INGEST_DROP_DIR` | `<config dir>/ingest/drop` | Per-library drop folders scanned via `scanIngestDropFolder`. |
+| `INGEST_STAGING_DIR` | `<config dir>/ingest/staging` | Immutable staged ingest files (`<sha256>-<filename>`); rejects go to `rejected/`. |
+| `INGEST_PROGRESS_RETENTION` | — | Typed ingest progress events retained for `ingestProgress` and `/api/v2/ingest/events` SSE replay. |
+| `INGEST_EDITOR_DIR` | — | Serves a built ingest editor under `/editor` when it contains `index.html`. |
+
+## Quick start
+
+`scripts/dev-fixture-server.sh` launches a headless debug build against a fixture library on the LAN — the same server used for device verification of Komelia, Grimmory, Mihon, and Kobo sync. The external `komga-compat` Hurl harness (`make replay`, `replay-negative-auth`, `replay-readium`, ...) replays protocol contracts against it. See [Client verification](docs/content/docs/developer/client-verification.mdx) for the levels, dates, and app versions behind each verdict.
+
+## Crate map
+
+| Crate | Role |
+| --- | --- |
+| `crates/media` (`stump_media`) | File/image processing: format processors (EPUB, ZIP, PDF behind `pdf`, RAR behind `rar`), content types, hashing, Readium manifests, thumbnails. |
+| `crates/scanner` (`stump_scanner`) | Library scanning and the shared directory-mtime snapshot walker. |
+| `crates/komga` (`stump_komga`) | Komga compatibility DTOs, pagination, and error mapping. |
+| `crates/kobo` (`stump_kobo`) | Kobo backend traits and contracts. |
+| `crates/kepub` | KEPUB conversion (Kobo pagination wrappers, `koboSpan` anchors); conversion-only. |
+| `crates/koreader` (`stump_koreader`) | KOReader sync backend traits and hash contracts. |
+| `crates/opds` (`stump_opds`) | OPDS 1.2/2.0 backend traits. |
+| `crates/liseur-sync` | Native liseur-sync provider traits. |
+| `crates/auth` (`stump_auth`) | Authenticated user/session context and authorization errors. |
+| `crates/api-types` (`stump_api_types`) | Transport-neutral request-origin URL construction and offset pagination. |
+| `crates/graphql` | GraphQL schema construction, input wrappers, and resolver errors. |
+| `crates/models` | Entities, domain types, and persistence-facing services. |
+
+## Project state and roadmap
+
+- [Project state](.omp/PROJECT_STATE.md) — branch, source map, and current coordination state.
+- [Next steps](.omp/NEXT_STEPS.md) — the working roadmap.
+- [Roadmap docs](docs/content/docs/developer/) — including proposed (not implemented) work in [Server architecture](docs/content/docs/developer/server-architecture.mdx) and [Modular ingest](docs/content/docs/developer/modular-ingest.mdx).
+
+## Upstream relationship
+
+This repository is a fork of [stumpapp/stump](https://github.com/stumpapp/stump), tracking the nightly branch. Changes here are made to be narrowly scoped and upstreamable, but they are not reviewed or endorsed by upstream. For the upstream project, its documentation, and its installation guides, see [stumpapp.dev](https://www.stumpapp.dev).
 
 ## License
 
@@ -135,6 +113,8 @@ There are a number of other projects that are similar to Stump, it certainly isn
 - All other code in the repository is licensed under [MIT License](https://www.tldrlegal.com/license/mit-license)
 
 ## Attribution
+
+This fork inherits the upstream Stump project and the work of its contributors:
 
 - Some of the icons used in the web and mobile applications are from the [Spacedrive](https://github.com/spacedriveapp/spacedrive/tree/main/packages/assets/icons) repository, and are licensed under the [FSL-1.1-ALv2](https://github.com/spacedriveapp/spacedrive/blob/main/LICENSE) license.
 - The native Readium expo modules were adapted from [Storyteller](https://gitlab.com/storyteller-platform/storyteller)

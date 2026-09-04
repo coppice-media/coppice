@@ -1,0 +1,116 @@
+---
+title: Current State
+description: Snapshot of what the Stump fork has landed as of 2026-09-04, with evidence pointers and known limitations.
+---
+
+# Current State
+
+Snapshot as of 2026-09-04, branch `headless-modular`. Every claim traces to a
+document or source path; nothing here is a promise. Verification levels
+(harness / source / device) are defined in
+[Client Verification](/docs/developer/client-verification).
+
+## Protocols and clients
+
+| Area | Landed | Evidence |
+| --- | --- | --- |
+| Komga compat (Komelia/Mihon profile) | Contract crate `crates/komga`, nested `/komga` Grimmory alias, Basic-auth cache, remember-me, SSE mutation events, virtual book URLs | [Komga Compatibility](/docs/developer/komga-compat) |
+| Mihon/Keiyoushi legacy catalog | `GET /api/v1/series`, `/api/v1/books` root-only, `/api/v1/series/{id}/books`, `/api/v1/authors` — device-verified browse/download/read | `.omp` 2026-09-04 evening log; `apps/server/src/routers/komga/` |
+| Mihon built-in tracker | `GET/PUT /api/v2/series/{id}/read-progress/tachiyomi` (+ readlist variant); Basic/API-key scope widened via `is_komga_basic_auth_path` — harness green, device retest pending | `apps/server/src/routers/komga/` |
+| OPDS 1.2/PSE + OPDS 2.0 | Both catalogs, acquisition/page routes, progression; path-key auth variants | [Server Architecture](/docs/developer/server-architecture) |
+| Kobo sync | Initialization, sync, state GET/PUT, metadata, KEPUB and file delivery; device tokens dummy, several routes catch-all | [Kobo Sync Capabilities](/docs/developer/kobo-sync-capabilities) |
+| KOReader sync | Hash-based progress GET/PUT under `/koreader/{api_key}` | [Server Architecture](/docs/developer/server-architecture) |
+| liseur-sync | Login/tokens, read-only catalog (`/v1/folders`, `/v1/books/*`), positions, sessions, CAS annotations; annotation insert column list repaired | [liseur-sync Integration](/docs/developer/liseur-sync-integration) |
+| Unified reading state | Design + provider projections documented; canonical heads not implemented | [Unified Reading State](/docs/developer/unified-reading-state) |
+
+Client results (2026-09-04 devices): Komelia reads and downloads CBZ/EPUB after
+four real-EPUB fixes in the Komga adapter (EPUB page list, Readium manifest
+normalization to komga-client types). Liseur works over the Komga profile,
+OPDS 1.2, and KOReader sync; it has no OPDS 2 parser (app limit). Details in
+[Client Verification](/docs/developer/client-verification).
+
+## Ingest and editor
+
+| Area | Landed | Evidence |
+| --- | --- | --- |
+| Staged ingest | Contract `core/src/ingest/contract.rs`, entities `crates/models/src/entity/ingest_*.rs`, migration `m20260907_000000_add_ingest`, drop folder/store/coordinator, seven quality checks, provider façade + `builtin:embedded` field-pick, GraphQL `ingest*` + `ingestProgress` subscription + `GET /api/v2/ingest/events` SSE. Verified live end-to-end (drop → scan → analyze → apply → approve → Komga download) | [Modular Ingest](/docs/developer/modular-ingest) |
+| Uploads/mutations | `stageIngestUploads` multipart (`relativePath`, auto-analysis), dedup of identical re-uploads, `bulkApplyIngestMetadata` (no partial writes), `requeueIngestAnalysis`, `rejectIngestItem` (file to `staging/rejected/`), `discardIngestItem` | `core/src/ingest/` |
+| Editor app | SvelteKit 2 / Svelte 5 / Tailwind 4 / shadcn-svelte static app in `editor/`; built app served by the headless server at `/editor` (`INGEST_EDITOR_DIR`, SPA fallback); browser-verified against the fixture | `apps/server/src/routers/ingest_editor.rs` |
+
+## Media and scanner crates
+
+| Area | Landed | Evidence |
+| --- | --- | --- |
+| `stump_media` (`crates/media`) | Format processors, `ContentType`/`FileError`, hashing (incl. KOReader hash), Readium, EPUB search, image primitives, `MediaConfig`; features `pdf`/`rar` default on; no dependency on core/jobs/DB. 134 tests default, 121 with `--no-default-features` | `crates/media` |
+| `stump_scanner` (`crates/scanner`) | `ScanOptions`, `ScanSource` trait, pure walker + mtime reconciliation, TagCache; 12 contract tests. Core keeps jobs/utils/watcher plus the SeaORM adapter (`core/src/filesystem/scanner/store.rs`) | `crates/scanner` |
+| `stump_kepub` (`crates/kepub`) | 1:1 port of kepubify @9546034; arena DOM, own ZIP writer (libdeflate), bounded rayon batches; byte-for-byte parity 35/35 books vs pinned kepubify build (`crates/kepub/tests/real_books.rs`); 1 book kepubify itself rejects. kepubify shell-out and `KOBO_KEPUBIFY_PATH` removed | [Kobo Sync Capabilities](/docs/developer/kobo-sync-capabilities) |
+| KEPUB delivery | Converts into a cache file, served with `ServeFile` (range requests); warming on sync entitlements, N-day eviction, `KOBO_KEPUB_PRECONVERT`, `KOBO_KEPUB_DEFLATE_LEVEL` | `apps/server/src/routers/kobo_backend/kepub_cache.rs` |
+| PDF | PDFium ingest end-to-end verified live (analysis score 100, 671 rendered pages); launcher exports `PDFIUM_PATH`. No `pdf` Cargo feature in `apps/server/Cargo.toml` — PDFium is unconditional in core | [Server Architecture](/docs/developer/server-architecture) |
+
+## Lifecycle and profiles
+
+- Lazy lifecycle: `Ctx` owns config/conn/events only; `JobRuntime` on first
+  enqueue, watcher only when needed, scheduler only for enabled scheduled-job
+  rows; server stops only what it created. `/api/v2/health` reports `jobs`
+  (disabled/enabled/idle/running) and `watcher` (disabled/inactive/active).
+  Verified live on the fixture (`core/src/context.rs`,
+  `apps/server/src/http_server.rs`).
+- Idle RSS: the lifecycle change itself is noise (62→66 MB debug, 19 threads,
+  same fixture copy); the structural win is lazy construction. Measured idle
+  RSS for optimized headless vs pristine nightly: 29,924 vs 40,776 KiB RSS,
+  5 vs 21 threads ([Server Architecture](/docs/developer/server-architecture)).
+- Profiles: `full` (default), `headless` (all backend routes, no SPA), `minimal`
+  (REST/auth/database only). Headless dependency count 779 with formats, 770
+  without. See [Server Architecture](/docs/developer/server-architecture).
+
+## Harness and verification
+
+- External replay harness `../komga-compat/` (user-owned); Hurl is the semantic
+  oracle. Four replays green and rerun-stable on the deployed fixture:
+  `make replay` (8/8), `replay-negative-auth` (1/1), `replay-mihon` (needs
+  `SERIES_ID`), `replay-liseur-sync`.
+- Test counts at the gate: media 134, scanner 12, core 146, komga 68, liseur 8,
+  graphql 91, server 81, migrations and models suites green.
+- Gate commands live in `.omp/PROJECT_STATE.md` ("Only definition of green").
+- Contract evidence pinned against Komelia `65f92fde`, `komga-client` 0.11.0
+  `74412a6e`, Liseur `31f8182d`, Grimmory main
+  ([Client Verification](/docs/developer/client-verification)).
+
+## Known limitations
+
+From the feature-gap analysis (`local://feature-gaps.md` in session storage;
+rows reproduced honestly here):
+
+- Komga is a target-profile subset, not full API parity: no persisted settings,
+  no sidecar/artwork CRUD, narrower search operators/events
+  ([Komga Compatibility](/docs/developer/komga-compat)). Collection creation is
+  not mounted: `crates/komga/src/routes/lists.rs` has GET routes and a PATCH,
+  but no POST. The Komga filesystem browser is partial and owner-only
+  (`crates/komga/src/routes/media.rs`).
+- Kobo: device tokens are dummy/non-persistent; tags/archive and other
+  advertised routes remain catch-all no-ops; no physical Kobo device
+  verification ([Kobo Sync Capabilities](/docs/developer/kobo-sync-capabilities)).
+- liseur-sync: local `media_annotations`/`bookmarks` projection, retention and
+  compaction, insights, token administration, upload/delete, and series claims
+  deferred ([liseur-sync Integration](/docs/developer/liseur-sync-integration)).
+- Calibre-Web facade for Liseur: missing — no `/opds/...` web-form contract, no
+  Calibre-Web login/token/delete facade
+  ([Liseur Providers](/docs/developer/liseur-providers)).
+- OPDS: strict facets, v2 path-key auth nuances, and EPUB chapter/resource
+  streaming gaps ([Server Architecture](/docs/developer/server-architecture)).
+- Modular extraction is partial: core still unconditionally links jobs, watcher,
+  and processor dependencies; no processor-sized Cargo features (`pdf-render`,
+  watcher, jobs, metadata, email) ([Server Architecture](/docs/developer/server-architecture)).
+- KOReader hash: the CBZ processor returns no KOReader hash — the branch is
+  commented out in `core/src/filesystem/media/format/zip.rs`; fixture sync
+  requires `generate_koreader_hashes` first.
+- Operations: no inbound API rate limiting, no metrics, no backup/restore,
+  health/readiness is partial, CI lacks a profile matrix
+  (`local://feature-gaps.md` §3).
+- Highlights/notes as a durable cross-device capability: partial — native and
+  liseur CAS storage exist, canonical heads and reconciliation are design/deferred
+  ([Unified Reading State](/docs/developer/unified-reading-state)).
+- Known upstream lints untouched: `emailer/sender.rs` and
+  `tests/reading_progress/manual_progression_changes.rs` (`useless vec!`).
+- In-flight: worker `LiseurCatalog` is implementing liseur catalog routes and
+  the `/v1/works/{id}/annotations` SQL fix against the pinned Liseur client.

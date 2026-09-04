@@ -250,7 +250,7 @@ Catalog and list query extraction uses `axum_extra::extract::Query` (the `serde_
 
 | Method | Path | Contract |
 | --- | --- | --- |
-| `PATCH` | `/api/v1/series/{id}/metadata` | Requires `ManageLibrary`; applies supported series metadata, tags, links, and lock fields to a visible series, then returns `204 No Content`. Unsupported fields are rejected with `400`. |
+| `PATCH` | `/api/v1/series/{id}/metadata` | Requires `ManageLibrary`; applies all supported series metadata, tags, links, and lock fields to a visible series, then returns `204 No Content`. `sharingLabels` and `sharingLabelsLock` remain unsupported and are rejected with `400` when present. |
 | `POST` | `/api/v1/series/{id}/read-progress` | Marks every visible, non-deleted book in the series read for the current user, using the last zero-based page where one exists; returns `204` (including an empty series). |
 | `DELETE` | `/api/v1/series/{id}/read-progress` | Deletes the current user's reading sessions for every visible, non-deleted book in the series; returns `204` (including an empty series). |
 | `GET` | `/api/v2/series/{id}/read-progress/tachiyomi` | Mihon series progress DTO: visible-book counts, status-derived read/in-progress/unread counts, continuous read prefix, and maximum number sort. |
@@ -276,11 +276,10 @@ Authentication-activity pagination accepts non-negative `page` and `size`, defau
 
 ### Library, book, and series metadata behavior
 
-Metadata PATCH bodies use the three-state `PatchValue` form: omitted means unchanged, `null` clears a nullable value, and a value replaces it. Series patches persist `status`, `title`, `summary`, `publisher`, `ageRating`, `genres`, `tags`, `totalBookCount`, and `links`, plus their supported lock fields. `titleSort`, `readingDirection`, `language`, `alternateTitles`, and `sharingLabels`, including each corresponding lock field, have no Stump equivalent; if any is present (including `null`), the request returns `400`.
-
+Metadata PATCH bodies use the three-state `PatchValue` form: omitted means unchanged, `null` clears a nullable value, and a value replaces it. Series patches persist `status`, `title`, `titleSort`, `summary`, `publisher`, `readingDirection`, `language`, `alternateTitles`, `ageRating`, `genres`, `tags`, `totalBookCount`, and `links`, plus their supported lock fields. For `titleSort`, a `null` value clears the stored override and GET responses fall back to the series title; `readingDirection` stores the Komga enum name and `language` stores the supplied BCP-47 tag. `alternateTitles` is stored as a JSON array of `{label,title}` objects. A `null` lock value clears the lock (`false`), while a boolean sets it. `sharingLabels` and `sharingLabelsLock` have no Stump equivalent; if either is present (including `null`), the request returns `400`.
 Book patches persist `title`, `summary`, decimal `number`, `releaseDate`, `authors`, `tags`, `isbn`, and `links`, plus their supported lock fields. Authors are mapped to Stump's CSV columns only for the seven roles `writer`, `penciller`, `inker`, `colorist`, `letterer`, `cover_artist`, and `editor`; roles are case-insensitive, names are trimmed and de-duplicated, and an empty name or any other role returns `400`. `numberSort` is derived from `number`: it cannot be cleared independently, and a supplied value must equal the finite numeric value derived from the patched number (or the existing number when `number` is omitted), otherwise the request returns `400`. Fields outside this DTO are not applied by the serde update mapping.
 
-`tags` replaces the existing relation (with duplicate names removed), while `links` and multi-value metadata are stored in Stump's comma-separated columns. Metadata writes and management jobs do not fabricate persistence for unsupported Komga settings.
+`tags` replaces the existing relation (with duplicate names removed); `links`, genres, and other legacy multi-value metadata use Stump's comma-separated columns, while `alternateTitles` uses its JSON column. Metadata writes and management jobs do not fabricate persistence for unsupported Komga settings.
 
 Sources: [`library.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/library.rs), [`book.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/book.rs), [`series.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/series.rs), and [`settings.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/settings.rs).
 For Tachiyomi progress, the adapter counts only the authenticated user's
@@ -305,17 +304,21 @@ Mihon's pinned [`KomgaApi.kt` and
 | `GET` | `/api/v1/books/{book_id}/pages/{page}` | One page image/content response. Page numbers are one-based. |
 | `GET` | `/api/v1/books/{book_id}/pages/{page}/thumbnail` | Generated JPEG thumbnail for an image page; page numbers are one-based. |
 | `GET` | `/api/v1/books/{book_id}/thumbnail` | Selected book thumbnail bytes. |
-| `GET` | `/api/v1/books/{book_id}/thumbnails` | Thumbnail metadata array. |
-| `GET` | `/api/v1/books/{book_id}/thumbnails/{thumbnail_id}` | Thumbnail bytes for the supported thumbnail ID. |
+| `GET` | `/api/v1/books/{book_id}/thumbnails` | Thumbnail metadata array. It contains the selected uploaded thumbnail followed by the generated entry when an upload exists; otherwise it contains one selected `GENERATED` entry. |
+| `GET` | `/api/v1/books/{book_id}/thumbnails/{thumbnail_id}` | Thumbnail bytes for a generated or uploaded thumbnail ID. |
+| `POST` | `/api/v1/books/{book_id}/thumbnails` | `multipart/form-data` with `file` (image bytes) and `selected=true`; replaces the selected thumbnail and returns the complete Komga thumbnail DTO. Requires `ManageLibrary`. |
+| `DELETE` | `/api/v1/books/{book_id}/thumbnails/{thumbnail_id}` | Deletes an uploaded thumbnail and returns `204`; deleting the generated ID returns `400`. Requires `ManageLibrary`. |
 | `GET` | `/api/v1/series/{series_id}/thumbnail` | Selected series thumbnail bytes. |
-| `GET` | `/api/v1/series/{series_id}/thumbnails` | Thumbnail metadata array. |
-| `GET` | `/api/v1/series/{series_id}/thumbnails/{thumbnail_id}` | Thumbnail bytes for the supported thumbnail ID. |
+| `GET` | `/api/v1/series/{series_id}/thumbnails` | Thumbnail metadata array. It contains one selected `USER_UPLOADED` entry when a persisted series thumbnail exists; generated covers are never listed. |
+| `GET` | `/api/v1/series/{series_id}/thumbnails/{thumbnail_id}` | Uploaded series thumbnail bytes. |
+| `POST` | `/api/v1/series/{series_id}/thumbnails` | `multipart/form-data` with `file` (image bytes) and `selected=true`; replaces the selected thumbnail and returns the complete Komga thumbnail DTO. Requires `ManageLibrary`. |
+| `DELETE` | `/api/v1/series/{series_id}/thumbnails/{thumbnail_id}` | Deletes an uploaded thumbnail and returns `204`; deleting the generated ID returns `400`. Requires `ManageLibrary`. |
 | `GET` | `/api/v1/books/{book_id}/file` | Original book file download, subject to Stump visibility and download permissions. |
 | `POST` | `/api/v1/libraries/{library_id}/scan` | Enqueues a library scan and returns `202 Accepted`; scan permission is required. `deep=true` requests a forced rebuild. |
 | `POST` | `/api/v1/books/{book_id}/analyze` | Enqueues forced media analysis and returns `202 Accepted`; library-management permission is required. |
 | `POST` | `/api/v1/filesystem` | Owner-only directory listing for Komelia's library picker. Absolute paths are required and the result is constrained to child directories. |
 
-Stump deliberately does not expose Komga's optional page conversion, zero-based page query mode, or disabling content negotiation: `convert=...`, `zero_based=true`, and `contentNegotiation=false` return `400`. Page metadata uses stable logical names (`page-1`, `page-2`, and so on) because Stump stores archive-level metadata rather than archive entry filenames. Source: [`media.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/media.rs).
+Thumbnail uploads are validated from their bytes as images, persisted through the shared thumbnail replacement path (`thumbnail_path` and `thumbnail_meta`), and replace all prior entity thumbnail files. Stump supports one selected upload: the response uses `stump-upload-book-<book-id>` or `stump-upload-series-<series-id>` and the generated book ID remains `stump-book-<book-id>`. The generated series cover is intentionally not listed because Komga's series thumbnail enum has no `GENERATED` value; a generated series ID deletion is rejected with `400`. Source: [`media.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/media.rs), [`komga_backend.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga_backend.rs), and [`thumbnail_utils.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/media/src/image/thumbnail_utils.rs).
 
 ### Progress — `progress.rs`
 
@@ -394,13 +397,14 @@ The media handler accepts only the corresponding generated ID for each book or s
 
 The following are current mapping decisions, not compatibility proposals:
 
-- `series.metadata.titleSort` is emitted as the series title (`title_sort=title`); Stump has no separate persisted sort title.
-- Series-level `metadata.language` is always empty because Stump stores language per book, not on the series metadata row. Series language conditions still search book metadata and project matching series.
+- `series.metadata.titleSort` is emitted from the persisted sort-title override, falling back to the series title when it is unset.
+- Series-level `metadata.readingDirection` and `metadata.language` are emitted from their persisted values, or `null` when unset. Series language conditions still search book metadata and project matching series.
+- `metadata.alternateTitles` is emitted from the persisted JSON array, or `[]` when unset; its lock and the reading-direction/language/title-sort locks are emitted from their dedicated persisted booleans.
+- `metadata.sharingLabels` remains empty and its lock remains false because Stump has no sharing-label model.
 - `scanInterval` is always `DISABLED`; Stump's watcher boolean is not converted into a fictional periodic interval.
 - Page metadata uses synthetic `page-N` file names because archive entry names are not persisted in the mapped row.
-- Each book exposes exactly one selected thumbnail of type `GENERATED` using the deterministic thumbnail ID above. Series thumbnail lists are empty and `/series/{id}/thumbnails/{tid}` is `404`: Komga's `ThumbnailSeries.Type` is only `SIDECAR | USER_UPLOADED`, generated series covers are served solely by `/series/{id}/thumbnail`, and Komelia decodes the listed type with an unguarded `valueOf` (a listed `GENERATED` entry crashed every download at the series import step).
-- Alternate series titles and sharing labels are empty; Stump does not persist equivalent collections for either field.
-- Library fields without Stump equivalents use neutral values from [`mapper.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/mapper.rs), including disabled scan/conversion/import switches where no persisted Stump setting exists.
+- Each book lists its deterministic `GENERATED` thumbnail (`stump-book-{id}`) and, when a cover was uploaded, a `USER_UPLOADED` one (`stump-upload-book-{id}`) marked `selected`. Series lists contain only the uploaded cover (`stump-upload-series-{id}`, `USER_UPLOADED`) or are empty: Komga's `ThumbnailSeries.Type` is only `SIDECAR | USER_UPLOADED` and Komelia decodes it with an unguarded `valueOf`, so a `GENERATED` series entry must never be emitted; generated series covers are served solely through `/series/{id}/thumbnail`. `POST /{books,series}/{id}/thumbnails` (multipart `file` + `selected`) stores the cover through the same helper as the GraphQL upload mutations and returns the full thumbnail DTO; `DELETE .../thumbnails/{tid}` removes an uploaded cover (`204`) and answers `400` for a generated id, as Komga does. See `crates/komga/src/routes/media.rs` and the Komf study for the client sequence.
+- Library fields without Stump equivalents use neutral values from [`mapper.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/mapper.rs), including disabled scan/conversion/import switches where no persisted Stump setting exists.
 - Book metadata is projected from Stump metadata when present, with the media name as the title fallback; series aggregates derive counts, tags, and representative book metadata from visible books.
 
 ## Replay observations and diagnostics
@@ -419,4 +423,4 @@ The external **komga-compat harness** and its sanitized Komelia 0.19.0 capture/r
 
 ## Compatibility boundary
 
-A client may rely on the route paths, authentication scope, pagination rules, search allowlist, progress numbering distinction, Readium aliases, generated thumbnail IDs, virtual `url` paths, and the SSE event set specified here. It must not rely on unlisted Komga routes, unsupported search operators, persisted alternate-title/sharing-label data, archive-entry filenames, periodic scan intervals, real filesystem paths, or event types that the adapter deliberately ignores.
+A client may rely on the route paths, authentication scope, pagination rules, search allowlist, progress numbering distinction, Readium aliases, generated thumbnail IDs, virtual `url` paths, and the SSE event set specified here. It must not rely on unlisted Komga routes, unsupported search operators, persisted sharing-label data, archive-entry filenames, periodic scan intervals, real filesystem paths, or event types that the adapter deliberately ignores.

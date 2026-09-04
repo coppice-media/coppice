@@ -1,0 +1,117 @@
+---
+title: Standards and protocols
+description: One map of every protocol the Stump fork speaks — routes, auth, feature gates, implemented vs deliberately unsupported, and where the evidence lives
+---
+
+This page maps the protocols this fork's server speaks. Every "supported" /
+"not supported" claim traces to a linked evidence doc in `docs/content/docs/developer/`;
+route and setting names are observed in the source files those docs cite.
+Verification status (harness-only vs device-verified) is tracked per client in
+[Client verification](/docs/developer/client-verification): **Device** level is
+the only one that counts as "works in the app". Gate and setting details are in
+[Provider status](/docs/developer/provider-status).
+
+## OPDS 1.2 (+ Page Streaming Extension)
+
+| | |
+| --- | --- |
+| What it is | XML catalog/acquisition format with OpenSearch and OPDS-PSE page access ([OPDS 1.2 spec](https://specs.opds.io/opds-1.2), [PSE](https://drafts.opds.io/page-streaming-extension)) |
+| Routes + auth | `/opds/v1.2/*` and a key-in-path alias `/opds/{api_key}/v1.2/*`; Basic or session auth, API key allowed in the path |
+| Feature + switch | Cargo feature `opds` (compile-time only, included in `headless`/`full`); no runtime route gate. Optional `ENABLE_OPDS_PROGRESSION=true` makes v1.2 page GETs upsert reading progress |
+| We implement | Catalog, navigation and search feeds, keep-reading, libraries, series, books, latest feeds, thumbnails, pages, acquisition via `DownloadFile` |
+| We deliberately do not | Auto-count page loads as progress unless opted in; strict-compliance mode (open TODO); v1 facets beyond the current set |
+| Evidence | [Provider status](/docs/developer/provider-status), [Server architecture](/docs/developer/server-architecture) |
+
+## OPDS 2.0
+
+| | |
+| --- | --- |
+| What it is | JSON catalog format with an authentication document and explicit progression PUT ([OPDS 2.0 drafts](https://drafts.opds.io)) |
+| Routes + auth | `/opds/v2.0/*`; Basic or session auth; public auth document advertises Basic. No v2 key-in-path alias |
+| Feature + switch | Cargo feature `opds` (compile-time only). Progression PUT is explicit — not affected by `ENABLE_OPDS_PROGRESSION` |
+| We implement | Auth document, catalog, search, browse, groups, book pages, acquisition, user-scoped progression GET/PUT with timestamp-conflict checking (integration-tested) |
+| We deliberately do not | Facets (open TODO in core); EPUB chapter/resource streaming (route registrations commented out); v2 path-key auth until the contract is defined |
+| Evidence | [Provider status](/docs/developer/provider-status) |
+
+## Komga compatibility profile
+
+| | |
+| --- | --- |
+| What it is | The Komga REST/SSE API subset observed from Komelia 0.19.0, pinned against Komga 1.26.3 OpenAPI, komga-client 0.11.0, and Komelia `65f92fde` ([Komga API](https://raw.githubusercontent.com/gotson/komga/1.26.3/komga/docs/openapi.json)) |
+| Routes + auth | `/api/v1/*`, `/api/v2/*`, `/sse/v1/events`; Basic (narrowly scoped path list), Bearer, session, `X-API-Key` on Komga paths, `komga-remember-me` cookie; `HEAD /login` is public |
+| Feature + switch | Cargo feature `komga` **and** runtime `STUMP_ENABLE_KOMGA=true` (default `false` in release). Both gates must be open |
+| We implement | Catalog/search, libraries, books/series, read lists, collections, media/pages/files, Readium manifest + positions + progression, metadata writes, Tachiyomi tracker routes, settings/announcements/users/admin subset, visibility-filtered SSE (mutation events only) |
+| We deliberately do not | Full Komga API parity: endpoints outside the Komelia profile, sharing labels, persisted settings PATCH, richer SSE event parity, unsupported search operators; the `/api/v1/{*path}` wildcard only logs and 404s |
+| Evidence | [Komga compatibility](/docs/developer/komga-compat) — the authoritative spec for this profile |
+
+## Grimmory alias
+
+| | |
+| --- | --- |
+| What it is | A Komga-shaped prefix alias matching Grimmory main `65f92fde`'s `KomgaController`, used by Liseur's Grimmory catalog client |
+| Routes + auth | `/komga/api/v1/books` (GET, not POST list), `/komga/api/v1/books/{id}/file`, `/komga/api/v1/books/{id}/thumbnail`, `/komga/api/v2/users/me`; Basic auth under the `/komga/api/v1|v2/` prefixes only |
+| Feature + switch | Same gates as the Komga profile: `komga` feature + `STUMP_ENABLE_KOMGA=true` |
+| We implement | The four-route listing/file/thumbnail/identity shim over the same handlers — no second database or identity store |
+| We deliberately do not | Any Grimmory-specific persistence, or broadening the Basic-auth path scope beyond the documented prefixes |
+| Evidence | [Komga compatibility](/docs/developer/komga-compat) (Grimmory shim section) |
+
+## Kobo sync
+
+| | |
+| --- | --- |
+| What it is | Kobo device sync protocol (entitlements, reading state, metadata, downloads), reverse-engineered from device traffic ([capabilities](/docs/developer/kobo-sync-capabilities)) |
+| Routes + auth | `/kobo/{api_key}/*`; full API key embedded in the device `api_endpoint`, requiring `ACCESS_KOBO_SYNC` (+ `DOWNLOAD_FILE` for files) |
+| Feature + switch | Cargo features `kobo` (+ `stump_kepub`), runtime `ENABLE_KOBO_SYNC=true` (default `false` in release). Optional `KOBO_KEPUB_CONVERSION=true` for lazy KEPUB conversion at the existing EPUB URL |
+| We implement | Initialization with resource rewriting, full and incremental sync (sync tokens, deltas, EPUB-only filter), ReadingState GET/PUT, metadata, thumbnails, EPUB download, optional KEPUB conversion with cached output |
+| We deliberately do not | Real device-auth token persistence (`/v1/auth/device` returns dummy UUIDs); tags/shelves, archive/delete, store proxy, device refresh (catch-all returns `{}`); annotations/highlights; non-EPUB stock sync |
+| Evidence | [Kobo sync capabilities](/docs/developer/kobo-sync-capabilities), [Kobo device database](/docs/developer/kobo-device-database) |
+
+## KOReader sync
+
+| | |
+| --- | --- |
+| What it is | KOReader's kosync progress-sync plugin protocol (auth probe + document progress by hash) ([kosync source](https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/plugins/kosync.koplugin/main.lua)) |
+| Routes + auth | `/koreader/{api_key}/users/auth`, `/koreader/{api_key}/syncs/progress` (PUT), `/koreader/{api_key}/syncs/progress/{document}` (GET); full API key with `ACCESS_KOREADER_SYNC`; username/password accepted but not validated |
+| Feature + switch | Cargo feature `koreader`, runtime `ENABLE_KOREADER_SYNC=true` (default `false` in release). Plus per-library `generateKoreaderHashes` (not an env key) |
+| We implement | Auth probe, progress GET/PUT with percentage, device, and raw x-pointer preservation; binary partial-MD5 matching for EPUB and PDF when the library hash flag is on |
+| We deliberately do not | Filename-MD5 matching (Stump never computes that hash); CBZ/ZIP and RAR hashes (generation commented out); x-pointer → Readium locator translation; device management; visibility-scoped PUT media lookup (explicit caveat) |
+| Evidence | [Provider status](/docs/developer/provider-status) (KOReader section), [sync platforms](/docs/developer/sync-platforms) |
+
+## liseur-sync
+
+| | |
+| --- | --- |
+| What it is | Stump-fork's own native sync protocol designed for the Liseur Android reader: token lifecycle, work/edition resolution, position operations, changes feed, sessions, annotations ([integration doc](/docs/developer/liseur-sync-integration)) |
+| Routes + auth | `/v1/*` under the liseur-sync tree: public `POST /v1/login`; Bearer device tokens for token, work, operation, change, head, position, session, and annotation routes |
+| Feature + switch | Cargo feature `liseur-sync` (compile-time only, included in `headless`/`full`); no runtime gate. Migrations must be applied |
+| We implement | Login → one-hour session → device-token mint/revoke (hashed secrets), direct `sha256`/`partial-md5` media matching, idempotent position operations with changes paging and heads, closed sessions, annotation push with CAS and tombstones (adapter-owned tables) |
+| We deliberately do not | Enforcement beyond the `sync` scope (other scopes are metadata only); approximate identifier lookup (`source`/`dc`/`ta` stored, never resolved); annotation projection into Stump `media_annotations`/`bookmarks`; catalog, insights, upload, registration, series-claim routes |
+| Evidence | [liseur-sync integration](/docs/developer/liseur-sync-integration), [Liseur providers](/docs/developer/liseur-providers), [Provider status](/docs/developer/provider-status) |
+
+## Native API (GraphQL, REST, Readium)
+
+| | |
+| --- | --- |
+| What it is | Stump's own surfaces: GraphQL (`/api/graphql`, playground in debug/web builds), REST under `/api/*`, and native Readium routes (`/readium/*`) for the Readium Web Publication spec ([Readium WP](https://readium.org/webpub)) |
+| Routes + auth | Session, Basic, Bearer, or user-scoped API keys (`ACCESS_API_KEYS`); see [API docs](/docs/developer/api) |
+| Feature + switch | Always compiled; no gate |
+| We implement | The full native client contract: libraries, media, progress, collections, read lists, auth/user management, Readium manifests/positions/progression for EPUB |
+| We deliberately do not | Nothing withheld — this is the primary API, not a compatibility shim |
+| Evidence | [API](/docs/developer/api), [Server architecture](/docs/developer/server-architecture), [Unified reading state](/docs/developer/unified-reading-state) |
+
+## Which one should a client use?
+
+- **A Stump client (web, desktop, mobile):** the native GraphQL/REST/Readium
+  API. It is the only surface with the complete contract; everything else is a
+  compatibility subset.
+- **A generic catalog client (Panels, Paperback, Kybook, …):** OPDS 1.2 for
+  broadest support, or OPDS 2.0 if the client parses JSON catalogs and speaks
+  progression PUT. Note the missing v2 features above.
+- **A Komga client (Komelia, Mihon):** the Komga profile at `/api/v1`/`/api/v2`,
+  or `/komga` if the client is Grimmory-shaped (Liseur). Scope is the Komelia
+  profile, not Komga parity.
+- **KOReader:** `/koreader/<api_key>` with Binary document matching and the
+  library hash flag enabled — only EPUB and PDF currently hash.
+- **Kobo devices:** `/kobo/<api_key>` with `ENABLE_KOBO_SYNC=true`; expect
+  EPUB-only stock sync.
+- **Liseur:** the native `/v1` liseur-sync protocol with a Bearer device token.
