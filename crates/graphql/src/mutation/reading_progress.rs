@@ -19,8 +19,7 @@ use sea_orm::{
 };
 
 use crate::{
-	data::{AuthContext, CoreContext},
-	input::media::MediaProgressInput,
+	data::CoreContext, input::media::MediaProgressInput,
 	object::reading_session::ReadingSession,
 };
 
@@ -35,7 +34,8 @@ impl ReadProgressMutation {
 		id: ID,
 		input: MediaProgressInput,
 	) -> Result<ReadingSession> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -96,7 +96,8 @@ impl ReadProgressMutation {
 		ancestor_session_id: Option<i32>,
 		input: MediaProgressInput,
 	) -> Result<ReadingSession> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let ancestor = match ancestor_session_id {
@@ -187,7 +188,8 @@ impl ReadProgressMutation {
 	/// trashes current readthrough, if there is one
 	#[tracing::instrument(skip(self, ctx), fields(media_id = ?id))]
 	async fn clear_media_progress(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let tx = core.conn.begin().await?;
@@ -241,7 +243,8 @@ impl ReadProgressMutation {
 	/// resets the elapsed seconds for all reading sessions in the current readthrough, if there is one
 	#[tracing::instrument(skip(self, ctx), fields(media_id = ?id))]
 	async fn reset_elapsed_seconds(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let tx = core.conn.begin().await?;
@@ -264,7 +267,8 @@ impl ReadProgressMutation {
 		id: ID,
 		#[graphql(default)] dnf: Option<bool>,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let tx = core.conn.begin().await?;
@@ -345,7 +349,8 @@ impl ReadProgressMutation {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<i64> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -391,7 +396,8 @@ impl ReadProgressMutation {
 
 	/// marks all books in the series as finished
 	async fn finish_series_progress(&self, ctx: &Context<'_>, id: ID) -> Result<i64> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let tx = core.conn.begin().await?;
@@ -492,7 +498,8 @@ impl ReadProgressMutation {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<i64> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let tx = core.conn.begin().await?;

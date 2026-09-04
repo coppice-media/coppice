@@ -5,10 +5,7 @@ use models::{
 };
 use sea_orm::{prelude::*, QuerySelect};
 
-use crate::{
-	data::{CoreContext, ServiceContext},
-	object::user::User,
-};
+use crate::{data::CoreContext, object::user::User};
 
 #[derive(Debug, SimpleObject)]
 #[graphql(complex)]
@@ -27,7 +24,7 @@ impl From<book_club_member::Model> for BookClubMember {
 impl BookClubMember {
 	async fn avatar_url(&self, ctx: &Context<'_>) -> Result<Option<String>> {
 		let core = ctx.data::<CoreContext>()?;
-		let service = ctx.data::<ServiceContext>()?;
+		let service = ctx.data::<stump_api_types::RequestOrigin>()?;
 		let user_avatar_path: Option<String> =
 			user::Entity::find_by_id(self.model.user_id.clone())
 				.select_only()

@@ -9,10 +9,8 @@ use email::{
 	AttachmentPayload, EmailContentType, EmailResult, EmailerClient, EmailerClientConfig,
 };
 use sea_orm::{prelude::*, IntoActiveModel, NotSet, Set};
-use stump_core::{
-	filesystem::{ContentType, FileParts, PathUtils},
-	utils::encryption::decrypt_string,
-};
+use stump_core::utils::encryption::decrypt_string;
+use stump_media::{ContentType, FileParts, PathUtils};
 
 use models::entity::{
 	emailer,

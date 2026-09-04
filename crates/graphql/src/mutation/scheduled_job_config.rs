@@ -23,6 +23,14 @@ fn kind_from_config(config: &ScheduledJobConfigInput) -> ScheduledJobKind {
 		ScheduledJobConfigInput::MetadataRetry(_) => ScheduledJobKind::MetadataRetry,
 	}
 }
+async fn refresh_scheduler(core: &CoreContext) -> Result<()> {
+	if core.background_jobs_enabled() {
+		core.start_scheduler()
+			.await
+			.map_err(|error| async_graphql::Error::new(error.to_string()))?;
+	}
+	Ok(())
+}
 
 #[Object]
 impl ScheduledJobConfigMutation {
@@ -49,6 +57,7 @@ impl ScheduledJobConfigMutation {
 		}
 		.insert(core.conn.as_ref())
 		.await?;
+		refresh_scheduler(core).await?;
 
 		Ok(ScheduledJob::from(model))
 	}
@@ -90,6 +99,7 @@ impl ScheduledJobConfigMutation {
 		}
 
 		let updated = active.update(core.conn.as_ref()).await?;
+		refresh_scheduler(core).await?;
 
 		Ok(ScheduledJob::from(updated))
 	}
@@ -107,6 +117,7 @@ impl ScheduledJobConfigMutation {
 		if deleted_count == 0 {
 			tracing::warn!(?id, "No scheduled job to delete with the given ID");
 		}
+		refresh_scheduler(core).await?;
 
 		Ok(deleted_count > 0)
 	}

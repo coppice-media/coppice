@@ -9,6 +9,7 @@ use models::{
 		library_config, library_exclusion, library_scan_record, library_tag, media,
 		media_metadata, metadata_provider_config, series, series_metadata, tag, user,
 	},
+	services::lists,
 	shared::enums::{FileStatus, MetadataResetImpact, UserPermission},
 };
 use sea_orm::{
@@ -18,19 +19,20 @@ use sea_orm::{
 };
 use stump_core::filesystem::{
 	image::{
-		generate_book_thumbnail, remove_thumbnails, GenerateThumbnailOptions,
-		ImageProcessorOptionsExt, PlaceholderGenerationJobConfig,
-		PlaceholderGenerationJobScope, ThumbnailGenerationJobParams,
+		generate_book_thumbnail, GenerateThumbnailOptions,
+		PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope,
+		ThumbnailGenerationJobParams,
 	},
 	media::analysis::{AnalysisJobConfig, MediaAnalysisJobScope},
 	metadata::{MetadataFetchJobParams, MetadataFetchScope},
-	scanner::ScanOptions,
 };
 use stump_core::job::stump_job::StumpJob;
+use stump_media::{image::remove_thumbnails, ImageProcessorOptionsExt};
+use stump_scanner::ScanOptions;
 use tokio::fs;
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	error_message,
 	guard::PermissionGuard,
 	input::{library::CreateOrUpdateLibraryInput, thumbnail::UpdateThumbnailInput},
@@ -57,7 +59,8 @@ impl LibraryMutation {
 		id: ID,
 		#[graphql(default = false)] force_reanalysis: bool,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -72,7 +75,8 @@ impl LibraryMutation {
 			force_reanalysis,
 			scope: MediaAnalysisJobScope::Library(model.id),
 		}))
-		.await?;
+		.await
+		.map_err(crate::error::map_core_error)?;
 
 		Ok(true)
 	}
@@ -90,7 +94,8 @@ impl LibraryMutation {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<CleanLibraryResponse> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		// This is primarily for access control assertion
@@ -105,7 +110,9 @@ impl LibraryMutation {
 
 		let txn = core.conn.as_ref().begin().await?;
 
-		let deleted_media_ids = media::Entity::delete_many()
+		let deleted_media_ids = media::Entity::find()
+			.select_only()
+			.column(media::Column::Id)
 			.filter(
 				media::Column::Status.ne(FileStatus::Ready.to_string()).and(
 					media::Column::SeriesId.in_subquery(
@@ -117,14 +124,30 @@ impl LibraryMutation {
 					),
 				),
 			)
-			.exec_with_returning(&txn)
-			.await?
-			.into_iter()
-			.map(|m| m.id)
-			.collect::<Vec<_>>();
-		tracing::trace!(?deleted_media_ids, "Deleted media ids");
+			.into_tuple::<String>()
+			.all(&txn)
+			.await?;
+		tracing::trace!(?deleted_media_ids, "Found media ids to delete");
 
-		let deleted_series_ids = series::Entity::delete_many()
+		lists::remove_memberships_for_media(&txn, &deleted_media_ids).await?;
+		media::Entity::delete_many()
+			.filter(
+				media::Column::Status.ne(FileStatus::Ready.to_string()).and(
+					media::Column::SeriesId.in_subquery(
+						Query::select()
+							.column(series::Column::Id)
+							.from(series::Entity)
+							.and_where(series::Column::LibraryId.eq(id.to_string()))
+							.to_owned(),
+					),
+				),
+			)
+			.exec(&txn)
+			.await?;
+
+		let deleted_series_ids = series::Entity::find()
+			.select_only()
+			.column(series::Column::Id)
 			.filter(series::Column::LibraryId.eq(id.to_string()))
 			.filter(
 				Condition::any()
@@ -140,12 +163,29 @@ impl LibraryMutation {
 						),
 					),
 			)
-			.exec_with_returning(&txn)
-			.await?
-			.into_iter()
-			.map(|s| s.id)
-			.collect::<Vec<_>>();
-		tracing::trace!(?deleted_series_ids, "Deleted series ids");
+			.into_tuple::<String>()
+			.all(&txn)
+			.await?;
+		tracing::trace!(?deleted_series_ids, "Found series ids to delete");
+
+		lists::remove_memberships_for_series(&txn, &deleted_series_ids).await?;
+		series::Entity::delete_many()
+			.filter(series::Column::LibraryId.eq(id.to_string()))
+			.filter(
+				Condition::any()
+					.add(series::Column::Status.ne(FileStatus::Ready.to_string()))
+					.add(
+						series::Column::Id.not_in_subquery(
+							Query::select()
+								.column(media::Column::SeriesId)
+								.distinct()
+								.from(media::Entity)
+								.to_owned(),
+						),
+					),
+			)
+			.exec(&txn)
+			.await?;
 
 		let is_library_empty = series::Entity::find()
 			.filter(series::Column::LibraryId.eq(id.to_string()))
@@ -182,7 +222,8 @@ impl LibraryMutation {
 		guard = "PermissionGuard::new(&[UserPermission::ReadJobs, UserPermission::ManageLibrary])"
 	)]
 	async fn clear_scan_history(&self, ctx: &Context<'_>, id: ID) -> Result<u64> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		// This is primarily for access control assertion
@@ -218,6 +259,11 @@ impl LibraryMutation {
 		let scan_after_creation = input.scan_after_persist;
 		let add_watcher = input.config.as_ref().is_some_and(|config| config.watch);
 		let tags = input.tags.take();
+
+		if scan_after_creation {
+			core.require_background_jobs()
+				.map_err(crate::error::map_core_error)?;
+		}
 
 		let txn = core.conn.as_ref().begin().await?;
 
@@ -271,12 +317,12 @@ impl LibraryMutation {
 				created_library.path.clone(),
 				None,
 			))
-			.await?;
+			.await
+			.map_err(crate::error::map_core_error)?;
 		}
 
-		if add_watcher {
-			core.library_watcher
-				.add_watcher(created_library.path.clone().into())
+		if core.background_jobs_enabled() && add_watcher {
+			core.add_watcher(created_library.path.clone().into())
 				.await?;
 		}
 
@@ -290,7 +336,8 @@ impl LibraryMutation {
 		id: ID,
 		impact: MetadataResetImpact,
 	) -> Result<Library> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -370,7 +417,8 @@ impl LibraryMutation {
 		id: ID,
 		mut input: CreateOrUpdateLibraryInput,
 	) -> Result<Library> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let (existing_library, existing_config) = library::Entity::find_for_user(user)
@@ -410,6 +458,11 @@ impl LibraryMutation {
 		let scan_after_update = input.scan_after_persist;
 		let add_watcher = input.config.as_ref().is_some_and(|config| config.watch);
 		let tags = input.tags.take();
+
+		if scan_after_update {
+			core.require_background_jobs()
+				.map_err(crate::error::map_core_error)?;
+		}
 
 		let txn = core.conn.as_ref().begin().await?;
 
@@ -469,17 +522,18 @@ impl LibraryMutation {
 				updated_library.path.clone(),
 				None,
 			))
-			.await?;
+			.await
+			.map_err(crate::error::map_core_error)?;
 		}
 
-		if add_watcher {
-			core.library_watcher
-				.add_watcher(updated_library.path.clone().into())
-				.await?;
-		} else {
-			core.library_watcher
-				.remove_watcher(existing_library.path.clone().into())
-				.await?;
+		if core.background_jobs_enabled() {
+			if add_watcher {
+				core.add_watcher(updated_library.path.clone().into())
+					.await?;
+			} else {
+				core.remove_watcher(existing_library.path.clone().into())
+					.await?;
+			}
 		}
 
 		Ok(Library::from(updated_library))
@@ -494,7 +548,8 @@ impl LibraryMutation {
 		emoji: Option<String>,
 	) -> Result<Library> {
 		let core = ctx.data::<CoreContext>()?;
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		let existing_library = library::Entity::find_for_user(user)
 			.filter(library::Column::Id.eq(id.to_string()))
@@ -521,7 +576,8 @@ impl LibraryMutation {
 		input: UpdateThumbnailInput,
 	) -> Result<Library> {
 		let core = ctx.data::<CoreContext>()?;
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		let (library, config) = library::Entity::find_for_user(user)
 			.filter(library::Column::Id.eq(id.to_string()))
@@ -579,7 +635,8 @@ impl LibraryMutation {
 		id: ID,
 		user_ids: Vec<String>,
 	) -> Result<Library> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		if user_ids.contains(&user.id) {
@@ -669,7 +726,8 @@ impl LibraryMutation {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<Library> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let library = library::Entity::find_for_user(user)
@@ -691,7 +749,8 @@ impl LibraryMutation {
 	/// operation cannot be undone.
 	#[graphql(guard = "PermissionGuard::one(UserPermission::DeleteLibrary)")]
 	async fn delete_library(&self, ctx: &Context<'_>, id: ID) -> Result<Library> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let library = library::Entity::find_for_user(user)
@@ -699,7 +758,32 @@ impl LibraryMutation {
 			.one(core.conn.as_ref())
 			.await?
 			.ok_or("Library not found")?;
-		library.clone().delete(core.conn.as_ref()).await?;
+
+		let txn = core.conn.as_ref().begin().await?;
+		let library_series = Query::select()
+			.column(series::Column::Id)
+			.from(series::Entity)
+			.and_where(series::Column::LibraryId.eq(library.id.clone()))
+			.to_owned();
+		let media_ids = media::Entity::find()
+			.select_only()
+			.column(media::Column::Id)
+			.filter(media::Column::SeriesId.in_subquery(library_series))
+			.into_tuple::<String>()
+			.all(&txn)
+			.await?;
+		let series_ids = series::Entity::find()
+			.select_only()
+			.column(series::Column::Id)
+			.filter(series::Column::LibraryId.eq(library.id.clone()))
+			.into_tuple::<String>()
+			.all(&txn)
+			.await?;
+
+		lists::remove_memberships_for_media(&txn, &media_ids).await?;
+		lists::remove_memberships_for_series(&txn, &series_ids).await?;
+		library.clone().delete(&txn).await?;
+		txn.commit().await?;
 
 		// TODO: delete thumbnails!
 
@@ -715,7 +799,8 @@ impl LibraryMutation {
 		id: ID,
 		#[graphql(default = false)] force_regenerate: bool,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let (library, config) = library::Entity::find_for_user(user)
@@ -737,7 +822,7 @@ impl LibraryMutation {
 			.await
 		{
 			tracing::error!(?error, "Failed to enqueue thumbnail generation job");
-			return Err(error.into());
+			return Err(crate::error::map_core_error(error));
 		}
 
 		Ok(true)
@@ -750,7 +835,8 @@ impl LibraryMutation {
 		id: ID,
 		#[graphql(default = false)] force_regenerate: bool,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let library = library::Entity::find_for_user(user)
@@ -771,7 +857,7 @@ impl LibraryMutation {
 			.await
 		{
 			tracing::error!(?error, "Failed to enqueue placeholder generation job");
-			return Err(error.into());
+			return Err(crate::error::map_core_error(error));
 		}
 
 		Ok(true)
@@ -779,7 +865,8 @@ impl LibraryMutation {
 
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
 	async fn delete_library_thumbnails(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let library = library::Entity::find_for_user(user)
@@ -837,7 +924,8 @@ impl LibraryMutation {
 		id: ID,
 		#[graphql(default = false)] force_refetch: bool,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let (library, config) = library::Entity::find_for_user(user)
@@ -869,7 +957,8 @@ impl LibraryMutation {
 			force_refetch,
 			scope: MetadataFetchScope::MediaInLibrary(library.id),
 		}))
-		.await?;
+		.await
+		.map_err(crate::error::map_core_error)?;
 		tracing::debug!("Enqueued library metadata fetch job");
 
 		Ok(true)
@@ -883,7 +972,8 @@ impl LibraryMutation {
 		library_id: ID,
 		locked_fields: Vec<MetadataField>,
 	) -> Result<u64> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let library = library::Entity::find_for_user(user)
@@ -934,7 +1024,8 @@ impl LibraryMutation {
 		library_id: ID,
 		locked_fields: Vec<MetadataField>,
 	) -> Result<u64> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let library = library::Entity::find_for_user(user)
@@ -994,7 +1085,8 @@ impl LibraryMutation {
 		id: ID,
 		options: Option<Json<ScanOptions>>,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let library = library::Entity::find_for_user(user)
@@ -1009,7 +1101,8 @@ impl LibraryMutation {
 			library.path,
 			options.map(|o| o.0),
 		))
-		.await?;
+		.await
+		.map_err(crate::error::map_core_error)?;
 		tracing::debug!("Enqueued library scan job");
 
 		Ok(true)
@@ -1018,7 +1111,8 @@ impl LibraryMutation {
 	/// "Visit" a library, which will upsert a record of the user's last visit to the library.
 	/// This is used to inform the UI of the last library which was visited by the user
 	async fn visit_library(&self, ctx: &Context<'_>, id: ID) -> Result<Library> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let library = library::Entity::find_for_user(user)

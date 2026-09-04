@@ -7,8 +7,7 @@ use sea_orm::{
 };
 
 use crate::{
-	data::{AuthContext, CoreContext},
-	input::reading_list::ReadingListInput,
+	data::CoreContext, input::reading_list::ReadingListInput,
 	object::reading_list::ReadingList,
 };
 
@@ -27,7 +26,7 @@ impl ReadingListMutation {
 		ctx: &Context<'_>,
 		input: ReadingListInput,
 	) -> Result<ReadingList> {
-		let user_id = ctx.data::<AuthContext>()?.id();
+		let user_id = ctx.data::<stump_auth::AuthContext>()?.id();
 
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
@@ -52,7 +51,7 @@ impl ReadingListMutation {
 		ctx: &Context<'_>,
 		input: ReadingListInput,
 	) -> Result<ReadingList> {
-		let user_id = ctx.data::<AuthContext>()?.id();
+		let user_id = ctx.data::<stump_auth::AuthContext>()?.id();
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let reading_list_id = input.id.clone();
 
@@ -71,7 +70,7 @@ impl ReadingListMutation {
 		ctx: &Context<'_>,
 		id: String,
 	) -> Result<ReadingList> {
-		let user_id = ctx.data::<AuthContext>()?.id();
+		let user_id = ctx.data::<stump_auth::AuthContext>()?.id();
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let reading_list = get_for_owner(&id, conn, user_id).await?;

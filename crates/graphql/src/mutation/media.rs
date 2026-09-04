@@ -18,9 +18,7 @@ use stump_core::{
 };
 
 use crate::{
-	data::{AuthContext, CoreContext},
-	guard::PermissionGuard,
-	input::thumbnail::PageBasedThumbnailInput,
+	data::CoreContext, guard::PermissionGuard, input::thumbnail::PageBasedThumbnailInput,
 	object::media::Media,
 };
 
@@ -36,7 +34,8 @@ impl MediaMutation {
 		id: ID,
 		#[graphql(default = false)] force_reanalysis: bool,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -53,7 +52,8 @@ impl MediaMutation {
 			force_reanalysis,
 			scope: MediaAnalysisJobScope::Book(model.id),
 		}))
-		.await?;
+		.await
+		.map_err(crate::error::map_core_error)?;
 
 		Ok(true)
 	}
@@ -61,7 +61,8 @@ impl MediaMutation {
 	// TODO: Support converting other formats in the future
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
 	async fn convert_media(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -85,7 +86,8 @@ impl MediaMutation {
 
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
 	async fn delete_media(&self, ctx: &Context<'_>, id: ID) -> Result<Media> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -111,7 +113,8 @@ impl MediaMutation {
 		id: ID,
 		is_favorite: bool,
 	) -> Result<Media> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -165,7 +168,8 @@ impl MediaMutation {
 		input: PageBasedThumbnailInput,
 	) -> Result<Media> {
 		let core = ctx.data::<CoreContext>()?;
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		let book = media::ModelWithMetadata::find_for_user(user)
 			.filter(media::Column::Id.eq(id.to_string()))

@@ -30,11 +30,11 @@ impl Default for CursorPagination {
 }
 
 fn default_restful_page() -> u64 {
-	1
+	stump_api_types::OffsetPagination::default().page
 }
 
 fn default_page_size() -> Option<u64> {
-	Some(20)
+	stump_api_types::OffsetPagination::default().page_size
 }
 
 fn default_limit() -> u64 {
@@ -42,7 +42,7 @@ fn default_limit() -> u64 {
 }
 
 fn default_zero_based() -> Option<bool> {
-	Some(false)
+	stump_api_types::OffsetPagination::default().zero_based
 }
 
 /// A simple offset-based pagination input object
@@ -62,45 +62,57 @@ pub struct OffsetPagination {
 	pub zero_based: Option<bool>,
 }
 
-impl Default for OffsetPagination {
-	fn default() -> Self {
+impl From<OffsetPagination> for stump_api_types::OffsetPagination {
+	fn from(value: OffsetPagination) -> Self {
 		Self {
-			page: 1,
-			page_size: default_page_size(),
-			zero_based: default_zero_based(),
+			page: value.page,
+			page_size: value.page_size,
+			zero_based: value.zero_based,
+		}
+	}
+}
+
+impl From<stump_api_types::OffsetPagination> for OffsetPagination {
+	fn from(value: stump_api_types::OffsetPagination) -> Self {
+		Self {
+			page: value.page,
+			page_size: value.page_size,
+			zero_based: value.zero_based,
 		}
 	}
 }
 
 impl OffsetPagination {
-	pub fn offset(&self) -> u64 {
-		if self.zero_based.unwrap_or(false) {
-			self.page * self.page_size.unwrap_or(20)
-		} else {
-			(self.page - 1) * self.page_size.unwrap_or(20)
+	fn as_neutral(&self) -> stump_api_types::OffsetPagination {
+		stump_api_types::OffsetPagination {
+			page: self.page,
+			page_size: self.page_size,
+			zero_based: self.zero_based,
 		}
+	}
+}
+
+impl Default for OffsetPagination {
+	fn default() -> Self {
+		stump_api_types::OffsetPagination::default().into()
+	}
+}
+
+impl OffsetPagination {
+	pub fn offset(&self) -> u64 {
+		self.as_neutral().offset()
 	}
 
 	pub fn limit(&self) -> u64 {
-		self.page_size.unwrap_or(20)
+		self.as_neutral().limit()
 	}
 
 	pub fn next_page(&self) -> u64 {
-		self.page + 1
+		self.as_neutral().next_page()
 	}
 
 	pub fn previous_page(&self) -> Option<u64> {
-		if self.zero_based.unwrap_or(false) {
-			if self.page > 0 {
-				Some(self.page - 1)
-			} else {
-				None
-			}
-		} else if self.page > 1 {
-			Some(self.page - 1)
-		} else {
-			None
-		}
+		self.as_neutral().previous_page()
 	}
 }
 
@@ -148,11 +160,7 @@ impl Pagination {
 	pub fn resolve(self) -> Pagination {
 		match self {
 			Pagination::None(input) if !input.unpaginated => {
-				Pagination::Offset(OffsetPagination {
-					page: 1,
-					page_size: default_page_size(),
-					zero_based: default_zero_based(),
-				})
+				Pagination::Offset(OffsetPagination::default())
 			},
 			_ => self,
 		}
@@ -161,11 +169,7 @@ impl Pagination {
 
 impl Default for Pagination {
 	fn default() -> Self {
-		Pagination::Offset(OffsetPagination {
-			page: 1,
-			page_size: default_page_size(),
-			zero_based: default_zero_based(),
-		})
+		Pagination::Offset(OffsetPagination::default())
 	}
 }
 
@@ -418,6 +422,36 @@ mod tests {
 
 	mod offset_pagination {
 		use super::*;
+
+		#[test]
+		fn default_delegates_to_neutral_pagination() {
+			let graphql = OffsetPagination::default();
+			let neutral = stump_api_types::OffsetPagination::default();
+
+			assert_eq!(
+				stump_api_types::OffsetPagination::from(graphql.clone()),
+				neutral
+			);
+			let roundtrip = OffsetPagination::from(neutral);
+			assert_eq!(roundtrip.page, graphql.page);
+			assert_eq!(roundtrip.page_size, graphql.page_size);
+			assert_eq!(roundtrip.zero_based, graphql.zero_based);
+		}
+
+		#[test]
+		fn arithmetic_delegates_to_neutral_pagination() {
+			let graphql = OffsetPagination {
+				page: 3,
+				page_size: Some(7),
+				zero_based: Some(false),
+			};
+			let neutral = stump_api_types::OffsetPagination::from(graphql.clone());
+
+			assert_eq!(graphql.offset(), neutral.offset());
+			assert_eq!(graphql.limit(), neutral.limit());
+			assert_eq!(graphql.next_page(), neutral.next_page());
+			assert_eq!(graphql.previous_page(), neutral.previous_page());
+		}
 
 		#[test]
 		fn next_page_returns_current_page_plus_one_when_one_based() {

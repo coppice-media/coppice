@@ -2,7 +2,7 @@ use async_graphql::{Context, Object, Result, ID};
 use models::entity::{bookmark, media, media_annotation};
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	object::{bookmark::Bookmark, epub::Epub, media_annotation::MediaAnnotation},
 };
 
@@ -13,7 +13,8 @@ pub struct EpubQuery;
 impl EpubQuery {
 	/// Get a single epub by its media ID
 	async fn epub_by_id(&self, ctx: &Context<'_>, id: ID) -> Result<Epub> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let model = media::Entity::find_media_ids_for_user(id.to_string(), user)
@@ -31,7 +32,8 @@ impl EpubQuery {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<Vec<Bookmark>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		Ok(
@@ -51,7 +53,8 @@ impl EpubQuery {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<Vec<MediaAnnotation>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		Ok(media_annotation::Model::find_for_user_and_media_id(

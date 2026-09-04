@@ -1,5 +1,5 @@
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	guard::PermissionGuard,
 	input::media::{MediaMetadataInput, MediaMetadataSearchInput},
 	object::{media::Media, metadata_fetch_record::MetadataFetchRecord},
@@ -28,7 +28,8 @@ impl MediaMetadataMutation {
 		id: ID,
 		input: MediaMetadataInput,
 	) -> Result<Media> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let model = media::ModelWithMetadata::find_for_user(user)
@@ -69,7 +70,7 @@ impl MediaMetadataMutation {
 		id: ID,
 		search: Option<MediaMetadataSearchInput>,
 	) -> Result<MetadataFetchRecord> {
-		let AuthContext { .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { .. } = ctx.data::<stump_auth::AuthContext>()?;
 		let core_ctx = ctx.data::<CoreContext>()?;
 		let conn = core_ctx.conn.as_ref();
 
@@ -263,7 +264,8 @@ impl MediaMetadataMutation {
 		media_id: ID,
 		locked_fields: Vec<MetadataField>,
 	) -> Result<Media> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let model = media::ModelWithMetadata::find_for_user(user)

@@ -1,5 +1,5 @@
 use crate::{
-	data::{AuthContext, CoreContext, ServiceContext},
+	data::CoreContext,
 	input::smart_lists::SmartListFilterGroupInput,
 	object::{
 		media::Media, smart_list_item::SmartListItems, smart_list_view::SmartListView,
@@ -45,7 +45,7 @@ impl SmartList {
 	// TODO(thumb-placeholders): We need to refactor how non-book thumbs are handled so we can pull
 	// dimensions/metadata here.
 	async fn thumbnail(&self, ctx: &Context<'_>) -> Result<ImageRef> {
-		let service = ctx.data::<ServiceContext>()?;
+		let service = ctx.data::<stump_api_types::RequestOrigin>()?;
 		Ok(ImageRef {
 			// FIXME(graphql): Make thumbnails endpoint
 			url: service
@@ -70,7 +70,8 @@ impl SmartList {
 		ctx: &Context<'_>,
 		#[graphql(default)] limit: Option<u64>,
 	) -> Result<Vec<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
 
@@ -103,7 +104,8 @@ impl SmartList {
 		ctx: &Context<'_>,
 		#[graphql(default)] limit: Option<u64>,
 	) -> Result<SmartListItems> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
 
@@ -135,7 +137,8 @@ impl SmartList {
 	}
 
 	async fn meta(&self, ctx: &Context<'_>) -> Result<SmartListMeta> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
 

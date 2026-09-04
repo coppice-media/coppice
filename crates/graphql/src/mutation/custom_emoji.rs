@@ -5,7 +5,7 @@ use models::{entity::custom_emoji, shared::enums::UserPermission};
 use sea_orm::{prelude::*, ActiveValue::Set, ColumnTrait, IntoActiveModel, QueryFilter};
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	guard::{OptionalFeature, OptionalFeatureGuard, PermissionGuard},
 	input::book_club::{CreateCustomEmojiInput, UpdateCustomEmojiInput},
 	object::custom_emoji::CustomEmoji,
@@ -26,7 +26,8 @@ impl CustomEmojiMutation {
 		input: CreateCustomEmojiInput,
 		upload: Upload,
 	) -> Result<CustomEmoji> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -80,7 +81,7 @@ impl CustomEmojiMutation {
 	/// Delete a custom emoji
 	#[graphql(guard = "PermissionGuard::new(&[UserPermission::UploadFile])")]
 	async fn delete_custom_emoji(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
-		let _ = ctx.data::<AuthContext>()?;
+		let _ = ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -113,7 +114,7 @@ impl CustomEmojiMutation {
 		id: ID,
 		input: UpdateCustomEmojiInput,
 	) -> Result<CustomEmoji> {
-		let _ = ctx.data::<AuthContext>()?;
+		let _ = ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let emoji_id = id.as_ref().parse::<i32>().map_err(|_| "Invalid emoji ID")?;

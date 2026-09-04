@@ -3,7 +3,7 @@ use metadata_integrations::MatchCandidate;
 use models::entity::{media, metadata_fetch_record, series};
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	object::{media::Media, series::Series},
 };
 
@@ -41,7 +41,8 @@ impl MetadataFetchRecord {
 			return Ok(None);
 		};
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		// Note: This is another awkward access issue where a user with permission to view these
 		// fetch records might not have permission to view the associated media.
@@ -61,7 +62,8 @@ impl MetadataFetchRecord {
 		};
 
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		// Note: This is another awkward access issue where a user with permission to view these
 		// fetch records might not have permission to view the associated media.

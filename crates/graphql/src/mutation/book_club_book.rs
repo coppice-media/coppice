@@ -7,7 +7,7 @@ use models::{
 use sea_orm::{prelude::*, Set, TransactionTrait};
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	input::book_club::AddBookToClubInput,
 	mutation::book_club::get_book_club_for_admin,
 	object::{book_club::BookClub, book_club_book::BookClubBookVariant},
@@ -25,7 +25,8 @@ impl BookClubBookMutation {
 		book_club_id: ID,
 		input: AddBookToClubInput,
 	) -> Result<BookClub> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let book_club = get_book_club_for_admin(user, &book_club_id, conn)
@@ -84,7 +85,8 @@ impl BookClubBookMutation {
 		ctx: &Context<'_>,
 		book_club_book_id: ID,
 	) -> Result<BookClub> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let book = book_club_book::Entity::find_by_id(book_club_book_id.as_ref())
@@ -124,7 +126,8 @@ impl BookClubBookMutation {
 		book_club_id: ID,
 		#[graphql(validator(min_items = 1))] book_ids: Vec<String>,
 	) -> Result<BookClub> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let book_club = get_book_club_for_admin(user, &book_club_id, conn)

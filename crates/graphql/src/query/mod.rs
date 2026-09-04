@@ -11,6 +11,7 @@ mod email_device;
 mod emailer;
 mod epub;
 mod filesystem;
+mod ingest;
 mod job;
 mod library;
 mod log;
@@ -40,6 +41,7 @@ use email_device::EmailDeviceQuery;
 use emailer::EmailerQuery;
 use epub::EpubQuery;
 use filesystem::FilesystemQuery;
+use ingest::IngestQuery;
 use library::LibraryQuery;
 use log::LogQuery;
 use media::MediaQuery;
@@ -92,6 +94,7 @@ struct SystemQueries(
 	MetadataProviderQuery,
 	ServerConfigQuery,
 	FilesystemQuery,
+	IngestQuery,
 );
 
 #[derive(async_graphql::MergedObject, Default)]

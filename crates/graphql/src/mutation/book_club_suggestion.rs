@@ -10,8 +10,7 @@ use models::{
 use sea_orm::{prelude::*, ActiveValue::Set, ColumnTrait, IntoActiveModel, QueryFilter};
 
 use crate::{
-	data::{AuthContext, CoreContext},
-	input::book_club::SuggestBookInput,
+	data::CoreContext, input::book_club::SuggestBookInput,
 	object::book_club_book_suggestion::BookClubBookSuggestion,
 };
 
@@ -27,7 +26,8 @@ impl BookClubSuggestionMutation {
 		book_club_id: ID,
 		input: SuggestBookInput,
 	) -> Result<BookClubBookSuggestion> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		book_club::Entity::find_by_id_and_user(book_club_id.as_ref(), user)
@@ -70,7 +70,8 @@ impl BookClubSuggestionMutation {
 		ctx: &Context<'_>,
 		suggestion_id: ID,
 	) -> Result<BookClubBookSuggestion> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let suggestion =
@@ -106,7 +107,8 @@ impl BookClubSuggestionMutation {
 		ctx: &Context<'_>,
 		suggestion_id: ID,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let suggestion =
@@ -153,7 +155,8 @@ impl BookClubSuggestionMutation {
 		status: BookClubSuggestionStatus,
 		notes: Option<String>,
 	) -> Result<BookClubBookSuggestion> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let suggestion =

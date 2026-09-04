@@ -4,17 +4,15 @@ use models::{
 	shared::{book_club::BookClubMemberRole, enums::UserPermission},
 };
 
-use crate::{
-	data::{AuthContext, CoreContext},
-	error_message,
-};
+use crate::{data::CoreContext, error_message};
 
 /// Guard that checks if the user is the owner of the server.
 pub struct ServerOwnerGuard;
 
 impl Guard for ServerOwnerGuard {
 	async fn check(&self, ctx: &Context<'_>) -> Result<()> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		if user.is_server_owner {
 			Ok(())
@@ -41,7 +39,8 @@ impl SelfGuard {
 
 impl Guard for SelfGuard {
 	async fn check(&self, ctx: &Context<'_>) -> Result<()> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		if user.id == self.user_id {
 			Ok(())
@@ -73,7 +72,8 @@ impl PermissionGuard {
 
 impl Guard for PermissionGuard {
 	async fn check(&self, ctx: &Context<'_>) -> Result<()> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		if user.is_server_owner {
 			return Ok(());
@@ -145,7 +145,8 @@ impl BookClubRoleGuard {
 
 impl Guard for BookClubRoleGuard {
 	async fn check(&self, ctx: &Context<'_>) -> Result<()> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		if user.is_server_owner {

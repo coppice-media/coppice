@@ -10,7 +10,7 @@ use sea_orm::{
 };
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	guard::{PermissionGuard, SelfGuard, ServerOwnerGuard},
 	object::{user::User, user_login_activity::UserLoginActivity},
 	pagination::{
@@ -25,7 +25,8 @@ pub struct UserQuery;
 #[Object]
 impl UserQuery {
 	async fn me(&self, ctx: &Context<'_>) -> Result<User> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let first = user::Entity::find()

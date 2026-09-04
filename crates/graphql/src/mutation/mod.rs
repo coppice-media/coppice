@@ -9,6 +9,7 @@ mod custom_emoji;
 mod email_device;
 mod emailer;
 mod epub;
+mod ingest;
 mod job;
 mod library;
 mod log;
@@ -27,6 +28,8 @@ mod smart_lists;
 mod tag;
 mod upload;
 mod user;
+
+use ingest::IngestMutation;
 
 use api_key::APIKeyMutation;
 use book_club::BookClubMutation;
@@ -92,6 +95,7 @@ struct SystemMutations(
 	ServerConfigMutation,
 	ScheduledJobConfigMutation,
 	MetadataProviderMutation,
+	IngestMutation,
 );
 
 #[derive(async_graphql::MergedObject, Default)]

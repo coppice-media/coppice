@@ -8,7 +8,7 @@ use sea_orm::{
 };
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	object::{
 		book_club_discussion::BookClubDiscussion,
 		book_club_discussion_message::BookClubDiscussionMessage,
@@ -27,7 +27,8 @@ impl BookClubDiscussionQuery {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<BookClubDiscussion> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let discussion = book_club_discussion::Entity::find_by_id(id.as_ref())
@@ -46,7 +47,8 @@ impl BookClubDiscussionQuery {
 		ctx: &Context<'_>,
 		book_club_book_id: ID,
 	) -> Result<Vec<BookClubDiscussion>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let book = book_club_book::Entity::find_by_id(book_club_book_id.as_ref())
@@ -76,7 +78,8 @@ impl BookClubDiscussionQuery {
 		ctx: &Context<'_>,
 		book_club_id: ID,
 	) -> Result<Vec<BookClubDiscussion>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		verify_read_access(book_club_id.as_ref(), user, conn).await?;
@@ -100,7 +103,8 @@ impl BookClubDiscussionQuery {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<BookClubDiscussionMessage> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let message = book_club_discussion_message::Entity::find_by_id(id.as_ref())
@@ -126,7 +130,8 @@ impl BookClubDiscussionQuery {
 		parent_id: Option<ID>,
 		#[graphql(default)] pagination: CursorPagination,
 	) -> Result<CursorPaginatedResponse<BookClubDiscussionMessage>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let discussion = book_club_discussion::Entity::find_by_id(discussion_id.as_ref())

@@ -16,7 +16,7 @@ use sea_orm::{
 };
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	filter::{media::MediaFilterInput, IntoFilter},
 	guard::{PermissionGuard, ServerOwnerGuard},
 	object::{
@@ -72,7 +72,8 @@ pub fn add_sessions_join_for_filter(
 #[Object]
 impl MediaQuery {
 	async fn media_count(&self, ctx: &Context<'_>) -> Result<i64> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let count = media::Entity::find_for_user(user)
@@ -151,7 +152,8 @@ impl MediaQuery {
 		#[graphql(default, validator(custom = "PaginationValidator"))]
 		pagination: Pagination,
 	) -> Result<PaginatedResponse<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let mut query = media::ModelWithMetadata::find_for_user(user);
@@ -234,7 +236,8 @@ impl MediaQuery {
 	}
 
 	async fn media_by_id(&self, ctx: &Context<'_>, id: ID) -> Result<Option<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let model = media::ModelWithMetadata::find_by_id_for_user(id.to_string(), user)
@@ -251,7 +254,8 @@ impl MediaQuery {
 		ctx: &Context<'_>,
 		path: String,
 	) -> Result<Option<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let model = media::ModelWithMetadata::find_for_user(user)
@@ -308,7 +312,8 @@ impl MediaQuery {
 		#[graphql(default, validator(custom = "PaginationValidator"))]
 		pagination: Pagination,
 	) -> Result<PaginatedResponse<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let user_id = user.id.clone();
@@ -447,7 +452,8 @@ impl MediaQuery {
 		#[graphql(default, validator(custom = "PaginationValidator"))]
 		pagination: Pagination,
 	) -> Result<PaginatedResponse<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let offset_info = match pagination.resolve() {
@@ -693,7 +699,8 @@ impl MediaQuery {
 		#[graphql(default, validator(custom = "PaginationValidator"))]
 		pagination: Pagination,
 	) -> Result<PaginatedResponse<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let query = media::ModelWithMetadata::find_for_user(user)
@@ -774,7 +781,8 @@ impl MediaQuery {
 	}
 
 	async fn duplicate_media(&self, ctx: &Context<'_>) -> Result<Vec<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let models = media::ModelWithMetadata::find_for_user(user)
@@ -802,7 +810,8 @@ impl MediaQuery {
 		media_id: ID,
 		branched_session_id: Option<i32>,
 	) -> Result<ReadingSessionConflictResolutionView> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let media_id_str = media_id.as_str();

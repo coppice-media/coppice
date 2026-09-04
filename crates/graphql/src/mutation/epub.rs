@@ -1,5 +1,5 @@
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	input::media::{BookmarkInput, CreateAnnotationInput, UpdateAnnotationInput},
 	object::{bookmark::Bookmark, media_annotation::MediaAnnotation},
 };
@@ -21,7 +21,8 @@ impl EpubMutation {
 		ctx: &Context<'_>,
 		input: BookmarkInput,
 	) -> Result<Bookmark> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let active_model = input.into_active_model(user);
@@ -32,7 +33,8 @@ impl EpubMutation {
 
 	/// Delete a bookmark by ID, only if the user created it
 	async fn delete_bookmark(&self, ctx: &Context<'_>, id: String) -> Result<Bookmark> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let bookmark = bookmark::Entity::find_for_user(user)
@@ -51,7 +53,8 @@ impl EpubMutation {
 		ctx: &Context<'_>,
 		input: CreateAnnotationInput,
 	) -> Result<MediaAnnotation> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let annotation = input.into_active_model(user);
@@ -66,7 +69,8 @@ impl EpubMutation {
 		ctx: &Context<'_>,
 		input: UpdateAnnotationInput,
 	) -> Result<MediaAnnotation> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let annotation = media_annotation::Entity::find()
@@ -89,7 +93,8 @@ impl EpubMutation {
 		ctx: &Context<'_>,
 		id: String,
 	) -> Result<MediaAnnotation> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let annotation = media_annotation::Entity::find()

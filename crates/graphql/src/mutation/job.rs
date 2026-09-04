@@ -19,7 +19,7 @@ impl JobMutation {
 	async fn cancel_job(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
 		let core = ctx.data::<CoreContext>()?;
 		let job_id = id.to_string();
-		let cancelled = core.apalis_state.cancel_job(&job_id);
+		let cancelled = core.cancel_job(&job_id);
 		if !cancelled {
 			tracing::warn!(%job_id, "Job not found or already completed");
 		}

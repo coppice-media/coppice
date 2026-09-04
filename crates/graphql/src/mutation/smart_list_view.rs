@@ -1,7 +1,5 @@
 use crate::{
-	data::{AuthContext, CoreContext},
-	guard::PermissionGuard,
-	input::smart_list_view::SaveSmartListView,
+	data::CoreContext, guard::PermissionGuard, input::smart_list_view::SaveSmartListView,
 	object::smart_list_view::SmartListView,
 };
 use async_graphql::{Context, Object, Result, ID};
@@ -22,7 +20,8 @@ impl SmartListViewMutation {
 		ctx: &Context<'_>,
 		input: SaveSmartListView,
 	) -> Result<SmartListView> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
 
@@ -49,7 +48,8 @@ impl SmartListViewMutation {
 		original_name: String,
 		input: SaveSmartListView,
 	) -> Result<SmartListView> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
 
@@ -79,7 +79,8 @@ impl SmartListViewMutation {
 		id: ID,
 		name: String,
 	) -> Result<SmartListView> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
 

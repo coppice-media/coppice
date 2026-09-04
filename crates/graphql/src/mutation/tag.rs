@@ -1,5 +1,5 @@
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	guard::PermissionGuard,
 	object::{media::Media, series::Series, tag::Tag},
 };
@@ -51,7 +51,8 @@ impl TagMutation {
 		id: ID,
 		tags: Vec<String>,
 	) -> Result<Media> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let model = media::ModelWithMetadata::find_for_user(user)
@@ -120,7 +121,8 @@ impl TagMutation {
 		id: ID,
 		tags: Vec<String>,
 	) -> Result<Series> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let model = series::ModelWithMetadata::find_for_user(user)

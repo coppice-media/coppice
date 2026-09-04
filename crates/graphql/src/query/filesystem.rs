@@ -10,7 +10,7 @@ use async_graphql::{Object, Result};
 use itertools::Itertools;
 use models::shared::enums::UserPermission;
 use std::fs::DirEntry;
-use stump_core::filesystem::PathUtils;
+use stump_media::PathUtils;
 
 #[derive(Default)]
 pub struct FilesystemQuery;

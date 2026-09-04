@@ -10,7 +10,7 @@ use num_traits::cast::ToPrimitive;
 use sea_orm::{prelude::*, sea_query::Query, FromQueryResult, QuerySelect};
 
 use crate::{
-	data::{AuthContext, CoreContext, ServiceContext},
+	data::CoreContext,
 	loader::{
 		favorite::{FavoriteMediaLoaderKey, FavoritesLoader},
 		library_config::{LibraryConfigLoader, LibraryConfigLoaderKey},
@@ -76,7 +76,8 @@ impl Media {
 
 	/// Whether the media is marked as a favorite by the current user
 	async fn is_favorite(&self, ctx: &Context<'_>) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<FavoritesLoader>>()?;
 
 		let is_favorite = loader
@@ -185,7 +186,7 @@ impl Media {
 	/// A reference to the thumbnail image for the media. This will be a fully
 	/// qualified URL to the image.
 	async fn thumbnail(&self, ctx: &Context<'_>) -> Result<ImageRef> {
-		let service = ctx.data::<ServiceContext>()?;
+		let service = ctx.data::<stump_api_types::RequestOrigin>()?;
 		let loader = ctx.data::<DataLoader<MediaAnalysisLoader>>()?;
 
 		let dimensions = match self
@@ -228,7 +229,8 @@ impl Media {
 		&self,
 		ctx: &Context<'_>,
 	) -> Result<Option<ResumeReadingCursor>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<ReadingSessionLoader>>()?;
 
 		let progress = loader
@@ -243,7 +245,8 @@ impl Media {
 
 	// TODO(graphql): Create object to query for device used (e.g., KoReader device ID)
 	async fn read_history(&self, ctx: &Context<'_>) -> Result<Vec<ReadthroughRecord>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<ReadingSessionLoader>>()?;
 
 		let history = loader
@@ -305,7 +308,8 @@ impl Media {
 		ctx: &Context<'_>,
 		#[graphql(default)] pagination: Pagination,
 	) -> Result<PaginatedResponse<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let pagination = match pagination {

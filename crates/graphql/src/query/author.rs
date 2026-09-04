@@ -5,7 +5,7 @@ use models::entity::{media, media_metadata, series, user::AuthUser};
 use sea_orm::{prelude::*, sea_query::Query, QuerySelect};
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	object::author::{Author, AuthorSeries},
 	pagination::{
 		OffsetPaginationInfo, PaginatedResponse, Pagination, PaginationValidator,
@@ -78,7 +78,8 @@ impl AuthorQuery {
 		#[graphql(desc = "Optional library ID to scope the author search")]
 		library_id: Option<String>,
 	) -> Result<Option<Author>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let authors = fetch_all_authors(conn, library_id.clone(), user).await?;
@@ -103,7 +104,8 @@ impl AuthorQuery {
 		#[graphql(default, validator(custom = "PaginationValidator"))]
 		pagination: Pagination,
 	) -> Result<PaginatedResponse<Author>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let all_authors = fetch_all_authors(conn, library_id.clone(), user).await?;
@@ -176,7 +178,8 @@ impl AuthorQuery {
 		#[graphql(desc = "Optional library ID to scope the series search")]
 		library_id: Option<String>,
 	) -> Result<Option<AuthorSeries>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let mut query = media::Entity::find_for_user(user)

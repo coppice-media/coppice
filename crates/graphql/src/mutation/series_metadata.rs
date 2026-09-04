@@ -10,7 +10,7 @@ use sea_orm::{prelude::*, sea_query::Query, IntoActiveModel, Set, TransactionTra
 use stump_core::filesystem::metadata::ProviderClientCache;
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	guard::PermissionGuard,
 	input::series::SeriesMetadataInput,
 	object::{metadata_fetch_record::MetadataFetchRecord, series::Series},
@@ -28,7 +28,8 @@ impl SeriesMetadataMutation {
 		id: ID,
 		input: SeriesMetadataInput,
 	) -> Result<Series> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let model = series::ModelWithMetadata::find_for_user(user)
@@ -62,7 +63,8 @@ impl SeriesMetadataMutation {
 		id: ID,
 		impact: MetadataResetImpact,
 	) -> Result<Series> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -128,7 +130,7 @@ impl SeriesMetadataMutation {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<Vec<MatchCandidate>> {
-		let AuthContext { .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { .. } = ctx.data::<stump_auth::AuthContext>()?;
 		let core_ctx = ctx.data::<CoreContext>()?;
 		let conn = core_ctx.conn.as_ref();
 
@@ -264,7 +266,8 @@ impl SeriesMetadataMutation {
 		series_id: ID,
 		locked_fields: Vec<MetadataField>,
 	) -> Result<Series> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let model = series::ModelWithMetadata::find_for_user(user)

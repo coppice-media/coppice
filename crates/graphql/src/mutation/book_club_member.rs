@@ -3,8 +3,7 @@ use models::{entity::book_club_member, shared::book_club::BookClubMemberRole};
 use sea_orm::prelude::*;
 
 use crate::{
-	data::{AuthContext, CoreContext},
-	guard::BookClubRoleGuard,
+	data::CoreContext, guard::BookClubRoleGuard,
 	input::book_club::CreateBookClubMemberInput,
 	object::book_club_member::BookClubMember,
 };
@@ -65,7 +64,8 @@ impl BookClubMemberMutation {
 		ctx: &Context<'_>,
 		book_club_id: ID,
 	) -> Result<BookClubMember> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let member =

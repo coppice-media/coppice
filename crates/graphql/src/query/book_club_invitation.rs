@@ -1,10 +1,7 @@
 use async_graphql::{Context, Object, Result};
 use models::entity::book_club_invitation;
 
-use crate::{
-	data::{AuthContext, CoreContext},
-	object::book_club_invitation::BookClubInvitation,
-};
+use crate::{data::CoreContext, object::book_club_invitation::BookClubInvitation};
 
 #[derive(Default)]
 pub struct BookClubInvitationQuery;
@@ -16,7 +13,8 @@ impl BookClubInvitationQuery {
 		&self,
 		ctx: &Context<'_>,
 	) -> Result<Vec<BookClubInvitation>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let invitations = book_club_invitation::Entity::find_for_user(user)

@@ -6,7 +6,7 @@ use models::{
 use sea_orm::{prelude::*, IntoActiveModel, TransactionTrait};
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	guard::{BookClubRoleGuard, PermissionGuard},
 	input::book_club::{CreateBookClubInput, UpdateBookClubInput},
 	mutation::book_club_discussion::create_general_discussion,
@@ -24,7 +24,8 @@ impl BookClubMutation {
 		ctx: &Context<'_>,
 		input: CreateBookClubInput,
 	) -> Result<BookClub> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		// input.validate()?;
@@ -50,7 +51,8 @@ impl BookClubMutation {
 		id: ID,
 		input: UpdateBookClubInput,
 	) -> Result<BookClub> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let book_club = get_book_club_for_admin(user, &id, conn)
@@ -64,7 +66,8 @@ impl BookClubMutation {
 
 	#[graphql(guard = "BookClubRoleGuard::new(id.as_ref(), BookClubMemberRole::Creator)")]
 	async fn delete_book_club(&self, ctx: &Context<'_>, id: ID) -> Result<BookClub> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let book_club = get_book_club_for_admin(user, &id, conn)

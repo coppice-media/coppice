@@ -1,5 +1,5 @@
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	error_message::FORBIDDEN_ACTION,
 	guard::{OptionalFeature, OptionalFeatureGuard, PermissionGuard, ServerOwnerGuard},
 	input::user::{
@@ -26,9 +26,8 @@ use sea_orm::{
 	Set, TransactionTrait, TryIntoModel,
 };
 use std::{io::Read, path::Path};
-use stump_core::{
-	config::StumpConfig, filesystem::image::generate_image_metadata_from_bytes,
-};
+use stump_core::config::StumpConfig;
+use stump_media::generate_image_metadata_from_bytes;
 use tower_sessions::Session;
 
 #[derive(Default)]
@@ -59,7 +58,8 @@ impl UserMutation {
 		id: Option<ID>,
 		upload: Upload,
 	) -> Result<User> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -79,7 +79,7 @@ impl UserMutation {
 			.content_type
 			.clone()
 			.as_deref()
-			.map(stump_core::filesystem::ContentType::from)
+			.map(stump_media::ContentType::from)
 			.ok_or("Could not verify content type of uploaded file")?;
 
 		if !content_type.is_image() {
@@ -160,7 +160,8 @@ impl UserMutation {
 		ctx: &Context<'_>,
 		id: Option<ID>,
 	) -> Result<User> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -275,7 +276,8 @@ impl UserMutation {
 		ctx: &Context<'_>,
 		input: UpdateUserInput,
 	) -> Result<User> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core_ctx = ctx.data::<CoreContext>()?;
 		let config = core_ctx.config.as_ref();
 		let conn = core_ctx.conn.as_ref();
@@ -291,7 +293,8 @@ impl UserMutation {
 		ctx: &Context<'_>,
 		input: UpdateUserPreferencesInput,
 	) -> Result<UserPreferences> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let session = ctx.data::<Session>()?;
 		let core_ctx = ctx.data::<CoreContext>()?;
 		let conn = core_ctx.conn.as_ref();
@@ -333,7 +336,8 @@ impl UserMutation {
 		id: ID,
 		input: UpdateUserInput,
 	) -> Result<User> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core_ctx = ctx.data::<CoreContext>()?;
 		let config = core_ctx.config.as_ref();
 		let conn = core_ctx.conn.as_ref();
@@ -362,7 +366,8 @@ impl UserMutation {
 		id: ID,
 		hard_delete: Option<bool>,
 	) -> Result<User> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core_ctx = ctx.data::<CoreContext>()?;
 		let conn = core_ctx.conn.as_ref();
 
@@ -415,7 +420,8 @@ impl UserMutation {
 		id: ID,
 		lock: bool,
 	) -> Result<User> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core_ctx = ctx.data::<CoreContext>()?;
 		let conn = core_ctx.conn.as_ref();
 
@@ -447,7 +453,8 @@ impl UserMutation {
 		locked: bool,
 	) -> Result<Arrangement> {
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		let preferences = user_preferences::Entity::find()
 			.filter(user_preferences::Column::UserId.eq(&user.id))
@@ -479,7 +486,8 @@ impl UserMutation {
 		input: NavigationArrangementInput,
 	) -> Result<Arrangement> {
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		let preferences = user_preferences::Entity::find()
 			.filter(user_preferences::Column::UserId.eq(&user.id))

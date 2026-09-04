@@ -21,7 +21,7 @@ use sea_orm::{
 };
 
 use crate::{
-	data::{AuthContext, CoreContext, ServiceContext},
+	data::CoreContext,
 	guard::PermissionGuard,
 	loader::favorite::{FavoriteLibraryLoaderKey, FavoritesLoader},
 	object::{library_scan_record::LibraryScanRecord, media::Media, stats::LibraryStats},
@@ -139,7 +139,8 @@ impl Library {
 	}
 
 	async fn is_favorite(&self, ctx: &Context<'_>) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<FavoritesLoader>>()?;
 
 		let is_favorite = loader
@@ -172,7 +173,8 @@ impl Library {
 		ctx: &Context<'_>,
 		#[graphql(default, validator(minimum = 1))] take: Option<u64>,
 	) -> Result<Vec<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let models = media::ModelWithMetadata::find_for_user(user)
@@ -308,7 +310,8 @@ impl Library {
 		ctx: &Context<'_>,
 		all_users: Option<bool>,
 	) -> Result<LibraryStats> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let stats = LibraryStats::fetch(
@@ -382,7 +385,7 @@ impl Library {
 	/// A reference to the thumbnail image for the thumbnail. This will be a fully
 	/// qualified URL to the image.
 	async fn thumbnail(&self, ctx: &Context<'_>) -> Result<ImageRef> {
-		let service = ctx.data::<ServiceContext>()?;
+		let service = ctx.data::<stump_api_types::RequestOrigin>()?;
 
 		let dimensions = self
 			.model

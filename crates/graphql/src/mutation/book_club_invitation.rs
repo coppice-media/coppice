@@ -6,7 +6,7 @@ use models::{
 use sea_orm::{prelude::*, Set};
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	input::book_club::{
 		BookClubInvitationInput, BookClubInvitationResponseInput,
 		BookClubInvitationResponseValidator, BookClubMemberInput,
@@ -26,7 +26,8 @@ impl BookClubInvitationMutation {
 		id: ID,
 		input: BookClubInvitationInput,
 	) -> Result<BookClubInvitation> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		validate_book_club_invitation_input(user, &id, &input, conn).await?;
@@ -45,7 +46,8 @@ impl BookClubInvitationMutation {
 		#[graphql(validator(custom = "BookClubInvitationResponseValidator"))]
 		input: BookClubInvitationResponseInput,
 	) -> Result<BookClubInvitation> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		Ok(handle_book_club_invitation(user, &id, input, conn)

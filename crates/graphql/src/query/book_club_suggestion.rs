@@ -6,8 +6,7 @@ use models::{
 use sea_orm::{prelude::*, ColumnTrait, QueryFilter, QueryOrder, QueryTrait};
 
 use crate::{
-	data::{AuthContext, CoreContext},
-	object::book_club_book_suggestion::BookClubBookSuggestion,
+	data::CoreContext, object::book_club_book_suggestion::BookClubBookSuggestion,
 };
 
 #[derive(Default)]
@@ -22,7 +21,8 @@ impl BookClubSuggestionQuery {
 		book_club_id: ID,
 		status: Option<BookClubSuggestionStatus>,
 	) -> Result<Vec<BookClubBookSuggestion>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		book_club::Entity::find_by_id_and_user(book_club_id.as_ref(), user)
@@ -53,7 +53,8 @@ impl BookClubSuggestionQuery {
 		ctx: &Context<'_>,
 		suggestion_id: ID,
 	) -> Result<BookClubBookSuggestion> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let suggestion =

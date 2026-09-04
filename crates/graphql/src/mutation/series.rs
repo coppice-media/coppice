@@ -16,9 +16,7 @@ use stump_core::filesystem::{
 use stump_core::job::stump_job::StumpJob;
 
 use crate::{
-	data::{AuthContext, CoreContext},
-	guard::PermissionGuard,
-	input::thumbnail::UpdateThumbnailInput,
+	data::CoreContext, guard::PermissionGuard, input::thumbnail::UpdateThumbnailInput,
 	object::series::Series,
 };
 
@@ -34,7 +32,8 @@ impl SeriesMutation {
 		id: ID,
 		#[graphql(default = false)] force_reanalysis: bool,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -49,7 +48,8 @@ impl SeriesMutation {
 			force_reanalysis,
 			scope: MediaAnalysisJobScope::Series(model.id),
 		}))
-		.await?;
+		.await
+		.map_err(crate::error::map_core_error)?;
 
 		Ok(true)
 	}
@@ -60,7 +60,8 @@ impl SeriesMutation {
 		id: ID,
 		is_favorite: bool,
 	) -> Result<Series> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -113,7 +114,8 @@ impl SeriesMutation {
 		input: UpdateThumbnailInput,
 	) -> Result<Series> {
 		let core = ctx.data::<CoreContext>()?;
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 
 		let series = series::ModelWithMetadata::find_for_user(user)
 			.filter(series::Column::Id.eq(id.to_string()))
@@ -174,7 +176,8 @@ impl SeriesMutation {
 
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ScanLibrary)")]
 	async fn scan_series(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
@@ -186,7 +189,8 @@ impl SeriesMutation {
 				.ok_or("Series not found")?;
 
 		core.enqueue(StumpJob::series_scan(model.id, model.path, None))
-			.await?;
+			.await
+			.map_err(crate::error::map_core_error)?;
 
 		Ok(true)
 	}

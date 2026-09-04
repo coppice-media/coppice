@@ -1,5 +1,5 @@
 use super::book_club_member::BookClubMember;
-use crate::data::{AuthContext, CoreContext};
+use crate::data::CoreContext;
 use crate::object::book_club_book::BookClubBook;
 use crate::object::book_club_discussion::BookClubDiscussion;
 use crate::object::book_club_invitation::BookClubInvitation;
@@ -115,7 +115,8 @@ impl BookClub {
 	}
 
 	async fn members(&self, ctx: &Context<'_>) -> Result<Vec<BookClubMember>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let book_club_members =
 			book_club_member::Entity::find_members_accessible_to_user_for_book_club_id(
@@ -133,7 +134,8 @@ impl BookClub {
 	}
 
 	async fn moderators(&self, ctx: &Context<'_>) -> Result<Vec<BookClubMember>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let book_club_members =
@@ -153,7 +155,8 @@ impl BookClub {
 	}
 
 	async fn members_count(&self, ctx: &Context<'_>) -> Result<u64> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let count =
 			book_club_member::Entity::find_members_accessible_to_user_for_book_club_id(
@@ -167,7 +170,8 @@ impl BookClub {
 	}
 
 	async fn membership(&self, ctx: &Context<'_>) -> Result<Option<BookClubMember>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let membership = book_club_member::Entity::find()

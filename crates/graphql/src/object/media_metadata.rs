@@ -1,7 +1,7 @@
 use async_graphql::{ComplexObject, SimpleObject};
 use metadata_integrations::MetadataField;
 use models::entity::media_metadata;
-use stump_core::utils::serde::comma_separated_list_to_vec;
+use stump_media::serde::comma_separated_list_to_vec;
 
 #[derive(Debug, Clone, SimpleObject)]
 #[graphql(complex)]

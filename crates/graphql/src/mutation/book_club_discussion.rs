@@ -11,7 +11,7 @@ use models::{
 use sea_orm::{prelude::*, ActiveValue::Set, ColumnTrait, IntoActiveModel, QueryFilter};
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	input::book_club::{BookClubDiscussionInput, EditMessageInput, SendMessageInput},
 	object::{
 		book_club_discussion::BookClubDiscussion,
@@ -31,7 +31,8 @@ impl BookClubDiscussionMutation {
 		discussion_id: ID,
 		input: SendMessageInput,
 	) -> Result<BookClubDiscussionMessage> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let discussion = book_club_discussion::Entity::find_by_id(discussion_id.as_ref())
@@ -107,7 +108,8 @@ impl BookClubDiscussionMutation {
 		message_id: ID,
 		input: EditMessageInput,
 	) -> Result<BookClubDiscussionMessage> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let message =
@@ -156,7 +158,8 @@ impl BookClubDiscussionMutation {
 		ctx: &Context<'_>,
 		message_id: ID,
 	) -> Result<BookClubDiscussionMessage> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let message =
@@ -204,7 +207,8 @@ impl BookClubDiscussionMutation {
 		emoji: Option<String>,
 		custom_emoji_id: Option<i32>,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		if emoji.is_some() == custom_emoji_id.is_some() {
@@ -290,7 +294,8 @@ impl BookClubDiscussionMutation {
 		discussion_id: ID,
 		locked: bool,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let discussion = book_club_discussion::Entity::find_by_id(discussion_id.as_ref())
@@ -321,7 +326,8 @@ impl BookClubDiscussionMutation {
 		message_id: ID,
 		pinned: bool,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let message =
@@ -362,7 +368,8 @@ impl BookClubDiscussionMutation {
 		book_club_id: ID,
 		input: BookClubDiscussionInput,
 	) -> Result<BookClubDiscussion> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let member = get_member_for_user(book_club_id.as_ref(), user, conn).await?;
@@ -414,7 +421,8 @@ impl BookClubDiscussionMutation {
 		discussion_id: ID,
 		archived: bool,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let discussion = book_club_discussion::Entity::find_by_id(discussion_id.as_ref())

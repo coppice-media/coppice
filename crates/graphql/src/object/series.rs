@@ -19,7 +19,7 @@ use sea_orm::{
 };
 
 use crate::{
-	data::{AuthContext, CoreContext, ServiceContext},
+	data::CoreContext,
 	loader::{
 		favorite::{FavoriteSeriesLoaderKey, FavoritesLoader},
 		series_count::SeriesCountLoader,
@@ -51,7 +51,8 @@ impl From<series::ModelWithMetadata> for Series {
 #[ComplexObject]
 impl Series {
 	async fn is_favorite(&self, ctx: &Context<'_>) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<FavoritesLoader>>()?;
 
 		let is_favorite = loader
@@ -99,7 +100,8 @@ impl Series {
 		#[graphql(default, validator(minimum = 1))] take: Option<u64>,
 		#[graphql(default, validator(minimum = 0))] skip: Option<u64>,
 	) -> Result<Vec<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let models = media::ModelWithMetadata::find_for_user(user)
@@ -163,7 +165,8 @@ impl Series {
 		#[graphql(default = 1, validator(minimum = 1))] take: u64,
 		cursor: Option<String>,
 	) -> Result<Vec<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let user_id = user.id.clone();
@@ -246,7 +249,7 @@ impl Series {
 	// 	&self,
 	// 	ctx: &Context<'_>,
 	// ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
-	// 	let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+	// 	let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
 	// 	let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 	// 	// i think we need a loader for this, but that does:
@@ -271,7 +274,8 @@ impl Series {
 	}
 
 	async fn read_count(&self, ctx: &Context<'_>) -> Result<i64> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let finished_loader = ctx.data::<DataLoader<SeriesFinishedCountLoader>>()?;
 		let finished_count = finished_loader
 			.load_one(FinishedCountLoaderKey {
@@ -313,7 +317,7 @@ impl Series {
 	/// A reference to the thumbnail image for the thumbnail. This will be a fully
 	/// qualified URL to the image.
 	async fn thumbnail(&self, ctx: &Context<'_>) -> Result<ImageRef> {
-		let service = ctx.data::<ServiceContext>()?;
+		let service = ctx.data::<stump_api_types::RequestOrigin>()?;
 
 		let dimensions = self
 			.model
@@ -337,7 +341,8 @@ impl Series {
 		ctx: &Context<'_>,
 		all_users: Option<bool>,
 	) -> Result<SeriesStats> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let stats = SeriesStats::fetch(
@@ -353,7 +358,7 @@ impl Series {
 }
 
 async fn get_series_progress(ctx: &Context<'_>, series_id: String) -> Result<(i64, i64)> {
-	let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+	let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
 
 	let loader = ctx.data::<DataLoader<SeriesCountLoader>>()?;
 	let media_count = loader.load_one(series_id.clone()).await?.unwrap_or(0i64);

@@ -67,6 +67,12 @@ input ApikeyPermissions @oneOf {
 
 union ApikeyPermissionsOutput = InheritPermissionStruct | UserPermissionStruct
 
+input ApplyIngestMetadataInput {
+	dropItemId: ID!
+	selections: [IngestMetadataFieldSelectionInput!]!
+	strategy: MergeStrategy
+}
+
 type Arrangement {
 	locked: Boolean!
 	sections: [ArrangementSection!]!
@@ -345,6 +351,12 @@ input BookmarkInput {
 	mediaId: String!
 	locator: ReadiumLocatorInput!
 	previewContent: String
+}
+
+input BulkApplyIngestMetadataInput {
+	dropItemIds: [ID!]!
+	selections: [IngestMetadataFieldSelectionInput!]!
+	strategy: MergeStrategy
 }
 
 type CleanLibraryResponse {
@@ -686,6 +698,11 @@ input EmailerSendTo @oneOf {
 	anonymous: SendToEmail
 }
 
+input EnqueueIngestAnalysisInput {
+	dropItemIds: [ID!]!
+	force: Boolean! = false
+}
+
 "The visibility of a shareable entity"
 enum EntityVisibility {
 	PUBLIC
@@ -948,6 +965,243 @@ input InProgressBooksInput {
 	links: [FilterableArrangementEntityLink!]! = []
 }
 
+type IngestAnalysisJob {
+	id: ID!
+	dropItemId: ID!
+	jobId: String
+	status: JobStatus!
+	phase: IngestAnalysisPhase!
+	priorityScore: Float!
+	attempt: Int!
+	queuedAt: DateTime!
+	startedAt: DateTime
+	completedAt: DateTime
+	error: String
+}
+
+enum IngestAnalysisPhase {
+	STAGING
+	ANALYSIS
+	QUALITY
+	IDENTIFY
+	LOOKUP
+	REVIEW
+	COMMIT
+	DONE
+}
+
+type IngestBulkApplyFailure {
+	dropItemId: ID!
+	message: String!
+}
+
+type IngestBulkApplyPayload {
+	applied: [IngestDropItem!]!
+	failures: [IngestBulkApplyFailure!]!
+}
+
+enum IngestCandidateStatus {
+	PENDING
+	ACCEPTED
+	REJECTED
+}
+
+type IngestDropFolder {
+	libraryId: ID!
+	displayPath: String!
+	enabled: Boolean!
+	pendingCount: Int!
+	lastDiscoveredAt: DateTime
+}
+
+type IngestDropItem {
+	id: ID!
+	libraryId: ID!
+	createdBy: ID!
+	filename: String!
+	relativePath: String
+	sizeBytes: Int!
+	sourceSha256: String!
+	mediaType: String!
+	status: IngestDropItemStatus!
+	revision: Int!
+	analysisJob: IngestAnalysisJob
+	qualityReport: IngestQualityReport
+	metadataCandidates: [IngestMetadataCandidate!]!
+	pendingFields: JSON!
+	media: Media
+	series: Series
+	error: String
+	createdAt: DateTime!
+	updatedAt: DateTime!
+}
+
+enum IngestDropItemStatus {
+	RECEIVED
+	STAGED
+	ANALYZING
+	AWAITING_REVIEW
+	READY
+	COMMITTED
+	REJECTED
+	FAILED
+}
+
+type IngestMetadataCandidate {
+	id: ID!
+	dropItemId: ID!
+	provider: String!
+	providerVersion: String!
+	model: String
+	confidence: Float!
+	fields: JSON!
+	fieldConfidences: JSON
+	sourceSha256: String!
+	provenance: JSON!
+	status: IngestCandidateStatus!
+	createdAt: DateTime!
+}
+
+enum IngestMetadataFieldMode {
+	KEEP_EXISTING
+	CANDIDATE
+	MANUAL
+	CLEAR
+}
+
+input IngestMetadataFieldSelectionInput {
+	field: MetadataField!
+	mode: IngestMetadataFieldMode!
+	candidateId: ID
+	value: JSON
+}
+
+type IngestProgressEvent {
+	eventId: ID!
+	emittedAt: DateTime!
+	libraryId: ID!
+	dropItemId: ID!
+	analysisJobId: ID
+	status: IngestDropItemStatus!
+	phase: IngestAnalysisPhase!
+	completed: Int!
+	total: Int!
+	score: Float
+	message: String
+}
+
+enum IngestProviderCapability {
+	IDENTIFY
+	LOOKUP
+	TAGS
+	AI_ENRICHMENT
+}
+
+type IngestProviderDescriptor {
+	id: String!
+	name: String!
+	version: String!
+	configured: Boolean!
+	capabilities: [IngestProviderCapability!]!
+	supportedMediaTypes: [String!]!
+	enabledByDefault: Boolean!
+	settings: [IngestSettingDefinition!]!
+}
+
+type IngestProviderSetting {
+	key: String!
+	configured: Boolean!
+	secret: Boolean!
+	value: JSON
+}
+
+type IngestProviderSettings {
+	provider: IngestProviderDescriptor!
+	enabled: Boolean!
+	optedIn: Boolean!
+	settings: [IngestProviderSetting!]!
+	updatedAt: DateTime
+}
+
+type IngestQualityCheckDescriptor {
+	id: String!
+	name: String!
+	version: String!
+	available: Boolean!
+	weight: Int!
+	enabled: Boolean!
+	supportedMediaTypes: [String!]!
+	settings: [IngestSettingDefinition!]!
+}
+
+type IngestQualityCheckResult {
+	checkId: String!
+	label: String!
+	status: IngestQualityStatus!
+	weight: Int!
+	normalizedScore: Float!
+	contribution: Float!
+	evidence: JSON!
+}
+
+type IngestQualityCheckSettings {
+	checkId: String!
+	enabled: Boolean!
+	settings: [IngestProviderSetting!]!
+	updatedAt: DateTime
+}
+
+type IngestQualityReport {
+	id: ID!
+	dropItemId: ID!
+	sourceSha256: String!
+	algorithmVersion: String!
+	score: Int!
+	checks: [IngestQualityCheckResult!]!
+	generatedAt: DateTime!
+}
+
+enum IngestQualityStatus {
+	PASS
+	WARN
+	FAIL
+	NOT_APPLICABLE
+}
+
+type IngestReworkItem {
+	item: IngestDropItem!
+	reasons: [IngestReworkReason!]!
+}
+
+type IngestReworkReason {
+	checkId: String!
+	status: IngestQualityStatus!
+	message: String!
+}
+
+type IngestSettingDefinition {
+	key: String!
+	label: String!
+	valueType: IngestSettingValueType!
+	required: Boolean!
+	secret: Boolean!
+	defaultValue: JSON
+	description: String
+}
+
+enum IngestSettingValueType {
+	BOOLEAN
+	INTEGER
+	NUMBER
+	STRING
+	JSON
+}
+
+input IngestUploadFileInput {
+	file: Upload!
+	relativePath: String
+}
+
 type InheritPermissionStruct {
 	value: InheritPermissionValue!
 }
@@ -1155,6 +1409,8 @@ input LibraryScanConfigInput {
 
 "The data that is collected and updated during the execution of a library scan job"
 type LibraryScanOutput {
+	"The library whose scan produced this output."
+	libraryId: String!
 	"The number of files visited during the scan"
 	totalFiles: Int!
 	"The number of directories visited during the scan"
@@ -2092,6 +2348,22 @@ type Mutation {
 	acceptAllPendingMatches(strategy: MergeStrategy, excludeFields: [MetadataField!]): Int!
 	"Reject all pending metadata matches, setting their status to NoMatch"
 	rejectAllPendingMatches: Int!
+	stageIngestUploads(input: StageIngestUploadsInput!): StageIngestUploadsPayload!
+	scanIngestDropFolder(libraryId: ID!): IngestDropFolder!
+	enqueueIngestAnalysis(input: EnqueueIngestAnalysisInput!): [IngestAnalysisJob!]!
+	requeueIngestAnalysis(dropItemId: ID!, force: Boolean! = false): IngestAnalysisJob!
+	pauseIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+	resumeIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+	retryIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+	cancelIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+	discardIngestItem(dropItemId: ID!, reason: String): IngestDropItem!
+	applyIngestMetadata(input: ApplyIngestMetadataInput!): IngestDropItem!
+	bulkApplyIngestMetadata(input: BulkApplyIngestMetadataInput!): IngestBulkApplyPayload!
+	approveIngestItem(dropItemId: ID!, strategy: MergeStrategy): IngestDropItem!
+	rejectIngestItem(dropItemId: ID!, reason: String): IngestDropItem!
+	setIngestProviderSettings(input: SetIngestProviderSettingsInput!): IngestProviderSettings!
+	verifyIngestProvider(providerId: String!, settings: JSON): ProviderCredentialVerification!
+	setIngestQualityCheckSettings(input: SetIngestQualityCheckSettingsInput!): IngestQualityCheckSettings!
 	createSmartList(input: SaveSmartListInput!): SmartList!
 	updateSmartList(id: ID!, input: SaveSmartListInput!): SmartList!
 	deleteSmartList(id: ID!): SmartList!
@@ -2308,6 +2580,21 @@ type PaginatedAuthorResponse {
 
 type PaginatedDirectoryListingResponse {
 	nodes: [DirectoryListing!]!
+	pageInfo: PaginationInfo!
+}
+
+type PaginatedIngestAnalysisJobResponse {
+	nodes: [IngestAnalysisJob!]!
+	pageInfo: PaginationInfo!
+}
+
+type PaginatedIngestDropItemResponse {
+	nodes: [IngestDropItem!]!
+	pageInfo: PaginationInfo!
+}
+
+type PaginatedIngestReworkResponse {
+	nodes: [IngestReworkItem!]!
 	pageInfo: PaginationInfo!
 }
 
@@ -2537,6 +2824,17 @@ type Query {
 	pendingMetadataMatches: [MetadataFetchRecord!]!
 	serverConfig: ServerConfigModel!
 	listDirectory(pagination: Pagination!, input: DirectoryListingInput): PaginatedDirectoryListingResponse!
+	ingestDropFolder(libraryId: ID!): IngestDropFolder
+	ingestDropItems(libraryId: ID, status: IngestDropItemStatus, pagination: Pagination! = {offset: {page: 1, pageSize: 20, zeroBased: false}}): PaginatedIngestDropItemResponse!
+	ingestItem(id: ID!): IngestDropItem
+	ingestAnalysisQueue(status: JobStatus, pagination: Pagination! = {offset: {page: 1, pageSize: 20, zeroBased: false}}): PaginatedIngestAnalysisJobResponse!
+	ingestAnalysisJob(id: ID!): IngestAnalysisJob
+	ingestReworkItems(minScore: Float, pagination: Pagination! = {offset: {page: 1, pageSize: 20, zeroBased: false}}): PaginatedIngestReworkResponse!
+	ingestBulkItems(ids: [ID!]!): [IngestDropItem!]!
+	ingestProviderCatalog(includeDisabled: Boolean! = false): [IngestProviderDescriptor!]!
+	ingestProviderSettings(providerId: String!): IngestProviderSettings
+	ingestQualityCheckCatalog(includeDisabled: Boolean! = false): [IngestQualityCheckDescriptor!]!
+	ingestQualityCheckSettings(checkId: String!): IngestQualityCheckSettings
 	smartLists(input: SmartListsInput! = {all: null, mine: true, search: null}): [SmartList!]!
 	smartListById(id: ID!): SmartList
 	smartListMeta(id: ID!): SmartListMeta
@@ -2621,6 +2919,15 @@ type ReadingSession {
 	"""
 	status: ReadingStatus!
 	notes: String
+	"""
+	The latest native Kobo ReadingState request for this session.
+	
+	Kobo's wire payload contains location fields and statistics that do not
+	have a native column in the unified reading-session model. Keeping the
+	request here lets the Kobo adapter replay those fields without treating
+	the normalized Readium locator as lossless.
+	"""
+	koboState: JSON
 	mediaId: String!
 	userId: String!
 	createdAt: DateTime!
@@ -2687,6 +2994,7 @@ type ReadiumLocator {
 	title: String
 	locations: ReadiumLocation
 	text: ReadiumText
+	koboSpan: String
 	type: String!
 }
 
@@ -2696,6 +3004,7 @@ input ReadiumLocatorInput {
 	title: String
 	locations: ReadiumLocationInput
 	text: ReadiumTextInput
+	koboSpan: String
 	type: String! = "application/xhtml+xml"
 }
 
@@ -3091,6 +3400,19 @@ type ServerConfigModel {
 	initialWalSetupComplete: Boolean!
 }
 
+input SetIngestProviderSettingsInput {
+	providerId: String!
+	enabled: Boolean
+	optedIn: Boolean
+	settings: JSON
+}
+
+input SetIngestQualityCheckSettingsInput {
+	checkId: String!
+	enabled: Boolean
+	settings: JSON
+}
+
 """
 A work that has multiple authors (co-authored). This wrapper allows querying
 the authors/co-authors of the work in context.
@@ -3221,6 +3543,18 @@ type SpineItem {
 	linear: Boolean!
 }
 
+input StageIngestUploadsInput {
+	libraryId: ID!
+	files: [IngestUploadFileInput!]!
+	idempotencyKey: String
+	startAnalysis: Boolean! = true
+}
+
+type StageIngestUploadsPayload {
+	items: [IngestDropItem!]!
+	deduplicated: Int!
+}
+
 """
 Represents the configuration of a Stump application. This struct is generated at startup
 using a TOML file, environment variables, or both and is input when creating a `StumpCore`
@@ -3281,6 +3615,14 @@ type StumpConfig {
 	enableKoreaderSync: Boolean!
 	"Indicates if the Kobo sync feature should be enabled."
 	enableKoboSync: Boolean!
+	"Whether EPUB files should be converted to KEPUB after a library scan."
+	koboKepubPreconvert: Boolean!
+	"Number of days an unused KEPUB cache entry is retained."
+	koboKepubCacheMaxAgeDays: Int!
+	"Deflate level used for generated KEPUB files."
+	koboKepubDeflateLevel: Int!
+	"Whether Kobo downloads should be converted to KEPUB with deterministic Kobo spans."
+	koboKepubConversion: Boolean!
 	"""
 	Indicates if OPDS page access should automatically track reading progression.
 	When disabled, clients loading/preloading pages won't trigger progress updates.
@@ -3327,6 +3669,7 @@ type StumpConfig {
 type Subscription {
 	tailLogFile: String!
 	readEvents: CoreEvent!
+	ingestProgress(libraryId: ID, dropItemId: ID, analysisJobId: ID, afterEventId: ID): IngestProgressEvent!
 }
 
 input SuggestBookInput {

@@ -1,7 +1,5 @@
 use crate::{
-	data::{AuthContext, CoreContext},
-	guard::PermissionGuard,
-	input::smart_lists::SaveSmartListInput,
+	data::CoreContext, guard::PermissionGuard, input::smart_lists::SaveSmartListInput,
 	object::smart_lists::SmartList,
 };
 use async_graphql::{Context, Object, Result, ID};
@@ -19,7 +17,7 @@ impl SmartListMutation {
 		ctx: &Context<'_>,
 		input: SaveSmartListInput,
 	) -> Result<SmartList> {
-		let user_id = ctx.data::<AuthContext>()?.id();
+		let user_id = ctx.data::<stump_auth::AuthContext>()?.id();
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let active_model = input.into_active_model(&user_id)?;
@@ -37,7 +35,8 @@ impl SmartListMutation {
 		id: ID,
 		input: SaveSmartListInput,
 	) -> Result<SmartList> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
 
@@ -56,7 +55,8 @@ impl SmartListMutation {
 
 	#[graphql(guard = "PermissionGuard::one(UserPermission::AccessSmartList)")]
 	async fn delete_smart_list(&self, ctx: &Context<'_>, id: ID) -> Result<SmartList> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
 

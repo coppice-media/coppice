@@ -14,7 +14,7 @@ use models::{
 use sea_orm::{prelude::*, FromQueryResult, QueryOrder, QuerySelect, QueryTrait};
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	object::{library::Library, missing_entity::MissingEntity, stats::LibraryStats},
 	pagination::{
 		CursorPaginationInfo, OffsetPaginationInfo, PaginatedResponse, Pagination,
@@ -46,7 +46,8 @@ impl LibraryQuery {
 		pagination: Pagination,
 		search: Option<String>,
 	) -> Result<PaginatedResponse<Library>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let query = LibraryModelOrderBy::add_order_by(
@@ -120,7 +121,8 @@ impl LibraryQuery {
 	}
 
 	async fn library_by_id(&self, ctx: &Context<'_>, id: ID) -> Result<Option<Library>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let model = library::Entity::find_for_user(user)
@@ -167,7 +169,8 @@ impl LibraryQuery {
 	}
 
 	async fn libraries_stats(&self, ctx: &Context<'_>) -> Result<LibraryStats> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let all_stats =
@@ -177,7 +180,8 @@ impl LibraryQuery {
 	}
 
 	async fn number_of_libraries(&self, ctx: &Context<'_>) -> Result<u64> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let count = library::Entity::find_for_user(user).count(conn).await?;
@@ -186,7 +190,8 @@ impl LibraryQuery {
 	}
 
 	async fn last_visited_library(&self, ctx: &Context<'_>) -> Result<Option<Library>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let last_visited = last_library_visit::Entity::find()

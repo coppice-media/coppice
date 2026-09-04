@@ -1,6 +1,6 @@
 use super::smart_lists_builder::{build_books_query, build_smart_list_items};
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	guard::PermissionGuard,
 	input::smart_lists::{SmartListFilterGroupInput, SmartListsInput},
 	object::{
@@ -31,7 +31,8 @@ impl SmartListsQuery {
 		ctx: &Context<'_>,
 		#[graphql(default)] input: SmartListsInput,
 	) -> Result<Vec<SmartList>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let query_all = input.all.unwrap_or(false);
@@ -64,7 +65,8 @@ impl SmartListsQuery {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<Option<SmartList>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let smart_list = smart_list::Entity::find_by_id(user, id).one(conn).await?;
@@ -78,7 +80,8 @@ impl SmartListsQuery {
 		ctx: &Context<'_>,
 		id: ID,
 	) -> Result<Option<SmartListMeta>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
 
@@ -128,7 +131,8 @@ impl SmartListsQuery {
 		id: ID,
 		#[graphql(default)] limit: Option<u64>,
 	) -> Result<SmartListItems> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let txn = conn.begin().await?;
 

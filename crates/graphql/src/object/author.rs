@@ -6,7 +6,6 @@ use async_graphql::{
 use models::shared::enums::AuthorRole;
 
 use crate::{
-	data::AuthContext,
 	loader::author::{
 		AuthorMediaLoader, AuthorMediaLoaderKey, MetadataSeriesMediaLoader,
 		MetadataSeriesMediaLoaderKey,
@@ -127,7 +126,8 @@ impl SharedWork {
 #[ComplexObject]
 impl AuthorSeries {
 	async fn books(&self, ctx: &Context<'_>) -> Result<Vec<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<MetadataSeriesMediaLoader>>()?;
 
 		let key = MetadataSeriesMediaLoaderKey {
@@ -142,7 +142,8 @@ impl AuthorSeries {
 
 	/// Authors who contributed to this series
 	async fn authors(&self, ctx: &Context<'_>) -> Result<Vec<Author>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<MetadataSeriesMediaLoader>>()?;
 
 		let key = MetadataSeriesMediaLoaderKey {
@@ -192,7 +193,8 @@ impl AuthorSeries {
 #[ComplexObject]
 impl Author {
 	async fn books(&self, ctx: &Context<'_>) -> Result<Vec<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<AuthorMediaLoader>>()?;
 
 		let key = AuthorMediaLoaderKey {
@@ -206,7 +208,8 @@ impl Author {
 	}
 
 	async fn series(&self, ctx: &Context<'_>) -> Result<Vec<AuthorSeries>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<AuthorMediaLoader>>()?;
 
 		let key = AuthorMediaLoaderKey {
@@ -240,7 +243,8 @@ impl Author {
 
 	/// Books where this author is the sole credited writer (no co-authors)
 	async fn standalones(&self, ctx: &Context<'_>) -> Result<Vec<Media>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<AuthorMediaLoader>>()?;
 
 		let key = AuthorMediaLoaderKey {
@@ -271,7 +275,8 @@ impl Author {
 
 	/// Books where this author shares credit with other writers (co-authored works)
 	async fn shared_works(&self, ctx: &Context<'_>) -> Result<Vec<SharedWork>> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<AuthorMediaLoader>>()?;
 
 		let key = AuthorMediaLoaderKey {

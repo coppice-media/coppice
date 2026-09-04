@@ -1,4 +1,5 @@
 pub mod data;
+pub(crate) mod error;
 pub mod error_message;
 pub mod filter;
 pub mod guard;

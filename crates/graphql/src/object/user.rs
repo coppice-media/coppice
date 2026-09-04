@@ -15,7 +15,7 @@ use models::{
 use sea_orm::{prelude::*, ActiveValue, QueryOrder};
 
 use crate::{
-	data::{CoreContext, ServiceContext},
+	data::CoreContext,
 	guard::{PermissionGuard, SelfGuard, ServerOwnerGuard},
 	pagination::{PaginatedResponse, Pagination, PaginationValidator},
 	query::media::MediaQuery,
@@ -42,7 +42,7 @@ impl User {
 		deprecation = "This will be deprecated in a future release which refactors the auth RESTful API. Until then, it stays."
 	)]
 	async fn avatar_url(&self, ctx: &Context<'_>) -> Result<Option<String>> {
-		let service = ctx.data::<ServiceContext>()?;
+		let service = ctx.data::<stump_api_types::RequestOrigin>()?;
 
 		if self.model.avatar_path.is_none() {
 			return Ok(None);
@@ -56,7 +56,7 @@ impl User {
 
 	/// a reference to the avatar image and its metadata for this user
 	async fn avatar(&self, ctx: &Context<'_>) -> Result<ImageRef> {
-		let service = ctx.data::<ServiceContext>()?;
+		let service = ctx.data::<stump_api_types::RequestOrigin>()?;
 
 		let dimensions = self
 			.model

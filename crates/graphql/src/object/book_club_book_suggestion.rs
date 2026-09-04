@@ -67,7 +67,7 @@ impl BookClubBookSuggestion {
 	/// Check if the current user has liked this suggestion
 	async fn is_liked_by_me(&self, ctx: &Context<'_>) -> Result<bool> {
 		let core = ctx.data::<CoreContext>()?;
-		let auth_ctx = ctx.data::<crate::data::AuthContext>()?;
+		let auth_ctx = ctx.data::<stump_auth::AuthContext>()?;
 
 		let member = book_club_member::Entity::find_by_club_for_user(
 			&auth_ctx.user,

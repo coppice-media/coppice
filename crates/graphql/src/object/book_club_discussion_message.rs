@@ -7,7 +7,7 @@ use models::entity::{
 };
 use sea_orm::{prelude::*, ColumnTrait, EntityTrait, QueryFilter};
 
-use crate::data::{AuthContext, CoreContext, ServiceContext};
+use crate::data::CoreContext;
 use crate::object::book_club_member::BookClubMember;
 
 #[derive(Debug, SimpleObject)]
@@ -53,8 +53,8 @@ impl BookClubDiscussionMessage {
 	/// TODO(dataloader): Create dataloader
 	async fn reactions(&self, ctx: &Context<'_>) -> Result<Vec<AggregatedReaction>> {
 		let core = ctx.data::<CoreContext>()?;
-		let service = ctx.data::<ServiceContext>()?;
-		let auth_ctx = ctx.data::<AuthContext>()?;
+		let service = ctx.data::<stump_api_types::RequestOrigin>()?;
+		let auth_ctx = ctx.data::<stump_auth::AuthContext>()?;
 
 		let my_member_id = book_club_member::Entity::find_by_club_for_user(
 			&auth_ctx.user,

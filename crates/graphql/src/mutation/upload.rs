@@ -12,19 +12,19 @@ use models::{
 	shared::enums::UserPermission,
 };
 use sea_orm::{prelude::*, sea_query::Query};
-use stump_core::filesystem::{
-	image::{
-		place_thumbnail, remove_thumbnails, PlaceholderGenerationJobConfig,
-		PlaceholderGenerationJobScope,
-	},
-	ContentType,
+use stump_core::filesystem::image::{
+	PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope,
 };
 use stump_core::job::stump_job::StumpJob;
+use stump_media::{
+	image::{place_thumbnail, remove_thumbnails},
+	ContentType,
+};
 use tokio::fs;
 use zip::{read::ZipFile, ZipArchive};
 
 use crate::{
-	data::{AuthContext, CoreContext},
+	data::CoreContext,
 	guard::{OptionalFeature, OptionalFeatureGuard, PermissionGuard},
 	object::{library::Library, media::Media, series::Series},
 };
@@ -57,7 +57,7 @@ impl UploadMutation {
 		ctx: &Context<'_>,
 		input: UploadBooksInput,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data()?;
+		let stump_auth::AuthContext { user, .. } = ctx.data()?;
 		let UploadBooksInput {
 			library_id,
 			place_at,
@@ -80,6 +80,9 @@ impl UploadMutation {
 			return Err("Upload path is not a directory".into());
 		}
 
+		core.require_background_jobs()
+			.map_err(crate::error::map_core_error)?;
+
 		for upload in uploads {
 			let mut value = upload.value(ctx)?;
 			validate_book_file(&mut value)?;
@@ -94,7 +97,7 @@ impl UploadMutation {
 			.await
 			.map_err(|e| {
 				tracing::error!(?e, "Failed to enqueue library scan job");
-				"Failed to enqueue library scan job".to_string()
+				Error::new("Failed to enqueue library scan job")
 			})?;
 
 		Ok(true)
@@ -108,7 +111,7 @@ impl UploadMutation {
 		ctx: &Context<'_>,
 		input: UploadSeriesInput,
 	) -> Result<bool> {
-		let AuthContext { user, .. } = ctx.data()?;
+		let stump_auth::AuthContext { user, .. } = ctx.data()?;
 		let UploadSeriesInput {
 			library_id,
 			place_at,
@@ -133,6 +136,9 @@ impl UploadMutation {
 
 		// Validate the contents of the zip file
 		validate_series_upload_contents(&mut value, &placement_path, false)?;
+
+		core.require_background_jobs()
+			.map_err(crate::error::map_core_error)?;
 
 		// Create directory if necessary
 		if let Err(e) = fs::metadata(&placement_path).await {
@@ -159,7 +165,7 @@ impl UploadMutation {
 			.await
 			.map_err(|e| {
 				tracing::error!(?e, "Failed to enqueue library scan job");
-				"Failed to enqueue library scan job".to_string()
+				Error::new("Failed to enqueue library scan job")
 			})?;
 
 		Ok(true)
@@ -177,7 +183,7 @@ impl UploadMutation {
 		id: ID,
 		file: Upload,
 	) -> Result<Library> {
-		let AuthContext { user, .. } = ctx.data()?;
+		let stump_auth::AuthContext { user, .. } = ctx.data()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let (library, config) = library::Entity::find_for_user(user)
@@ -186,6 +192,14 @@ impl UploadMutation {
 			.one(core.conn.as_ref())
 			.await?
 			.ok_or("Library not found")?;
+
+		let config = config.ok_or("Library config not found")?;
+		let should_enqueue_placeholder = config.thumbnail_config.is_some()
+			|| config.process_thumbnail_colors_even_without_config;
+		if should_enqueue_placeholder {
+			core.require_background_jobs()
+				.map_err(crate::error::map_core_error)?;
+		}
 
 		let value = file.value(ctx)?;
 
@@ -218,7 +232,8 @@ impl UploadMutation {
 		}
 
 		let path_buf =
-			place_thumbnail(&library.id, &extension, &image_buf, &core.config).await?;
+			place_thumbnail(&library.id, &extension, &image_buf, &core.config.media)
+				.await?;
 
 		tracing::debug!(?path_buf, "Placed library thumbnail");
 
@@ -230,11 +245,6 @@ impl UploadMutation {
 			.filter(library::Column::Id.eq(library.id.clone()))
 			.exec(core.conn.as_ref())
 			.await?;
-
-		let config = config.ok_or("Library config not found")?;
-
-		let should_enqueue_placeholder = config.thumbnail_config.is_some()
-			|| config.process_thumbnail_colors_even_without_config;
 
 		if !should_enqueue_placeholder {
 			tracing::info!(
@@ -275,9 +285,8 @@ impl UploadMutation {
 		id: ID,
 		file: Upload,
 	) -> Result<Series> {
-		let AuthContext { user, .. } = ctx.data()?;
+		let stump_auth::AuthContext { user, .. } = ctx.data()?;
 		let core = ctx.data::<CoreContext>()?;
-		let _conn = core.conn.as_ref();
 
 		let series = series::ModelWithMetadata::find_for_user(user)
 			.filter(series::Column::Id.eq(id.to_string()))
@@ -285,6 +294,20 @@ impl UploadMutation {
 			.one(core.conn.as_ref())
 			.await?
 			.ok_or("Series not found")?;
+
+		let config = library_config::Entity::find()
+			.filter(
+				library_config::Column::LibraryId.eq(series.series.library_id.clone()),
+			)
+			.one(core.conn.as_ref())
+			.await?
+			.ok_or("Library config not found")?;
+		let should_enqueue_placeholder = config.thumbnail_config.is_some()
+			|| config.process_thumbnail_colors_even_without_config;
+		if should_enqueue_placeholder {
+			core.require_background_jobs()
+				.map_err(crate::error::map_core_error)?;
+		}
 
 		let value = file.value(ctx)?;
 
@@ -316,9 +339,13 @@ impl UploadMutation {
 			),
 		}
 
-		let path_buf =
-			place_thumbnail(&series.series.id, &extension, &image_buf, &core.config)
-				.await?;
+		let path_buf = place_thumbnail(
+			&series.series.id,
+			&extension,
+			&image_buf,
+			&core.config.media,
+		)
+		.await?;
 
 		tracing::debug!(?path_buf, "Placed series thumbnail");
 
@@ -330,17 +357,6 @@ impl UploadMutation {
 			.filter(series::Column::Id.eq(series.series.id.clone()))
 			.exec(core.conn.as_ref())
 			.await?;
-
-		let config = library_config::Entity::find()
-			.filter(
-				library_config::Column::LibraryId.eq(series.series.library_id.clone()),
-			)
-			.one(core.conn.as_ref())
-			.await?
-			.ok_or("Library config not found")?;
-
-		let should_enqueue_placeholder = config.thumbnail_config.is_some()
-			|| config.process_thumbnail_colors_even_without_config;
 
 		if !should_enqueue_placeholder {
 			tracing::info!(
@@ -382,7 +398,7 @@ impl UploadMutation {
 		id: ID,
 		file: Upload,
 	) -> Result<Media> {
-		let AuthContext { user, .. } = ctx.data()?;
+		let stump_auth::AuthContext { user, .. } = ctx.data()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let book = media::ModelWithMetadata::find_for_user(user)
@@ -391,6 +407,26 @@ impl UploadMutation {
 			.one(core.conn.as_ref())
 			.await?
 			.ok_or("Book not found")?;
+
+		let config = library_config::Entity::find()
+			.filter(
+				library_config::Column::LibraryId.in_subquery(
+					Query::select()
+						.column(series::Column::LibraryId)
+						.from(series::Entity)
+						.and_where(series::Column::Id.eq(book.media.series_id.clone()))
+						.to_owned(),
+				),
+			)
+			.one(core.conn.as_ref())
+			.await?
+			.ok_or("Library config not found")?;
+		let should_enqueue_placeholder = config.thumbnail_config.is_some()
+			|| config.process_thumbnail_colors_even_without_config;
+		if should_enqueue_placeholder {
+			core.require_background_jobs()
+				.map_err(crate::error::map_core_error)?;
+		}
 
 		let value = file.value(ctx)?;
 
@@ -428,7 +464,8 @@ impl UploadMutation {
 		}
 
 		let path_buf =
-			place_thumbnail(&book.media.id, &extension, &image_buf, &core.config).await?;
+			place_thumbnail(&book.media.id, &extension, &image_buf, &core.config.media)
+				.await?;
 
 		tracing::debug!(?path_buf, "Placed book thumbnail");
 
@@ -440,23 +477,6 @@ impl UploadMutation {
 			.filter(media::Column::Id.eq(book.media.id.clone()))
 			.exec(core.conn.as_ref())
 			.await?;
-
-		let config = library_config::Entity::find()
-			.filter(
-				library_config::Column::LibraryId.in_subquery(
-					Query::select()
-						.column(series::Column::LibraryId)
-						.from(series::Entity)
-						.and_where(series::Column::Id.eq(book.media.series_id.clone()))
-						.to_owned(),
-				),
-			)
-			.one(core.conn.as_ref())
-			.await?
-			.ok_or("Library config not found")?;
-
-		let should_enqueue_placeholder = config.thumbnail_config.is_some()
-			|| config.process_thumbnail_colors_even_without_config;
 
 		if !should_enqueue_placeholder {
 			tracing::info!(
@@ -501,7 +521,7 @@ impl UploadMutation {
 		id: ID,
 		image: String,
 	) -> Result<Series> {
-		let AuthContext { user, .. } = ctx.data()?;
+		let stump_auth::AuthContext { user, .. } = ctx.data()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let series = series::ModelWithMetadata::find_for_user(user)
@@ -510,6 +530,20 @@ impl UploadMutation {
 			.one(core.conn.as_ref())
 			.await?
 			.ok_or("Series not found")?;
+
+		let config = library_config::Entity::find()
+			.filter(
+				library_config::Column::LibraryId.eq(series.series.library_id.clone()),
+			)
+			.one(core.conn.as_ref())
+			.await?
+			.ok_or("Library config not found")?;
+		let should_enqueue_placeholder = config.thumbnail_config.is_some()
+			|| config.process_thumbnail_colors_even_without_config;
+		if should_enqueue_placeholder {
+			core.require_background_jobs()
+				.map_err(crate::error::map_core_error)?;
+		}
 
 		let (image_buf, extension) =
 			decode_base64_image(&image, core.config.max_file_upload_size)?;
@@ -527,9 +561,13 @@ impl UploadMutation {
 			),
 		}
 
-		let path_buf =
-			place_thumbnail(&series.series.id, &extension, &image_buf, &core.config)
-				.await?;
+		let path_buf = place_thumbnail(
+			&series.series.id,
+			&extension,
+			&image_buf,
+			&core.config.media,
+		)
+		.await?;
 
 		tracing::debug!(?path_buf, "Placed series thumbnail from base64");
 
@@ -541,17 +579,6 @@ impl UploadMutation {
 			.filter(series::Column::Id.eq(series.series.id.clone()))
 			.exec(core.conn.as_ref())
 			.await?;
-
-		let config = library_config::Entity::find()
-			.filter(
-				library_config::Column::LibraryId.eq(series.series.library_id.clone()),
-			)
-			.one(core.conn.as_ref())
-			.await?
-			.ok_or("Library config not found")?;
-
-		let should_enqueue_placeholder = config.thumbnail_config.is_some()
-			|| config.process_thumbnail_colors_even_without_config;
 
 		if !should_enqueue_placeholder {
 			tracing::info!(
@@ -596,7 +623,7 @@ impl UploadMutation {
 		id: ID,
 		image: String,
 	) -> Result<Media> {
-		let AuthContext { user, .. } = ctx.data()?;
+		let stump_auth::AuthContext { user, .. } = ctx.data()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let book = media::ModelWithMetadata::find_for_user(user)
@@ -605,6 +632,26 @@ impl UploadMutation {
 			.one(core.conn.as_ref())
 			.await?
 			.ok_or("Book not found")?;
+
+		let config = library_config::Entity::find()
+			.filter(
+				library_config::Column::LibraryId.in_subquery(
+					Query::select()
+						.column(series::Column::LibraryId)
+						.from(series::Entity)
+						.and_where(series::Column::Id.eq(book.media.series_id.clone()))
+						.to_owned(),
+				),
+			)
+			.one(core.conn.as_ref())
+			.await?
+			.ok_or("Library config not found")?;
+		let should_enqueue_placeholder = config.thumbnail_config.is_some()
+			|| config.process_thumbnail_colors_even_without_config;
+		if should_enqueue_placeholder {
+			core.require_background_jobs()
+				.map_err(crate::error::map_core_error)?;
+		}
 
 		let (image_buf, extension) =
 			decode_base64_image(&image, core.config.max_file_upload_size)?;
@@ -623,7 +670,8 @@ impl UploadMutation {
 		}
 
 		let path_buf =
-			place_thumbnail(&book.media.id, &extension, &image_buf, &core.config).await?;
+			place_thumbnail(&book.media.id, &extension, &image_buf, &core.config.media)
+				.await?;
 
 		tracing::debug!(?path_buf, "Placed book thumbnail from base64");
 
@@ -635,23 +683,6 @@ impl UploadMutation {
 			.filter(media::Column::Id.eq(book.media.id.clone()))
 			.exec(core.conn.as_ref())
 			.await?;
-
-		let config = library_config::Entity::find()
-			.filter(
-				library_config::Column::LibraryId.in_subquery(
-					Query::select()
-						.column(series::Column::LibraryId)
-						.from(series::Entity)
-						.and_where(series::Column::Id.eq(book.media.series_id.clone()))
-						.to_owned(),
-				),
-			)
-			.one(core.conn.as_ref())
-			.await?
-			.ok_or("Library config not found")?;
-
-		let should_enqueue_placeholder = config.thumbnail_config.is_some()
-			|| config.process_thumbnail_colors_even_without_config;
 
 		if !should_enqueue_placeholder {
 			tracing::info!(

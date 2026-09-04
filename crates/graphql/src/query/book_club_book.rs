@@ -2,10 +2,7 @@ use async_graphql::{Context, Object, Result, ID};
 use models::entity::{book_club_book, media};
 use sea_orm::{prelude::*, QuerySelect};
 
-use crate::{
-	data::{AuthContext, CoreContext},
-	object::book_club_book::BookClubBook,
-};
+use crate::{data::CoreContext, object::book_club_book::BookClubBook};
 
 #[derive(Default)]
 pub struct BookClubBookQuery;
@@ -14,7 +11,8 @@ pub struct BookClubBookQuery;
 impl BookClubBookQuery {
 	/// Get a club book by ID
 	async fn book_club_book(&self, ctx: &Context<'_>, id: ID) -> Result<BookClubBook> {
-		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let mut book = book_club_book::Entity::find_by_id(id.as_ref())
