@@ -828,7 +828,7 @@ fn book_condition_filter(
 				Some("inker") => vec![media_metadata::Column::Inkers],
 				Some("colorist") => vec![media_metadata::Column::Colorists],
 				Some("letterer") => vec![media_metadata::Column::Letterers],
-				Some("cover_artist") => vec![media_metadata::Column::CoverArtists],
+				Some("cover") | Some("cover_artist") => vec![media_metadata::Column::CoverArtists],
 				Some("editor") => vec![media_metadata::Column::Editors],
 				Some(_) => return Err(unsupported_filter("author role")),
 			};
@@ -2632,7 +2632,7 @@ async fn collect_authors(
 		add_authors(&mut authors, row.inkers.as_deref(), "inker");
 		add_authors(&mut authors, row.colorists.as_deref(), "colorist");
 		add_authors(&mut authors, row.letterers.as_deref(), "letterer");
-		add_authors(&mut authors, row.cover_artists.as_deref(), "cover_artist");
+		add_authors(&mut authors, row.cover_artists.as_deref(), "cover");
 		add_authors(&mut authors, row.editors.as_deref(), "editor");
 	}
 	for row in &series_rows {

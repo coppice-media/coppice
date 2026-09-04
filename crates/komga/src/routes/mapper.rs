@@ -639,7 +639,7 @@ fn authors_from_media_metadata(metadata: &media_metadata::Model) -> Vec<KomgaAut
 		(metadata.inkers.as_deref(), "inker"),
 		(metadata.colorists.as_deref(), "colorist"),
 		(metadata.letterers.as_deref(), "letterer"),
-		(metadata.cover_artists.as_deref(), "cover_artist"),
+		(metadata.cover_artists.as_deref(), "cover"),
 		(metadata.editors.as_deref(), "editor"),
 	] {
 		for name in split_csv(raw) {

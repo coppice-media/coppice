@@ -93,7 +93,7 @@ fn push_author(values: &mut Vec<String>, name: &str) {
 
 /// Map Komga's author roles back to the CSV columns used by Stump metadata.
 ///
-/// The mapper exposes exactly these seven roles, so accepting any other role
+/// Stump persists exactly these seven role columns, so accepting any other role
 /// would make a PATCH silently lose data.
 fn map_author_columns(authors: &[KomgaAuthor]) -> Result<AuthorColumns, String> {
 	let mut columns = AuthorColumns::default();
@@ -109,7 +109,9 @@ fn map_author_columns(authors: &[KomgaAuthor]) -> Result<AuthorColumns, String> 
 			"inker" => push_author(&mut columns.inkers, name),
 			"colorist" => push_author(&mut columns.colorists, name),
 			"letterer" => push_author(&mut columns.letterers, name),
-			"cover_artist" => push_author(&mut columns.cover_artists, name),
+			// Komga names this role `cover` (komga-client AuthorDto / Komf emits `COVER`);
+			// Stump's CSV column is `cover_artists`. Accept both spellings.
+			"cover" | "cover_artist" => push_author(&mut columns.cover_artists, name),
 			"editor" => push_author(&mut columns.editors, name),
 			_ => {
 				return Err(format!(
@@ -515,6 +517,17 @@ mod tests {
 		assert_eq!(columns.pencillers, vec!["Artist"]);
 		assert_eq!(columns.editors, vec!["Editor"]);
 		assert!(columns.inkers.is_empty());
+	}
+
+	#[test]
+	fn patch_authors_accept_komga_cover_role_spellings() {
+		// Komf sends `COVER` (Komga's role name); older clients may send `cover_artist`.
+		let columns = map_author_columns(&[
+			KomgaAuthor { name: "A".into(), role: "COVER".into() },
+			KomgaAuthor { name: "B".into(), role: "cover_artist".into() },
+		])
+		.unwrap();
+		assert_eq!(columns.cover_artists, vec!["A".to_string(), "B".to_string()]);
 	}
 
 	#[test]
