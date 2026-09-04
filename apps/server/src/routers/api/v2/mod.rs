@@ -1,10 +1,12 @@
 pub(crate) mod auth;
 pub(crate) mod emoji;
+#[cfg(feature = "readium")]
 pub(crate) mod epub;
+pub(crate) mod ingest_events;
 pub(crate) mod library;
 pub(crate) mod media;
 mod oidc;
-mod series;
+pub(crate) mod series;
 mod user;
 
 use axum::{
@@ -26,12 +28,17 @@ use crate::{
 };
 
 pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
-	Router::new()
+	let router = Router::new()
 		.merge(auth::mount(app_state.clone()))
 		.merge(oidc::mount())
 		.merge(emoji::mount(app_state.clone()))
-		.merge(media::mount(app_state.clone()))
-		.merge(epub::mount(app_state.clone()))
+		.merge(ingest_events::mount(app_state.clone()))
+		.merge(media::mount(app_state.clone()));
+
+	#[cfg(feature = "readium")]
+	let router = router.merge(epub::mount(app_state.clone()));
+
+	router
 		.merge(series::mount(app_state.clone()))
 		.merge(library::mount(app_state.clone()))
 		.merge(user::mount(app_state))
@@ -140,7 +147,8 @@ async fn health(State(ctx): State<AppState>) -> impl IntoResponse {
 		Err(e) => (false, json!({"status": "error", "message": e.to_string()})),
 	};
 
-	let (spa_available, spa_data) =
+	let webui_enabled = cfg!(feature = "webui") && ctx.config.enable_webui;
+	let (spa_available, spa_data) = if webui_enabled {
 		match tokio::fs::metadata(&ctx.config.client_dir).await {
 			Ok(metadata) if metadata.is_dir() => (true, ok_status),
 			Ok(_) => (
@@ -148,7 +156,10 @@ async fn health(State(ctx): State<AppState>) -> impl IntoResponse {
 				json!({"status": "error", "message": "The client directory is malformed or missing"}),
 			),
 			Err(e) => (false, json!({"status": "error", "message": e.to_string()})),
-		};
+		}
+	} else {
+		(true, json!({"status": "disabled"}))
+	};
 
 	let status_code = if [db_ready, spa_available].iter().all(|&ready| ready) {
 		StatusCode::OK
@@ -157,6 +168,8 @@ async fn health(State(ctx): State<AppState>) -> impl IntoResponse {
 	};
 	let payload = json!({
 		"status": if status_code == StatusCode::OK { "ok" } else { "error" },
+		"jobs": ctx.jobs_health_status(),
+		"watcher": ctx.watcher_health_status(),
 		"dependencies": {
 			"database": db_data,
 			"spa": spa_data

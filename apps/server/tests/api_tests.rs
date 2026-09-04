@@ -1,9 +1,15 @@
 mod common;
+#[cfg(feature = "readium")]
 mod epub;
+#[cfg(feature = "graphql")]
 mod graphql;
+#[cfg(feature = "kobo")]
 mod kobo;
+#[cfg(feature = "koreader")]
 mod koreader;
+#[cfg(feature = "opds")]
 mod opds;
+#[cfg(feature = "graphql")]
 mod reading_progress;
 
 use common::TestApp;

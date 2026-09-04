@@ -6,11 +6,11 @@ use axum::{
 	http::{header, HeaderMap},
 	response::IntoResponse,
 };
-use graphql::data::AuthContext;
 use models::{
 	entity::media::{self},
 	shared::enums::UserPermission,
 };
+use stump_auth::AuthContext;
 use tower_http::services::ServeFile;
 
 use sea_orm::prelude::*;

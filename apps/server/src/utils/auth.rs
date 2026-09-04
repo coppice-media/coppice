@@ -1,5 +1,5 @@
-use models::entity::user::{AuthUser, LoginUser};
-use sea_orm::DatabaseConnection;
+use models::entity::user::{self, AuthUser, LoginUser};
+use sea_orm::{ColumnTrait, DatabaseConnection, QueryFilter};
 use stump_core::config::StumpConfig;
 use tower_sessions::Session;
 
@@ -53,6 +53,7 @@ pub async fn fetch_session_user(
 ) -> Result<Option<AuthUser>, APIError> {
 	if let Some(user_id) = session.get::<String>(SESSION_USER_KEY).await? {
 		let user = LoginUser::find_by_id(user_id)
+			.filter(user::Column::DeletedAt.is_null())
 			.into_model::<LoginUser>()
 			.one(conn)
 			.await?

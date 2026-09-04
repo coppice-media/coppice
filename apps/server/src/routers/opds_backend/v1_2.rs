@@ -3,13 +3,10 @@ use std::path::PathBuf;
 use axum::{
 	extract::{Path, Query, State},
 	http::HeaderMap,
-	middleware,
 	response::IntoResponse,
-	routing::get,
-	Extension, Router,
+	Extension,
 };
 use chrono::Utc;
-use graphql::{data::AuthContext, pagination::OffsetPagination};
 use models::{
 	domain::reading_progress::compute_page_based_percentage,
 	entity::{library, media, media_metadata, reading_session, series, series_metadata},
@@ -18,94 +15,45 @@ use models::{
 };
 use sea_orm::{prelude::*, QueryOrder, QuerySelect, QueryTrait};
 use serde::{Deserialize, Serialize};
-use stump_core::{
-	config::StumpConfig,
-	filesystem::{
-		image::{GenericImageProcessor, ImageProcessor},
-		media::get_page_async,
-		ContentType,
-	},
-	opds::{
-		v1_2::{
-			entry::{IntoOPDSEntry, OPDSEntryBuilder, OpdsEntry},
-			feed::{
-				OPDSFeedBuilder, OPDSFeedBuilderPageParams, OPDSFeedBuilderParams,
-				OpdsFeed,
-			},
-			link::{OpdsLink, OpdsLinkRel, OpdsLinkType},
-			opensearch::OpdsOpenSearch,
+use stump_api_types::OffsetPagination;
+use stump_auth::AuthContext;
+use stump_core::opds::{
+	v1_2::{
+		entry::{IntoOPDSEntry, OPDSEntryBuilder, OpdsEntry},
+		feed::{
+			OPDSFeedBuilder, OPDSFeedBuilderPageParams, OPDSFeedBuilderParams, OpdsFeed,
 		},
-		v2_0::entity::OPDSPublicationEntity,
+		link::{OpdsLink, OpdsLinkRel, OpdsLinkType},
+		opensearch::OpdsOpenSearch,
 	},
+	v2_0::entity::OPDSPublicationEntity,
+};
+use stump_media::{
+	image::{GenericImageProcessor, ImageProcessor},
+	media::get_page_async,
+	ContentType, MediaConfig,
 };
 
 use crate::{
 	config::state::AppState,
 	errors::{APIError, APIResult},
-	middleware::auth::{api_key_middleware, auth_middleware},
 	utils::{
 		http::{ImageResponse, Xml},
 		serve_media,
 	},
 };
 
-pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
-	let primary_router = Router::new() //
-		.route("/catalog", get(catalog))
-		.route("/search", get(search_description))
-		.route("/search/feed", get(search_feed))
-		.route("/keep-reading", get(keep_reading))
-		.nest(
-			"/libraries",
-			Router::new()
-				.route("/", get(get_libraries))
-				.route("/{id}", get(get_library_by_id)),
-		)
-		.nest(
-			"/series",
-			Router::new()
-				.route("/", get(get_series))
-				.route("/latest", get(get_latest_series))
-				.route("/{id}", get(get_series_by_id)),
-		)
-		.nest(
-			"/books",
-			Router::new()
-				.route("/", get(get_books))
-				.route("/latest", get(get_latest_books))
-				.route("/{id}/thumbnail", get(get_book_thumbnail))
-				.route("/{id}/pages/{page}", get(get_book_page))
-				.route("/{id}/file/{filename}", get(download_book)),
-		);
-
-	Router::new()
-		.nest(
-			"/v1.2",
-			primary_router.clone().layer(middleware::from_fn_with_state(
-				app_state.clone(),
-				auth_middleware,
-			)),
-		)
-		.nest(
-			"/{api_key}/v1.2",
-			primary_router.layer(middleware::from_fn_with_state(
-				app_state,
-				api_key_middleware,
-			)),
-		)
-}
-
 #[derive(Debug, Serialize, Deserialize)]
-struct OPDSURLParams<D> {
+pub(crate) struct OPDSURLParams<D> {
 	#[serde(flatten)]
-	params: D,
+	pub(crate) params: D,
 	#[serde(default)]
-	api_key: Option<String>,
+	pub(crate) api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct OPDSIDURLParams {
-	id: String,
+pub(crate) struct OPDSIDURLParams {
+	pub(crate) id: String,
 }
 
 fn number_or_string_deserializer<'de, D>(deserializer: D) -> Result<i32, D::Error>
@@ -117,22 +65,22 @@ where
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct OPDSPageURLParams {
-	id: String,
+pub(crate) struct OPDSPageURLParams {
+	pub(crate) id: String,
 	#[serde(deserialize_with = "number_or_string_deserializer")]
-	page: i32,
+	pub(crate) page: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct OPDSFilenameURLParams {
-	id: String,
-	filename: String,
+pub(crate) struct OPDSFilenameURLParams {
+	pub(crate) id: String,
+	pub(crate) filename: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct OPDSSearchQuery {
+pub(crate) struct OPDSSearchQuery {
 	#[serde(default)]
-	search: Option<String>,
+	pub(crate) search: Option<String>,
 }
 
 fn catalog_url(req_ctx: &AuthContext, path: &str) -> String {
@@ -151,7 +99,7 @@ fn service_url(req_ctx: &AuthContext) -> String {
 	}
 }
 
-async fn catalog(Extension(req): Extension<AuthContext>) -> APIResult<Xml> {
+pub(crate) async fn catalog(Extension(req): Extension<AuthContext>) -> APIResult<Xml> {
 	let entries = vec![
 		OpdsEntry::new(
 			"keepReading".to_string(),
@@ -267,13 +215,15 @@ async fn catalog(Extension(req): Extension<AuthContext>) -> APIResult<Xml> {
 	Ok(Xml(feed.build()?))
 }
 
-async fn search_description(Extension(req): Extension<AuthContext>) -> APIResult<Xml> {
+pub(crate) async fn search_description(
+	Extension(req): Extension<AuthContext>,
+) -> APIResult<Xml> {
 	Ok(OpdsOpenSearch::new(Some(service_url(&req)))
 		.build()
 		.map(Xml)?)
 }
 
-async fn keep_reading(
+pub(crate) async fn keep_reading(
 	State(ctx): State<AppState>,
 	Extension(req): Extension<AuthContext>,
 ) -> APIResult<Xml> {
@@ -314,7 +264,7 @@ async fn keep_reading(
 }
 
 /// A handler for GET /opds/v1.2/libraries, accepts a `search` URL param
-async fn get_libraries(
+pub(crate) async fn get_libraries(
 	State(ctx): State<AppState>,
 	Query(OPDSSearchQuery { search }): Query<OPDSSearchQuery>,
 	Extension(req): Extension<AuthContext>,
@@ -356,7 +306,7 @@ async fn get_libraries(
 	Ok(Xml(feed.build()?))
 }
 
-async fn get_library_by_id(
+pub(crate) async fn get_library_by_id(
 	State(ctx): State<AppState>,
 	Path(OPDSURLParams {
 		params: OPDSIDURLParams { id },
@@ -419,7 +369,7 @@ async fn get_library_by_id(
 
 /// A handler for GET /opds/v1.2/series, accepts a `page` URL param. Note: OPDS
 /// pagination is zero-indexed.
-async fn get_series(
+pub(crate) async fn get_series(
 	State(ctx): State<AppState>,
 	Query(pagination): Query<OffsetPagination>,
 	Query(OPDSSearchQuery { search }): Query<OPDSSearchQuery>,
@@ -474,7 +424,7 @@ async fn get_series(
 	Ok(Xml(feed.build()?))
 }
 
-async fn get_latest_series(
+pub(crate) async fn get_latest_series(
 	State(ctx): State<AppState>,
 	pagination: Query<OffsetPagination>,
 	Extension(req): Extension<AuthContext>,
@@ -512,7 +462,7 @@ async fn get_latest_series(
 	Ok(Xml(feed.build()?))
 }
 
-async fn get_series_by_id(
+pub(crate) async fn get_series_by_id(
 	Path(OPDSURLParams {
 		params: OPDSIDURLParams { id },
 		..
@@ -571,7 +521,7 @@ async fn get_series_by_id(
 }
 
 /// A handler for GET /opds/v1.2/search/feed, unified search returning libraries + series + books
-async fn search_feed(
+pub(crate) async fn search_feed(
 	State(ctx): State<AppState>,
 	Query(OPDSSearchQuery { search }): Query<OPDSSearchQuery>,
 	Extension(req): Extension<AuthContext>,
@@ -672,7 +622,7 @@ async fn search_feed(
 }
 
 /// A handler for GET /opds/v1.2/books, paginated book listing with optional search
-async fn get_books(
+pub(crate) async fn get_books(
 	State(ctx): State<AppState>,
 	Query(pagination): Query<OffsetPagination>,
 	Query(OPDSSearchQuery { search }): Query<OPDSSearchQuery>,
@@ -736,7 +686,7 @@ async fn get_books(
 }
 
 /// A handler for GET /opds/v1.2/books/latest, latest books ordered by created_at DESC
-async fn get_latest_books(
+pub(crate) async fn get_latest_books(
 	State(ctx): State<AppState>,
 	pagination: Query<OffsetPagination>,
 	Extension(req): Extension<AuthContext>,
@@ -808,7 +758,7 @@ fn handle_opds_image_response(
 }
 
 /// A handler for GET /opds/v1.2/books/{id}/thumbnail, returns the thumbnail
-async fn get_book_thumbnail(
+pub(crate) async fn get_book_thumbnail(
 	Path(OPDSURLParams {
 		params: OPDSIDURLParams { id },
 		..
@@ -825,9 +775,9 @@ async fn get_book_thumbnail(
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
 
-	let adjusted_config = StumpConfig {
+	let adjusted_config = MediaConfig {
 		pdf_prerender_range: 0, // Disable PDF prerendering for thumbnails since we only need the first page
-		..ctx.config.as_ref().clone()
+		..ctx.config.media.clone()
 	};
 
 	let (content_type, image_buffer) =
@@ -841,7 +791,7 @@ async fn get_book_thumbnail(
 /// Note: Reading progression tracking can be disabled via the ENABLE_OPDS_PROGRESSION
 /// configuration variable to avoid inaccurate tracking when clients preload pages.
 #[tracing::instrument(skip(ctx, req), fields(book_id = %id, page, zero_based = ?pagination.zero_based))]
-async fn get_book_page(
+pub(crate) async fn get_book_page(
 	Path(OPDSURLParams {
 		params: OPDSPageURLParams { id, page },
 		..
@@ -880,13 +830,13 @@ async fn get_book_page(
 	}
 
 	let (content_type, image_buffer) =
-		get_page_async(PathBuf::from(book.path), correct_page, &ctx.config).await?;
+		get_page_async(PathBuf::from(book.path), correct_page, &ctx.config.media).await?;
 
 	handle_opds_image_response(content_type, image_buffer)
 }
 
 /// A handler for GET /opds/v1.2/books/{id}/file/{filename}, returns the book
-async fn download_book(
+pub(crate) async fn download_book(
 	Path(OPDSURLParams {
 		params: OPDSFilenameURLParams { id, .. },
 		..

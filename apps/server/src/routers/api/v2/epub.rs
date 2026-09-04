@@ -8,14 +8,14 @@ use axum::{
 	routing::get,
 	Extension, Json, Router,
 };
-use graphql::data::AuthContext;
 use models::{
 	entity::{media, user::AuthUser},
 	shared::readium::{RWPMPositions, RWPManifest},
 };
 use sea_orm::prelude::*;
 use serde::Deserialize;
-use stump_core::filesystem::media::{
+use stump_auth::AuthContext;
+use stump_media::{
 	search_epub, EpubProcessor, EpubSearchOptions, ReadiumManifestGenerator,
 	EPUB_SEARCH_DEFAULT_LIMIT,
 };

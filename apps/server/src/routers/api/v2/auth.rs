@@ -8,7 +8,6 @@ use axum::{
 };
 use axum_extra::{headers::UserAgent, TypedHeader};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
-use graphql::data::{AuthContext, ServiceContext};
 use models::{
 	entity::{
 		session,
@@ -21,6 +20,8 @@ use reqwest::header;
 use sea_orm::{prelude::*, IntoActiveModel, TransactionTrait};
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 use serde::{Deserialize, Serialize};
+use stump_api_types::RequestOrigin;
+use stump_auth::AuthContext;
 use tower_sessions::Session;
 use tracing::error;
 
@@ -173,7 +174,7 @@ async fn handle_remove_earliest_session(
 	}
 }
 
-fn inject_avatar_url(mut user: AuthUser, service: ServiceContext) -> AuthUser {
+fn inject_avatar_url(mut user: AuthUser, service: RequestOrigin) -> AuthUser {
 	user.avatar = ImageRef {
 		url: service.cache_friendly_url(
 			format!("/api/v2/users/{}/avatar", user.id),
@@ -214,7 +215,7 @@ async fn login(
 	Json(PasswordUserInput { username, password }): Json<PasswordUserInput>,
 ) -> APIResult<Json<LoginResponse>> {
 	let config = state.config.clone();
-	let service = ServiceContext::new(details.host, details.scheme);
+	let service = RequestOrigin::new(details.host, details.scheme);
 
 	let is_oidc_only_auth = config
 		.oidc
@@ -381,7 +382,7 @@ pub async fn register(
 	Json(input): Json<PasswordUserInput>,
 ) -> APIResult<Json<AuthUser>> {
 	let config = ctx.config.clone();
-	let service = ServiceContext::new(details.host, details.scheme);
+	let service = RequestOrigin::new(details.host, details.scheme);
 
 	let is_oidc_only_auth = config
 		.oidc

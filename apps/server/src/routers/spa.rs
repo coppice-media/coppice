@@ -74,8 +74,8 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 		.fallback_service(spa_fallback)
 }
 
-pub(crate) fn relative_favicon_path() -> String {
-	format!("{ASSETS}{FAVICON}")
+pub(crate) fn relative_favicon_path(webui_enabled: bool) -> Option<String> {
+	webui_enabled.then(|| format!("{ASSETS}{FAVICON}"))
 }
 
 // https://github.com/tokio-rs/axum/discussions/608#discussioncomment-7772294

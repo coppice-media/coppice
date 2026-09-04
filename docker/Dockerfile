@@ -57,10 +57,10 @@ RUN --mount=type=cache,target=/usr/local/yarn/.cache,id=${TARGETARCH} \
     if [ ! -d "./build" ] || [ ! "$(ls -A ./build)" ]; then exit 1; fi
 
 # ------------------------------------------------------------------------------
-# Cargo Build Stage
+# Shared Rust Builder Base
 # ------------------------------------------------------------------------------
 
-FROM rust:1.97-bookworm AS builder
+FROM rust:1.97-bookworm AS rust-builder-base
 
 ARG GIT_REV
 ARG BUILD_CHANNEL
@@ -80,11 +80,15 @@ RUN --mount=type=cache,target=/var/cache/apt --mount=type=cache,target=/var/lib/
     curl \
     libsqlite3-dev;
 
-# Cargo build for stump
 WORKDIR /app
 
 COPY . .
 
+# ------------------------------------------------------------------------------
+# Full Rust Build Stage
+# ------------------------------------------------------------------------------
+
+FROM rust-builder-base AS full-builder
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=${TARGETARCH} \
     --mount=type=cache,target=/app/target,id=${TARGETARCH} \
@@ -92,10 +96,21 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=${TARGETARCH} \
     cp ./target/release/stump_server ./stump_server
 
 # ------------------------------------------------------------------------------
-# Final Stage
+# Headless Rust Build Stage
 # ------------------------------------------------------------------------------
 
-FROM gcr.io/distroless/cc-debian12:debug
+FROM rust-builder-base AS headless-builder
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=${TARGETARCH} \
+    --mount=type=cache,target=/app/target,id=${TARGETARCH} \
+    ./docker/build_server.sh --no-default-features --features headless && \
+    cp ./target/release/stump_server ./stump_server
+
+# ------------------------------------------------------------------------------
+# Shared Runtime Base
+# ------------------------------------------------------------------------------
+
+FROM gcr.io/distroless/cc-debian12:debug AS runtime-base
 
 ARG PORT=10801
 
@@ -114,14 +129,11 @@ RUN ln -s /busybox/env /usr/bin/env
 # RUN apt-get update && apt-get install -y locales-all && rm -rf /var/lib/apt/lists/*; \
 #     mkdir -p config && mkdir -p data && mkdir -p app
 
-COPY --from=builder /app/stump_server /app/stump
 COPY --from=pdfium /pdfium /opt/pdfium
-COPY --from=frontend /app/build /app/client
 COPY --chmod=755 docker/entrypoint.sh /entrypoint.sh
 
 # Default Stump environment variables
 ENV STUMP_CONFIG_DIR=/config \
-    STUMP_CLIENT_DIR=/app/client \
     STUMP_PROFILE=release \
     STUMP_PORT=${PORT} \
     STUMP_IN_DOCKER=true \
@@ -133,3 +145,28 @@ WORKDIR /app
 EXPOSE ${PORT}
 
 ENTRYPOINT ["/entrypoint.sh"]
+
+# ------------------------------------------------------------------------------
+# Headless Final Stage
+# ------------------------------------------------------------------------------
+
+FROM runtime-base AS headless
+
+COPY --from=headless-builder /app/stump_server /app/stump
+
+ENV STUMP_ENABLE_WEBUI=false \
+    STUMP_RUNTIME_WORKER_THREADS=2 \
+    STUMP_RUNTIME_MAX_BLOCKING_THREADS=8 \
+    STUMP_DB_MAX_CONNECTIONS=2 \
+    STUMP_SQLITE_STATEMENT_CACHE_CAPACITY=32
+
+# ------------------------------------------------------------------------------
+# Full Final Stage (default)
+# ------------------------------------------------------------------------------
+
+FROM runtime-base AS full
+
+COPY --from=full-builder /app/stump_server /app/stump
+COPY --from=frontend /app/build /app/client
+
+ENV STUMP_CLIENT_DIR=/app/client

@@ -2,7 +2,7 @@ use axum::{
 	http::{header, HeaderValue},
 	response::{IntoResponse, Response},
 };
-use stump_core::filesystem::ContentType;
+use stump_media::ContentType;
 use tracing::error;
 
 /// [`ImageResponse`] is a thin wrapper struct to return an image correctly in Axum.
@@ -49,10 +49,12 @@ impl IntoResponse for ImageResponse {
 	}
 }
 
+#[cfg(any(feature = "opds", test))]
 /// [Xml] is a wrapper struct to return XML correctly in Axum. It really just
 /// sets the content type to application/xml.
 pub struct Xml(pub String);
 
+#[cfg(any(feature = "opds", test))]
 impl IntoResponse for Xml {
 	fn into_response(self) -> Response {
 		// initialize the response based on axum's default for strings
@@ -68,6 +70,7 @@ impl IntoResponse for Xml {
 	}
 }
 
+#[cfg(any(feature = "readium", test))]
 /// [`BufferResponse`] is a wrapper struct to return a buffer of any Stump-compliant (see [`ContentType`])
 /// Content-Type correctly in Axum.
 pub struct BufferResponse {
@@ -75,12 +78,14 @@ pub struct BufferResponse {
 	pub data: Vec<u8>,
 }
 
+#[cfg(any(feature = "readium", test))]
 impl From<(ContentType, Vec<u8>)> for BufferResponse {
 	fn from((content_type, data): (ContentType, Vec<u8>)) -> Self {
 		Self { content_type, data }
 	}
 }
 
+#[cfg(any(feature = "readium", test))]
 impl IntoResponse for BufferResponse {
 	fn into_response(self) -> Response {
 		let mut base_response = self.data.into_response();
@@ -137,7 +142,7 @@ pub async fn download_image(url: &str) -> Result<(Vec<u8>, String), String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use stump_core::filesystem::ContentType;
+	use stump_media::ContentType;
 
 	#[test]
 	fn test_buffer_response() {

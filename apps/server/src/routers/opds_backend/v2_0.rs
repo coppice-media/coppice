@@ -3,12 +3,9 @@ use std::{ops::Deref, path::PathBuf};
 use axum::{
 	extract::{Path, Query, State},
 	http::{header, HeaderMap, HeaderValue},
-	middleware,
 	response::IntoResponse,
-	routing::get,
-	Extension, Json, Router,
+	Extension, Json,
 };
-use graphql::{data::AuthContext, pagination::OffsetPagination};
 use models::{
 	domain::reading_progress::compute_page_based_percentage,
 	services::reading_progress::{upsert_reading_session, NormalizedProgression},
@@ -26,8 +23,9 @@ use sea_orm::{
 };
 use sea_orm::{PaginatorTrait, QuerySelect};
 use serde::{Deserialize, Serialize};
+use stump_api_types::OffsetPagination;
+use stump_auth::AuthContext;
 use stump_core::{
-	filesystem::media::get_page_async,
 	opds::v2_0::{
 		authentication::{
 			OPDSAuthenticationDocument, OPDSAuthenticationDocumentBuilder,
@@ -47,71 +45,21 @@ use stump_core::{
 	utils::chain_optional_iter,
 	Ctx,
 };
+use stump_media::media::get_page_async;
 
 use crate::{
 	config::state::AppState,
 	errors::{APIError, APIResult},
-	middleware::{auth::auth_middleware, host::HostExtractor},
+	middleware::host::HostExtractor,
 	routers::{api::v2::media::get_media_thumbnail_by_id, relative_favicon_path},
 	utils::{http::ImageResponse, serve_media},
 };
 
 const DEFAULT_LIMIT: u64 = 10;
 
-pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
-	Router::new()
-		.nest(
-			"/v2.0",
-			Router::new()
-				.route("/auth", get(auth))
-				.route("/catalog", get(catalog))
-				.route("/search", get(search))
-				.nest(
-					"/libraries",
-					Router::new().route("/", get(browse_libraries)).nest(
-						"/{id}",
-						Router::new().route("/", get(browse_library_by_id)).nest(
-							"/books",
-							Router::new()
-								.route("/", get(browse_library_books))
-								.route("/latest", get(latest_library_books)),
-						),
-					),
-				)
-				.nest(
-					"/series",
-					Router::new().route("/", get(browse_series)).nest(
-						"/{id}",
-						Router::new().route("/", get(browse_series_by_id)),
-					),
-				)
-				.nest(
-					"/books",
-					Router::new()
-						.route("/browse", get(browse_books))
-						.route("/latest", get(latest_books))
-						.route("/keep-reading", get(keep_reading))
-						.nest(
-							"/{id}",
-							Router::new()
-								.route("/", get(get_book_by_id))
-								.route("/thumbnail", get(get_book_thumbnail))
-								.route("/pages/{page}", get(get_book_page))
-								.route(
-									"/progression",
-									get(get_book_progression)
-										.put(update_book_progression),
-								)
-								.route("/file", get(download_book)),
-						),
-				),
-		)
-		.layer(middleware::from_fn_with_state(app_state, auth_middleware))
-}
-
 /// A wrapper struct for an OPDS authentication document, which is used to set the
 /// appropriate content type header. The Json extractor would otherwise set it incorrectly
-struct OPDSAuthDocWrapper(OPDSAuthenticationDocument);
+pub(crate) struct OPDSAuthDocWrapper(OPDSAuthenticationDocument);
 
 impl IntoResponse for OPDSAuthDocWrapper {
 	fn into_response(self) -> axum::http::Response<axum::body::Body> {
@@ -131,9 +79,9 @@ impl IntoResponse for OPDSAuthDocWrapper {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct OPDSSearchQuery {
+pub(crate) struct OPDSSearchQuery {
 	#[serde(default)]
-	query: Option<String>,
+	pub(crate) query: Option<String>,
 }
 
 /// The filter options for browsing books, based on the OPDS/Readium spec
@@ -141,17 +89,17 @@ struct OPDSSearchQuery {
 /// See https://readium.org/webpub-manifest/schema/metadata.schema.json
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct OPDSBrowseFilter {
-	author: Option<String>, // Note: Filter by writers
-	penciler: Option<String>,
-	colorist: Option<String>,
-	inker: Option<String>,
-	letterer: Option<String>,
-	editor: Option<String>,
-	cover_artist: Option<String>,
-	subject: Option<String>,
-	characters: Option<String>,
-	teams: Option<String>,
+pub(crate) struct OPDSBrowseFilter {
+	pub(crate) author: Option<String>,
+	pub(crate) penciler: Option<String>,
+	pub(crate) colorist: Option<String>,
+	pub(crate) inker: Option<String>,
+	pub(crate) letterer: Option<String>,
+	pub(crate) editor: Option<String>,
+	pub(crate) cover_artist: Option<String>,
+	pub(crate) subject: Option<String>,
+	pub(crate) characters: Option<String>,
+	pub(crate) teams: Option<String>,
 }
 
 impl OPDSBrowseFilter {
@@ -255,28 +203,33 @@ impl OPDSBrowseFilter {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct OPDSBrowseParams {
+pub(crate) struct OPDSBrowseParams {
 	#[serde(flatten)]
-	pagination: OffsetPagination,
+	pub(crate) pagination: OffsetPagination,
 	#[serde(flatten)]
-	filter: OPDSBrowseFilter,
+	pub(crate) filter: OPDSBrowseFilter,
 }
 
-#[tracing::instrument]
-async fn auth(HostExtractor(host): HostExtractor) -> APIResult<OPDSAuthDocWrapper> {
+#[tracing::instrument(skip(ctx))]
+pub(crate) async fn auth(
+	State(ctx): State<AppState>,
+	HostExtractor(host): HostExtractor,
+) -> APIResult<OPDSAuthDocWrapper> {
+	let mut links = vec![OPDSLink::help()];
+	if let Some(favicon_path) = relative_favicon_path(ctx.config.enable_webui) {
+		links.push(OPDSLink::logo(format!("{}{}", host.url(), favicon_path)));
+	}
+
 	Ok(OPDSAuthDocWrapper(
 		OPDSAuthenticationDocumentBuilder::default()
 			.description(OPDSSupportedAuthFlow::Basic.description().to_string())
-			.links(vec![
-				OPDSLink::help(),
-				OPDSLink::logo(format!("{}{}", host.url(), relative_favicon_path())),
-			])
+			.links(links)
 			.build()?,
 	))
 }
 
 #[tracing::instrument(err, skip(ctx))]
-async fn catalog(
+pub(crate) async fn catalog(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	Extension(req): Extension<AuthContext>,
@@ -438,7 +391,7 @@ async fn catalog(
 }
 
 #[tracing::instrument(err, skip(ctx))]
-async fn search(
+pub(crate) async fn search(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	Query(OPDSSearchQuery { query }): Query<OPDSSearchQuery>,
@@ -597,7 +550,7 @@ async fn search(
 /// A route handler which returns a feed of libraries for a user. The feed includes groups for
 /// series and books in each library.
 #[tracing::instrument(skip(ctx))]
-async fn browse_libraries(
+pub(crate) async fn browse_libraries(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	pagination: Query<OffsetPagination>,
@@ -689,7 +642,7 @@ async fn browse_libraries(
 }
 
 #[tracing::instrument(skip(ctx))]
-async fn browse_library_by_id(
+pub(crate) async fn browse_library_by_id(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	Path(id): Path<String>,
@@ -947,7 +900,7 @@ where
 
 /// A route handler which returns a feed of books for a library.
 #[tracing::instrument(skip(ctx))]
-async fn browse_library_books(
+pub(crate) async fn browse_library_books(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	Path(id): Path<String>,
@@ -971,7 +924,7 @@ async fn browse_library_books(
 }
 
 #[tracing::instrument(skip(ctx))]
-async fn latest_library_books(
+pub(crate) async fn latest_library_books(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	Path(id): Path<String>,
@@ -995,7 +948,7 @@ async fn latest_library_books(
 }
 
 #[tracing::instrument(skip(ctx))]
-async fn browse_series(
+pub(crate) async fn browse_series(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	pagination: Query<OffsetPagination>,
@@ -1084,7 +1037,7 @@ async fn browse_series(
 }
 
 #[tracing::instrument(skip(ctx))]
-async fn browse_series_by_id(
+pub(crate) async fn browse_series_by_id(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	pagination: Query<OffsetPagination>,
@@ -1123,7 +1076,7 @@ async fn browse_series_by_id(
 
 /// A route handler which returns a feed of books for a user
 #[tracing::instrument(skip(ctx))]
-async fn browse_books(
+pub(crate) async fn browse_books(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	Query(params): Query<OPDSBrowseParams>,
@@ -1158,7 +1111,7 @@ async fn browse_books(
 
 /// A route handler which returns the latest books for a user as an OPDS feed.
 #[tracing::instrument(skip(ctx))]
-async fn latest_books(
+pub(crate) async fn latest_books(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	pagination: Query<OffsetPagination>,
@@ -1185,7 +1138,7 @@ async fn latest_books(
 ///
 /// Completed books are not included in this feed.
 #[tracing::instrument(skip(ctx))]
-async fn keep_reading(
+pub(crate) async fn keep_reading(
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
 	pagination: Query<OffsetPagination>,
@@ -1214,7 +1167,7 @@ async fn keep_reading(
 }
 
 #[tracing::instrument(skip(ctx))]
-async fn get_book_by_id(
+pub(crate) async fn get_book_by_id(
 	Path(id): Path<String>,
 	HostExtractor(host): HostExtractor,
 	State(ctx): State<AppState>,
@@ -1239,7 +1192,7 @@ async fn get_book_by_id(
 
 /// A route handler which returns a book thumbnail for a user as a valid image response.
 #[tracing::instrument(skip(ctx))]
-async fn get_book_thumbnail(
+pub(crate) async fn get_book_thumbnail(
 	Path(id): Path<String>,
 	State(ctx): State<AppState>,
 	Extension(req): Extension<AuthContext>,
@@ -1250,7 +1203,7 @@ async fn get_book_thumbnail(
 /// A route handler which returns a single page of a book for a user as a valid image
 /// response.
 #[tracing::instrument(skip(ctx))]
-async fn get_book_page(
+pub(crate) async fn get_book_page(
 	Path((id, page)): Path<(String, i32)>,
 	State(ctx): State<AppState>,
 	Extension(req): Extension<AuthContext>,
@@ -1264,7 +1217,7 @@ async fn get_book_page(
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
 
 	let (content_type, image_buffer) =
-		get_page_async(PathBuf::from(book.path), page, &ctx.config).await?;
+		get_page_async(PathBuf::from(book.path), page, &ctx.config.media).await?;
 
 	Ok(ImageResponse::new(content_type, image_buffer))
 }
@@ -1275,7 +1228,7 @@ async fn get_book_page(
 
 /// A route handler which returns the progression of a book for a user.
 #[tracing::instrument(skip(ctx))]
-async fn get_book_progression(
+pub(crate) async fn get_book_progression(
 	Path(id): Path<String>,
 	State(ctx): State<AppState>,
 	HostExtractor(host): HostExtractor,
@@ -1309,7 +1262,7 @@ async fn get_book_progression(
 ///
 /// Returns 204 on success, 409 Conflict if the timestamp is older.
 #[tracing::instrument(skip(ctx))]
-async fn update_book_progression(
+pub(crate) async fn update_book_progression(
 	Path(id): Path<String>,
 	State(ctx): State<AppState>,
 	Extension(req): Extension<AuthContext>,
@@ -1400,7 +1353,7 @@ async fn update_book_progression(
 
 /// A route handler which downloads a book for a user.
 #[tracing::instrument(skip(ctx))]
-async fn download_book(
+pub(crate) async fn download_book(
 	Path(id): Path<String>,
 	State(ctx): State<AppState>,
 	Extension(req): Extension<AuthContext>,

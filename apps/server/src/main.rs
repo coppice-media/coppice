@@ -21,11 +21,15 @@ fn debug_setup() {
 	std::env::set_var("STUMP_COLORFUL_LOGS", "true");
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<(), EntryError> {
+fn main() -> Result<(), EntryError> {
 	#[cfg(debug_assertions)]
 	debug_setup();
 
+	let runtime = config::runtime::build_runtime().map_err(EntryError::InvalidConfig)?;
+	runtime.block_on(run())
+}
+
+async fn run() -> Result<(), EntryError> {
 	let config_dir = bootstrap_config_dir();
 
 	let config = StumpCore::init_config(config_dir)
@@ -34,14 +38,19 @@ async fn main() -> Result<(), EntryError> {
 	let cli = Cli::parse();
 
 	if let Some(command) = cli.command {
-		Ok(handle_command(command, &cli.config.merge_stump_config(config)).await?)
+		let resolved_config = cli.config.merge_stump_config(config);
+		stump_core::database::validate_pool_config(&resolved_config)
+			.map_err(|e| EntryError::InvalidConfig(e.to_string()))?;
+		Ok(handle_command(command, &resolved_config).await?)
 	} else {
 		let resolved_config = cli.config.merge_stump_config(config);
+		stump_core::database::validate_pool_config(&resolved_config)
+			.map_err(|e| EntryError::InvalidConfig(e.to_string()))?;
 		// Note: init_tracing after loading the environment so the correct verbosity
 		// level is used for logging.
 		init_tracing(&resolved_config);
 
-		if let Some(ref oidc) = resolved_config.oidc {
+		if let Some(oidc) = &resolved_config.oidc {
 			tracing::info!(enabled = oidc.enabled, "OIDC configuration loaded");
 		}
 

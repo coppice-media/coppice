@@ -53,6 +53,27 @@ impl StumpSessionStore {
 		Self { conn, config }
 	}
 
+	/// Inserts a session row with an explicit expiry and returns its opaque ID.
+	///
+	/// This is used for compatibility tokens whose lifetime differs from the
+	/// browser session configured on the normal [`Session`] layer.
+	pub async fn create_for_user(
+		&self,
+		user_id: &str,
+		expiry_time: DateTimeWithTimeZone,
+	) -> Result<String, sea_orm::DbErr> {
+		let session_id = Id::default().to_string();
+		let active_model = session::ActiveModel {
+			session_id: Set(session_id.clone()),
+			user_id: Set(user_id.to_owned()),
+			expiry_time: Set(expiry_time),
+			..Default::default()
+		};
+
+		active_model.insert(self.conn.as_ref()).await?;
+		Ok(session_id)
+	}
+
 	pub async fn continuously_delete_expired(self, period: tokio::time::Duration) {
 		let mut interval = tokio::time::interval(period);
 		interval.set_missed_tick_behavior(MissedTickBehavior::Delay);

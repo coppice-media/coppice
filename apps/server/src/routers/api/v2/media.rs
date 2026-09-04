@@ -6,18 +6,16 @@ use axum::{
 	routing::get,
 	Extension, Router,
 };
-use graphql::data::AuthContext;
 use models::{
 	entity::{library, library_config, media, series, user::AuthUser},
 	shared::image_processor_options::SupportedImageFormat,
 };
 use sea_orm::{prelude::*, sea_query::Query, QuerySelect};
-use stump_core::{
-	config::StumpConfig,
-	filesystem::{
-		get_saved_thumbnail, get_thumbnail, media::get_page_async, ContentType, FileError,
-	},
-	Ctx,
+use stump_auth::AuthContext;
+use stump_core::{config::StumpConfig, Ctx};
+use stump_media::{
+	get_saved_thumbnail, get_thumbnail, media::get_page_async, ContentType, FileError,
+	MediaConfig,
 };
 
 use crate::{
@@ -68,9 +66,9 @@ pub(crate) async fn get_media_thumbnail(
 	let generated_thumb =
 		get_thumbnail(config.get_thumbnails_dir(), &book.id, image_format).await?;
 
-	let adjusted_config = StumpConfig {
+	let adjusted_config = MediaConfig {
 		pdf_prerender_range: 0, // Disable PDF prerendering for thumbnails since we only need the first page
-		..config.clone()
+		..config.media.clone()
 	};
 
 	if let Some((content_type, bytes)) = generated_thumb {
@@ -139,7 +137,7 @@ pub(crate) async fn get_media_thumbnail_handler(
 	get_media_thumbnail_by_id(&ctx, &req.user(), id).await
 }
 
-async fn get_media_page(
+pub(crate) async fn get_media_page(
 	Path((id, page)): Path<(String, u32)>,
 	State(ctx): State<AppState>,
 	Extension(req): Extension<AuthContext>,
@@ -152,7 +150,7 @@ async fn get_media_page(
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
 
 	let content =
-		match get_page_async(&book.path, page.try_into()?, ctx.config.as_ref()).await {
+		match get_page_async(&book.path, page.try_into()?, &ctx.config.media).await {
 			Ok(result) => result,
 			Err(e) => {
 				if matches!(e, FileError::NoImageError) {

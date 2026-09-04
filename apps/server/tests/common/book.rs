@@ -1,11 +1,14 @@
+#[cfg(feature = "graphql")]
 use async_graphql::InputType;
 use chrono::{DateTime, Duration, Utc};
+#[cfg(feature = "graphql")]
 use graphql::input::media::{MediaProgressInput, PagedProgressInput};
 use models::{entity::reading_session, shared::enums::ReadingStatus};
 use sea_orm::{prelude::*, QueryOrder};
 
 use crate::common::TestApp;
 
+#[cfg(feature = "graphql")]
 pub async fn update_progress(app: &TestApp, book_id: &str, input: MediaProgressInput) {
 	let json_input = input
 		.to_value()
@@ -64,6 +67,7 @@ pub async fn fudge_session_time_with_timestamp(
 
 /// this will create a n completed readthroughs and then fudge the timestamps to be old enough that
 /// a follow-up session can be created
+#[cfg(feature = "graphql")]
 pub async fn create_nth_readthrough(app: &TestApp, book_id: &str, n: i32) {
 	let conn = app.conn();
 

@@ -1,14 +1,11 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc};
 
-use apalis::prelude::*;
 use axum::{extract::connect_info::Connected, serve::IncomingStream, Extension, Router};
 use stump_core::{
 	config::{bootstrap_config_dir, logging::init_tracing},
-	job::dispatch_job,
 	StumpCore,
 };
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
 use tower_http::{
 	compression::{
 		predicate::{DefaultPredicate, NotForContentType, Predicate},
@@ -28,16 +25,16 @@ use stump_core::config::StumpConfig;
 pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	let core = StumpCore::new(config.clone()).await;
 
-	// TODO: These need reorganizing, the core-specific initializations should just be
-	// in some initialization function. The server-specific things, e.g. watcher, scheduler,
-	// should be fully managed by the server and removed from the core...
+	// Server-only resources are started lazily or only when their configuration
+	// requires them; the context retains the shared lifecycle handles.
 
-	// Cancel any islanded jobs from a previous run
-	core.get_context()
-		.apalis_state
-		.cancel_islanded_jobs()
-		.await
-		.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
+	// Cancel any islanded jobs from a previous run. This is a direct database
+	// operation and deliberately does not create the lazy job runtime.
+	if config.enable_background_jobs {
+		core.cancel_islanded_jobs()
+			.await
+			.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
+	}
 
 	// Initialize the server configuration. If it already exists, nothing will happen.
 	core.init_server_config()
@@ -57,15 +54,23 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 		.await
 		.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
 
-	let _scheduler = core
-		.init_scheduler()
-		.await
-		.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
+	// The scheduler and watcher are optional server-owned startup handles. The
+	// context can start either one later when a request changes configuration.
+	let _scheduler = if config.enable_background_jobs {
+		core.init_scheduler()
+			.await
+			.map_err(|e| ServerError::ServerStartError(e.to_string()))?
+	} else {
+		None
+	};
 
-	core.init_library_watcher()
-		.await
-		.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
-
+	let _library_watcher = if config.enable_background_jobs {
+		core.init_library_watcher()
+			.await
+			.map_err(|e| ServerError::ServerStartError(e.to_string()))?
+	} else {
+		None
+	};
 	let oidc_provider: Option<Arc<OidcProvider>> = {
 		if let Some(oidc_config) = config.oidc.as_ref().filter(|c| c.is_configured()) {
 			let state = OidcProvider::new(oidc_config).await.map_err(|e| {
@@ -106,21 +111,42 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	let app = Router::new()
 		.merge(app_router)
 		.with_state(app_state.clone())
-		.layer(get_session_layer(app_state.clone()))
+		.layer(get_session_layer(app_state.clone()));
+
+	// Komga clients (Komelia) keep separate HTTP clients that share one cookie
+	// jar; a session-clearing `Set-Cookie` on a 401 from any of them (for
+	// example an SSE reconnect carrying a dead cookie) wipes the live session
+	// of the others. Komga itself never clears cookies on 401, so strip the
+	// clears that both Stump and tower-sessions attach, on Komga paths only.
+	// This must sit outside the session layer to see tower-sessions' header.
+	#[cfg(feature = "komga")]
+	let app = app.layer(axum::middleware::from_fn(
+		crate::middleware::auth::strip_komga_unauthorized_cookie_clears,
+	));
+
+	let app = app
 		.layer(cors_layer)
 		.layer(CompressionLayer::new().compress_when(compression_predicate))
-		.layer(TraceLayer::new_for_http())
+		// The default span only carries method/uri at TRACE; record them on the
+		// span so every 4xx/5xx `on_failure` line names the request.
+		.layer(TraceLayer::new_for_http().make_span_with(
+			tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::DEBUG),
+		))
 		.layer(Extension(oidc_provider));
-
-	let shutdown_notify = Arc::new(Notify::new());
 
 	// TODO: Refactor to use https://docs.rs/async-shutdown/latest/async_shutdown/
 	let cleanup = {
-		let shutdown_notify = shutdown_notify.clone();
-		|| async move {
+		let server_ctx = server_ctx.clone();
+		let background_jobs_enabled = config.enable_background_jobs;
+		move || async move {
 			println!("Initializing graceful shutdown...");
-			let _ = core.get_context().library_watcher.stop().await;
-			shutdown_notify.notify_waiters();
+			if background_jobs_enabled {
+				// These methods are no-ops when the corresponding lazy resource
+				// was never created, including resources started after boot.
+				let _ = server_ctx.stop_library_watcher().await;
+				server_ctx.stop_scheduler().await;
+				server_ctx.stop_job_runtime().await;
+			}
 		}
 	};
 
@@ -137,31 +163,13 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 
 	// TODO: Experiment with higher concurrency, YEARS ago at this point (before enforcing WAL even)
 	// I experienced multi-writer issues but perhaps with SeaORM + WAL we can have parallel scans.
-	let monitor = Monitor::new()
-		.register(
-			WorkerBuilder::new("stump-worker")
-				.enable_tracing()
-				.data(server_ctx.apalis_state.clone())
-				.concurrency(1)
-				.backend(server_ctx.job_storage.clone())
-				.build_fn(dispatch_job),
-		)
-		.with_terminator(tokio::time::sleep(Duration::from_secs(30)))
-		.run_with_signal({
-			let shutdown_notify = shutdown_notify.clone();
-			async move {
-				shutdown_notify.notified().await;
-				Ok(())
-			}
-		});
-
 	let http = axum::serve(
 		listener,
 		app.into_make_service_with_connect_info::<StumpRequestInfo>(),
 	)
 	.with_graceful_shutdown(shutdown_signal_with_cleanup(Some(cleanup)));
 
-	let _ = tokio::join!(monitor, http);
+	let _ = http.await;
 
 	Ok(())
 }

@@ -6,15 +6,10 @@ use axum::{
 };
 use cli::CliError;
 use stump_core::{
-	error::CoreError,
-	filesystem::{
-		image::{ProcessorError, ThumbnailGenerateError},
-		media::EpubSearchError,
-		FileError,
-	},
-	opds::v2_0::OPDSV2Error,
+	error::CoreError, filesystem::image::ThumbnailGenerateError, opds::v2_0::OPDSV2Error,
 	CoreEvent,
 };
+use stump_media::{EpubSearchError, FileError, ProcessorError};
 use tokio::sync::mpsc;
 use tower_sessions::session::Error as SessionError;
 
@@ -230,6 +225,9 @@ impl From<TryFromIntError> for APIError {
 impl From<CoreError> for APIError {
 	fn from(err: CoreError) -> Self {
 		match err {
+			CoreError::FeatureDisabled(feature) => APIError::ServiceUnavailable(format!(
+				"{feature} is disabled by server configuration"
+			)),
 			CoreError::InternalError(err) => APIError::InternalServerError(err),
 			CoreError::IoError(err) => APIError::InternalServerError(err.to_string()),
 			CoreError::MigrationError(err) => APIError::InternalServerError(err),
@@ -277,7 +275,12 @@ impl From<mpsc::error::SendError<CoreEvent>> for APIError {
 
 impl From<FileError> for APIError {
 	fn from(error: FileError) -> APIError {
-		APIError::InternalServerError(error.to_string())
+		match error {
+			FileError::PageNotFound { .. } | FileError::ResourceNotFound(_) => {
+				APIError::NotFound(error.to_string())
+			},
+			_ => APIError::InternalServerError(error.to_string()),
+		}
 	}
 }
 
@@ -309,6 +312,31 @@ impl From<ProcessorError> for APIError {
 impl From<std::io::Error> for APIError {
 	fn from(error: std::io::Error) -> APIError {
 		APIError::InternalServerError(error.to_string())
+	}
+}
+
+/// The Komga provider crate mirrors the server's HTTP error vocabulary so
+/// server-local Komga routes can share helpers with the extracted ones.
+#[cfg(feature = "komga")]
+impl From<stump_komga::errors::APIError> for APIError {
+	fn from(error: stump_komga::errors::APIError) -> Self {
+		use stump_komga::errors::APIError as Komga;
+		match error {
+			Komga::AccountLocked => APIError::AccountLocked,
+			Komga::BadRequest(message) => APIError::BadRequest(message),
+			Komga::CancelledRequest => APIError::CancelledRequest,
+			Komga::NotFound(message) => APIError::NotFound(message),
+			Komga::InternalServerError(message) => APIError::InternalServerError(message),
+			Komga::Unauthorized => APIError::Unauthorized,
+			Komga::Forbidden(message) => APIError::Forbidden(message),
+			Komga::Conflict(message) => APIError::Conflict(message),
+			Komga::NotImplemented => APIError::NotImplemented,
+			Komga::NotSupported => APIError::NotSupported,
+			Komga::ServiceUnavailable(message) => APIError::ServiceUnavailable(message),
+			Komga::BadGateway(message) => APIError::BadGateway(message),
+			Komga::Unknown(message) => APIError::Unknown(message),
+			Komga::DbError(error) => APIError::DbError(error),
+		}
 	}
 }
 
@@ -371,4 +399,17 @@ impl IntoResponse for APIError {
 pub mod api_error_message {
 	pub const LOCKED_ACCOUNT: &str =
 		"Your account is locked. Please contact an administrator to unlock your account.";
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn disabled_feature_is_service_unavailable() {
+		let response =
+			APIError::from(CoreError::FeatureDisabled("background jobs")).into_response();
+
+		assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+	}
 }

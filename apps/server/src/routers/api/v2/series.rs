@@ -4,16 +4,14 @@ use axum::{
 	routing::get,
 	Extension, Router,
 };
-use graphql::data::AuthContext;
 use models::{
 	entity::{library_config, media, series},
 	shared::image_processor_options::SupportedImageFormat,
 };
 use sea_orm::{prelude::*, sea_query::Query, QueryOrder};
-use stump_core::{
-	config::StumpConfig,
-	filesystem::{get_saved_thumbnail, get_thumbnail, ContentType},
-};
+use stump_auth::AuthContext;
+use stump_core::config::StumpConfig;
+use stump_media::{get_saved_thumbnail, get_thumbnail, ContentType};
 
 use crate::{
 	config::state::AppState,
