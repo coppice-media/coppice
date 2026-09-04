@@ -1311,8 +1311,11 @@ fn apply_series_order(
 			"createddate" => query.order_by(series::Column::CreatedAt, order),
 			"metadata.titlesort" => query.order_by(
 				Expr::expr(Func::coalesce([
-					Expr::col((series_metadata::Entity, series_metadata::Column::Title))
-						.into(),
+					Expr::col((
+						series_metadata::Entity,
+						series_metadata::Column::TitleSort,
+					))
+					.into(),
 					Expr::col((series::Entity, series::Column::Name)).into(),
 				])),
 				order,
@@ -2774,6 +2777,23 @@ mod tests {
 		assert!(
 			parse_sort_specs(&["metadata.titleSort,asc,extra".to_owned()]).is_empty()
 		);
+	}
+
+	#[test]
+	fn series_title_sort_uses_persisted_override_with_name_fallback() {
+		let query = apply_series_order(
+			series::ModelWithMetadata::find(),
+			&[SortSpec {
+				field: "metadata.titlesort".to_owned(),
+				direction: SortDirection::Asc,
+			}],
+		);
+		let sql = query
+			.into_query()
+			.to_string(sea_orm::sea_query::SqliteQueryBuilder);
+		assert!(sql.contains("COALESCE"));
+		assert!(sql.contains("\"series_metadata\".\"title_sort\""));
+		assert!(sql.contains("\"series\".\"name\""));
 	}
 
 	#[test]

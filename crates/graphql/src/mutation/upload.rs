@@ -17,7 +17,7 @@ use stump_core::filesystem::image::{
 };
 use stump_core::job::stump_job::StumpJob;
 use stump_media::{
-	image::{place_thumbnail, remove_thumbnails},
+	image::{place_thumbnail, remove_thumbnails, replace_thumbnail},
 	ContentType,
 };
 use tokio::fs;
@@ -324,22 +324,7 @@ impl UploadMutation {
 			.map(str::to_ascii_lowercase)
 			.ok_or("Expected file to have an extension")?;
 
-		// Note: I chose to *safely* attempt the removal as to not block the upload, however after some
-		// user testing I'd like to see if this becomes a problem. We'll see!
-		match remove_thumbnails(
-			std::slice::from_ref(&series.series.id),
-			&core.config.get_thumbnails_dir(),
-		)
-		.await
-		{
-			Ok(count) => tracing::info!("Removed {} thumbnails!", count),
-			Err(e) => tracing::error!(
-				?e,
-				"Failed to remove existing series thumbnail before replacing!"
-			),
-		}
-
-		let path_buf = place_thumbnail(
+		let path_buf = replace_thumbnail(
 			&series.series.id,
 			&extension,
 			&image_buf,
@@ -448,23 +433,8 @@ impl UploadMutation {
 			"Determined file extension of uploaded thumbnail. Preparing to replace..."
 		);
 
-		// Note: I chose to *safely* attempt the removal as to not block the upload, however after some
-		// user testing I'd like to see if this becomes a problem. We'll see!
-		let removal_result = remove_thumbnails(
-			std::slice::from_ref(&book.media.id),
-			&core.config.get_thumbnails_dir(),
-		)
-		.await;
-		match removal_result {
-			Ok(count) => tracing::info!("Removed {} thumbnails!", count),
-			Err(e) => tracing::error!(
-				?e,
-				"Failed to remove existing book thumbnail before replacing!"
-			),
-		}
-
 		let path_buf =
-			place_thumbnail(&book.media.id, &extension, &image_buf, &core.config.media)
+			replace_thumbnail(&book.media.id, &extension, &image_buf, &core.config.media)
 				.await?;
 
 		tracing::debug!(?path_buf, "Placed book thumbnail");
@@ -548,20 +518,7 @@ impl UploadMutation {
 		let (image_buf, extension) =
 			decode_base64_image(&image, core.config.max_file_upload_size)?;
 
-		match remove_thumbnails(
-			std::slice::from_ref(&series.series.id),
-			&core.config.get_thumbnails_dir(),
-		)
-		.await
-		{
-			Ok(count) => tracing::info!("Removed {} thumbnails!", count),
-			Err(e) => tracing::error!(
-				?e,
-				"Failed to remove existing series thumbnail before replacing!"
-			),
-		}
-
-		let path_buf = place_thumbnail(
+		let path_buf = replace_thumbnail(
 			&series.series.id,
 			&extension,
 			&image_buf,
@@ -656,21 +613,8 @@ impl UploadMutation {
 		let (image_buf, extension) =
 			decode_base64_image(&image, core.config.max_file_upload_size)?;
 
-		let removal_result = remove_thumbnails(
-			std::slice::from_ref(&book.media.id),
-			&core.config.get_thumbnails_dir(),
-		)
-		.await;
-		match removal_result {
-			Ok(count) => tracing::info!("Removed {} thumbnails!", count),
-			Err(e) => tracing::error!(
-				?e,
-				"Failed to remove existing book thumbnail before replacing!"
-			),
-		}
-
 		let path_buf =
-			place_thumbnail(&book.media.id, &extension, &image_buf, &core.config.media)
+			replace_thumbnail(&book.media.id, &extension, &image_buf, &core.config.media)
 				.await?;
 
 		tracing::debug!(?path_buf, "Placed book thumbnail from base64");

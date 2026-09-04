@@ -6,13 +6,13 @@ use axum::{
 	Extension, Router,
 };
 use futures_util::stream::{self, Stream, StreamExt as _};
-use models::entity::{media, series, user::AuthUser};
+use models::entity::{library, media, series, user::AuthUser};
 use sea_orm::{ColumnTrait, DatabaseConnection, QueryFilter};
 use stump_auth::AuthContext;
 use tokio::sync::broadcast::{self, error::RecvError};
 
 use super::{KomgaBackend, KomgaCoreEvent, KomgaEvents};
-use crate::sse::KomgaEvent;
+use crate::sse::{KomgaEvent, TaskQueueStatus};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -66,8 +66,8 @@ fn core_event_stream(
 			loop {
 				match receiver.recv().await {
 					Ok(core_event) => {
-						if let Some((media_id, event)) = map_core_event(core_event) {
-							if is_media_visible(conn.as_ref(), &user, &media_id).await {
+						if let Some((visibility, event)) = map_core_event(core_event) {
+							if is_event_visible(conn.as_ref(), &user, &visibility).await {
 								return Some((Ok(event), (receiver, conn, user)));
 							}
 						}
@@ -148,6 +148,27 @@ async fn is_series_visible(conn: &DatabaseConnection, user: &AuthUser, id: &str)
 	}
 }
 
+async fn is_library_visible(
+	conn: &DatabaseConnection,
+	user: &AuthUser,
+	id: &str,
+) -> bool {
+	match library::Entity::find_for_user(user)
+		.filter(library::Column::Id.eq(id))
+		.one(conn)
+		.await
+	{
+		Ok(row) => row.is_some(),
+		Err(error) => {
+			tracing::warn!(
+				?error,
+				"Komga SSE library visibility check failed; dropping event"
+			);
+			false
+		},
+	}
+}
+
 async fn any_media_visible(
 	conn: &DatabaseConnection,
 	user: &AuthUser,
@@ -173,11 +194,12 @@ async fn any_series_visible(
 	}
 	false
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum EventVisibility {
+	Any,
 	Media(String),
 	Series(String),
+	Library(String),
 	MediaSet(Vec<String>),
 	SeriesSet(Vec<String>),
 	User(String),
@@ -189,8 +211,10 @@ async fn is_event_visible(
 	visibility: &EventVisibility,
 ) -> bool {
 	match visibility {
+		EventVisibility::Any => true,
 		EventVisibility::Media(id) => is_media_visible(conn, user, id).await,
 		EventVisibility::Series(id) => is_series_visible(conn, user, id).await,
+		EventVisibility::Library(id) => is_library_visible(conn, user, id).await,
 		EventVisibility::MediaSet(ids) => any_media_visible(conn, user, ids).await,
 		EventVisibility::SeriesSet(ids) => any_series_visible(conn, user, ids).await,
 		EventVisibility::User(event_user_id) => {
@@ -328,15 +352,18 @@ impl KomgaSseEvent {
 	}
 }
 
-/// Maps a core event to a Komga event plus the media ID whose visibility gates it.
-fn map_core_event(event: KomgaCoreEvent) -> Option<(String, KomgaSseEvent)> {
+/// Maps a core event to a Komga event and the visibility scope for its
+/// subscriber. Queue status is global and therefore does not query the
+/// database; deletion events are gated by their library because the deleted
+/// row may no longer exist when the SSE subscriber receives them.
+fn map_core_event(event: KomgaCoreEvent) -> Option<(EventVisibility, KomgaSseEvent)> {
 	match event {
 		KomgaCoreEvent::CreatedMedia {
 			id,
 			series_id,
 			library_id,
 		} => {
-			let media_id = id.clone();
+			let visibility = EventVisibility::Media(id.clone());
 			KomgaSseEvent::from_payload(
 				"BookAdded",
 				crate::sse::BookAdded {
@@ -345,8 +372,46 @@ fn map_core_event(event: KomgaCoreEvent) -> Option<(String, KomgaSseEvent)> {
 					library_id: library_id.into(),
 				},
 			)
-			.map(|event| (media_id, event))
+			.map(|event| (visibility, event))
 		},
+		KomgaCoreEvent::MediaDeleted {
+			id,
+			series_id,
+			library_id,
+		} => {
+			let visibility = EventVisibility::Library(library_id.clone());
+			KomgaSseEvent::from_payload(
+				"BookDeleted",
+				crate::sse::BookDeleted {
+					book_id: id.into(),
+					series_id: series_id.into(),
+					library_id: library_id.into(),
+				},
+			)
+			.map(|event| (visibility, event))
+		},
+		KomgaCoreEvent::SeriesDeleted { id, library_id } => {
+			let visibility = EventVisibility::Library(library_id.clone());
+			KomgaSseEvent::from_payload(
+				"SeriesDeleted",
+				crate::sse::SeriesDeleted {
+					series_id: id.into(),
+					library_id: library_id.into(),
+				},
+			)
+			.map(|event| (visibility, event))
+		},
+		KomgaCoreEvent::JobQueueStatus {
+			count,
+			count_by_type,
+		} => KomgaSseEvent::from_payload(
+			"TaskQueueStatus",
+			TaskQueueStatus {
+				count,
+				count_by_type,
+			},
+		)
+		.map(|event| (EventVisibility::Any, event)),
 		KomgaCoreEvent::Other => None,
 	}
 }
@@ -375,9 +440,9 @@ mod tests {
 			}"#,
 		);
 
-		let (media_id, mapped) =
+		let (visibility, mapped) =
 			map_core_event(event).expect("created media is mappable");
-		assert_eq!(media_id, "book-1");
+		assert_eq!(visibility, EventVisibility::Media("book-1".to_owned()));
 		assert_eq!(mapped.name, "BookAdded");
 
 		let decoded = decode_event(Some(mapped.name), Some(&mapped.data))
@@ -388,6 +453,77 @@ mod tests {
 				book_id: "book-1".into(),
 				series_id: "series-1".into(),
 				library_id: "library-1".into(),
+			}
+		);
+	}
+
+	#[test]
+	fn deleted_book_maps_to_library_visible_book_deleted() {
+		let event = core_event(
+			r#"{
+				"__typename": "MediaDeleted",
+				"id": "book-1",
+				"seriesId": "series-1",
+				"libraryId": "library-1"
+			}"#,
+		);
+		let (visibility, mapped) =
+			map_core_event(event).expect("book deletion is mappable");
+		assert_eq!(visibility, EventVisibility::Library("library-1".to_owned()));
+		assert_eq!(mapped.name, "BookDeleted");
+		assert_eq!(
+			decode_event(Some(mapped.name), Some(&mapped.data))
+				.expect("valid SSE payload"),
+			KomgaEvent::BookDeleted {
+				book_id: "book-1".into(),
+				series_id: "series-1".into(),
+				library_id: "library-1".into(),
+			}
+		);
+	}
+
+	#[test]
+	fn deleted_series_maps_to_library_visible_series_deleted() {
+		let event = core_event(
+			r#"{
+				"__typename": "SeriesDeleted",
+				"id": "series-1",
+				"libraryId": "library-1"
+			}"#,
+		);
+		let (visibility, mapped) =
+			map_core_event(event).expect("series deletion is mappable");
+		assert_eq!(visibility, EventVisibility::Library("library-1".to_owned()));
+		assert_eq!(mapped.name, "SeriesDeleted");
+		assert_eq!(
+			decode_event(Some(mapped.name), Some(&mapped.data))
+				.expect("valid SSE payload"),
+			KomgaEvent::SeriesDeleted {
+				series_id: "series-1".into(),
+				library_id: "library-1".into(),
+			}
+		);
+	}
+
+	#[test]
+	fn queue_status_maps_without_item_visibility_lookup() {
+		let event = core_event(
+			r#"{
+				"__typename": "JobQueueStatus",
+				"count": 0,
+				"countByType": {}
+			}"#,
+		);
+		let (visibility, mapped) =
+			map_core_event(event).expect("queue status is mappable");
+		assert_eq!(visibility, EventVisibility::Any);
+		assert_eq!(mapped.name, "TaskQueueStatus");
+		assert_eq!(
+			decode_event(Some(mapped.name), Some(&mapped.data))
+				.expect("valid SSE payload"),
+			KomgaEvent::TaskQueueStatus {
+				count: 0,
+				count_by_type: std::collections::BTreeMap::new(),
 			}
 		);
 	}

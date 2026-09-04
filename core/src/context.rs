@@ -5,7 +5,7 @@ use std::{
 
 use apalis::{
 	layers::WorkerBuilderExt,
-	prelude::{MemoryStorage, MessageQueue, Monitor, WorkerBuilder, WorkerFactoryFn},
+	prelude::{MemoryStorage, Monitor, WorkerBuilder, WorkerFactoryFn},
 };
 use chrono::Utc;
 use models::entity::{job, library, library_config, server_config};
@@ -18,7 +18,7 @@ use tokio::sync::{
 use crate::{
 	config::StumpConfig,
 	database,
-	event::CoreEvent,
+	event::{CoreEvent, JobQueueStatus},
 	filesystem::scanner::LibraryWatcher,
 	ingest::services::IngestServices,
 	job::{
@@ -86,6 +86,11 @@ impl JobRuntime {
 			shutdown_notify,
 			monitor: std::sync::Mutex::new(Some(monitor)),
 		}
+	}
+
+	/// Returns a lock-free snapshot of queued and running background jobs.
+	pub fn queue_depth(&self) -> JobQueueStatus {
+		self.apalis_state.queue_state.snapshot()
 	}
 
 	async fn stop(&self) {
@@ -308,15 +313,15 @@ impl Ctx {
 		Ok(self
 			.library_watcher
 			.get_or_init(|| {
-				Arc::new(LibraryWatcher::new_with_enabled(
+				Arc::new(LibraryWatcher::new_with_enabled_and_queue(
 					self.conn.clone(),
 					runtime.storage.clone(),
+					runtime.apalis_state.queue_state.clone(),
 					true,
 				))
 			})
 			.clone())
 	}
-
 	/// Initializes the library watcher only when at least one ready library is
 	/// configured for watching.
 	pub async fn init_library_watcher(&self) -> CoreResult<Option<Arc<LibraryWatcher>>> {
@@ -431,9 +436,9 @@ impl Ctx {
 	/// Enqueue a job into apalis storage, starting the runtime on first use.
 	pub async fn enqueue(&self, job: StumpJob) -> CoreResult<()> {
 		let runtime = self.job_runtime()?;
-		let mut storage = runtime.storage.clone();
-		storage
-			.enqueue(job)
+		runtime
+			.apalis_state
+			.enqueue_job(job)
 			.await
 			.map_err(|_| CoreError::InternalError("Failed to enqueue job".to_string()))?;
 		Ok(())

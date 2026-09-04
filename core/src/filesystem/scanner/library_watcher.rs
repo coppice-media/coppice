@@ -1,5 +1,8 @@
-use crate::{job::stump_job::StumpJob, CoreError, CoreResult};
-use apalis::prelude::MemoryStorage;
+use crate::{
+	job::{state::JobQueueState, stump_job::StumpJob},
+	CoreError, CoreResult,
+};
+use apalis::prelude::{MemoryStorage, MessageQueue};
 use async_trait::async_trait;
 use models::entity::{library, library_config};
 use notify::{Event, RecommendedWatcher, Watcher};
@@ -159,20 +162,28 @@ trait SubmitScanJob {
 #[derive(Clone)]
 struct ApalisJobSubmitter {
 	storage: MemoryStorage<StumpJob>,
+	queue_state: Option<Arc<JobQueueState>>,
 }
 
 #[async_trait]
 impl SubmitScanJob for ApalisJobSubmitter {
 	async fn submit(&self, id: String, path: String) -> Result<(), ()> {
+		let job = StumpJob::library_scan(id, path, None);
+		if let Some(queue_state) = &self.queue_state {
+			queue_state.enqueued(&job);
+		}
 		let mut storage = self.storage.clone();
-		use apalis::prelude::MessageQueue;
-		storage
-			.enqueue(StumpJob::library_scan(id, path, None))
-			.await
-			.map(|_| ())
-			.map_err(|e| {
-				tracing::error!(error = ?e, "Error enqueuing library scan job");
-			})
+		let queued_job = job.clone();
+		match storage.enqueue(job).await {
+			Ok(_) => Ok(()),
+			Err(error) => {
+				if let Some(queue_state) = &self.queue_state {
+					queue_state.enqueue_failed(&queued_job);
+				}
+				tracing::error!(error = ?error, "Error enqueuing library scan job");
+				Err(())
+			},
+		}
 	}
 }
 
@@ -197,7 +208,33 @@ impl LibraryWatcher {
 		enabled: bool,
 	) -> LibraryWatcher {
 		let library_provider = LibraryProvider { conn };
-		let job_submitter = ApalisJobSubmitter { storage };
+		let job_submitter = ApalisJobSubmitter {
+			storage,
+			queue_state: None,
+		};
+		let (tx, rx) = unbounded_channel();
+		Self::new_internal_with_enabled(
+			tx,
+			rx,
+			None,
+			library_provider,
+			job_submitter,
+			Duration::from_millis(5000),
+			enabled,
+		)
+	}
+
+	pub(crate) fn new_with_enabled_and_queue(
+		conn: Arc<DatabaseConnection>,
+		storage: MemoryStorage<StumpJob>,
+		queue_state: Arc<JobQueueState>,
+		enabled: bool,
+	) -> LibraryWatcher {
+		let library_provider = LibraryProvider { conn };
+		let job_submitter = ApalisJobSubmitter {
+			storage,
+			queue_state: Some(queue_state),
+		};
 		let (tx, rx) = unbounded_channel();
 		Self::new_internal_with_enabled(
 			tx,

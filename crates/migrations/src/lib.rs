@@ -38,6 +38,7 @@ mod m20260904_000000_add_liseur_sync;
 mod m20260905_000000_add_kobo_reading_state;
 mod m20260906_000000_add_liseur_token_metadata;
 mod m20260907_000000_add_ingest;
+mod m20260908_000000_add_series_metadata_komga_fields;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -85,6 +86,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260905_000000_add_kobo_reading_state::Migration),
 			Box::new(m20260906_000000_add_liseur_token_metadata::Migration),
 			Box::new(m20260907_000000_add_ingest::Migration),
+			Box::new(m20260908_000000_add_series_metadata_komga_fields::Migration),
 		]
 	}
 }

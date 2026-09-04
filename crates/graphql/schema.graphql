@@ -420,7 +420,7 @@ type ConfidenceFactor {
 }
 
 "An event that is emitted by the core and consumed by a client"
-union CoreEvent = JobStarted | JobUpdate | JobOutput | DiscoveredMissingLibrary | CreatedMedia | CreatedManySeries | CreatedOrUpdatedManyMedia
+union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | DiscoveredMissingLibrary | CreatedMedia | MediaDeleted | SeriesDeleted | CreatedManySeries | CreatedOrUpdatedManyMedia
 
 union CoreJobOutput = LibraryScanOutput | SeriesScanOutput | ThumbnailGenerationOutput | PlaceholderGenerationOutput | MetadataFetchJobOutput | AnalyzeMediaOutput
 
@@ -1252,6 +1252,11 @@ type JobOutput {
 	output: CoreJobOutput!
 }
 
+type JobQueueStatus {
+	count: Int!
+	countByType: JSONObject!
+}
+
 type JobStarted {
 	id: String!
 }
@@ -1637,6 +1642,12 @@ type MediaAnnotationModel {
 	userId: String!
 	createdAt: DateTime!
 	updatedAt: DateTime!
+}
+
+type MediaDeleted {
+	id: String!
+	seriesId: String!
+	libraryId: String!
 }
 
 input MediaFilterInput {
@@ -3214,6 +3225,11 @@ type Series {
 	stats(allUsers: Boolean): SeriesStats!
 }
 
+type SeriesDeleted {
+	id: String!
+	libraryId: String!
+}
+
 input SeriesFilterInput {
 	name: FieldFilterString = null
 	path: FieldFilterString = null
@@ -3256,6 +3272,21 @@ type SeriesMetadata {
 	summary: String
 	"Title of series"
 	title: String
+	"""
+	Title used for Komga metadata sorting. The Komga adapter falls back to
+	the series title when this value is unset.
+	"""
+	titleSort: String
+	"Komga reading-direction enum name (for example, `LEFT_TO_RIGHT`)."
+	readingDirection: String
+	"BCP-47 language tag supplied by the metadata provider."
+	language: String
+	"JSON array of `{label,title}` alternate titles from Komga."
+	alternateTitles: String
+	titleSortLock: Boolean!
+	readingDirectionLock: Boolean!
+	languageLock: Boolean!
+	alternateTitlesLock: Boolean!
 	"Total issues in the series up until this point in time"
 	totalIssues: Int
 	"Volume of the series in relation to other titles (this can be either numerical or the series year)"
@@ -3332,6 +3363,14 @@ enum SeriesMetadataModelOrdering {
 	STATUS
 	SUMMARY
 	TITLE
+	TITLE_SORT
+	READING_DIRECTION
+	LANGUAGE
+	ALTERNATE_TITLES
+	TITLE_SORT_LOCK
+	READING_DIRECTION_LOCK
+	LANGUAGE_LOCK
+	ALTERNATE_TITLES_LOCK
 	TOTAL_ISSUES
 	VOLUME
 	WRITERS

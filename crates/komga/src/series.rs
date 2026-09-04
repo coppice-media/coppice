@@ -77,7 +77,7 @@ pub struct KomgaSeriesMetadata {
 	pub publisher_lock: bool,
 	pub age_rating: Option<i32>,
 	pub age_rating_lock: bool,
-	pub language: String,
+	pub language: Option<String>,
 	pub language_lock: bool,
 	pub genres: Vec<String>,
 	pub genres_lock: bool,

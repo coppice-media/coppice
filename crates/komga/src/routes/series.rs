@@ -25,8 +25,8 @@ use models::{
 	shared::enums::UserPermission,
 };
 use sea_orm::{
-	prelude::*, ActiveValue::Set, DatabaseTransaction, IntoActiveModel, QueryOrder,
-	TransactionTrait,
+	prelude::*, ActiveValue, ActiveValue::Set, DatabaseTransaction, IntoActiveModel,
+	QueryOrder, TransactionTrait,
 };
 use stump_auth::AuthContext;
 
@@ -78,16 +78,9 @@ fn unsupported_metadata_fields(
 		};
 	}
 
-	// Stump has no series_metadata columns or equivalent relation for these
-	// Komga fields. Rejecting them keeps PATCH honest instead of dropping writes.
-	unsupported!(title_sort, "titleSort");
-	unsupported!(title_sort_lock, "titleSortLock");
-	unsupported!(reading_direction, "readingDirection");
-	unsupported!(reading_direction_lock, "readingDirectionLock");
-	unsupported!(language, "language");
-	unsupported!(language_lock, "languageLock");
-	unsupported!(alternate_titles, "alternateTitles");
-	unsupported!(alternate_titles_lock, "alternateTitlesLock");
+	// Stump persists all of the Komga series metadata fields below except sharing labels.
+	// Sharing labels have no Stump equivalent, so a present value (including null) is
+	// rejected instead of silently dropping the write.
 	unsupported!(sharing_labels, "sharingLabels");
 	unsupported!(sharing_labels_lock, "sharingLabelsLock");
 	fields
@@ -134,12 +127,20 @@ fn metadata_patch_has_changes(patch: &KomgaSeriesMetadataUpdateRequest) -> bool 
 		|| !patch.status_lock.is_unset()
 		|| !patch.title.is_unset()
 		|| !patch.title_lock.is_unset()
+		|| !patch.title_sort.is_unset()
+		|| !patch.title_sort_lock.is_unset()
 		|| !patch.summary.is_unset()
 		|| !patch.summary_lock.is_unset()
 		|| !patch.publisher.is_unset()
 		|| !patch.publisher_lock.is_unset()
+		|| !patch.reading_direction.is_unset()
+		|| !patch.reading_direction_lock.is_unset()
 		|| !patch.age_rating.is_unset()
 		|| !patch.age_rating_lock.is_unset()
+		|| !patch.language.is_unset()
+		|| !patch.language_lock.is_unset()
+		|| !patch.alternate_titles.is_unset()
+		|| !patch.alternate_titles_lock.is_unset()
 		|| !patch.genres.is_unset()
 		|| !patch.genres_lock.is_unset()
 		|| !patch.tags_lock.is_unset()
@@ -147,6 +148,66 @@ fn metadata_patch_has_changes(patch: &KomgaSeriesMetadataUpdateRequest) -> bool 
 		|| !patch.total_book_count_lock.is_unset()
 		|| !patch.links.is_unset()
 		|| !patch.links_lock.is_unset()
+}
+
+fn reading_direction_name(direction: crate::KomgaReadingDirection) -> &'static str {
+	match direction {
+		crate::KomgaReadingDirection::LeftToRight => "LEFT_TO_RIGHT",
+		crate::KomgaReadingDirection::RightToLeft => "RIGHT_TO_LEFT",
+		crate::KomgaReadingDirection::Vertical => "VERTICAL",
+		crate::KomgaReadingDirection::Webtoon => "WEBTOON",
+	}
+}
+
+fn apply_bool_patch(active: &mut ActiveValue<bool>, patch: &PatchValue<bool>) {
+	match patch {
+		PatchValue::Unset => {},
+		PatchValue::None => *active = Set(false),
+		PatchValue::Some(value) => *active = Set(*value),
+	}
+}
+
+fn apply_komga_series_metadata_patch(
+	active: &mut series_metadata::ActiveModel,
+	patch: &KomgaSeriesMetadataUpdateRequest,
+) -> APIResult<()> {
+	match &patch.title_sort {
+		PatchValue::Unset => {},
+		PatchValue::None => active.title_sort = Set(None),
+		PatchValue::Some(value) => active.title_sort = Set(Some(value.clone())),
+	}
+	match &patch.reading_direction {
+		PatchValue::Unset => {},
+		PatchValue::None => active.reading_direction = Set(None),
+		PatchValue::Some(value) => {
+			active.reading_direction =
+				Set(Some(reading_direction_name(*value).to_owned()))
+		},
+	}
+	match &patch.language {
+		PatchValue::Unset => {},
+		PatchValue::None => active.language = Set(None),
+		PatchValue::Some(value) => active.language = Set(Some(value.clone())),
+	}
+	match &patch.alternate_titles {
+		PatchValue::Unset => {},
+		PatchValue::None => active.alternate_titles = Set(None),
+		PatchValue::Some(value) => {
+			active.alternate_titles = Set(Some(serde_json::to_string(value)?))
+		},
+	}
+
+	apply_bool_patch(&mut active.title_sort_lock, &patch.title_sort_lock);
+	apply_bool_patch(
+		&mut active.reading_direction_lock,
+		&patch.reading_direction_lock,
+	);
+	apply_bool_patch(&mut active.language_lock, &patch.language_lock);
+	apply_bool_patch(
+		&mut active.alternate_titles_lock,
+		&patch.alternate_titles_lock,
+	);
+	Ok(())
 }
 
 fn lock_patch_requested(patch: &KomgaSeriesMetadataUpdateRequest) -> bool {
@@ -282,6 +343,7 @@ async fn patch_series_metadata(
 			..Default::default()
 		},
 	};
+	apply_komga_series_metadata_patch(&mut active, &patch)?;
 
 	match &patch.status {
 		PatchValue::Unset => {},
@@ -558,16 +620,162 @@ mod tests {
 	use serde_json::json;
 
 	#[test]
-	fn metadata_patch_rejects_unpersistable_fields() {
+	fn metadata_patch_rejects_only_sharing_labels() {
 		let patch: KomgaSeriesMetadataUpdateRequest = serde_json::from_value(json!({
-			"titleSort": "A", "language": "en", "title": "Supported"
+			"titleSort": "A",
+			"language": "en",
+			"readingDirection": "LEFT_TO_RIGHT",
+			"alternateTitles": [],
+			"sharingLabels": []
 		}))
 		.unwrap();
 		let error = validate_metadata_patch(&patch).unwrap_err();
 		assert!(matches!(
 			error,
-			APIError::BadRequest(message)
-				if message.contains("titleSort") && message.contains("language")
+			APIError::BadRequest(message) if message.contains("sharingLabels")
+		));
+	}
+
+	#[test]
+	fn metadata_patch_applies_new_fields_when_set() {
+		let patch: KomgaSeriesMetadataUpdateRequest = serde_json::from_value(json!({
+			"titleSort": "Sorted title",
+			"titleSortLock": true,
+			"readingDirection": "LEFT_TO_RIGHT",
+			"readingDirectionLock": true,
+			"language": "en",
+			"languageLock": true,
+			"alternateTitles": [{"label": "native", "title": "Original"}],
+			"alternateTitlesLock": true
+		}))
+		.unwrap();
+		let mut active = series_metadata::ActiveModel {
+			series_id: Set("series".to_owned()),
+			..Default::default()
+		};
+
+		apply_komga_series_metadata_patch(&mut active, &patch).unwrap();
+
+		assert!(matches!(
+			&active.title_sort,
+			ActiveValue::Set(Some(value)) if value == "Sorted title"
+		));
+		assert!(matches!(
+			&active.reading_direction,
+			ActiveValue::Set(Some(value)) if value == "LEFT_TO_RIGHT"
+		));
+		assert!(matches!(
+			&active.language,
+			ActiveValue::Set(Some(value)) if value == "en"
+		));
+		assert!(matches!(
+			&active.alternate_titles,
+			ActiveValue::Set(Some(value))
+				if value == r#"[{"label":"native","title":"Original"}]"#
+		));
+		assert!(matches!(&active.title_sort_lock, ActiveValue::Set(true)));
+		assert!(matches!(
+			&active.reading_direction_lock,
+			ActiveValue::Set(true)
+		));
+		assert!(matches!(&active.language_lock, ActiveValue::Set(true)));
+		assert!(matches!(
+			&active.alternate_titles_lock,
+			ActiveValue::Set(true)
+		));
+	}
+
+	#[test]
+	fn metadata_patch_clears_new_fields_and_locks_with_null() {
+		let patch: KomgaSeriesMetadataUpdateRequest = serde_json::from_value(json!({
+			"titleSort": null,
+			"titleSortLock": null,
+			"readingDirection": null,
+			"readingDirectionLock": null,
+			"language": null,
+			"languageLock": null,
+			"alternateTitles": null,
+			"alternateTitlesLock": null
+		}))
+		.unwrap();
+		let mut active = series_metadata::ActiveModel {
+			series_id: Set("series".to_owned()),
+			title_sort: Set(Some("Sorted title".to_owned())),
+			title_sort_lock: Set(true),
+			reading_direction: Set(Some("RIGHT_TO_LEFT".to_owned())),
+			reading_direction_lock: Set(true),
+			language: Set(Some("fr".to_owned())),
+			language_lock: Set(true),
+			alternate_titles: Set(Some("[]".to_owned())),
+			alternate_titles_lock: Set(true),
+			..Default::default()
+		};
+
+		apply_komga_series_metadata_patch(&mut active, &patch).unwrap();
+
+		assert!(matches!(&active.title_sort, ActiveValue::Set(None)));
+		assert!(matches!(&active.reading_direction, ActiveValue::Set(None)));
+		assert!(matches!(&active.language, ActiveValue::Set(None)));
+		assert!(matches!(&active.alternate_titles, ActiveValue::Set(None)));
+		assert!(matches!(&active.title_sort_lock, ActiveValue::Set(false)));
+		assert!(matches!(
+			&active.reading_direction_lock,
+			ActiveValue::Set(false)
+		));
+		assert!(matches!(&active.language_lock, ActiveValue::Set(false)));
+		assert!(matches!(
+			&active.alternate_titles_lock,
+			ActiveValue::Set(false)
+		));
+	}
+
+	#[test]
+	fn metadata_patch_leaves_new_fields_and_locks_unchanged_when_unset() {
+		let patch: KomgaSeriesMetadataUpdateRequest =
+			serde_json::from_value(json!({})).unwrap();
+		let mut active = series_metadata::ActiveModel {
+			series_id: Set("series".to_owned()),
+			title_sort: Set(Some("Sorted title".to_owned())),
+			title_sort_lock: Set(true),
+			reading_direction: Set(Some("VERTICAL".to_owned())),
+			reading_direction_lock: Set(true),
+			language: Set(Some("ja".to_owned())),
+			language_lock: Set(true),
+			alternate_titles: Set(Some(
+				r#"[{"label":"native","title":"Original"}]"#.to_owned(),
+			)),
+			alternate_titles_lock: Set(true),
+			..Default::default()
+		};
+
+		apply_komga_series_metadata_patch(&mut active, &patch).unwrap();
+
+		assert!(matches!(
+			&active.title_sort,
+			ActiveValue::Set(Some(value)) if value == "Sorted title"
+		));
+		assert!(matches!(
+			&active.reading_direction,
+			ActiveValue::Set(Some(value)) if value == "VERTICAL"
+		));
+		assert!(matches!(
+			&active.language,
+			ActiveValue::Set(Some(value)) if value == "ja"
+		));
+		assert!(matches!(
+			&active.alternate_titles,
+			ActiveValue::Set(Some(value))
+				if value == r#"[{"label":"native","title":"Original"}]"#
+		));
+		assert!(matches!(&active.title_sort_lock, ActiveValue::Set(true)));
+		assert!(matches!(
+			&active.reading_direction_lock,
+			ActiveValue::Set(true)
+		));
+		assert!(matches!(&active.language_lock, ActiveValue::Set(true)));
+		assert!(matches!(
+			&active.alternate_titles_lock,
+			ActiveValue::Set(true)
 		));
 	}
 

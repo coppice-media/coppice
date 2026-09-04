@@ -15,6 +15,7 @@ use stump_core::{
 		media::analysis::{AnalysisJobConfig, MediaAnalysisJobScope},
 	},
 	job::stump_job::StumpJob,
+	CoreEvent, MediaDeleted,
 };
 
 use crate::{
@@ -97,9 +98,25 @@ impl MediaMutation {
 			.one(conn)
 			.await?
 			.ok_or("Media not found")?;
+		let series_id = model
+			.media
+			.series_id
+			.clone()
+			.ok_or("Series ID not set on media")?;
+		let library_id = series::Entity::find()
+			.filter(series::Column::Id.eq(series_id.clone()))
+			.one(conn)
+			.await?
+			.and_then(|series| series.library_id)
+			.ok_or("Library ID not set on series")?;
 		let mut active_model = model.media.clone().into_active_model();
 		active_model.deleted_at = Set(Some(Utc::now().into()));
 		let deleted_book = active_model.update(conn).await?;
+		core.send_core_event(CoreEvent::MediaDeleted(MediaDeleted {
+			id: deleted_book.id.clone(),
+			series_id,
+			library_id,
+		}));
 
 		Ok(Media::from(media::ModelWithMetadata {
 			media: deleted_book,

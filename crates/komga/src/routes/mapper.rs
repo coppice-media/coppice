@@ -153,12 +153,6 @@ pub(crate) async fn map_series(
 	}
 
 	let series_ids = unique_ids(series_rows.iter().map(|row| row.series.id.clone()));
-	let library_ids = unique_ids(
-		series_rows
-			.iter()
-			.filter_map(|row| row.series.library_id.clone()),
-	);
-	let library_configs = load_visible_library_configs(conn, user, &library_ids).await?;
 	let books = if series_ids.is_empty() {
 		Vec::new()
 	} else {
@@ -187,18 +181,12 @@ pub(crate) async fn map_series(
 		.map(|row| {
 			let id = row.series.id.clone();
 			let books = books_by_series.remove(&id).unwrap_or_default();
-			let config = row
-				.series
-				.library_id
-				.as_ref()
-				.and_then(|library_id| library_configs.get(library_id));
 			map_series_row(
 				row,
 				&books,
 				&sessions,
 				series_tags.get(&id).map(Vec::as_slice).unwrap_or(&[]),
 				&media_tags,
-				config,
 			)
 		})
 		.collect())
@@ -345,12 +333,15 @@ fn map_series_row(
 	sessions: &HashMap<String, reading_session::ModelWithDevice>,
 	series_tags: &[String],
 	media_tags: &HashMap<String, Vec<String>>,
-	library_config: Option<&library_config::Model>,
 ) -> KomgaSeries {
 	let series = row.series;
 	let metadata = row.metadata.as_ref();
 	let title = non_empty(metadata.and_then(|metadata| metadata.title.clone()))
 		.unwrap_or_else(|| series.name.clone());
+	let title_sort = series_title_sort(
+		metadata.and_then(|metadata| metadata.title_sort.clone()),
+		&title,
+	);
 	let summary = metadata
 		.and_then(|metadata| metadata.summary.clone())
 		.or_else(|| series.description.clone())
@@ -401,27 +392,29 @@ fn map_series_row(
 			),
 			status_lock: is_locked(locked_fields, &["STATUS"]),
 			title: title.clone(),
-			// Stump stores no alternate-title collection.
-			alternate_titles: Vec::new(),
-			alternate_titles_lock: false,
+			alternate_titles: parse_alternate_titles(
+				metadata.and_then(|metadata| metadata.alternate_titles.as_deref()),
+			),
+			alternate_titles_lock: metadata
+				.is_some_and(|metadata| metadata.alternate_titles_lock),
 			title_lock: is_locked(locked_fields, &["TITLE"]),
-			// Stump persists no separate sort title.
-			title_sort: title.clone(),
-			title_sort_lock: is_locked(locked_fields, &["TITLE_SORT"]),
+			title_sort,
+			title_sort_lock: metadata.is_some_and(|metadata| metadata.title_sort_lock),
 			summary: summary.clone(),
 			summary_lock: is_locked(locked_fields, &["SUMMARY"]),
-			// Library configuration is batch-loaded through the same user-visible library scope.
-			reading_direction: map_reading_direction(library_config),
-			reading_direction_lock: false,
+			reading_direction: map_reading_direction(
+				metadata.and_then(|metadata| metadata.reading_direction.as_deref()),
+			),
+			reading_direction_lock: metadata
+				.is_some_and(|metadata| metadata.reading_direction_lock),
 			publisher: metadata
 				.and_then(|metadata| metadata.publisher.clone())
 				.unwrap_or_default(),
 			publisher_lock: is_locked(locked_fields, &["PUBLISHER"]),
 			age_rating: metadata.and_then(|metadata| metadata.age_rating),
 			age_rating_lock: is_locked(locked_fields, &["AGE_RATING"]),
-			// Series metadata has no language column; Stump stores language per book.
-			language: String::new(),
-			language_lock: false,
+			language: metadata.and_then(|metadata| metadata.language.clone()),
+			language_lock: metadata.is_some_and(|metadata| metadata.language_lock),
 			genres: split_csv(metadata.and_then(|metadata| metadata.genres.as_deref())),
 			genres_lock: is_locked(locked_fields, &["GENRES"]),
 			tags: series_tags.to_vec(),
@@ -550,25 +543,6 @@ async fn load_latest_sessions(
 		}
 	}
 	Ok(latest)
-}
-
-async fn load_visible_library_configs(
-	conn: &DatabaseConnection,
-	user: &AuthUser,
-	library_ids: &[String],
-) -> APIResult<HashMap<String, library_config::Model>> {
-	if library_ids.is_empty() {
-		return Ok(HashMap::new());
-	}
-	let rows = library::Entity::find_for_user(user)
-		.filter(library::Column::Id.is_in(library_ids.to_vec()))
-		.find_also_related(library_config::Entity)
-		.all(conn)
-		.await?;
-	Ok(rows
-		.into_iter()
-		.filter_map(|(library, config)| config.map(|config| (library.id, config)))
-		.collect())
 }
 
 async fn load_media_tags(
@@ -765,18 +739,20 @@ fn media_profile_for_extension(extension: &str) -> Option<MediaProfile> {
 		})
 }
 
-fn map_reading_direction(
-	config: Option<&library_config::Model>,
-) -> Option<KomgaReadingDirection> {
-	match config.map(|config| config.default_reading_dir) {
-		Some(models::shared::enums::ReadingDirection::Ltr) => {
-			Some(KomgaReadingDirection::LeftToRight)
-		},
-		Some(models::shared::enums::ReadingDirection::Rtl) => {
-			Some(KomgaReadingDirection::RightToLeft)
-		},
-		None => None,
+fn map_reading_direction(value: Option<&str>) -> Option<KomgaReadingDirection> {
+	match value.map(str::trim) {
+		Some("LEFT_TO_RIGHT") => Some(KomgaReadingDirection::LeftToRight),
+		Some("RIGHT_TO_LEFT") => Some(KomgaReadingDirection::RightToLeft),
+		Some("VERTICAL") => Some(KomgaReadingDirection::Vertical),
+		Some("WEBTOON") => Some(KomgaReadingDirection::Webtoon),
+		_ => None,
 	}
+}
+
+fn parse_alternate_titles(value: Option<&str>) -> Vec<crate::KomgaAlternativeTitle> {
+	value
+		.and_then(|value| serde_json::from_str(value).ok())
+		.unwrap_or_default()
 }
 
 fn map_media_status(status: FileStatus) -> KomgaMediaStatus {
@@ -945,6 +921,10 @@ fn non_empty(value: Option<String>) -> Option<String> {
 	value.filter(|value| !value.trim().is_empty())
 }
 
+fn series_title_sort(title_sort: Option<String>, title: &str) -> String {
+	title_sort.unwrap_or_else(|| title.to_owned())
+}
+
 fn is_locked(fields: Option<&serde_json::Value>, names: &[&str]) -> bool {
 	fields
 		.and_then(serde_json::Value::as_array)
@@ -1085,5 +1065,15 @@ mod tests {
 		assert_eq!(number_sort_from_text("2.5"), 2.5);
 		assert_eq!(number_sort_from_text("NaN"), 0.0);
 		assert_eq!(number_sort_from_text("not-a-number"), 0.0);
+	}
+
+	#[test]
+	fn title_sort_falls_back_to_series_title_when_unset() {
+		assert_eq!(series_title_sort(None, "Series title"), "Series title");
+
+		assert_eq!(
+			series_title_sort(Some("Sort title".to_owned()), "Series title"),
+			"Sort title"
+		);
 	}
 }

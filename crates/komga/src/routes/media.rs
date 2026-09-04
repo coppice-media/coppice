@@ -1,13 +1,10 @@
-use std::{convert::TryFrom, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 use tokio::fs;
 
-use crate::{
-	DirectoryListing, DirectoryRequest, KomgaBookId, KomgaBookPage, KomgaBookThumbnail,
-	KomgaSeriesThumbnail, KomgaThumbnailId, Path as KomgaPath,
-};
+use crate::{DirectoryListing, DirectoryRequest, KomgaBookPage, Path as KomgaPath};
 use axum::{
 	body::Body,
-	extract::{Path, Query},
+	extract::{Multipart, Path, Query},
 	http::{header, HeaderMap, HeaderValue, StatusCode},
 	response::Response,
 	routing::{get, post},
@@ -25,8 +22,6 @@ use super::{KomgaBackend, KomgaImage};
 use crate::errors::{APIError, APIResult};
 
 use super::response::{cached_bytes, cached_json};
-
-const BOOK_THUMBNAIL_PREFIX: &str = "stump-book-";
 
 /// Komelia's page numbering is one-based. The compatibility layer deliberately does not expose
 /// Komga's optional zero-based mode or content negotiation because Stump cannot honor either mode
@@ -49,14 +44,6 @@ struct ScanQuery {
 	deep: Option<bool>,
 }
 
-#[derive(Debug)]
-struct ThumbnailDetails {
-	media_type: String,
-	file_size: i64,
-	width: i32,
-	height: i32,
-}
-
 pub(crate) fn routes<S>() -> Router<S>
 where
 	S: Clone + Send + Sync + 'static,
@@ -71,11 +58,11 @@ where
 		.route("/api/v1/books/{book_id}/thumbnail", get(get_book_thumbnail))
 		.route(
 			"/api/v1/books/{book_id}/thumbnails",
-			get(get_book_thumbnails),
+			get(get_book_thumbnails).post(upload_book_thumbnail),
 		)
 		.route(
 			"/api/v1/books/{book_id}/thumbnails/{thumbnail_id}",
-			get(get_book_thumbnail_by_id),
+			get(get_book_thumbnail_by_id).delete(delete_book_thumbnail),
 		)
 		.route(
 			"/api/v1/series/{series_id}/thumbnail",
@@ -83,11 +70,11 @@ where
 		)
 		.route(
 			"/api/v1/series/{series_id}/thumbnails",
-			get(get_series_thumbnails),
+			get(get_series_thumbnails).post(upload_series_thumbnail),
 		)
 		.route(
 			"/api/v1/series/{series_id}/thumbnails/{thumbnail_id}",
-			get(get_series_thumbnail_by_id),
+			get(get_series_thumbnail_by_id).delete(delete_series_thumbnail),
 		)
 		.route("/api/v1/books/{book_id}/file", get(get_book_file))
 		.route("/api/v1/libraries/{library_id}/scan", post(scan_library))
@@ -106,14 +93,6 @@ async fn find_book(
 		.ok_or_else(|| APIError::NotFound("Book not found".to_string()))
 }
 
-fn thumbnail_id(prefix: &str, id: &str) -> KomgaThumbnailId {
-	KomgaThumbnailId::new(format!("{prefix}{id}"))
-}
-
-fn book_thumbnail_id(id: &str) -> KomgaThumbnailId {
-	thumbnail_id(BOOK_THUMBNAIL_PREFIX, id)
-}
-
 pub(crate) fn cache_image(
 	headers: &HeaderMap,
 	image: KomgaImage,
@@ -125,6 +104,48 @@ pub(crate) fn cache_image(
 	}
 
 	cached_bytes(headers, &image.content_type, image.data)
+}
+
+fn enforce_manage_library(auth: &AuthContext) -> APIResult<()> {
+	auth.enforce_permissions(&[UserPermission::ManageLibrary])
+		.map_err(|_| APIError::forbidden_discreet())
+}
+
+async fn parse_thumbnail_upload(mut multipart: Multipart) -> APIResult<(Vec<u8>, bool)> {
+	let mut file = None;
+	let mut selected = None;
+	while let Some(field) = multipart
+		.next_field()
+		.await
+		.map_err(|error| APIError::BadRequest(error.to_string()))?
+	{
+		match field.name() {
+			Some("file") => {
+				file = Some(
+					field
+						.bytes()
+						.await
+						.map_err(|error| APIError::BadRequest(error.to_string()))?
+						.to_vec(),
+				);
+			},
+			Some("selected") => {
+				let value = field
+					.text()
+					.await
+					.map_err(|error| APIError::BadRequest(error.to_string()))?;
+				selected = Some(value.parse::<bool>().map_err(|_| {
+					APIError::BadRequest(
+						"Thumbnail selected must be a boolean".to_string(),
+					)
+				})?);
+			},
+			_ => {},
+		}
+	}
+	let file = file
+		.ok_or_else(|| APIError::BadRequest("Thumbnail file is required".to_string()))?;
+	Ok((file, selected.unwrap_or(true)))
 }
 
 fn validate_page_number(page: u32) -> APIResult<()> {
@@ -239,26 +260,6 @@ pub(crate) async fn load_series_thumbnail(
 	backend.series_thumbnail(user, series_id).await
 }
 
-async fn thumbnail_details(image: KomgaImage) -> APIResult<ThumbnailDetails> {
-	if !image.content_type.starts_with("image/") {
-		return Err(APIError::BadRequest(
-			"The requested asset is not an image".to_string(),
-		));
-	}
-	let file_size = i64::try_from(image.data.len())?;
-	let (Some(width), Some(height)) = (image.width, image.height) else {
-		return Err(APIError::BadRequest(
-			"Thumbnail dimensions are unavailable".to_string(),
-		));
-	};
-	Ok(ThumbnailDetails {
-		media_type: image.content_type,
-		file_size,
-		width,
-		height,
-	})
-}
-
 async fn get_book_thumbnail(
 	Path(book_id): Path<String>,
 	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
@@ -285,60 +286,99 @@ async fn get_book_thumbnails(
 	Extension(req): Extension<AuthContext>,
 	headers: HeaderMap,
 ) -> APIResult<Response<Body>> {
-	let user = req.user();
-	let details = thumbnail_details(
-		load_book_thumbnail(ctx.as_ref(), &user, book_id.clone()).await?,
-	)
-	.await?;
-	let thumbnails = vec![KomgaBookThumbnail {
-		id: book_thumbnail_id(&book_id),
-		book_id: KomgaBookId::new(book_id),
-		r#type: "GENERATED".to_string(),
-		selected: true,
-		media_type: details.media_type,
-		file_size: details.file_size,
-		width: details.width,
-		height: details.height,
-	}];
-
+	let thumbnails = ctx.book_thumbnails(&req.user(), book_id).await?;
 	cached_json(&headers, &thumbnails)
 }
 
 async fn get_book_thumbnail_by_id(
-	Path((book_id, thumbnail)): Path<(String, String)>,
+	Path((book_id, thumbnail_id)): Path<(String, String)>,
 	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
 	Extension(req): Extension<AuthContext>,
 	headers: HeaderMap,
 ) -> APIResult<Response<Body>> {
-	if thumbnail != book_thumbnail_id(&book_id).to_string() {
-		return Err(APIError::NotFound("Thumbnail not found".to_string()));
-	}
-	let image = load_book_thumbnail(ctx.as_ref(), &req.user(), book_id).await?;
+	let image = ctx
+		.book_thumbnail_by_id(&req.user(), book_id, thumbnail_id)
+		.await?;
 	cache_image(&headers, image)
+}
+
+async fn upload_book_thumbnail(
+	Path(book_id): Path<String>,
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(req): Extension<AuthContext>,
+	headers: HeaderMap,
+	multipart: Multipart,
+) -> APIResult<Response<Body>> {
+	enforce_manage_library(&req)?;
+	let (bytes, selected) = parse_thumbnail_upload(multipart).await?;
+	let thumbnail = ctx
+		.upload_book_thumbnail(&req.user(), book_id, bytes, selected)
+		.await?;
+	cached_json(&headers, &thumbnail)
+}
+
+async fn delete_book_thumbnail(
+	Path((book_id, thumbnail_id)): Path<(String, String)>,
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(req): Extension<AuthContext>,
+) -> APIResult<StatusCode> {
+	enforce_manage_library(&req)?;
+	ctx.delete_book_thumbnail(&req.user(), book_id, thumbnail_id)
+		.await?;
+	Ok(StatusCode::NO_CONTENT)
 }
 
 /// Komga's `ThumbnailSeries.Type` is only `SIDECAR | USER_UPLOADED`: a series
 /// cover generated from its first book is served by `/series/{id}/thumbnail`
 /// but never appears in the thumbnail list. Komelia's offline import calls an
-/// unguarded `valueOf` on this field, so listing a `GENERATED` entry here
-/// crashed every download at the series import step. Stump has no persisted
-/// sidecar or uploaded series artwork, so the list is empty by contract.
+/// unguarded `valueOf` on this field, so listing a `GENERATED` entry here would
+/// crash every download at the series import step.
 async fn get_series_thumbnails(
 	Path(series_id): Path<String>,
 	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
 	Extension(req): Extension<AuthContext>,
 	headers: HeaderMap,
 ) -> APIResult<Response<Body>> {
-	// Visibility check keeps the 404-for-hidden-series behavior of the
-	// other series routes.
-	load_series_thumbnail(ctx.as_ref(), &req.user(), &series_id).await?;
-	cached_json(&headers, &Vec::<KomgaSeriesThumbnail>::new())
+	let thumbnails = ctx.series_thumbnails(&req.user(), series_id).await?;
+	cached_json(&headers, &thumbnails)
 }
 
 async fn get_series_thumbnail_by_id(
-	Path((_series_id, _thumbnail)): Path<(String, String)>,
+	Path((series_id, thumbnail_id)): Path<(String, String)>,
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(req): Extension<AuthContext>,
+	headers: HeaderMap,
 ) -> APIResult<Response<Body>> {
-	Err(APIError::NotFound("Thumbnail not found".to_string()))
+	let image = ctx
+		.series_thumbnail_by_id(&req.user(), series_id, thumbnail_id)
+		.await?;
+	cache_image(&headers, image)
+}
+
+async fn upload_series_thumbnail(
+	Path(series_id): Path<String>,
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(req): Extension<AuthContext>,
+	headers: HeaderMap,
+	multipart: Multipart,
+) -> APIResult<Response<Body>> {
+	enforce_manage_library(&req)?;
+	let (bytes, selected) = parse_thumbnail_upload(multipart).await?;
+	let thumbnail = ctx
+		.upload_series_thumbnail(&req.user(), series_id, bytes, selected)
+		.await?;
+	cached_json(&headers, &thumbnail)
+}
+
+async fn delete_series_thumbnail(
+	Path((series_id, thumbnail_id)): Path<(String, String)>,
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(req): Extension<AuthContext>,
+) -> APIResult<StatusCode> {
+	enforce_manage_library(&req)?;
+	ctx.delete_series_thumbnail(&req.user(), series_id, thumbnail_id)
+		.await?;
+	Ok(StatusCode::NO_CONTENT)
 }
 
 fn download_mime_type(extension: &str) -> Option<String> {

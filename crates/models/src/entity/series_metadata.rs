@@ -63,6 +63,23 @@ pub struct Model {
 	/// Title of series
 	#[sea_orm(column_type = "Text", nullable)]
 	pub title: Option<String>,
+	/// Title used for Komga metadata sorting. The Komga adapter falls back to
+	/// the series title when this value is unset.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub title_sort: Option<String>,
+	/// Komga reading-direction enum name (for example, `LEFT_TO_RIGHT`).
+	#[sea_orm(column_type = "Text", nullable)]
+	pub reading_direction: Option<String>,
+	/// BCP-47 language tag supplied by the metadata provider.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub language: Option<String>,
+	/// JSON array of `{label,title}` alternate titles from Komga.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub alternate_titles: Option<String>,
+	pub title_sort_lock: bool,
+	pub reading_direction_lock: bool,
+	pub language_lock: bool,
+	pub alternate_titles_lock: bool,
 	/// Total issues in the series up until this point in time
 	pub total_issues: Option<i32>,
 	/// Volume of the series in relation to other titles (this can be either numerical or the series year)

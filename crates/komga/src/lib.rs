@@ -64,7 +64,8 @@ pub use search::{
 pub use series::{
 	KomgaAlternativeTitle, KomgaSeries, KomgaSeriesBookMetadata, KomgaSeriesId,
 	KomgaSeriesMetadata, KomgaSeriesMetadataUpdateRequest, KomgaSeriesQuery,
-	KomgaSeriesSearch, KomgaSeriesStatus, KomgaSeriesThumbnail, SearchField, SearchRegex,
+	KomgaSeriesSearch, KomgaSeriesStatus, KomgaSeriesThumbnail, KomgaSeriesThumbnailType,
+	SearchField, SearchRegex,
 };
 pub use settings::{
 	KomgaSettings, KomgaSettingsUpdateRequest, KomgaThumbnailSize, SettingMultiSource,

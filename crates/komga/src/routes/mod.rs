@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use axum::{
@@ -12,7 +12,10 @@ use sea_orm::DatabaseConnection;
 use stump_auth::AuthContext;
 use tokio::sync::broadcast::{self, Receiver, Sender};
 
-use crate::{errors::APIResult, KomgaBookPage, KomgaEvent};
+use crate::{
+	errors::APIResult, KomgaBookPage, KomgaBookThumbnail, KomgaEvent,
+	KomgaSeriesThumbnail,
+};
 mod book;
 mod catalog;
 mod grimmory;
@@ -60,6 +63,23 @@ pub enum KomgaCoreEvent {
 		series_id: String,
 		#[serde(rename = "libraryId")]
 		library_id: String,
+	},
+	MediaDeleted {
+		id: String,
+		#[serde(rename = "seriesId")]
+		series_id: String,
+		#[serde(rename = "libraryId")]
+		library_id: String,
+	},
+	SeriesDeleted {
+		id: String,
+		#[serde(rename = "libraryId")]
+		library_id: String,
+	},
+	JobQueueStatus {
+		count: i32,
+		#[serde(rename = "countByType")]
+		count_by_type: BTreeMap<String, i32>,
 	},
 	#[serde(other)]
 	Other,
@@ -109,11 +129,59 @@ pub trait KomgaBackend: Send + Sync {
 		user: &AuthUser,
 		book_id: String,
 	) -> APIResult<KomgaImage>;
+	async fn book_thumbnails(
+		&self,
+		user: &AuthUser,
+		book_id: String,
+	) -> APIResult<Vec<KomgaBookThumbnail>>;
+	async fn book_thumbnail_by_id(
+		&self,
+		user: &AuthUser,
+		book_id: String,
+		thumbnail_id: String,
+	) -> APIResult<KomgaImage>;
+	async fn upload_book_thumbnail(
+		&self,
+		user: &AuthUser,
+		book_id: String,
+		bytes: Vec<u8>,
+		selected: bool,
+	) -> APIResult<KomgaBookThumbnail>;
+	async fn delete_book_thumbnail(
+		&self,
+		user: &AuthUser,
+		book_id: String,
+		thumbnail_id: String,
+	) -> APIResult<()>;
 	async fn series_thumbnail(
 		&self,
 		user: &AuthUser,
 		series_id: &str,
 	) -> APIResult<KomgaImage>;
+	async fn series_thumbnails(
+		&self,
+		user: &AuthUser,
+		series_id: String,
+	) -> APIResult<Vec<KomgaSeriesThumbnail>>;
+	async fn series_thumbnail_by_id(
+		&self,
+		user: &AuthUser,
+		series_id: String,
+		thumbnail_id: String,
+	) -> APIResult<KomgaImage>;
+	async fn upload_series_thumbnail(
+		&self,
+		user: &AuthUser,
+		series_id: String,
+		bytes: Vec<u8>,
+		selected: bool,
+	) -> APIResult<KomgaSeriesThumbnail>;
+	async fn delete_series_thumbnail(
+		&self,
+		user: &AuthUser,
+		series_id: String,
+		thumbnail_id: String,
+	) -> APIResult<()>;
 	async fn serve_book_file(
 		&self,
 		auth: AuthContext,

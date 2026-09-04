@@ -16,6 +16,28 @@ pub async fn place_thumbnail(
 	Ok(thumbnail_path)
 }
 
+/// Replaces all thumbnail files for an entity and writes its new thumbnail.
+///
+/// Stump stores one selected thumbnail per entity. Existing generated and
+/// uploaded variants share the entity filename prefix so replacing an upload
+/// cannot leave stale files behind.
+pub async fn replace_thumbnail(
+	id: &str,
+	ext: &str,
+	bytes: &[u8],
+	config: &MediaConfig,
+) -> Result<PathBuf, FileError> {
+	let ids = [id.to_owned()];
+	if let Err(error) = remove_thumbnails(&ids, config.get_thumbnails_dir()).await {
+		tracing::warn!(
+			?error,
+			id,
+			"Could not remove previous thumbnails before replacement"
+		);
+	}
+	place_thumbnail(id, ext, bytes, config).await
+}
+
 pub const THUMBNAIL_LOG_FREQUENCY: usize = 500;
 
 /// Deletes thumbnails and returns the number deleted if successful, returns

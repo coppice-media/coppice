@@ -17,16 +17,19 @@ use sea_orm::{
 	sea_query::{OnConflict, Query},
 	Condition, IntoActiveModel, QuerySelect, Set, TransactionTrait,
 };
-use stump_core::filesystem::{
-	image::{
-		generate_book_thumbnail, GenerateThumbnailOptions,
-		PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope,
-		ThumbnailGenerationJobParams,
+use stump_core::{
+	filesystem::{
+		image::{
+			generate_book_thumbnail, GenerateThumbnailOptions,
+			PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope,
+			ThumbnailGenerationJobParams,
+		},
+		media::analysis::{AnalysisJobConfig, MediaAnalysisJobScope},
+		metadata::{MetadataFetchJobParams, MetadataFetchScope},
 	},
-	media::analysis::{AnalysisJobConfig, MediaAnalysisJobScope},
-	metadata::{MetadataFetchJobParams, MetadataFetchScope},
+	job::stump_job::StumpJob,
+	CoreEvent, MediaDeleted, SeriesDeleted,
 };
-use stump_core::job::stump_job::StumpJob;
 use stump_media::{image::remove_thumbnails, ImageProcessorOptionsExt};
 use stump_scanner::ScanOptions;
 use tokio::fs;
@@ -110,9 +113,7 @@ impl LibraryMutation {
 
 		let txn = core.conn.as_ref().begin().await?;
 
-		let deleted_media_ids = media::Entity::find()
-			.select_only()
-			.column(media::Column::Id)
+		let deleted_media = media::Entity::find()
 			.filter(
 				media::Column::Status.ne(FileStatus::Ready.to_string()).and(
 					media::Column::SeriesId.in_subquery(
@@ -124,9 +125,12 @@ impl LibraryMutation {
 					),
 				),
 			)
-			.into_tuple::<String>()
 			.all(&txn)
 			.await?;
+		let deleted_media_ids = deleted_media
+			.iter()
+			.map(|media| media.id.clone())
+			.collect::<Vec<_>>();
 		tracing::trace!(?deleted_media_ids, "Found media ids to delete");
 
 		lists::remove_memberships_for_media(&txn, &deleted_media_ids).await?;
@@ -208,6 +212,23 @@ impl LibraryMutation {
 			{
 				tracing::error!(?error, "Failed to remove thumbnails for library series");
 			}
+		}
+
+		let event_library_id = id.to_string();
+		for media in deleted_media {
+			if let Some(series_id) = media.series_id {
+				core.send_core_event(CoreEvent::MediaDeleted(MediaDeleted {
+					id: media.id,
+					series_id,
+					library_id: event_library_id.clone(),
+				}));
+			}
+		}
+		for series_id in &deleted_series_ids {
+			core.send_core_event(CoreEvent::SeriesDeleted(SeriesDeleted {
+				id: series_id.clone(),
+				library_id: event_library_id.clone(),
+			}));
 		}
 
 		Ok(CleanLibraryResponse {
@@ -765,13 +786,14 @@ impl LibraryMutation {
 			.from(series::Entity)
 			.and_where(series::Column::LibraryId.eq(library.id.clone()))
 			.to_owned();
-		let media_ids = media::Entity::find()
-			.select_only()
-			.column(media::Column::Id)
+		let media_rows = media::Entity::find()
 			.filter(media::Column::SeriesId.in_subquery(library_series))
-			.into_tuple::<String>()
 			.all(&txn)
 			.await?;
+		let media_ids = media_rows
+			.iter()
+			.map(|media| media.id.clone())
+			.collect::<Vec<_>>();
 		let series_ids = series::Entity::find()
 			.select_only()
 			.column(series::Column::Id)
@@ -785,7 +807,41 @@ impl LibraryMutation {
 		library.clone().delete(&txn).await?;
 		txn.commit().await?;
 
-		// TODO: delete thumbnails!
+		if !media_ids.is_empty() {
+			if let Err(error) =
+				remove_thumbnails(&media_ids, &core.config.get_thumbnails_dir()).await
+			{
+				tracing::error!(
+					?error,
+					"Failed to remove thumbnails for deleted library media"
+				);
+			}
+		}
+		if !series_ids.is_empty() {
+			if let Err(error) =
+				remove_thumbnails(&series_ids, &core.config.get_thumbnails_dir()).await
+			{
+				tracing::error!(
+					?error,
+					"Failed to remove thumbnails for deleted library series"
+				);
+			}
+		}
+		for media in media_rows {
+			if let Some(series_id) = media.series_id {
+				core.send_core_event(CoreEvent::MediaDeleted(MediaDeleted {
+					id: media.id,
+					series_id,
+					library_id: library.id.clone(),
+				}));
+			}
+		}
+		for series_id in &series_ids {
+			core.send_core_event(CoreEvent::SeriesDeleted(SeriesDeleted {
+				id: series_id.clone(),
+				library_id: library.id.clone(),
+			}));
+		}
 
 		// Note: We return the full node so the ID may be pulled to properly update the cache.
 		// For obvious reasons, certain fields will error if accessed.

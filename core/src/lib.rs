@@ -30,7 +30,7 @@ use sea_orm::{
 
 pub use context::{Ctx, JobRuntime};
 pub use error::{CoreError, CoreResult};
-pub use event::CoreEvent;
+pub use event::{CoreEvent, JobQueueStatus, MediaDeleted, SeriesDeleted};
 
 pub use email::{
 	AttachmentPayload, EmailContentType, EmailerClient, EmailerClientConfig,

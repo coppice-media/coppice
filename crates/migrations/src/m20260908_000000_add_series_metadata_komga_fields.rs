@@ -1,0 +1,180 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+	async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+		// SQLite supports one column addition per ALTER TABLE statement.
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.add_column(ColumnDef::new(SeriesMetadata::TitleSort).text())
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.add_column(ColumnDef::new(SeriesMetadata::ReadingDirection).text())
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.add_column(ColumnDef::new(SeriesMetadata::Language).text())
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.add_column(ColumnDef::new(SeriesMetadata::AlternateTitles).text())
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.add_column(
+						ColumnDef::new(SeriesMetadata::TitleSortLock)
+							.boolean()
+							.not_null()
+							.default(false),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.add_column(
+						ColumnDef::new(SeriesMetadata::ReadingDirectionLock)
+							.boolean()
+							.not_null()
+							.default(false),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.add_column(
+						ColumnDef::new(SeriesMetadata::LanguageLock)
+							.boolean()
+							.not_null()
+							.default(false),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.add_column(
+						ColumnDef::new(SeriesMetadata::AlternateTitlesLock)
+							.boolean()
+							.not_null()
+							.default(false),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		Ok(())
+	}
+
+	async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.drop_column(SeriesMetadata::AlternateTitlesLock)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.drop_column(SeriesMetadata::LanguageLock)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.drop_column(SeriesMetadata::ReadingDirectionLock)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.drop_column(SeriesMetadata::TitleSortLock)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.drop_column(SeriesMetadata::AlternateTitles)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.drop_column(SeriesMetadata::Language)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.drop_column(SeriesMetadata::ReadingDirection)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.alter_table(
+				Table::alter()
+					.table(SeriesMetadata::Table)
+					.drop_column(SeriesMetadata::TitleSort)
+					.to_owned(),
+			)
+			.await?;
+
+		Ok(())
+	}
+}
+
+#[derive(DeriveIden)]
+enum SeriesMetadata {
+	#[sea_orm(iden = "series_metadata")]
+	Table,
+	TitleSort,
+	ReadingDirection,
+	Language,
+	AlternateTitles,
+	TitleSortLock,
+	ReadingDirectionLock,
+	LanguageLock,
+	AlternateTitlesLock,
+}

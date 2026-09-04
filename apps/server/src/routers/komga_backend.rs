@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+	path::{Path, PathBuf},
+	sync::Arc,
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -14,7 +17,11 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use stump_auth::AuthContext;
 use stump_core::{job::stump_job::StumpJob, CoreEvent};
 use stump_media::{
-	image::{generate_image_metadata_from_bytes, GenericImageProcessor, ImageProcessor},
+	get_saved_thumbnail,
+	image::{
+		generate_image_metadata_from_bytes, replace_thumbnail, GenericImageProcessor,
+		ImageProcessor,
+	},
 	media::{get_content_types_for_pages, get_page_async, get_page_count_async},
 	ContentType, EpubProcessor,
 };
@@ -26,7 +33,10 @@ use crate::{
 	routers::api::v2::{media as api_media, series as api_series},
 	utils::{http::ImageResponse, serve_media},
 };
-use stump_komga::routes::{KomgaBackend, KomgaCoreEvent, KomgaImage};
+use stump_komga::{
+	routes::{KomgaBackend, KomgaCoreEvent, KomgaImage},
+	KomgaBookId, KomgaSeriesId, KomgaThumbnailId,
+};
 
 /// Server-side implementation of the Komga backend contract. Every Stump-specific
 /// operation (database, media processing, jobs, core events) stays in
@@ -49,6 +59,25 @@ impl KomgaBackendAdapter {
 							id: media.id,
 							series_id: media.series_id,
 							library_id: media.library_id,
+						});
+					},
+					Ok(CoreEvent::MediaDeleted(media)) => {
+						let _ = forwarder.send(KomgaCoreEvent::MediaDeleted {
+							id: media.id,
+							series_id: media.series_id,
+							library_id: media.library_id,
+						});
+					},
+					Ok(CoreEvent::SeriesDeleted(series)) => {
+						let _ = forwarder.send(KomgaCoreEvent::SeriesDeleted {
+							id: series.id,
+							library_id: series.library_id,
+						});
+					},
+					Ok(CoreEvent::JobQueueStatus(status)) => {
+						let _ = forwarder.send(KomgaCoreEvent::JobQueueStatus {
+							count: status.count,
+							count_by_type: status.count_by_type,
 						});
 					},
 					Ok(_) => {},
@@ -110,6 +139,54 @@ async fn image_response(
 		width,
 		height,
 	})
+}
+
+const BOOK_THUMBNAIL_PREFIX: &str = "stump-book-";
+const SERIES_THUMBNAIL_PREFIX: &str = "stump-series-";
+const BOOK_UPLOAD_THUMBNAIL_PREFIX: &str = "stump-upload-book-";
+const SERIES_UPLOAD_THUMBNAIL_PREFIX: &str = "stump-upload-series-";
+
+fn thumbnail_id(prefix: &str, id: &str) -> KomgaThumbnailId {
+	KomgaThumbnailId::new(format!("{prefix}{id}"))
+}
+
+fn book_thumbnail_id(id: &str) -> KomgaThumbnailId {
+	thumbnail_id(BOOK_THUMBNAIL_PREFIX, id)
+}
+
+fn book_upload_thumbnail_id(id: &str) -> KomgaThumbnailId {
+	thumbnail_id(BOOK_UPLOAD_THUMBNAIL_PREFIX, id)
+}
+fn series_thumbnail_id(id: &str) -> KomgaThumbnailId {
+	thumbnail_id(SERIES_THUMBNAIL_PREFIX, id)
+}
+
+fn series_upload_thumbnail_id(id: &str) -> KomgaThumbnailId {
+	thumbnail_id(SERIES_UPLOAD_THUMBNAIL_PREFIX, id)
+}
+
+fn thumbnail_details(
+	image: &KomgaImage,
+) -> stump_komga::errors::APIResult<(String, i64, i32, i32)> {
+	if !image.content_type.starts_with("image/") {
+		return Err(stump_komga::errors::APIError::BadRequest(
+			"The requested asset is not an image".to_string(),
+		));
+	}
+	let (Some(width), Some(height)) = (image.width, image.height) else {
+		return Err(stump_komga::errors::APIError::BadRequest(
+			"Thumbnail dimensions are unavailable".to_string(),
+		));
+	};
+	let file_size = i64::try_from(image.data.len()).map_err(map_core_error)?;
+	Ok((image.content_type.clone(), file_size, width, height))
+}
+
+async fn saved_thumbnail(path: &str) -> stump_komga::errors::APIResult<KomgaImage> {
+	let (content_type, data) = get_saved_thumbnail(Path::new(path))
+		.await
+		.map_err(map_core_error)?;
+	image_response(ImageResponse::new(content_type, data)).await
 }
 
 #[async_trait]
@@ -291,6 +368,224 @@ impl KomgaBackend for KomgaBackendAdapter {
 				.map_err(map_server_error)?;
 		image_response(image).await
 	}
+	async fn book_thumbnails(
+		&self,
+		user: &AuthUser,
+		book_id: String,
+	) -> stump_komga::errors::APIResult<Vec<stump_komga::KomgaBookThumbnail>> {
+		let book = media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(book_id.clone()))
+			.filter(media::Column::DeletedAt.is_null())
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| {
+				stump_komga::errors::APIError::NotFound("Book not found".to_owned())
+			})?;
+
+		let uploaded = match book.thumbnail_path.as_deref() {
+			Some(path) => match saved_thumbnail(path).await {
+				Ok(image) => Some(image),
+				Err(error) => {
+					tracing::warn!(?error, path, "Failed to read saved book thumbnail");
+					None
+				},
+			},
+			None => None,
+		};
+		let image = match uploaded.as_ref() {
+			Some(image) => image.clone(),
+			None => self.book_thumbnail(user, book.id.clone()).await?,
+		};
+		let (media_type, file_size, width, height) = thumbnail_details(&image)?;
+		let mut thumbnails = Vec::with_capacity(if uploaded.is_some() { 2 } else { 1 });
+		if uploaded.is_some() {
+			thumbnails.push(stump_komga::KomgaBookThumbnail {
+				id: book_upload_thumbnail_id(&book.id),
+				book_id: KomgaBookId::new(book.id.clone()),
+				r#type: "USER_UPLOADED".to_owned(),
+				selected: true,
+				media_type: media_type.clone(),
+				file_size,
+				width,
+				height,
+			});
+			thumbnails.push(stump_komga::KomgaBookThumbnail {
+				id: book_thumbnail_id(&book.id),
+				book_id: KomgaBookId::new(book.id),
+				r#type: "GENERATED".to_owned(),
+				selected: false,
+				media_type,
+				file_size,
+				width,
+				height,
+			});
+		} else {
+			thumbnails.push(stump_komga::KomgaBookThumbnail {
+				id: book_thumbnail_id(&book.id),
+				book_id: KomgaBookId::new(book.id),
+				r#type: "GENERATED".to_owned(),
+				selected: true,
+				media_type,
+				file_size,
+				width,
+				height,
+			});
+		}
+		Ok(thumbnails)
+	}
+
+	async fn book_thumbnail_by_id(
+		&self,
+		user: &AuthUser,
+		book_id: String,
+		thumbnail_id: String,
+	) -> stump_komga::errors::APIResult<KomgaImage> {
+		let book = media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(book_id.clone()))
+			.filter(media::Column::DeletedAt.is_null())
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| {
+				stump_komga::errors::APIError::NotFound("Book not found".to_owned())
+			})?;
+		if thumbnail_id == book_upload_thumbnail_id(&book.id).to_string() {
+			let path = book.thumbnail_path.as_deref().ok_or_else(|| {
+				stump_komga::errors::APIError::NotFound("Thumbnail not found".to_owned())
+			})?;
+			return saved_thumbnail(path).await.map_err(|_| {
+				stump_komga::errors::APIError::NotFound("Thumbnail not found".to_owned())
+			});
+		}
+		if thumbnail_id == book_thumbnail_id(&book.id).to_string() {
+			return self.book_thumbnail(user, book.id).await;
+		}
+		Err(stump_komga::errors::APIError::NotFound(
+			"Thumbnail not found".to_owned(),
+		))
+	}
+
+	async fn upload_book_thumbnail(
+		&self,
+		user: &AuthUser,
+		book_id: String,
+		bytes: Vec<u8>,
+		selected: bool,
+	) -> stump_komga::errors::APIResult<stump_komga::KomgaBookThumbnail> {
+		if !selected {
+			return Err(stump_komga::errors::APIError::BadRequest(
+				"Stump only supports selected thumbnail uploads".to_owned(),
+			));
+		}
+		if bytes.is_empty() {
+			return Err(stump_komga::errors::APIError::BadRequest(
+				"Thumbnail file is empty".to_owned(),
+			));
+		}
+		if bytes.len() > self.ctx.config.max_file_upload_size {
+			return Err(stump_komga::errors::APIError::BadRequest(
+				"Thumbnail file exceeds the configured upload limit".to_owned(),
+			));
+		}
+		let content_type = ContentType::from_bytes(&bytes);
+		if !content_type.is_image() {
+			return Err(stump_komga::errors::APIError::BadRequest(
+				"Thumbnail file must be an image".to_owned(),
+			));
+		}
+		let book = media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(book_id))
+			.filter(media::Column::DeletedAt.is_null())
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| {
+				stump_komga::errors::APIError::NotFound("Book not found".to_owned())
+			})?;
+		let metadata = generate_image_metadata_from_bytes(bytes.clone())
+			.await
+			.map_err(map_core_error)?;
+		let path = replace_thumbnail(
+			&book.id,
+			content_type.extension(),
+			&bytes,
+			&self.ctx.config.media,
+		)
+		.await
+		.map_err(map_core_error)?;
+		media::Entity::update_many()
+			.col_expr(
+				media::Column::ThumbnailPath,
+				sea_orm::sea_query::Expr::value(Some(path.to_string_lossy().to_string())),
+			)
+			.col_expr(
+				media::Column::ThumbnailMeta,
+				sea_orm::sea_query::Expr::value(Some(metadata)),
+			)
+			.filter(media::Column::Id.eq(book.id.clone()))
+			.exec(self.conn())
+			.await?;
+		let image = saved_thumbnail(&path.to_string_lossy()).await?;
+		let (media_type, file_size, width, height) = thumbnail_details(&image)?;
+		Ok(stump_komga::KomgaBookThumbnail {
+			id: book_upload_thumbnail_id(&book.id),
+			book_id: KomgaBookId::new(book.id),
+			r#type: "USER_UPLOADED".to_owned(),
+			selected: true,
+			media_type,
+			file_size,
+			width,
+			height,
+		})
+	}
+
+	async fn delete_book_thumbnail(
+		&self,
+		user: &AuthUser,
+		book_id: String,
+		thumbnail_id: String,
+	) -> stump_komga::errors::APIResult<()> {
+		let book = media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(book_id))
+			.filter(media::Column::DeletedAt.is_null())
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| {
+				stump_komga::errors::APIError::NotFound("Book not found".to_owned())
+			})?;
+		if thumbnail_id == book_thumbnail_id(&book.id).to_string() {
+			return Err(stump_komga::errors::APIError::BadRequest(
+				"Generated thumbnails cannot be deleted".to_owned(),
+			));
+		}
+		if thumbnail_id != book_upload_thumbnail_id(&book.id).to_string()
+			|| book.thumbnail_path.is_none()
+		{
+			return Err(stump_komga::errors::APIError::NotFound(
+				"Thumbnail not found".to_owned(),
+			));
+		}
+		let ids = [book.id.clone()];
+		stump_media::image::remove_thumbnails(
+			&ids,
+			&self.ctx.config.get_thumbnails_dir(),
+		)
+		.await
+		.map_err(map_core_error)?;
+		media::Entity::update_many()
+			.col_expr(
+				media::Column::ThumbnailPath,
+				sea_orm::sea_query::Expr::value(None::<String>),
+			)
+			.col_expr(
+				media::Column::ThumbnailMeta,
+				sea_orm::sea_query::Expr::value(
+					None::<models::shared::image::ImageMetadata>,
+				),
+			)
+			.filter(media::Column::Id.eq(book.id))
+			.exec(self.conn())
+			.await?;
+		Ok(())
+	}
 
 	async fn series_thumbnail(
 		&self,
@@ -331,6 +626,187 @@ impl KomgaBackend for KomgaBackendAdapter {
 		image_response(ImageResponse::new(content_type, data)).await
 	}
 
+	async fn series_thumbnails(
+		&self,
+		user: &AuthUser,
+		series_id: String,
+	) -> stump_komga::errors::APIResult<Vec<stump_komga::KomgaSeriesThumbnail>> {
+		let series = series::Entity::find_for_user(user)
+			.filter(series::Column::Id.eq(series_id))
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| {
+				stump_komga::errors::APIError::NotFound("Series not found".to_owned())
+			})?;
+		let Some(path) = series.thumbnail_path.as_deref() else {
+			return Ok(Vec::new());
+		};
+		let image = match saved_thumbnail(path).await {
+			Ok(image) => image,
+			Err(error) => {
+				tracing::warn!(?error, path, "Failed to read saved series thumbnail");
+				return Ok(Vec::new());
+			},
+		};
+		let (media_type, file_size, width, height) = thumbnail_details(&image)?;
+		Ok(vec![stump_komga::KomgaSeriesThumbnail {
+			id: series_upload_thumbnail_id(&series.id),
+			series_id: KomgaSeriesId::new(series.id),
+			r#type: stump_komga::KomgaSeriesThumbnailType::UserUploaded,
+			selected: true,
+			media_type,
+			file_size,
+			width,
+			height,
+		}])
+	}
+
+	async fn series_thumbnail_by_id(
+		&self,
+		user: &AuthUser,
+		series_id: String,
+		thumbnail_id: String,
+	) -> stump_komga::errors::APIResult<KomgaImage> {
+		let series = series::Entity::find_for_user(user)
+			.filter(series::Column::Id.eq(series_id))
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| {
+				stump_komga::errors::APIError::NotFound("Series not found".to_owned())
+			})?;
+		if thumbnail_id != series_upload_thumbnail_id(&series.id).to_string() {
+			return Err(stump_komga::errors::APIError::NotFound(
+				"Thumbnail not found".to_owned(),
+			));
+		}
+		let path = series.thumbnail_path.as_deref().ok_or_else(|| {
+			stump_komga::errors::APIError::NotFound("Thumbnail not found".to_owned())
+		})?;
+		saved_thumbnail(path).await.map_err(|_| {
+			stump_komga::errors::APIError::NotFound("Thumbnail not found".to_owned())
+		})
+	}
+
+	async fn upload_series_thumbnail(
+		&self,
+		user: &AuthUser,
+		series_id: String,
+		bytes: Vec<u8>,
+		selected: bool,
+	) -> stump_komga::errors::APIResult<stump_komga::KomgaSeriesThumbnail> {
+		if !selected {
+			return Err(stump_komga::errors::APIError::BadRequest(
+				"Stump only supports selected thumbnail uploads".to_owned(),
+			));
+		}
+		if bytes.is_empty() {
+			return Err(stump_komga::errors::APIError::BadRequest(
+				"Thumbnail file is empty".to_owned(),
+			));
+		}
+		if bytes.len() > self.ctx.config.max_file_upload_size {
+			return Err(stump_komga::errors::APIError::BadRequest(
+				"Thumbnail file exceeds the configured upload limit".to_owned(),
+			));
+		}
+		let content_type = ContentType::from_bytes(&bytes);
+		if !content_type.is_image() {
+			return Err(stump_komga::errors::APIError::BadRequest(
+				"Thumbnail file must be an image".to_owned(),
+			));
+		}
+		let series = series::Entity::find_for_user(user)
+			.filter(series::Column::Id.eq(series_id))
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| {
+				stump_komga::errors::APIError::NotFound("Series not found".to_owned())
+			})?;
+		let metadata = generate_image_metadata_from_bytes(bytes.clone())
+			.await
+			.map_err(map_core_error)?;
+		let path = replace_thumbnail(
+			&series.id,
+			content_type.extension(),
+			&bytes,
+			&self.ctx.config.media,
+		)
+		.await
+		.map_err(map_core_error)?;
+		series::Entity::update_many()
+			.col_expr(
+				series::Column::ThumbnailPath,
+				sea_orm::sea_query::Expr::value(Some(path.to_string_lossy().to_string())),
+			)
+			.col_expr(
+				series::Column::ThumbnailMeta,
+				sea_orm::sea_query::Expr::value(Some(metadata)),
+			)
+			.filter(series::Column::Id.eq(series.id.clone()))
+			.exec(self.conn())
+			.await?;
+		let image = saved_thumbnail(&path.to_string_lossy()).await?;
+		let (media_type, file_size, width, height) = thumbnail_details(&image)?;
+		Ok(stump_komga::KomgaSeriesThumbnail {
+			id: series_upload_thumbnail_id(&series.id),
+			series_id: KomgaSeriesId::new(series.id),
+			r#type: stump_komga::KomgaSeriesThumbnailType::UserUploaded,
+			selected: true,
+			media_type,
+			file_size,
+			width,
+			height,
+		})
+	}
+
+	async fn delete_series_thumbnail(
+		&self,
+		user: &AuthUser,
+		series_id: String,
+		thumbnail_id: String,
+	) -> stump_komga::errors::APIResult<()> {
+		let series = series::Entity::find_for_user(user)
+			.filter(series::Column::Id.eq(series_id))
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| {
+				stump_komga::errors::APIError::NotFound("Series not found".to_owned())
+			})?;
+		if thumbnail_id == series_thumbnail_id(&series.id).to_string() {
+			return Err(stump_komga::errors::APIError::BadRequest(
+				"Generated thumbnails cannot be deleted".to_owned(),
+			));
+		}
+		if thumbnail_id != series_upload_thumbnail_id(&series.id).to_string()
+			|| series.thumbnail_path.is_none()
+		{
+			return Err(stump_komga::errors::APIError::NotFound(
+				"Thumbnail not found".to_owned(),
+			));
+		}
+		let ids = [series.id.clone()];
+		stump_media::image::remove_thumbnails(
+			&ids,
+			&self.ctx.config.get_thumbnails_dir(),
+		)
+		.await
+		.map_err(map_core_error)?;
+		series::Entity::update_many()
+			.col_expr(
+				series::Column::ThumbnailPath,
+				sea_orm::sea_query::Expr::value(None::<String>),
+			)
+			.col_expr(
+				series::Column::ThumbnailMeta,
+				sea_orm::sea_query::Expr::value(
+					None::<models::shared::image::ImageMetadata>,
+				),
+			)
+			.filter(series::Column::Id.eq(series.id))
+			.exec(self.conn())
+			.await?;
+		Ok(())
+	}
 	async fn serve_book_file(
 		&self,
 		auth: AuthContext,

@@ -98,6 +98,7 @@ pub async fn dispatch_job(
 	let job_ctx = match JobContext::new(Arc::clone(&ctx), job_id.clone(), &job).await {
 		Ok(h) => h,
 		Err(e) => {
+			ctx.queue_state.enqueue_failed(&job);
 			tracing::error!(?e, "Failed to start job");
 			return Err(apalis::prelude::Error::Failed(Arc::new(Box::new(e))));
 		},

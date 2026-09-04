@@ -30,7 +30,7 @@ pub mod image {
 	};
 	pub use self::process::{ImageProcessor, ImageProcessorOptionsExt};
 	pub use self::thumbnail_utils::{
-		place_thumbnail, remove_thumbnails, scale_height_dimension,
+		place_thumbnail, remove_thumbnails, replace_thumbnail, scale_height_dimension,
 		scale_width_dimension, THUMBNAIL_LOG_FREQUENCY,
 	};
 	pub use self::webp::WebpProcessor;
