@@ -3,13 +3,13 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{error, trace};
 
-use crate::{config::StumpConfig, filesystem::FileError};
+use crate::{FileError, MediaConfig};
 
 pub async fn place_thumbnail(
 	id: &str,
 	ext: &str,
 	bytes: &[u8],
-	config: &StumpConfig,
+	config: &MediaConfig,
 ) -> Result<PathBuf, FileError> {
 	let thumbnail_path = config.get_thumbnails_dir().join(format!("{id}.{ext}"));
 	fs::write(&thumbnail_path, bytes).await?;

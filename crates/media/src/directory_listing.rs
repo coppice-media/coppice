@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::filesystem::PathUtils;
+use crate::PathUtils;
 
 fn default_true() -> bool {
 	true

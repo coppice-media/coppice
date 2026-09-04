@@ -5,7 +5,7 @@ use models::shared::image_processor_options::{
 	Dimension, ImageProcessorOptions, ScaledDimensionResize, SupportedImageFormat,
 };
 
-use crate::filesystem::{image::process::resized_dimensions, FileError};
+use crate::{image::process::resized_dimensions, FileError};
 
 use super::{
 	process::ImageProcessor, scale_height_dimension, scale_width_dimension,
@@ -118,7 +118,7 @@ mod tests {
 	use rust_decimal::Decimal;
 
 	use super::*;
-	use crate::filesystem::image::tests::{get_test_jpg_path, get_test_png_path};
+	use crate::tests::{get_test_jpg_path, get_test_png_path};
 
 	//JPG -> other Tests
 	//JPG -> JPG

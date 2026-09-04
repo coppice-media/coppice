@@ -11,21 +11,18 @@ use pdfium_render::prelude::{
 };
 
 use crate::{
-	config::StumpConfig,
-	filesystem::{
-		archive::create_zip_archive,
-		error::FileError,
-		hash::{self, generate_koreader_hash},
-		image::into_image_format,
-		media::{
-			process::{
-				AnalyzedPage, FileConverter, FileProcessor, FileProcessorOptions,
-				ProcessedFile,
-			},
-			ProcessedFileHashes, ProcessedMediaMetadata,
+	archive::create_zip_archive,
+	error::FileError,
+	hash::{self, generate_koreader_hash},
+	image::into_image_format,
+	media::{
+		process::{
+			AnalyzedPage, FileConverter, FileProcessor, FileProcessorOptions,
+			ProcessedFile,
 		},
-		ContentType, FileParts, PathUtils,
+		ProcessedFileHashes, ProcessedMediaMetadata,
 	},
+	ContentType, FileParts, MediaConfig, PathUtils,
 };
 
 /// alright so tldr; this is a temporary workaround (the mutex) until upstream fixes issues with
@@ -81,7 +78,7 @@ impl FileProcessor for PdfProcessor {
 	fn process(
 		path: &str,
 		options: FileProcessorOptions,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<ProcessedFile, FileError> {
 		// TODO: undo this once upstream fixes the issue outlined above
 		// this is scoped a bit more tightly than before since wrapping the singleton
@@ -116,12 +113,12 @@ impl FileProcessor for PdfProcessor {
 	fn get_page(
 		path: &str,
 		page: i32,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<(ContentType, Vec<u8>), FileError> {
 		PdfProcessor::render_page_sync(path, page, config)
 	}
 
-	fn get_page_count(path: &str, config: &StumpConfig) -> Result<i32, FileError> {
+	fn get_page_count(path: &str, config: &MediaConfig) -> Result<i32, FileError> {
 		let pdfium = PdfProcessor::renderer(&config.pdfium_path)?;
 		let document = pdfium.load_pdf_from_file(path, None)?;
 
@@ -144,7 +141,7 @@ impl FileProcessor for PdfProcessor {
 	fn analyze_page(
 		path: &str,
 		page: i32,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<AnalyzedPage, FileError> {
 		let pdfium = PdfProcessor::renderer(&config.pdfium_path)?;
 		let document = pdfium.load_pdf_from_file(path, None)?;
@@ -205,7 +202,7 @@ impl PdfProcessor {
 	/// Process the metadata of a PDF file using the specified config/env pdfium path.
 	pub fn process_metadata_internal(
 		path: &str,
-		pdfium_path: &Option<String>,
+		pdfium_path: &Option<PathBuf>,
 	) -> Result<Option<ProcessedMediaMetadata>, FileError> {
 		let pdfium = Self::renderer(pdfium_path)?;
 		let document = pdfium.load_pdf_from_file(path, None)?;
@@ -222,14 +219,15 @@ impl PdfProcessor {
 	///
 	/// See: https://github.com/ajrcarey/pdfium-render#thread-safety
 	pub fn renderer(
-		pdfium_path: &Option<String>,
+		pdfium_path: &Option<PathBuf>,
 	) -> Result<MutexGuard<'static, Pdfium>, FileError> {
 		let result = PDFIUM.get_or_init(|| {
-			let path =
-				pdfium_path.clone().or_else(|| std::env::var("PDFIUM_PATH").ok());
+			let path = pdfium_path
+				.clone()
+				.or_else(|| std::env::var_os("PDFIUM_PATH").map(PathBuf::from));
 
 			if let Some(path) = path {
-				tracing::info!(path, "Initializing PDFium from provided path");
+				tracing::info!(?path, "Initializing PDFium from provided path");
 				let bindings = Pdfium::bind_to_library(&path)
 					.or_else(|e| {
 						tracing::error!(provided_path = ?path, ?e, "Failed to bind to PDFium library at provided path, attempting fallback to system library");
@@ -269,7 +267,7 @@ impl PdfProcessor {
 	pub fn render_page_sync(
 		path: &str,
 		page: i32,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<(ContentType, Vec<u8>), FileError> {
 		Self::render_page_with_quality(path, page, config, false)
 	}
@@ -278,7 +276,7 @@ impl PdfProcessor {
 	pub fn render_page_with_quality(
 		path: &str,
 		page: i32,
-		config: &StumpConfig,
+		config: &MediaConfig,
 		force_high_quality: bool,
 	) -> Result<(ContentType, Vec<u8>), FileError> {
 		let pdfium = PdfProcessor::renderer(&config.pdfium_path)?;
@@ -357,7 +355,7 @@ impl PdfProcessor {
 	pub async fn get_page_async(
 		path: &str,
 		page: i32,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<(ContentType, Vec<u8>), FileError> {
 		// Check cache first if caching is enabled
 		if config.pdf_cache_pages {
@@ -405,7 +403,7 @@ impl PdfProcessor {
 	fn generate_cache_key(
 		pdf_path: &str,
 		page: i32,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<String, FileError> {
 		let metadata = std::fs::metadata(pdf_path)?;
 		let modified_time = metadata
@@ -435,7 +433,7 @@ impl PdfProcessor {
 	async fn get_cached_page(
 		pdf_path: &str,
 		page: i32,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<Option<(ContentType, Vec<u8>)>, FileError> {
 		if !config.pdf_cache_pages {
 			return Ok(None);
@@ -471,7 +469,7 @@ impl PdfProcessor {
 		pdf_path: &str,
 		page: i32,
 		content: &[u8],
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<(), FileError> {
 		if !config.pdf_cache_pages || content.is_empty() {
 			return Ok(());
@@ -518,7 +516,7 @@ impl PdfProcessor {
 	async fn prerender_adjacent_pages(
 		pdf_path: &str,
 		current_page: i32,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) {
 		if !config.pdf_cache_pages || config.pdf_prerender_range == 0 {
 			return;
@@ -620,7 +618,7 @@ impl FileConverter for PdfProcessor {
 		path: &str,
 		delete_source: bool,
 		format: Option<SupportedImageFormat>,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<PathBuf, FileError> {
 		let pdfium = PdfProcessor::renderer(&config.pdfium_path)?;
 		let document = pdfium.load_pdf_from_file(path, None)?;
@@ -733,7 +731,7 @@ impl FileConverter for PdfProcessor {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::filesystem::media::tests::get_test_pdf_path;
+	use crate::{tests::get_test_pdf_path, MediaConfig};
 
 	#[test]
 	fn test_process() {
@@ -742,7 +740,7 @@ mod tests {
 			return;
 		}
 		let path = get_test_pdf_path();
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 
 		let processed_file = PdfProcessor::process(
 			&path,
@@ -813,7 +811,7 @@ mod tests {
 			return;
 		}
 		let path = get_test_pdf_path();
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 		let page = PdfProcessor::analyze_page(&path, 1, &config);
 		assert!(page.is_ok());
 		let page = page.unwrap();
@@ -828,7 +826,7 @@ mod tests {
 			return;
 		}
 		let path = get_test_pdf_path();
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 
 		// Test without cache
 		let mut no_cache_config = config.clone();
@@ -840,7 +838,10 @@ mod tests {
 		let mut cache_config = config.clone();
 		cache_config.pdf_cache_pages = true;
 		let temp_dir = tempfile::tempdir().unwrap();
-		cache_config.config_dir = temp_dir.path().to_string_lossy().to_string();
+		cache_config.config_dir = temp_dir.path().to_path_buf();
+		cache_config.cache_dir = temp_dir.path().join("cache");
+		cache_config.thumbnails_dir = temp_dir.path().join("thumbnails");
+		cache_config.pdf_cache_dir = cache_config.cache_dir.join("pdf_pages");
 
 		let result1 = PdfProcessor::get_page_async(&path, 1, &cache_config).await;
 		assert!(result1.is_ok());
@@ -858,11 +859,16 @@ mod tests {
 			return;
 		}
 		let path = get_test_pdf_path();
-		let mut config = StumpConfig::debug();
-		config.pdf_cache_pages = true;
-		config.pdf_prerender_range = 1;
 		let temp_dir = tempfile::tempdir().unwrap();
-		config.config_dir = temp_dir.path().to_string_lossy().to_string();
+		let config = MediaConfig {
+			pdf_cache_pages: true,
+			pdf_prerender_range: 1,
+			config_dir: temp_dir.path().to_path_buf(),
+			cache_dir: temp_dir.path().join("cache"),
+			thumbnails_dir: temp_dir.path().join("thumbnails"),
+			pdf_cache_dir: temp_dir.path().join("cache").join("pdf_pages"),
+			..MediaConfig::default()
+		};
 
 		// This will pre-render page 2 in the background when requesting page 1
 		let result = PdfProcessor::get_page_async(&path, 1, &config).await;
@@ -897,7 +903,7 @@ mod tests {
 			return;
 		}
 		let path = get_test_pdf_path();
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 		let result = PdfProcessor::to_zip(&path, false, None, &config);
 		assert!(result.is_ok());
 		let zip_path = result.unwrap();

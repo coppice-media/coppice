@@ -1,0 +1,21 @@
+[package]
+name = "stump_scanner"
+version.workspace = true
+edition = "2021"
+description = "Filesystem walking and scan planning primitives for Stump"
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+globset.workspace = true
+serde.workspace = true
+stump_media = { path = "../media", default-features = false }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+walkdir = "2.5.0"
+
+[dev-dependencies]
+parking_lot = "0.12.1"
+serde_json.workspace = true
+tempfile.workspace = true

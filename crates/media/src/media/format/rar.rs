@@ -9,23 +9,20 @@ use tracing::{debug, error, trace, warn};
 use unrar::{Archive, CursorBeforeHeader, List, OpenArchive, Process, UnrarResult};
 
 use crate::{
-	config::StumpConfig,
-	filesystem::{
-		archive::create_zip_archive,
-		content_type::ContentType,
-		error::FileError,
-		hash::{self, HASH_SAMPLE_COUNT, HASH_SAMPLE_SIZE},
-		media::{
-			process::{
-				AnalyzedPage, FileConverter, FileProcessor, FileProcessorOptions,
-				ProcessedFile, ProcessedFileHashes,
-			},
-			utils::metadata_from_buf,
-			zip::ZipProcessor,
-			ProcessedMediaMetadata,
+	archive::create_zip_archive,
+	content_type::ContentType,
+	error::FileError,
+	hash::{self, HASH_SAMPLE_COUNT, HASH_SAMPLE_SIZE},
+	media::{
+		format::zip::ZipProcessor,
+		process::{
+			AnalyzedPage, FileConverter, FileProcessor, FileProcessorOptions,
+			ProcessedFile, ProcessedFileHashes,
 		},
-		FileParts, PathUtils,
+		utils::metadata_from_buf,
+		ProcessedMediaMetadata,
 	},
+	FileParts, MediaConfig, PathUtils,
 };
 
 /// A file processor for RAR files.
@@ -182,7 +179,7 @@ impl FileProcessor for RarProcessor {
 	fn process(
 		path: &str,
 		options: FileProcessorOptions,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<ProcessedFile, FileError> {
 		if options.convert_rar_to_zip {
 			let zip_path_buf = RarProcessor::to_zip(
@@ -259,7 +256,7 @@ impl FileProcessor for RarProcessor {
 	fn get_page(
 		file: &str,
 		page: i32,
-		_: &StumpConfig,
+		_: &MediaConfig,
 	) -> Result<(ContentType, Vec<u8>), FileError> {
 		let archive = RarProcessor::open_for_listing(file)?;
 
@@ -305,8 +302,7 @@ impl FileProcessor for RarProcessor {
 
 		Ok((content_type, bytes))
 	}
-
-	fn get_page_count(path: &str, _: &StumpConfig) -> Result<i32, FileError> {
+	fn get_page_count(path: &str, _: &MediaConfig) -> Result<i32, FileError> {
 		let archive = RarProcessor::open_for_listing(path)?;
 
 		let page_count = archive
@@ -363,7 +359,7 @@ impl FileProcessor for RarProcessor {
 	fn analyze_page(
 		path: &str,
 		page: i32,
-		_: &StumpConfig,
+		_: &MediaConfig,
 	) -> Result<AnalyzedPage, FileError> {
 		let archive = RarProcessor::open_for_listing(path)?;
 
@@ -419,7 +415,7 @@ impl FileConverter for RarProcessor {
 		path: &str,
 		delete_source: bool,
 		_: Option<SupportedImageFormat>,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<PathBuf, FileError> {
 		debug!(path, "Converting RAR to ZIP");
 
@@ -502,10 +498,9 @@ impl FileConverter for RarProcessor {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::filesystem::media::tests::{
+	use crate::tests::{
 		get_test_complex_rar_path, get_test_rar_file_data, get_test_rar_path,
 	};
-
 	use std::fs;
 
 	#[test]
@@ -519,7 +514,7 @@ mod tests {
 			.to_string();
 		fs::write(&temp_rar_file_path, get_test_rar_file_data())
 			.expect("Failed to write temporary test_process.rar");
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 
 		// We can test deletion since it's a temporary file
 		let processed_file = RarProcessor::process(
@@ -542,7 +537,7 @@ mod tests {
 
 	#[test]
 	fn test_rar_to_zip() {
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 		let tempdir = tempfile::tempdir().expect("Failed to create temporary directory");
 
 		let temp_cbr_path = tempdir
@@ -580,7 +575,7 @@ mod tests {
 		let cbz_file = fs::File::open(&cbz_path).expect("failed to open CBZ");
 		let cbz_archive =
 			zip::ZipArchive::new(cbz_file).expect("failed to read CBZ archive");
-		assert!(cbz_archive.len() > 0, "should contain at least one entry");
+		assert!(!cbz_archive.is_empty(), "should contain at least one entry");
 	}
 
 	#[test]
@@ -595,7 +590,7 @@ mod tests {
 	fn test_rar_with_complex_file_tree() {
 		let path = get_test_complex_rar_path();
 
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 		let processed_file = RarProcessor::process(
 			&path,
 			FileProcessorOptions {

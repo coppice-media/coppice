@@ -1,4 +1,4 @@
-use crate::filesystem::FileError;
+use crate::FileError;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessorError {

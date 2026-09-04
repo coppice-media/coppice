@@ -9,7 +9,7 @@ use tokio::{fs, io};
 use tracing::error;
 use walkdir::WalkDir;
 
-use super::{media::is_accepted_cover_name, ContentType};
+use crate::{content_type::ContentType, media::is_accepted_cover_name};
 
 pub const ACCEPTED_IMAGE_EXTENSIONS: [&str; 8] =
 	["jpg", "png", "jpeg", "jxl", "webp", "gif", "avif", "heif"];

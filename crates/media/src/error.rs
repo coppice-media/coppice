@@ -1,10 +1,7 @@
 use std::io;
 
 use thiserror::Error;
-use unrar::error::UnrarError;
 use zip::result::ZipError;
-
-use crate::error::CoreError;
 
 #[derive(Error, Debug)]
 pub enum FileError {
@@ -20,26 +17,38 @@ pub enum FileError {
 	EpubOpenError(String),
 	#[error("Error while attempting to read .epub file: {0}")]
 	EpubReadError(String),
+	#[error("Page {page} does not exist; the file has {available} pages")]
+	PageNotFound { page: usize, available: usize },
+	#[error("Resource {0} does not exist in the file")]
+	ResourceNotFound(String),
 	#[error("Could not find an image")]
 	NoImageError,
+	#[cfg(feature = "pdf")]
 	#[error("{0}")]
 	PdfRendererError(#[from] pdfium_render::prelude::PdfiumError),
 	#[error("Stump is not properly configured to render PDFs")]
 	PdfConfigurationError,
 	#[error("Failed to process PDF file: {0}")]
 	PdfProcessingError(String),
+	#[cfg(feature = "rar")]
 	#[error("{0}")]
-	RarError(#[from] UnrarError),
+	RarError(#[from] unrar::error::UnrarError),
+	#[cfg(feature = "rar")]
 	#[error("Failed to open rar archive: {0}")]
 	RarNulError(#[from] unrar::error::NulError),
+	#[cfg(feature = "rar")]
 	#[error("Could not open rar file")]
 	RarOpenError,
+	#[cfg(feature = "rar")]
 	#[error("Error extracting RAR file: {0}")]
 	RarExtractError(String),
+	#[cfg(feature = "rar")]
 	#[error("Error reading RAR file")]
 	RarReadError,
+	#[cfg(feature = "rar")]
 	#[error("Error reading RAR byte content")]
 	RarByteReadError(#[from] std::str::Utf8Error),
+	#[cfg(feature = "rar")]
 	#[error("RAR archive is empty")]
 	RarEmpty,
 	#[error("Unsupported file type: {0}")]
@@ -56,14 +65,4 @@ pub enum FileError {
 	NotFound,
 	#[error("An unknown error occurred: {0}")]
 	UnknownError(String),
-}
-
-impl From<FileError> for CoreError {
-	fn from(error: FileError) -> Self {
-		match error {
-			FileError::FileIoError(err) => CoreError::IoError(err),
-			FileError::UnknownError(err) => CoreError::Unknown(err),
-			_ => CoreError::InternalError(error.to_string()),
-		}
-	}
 }

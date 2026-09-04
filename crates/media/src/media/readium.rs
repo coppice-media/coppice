@@ -7,7 +7,7 @@ use models::shared::readium::{
 	RWPMPositionsBuilder, RWPManifest, RWPManifestBuilder,
 };
 
-use crate::filesystem::error::FileError;
+use crate::FileError;
 
 /// A utility struct for generating Readium Web Publication Manifests
 pub struct ReadiumManifestGenerator {
@@ -390,7 +390,7 @@ fn enumerate_spine_position_meta(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::filesystem::media::tests::get_test_epub_path;
+	use crate::tests::get_test_epub_path;
 	use models::shared::readium::RWPM_CONTEXT;
 
 	#[test]

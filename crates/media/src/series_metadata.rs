@@ -1,4 +1,4 @@
-use crate::{filesystem::FileError, utils::serde::age_rating_deserializer};
+use crate::{error::FileError, serde::age_rating_deserializer};
 use models::{
 	entity::series_metadata,
 	shared::series_metadata::{CollectedItem, CollectedItems},

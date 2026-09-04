@@ -6,10 +6,10 @@ use models::shared::image_processor_options::{
 };
 use webp::Encoder;
 
-use crate::filesystem::{
-	error::FileError,
+use crate::{
 	image::process::resized_dimensions,
-	image::{process::ImageProcessor, ProcessorError},
+	image::{ImageProcessor, ProcessorError},
+	FileError,
 };
 
 use super::{scale_height_dimension, scale_width_dimension, ScaledDimensionResize};
@@ -108,9 +108,7 @@ mod tests {
 	use rust_decimal::Decimal;
 
 	use super::*;
-	use crate::filesystem::image::tests::{
-		get_test_jpg_path, get_test_png_path, get_test_webp_path,
-	};
+	use crate::tests::{get_test_jpg_path, get_test_png_path, get_test_webp_path};
 	use std::fs;
 
 	#[test]

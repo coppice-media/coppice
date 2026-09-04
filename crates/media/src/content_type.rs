@@ -3,7 +3,7 @@ use std::path::Path;
 use models::shared::image_processor_options::SupportedImageFormat;
 use serde::Serialize;
 
-use crate::CoreError;
+use crate::FileError;
 
 /// [`ContentType`] is an enum that represents the HTTP content type. This is a smaller
 /// subset of the full list of content types, mostly focusing on types supported by Stump.
@@ -61,7 +61,7 @@ impl ContentType {
 	///
 	/// ### Example
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	///
 	/// let content_type = ContentType::from_extension("png");
 	/// assert_eq!(content_type, ContentType::PNG);
@@ -95,7 +95,7 @@ impl ContentType {
 	///
 	/// ### Example
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	///
 	/// let content_type = ContentType::from_file("test.png");
 	/// assert_eq!(content_type, ContentType::PNG);
@@ -110,7 +110,7 @@ impl ContentType {
 	///
 	/// ### Example
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	///
 	/// let buf = [0xFF, 0xD8, 0xFF, 0xAA];
 	/// let content_type = ContentType::from_bytes(&buf);
@@ -127,7 +127,7 @@ impl ContentType {
 	///
 	/// ### Example
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	///
 	/// // This is NOT a valid PNG buff
 	/// let buf = [0xFF, 0xD8, 0xBB, 0xBB];
@@ -178,7 +178,7 @@ impl ContentType {
 	///
 	/// ### Example
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	/// use std::path::Path;
 	///
 	/// let path = Path::new("test.png");
@@ -207,7 +207,7 @@ impl ContentType {
 	///
 	/// ## Example
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	///
 	/// let content_type = ContentType::PNG;
 	/// assert!(content_type.is_image());
@@ -225,7 +225,7 @@ impl ContentType {
 	/// ## Example
 	///
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	///
 	/// let content_type = ContentType::PNG;
 	/// assert!(content_type.is_opds_legacy_image());
@@ -245,7 +245,7 @@ impl ContentType {
 	/// ## Example
 	///
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	///
 	/// let content_type = ContentType::PNG;
 	/// assert!(content_type.is_decodable_image());
@@ -262,7 +262,7 @@ impl ContentType {
 	/// ## Example
 	///
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	///
 	/// let content_type = ContentType::ZIP;
 	/// assert!(content_type.is_zip());
@@ -287,7 +287,7 @@ impl ContentType {
 	/// ## Example
 	///
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	///
 	/// let content_type = ContentType::RAR;
 	/// assert!(content_type.is_rar());
@@ -301,7 +301,7 @@ impl ContentType {
 	/// ## Example
 	///
 	/// ```no_run
-	/// use stump_core::filesystem::ContentType;
+	/// use stump_media::ContentType;
 	///
 	/// let content_type = ContentType::EPUB_ZIP;
 	/// assert!(content_type.is_epub());
@@ -402,12 +402,12 @@ impl From<SupportedImageFormat> for ContentType {
 }
 
 impl TryFrom<ContentType> for image::ImageFormat {
-	type Error = CoreError;
+	type Error = FileError;
 
 	fn try_from(value: ContentType) -> Result<Self, Self::Error> {
 		/// Internal helper function to reduce code duplication
-		fn unsupported_error(unsupported_type: &str) -> CoreError {
-			CoreError::InternalError(format!(
+		fn unsupported_error(unsupported_type: &str) -> FileError {
+			FileError::UnsupportedFileType(format!(
 				"Cannot convert {} into image::ImageFormat, not supported.",
 				unsupported_type
 			))

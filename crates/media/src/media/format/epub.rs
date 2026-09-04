@@ -6,16 +6,14 @@ const ACCEPTED_EPUB_COVER_MIMES: [&str; 2] = ["image/jpeg", "image/png"];
 const DEFAULT_EPUB_COVER_ID: &str = "cover";
 
 use crate::{
-	config::StumpConfig,
-	filesystem::{
-		content_type::ContentType,
-		error::FileError,
-		hash::{self, generate_koreader_hash},
-		media::{
-			process::{AnalyzedPage, FileProcessor, FileProcessorOptions, ProcessedFile},
-			ProcessedFileHashes, ProcessedMediaMetadata,
-		},
+	content_type::ContentType,
+	error::FileError,
+	hash::{self, generate_koreader_hash},
+	media::{
+		process::{AnalyzedPage, FileProcessor, FileProcessorOptions, ProcessedFile},
+		ProcessedFileHashes, ProcessedMediaMetadata,
 	},
+	MediaConfig,
 };
 use epub::doc::EpubDoc;
 
@@ -130,7 +128,7 @@ impl FileProcessor for EpubProcessor {
 	fn process(
 		path: &str,
 		options: FileProcessorOptions,
-		_: &StumpConfig,
+		_: &MediaConfig,
 	) -> Result<ProcessedFile, FileError> {
 		tracing::trace!(?path, "Processing epub");
 
@@ -167,7 +165,7 @@ impl FileProcessor for EpubProcessor {
 	fn get_page(
 		path: &str,
 		page: i32,
-		_: &StumpConfig,
+		_: &MediaConfig,
 	) -> Result<(ContentType, Vec<u8>), FileError> {
 		if page == 1 {
 			// Assume this is the cover page
@@ -177,7 +175,7 @@ impl FileProcessor for EpubProcessor {
 		}
 	}
 
-	fn get_page_count(path: &str, _: &StumpConfig) -> Result<i32, FileError> {
+	fn get_page_count(path: &str, _: &MediaConfig) -> Result<i32, FileError> {
 		let mut epub_file = Self::open(path)?;
 		Self::compute_synthetic_page_count(&mut epub_file)
 	}
@@ -189,12 +187,19 @@ impl FileProcessor for EpubProcessor {
 		let mut epub_file = Self::open(path)?;
 
 		let mut content_types = HashMap::new();
+		// Page numbers may come from the synthetic (position-based) page count,
+		// which is usually larger than the spine; those pages have no chapter
+		// and are simply absent from the result rather than an error.
+		let spine_len = epub_file.spine.len();
 
 		for chapter in pages {
 			if chapter == 1 {
 				// Assume this is the cover page
 				let (content_type, _) = Self::get_cover_internal(&mut epub_file)?;
 				content_types.insert(chapter, content_type);
+				continue;
+			}
+			if chapter < 0 || chapter as usize >= spine_len {
 				continue;
 			}
 
@@ -225,7 +230,7 @@ impl FileProcessor for EpubProcessor {
 	fn analyze_page(
 		_path: &str,
 		_page: i32,
-		_config: &StumpConfig,
+		_config: &MediaConfig,
 	) -> Result<AnalyzedPage, FileError> {
 		Err(FileError::UnsupportedFileType(
 			"Epub page analysis is not supported".to_string(),
@@ -398,6 +403,15 @@ impl EpubProcessor {
 	) -> Result<(ContentType, Vec<u8>), FileError> {
 		let mut epub_file = Self::open(path)?;
 
+		// Chapters index the spine directly; a client that derives page numbers
+		// from the synthetic (position-based) page count can ask past the end.
+		let available = epub_file.spine.len();
+		if chapter >= available {
+			return Err(FileError::PageNotFound {
+				page: chapter,
+				available,
+			});
+		}
 		if !epub_file.set_current_chapter(chapter) {
 			tracing::error!(path, chapter, "Failed to get chapter from epub file!");
 			return Err(FileError::EpubReadError(
@@ -431,8 +445,8 @@ impl EpubProcessor {
 		let mut epub_file = Self::open(path)?;
 
 		let (buf, mime) = epub_file.get_resource(resource_id).ok_or_else(|| {
-			tracing::error!("Failed to get resource: {resource_id}");
-			FileError::EpubReadError("Failed to get resource".to_string())
+			tracing::debug!(resource_id, "Requested EPUB resource does not exist");
+			FileError::ResourceNotFound(resource_id.to_string())
 		})?;
 
 		Ok((ContentType::from(mime.as_str()), buf))
@@ -456,12 +470,12 @@ impl EpubProcessor {
 					.values()
 					.map(|r| r.path.to_string_lossy().to_string())
 					.collect();
-				tracing::error!(
+				tracing::debug!(
 					?adjusted_path,
 					?available_resources,
-					"Failed to get resource!"
+					"Requested EPUB resource does not exist"
 				);
-				FileError::EpubReadError("Failed to get resource".to_string())
+				FileError::ResourceNotFound(adjusted_path.to_string_lossy().into_owned())
 			})?;
 
 		// Note: If the resource does not have an entry in the `resources` map, then loading the content
@@ -746,8 +760,8 @@ pub(crate) fn normalize_resource_path(path: PathBuf, root: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::filesystem::media::tests::get_test_epub_path;
 
+	use crate::tests::get_test_epub_path;
 	#[test]
 	fn test_get_cover_first_sorted_image() {
 		let resources = HashMap::from([
@@ -927,7 +941,7 @@ mod tests {
 	#[test]
 	fn test_process() {
 		let path = get_test_epub_path();
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 
 		let processed_file = EpubProcessor::process(
 			&path,
@@ -1227,5 +1241,27 @@ mod tests {
 		assert!(cover.is_ok());
 		let chapter = EpubProcessor::get_chapter(&path, 1);
 		assert!(chapter.is_ok());
+	}
+	#[test]
+	fn chapter_past_the_spine_is_page_not_found() {
+		let path = get_test_epub_path();
+		let spine_len = EpubProcessor::open(&path).unwrap().spine.len();
+		let error = EpubProcessor::get_chapter(&path, spine_len).unwrap_err();
+		assert!(
+			matches!(error, FileError::PageNotFound { page, available } if page == spine_len && available == spine_len),
+			"{error}"
+		);
+		assert!(EpubProcessor::get_chapter(&path, spine_len - 1).is_ok());
+	}
+	#[test]
+	fn content_types_skip_pages_past_the_spine() {
+		let path = get_test_epub_path();
+		let spine_len = EpubProcessor::open(&path).unwrap().spine.len() as i32;
+		let pages = (1..=spine_len + 50).collect::<Vec<_>>();
+		let types = EpubProcessor::get_page_content_types(&path, pages).unwrap();
+		assert!(types.contains_key(&1));
+		assert!(types.contains_key(&(spine_len - 1)));
+		assert!(!types.contains_key(&spine_len));
+		assert!(!types.contains_key(&(spine_len + 50)));
 	}
 }

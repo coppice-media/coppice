@@ -18,9 +18,9 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use zip::ZipArchive;
 
-use crate::filesystem::{
-	error::FileError,
+use crate::{
 	media::readium::{enumerate_spine_for_positions_at, rwpm_resource_url},
+	FileError,
 };
 
 pub const EPUB_SEARCH_MIN_QUERY_LEN: usize = 2;
@@ -788,7 +788,7 @@ fn snap_right(text: &str, from: usize, to: usize) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::filesystem::media::tests::get_test_epub_path;
+	use crate::tests::get_test_epub_path;
 
 	#[test]
 	fn extract_skips_script_and_style() {

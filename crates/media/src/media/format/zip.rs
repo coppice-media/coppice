@@ -2,18 +2,15 @@ use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 use tracing::{debug, error, trace};
 
 use crate::{
-	config::StumpConfig,
-	filesystem::{
-		content_type::ContentType,
-		error::FileError,
-		hash,
-		media::{
-			process::{AnalyzedPage, FileProcessor, FileProcessorOptions, ProcessedFile},
-			utils::{metadata_from_buf, sort_file_names},
-			ProcessedFileHashes, ProcessedMediaMetadata,
-		},
-		FileParts, PathUtils,
+	content_type::ContentType,
+	error::FileError,
+	hash,
+	media::{
+		process::{AnalyzedPage, FileProcessor, FileProcessorOptions, ProcessedFile},
+		utils::{metadata_from_buf, sort_file_names},
+		ProcessedFileHashes, ProcessedMediaMetadata,
 	},
+	FileParts, MediaConfig, PathUtils,
 };
 
 /// A file processor for ZIP files.
@@ -123,7 +120,7 @@ impl FileProcessor for ZipProcessor {
 	fn process(
 		path: &str,
 		options: FileProcessorOptions,
-		_: &StumpConfig,
+		_: &MediaConfig,
 	) -> Result<ProcessedFile, FileError> {
 		let zip_file = File::open(path)?;
 		let mut archive = zip::ZipArchive::new(zip_file)?;
@@ -182,7 +179,7 @@ impl FileProcessor for ZipProcessor {
 	fn get_page(
 		path: &str,
 		page: i32,
-		_: &StumpConfig,
+		_: &MediaConfig,
 	) -> Result<(ContentType, Vec<u8>), FileError> {
 		let zip_file = File::open(path)?;
 
@@ -236,7 +233,7 @@ impl FileProcessor for ZipProcessor {
 		Err(FileError::NoImageError)
 	}
 
-	fn get_page_count(path: &str, _: &StumpConfig) -> Result<i32, FileError> {
+	fn get_page_count(path: &str, _: &MediaConfig) -> Result<i32, FileError> {
 		let zip_file = File::open(path)?;
 
 		let mut archive = zip::ZipArchive::new(&zip_file)?;
@@ -321,7 +318,7 @@ impl FileProcessor for ZipProcessor {
 	fn analyze_page(
 		path: &str,
 		page: i32,
-		_: &StumpConfig,
+		_: &MediaConfig,
 	) -> Result<AnalyzedPage, FileError> {
 		let zip_file = File::open(path)?;
 
@@ -396,7 +393,7 @@ impl FileProcessor for ZipProcessor {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::filesystem::media::tests::{
+	use crate::tests::{
 		get_nested_macos_compressed_cbz_path, get_test_cbz_path,
 		get_test_complex_zip_path, get_test_zip_path,
 	};
@@ -404,7 +401,7 @@ mod tests {
 	#[test]
 	fn test_process() {
 		let path = get_test_zip_path();
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 
 		let processed_file = ZipProcessor::process(
 			&path,
@@ -421,7 +418,7 @@ mod tests {
 	#[test]
 	fn test_process_cbz() {
 		let path = get_test_cbz_path();
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 
 		let processed_file = ZipProcessor::process(
 			&path,
@@ -438,7 +435,7 @@ mod tests {
 	#[test]
 	fn test_process_nested_cbz() {
 		let path = get_nested_macos_compressed_cbz_path();
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 
 		let processed_file = ZipProcessor::process(
 			&path,
@@ -457,7 +454,7 @@ mod tests {
 	fn test_get_page_cbz() {
 		// Note: This doesn't work with the other test book, because it has no pages.
 		let path = get_test_cbz_path();
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 
 		let page = ZipProcessor::get_page(&path, 1, &config);
 		assert!(page.is_ok());
@@ -467,8 +464,9 @@ mod tests {
 	fn test_get_page_nested_cbz() {
 		let path = get_nested_macos_compressed_cbz_path();
 
-		let (content_type, buf) = ZipProcessor::get_page(&path, 1, &StumpConfig::debug())
-			.expect("Failed to get page");
+		let (content_type, buf) =
+			ZipProcessor::get_page(&path, 1, &MediaConfig::default())
+				.expect("Failed to get page");
 		assert_eq!(content_type.mime_type(), "image/jpeg");
 		// Note: this is known and expected to be 96623 bytes.
 		assert_eq!(buf.len(), 96623);
@@ -507,7 +505,7 @@ mod tests {
 	fn test_zip_with_complex_file_tree() {
 		let path = get_test_complex_zip_path();
 
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 		let processed_file = ZipProcessor::process(
 			&path,
 			FileProcessorOptions {
@@ -525,7 +523,7 @@ mod tests {
 	#[test]
 	fn test_analyze_page() {
 		let path = get_test_cbz_path();
-		let config = StumpConfig::debug();
+		let config = MediaConfig::default();
 
 		let analyzed_page = ZipProcessor::analyze_page(&path, 1, &config)
 			.expect("Failed to analyze page");

@@ -1,5 +1,5 @@
+use ::serde::{Deserialize, Deserializer};
 use regex::Regex;
-use serde::{Deserialize, Deserializer};
 use std::str::FromStr;
 
 pub fn string_list_deserializer<'de, D>(

@@ -9,16 +9,15 @@ use models::{
 use tokio::{sync::oneshot, task::spawn_blocking};
 
 use crate::{
-	config::StumpConfig,
-	filesystem::{
-		content_type::ContentType,
-		error::FileError,
-		media::{epub::EpubProcessor, pdf::PdfProcessor},
-		FileParts, PathUtils,
-	},
+	content_type::ContentType, error::FileError, FileParts, MediaConfig, PathUtils,
 };
 
-use super::{metadata::ProcessedMediaMetadata, rar::RarProcessor, zip::ZipProcessor};
+#[cfg(feature = "pdf")]
+use super::format::pdf::PdfProcessor;
+#[cfg(feature = "rar")]
+use super::format::rar::RarProcessor;
+use super::metadata::ProcessedMediaMetadata;
+use super::{format::epub::EpubProcessor, format::zip::ZipProcessor};
 
 /// A struct representing the options for processing a file. This is a subset of [`LibraryConfig`]
 /// and is used to pass options to the [`FileProcessor`] implementations.
@@ -89,7 +88,7 @@ pub trait FileProcessor {
 	fn process(
 		path: &str,
 		options: FileProcessorOptions,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<ProcessedFile, FileError>;
 
 	/// Process the metadata of a file. This should gather the metadata of the file
@@ -100,11 +99,11 @@ pub trait FileProcessor {
 	fn get_page(
 		path: &str,
 		page: i32,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<(ContentType, Vec<u8>), FileError>;
 
 	/// Get the number of pages in the file.
-	fn get_page_count(path: &str, config: &StumpConfig) -> Result<i32, FileError>;
+	fn get_page_count(path: &str, config: &MediaConfig) -> Result<i32, FileError>;
 
 	/// Get the content types of a list of pages of the file. This should determine content
 	/// types by actually testing the bytes for each page.
@@ -118,7 +117,7 @@ pub trait FileProcessor {
 	fn analyze_page(
 		path: &str,
 		page: i32,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<AnalyzedPage, FileError>;
 }
 
@@ -136,7 +135,7 @@ pub trait FileConverter {
 		path: &str,
 		delete_source: bool,
 		image_format: Option<SupportedImageFormat>,
-		config: &StumpConfig,
+		config: &MediaConfig,
 	) -> Result<PathBuf, FileError>;
 }
 
@@ -189,15 +188,35 @@ fn determine_processor(path: &Path) -> Result<ProcessorType, FileError> {
 /// the functions below, which all follow the same pattern for determining which processor
 /// to use for the given path
 macro_rules! dispatch_processor {
-    ($path:expr, $method:ident $(, $arg:expr)*) => {{
-        let processor_type = determine_processor($path.as_ref())?;
-        match processor_type {
-            ProcessorType::Zip => ZipProcessor::$method($($arg),*),
-            ProcessorType::Rar => RarProcessor::$method($($arg),*),
-            ProcessorType::Epub => EpubProcessor::$method($($arg),*),
-            ProcessorType::Pdf => PdfProcessor::$method($($arg),*),
-        }
-    }};
+	($path:expr, $method:ident $(, $arg:expr)*) => {{
+		let processor_type = determine_processor($path.as_ref())?;
+		match processor_type {
+			ProcessorType::Zip => ZipProcessor::$method($($arg),*),
+			ProcessorType::Rar => {
+				#[cfg(feature = "rar")]
+				{
+					RarProcessor::$method($($arg),*)
+				}
+				#[cfg(not(feature = "rar"))]
+				{
+					Err(FileError::UnsupportedFileType(
+						"RAR support is disabled".to_string(),
+					))
+				}
+			},
+			ProcessorType::Epub => EpubProcessor::$method($($arg),*),
+			ProcessorType::Pdf => {
+				#[cfg(feature = "pdf")]
+				{
+					PdfProcessor::$method($($arg),*)
+				}
+				#[cfg(not(feature = "pdf"))]
+				{
+					Err(FileError::PdfConfigurationError)
+				}
+			},
+		}
+	}};
 }
 
 /// A function to process a file in a blocking manner. This will call the appropriate
@@ -206,7 +225,7 @@ macro_rules! dispatch_processor {
 pub fn process(
 	path: &Path,
 	options: FileProcessorOptions,
-	config: &StumpConfig,
+	config: &MediaConfig,
 ) -> Result<ProcessedFile, FileError> {
 	let path_str = path.to_str().unwrap_or_default();
 	dispatch_processor!(path, process, path_str, options, config)
@@ -218,7 +237,7 @@ pub fn process(
 pub async fn process_async(
 	path: impl AsRef<Path>,
 	options: FileProcessorOptions,
-	config: &StumpConfig,
+	config: &MediaConfig,
 ) -> Result<ProcessedFile, FileError> {
 	let (tx, rx) = oneshot::channel();
 
@@ -337,7 +356,7 @@ pub async fn generate_hashes_async(
 pub fn get_page(
 	path: &str,
 	page: i32,
-	config: &StumpConfig,
+	config: &MediaConfig,
 ) -> Result<(ContentType, Vec<u8>), FileError> {
 	dispatch_processor!(Path::new(path), get_page, path, page, config)
 }
@@ -349,14 +368,21 @@ pub fn get_page(
 pub async fn get_page_async(
 	path: impl AsRef<Path>,
 	page: i32,
-	config: &StumpConfig,
+	config: &MediaConfig,
 ) -> Result<(ContentType, Vec<u8>), FileError> {
 	let path_str = path.as_ref().to_str().unwrap_or_default();
 	let mime = ContentType::from_file(path_str).mime_type();
 
-	// Use optimized PDF rendering for PDF files (includes caching if enabled)
+	// Use optimized PDF rendering for PDF files (includes caching if enabled).
 	if mime == "application/pdf" {
-		return PdfProcessor::get_page_async(path_str, page, config).await;
+		#[cfg(feature = "pdf")]
+		{
+			return PdfProcessor::get_page_async(path_str, page, config).await;
+		}
+		#[cfg(not(feature = "pdf"))]
+		{
+			return Err(FileError::PdfConfigurationError);
+		}
 	}
 
 	// For other file types, use the original blocking approach
@@ -392,15 +418,14 @@ pub async fn get_page_async(
 
 /// Get the number of pages in a file. This will call the appropriate [`FileProcessor::get_page_count`]
 /// implementation based on the file's mime type, or return an error if the file type is not supported.
-pub fn get_page_count(path: &str, config: &StumpConfig) -> Result<i32, FileError> {
+pub fn get_page_count(path: &str, config: &MediaConfig) -> Result<i32, FileError> {
 	dispatch_processor!(Path::new(path), get_page_count, path, config)
 }
-
 /// Analyze a page to get its dimensions and content type
 pub fn analyze_page(
 	path: &str,
 	page: i32,
-	config: &StumpConfig,
+	config: &MediaConfig,
 ) -> Result<AnalyzedPage, FileError> {
 	dispatch_processor!(Path::new(path), analyze_page, path, page, config)
 }
@@ -410,7 +435,7 @@ pub fn analyze_page(
 #[tracing::instrument(err, fields(path = %path.as_ref().display()))]
 pub async fn get_page_count_async(
 	path: impl AsRef<Path>,
-	config: &StumpConfig,
+	config: &MediaConfig,
 ) -> Result<i32, FileError> {
 	let (tx, rx) = oneshot::channel();
 
@@ -508,7 +533,7 @@ pub async fn get_content_type_for_page(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::filesystem::media::tests::{
+	use crate::tests::{
 		get_test_cbz_path, get_test_epub_path, get_test_pdf_path, get_test_rar_path,
 		get_test_zip_path,
 	};
@@ -578,5 +603,53 @@ mod tests {
 		let result = determine_processor(path);
 		assert!(result.is_err());
 		assert!(matches!(result, Err(FileError::UnsupportedFileType(_))));
+	}
+}
+
+/// Feature-off contracts: a build without a format backend must fail with the
+/// documented error instead of panicking or misdetecting the file.
+#[cfg(test)]
+mod feature_gate_tests {
+	use super::*;
+	#[cfg(not(feature = "pdf"))]
+	use crate::tests::get_test_pdf_path;
+	#[cfg(not(feature = "rar"))]
+	use crate::tests::get_test_rar_path;
+	#[cfg(not(all(feature = "pdf", feature = "rar")))]
+	use crate::MediaConfig;
+
+	#[cfg(not(feature = "pdf"))]
+	#[test]
+	fn pdf_without_pdf_feature_reports_configuration_error() {
+		let path = get_test_pdf_path();
+		assert!(matches!(
+			get_page(&path, 1, &MediaConfig::default()),
+			Err(FileError::PdfConfigurationError)
+		));
+		assert_eq!(ContentType::from_file(&path), ContentType::PDF);
+	}
+
+	#[cfg(not(feature = "rar"))]
+	#[test]
+	fn rar_without_rar_feature_reports_unsupported() {
+		let path = get_test_rar_path();
+		assert!(matches!(
+			get_page(&path, 1, &MediaConfig::default()),
+			Err(FileError::UnsupportedFileType(_))
+		));
+		assert_eq!(ContentType::from_file(&path), ContentType::RAR);
+	}
+
+	#[cfg(all(feature = "pdf", feature = "rar"))]
+	#[test]
+	fn default_features_dispatch_both_backends() {
+		assert!(matches!(
+			determine_processor(Path::new("a.pdf")),
+			Ok(ProcessorType::Pdf)
+		));
+		assert!(matches!(
+			determine_processor(Path::new("a.cbr")),
+			Ok(ProcessorType::Rar)
+		));
 	}
 }

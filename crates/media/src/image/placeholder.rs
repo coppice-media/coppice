@@ -8,7 +8,7 @@ use std::path::Path;
 use thumbhash::rgba_to_thumb_hash;
 use tokio::{sync::oneshot, task::spawn_blocking};
 
-use crate::filesystem::image::ProcessorError;
+use crate::image::ProcessorError;
 
 pub async fn generate_image_metadata(
 	path: &Path,

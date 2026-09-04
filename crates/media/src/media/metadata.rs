@@ -5,7 +5,7 @@ use sea_orm::{prelude::*, Set};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use crate::utils::serde::{
+use crate::serde::{
 	age_rating_deserializer, optional_f64_deserializer, optional_i32_deserializer,
 	parse_age_restriction, string_list_deserializer,
 };
