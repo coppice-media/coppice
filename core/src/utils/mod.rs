@@ -1,5 +1,4 @@
 pub mod encryption;
-pub mod serde;
 
 pub fn chain_optional_iter<T>(
 	required: impl IntoIterator<Item = T>,

@@ -1,6 +1,5 @@
 use std::fmt::Debug;
 
-use async_graphql::Union;
 use serde::{de, Deserialize, Serialize};
 
 use crate::filesystem::{
@@ -10,7 +9,8 @@ use crate::filesystem::{
 	scanner::{LibraryScanOutput, SeriesScanOutput},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, Union)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Union))]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum CoreJobOutput {
 	LibraryScan(LibraryScanOutput),
@@ -19,6 +19,48 @@ pub enum CoreJobOutput {
 	PlaceholderGeneration(PlaceholderGenerationOutput),
 	MetadataFetch(MetadataFetchJobOutput),
 	AnalyzeMedia(AnalyzeMediaOutput),
+}
+
+#[cfg(not(feature = "graphql"))]
+impl From<LibraryScanOutput> for CoreJobOutput {
+	fn from(output: LibraryScanOutput) -> Self {
+		Self::LibraryScan(output)
+	}
+}
+
+#[cfg(not(feature = "graphql"))]
+impl From<SeriesScanOutput> for CoreJobOutput {
+	fn from(output: SeriesScanOutput) -> Self {
+		Self::SeriesScan(output)
+	}
+}
+
+#[cfg(not(feature = "graphql"))]
+impl From<ThumbnailGenerationOutput> for CoreJobOutput {
+	fn from(output: ThumbnailGenerationOutput) -> Self {
+		Self::ThumbnailGeneration(output)
+	}
+}
+
+#[cfg(not(feature = "graphql"))]
+impl From<PlaceholderGenerationOutput> for CoreJobOutput {
+	fn from(output: PlaceholderGenerationOutput) -> Self {
+		Self::PlaceholderGeneration(output)
+	}
+}
+
+#[cfg(not(feature = "graphql"))]
+impl From<MetadataFetchJobOutput> for CoreJobOutput {
+	fn from(output: MetadataFetchJobOutput) -> Self {
+		Self::MetadataFetch(output)
+	}
+}
+
+#[cfg(not(feature = "graphql"))]
+impl From<AnalyzeMediaOutput> for CoreJobOutput {
+	fn from(output: AnalyzeMediaOutput) -> Self {
+		Self::AnalyzeMedia(output)
+	}
 }
 
 /// A trait to extend the output type for a job with a common interface. Job output starts

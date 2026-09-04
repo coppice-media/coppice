@@ -1,12 +1,11 @@
-use crate::{
-	filesystem::series::metadata::ProcessedSeriesMetadata, CoreError, CoreResult,
-};
+use crate::{CoreError, CoreResult};
 use models::{
 	entity::{series, series_metadata},
 	shared::enums::FileStatus,
 };
 use sea_orm::Set;
 use std::path::{Path, PathBuf};
+use stump_media::ProcessedSeriesMetadata;
 
 pub struct SeriesBuilder {
 	path: PathBuf,

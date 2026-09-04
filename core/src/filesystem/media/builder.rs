@@ -8,20 +8,15 @@ use models::{
 use sea_orm::Set;
 use uuid::Uuid;
 
-use crate::{
-	config::StumpConfig,
-	filesystem::{
-		media::process,
-		scanner::{CustomVisit, CustomVisitResult},
-		FileParts, PathUtils,
+use crate::{config::StumpConfig, CoreResult};
+use stump_media::{
+	media::{
+		generate_hashes, process, process_metadata, ProcessedFileHashes,
+		ProcessedMediaMetadata,
 	},
-	CoreResult,
+	FileParts, PathUtils,
 };
-
-use super::{
-	generate_hashes, metadata::ProcessedMediaMetadata, process_metadata,
-	ProcessedFileHashes,
-};
+use stump_scanner::{CustomVisit, CustomVisitResult};
 
 pub struct MediaBuilder {
 	path: PathBuf,
@@ -72,7 +67,7 @@ impl MediaBuilder {
 
 	pub fn build(self) -> CoreResult<BuiltMedia> {
 		let processed_entry =
-			process(&self.path, self.library_config.into(), &self.config)?;
+			process(&self.path, self.library_config.into(), &self.config.media)?;
 
 		tracing::trace!(?processed_entry, "Processed entry");
 
@@ -216,9 +211,10 @@ mod tests {
 		assert_eq!(media.extension, ActiveValue::Set("epub".to_string()));
 	}
 
+	#[cfg(feature = "pdf")]
 	#[test]
 	fn test_build_media_pdf() {
-		if crate::filesystem::media::format::pdf::PdfProcessor::renderer(&None).is_err() {
+		if stump_media::PdfProcessor::renderer(&None).is_err() {
 			eprintln!("Skipping test: PDFium is not configured or available.");
 			return;
 		}

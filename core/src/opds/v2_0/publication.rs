@@ -10,10 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use crate::{
-	filesystem::{media::get_content_type_for_page, ContentType},
-	opds::v2_0::metadata::OPDSEntryBelongsToEntityBuilder,
-	CoreError, CoreResult,
+	opds::v2_0::metadata::OPDSEntryBelongsToEntityBuilder, CoreError, CoreResult,
 };
+use stump_media::{media::get_content_type_for_page, ContentType};
 
 use super::{
 	entity::OPDSPublicationEntity,

@@ -6,7 +6,8 @@
 
 use xml::{writer::XmlEvent, EventWriter};
 
-use crate::{error::CoreResult, filesystem::ContentType};
+use crate::error::CoreResult;
+use stump_media::ContentType;
 
 use super::util::OpdsEnumStr;
 

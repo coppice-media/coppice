@@ -13,6 +13,7 @@ pub mod database;
 pub mod error;
 mod event;
 pub mod filesystem;
+pub mod ingest;
 pub mod job;
 pub mod kobo;
 pub mod opds;
@@ -27,7 +28,7 @@ use sea_orm::{
 	QuerySelect, SelectColumns, Statement,
 };
 
-pub use context::Ctx;
+pub use context::{Ctx, JobRuntime};
 pub use error::{CoreError, CoreResult};
 pub use event::CoreEvent;
 
@@ -104,6 +105,9 @@ impl StumpCore {
 		if let Some(env_oidc) = config::OidcConfig::from_env() {
 			config.oidc = Some(env_oidc);
 		}
+
+		config.finalize_media_config();
+		database::validate_pool_config(&config)?;
 
 		// Write ensure that config directory exists and write Stump.toml
 		config.write_config_dir()?;
@@ -293,13 +297,57 @@ impl StumpCore {
 		}
 	}
 
-	pub async fn init_scheduler(&self) -> Result<JobScheduler, CoreError> {
-		let ctx = self.ctx.arced();
-		let scheduler = JobScheduler::init(ctx).await?;
-		Ok(scheduler)
+	pub async fn init_scheduler(&self) -> Result<Option<JobScheduler>, CoreError> {
+		self.ctx.start_scheduler().await
 	}
 
-	pub async fn init_library_watcher(&self) -> CoreResult<()> {
-		self.ctx.library_watcher.init().await
+	/// Refreshes the scheduler after a scheduled-job configuration change.
+	pub async fn start_scheduler(&self) -> CoreResult<Option<JobScheduler>> {
+		self.ctx.start_scheduler().await
+	}
+
+	/// Stops the scheduler if one was created.
+	pub async fn stop_scheduler(&self) {
+		self.ctx.stop_scheduler().await;
+	}
+
+	pub async fn init_library_watcher(
+		&self,
+	) -> CoreResult<Option<Arc<filesystem::scanner::LibraryWatcher>>> {
+		self.ctx.init_library_watcher().await
+	}
+
+	/// Cancels jobs left running by a previous server process without creating
+	/// the lazy worker runtime.
+	pub async fn cancel_islanded_jobs(&self) -> CoreResult<()> {
+		self.ctx.cancel_islanded_jobs().await
+	}
+
+	/// Stops the Apalis monitor if it was initialized.
+	pub async fn stop_job_runtime(&self) {
+		self.ctx.stop_job_runtime().await;
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn invalid_pool_config_is_not_persisted() {
+		let tempdir = tempfile::tempdir().expect("Failed to create temporary directory");
+		let config_dir = tempdir.path().to_string_lossy().to_string();
+
+		temp_env::with_var(config::env_keys::DB_MAX_CONNECTIONS_KEY, Some("0"), || {
+			let error = StumpCore::init_config(config_dir)
+				.expect_err("zero max must be rejected");
+
+			assert!(matches!(
+				error,
+				CoreError::InitializationError(message)
+					if message.contains("db_max_connections")
+			));
+			assert!(!tempdir.path().join("Stump.toml").exists());
+		});
 	}
 }

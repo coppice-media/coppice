@@ -7,7 +7,6 @@ use crate::{
 		JobTaskOutput, WorkingState,
 	},
 };
-use async_graphql::SimpleObject;
 use models::entity::{media, media_analysis, media_metadata, series};
 use sea_orm::{prelude::*, QuerySelect};
 use serde::{Deserialize, Serialize};
@@ -37,7 +36,8 @@ pub enum AnalyzeMediaTask {
 	ProcessBook(Id),
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, Debug, SimpleObject)]
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct AnalyzeMediaOutput {
 	/// The number of pages in total that were analyzed to some extent
 	pub pages_analyzed: u64,

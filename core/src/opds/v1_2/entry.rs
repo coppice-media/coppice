@@ -11,10 +11,10 @@ use urlencoding::encode;
 use xml::{writer::XmlEvent, EventWriter};
 
 use crate::error::CoreResult;
-use crate::filesystem::media::get_content_types_for_pages;
-use crate::filesystem::{ContentType, FileParts, PathUtils};
 use crate::opds::v1_2::link::OpdsStreamLink;
 use crate::opds::v2_0::entity::OPDSPublicationEntity;
+use stump_media::media::get_content_types_for_pages;
+use stump_media::{ContentType, FileParts, PathUtils};
 
 use super::{
 	link::{OpdsLink, OpdsLinkRel, OpdsLinkType},

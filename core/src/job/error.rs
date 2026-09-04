@@ -1,7 +1,8 @@
 use models::error::EntityError;
 use sea_orm;
 
-use crate::{filesystem::error::FileError, CoreError};
+use crate::CoreError;
+use stump_media::FileError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JobError {

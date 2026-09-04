@@ -1,10 +1,8 @@
 use crate::{
-	filesystem::media::{
-		analysis::job::{AnalyzeMediaJob, AnalyzeMediaOutput},
-		analyze_page, AnalyzedPage,
-	},
+	filesystem::media::analysis::job::{AnalyzeMediaJob, AnalyzeMediaOutput},
 	job::{error::JobError, JobContext, JobExecuteLog, JobProgress, JobTaskOutput},
 };
+use stump_media::media::{analyze_page, AnalyzedPage};
 
 use std::sync::{
 	atomic::{AtomicUsize, Ordering},
@@ -74,7 +72,7 @@ async fn analyze_book_page(
 		});
 	}
 
-	let config_owned = ctx.config().clone();
+	let config_owned = ctx.config().media.clone();
 	let path_owned = path.clone();
 	let AnalyzedPage {
 		content_type,

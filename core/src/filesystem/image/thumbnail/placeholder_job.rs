@@ -1,4 +1,3 @@
-use async_graphql::SimpleObject;
 use serde::{Deserialize, Serialize};
 
 use models::entity::{library, media, series};
@@ -59,7 +58,8 @@ pub enum PlaceholderGenerationTask {
 	Library(Vec<Id>),
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, Debug, SimpleObject)]
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[serde(default, rename_all = "camelCase")]
 pub struct PlaceholderGenerationOutput {
 	/// The total number of entities that were visited

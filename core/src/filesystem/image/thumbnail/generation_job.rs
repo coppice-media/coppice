@@ -1,4 +1,3 @@
-use async_graphql::SimpleObject;
 use serde::{Deserialize, Serialize};
 
 use models::{
@@ -89,7 +88,8 @@ pub enum ThumbnailGenerationTask {
 	Library(Vec<Id>),
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, Debug, SimpleObject)]
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 // Note: This container attribute is used to ensure future additions to the struct do not break deserialization
 #[serde(default, rename_all = "camelCase")]
 pub struct ThumbnailGenerationOutput {

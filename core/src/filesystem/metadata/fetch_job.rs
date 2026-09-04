@@ -1,7 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use async_graphql::SimpleObject;
 use metadata_integrations::{MatchCandidate, SearchQuery};
 use models::{
 	entity::{
@@ -96,7 +95,8 @@ pub enum MetadataFetchTask {
 	},
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, Debug, SimpleObject)]
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[serde(default, rename_all = "camelCase")]
 pub struct MetadataFetchJobOutput {
 	/// Total number of entities processed

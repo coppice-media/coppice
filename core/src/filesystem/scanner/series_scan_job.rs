@@ -1,9 +1,9 @@
 use std::{
 	collections::{HashMap, VecDeque},
 	path::{Path, PathBuf},
+	sync::Arc,
 };
 
-use async_graphql::SimpleObject;
 use models::{
 	entity::{library, library_config, media, series},
 	shared::enums::FileStatus,
@@ -25,13 +25,16 @@ use crate::{
 	CoreEvent,
 };
 
+use stump_scanner::{
+	walk_series, BookVisitOperation, ScanOptions, WalkedSeries, WalkerCtx,
+};
+
 use super::{
-	options::BookVisitOperation,
+	store::SeaOrmScanSource,
 	utils::{
 		handle_missing_media, handle_restored_media, safely_build_and_insert_media,
 		visit_and_update_media, MediaBuildOperation, MediaOperationOutput,
 	},
-	walk_series, ScanOptions, WalkedSeries, WalkerCtx,
 };
 
 #[allow(clippy::enum_variant_names)]
@@ -68,7 +71,8 @@ impl SeriesScanJob {
 
 // TODO: emit progress events. This job isn't exposed in the UI yet, so it's not a big deal for now
 
-#[derive(Clone, Serialize, Deserialize, Default, Debug, SimpleObject)]
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[serde(rename_all = "camelCase")]
 pub struct SeriesScanOutput {
 	/// The number of files to scan relative to the series root
@@ -161,18 +165,23 @@ impl JobLifecycle for SeriesScanJob {
 			ignored_files,
 			skipped_files,
 			..
-		} = walk_series(
-			PathBuf::from(self.path.clone()).as_path(),
-			WalkerCtx {
-				db: ctx.apalis_state.conn.clone(),
-				ignore_rules,
-				max_depth,
-				options: self.options,
-				dir_mtimes: HashMap::new(),
-				series_id: Some(self.id.clone()),
-			},
-		)
-		.await?;
+		} = {
+			let scan_source = SeaOrmScanSource::new(ctx.apalis_state.conn.clone());
+			walk_series(
+				PathBuf::from(self.path.clone()).as_path(),
+				&scan_source,
+				WalkerCtx {
+					ignore_rules,
+					max_depth,
+					options: self.options,
+					dir_mtimes: Arc::new(HashMap::new()),
+					library_id: self.library_id().unwrap_or_default(),
+					series_id: Some(self.id.clone()),
+				},
+			)
+			.await
+			.map_err(|error| JobError::Unknown(error.to_string()))?
+		};
 
 		if series_is_missing {
 			let _ = handle_missing_series(ctx.conn(), self.path.as_str()).await;

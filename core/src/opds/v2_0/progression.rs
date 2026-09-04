@@ -270,6 +270,7 @@ impl OPDSProgressionInput {
 			chapter_title: String::new(),
 			locations,
 			text,
+			kobo_span: None,
 		})
 	}
 }

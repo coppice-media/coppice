@@ -1,6 +1,5 @@
 use std::env;
 
-use async_graphql::SimpleObject;
 use serde::{Deserialize, Serialize};
 
 use super::env_keys::*;
@@ -8,8 +7,9 @@ use super::env_keys::*;
 const REQUIRED_SCOPES: &str = "email";
 
 /// Configuration for OpenID Connect (OIDC) authentication
-#[derive(Clone, Serialize, Deserialize, PartialEq, SimpleObject)]
-#[graphql(name = "OidcConfig")]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "OidcConfig"))]
 pub struct OidcConfig {
 	/// Whether to enable OIDC authentication
 	#[serde(default)]
@@ -22,7 +22,7 @@ pub struct OidcConfig {
 	pub issuer_url: String,
 	/// The client secret
 	#[serde(default)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub client_secret: String,
 	/// Additional scopes to request (comma-separated)
 	/// Default: "openid,email,profile"
@@ -39,7 +39,7 @@ pub struct OidcConfig {
 	pub extra_audiences: Vec<String>,
 	/// Path to a CA certificate file (PEM-encoded) to trust when connecting to the OIDC issuer
 	#[serde(default)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub ca_cert_file: Option<String>,
 }
 

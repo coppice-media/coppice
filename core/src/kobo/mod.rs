@@ -16,6 +16,49 @@ pub fn native_kobo_resources() -> &'static serde_json::Value {
 	})
 }
 
+/// Rewrite resource URLs used by a Kobo device for books owned by this Stump
+/// instance. Store-only resources intentionally remain untouched.
+pub fn rewrite_kobo_resources(
+	resources: &mut serde_json::Value,
+	base_url: &str,
+	api_key: &str,
+) {
+	let prefix = format!("{}/kobo/{}", base_url.trim_end_matches('/'), api_key);
+	let local_resources = [
+		("add_entitlement", "/v1/library/{RevisionIds}"),
+		("delete_entitlement", "/v1/library/{Ids}"),
+		("library_book", "/v1/user/library/books/{LibraryItemId}"),
+		("library_items", "/v1/user/library"),
+		("library_metadata", "/v1/library/{Ids}/metadata"),
+		("library_sync", "/v1/library/sync"),
+		("reading_state", "/v1/library/{Ids}/state"),
+		("tags", "/v1/library/tags"),
+		("tag_items", "/v1/library/tags/{TagId}/Items"),
+		("rename_tag", "/v1/library/tags/{TagId}"),
+		("delete_tag", "/v1/library/tags/{TagId}"),
+		("delete_tag_items", "/v1/library/tags/{TagId}/items/delete"),
+		("user_profile", "/v1/user/profile"),
+		(
+			"content_access_book",
+			"/v1/products/books/{ProductId}/access",
+		),
+		(
+			"update_accessibility_to_preview",
+			"/v1/library/{EntitlementIds}/preview",
+		),
+	];
+
+	let Some(object) = resources.as_object_mut() else {
+		return;
+	};
+	for (key, path) in local_resources {
+		object.insert(
+			key.to_string(),
+			serde_json::Value::String(format!("{prefix}{path}")),
+		);
+	}
+}
+
 // yoinked from -> https://github.com/gotson/komga/blob/master/komga/src/main/kotlin/org/gotson/komga/infrastructure/kobo/KoboProxy.kt#L148-L341
 const NATIVE_KOBO_RESOURCES_JSON: &str = r#"{
   "account_page": "https://www.kobo.com/account/settings",
@@ -204,3 +247,36 @@ const NATIVE_KOBO_RESOURCES_JSON: &str = r#"{
   "userguide_host": "https://ereaderfiles.kobo.com",
   "wishlist_page": "https://www.kobo.com/{region}/{language}/account/wishlist"
 }"#;
+#[cfg(test)]
+mod tests {
+	use super::rewrite_kobo_resources;
+
+	#[test]
+	fn rewrites_local_resources_and_preserves_store_resources() {
+		let mut resources = serde_json::json!({
+			"reading_state": "https://storeapi.kobo.com/old-state",
+			"library_sync": "https://storeapi.kobo.com/old-sync",
+			"tags": "https://storeapi.kobo.com/old-tags",
+			"add_device": "https://storeapi.kobo.com/v1/user/add-device",
+		});
+
+		rewrite_kobo_resources(&mut resources, "https://stump.example.test/", "api-key");
+
+		assert_eq!(
+			resources["reading_state"],
+			"https://stump.example.test/kobo/api-key/v1/library/{Ids}/state"
+		);
+		assert_eq!(
+			resources["library_sync"],
+			"https://stump.example.test/kobo/api-key/v1/library/sync"
+		);
+		assert_eq!(
+			resources["tags"],
+			"https://stump.example.test/kobo/api-key/v1/library/tags"
+		);
+		assert_eq!(
+			resources["add_device"],
+			"https://storeapi.kobo.com/v1/user/add-device"
+		);
+	}
+}

@@ -1,13 +1,17 @@
 use models::{
 	entity::{media, media_metadata, reading_session, user::AuthUser},
 	prefixer::{parse_query_to_model, parse_query_to_model_optional},
-	shared::enums::ReadingStatus,
+	shared::{
+		enums::ReadingStatus,
+		readium::{ReadiumLocation, ReadiumLocator},
+	},
 };
 use rust_decimal::prelude::ToPrimitive;
 use sea_orm::{
 	prelude::*,
 	sea_query::{Condition, Expr, Query, SimpleExpr, SubQueryStatement},
-	FromQueryResult, JoinType, QuerySelect, Select,
+	ActiveModelTrait, ActiveValue, ConnectionTrait, EntityTrait, FromQueryResult,
+	IntoActiveModel, JoinType, QueryFilter, QuerySelect, Select, Set,
 };
 
 use crate::kobo::sync_types::*;
@@ -18,7 +22,9 @@ pub struct ReadingSession {
 	pub created_at: DateTimeWithTimeZone,
 	pub updated_at: Option<DateTimeWithTimeZone>,
 	pub end_percentage: Option<Decimal>,
+	pub end_locator: Option<ReadiumLocator>,
 	pub status: ReadingStatus,
+	pub kobo_state: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +107,14 @@ fn apply_reading_session_joins(
 				reading_session::Column::EndPercentage,
 			)),
 			"reading_sessionsend_percentage",
+		)
+		.column_as(
+			Expr::col((reading_session::Entity, reading_session::Column::EndLocator)),
+			"reading_sessionsend_locator",
+		)
+		.column_as(
+			Expr::col((reading_session::Entity, reading_session::Column::KoboState)),
+			"reading_sessionskobo_state",
 		)
 		.column_as(
 			Expr::col((reading_session::Entity, reading_session::Column::Status)),
@@ -194,6 +208,14 @@ const DUMMY_UUID: &str = "00000000-0000-0000-0000-000000000001";
 
 impl BookMetadata {
 	pub fn from_media(m: &MediaWithMetadataAndReadingSessions, book_url: String) -> Self {
+		Self::from_media_with_format(m, book_url, Format::EPUB3)
+	}
+
+	pub fn from_media_with_format(
+		m: &MediaWithMetadataAndReadingSessions,
+		book_url: String,
+		format: Format,
+	) -> Self {
 		let media_id = &m.media.id;
 
 		let writers = m.metadata.as_ref().and_then(|mm| mm.writers.clone());
@@ -243,7 +265,7 @@ impl BookMetadata {
 				drm_type: "None".to_string(),
 				// this seems to be unrelated to the EPUB 3 spec.
 				// the Kobo ignores books with format: "EPUB".
-				format: Format::EPUB3,
+				format,
 				size: u64::try_from(m.media.size).unwrap_or(0),
 				platform: "Generic".to_string(),
 				url: book_url,
@@ -279,6 +301,267 @@ impl BookMetadata {
 				.unwrap_or(m.media.name.clone()),
 			work_id: media_id.clone(),
 		}
+	}
+}
+
+/// The normalized projection of a Kobo `CurrentBookmark` and `StatusInfo`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KoboReadingStateProjection {
+	pub locator: Option<ReadiumLocator>,
+	pub progression: Option<Decimal>,
+	pub total_progression: Option<Decimal>,
+	pub status: Option<ReadingStatus>,
+}
+
+fn percent_to_progression(value: Option<f32>) -> Option<Decimal> {
+	value
+		.and_then(|value| Decimal::try_from(value as f64).ok())
+		.map(|value| value / Decimal::new(100, 0))
+}
+
+/// Map the fields understood by the Kobo ReadingState API onto Stump's
+/// canonical Readium locator and reading-session values.
+///
+/// Kobo spans are only projected when their location explicitly declares the
+/// `KoboSpan` type. Unknown location types remain in the retained raw payload
+/// rather than being presented as a Readium anchor.
+pub fn map_kobo_reading_state(
+	update: &ReadingStateUpdate,
+) -> Result<KoboReadingStateProjection, String> {
+	let (progression, total_progression, locator) =
+		if let Some(bookmark) = update.current_bookmark.as_ref() {
+			let progression =
+				percent_to_progression(bookmark.content_source_progress_percent);
+			let total_progression = percent_to_progression(bookmark.progress_percent);
+
+			let locator = bookmark.location.as_ref().and_then(|location| {
+				let source = location.source.as_deref()?.trim();
+				if source.is_empty() {
+					return None;
+				}
+
+				let kobo_span = location
+					.type_
+					.as_deref()
+					.filter(|kind| kind.eq_ignore_ascii_case("KoboSpan"))
+					.and_then(|_| location.value.clone());
+
+				Some(ReadiumLocator {
+					chapter_title: String::new(),
+					href: source.to_string(),
+					title: None,
+					locations: Some(ReadiumLocation {
+						fragments: None,
+						progression,
+						position: None,
+						total_progression,
+						css_selector: None,
+						partial_cfi: None,
+					}),
+					text: None,
+					kobo_span,
+					r#type: "application/xhtml+xml".to_string(),
+				})
+			});
+
+			(progression, total_progression, locator)
+		} else {
+			(None, None, None)
+		};
+
+	let status = update
+		.status_info
+		.as_ref()
+		.and_then(|status_info| status_info.status.as_deref())
+		.map(|status| match status {
+			"ReadyToRead" => Ok(ReadingStatus::NotStarted),
+			"Reading" => Ok(ReadingStatus::Reading),
+			"Finished" => Ok(ReadingStatus::Finished),
+			other => Err(format!("unsupported Kobo reading status: {other}")),
+		})
+		.transpose()?;
+
+	Ok(KoboReadingStateProjection {
+		locator,
+		progression,
+		total_progression,
+		status,
+	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::map_kobo_reading_state;
+	use crate::kobo::sync_types::ReadingStateUpdateRequest;
+	use models::shared::enums::ReadingStatus;
+	use rust_decimal::Decimal;
+
+	#[test]
+	fn maps_kobo_span_location_and_percentages() {
+		let update: super::ReadingStateUpdate =
+			serde_json::from_value(serde_json::json!({
+				"CurrentBookmark": {
+					"ProgressPercent": 73.0,
+					"ContentSourceProgressPercent": 42.0,
+					"Location": {
+						"Value": "kobo.3.7",
+						"Type": "KoboSpan",
+						"Source": "chapter.xhtml"
+					}
+				},
+				"StatusInfo": { "Status": "Reading" }
+			}))
+			.expect("valid Kobo state");
+
+		let projection = map_kobo_reading_state(&update).expect("state maps");
+		assert_eq!(projection.progression, Some(Decimal::new(42, 2)));
+		assert_eq!(projection.total_progression, Some(Decimal::new(73, 2)));
+		assert_eq!(projection.status, Some(ReadingStatus::Reading));
+		let locator = projection.locator.expect("locator maps");
+		assert_eq!(locator.href, "chapter.xhtml");
+		assert_eq!(locator.kobo_span.as_deref(), Some("kobo.3.7"));
+	}
+
+	#[test]
+	fn maps_plain_location_without_kobo_span_anchor() {
+		let update: super::ReadingStateUpdate =
+			serde_json::from_value(serde_json::json!({
+				"CurrentBookmark": {
+					"ProgressPercent": 20.0,
+					"ContentSourceProgressPercent": 11.0,
+					"Location": {
+						"Value": "epubcfi(/6/4)",
+						"Type": "ContentCFI",
+						"Source": "chapter.xhtml"
+					}
+				},
+				"StatusInfo": { "Status": "Finished" }
+			}))
+			.expect("valid Kobo state");
+
+		let projection = map_kobo_reading_state(&update).expect("state maps");
+		assert_eq!(projection.status, Some(ReadingStatus::Finished));
+		let locator = projection.locator.expect("locator maps");
+		assert_eq!(locator.href, "chapter.xhtml");
+		assert_eq!(locator.kobo_span, None);
+		assert_eq!(
+			locator
+				.locations
+				.and_then(|locations| locations.progression),
+			Some(Decimal::new(11, 2))
+		);
+	}
+
+	#[test]
+	fn rejects_unknown_status_without_silent_projection() {
+		let update: super::ReadingStateUpdate =
+			serde_json::from_value(serde_json::json!({
+				"StatusInfo": { "Status": "Paused" }
+			}))
+			.expect("valid Kobo state");
+		let error = map_kobo_reading_state(&update).expect_err("unknown status rejected");
+		assert!(error.contains("Paused"));
+	}
+
+	#[test]
+	fn update_request_reads_pascal_case_sections() {
+		let request: ReadingStateUpdateRequest =
+			serde_json::from_value(serde_json::json!({
+				"ReadingStates": [{ "StatusInfo": { "Status": "Reading" } }]
+			}))
+			.expect("valid Kobo request");
+		assert_eq!(request.reading_states.len(), 1);
+	}
+}
+
+fn add_device_id(active: &mut reading_session::ActiveModel, device_id: Option<String>) {
+	let Some(device_id) = device_id.filter(|id| !id.is_empty()) else {
+		return;
+	};
+
+	let current = match &active.device_ids {
+		ActiveValue::Set(value) | ActiveValue::Unchanged(value) => value.as_ref(),
+		ActiveValue::NotSet => None,
+	};
+	let mut ids = current
+		.map(|reading_session::DeviceIds(ids)| ids.clone())
+		.unwrap_or_default();
+	if !ids.contains(&device_id) {
+		ids.push(device_id);
+		active.device_ids = Set(Some(reading_session::DeviceIds(ids)));
+	}
+}
+
+/// Persist a Kobo state request in the existing reading-session model.
+///
+/// The complete request body is retained in `kobo_state`; normalized
+/// progression and the Readium locator are updated independently so later
+/// non-Kobo clients can still consume the session.
+pub async fn persist_kobo_reading_state<C: ConnectionTrait>(
+	conn: &C,
+	user: &AuthUser,
+	media_id: &str,
+	update: &ReadingStateUpdate,
+	raw_payload: serde_json::Value,
+	device_id: Option<String>,
+) -> Result<reading_session::Model, DbErr> {
+	let projection = map_kobo_reading_state(update).map_err(DbErr::Custom)?;
+	let latest = reading_session::Entity::find_latest_for_user_and_media(user, media_id)
+		.one(conn)
+		.await?;
+
+	let incoming_status = projection.status.unwrap_or(ReadingStatus::Reading);
+	let starts_new_readthrough = latest.as_ref().is_some_and(|session| {
+		session.is_finalized() && incoming_status == ReadingStatus::Reading
+	});
+
+	// A finalized session followed by fresh reading activity starts a new
+	// readthrough; otherwise the latest session is continued.
+	let continued = match latest {
+		Some(session) if !starts_new_readthrough => Some(session),
+		_ => None,
+	};
+
+	match continued {
+		None => {
+			let readthrough_number =
+				models::services::reading_progress::derive_readthrough_number(
+					conn, &user.id, media_id,
+				)
+				.await?;
+			let locator = projection.locator.clone();
+			let mut active = reading_session::ActiveModel {
+				session_date: Set(Utc::now().date_naive()),
+				start_locator: Set(locator.clone()),
+				end_locator: Set(locator),
+				start_percentage: Set(Some(Decimal::new(0, 0))),
+				end_percentage: Set(projection.total_progression),
+				elapsed_seconds: Set(Some(0)),
+				readthrough_number: Set(readthrough_number),
+				status: Set(incoming_status),
+				kobo_state: Set(Some(raw_payload)),
+				media_id: Set(media_id.to_string()),
+				user_id: Set(user.id.clone()),
+				..Default::default()
+			};
+			add_device_id(&mut active, device_id);
+			active.insert(conn).await
+		},
+		Some(session) => {
+			let mut active = session.into_active_model();
+			if let Some(locator) = projection.locator {
+				active.end_locator = Set(Some(locator));
+			}
+			if let Some(total_progression) = projection.total_progression {
+				active.end_percentage = Set(Some(total_progression));
+			}
+			if let Some(status) = projection.status {
+				active.status = Set(status);
+			}
+			active.kobo_state = Set(Some(raw_payload));
+			add_device_id(&mut active, device_id);
+			active.update(conn).await
+		},
 	}
 }
 
@@ -333,17 +616,76 @@ impl ReadingState {
 
 	pub fn from_active_reading_session(media_id: String, rs: &ReadingSession) -> Self {
 		let updated_or_started_at = rs.updated_at.unwrap_or(rs.created_at).to_utc();
-		let percent_complete = rs
+		let stored_percent = rs
 			.end_percentage
 			.and_then(|pc| pc.to_f32().map(|pc| pc * 100.0));
+		let stored_content_source_percent = rs
+			.end_locator
+			.as_ref()
+			.and_then(|locator| locator.locations.as_ref())
+			.and_then(|locations| locations.progression)
+			.and_then(|progression| progression.to_f32().map(|value| value * 100.0));
+
+		let raw_update = rs
+			.kobo_state
+			.as_ref()
+			.and_then(|raw| {
+				serde_json::from_value::<ReadingStateUpdateRequest>(raw.clone()).ok()
+			})
+			.and_then(|request| request.reading_states.into_iter().next());
+
+		let percent_complete = raw_update
+			.as_ref()
+			.and_then(|update| {
+				update
+					.current_bookmark
+					.as_ref()
+					.and_then(|bookmark| bookmark.progress_percent)
+			})
+			.or(stored_percent);
+		let content_source_progress_percent = raw_update
+			.as_ref()
+			.and_then(|update| {
+				update
+					.current_bookmark
+					.as_ref()
+					.and_then(|bookmark| bookmark.content_source_progress_percent)
+			})
+			.or(stored_content_source_percent)
+			.or(percent_complete);
+
+		let location = raw_update
+			.as_ref()
+			.and_then(|update| update.current_bookmark.as_ref())
+			.and_then(|bookmark| bookmark.location.as_ref())
+			.map(|location| Location {
+				value: location.value.clone(),
+				type_: location.type_.clone(),
+				source: location.source.clone().unwrap_or_default(),
+			})
+			.or_else(|| {
+				rs.end_locator.as_ref().and_then(|locator| {
+					locator.kobo_span.as_ref().map(|span| Location {
+						value: Some(span.clone()),
+						type_: Some("KoboSpan".to_string()),
+						source: locator.href.clone(),
+					})
+				})
+			});
+
+		let status = match rs.status {
+			ReadingStatus::Finished => Status::Finished,
+			ReadingStatus::NotStarted | ReadingStatus::Abandoned => Status::ReadyToRead,
+			ReadingStatus::Reading => Status::Reading,
+		};
 
 		ReadingState {
-			created: Utc::now(),
+			created: rs.created_at.to_utc(),
 			current_bookmark: CurrentBookmark {
 				last_modified: updated_or_started_at,
 				progress_percent: percent_complete,
-				content_source_progress_percent: percent_complete,
-				location: None, // this is where the Kobo span will go once we are able to compute it.
+				content_source_progress_percent,
+				location,
 			},
 			entitlement_id: media_id,
 			last_modified: updated_or_started_at,
@@ -353,8 +695,12 @@ impl ReadingState {
 			},
 			status_info: StatusInfo {
 				last_modified: updated_or_started_at,
-				status: Status::Reading,
-				times_started_reading: 1,
+				status,
+				times_started_reading: if matches!(rs.status, ReadingStatus::Reading) {
+					1
+				} else {
+					0
+				},
 			},
 		}
 	}
@@ -368,6 +714,11 @@ impl BookEntitlementContainer {
 			m.reading_session.as_ref(),
 			m.finished_reading_session_last_completed_at,
 		) {
+			// Kobo's ReadyToRead state maps to the explicit NotStarted
+			// session status rather than an active reading session.
+			(Some(rs), _) if rs.status == ReadingStatus::NotStarted => {
+				ReadingState::unread(media_id.to_string())
+			},
 			// latest session was abandoned but there is a prior completion
 			(Some(rs), Some(last_completed_at))
 				if rs.status == ReadingStatus::Abandoned =>
@@ -427,7 +778,7 @@ impl BookEntitlementContainer {
 }
 
 #[cfg(test)]
-mod tests {
+mod persistence_tests {
 	use models::entity::user;
 	use sea_orm::DbConn;
 	use tests::db::test_database;

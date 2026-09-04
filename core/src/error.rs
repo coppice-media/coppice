@@ -53,6 +53,8 @@ pub enum CoreError {
 	JobInitializationError(String),
 	#[error("{0}")]
 	InternalError(String),
+	#[error("Feature disabled: {0}")]
+	FeatureDisabled(&'static str),
 	#[error("This feature is not yet implemented: {0}")]
 	UnImplemented(String),
 	#[error("An object failed to (de)serialize: {0}")]
@@ -61,6 +63,15 @@ pub enum CoreError {
 	Unknown(String),
 }
 
+impl From<stump_media::FileError> for CoreError {
+	fn from(error: stump_media::FileError) -> Self {
+		match error {
+			stump_media::FileError::FileIoError(err) => Self::IoError(err),
+			stump_media::FileError::UnknownError(err) => Self::Unknown(err),
+			error => Self::InternalError(error.to_string()),
+		}
+	}
+}
 impl From<chrono::ParseError> for CoreError {
 	fn from(error: chrono::ParseError) -> Self {
 		Self::InternalError(error.to_string())

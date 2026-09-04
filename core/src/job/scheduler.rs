@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 
 use chrono::Utc;
 use croner::Cron;
@@ -11,23 +11,46 @@ use crate::filesystem::metadata::MetadataFetchJobParams;
 use crate::job::stump_job::StumpJob;
 use crate::{CoreError, CoreResult, Ctx};
 
-/// A scheduler that loads cron-based jobs and spawns them accordingly
+/// A scheduler that loads cron-based jobs and spawns them accordingly.
+///
+/// The inner handle collection is shared so a server-owned handle and the
+/// context's refresh hook always refer to the same loops.
+#[derive(Clone)]
 #[must_use = "dropping the JobScheduler aborts all scheduled job loops"]
 pub struct JobScheduler {
-	handles: Vec<tokio::task::JoinHandle<()>>,
+	inner: Arc<JobSchedulerInner>,
+}
+
+struct JobSchedulerInner {
+	handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl JobScheduler {
-	pub async fn init(ctx: Arc<Ctx>) -> CoreResult<Self> {
+	/// Loads enabled scheduled jobs. No scheduler or task is created when no
+	/// valid enabled row exists.
+	pub async fn init(ctx: Arc<Ctx>) -> CoreResult<Option<Self>> {
+		let handles = Self::load_handles(ctx).await?;
+		if handles.is_empty() {
+			tracing::info!("No enabled scheduled jobs; scheduler remains idle");
+			return Ok(None);
+		}
+
+		let scheduler = Self {
+			inner: Arc::new(JobSchedulerInner {
+				handles: Mutex::new(handles),
+			}),
+		};
+		tracing::info!(job_count = scheduler.job_count(), "Scheduler initialized");
+		Ok(Some(scheduler))
+	}
+
+	async fn load_handles(ctx: Arc<Ctx>) -> CoreResult<Vec<tokio::task::JoinHandle<()>>> {
 		let jobs = scheduled_job::Entity::find()
 			.filter(scheduled_job::Column::Enabled.eq(true))
 			.all(ctx.conn.as_ref())
 			.await?;
 
-		let mut scheduler = Self {
-			handles: Vec::with_capacity(jobs.len()),
-		};
-
+		let mut handles = Vec::with_capacity(jobs.len());
 		for job in jobs {
 			match Cron::from_str(&job.schedule) {
 				Ok(cron) => {
@@ -38,9 +61,8 @@ impl JobScheduler {
 						schedule = %job.schedule,
 						"Starting scheduled job"
 					);
-					let ctx = Arc::clone(&ctx);
-					let handle = tokio::spawn(cron_loop(job, cron, ctx));
-					scheduler.handles.push(handle);
+					let ctx = Arc::downgrade(&ctx);
+					handles.push(tokio::spawn(cron_loop(job, cron, ctx)));
 				},
 				Err(error) => {
 					// TODO: Persisted log for UI to see
@@ -55,19 +77,47 @@ impl JobScheduler {
 			}
 		}
 
-		tracing::info!(job_count = scheduler.handles.len(), "Scheduler initialized");
+		Ok(handles)
+	}
 
-		Ok(scheduler)
+	/// Replaces the active loops with the currently enabled scheduled-job rows.
+	pub async fn reload(&self, ctx: Arc<Ctx>) -> CoreResult<bool> {
+		let handles = Self::load_handles(ctx).await?;
+		let has_jobs = !handles.is_empty();
+		let mut current = self.inner.handles.lock().expect("scheduler mutex poisoned");
+		for handle in current.drain(..) {
+			handle.abort();
+		}
+		*current = handles;
+		tracing::info!(job_count = current.len(), "Scheduler reloaded");
+		Ok(has_jobs)
 	}
 
 	pub fn job_count(&self) -> usize {
-		self.handles.len()
+		self.inner
+			.handles
+			.lock()
+			.expect("scheduler mutex poisoned")
+			.len()
+	}
+
+	/// Aborts all scheduled loops immediately.
+	pub fn stop(&self) {
+		let mut handles = self.inner.handles.lock().expect("scheduler mutex poisoned");
+		for handle in handles.drain(..) {
+			handle.abort();
+		}
 	}
 }
 
-impl Drop for JobScheduler {
+impl Drop for JobSchedulerInner {
 	fn drop(&mut self) {
-		for handle in &self.handles {
+		for handle in self
+			.handles
+			.get_mut()
+			.expect("scheduler mutex poisoned")
+			.drain(..)
+		{
 			handle.abort();
 		}
 	}
@@ -75,7 +125,7 @@ impl Drop for JobScheduler {
 
 /// The main loop for a single scheduled job based on its cron expression
 #[tracing::instrument(fields(job_id = %job.id, job_name = %job.name), skip(ctx))]
-async fn cron_loop(job: scheduled_job::Model, cron: Cron, ctx: Arc<Ctx>) {
+async fn cron_loop(job: scheduled_job::Model, cron: Cron, ctx: Weak<Ctx>) {
 	loop {
 		let now = Utc::now();
 		let next = match cron.find_next_occurrence(&now, false) {
@@ -95,6 +145,9 @@ async fn cron_loop(job: scheduled_job::Model, cron: Cron, ctx: Arc<Ctx>) {
 
 		tokio::time::sleep(duration).await;
 
+		let Some(ctx) = ctx.upgrade() else {
+			return;
+		};
 		tracing::info!("Firing scheduled job");
 
 		if let Err(error) = dispatch(&job, &ctx).await {

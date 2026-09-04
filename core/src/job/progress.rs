@@ -2,14 +2,14 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use super::JobStatus;
-use async_graphql::SimpleObject;
 
 /// An update event that is emitted by a job
-#[derive(Debug, Clone, Deserialize, Serialize, SimpleObject)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct JobUpdate {
 	pub id: String,
 	#[serde(flatten)]
-	#[graphql(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(flatten))]
 	pub payload: JobProgress,
 }
 
@@ -21,7 +21,8 @@ pub struct JobUpdate {
 /// where the client will ignore any fields that are not present. This is done so all internal ops
 /// can be done without needing to know the full state of the job.
 #[skip_serializing_none]
-#[derive(Debug, Clone, Default, Deserialize, Serialize, SimpleObject)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[serde(rename_all = "camelCase")]
 pub struct JobProgress {
 	/// The status of the job

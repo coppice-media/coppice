@@ -6,7 +6,7 @@ use models::entity::{library, series};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use crate::filesystem::ContentType;
+use stump_media::ContentType;
 
 use super::{
 	properties::{OPDSProperties, AUTH_ROUTE},

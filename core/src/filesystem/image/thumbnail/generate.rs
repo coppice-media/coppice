@@ -16,18 +16,17 @@ use tokio::{fs, sync::oneshot, task::spawn_blocking};
 
 use crate::{
 	config::StumpConfig,
-	filesystem::{
-		image::{
-			generate_image_metadata_from_bytes,
-			thumbnail::placeholder::generate_image_metadata, GenericImageProcessor,
-			ImageProcessor, PlaceholderGenerationJob, PlaceholderGenerationOutput,
-			ProcessorError, ThumbnailGenerationJob, ThumbnailGenerationOutput,
-			WebpProcessor,
-		},
-		media::{get_page, get_page_async},
-		FileError,
+	filesystem::image::thumbnail::{
+		PlaceholderGenerationJob, PlaceholderGenerationOutput, ThumbnailGenerationJob,
+		ThumbnailGenerationOutput,
 	},
 	job::{JobContext, JobExecuteLog, JobTaskOutput},
+};
+use stump_media::media::{get_page, get_page_async};
+use stump_media::FileError;
+use stump_media::{
+	generate_image_metadata, generate_image_metadata_from_bytes, GenericImageProcessor,
+	ImageProcessor, ProcessorError, WebpProcessor,
 };
 
 /// An error enum for thumbnail generation errors
@@ -74,7 +73,7 @@ pub type GenerateOutput = (Vec<u8>, PathBuf, DidGenerate);
 fn do_generate_book_thumbnail(
 	book_path: &str,
 	file_name: &str,
-	config: &StumpConfig,
+	config: &stump_media::MediaConfig,
 	options: ImageProcessorOptions,
 ) -> Result<GenerateOutput, ProcessorError> {
 	let (_, page_data) = get_page(book_path, options.page.unwrap_or(1), config)?;
@@ -115,7 +114,7 @@ pub async fn generate_book_thumbnail(
 	let file_path = if let Some(stored_path) = &book.thumbnail_path {
 		PathBuf::from(stored_path.clone())
 	} else {
-		core_config.get_thumbnails_dir().join(format!(
+		core_config.media.get_thumbnails_dir().join(format!(
 			"{}.{}",
 			file_name,
 			image_options.format.extension()
@@ -152,7 +151,7 @@ pub async fn generate_book_thumbnail(
 			let result = do_generate_book_thumbnail(
 				&book_path,
 				&file_name,
-				&core_config,
+				&core_config.media,
 				image_options,
 			);
 			let send_result = tx.send(result);
@@ -259,6 +258,7 @@ where
 
 	let dest_path = ctx
 		.config()
+		.media
 		.get_thumbnails_dir()
 		.join(format!("{}.{}", entity_id, ext));
 
@@ -546,7 +546,7 @@ pub async fn generate_book_placeholder(
 			fs::read(&path).await?
 		},
 		_ => {
-			let (_, data) = get_page_async(&book.path, 1, ctx.config()).await?;
+			let (_, data) = get_page_async(&book.path, 1, &ctx.config().media).await?;
 			data
 		},
 	};
@@ -592,7 +592,8 @@ async fn get_series_thumbnail_candidate(
 			fs::read(&path).await?
 		},
 		_ => {
-			let (_, data) = get_page_async(&first_book.path, 1, ctx.config()).await?;
+			let (_, data) =
+				get_page_async(&first_book.path, 1, &ctx.config().media).await?;
 			data
 		},
 	};
@@ -680,7 +681,7 @@ async fn get_library_thumbnail_candidate(
 			fs::read(&path).await?
 		},
 		_ => {
-			let (_, data) = get_page_async(&book.path, 1, ctx.config()).await?;
+			let (_, data) = get_page_async(&book.path, 1, &ctx.config().media).await?;
 			data
 		},
 	};

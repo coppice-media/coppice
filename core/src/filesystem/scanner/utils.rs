@@ -5,7 +5,6 @@ use std::{
 	time::Instant,
 };
 
-use chrono::{DateTime, Utc};
 use futures::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
 use models::{
 	entity::{library_config, media, media_metadata, media_tag, series, tag},
@@ -18,7 +17,6 @@ use sea_orm::{
 	Iterable, Set, TransactionTrait,
 };
 use tokio::task::spawn_blocking;
-use walkdir::DirEntry;
 
 use crate::{
 	config::StumpConfig,
@@ -27,32 +25,80 @@ use crate::{
 	event::CreatedMedia,
 	filesystem::{
 		media::{BuiltMedia, MediaBuilder},
-		scanner::options::{BookVisitOperation, CustomVisitResult},
 		series::{BuiltSeries, SeriesBuilder},
 	},
 	job::{error::JobError, JobContext, JobExecuteLog, JobProgress},
 	CoreEvent,
 };
-
-use super::{options::BookVisitResult, tag_cache::TagCache};
+use stump_scanner::{BookVisitOperation, CustomVisitResult, TagCache};
 
 const MAX_INSERT_CHUNK_SIZE: usize = 250;
+async fn build_tag_cache(
+	conn: &DatabaseConnection,
+	all_tag_names: HashSet<String>,
+) -> CoreResult<TagCache> {
+	if all_tag_names.is_empty() {
+		return Ok(TagCache::default());
+	}
 
-pub(crate) fn file_updated_since_scan(
-	entry: &DirEntry,
-	last_modified_at: &DateTimeWithTimeZone,
-) -> bool {
-	if let Ok(Ok(system_time)) = entry.metadata().map(|m| m.modified()) {
-		let system_time_converted: DateTime<Utc> = system_time.into();
-		let media_modified_at = last_modified_at.with_timezone(&Utc);
-		tracing::trace!(?system_time_converted, ?media_modified_at);
-		system_time_converted > media_modified_at
-	} else {
-		tracing::error!(
-			path = ?entry.path(),
-			"Error occurred trying to read modified date for media",
-		);
-		true
+	let names: Vec<_> = all_tag_names.iter().cloned().collect();
+	let mut map = HashMap::with_capacity(names.len());
+
+	for chunk in names.chunks(SQLITE_BIND_LIMIT) {
+		let rows = tag::Entity::find()
+			.filter(tag::Column::Name.is_in(chunk.to_vec()))
+			.all(conn)
+			.await?;
+
+		for row in rows {
+			map.insert(row.name, row.id);
+		}
+	}
+
+	let missing: Vec<tag::ActiveModel> = all_tag_names
+		.iter()
+		.filter(|name| !map.contains_key(*name))
+		.map(|name| tag::ActiveModel {
+			name: Set(name.clone()),
+			..Default::default()
+		})
+		.collect();
+
+	if !missing.is_empty() {
+		let tag_cols = tag::Column::iter().count();
+		let batch_size = get_insert_batch_size(tag_cols);
+		for chunk in missing.chunks(batch_size) {
+			let inserted = tag::Entity::insert_many(chunk.to_vec())
+				.exec_with_returning_many(conn)
+				.await
+				.map_err(CoreError::from)?;
+
+			for row in inserted {
+				map.insert(row.name, row.id);
+			}
+		}
+	}
+
+	Ok(TagCache::from_entries(map))
+}
+pub(crate) enum BookVisitResult {
+	Built(Box<BuiltMedia>),
+	Custom(CustomVisitResult),
+}
+
+impl BookVisitResult {
+	/// Returns the path or ID that provides context for a visit failure.
+	fn error_ctx(&self) -> String {
+		match self {
+			Self::Built(result) => match result.media.path.clone().into_value() {
+				Some(sea_orm::Value::String(Some(path))) => *path,
+				_ => {
+					tracing::warn!(?result, "Processed media has invalid path?");
+					String::default()
+				},
+			},
+			Self::Custom(result) => result.id.clone(),
+		}
 	}
 }
 
@@ -745,14 +791,6 @@ pub(crate) async fn safely_build_and_insert_media(
 		"Built books from disk"
 	);
 
-	let success_count = books.len();
-	let error_count = output.logs.len();
-	tracing::debug!(
-		elapsed = ?start.elapsed(),
-		success_count, error_count,
-		"Built books from disk"
-	);
-
 	worker_ctx.report_progress(JobProgress::msg("Inserting books into database"));
 	let task_count = books.len() as i32;
 	let start = Instant::now();
@@ -763,7 +801,7 @@ pub(crate) async fn safely_build_and_insert_media(
 
 	let all_tag_names: HashSet<_> =
 		books.iter().flat_map(|b| b.tags.iter().cloned()).collect();
-	let tag_cache = TagCache::build(worker_ctx.conn(), all_tag_names).await?;
+	let tag_cache = build_tag_cache(worker_ctx.conn(), all_tag_names).await?;
 
 	let mut insert_cursor = 0i32;
 

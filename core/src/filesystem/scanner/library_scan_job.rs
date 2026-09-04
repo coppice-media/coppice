@@ -4,7 +4,6 @@ use std::{
 	sync::{Arc, Mutex},
 };
 
-use async_graphql::SimpleObject;
 use models::{
 	entity::{
 		library, library_config, library_scan_record, media, metadata_provider_config,
@@ -38,14 +37,18 @@ use crate::{
 	CoreEvent,
 };
 
+use stump_scanner::{
+	walk_library, walk_series, ScanOptions, WalkedLibrary, WalkedSeries, WalkerCtx,
+};
+
 use super::{
 	series_scan_job::SeriesScanTask,
+	store::SeaOrmScanSource,
 	utils::{
 		handle_missing_media, handle_missing_series, handle_restored_media,
 		safely_build_and_insert_media, safely_build_series, visit_and_update_media,
 		MediaBuildOperation, MediaOperationOutput, MissingSeriesOutput,
 	},
-	walk_library, walk_series, ScanOptions, WalkedLibrary, WalkedSeries, WalkerCtx,
 };
 
 /// The task variants that are used to scan a library
@@ -104,9 +107,13 @@ impl LibraryScanJob {
 }
 
 /// The data that is collected and updated during the execution of a library scan job
-#[derive(Clone, Serialize, Deserialize, Default, Debug, SimpleObject)]
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryScanOutput {
+	/// The library whose scan produced this output.
+	#[serde(default)]
+	pub library_id: String,
 	/// The number of files visited during the scan
 	total_files: u64,
 	/// The number of directories visited during the scan
@@ -157,7 +164,10 @@ impl JobLifecycle for LibraryScanJob {
 		&mut self,
 		ctx: &JobContext,
 	) -> Result<WorkingState<Self::Output, Self::Task>, JobError> {
-		let mut output = Self::Output::default();
+		let mut output = Self::Output {
+			library_id: self.id.clone(),
+			..Default::default()
+		};
 		// Note: We ignore the potential self.config here in the event that it was
 		// updated since being queued. This is perhaps a bit overly cautious, but it's
 		// just one additional query.
@@ -212,20 +222,25 @@ impl JobLifecycle for LibraryScanJob {
 			library_is_missing,
 			ignored_directories,
 			seen_directories,
-		} = walk_library(
-			&self.path,
-			WalkerCtx {
-				db: ctx.apalis_state.conn.clone(),
-				ignore_rules,
-				max_depth: is_collection_based.then_some(1),
-				options: self.options,
-				// intentially empty here since walk_library only visits top-level dirs to discover series,
-				// so there is nothing to short-circuit
-				dir_mtimes: HashMap::new(),
-				series_id: None,
-			},
-		)
-		.await?;
+		} = {
+			let scan_source = SeaOrmScanSource::new(ctx.apalis_state.conn.clone());
+			walk_library(
+				&self.path,
+				&scan_source,
+				WalkerCtx {
+					ignore_rules,
+					max_depth: is_collection_based.then_some(1),
+					options: self.options,
+					// Intentionally empty here since walk_library only visits top-level dirs to
+					// discover series, so there is nothing to short-circuit.
+					dir_mtimes: Arc::new(HashMap::new()),
+					library_id: self.id.clone(),
+					series_id: None,
+				},
+			)
+			.await
+			.map_err(|error| JobError::Unknown(error.to_string()))?
+		};
 		tracing::debug!(
 			series_to_create = series_to_create.len(),
 			series_to_visit = series_to_visit.len(),
@@ -672,14 +687,16 @@ impl JobLifecycle for LibraryScanJob {
 					map.get(&path_buf.to_string_lossy().to_string()).cloned()
 				});
 
+				let scan_source = SeaOrmScanSource::new(ctx.apalis_state.conn.clone());
 				let walk_result = walk_series(
 					path_buf.as_path(),
+					&scan_source,
 					WalkerCtx {
-						db: ctx.apalis_state.conn.clone(),
 						ignore_rules,
 						max_depth,
 						options: self.options,
-						dir_mtimes: (*self.dir_mtimes).clone(),
+						dir_mtimes: self.dir_mtimes.clone(),
+						library_id: self.id.clone(),
 						series_id: series_id.clone(),
 					},
 				)

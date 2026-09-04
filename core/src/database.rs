@@ -51,24 +51,67 @@ fn resolve_database_url(config: &StumpConfig) -> String {
 	}
 }
 
+pub fn validate_pool_config(config: &StumpConfig) -> Result<(), CoreError> {
+	if config.db_max_connections == 0 {
+		return Err(CoreError::InitializationError(format!(
+			"Invalid database pool configuration: db_max_connections must be greater than zero (got {})",
+			config.db_max_connections
+		)));
+	}
+	if config.db_min_connections > config.db_max_connections {
+		return Err(CoreError::InitializationError(format!(
+			"Invalid database pool configuration: db_min_connections ({}) cannot exceed db_max_connections ({})",
+			config.db_min_connections, config.db_max_connections
+		)));
+	}
+
+	Ok(())
+}
+
+fn sqlite_pool_options(config: &StumpConfig) -> SqlitePoolOptions {
+	SqlitePoolOptions::new()
+		.max_connections(config.db_max_connections)
+		.min_connections(config.db_min_connections)
+		.acquire_timeout(Duration::from_secs(config.db_timeout_secs))
+}
+
+fn postgres_connect_options(
+	connection_url: String,
+	config: &StumpConfig,
+) -> sea_orm::ConnectOptions {
+	sea_orm::ConnectOptions::new(connection_url)
+		.max_connections(config.db_max_connections)
+		.min_connections(config.db_min_connections)
+		.acquire_timeout(Duration::from_secs(config.db_timeout_secs))
+		.to_owned()
+}
+
+fn sqlite_connect_options(
+	connection_url: &str,
+	config: &StumpConfig,
+) -> Result<SqliteConnectOptions, CoreError> {
+	Ok(SqliteConnectOptions::from_str(connection_url)
+		.map_err(|e| {
+			CoreError::InternalError(format!("Invalid SQLite connection string: {e}"))
+		})?
+		// TODO(482): support this:
+		// - add indexes (e.g., create index media_name on media (name collate NATURALSORT))
+		// - maybe some sql magic (e.g., update sqlite_master set sql = replace(sql, 'collate NOCASE', 'collate NATURALSORT') WHERE type = 'table' AND name IN (...))
+		// - will need to verify ^ doesn't break comparisons where case matters, though
+		.collation("NATURALSORT", natord::compare)
+		.statement_cache_capacity(config.sqlite_statement_cache_capacity)
+		// TODO(sqlite): do proper eval for NORMAL synchronous mode
+		// .synchronous(SqliteSynchronous::Normal)
+		.busy_timeout(Duration::from_secs(config.db_timeout_secs)))
+}
+
 pub async fn connect(config: &StumpConfig) -> Result<DatabaseConnection, CoreError> {
+	validate_pool_config(config)?;
 	let connection_url = resolve_database_url(config);
 
 	let connection = if connection_url.starts_with("sqlite://") {
-		let options = SqliteConnectOptions::from_str(&connection_url)
-			.map_err(|e| {
-				CoreError::InternalError(format!("Invalid SQLite connection string: {e}"))
-			})?
-			// TODO(482): support this:
-			// - add indexes (e.g., create index media_name on media (name collate NATURALSORT))
-			// - maybe some sql magic (e.g., update sqlite_master set sql = replace(sql, 'collate NOCASE', 'collate NATURALSORT') WHERE type = 'table' AND name IN (...))
-			// - will need to verify ^ doesn't break comparisons where case matters, though
-			.collation("NATURALSORT", natord::compare)
-			// TODO(sqlite): do proper eval for NORMAL synchronous mode
-			// .synchronous(SqliteSynchronous::Normal)
-			.busy_timeout(Duration::from_secs(config.db_timeout_secs));
-		let pool = SqlitePoolOptions::new()
-			.acquire_timeout(Duration::from_secs(config.db_timeout_secs))
+		let options = sqlite_connect_options(&connection_url, config)?;
+		let pool = sqlite_pool_options(config)
 			.connect_with(options)
 			.await
 			.map_err(|e| {
@@ -76,10 +119,7 @@ pub async fn connect(config: &StumpConfig) -> Result<DatabaseConnection, CoreErr
 			})?;
 		SqlxSqliteConnector::from_sqlx_sqlite_pool(pool)
 	} else {
-		// TODO(postgres): tune for postgres
-		let connect_options = sea_orm::ConnectOptions::new(connection_url)
-			.acquire_timeout(Duration::from_secs(config.db_timeout_secs))
-			.to_owned();
+		let connect_options = postgres_connect_options(connection_url, config);
 		sea_orm::Database::connect(connect_options).await?
 	};
 
@@ -197,4 +237,64 @@ where
 /// This is to reduce query complexity and avoid shit like "too many SQL variables"
 pub fn get_insert_batch_size(param_count: usize) -> usize {
 	SQLITE_BIND_LIMIT / param_count
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn test_config() -> StumpConfig {
+		StumpConfig::new("/tmp/stump-database-test".to_string())
+	}
+
+	#[test]
+	fn rejects_zero_max_connections_before_connecting() {
+		let mut config = test_config();
+		config.db_max_connections = 0;
+
+		let error = validate_pool_config(&config).expect_err("zero max must be rejected");
+		assert!(matches!(
+			error,
+			CoreError::InitializationError(message)
+				if message.contains("db_max_connections")
+					&& message.contains("greater than zero")
+		));
+	}
+
+	#[test]
+	fn rejects_min_connections_above_max() {
+		let mut config = test_config();
+		config.db_max_connections = 2;
+		config.db_min_connections = 3;
+
+		let error =
+			validate_pool_config(&config).expect_err("min above max must be rejected");
+		assert!(matches!(
+			error,
+			CoreError::InitializationError(message)
+				if message.contains("db_min_connections")
+					&& message.contains("db_max_connections")
+		));
+	}
+
+	#[test]
+	fn applies_pool_limits_to_sqlite_and_postgres_options() {
+		let mut config = test_config();
+		config.db_max_connections = 2;
+		config.db_min_connections = 1;
+		config.sqlite_statement_cache_capacity = 32;
+
+		let sqlite_pool = sqlite_pool_options(&config);
+		assert_eq!(sqlite_pool.get_max_connections(), 2);
+		assert_eq!(sqlite_pool.get_min_connections(), 1);
+
+		let postgres =
+			postgres_connect_options("postgresql://localhost/stump".to_string(), &config);
+		assert_eq!(postgres.get_max_connections(), Some(2));
+		assert_eq!(postgres.get_min_connections(), Some(1));
+
+		let sqlite = sqlite_connect_options("sqlite::memory:", &config)
+			.expect("in-memory SQLite URL should parse");
+		assert!(format!("{sqlite:?}").contains("statement_cache_capacity: 32"));
+	}
 }
