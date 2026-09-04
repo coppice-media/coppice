@@ -1,4 +1,3 @@
-use async_graphql::SimpleObject;
 use sea_orm::{
 	entity::prelude::{async_trait::async_trait, *},
 	ActiveValue::Set,
@@ -14,8 +13,9 @@ use crate::shared::{
 	image_processor_options::ImageProcessorOptions,
 };
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "LibraryConfigModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "LibraryConfigModel"))]
 #[sea_orm(table_name = "library_configs")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = true)]
@@ -41,13 +41,13 @@ pub struct Model {
 	pub library_type: LibraryType,
 	#[sea_orm(default_value = "false")]
 	pub skip_book_overview: bool,
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[sea_orm(column_type = "Json", nullable)]
 	pub thumbnail_config: Option<ImageProcessorOptions>,
 	#[sea_orm(default_value = "false")]
 	pub process_thumbnail_colors_even_without_config: bool,
 	#[sea_orm(column_type = "Json", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub ignore_rules: Option<IgnoreRules>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub library_id: Option<String>,

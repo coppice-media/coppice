@@ -19,14 +19,28 @@ pub enum Relation {
 		from = "Column::ReadingListId",
 		to = "super::reading_list::Column::Id",
 		on_update = "Cascade",
-		on_delete = "Restrict"
+		on_delete = "Cascade"
 	)]
 	ReadingList,
+	#[sea_orm(
+		belongs_to = "super::user::Entity",
+		from = "Column::UserId",
+		to = "super::user::Column::Id",
+		on_update = "Cascade",
+		on_delete = "Cascade"
+	)]
+	User,
 }
 
 impl Related<super::reading_list::Entity> for Entity {
 	fn to() -> RelationDef {
 		Relation::ReadingList.def()
+	}
+}
+
+impl Related<super::user::Entity> for Entity {
+	fn to() -> RelationDef {
+		Relation::User.def()
 	}
 }
 

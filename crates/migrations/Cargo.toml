@@ -5,8 +5,11 @@ edition = "2021"
 [[bin]]
 name = "migrate"
 path = "bin/migrate.rs"
+required-features = ["cli"]
 
 [features]
+default = ["cli"]
+cli = ["sea-orm-migration/cli"]
 # will run tests that are really just quick smoke tests to ensure
 # the migrations work for postgres
 postgres-tests = []

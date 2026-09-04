@@ -1,12 +1,10 @@
-use async_graphql::SimpleObject;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(
-	Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject, Serialize, Deserialize,
-)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[serde(rename_all = "camelCase")]
-#[graphql(name = "AgeRestriction")]
+#[cfg_attr(feature = "graphql", graphql(name = "AgeRestriction"))]
 #[sea_orm(table_name = "age_restrictions")]
 pub struct Model {
 	#[sea_orm(primary_key)]

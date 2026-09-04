@@ -1,4 +1,3 @@
-use async_graphql::SimpleObject;
 use sea_orm::{
 	entity::prelude::{async_trait::async_trait, *},
 	ActiveValue, FromQueryResult, JoinType, QuerySelect,
@@ -15,8 +14,9 @@ use super::{
 	user_preferences,
 };
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "APIKeyModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "APIKeyModel"))]
 #[sea_orm(table_name = "api_keys")]
 pub struct Model {
 	#[sea_orm(primary_key)]
@@ -28,7 +28,7 @@ pub struct Model {
 	#[sea_orm(column_type = "Text")]
 	pub long_token_hash: String,
 	#[sea_orm(column_type = "Json", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub permissions: APIKeyPermissions,
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]
 	pub created_at: DateTimeWithTimeZone,

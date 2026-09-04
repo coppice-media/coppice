@@ -1,9 +1,9 @@
-use async_graphql::SimpleObject;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "EmailerSendRecordModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "EmailerSendRecordModel"))]
 #[sea_orm(table_name = "emailer_send_records")]
 pub struct Model {
 	#[sea_orm(primary_key)]
@@ -12,7 +12,7 @@ pub struct Model {
 	#[sea_orm(column_type = "Text")]
 	pub recipient_email: String,
 	#[sea_orm(column_type = "Blob", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub attachment_meta: Option<Vec<u8>>,
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]
 	pub sent_at: DateTimeWithTimeZone,
@@ -55,7 +55,8 @@ impl Related<super::user::Entity> for Entity {
 impl ActiveModelBehavior for ActiveModel {}
 
 /// The metadata of an attachment that was sent with an email
-#[derive(Debug, Serialize, Deserialize, SimpleObject)]
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct AttachmentMetaModel {
 	/// The filename of the attachment
 	pub filename: String,

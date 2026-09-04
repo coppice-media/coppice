@@ -1,4 +1,3 @@
-use async_graphql::SimpleObject;
 use chrono::Utc;
 use sea_orm::{
 	entity::prelude::*,
@@ -20,8 +19,9 @@ use super::user::AuthUser;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
 pub struct DeviceIds(pub Vec<String>);
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "ReadingSessionModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "ReadingSessionModel"))]
 #[sea_orm(table_name = "reading_sessions")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = true)]
@@ -59,8 +59,17 @@ pub struct Model {
 	#[sea_orm(column_type = "Text", nullable)]
 	pub notes: Option<String>,
 
+	/// The latest native Kobo ReadingState request for this session.
+	///
+	/// Kobo's wire payload contains location fields and statistics that do not
+	/// have a native column in the unified reading-session model. Keeping the
+	/// request here lets the Kobo adapter replay those fields without treating
+	/// the normalized Readium locator as lossless.
+	#[sea_orm(column_type = "Json", nullable)]
+	pub kobo_state: Option<serde_json::Value>,
+
 	/// all device ids that contributed updates to this session
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[sea_orm(column_type = "Json", nullable)]
 	pub device_ids: Option<DeviceIds>,
 

@@ -1,8 +1,8 @@
-use async_graphql::SimpleObject;
 use sea_orm::entity::prelude::*;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "ReadingListItemModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "ReadingListItemModel"))]
 #[sea_orm(table_name = "reading_list_items")]
 pub struct Model {
 	#[sea_orm(primary_key)]
@@ -29,7 +29,7 @@ pub enum Relation {
 		from = "Column::ReadingListId",
 		to = "super::reading_list::Column::Id",
 		on_update = "Cascade",
-		on_delete = "Restrict"
+		on_delete = "Cascade"
 	)]
 	ReadingList,
 }

@@ -1,5 +1,3 @@
-use async_graphql::InputObject;
-
 use lettre::{
 	address::{Address, AddressError},
 	message::{
@@ -14,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::{EmailError, EmailResult};
 
 /// The configuration for an [EmailerClient]
-#[derive(Serialize, Deserialize, InputObject)]
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::InputObject))]
 pub struct EmailerClientConfig {
 	/// The email address to send from
 	pub sender_email: String,

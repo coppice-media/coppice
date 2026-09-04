@@ -1,4 +1,3 @@
-use async_graphql::SimpleObject;
 use sea_orm::{entity::prelude::*, prelude::async_trait::async_trait, ActiveValue};
 use serde::{Deserialize, Serialize};
 
@@ -9,14 +8,13 @@ use crate::shared::{
 	},
 };
 
-#[derive(
-	Clone, Debug, PartialEq, DeriveEntityModel, SimpleObject, Serialize, Deserialize,
-)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[serde(rename_all = "camelCase")]
-#[graphql(name = "UserPreferencesModel")]
+#[cfg_attr(feature = "graphql", graphql(name = "UserPreferencesModel"))]
 #[sea_orm(table_name = "user_preferences")]
 pub struct Model {
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[serde(skip)]
 	#[sea_orm(primary_key, auto_increment = true)]
 	pub id: i32,
@@ -50,12 +48,12 @@ pub struct Model {
 	pub interface_roundness: InterfaceRoundness,
 	#[sea_orm(column_type = "Text")]
 	pub thumbnail_roundness: InterfaceRoundness,
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[sea_orm(column_type = "Json", nullable)]
 	#[serde(default = "Model::default_navigation_arrangement")]
 	pub navigation_arrangement: Option<Arrangement>,
 	#[sea_orm(column_type = "Json", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[serde(default = "Model::default_home_arrangement")]
 	pub home_arrangement: Option<Arrangement>,
 

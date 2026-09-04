@@ -1,11 +1,11 @@
-use async_graphql::SimpleObject;
 use sea_orm::{entity::prelude::*, ActiveValue};
 
 use crate::shared::readium::ReadiumLocator;
 
 /// A media annotation represents a highlight and/or note
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "MediaAnnotationModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "MediaAnnotationModel"))]
 #[sea_orm(table_name = "media_annotations")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]

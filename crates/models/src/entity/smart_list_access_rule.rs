@@ -1,4 +1,3 @@
-use async_graphql::{Enum, SimpleObject};
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
@@ -18,8 +17,8 @@ use strum::{Display, EnumString};
 	DeriveActiveEnum,
 	EnumString,
 	Display,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -34,8 +33,9 @@ pub enum SmartListAccessRole {
 	CoCreator = 3,
 }
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "SmartListAccessRuleModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "SmartListAccessRuleModel"))]
 #[sea_orm(table_name = "smart_list_access_rules")]
 pub struct Model {
 	#[sea_orm(primary_key)]

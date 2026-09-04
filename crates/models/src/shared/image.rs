@@ -1,10 +1,10 @@
-use async_graphql::SimpleObject;
 use sea_orm::{
 	entity::prelude::DateTimeWithTimeZone, prelude::Decimal, FromJsonQueryResult,
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Debug, Clone, SimpleObject, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[serde(rename_all = "camelCase")]
 pub struct ImageRef {
 	pub url: String,
@@ -14,33 +14,24 @@ pub struct ImageRef {
 	pub last_modified: Option<DateTimeWithTimeZone>,
 }
 
-#[derive(
-	Debug, Clone, SimpleObject, Deserialize, Serialize, PartialEq, Eq, FromJsonQueryResult,
-)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, FromJsonQueryResult)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct ImageDimensions {
 	pub width: u32,
 	pub height: u32,
 }
 
-#[derive(
-	Debug, Clone, SimpleObject, Deserialize, Serialize, PartialEq, Eq, FromJsonQueryResult,
-)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, FromJsonQueryResult)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct ImageColor {
 	pub color: String,
 	pub percentage: Decimal,
 }
 
 #[derive(
-	Default,
-	Debug,
-	Clone,
-	SimpleObject,
-	Deserialize,
-	Serialize,
-	PartialEq,
-	Eq,
-	FromJsonQueryResult,
+	Default, Debug, Clone, Deserialize, Serialize, PartialEq, Eq, FromJsonQueryResult,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct ImageMetadata {
 	pub average_color: Option<String>,
 	pub colors: Vec<ImageColor>,

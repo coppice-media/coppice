@@ -1,25 +1,27 @@
 use crate::{entity::age_restriction, shared::image::ImageMetadata};
-use async_graphql::SimpleObject;
 use async_trait::async_trait;
 use chrono::Utc;
+#[cfg(feature = "graphql")]
 use filter_gen::Ordering;
+#[cfg(feature = "graphql")]
+use sea_orm::QueryOrder;
 use sea_orm::{
-	prelude::*, ActiveValue, Condition, FromQueryResult, JoinType, QueryOrder,
-	QuerySelect,
+	prelude::*, ActiveValue, Condition, FromQueryResult, JoinType, QuerySelect,
 };
 
+#[cfg(feature = "graphql")]
+use crate::shared::ordering::{OrderBy, OrderDirection};
 use crate::{
 	prefixer::{parse_query_to_model, parse_query_to_model_optional, Prefixer},
-	shared::{
-		enums::FileStatus,
-		ordering::{OrderBy, OrderDirection},
-	},
+	shared::enums::FileStatus,
 };
 
 use super::{library_exclusion, media_metadata, series, series_metadata, user::AuthUser};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject, Ordering)]
-#[graphql(name = "MediaModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", derive(Ordering))]
+#[cfg_attr(feature = "graphql", graphql(name = "MediaModel"))]
 #[sea_orm(table_name = "media")]
 pub struct Model {
 	/// The unique identifier for the media
@@ -191,9 +193,10 @@ impl Entity {
 	}
 }
 
-#[derive(Debug, Clone, SimpleObject)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct ModelWithMetadata {
-	#[graphql(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(flatten))]
 	pub media: Model,
 	pub metadata: Option<media_metadata::Model>,
 }

@@ -1,10 +1,10 @@
-use async_graphql::SimpleObject;
 use serde::{Deserialize, Serialize};
 
 use super::ExternalMetadata;
 
 /// A potential match from an external provider
-#[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchCandidate {
 	/// The provider this match came from
 	pub provider: String,
@@ -20,7 +20,8 @@ pub struct MatchCandidate {
 }
 
 /// A factor that contributed to a match's confidence score
-#[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfidenceFactor {
 	/// Name of the scoring factor (e.g., "title_exact_match")
 	pub factor: String,

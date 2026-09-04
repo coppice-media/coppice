@@ -1,18 +1,18 @@
-use async_graphql::{Enum, Result, SimpleObject, Union};
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[sea_orm(table_name = "notifiers")]
-#[graphql(name = "NotifierModel")]
+#[cfg_attr(feature = "graphql", graphql(name = "NotifierModel"))]
 pub struct Model {
 	#[sea_orm(primary_key)]
 	pub id: i32,
 	#[sea_orm(column_type = "Text")]
 	pub r#type: String,
 
-	#[graphql(skip)] // unmarshalled later on graphql side
+	#[cfg_attr(feature = "graphql", graphql(skip))] // unmarshalled later on graphql side
 	#[sea_orm(column_type = "Blob")]
 	pub config: Vec<u8>,
 }
@@ -33,10 +33,10 @@ impl ActiveModelBehavior for ActiveModel {}
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 	EnumString,
 	Display,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -49,18 +49,21 @@ pub enum NotifierType {
 	Telegram,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SimpleObject)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct DiscordConfig {
 	pub webhook_url: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SimpleObject)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct TelegramConfig {
 	pub encrypted_token: String,
 	pub chat_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Union))]
 #[serde(untagged)]
 pub enum NotifierConfig {
 	Discord(DiscordConfig),
@@ -68,13 +71,25 @@ pub enum NotifierConfig {
 }
 
 impl NotifierConfig {
-	pub fn into_bytes(self) -> Result<Vec<u8>> {
+	#[cfg(feature = "graphql")]
+	pub fn into_bytes(self) -> async_graphql::Result<Vec<u8>> {
 		Ok(serde_json::to_vec(&self)?)
 	}
 
-	pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+	#[cfg(not(feature = "graphql"))]
+	pub fn into_bytes(self) -> std::result::Result<Vec<u8>, serde_json::Error> {
+		serde_json::to_vec(&self)
+	}
+
+	#[cfg(feature = "graphql")]
+	pub fn from_bytes(bytes: &[u8]) -> async_graphql::Result<Self> {
 		let config: NotifierConfig = serde_json::from_slice(bytes)?;
 		Ok(config)
+	}
+
+	#[cfg(not(feature = "graphql"))]
+	pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, serde_json::Error> {
+		serde_json::from_slice(bytes)
 	}
 }
 

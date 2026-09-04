@@ -1,4 +1,3 @@
-use async_graphql::{Enum, InputObject, Json, OneofObject, SimpleObject, Union};
 use sea_orm::{prelude::*, DeriveActiveEnum, EnumIter, FromJsonQueryResult};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
@@ -16,12 +15,12 @@ fn default_true() -> bool {
 	EnumIter,
 	PartialEq,
 	DeriveActiveEnum,
-	Enum,
 	EnumString,
 	Display,
 	Serialize,
 	Deserialize,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -37,13 +36,18 @@ pub enum SystemArrangement {
 	BookClubs,
 }
 
-#[derive(
-	Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SimpleObject, InputObject,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "SystemArrangementConfigInput")]
+#[cfg_attr(
+	feature = "graphql",
+	graphql(input_name = "SystemArrangementConfigInput")
+)]
 pub struct SystemArrangementConfig {
 	variant: SystemArrangement,
-	#[graphql(default)]
+	#[cfg_attr(feature = "graphql", graphql(default))]
 	links: Vec<FilterableArrangementEntityLink>,
 }
 
@@ -57,12 +61,12 @@ pub struct SystemArrangementConfig {
 	EnumIter,
 	PartialEq,
 	DeriveActiveEnum,
-	Enum,
 	EnumString,
 	Display,
 	Serialize,
 	Deserialize,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -89,12 +93,12 @@ pub enum FilterableArrangementEntity {
 	EnumIter,
 	PartialEq,
 	DeriveActiveEnum,
-	Enum,
 	EnumString,
 	Display,
 	Serialize,
 	Deserialize,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -107,69 +111,61 @@ pub enum FilterableArrangementEntityLink {
 	ShowAll,
 }
 
-#[derive(
-	Debug,
-	Clone,
-	Default,
-	PartialEq,
-	Eq,
-	Serialize,
-	Deserialize,
-	SimpleObject,
-	InputObject,
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "FilterableArrangementEntityLinkInput")]
+#[cfg_attr(
+	feature = "graphql",
+	graphql(input_name = "FilterableArrangementEntityLinkInput")
+)]
 pub struct CustomArrangementConfig {
 	entity: FilterableArrangementEntity,
 	name: Option<String>,
 	// TODO(custom-arrangement): Support typed filters
-	filter: Option<Json<serde_json::Value>>,
+	#[cfg(feature = "graphql")]
+	filter: Option<async_graphql::Json<serde_json::Value>>,
+	#[cfg(not(feature = "graphql"))]
+	filter: Option<serde_json::Value>,
 	order_by: Option<String>,
-	#[graphql(default)]
+	#[cfg_attr(feature = "graphql", graphql(default))]
 	links: Vec<FilterableArrangementEntityLink>,
 }
 
-#[derive(
-	Debug,
-	Clone,
-	Default,
-	PartialEq,
-	Eq,
-	Serialize,
-	Deserialize,
-	SimpleObject,
-	InputObject,
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "InProgressBooksInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "InProgressBooksInput"))]
 pub struct InProgressBooks {
 	name: Option<String>,
 	// filter: Option<Json<serde_json::Value>>,
-	#[graphql(default)]
+	#[cfg_attr(feature = "graphql", graphql(default))]
 	links: Vec<FilterableArrangementEntityLink>,
 }
 
-#[derive(
-	Debug,
-	Clone,
-	Default,
-	PartialEq,
-	Eq,
-	Serialize,
-	Deserialize,
-	SimpleObject,
-	InputObject,
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "RecentlyAddedInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "RecentlyAddedInput"))]
 pub struct RecentlyAdded {
 	entity: FilterableArrangementEntity,
 	name: Option<String>,
 	// filter: Option<Json<serde_json::Value>>,
-	#[graphql(default)]
+	#[cfg_attr(feature = "graphql", graphql(default))]
 	links: Vec<FilterableArrangementEntityLink>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union, OneofObject)]
-#[graphql(input_name = "ArrangementConfigInput")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::Union, async_graphql::OneofObject)
+)]
+#[cfg_attr(feature = "graphql", graphql(input_name = "ArrangementConfigInput"))]
 #[serde(untagged)]
 pub enum ArrangementConfig {
 	System(SystemArrangementConfig),
@@ -178,23 +174,24 @@ pub enum ArrangementConfig {
 	Custom(CustomArrangementConfig),
 }
 
-#[derive(
-	Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SimpleObject, InputObject,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "ArrangementSectionInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "ArrangementSectionInput"))]
 pub struct ArrangementSection {
 	config: ArrangementConfig,
 	#[serde(default = "default_true")]
-	#[graphql(default_with = "default_true()")]
+	#[cfg_attr(feature = "graphql", graphql(default_with = "default_true()"))]
 	visible: bool,
 }
 
 // TODO(graphql): There is enough distinction between sidebar/navigation and home arrangements that they should just be separate types.
 // I'll aim to tackle this one I am closer to the end of the migration, as it is not the most important thing right now.
 
-#[derive(
-	Debug, Clone, SimpleObject, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct Arrangement {
 	pub locked: bool,
 	pub sections: Vec<ArrangementSection>,

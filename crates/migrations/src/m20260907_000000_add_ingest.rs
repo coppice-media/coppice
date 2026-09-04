@@ -1,0 +1,777 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+	async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+		manager
+			.create_table(
+				Table::create()
+					.table(IngestDropItems::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(IngestDropItems::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(ColumnDef::new(IngestDropItems::LibraryId).text().not_null())
+					.col(ColumnDef::new(IngestDropItems::CreatedBy).text())
+					.col(
+						ColumnDef::new(IngestDropItems::SourceFilename)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(IngestDropItems::RelativePath).text())
+					.col(
+						ColumnDef::new(IngestDropItems::ByteSize)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestDropItems::SourceSha256)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(IngestDropItems::MediaKind).text().not_null())
+					.col(
+						ColumnDef::new(IngestDropItems::StagingPath)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(IngestDropItems::Status).text().not_null())
+					.col(ColumnDef::new(IngestDropItems::AnalysisJobId).text())
+					.col(ColumnDef::new(IngestDropItems::QualityReportId).text())
+					.col(ColumnDef::new(IngestDropItems::MediaId).text())
+					.col(ColumnDef::new(IngestDropItems::SeriesId).text())
+					.col(ColumnDef::new(IngestDropItems::PendingFields).json())
+					.col(ColumnDef::new(IngestDropItems::Error).text())
+					.col(ColumnDef::new(IngestDropItems::IdempotencyKey).text())
+					.col(
+						ColumnDef::new(IngestDropItems::Revision)
+							.integer()
+							.not_null()
+							.default(1),
+					)
+					.col(
+						ColumnDef::new(IngestDropItems::CreatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.col(
+						ColumnDef::new(IngestDropItems::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(IngestDropItems::Table, IngestDropItems::LibraryId)
+							.to(Libraries::Table, Libraries::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(IngestDropItems::Table, IngestDropItems::CreatedBy)
+							.to(Users::Table, Users::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::SetNull),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(IngestDropItems::Table, IngestDropItems::MediaId)
+							.to(Media::Table, Media::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::SetNull),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(IngestDropItems::Table, IngestDropItems::SeriesId)
+							.to(Series::Table, Series::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::SetNull),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_index(
+				Index::create()
+					.name("idx_ingest_drop_items_identity")
+					.table(IngestDropItems::Table)
+					.col(IngestDropItems::LibraryId)
+					.col(IngestDropItems::SourceSha256)
+					.col(IngestDropItems::SourceFilename)
+					.unique()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("idx_ingest_drop_items_idempotency")
+					.table(IngestDropItems::Table)
+					.col(IngestDropItems::LibraryId)
+					.col(IngestDropItems::IdempotencyKey)
+					.unique()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("idx_ingest_drop_items_library_status")
+					.table(IngestDropItems::Table)
+					.col(IngestDropItems::LibraryId)
+					.col(IngestDropItems::Status)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(IngestAnalysisJobs::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(IngestAnalysisJobs::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(
+						ColumnDef::new(IngestAnalysisJobs::DropItemId)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(IngestAnalysisJobs::JobId).text())
+					.col(ColumnDef::new(IngestAnalysisJobs::Status).text().not_null())
+					.col(ColumnDef::new(IngestAnalysisJobs::Phase).text().not_null())
+					.col(
+						ColumnDef::new(IngestAnalysisJobs::Priority)
+							.integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestAnalysisJobs::Attempts)
+							.integer()
+							.not_null(),
+					)
+					.col(ColumnDef::new(IngestAnalysisJobs::Plan).json().not_null())
+					.col(ColumnDef::new(IngestAnalysisJobs::Error).text())
+					.col(
+						ColumnDef::new(IngestAnalysisJobs::CreatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.col(
+						ColumnDef::new(IngestAnalysisJobs::StartedAt)
+							.timestamp_with_time_zone(),
+					)
+					.col(
+						ColumnDef::new(IngestAnalysisJobs::FinishedAt)
+							.timestamp_with_time_zone(),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(
+								IngestAnalysisJobs::Table,
+								IngestAnalysisJobs::DropItemId,
+							)
+							.to(IngestDropItems::Table, IngestDropItems::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("idx_ingest_analysis_jobs_drop_item")
+					.table(IngestAnalysisJobs::Table)
+					.col(IngestAnalysisJobs::DropItemId)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(IngestQualityReports::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(IngestQualityReports::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(
+						ColumnDef::new(IngestQualityReports::DropItemId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestQualityReports::SourceSha256)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestQualityReports::AlgorithmVersion)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestQualityReports::Score)
+							.integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestQualityReports::Checks)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestQualityReports::SettingsSnapshot)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestQualityReports::CreatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(
+								IngestQualityReports::Table,
+								IngestQualityReports::DropItemId,
+							)
+							.to(IngestDropItems::Table, IngestDropItems::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(IngestMetadataCandidates::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(ColumnDef::new(IngestMetadataCandidates::DropItemId).text())
+					.col(ColumnDef::new(IngestMetadataCandidates::MediaId).text())
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::ProviderId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::ProviderVersion)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(IngestMetadataCandidates::ExternalId).text())
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::SourceSha256)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::Confidence)
+							.float()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::Fields)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::FieldConfidence)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::Provenance)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::Status)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::CreatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataCandidates::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(
+								IngestMetadataCandidates::Table,
+								IngestMetadataCandidates::DropItemId,
+							)
+							.to(IngestDropItems::Table, IngestDropItems::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(
+								IngestMetadataCandidates::Table,
+								IngestMetadataCandidates::MediaId,
+							)
+							.to(Media::Table, Media::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("idx_ingest_metadata_candidates_drop_item")
+					.table(IngestMetadataCandidates::Table)
+					.col(IngestMetadataCandidates::DropItemId)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(IngestMetadataApplications::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(IngestMetadataApplications::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(ColumnDef::new(IngestMetadataApplications::DropItemId).text())
+					.col(ColumnDef::new(IngestMetadataApplications::MediaId).text())
+					.col(
+						ColumnDef::new(IngestMetadataApplications::ExpectedRevision)
+							.integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataApplications::Strategy)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataApplications::Picks)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataApplications::Actor)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataApplications::AppliedFields)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataApplications::FailedFields)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestMetadataApplications::CreatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(
+								IngestMetadataApplications::Table,
+								IngestMetadataApplications::DropItemId,
+							)
+							.to(IngestDropItems::Table, IngestDropItems::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::SetNull),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(
+								IngestMetadataApplications::Table,
+								IngestMetadataApplications::MediaId,
+							)
+							.to(Media::Table, Media::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::SetNull),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("idx_ingest_metadata_applications_drop_item")
+					.table(IngestMetadataApplications::Table)
+					.col(IngestMetadataApplications::DropItemId)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(IngestPluginSettings::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(IngestPluginSettings::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(
+						ColumnDef::new(IngestPluginSettings::PluginId)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(IngestPluginSettings::Kind).text().not_null())
+					.col(ColumnDef::new(IngestPluginSettings::LibraryId).text())
+					.col(ColumnDef::new(IngestPluginSettings::UserId).text())
+					.col(
+						ColumnDef::new(IngestPluginSettings::Enabled)
+							.boolean()
+							.not_null()
+							.default(false),
+					)
+					.col(
+						ColumnDef::new(IngestPluginSettings::OptedIn)
+							.boolean()
+							.not_null()
+							.default(false),
+					)
+					.col(ColumnDef::new(IngestPluginSettings::Values).json())
+					.col(
+						ColumnDef::new(IngestPluginSettings::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("idx_ingest_plugin_settings_scope")
+					.table(IngestPluginSettings::Table)
+					.col(IngestPluginSettings::PluginId)
+					.col(IngestPluginSettings::Kind)
+					.col(IngestPluginSettings::LibraryId)
+					.col(IngestPluginSettings::UserId)
+					.unique()
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(IngestProgressEvents::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(IngestProgressEvents::Cursor)
+							.big_integer()
+							.not_null()
+							.auto_increment()
+							.primary_key(),
+					)
+					.col(
+						ColumnDef::new(IngestProgressEvents::LibraryId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestProgressEvents::DropItemId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestProgressEvents::Payload)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(IngestProgressEvents::CreatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(
+								IngestProgressEvents::Table,
+								IngestProgressEvents::LibraryId,
+							)
+							.to(Libraries::Table, Libraries::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.from(
+								IngestProgressEvents::Table,
+								IngestProgressEvents::DropItemId,
+							)
+							.to(IngestDropItems::Table, IngestDropItems::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("idx_ingest_progress_events_filters")
+					.table(IngestProgressEvents::Table)
+					.col(IngestProgressEvents::LibraryId)
+					.col(IngestProgressEvents::DropItemId)
+					.col(IngestProgressEvents::Cursor)
+					.to_owned(),
+			)
+			.await
+	}
+
+	async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+		manager
+			.drop_table(
+				Table::drop()
+					.table(IngestProgressEvents::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(IngestPluginSettings::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(IngestMetadataApplications::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(IngestMetadataCandidates::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(IngestQualityReports::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(IngestAnalysisJobs::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(IngestDropItems::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		Ok(())
+	}
+}
+
+#[derive(DeriveIden)]
+enum IngestDropItems {
+	#[sea_orm(iden = "ingest_drop_items")]
+	Table,
+	Id,
+	LibraryId,
+	CreatedBy,
+	SourceFilename,
+	RelativePath,
+	ByteSize,
+	SourceSha256,
+	MediaKind,
+	StagingPath,
+	Status,
+	AnalysisJobId,
+	QualityReportId,
+	MediaId,
+	SeriesId,
+	PendingFields,
+	Error,
+	IdempotencyKey,
+	Revision,
+	CreatedAt,
+	UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum IngestAnalysisJobs {
+	#[sea_orm(iden = "ingest_analysis_jobs")]
+	Table,
+	Id,
+	DropItemId,
+	JobId,
+	Status,
+	Phase,
+	Priority,
+	Attempts,
+	Plan,
+	Error,
+	CreatedAt,
+	StartedAt,
+	FinishedAt,
+}
+
+#[derive(DeriveIden)]
+enum IngestQualityReports {
+	#[sea_orm(iden = "ingest_quality_reports")]
+	Table,
+	Id,
+	DropItemId,
+	SourceSha256,
+	AlgorithmVersion,
+	Score,
+	Checks,
+	SettingsSnapshot,
+	CreatedAt,
+}
+
+#[derive(DeriveIden)]
+enum IngestMetadataCandidates {
+	#[sea_orm(iden = "ingest_metadata_candidates")]
+	Table,
+	Id,
+	DropItemId,
+	MediaId,
+	ProviderId,
+	ProviderVersion,
+	ExternalId,
+	SourceSha256,
+	Confidence,
+	Fields,
+	FieldConfidence,
+	Provenance,
+	Status,
+	CreatedAt,
+	UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum IngestMetadataApplications {
+	#[sea_orm(iden = "ingest_metadata_applications")]
+	Table,
+	Id,
+	DropItemId,
+	MediaId,
+	ExpectedRevision,
+	Strategy,
+	Picks,
+	Actor,
+	AppliedFields,
+	FailedFields,
+	CreatedAt,
+}
+
+#[derive(DeriveIden)]
+enum IngestPluginSettings {
+	#[sea_orm(iden = "ingest_plugin_settings")]
+	Table,
+	Id,
+	PluginId,
+	Kind,
+	LibraryId,
+	UserId,
+	Enabled,
+	OptedIn,
+	Values,
+	UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum IngestProgressEvents {
+	#[sea_orm(iden = "ingest_progress_events")]
+	Table,
+	Cursor,
+	LibraryId,
+	DropItemId,
+	Payload,
+	CreatedAt,
+}
+
+#[derive(DeriveIden)]
+enum Libraries {
+	#[sea_orm(iden = "libraries")]
+	Table,
+	Id,
+}
+
+#[derive(DeriveIden)]
+enum Users {
+	#[sea_orm(iden = "users")]
+	Table,
+	Id,
+}
+
+#[derive(DeriveIden)]
+enum Media {
+	#[sea_orm(iden = "media")]
+	Table,
+	Id,
+}
+
+#[derive(DeriveIden)]
+enum Series {
+	#[sea_orm(iden = "series")]
+	Table,
+	Id,
+}

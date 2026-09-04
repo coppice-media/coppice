@@ -1,4 +1,3 @@
-use async_graphql::{Enum, InputObject};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -6,7 +5,8 @@ use serde_json::Value as JsonValue;
 use crate::types::MetadataField;
 
 /// How to merge external metadata values onto existing entity metadata
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Enum)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MergeStrategy {
 	/// Only populate fields that are currently nullish
@@ -48,7 +48,8 @@ impl Default for AutoApplyConfig {
 }
 
 /// A user-provided override value for a specific metadata field
-#[derive(Debug, Clone, Serialize, Deserialize, InputObject)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::InputObject))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetadataFieldOverride {
 	/// Which metadata field this override applies to
 	pub field: MetadataField,

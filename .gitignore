@@ -54,3 +54,6 @@ apps/server/client/*
 #Code coverage
 lcov.info
 tarpaulin-report.html
+
+# Local personal library used for ingest testing; never commit
+/input/

@@ -818,6 +818,7 @@ mod tests {
 				text: None,
 				title: Some("Chapter 1".to_string()),
 				r#type: "application/xhtml+xml".to_string(),
+				kobo_span: None,
 			})),
 			..Default::default()
 		}
@@ -836,6 +837,7 @@ mod tests {
 				text: None,
 				title: Some("Chapter 3".to_string()),
 				r#type: "application/xhtml+xml".to_string(),
+				kobo_span: None,
 			}),
 			annotation_text: Set(Some("Important note!".to_string())),
 			..Default::default()

@@ -1,5 +1,3 @@
-use async_graphql::SimpleObject;
-
 use chrono::Utc;
 use sea_orm::{
 	entity::prelude::*, prelude::async_trait::async_trait, ActiveValue, FromQueryResult,
@@ -18,8 +16,9 @@ use crate::{
 
 use super::{age_restriction, user_preferences};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "UserModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "UserModel"))]
 #[sea_orm(table_name = "users")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
@@ -27,7 +26,7 @@ pub struct Model {
 	#[sea_orm(column_type = "Text", unique)]
 	pub username: String,
 	#[sea_orm(column_type = "Text")]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub hashed_password: String,
 	pub is_server_owner: bool,
 	#[sea_orm(column_type = "Text", nullable)]
@@ -41,13 +40,13 @@ pub struct Model {
 	pub deleted_at: Option<DateTimeWithTimeZone>,
 	pub is_locked: bool,
 	pub max_sessions_allowed: Option<i32>,
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[sea_orm(column_type = "Text", nullable)]
 	pub permissions: Option<String>,
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[sea_orm(nullable, unique)]
 	pub user_preferences_id: Option<i32>,
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[sea_orm(column_type = "Text", nullable, unique)]
 	pub oidc_issuer_id: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]

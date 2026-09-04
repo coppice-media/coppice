@@ -1,4 +1,3 @@
-use async_graphql::SimpleObject;
 use async_trait::async_trait;
 
 use crate::{
@@ -10,7 +9,7 @@ use crate::{
 	MatchScorer,
 };
 
-#[derive(SimpleObject)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct ProviderCredentialVerification {
 	pub response_status: u16,
 	pub is_valid: bool,

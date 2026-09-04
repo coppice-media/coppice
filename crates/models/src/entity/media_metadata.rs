@@ -1,24 +1,17 @@
-use async_graphql::SimpleObject;
+#[cfg(feature = "graphql")]
 use filter_gen::Ordering;
 use sea_orm::{prelude::*, QueryOrder, QuerySelect};
 use serde::Serialize;
 use serde_with::skip_serializing_none;
 
+#[cfg(feature = "graphql")]
 use crate::shared::ordering::{OrderBy, OrderDirection};
 
 #[skip_serializing_none]
-#[derive(
-	Clone,
-	Default,
-	Debug,
-	PartialEq,
-	DeriveEntityModel,
-	Eq,
-	SimpleObject,
-	Serialize,
-	Ordering,
-)]
-#[graphql(name = "MediaMetadataModel")]
+#[derive(Clone, Default, Debug, PartialEq, DeriveEntityModel, Eq, Serialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", derive(Ordering))]
+#[cfg_attr(feature = "graphql", graphql(name = "MediaMetadataModel"))]
 #[sea_orm(table_name = "media_metadata")]
 pub struct Model {
 	#[serde(skip_serializing)]
@@ -28,22 +21,22 @@ pub struct Model {
 	pub media_id: Option<String>,
 	pub age_rating: Option<i32>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub characters: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub colorists: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub cover_artists: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub format: Option<String>,
 	pub day: Option<i32>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub editors: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub genres: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub identifier_amazon: Option<String>,
@@ -58,15 +51,15 @@ pub struct Model {
 	#[sea_orm(column_type = "Text", nullable)]
 	pub identifier_uuid: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub inkers: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub language: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub letterers: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub links: Option<String>,
 	pub month: Option<i32>,
 	#[sea_orm(column_type = "Text", nullable)]
@@ -75,7 +68,7 @@ pub struct Model {
 	pub number: Option<Decimal>,
 	pub page_count: Option<i32>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub pencillers: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub publisher: Option<String>,
@@ -89,7 +82,7 @@ pub struct Model {
 	#[sea_orm(column_type = "Text", nullable)]
 	pub summary: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub teams: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub title: Option<String>,
@@ -97,7 +90,7 @@ pub struct Model {
 	pub title_sort: Option<String>,
 	pub volume: Option<i32>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub writers: Option<String>,
 	pub year: Option<i32>,
 	/// The external metadata provider that supplied this metadata (e.g., "HARDCOVER")
@@ -109,7 +102,7 @@ pub struct Model {
 	/// JSON array of MetadataField enum values that are locked from being overwritten by fetch
 	/// features
 	#[sea_orm(column_type = "Json", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub locked_fields: Option<serde_json::Value>,
 }
 

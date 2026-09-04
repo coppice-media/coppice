@@ -1,8 +1,8 @@
-use async_graphql::{Enum, InputObject, OneofObject, SimpleObject, Union};
 use sea_orm::{prelude::Decimal, FromJsonQueryResult};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Enum)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 pub enum Dimension {
 	Height,
 	Width,
@@ -10,11 +10,16 @@ pub enum Dimension {
 
 /// A resize option which will resize the image while maintaining the aspect ratio.
 /// The dimension *not* specified will be calculated based on the aspect ratio.
-#[derive(
-	Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, SimpleObject, InputObject,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
 #[serde(rename_all = "camelCase")]
-#[graphql(input_name = "ScaledDimensionResizeInput")]
+#[cfg_attr(
+	feature = "graphql",
+	graphql(input_name = "ScaledDimensionResizeInput")
+)]
 pub struct ScaledDimensionResize {
 	/// The dimension to set with the given size, e.g. `Height` or `Width`.
 	pub dimension: Dimension,
@@ -24,10 +29,12 @@ pub struct ScaledDimensionResize {
 
 /// A resize option which will resize the image to the given dimensions, without
 /// maintaining the aspect ratio.
-#[derive(
-	Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, SimpleObject, InputObject,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "ExactDimensionResizeInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "ExactDimensionResizeInput"))]
 pub struct ExactDimensionResize {
 	/// The width (in pixels) the resulting image should be resized to
 	pub width: u32,
@@ -35,18 +42,12 @@ pub struct ExactDimensionResize {
 	pub height: u32,
 }
 
-#[derive(
-	Debug,
-	Default,
-	Copy,
-	Clone,
-	Serialize,
-	Deserialize,
-	PartialEq,
-	SimpleObject,
-	InputObject,
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "ScaleEvenlyByFactorInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "ScaleEvenlyByFactorInput"))]
 pub struct ScaleEvenlyByFactor {
 	/// The factor to scale the image by. Note that this was made a [Decimal]
 	/// to correct precision issues
@@ -59,10 +60,12 @@ impl Eq for ScaleEvenlyByFactor {}
 /// maintaining the aspect ratio.
 ///
 /// If the image already fits within the dimensions, it will not be scaled up.
-#[derive(
-	Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, SimpleObject, InputObject,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "FitWithinResizeInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "FitWithinResizeInput"))]
 pub struct FitWithinResize {
 	/// The maximum width (in pixels) of the resulting image
 	pub width: u32,
@@ -71,11 +74,13 @@ pub struct FitWithinResize {
 }
 
 /// The resize options to use when generating an image
-#[derive(
-	Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Union, OneofObject,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::Union, async_graphql::OneofObject)
 )]
 #[serde(rename_all = "camelCase")]
-#[graphql(input_name = "ImageResizeMethodInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "ImageResizeMethodInput"))]
 pub enum ImageResizeMethod {
 	Exact(ExactDimensionResize),
 	ScaleEvenlyByFactor(ScaleEvenlyByFactor),
@@ -86,7 +91,8 @@ pub enum ImageResizeMethod {
 // TODO(images): Support JpegXl and Avif
 
 /// Supported image formats for processing images throughout Stump
-#[derive(Default, Copy, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Enum)]
+#[derive(Default, Copy, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 pub enum SupportedImageFormat {
 	Webp,
 	#[default]
@@ -107,19 +113,17 @@ impl SupportedImageFormat {
 
 /// Options for processing images throughout Stump.
 #[derive(
-	Default,
-	Debug,
-	Clone,
-	Serialize,
-	Deserialize,
-	PartialEq,
-	Eq,
-	FromJsonQueryResult,
-	SimpleObject,
-	InputObject,
+	Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, FromJsonQueryResult,
+)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
 #[serde(rename_all = "camelCase")]
-#[graphql(input_name = "ImageProcessorOptionsInput")]
+#[cfg_attr(
+	feature = "graphql",
+	graphql(input_name = "ImageProcessorOptionsInput")
+)]
 pub struct ImageProcessorOptions {
 	/// The size factor to use when generating an image. See [`ImageResizeOptions`]
 	#[serde(default)]

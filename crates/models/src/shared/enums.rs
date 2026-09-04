@@ -1,4 +1,3 @@
-use async_graphql::Enum;
 use sea_orm::{prelude::*, DeriveActiveEnum, EnumIter};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
@@ -6,7 +5,8 @@ use strum::{Display, EnumString};
 // TODO: Consider not using screaming case?
 
 /// The role of an author in relation to a work or series
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 pub enum AuthorRole {
 	Primary,
 	CoAuthor,
@@ -21,13 +21,13 @@ pub enum AuthorRole {
 	Debug,
 	Clone,
 	Default,
-	Enum,
 	EnumIter,
 	PartialEq,
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(rs_type = "i32", db_type = "Integer")]
 pub enum AccessRole {
 	#[default]
@@ -80,10 +80,10 @@ pub enum AccessRole {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 	EnumString,
 	Display,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -113,8 +113,8 @@ pub enum EntityVisibility {
 	DeriveActiveEnum,
 	EnumString,
 	Display,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -152,12 +152,12 @@ impl From<FileStatus> for String {
 	Debug,
 	Clone,
 	EnumIter,
-	Enum,
 	PartialEq,
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -178,12 +178,12 @@ pub enum InterfaceLayout {
 	Default,
 	Clone,
 	EnumIter,
-	Enum,
 	PartialEq,
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -207,12 +207,12 @@ pub enum InterfaceRoundness {
 	Default,
 	Clone,
 	EnumIter,
-	Enum,
 	PartialEq,
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -239,10 +239,10 @@ pub enum ThumbnailPlaceholderStyle {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 	EnumString,
 	Display,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -302,8 +302,8 @@ impl JobStatus {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -328,8 +328,8 @@ pub enum LibraryPattern {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -355,8 +355,8 @@ pub enum LibraryViewMode {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -387,10 +387,10 @@ pub enum LibraryType {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 	EnumString,
 	Display,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -418,10 +418,10 @@ pub enum LogLevel {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 	EnumString,
 	Display,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -455,8 +455,8 @@ pub enum MetadataFetchStatus {
 	DeriveActiveEnum,
 	EnumString,
 	Display,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -498,18 +498,9 @@ impl LibraryType {
 /// An enum representing the different types of metadata resets that can occur,
 /// which manifest differently depending on the context
 #[derive(
-	Eq,
-	Copy,
-	Hash,
-	Debug,
-	Clone,
-	PartialEq,
-	Serialize,
-	Deserialize,
-	Enum,
-	EnumString,
-	Display,
+	Eq, Copy, Hash, Debug, Clone, PartialEq, Serialize, Deserialize, EnumString, Display,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MetadataResetImpact {
@@ -542,8 +533,8 @@ pub enum MetadataResetImpact {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -570,9 +561,9 @@ pub enum ReadingDirection {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 	Display,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -611,8 +602,8 @@ impl From<ReadingStatus> for String {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -641,8 +632,8 @@ pub enum ReadingImageScaleFit {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -668,8 +659,8 @@ pub enum ReadingMode {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -708,10 +699,10 @@ pub enum SupportedFont {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 	EnumString,
 	Display,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -824,8 +815,8 @@ pub enum UserPermission {
 	DeriveActiveEnum,
 	EnumString,
 	Display,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",

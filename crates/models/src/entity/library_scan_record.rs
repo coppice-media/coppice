@@ -1,13 +1,13 @@
-use async_graphql::SimpleObject;
 use sea_orm::entity::prelude::*;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "LibraryScanRecordModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "LibraryScanRecordModel"))]
 #[sea_orm(table_name = "library_scan_records")]
 pub struct Model {
 	#[sea_orm(primary_key)]
 	pub id: i32,
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[sea_orm(column_type = "Blob", nullable)]
 	pub options: Option<Vec<u8>>,
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]

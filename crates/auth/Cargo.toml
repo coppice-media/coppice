@@ -1,0 +1,9 @@
+[package]
+name = "stump_auth"
+edition = "2021"
+version.workspace = true
+
+[dependencies]
+models = { path = "../models", default-features = false }
+thiserror.workspace = true
+tracing.workspace = true

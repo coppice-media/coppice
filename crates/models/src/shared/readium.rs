@@ -1,4 +1,3 @@
-use async_graphql::{InputObject, SimpleObject};
 use derive_builder::Builder;
 use sea_orm::{prelude::Decimal, FromJsonQueryResult};
 use serde::{Deserialize, Serialize};
@@ -116,18 +115,12 @@ pub struct RWPMPositions {
 	pub positions: Vec<RWPMPosition>,
 }
 
-#[derive(
-	Clone,
-	Debug,
-	SimpleObject,
-	InputObject,
-	Deserialize,
-	Serialize,
-	FromJsonQueryResult,
-	PartialEq,
-	Eq,
+#[derive(Clone, Debug, Deserialize, Serialize, FromJsonQueryResult, PartialEq, Eq)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "ReadiumLocationInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "ReadiumLocationInput"))]
 #[serde(rename_all = "camelCase")]
 pub struct ReadiumLocation {
 	pub fragments: Option<Vec<String>>,
@@ -138,18 +131,12 @@ pub struct ReadiumLocation {
 	pub partial_cfi: Option<String>,
 }
 
-#[derive(
-	Clone,
-	Debug,
-	SimpleObject,
-	InputObject,
-	Deserialize,
-	Serialize,
-	FromJsonQueryResult,
-	PartialEq,
-	Eq,
+#[derive(Clone, Debug, Deserialize, Serialize, FromJsonQueryResult, PartialEq, Eq)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "ReadiumTextInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "ReadiumTextInput"))]
 #[serde(rename_all = "camelCase")]
 pub struct ReadiumText {
 	pub after: Option<String>,
@@ -162,28 +149,28 @@ fn default_type() -> String {
 }
 
 #[derive(
-	Clone,
-	Debug,
-	Default,
-	SimpleObject,
-	InputObject,
-	Deserialize,
-	Serialize,
-	FromJsonQueryResult,
-	PartialEq,
-	Eq,
+	Clone, Debug, Default, Deserialize, Serialize, FromJsonQueryResult, PartialEq, Eq,
 )]
-#[graphql(input_name = "ReadiumLocatorInput")]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
+)]
+#[cfg_attr(feature = "graphql", graphql(input_name = "ReadiumLocatorInput"))]
 #[serde(rename_all = "camelCase")]
 pub struct ReadiumLocator {
-	#[graphql(default = "")]
+	#[cfg_attr(feature = "graphql", graphql(default = ""))]
 	#[serde(default)]
 	pub chapter_title: String,
 	pub href: String,
 	pub title: Option<String>,
 	pub locations: Option<ReadiumLocation>,
 	pub text: Option<ReadiumText>,
-	#[graphql(default = "application/xhtml+xml", name = "type")]
+	#[serde(default)]
+	pub kobo_span: Option<String>,
+	#[cfg_attr(
+		feature = "graphql",
+		graphql(default = "application/xhtml+xml", name = "type")
+	)]
 	#[serde(default = "default_type")]
 	pub r#type: String,
 }

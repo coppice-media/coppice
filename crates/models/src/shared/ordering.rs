@@ -1,10 +1,10 @@
-use async_graphql::Enum;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 
 #[derive(
-	Debug, PartialEq, Eq, Clone, Copy, Enum, EnumString, Display, Serialize, Deserialize,
+	Debug, PartialEq, Eq, Clone, Copy, EnumString, Display, Serialize, Deserialize,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 pub enum OrderDirection {
 	Asc,
 	Desc,

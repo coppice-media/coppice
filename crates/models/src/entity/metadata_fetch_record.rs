@@ -1,4 +1,3 @@
-use async_graphql::SimpleObject;
 use chrono::Utc;
 use sea_orm::{
 	prelude::{async_trait::async_trait, *},
@@ -8,8 +7,9 @@ use serde_json::Value as JsonValue;
 
 use crate::shared::enums::MetadataFetchStatus;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "MetadataFetchRecordModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "MetadataFetchRecordModel"))]
 #[sea_orm(table_name = "metadata_fetch_records")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = true)]
@@ -20,10 +20,10 @@ pub struct Model {
 	#[sea_orm(column_type = "Text", nullable)]
 	pub series_id: Option<String>, // null if this is for a media
 	#[sea_orm(column_type = "Json", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub match_candidates: Option<JsonValue>,
 	#[sea_orm(column_type = "Json", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub accepted_match_candidate: Option<JsonValue>, // auto or manual
 	/// The total number of raw hits reported by provider searches, across all
 	/// providers searched. Compare against `match_candidates.len()` to detect when

@@ -8,7 +8,6 @@
 //! and [`dimension_vec_from_str`] methods can be used for serializing and deserializing this
 //! structure
 
-use async_graphql::SimpleObject;
 use sea_orm::FromJsonQueryResult;
 
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
@@ -16,7 +15,8 @@ use std::fmt;
 use std::str::FromStr;
 use std::string::ToString;
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, SimpleObject, FromJsonQueryResult)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, FromJsonQueryResult)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct MediaAnalysisData {
 	pub dimensions: Vec<PageDimension>,
 	pub content_types: Vec<String>,
@@ -77,9 +77,8 @@ pub enum RunLengthParserError {
 
 /// Represents a page dimension for a page of a Stump media item. It consists of a
 /// height and a width.
-#[derive(
-	Serialize, Deserialize, Debug, Clone, PartialEq, Eq, FromJsonQueryResult, SimpleObject,
-)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, FromJsonQueryResult)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 pub struct PageDimension {
 	pub height: u32,
 	pub width: u32,

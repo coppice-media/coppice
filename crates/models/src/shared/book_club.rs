@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use async_graphql::{Enum, InputObject, SimpleObject};
 use sea_orm::{DeriveActiveEnum, EnumIter, FromJsonQueryResult};
 use serde::{Deserialize, Serialize};
 use strum::Display;
@@ -18,11 +17,11 @@ use strum::Display;
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 	Display,
 	PartialOrd,
 	Ord,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -66,18 +65,12 @@ impl Default for BookClubMemberRoleSpec {
 	}
 }
 
-#[derive(
-	Debug,
-	Clone,
-	Deserialize,
-	Serialize,
-	PartialEq,
-	Eq,
-	SimpleObject,
-	InputObject,
-	FromJsonQueryResult,
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, FromJsonQueryResult)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "BookClubExternalBookInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "BookClubExternalBookInput"))]
 pub struct BookClubExternalBook {
 	// The title of the book
 	pub title: String,
@@ -89,10 +82,12 @@ pub struct BookClubExternalBook {
 	pub image_url: Option<String>,
 }
 
-#[derive(
-	Debug, Clone, Deserialize, Serialize, PartialEq, Eq, SimpleObject, InputObject,
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, FromJsonQueryResult)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "BookClubInternalBookInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "BookClubInternalBookInput"))]
 pub struct BookClubInternalBook {
 	pub id: String,
 }
@@ -110,9 +105,9 @@ pub struct BookClubInternalBook {
 	Serialize,
 	Deserialize,
 	DeriveActiveEnum,
-	Enum,
 	Display,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(rs_type = "String", db_type = "Text")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]

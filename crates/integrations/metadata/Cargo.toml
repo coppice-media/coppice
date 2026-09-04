@@ -3,8 +3,13 @@ name = "metadata_integrations"
 version.workspace = true
 edition = "2021"
 
+[features]
+default = []
+graphql = ["dep:async-graphql"]
+
 [dependencies]
-async-graphql = { workspace = true }
+async-graphql = { workspace = true, optional = true }
+
 async-trait = { workspace = true }
 chrono = { workspace = true }
 dateparser = "0.2.1"

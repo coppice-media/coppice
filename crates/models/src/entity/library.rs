@@ -1,21 +1,23 @@
-use async_graphql::SimpleObject;
 use chrono::Utc;
+#[cfg(feature = "graphql")]
 use filter_gen::Ordering;
+#[cfg(feature = "graphql")]
+use sea_orm::QueryOrder;
 use sea_orm::{
 	entity::prelude::*, prelude::async_trait::async_trait, ActiveValue,
-	DerivePartialModel, FromQueryResult, QueryOrder,
+	DerivePartialModel, FromQueryResult,
 };
 
-use crate::shared::{
-	enums::FileStatus,
-	image::ImageMetadata,
-	ordering::{OrderBy, OrderDirection},
-};
+#[cfg(feature = "graphql")]
+use crate::shared::ordering::{OrderBy, OrderDirection};
+use crate::shared::{enums::FileStatus, image::ImageMetadata};
 
 use super::{library_exclusion, user::AuthUser};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject, Ordering)]
-#[graphql(name = "LibraryModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", derive(Ordering))]
+#[cfg_attr(feature = "graphql", graphql(name = "LibraryModel"))]
 #[sea_orm(table_name = "libraries")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]

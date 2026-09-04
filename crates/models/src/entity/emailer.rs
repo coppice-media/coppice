@@ -1,8 +1,8 @@
-use async_graphql::SimpleObject;
 use sea_orm::entity::prelude::*;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "EmailerModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "EmailerModel"))]
 #[sea_orm(table_name = "emailers")]
 pub struct Model {
 	#[sea_orm(primary_key)]
@@ -16,7 +16,7 @@ pub struct Model {
 	pub sender_display_name: String,
 	#[sea_orm(column_type = "Text")]
 	pub username: String,
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[sea_orm(column_type = "Text")]
 	pub encrypted_password: String,
 	#[sea_orm(column_type = "Text")]

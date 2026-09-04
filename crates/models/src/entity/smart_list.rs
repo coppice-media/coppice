@@ -1,19 +1,19 @@
-use async_graphql::{Enum, SimpleObject, ID};
+#[cfg(feature = "graphql")]
 use filter_gen::Ordering;
+#[cfg(feature = "graphql")]
+use sea_orm::QueryOrder;
 use sea_orm::{
-	prelude::*, Condition, DeriveActiveEnum, EnumIter, QueryOrder, QuerySelect,
-	QueryTrait,
+	prelude::*, Condition, DeriveActiveEnum, EnumIter, QuerySelect, QueryTrait,
 };
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 
 use super::smart_list_access_rule;
+#[cfg(feature = "graphql")]
+use crate::shared::ordering::{OrderBy, OrderDirection};
 use crate::{
 	entity::{smart_list_access_rule::SmartListAccessRole, user::AuthUser},
-	shared::{
-		enums::EntityVisibility,
-		ordering::{OrderBy, OrderDirection},
-	},
+	shared::enums::EntityVisibility,
 };
 
 /// The different filter joiners that can be used in smart lists
@@ -31,8 +31,8 @@ use crate::{
 	DeriveActiveEnum,
 	EnumString,
 	Display,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -61,8 +61,8 @@ pub enum SmartListJoiner {
 	DeriveActiveEnum,
 	EnumString,
 	Display,
-	Enum,
 )]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
 #[sea_orm(
 	rs_type = "String",
 	rename_all = "SCREAMING_SNAKE_CASE",
@@ -77,8 +77,10 @@ pub enum SmartListGrouping {
 	ByLibrary,
 }
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject, Ordering)]
-#[graphql(name = "SmartListModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", derive(Ordering))]
+#[cfg_attr(feature = "graphql", graphql(name = "SmartListModel"))]
 #[sea_orm(table_name = "smart_lists")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
@@ -88,7 +90,7 @@ pub struct Model {
 	#[sea_orm(column_type = "Text", nullable)]
 	pub description: Option<String>,
 	#[sea_orm(column_type = "Blob")]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub filters: Vec<u8>,
 	#[sea_orm(column_type = "Text")]
 	pub joiner: SmartListJoiner,
@@ -240,7 +242,17 @@ impl Entity {
 		)
 	}
 
-	pub fn find_by_id(user: &AuthUser, id: ID) -> Select<Self> {
+	#[cfg(feature = "graphql")]
+	pub fn find_by_id(user: &AuthUser, id: async_graphql::ID) -> Select<Self> {
+		Entity::find().filter(
+			Condition::all()
+				.add_option(get_access_condition_for_user(user, false, false))
+				.add(Column::Id.eq(id.to_string())),
+		)
+	}
+
+	#[cfg(not(feature = "graphql"))]
+	pub fn find_by_id(user: &AuthUser, id: String) -> Select<Self> {
 		Entity::find().filter(
 			Condition::all()
 				.add_option(get_access_condition_for_user(user, false, false))

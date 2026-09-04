@@ -1,9 +1,9 @@
-use async_graphql::Enum;
 use serde::{Deserialize, Serialize};
 
 /// Represents a specific metadata field that can be locked or configured
 /// for per-field merge strategies
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Enum)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MetadataField {
 	Title,
@@ -54,7 +54,8 @@ pub enum MetadataField {
 }
 
 /// Types of media that can be handled by metadata providers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Enum)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MediaType {
 	Comic,
 	Manga,
@@ -65,7 +66,8 @@ pub enum MediaType {
 	Webtoon,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Enum)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PublicationStatus {
 	Ongoing,
 	Completed,

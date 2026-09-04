@@ -1,4 +1,3 @@
-use async_graphql::SimpleObject;
 use chrono::Utc;
 use sea_orm::{
 	prelude::{async_trait::async_trait, *},
@@ -7,15 +6,16 @@ use sea_orm::{
 
 use crate::shared::enums::MetadataProvider;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "MetadataProviderConfigModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "MetadataProviderConfigModel"))]
 #[sea_orm(table_name = "metadata_provider_configs")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = true)]
 	pub id: i32,
 	pub provider_type: MetadataProvider,
 	pub enabled: bool,
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub encrypted_api_token: Option<String>,
 	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
 	// Mostly just to serve as a reminder, this isn't enforced since it isn't managed

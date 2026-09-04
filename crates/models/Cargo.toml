@@ -2,8 +2,12 @@
 name = "models"
 edition = "2021"
 
+[features]
+default = []
+graphql = ["dep:async-graphql"]
+
 [dependencies]
-async-graphql.workspace = true
+async-graphql = { workspace = true, optional = true }
 chrono.workspace = true
 derive_builder.workspace = true
 globset.workspace = true

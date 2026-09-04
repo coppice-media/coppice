@@ -33,6 +33,14 @@ mod m20260702_000000_metadata_fetch_partial_results;
 mod m20260804_000000_smart_list_role_to_integer;
 mod m20260815_205755_avatar_image_metadata;
 mod m20260816_000000_drop_legacy_epubcfi;
+mod m20260902_000000_add_reading_lists_and_collections;
+mod m20260904_000000_add_liseur_sync;
+mod m20260905_000000_add_kobo_reading_state;
+mod m20260906_000000_add_liseur_token_metadata;
+mod m20260907_000000_add_ingest;
+
+// Keep newly added migrations appended in chronological order; do not reorder
+// already-published migrations.
 
 pub struct Migrator;
 
@@ -72,6 +80,11 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260804_000000_smart_list_role_to_integer::Migration),
 			Box::new(m20260815_205755_avatar_image_metadata::Migration),
 			Box::new(m20260816_000000_drop_legacy_epubcfi::Migration),
+			Box::new(m20260902_000000_add_reading_lists_and_collections::Migration),
+			Box::new(m20260904_000000_add_liseur_sync::Migration),
+			Box::new(m20260905_000000_add_kobo_reading_state::Migration),
+			Box::new(m20260906_000000_add_liseur_token_metadata::Migration),
+			Box::new(m20260907_000000_add_ingest::Migration),
 		]
 	}
 }

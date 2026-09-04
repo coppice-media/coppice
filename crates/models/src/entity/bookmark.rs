@@ -1,13 +1,13 @@
-use async_graphql::SimpleObject;
 use sea_orm::{entity::prelude::*, prelude::async_trait::async_trait, ActiveValue};
 
 use crate::shared::readium::ReadiumLocator;
 
 use super::user::AuthUser;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[sea_orm(table_name = "bookmarks")]
-#[graphql(name = "BookmarkModel")]
+#[cfg_attr(feature = "graphql", graphql(name = "BookmarkModel"))]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
 	pub id: String,

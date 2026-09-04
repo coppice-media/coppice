@@ -10,10 +10,36 @@ pub struct Model {
 	#[sea_orm(column_type = "Text", nullable)]
 	pub description: Option<String>,
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]
-	pub updated_at: String,
+	pub updated_at: DateTimeWithTimeZone,
+	pub ordered: bool,
+	#[sea_orm(column_type = "Text")]
+	pub creating_user_id: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
+pub enum Relation {
+	#[sea_orm(has_many = "super::collection_series::Entity")]
+	CollectionSeries,
+	#[sea_orm(
+		belongs_to = "super::user::Entity",
+		from = "Column::CreatingUserId",
+		to = "super::user::Column::Id",
+		on_update = "Cascade",
+		on_delete = "Cascade"
+	)]
+	User,
+}
+
+impl Related<super::collection_series::Entity> for Entity {
+	fn to() -> RelationDef {
+		Relation::CollectionSeries.def()
+	}
+}
+
+impl Related<super::user::Entity> for Entity {
+	fn to() -> RelationDef {
+		Relation::User.def()
+	}
+}
 
 impl ActiveModelBehavior for ActiveModel {}

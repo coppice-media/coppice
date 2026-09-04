@@ -1,13 +1,14 @@
-use async_graphql::{InputObject, SimpleObject};
 use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
 /// Represents a collected issue/series within a TPB or GN
 /// See https://github.com/mylar3/mylar3/wiki/series.json-schema-%28version-1.0.1%29
-#[derive(
-	Clone, Debug, PartialEq, Eq, Deserialize, Serialize, SimpleObject, InputObject,
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(
+	feature = "graphql",
+	derive(async_graphql::SimpleObject, async_graphql::InputObject)
 )]
-#[graphql(input_name = "CollectedItemInput")]
+#[cfg_attr(feature = "graphql", graphql(input_name = "CollectedItemInput"))]
 pub struct CollectedItem {
 	/// The title of the series
 	pub series: Option<String>,

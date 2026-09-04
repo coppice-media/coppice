@@ -1,13 +1,16 @@
-use crate::shared::{
-	ordering::{OrderBy, OrderDirection},
-	series_metadata::CollectedItems,
-};
-use async_graphql::SimpleObject;
+#[cfg(feature = "graphql")]
+use crate::shared::ordering::{OrderBy, OrderDirection};
+use crate::shared::series_metadata::CollectedItems;
+#[cfg(feature = "graphql")]
 use filter_gen::Ordering;
-use sea_orm::{entity::prelude::*, QueryOrder};
+use sea_orm::entity::prelude::*;
+#[cfg(feature = "graphql")]
+use sea_orm::QueryOrder;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject, Ordering)]
-#[graphql(name = "SeriesMetadataModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", derive(Ordering))]
+#[cfg_attr(feature = "graphql", graphql(name = "SeriesMetadataModel"))]
 #[sea_orm(table_name = "series_metadata")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
@@ -15,14 +18,14 @@ pub struct Model {
 	/// Age rating of the series
 	pub age_rating: Option<i32>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub characters: Option<String>,
 	/// Booktype of the series (Print, OneShot, TPB or GN)
 	#[sea_orm(column_type = "Text", nullable)]
 	pub booktype: Option<String>,
 	/// TPB or GN may collect various single issues/series. This will list them here
 	#[sea_orm(column_type = "Json", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub collects: Option<CollectedItems>,
 	/// ComicVine comicid
 	pub comicid: Option<i32>,
@@ -33,13 +36,13 @@ pub struct Model {
 	#[sea_orm(column_type = "Text", nullable)]
 	pub description_formatted: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub genres: Option<String>,
 	/// Name of imprint while under publisher
 	#[sea_orm(column_type = "Text", nullable)]
 	pub imprint: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub links: Option<String>,
 	/// Type of series (e.g. "comicSeries")
 	#[sea_orm(column_type = "Text", nullable)]
@@ -65,7 +68,7 @@ pub struct Model {
 	/// Volume of the series in relation to other titles (this can be either numerical or the series year)
 	pub volume: Option<i32>,
 	#[sea_orm(column_type = "Text", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub writers: Option<String>,
 	/// Year the series started (publication start)
 	pub year: Option<i32>,
@@ -77,7 +80,7 @@ pub struct Model {
 	pub metadata_external_id: Option<String>,
 	/// JSON array of MetadataField enum values that are locked from being overwritten by fetch features
 	#[sea_orm(column_type = "Json", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub locked_fields: Option<serde_json::Value>,
 }
 

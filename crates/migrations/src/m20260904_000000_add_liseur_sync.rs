@@ -1,0 +1,901 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+	async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+		manager
+			.create_table(
+				Table::create()
+					.table(LiseurSyncTokens::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(LiseurSyncTokens::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(ColumnDef::new(LiseurSyncTokens::UserId).text().not_null())
+					.col(ColumnDef::new(LiseurSyncTokens::DeviceId).text().not_null())
+					.col(
+						ColumnDef::new(LiseurSyncTokens::SecretHash)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(LiseurSyncTokens::Scopes).text().not_null())
+					.col(
+						ColumnDef::new(LiseurSyncTokens::CreatedAt)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncTokens::ExpiresAt)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(LiseurSyncTokens::LastUsedAt).text())
+					.col(ColumnDef::new(LiseurSyncTokens::RevokedAt).text())
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-tokens-user")
+							.from(LiseurSyncTokens::Table, LiseurSyncTokens::UserId)
+							.to(Users::Table, Users::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("idx-liseur-sync-tokens-user")
+					.table(LiseurSyncTokens::Table)
+					.col(LiseurSyncTokens::UserId)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("uq-liseur-sync-tokens-secret")
+					.table(LiseurSyncTokens::Table)
+					.col(LiseurSyncTokens::SecretHash)
+					.unique()
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(LiseurSyncCounters::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(LiseurSyncCounters::UserId)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncCounters::OpSeq)
+							.big_integer()
+							.not_null()
+							.default(0),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncCounters::AnnotationSeq)
+							.big_integer()
+							.not_null()
+							.default(0),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-counters-user")
+							.from(LiseurSyncCounters::Table, LiseurSyncCounters::UserId)
+							.to(Users::Table, Users::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(LiseurSyncWorks::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(LiseurSyncWorks::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(ColumnDef::new(LiseurSyncWorks::UserId).text().not_null())
+					.col(ColumnDef::new(LiseurSyncWorks::Title).text().not_null())
+					.col(ColumnDef::new(LiseurSyncWorks::Author).text().not_null())
+					.col(
+						ColumnDef::new(LiseurSyncWorks::Pending)
+							.boolean()
+							.not_null()
+							.default(false),
+					)
+					.col(ColumnDef::new(LiseurSyncWorks::CreatedAt).text().not_null())
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-works-user")
+							.from(LiseurSyncWorks::Table, LiseurSyncWorks::UserId)
+							.to(Users::Table, Users::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("uq-liseur-sync-works-user-id")
+					.table(LiseurSyncWorks::Table)
+					.col(LiseurSyncWorks::UserId)
+					.col(LiseurSyncWorks::Id)
+					.unique()
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(LiseurSyncEditions::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(LiseurSyncEditions::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(ColumnDef::new(LiseurSyncEditions::UserId).text().not_null())
+					.col(
+						ColumnDef::new(LiseurSyncEditions::EditionSha)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(LiseurSyncEditions::SampledHash).text())
+					.col(ColumnDef::new(LiseurSyncEditions::KoreaderHash).text())
+					.col(ColumnDef::new(LiseurSyncEditions::WorkId).text().not_null())
+					.col(ColumnDef::new(LiseurSyncEditions::MediaId).text())
+					.col(ColumnDef::new(LiseurSyncEditions::PageCount).big_integer())
+					.col(ColumnDef::new(LiseurSyncEditions::CharCount).big_integer())
+					.col(ColumnDef::new(LiseurSyncEditions::Metadata).text())
+					.col(
+						ColumnDef::new(LiseurSyncEditions::CreatedAt)
+							.text()
+							.not_null(),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-editions-user")
+							.from(LiseurSyncEditions::Table, LiseurSyncEditions::UserId)
+							.to(Users::Table, Users::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-editions-work")
+							.from(LiseurSyncEditions::Table, LiseurSyncEditions::WorkId)
+							.to(LiseurSyncWorks::Table, LiseurSyncWorks::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-editions-media")
+							.from(LiseurSyncEditions::Table, LiseurSyncEditions::MediaId)
+							.to(Media::Table, Media::Id)
+							.on_delete(ForeignKeyAction::SetNull)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("uq-liseur-sync-editions-user-sha")
+					.table(LiseurSyncEditions::Table)
+					.col(LiseurSyncEditions::UserId)
+					.col(LiseurSyncEditions::EditionSha)
+					.unique()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("idx-liseur-sync-editions-koreader")
+					.table(LiseurSyncEditions::Table)
+					.col(LiseurSyncEditions::UserId)
+					.col(LiseurSyncEditions::KoreaderHash)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(LiseurSyncAliases::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(LiseurSyncAliases::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(ColumnDef::new(LiseurSyncAliases::UserId).text().not_null())
+					.col(ColumnDef::new(LiseurSyncAliases::Kind).text().not_null())
+					.col(ColumnDef::new(LiseurSyncAliases::Value).text().not_null())
+					.col(ColumnDef::new(LiseurSyncAliases::WorkId).text().not_null())
+					.col(ColumnDef::new(LiseurSyncAliases::EditionSha).text())
+					.col(
+						ColumnDef::new(LiseurSyncAliases::CreatedAt)
+							.text()
+							.not_null(),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-aliases-user")
+							.from(LiseurSyncAliases::Table, LiseurSyncAliases::UserId)
+							.to(Users::Table, Users::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-aliases-work")
+							.from(LiseurSyncAliases::Table, LiseurSyncAliases::WorkId)
+							.to(LiseurSyncWorks::Table, LiseurSyncWorks::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("uq-liseur-sync-aliases-user-kind-value")
+					.table(LiseurSyncAliases::Table)
+					.col(LiseurSyncAliases::UserId)
+					.col(LiseurSyncAliases::Kind)
+					.col(LiseurSyncAliases::Value)
+					.unique()
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(LiseurSyncMediaLinks::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(LiseurSyncMediaLinks::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncMediaLinks::UserId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncMediaLinks::MediaId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncMediaLinks::WorkId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncMediaLinks::EditionSha)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncMediaLinks::ResolutionStatus)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncMediaLinks::CreatedAt)
+							.text()
+							.not_null(),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-media-links-user")
+							.from(
+								LiseurSyncMediaLinks::Table,
+								LiseurSyncMediaLinks::UserId,
+							)
+							.to(Users::Table, Users::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-media-links-media")
+							.from(
+								LiseurSyncMediaLinks::Table,
+								LiseurSyncMediaLinks::MediaId,
+							)
+							.to(Media::Table, Media::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-media-links-work")
+							.from(
+								LiseurSyncMediaLinks::Table,
+								LiseurSyncMediaLinks::WorkId,
+							)
+							.to(LiseurSyncWorks::Table, LiseurSyncWorks::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("uq-liseur-sync-media-links-user-media")
+					.table(LiseurSyncMediaLinks::Table)
+					.col(LiseurSyncMediaLinks::UserId)
+					.col(LiseurSyncMediaLinks::MediaId)
+					.unique()
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(LiseurSyncOps::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(LiseurSyncOps::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(ColumnDef::new(LiseurSyncOps::UserId).text().not_null())
+					.col(ColumnDef::new(LiseurSyncOps::Seq).big_integer().not_null())
+					.col(ColumnDef::new(LiseurSyncOps::OpId).text().not_null())
+					.col(ColumnDef::new(LiseurSyncOps::WorkId).text().not_null())
+					.col(ColumnDef::new(LiseurSyncOps::EditionSha).text())
+					.col(ColumnDef::new(LiseurSyncOps::DeviceId).text().not_null())
+					.col(ColumnDef::new(LiseurSyncOps::ClientTs).text().not_null())
+					.col(
+						ColumnDef::new(LiseurSyncOps::Progression)
+							.float()
+							.not_null(),
+					)
+					.col(ColumnDef::new(LiseurSyncOps::Locator).text())
+					.col(ColumnDef::new(LiseurSyncOps::ForeignPos).text())
+					.col(ColumnDef::new(LiseurSyncOps::Origin).text().not_null())
+					.col(ColumnDef::new(LiseurSyncOps::ReceivedAt).text().not_null())
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-ops-user")
+							.from(LiseurSyncOps::Table, LiseurSyncOps::UserId)
+							.to(Users::Table, Users::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-ops-work")
+							.from(LiseurSyncOps::Table, LiseurSyncOps::WorkId)
+							.to(LiseurSyncWorks::Table, LiseurSyncWorks::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		for index in [
+			Index::create()
+				.name("uq-liseur-sync-ops-user-seq")
+				.table(LiseurSyncOps::Table)
+				.col(LiseurSyncOps::UserId)
+				.col(LiseurSyncOps::Seq)
+				.unique()
+				.to_owned(),
+			Index::create()
+				.name("uq-liseur-sync-ops-user-op-id")
+				.table(LiseurSyncOps::Table)
+				.col(LiseurSyncOps::UserId)
+				.col(LiseurSyncOps::OpId)
+				.unique()
+				.to_owned(),
+			Index::create()
+				.name("idx-liseur-sync-ops-work")
+				.table(LiseurSyncOps::Table)
+				.col(LiseurSyncOps::UserId)
+				.col(LiseurSyncOps::WorkId)
+				.col(LiseurSyncOps::Seq)
+				.to_owned(),
+		] {
+			manager.create_index(index).await?;
+		}
+
+		manager
+			.create_table(
+				Table::create()
+					.table(LiseurSyncSessions::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(LiseurSyncSessions::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(ColumnDef::new(LiseurSyncSessions::UserId).text().not_null())
+					.col(
+						ColumnDef::new(LiseurSyncSessions::SessionId)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(LiseurSyncSessions::WorkId).text().not_null())
+					.col(ColumnDef::new(LiseurSyncSessions::EditionSha).text())
+					.col(
+						ColumnDef::new(LiseurSyncSessions::DeviceId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncSessions::StartedAt)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncSessions::EndedAt)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncSessions::StartProgression)
+							.float()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncSessions::EndProgression)
+							.float()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncSessions::IdleMs)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncSessions::Payload)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncSessions::ReceivedAt)
+							.text()
+							.not_null(),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-sessions-user")
+							.from(LiseurSyncSessions::Table, LiseurSyncSessions::UserId)
+							.to(Users::Table, Users::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-sessions-work")
+							.from(LiseurSyncSessions::Table, LiseurSyncSessions::WorkId)
+							.to(LiseurSyncWorks::Table, LiseurSyncWorks::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("uq-liseur-sync-sessions-user-session")
+					.table(LiseurSyncSessions::Table)
+					.col(LiseurSyncSessions::UserId)
+					.col(LiseurSyncSessions::SessionId)
+					.unique()
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(LiseurSyncAnnotations::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::RowId)
+							.big_integer()
+							.not_null()
+							.auto_increment()
+							.primary_key(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::UserId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::AnnotationId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::Rev)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::Seq)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::WorkId)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(LiseurSyncAnnotations::EditionSha).text())
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::Kind)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(LiseurSyncAnnotations::Locator).text())
+					.col(ColumnDef::new(LiseurSyncAnnotations::Progression).float())
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::Excerpt)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::Color)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::Body)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::DeviceId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::ClientTs)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::UpdatedAt)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::Deleted)
+							.boolean()
+							.not_null()
+							.default(false),
+					)
+					.col(ColumnDef::new(LiseurSyncAnnotations::DeletedAt).text())
+					.col(
+						ColumnDef::new(LiseurSyncAnnotations::Payload)
+							.text()
+							.not_null(),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-annotations-user")
+							.from(
+								LiseurSyncAnnotations::Table,
+								LiseurSyncAnnotations::UserId,
+							)
+							.to(Users::Table, Users::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-liseur-sync-annotations-work")
+							.from(
+								LiseurSyncAnnotations::Table,
+								LiseurSyncAnnotations::WorkId,
+							)
+							.to(LiseurSyncWorks::Table, LiseurSyncWorks::Id)
+							.on_delete(ForeignKeyAction::Cascade)
+							.on_update(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		for index in [
+			Index::create()
+				.name("uq-liseur-sync-annotations-user-id")
+				.table(LiseurSyncAnnotations::Table)
+				.col(LiseurSyncAnnotations::UserId)
+				.col(LiseurSyncAnnotations::AnnotationId)
+				.unique()
+				.to_owned(),
+			Index::create()
+				.name("idx-liseur-sync-annotations-feed")
+				.table(LiseurSyncAnnotations::Table)
+				.col(LiseurSyncAnnotations::UserId)
+				.col(LiseurSyncAnnotations::Seq)
+				.to_owned(),
+			Index::create()
+				.name("idx-liseur-sync-annotations-work")
+				.table(LiseurSyncAnnotations::Table)
+				.col(LiseurSyncAnnotations::UserId)
+				.col(LiseurSyncAnnotations::WorkId)
+				.col(LiseurSyncAnnotations::Deleted)
+				.to_owned(),
+		] {
+			manager.create_index(index).await?;
+		}
+
+		Ok(())
+	}
+
+	async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+		manager
+			.drop_table(
+				Table::drop()
+					.table(LiseurSyncAnnotations::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(LiseurSyncSessions::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(LiseurSyncOps::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(LiseurSyncMediaLinks::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(LiseurSyncAliases::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(LiseurSyncEditions::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(LiseurSyncWorks::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(LiseurSyncCounters::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(LiseurSyncTokens::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		Ok(())
+	}
+}
+
+#[derive(DeriveIden)]
+enum Users {
+	Table,
+	Id,
+}
+
+#[derive(DeriveIden)]
+enum Media {
+	Table,
+	Id,
+}
+
+#[derive(DeriveIden)]
+enum LiseurSyncTokens {
+	#[sea_orm(iden = "liseur_sync_tokens")]
+	Table,
+	Id,
+	UserId,
+	DeviceId,
+	SecretHash,
+	Scopes,
+	CreatedAt,
+	ExpiresAt,
+	LastUsedAt,
+	RevokedAt,
+}
+
+#[derive(DeriveIden)]
+enum LiseurSyncCounters {
+	#[sea_orm(iden = "liseur_sync_counters")]
+	Table,
+	UserId,
+	OpSeq,
+	AnnotationSeq,
+}
+
+#[derive(DeriveIden)]
+enum LiseurSyncWorks {
+	#[sea_orm(iden = "liseur_sync_works")]
+	Table,
+	Id,
+	UserId,
+	Title,
+	Author,
+	Pending,
+	CreatedAt,
+}
+
+#[derive(DeriveIden)]
+enum LiseurSyncEditions {
+	#[sea_orm(iden = "liseur_sync_editions")]
+	Table,
+	Id,
+	UserId,
+	EditionSha,
+	SampledHash,
+	KoreaderHash,
+	WorkId,
+	MediaId,
+	PageCount,
+	CharCount,
+	Metadata,
+	CreatedAt,
+}
+
+#[derive(DeriveIden)]
+enum LiseurSyncAliases {
+	#[sea_orm(iden = "liseur_sync_aliases")]
+	Table,
+	Id,
+	UserId,
+	Kind,
+	Value,
+	WorkId,
+	EditionSha,
+	CreatedAt,
+}
+
+#[derive(DeriveIden)]
+enum LiseurSyncMediaLinks {
+	#[sea_orm(iden = "liseur_sync_media_links")]
+	Table,
+	Id,
+	UserId,
+	MediaId,
+	WorkId,
+	EditionSha,
+	ResolutionStatus,
+	CreatedAt,
+}
+
+#[derive(DeriveIden)]
+enum LiseurSyncOps {
+	#[sea_orm(iden = "liseur_sync_ops")]
+	Table,
+	Id,
+	UserId,
+	Seq,
+	OpId,
+	WorkId,
+	EditionSha,
+	DeviceId,
+	ClientTs,
+	Progression,
+	Locator,
+	ForeignPos,
+	Origin,
+	ReceivedAt,
+}
+
+#[derive(DeriveIden)]
+enum LiseurSyncSessions {
+	#[sea_orm(iden = "liseur_sync_sessions")]
+	Table,
+	Id,
+	UserId,
+	SessionId,
+	WorkId,
+	EditionSha,
+	DeviceId,
+	StartedAt,
+	EndedAt,
+	StartProgression,
+	EndProgression,
+	IdleMs,
+	Payload,
+	ReceivedAt,
+}
+
+#[derive(DeriveIden)]
+enum LiseurSyncAnnotations {
+	#[sea_orm(iden = "liseur_sync_annotations")]
+	Table,
+	RowId,
+	UserId,
+	AnnotationId,
+	Rev,
+	Seq,
+	WorkId,
+	EditionSha,
+	Kind,
+	Locator,
+	Progression,
+	Excerpt,
+	Color,
+	Body,
+	DeviceId,
+	ClientTs,
+	UpdatedAt,
+	Deleted,
+	DeletedAt,
+	Payload,
+}

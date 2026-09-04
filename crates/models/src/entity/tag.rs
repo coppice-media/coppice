@@ -1,11 +1,9 @@
 use super::media_tag;
-use async_graphql::SimpleObject;
 use sea_orm::{entity::prelude::*, JoinType, QuerySelect};
 
-#[derive(
-	Clone, Debug, PartialEq, Eq, PartialOrd, Ord, DeriveEntityModel, SimpleObject,
-)]
-#[graphql(name = "TagModel")]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, DeriveEntityModel)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "TagModel"))]
 #[sea_orm(table_name = "tags")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = true)]

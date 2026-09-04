@@ -1,11 +1,11 @@
-use async_graphql::SimpleObject;
 use sea_orm::{
 	prelude::{async_trait::async_trait, *},
 	ActiveValue, QueryOrder, QuerySelect,
 };
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "BookClubBookModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "BookClubBookModel"))]
 #[sea_orm(table_name = "book_club_books")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]

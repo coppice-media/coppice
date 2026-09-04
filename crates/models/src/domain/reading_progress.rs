@@ -121,6 +121,7 @@ mod tests {
 			end_percentage: None,
 			koreader_progress: None,
 			elapsed_seconds: None,
+			kobo_state: None,
 			readthrough_number: 1,
 			status: if did_complete {
 				ReadingStatus::Finished

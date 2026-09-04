@@ -1,5 +1,4 @@
 use super::{book_club, user::AuthUser};
-use async_graphql::SimpleObject;
 use sea_orm::{
 	prelude::*,
 	sea_query::{Query, SimpleExpr},
@@ -8,8 +7,9 @@ use sea_orm::{
 
 use crate::shared::book_club::BookClubMemberRole;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "BookClubMemberModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "BookClubMemberModel"))]
 #[sea_orm(table_name = "book_club_members")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]

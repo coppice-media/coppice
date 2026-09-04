@@ -1,12 +1,12 @@
-use async_graphql::SimpleObject;
 use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::{entity::prelude::*, ActiveValue::Set, FromQueryResult};
 
 use crate::shared::enums::JobStatus;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "JobModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "JobModel"))]
 #[sea_orm(table_name = "jobs")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
@@ -18,10 +18,10 @@ pub struct Model {
 	#[sea_orm(column_type = "Text")]
 	pub status: JobStatus,
 	#[sea_orm(column_type = "Blob", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub save_state: Option<Vec<u8>>,
 	#[sea_orm(column_type = "Blob", nullable)]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub output_data: Option<Vec<u8>>,
 	pub ms_elapsed: i64,
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]

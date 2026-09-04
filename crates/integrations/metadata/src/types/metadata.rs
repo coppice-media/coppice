@@ -1,9 +1,9 @@
-use async_graphql::{SimpleObject, Union};
 use serde::{Deserialize, Serialize};
 
 use crate::types::PublicationStatus;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Union)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Union))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExternalMetadata {
 	Media(ExternalMediaMetadata),
 	Series(ExternalSeriesMetadata),
@@ -30,7 +30,8 @@ impl ExternalMetadata {
 // TODO: Hone the fields we can pull across different providers
 
 /// Metadata about a media item from an external metadata provider
-#[derive(Debug, Clone, Default, Serialize, Deserialize, SimpleObject)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExternalMediaMetadata {
 	pub provider: String,
 	pub external_id: String,
@@ -65,7 +66,8 @@ pub struct ExternalMediaMetadata {
 }
 
 /// Metadata about a series from an external metadata provider
-#[derive(Debug, Clone, Default, Serialize, Deserialize, SimpleObject)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExternalSeriesMetadata {
 	pub provider: String,
 	pub external_id: String,

@@ -1,10 +1,10 @@
-use async_graphql::SimpleObject;
 use sea_orm::{prelude::*, Condition, FromQueryResult, QueryOrder};
 
 use super::{reading_list_rule, user::AuthUser};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "ReadingListModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "ReadingListModel"))]
 #[sea_orm(table_name = "reading_lists")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]

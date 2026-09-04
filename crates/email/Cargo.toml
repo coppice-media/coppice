@@ -3,8 +3,12 @@ name = "email"
 edition = "2021"
 version.workspace = true
 
+[features]
+default = []
+graphql = ["dep:async-graphql"]
+
 [dependencies]
-async-graphql.workspace = true
+async-graphql = { workspace = true, optional = true }
 lettre = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

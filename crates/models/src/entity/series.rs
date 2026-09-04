@@ -1,26 +1,28 @@
-use async_graphql::SimpleObject;
 use chrono::Utc;
+#[cfg(feature = "graphql")]
 use filter_gen::Ordering;
+#[cfg(feature = "graphql")]
+use sea_orm::QueryOrder;
 use sea_orm::{
 	entity::prelude::*, prelude::async_trait::async_trait, sea_query::Query, ActiveValue,
-	Condition, FromQueryResult, Linked, QueryOrder, QuerySelect, QueryTrait,
+	Condition, FromQueryResult, Linked, QuerySelect, QueryTrait,
 };
 
+#[cfg(feature = "graphql")]
+use crate::shared::ordering::{OrderBy, OrderDirection};
 use crate::{
 	prefixer::{parse_query_to_model, parse_query_to_model_optional, Prefixer},
-	shared::{
-		enums::FileStatus,
-		image::ImageMetadata,
-		ordering::{OrderBy, OrderDirection},
-	},
+	shared::{enums::FileStatus, image::ImageMetadata},
 };
 
 use super::{library_exclusion, series_metadata, user::AuthUser};
 
 // TODO: Properly support soft deletion
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject, Ordering)]
-#[graphql(name = "SeriesModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", derive(Ordering))]
+#[cfg_attr(feature = "graphql", graphql(name = "SeriesModel"))]
 #[sea_orm(table_name = "series")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]

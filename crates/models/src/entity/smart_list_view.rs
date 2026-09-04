@@ -1,12 +1,12 @@
 use super::smart_list;
-use async_graphql::{SimpleObject, ID};
 use sea_orm::{prelude::*, Condition};
 
 use crate::entity::user::AuthUser;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[sea_orm(table_name = "smart_list_views")]
-#[graphql(name = "SmartListViewModel")]
+#[cfg_attr(feature = "graphql", graphql(name = "SmartListViewModel"))]
 pub struct Model {
 	#[sea_orm(primary_key)]
 	pub id: i32,
@@ -15,7 +15,7 @@ pub struct Model {
 	#[sea_orm(column_type = "Text")]
 	pub list_id: String,
 	#[sea_orm(column_type = "Blob")]
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub data: Vec<u8>,
 }
 
@@ -44,9 +44,21 @@ impl Entity {
 		Self::find().filter(Column::ListId.eq(list_id))
 	}
 
+	#[cfg(feature = "graphql")]
 	pub fn find_by_user_list_id_name(
 		user: &AuthUser,
-		list_id: &ID,
+		list_id: &async_graphql::ID,
+		name: &String,
+	) -> Select<Self> {
+		Self::find_by_user(user)
+			.filter(Column::ListId.eq(list_id.to_string()))
+			.filter(Column::Name.eq(name))
+	}
+
+	#[cfg(not(feature = "graphql"))]
+	pub fn find_by_user_list_id_name(
+		user: &AuthUser,
+		list_id: &String,
 		name: &String,
 	) -> Select<Self> {
 		Self::find_by_user(user)

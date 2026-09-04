@@ -2,7 +2,6 @@ use crate::{
 	entity::{book_club, book_club_member},
 	shared::book_club::{BookClubMemberRole, BookClubMemberRoleSpec},
 };
-use async_graphql::SimpleObject;
 use chrono::Utc;
 use sea_orm::{
 	entity::prelude::*,
@@ -15,8 +14,9 @@ use slugify::slugify;
 
 use super::user::AuthUser;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject)]
-#[graphql(name = "BookClubModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", graphql(name = "BookClubModel"))]
 #[sea_orm(table_name = "book_clubs")]
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
@@ -28,7 +28,7 @@ pub struct Model {
 	#[sea_orm(column_type = "Text", nullable)]
 	pub description: Option<String>,
 	pub is_private: bool,
-	#[graphql(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[sea_orm(column_type = "Json", nullable)]
 	pub member_role_spec: Option<BookClubMemberRoleSpec>,
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]

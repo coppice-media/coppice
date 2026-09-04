@@ -1,14 +1,17 @@
-use async_graphql::SimpleObject;
+#[cfg(feature = "graphql")]
 use filter_gen::Ordering;
-use sea_orm::{prelude::*, QueryOrder};
+use sea_orm::prelude::*;
+#[cfg(feature = "graphql")]
+use sea_orm::QueryOrder;
 
-use crate::shared::{
-	enums::LogLevel,
-	ordering::{OrderBy, OrderDirection},
-};
+use crate::shared::enums::LogLevel;
+#[cfg(feature = "graphql")]
+use crate::shared::ordering::{OrderBy, OrderDirection};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, SimpleObject, Ordering)]
-#[graphql(name = "LogModel")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[cfg_attr(feature = "graphql", derive(Ordering))]
+#[cfg_attr(feature = "graphql", graphql(name = "LogModel"))]
 #[sea_orm(table_name = "logs")]
 pub struct Model {
 	#[sea_orm(primary_key)]

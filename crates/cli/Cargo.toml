@@ -8,9 +8,9 @@ name = "cli-bin"
 path = "bin/main.rs"
 
 [dependencies]
-stump_core = { path = "../../core" }
+stump_core = { path = "../../core", default-features = false }
 models = { path = "../models" }
-migrations = { path = "../migrations" }
+migrations = { path = "../migrations", default-features = false }
 
 sea-orm = { workspace = true }
 tokio = { workspace = true }
