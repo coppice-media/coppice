@@ -1,0 +1,59 @@
+---
+title: Client verification
+description: Which real clients have been verified against the headless Stump build, with what evidence, and what is known not to work
+---
+
+This page is the single record of client-facing verification. Three evidence
+levels are used, and a row never claims more than its evidence:
+
+- **Device** — exercised by a person on a real app against the fixture server
+  (`scripts/dev-fixture-server.sh`, headless debug build, LAN address). Date and
+  app version are given.
+- **Harness** — replayed by the external `komga-compat` Hurl specs
+  (`make replay`, `replay-negative-auth`, `replay-readium`,
+  `replay-liseur-sync`, `replay-mihon`) or a server-side probe; proves the server
+  contract, not the app.
+- **Source** — implemented against a pinned client source; no run yet.
+
+Device verification is the only level that counts as "works in the app".
+
+## Matrix (as of 2026-09-04)
+
+| Client | Protocol / route tree | Login | Browse | Read | Download | Progress sync | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Komelia 0.19.0 (Android) | Komga profile `/api/v1`, `/api/v2`, Readium | Device | Device | Device (CBZ + EPUB) | Device (CBZ + EPUB, offline) | Device (read-progress, mark-read) | 2026-09-03 and 2026-09-04; harness `replay` 8/8, `replay-readium` |
+| Liseur (Komga profile) | Komga profile | Device | Device | Device | — | Device | 2026-09-04 (user report) |
+| Liseur (OPDS 1.2) | `/opds/v1.2` | Device | Device (merged library, covers) | Device | Device | via KOReader sync pairing | 2026-09-04 (user report, screenshot) |
+| Liseur (OPDS 2.0) | `/opds/v2.0` | n/a | **Not supported by the app** | — | — | — | Liseur `OpdsHttp.kt:93` only accepts `application/atom+xml;profile=opds-catalog`; it has no OPDS 2 (`application/opds+json`) parser. Stump serves a valid 2.0 catalog (`200`, JSON links) |
+| Liseur (KOReader sync) | `/koreader/{api_key}` | Device | n/a | n/a | n/a | Device | 2026-09-04 (user report); server probe `users/auth` 200 |
+| Liseur (liseur-sync) | `/v1/*` | Device (login, token mint, `/v1/token`) | Device (folders, books, covers; 2026-09-04 retest) | Device (download) | Device | Device (positions/heads) + harness (`replay-liseur-sync`: positions, heads, changes, annotations, catalog chain, rerun-stable) | 2026-09-04: the earlier `GET /v1/folders` 404 (catalog not implemented) and `GET /v1/works/{id}/annotations` 500 (SQL `no such column: id`) are fixed against the pinned Liseur `31f8182` client (`LiseurSyncApi.kt`, `LiseurSyncCatalogClient.kt`) and retested on the device |
+| Grimmory alias | `/komga/api/*` | Device (login) | Harness | Harness | Harness | Harness | `specs/grimmory.hurl` |
+| Mihon / Tachiyomi (Keiyoushi Komga ext. + built-in Komga tracker) | Komga profile | Device (2026-09-04, API key and user/pass) + harness (`replay-mihon`: X-API-Key + Basic) | Device (browse) + harness (legacy GET catalog) | Device (download + read) + harness (pages + page image) | — | Device (2026-09-04 retest, Komga enhanced tracker) + harness (`replay-mihon`: series tracker GET → PUT → GET, cold Basic first; readlist route when fixture has one) | Device tracker calls (`/api/v2/series/{id}/read-progress/tachiyomi`) were observed 401 before the Basic/API-key scope was widened to that path (`apps/server/src/middleware/auth.rs` `is_komga_basic_auth_path`) — fixed and retested on the device the same day |
+| Kobo device | `/kobo/{api_key}` | Harness (`initialization` 200) | Harness (`library/sync`) | Harness (KEPUB delivery, `Range`) | Harness | Harness (`ReadingState` round-trip) | No physical Kobo yet; KEPUB output is byte-identical to kepubify on 35/35 real books |
+
+Server memory while serving all of the above (debug build, 5 h uptime):
+14.5 MB RSS idle, 110 MB peak during a parallel KEPUB batch.
+
+## How a device report is triaged
+
+1. Every failed response logs `method` + `uri` (`TraceLayer` span at DEBUG in
+   `apps/server/src/http_server.rs`); read the fixture log via the `stump-komga`
+   process logs and match the app's error text to the request.
+2. Reproduce with `curl` against the LAN address using the same credentials
+   and client headers, then against the pinned client source to confirm the
+   expected shape (DTO types, status code).
+3. Fix at the adapter boundary (never in Stump's native routes), add a unit
+   test, and pin the shape in the relevant Hurl spec so the class cannot
+   regress.
+4. Redeploy the fixture (`hub restart stump-komga`), re-run `make replay`, and
+   ask for a retest. Update this page.
+
+## Known client-side limits (not Stump bugs)
+
+- Liseur has no OPDS 2 parser (see matrix); use the OPDS 1.2 URL.
+- Komelia's Readium DTOs are stricter than the Readium spec (`rel` must be a
+  string, `published` a calendar date, contributors lists); the Komga alias
+  normalizes to those types and the native routes keep the spec shapes.
+- The `replay-readium` spec needs a book with no existing reading session for
+  its `PUT /progression`; on a book the phone has opened it returns `409` by
+  design (older timestamp than the live session).

@@ -1,0 +1,722 @@
+Komga/Mihon is one notable problem
+
+Grimmory exposes a Komga-compatible API that supports page streaming and clients including Mihon/Koma/Komelia.
+
+Stump does not currently have this. Mihon support is still an open feature request assigned to the future v0.3.0 backlog.
+
+If you actually use Mihon, I'd put:
+
+Komga compatibility API
+
+near the top of our Stump additions.
+
+Fortunately, Grimmory documents the subset it implements. It's not the entire gigantic Komga API: library/series/book browsing, file download, thumbnails, page listings and page streaming are the important pieces.
+
+That seems like a very reasonable Rust module to add.
+
+Now, about making Stump properly modular
+
+This is where I think there's a really worthwhile project.
+
+Upstream Stump is modular in source organization, but currently not much in Cargo dependency selection.
+
+Its server Cargo.toml unconditionally pulls in things like:
+
+async-graphql
+OIDC
+Apalis job system
+multipart
+stump_core
+tower-http filesystem serving
+
+And stump_core currently unconditionally includes:
+
+Apalis jobs
+cron
+filesystem notify
+email
+EPUB
+image codecs
+metadata integrations
+PDFium
+Rayon
+RAR
+walkdir
+WebP
+ZIP
+...
+
+There's currently no meaningful Cargo feature matrix such as:
+
+[features]
+webui = []
+pdf = []
+metadata = []
+kobo = []
+koreader = []
+
+That's what I would change.
+
+Upstream already has the right seams
+
+Kobo and KOReader are already runtime conditional:
+
+if config.enable_koreader_sync {
+    mount_koreader();
+}
+
+if config.enable_kobo_sync {
+    mount_kobo();
+}
+
+But SPA and OPDS are mounted unconditionally.
+
+Even more interestingly, Stump currently always initializes its scheduler and library watcher at startup, and there's literally a TODO in the source saying those pieces should be reorganized and moved out of the core.
+
+So our modularization direction isn't fighting Stump's architecture.
+
+It actually agrees with an architectural cleanup the upstream code itself already calls for.
+
+I'd create two levels of modularity
+
+Runtime switches for cheap functionality:
+
+ENABLE_WEBUI=false
+ENABLE_KOBO_SYNC=true
+ENABLE_KOREADER_SYNC=true
+ENABLE_OPDS=true
+ENABLE_FILE_WATCHER=false
+ENABLE_METADATA=false
+
+Those let one full binary change behavior.
+
+Then Cargo features for dependencies that we genuinely don't want compiled/linked:
+
+webui
+pdf-render
+metadata
+email
+watcher
+jobs
+kobo
+koreader
+opds-pse
+
+That gives us a real minimal binary.
+
+Something conceptually like:
+
+cargo build --release \
+  --no-default-features \
+  --features sqlite,oidc,opds,koreader
+
+versus:
+
+cargo build --release \
+  --features full
+
+Upstream users still get normal Stump.
+
+You get Stump Headless.
+
+Browser UI and browser readers can absolutely go
+
+I'd distinguish these:
+
+WEB SPA
+React app
+layouts
+settings UI
+browser readers
+themes
+frontend JS
+
+from:
+
+SERVER MEDIA SUPPORT
+EPUB parsing
+PDF parsing
+thumbnail generation
+CBZ extraction
+OPDS PSE page serving
+mobile API
+
+The entire first category can disappear from your headless image.
+
+The official Docker image currently spends a whole Node build stage generating that web bundle and then copies it into the final image.
+
+So a headless image can simply skip that stage.
+
+PDFium needs more thought
+
+I wouldn't initially equate:
+
+disable browser PDF reader
+
+with:
+
+remove PDFium.
+
+Stump currently uses PDFium server-side for things like PDF page rendering and thumbnail generation as well. Its Docker image always carries PDFium, and current bug reports demonstrate that server-side PDF thumbnail/page generation goes through it.
+
+So eventually I would split this further:
+
+pdf-core
+    recognize PDF
+    metadata/page count
+    download original
+
+pdf-render
+    PDFium
+    render pages
+    thumbnails
+    OPDS page streaming
+
+If all you want is:
+
+OPDS → download PDF → reader renders locally
+
+there's no architectural reason for your server to keep a full PDF rendering engine resident.
+
+The Stump profile I'd build for you
+
+Conceptually:
+
+stump-headless
+│
+├── Axum
+├── SQLite WAL
+│
+├── auth
+│   ├── OIDC
+│   └── API keys/local credentials for protocols
+│
+├── library
+│   ├── users/permissions
+│   ├── books
+│   ├── series
+│   ├── shelves/lists
+│   └── reading progress
+│
+├── OPDS 1.2 / 2
+├── KOReader
+│
+├── optional: Kobo
+├── optional: Komga API
+├── optional: metadata fetching
+└── optional: file watcher
+
+NOT PRESENT:
+    React SPA
+    browser readers
+    Node assets
+    email
+    PDFium if unnecessary
+    heavyweight metadata providers
+    unrelated jobs
+
+And still only one Rust process.
+
+I would explicitly avoid turning those modules into separate containers.
+
+This also preserves the official Stump mobile app
+
+And that's a huge advantage over creating grimmory-rs.
+
+We already have:
+
+           ┌─ Stump iOS app
+           ├─ Stump Android app
+           ├─ OPDS clients
+stumpd ────┼─ KOReader
+           ├─ Kobo
+           └─ future Komga/Mihon
+
+Stump's mobile app currently supports offline downloads/readers and bidirectional progress synchronization.
+
+One caution: I would not remove GraphQL or server media endpoints in the first headless pass. We'd first trace what the official mobile app actually consumes. Removing the SPA is clearly safe as an architectural separation; removing backend APIs simply because the web frontend also uses them could break mobile.
+
+That should be driven by dependency tracing/tests rather than guesses.
+
+Where I land
+
+For your priorities, I'd choose:
+
+Stump as the base.
+
+I would not try to reproduce all of Grimmory.
+
+The missing Grimmory pieces I'd potentially bring over are, in order of value:
+
+finish Kobo parity
+Komga-compatible API, if you use Mihon/Komelia
+better metadata providers
+a headless BookDrop/import pipeline, if you actually value that workflow
+
+Everything else is already remarkably close.
+
+And the first engineering change I'd make would be very small:
+
+Stump upstream
+     │
+     ├── normal/full build
+     │
+     └── headless build
+           ├── no SPA
+           ├── no frontend Docker stage
+           ├── configurable watcher/jobs
+           └── same DB/API/protocol compatibility
+
+Then benchmark that before touching Rust internals further.
+
+Because we may discover that simply making the always-on/background parts lazy gets us far enough that a more invasive rewrite isn't necessary.
+
+we can probably make it a lot lighter right? even with those faetures
+
+Yes. I think Stump could be made substantially lighter while retaining almost all of the useful features.
+
+The important distinction is:
+
+Having a feature compiled into the binary is usually cheap.
+Having that feature allocate caches, start workers, watch directories, initialize native libraries, or retain scan state is what costs RAM.
+
+For example, OPDS, KOReader, Kobo routes, OIDC and a static web UI can all be present while doing essentially nothing at idle.
+
+Where I’d aim
+
+For a reasonably sized personal library, I think these are sensible engineering targets, not current Stump measurements:
+
+Stump configuration	Idle target
+Minimal API + SQLite	~25–50 MB
++ OIDC + OPDS + KOReader	~30–60 MB
++ Kobo routes	~35–70 MB
++ static web UI available	basically unchanged
++ metadata integrations available but idle	~40–80 MB
+Full-featured but aggressively lazy Stump	~50–120 MB
+
+I'd therefore aim to make a 128 MB container limit realistic for ordinary usage, with perhaps 256 MB for comfortable scan/import spikes.
+
+That's considerably different from saying “strip Stump down until it has no features.”
+
+Current Stump has several obvious optimization opportunities
+
+Today its server always initializes both the scheduler and library watcher at startup. The source even has a TODO saying the watcher and scheduler need reorganizing and should be moved out of core.
+
+Its central context also always constructs:
+
+SQLite connection pool
+event channel (capacity 1024)
+in-memory Apalis job storage
+Apalis worker state
+LibraryWatcher
+
+whether those facilities are needed immediately or not.
+
+I'd change the lifecycle to more like:
+
+startup
+│
+├── SQLite
+├── HTTP
+├── auth/OIDC config
+├── OPDS
+├── KOReader
+└── Kobo
+       ↓
+
+~tiny idle state
+
+
+first scan requested
+       ↓
+create scanner resources
+       ↓
+scan
+       ↓
+drop scanner state
+
+
+watcher enabled?
+       ↓
+only then initialize notify
+
+
+scheduled jobs configured?
+       ↓
+only then start scheduler
+
+That alone makes the design much more predictable.
+
+The current dependencies are also completely un-feature-gated
+
+stump_core presently pulls in all of these unconditionally:
+
+Apalis
+cron
+notify
+async-graphql
+email
+EPUB
+image
+metadata integrations
+PDFium
+Rayon
+RAR
+walkdir
+WebP
+ZIP
+...
+
+That's begging for Cargo features.
+
+Something like:
+
+[features]
+default = ["opds", "koreader"]
+
+webui = []
+kobo = []
+metadata = []
+pdf-render = ["pdfium-render"]
+watcher = ["notify"]
+jobs = ["apalis", "apalis-cron"]
+mail = ["email"]
+graphql = ["async-graphql"]
+
+Then you can have both:
+
+stump:full
+
+and:
+
+stump:headless
+
+without maintaining different codebases.
+
+But even full should be lazy
+
+This is the part I'd emphasize.
+
+Suppose you build:
+
+stump-full
+
+✅ Web UI
+✅ OIDC
+✅ OPDS
+✅ KOReader
+✅ Kobo
+✅ PDF
+✅ comics
+✅ metadata
+✅ scanner
+✅ watcher
+✅ jobs
+
+That doesn't mean all of these need active runtime state.
+
+I'd want:
+
+Feature                    Idle behavior
+
+Web UI          static files, nothing running
+OPDS            routes only
+KOReader        routes only
+Kobo            routes only
+OIDC            provider config + cached keys
+metadata        instantiate HTTP client on demand
+PDFium          load on first PDF render
+scanner         construct for scan; destroy afterward
+thumbnail work  bounded task; destroy afterward
+Book watcher    only if configured
+scheduler       only if jobs exist/enabled
+email           HTTP/SMTP client on demand
+
+So feature richness and idle RAM become mostly independent.
+
+The scanner is probably a huge part of the historical numbers
+
+This is especially important because the benchmark I quoted earlier used Stump v0.1.4.
+
+That benchmark measured about 209 MB idle after scanning 10k books, rising substantially with library size.
+
+But Stump's maintainer subsequently found some pretty serious scanner behavior.
+
+Before v0.1.5 the scanner had a default concurrency limit of 200, mixed Tokio and Rayon workers, generated large numbers of futures, did repeated database operations, etc. The maintainer specifically identified that as likely responsible for the “massive memory pressure.”
+
+v0.1.5 changed that to:
+
+CPU-derived bounded concurrency
+no Rayon in the scanner
+fill/drain rather than huge pending-future sets
+batched DB operations
+cached tag state
+fewer repeated scans
+transactions/batching
+
+with the maintainer saying the resource improvements should be most significant for libraries over 50k books.
+
+So the 209/448/1160 MB numbers should not be treated as the floor for Stump's architecture.
+
+They were partly measuring an implementation issue that's already being worked on.
+
+There's another hidden problem: “idle after scan” isn't necessarily true live memory
+
+This is something I'd explicitly profile.
+
+A Rust process can do:
+
+start          40 MB
+
+scan
+allocate       400 MB
+
+scan finishes
+live objects    60 MB
+
+RSS            180 MB
+
+because the allocator may keep freed heap pages around for future allocation instead of immediately returning them to Linux.
+
+Docker reports RSS-ish resident memory, so the container can look “fat” even though the application isn't actually holding 180 MB of useful objects.
+
+That distinction is important.
+
+Before refactoring half of Stump, I would measure:
+
+RSS
+vs
+live heap
+vs
+SQLite page cache
+vs
+mapped files/native libs
+
+after:
+
+clean startup
+10 minutes idle
+scan
+immediately after scan
+30 minutes after scan
+
+If:
+
+live heap = 40 MB
+RSS = 180 MB
+
+then we're partly fighting allocator retention, not Stump objects.
+
+That can potentially be improved with allocator choices/decommit behavior rather than application redesign.
+
+SQLite also deserves tuning
+
+Current Stump uses a SqlitePool, but it does not currently specify a maximum pool size in its connection code.
+
+For this application I wouldn't let the general-purpose DB library decide that.
+
+I'd probably use:
+
+max SQLite connections: 2–4
+
+not 10/20/etc.
+
+For SQLite:
+
+HTTP reads ─┐
+            ├─ small connection pool
+MCP/API etc ┘
+                ↓
+             SQLite WAL
+
+There's no benefit to having a large idle pool on a home book server.
+
+I'd also explicitly tune:
+
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA cache_size = ...;
+PRAGMA temp_store = MEMORY;
+
+with a deliberately modest page cache.
+
+This could save tens of MB depending on what the current library stack does.
+
+Web UI: keep it
+
+Given all of this, I'm actually less interested in removing the web UI for RAM reasons.
+
+Current Stump does:
+
+browser
+   ↓
+static JS/CSS/HTML
+   ↓
+Axum
+
+The browser consumes the UI memory.
+
+Server-side, Stump just serves files. Its router currently mounts the SPA unconditionally, but it's just another Axum router.
+
+So we can certainly add:
+
+STUMP_WEBUI=false
+
+and a headless Docker image.
+
+But I'd view that as:
+
+smaller Docker image
+cleaner headless deployment
+smaller attack surface
+no Node frontend build required
+
+rather than a big RAM optimization.
+
+I would keep full Web UI support in the project.
+
+OPDS / KOReader / Kobo should definitely stay
+
+They're almost ideal server features because they're mostly dormant HTTP routes.
+
+Current Stump already does exactly the right thing with KOReader and Kobo routing:
+
+if enable_koreader_sync {
+    mount(koreader)
+}
+
+if enable_kobo_sync {
+    mount(kobo)
+}
+
+Their idle cost should be extremely small.
+
+So I wouldn't sacrifice those to chase memory.
+
+Even Kobo, despite having quite a lot of logic, can remain effectively dormant until a Kobo connects.
+
+PDFium is a better optional boundary
+
+This is one I'd pay attention to.
+
+Stump's standard packaging includes libpdfium, and stump_core currently depends directly on pdfium-render.
+
+There's no reason an EPUB user doing:
+
+Kobo
+OPDS
+KOReader
+
+should necessarily have a PDF renderer initialized.
+
+So I'd split:
+
+PDF support
+├── identify/index/download PDF        cheap
+└── render PDF pages/thumbnails        PDFium
+
+and load the second only when actually required.
+
+Same philosophy for image processing.
+
+Metadata can stay too
+
+External metadata support is mostly:
+
+code
++ some config
++ HTTP client
+
+while idle.
+
+That's cheap.
+
+The expensive part is:
+
+1000 books
+ ×
+provider calls
+ ×
+images
+ ×
+parsing
+ ×
+database writes
+
+So don't remove metadata.
+
+Just run it as a bounded job:
+
+metadata job starts
+       ↓
+N concurrent requests, e.g. 4
+       ↓
+batch writes
+       ↓
+release HTTP/body/image buffers
+       ↓
+idle again
+
+Exactly the same for thumbnail generation.
+
+My preferred architecture now
+
+Not actually “Stump Lite.”
+
+I'd aim for one Stump that is naturally light:
+
+                     Stump
+                       │
+              ┌────────┴────────┐
+              │   always-on     │
+              │                 │
+              │ Axum            │
+              │ SQLite          │
+              │ auth            │
+              │ OIDC            │
+              │ core API        │
+              │ OPDS            │
+              │ KOReader        │
+              │ Kobo            │
+              └────────┬────────┘
+                       │
+                   ~low RAM
+                       │
+         ┌─────────────┼─────────────┐
+         ▼             ▼             ▼
+      scanner        PDFium       metadata
+      on demand      on demand    on demand
+         │             │             │
+         └─────────────┴─────────────┘
+                       │
+                  release memory
+
+Then Cargo feature flags exist mostly to build specialized images, not because the full binary inherently needs lots of memory.
+
+My target would be
+
+I'd treat:
+
+~50–80 MB clean startup idle
+
+as a strong goal.
+
+<100 MB after normal use
+
+as the more important goal.
+
+And:
+
+<128 MB typical idle/full feature set
+
+as a realistic success criterion.
+
+During a large scan, PDF render, thousands-of-book metadata refresh, etc., I'd happily allow:
+
+200–500 MB temporary
+
+provided it falls back near baseline afterwards.
+
+That's actually preferable to designing everything around never exceeding 100 MB. RAM exists to make active work fast; the waste is holding it forever while the server is doing nothing.
+
+The fact that current Stump already has a maintainer actively fixing scanner memory pressure and has explicit TODOs around decoupling scheduler/watcher initialization makes me think this could also be a reasonable upstream optimization effort, rather than requiring a permanent fork.

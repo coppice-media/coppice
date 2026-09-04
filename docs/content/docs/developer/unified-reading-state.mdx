@@ -1,0 +1,502 @@
+---
+title: Unified reading state
+description: Design contract for lossless reading-position and annotation synchronization
+---
+
+This page is a design contract, not an implementation. It defines the common
+state layer that provider adapters can target without pretending that a Readium
+locator is a lossless interchange format.
+
+## Evidence and labels
+
+Facts in this page are marked **[observed]** and cite the source file, line
+range, and inspected revision. The `headless-modular` provider crates and
+server adapters are uncommitted in the inspected worktree; those citations use
+`@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)` rather than
+claiming that the new files exist in the base commit. Design choices and
+projections are marked **[inference]**. The Kobo API mapping is intentionally
+referenced to the planned companion [Kobo sync capabilities, §7](./kobo-sync-capabilities)
+and to the pinned upstream implementation instead of being re-derived from
+Stump's compatibility stub.
+
+The canonical locator type is already present in
+`crates/models/src/shared/readium.rs:122-190@37fdb7d7340894a777c40d685d5262becceae007`.
+It contains `href`, `type`, `title`, optional `locations` (fragments,
+progression, position, total progression, CSS selector, and partial CFI),
+optional text context, and optional `kobo_span`. The fields below therefore
+use `ReadiumLocator` as a **projection** only. Every provider event MUST keep
+its raw native locator, complete native payload, provenance, and declared
+precision beside that projection.
+
+## Domain model
+
+### Reading position
+
+**[inference]** A reading position is an event plus a materialized head. The
+head is convenient for readers; the event is the audit/reconciliation record
+and is never rewritten when a later provider overwrites the head.
+
+```text
+reading_position_event {
+  id: string                         // server event id
+  user_id: string
+  work_id: string                    // canonical work/media identity
+  edition_id: string?                // exact file/publication when known
+
+  locator: ReadiumLocator?           // normalized projection; may be absent
+  progression: decimal?              // resource-local, 0..=1
+  total_progression: decimal?        // publication-wide, 0..=1
+  status: reading_status?            // reading, finished, abandoned, unread
+
+  device: { id: string, name: string? }?
+  source_provider: provider
+  source_record_id: string?          // op id, session id, media id, etc.
+  source_locator_kind: string?       // R2, page, epubcfi, xpointer, etc.
+  raw_native_locator: json           // null when the source has no locator
+  raw_native_payload: json           // complete source request/row/response
+  provenance: {
+    source_work_id: string?
+    source_edition_id: string?
+    source_timestamp: timestamp?
+    timestamp_kind: device | server
+    received_at: timestamp
+    converter: string                 // converter name and version
+  }
+  precision: precision_tier
+  updated_at: timestamp               // effective event time
+  server_seq: int64                   // monotonic per user/position stream
+}
+
+reading_position_head {
+  user_id
+  work_id
+  edition_id?
+  winning_event_id
+  projection: PositionProjection        // normalized, raw, and provenance fields above
+}
+```
+
+**[observed]** Stump's current `reading_session::Model` stores session date,
+start/end Readium locators, start/end pages, start/end percentages, raw
+`koreader_progress`, elapsed seconds, readthrough number, status, notes,
+device IDs, media/user IDs, and created/updated timestamps
+(`crates/models/src/entity/reading_session.rs:22-74@37fdb7d7340894a777c40d685d5262becceae007`).
+The unified event keeps those session facts in provenance/history while the
+head is derived from the latest accepted end position.
+
+**[inference]** `updated_at` is the effective source event time, not a license
+to discard `received_at`. If a protocol supplies a device timestamp, it is
+used and `timestamp_kind=device`; if it does not (for example the current
+native Stump GraphQL input or KOReader PUT), the server assigns the ingestion
+time and records `timestamp_kind=server`. A converter MUST NOT silently
+invent an EPUB `href`, CFI, or page when the native source did not provide one.
+
+### Precision tiers
+
+**[inference]** Precision is declared by the converter and is never inferred
+only because a JSON field is non-empty. Tiers are ordered for fallback and
+conflict display as follows:
+
+| Tier | Meaning | Examples |
+| --- | --- | --- |
+| `range` | A range/anchor was validated against the exact edition bytes. | Readium CFI/range, or a Kobo span resolved against the same KEPUB transformation. |
+| `resource` | A resource `href` plus a valid resource-local position/progression is known, but a text range is not guaranteed. | R2 `href` + `locations.progression`; Kobo `Location.Source` + content-source percentage. |
+| `page` | A discrete page coordinate is known, but no stable resource anchor is known. | Stump paged input or numeric KOReader `progress`. |
+| `publication` | Only whole-publication percentage is known. | KOReader percentage without a usable page; Kobo `ProgressPercent`. |
+| `unknown` | The source has no usable position. | An empty state or a malformed/unresolvable native locator. |
+
+A Kobo span or CFI is `range` only after validation against the exact bytes;
+otherwise it remains raw evidence and is at most `resource`. A page and a
+resource anchor are not interchangeable merely because both can be displayed
+as a progress bar.
+
+### Annotation
+
+**[inference]** An annotation uses the same identity, normalized locator,
+progression, device, provider, raw payload, provenance, precision, effective
+time, and server-sequence fields as a reading position, and adds:
+
+```text
+annotation {
+  id: string                         // provider id in a namespaced identity
+  user_id
+  work_id
+  edition_id?
+  kind: highlight | note | bookmark
+  locator: ReadiumLocator?           // canonical anchor projection
+  progression?
+  total_progression?
+  quote: {
+    text?: string                    // selected text/excerpt
+    before?: string
+    after?: string
+  }
+  anchors: {
+    start?: json                     // canonical/native anchor details
+    end?: json
+  }
+  body?: string                      // user's note, distinct from quote.text
+  device?
+  source_provider
+  source_record_id?
+  source_locator_kind?
+  raw_native_locator: json
+  raw_native_payload: json
+  provenance
+  precision: precision_tier
+  revision: int64
+  tombstone: bool
+  deleted_at: timestamp?
+  updated_at: timestamp
+  server_seq: int64                   // monotonic per user/annotation stream
+}
+```
+
+**[observed]** Native Stump `media_annotations` has a required
+`ReadiumLocator`, optional `annotation_text`, media/user IDs, and
+created/updated timestamps (`crates/models/src/entity/media_annotation.rs:1-70@37fdb7d7340894a777c40d685d5262becceae007`).
+Native `bookmarks` has optional preview content, optional locator, optional
+page, media/user IDs, and a creation timestamp
+(`crates/models/src/entity/bookmark.rs:1-80@37fdb7d7340894a777c40d685d5262becceae007`).
+The unified `body` is the note/annotation text; selected text in
+`locator.text.highlight` or a provider excerpt is the quote, not the note.
+
+**[observed]** The native liseur-sync annotation contract carries `kind`, an
+opaque locator, optional progression/excerpt/color/body, client timestamp,
+revision, sequence, device, and deletion fields. `base_rev == 0` creates a
+record and later writes use compare-and-set revisions
+(`crates/liseur-sync/src/lib.rs:192-245@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+The unified annotation MUST retain a tombstone even when a provider's local
+store normally hard-deletes rows.
+
+## Converter contract
+
+**[inference]** Every provider that carries a position implements the same
+logical contract. The names below are language-neutral pseudocode; the
+provider-specific native DTO remains owned by its provider crate.
+
+```text
+to_locator(native_position, publication_context)
+  -> { locator, progression, total_progression, status,
+       raw_native_locator, raw_native_payload, provenance, precision,
+       losses }
+
+from_locator(projection, publication_context)
+  -> { native_payload, native_locator, losses }
+```
+
+`to_locator` MUST:
+
+1. retain the complete native request/row/response as JSON;
+2. retain the native locator separately, including opaque/foreign formats;
+3. populate only fields justified by the native contract and publication
+   context;
+4. return a field-level loss report and a precision tier; and
+5. keep provider identity and timestamps separate from the normalized locator.
+
+`from_locator` MUST reject an unrepresentable projection or return it with an
+explicit loss report. It MUST NOT substitute a different provider's locator
+syntax, silently drop a note/range, or turn a server-generated URL into a
+publication resource `href` without recording that derivation.
+
+`to_annotation` and `from_annotation` use the same contract when the provider
+has an annotation resource. A provider with no annotation surface returns
+`unsupported` rather than treating progress text as a highlight.
+
+## Provider contracts and loss tables
+
+### Komga R2 native
+
+**[observed]** The extracted Komga DTO defines `R2Progression.modified`,
+`device`, and an `R2Locator`; the locator has `href`, `type`, `title`,
+`locations.fragment`, `position`, `progression`, `total_progression`, text
+before/highlight/after, and `kobo_span`
+(`crates/komga/src/readium.rs:1-91@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+The route converts those fields to Stump's `ReadiumLocator` and back
+(`crates/komga/src/routes/readium.rs:168-224@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+
+| Direction | Mapping | Precision and losses |
+| --- | --- | --- |
+| `to_locator` | **[observed]** `R2Locator.href` -> `ReadiumLocator.href`; `type` -> `type`; `title` -> `title`; `locations.fragment` -> `locations.fragments`; `position` -> `locations.position`; resource/total progressions copy to `locations.progression`/`locations.total_progression`; `text.before/highlight/after` copy to `ReadiumText`; `koboSpan` -> `kobo_span`. `R2Progression.modified` -> `updated_at`; `R2Device.id/name` -> `device`. | **[inference]** `range` only after fragment validation; otherwise `resource` or `publication`. The route's decimal-to-`f32` round trip can lose numeric precision. |
+| `from_locator` | **[observed]** Stump sends `locations.position`, both progression values, fragments, text, and `kobo_span` in the R2 JSON; the route uses total progression as the normalized session percentage and rejects an older `modified` timestamp (`crates/komga/src/routes/readium.rs:300-399@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | **[observed]** The current conversion drops `chapter_title`, `css_selector`, and `partial_cfi` because R2 has no corresponding fields in this adapter. **[inference]** A caller needing only a page should use the Komga read-progress endpoint rather than fabricate an R2 `href`. |
+| Annotation | **[observed]** R2 progression text has context fields but the Komga route tree exposes progression/read-progress, not a revisioned annotation resource (`crates/komga/src/routes/readium.rs:38-48@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`; `crates/komga/src/routes/progress.rs:23-27@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | `to_annotation`/`from_annotation` are **[inference]** `unsupported`. `text.highlight` MUST remain position context, not become an annotation with invented id/revision/tombstone. |
+
+**[inference]** The R2 wire scalar is `f32`; the canonical store uses
+`Decimal`. The adapter MUST preserve the original R2 JSON so a subsequent
+round trip can use the original precision/unknown fields even when the
+normalized decimal was rounded.
+
+### Stump native (page, epubcfi, percentage)
+
+**[observed]** The native GraphQL input has an EPUB variant containing a full
+`ReadiumLocator` and optional percentage, and a paged variant containing a
+page (`crates/graphql/src/input/media.rs:8-42@37fdb7d7340894a777c40d685d5262becceae007`).
+The mutation maps EPUB input to locator + percentage and paged input to page +
+page-derived percentage before calling `upsert_reading_session`
+(`crates/graphql/src/mutation/reading_progress.rs:28-79@37fdb7d7340894a777c40d685d5262becceae007`).
+The shared service stores end locator/page/percentage and preserves an earlier
+value when that component is omitted
+(`crates/models/src/services/reading_progress.rs:13-45,73-139@37fdb7d7340894a777c40d685d5262becceae007`).
+
+| Direction | Mapping | Precision and losses |
+| --- | --- | --- |
+| `to_locator` — EPUB | **[observed]** `reading_sessions.end_locator` is the canonical locator projection; `end_percentage` -> `total_progression`; its nested resource progression, position, fragments, CFI, CSS selector, text, and Kobo span remain in the locator. `status`, `device_ids`, elapsed time, and session timestamps remain provenance/state fields. | **[inference]** `range`/`resource` follows validation of the stored locator. The session's start fields and accumulated elapsed seconds are history, not a second current locator. |
+| `to_locator` — paged | **[observed]** `end_page` is the native page coordinate and `end_percentage` is the page-derived whole-publication progression. The current paged mutation supplies no Readium `href` or locator. | **[inference]** Keep `locator=null`, keep `end_page` in `raw_native_locator`/provenance, and declare `page`; do not manufacture a URL. A media adapter may create a `ReadiumLocator` only when it has a stable page resource href. |
+| `to_locator` — legacy EPUB CFI | **[observed]** The original schema had `locator`, `epubcfi`, `page`, and `percentage_completed` columns (`crates/migrations/src/m20250807_202824_init.rs:2190-2239@37fdb7d7340894a777c40d685d5262becceae007`); the v2 migration carries the legacy CFI and locator into the new session shape (`crates/migrations/src/m20260519_192218_reading_sessions_v2.rs:110-206@37fdb7d7340894a777c40d685d5262becceae007`). | **[inference]** Preserve the original `epubcfi` string verbatim. Map it to `locations.partial_cfi` only after validating its syntax and edition; otherwise leave the normalized locator unchanged and report `legacy-epubcfi-unresolved`. It is not equivalent to a full Readium range by string similarity alone. |
+| `from_locator` — EPUB | **[observed]** Emit the canonical locator as the native EPUB `locator`, `total_progression` as the optional percentage, and completion/device fields where supplied. The source input has no client timestamp, so the server assigns `updated_at` (`crates/graphql/src/input/media.rs:8-16@37fdb7d7340894a777c40d685d5262becceae007`). | **[inference]** Preserve the raw source payload in the unified event; GraphQL has no field for provider provenance, server sequence, or raw payload. |
+| `from_locator` — paged | **[inference]** Require a valid `locations.position` and page-count context, emit that position as `PagedProgressInput.page`, and let Stump recompute the percentage. Reject a projection with only an EPUB CFI/href rather than silently converting it to a page. |
+| Annotation | **[observed]** `media_annotations.locator` -> canonical locator and `annotation_text` -> note body; `bookmarks.locator`/`page`/`preview_content` are separate native fields. | **[inference]** Import annotations/bookmarks with `revision=1`, `tombstone=false`, and `source_provider=stump`. `locator.text.highlight` is quote text; bookmark preview is retained raw and MUST NOT be assumed to be a selected quote. Hard-deleted native rows provide no deletion history, so no historical tombstone can be reconstructed. |
+
+**[observed]** The old v1 schema's `epubcfi` is a legacy column, not a
+field on the current Rust `reading_session::Model`; the current canonical
+`ReadiumLocation` instead exposes `partial_cfi`. This difference is why the
+migration keeps the raw legacy value and why conversion is conditional rather
+than an unconditional rename.
+
+### KOReader (percentage + xpointer)
+
+**[observed]** KOReader PUT requires `document`, string `progress`,
+`percentage` in `0..=1`, `device`, and `device_id`; GET returns those values
+plus a millisecond timestamp. Numeric `progress` parses as a page, while a
+non-numeric DOM x-pointer is retained verbatim and is explicitly not a
+Readium locator (`apps/server/src/routers/koreader_backend/sync.rs:69-90,178-190@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+PUT stores the percentage/page/device in the shared session and then stores the
+raw progress string as `koreader_progress`
+(`apps/server/src/routers/koreader_backend/sync.rs:213-303@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+
+| Direction | Mapping | Precision and losses |
+| --- | --- | --- |
+| `to_locator` — numeric progress | **[observed]** `percentage` -> `total_progression`; numeric `progress` -> native page/end page; `device_id`/`device` -> device; `document` -> source identity matched to `media.koreader_hash` (`crates/models/src/entity/media.rs:50-58@37fdb7d7340894a777c40d685d5262becceae007`). | `page` when the numeric page is valid for the edition; otherwise `publication`. The original string and hash MUST remain raw. |
+| `to_locator` — x-pointer | **[observed]** `percentage` is retained; the x-pointer is stored as `koreader_progress` and no Readium locator is produced. | `publication`; `raw_native_locator` is the x-pointer string, not a fabricated CFI. |
+| `from_locator` | **[inference]** If `locations.position` is available, serialize it as KOReader's string `progress`; otherwise reuse a retained raw x-pointer from the same provider event. Map `total_progression` -> `percentage` and the edition/hash alias -> `document`. If neither page nor retained x-pointer exists, return `unsupported` instead of sending a made-up progress string. |
+| Timestamp/device | **[observed]** KOReader PUT has no client timestamp; Stump returns a server millisecond timestamp and updates the session server-side (`apps/server/src/routers/koreader_backend/sync.rs:93-175,270-303@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | **[inference]** Use `received_at` as `updated_at` with `timestamp_kind=server`; keep the returned timestamp in raw payload. |
+| Annotation | **[observed]** The KOReader route tree and DTOs contain only auth/progress fields and no annotation, highlight, note, bookmark, or Readium-range field (`crates/koreader/src/lib.rs:69-106@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | `to_annotation`/`from_annotation` are **[inference]** `unsupported`; an x-pointer is not an annotation anchor. |
+
+### Kobo API `ReadingState`
+
+The Kobo API mapping below follows the Komga `KoboController` precedent,
+which is documented in the planned companion [Kobo sync capabilities, §7](./kobo-sync-capabilities).
+The pinned upstream sources are Komga's
+`KoboController.kt:573-609@656001eb03bf8b54ca909f3e74fe2ec1b95dac48`,
+`LocationDto.kt:6-18@656001eb03bf8b54ca909f3e74fe2ec1b95dac48`, and
+`ReadingStateDto.kt:29-58@656001eb03bf8b54ca909f3e74fe2ec1b95dac48`.
+Calibre-Web's compatible state handler is also pinned at
+`cps/kobo.py:758-819@a97826402f1b39c45b7ea8d906efddc9f1750934`.
+
+| Direction | Mapping | Precision and losses |
+| --- | --- | --- |
+| `to_locator` — `CurrentBookmark` | **[observed]** `ProgressPercent / 100` -> `total_progression`; `ContentSourceProgressPercent / 100` -> resource `progression`; `Location.Source` -> `ReadiumLocator.href`; a `Location.Type` equal to `KoboSpan` (case-insensitive) makes `Location.Value` -> `kobo_span`. Komga's source constructs exactly these fields in its Kobo controller; Calibre-Web accepts/stores `ProgressPercent`, `ContentSourceProgressPercent`, and `Location.Value/Type/Source`. | `range` only when the span is validated against the exact KEPUB; otherwise `resource`/`publication`. `ReadiumLocator` has no generic field for an unrecognized Kobo location type, so retain the complete `Location` object raw and report `foreign-kobo-location-type`. |
+| `to_locator` — identity | **[observed]** `EntitlementId` identifies the source book; `Created` and `PriorityTimestamp` are top-level state fields. | **[inference]** Map entitlement to source identity/provenance, retain both timestamps raw, and resolve canonical work/edition only through an explicit identity alias. |
+| `to_locator` — status/statistics | **[observed]** `StatusInfo.Status` is `ReadyToRead`, `Reading`, or `Finished`; `Statistics` carries fields such as `SpentReadingMinutes` and `RemainingTimeMinutes`; Calibre-Web updates status, times-started, and statistics separately from the bookmark. | **[inference]** Preserve status, statistics, and `TimesStartedReading` in the payload/provenance; do not squeeze minutes or status into a progression scalar. |
+| `to_locator` — timestamps/device | **[observed]** Kobo state includes top-level and bookmark `LastModified`; Komga uses the bookmark's `lastModified` as the R2 `modified` value when accepting a state update. The device identity/header (`x-kobo-deviceid`) is transport provenance, not a locator field. | **[inference]** Use the source state timestamp as `updated_at`, preserve both timestamp fields raw, and retain Kobo device headers in provenance. |
+| `from_locator` | **[observed]** Komga serializes canonical resource/total progression back as Kobo `ContentSourceProgressPercent`/`ProgressPercent` multiplied by 100 and emits `Location.Source`/`Location.Value`; status maps to the Kobo status names (`ReadingStateDto.kt:29-58@656001eb03bf8b54ca909f3e74fe2ec1b95dac48`). | **[inference]** Emit `Location.Type=KoboSpan` only when `kobo_span` is validated for the target KEPUB. Drop or report canonical CFI/CSS/text fields because ReadingState has no equivalent; preserve them in the unified raw event. |
+| `from_locator` — identity | **[inference]** Emit the canonical source identity as `EntitlementId` and the effective/provenance timestamps as `LastModified`, `Created`, and `PriorityTimestamp` when the target API requires them. | Canonical work identity is not a locator; retain the alias and raw state for replay. |
+| Finished state | **[observed]** Komga ignores Kobo's first-resource location when Kobo reports `Finished` and selects the last EPUB resource (`KoboController.kt:573-609@656001eb03bf8b54ca909f3e74fe2ec1b95dac48`). | **[inference]** A future Stump Kobo converter MUST apply the same publication-context rule and report the location substitution; it MUST NOT claim the first Kobo resource is the final locator. |
+| Annotation | **[observed]** The ReadingState handler accepts bookmark percentages/location, statistics, and status, but no `Text`, `Annotation`, highlight collection, or annotation object (`cps/kobo.py:758-819@a97826402f1b39c45b7ea8d906efddc9f1750934`). | `to_annotation`/`from_annotation` are **[inference]** `unsupported` for the API state lane. Kobo database `Bookmark` ingestion is a separate provider path, not a ReadingState field. |
+
+**[observed]** Stump currently emits Kobo ReadingState as a compatibility
+projection: active session percentage is multiplied by 100 into both Kobo
+percentage fields and `location` is `None`; its current route set has library
+sync but no state writer, and the `/v1/{*path}` fallback returns `{}`
+(`core/src/kobo/entity.rs:334-360@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`,
+`crates/kobo/src/lib.rs:89-183@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`,
+`apps/server/src/routers/kobo_backend/router.rs:101-119@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+That observed gap is why this table specifies a future converter rather than
+claiming current Kobo API round-trip support.
+
+### liseur-sync native op-log
+
+**[observed]** A liseur-sync position input contains `op_id`, `work_id`,
+optional `edition_sha`, `client_ts`, an optional-on-wire but validation-required `progression`, opaque
+JSON `locator`, and optional `foreign_pos`; a returned record adds `seq`,
+device, origin, and `received_at`
+(`crates/liseur-sync/src/lib.rs:118-167@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+The Stump storage writes those fields, assigns a per-user sequence, and
+returns changes ordered by sequence
+(`apps/server/src/routers/liseur_sync/storage.rs:721-838,877-906@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+
+| Direction | Mapping | Precision and losses |
+| --- | --- | --- |
+| `to_locator` — position op | **[observed]** `locator` is retained as opaque JSON; `progression` is a bounded scalar; `foreign_pos` is a separate foreign-position string; `client_ts` -> source timestamp; `device_id`, `seq`, `received_at`, `work_id`, and `edition_sha` -> provenance/identity. | **[inference]** Treat the single liseur progression as `total_progression` unless a provider-specific extension explicitly says it is resource-local. Parse an opaque locator as `ReadiumLocator` only when it validates; otherwise use `publication` or `unknown` while retaining raw JSON. |
+| `from_locator` — position op | **[inference]** Serialize the canonical locator as opaque `locator`, map `total_progression` to required liseur `progression`, copy a retained `foreign_pos` when the source was liseur, and use the canonical effective timestamp as `client_ts`. `op_id` remains a caller-owned idempotency key and MUST be supplied deterministically by the sync client. |
+| Sessions | **[observed]** `SessionInput` has `session_id`, `work_id`, optional edition, start/end timestamps and progressions, and `idle_ms`; Stump stores it as an immutable payload keyed by user/session (`crates/liseur-sync/src/lib.rs:171-189@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`, `apps/server/src/routers/liseur_sync/storage.rs:939-1029@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | **[inference]** Sessions become history events, not a competing current locator. Preserve the complete session JSON and never collapse idle time into progression. |
+| `to_annotation` | **[observed]** Map `AnnotationInput.kind` to `kind`; opaque `locator` to raw/native locator; `progression` to total progression; `excerpt` to quote text; `body` to note body; `client_ts` to source time; `id`/`base_rev` to identity/revision precondition. Server records add `rev`, `seq`, device, updated time, and tombstone fields (`crates/liseur-sync/src/lib.rs:192-245@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | `range`/`resource` only after validating the opaque locator. `color` is retained as annotation metadata; it is not represented in `ReadiumLocator`. |
+| `from_annotation` | **[inference]** For a live highlight/bookmark, emit the canonical locator JSON, progression, quote excerpt, body, color, edition, and `client_ts`; use the current `revision` as `base_rev`. For a tombstone, use the liseur delete route with its revision rather than sending a synthetic empty annotation. | Liseur's `note` kind forbids a locator while Stump's current annotation entity requires one; such a note cannot be projected into the native Stump row without loss and MUST remain in the unified bridge/raw store. |
+| Conflict/lifecycle | **[observed]** Position ops are append-only/idempotent by `op_id`; annotation edits use CAS revisions, separate annotation sequence, and tombstones (`apps/server/src/routers/liseur_sync/storage.rs:740-838,1046-1297@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | **[inference]** The unified head uses the conflict rule below; liseur annotation `base_rev` remains a precondition, so a stale revision is a conflict rather than an automatic overwrite. |
+
+### OPDS — no provider converter (none)
+
+**[observed]** OPDS 1.2 page delivery can optionally record a page and a
+page-derived percentage through `NormalizedProgression`; it has no native
+locator payload (`apps/server/src/routers/opds_backend/v1_2.rs:794-835@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+Therefore the OPDS 1.2 provider contract has **no `to_locator` or
+`from_locator` converter**: page tracking uses the Stump-native page mapping,
+and an OPDS feed/download itself does not create an annotation.
+
+**[observed]** OPDS 2.0's progression route is a wire wrapper around Readium
+fields. Its output maps EPUB session locators and paged positions to
+`href`/type/locations, and its input maps those fields into a
+`ReadiumLocator`; it checks the supplied `modified` timestamp before writing
+(`core/src/opds/v2_0/progression.rs:17-120,141-248@37fdb7d7340894a777c40d685d5262becceae007`,
+`apps/server/src/routers/opds_backend/v2_0.rs:1229-1351@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+This is a direct canonical Readium path, not a second OPDS-specific converter.
+
+| OPDS surface | Mapping and declared loss |
+| --- | --- |
+| 2.0 envelope | **[observed]** `modified` -> effective timestamp and `device.id/name` -> device when present. | **[inference]** Preserve the raw envelope; OPDS still has no provider-specific converter. |
+| 1.2 page | **[observed]** Corrected page -> native page; page count -> computed percentage; optional progression tracking is configuration-gated. **[inference]** `precision=page`; `to_locator/from_locator=none`; retain request path/query as raw payload. |
+| 2.0 EPUB progression | **[observed]** Input `href`, `type`, title, fragments, position, progression, total progression, and text map to the canonical fields; output uses the session's end locator. **[observed]** The OPDS output type has no text, CSS selector, partial CFI, or Kobo span, so those fields are lost on a GET response even though input text is accepted. **[inference]** Use the canonical Readium converter with `losses=[opds-wire-fields-not-emitted]`, not an OPDS converter. |
+| 2.0 paged progression | **[observed]** Output synthesizes a server page URL and `image/jpeg` type from `end_page`; input position maps back to page and total progression. **[inference]** Mark the href/type as provider-derived, retain raw JSON, and do not treat the synthetic URL as a publication resource anchor. |
+| Annotation | **[observed]** OPDS route inventory has catalog, page/download, and v2 progression but no revisioned annotation resource (`crates/opds/src/lib.rs:225-236,332-337,650-665@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | `to_annotation`/`from_annotation=unsupported` **[inference]**; no annotation id, quote, body, revision, or tombstone can be obtained from OPDS. |
+
+## Conflict and materialization rule
+
+**[observed]** Komga R2 and OPDS v2 reject an update whose supplied
+`modified` timestamp is older than the latest session
+(`crates/komga/src/routes/readium.rs:337-349@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`;
+`apps/server/src/routers/opds_backend/v2_0.rs:1261-1290@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+**[observed]** liseur-sync records client timestamp, device, received time,
+and an atomically assigned sequence, and exposes changes ordered by that
+sequence (`apps/server/src/routers/liseur_sync/storage.rs:721-838,877-906@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+Its annotation lane additionally uses revision CAS and tombstones
+(`apps/server/src/routers/liseur_sync/storage.rs:1046-1297@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+
+**[inference]** The unified reading-position head uses **last-writer-wins by
+device timestamp, with server sequence as the deterministic tie-breaker**:
+
+1. Convert a source timestamp to `updated_at`. Prefer the provider's device
+   timestamp (`R2.modified`, OPDS `modified`, Kobo state/bookmark
+   `LastModified`, or liseur `client_ts`). For Stump native and KOReader,
+   which do not carry a client timestamp in their write DTOs, use server
+   ingestion time and mark `timestamp_kind=server`.
+2. Assign an atomically increasing `server_seq` in the user's position
+   stream. The sequence is a cursor/audit order, not a replacement for the
+   device timestamp.
+3. Compare candidates lexicographically by `(updated_at, server_seq)`; the
+   greatest candidate becomes the materialized head. A later-arriving update
+   with an older device timestamp is retained as an event but does not move
+   the head. Equal timestamps are resolved by the larger server sequence.
+4. Keep losing raw payloads and loss reports. A client can inspect the losing
+   event and the winning event; no native locator is thrown away merely
+   because it cannot be projected to Readium.
+5. Scope the comparison by `(user_id, canonical work_id, edition_id)` and keep
+   source identity aliases (media ID, Kobo entitlement, KOReader hash, liseur
+   work/edition) in provenance. An identifier mismatch MUST NOT merge two
+   works on title similarity alone.
+
+
+**[inference]** Annotation writes apply the liseur base_rev CAS precondition
+first. A matching write gets the next revision and annotation sequence; a
+stale revision returns a conflict and leaves the current record/tombstone
+untouched. For annotation sources without revisions, accepted events use the
+same (updated_at, server_seq) LWW ordering. Once accepted, a unified
+annotation head uses the same ordering; CAS protects the provider edit chain
+rather than replacing cross-provider ordering. A delete is a new tombstone
+revision, never a physical disappearance from the unified stream. This keeps
+the requested LWW rule for provider state while preserving liseur-sync
+observed revision semantics for mutable annotation identities.
+ 
+## Migration outline from today's tables
+
+**[observed]** The current storage is split across the v2 reading-session row,
+reading-device registry, the KOReader hash/raw-progress fields, native
+annotation/bookmark rows, and Kobo synchronization cursors. `reading_devices`
+is a small id/name/kind/email registry
+(`crates/models/src/entity/reading_device.rs:1-24@37fdb7d7340894a777c40d685d5262becceae007`);
+`media.koreader_hash` is an optional KOReader identity hash
+(`crates/models/src/entity/media.rs:50-58@37fdb7d7340894a777c40d685d5262becceae007`);
+and `kobo_sync_sessions` stores user, selected media IDs, Kobo device id and
+metadata, creation time, and previous-sync time
+(`crates/models/src/entity/kobo_sync_session.rs:1-40@37fdb7d7340894a777c40d685d5262becceae007`).
+There is no standalone `koreader` table in the entity index; KOReader state is
+stored in `media.koreader_hash`, `reading_session.koreader_progress`, and
+`reading_devices` (`crates/models/src/entity/mod.rs:1-48@37fdb7d7340894a777c40d685d5262becceae007`).
+
+### Phase 1 — add the unified event/head store
+
+**[inference]** Add position events and heads, annotation records/events, and
+provider-identity/provenance columns without removing the old tables. Keep
+separate per-user position and annotation sequence counters, matching
+liseur-sync's observed `op_seq`/`annotation_seq` split
+(`crates/migrations/src/m20260904_000000_add_liseur_sync.rs:49-91,300-503@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+Raw JSON should be validated for size and parseability but stored unchanged
+as a value; normalization is an additional column, never an in-place rewrite.
+
+### Phase 2 — deterministic backfill
+
+1. **[inference] Reading sessions:** emit one Stump position event per
+   session's end state. Map `end_locator`, `end_page`, `end_percentage`,
+   status, device IDs, notes, elapsed seconds, media/user IDs, and timestamps;
+   retain start fields and the complete row in raw payload/provenance. Order
+   equal timestamps by the existing session `id` when seeding `server_seq`.
+2. **[inference] Legacy CFI:** if a deployed database still has the legacy
+   `epubcfi` value, retain it verbatim and conditionally populate
+   `partial_cfi`; never claim successful conversion without edition
+   validation. The v2 migration's legacy copy is evidence that this value is
+   historical input, not a new provider contract.
+3. **[inference] KOReader:** copy `media.koreader_hash` into provider identity
+   aliases/edition provenance, not into a locator. For every session with
+   `koreader_progress`, create a raw KOReader event containing
+   document=`media.koreader_hash` when available, `progress`, percentage,
+   and device. Numeric strings can seed page; an x-pointer seeds raw
+   foreign position and percentage only.
+4. **[inference] Devices:** import `reading_devices` into the unified device
+   registry and preserve all `reading_session.device_ids`. The materialized
+   head may expose one winning device, but provenance retains the complete
+   contributing set.
+5. **[inference] Native annotations/bookmarks:** backfill
+   `media_annotations` as highlight/note records and `bookmarks` as bookmark
+   records with `revision=1`, `tombstone=false`, source `stump`, and raw rows.
+   A hard delete leaves no historical tombstone; do not synthesize one.
+6. **[inference] Kobo cursors:** do not convert `kobo_sync_sessions` into
+   reading positions. Migrate its device id, device metadata, selected media
+   IDs, and previous-sync timestamp into a provider cursor/provenance table;
+   completed cursors can be retired after parity, while incomplete cursors
+   remain resumable or expire by an explicit policy.
+7. **[inference] Existing liseur records:** where the optional
+   `liseur_sync_*` tables already exist, import position ops and annotation
+   records as liseur events without interpreting opaque locator JSON. Keep
+   their `seq`, `rev`, `client_ts`, `device_id`, payload, and tombstones as
+   source evidence.
+
+### Phase 3 — dual read/write and parity
+
+**[inference]** Route every provider position write through its applicable adapter (`to_locator` where defined, the canonical identity path for OPDS 2.0, or the direct page path for OPDS 1.2), append an
+immutable unified event, materialize the conflict winner, and maintain the
+legacy projection needed by existing GraphQL/Komga/KOReader/Kobo clients.
+Provider reads use `from_locator` and retain the winning raw native payload
+when it can be replayed. Use a deterministic idempotency key such as
+`(user_id, source_provider, source_record_id, payload_digest)` so a retry does
+not create a second event. Compare provider responses with the legacy path
+before switching reads; discrepancies must be reported as field-level losses,
+not hidden by a fallback conversion.
+
+### Phase 4 — cutover and retirement
+
+**[inference]** After parity, switch native and compatibility reads to unified
+heads, keep old rows read-only for a rollback window, and stop duplicate
+writes. Only then retire compatibility columns/tables: archive
+`reading_sessions`, keep the KOReader hash as a durable identity alias even
+if `media.koreader_hash` is removed, and remove `kobo_sync_sessions` only
+after its cursor state has moved. Native `media_annotations` and `bookmarks`
+may remain as local projections; the unified annotation/tombstone stream is
+the source of truth for cross-provider synchronization.
+
+## Non-negotiable invariants
+
+- **[inference]** A normalized Readium locator is never the sole copy of a
+  provider position or annotation.
+- **[inference]** Every event identifies its provider, source identity,
+  timestamp kind, converter version, raw native locator, raw native payload,
+  precision, and loss report.
+- **[inference]** Unknown provider fields survive round trips in raw JSON;
+  unsupported fields are reported, not silently repurposed.
+- **[inference]** A sequence is a server ordering/audit cursor. It does not
+  erase device time, and device time does not erase sequence ties.
+- **[inference]** Annotation revisions and tombstones survive provider
+  deletion or provider disablement.
+- **[observed]** Existing provider routes already distinguish stale timestamp
+  conflicts (Komga/OPDS) and keep liseur position/annotation sequence data;
+  the unified layer extends those boundaries rather than changing the public
+  protocol behavior (`crates/komga/src/routes/readium.rs:337-399@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`,
+  `apps/server/src/routers/liseur_sync/storage.rs:721-838,1046-1297@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).

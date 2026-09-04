@@ -41,11 +41,35 @@ The directory where Stump will look for its configuration file.
 
 ### STUMP_CLIENT_DIR
 
-The directory the contains the web bundle for the web UI
+The directory that contains the web bundle for the web UI.
 
 | Type   | Default Value | TOML Key     |
 | ------ | ------------- | ------------ |
-| String | `./dist`      | `client_dir` |
+| String | `./client`    | `client_dir` |
+
+### STUMP_ENABLE_WEBUI
+
+Whether to serve the Stump web UI and its single-page application (SPA) fallback routes. This is enabled by default. The setting takes effect only when the server was compiled with the Cargo `webui` feature; a `--no-default-features --features headless` build contains no SPA module or frontend assets and cannot re-enable the web UI through configuration.
+
+| Type    | Default Value | TOML Key       |
+| ------- | ------------- | -------------- |
+| Boolean | `true`        | `enable_webui` |
+
+### STUMP_RUNTIME_WORKER_THREADS
+
+Optional number of Tokio worker threads. When unset, Tokio uses its normal CPU-based default. This is read before `Stump.toml` is loaded and is available only as an environment variable. Values must be positive integers.
+
+### STUMP_RUNTIME_MAX_BLOCKING_THREADS
+
+Optional upper bound for Tokio blocking threads. When unset, Tokio's default of 512 is preserved. Blocking threads are created on demand rather than all at startup; a lower bound limits peak thread growth during processor work. This is available only as an environment variable, and values must be positive integers.
+
+### STUMP_ENABLE_BACKGROUND_JOBS
+
+Whether to initialize scheduled jobs, the library-watcher listener, and the Apalis worker. Disabling this keeps the HTTP/database service available, but job submission and watcher operations return an explicit disabled error.
+
+| Type    | Default Value | TOML Key                |
+| ------- | ------------- | ----------------------- |
+| Boolean | `true`        | `enable_background_jobs` |
 
 ### STUMP_ALLOWED_ORIGINS
 
@@ -135,6 +159,30 @@ The timeout for both SQLite and PostgreSQL database connections, in seconds. It 
 
 - For SQLite, this is the timeout used for both acquiring and busy waiting for a database connection
 - For PostgreSQL, this is the timeout used for acquiring a database connection
+
+### STUMP_DB_MAX_CONNECTIONS
+
+Maximum database connections retained by the SQLx pool for either SQLite or PostgreSQL. The value must be greater than zero. Lower values bound connection and prepared-statement memory but can reduce request concurrency.
+
+| Type    | Default Value | TOML Key            |
+| ------- | ------------- | ------------------- |
+| Integer | `10`          | `db_max_connections` |
+
+### STUMP_DB_MIN_CONNECTIONS
+
+Minimum idle database connections. This cannot exceed `STUMP_DB_MAX_CONNECTIONS`.
+
+| Type    | Default Value | TOML Key            |
+| ------- | ------------- | ------------------- |
+| Integer | `0`           | `db_min_connections` |
+
+### STUMP_SQLITE_STATEMENT_CACHE_CAPACITY
+
+Prepared statements cached per SQLite connection. This does not affect PostgreSQL. The headless container uses `32`; source and full builds preserve SQLx's prior effective value of `100`.
+
+| Type    | Default Value | TOML Key                         |
+| ------- | ------------- | -------------------------------- |
+| Integer | `100`         | `sqlite_statement_cache_capacity` |
 
 ## Logging
 
@@ -296,6 +344,89 @@ Whether or not to enable the Kobo sync integration. To learn more about this int
 | ------- | ------------- | ------------------ |
 | Boolean | `false`       | `enable_kobo_sync` |
 
+### KOBO_KEPUB_CONVERSION
+
+Whether Kobo EPUB downloads should be converted to KEPUB before delivery. The
+converter adds Kobo pagination wrappers and deterministic `koboSpan` anchors,
+and caches the result under the configured cache directory. This setting only
+affects EPUB books and is disabled by default; the existing EPUB download path
+remains compatible with Kobo.
+
+| Type    | Default Value | TOML Key                  |
+| ------- | ------------- | ------------------------- |
+| Boolean | `false`       | `kobo_kepub_conversion`    |
+
+### KOBO_KEPUB_PRECONVERT
+
+Whether to warm the KEPUB cache for every EPUB in a library after its scan
+completes. This is disabled by default and has no effect unless
+`KOBO_KEPUB_CONVERSION` is enabled.
+
+| Type    | Default Value | TOML Key               |
+| ------- | ------------- | ---------------------- |
+| Boolean | `false`       | `kobo_kepub_preconvert` |
+
+### KOBO_KEPUB_CACHE_MAX_AGE_DAYS
+
+The number of days an unused KEPUB cache file is retained. Cache file mtimes
+are refreshed when a cached KEPUB is delivered. The default is 90 days.
+
+| Type    | Default Value | TOML Key                        |
+| ------- | ------------- | ------------------------------- |
+| Integer | `90`          | `kobo_kepub_cache_max_age_days` |
+
+### KOBO_KEPUB_DEFLATE_LEVEL
+
+The libdeflate compression level used for rewritten KEPUB entries. Values are
+limited to `1..=12`; the default is `6`. The value is part of the cache key.
+
+| Type    | Default Value | TOML Key                   |
+| ------- | ------------- | -------------------------- |
+| Integer | `6`           | `kobo_kepub_deflate_level` |
+
+### INGEST_DROP_DIR
+
+Root of the per-library ingest drop folders (`<INGEST_DROP_DIR>/<library id>/`).
+Files placed there are admitted into the staged ingest workflow by
+`scanIngestDropFolder` (or the editor's "Scan drop folder"). When unset, this
+resolves to `<config dir>/ingest/drop`.
+
+| Type   | Default Value                | TOML Key          |
+| ------ | ---------------------------- | ----------------- |
+| String | `<config dir>/ingest/drop`   | `ingest_drop_dir` |
+
+### INGEST_STAGING_DIR
+
+Root for immutable staged ingest files (one subdirectory per library, files
+named `<sha256>-<filename>`; rejected files move to `rejected/`). When unset,
+this resolves to `<config dir>/ingest/staging`.
+
+| Type   | Default Value                  | TOML Key             |
+| ------ | ------------------------------ | -------------------- |
+| String | `<config dir>/ingest/staging`  | `ingest_staging_dir` |
+
+### INGEST_PROGRESS_RETENTION
+
+Number of typed ingest progress events retained for replay by the
+`ingestProgress` subscription and the `/api/v2/ingest/events` SSE endpoint.
+Reconnecting clients that supply a cursor older than the retained window
+receive `CURSOR_EXPIRED` and must refetch.
+
+| Type    | Default Value | TOML Key                    |
+| ------- | ------------- | --------------------------- |
+| Integer | `10000`       | `ingest_progress_retention` |
+
+### INGEST_EDITOR_DIR
+
+Directory containing the built ingest editor (`editor/build`). When set and
+it contains `index.html`, the editor is served by this server under `/editor`
+with immutable caching for its hashed assets. Unset by default; the editor is
+then not served.
+
+| Type   | Default Value | TOML Key            |
+| ------ | ------------- | ------------------- |
+| String | (unset)       | `ingest_editor_dir` |
+
 ### ENABLE_KOREADER_SYNC
 
 Whether or not to enable the KoReader sync integration. This is a special integration that allows KoReader to sync with Stump. To learn more about this integration, visit the [KoReader](/docs/guides/integrations/koreader) guide.
@@ -418,7 +549,7 @@ The number of seconds after which a book can be re-completed.
 
 ### STUMP_ENABLE_PLAYGROUND
 
-Whether or not to enable the GraphQL playground. The playground is an interactive in-browser IDE for exploring the Stump GraphQL API. It is always enabled in development builds.
+Whether or not to enable the GraphQL playground. The playground is an interactive in-browser IDE for exploring the Stump GraphQL API. It is available only when the server is compiled with `webui` and `STUMP_ENABLE_WEBUI=true`; within that profile, debug builds enable it automatically.
 
 | Type    | Default Value | TOML Key            |
 | ------- | ------------- | ------------------- |

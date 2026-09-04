@@ -89,7 +89,7 @@ This deletes all stored sync sessions for your account, which should force a ful
 
 The current implementation is very basic. It does not support:
 
-- syncing read progress in either direction
+- accepting reading-state updates from Kobo (Stump emits a reading-state projection during library sync, derived from its own reading sessions; see [`KoboSync::sync_items`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo/sync.rs#L243-L286) and [`BookEntitlementContainer::from_media`](https://github.com/stumpapp/stump/blob/nightly/core/src/kobo/entity.rs#L363-L426))
 - converting EPUBs to KEPUBs: page turns take significantly longer with an EPUB
 - proxying to the Kobo store: if you point your device at Stump, you will not be able to sync books from the Kobo store
 - selecting which books should be synced to the Kobo: all EPUBs available to a user will be synced to the Kobo

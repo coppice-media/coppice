@@ -1,0 +1,443 @@
+---
+title: Kobo device-database ingestion
+description: A source-preserving design for importing KoboReader.sqlite reading state and annotations
+---
+
+This page specifies how Stump should ingest a copied `KoboReader.sqlite` without
+turning Kobo's evolving, device-local schema into a second canonical model. It
+is a design document, not a claim that the importer or the Kobo database write
+routes exist today.
+
+The rule for this page is deliberately strict:
+
+> Readium is the projection. The Kobo row, its native locator, the source
+> device, the snapshot, and the precision of any conversion remain first-class
+> evidence.
+
+The canonical Stump projection is `ReadiumLocator` with `ReadiumLocation` and `ReadiumText` (`crates/models/src/shared/readium.rs:118-176@37fdb7d7340894a777c40d685d5262becceae007`). This page uses those fields as a projection only; it does not treat them as a lossless replacement for Kobo native evidence.
+
+`[observed]` means that a pinned source selects, documents, or demonstrates the
+field or behavior. `[inference]` is the ingestion behavior Stump should build.
+`[unverified]` means that a source mentions the table or field, but no pinned
+implementation establishes a stable schema or meaning. A name in the source
+inventory below is included only where the linked source contains that name. Source inventory and firmware-gate claims are **[observed]**; Stump mappings, safety rules, and ingestion behavior are **[inference]** unless explicitly marked otherwise.
+
+## Evidence baseline
+
+The primary sources used here are pinned so that a future implementation can
+re-run the investigation rather than depend on a remembered Kobo schema:
+
+| Source | Pinned revision | What it establishes |
+| --- | --- | --- |
+| [NickelHardcover](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a) | `149ab0ec224b8cf49da269338731b8eade1a809a` | A stock-Nickel, device-side integration. Its CLI opens the database read-only, reads a deliberately small bookmark projection, and pushes progress/journal data to Hardcover. |
+| [kobo-highlights-to-calibre](https://github.com/valeriangalliat/kobo-highlights-to-calibre/tree/7f04a7a760f61b7d36688c0ab1e4415e12150016) | `7f04a7a760f61b7d36688c0ab1e4415e12150016` | A copied-database highlight importer and a documented `Bookmark` schema, including CFI-like start/end paths. |
+| [kobuddy](https://github.com/karlicoss/kobuddy/tree/4e972ce6256d9499394de211c2873cc8b94ee58a) | `4e972ce6256d9499394de211c2873cc8b94ee58a` | A read-only, multi-snapshot parser for `content`, `Bookmark`, `Event`, and `AnalyticsEvents`; its comments also mark uncertain event and `Activity` behavior. |
+| [kobo-db-tools](https://github.com/mfdaves/kobo-db-tools/tree/6c6b2903c58512e8714935048a30d0cc72923bc8) | `6c6b2903c58512e8714935048a30d0cc72923bc8` | Analytics/session parsing, bookmark extraction, read-only fallback, and the optional (but risky) analytics-deletion trigger. |
+| [Calibre Kobo driver](https://github.com/kovidgoyal/calibre/tree/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo) | `335bd69984529a80db528a493754003e4f210acc8` | Firmware/database version gates and compatibility fallbacks. It is a compatibility reader, not a complete schema specification. |
+
+External citations below use `path:line-range@commit`; each linked URL points to the same pinned revision and line range.
+The Kobo volume path used by the importer sources is `.kobo/KoboReader.sqlite`.
+The device-side default is also explicit in NickelHardcover's configuration
+(`cli/src/config.rs`), while kobuddy's mounted-device helper resolves the same
+`.kobo/KoboReader.sqlite` path. Treat the path as an input convention, not as a
+globally available server filesystem path.
+
+## What the database can establish
+
+### `Bookmark`: the annotation lane
+**[observed]** The most complete pinned schema is the `sqlite3 .schema Bookmark`
+capture in `kobo-highlights-to-calibre`. It is an observed schema from that
+database capture, not a promise that every firmware creates every column with the same
+nullability or default. The schema and index evidence is
+`README.md:108-153@7f04a7a760f61b7d36688c0ab1e4415e12150016`; the query projection is
+`index.js:65-106@7f04a7a760f61b7d36688c0ab1e4415e12150016`. The source lists the
+following columns and indexes:
+
+| Source table | Observed columns / constraints | Evidence and interpretation |
+| --- | --- | --- |
+| `Bookmark` | `BookmarkID`, `VolumeID`, `ContentID` | `BookmarkID` is the primary key. `VolumeID` identifies the book volume; `ContentID` identifies the chapter/resource row used to recover title and chapter context. The importer uses `BookmarkID` as its destination annotation ID and groups by `VolumeID`. ([schema](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/README.md#L119-L126), [import query](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/index.js#L68-L106)) |
+| `Bookmark` | `StartContainerPath`, `StartContainerChildIndex`, `StartOffset`, `EndContainerPath`, `EndContainerChildIndex`, `EndOffset` | The start/end container paths are the native range anchors. The example contains `OEBPS/cha01.xhtml#point(/1/4/2/26/1:223)` and describes the paths as CFI-like. ([schema and example](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/README.md#L127-L145), [CFI explanation](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/README.md#L198-L235)) |
+| `Bookmark` | `Text`, `Annotation`, `ExtraAnnotationData` | `Text` is the selected passage in the documented capture; `Annotation` is a separate optional user annotation; `ExtraAnnotationData` is a BLOB whose semantics are not established by these sources. The pinned NickelHardcover query selects `Text` and `Annotation` but not the range-path columns. ([schema](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/README.md#L137-L140), [NickelHardcover query](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/database.rs#L17-L80)) |
+| `Bookmark` | `DateCreated`, `ChapterProgress`, `Hidden`, `Version`, `DateModified` | The capture declares `ChapterProgress` with a default of `0` and `Hidden` with a default of `0`. Calibre filters `Hidden = "false"`, orders by `chapterprogress`, and uses `ChapterProgress` in its annotation display. `Hidden` must not be assumed to mean a deletion tombstone without fixtures. ([schema](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/README.md#L140-L145), [Calibre reader](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/bookmark.py#L46-L53)) |
+| `Bookmark` | `Creator`, `UUID`, `UserID`, `SyncTime`, `Published`, `ContextString`, `Type` | These columns are present in the documented capture. The importer filters `Type = 'highlight'`; that filter is a tool policy, not proof that every `Type` value has stable semantics. Preserve all of these values in the native payload. ([schema](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/README.md#L145-L150), [import query](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/index.js#L89-L106)) |
+| `Bookmark` | `PRIMARY KEY(BookmarkID)`; indexes `bookmark_content(ContentID)` and `bookmark_volume(VolumeID)` | These constraints are part of the same documented schema capture. They are useful for a staged importer, but an importer must still inspect the actual database before relying on them. ([schema](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/README.md#L150-L153)) |
+| `Bookmark` | `Color` | `kobo-db-tools` selects `Color` when exporting bookmarks, while the separate schema capture above does not list it. Treat it as an optional, generation-dependent column: probe before selecting it and retain it only when present. ([bookmark query](https://github.com/mfdaves/kobo-db-tools/blob/6c6b2903c58512e8714935048a30d0cc72923bc8/src/model/bookmark.rs#L16-L39)) |
+
+The pinned tools intentionally read different subsets. NickelHardcover's
+bookmark query selects `BookmarkID`, `Text`, `Annotation`, `DateCreated`, and
+`ChapterProgress`, then estimates a whole-book position from chapter
+`WordCount`. It does not query `StartContainerPath`, `EndContainerPath`,
+`Event`, or `Activity`; those richer fields must not be attributed to that
+integration. ([query](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/database.rs#L17-L80))
+
+Calibre's classification is useful evidence for a conservative importer, not a
+normative Kobo specification: a row with both `StartContainerChildIndex` and
+`StartOffset` equal to zero is treated as a dog-ear bookmark; non-empty `Text`
+with no `Annotation` is a highlight; and non-empty `Text` plus `Annotation` is
+an annotation. ([classification](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/bookmark.py#L75-L130))
+
+### `content`: identity, chapters, and coarse progress
+
+**[observed]** No pinned source provides a complete `CREATE TABLE content` for all
+firmware (`src/kobuddy/__init__.py:404-448@4e972ce6256d9499394de211c2873cc8b94ee58a`;
+`src/calibre/devices/kobo/driver.py:2275-2315@335bd69984529a80db528a493754003e4f210acc8`).
+The following is the union of columns explicitly selected or indexed by the
+sources; the generation gates below say when Calibre attempts to use some of
+them.
+
+| Source table | Observed columns | Use in ingestion | Evidence |
+| --- | --- | --- | --- |
+| `content` | `ContentID`, `BookID`, `ContentType`, `Title`, `Attribution`, `ISBN`, `MimeType`, `___UserID` | Resolve a volume/chapter to Stump media and retain title/author/ISBN/MIME/user evidence. `ContentType = 6` is used by kobuddy for book rows; Calibre's bookmark path also reads `ContentType = 899` chapter rows for KEPUB metadata. | [kobuddy book query](https://github.com/karlicoss/kobuddy/blob/4e972ce6256d9499394de211c2873cc8b94ee58a/src/kobuddy/__init__.py#L404-L448), [Calibre chapter query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/bookmark.py#L39-L45) |
+| `content` | `___PercentRead`, `ReadStatus`, `DateLastRead`, `TimeSpentReading` | Fallback state when `AnalyticsEvents` is absent. The sources read `___PercentRead`, `ReadStatus`, and `DateLastRead`; kobuddy reads `TimeSpentReading` when the key exists. The pinned tools treat `ReadStatus = 2` as finished, but other status values remain source-specific until fixtures establish them. | [kobuddy content projection](https://github.com/karlicoss/kobuddy/blob/4e972ce6256d9499394de211c2873cc8b94ee58a/src/kobuddy/__init__.py#L404-L448), [Calibre last-read query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/bookmark.py#L130-L155) |
+| `content` | `WordCount`, `VolumeIndex`, `BookTitle`, `___NumPages` | Chapter ordering, chapter title, and the optional whole-book progression estimate used by NickelHardcover and Calibre's KEPUB annotation display. These are not required for a lossless native-row import. | [NickelHardcover estimate](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/database.rs#L17-L80), [Calibre KEPUB query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/bookmark.py#L39-L66) |
+| `content` | `Description`, `Publisher`, `ImageID`/`ImageId`, `Language`, `IsDownloaded`, `___ExpirationStatus`, `FavouritesIndex`, `Accessibility` | Catalog/context fields selected by Calibre. They are not needed to reconstruct an annotation, but retaining them in a source snapshot can help match a sideloaded volume. Spelling differs in Calibre queries (`ImageID` and `ImageId`); do not infer two columns. | [Calibre legacy query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L396-L450), [Calibre modern query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L2275-L2315) |
+| `content` | `Series`, `SeriesNumber`, `___UserID`, `ExternalId`, `Subtitle`, `SeriesID`, `SeriesNumberFloat` | Optional catalog identity/context. Calibre only selects the series/external-ID group after its database-version gates, and selects `SeriesID`/`SeriesNumberFloat` only after both database and firmware gates. Do not make any of these required for a state import. | [Calibre modern query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L2275-L2301), [Calibre support helpers](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L4679-L4709) |
+| `content` | `StorePages`, `StoreWordCount`, `StoreTimeToReadLowerEstimate`, `StoreTimeToReadUpperEstimate` | Optional statistics/context fields. Calibre selects them only when its firmware and database gates report support; absent fields must remain absent rather than be filled with zero. | [Calibre modern query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L2295-L2301), [bookstats gate](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L4683-L4685) |
+
+`ContentID` can refer to a book volume or a chapter/resource depending on the
+row and firmware. The importer therefore joins on the exact source ID first,
+then resolves a volume through `VolumeID`/`BookID` only when the join is
+unambiguous. A title match is a reviewable fallback, never proof of identity.
+
+### `Event`: legacy and opaque history
+
+**[observed]** Kobuddy parser selects `Event` fields
+(`src/kobuddy/__init__.py:444-658@4e972ce6256d9499394de211c2873cc8b94ee58a`;
+`src/kobuddy/qdatastream.py:1-70@4e972ce6256d9499394de211c2873cc8b94ee58a`). It names the six columns:
+`EventType`, `EventCount`, `LastOccurrence`, `ContentID`, `Checksum`, and
+`ExtraData`. It decodes a subset of `ExtraData` as a Qt QVariant map and emits
+timestamps for a few event types, but its own comments label many numeric types
+uncertain. ([column constants and query](https://github.com/karlicoss/kobuddy/blob/4e972ce6256d9499394de211c2873cc8b94ee58a/src/kobuddy/__init__.py#L444-L568), [subset decoder](https://github.com/karlicoss/kobuddy/blob/4e972ce6256d9499394de211c2873cc8b94ee58a/src/kobuddy/__init__.py#L564-L658), [QVariant reader](https://github.com/karlicoss/kobuddy/blob/4e972ce6256d9499394de211c2873cc8b94ee58a/src/kobuddy/qdatastream.py#L1-L70))
+
+`kobo-db-tools` provides the important counterpoint: after sync, the remaining
+trace in `Event.ExtraData` may be an encrypted binary blob. ([warning](https://github.com/mfdaves/kobo-db-tools/blob/6c6b2903c58512e8714935048a30d0cc72923bc8/README.md#L1-L13))
+
+**Design consequence:** retain each `Event` row byte-for-byte (encoding the
+BLOB in the canonical JSON envelope) and record decoder success, decoder
+version, and any derived timestamps as supplemental evidence. Never replace a
+`Bookmark` annotation or a newer state with an inferred numeric `EventType`.
+
+### `AnalyticsEvents`: readable but disposable history
+
+**[observed]** The pinned kobo-db-tools parser selects exactly `Id`, `Type`, `Timestamp`,
+`Attributes`, and `Metrics` from `AnalyticsEvents`
+(`src/parser.rs:684-748@6c6b2903c58512e8714935048a30d0cc72923bc8`), ordered by `Timestamp`.
+Its test schema identifies `Id` as a primary key, `Type` and `Timestamp` as
+non-null, and `Attributes`/`Metrics` as text values. ([query and test schema](https://github.com/mfdaves/kobo-db-tools/blob/6c6b2903c58512e8714935048a30d0cc72923bc8/src/parser.rs#L684-L748))
+
+For reading sessions, that parser establishes these JSON members:
+
+| Row field | Observed members | Proposed projection |
+| --- | --- | --- |
+| `Attributes` | `progress`, optional `volumeid`, optional `title`, optional `attribution` | Preserve the complete JSON object. When `volumeid` resolves to a Stump media, use `progress` as the native progression evidence; do not discard title/author when resolution fails. |
+| `Metrics` on `LeaveContent` | `ButtonPressCount`, `SecondsRead`, `PagesTurned` | Preserve all three under native statistics. `SecondsRead` and `PagesTurned` are useful session evidence, not an annotation position. |
+| `Type` | `OpenContent`, `LeaveContent`, `BookProgress`, `StartReadingBook`, `FinishedReadingBook`, plus device/app events | Pair only the event types whose parser semantics are established. Keep unknown and ignored types in the raw event lane. |
+
+The `OpenContent`/`LeaveContent` pairing and the metric names above are taken
+from the parser's structures and session state machine, not inferred from
+field names. ([attributes and metrics](https://github.com/mfdaves/kobo-db-tools/blob/6c6b2903c58512e8714935048a30d0cc72923bc8/src/parser.rs#L30-L52), [session parser](https://github.com/mfdaves/kobo-db-tools/blob/6c6b2903c58512e8714935048a30d0cc72923bc8/src/parser.rs#L89-L183), [event type list](https://github.com/karlicoss/kobuddy/blob/4e972ce6256d9499394de211c2873cc8b94ee58a/src/kobuddy/__init__.py#L200-L217))
+
+`AnalyticsEvents` is not durable. The pinned kobo-db-tools README reports that
+Kobo clears its human-readable rows during online sync, leaving the opaque
+`Event.ExtraData` trace. An importer must therefore capture this table before a
+device sync, or explicitly mark the source as incomplete. ([retention warning](https://github.com/mfdaves/kobo-db-tools/blob/6c6b2903c58512e8714935048a30d0cc72923bc8/README.md#L7-L21))
+
+### `Activity`: present in listings, semantics unverified
+**[observed]** The `.tables` capture includes `Activity`
+(`README.md:108-120@7f04a7a760f61b7d36688c0ab1e4415e12150016`). The Calibre
+driver gates it with `has_activity_table()` at database version `>= 77`
+(`driver.py:4700-4711@335bd69984529a80db528a493754003e4f210acc8`) and deletes
+an activity row by `Id` (`driver.py:2850-2858@335bd69984529a80db528a493754003e4f210acc8`).
+Those facts establish neither a complete schema nor the meaning of its rows.
+
+
+**Import policy:** `[unverified]` do not select, interpret, project, or delete
+`Activity` rows. If a fixture is supplied, store the table name, discovered
+schema, and raw rows in a quarantined evidence namespace until a source-backed
+mapping exists. Do not call an `Activity` row a bookmark, reading session, or
+tombstone.
+
+### `dbversion` and the device version file
+**[observed]** Calibre reads `SELECT version FROM dbversion` and uses the result as
+`dbversion` (`src/calibre/devices/kobo/db.py:46-64@335bd69984529a80db528a493754003e4f210acc8`).
+It separately reads `.kobo/version`: the first item is used as the serial number
+and the third item is parsed as firmware version
+(`src/calibre/devices/kobo/driver.py:175-217@335bd69984529a80db528a493754003e4f210acc8`).
+
+
+The serial is the best observed device identity, but it is not a user identity.
+`Bookmark.UserID` and `content.___UserID` remain raw account/row evidence; they
+must not silently become `reading_state.device`.
+
+## Firmware and database generations
+
+**[observed]** Calibre's gates are the most useful pinned evidence of generation differences.
+They are compatibility thresholds, not a promise that Kobo firmware versions
+map one-to-one to a single schema. An importer should discover the actual
+columns and use the gates as hints for fixtures and query planning.
+The generation thresholds are `src/calibre/devices/kobo/driver.py:396-450,1540-1585,2275-2315,4679-4765@335bd69984529a80db528a493754003e4f210acc8`.
+
+| Calibre distinction | Source-backed behavior | Import consequence |
+| --- | --- | --- |
+| Database version source | `dbversion.version` is read at connection time. `KoboTouch` declares `min_supported_dbversion = 53` and `supported_dbversion = 220` in this pinned source. | Read and record the integer before table queries. Missing or non-integer values produce `generation = unknown`, not a guessed modern schema. ([constants](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L1540-L1552), [version read](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/db.py#L46-L64)) |
+| `< 8`, `8–13`, `14–15`, `16–32`, `>= 33` | Calibre changes its `content` query: older generations receive synthetic defaults for `___ExpirationStatus`, `FavouritesIndex`, `Accessibility`, and `IsDownloaded`; `IsDownloaded` is selected only at `>= 33`. | Probe each column. A missing column is represented as absent/unknown in the native payload, never as a real device value equal to Calibre's synthetic `-1`, `1`, or `NULL`. ([legacy queries](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L396-L450)) |
+| `< 16` versus `>= 16`; `< 46` versus `>= 46` | In the modern query, Calibre selects `___ExpirationStatus`, `FavouritesIndex`, and `Accessibility` at `>= 16`, and `ISBN` at `>= 46`; lower versions receive defaults. | `ISBN`, archive/favourite/accessibility state are optional context. Do not reject an annotation because these columns are missing. ([modern query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L2275-L2285)) |
+| `>= 65` | `supports_series()` and `has_externalid()` enable `Series`, `SeriesNumber`, `___UserID`, `ExternalId`, and `Subtitle` as a group. | Keep these as optional identity evidence; they do not replace `VolumeID`, `ContentID`, or a verified Stump media match. ([query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L2285-L2294), [helper](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L4679-L4709)) |
+| `>= 71` | `supports_kobo_archive()` becomes true. | Archive filtering is catalog behavior, not annotation deletion. Preserve the row and its source state; do not apply Calibre's catalog filter to imported annotations. ([gate](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L4693-L4696)) |
+| `>= 77` | Calibre sets `has_activity_table()` true; the same database threshold is used for images on SD card. | This is only a presence hint for `Activity`; its schema remains `[unverified]` and is quarantined. ([constants and helper](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L1544-L1549), [helper](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L4700-L4711)) |
+| `>= 136` and firmware `>= 4.20.14601` | `supports_series_list` enables `SeriesID` and `SeriesNumberFloat`. | Probe both the database column and firmware version; record a missing half as unknown rather than inventing a series identity. ([query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L2290-L2295), [firmware constants](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L1570-L1574), [helper](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L4687-L4689)) |
+| `>= 168` and firmware `>= 4.32.19501` | `supports_bookstats` enables `StorePages`, `StoreWordCount`, `StoreTimeToReadLowerEstimate`, and `StoreTimeToReadUpperEstimate`. | Store statistics as optional native context. Do not use them to manufacture a precise locator. ([query](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L2295-L2301), [gate](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L1550-L1581), [helper](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L4683-L4685)) |
+| Firmware `1.0`/`1.4` versus other versions | In the base Calibre reader, `has_kepubs` is enabled when firmware is not `(1, 0)` or `(1, 4)`. `KoboTouch` declares KEPUB support. | Collect both an old no-KEPUB and a modern KEPUB fixture. A path that looks CFI-like is not enough to prove that the imported bytes are the same publication. ([firmware/KEPUB logic](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L255-L264), [KEPUB declaration](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L1540-L1585)) |
+| Firmware `>= 4.17.13651` | Calibre records this as the firmware threshold for an EPUB reading location without the full content ID. | Treat an EPUB location lacking a full volume ID as unresolved until matched to the imported file and resource; retain the native path. ([firmware constant](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L1570-L1573)) |
+
+Calibre disables database editing when the database or firmware is newer than
+its supported range unless the user explicitly overrides the guard. That is a
+useful safety signal for Stump: a read-only importer should continue to inspect
+unknown generations only in an immutable copy, never “support” them by writing
+back to the device. ([write guard](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/driver.py#L4708-L4765))
+
+## Projection into the unified state and annotation model
+
+The normalized projection below is intentionally lossy. Every imported object
+also stores:
+
+- `source_provider = "kobo-device-db"`;
+- `source_device_id` (the serial from `.kobo/version` when present, otherwise a
+  caller-supplied device identity);
+- `source_snapshot_id` and a cryptographic digest of the copied database;
+- `source_record_id` namespaced by table (`BookmarkID`, `AnalyticsEvents.Id`, or a stable hash for an `Event` row);
+- `raw_native_locator` (or `null`) and `raw_native_payload` as JSON, with BLOBs encoded losslessly;
+  Encode each SQLite BLOB as an explicit tagged base64 value (not a lossy UTF-8 string).
+- `provenance.source_timestamp` and raw timestamp strings exactly as read; and
+- `precision` using the unified tiers (`range`, `resource`, `page`, `publication`, or
+  `unknown`).
+
+### Annotation mapping (inference)
+
+For the first visible, resolvable `Bookmark` row, emit an annotation event with
+`revision = 1` and `tombstone = false`; later versions of the same namespaced
+source identity increment `revision` and retain the earlier event. Keep the
+complete row as `raw_native_payload` and the native range as `raw_native_locator`.
+Hidden or unresolvable rows stay in quarantine, and a missing row in a later
+snapshot is not a tombstone.
+
+| Native evidence | Readium/unified projection | Declared loss and guard |
+| --- | --- | --- |
+| `BookmarkID`, `VolumeID`, `ContentID`, and the complete row | Annotation identity `(source_device_id, BookmarkID)` plus source provenance. `VolumeID`/`ContentID` resolve the Stump media and chapter only after an exact or reviewable match. | `BookmarkID` is device-local, not globally unique. `UUID` is retained separately when present. A title-only match is pending, never silently linked. |
+| `StartContainerPath` / `EndContainerPath` | If the corresponding EPUB resource exists, set the normalized locator `href` to that resource and retain a valid single-point CFI in `ReadiumLocation.partial_cfi` only when it can be verified against the imported bytes. | A Readium locator has no lossless pair of Kobo range endpoints. Keep both native paths, child indexes, and offsets in `raw_native_locator`; a normalized point is a projection, not the source range. |
+| `Text` | `ReadiumText.highlight` and the annotation's quote/excerpt. | Kobo's text can be trimmed or differ from DOM text. Keep the exact original string and do not regenerate it from a locator. |
+| `Annotation` | The unified annotation note/body, separate from the selected quote. | `NULL` and empty string are distinct native values; retain both in the raw payload even if the normalized body is absent. |
+| `Type` plus Calibre's conservative heuristics | `bookmark` for a verified dog-ear; `highlight` for selected text; `highlight` with a note for selected text plus user annotation. | Unknown `Type` values and rows that do not satisfy a verified rule remain quarantined for kind; precision may still be set from independently validated anchors. `Hidden != false` is quarantined and is not automatically a tombstone. |
+| `ChapterProgress` | Preserve as native chapter-relative progress. If the chapter has verified `WordCount` and preceding chapter totals, optionally set a whole-book `total_progression` estimate. | Chapter-relative progress is not whole-book progress. The estimate is `publication` precision, and the formula is never used to fabricate a precise locator. NickelHardcover's source computes this estimate from chapter and preceding `WordCount`; it is not a Kobo guarantee. ([formula](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/database.rs#L17-L80)) |
+| `DateModified` and `DateCreated` | `updated_at = DateModified` when parseable, otherwise `DateCreated`; retain both native strings. | If neither parses, use the snapshot import time only as a `snapshot-time` fallback and do not let it overwrite a newer state. |
+
+The CFI-like path needs special care. The importer source documents that Kobo's
+offset after `:` is a byte offset, while common CFI implementations expect a
+character offset; it also documents a Kobo root-node quirk and empty-text-node
+cases. Its implementation converts bytes to Unicode offsets and may recompute
+the range from the selected text, but warns that the conversion is not
+bulletproof. ([byte-offset warning](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/README.md#L236-L287), [conversion implementation](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/bookmark.js#L35-L124))
+
+Therefore:
+
+1. Resolve against the exact EPUB/KEPUB bytes from the same snapshot whenever
+   possible.
+2. Preserve the original start/end paths and byte offsets even when conversion
+   succeeds.
+3. Mark a converted range `range` only when both endpoints and the
+   selected text validate; otherwise use `resource`, `publication`, or
+   `unknown` precision.
+4. Never map a KEPUB span or CFI-like path from one transformed publication to
+   an unrelated EPUB and call it exact.
+
+### Reading-state mapping (inference)
+
+1. **Analytics-first:** pair `OpenContent` and `LeaveContent` rows when their
+   `Attributes.volumeid` resolves and their JSON validates. Project start/end
+   progress, `Timestamp`, and the `LeaveContent` metrics into the unified
+   reading state/session evidence. When `progress` validates as a 0..100
+   percentage, set `total_progression = progress / 100`; preserve the original
+   string and otherwise keep the event at `unknown` precision. Keep each original
+   event row and assign a server sequence in import order; do not use SQLite row
+   order as time.
+2. **Content fallback:** when readable analytics are absent, map
+   `___PercentRead / 100` to `locations.total_progression` with `precision=publication`, use
+   `DateLastRead` as the native update time, and treat `ReadStatus = 2` as
+   finished only with the pinned-tool evidence. Keep `TimeSpentReading` and
+   all other content fields in native statistics/context.
+3. **Legacy event supplement:** decode `Event.ExtraData` only when the decoder
+   succeeds and retain the original BLOB. Derived event timestamps can fill a
+   history gap, but cannot overrule a newer `AnalyticsEvents` row or a
+   `Bookmark` row.
+4. **No annotation from analytics names:** `CreateBookmark`, `CreateHighlight`,
+   and `CreateNote` event names are not a portable annotation payload in the
+   pinned parser. The `Bookmark` row remains the source for text, note, and
+   native range data. ([ignored event names](https://github.com/karlicoss/kobuddy/blob/4e972ce6256d9499394de211c2873cc8b94ee58a/src/kobuddy/__init__.py#L655-L710))
+5. **No state from `Activity`:** until fixtures establish its semantics, keep
+   it quarantined and do not update reading state from it.
+
+The normalized `device` field is therefore an import provenance value, not
+`UserID`. State conflict resolution follows the unified layer's server rule:
+compare the native device timestamp, then use the server sequence as the
+deterministic tie-breaker. An import with an unparseable timestamp is
+`unknown` precision with a `snapshot-time` provenance fallback and must not displace a newer, timestamped value.
+
+## Ingestion paths (inference)
+
+### A. Device-side push (NickelHardcover style)
+
+**[observed]** NickelHardcover demonstrates a stock-Nickel push path rather than a server
+filesystem pull:
+Source ranges: `hook/src/nickelhardcover.cc:160-185@149ab0ec224b8cf49da269338731b8eade1a809a`; `hook/src/syncqueue.cc:1-140@149ab0ec224b8cf49da269338731b8eade1a809a`; `cli/src/database.rs:17-80@149ab0ec224b8cf49da269338731b8eade1a809a`.
+
+- its hook intercepts Nickel's reading view and obtains calculated progress;
+- it queues progress on page/close thresholds and can run a manual sync; and
+- its CLI opens `/mnt/onboard/.kobo/KoboReader.sqlite` with
+  `SQLITE_OPEN_READ_ONLY`, reads bookmarks, and sends the resulting progress or
+  journal request over HTTPS. ([hook entry point](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/hook/src/nickelhardcover.cc#L160-L185), [queue behavior](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/hook/src/syncqueue.cc#L1-L140), [read-only DB query](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/database.rs#L17-L80))
+
+**[inference] Stump device-side client:** a Kobo plugin may push batches of
+`Bookmark` rows and readable `AnalyticsEvents` before the device performs
+online sync. It must:
+
+1. authenticate as an explicitly provisioned Stump device;
+2. send `source_device_id`, a capture timestamp, the database version, and the
+   complete native row payload;
+3. use `(source_device_id, BookmarkID)` and `AnalyticsEvents.Id` for idempotent
+   retries;
+4. push `Bookmark` before any optional derived projection; and
+5. never write to `KoboReader.sqlite`.
+
+This path can deliver `AnalyticsEvents` before device-side sync clears them,
+without requiring a USB database copy. A regular Stump server cannot pull a
+mounted Kobo path.
+
+**[observed]** The kobo-db-tools project offers a device-side SQL trigger that aborts deletes
+from `AnalyticsEvents`, but explicitly warns that modifying the Kobo database
+is risky and that the trigger may need firmware-specific adaptation. It is an
+optional, user-administered preservation experiment, not part of Stump's
+importer and not something the server should install remotely. ([trigger and
+caution](https://github.com/mfdaves/kobo-db-tools/blob/6c6b2903c58512e8714935048a30d0cc72923bc8/src/db.rs#L16-L43), [README caution](https://github.com/mfdaves/kobo-db-tools/blob/6c6b2903c58512e8714935048a30d0cc72923bc8/README.md#L19-L34))
+
+### B. Server-side import of a copied database
+
+This is the preferred first implementation because it requires no Kobo-side
+plugin and gives the user a reviewable artifact:
+
+1. The user ejects or closes the reader's database, copies
+   `.kobo/KoboReader.sqlite` to a Stump import staging area, and supplies the
+   device identity when the `.kobo/version` file is unavailable.
+2. The copier records the database digest, file size, copy time, database
+   version, and whether `-wal`/`-shm` sidecars were included. A live SQLite
+   snapshot must include the transactions needed for a consistent read.
+4. Annotation/state writes happen in Stump's database, keyed by source device
+   and native IDs. Re-importing the same snapshot is idempotent; a newer
+   snapshot contributes new native revisions or events rather than replacing
+   the evidence envelope.
+5. Unknown tables, columns, malformed JSON, invalid dates, unresolved media,
+   and unverified `Activity` rows are retained in a quarantine report. The
+   importer never “repairs” the device copy.
+
+Kobuddy demonstrates both useful safety patterns: its backup command copies to
+a temporary file and renames into place, and its parser opens database paths
+with SQLite's immutable URI mode. ([backup](https://github.com/karlicoss/kobuddy/blob/4e972ce6256d9499394de211c2873cc8b94ee58a/src/kobuddy/backup.py#L10-L35), [immutable reader](https://github.com/karlicoss/kobuddy/blob/4e972ce6256d9499394de211c2873cc8b94ee58a/src/kobuddy/sqlite.py#L20-L50))
+
+**[observed]** Calibre's device adapter adds an important WAL precedent: it checkpoints the
+WAL and uses SQLite's backup API when creating a copy, and copies a `-wal`
+sidecar when a direct connection is not possible. Stump's copier should adopt
+an equivalent snapshot discipline rather than blindly reading a live main file.
+Source range: `src/calibre/devices/kobo/db.py:23-44@335bd69984529a80db528a493754003e4f210acc8`.
+([Calibre snapshot code](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/db.py#L23-L44))
+
+**[observed]** The highlights-to-Calibre tool is a useful contrast, not a template for device
+safety: it reads `KoboReader.sqlite` but writes Calibre's `metadata.db`, using
+`INSERT`/`UPDATE` on the destination `annotations` table. Stump should write
+only its own database and keep the copied Kobo file immutable. ([destination
+writes](https://github.com/valeriangalliat/kobo-highlights-to-calibre/blob/7f04a7a760f61b7d36688c0ab1e4415e12150016/index.js#L108-L171))
+
+## Read-only safety rules (inference)
+
+These rules apply to both ingestion paths:
+
+- **Never open the mounted device database for writes.** Use a read-only SQLite
+  flag or immutable URI on a copied file. NickelHardcover uses
+  `SQLITE_OPEN_READ_ONLY`; kobuddy uses `immutable=True`. ([NickelHardcover](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/database.rs#L17-L25), [kobuddy](https://github.com/karlicoss/kobuddy/blob/4e972ce6256d9499394de211c2873cc8b94ee58a/src/kobuddy/sqlite.py#L20-L50))
+- **Do not install triggers, run `VACUUM`, update rows, delete rows, or
+  checkpoint the user's live database.** The analytics-preserving trigger is a
+  separately documented device-admin experiment and requires a backup first.
+- **Treat WAL state as part of the snapshot.** Copy through a SQLite backup API
+  or capture the main database and sidecars consistently; record which method
+  was used. Calibre's copy code shows why a main-file-only copy is not a
+  sufficient universal strategy. ([copy code](https://github.com/kovidgoyal/calibre/blob/335bd69984529a80db528a493754003e4f210acc8/src/calibre/devices/kobo/db.py#L23-L44))
+- **Do not trust a successful open as proof of a complete schema.** Probe
+  `dbversion`, table presence, and each optional column; unknown generations
+  produce partial evidence and a fixture-needed report.
+- **Do not convert native ranges in place.** Resolve CFI-like paths against a
+  read-only copy of the exact publication, and retain the original byte-based
+  paths even when a Readium projection is emitted.
+- **Do not infer deletion from absence.** A book or annotation may disappear
+  from a later device snapshot; represent the snapshot's absence as evidence,
+  not as a tombstone, unless the unified layer has an explicit source deletion
+  record.
+- **Do not log credentials or copied contents.** The provenance envelope may
+  contain private highlights and notes; access follows the authenticated Stump
+  user and device, and diagnostics store hashes/IDs rather than full text by
+  default.
+
+## Firmware fixtures needed before implementation is called stable (inference)
+
+The following fixtures are required before enabling broad automatic projection.
+The database-version buckets come directly from Calibre's gates; they are a
+test matrix, not claims that each bucket has a unique schema.
+
+### Database and firmware coverage
+
+- One valid database for each bucket `< 8`, `8–13`, `14–15`, `16–32`,
+  `33–45`, `46–64`, `65–70`, `71–76`, `77–81`, `82–135`, `136–167`,
+  `168–187`, `>= 188`, and a future/unsupported `> 220` database.
+- Firmware `1.0` and `1.4` (the Calibre no-KEPUB branch), one modern EPUB
+  device, and one modern KEPUB device.
+- Firmware around `4.17.13651`, `4.20.14601`, and `4.32.19501` to exercise
+  the EPUB-location, series-list, and bookstats thresholds.
+- A device with a serial/model `.kobo/version` file and a copied database where
+  that file is unavailable, so provenance fallback is tested.
+- A database with a live WAL and a database after clean ejection, including
+  main/`-wal`/`-shm` copy cases.
+
+### Annotation and locator coverage
+
+- A visible text highlight with ASCII text and one with multibyte Unicode;
+  validate Kobo byte offsets versus Unicode character offsets.
+- A range whose start/end paths target different text nodes, an empty text node,
+  and a path that needs recomputation from `Text`.
+- A dog-ear bookmark, a highlight with an `Annotation`, a row with empty
+  `Annotation`, a row with `Text IS NULL`, and an unknown `Type`.
+- `Hidden` rows, missing/zero dates, non-empty `ExtraAnnotationData`, `UUID`,
+  `UserID`, `SyncTime`, `Published`, and `ContextString` values.
+- EPUB and KEPUB rows whose `ContentID` points at the same resource name but
+  whose transformed bytes differ; verify that the importer downgrades precision
+  rather than producing a false exact locator.
+- `Color` present and absent, because the pinned exporters disagree on whether
+  it is part of the observed schema.
+
+### State/event coverage
+
+- A database before online sync containing `AnalyticsEvents`, and a later copy
+  after sync where those rows are cleared; verify an explicit incomplete-history
+  report and no fabricated sessions.
+- Valid `OpenContent`/`LeaveContent` rows with all three leave metrics, rows with
+  missing `volumeid`, malformed `Attributes`/`Metrics`, and each known progress
+  or finished event type.
+- `Event` rows with decodable QVariant `eventTimestamps`, rows with unknown
+  numeric types, and rows whose `ExtraData` remains encrypted/opaque.
+- `Activity` presence/absence and at least one schema fixture per database
+  generation; document the meaning of every selected column before lifting the
+  quarantine.
+- Re-import the same snapshot twice, then import a newer snapshot with changed
+  `Bookmark` text, a hidden row, and a newer/older state timestamp. Verify stable
+  native identity, server sequence ordering, and last-writer-wins behavior
+  without deleting independently stored local annotations.
+
+Until those fixtures exist, the safe supported result is a source-preserving
+import with coarse state, raw annotations, and explicit unresolved/fixture-needed
+reports—not a claim of complete Kobo firmware compatibility.

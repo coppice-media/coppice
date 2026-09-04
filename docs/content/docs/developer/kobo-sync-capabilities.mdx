@@ -1,0 +1,383 @@
+---
+title: Kobo sync capabilities
+description: Evidence-backed Kobo protocol, device database, and Stump compatibility profile
+---
+
+This page separates three things that are easy to conflate: the Kobo HTTP protocol, the `KoboReader.sqlite` database on a device, and Stump's current adapter. Statements marked **[observed]** describe the pinned source snapshots below. Statements marked **[inference]** are recommendations or conclusions drawn from those observations.
+
+## 1. Kobo sync protocol surface as implemented by Calibre-Web
+
+**[observed]** The pinned Calibre-Web implementation uses a blueprint below `/kobo/<auth_token>`. Its local sync lane supports the following route inventory (`cps/kobo.py:55-61@a97826402f1b39c45b7ea8d906efddc9f1750934`):
+
+| Method | Path | Local behavior |
+| --- | --- | --- |
+| `GET` | `/v1/library/sync` | Incremental library sync; emits entitlements, metadata, reading-state changes, and tags. |
+| `GET`, `PUT` | `/v1/library/<book_uuid>/state` | Read or write one book's structured Kobo reading state. |
+| `GET` | `/v1/library/<book_uuid>/metadata` | Returns local metadata for a known downloadable book. |
+| `POST`, `DELETE` | `/v1/library/tags` | Creates a shelf from `Name` and `Items`; a `DELETE` to this route is rejected. |
+| `PUT`, `DELETE` | `/v1/library/tags/<tag_id>` | Renames or deletes a shelf. |
+| `POST` | `/v1/library/tags/<tag_id>/items` | Adds shelf members. |
+| `POST` | `/v1/library/tags/<tag_id>/items/delete` | Removes shelf members. |
+| `DELETE` | `/v1/library/<book_uuid>` | Archives/removes a known local book from the Kobo view. |
+| `DELETE`, `GET`, `POST` | `/v1/library/<dummy>` | Unimplemented library requests; redirects/proxies when configured, otherwise returns an empty JSON object. |
+| `POST` | `/v1/library/<dummy>/preview` | Unimplemented library preview request; redirects/proxies when configured, otherwise returns an empty JSON object. |
+| `GET` | `/<book_uuid>/<width>/<height>/<isGreyscale>/image.jpg` | Serves a local cover, or redirects an unknown cover to Kobo when proxying is enabled. |
+| `GET` | `/<book_uuid>/<width>/<height>/<Quality>/<isGreyscale>/image.jpg` | Cover route variant with an explicit quality component. |
+| `GET`, `POST` | `/v1/user/loyalty/<dummy>` | Unimplemented user request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/user/profile` | Unimplemented user request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/user/wishlist` | Unimplemented user request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/user/recommendations` | Unimplemented user request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/analytics/<dummy>` | Analytics catch-all; relays to the official store in proxy mode or returns `{}`. |
+| `GET` | `/v1/assets` | Unimplemented user/assets request; redirects/proxies or returns `{}`. |
+| `GET` | `/v1/user/loyalty/benefits` | Returns the local empty `Benefits` object without proxying, unless proxy mode is enabled. |
+| `GET`, `POST` | `/v1/analytics/gettests` | Returns a local success/test-key response, unless proxy mode is enabled. |
+| `GET`, `POST` | `/v1/products/<dummy>/prices` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/<dummy>/recommendations` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/<dummy>/nextread` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/<dummy>/reviews` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/featured/<dummy>` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/featured/` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/books/external/<dummy>` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/books/series/<dummy>` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/books/<dummy>` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/books/<dummy>/` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/dailydeal` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/deals` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products` | Product request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/<path:dummy>` | Product request catch-all; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/products/<path:dummy>/` | Product request catch-all variant; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/affiliate` | Affiliate request; redirects/proxies or returns `{}`. |
+| `GET`, `POST` | `/v1/deals` | Deals request; redirects/proxies or returns `{}`. |
+| `POST` | `/v1/auth/refresh` | Auth refresh; proxies official auth when enabled, otherwise returns a dummy local token response. |
+| `POST` | `/v1/auth/device` | Device auth; proxies official auth when enabled, otherwise returns a dummy local token response. |
+| `GET` | `/v1/initialization` | Returns Kobo resource URLs and an API token header. |
+| `GET` | `/download/<book_id>/<book_format>` | Delivers a local book in the requested configured format. |
+| `GET` | `` (blueprint top-level endpoint) | Returns `{}`. |
+
+The route groups above are declared in `cps/kobo.py:141-143@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:335-350@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:506-667@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:916-949@a97826402f1b39c45b7ea8d906efddc9f1750934`, and `cps/kobo.py:952-1071@a97826402f1b39c45b7ea8d906efddc9f1750934`. The sync response and local/remote behavior are implemented in `cps/kobo.py:89-130@a97826402f1b39c45b7ea8d906efddc9f1750934` and `cps/kobo.py:308-332@a97826402f1b39c45b7ea8d906efddc9f1750934`.
+
+### Library sync and headers
+
+**[observed]** `GET /v1/library/sync` consumes the `x-kobo-synctoken` request header. A local page can contain `NewEntitlement` items, `ChangedEntitlement` items, and `ChangedReadingState` items; shelf changes are added as tag items. The response carries a new sync token in headers. When more local results remain, Calibre-Web sets `x-kobo-sync: continue`; when proxying the official store, it also preserves the store's sync-mode and recent-read headers and merges the store response into the local response (`cps/kobo.py:143-224@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:264-332@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+**[observed]** Calibre-Web's local format map is exactly `{"KEPUB": ["KEPUB"], "EPUB": ["EPUB3", "EPUB"]}`. When a KEPUB is unavailable but conversion is configured, delivery can queue EPUB-to-KEPUB conversion (`cps/kobo.py:55-57@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:207-224@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+### ReadingState GET and PUT
+
+**[observed]** `GET /v1/library/<book_uuid>/state` returns a one-element JSON array. The element contains `EntitlementId`, timestamps, `StatusInfo`, `Statistics`, and `CurrentBookmark` (`cps/kobo.py:758-819@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:857-913@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+The wire shape can be summarized as:
+
+```json
+[
+  {
+    "EntitlementId": "book-uuid",
+    "Created": "timestamp",
+    "LastModified": "timestamp",
+    "PriorityTimestamp": "timestamp",
+    "StatusInfo": {
+      "LastModified": "timestamp",
+      "Status": "ReadyToRead | Reading | Finished",
+      "TimesStartedReading": 0,
+      "LastTimeStartedReading": "timestamp"
+    },
+    "Statistics": {
+      "LastModified": "timestamp",
+      "SpentReadingMinutes": 0,
+      "RemainingTimeMinutes": 0
+    },
+    "CurrentBookmark": {
+      "LastModified": "timestamp",
+      "ProgressPercent": 0,
+      "ContentSourceProgressPercent": 0,
+      "Location": {
+        "Value": "opaque value",
+        "Type": "KoboSpan",
+        "Source": "resource href"
+      }
+    }
+  }
+]
+```
+
+PUT request:
+
+```json
+{
+  "ReadingStates": [
+    {
+      "CurrentBookmark": { "...": "fields above" },
+      "Statistics": { "...": "fields above" },
+      "StatusInfo": { "...": "fields above" }
+    }
+  ]
+}
+```
+
+`LastTimeStartedReading` and the numeric fields shown as optional are emitted only when the corresponding local values exist; the handler's accepted input and response update results are the contract (`cps/kobo.py:758-819@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:857-913@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+**[observed]** `PUT /v1/library/<book_uuid>/state` reads `ReadingStates[0]` and handles only these structured fields:
+
+- `CurrentBookmark`: `ProgressPercent`, `ContentSourceProgressPercent`, and, when present, `Location.Value`, `Location.Type`, and `Location.Source`.
+- `Statistics`: `SpentReadingMinutes` and `RemainingTimeMinutes`.
+- `StatusInfo`: `Status` and `TimesStartedReading` (the handler updates the local reading status and increments the start counter when entering `Reading`).
+
+It returns `RequestResult: Success`, an `UpdateResults` array, and last/priority timestamps (`cps/kobo.py:758-819@a97826402f1b39c45b7ea8d906efddc9f1750934`). The `CurrentBookmark` JSON object is not the same thing as the KoboReader.sqlite `Bookmark` table: this HTTP handler does not parse `Text`, `Annotation`, or an annotation collection (`cps/kobo.py:758-819@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+### Shelves as tags
+
+**[observed]** Calibre-Web models Kobo shelves as its local shelf records and exposes them as Kobo tags. `POST /v1/library/tags` accepts `Name` and `Items`; members are keyed by `RevisionId` and `Type: ProductRevisionTagItem`. The item add/remove routes accept an `Items` collection, and sync emits `NewTag`, `ChangedTag`, and `DeletedTag` records (`cps/kobo.py:506-757@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+### Proxy, redirect, and fallback behavior
+
+**[observed]** With proxying enabled, Calibre-Web sends unknown or unimplemented requests to `https://storeapi.kobo.com` using the incoming method, headers, and body. It returns an HTTP `307` redirect for `GET`; it proxies non-`GET` requests itself because Kobo turns redirected writes into `GET`. Connection-specific headers are removed from proxied responses (`cps/kobo.py:89-130@a97826402f1b39c45b7ea8d906efddc9f1750934`). In proxy mode, the official `/v1/library/sync` response and token are merged into the local sync response (`cps/kobo.py:308-332@a97826402f1b39c45b7ea8d906efddc9f1750934`). Without proxying, unimplemented requests return `{}` or their route-specific empty result (`cps/kobo.py:969-1037@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+## 2. What a stock Kobo syncs for third-party books
+
+**[observed]** A third-party server can receive progress, status, and statistics through the ReadingState contract above: the writable fields are percentages, an optional Kobo `Location`, reading minutes, remaining time, status, and reading-start count (`cps/kobo.py:758-819@a97826402f1b39c45b7ea8d906efddc9f1750934`). This is distinct from the `Bookmark` table in `KoboReader.sqlite`.
+
+**[observed]** Highlights and annotations are not part of the Calibre-Web ReadingState API evidence. The state handler reads `CurrentBookmark`, but only its progress/location members; there is no `Text`, `Annotation`, highlight field, or annotation collection in the handler (`cps/kobo.py:758-819@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+**[observed]** Calibre-Web's authentication comments mention an official Kobo `AnnotationService` that uses a Bearer token obtained through device authentication, but the pinned Calibre-Web implementation has no local AnnotationService implementation or annotation parser. Its analytics catch-all either blindly relays requests to Kobo in proxy mode or returns `{}` (`cps/kobo_auth.py:43-58@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:969-991@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+**[inference]** Therefore, “progress yes, highlights/annotations no” is the reliable answer for a stock Kobo pointed at a third-party server using this API shape: ReadingState can carry progress, but analytics or official AnnotationService traffic that is proxied remains official-store traffic, not a local annotation record. A server-owned highlight archive needs a device-side database import or another explicitly implemented channel.
+
+**[observed]** Store books are different from third-party books. A Calibre-Web instance can make store traffic appear to work only by proxying/redirecting official Kobo requests and merging the official store's sync response; that is not a local third-party entitlement (`cps/kobo.py:89-130@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:308-332@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+## 3. EPUB versus KEPUB
+
+**[observed]** KEPUB remains an EPUB container, but `kepubify` transforms an EPUB into Kobo's form: it applies Kobo styles and pagination markup and adds mandatory `koboSpan` elements around text fragments. The source explains that spans provide better references to text chunks and that highlighting, bookmarking, and related features do not work without them (`kepub/transform.go:102-129@9546034bc023891af5ce30709de6ae2dcf264628`).
+
+**[observed]** The kepubify documentation describes Kobo EPUBs as improving page turns, font changes, highlighting, and searching, while the KEPUB reader supports EPUB 3 features and Kobo statistics such as a chapter graph and estimated read time (`public/index.html:100-117@448534694374e195f8a915c5caf16cdf22ec7792`). The converter can use `.kepub` rather than `.kepub.epub` as its output extension (`cmd/kepubify/kepubify.go:35-41@9546034bc023891af5ce30709de6ae2dcf264628`).
+
+**[observed]** Calibre-Web advertises format labels `KEPUB`, `EPUB3`, and `EPUB` using the exact `KOBO_FORMATS` map above. It prefers an existing KEPUB and can queue conversion when only EPUB is available (`cps/kobo.py:55-57@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:207-224@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+
+**[observed]** Komga provides a second delivery precedent: its Kobo controller can select KEPUB conversion and emits `Format.KEPUB` when that delivery path is selected; its ordinary EPUB path uses the corresponding EPUB format labels (`KoboController.kt:637-783@656001eb03bf8b54ca909f3e74fe2ec1b95dac48`).
+
+**[inference]** KEPUB conversion and ReadingState persistence are separate features. Conversion changes the bytes and creates a stable Kobo-span coordinate space; persistence can first store percentages and Kobo locations even when delivery remains plain EPUB. A `KoboSpan` is meaningful only against the exact transformed resource and position map, so it must not be treated as portable across arbitrary EPUB and KEPUB variants.
+
+### Stump's optional converter and cache
+
+**[implemented]** Stump includes a pure-Rust EPUB-to-KEPUB converter in
+`crates/kepub` and an adapter hook in
+`apps/server/src/routers/kobo_backend/kepub.rs`. It is disabled by default and
+is enabled with `KOBO_KEPUB_CONVERSION=true` (the corresponding
+`StumpConfig.kobo_kepub_conversion` setting). The Kobo URL remains
+`/v1/books/<book_id>/file/epub` for compatibility; when conversion is enabled,
+an EPUB book is served as `application/epub+zip` with a
+`<name>.kepub.epub` attachment filename and KEPUB metadata.
+
+The converter is a 1:1 port of kepubify's `kepub` package at commit
+`9546034bc023891af5ce30709de6ae2dcf264628` (parser fork
+`pgaskin/kepubify/_/html@6ee2cc632cdc`): lenient self-closing repair,
+HTML5 tree building, the `div#book-columns > div#book-inner` wrapper,
+`kobostylehacks`, `koboSpan` sentence splitting and `kobo.N.M` numbering,
+Adept/MS Word cleanup, the polyglot XHTML renderer, the OPF rewrite (cover
+property, Calibre metadata removal, 4-space re-indent), and the dummy
+title-page heuristic. Optional converter controls (smart punctuation,
+find/replace, extra CSS, hyphenation, full-screen fixes, charset) are exposed
+on `TransformOptions` with kepubify semantics.
+
+**[verified]** Parity contract: for every ZIP entry, Stump's decompressed
+bytes equal kepubify's; entry order and compression are Stump's own (kepubify's
+ZIP writer is not byte-stable across runs, so archive-level equality is not a
+meaningful target). Enforced by:
+
+- `crates/kepub/tests/transform_content.rs`, `transform_opf_and_files.rs`,
+  `split_sentences.rs`, `convert.rs`: kepubify's Go test tables ported verbatim;
+- `crates/kepub/tests/transform.rs::kepubify_corpus_matches_reference`: the
+  bundled fixture against a stored kepubify output;
+- `crates/kepub/tests/real_books.rs` (ignored; `KEPUB_REAL_INPUT=<dir>`
+  and `KEPUBIFY_BIN=<pinned kepubify build>`): entry-level parity over a local
+  corpus. Verified on 36 commercial and Gutenberg EPUBs.
+
+One deliberate deviation: kepubify (via Go `encoding/xml`) rejects packages
+whose OPF declares `<?xml version="1.1"?>`; Stump converts them.
+
+**[measured]** Performance (release build, AMD Ryzen 7 5800X, 36-book /
+37 MB corpus, best-of-3 process wall-clock including startup; kepubify is
+itself multi-threaded per book):
+
+| | Stump | kepubify | ratio | peak RSS Stump / kepubify |
+|---|---|---|---|---|
+| pinned to one core | 1160 ms | 1742 ms | 1.50× | 14 MB / 22 MB |
+| 8 cores | 386 ms | 1060 ms | 2.75× | 29 MB / 34 MB |
+
+Design: the HTML tree is an index-linked arena (`crates/kepub/src/dom.rs`,
+a custom html5ever `TreeSink`) and `koboSpan` markup is emitted while
+serializing rather than materialised as nodes; content documents are inflated,
+transformed, and deflated on a `rayon` pool in bounded batches (2 × threads in
+flight) and written in source order; untouched entries are sliced from the
+source archive by offset (never inflated); the ZIP container is written by
+`crates/kepub/src/archive.rs` straight into any `Write` sink
+(`transform_epub_to`), so the server converts directly into the cache file and
+the whole KEPUB is never held in memory. Deflate/inflate use `libdeflate`;
+the default deflate level is 6 (kepubify's default).
+
+**[implemented]** Non-content ZIP entries are copied through verbatim,
+preserving their compressed bytes, timestamps, and Unix mode. Converted output
+is cached lazily at
+`<config_dir>/cache/kepub/<media_id>-<file_mtime>-<options digest>-d<deflate level>.kepub.epub`,
+where `file_mtime` is the source modification time in nanoseconds since the
+Unix epoch and the deflate level is part of the cache key. The file is written
+to a unique temp name and renamed into place, and served with `ServeFile`
+(range requests supported). Replacing a source file or changing converter
+options or compression selects a new cache key; conversion never mutates the
+original EPUB.
+
+KEPUB cache warming is enabled by the same `KOBO_KEPUB_CONVERSION=true`
+switch. New EPUB entitlements in `GET /v1/library/sync` are queued for
+background conversion. The queue is process-wide, bounded, deduplicated by
+cache path, and converts one book at a time on Tokio's blocking pool. Set
+`KOBO_KEPUB_PRECONVERT=true` to enqueue every EPUB in a library when its scan
+completion event arrives. Cache files are touched on delivery hits and an age
+sweep runs at startup and every 24 hours; files unused longer than
+`KOBO_KEPUB_CACHE_MAX_AGE_DAYS` are removed, while temporary files younger than
+one hour are retained.
+
+## 4. Stump today
+
+**[observed]** At Stump commit `37fdb7d7340894a777c40d685d5262becceae007`, the Kobo crate explicitly mounted initialization, library sync, metadata, thumbnails, device auth, and `/v1/books/{book_id}/file/epub`; the fallback was `/v1/{*path}`. That snapshot is the baseline for the gaps described below.
+
+**[implemented]** The current adapter rewrites the device-facing `Resources` entries for library sync, reading state, metadata, tags, profile, and book access to `{base}/kobo/{api_key}/v1/...`; store-only account, product, and authentication resources remain official Kobo URLs (`core/src/kobo/mod.rs`, `apps/server/src/routers/kobo_backend/router.rs`).
+
+**[implemented]** `GET` and `PUT /v1/library/{book_id}/state` now implement the Calibre-Web wire shape. The PUT parser consumes `ReadingStates[0]`, projects `Location.Source` and KoboSpan values into `ReadiumLocator`, normalizes both progress percentages, maps `Finished` to a completed reading session, and stores the complete native request in the additive `reading_sessions.kobo_state` JSON column (`core/src/kobo/entity.rs`, `core/src/kobo/sync_types.rs`, `crates/migrations/src/m20260905_000000_add_kobo_reading_state.rs`). GET reconstructs the one-element state array from that normalized row plus the retained native payload.
+
+**[implemented]** Incremental sync includes `ChangedReadingState` when a user's reading-session row changed after the prior sync token, while retaining `NewEntitlement` and `ChangedProductMetadata` behavior (`crates/kobo/src/sync.rs`).
+
+**[implemented]** EPUB delivery remains the default. With `KOBO_KEPUB_CONVERSION=true`, the optional pure-Rust converter serves deterministic KEPUB bytes and metadata through the same `/v1/books/{book_id}/file/epub` URL (`crates/kepub`, `apps/server/src/routers/kobo_backend/kepub.rs`).
+
+### Fixture probe
+
+The fixture server can exercise the state round trip without restarting the
+server. Run this against `http://127.0.0.1:25600` with the fixture key from
+`scripts/dev-fixture-server.sh`:
+
+```bash
+BASE=http://127.0.0.1:25600
+KEY=stump_VGQQpvVAkun_KyDK1NExypMM2cQJA7XtcXCzHgEiWczYc
+
+# Initialization must point the state resource back at Stump.
+curl -fsS "$BASE/kobo/$KEY/v1/initialization" \
+  | jq -e --arg url "$BASE/kobo/$KEY/v1/library/{Ids}/state" \
+      '.Resources.reading_state == $url'
+
+# The first sync supplies a fixture book id and a token for the next sync.
+curl -fsS -D /tmp/stump-kobo-sync.headers \
+  "$BASE/kobo/$KEY/v1/library/sync" \
+  -H 'x-kobo-deviceid: fixture-kobo' >/tmp/stump-kobo-sync.json
+BOOK_ID="$(jq -r '.[].NewEntitlement.BookEntitlement.Id // empty' \
+  /tmp/stump-kobo-sync.json | sed -n '1p')"
+TOKEN="$(sed -n 's/^[Xx]-[Kk]obo-[Ss]ynctoken: *//p' \
+  /tmp/stump-kobo-sync.headers | tr -d '\r')"
+
+cat >/tmp/stump-kobo-state.json <<'JSON'
+{"ReadingStates":[{"CurrentBookmark":{"ProgressPercent":73,
+  "ContentSourceProgressPercent":42,
+  "Location":{"Value":"kobo.3.7","Type":"KoboSpan",
+  "Source":"chapter.xhtml"}},"Statistics":{"SpentReadingMinutes":4,
+  "RemainingTimeMinutes":8},"StatusInfo":{"Status":"Reading",
+  "TimesStartedReading":1}}]}
+JSON
+curl -fsS -X PUT "$BASE/kobo/$KEY/v1/library/$BOOK_ID/state" \
+  -H 'Content-Type: application/json' \
+  -H 'x-kobo-deviceid: fixture-kobo' \
+  --data-binary @/tmp/stump-kobo-state.json | jq -e \
+  '.RequestResult == "Success" and .UpdateResults[0].CurrentBookmarkResult.Result == "Success"'
+curl -fsS "$BASE/kobo/$KEY/v1/library/$BOOK_ID/state" | jq -e \
+  '.[0].CurrentBookmark.Location.Value == "kobo.3.7" and
+   .[0].CurrentBookmark.ProgressPercent == 73'
+
+# The incremental sync must report the state-only change.
+curl -fsS "$BASE/kobo/$KEY/v1/library/sync" \
+  -H "x-kobo-deviceid: fixture-kobo" \
+  -H "x-kobo-synctoken: $TOKEN" | jq -e --arg id "$BOOK_ID" \
+  'any(.[]; .ChangedReadingState.ReadingState.EntitlementId == $id)'
+```
+
+
+## 5. NickelHardcover and richer community extractors
+
+### NickelHardcover
+
+**[observed]** NickelHardcover is a device-side push integration to Hardcover, not a server-pull integration for Stump. Its CLI opens `/mnt/onboard/.kobo/KoboReader.sqlite` read-only, while the hook obtains progress from Nickel's `ReadingView__getCalculatedReadProgress`; the CLI sends the percentage to Hardcover (`cli/src/database.rs:17-80@149ab0ec224b8cf49da269338731b8eade1a809a`, `cli/src/commands/updatejournal.rs:178-220@149ab0ec224b8cf49da269338731b8eade1a809a`; [Codeberg `cli/src/database.rs:17-80`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/database.rs#L17-L80), [Codeberg `updatejournal.rs:178-220`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/commands/updatejournal.rs#L178-L220)).
+
+**[observed]** Its bookmark query reads `BookmarkID`, `Text`, `Annotation`, `DateCreated`, and `ChapterProgress`, joins `content` for chapter/book word counts, and normalizes a bookmark position. It combines `Text` and `Annotation` into a Hardcover journal quote (`cli/src/database.rs:17-80@149ab0ec224b8cf49da269338731b8eade1a809a`, `cli/src/commands/updatejournal.rs:178-220@149ab0ec224b8cf49da269338731b8eade1a809a`). The current pinned source does **not** select `StartContainerPath`, and it does not query `Event` or `Activity`; those richer fields must not be attributed to NickelHardcover. Codeberg citations: [`cli/src/database.rs:17-80@149ab0e`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/database.rs#L17-L80), [`cli/src/commands/updatejournal.rs:178-220@149ab0e`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/commands/updatejournal.rs#L178-L220).
+
+**[observed]** The README warns that firmware 5.x is not supported ([`README.md:10-15@149ab0e`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/README.md#L10-L15)). Its compiled configuration defaults differ from the README example: the code defaults `auto_sync_default=false`, `sync_bookmarks=Never`, `sync_on_close=Never`, `threshold=0`, and the standard database path; the example sets `sync_bookmarks=always`, `sync_on_close=always`, `threshold=20`, and `retry_on_network=true` (`cli/src/config.rs:123-151@149ab0ec224b8cf49da269338731b8eade1a809a`, `hook/res/config_example.ini:4-38@149ab0ec224b8cf49da269338731b8eade1a809a`). The README's example repeats those enabled bookmark/close-sync values ([`README.md:75-109@149ab0e`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/README.md#L75-L109)).
+
+### Richer database extractors
+
+**[observed]** `kobo-highlights-to-calibre` documents the richer `Bookmark` schema, including `StartContainerPath`, `EndContainerPath`, child indexes and offsets, `Text`, `Annotation`, `ChapterProgress`, timestamps, and other fields. Its examples include anchors such as `OEBPS/chap.xhtml#point(/...)`, which are CFI-like resource anchors (`README.md:104-176@7f04a7a760f61b7d36688c0ab1e4415e12150016`, `index.js:68-108@7f04a7a760f61b7d36688c0ab1e4415e12150016`).
+
+**[observed]** `kobo-db-tools` parses `AnalyticsEvents` rows (`Type`, `Timestamp`, `Attributes`, `Metrics`) into reading sessions and metrics and also parses bookmarks. Its README warns that a sync can clear `AnalyticsEvents`; the remaining `Event.ExtraData` trace is an encrypted/opaque blob (`README.md:1-46@6c6b2903c58512e8714935048a30d0cc72923bc8`, `src/parser.rs:689-710@6c6b2903c58512e8714935048a30d0cc72923bc8`). The database can be opened read-only as a fallback (`src/parser.rs:441-445@6c6b2903c58512e8714935048a30d0cc72923bc8`).
+
+**[observed]** `kobuddy` reads device `content` rows for book identity, percentage, status, last-read time, and time spent, and iterates both `Event` and `AnalyticsEvents` tables. Its own comments mark Event meanings as uncertain; this is useful extraction evidence, not a stable firmware contract (`src/kobuddy/__init__.py:398-446@4e972ce6256d9499394de211c2873cc8b94ee58a`, `src/kobuddy/__init__.py:454-570@4e972ce6256d9499394de211c2873cc8b94ee58a`, `src/kobuddy/__init__.py:659-757@4e972ce6256d9499394de211c2873cc8b94ee58a`).
+
+**[observed]** `Activity` appears in some database table listings, but the pinned tools above do not establish stable Activity semantics. Treating it as a contract requires firmware fixtures and validation (`README.md:104-137@7f04a7a760f61b7d36688c0ab1e4415e12150016`).
+
+**[inference]** A device importer must copy/read the database promptly and read it without mutation. Analytics rows may disappear during a later sync, and richer CFI fields come from supplementary extractors rather than the current NickelHardcover path.
+
+## 6. Decision matrix
+
+The matrix is for a stock Kobo pointed at Stump today. “Yes” means the capability is available end to end through the named path; “possible” means it needs a device-side hook or importer rather than a stock server pull.
+
+| Capability | Result today | Evidence and boundary |
+| --- | --- | --- |
+| DRM-free local EPUB books | **Yes**, when the media is user-visible and has extension `epub`. | Stump filters on `epub` and serves `/file/epub` (`crates/kobo/src/sync.rs:77-120@37fdb7d7340894a777c40d685d5262becceae007`, `crates/kobo/src/sync.rs:251-287@37fdb7d7340894a777c40d685d5262becceae007`). |
+| KEPUB books | **Optional**, when `KOBO_KEPUB_CONVERSION=true`. | The hook transforms EPUB bytes into deterministic KEPUB and metadata reports `KEPUB`; default delivery remains EPUB3 (`crates/kepub`, `apps/server/src/routers/kobo_backend/kepub.rs`, `core/src/kobo/entity.rs`). |
+| Progress through the Kobo sync API | **Yes**, for state fields represented by the ReadingState contract. | Stump persists PUT state in the user's reading session, reconstructs GET state, and emits `ChangedReadingState` on incremental sync (`crates/kobo/src/sync.rs`, `apps/server/src/routers/kobo_backend/router.rs`, `core/src/kobo/entity.rs`). |
+| Progress through KOReader | **Yes**, through Stump's separate KOReader API and device/hash setup. | KOReader's adapter is a separate progress contract and does not make stock-Nickel Kobo ReadingState compatible (`sync-platforms.mdx:14-44`, existing Stump documentation). |
+| Progress via a NickelHardcover-style database ingestion | **Possible**, only with a device-side hook or timely USB/database-copy importer. | NickelHardcover reads the device database and pushes outward; stock Kobo gives Stump no server-side filesystem pull (`cli/src/database.rs:17-80@149ab0ec224b8cf49da269338731b8eade1a809a`, `README.md:10-15@149ab0ec224b8cf49da269338731b8eade1a809a`). |
+| Highlights/annotations through the Kobo sync API | **No**. | The ReadingState handler accepts progress/location/statistics/status, not `Text` or `Annotation` (`cps/kobo.py:758-819@a97826402f1b39c45b7ea8d906efddc9f1750934`). |
+| Highlights/annotations through Stump's current KOReader API | **No**. | The KOReader DTO surface is progress-only (`sync-platforms.mdx:36-44`, existing Stump documentation). |
+| Highlights/annotations via `KoboReader.sqlite` `Bookmark` | **Yes**, the viable path. | Supplementary extractors document text, annotation, and CFI-like path fields (`README.md:104-176@7f04a7a760f61b7d36688c0ab1e4415e12150016`). |
+| Shelves/tags through Stump | **No**. | Stump advertises resources but routes them to empty-success stubs (`core/src/kobo/mod.rs:129-197@37fdb7d7340894a777c40d685d5262becceae007`, `apps/server/src/routers/kobo_backend/router.rs:101-119@37fdb7d7340894a777c40d685d5262becceae007`). |
+| Store books | **No local third-party entitlement** unless an explicit official-store proxy is built. | Calibre-Web's contrasting behavior is proxy/redirect plus official sync merge (`cps/kobo.py:89-130@a97826402f1b39c45b7ea8d906efddc9f1750934`, `cps/kobo.py:308-332@a97826402f1b39c45b7ea8d906efddc9f1750934`). |
+
+## 7. Recommended Stump strategy
+
+### Primary implementation task
+
+**[implemented]** The primary task was to rewrite the initialization resources so `reading_state`, `library_sync`, and `tags` point to Stump URLs, then implement and persist Kobo ReadingState. The implementation is additive: store-only resources remain official URLs, and the optional KEPUB delivery path is separate from state persistence (`core/src/kobo/mod.rs`, `apps/server/src/routers/kobo_backend/router.rs`, `crates/kobo/src/sync.rs`, `crates/kepub`).
+
+### Normalize through the existing ReadiumLocator
+
+**[inference]** Komga's Kobo controller is the useful wire-mapping precedent. Map:
+
+| Kobo field | Stump normalized field |
+| --- | --- |
+| `Location.Source` | `ReadiumLocator.href` |
+| `Location.Type=KoboSpan` plus `Location.Value` | `ReadiumLocator.kobo_span` |
+| `ContentSourceProgressPercent / 100` | `ReadiumLocator.locations.progression` |
+| `ProgressPercent / 100` | `ReadiumLocator.locations.total_progression` |
+| `StatusInfo` | Separate reading-session/status fields |
+| `Statistics` | Separate reading-session/statistics fields |
+
+This is the mapping used by Komga's `R2Locator` construction and ReadingState DTO (`KoboController.kt:573-609@656001eb03bf8b54ca909f3e74fe2ec1b95dac48`, `ReadingStateDto.kt:29-58@656001eb03bf8b54ca909f3e74fe2ec1b95dac48`). Stump already has `ReadiumLocation.progression`, `total_progression`, and `partial_cfi`, plus `ReadiumLocator.kobo_span` (`crates/models/src/shared/readium.rs:118-176@37fdb7d7340894a777c40d685d5262becceae007`).
+
+For database imports, split `StartContainerPath` into resource href and its CFI-like fragment/partial CFI; map `Text` to Readium text highlight, retain `Annotation` as annotation text, and use `ChapterProgress` plus content word-count ordering only as a fallback progression estimate (`README.md:104-176@7f04a7a760f61b7d36688c0ab1e4415e12150016`, `cli/src/database.rs:17-80@149ab0ec224b8cf49da269338731b8eade1a809a`).
+
+### Precision tiers and safety rules
+
+**[inference]** Implement explicit precision tiers:
+
+1. **Percentage:** always available from `ProgressPercent` when a stable locator is absent.
+2. **Resource progression:** use `Location.Source` and the two percentages when the device sends them.
+3. **KoboSpan:** retain `Location.Value` only for the exact KEPUB/resource transformation that produced it.
+4. **Database highlight:** use `StartContainerPath`/`EndContainerPath`, text, and annotation when importing a timely database copy.
+
+Plain EPUB supports coarse percentage unless a stable resource locator is sent. KEPUB can provide high-precision spans only when Stump preserves or reproduces the same transformed content and `koboSpan` map; otherwise Stump must not pretend that a KoboSpan is portable across EPUB/KEPUB variants (`kepub/transform.go:102-129@9546034bc023891af5ce30709de6ae2dcf264628`, `crates/models/src/shared/readium.rs:118-176@37fdb7d7340894a777c40d685d5262becceae007`).
+
+The resulting design is a clean sequence: first make initialization advertise Stump-owned state URLs and persist ReadingState; then add locator-aware conversion/import; only after that add optional KEPUB delivery. Keep the HTTP `CurrentBookmark` JSON contract distinct from the SQLite `Bookmark` table throughout.
+
+### Pinned source snapshots
+
+- Calibre-Web: `https://github.com/janeczku/calibre-web@a97826402f1b39c45b7ea8d906efddc9f1750934`, primarily `cps/kobo.py` and `cps/kobo_auth.py`.
+- Komga: `https://github.com/gotson/Komga@656001eb03bf8b54ca909f3e74fe2ec1b95dac48`.
+- kepubify: `https://github.com/pgaskin/kepubify@9546034bc023891af5ce30709de6ae2dcf264628`; documentation snapshot `https://github.com/pgaskin/kepubify@448534694374e195f8a915c5caf16cdf22ec7792`.
+- NickelHardcover: `https://github.com/RedHatter/NickelHardcover@149ab0ec224b8cf49da269338731b8eade1a809a` and canonical Codeberg source `https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a`.
+- `kobo-highlights-to-calibre`: `https://github.com/valeriangalliat/kobo-highlights-to-calibre@7f04a7a760f61b7d36688c0ab1e4415e12150016`.
+- `kobo-db-tools`: `https://github.com/mfdaves/kobo-db-tools@6c6b2903c58512e8714935048a30d0cc72923bc8`.
+- `kobuddy`: `https://github.com/karlicoss/kobuddy@4e972ce6256d9499394de211c2873cc8b94ee58a`.
+- Stump: `https://github.com/stump@37fdb7d7340894a777c40d685d5262becceae007`.

@@ -1,0 +1,422 @@
+---
+title: Komga compatibility adapter
+description: The evidence-backed Komga API profile implemented for Komelia clients
+---
+
+This page is the authoritative specification for Stump's Komga compatibility adapter. It describes the **implemented compatibility profile**, not the full Komga API. The target is the route and DTO profile observed from Komelia **0.19.0**; an endpoint or field not described here is not implied to be supported.
+
+## Scope and evidence
+
+### Current facts
+
+The adapter is a protocol boundary over Stump's existing authenticated library, media, reading-progress, collection, and read-list services. It does not introduce Komga persistence or a second identity system. All route handlers are mounted by [`apps/server/src/routers/komga/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/mod.rs), and DTOs are defined in [`crates/komga/src`](https://github.com/stumpapp/stump/tree/nightly/crates/komga/src).
+
+The compatibility claims in this document have two sources:
+
+- **Source facts:** the linked adapter, middleware, configuration, and contract source files in this repository.
+- **Interoperability evidence:** the external **komga-compat harness**, using a sanitized Komelia 0.19.0 capture. The capture establishes the client profile exercised by the adapter; it is not evidence that every Komga client or every Komga endpoint is supported.
+
+### Pinned upstream contracts
+
+The identity and session routes follow the Komga **1.26.3** OpenAPI
+document ([`openapi.json`](https://raw.githubusercontent.com/gotson/komga/1.26.3/komga/docs/openapi.json)).
+The request and response DTO shapes are corroborated by the pinned
+[`komga-client` 0.11.0 commit
+`74412a6e`](https://github.com/Snd-R/komga-client/commit/74412a6e27402b90f73672c7452f60a0f05914ca)
+and the Komelia client snapshot
+[`65f92fde`](https://github.com/Snd-R/Komelia/commit/65f92fde60b7b7b62b85a55ceb80b92adf50eec8).
+
+
+**Live client verdict (2026-09-03, Komelia 0.19.0 on Android against a headless debug build):** login, library/series/book browsing, filters, reading (CBZ pages and EPUB via Readium), read-progress and mark-read, series/book metadata editing with immediate refresh through the SSE mutation events, collections, and background downloads all worked end to end. Three regressions were found and fixed during that session and are covered by the harness: a stale session cookie triggering Stump's `401` cookie clears and wiping the live session across Komelia's shared cookie jar; `book.url` returning an API path instead of a filesystem-style path, which broke downloaded filenames; and missing `remember-me` support, which left Komelia's background download worker without credentials. Remaining observed gaps at that time were the user-settings screens (`POST /api/logout`, password changes, user management), tracked below.
+
+**Live client verdict (2026-09-04, Komelia 0.19.0 on Android, same build
+profile, real commercial EPUBs added to the fixture library):** reading and
+offline downloads of both CBZ and EPUB work end to end. Four regressions were
+found from the app's error messages and the server log, fixed, and pinned in
+the harness; all were specific to real EPUBs (the synthetic fixture EPUB had no
+`dc:date`, publisher, or TOC, so the 09-03 session never exercised them):
+
+| Symptom in Komelia | Cause | Fix (pinned by) |
+| --- | --- | --- |
+| `GET /api/v1/books/{id}/pages` → 500 "Failed to get chapter"; blocks open **and** download | The adapter walked `1..=pagesCount` as EPUB chapters, but Stump's EPUB `pagesCount` is a synthetic position count larger than the spine | EPUB page list is `[]`, Komga's behaviour for non-Divina EPUBs (`apps/server/src/routers/komga_backend.rs` `book_pages`); `replay-readium` asserts it |
+| `Unexpected JSON token … $.links[0].rel` | komga-client 0.11 types `WPLink.rel` as `String?`; Stump's Readium generator emits the spec's array form | `normalize_manifest_for_komga_client` in `crates/komga/src/routes/readium.rs` flattens `rel`; harness asserts `isString` |
+| `DateTimeParseException '1994-07-14T10:00:00+00:00' … index 10` | `WPMetadata.published` is `LocalDate`; `dc:date` is passed through verbatim | same normalizer truncates to `YYYY-MM-DD`; harness asserts the pattern |
+| (latent) `publisher` as string | `WPMetadata.publisher` and the other contributor fields are `List<String>` | same normalizer wraps scalar contributor fields; harness asserts `isCollection` |
+
+Also on that build: an out-of-range single page (`/pages/{n}` past the spine)
+and a missing EPUB resource now return `404` instead of `500`
+(`FileError::PageNotFound` / `ResourceNotFound`), and every failed response
+logs its method and URI so the next client report can be matched to a request.
+The native Stump Readium routes are unchanged; only the Komga alias is narrowed
+to the pinned client's DTO types.
+
+The current harness/replay evidence covers the route and DTO observations used here, including non-empty read-list and collection responses with seeded ordered membership, collection `PATCH` returning `204` followed by a readback, successful and boundary sibling navigation, and the observed media/auth method behavior. In particular, `GET /api/v1/books/{id}/read-progress` returns `405 Method Not Allowed` because progress reads are provided by the Readium progression route, while `PATCH /api/v1/books/{id}/read-progress` returns `204`; a byte-range request to a page or thumbnail asset served through `cached_bytes` returns `200` without `Content-Range`, whereas the full-file `/api/v1/books/{id}/file` route is served through tower-http `ServeFile` and returns `206 Partial Content` with `Content-Range`; and `POST /api/v1/auth/login` returns `404` by design. Komelia's probe is `HEAD /login`, followed by Basic authentication on the protected route scope.
+
+### Non-goals and proposals
+
+- This is not a claim of complete Komga server compatibility.
+- Komga endpoints outside the route matrix below are not part of the current contract.
+- Additional event types, unsupported metadata fields, broader search operators, and other endpoints outside this profile require an explicit implementation and compatibility probe before they become supported.
+
+## Enabling the adapter
+
+Two independent gates must both allow the adapter:
+
+1. **Cargo feature:** the server must be compiled with the `komga` feature. In [`apps/server/Cargo.toml`](https://github.com/stumpapp/stump/blob/nightly/apps/server/Cargo.toml), `komga` enables `readium` and the optional `stump_komga` contract crate. The route module itself is compiled only under `#[cfg(feature = "komga")]` in [`apps/server/src/routers/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/mod.rs).
+2. **Runtime configuration:** the effective `enable_komga` setting must be `true` (normally set with `STUMP_ENABLE_KOMGA=true`). [`core/src/config/stump_config.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/config/stump_config.rs) defines this key, defaulting to `false` in release configuration and `true` for the debug configuration.
+
+When both gates are open, `routers::mount` merges the Komga router. If `STUMP_ENABLE_KOMGA=true` is used with a binary compiled without the `komga` feature, the server logs a warning and does not mount the Komga route tree; native API routes remain available. This distinction is enforced in [`apps/server/src/routers/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/mod.rs).
+
+## Authentication
+
+The mounted adapter uses the common authenticated context. The top-level Komga router applies [`auth_middleware`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs) once to all protected modules. `HEAD /login` is the sole public route and returns `200 OK`; every other route in the matrix requires an authenticated user.
+
+### Basic-auth path scope
+
+Basic authentication is intentionally narrow. [`is_komga_basic_auth_path`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs) returns true only for:
+
+- any path beginning with `/api/v1/` (or the Grimmory prefix `/komga/api/v1/`);
+- exactly `/api/logout`, `/api/v2/users`, `/api/v2/users/me`, `/api/v2/users/me/authentication-activity`, `/api/v2/users/authentication-activity`, or `/api/v2/authors`;
+- the Grimmory identity alias `/komga/api/v2/users/me`;
+- a path beginning with `/api/v2/users/` and ending with `/authentication-activity/latest`;
+- a path beginning with `/api/v2/series/` (or `/komga/api/v2/series/`) and ending with `/read-progress/tachiyomi` — Mihon's built-in Komga tracker sends only Basic or `X-API-Key` on this path ([`KomgaApi.kt:54,91`](https://github.com/mihonapp/mihon/blob/21af65b10012f23e53dba9d01fd2474fcb810f7c/app/src/main/java/eu/kanade/tachiyomi/data/track/komga/KomgaApi.kt#L54)); or
+- exactly `/sse/v1/events`.
+
+The latest-activity and tracker rules are the only non-exact `/api/v2` matches. Thus `/api/v1`
+(without the trailing slash), `/api/v1x/...`, `/api/v2/users/me/books`,
+`/api/v2/users/{id}/authentication-activity/latest/other`,
+`/komga/api/v2/users/{id}/authentication-activity/latest`, `/api/graphql`, and
+`/sse/v1/events/other` are not Komga Basic-auth paths. Basic credentials on a
+Komga path create a Stump session cookie for follow-up requests; OPDS keeps
+its separate opt-in session behavior. The logout route deliberately does not
+save a new session when a client authenticates with Basic or remember-me
+credentials.
+
+When no `Authorization` header is present, `X-API-Key` is considered only on those same Komga-scoped paths. The adapter parses the prefixed key and authenticates it through [`validate_api_key`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs), which requires a matching unexpired key, a server owner or `AccessApiKeys` permission, and a valid long-token hash. The header is not a general-purpose API-key bypass for non-Komga routes. Bearer credentials and Stump session authentication continue to use the common middleware rules.
+
+### Remember-me cookie
+
+The Komga login shape `GET /api/v2/users/me?remember-me=true` issues
+`komga-remember-me` only after Basic authentication succeeds. The response
+contains both the normal `stump_session` cookie and an opaque
+`komga-remember-me` cookie with `Path=/`, `HttpOnly`, `SameSite=Lax`, and
+`Max-Age=1209600` (14 days). The lifetime is a code constant matching Komga's
+default `komga.remember-me.validity=P14D`; Stump does not currently expose a
+separate setting for this compatibility value.
+
+The remember-me value is a fresh random session ID stored as its own row in
+the existing `sessions` table with the authenticated user ID and an expiry
+of 14 days from issuance. It never reuses or exposes the browser
+`stump_session` ID. Existing session expiry cleanup, deletion/revocation, and
+`enforce_max_sessions` therefore apply to the token row.
+
+On a Komga Basic-auth path, the middleware considers this cookie only when
+there is no session user, `Authorization` header, or `X-API-Key` header. A
+present token must resolve to an unexpired session row whose user still
+exists and is not deleted or locked. Successful resolution authenticates the
+request and saves a fresh short-lived `stump_session`; missing, malformed,
+expired, unknown, deleted-user, or locked-user tokens return `401`.
+
+`POST /api/logout` invalidates the current Stump session and, when present,
+deletes the `komga-remember-me` session row as well. It returns `204 No
+Content` and emits clearing `Set-Cookie` headers for both `stump_session` and
+`komga-remember-me` (both use `Path=/`, with `Max-Age=0`; the existing
+session cookie also retains `HttpOnly` and `SameSite=Lax`). This is the
+intentional logout exception to the normal Komga `401` cookie-clear stripping:
+an authenticated logout must clear both client cookies.
+
+On a `401 Unauthorized` response, Stump attaches a session-clearing `Set-Cookie` (`stump_session=; Max-Age=0`) from [`APIErrorResponse`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/errors.rs), and a request that carried a dead session cookie receives a second clear from the tower-sessions layer. Komga never clears the session cookie on a `401`, and Komga clients such as Komelia run several HTTP clients (REST, SSE, image loading) over one shared cookie jar, so a stale cookie on one client would otherwise wipe the live session of the others. [`strip_komga_unauthorized_cookie_clears`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs), layered outside the session layer in `http_server.rs`, removes only those `stump_session` clears from `401` responses on the Komga-scoped paths above; fresh session cookies and other cookies pass through, and every non-Komga path keeps the clearing behavior. The harness spec `session-cookie-scope.hurl` covers stale-cookie isolation and the remember-me exchange.
+
+## Grimmory shim
+
+Stump also exposes the Grimmory Komga-shaped profile below `/komga`. This is a
+prefix alias over the same authenticated Komga book, media, and identity
+handlers; it does not add a second database or identity store. The route shape
+matches Grimmory main [`65f92fde`](https://github.com/grimmory-tools/grimmory/commit/65f92fde)
+and its `KomgaController`
+(`backend/src/main/java/org/booklore/controller/KomgaController.java:45-46`):
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `GET` | `/komga/api/v2/users/me` | Basic-authenticated Komga user projection. |
+| `GET` | `/komga/api/v1/books` | Grimmory listing profile; accepts `page` and `size` query parameters and returns the Komga `Page` envelope. |
+| `GET` | `/komga/api/v1/books/{id}/file` | Basic-authenticated book-file download. |
+| `GET` | `/komga/api/v1/books/{id}/thumbnail` | Basic-authenticated book thumbnail (the catalog-derived cover URL). |
+
+The listing route is intentionally `GET /api/v1/books`, rather than Komga's
+`POST /api/v1/books/list`, matching Grimmory's controller
+(`backend/src/main/java/org/booklore/controller/KomgaController.java:146-155`).
+Liseur's Grimmory catalog requests `GET /api/v1/books?page=&size=200`, filters
+locally on `media.mediaType == application/epub+zip`, and derives thumbnail and
+file links under `/komga/api/v1/books/{id}/...`
+(`app/src/main/kotlin/com/chmouel/liseur/data/grimmory/GrimmoryCatalogClient.kt:34-64,364-419`;
+`app/src/main/kotlin/com/chmouel/liseur/data/grimmory/GrimmoryFileSource.kt:17-29`).
+Its setup probe is `GET /komga/api/v2/users/me` with an OPDS user's Basic
+credentials, and the client treats an authenticated account as download-capable
+(`app/src/main/kotlin/com/chmouel/liseur/data/grimmory/GrimmorySetupClient.kt:28-49,144-175`).
+
+The shim accepts the same Basic-auth middleware as the ordinary Komga profile,
+but only under the `/komga/api/v1/` and `/komga/api/v2/` prefixes. Grimmory's
+identity response is Komga-shaped; no Grimmory-specific persistence is created.
+
+## Route matrix
+
+All paths below are absolute request paths. Unless marked **public**, the route is authenticated by the parent Komga router. Route declarations are the source of truth; the module links in each table point to the corresponding `apps/server/src/routers/komga/*.rs` file.
+
+### Identity — `identity.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `HEAD` | `/login` | Public login/probe response (`200 OK`). |
+| `POST` | `/api/logout` | Invalidates the current session and any `komga-remember-me` session row; returns `204` and clears both cookies. |
+| `GET` | `/api/v2/users/me` | Authenticated `KomgaUser` projection, including Stump-derived roles, age restriction, and visible-library sharing fields. With Basic auth and `remember-me=true`, also issues a remember-me cookie. |
+| `PATCH` | `/api/v2/users/me/password` | Changes the authenticated user's password using the configured bcrypt cost; returns `204`. |
+| `PATCH` | `/api/v2/users/{id}/password` | Changes the target password when the caller is that user or the server owner; returns `204`. |
+
+Source: [`identity.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/identity.rs), [`user.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/user.rs), and the pinned [Komga 1.26.3 OpenAPI user/session paths](https://raw.githubusercontent.com/gotson/komga/1.26.3/komga/docs/openapi.json).
+
+### Catalog — `catalog.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `GET` | `/api/v1/libraries` | Visible library list. |
+| `GET` | `/api/v1/libraries/{id}` | One visible library. |
+| `GET` | `/api/v1/books` | Mihon legacy book search page; accepts `search`, zero-based `page`, `size`, `unpaged`, `deleted`, comma-separated `library_id`, repeated `read_status`/`author`, comma-separated `status`/`genre`/`tag`/`publisher`, `media_status`, and repeated `sort` ([`Komga.kt:144-193`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L144-L193)). |
+| `GET` | `/api/v1/series` | Mihon legacy series search page; accepts the same query shape and maps `metadata.titleSort` ([`Komga.kt:144-193`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L144-L193)). |
+| `POST` | `/api/v1/books/list` | Searchable, paged book list; accepts the book search DTO as JSON. |
+| `POST` | `/api/v1/series/list` | Searchable, paged series list; accepts the series search DTO as JSON. |
+| `GET` | `/api/v1/series/{id}/books` | Mihon series chapter page; accepts `unpaged`, `media_status`, and `deleted`, and orders books by number ([`Komga.kt:244-249`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L244-L249)). |
+| `GET` | `/api/v1/books/ondeck` | On-deck book feed. |
+| `GET` | `/api/v1/series/new` | New-series feed. |
+| `GET` | `/api/v1/series/updated` | Updated-series feed. |
+| `GET` | `/api/v1/books/{id}` | One visible book. |
+| `GET` | `/api/v1/series/{id}` | One visible series. |
+| `GET` | `/api/v1/books/{id}/previous` | Previous sibling book in the series ordering. |
+| `GET` | `/api/v1/books/{id}/next` | Next sibling book in the series ordering. |
+| `GET` | `/api/v1/tags/book` | Distinct visible book tags, optionally filtered by library, series, or read list. |
+| `GET` | `/api/v1/tags/series` | Distinct visible series tags, optionally filtered by library; `collectionId` is rejected. |
+| `GET` | `/api/v1/tags` | Sorted union of distinct visible book and series tags. |
+| `GET` | `/api/v1/authors` | Mihon legacy author list as a plain array of `{name, role}` objects ([`Komga.kt:574-579`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L574-L579)). |
+| `GET` | `/api/v2/authors` | Distinct visible authors with role, search, library/series/read-list filters, and paging; this path is also in the Basic-auth scope. |
+| `GET` | `/api/v1/genres` | Distinct visible series genres; `collectionId` is rejected. |
+| `GET` | `/api/v1/series/release-dates` | Distinct visible book release years; `collectionId` is rejected. |
+| `GET` | `/api/v1/age-ratings` | Distinct visible series age ratings; `collectionId` is rejected. |
+| `GET` | `/api/v1/publishers` | Distinct visible series publishers; `collectionId` is rejected. |
+| `GET` | `/api/v1/sharing-labels` | Always the empty JSON array; Stump has no sharing-label model. |
+| `GET` | `/api/v1/languages` | Distinct non-empty visible book languages; `collectionId` is rejected. |
+Source: [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/catalog.rs).
+
+### Lists — `lists.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `GET` | `/api/v1/readlists` | Visible read-list collection, with Mihon `search`, supported library filtering, and pagination ([`Komga.kt:144-193`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L144-L193)). |
+| `GET` | `/api/v1/readlists/{id}` | One visible read list. |
+| `GET` | `/api/v1/readlists/{id}/books` | Books in a visible read list, preserving read-list order, in a `Page` envelope ([`Komga.kt:244-249`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L244-L249)). |
+| `GET` | `/api/v1/readlists/{id}/read-progress/tachiyomi` | Mihon read-list progress DTO: visible-book counts and the 1-based continuous read prefix (`lastReadContinuousIndex`, `0` when none). |
+| `PUT` | `/api/v1/readlists/{id}/read-progress/tachiyomi` | Marks the first `lastBookRead` visible books in read-list order as read and returns `204`. |
+| `GET` | `/api/v1/books/{id}/readlists` | Read lists containing a visible book, returned as a plain JSON array (not a `Page`). |
+| `GET` | `/api/v1/collections` | Visible series-collection list, with supported library filtering and pagination. |
+| `GET` | `/api/v1/collections/{id}` | One visible collection. |
+| `PATCH` | `/api/v1/collections/{id}` | Creator-only update; provided non-null `name`, `ordered`, and `seriesIds` values are applied, while omitted or `null` values leave those fields unchanged. Duplicate series IDs are rejected, and an explicit empty `seriesIds` clears membership. Returns `204`. |
+| `GET` | `/api/v1/collections/{id}/thumbnail` | Thumbnail from the first visible series in the collection; `404` when no visible member has one. |
+| `GET` | `/api/v1/series/{id}/collections` | Collections containing a visible series, returned as a plain JSON array (not a `Page`). |
+| `GET` | `/api/v1/collections/{id}/series` | Series in a visible collection, preserving collection order, in a `Page` envelope ([`Komga.kt:144-193`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L144-L193)). |
+
+The read-list query accepts the Mihon `search`, `page`, `deleted`, and `sort`
+parameters; collection and read-list filters otherwise reject non-empty
+`condition` and `fullTextSearch` values rather than silently ignoring them.
+Source: [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/lists.rs), [`collection.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/collection.rs), and [`read_list.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/read_list.rs).
+
+Catalog and list query extraction uses `axum_extra::extract::Query` (the `serde_html_form` decoder), not Axum's plain query extractor. Collection fields are plain `Vec` values with `#[serde(default)]`, never `Option<Vec>`, so scalar and repeated query forms are both accepted: catalog queries use `libraryId`/`library_id`, while list filters use `libraryIds`/`library_id`. This wire-shape detail is required for Komelia's scalar library filter encoding and is implemented in [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/catalog.rs) and [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/lists.rs).
+
+
+### Library management — `library.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `POST` | `/api/v1/libraries/{id}/metadata/refresh` | Requires `ManageLibrary`, resolves a visible library, enqueues a Stump library scan, and returns `202 Accepted`. |
+| `POST` | `/api/v1/libraries/{id}/analyze` | Requires `ManageLibrary`, resolves a visible library, enqueues forced media analysis for that library, and returns `202 Accepted`. |
+| `POST` | `/api/v1/libraries/{id}/empty-trash` | Requires `ManageLibrary`, permanently deletes only soft-deleted media in the visible library, removes their reading-list junction rows in the same transaction, leaves active media and series rows untouched, and returns `202 Accepted`. |
+
+### Book metadata — `book.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `PATCH` | `/api/v1/books/{id}/metadata` | Requires `ManageLibrary`; applies the supported metadata patch and lock fields to a visible, non-deleted book, then returns `204 No Content`. |
+| `POST` | `/api/v1/books/{id}/metadata/refresh` | Requires `ManageLibrary`, resolves a visible book, enqueues forced media analysis, and returns `202 Accepted`. |
+
+### Series metadata and progress — `series.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `PATCH` | `/api/v1/series/{id}/metadata` | Requires `ManageLibrary`; applies supported series metadata, tags, links, and lock fields to a visible series, then returns `204 No Content`. Unsupported fields are rejected with `400`. |
+| `POST` | `/api/v1/series/{id}/read-progress` | Marks every visible, non-deleted book in the series read for the current user, using the last zero-based page where one exists; returns `204` (including an empty series). |
+| `DELETE` | `/api/v1/series/{id}/read-progress` | Deletes the current user's reading sessions for every visible, non-deleted book in the series; returns `204` (including an empty series). |
+| `GET` | `/api/v2/series/{id}/read-progress/tachiyomi` | Mihon series progress DTO: visible-book counts, status-derived read/in-progress/unread counts, continuous read prefix, and maximum number sort. |
+| `PUT` | `/api/v2/series/{id}/read-progress/tachiyomi` | Marks every visible book whose finite number is `<= lastBookNumberSortRead` as read and returns `204`. |
+
+### Settings and account administration — `settings.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `GET` | `/api/v1/settings` | Returns Komga-shaped settings. Stump supplies the configured session duration and server port; unsupported settings use neutral values. |
+| `PATCH` | `/api/v1/settings` | Server-owner-only. Valid update JSON is accepted, logged as a warning, not persisted, and returns `204 No Content`. |
+| `GET` | `/api/v1/announcements` | Returns an empty JSON Feed 1.1 document titled `Stump`; it states that Stump publishes no announcements. |
+| `PUT` | `/api/v1/announcements` | Accepts announcement IDs and is a no-op returning `204 No Content`. |
+| `GET` | `/api/v2/users` | Server-owner-only list of non-deleted users, ordered by username, with Komga user projections, age restrictions, and sharing fields. |
+| `POST` | `/api/v2/users` | Server-owner-only creation from `email`, `password`, and `roles`; the result is always a non-owner with Stump's default permissions, even when `ADMIN` is requested, and returns `201` with a user projection. |
+| `PATCH` | `/api/v2/users/{id}` | Server-owner-only user update. Only `ageRestriction` is persisted (`ALLOW_ONLY` maps to Stump's `restrict_on_unset=true`; `EXCLUDE` maps to `false`; `NONE` or `null` clears it). `roles`, labels, and shared-library updates are rejected with `400`; returns `204`. |
+| `DELETE` | `/api/v2/users/{id}` | Server-owner-only soft delete of a non-owner user; deleting the caller or server owner is rejected; returns `204`. |
+| `GET` | `/api/v2/users/me/authentication-activity` | Current user's authentication activity, newest first, in a `Page` envelope. |
+| `GET` | `/api/v2/users/authentication-activity` | Server-owner-only authentication activity for all users, newest first, in a `Page` envelope. |
+| `GET` | `/api/v2/users/{id}/authentication-activity/latest` | Server-owner-only latest activity for an existing user; returns `404` if the user or that user's activity does not exist. |
+
+Authentication-activity pagination accepts non-negative `page` and `size`, defaults to page `0` and size `20`, clamps sizes over `200`, and accepts `unpaged=true`. Results expose the stored user ID, username as `email` when available, IP, user agent, success flag, UTC timestamp, source `PASSWORD`, and `error: null`.
+
+### Library, book, and series metadata behavior
+
+Metadata PATCH bodies use the three-state `PatchValue` form: omitted means unchanged, `null` clears a nullable value, and a value replaces it. Series patches persist `status`, `title`, `summary`, `publisher`, `ageRating`, `genres`, `tags`, `totalBookCount`, and `links`, plus their supported lock fields. `titleSort`, `readingDirection`, `language`, `alternateTitles`, and `sharingLabels`, including each corresponding lock field, have no Stump equivalent; if any is present (including `null`), the request returns `400`.
+
+Book patches persist `title`, `summary`, decimal `number`, `releaseDate`, `authors`, `tags`, `isbn`, and `links`, plus their supported lock fields. Authors are mapped to Stump's CSV columns only for the seven roles `writer`, `penciller`, `inker`, `colorist`, `letterer`, `cover_artist`, and `editor`; roles are case-insensitive, names are trimmed and de-duplicated, and an empty name or any other role returns `400`. `numberSort` is derived from `number`: it cannot be cleared independently, and a supplied value must equal the finite numeric value derived from the patched number (or the existing number when `number` is omitted), otherwise the request returns `400`. Fields outside this DTO are not applied by the serde update mapping.
+
+`tags` replaces the existing relation (with duplicate names removed), while `links` and multi-value metadata are stored in Stump's comma-separated columns. Metadata writes and management jobs do not fabricate persistence for unsupported Komga settings.
+
+Sources: [`library.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/library.rs), [`book.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/book.rs), [`series.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/series.rs), and [`settings.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/settings.rs).
+For Tachiyomi progress, the adapter counts only the authenticated user's
+latest reading session for each visible, non-deleted book. `FINISHED` is read;
+any other existing session is in progress; no session is unread. The series
+continuous prefix sorts by finite metadata number and stops at the first unread
+or in-progress book; it reports `0` when the prefix is empty. Books with missing
+numbers receive a stable 1-based visible-order number for this tracker route;
+`maxNumberSort` still falls back to the visible book count when any source
+number is missing. Writes use the existing `upsert_reading_session` path, so
+normal progress events are emitted. This ordinal treatment of missing numbers
+is a deliberate compatibility deviation: it makes the fixture's unnumbered
+books trackable without inventing persisted metadata. The wire contract follows
+Mihon's pinned [`KomgaApi.kt` and
+`KomgaModels.kt`](https://github.com/mihonapp/mihon/tree/21af65b10012f23e53dba9d01fd2474fcb810f7c/app/src/main/java/eu/kanade/tachiyomi/data/track/komga).
+
+### Media — `media.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `GET` | `/api/v1/books/{book_id}/pages` | Page metadata array for a visible book. |
+| `GET` | `/api/v1/books/{book_id}/pages/{page}` | One page image/content response. Page numbers are one-based. |
+| `GET` | `/api/v1/books/{book_id}/pages/{page}/thumbnail` | Generated JPEG thumbnail for an image page; page numbers are one-based. |
+| `GET` | `/api/v1/books/{book_id}/thumbnail` | Selected book thumbnail bytes. |
+| `GET` | `/api/v1/books/{book_id}/thumbnails` | Thumbnail metadata array. |
+| `GET` | `/api/v1/books/{book_id}/thumbnails/{thumbnail_id}` | Thumbnail bytes for the supported thumbnail ID. |
+| `GET` | `/api/v1/series/{series_id}/thumbnail` | Selected series thumbnail bytes. |
+| `GET` | `/api/v1/series/{series_id}/thumbnails` | Thumbnail metadata array. |
+| `GET` | `/api/v1/series/{series_id}/thumbnails/{thumbnail_id}` | Thumbnail bytes for the supported thumbnail ID. |
+| `GET` | `/api/v1/books/{book_id}/file` | Original book file download, subject to Stump visibility and download permissions. |
+| `POST` | `/api/v1/libraries/{library_id}/scan` | Enqueues a library scan and returns `202 Accepted`; scan permission is required. `deep=true` requests a forced rebuild. |
+| `POST` | `/api/v1/books/{book_id}/analyze` | Enqueues forced media analysis and returns `202 Accepted`; library-management permission is required. |
+| `POST` | `/api/v1/filesystem` | Owner-only directory listing for Komelia's library picker. Absolute paths are required and the result is constrained to child directories. |
+
+Stump deliberately does not expose Komga's optional page conversion, zero-based page query mode, or disabling content negotiation: `convert=...`, `zero_based=true`, and `contentNegotiation=false` return `400`. Page metadata uses stable logical names (`page-1`, `page-2`, and so on) because Stump stores archive-level metadata rather than archive entry filenames. Source: [`media.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/media.rs).
+
+### Progress — `progress.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `PATCH` | `/api/v1/books/{id}/read-progress` | Applies a JSON `{page?, completed?}` update and returns `204 No Content`. For this Komga progress contract, `page` is zero-based and valid in the half-open range `0..pages`; an empty patch or out-of-range page returns `400`. |
+| `DELETE` | `/api/v1/books/{id}/read-progress` | Deletes the current user's progress and returns `204 No Content`. |
+
+Progress visibility is checked before mutation so missing, hidden, and inaccessible books are not distinguishable. Source: [`progress.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/progress.rs) and [`book.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/book.rs).
+
+### Readium — `readium.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `GET` | `/api/v1/books/{id}/manifest` | Authenticated Readium manifest for a visible EPUB. |
+| `GET` | `/api/v1/books/{id}/manifest.json` | `.json` alias for the manifest endpoint. |
+| `GET` | `/api/v1/books/{id}/positions` | Authenticated Readium positions for a visible EPUB. |
+| `GET` | `/api/v1/books/{id}/positions.json` | `.json` alias for the positions endpoint. |
+| `GET` | `/api/v1/books/{id}/resource/{*path}` | Authenticated EPUB resource bytes; the resource path must remain relative to the book and traversal is rejected. |
+| `GET` | `/api/v1/books/{id}/progression` | Returns the current Readium progression, or `204 No Content` when none exists. |
+| `PUT` | `/api/v1/books/{id}/progression` | Validates and stores Readium progression, returning `204 No Content`; stale timestamps conflict. |
+
+The manifest generator builds resource links from the request host, so a reverse proxy must preserve the client-facing `Host` when forwarding these requests. Source: [`readium.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/readium.rs) and [`crates/komga/src/readium.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/readium.rs).
+
+### Server-sent events — `sse.rs`
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| `GET` | `/sse/v1/events` | Authenticated `text/event-stream` with a 15-second keep-alive. |
+
+Two event sources feed the stream. Stump core events: `CreatedMedia` is mapped to `BookAdded` with `bookId`, `seriesId`, and `libraryId`; `JobStarted`, `JobUpdate`, `JobOutput`, `DiscoveredMissingLibrary`, `CreatedManySeries`, and `CreatedOrUpdatedManyMedia` are ignored because they carry no per-item IDs or would require fabricating update/deletion events. Adapter mutation events, published on a Komga-scoped broadcast bus (`KomgaEvents`, capacity 256) after the database write succeeds: `PATCH /api/v1/series/{id}/metadata` → `SeriesChanged`; `PATCH /api/v1/books/{id}/metadata` → `BookChanged`; `PATCH /api/v1/books/{id}/read-progress` and `PUT /api/v1/books/{id}/progression` → `ReadProgressChanged`, `ReadProgressSeriesChanged`, `BookChanged`, `SeriesChanged`; `DELETE /api/v1/books/{id}/read-progress` → `ReadProgressDeleted`, `ReadProgressSeriesDeleted`, `BookChanged`, `SeriesChanged`; `POST`/`DELETE /api/v1/series/{id}/read-progress` → `ReadProgressSeriesChanged`/`ReadProgressSeriesDeleted`, `SeriesChanged`, and one `BookChanged` per book; `PATCH /api/v1/collections/{id}` → `CollectionChanged` with the resulting ordered series IDs. Event names are the Komga PascalCase names and payloads are the camelCase DTOs from `crates/komga/src/sse.rs` without a type tag. Delivery is gated per subscriber: book/series/collection events require the referenced media or series to be visible to that user, and every `ReadProgress*` event is delivered only to the user whose progress changed. A lagged subscriber continues with the newest available event. Source: [`sse.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/sse.rs) and [`crates/komga/src/sse.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/sse.rs).
+
+## Search-condition profile
+
+The JSON search DTOs are defined in [`crates/komga/src/search.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/search.rs). For `POST /api/v1/books/list` and `POST /api/v1/series/list`, the adapter recursively evaluates these condition forms:
+
+- `AllOfBook` / `AllOfSeries`: all nested conditions are combined with logical AND.
+- `AnyOfBook` / `AnyOfSeries`: nested conditions are combined with logical OR.
+- Book `LibraryId` with `operator: { "is": ... }`.
+- Book `SeriesId` with `operator: { "is": ... }`.
+- Book `MediaStatus` with `operator: { "is": ... }`: `READY`, `UNKNOWN` (Stump `UNKNOWN` or `MISSING`), `ERROR`, and `UNSUPPORTED` map to Stump file statuses. `OUTDATED` is intentionally always false, so it matches no books.
+- Book `ReleaseDate` with `operator: { "isInTheLast": ... }`.
+- Series `LibraryId` with `operator: { "is": ... }`.
+- Series `Language` with `operator: { "is": ... }`; matching is case-insensitive against the language stored on a book's metadata and then projects the matching series.
+
+The `allOf` and `anyOf` arrays default to empty when their keys are omitted. This matches the pinned Komelia client payload shape and is part of the deserialization contract; it does not expand the set of supported leaf conditions.
+
+Every other condition variant or operator returns `400 Bad Request` through the adapter's unsupported-filter error. Before returning that error, the adapter writes a warning whose `condition` field contains the rejected condition serialized as JSON. Unsupported filters are not accepted as if they had been applied. `fullTextSearch` is a separate supported search field; book full-text search covers book, book-metadata, series, and series-metadata text columns, while series full-text search covers series name, title, summary, and writers. The condition allowlist and full-text behavior are implemented in [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/catalog.rs).
+
+## Pagination contract
+
+Catalog feeds, book/series list requests, author results, list endpoints, and authentication-activity results use a Komga/Spring-style `Page<T>` envelope from [`crates/komga/src/common.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/common.rs). The envelope contains `content`, `pageable`, `totalElements`, `totalPages`, `last`, `number`, `sort`, `first`, `numberOfElements`, `size`, and `empty`. The two by-parent endpoints (`/books/{id}/readlists` and `/series/{id}/collections`) are the deliberate plain-array exceptions.
+
+- `page` is zero-based and must be non-negative.
+- `size` is non-negative and defaults to `20`; values above **200** are clamped to `200`. Catalog and authentication-activity pagination warn when clamping; list pagination clamps without that warning.
+- `size=0` is a count-only request on paged endpoints: content is empty while `totalElements` remains populated (and `totalPages` is `1` when the total is non-zero).
+- `unpaged=true` is accepted. An unpaged response reports page number and offset as zero, uses the content length as its page size, and reports zero or one total pages depending on whether content is empty.
+- For paged requests, the SQL offset is `page * size` and the response preserves the requested page and size.
+
+For book and series list/feed endpoints, sort expressions are `field` or `field,direction`, with `asc` or `desc` direction. The six supported book-list keys are `lastModified`, `createdDate`, `metadata.titleSort`, `metadata.numberSort`, `metadata.releaseDate`, and `readProgress.readDate`. Series list/feed sorting supports `lastModified`, `createdDate`, and `metadata.titleSort`. Unknown fields, malformed expressions, and invalid directions are warned about and fall back to the endpoint's default order; they do not return `400`. The on-deck feed additionally accepts its observed aliases for created date (`created`, `createdAt`, `created_at`), last modified (`lastModified`, `lastModifiedDate`, `last_modified`), and title/name (`name`, `title`, `metadata.title`, `relevance`), with unknown values also using the default order.
+
+The validation and envelope construction are implemented in [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/catalog.rs), [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/lists.rs), [`settings.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/settings.rs), and [`common.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/common.rs).
+
+## DTO mapping and intentional losses
+
+### Identity and IDs
+
+Book, series, library, collection, and read-list IDs are the underlying Stump IDs wrapped in typed Komga newtypes; they are not regenerated Komga IDs. Komga's `book.url` and `series.url` are filesystem paths, and Komelia derives a downloaded book's local filename (and therefore its format) from the last segment of `book.url`. Stump never exposes real library paths to users, so the mapper emits a virtual path made only of the series directory name and the file name (`/<series dir>/<file.cbz>` for books, `/<series dir>` for series), with the `virtual_book_url`/`virtual_series_url` helpers in `mapper.rs`. Thumbnail IDs are deterministic adapter IDs:
+
+- book thumbnail: `stump-book-<book-id>`;
+- series thumbnail: `stump-series-<series-id>`.
+
+The media handler accepts only the corresponding generated ID for each book or series. These rules are implemented by [`mapper.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/mapper.rs), [`media.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/media.rs), [`collection.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/collection.rs), and [`read_list.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/read_list.rs).
+
+### Mapped fields and losses
+
+The following are current mapping decisions, not compatibility proposals:
+
+- `series.metadata.titleSort` is emitted as the series title (`title_sort=title`); Stump has no separate persisted sort title.
+- Series-level `metadata.language` is always empty because Stump stores language per book, not on the series metadata row. Series language conditions still search book metadata and project matching series.
+- `scanInterval` is always `DISABLED`; Stump's watcher boolean is not converted into a fictional periodic interval.
+- Page metadata uses synthetic `page-N` file names because archive entry names are not persisted in the mapped row.
+- Each book exposes exactly one selected thumbnail of type `GENERATED` using the deterministic thumbnail ID above. Series thumbnail lists are empty and `/series/{id}/thumbnails/{tid}` is `404`: Komga's `ThumbnailSeries.Type` is only `SIDECAR | USER_UPLOADED`, generated series covers are served solely by `/series/{id}/thumbnail`, and Komelia decodes the listed type with an unguarded `valueOf` (a listed `GENERATED` entry crashed every download at the series import step).
+- Alternate series titles and sharing labels are empty; Stump does not persist equivalent collections for either field.
+- Library fields without Stump equivalents use neutral values from [`mapper.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/mapper.rs), including disabled scan/conversion/import switches where no persisted Stump setting exists.
+- Book metadata is projected from Stump metadata when present, with the media name as the title fallback; series aggregates derive counts, tags, and representative book metadata from visible books.
+
+## Replay observations and diagnostics
+
+The replay observations above are compatibility evidence, not new routes. They are included because clients depend on the negative space as well as successful responses:
+
+- `GET /api/v1/books/{id}/read-progress` is not mounted and therefore returns `405`; use the Readium progression GET route when a progression read is needed.
+- `PATCH /api/v1/books/{id}/read-progress` returns `204` on a valid update.
+- A Range request to a page or thumbnail asset served through `cached_bytes` returns `200` without `Content-Range`; this is the observed behavior for those cached asset endpoints, not a promise of byte-range semantics. The full-file download at `/api/v1/books/{id}/file` is served through tower-http `ServeFile` and honors Range, returning `206 Partial Content` with `Content-Range`.
+- `POST /api/v1/auth/login` returns `404`; login discovery is `HEAD /login`, and credentials are sent through the common Basic-auth path scope.
+
+The Komga router also mounts a scoped `ANY /api/v1/{*path}` fallback. Any unmatched request under `/api/v1/` that reaches this wildcard, including an unsupported method, is warned with its HTTP method and URI (`Unmatched Komga-profile route`) and returns `404`; the fallback does not replace the application-wide SPA fallback. Unsupported search conditions are separately warned with the rejected condition serialized as a JSON log field before the `400` response.
+
+The external **komga-compat harness** and its sanitized Komelia 0.19.0 capture/replay provide the interoperability evidence. Harness specifications are referred to by filename only, including `management-pending.hurl`; their machine paths are not part of this contract. They do not turn unlisted methods into supported endpoints.
+
+
+## Compatibility boundary
+
+A client may rely on the route paths, authentication scope, pagination rules, search allowlist, progress numbering distinction, Readium aliases, generated thumbnail IDs, virtual `url` paths, and the SSE event set specified here. It must not rely on unlisted Komga routes, unsupported search operators, persisted alternate-title/sharing-label data, archive-entry filenames, periodic scan intervals, real filesystem paths, or event types that the adapter deliberately ignores.

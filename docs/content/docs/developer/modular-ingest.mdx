@@ -1,0 +1,589 @@
+---
+title: Modular ingest
+description: A staged, deterministic ingest pipeline and additive GraphQL contract for the first-party editor
+---
+
+This page specifies the proposed modular ingest contract for a first-party SvelteKit editor. It narrows the future metadata/book-lab direction in [server architecture](./server-architecture) into a staged drop-folder workflow without changing Stump's existing upload, scan, metadata, or job APIs. **Current** means the behavior is in this worktree; **proposed** means a new persistence or API surface and is not implemented.
+
+The server remains authoritative: a source file is immutable while it is being analyzed, all derived evidence is content-addressed to that source, and metadata providers produce reviewable candidates rather than silently changing a library. A pending item may be discarded or reworked without deleting an already committed `Media` row.
+
+This page extends the uploader-prepared boundary and metadata/book-lab proposal already recorded in `docs/content/docs/developer/server-architecture.mdx:180-226`; it also follows the optional-provider and candidate provenance rules in `docs/content/docs/developer/hardcover-integration.mdx:1-20,167-220`. Those pages remain the broader architecture and integration notes; this page adds the queue, deterministic quality report, and editor-facing GraphQL contract.
+
+## What exists today and what this design adds
+
+The current path is deliberately preserved:
+
+- GraphQL `uploadBooks` and `uploadSeries` receive multipart `Upload` values, copy them into a library path, and enqueue a library scan. They return only `Boolean`; there is no durable drop-item or analysis-report identity ([observed — `crates/graphql/src/mutation/upload.rs:43-102,108-167`]).
+- The library watcher receives create/modify notifications, accumulates paths, waits until the tree has been quiet for its debounce interval, and submits a `library_scan` job ([observed — `core/src/filesystem/scanner/library_watcher.rs:15-104`]).
+- Apalis-backed `StumpJob` currently contains library/series scans, thumbnail work, metadata fetches, and media analysis. `AnalyzeMediaJob` accepts book, list-of-books, library, and series scopes and creates one `ProcessBook` task per selected media ([observed — `core/src/job/stump_job.rs:10-103`; `core/src/filesystem/media/analysis/job.rs:12-136`]).
+- Page analysis currently stores dimensions and content types in `MediaAnalysisData`; it reuses complete existing page entries unless forced and reports task/subtask progress through the job event channel ([observed — `core/src/filesystem/media/analysis/analyze.rs:99-194`; `core/src/job/progress.rs:8-53`]).
+- The existing `metadata_integrations::MetadataProvider` has provider identity, supported media types, series/media search, scoring, detail fetch, and credential verification methods. `MatchCandidate` already carries provider, external ID, metadata, confidence, and confidence factors ([observed — `crates/integrations/metadata/src/provider.rs:19-75`; `crates/integrations/metadata/src/types/match_candidate.rs:5-44`]).
+- Core metadata fetches enabled providers, stores candidates in `metadata_fetch_records`, and can auto-apply through the existing merge path. Current records are one media or series target at a time; the existing GraphQL surface exposes `pendingMetadataMatches`, candidate acceptance/rejection, field locks, bulk accept/reject, and provider configuration ([observed — `core/src/filesystem/metadata/fetch.rs:114-224,247-378`; `core/src/filesystem/metadata/apply.rs:17-124`; `crates/graphql/schema.graphql:1648-1780,1884-1908,1959-1964,2086-2094`]).
+- The existing GraphQL `readEvents` subscription forwards the core broadcast stream of `JobStarted`, `JobUpdate`, `JobOutput`, and scan events. `JobProgress` is a patch, so omitted fields must be retained by a client ([observed — `crates/graphql/src/subscription/event.rs:6-32`; `core/src/event.rs:1-58`; `core/src/job/progress.rs:8-27`]).
+
+The proposed path is additive and may coexist with the current path:
+
+```text
+upload/watch -> immutable staging -> drop_item
+                              -> analysis_job -> existing processors + quality_report
+                                                   -> provider identification/lookup
+                                                   -> metadata candidates + review
+                                                   -> field-level apply/merge
+                                                   -> explicit commit to Media/Series
+```
+
+A current library scan may still create `Media` and `Series` before the new workflow is introduced. The staged workflow instead keeps a `drop_item` pending until `approveIngestItem` commits it. A compatibility adapter can call the existing scanner/`MediaBuilder` transaction at that boundary; no existing client is required to adopt the new contract.
+
+## Domain model
+
+The names below are logical records. Their exact SeaORM entities and migrations are **implemented**. IDs are opaque, timestamps are UTC, and every record that derives from a file stores the source digest and the algorithm/processor version used.
+
+
+| Record | Required fields and invariants | Lifecycle / purpose |
+| --- | --- | --- |
+| `drop_item` | `id`, `library_id`, `created_by`, source filename and normalized relative path, byte size, full source SHA-256, detected media type, staging reference (never an absolute path in GraphQL), `status`, `analysis_job_id`, `quality_report_id`, optional committed `media_id`/`series_id`, pending metadata field map, error, created/updated timestamps, and an integer revision. `(library_id, source_sha256, source_filename)` plus an idempotency key prevents duplicate admission; the staged bytes are immutable. | `RECEIVED -> STAGED -> ANALYZING -> AWAITING_REVIEW/READY -> COMMITTED`; `REJECTED` and `FAILED` are terminal for that attempt. A retry creates a new analysis attempt but does not mutate source bytes. |
+| `analysis_job` | `id`, `drop_item_id`, underlying optional existing Apalis `job_id`, `status`, phase, priority score, algorithm/provider plan, attempts, timestamps, and error. The job references a drop item rather than embedding a filesystem path. | A durable editor-facing projection of work. It can be queued, running, paused, cancelled, retried, or completed while the underlying `Job` remains compatible with existing job history. |
+| `quality_report` | `id`, `drop_item_id`, `source_sha256`, `algorithm_version`, `score` in `0..=100`, ordered `checks[]`, generated timestamp, and optional parser/processor evidence. A report is valid only for the exact source digest and algorithm version. | Immutable evidence for one analysis attempt. A newer report supersedes it; prior reports remain audit history. |
+| `quality_check_result` (an element of `checks[]`) | `check_id`, display label, `status` (`PASS`, `WARN`, `FAIL`, `NOT_APPLICABLE`), fixed weight, normalized score `0..=1`, contribution, and bounded structured evidence (counts, hashes, dimensions, or parser candidates). | One deterministic finding. A check never inspects network results, wall-clock time, provider response order, or an AI opinion. |
+| `metadata_candidate` | `id`, `drop_item_id` or committed target, stable provider ID, overall `confidence` in `0..=1`, canonical `fields` map, optional per-field confidences, source digest, identity/lookup input, provider version/model, provenance, status, and timestamps. | `PENDING -> ACCEPTED/REJECTED`. Candidates are evidence; they never become trusted metadata until a user or an explicitly enabled auto-apply policy selects fields. |
+| `metadata_application` | `id`, item/target ID, expected revision/source digest, strategy, ordered field picks, actor (`user`, `auto_apply`, or `system`), applied/failed fields, and timestamp. | Audit trail for a single or bulk merge. A stale revision fails rather than overwriting a newer edit. |
+| `plugin_registration` and `plugin_setting` | Provider/check ID, kind, display name, version, supported media types, capabilities, setting definitions, enabled/opted-in flags, and secret/configured markers. Secret values are encrypted and never returned. | Registry discovery and per-user/per-library settings. Built-ins can be statically registered; dynamic native loading is not required for the first implementation. |
+
+### State and ownership rules
+
+1. Staging is server-owned. A client supplies a file stream and an optional relative display path, never a server filesystem path. The server validates the library, normalizes path separators, rejects `..`, computes the full digest while writing, and atomically records the item.
+2. A source digest is the identity of bytes; a filename is only an input to parsing. A repeated idempotency key returns the original item, while the same filename with different bytes creates a new item.
+3. A `quality_report` and every candidate must name the source digest. Results from a worker/uploader whose digest does not match are rejected without losing the source.
+4. A pending item has no reader-visible `Media` row until commit. If an implementation chooses to reuse the scanner's early row, it must mark that row unavailable to normal readers until the same explicit commit transition succeeds.
+5. `approveIngestItem` is the only proposed transition to committed library state. It applies selected metadata in the same database transaction as the media/series association. `rejectIngestItem` removes or quarantines staging only; it does not delete unrelated existing media.
+6. All list ordering is deterministic: score/priority first, then creation timestamp, then opaque ID. Provider response order is never a tie-breaker.
+
+## Analysis job and queue
+
+`analysis_job` is the durable orchestration record for the editor; the existing Apalis job remains the execution mechanism where possible. A coordinator creates one analysis job per drop item, schedules bounded tasks, and records phase transitions. It may delegate page extraction to `AnalyzeMediaJob` and archive/EPUB parsing to the existing `FileProcessor` implementations rather than duplicate native readers.
+
+The queue priority is the current quality score, with the lowest score first because the most defective item needs attention first:
+
+```text
+priority(item) = quality_report.score if a report exists, otherwise 0
+order by priority asc, created_at asc, id asc
+```
+
+A missing report is score `0`, not an implicit pass. A re-run replaces the priority key and moves the item deterministically. The client cannot choose an arbitrary priority; an operator can only enqueue, pause, resume, cancel, or retry. `force` means re-run checks even when a source/processor version is unchanged. Existing `JobStatus` values (`QUEUED`, `RUNNING`, `PAUSED`, `COMPLETED`, `CANCELLED`, `FAILED`) are reused in the proposed GraphQL projection ([observed — `crates/graphql/schema.graphql:982-1031`]).
+
+`AnalyzeMediaJob` currently gathers IDs from its `Book`, `Books`, `Library`, or `Series` scope, invokes `safely_analyze_book`, and reports page subtasks. The proposed coordinator supplies a staged item adapter and records the resulting `MediaAnalysisData`; it does not change those existing scopes ([observed — `core/src/filesystem/media/analysis/job.rs:75-136`; `core/src/filesystem/media/analysis/analyze.rs:104-194`]).
+
+## Quality checks and deterministic score
+
+Every built-in check has a fixed weight. The weights below sum to 100. `q_i` is the normalized score in the table, and `w_i` is the weight. `NOT_APPLICABLE` checks are excluded from both sums so an EPUB is not penalized for an archive-only rule; a report with no applicable checks has score `0`.
+
+$$
+\operatorname{score} = \operatorname{round}\left(100 \times
+\frac{\sum_{i \in A} w_i q_i}{\sum_{i \in A} w_i}\right),
+\qquad A = \{i \mid status_i \ne NOT\_APPLICABLE\}
+$$
+
+For each applicable check, `contribution_i = 100 * w_i * q_i / sum_A(w_j)`; the displayed contributions sum to the unrounded score and the persisted `score` is their nearest integer. The persisted `score` is an integer in GraphQL, while each `normalizedScore` and `contribution` remains available for explanation. `WARN` is not synonymous with failure: it contributes its explicitly listed fractional value. A report records `algorithmVersion = "ingest-quality-1"` (or a future version) so changing a threshold never silently changes old scores.
+
+| Check ID | Weight | Deterministic definition and normalized score |
+| --- | ---: | --- |
+| `cover_present` | 20 | The format adapter must identify one cover artifact using only embedded/package structure and decode it as an image. EPUB uses its package cover declaration/nav resource; paged files use the first decodable page; an archive uses the first decodable image in stable natural-path order. `PASS`, `q=1`, means a selected image exists and decodes; `FAIL`, `q=0`, means no selected image or decode failure. Non-paged/text-only formats are `NOT_APPLICABLE`. |
+| `cover_not_page_two` | 10 | If at least two pages/resources exist in the format adapter canonical reading order (ZIP natural path, EPUB spine order, or PDF page order), and a decodable cover and second page exist, canonicalize both images to the same RGBA pixel representation and compare their SHA-256 digests. Different digests are `PASS`, `q=1`; equal digests are `FAIL`, `q=0`; an undecodable comparison is `WARN`, `q=0.5`. Fewer than two pages/resources is `NOT_APPLICABLE`. This deliberately uses exact decoded pixels, not a tunable perceptual threshold. |
+| `page_count_matches_archive_entries` | 20 | For ZIP/CBZ-like archives only, count non-directory image entries after excluding hidden files and known metadata files (`ComicInfo.xml`, `Thumbs.db`, and dotfiles), using the processor's stable natural-path order. Compare that count `E` with the processor/metadata page count `P`: `E=P` is `PASS`, `q=1`; `|E-P|=1` is `WARN`, `q=0.5`; a larger difference or invalid `P` is `FAIL`, `q=0`. Non-archive formats are `NOT_APPLICABLE`. |
+| `image_dimensions_consistent` | 15 | Analyze every image page with the existing minimum-byte dimension reader, count `N`, and find the modal `(width,height)` pair with lexicographic tie-break. A page whose dimensions cannot be decoded contributes zero matches. `q = matching_pages / N`; `PASS` when `q=1`, `WARN` when `0.9 <= q < 1`, and `FAIL` when `q < 0.9`. A non-image or fewer-than-two-image item is `NOT_APPLICABLE`. Existing page dimensions are available in `MediaAnalysisData` ([observed — `core/src/filesystem/media/analysis/analyze.rs:104-194`; `crates/models/src/shared/analysis.rs:1-104`]). |
+| `epub_toc_chapters` | 15 | EPUB only. Parse the container/rootfile and package with the existing EPUB parser; require a non-empty spine and at least one nav/NCX entry resolving to a spine resource. Valid package+spine but no resolvable TOC is `WARN`, `q=0.5`; valid package with no spine or a parse/decode failure is `FAIL`, `q=0`; both spine and TOC are `PASS`, `q=1`. Non-EPUB formats are `NOT_APPLICABLE`. |
+| `duplicate_existing` | 10 | First compare the new full source digest against future full-digest records and, for compatibility, the current `Media.hash` when it was produced with the same algorithm. An exact match is `FAIL`, `q=0`. If no exact hash matches, compare the normalized filename/metadata title with existing visible media using the existing `MatchScorer` signals (exact/alternate title, Dice/Jaro-Winkler, and token overlap). A highest score `>=0.70` is a possible duplicate: `WARN`, `q=0.5`; below `0.70` is `PASS`, `q=1`. Evidence lists all matching media IDs sorted by score desc then ID. The current Stump hash is a secondary sample identifier rather than a promised full-file digest ([observed — `core/src/filesystem/media/process.rs:49-78`; `crates/graphql/schema.graphql:1297-1305`; `crates/integrations/metadata/src/scoring.rs:17-40,95-175`]). |
+| `filename_series_parse` | 10 | Normalize Unicode to NFKC, trim the extension, normalize `_` and `.` to spaces, preserve one surrounded ` - ` series boundary, collapse whitespace, and parse a fixed grammar: optional parent-directory series or filename prefix before ` - `, required non-empty residual title, optional one marker (`#n`, `vN`, `vol N`, `issue N`, or `chapter N`), and optional year `1900..2099`. A standalone title with no series/number is valid. The check exposes `q` as filename/series parse confidence: exactly one tuple `(series?, title, number?, year?)` is `PASS`, `q=1`; conflicting parent/prefix or multiple numeric markers producing more than one tuple is `WARN`, `q=0.5`; an empty title or malformed marker is `FAIL`, `q=0`. The chosen tuple and rejected alternatives are evidence; no network lookup affects this score. |
+
+The check registry must expose the same IDs, weights, algorithm version, and setting definitions to the UI. A setting can alter whether a check is enabled or a bounded parser option, but a report always stores the effective setting snapshot. If an operator changes settings, the coordinator invalidates affected reports and requeues the items instead of rewriting history.
+
+## Metadata providers, taggers, and AI enrichment
+
+### Two plugin traits
+
+The proposed ingest layer has exactly two logical plugin seams. They are shown as Rust-like contracts; they are not current exported Rust APIs.
+
+```rust
+#[async_trait]
+pub trait MetadataProvider: Send + Sync {
+    fn id(&self) -> &'static str;
+    fn name(&self) -> &'static str;
+    fn version(&self) -> &'static str;
+    fn supported_media_types(&self) -> &[MediaType];
+    fn settings(&self) -> &[SettingDefinition];
+
+    async fn identify(
+        &self,
+        book: &BookSnapshot,
+    ) -> Result<Vec<ProviderIdentity>, ProviderError>;
+
+    async fn lookup(
+        &self,
+        book: &BookSnapshot,
+        identity: &ProviderIdentity,
+    ) -> Result<Vec<MetadataCandidate>, ProviderError>;
+}
+
+#[async_trait]
+pub trait QualityCheck: Send + Sync {
+    fn id(&self) -> &'static str;
+    fn name(&self) -> &'static str;
+    fn version(&self) -> &'static str;
+    fn weight(&self) -> u16;
+    fn settings(&self) -> &[SettingDefinition];
+
+    async fn run(
+        &self,
+        book: &BookSnapshot,
+    ) -> Result<QualityCheckResult, QualityCheckError>;
+}
+
+pub struct QualityCheckResult {
+    pub findings: Vec<QualityFinding>,
+    pub weight: u16,
+}
+```
+
+`BookSnapshot` contains only a read-only source handle, digest, filename/path metadata, embedded metadata, page/archive index, and any already-computed `MediaAnalysisData`; it does not permit a provider to mutate the library. `QualityCheckResult.weight` must equal the registered fixed weight; a mismatch is a registration error. A check can emit multiple findings, but its one normalized result and fixed weight determine its score contribution.
+
+The existing integration is reused through an adapter rather than renamed:
+
+| Proposed seam | Reuse / new work |
+| --- | --- |
+| `identify` | **Reuse:** compose the existing `SearchQuery` from filename/embedded metadata, invoke current `search_media`/`search_series`, and preserve `MatchScorer` confidence factors. **New:** return a provider-neutral identity list and source provenance. |
+| `lookup` | **Reuse:** call existing `fetch_media_metadata`/`fetch_series_metadata`, `ProviderClientCache`, retry/rate-limit handling, and `ExternalMediaMetadata`/`ExternalSeriesMetadata`. **New:** normalize fields into `metadata_candidate.fields` and bind them to the staged source digest. |
+| Candidate persistence | **Reuse:** existing `metadata_fetch_records` is the compatibility view for a committed media/series target. **New:** a drop item needs many candidates before a `Media` exists, plus provenance/source digest and field-level confidence. |
+| Apply/merge | **Reuse:** `FieldMerger`, locked fields, `MergeStrategy`, `apply_media_match`, `apply_series_match`, and current metadata permissions. **New:** field-level candidate/manual picks and a transactional pending-item projection. |
+| Queue execution | **Reuse:** `StumpJob`, `JobLifecycle`, Apalis state, cancellation, logs, and `JobProgress`. **New:** durable drop-item/analysis-job priority and typed progress/replay. |
+
+The existing `metadata_integrations::MetadataProvider` is the lower-level client contract and remains source-compatible ([observed — `crates/integrations/metadata/src/provider.rs:19-75`]). It currently has separate `search_*` and `fetch_*` methods rather than `identify`/`lookup`; the adapter supplies those higher-level semantics without renaming an existing type.
+
+### Registration and discovery
+
+At startup, a `PluginRegistry` registers built-in providers and quality checks, then overlays persisted per-user/per-library settings. Each descriptor includes:
+
+- stable ID, human name, implementation version, kind, supported media types, and capabilities (`IDENTIFY`, `LOOKUP`, `TAGS`, `AI_ENRICHMENT`);
+- a deterministic setting schema (key, type, default, required, secret, description) and effective setting values with secrets redacted;
+- whether the plugin is available in this build, enabled, and opted in for the current library/user; and
+- the quality-check weight and algorithm version where the plugin is a check.
+
+`ingestProviderCatalog` and `ingestQualityCheckCatalog` are discovery, not hard-coded UI lists. For an unknown persisted ID, the registry emits an unavailable descriptor (`available=false`) with no executable capabilities; the settings query still returns redacted stored values. Unknown IDs remain visible as unavailable settings and never execute. A provider that is disabled or missing required credentials is excluded from scheduling, not treated as a failed book.
+
+### Auto-tagger and AI provider policy
+
+An auto-tagger and an AI enricher are ordinary `MetadataProvider` implementations, not privileged writers:
+
+- `builtin:auto-tagger` returns a `tags` field plus per-tag confidence (and, optionally, tag explanations). It is disabled by default, opt-in per user/library, and never removes existing tags unless the user selects `CLEAR` explicitly and has metadata permission.
+- `ai:<provider>` returns canonical fields and/or tags with overall and per-field confidence, prompt/model/version provenance, and the exact source digest. It is disabled by default, requires an explicit opt-in and provider setting, and is never eligible for auto-apply solely because it returned a candidate.
+- By default only bounded text/metadata excerpts and the digest leave Stump; source bytes, page images, annotations, and private notes are not sent. A future image-capable setting must be a separate, explicit consent and size-limited option.
+- Auto-apply requires both the provider opt-in and a confidence threshold. Existing provider auto-apply defaults remain conservative (`enabled=false`, threshold `0.95`, `FILL_GAPS`), so adopting the new editor does not change current behavior ([observed — `crates/integrations/metadata/src/merge/config.rs:11-56`]). Field locks and permissions always win over provider settings.
+- A candidate from AI or a tagger is still reviewable and can be selected field by field. The server records provider/model version and setting snapshot so a later model change cannot silently rewrite prior decisions.
+
+## Field-level apply, merge, and bulk editing
+
+The editor submits an ordered list of field picks. Each pick names a `MetadataField` and one mode:
+
+- `KEEP_EXISTING`: do nothing;
+- `CANDIDATE`: take the value for that field from a specific candidate ID;
+- `MANUAL`: use the supplied JSON value after field/type validation; or
+- `CLEAR`: explicitly clear a nullable field, subject to permission and lock rules.
+
+Input validation rejects duplicate fields, requires `candidateId` only for `CANDIDATE`, requires `value` only for `MANUAL`, and rejects values for `KEEP_EXISTING` or `CLEAR`. The server validates that the candidate belongs to the same drop item/source digest, applies locked fields and the requested existing `MergeStrategy`, and records an application audit row. A candidate can supply different fields from multiple providers. If a drop item has no committed media yet, the selected values remain in its pending projection until approval; if it targets an existing media, the operation uses the existing transaction and returns the updated item.
+
+`bulkApplyIngestMetadata` applies the same field-pick recipe to many selected drop items. It is deterministic and idempotent per item revision: each item succeeds or returns a bounded failure with no partial field write for that item. The response includes both updated items and failures. A bulk operation does not implicitly approve/reject source files. For already committed records, the existing `updateMediaMetadata`, `setMediaTags`, `setSeriesTags`, and provider match mutations remain available ([observed — `crates/graphql/schema.graphql:1883-1898,2000-2016`]).
+
+## Progress transport
+
+### Existing compatibility stream
+
+Today, clients can subscribe to `readEvents` over the existing GraphQL WebSocket route. It receives the core broadcast `CoreEvent`; a `JobUpdate` contains a patch with status/message/task/subtask fields and `JobOutput` contains the final output ([observed — `crates/graphql/schema.graphql:410-413,1014-1031,3332-3336`; `crates/graphql/src/subscription/event.rs:6-32`]). This remains the compatibility fallback for scans and delegated `AnalyzeMediaJob`s. It has no durable replay cursor, and the broadcast receiver can end after a lag/close, so a reconnecting editor must refetch state.
+
+### Proposed typed subscription
+
+`ingestProgress` is a typed, filtered subscription. Every event has a monotonically ordered opaque cursor, source/item/job IDs, phase/status, counts, score when known, and a human message. It is a state update, not a secret-bearing log. A reconnect supplies `afterEventId`; the server replays retained events when available and then continues live. If the cursor has expired, the server sends a `CURSOR_EXPIRED` error and the client refetches `ingestDropItems`, `ingestAnalysisQueue`, or `ingestItem`.
+
+### Proposed SSE endpoint
+
+For clients that do not keep a GraphQL WebSocket open, the same event envelope is served by an authenticated SSE endpoint:
+
+```text
+GET /api/v2/ingest/events?libraryId=<id>&dropItemId=<id>&after=<cursor>
+Accept: text/event-stream
+Last-Event-ID: <cursor>
+
+id: <eventId>
+event: ingest.progress
+data: {"eventId":"000000000001","emittedAt":"2026-01-01T00:00:00Z","libraryId":"library","dropItemId":"item","analysisJobId":"job","status":"ANALYZING","phase":"QUALITY","completed":3,"total":7,"score":42,"message":"Running quality checks"}
+```
+
+The exact endpoint and retention store are **implemented**. SSE must enforce the same per-user/library authorization as GraphQL, emit heartbeats, bound event size, preserve event ordering, and never include API tokens, provider secrets, absolute staging paths, or raw source bytes. The GraphQL subscription and SSE payloads use the same field names so the SvelteKit editor can share a reducer.
+
+## Editor screen map
+
+The editor is GraphQL-first; it does not need to know SeaORM tables or Apalis internals. Existing operations listed in the last column remain available during migration.
+
+| Screen | Initial query reads | User mutations | Live progress | Existing compatibility fallback |
+| --- | --- | --- | --- | --- |
+| Drop folder | `ingestDropFolder(libraryId)`, `ingestDropItems(libraryId,status,pagination)`, `ingestItem(id)` | `stageIngestUploads`, `scanIngestDropFolder`, `enqueueIngestAnalysis`, `discardIngestItem` | `ingestProgress(libraryId: $libraryId, dropItemId: $dropItemId)` | `listDirectory`, `uploadBooks`, `uploadSeries`, `readEvents`, and then `scanLibrary` ([observed — `crates/graphql/schema.graphql:1883-1884,1965-1969,2539-2540,3493-3511`]). |
+| Analysis queue | `ingestAnalysisQueue(status,pagination)`, `ingestAnalysisJob(id)` | `enqueueIngestAnalysis`, `pauseIngestAnalysis`, `resumeIngestAnalysis`, `retryIngestAnalysis`, `cancelIngestAnalysis` | `ingestProgress(analysisJobId)` | `jobs`, `jobById`, `cancelJob`, and `readEvents` ([observed — `crates/graphql/schema.graphql:2073-2077,2522-2524`]). |
+| Rework list | `ingestReworkItems(minScore,pagination)`, `ingestItem(id)`; each item includes `qualityReport.checks` and candidates | `applyIngestMetadata`, `approveIngestItem`, `rejectIngestItem`, `requeueIngestAnalysis` | `ingestProgress(dropItemId)` | `pendingMetadataMatches`, `metadataFetchRecord`, `acceptMediaMatch`/`rejectMediaMatch`, `acceptAllPendingMatches`/`rejectAllPendingMatches` ([observed — `crates/graphql/schema.graphql:1892-1896,2089-2094,2533-2537`]). |
+| Bulk metadata editor | `ingestBulkItems(ids)` plus `ingestItem(id)` for detail/revision | `bulkApplyIngestMetadata`; after commit, existing `updateMediaMetadata`, `setMediaTags`, or `setSeriesTags` remain valid | `ingestProgress` for jobs started by the edit; synchronous field applications return payloads directly | Existing locked-field bulk mutations and current per-media/series metadata mutations ([observed — `crates/graphql/schema.graphql:1959-1964,1883-1908,2008-2016`]). |
+| Provider settings | `ingestProviderCatalog`, `ingestProviderSettings(providerId)`, `ingestQualityCheckCatalog`, `ingestQualityCheckSettings(checkId)` | `setIngestProviderSettings`, `verifyIngestProvider`, `setIngestQualityCheckSettings` | `ingestProgress` when a settings change triggers re-analysis; verification itself is synchronous | `metadataProviderConfigs`, `metadataProviderConfigById`, `createMetadataProvider`, `updateMetadataProvider`, `deleteMetadataProvider`, `validateProviderConfig` ([observed — `crates/graphql/schema.graphql:2086-2090,2533-2535`]). |
+
+The proposed permission mapping is conservative: staging/configuring the drop folder uses the existing upload/manage-library checks; reading queue/rework uses `READ_JOBS` and metadata-fetch read permissions; queue controls use `MANAGE_JOBS`; field edits use `EDIT_METADATA`; provider settings use metadata-provider read/manage. A future deployment may introduce narrower ingest permissions, but it must not weaken existing authorization.
+
+## Additive GraphQL contract
+
+The following SDL is a code-generation contract, not an implementation claim. It is intentionally an **extension** of the current schema: it does not redeclare or rename `Query`, `Mutation`, `Subscription`, `JSON`, `Upload`, `DateTime`, `Pagination`, `PaginationInfo`, `JobStatus`, `Media`, `Library`, `MetadataField`, `MergeStrategy`, or `ProviderCredentialVerification`. The existing definitions are in `crates/graphql/schema.graphql`; merge this block into that schema before validation.
+
+```graphql
+"A staged source item awaiting analysis or explicit commit."
+type IngestDropItem {
+  id: ID!
+  libraryId: ID!
+  createdBy: ID!
+  filename: String!
+  relativePath: String
+  sizeBytes: Int!
+  sourceSha256: String!
+  mediaType: String!
+  status: IngestDropItemStatus!
+  revision: Int!
+  analysisJob: IngestAnalysisJob
+  qualityReport: IngestQualityReport
+  metadataCandidates: [IngestMetadataCandidate!]!
+  pendingFields: JSON!
+  media: Media
+  series: Series
+  error: String
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+enum IngestDropItemStatus {
+  RECEIVED
+  STAGED
+  ANALYZING
+  AWAITING_REVIEW
+  READY
+  COMMITTED
+  REJECTED
+  FAILED
+}
+
+type IngestDropFolder {
+  libraryId: ID!
+  displayPath: String!
+  enabled: Boolean!
+  pendingCount: Int!
+  lastDiscoveredAt: DateTime
+}
+
+type IngestAnalysisJob {
+  id: ID!
+  dropItemId: ID!
+  jobId: String
+  status: JobStatus!
+  phase: IngestAnalysisPhase!
+  priorityScore: Float!
+  attempt: Int!
+  queuedAt: DateTime!
+  startedAt: DateTime
+  completedAt: DateTime
+  error: String
+}
+
+enum IngestAnalysisPhase {
+  STAGING
+  ANALYSIS
+  QUALITY
+  IDENTIFY
+  LOOKUP
+  REVIEW
+  COMMIT
+  DONE
+}
+
+type IngestQualityReport {
+  id: ID!
+  dropItemId: ID!
+  sourceSha256: String!
+  algorithmVersion: String!
+  score: Int!
+  checks: [IngestQualityCheckResult!]!
+  generatedAt: DateTime!
+}
+
+type IngestQualityCheckResult {
+  checkId: String!
+  label: String!
+  status: IngestQualityStatus!
+  weight: Int!
+  normalizedScore: Float!
+  contribution: Float!
+  evidence: JSON!
+}
+
+enum IngestQualityStatus {
+  PASS
+  WARN
+  FAIL
+  NOT_APPLICABLE
+}
+
+type IngestMetadataCandidate {
+  id: ID!
+  dropItemId: ID!
+  provider: String!
+  providerVersion: String!
+  model: String
+  confidence: Float!
+  fields: JSON!
+  fieldConfidences: JSON
+  sourceSha256: String!
+  provenance: JSON!
+  status: IngestCandidateStatus!
+  createdAt: DateTime!
+}
+
+enum IngestCandidateStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+type IngestReworkReason {
+  checkId: String!
+  status: IngestQualityStatus!
+  message: String!
+}
+
+type IngestReworkItem {
+  item: IngestDropItem!
+  reasons: [IngestReworkReason!]!
+}
+
+type PaginatedIngestDropItemResponse {
+  nodes: [IngestDropItem!]!
+  pageInfo: PaginationInfo!
+}
+
+type PaginatedIngestAnalysisJobResponse {
+  nodes: [IngestAnalysisJob!]!
+  pageInfo: PaginationInfo!
+}
+
+type PaginatedIngestReworkResponse {
+  nodes: [IngestReworkItem!]!
+  pageInfo: PaginationInfo!
+}
+
+enum IngestMetadataFieldMode {
+  KEEP_EXISTING
+  CANDIDATE
+  MANUAL
+  CLEAR
+}
+
+input IngestMetadataFieldSelectionInput {
+  field: MetadataField!
+  mode: IngestMetadataFieldMode!
+  candidateId: ID
+  value: JSON
+}
+
+type IngestBulkApplyFailure {
+  dropItemId: ID!
+  message: String!
+}
+
+type IngestBulkApplyPayload {
+  applied: [IngestDropItem!]!
+  failures: [IngestBulkApplyFailure!]!
+}
+
+type IngestProviderDescriptor {
+  id: String!
+  name: String!
+  version: String!
+  available: Boolean!
+  capabilities: [IngestProviderCapability!]!
+  supportedMediaTypes: [String!]!
+  enabledByDefault: Boolean!
+  settings: [IngestSettingDefinition!]!
+}
+
+enum IngestProviderCapability {
+  IDENTIFY
+  LOOKUP
+  TAGS
+  AI_ENRICHMENT
+}
+
+enum IngestSettingValueType {
+  BOOLEAN
+  INTEGER
+  NUMBER
+  STRING
+  JSON
+}
+
+type IngestSettingDefinition {
+  key: String!
+  label: String!
+  valueType: IngestSettingValueType!
+  required: Boolean!
+  secret: Boolean!
+  defaultValue: JSON
+  description: String
+}
+
+type IngestProviderSetting {
+  key: String!
+  configured: Boolean!
+  secret: Boolean!
+  value: JSON
+}
+
+type IngestProviderSettings {
+  provider: IngestProviderDescriptor!
+  enabled: Boolean!
+  optedIn: Boolean!
+  settings: [IngestProviderSetting!]!
+  updatedAt: DateTime
+}
+
+type IngestQualityCheckDescriptor {
+  id: String!
+  name: String!
+  version: String!
+  available: Boolean!
+  weight: Int!
+  enabled: Boolean!
+  supportedMediaTypes: [String!]!
+  settings: [IngestSettingDefinition!]!
+}
+
+type IngestQualityCheckSettings {
+  checkId: String!
+  enabled: Boolean!
+  settings: [IngestProviderSetting!]!
+  updatedAt: DateTime
+}
+
+type IngestProgressEvent {
+  eventId: ID!
+  emittedAt: DateTime!
+  libraryId: ID!
+  dropItemId: ID!
+  analysisJobId: ID
+  status: IngestDropItemStatus!
+  phase: IngestAnalysisPhase!
+  completed: Int!
+  total: Int!
+  score: Float
+  message: String
+}
+
+input IngestUploadFileInput {
+  file: Upload!
+  relativePath: String
+}
+
+input StageIngestUploadsInput {
+  libraryId: ID!
+  files: [IngestUploadFileInput!]!
+  idempotencyKey: String
+  startAnalysis: Boolean = true
+}
+
+type StageIngestUploadsPayload {
+  items: [IngestDropItem!]!
+  deduplicated: Int!
+}
+
+input EnqueueIngestAnalysisInput {
+  dropItemIds: [ID!]!
+  force: Boolean = false
+}
+
+input ApplyIngestMetadataInput {
+  dropItemId: ID!
+  selections: [IngestMetadataFieldSelectionInput!]!
+  strategy: MergeStrategy
+}
+
+input BulkApplyIngestMetadataInput {
+  dropItemIds: [ID!]!
+  selections: [IngestMetadataFieldSelectionInput!]!
+  strategy: MergeStrategy
+}
+
+input SetIngestProviderSettingsInput {
+  providerId: String!
+  enabled: Boolean
+  optedIn: Boolean
+  settings: JSON
+}
+
+input SetIngestQualityCheckSettingsInput {
+  checkId: String!
+  enabled: Boolean
+  settings: JSON
+}
+
+extend type Query {
+  ingestDropFolder(libraryId: ID!): IngestDropFolder
+  ingestDropItems(libraryId: ID, status: IngestDropItemStatus, pagination: Pagination!): PaginatedIngestDropItemResponse!
+  ingestItem(id: ID!): IngestDropItem
+  ingestAnalysisQueue(status: JobStatus, pagination: Pagination!): PaginatedIngestAnalysisJobResponse!
+  ingestAnalysisJob(id: ID!): IngestAnalysisJob
+  ingestReworkItems(minScore: Float, pagination: Pagination!): PaginatedIngestReworkResponse!
+  ingestBulkItems(ids: [ID!]!): [IngestDropItem!]!
+  ingestProviderCatalog(includeDisabled: Boolean = false): [IngestProviderDescriptor!]!
+  ingestProviderSettings(providerId: String!): IngestProviderSettings
+  ingestQualityCheckCatalog(includeDisabled: Boolean = false): [IngestQualityCheckDescriptor!]!
+  ingestQualityCheckSettings(checkId: String!): IngestQualityCheckSettings
+}
+
+extend type Mutation {
+  stageIngestUploads(input: StageIngestUploadsInput!): StageIngestUploadsPayload!
+  scanIngestDropFolder(libraryId: ID!): IngestDropFolder!
+  enqueueIngestAnalysis(input: EnqueueIngestAnalysisInput!): [IngestAnalysisJob!]!
+  requeueIngestAnalysis(dropItemId: ID!, force: Boolean = false): IngestAnalysisJob!
+  pauseIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+  resumeIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+  retryIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+  cancelIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+  discardIngestItem(dropItemId: ID!, reason: String): IngestDropItem!
+  applyIngestMetadata(input: ApplyIngestMetadataInput!): IngestDropItem!
+  bulkApplyIngestMetadata(input: BulkApplyIngestMetadataInput!): IngestBulkApplyPayload!
+  approveIngestItem(dropItemId: ID!, strategy: MergeStrategy): IngestDropItem!
+  rejectIngestItem(dropItemId: ID!, reason: String): IngestDropItem!
+  setIngestProviderSettings(input: SetIngestProviderSettingsInput!): IngestProviderSettings!
+  verifyIngestProvider(providerId: String!, settings: JSON): ProviderCredentialVerification!
+  setIngestQualityCheckSettings(input: SetIngestQualityCheckSettingsInput!): IngestQualityCheckSettings!
+}
+
+extend type Subscription {
+  ingestProgress(libraryId: ID, dropItemId: ID, analysisJobId: ID, afterEventId: ID): IngestProgressEvent!
+}
+```
+
+### SDL invariants
+
+- The block uses only new `Ingest*` names plus existing scalar/types/enums. It therefore composes with, rather than replaces, the native schema. Existing `readEvents`, `jobs`, metadata records, and upload fields remain untouched.
+- `PaginationInfo` is the existing union, so generated clients must use fragments for cursor/offset-specific fields just as they do for current media/jobs queries ([observed — `crates/graphql/schema.graphql:2305-2430`]).
+- `JSON` is used for provider-specific fields and setting values because the existing schema already uses that scalar for metadata overrides/configuration ([observed — `crates/graphql/schema.graphql:1758-1764,2392-2404`]). The server validates field types before applying a manual value.
+- `IngestProgressEvent` is deliberately not a new `CoreEvent` union member. The existing `readEvents` union remains stable; the proposed typed subscription and SSE adapter can be introduced without changing or renaming any existing union member.
+
+## Implementation boundary and rollout
+
+1. Add migrations/entities for `drop_item`, analysis attempts/jobs, quality reports/checks, candidate provenance, plugin registrations/settings, and application audit. Keep original bytes and full digest separate from the current sample-oriented `Media.hash`.
+2. Add a staging service used by GraphQL upload, watcher discovery, and future uploader-prepared clients. Keep `uploadBooks`/`uploadSeries` unchanged until the new path has equivalent authorization, size limits, and scan behavior.
+3. Register built-in quality checks and adapt the existing `FileProcessor`/`AnalyzeMediaJob` output. Persist `ingest-quality-1` reports and priority ordering before enabling automatic commit.
+4. Wrap the current provider cache/search/fetch/merge stack in the proposed `MetadataProvider` façade. Add candidate provenance and field-level application without changing existing metadata GraphQL names.
+5. Add the additive GraphQL fields above and the typed subscription. Implement SSE only if a deployment needs a non-WebSocket transport; both transports share the same retained event cursor.
+6. Enable AI/tagger providers only after explicit settings, redaction, permission, and confidence tests pass. The default behavior remains current scan/metadata behavior, with no new network calls or auto-apply side effects.
+
+The first-party editor can ship against this contract while legacy clients continue using the current native schema. No provider, AI service, worker, or new drop-folder database is required for an existing Stump installation until an operator opts into the proposed workflow.

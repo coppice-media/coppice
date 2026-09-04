@@ -20,6 +20,18 @@
 
 		"---Developer---",
 		"developer/api",
+		"developer/server-architecture",
+		"developer/provider-status",
+		"developer/modular-ingest",
+		"developer/client-verification",
+		"developer/komga-compat",
+		"developer/kobo-sync-capabilities",
+		"developer/sync-platforms",
+		"developer/kobo-device-database",
+		"developer/unified-reading-state",
+		"developer/hardcover-integration",
+		"developer/liseur-sync-integration",
+		"developer/liseur-providers",
 		"developer/cli",
 		"developer/contributing"
 	]

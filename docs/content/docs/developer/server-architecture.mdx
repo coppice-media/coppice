@@ -1,0 +1,304 @@
+---
+title: Server architecture
+description: Current Stump server lifecycle, compatibility boundaries, and the proposed modular design
+---
+
+This page is a source map for the Stump server and the headless/modular work. **Current** means behavior or structure present in this branch. **Proposed (not implemented)** marks later package splits rather than configuration or artifacts available today.
+
+The compatibility baseline is the full/default server. A headless build removes the browser UI, not the Rust process, database, authentication, GraphQL API, REST/media API, or protocol integrations.
+
+## At a glance
+
+Stump is one Rust server process. `stump_server` adapts HTTP/WebSocket requests with Axum, `stump_core` owns orchestration and filesystem/job behavior, and `crates/models` owns entities, domain types, and services. The web UI is a separately built Vite application whose static assets may be served by the same process. The database and authentication system remain shared by every profile.
+
+The branch includes measured runtime and allocation work:
+
+- The scanner shares one immutable directory-mtime snapshot through `Arc` instead of repeatedly deep-copying the map. See [`LibraryScanJob`](https://github.com/stumpapp/stump/blob/nightly/core/src/filesystem/scanner/library_scan_job.rs) and [`WalkerCtx`](https://github.com/stumpapp/stump/blob/nightly/core/src/filesystem/scanner/walk.rs).
+- `LibraryWatcher` creates its OS `notify` watcher only when the first path is added. Disabling background jobs also prevents construction of its logical listener. See [`library_watcher.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/filesystem/scanner/library_watcher.rs).
+- The Tokio worker and blocking-thread limits, database pool bounds, and SQLite prepared-statement cache are configurable. Unset values preserve upstream defaults.
+- The GraphQL route installs a concurrency-safe schema cell; schema types and DataLoaders are built once, on the first authenticated GraphQL HTTP or WebSocket request rather than at server startup.
+- The dependency graph no longer enables unused image formats, `kmeans_colors` CLI defaults, `http-cache-reqwest`'s unused CACache manager, or the SeaORM migration CLI in the server graph.
+
+## Current execution
+
+### Development and source builds
+
+The repository's normal development commands are defined in [`package.json`](https://github.com/stumpapp/stump/blob/nightly/package.json) and documented in [Contributing](/docs/developer/contributing):
+
+| Command | Current behavior |
+| --- | --- |
+| `yarn setup` | Installs JavaScript dependencies and builds the web bundle. |
+| `yarn dev:web` | Runs the Bacon `stump_server` job and the Vite web dev server together. This is a development launcher; its Bacon `--headless` argument is not a separate packaged Cargo profile. |
+| `cargo run --package stump_server --bin stump_server` | Runs the Rust server directly. |
+| `cargo run --package stump_server --no-default-features --features headless` | Runs every backend route capability without compiling SPA routes. |
+| `cargo run --package stump_server --no-default-features` | Runs the minimal REST/auth/database route profile. Optional GraphQL, OPDS, Readium, Kobo, and KOReader route trees are omitted. |
+| `yarn start:desktop` / `yarn dev:desktop` | Runs the Rust server beside the Tauri desktop application. |
+| `yarn dev:expo` | Runs the Rust server beside the Expo development client. |
+| `yarn web build && cargo build --package stump_server --release` | Builds the production web bundle and release server from source. A source build needs a usable PDFium library (`PDFIUM_PATH` or a system library); the container supplies PDFium itself. |
+
+`apps/server/src/main.rs` performs debug setup, bootstraps the configuration directory, parses CLI commands, initializes tracing, and enters `run_http_server`. In debug builds it points `STUMP_CLIENT_DIR` at the local web distribution. The Vite app uses `apps/web/dist` as its build output; see [`apps/web/vite.config.mts`](https://github.com/stumpapp/stump/blob/nightly/apps/web/vite.config.mts).
+
+Database selection is centralized in [`core/src/database.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/database.rs). `STUMP_DATABASE_URL` has highest precedence, PostgreSQL component variables can compose a PostgreSQL URL, and SQLite is the default. Connecting always runs the SeaORM migrations before the server starts accepting requests. Pool bounds apply to both backends; the SQLite statement-cache setting applies only to SQLite.
+
+### Docker
+
+[`docker/Dockerfile`](https://github.com/stumpapp/stump/blob/nightly/docker/Dockerfile) now has two final targets:
+
+```sh
+docker buildx build -f docker/Dockerfile --target full .
+docker buildx build -f docker/Dockerfile --target headless .
+```
+
+- **`full` (the Dockerfile's default final stage):** builds the frontend, copies it to `/app/client`, builds the server with its default Cargo features, and uses the shared runtime image.
+- **`headless`:** builds with `--no-default-features --features headless`, copies no frontend bundle, and sets `STUMP_ENABLE_WEBUI=false`. It retains GraphQL, OPDS, Readium EPUB, Kobo, KOReader, native liseur-sync, authenticated REST, background jobs, PostgreSQL, and the shared PDFium runtime.
+- Both targets use the common PDFium stage and runtime base. The headless image also chooses conservative, overridable runtime defaults: two Tokio workers, eight blocking threads, at most two database connections, and 32 prepared statements cached per SQLite connection. [`docker/build_server.sh`](https://github.com/stumpapp/stump/blob/nightly/docker/build_server.sh) forwards feature arguments to Cargo after removing desktop/integration-test workspace members for the container build.
+
+The server Cargo graph exposes three aggregates: default `full`, UI-free `headless`, and no-default `minimal`. `full` is `headless + webui`; `headless` contains every backend route feature, including the optional `liseur-sync` provider; `minimal` keeps REST/auth/database and omits optional protocol route trees. These route features are the first composition boundary. Core processor/provider crates are still linked in `headless` and `minimal` until the deeper package split described below.
+
+## Current startup lifecycle
+
+The startup sequence is visible in [`apps/server/src/http_server.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/http_server.rs):
+
+1. `apps/server/src/main.rs` reads optional runtime sizing from the environment, builds the Tokio multi-thread runtime, bootstraps configuration, and enters asynchronous startup. Unset runtime controls preserve Tokio's automatic worker count and blocking-thread default.
+2. `StumpCore::new` creates [`Ctx`](https://github.com/stumpapp/stump/blob/nightly/core/src/context.rs). Context construction connects to the selected SQLite or PostgreSQL database and creates the core event channel; the Apalis queue/state, monitor, scheduler, and logical watcher are lazy resources.
+3. The server initializes server configuration, encryption and JWT secrets, and SQLite journal mode where applicable. Database migrations and these consistency operations are intentionally not lazy: all retained authenticated API routes require a valid schema and secrets.
+4. With `STUMP_ENABLE_BACKGROUND_JOBS=true`, startup cancels islanded jobs with a direct database update. It creates scheduler loops only for valid enabled scheduled-job rows and creates the logical library watcher only when a ready library has watching enabled. With it set to `false`, these lifecycle steps are omitted and attempts to enqueue jobs or operate the watcher return an explicit `FeatureDisabled` error.
+5. The Apalis queue/state and monitor are created together on the first enqueue (including enqueue paths reached by GraphQL, protocol adapters, or ingest), so work submitted after boot is processed without a restart. Registering a watched library also creates the job runtime when necessary.
+6. The OS `notify` backend remains lazy even after the logical watcher is created: it is created only when the first watched path is added. A configured path that no longer exists is skipped with a warning; listener termination and other backend failures abort watcher initialization instead of being silently ignored.
+7. A configured OIDC provider is initialized. Cargo features select GraphQL, OPDS, Readium, KOReader, Kobo, liseur-sync, and SPA route trees. Existing Kobo/KOReader configuration switches still decide whether their compiled routes are mounted.
+8. GraphQL router mounting allocates only a shared `OnceCell`; `build_schema` runs once after the first GraphQL request has passed authentication.
+9. Session, CORS, compression, tracing, and optional OIDC layers are applied before binding the listener. The server keeps optional scheduler/watcher handles and stops only resources that were created; the Apalis monitor is independent of HTTP startup and follows the first enqueue.
+
+Database connection/migration, server secrets, journal setup, session middleware, retained route assembly, and the HTTP listener are necessary startup work. Metadata provider clients and PDFium were already demand-initialized; this branch makes GraphQL schema construction and optional job infrastructure follow the same principle where their contracts permit it.
+
+## Current compatibility matrix
+
+The route tree is mounted by [`apps/server/src/routers/api/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/mod.rs), [`opds/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/opds/mod.rs), and the protocol router modules. The following contracts must survive SPA removal and any future profile work.
+
+| Surface | Current routes and behavior | Authentication and compatibility notes |
+| --- | --- | --- |
+| **GraphQL HTTP** | `POST /api/graphql`; `GET /api/graphql` is the owner-only GraphiQL playground when the effective web UI profile is enabled and either the playground setting is enabled or the server is a debug build. The GET route is not mounted in the headless profile. | The common auth middleware accepts a session cookie or `Bearer` JWT/API key. GraphQL requests receive `AuthContext`, host/scheme, and session data. See [`graphql.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/graphql.rs) and [`auth.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs). |
+| **GraphQL WebSocket** | `GET /api/graphql/ws`, using the async-graphql WebSocket protocols. | The route is authenticated and passes auth/context data into `GraphQLWebSocket`. The shared SDK connects with `graphql-ws`; see [`packages/sdk/src/socket.ts`](https://github.com/stumpapp/stump/blob/nightly/packages/sdk/src/socket.ts). This is an API contract, not a web-UI route. |
+| **REST and media** | `/api/v2` mounts auth, OIDC, emoji, media, EPUB, series, library, and user routers. `/api/v2/claim`, `/health`, `/ping`, `/version` (POST), and `/check-for-update` are the explicitly public utility routes; login/register/refresh/logout are mounted without auth while viewer/me and protected resources require it. Media includes `/api/v2/media/{id}/thumbnail`, `/page/{page}`, and `/file`. | Media is user-scoped. Full-file downloads enforce `DownloadFile`, preserve range handling through `ServeFile`, and retain content types/lengths needed by clients. See [`v2/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/v2/mod.rs), [`media.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/v2/media.rs), [`serve_media.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/utils/serve_media.rs), and [`packages/sdk/src/controllers/media-api.ts`](https://github.com/stumpapp/stump/blob/nightly/packages/sdk/src/controllers/media-api.ts). |
+| **REST and EPUB** | `/api/v2/epub/{id}/manifest.json`, `/positions.json`, `/search`, and `/resource/{path}` provide the Readium web publication contract. | Routes use the same auth and user-visibility lookup as comic page streaming; `DownloadFile` applies only to the full archive endpoint, not these EPUB resources. See [`epub.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/v2/epub.rs) and [`packages/sdk/src/controllers/epub-api.ts`](https://github.com/stumpapp/stump/blob/nightly/packages/sdk/src/controllers/epub-api.ts). |
+| **OPDS 1.2** | `/opds/v1.2/catalog`, search/search feed, keep-reading, libraries, series, books, thumbnails, page streaming, and filename downloads. | The same router is mounted under `/opds/v1.2` with normal auth and `/opds/{api_key}/v1.2` with an API-key path middleware. Basic authentication is accepted for OPDS 1.2. Feeds emit OPDS Page Streaming Extension links with page count and optional last-read attributes. See [`opds/v1_2.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/opds/v1_2.rs) and [`core/src/opds/v1_2/link.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/opds/v1_2/link.rs). |
+| **OPDS 2.0** | `/opds/v2.0/auth`, catalog/search, library/series/book navigation, thumbnails, pages, `/books/{id}/progression` GET/PUT, and `/books/{id}/file`. | The router uses common auth. `/opds/v2.0/auth` is intentionally public so clients can discover the Basic flow and authentication-document content type; other resources require auth. See [`opds/v2_0.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/opds/v2_0.rs) and the OPDS authentication handling in [`auth.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs). |
+| **KOReader sync** | When `ENABLE_KOREADER_SYNC` is enabled, `/koreader/{api_key}/users/auth`, `/syncs/progress` (PUT), and `/syncs/progress/{document}` (GET) are mounted. | The API key is in the path and the user must have `AccessKoreaderSync`. The hash-based document identity and MD5-compatible route shape are deliberate interoperability behavior; there is no required Stump healthcheck route. See [`koreader/sync.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/koreader/sync.rs) and [`core/src/filesystem/hash.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/filesystem/hash.rs). |
+| **Kobo sync** | When `ENABLE_KOBO_SYNC` is enabled, `/kobo/{api_key}/v1/initialization`, library sync, metadata, thumbnails, device auth, and EPUB download routes are mounted. `/api/v2/kobo/sync-sessions` (DELETE) uses normal auth to clear sessions. | The API key is in the path and the user must have `AccessKoboSync`. The catch-all `/kobo/{api_key}/v1/{path}` currently returns an empty success for many unimplemented Kobo calls. This is partial current Kobo compatibility, not a Komga implementation. See [`kobo/router.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo/router.rs) and [`kobo/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo/mod.rs). |
+
+| **liseur-sync native sync** | When the `liseur-sync` Cargo feature is enabled (included by `headless`), `/v1/login`, side-loaded `/v1/works/resolve`, position ops/changes/heads/positions, closed sessions, and revisioned annotation routes are mounted. | Login verifies Stump credentials and returns a one-hour sync-only bearer device token; every protected route is user-scoped and uses the token's `sync` scope. Catalog, token administration, insights, upload/delete, series claims, and local core annotation projection remain deferred. See `crates/liseur-sync`, `apps/server/src/routers/liseur_sync/`, and `crates/migrations/src/m20260904_000000_add_liseur_sync.rs`. |
+
+Current configuration defaults are also part of compatibility: `STUMP_ENABLE_WEBUI` defaults to `true`; `ENABLE_KOREADER_SYNC` and `ENABLE_KOBO_SYNC` default to `false` in release builds (debug defaults differ); and `ENABLE_OPDS_PROGRESSION` defaults to `false`, so preloaded OPDS 1.2 pages do not update reading progress unless explicitly enabled. See [`stump_config.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/config/stump_config.rs).
+
+### OPDS Page Streaming Extension
+
+Stump's OPDS 1.2 stream link uses the `http://vaemendis.net/opds-pse/stream` relation and a page placeholder such as `/opds/v1.2/books/<id>/pages/{pageNumber}?zero_based=true`. The feed can include `pse:count`, `pse:lastRead`, and `pse:lastReadDate`. This is current behavior and must remain valid for clients that read comics page by page. The authoritative extension document is [OPDS-PSE 1.2](https://github.com/anansi-project/opds-pse/blob/master/v1.2.md); it defines the namespace, relation, page numbering, and required link attributes.
+
+### KOReader interoperability
+
+The route shape is derived from the official [KOReader sync-server routes](https://github.com/koreader/koreader-sync-server/blob/master/config/routes.lua). Stump's hash implementation also cites the [KOReader `generateDocChecksum` algorithm](https://github.com/koreader/koreader/blob/master/frontend/util.lua#L1046-L1072). Do not replace this API-key and hash contract with the normal Stump auth middleware: the KOReader client sends a different password/hash representation, which is why the path-key middleware is retained.
+
+## Safe SPA-removal boundary and mobile invariants
+
+The SPA is isolated in [`apps/server/src/routers/spa.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/spa.rs): it serves `/`, `/index.html`, `/favicon.ico`, `/sw.js`, `/assets`, `/dist`, and an SPA fallback from `STUMP_CLIENT_DIR`. Removing or not compiling this module is the safe boundary **only** if all of the following remain true:
+
+- `/api/graphql`, `/api/graphql/ws`, `/api/v2`, OPDS 1.2/2.0, KOReader, Kobo, sessions, auth middleware, CORS, compression, and media/EPUB routes remain mounted.
+- Health/readiness is profile-aware. `/api/v2/health` checks `STUMP_CLIENT_DIR` only when the web UI is both compiled and enabled; otherwise it reports the `spa` dependency as disabled without failing readiness.
+- OPDS authentication documents omit their logo link when the web UI is disabled or not compiled, avoiding a link to an unavailable static asset route.
+- Media access remains user-scoped, range-capable, and permission-checked. The server-side EPUB manifest, positions, search, and resource routes remain available.
+
+The native/mobile clients do not need the SPA to read a library. They use the shared SDK and route contracts: GraphQL calls go to `/api/graphql`, GraphQL subscriptions use `/api/graphql/ws`, media pages/downloads use `/api/v2/media/...`, and EPUB readers use `/api/v2/epub/...`. The Expo server layout configures an SDK for each saved server and authenticates it; see [`apps/expo/app/server/[id]/_layout.tsx`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/app/server/%5Bid%5D/_layout.tsx), [`media-api.ts`](https://github.com/stumpapp/stump/blob/nightly/packages/sdk/src/controllers/media-api.ts), and [`epub-api.ts`](https://github.com/stumpapp/stump/blob/nightly/packages/sdk/src/controllers/epub-api.ts). A headless profile can therefore serve native clients or an externally hosted UI, but it cannot remove these backend contracts.
+
+## Three independent modularity layers
+
+These layers must not be conflated:
+
+| Layer | What it controls | Current state | Remaining boundary |
+| --- | --- | --- | --- |
+| **Runtime switch** | Resource sizing and work selection in an already-built binary. | `STUMP_ENABLE_WEBUI` and `STUMP_ENABLE_BACKGROUND_JOBS` gate SPA and job infrastructure. `STUMP_RUNTIME_WORKER_THREADS`, `STUMP_RUNTIME_MAX_BLOCKING_THREADS`, database pool bounds, and the SQLite statement cache right-size retained services. Existing Kobo, KOReader, OIDC, upload, and OPDS progression switches remain. | Metadata providers and PDFium are already initialized on first use. A provider/processor runtime switch would add no idle saving unless some caller currently initializes it. |
+| **Cargo feature** | Compile-time route/code selection. | `full`, `headless`, and minimal no-default compositions select `webui`, `graphql`, `opds`, `readium`, `kobo`, and `koreader` route trees. Shared request-origin and pagination types live in `stump_api_types`; shared authentication context and authorization errors live in `stump_auth`. GraphQL derives in models, core, email, and metadata integrations are opt-in, so the minimal server graph excludes `async-graphql`. File/image processing lives in `stump_media` (`crates/media`) with `pdf` (PDFium) and `rar` (unrar) features; the server's `formats = ["pdf", "rar"]` aggregate is part of every profile so defaults stay behaviour-identical, and either backend can be dropped explicitly (`--no-default-features --features headless,rar` links no PDFium). Without `pdf`, PDF requests fail with `PdfConfigurationError`; without `rar`, RAR/CBR fail with `UnsupportedFileType` — content-type detection still recognises both. | Scanner, watcher, thumbnail/analysis/metadata jobs remain in `stump_core` and coupled to Apalis; see the scanner split plan. |
+| **Container target** | Packaged assets plus runtime defaults. | Docker `full` includes the frontend. Docker `headless` omits it, builds the `headless` Cargo aggregate, and supplies conservative thread/pool/cache defaults. Both retain PostgreSQL support, PDFium, and the same database/auth model. | A processor-minimal image would need explicit capability labels and route/scan tests; image size alone is not RAM evidence. |
+
+A runtime switch can avoid doing work but cannot remove a linked dependency. A Cargo feature can remove code/dependencies but cannot choose which assets a release image copies. A Docker target chooses packaged inputs but does not create a different server architecture.
+
+## Package seams
+
+The following ownership boundaries keep Stump as one process rather than splitting it into services:
+
+- **Neutral API contracts live in `stump_api_types` (`crates/api-types`).** It owns request-origin URL construction and transport-independent offset pagination without depending on Axum or GraphQL.
+- **Authentication context lives in `stump_auth` (`crates/auth`).** It owns the authenticated user/session context and authorization errors. GraphQL maps those neutral errors at its adapter boundary.
+- **GraphQL schema concerns stay in `graphql` (`crates/graphql`).** GraphQL input wrappers, derives, resolver errors, and schema construction remain local and are enabled explicitly by the server's `graphql` feature.
+
+- **Models and services stay in `crates/models`.** Entities, domain types, and persistence-facing services remain the shared source of truth.
+- **File and image processing lives in `stump_media` (`crates/media`).** Format processors (`EpubProcessor`, `ZipProcessor`, `PdfProcessor` behind `pdf`, `RarProcessor` behind `rar`), `ContentType`, `FileError`, hashing (incl. the KOReader hash), Readium manifest generation, EPUB search, image resize/thumbnail primitives, and `MediaConfig`. It depends on `models` for shared option types but not on `stump_core`, jobs, events, or the database. Processors take `&MediaConfig`, a snapshot `StumpConfig` computes once in `finalize_media_config` (called by `init_config` and `Ctx::new`) and exposes as `config.media`, so per-request calls neither clone `StumpConfig` nor rebuild paths.
+- **Orchestration stays in `stump_core` (`core`).** Scanning, the library watcher, job orchestration, thumbnail/analysis/metadata jobs, metadata coordination, and shared application context belong here rather than in Axum handlers; file-level processing is delegated to `stump_media`.
+- **Axum adapters stay in `stump_server` (`apps/server`).** Routes, middleware, protocol adapters, HTTP/WebSocket extraction, and response mapping belong here. The server remains the composition root for one process.
+- **The web UI stays in `apps/web`.** Server static serving, Vite build output, and Docker asset copying are the UI modularity boundary; they are not a reason to fork the API server.
+- **Metadata starts with provider features in `metadata_integrations`.** Add provider-level Cargo features and preserve the default dependency graph before considering a gratuitous crate split. Provider DTOs and retry/cache behavior should remain behind the existing integration boundary.
+- **Komga contracts live in `stump_komga` (`crates/komga`).** It owns Komga DTOs, pagination, and error mapping; the `komga` Cargo feature in `apps/server` compiles the adapter route tree under `apps/server/src/routers/komga/`. The server still owns route mounting while existing models/services own persistence. See [Komga compatibility](/docs/developer/komga-compat) for the current spec.
+
+Implemented and proposed seams must preserve one Rust process, one configured database, current authentication, and the existing GraphQL/REST/protocol surfaces.
+
+## Profiles
+
+### Full/default
+
+`default = ["full"]`, and `full = ["headless", "webui"]`. The Docker `full` target packages the Vite output. Unset runtime and database tuning variables preserve upstream Tokio and SQLx defaults. This is the compatibility baseline.
+
+### Headless
+
+`cargo build --package stump_server --no-default-features --features headless` compiles GraphQL, OPDS, Readium, Kobo, KOReader, authenticated REST, jobs, SQLite, and PostgreSQL without SPA routes. The Docker `headless` target uses this exact aggregate. `/api/v2/health` reports the SPA dependency as disabled and continues to validate the database.
+
+### Minimal
+
+`cargo build --package stump_server --no-default-features --features minimal` retains REST authentication, database-backed library/media endpoints, sessions, health, and raw file serving while omitting the optional GraphQL, OPDS, Readium, Kobo, and KOReader route modules. The profile no longer links `async-graphql`; it is still a route-composition profile rather than a processor-free binary because shared core metadata, jobs, image, PDF, and archive processing remain linked.
+
+### Runtime controls
+
+Any compiled profile can tune resources without changing the default:
+
+- `STUMP_RUNTIME_WORKER_THREADS` and `STUMP_RUNTIME_MAX_BLOCKING_THREADS` size Tokio before asynchronous startup.
+- `STUMP_DB_MAX_CONNECTIONS`, `STUMP_DB_MIN_CONNECTIONS`, and `STUMP_SQLITE_STATEMENT_CACHE_CAPACITY` bound database runtime state.
+- `STUMP_ENABLE_BACKGROUND_JOBS=false` skips islanded-job cleanup, scheduler initialization, the watcher listener, and the Apalis monitor. Job submission and watcher operations fail explicitly with `FeatureDisabled("background jobs")`.
+- `/api/v2/health` reports `jobs` as `disabled`, `enabled` (configured but not yet initialized), `idle`, or `running`, and reports `watcher` as `disabled`, `inactive`, or `active`. Health reads lifecycle state without constructing the queue, monitor, scheduler, or watcher.
+
+The headless container defaults to two Tokio workers, eight blocking threads, a two-connection pool cap, and a 32-entry SQLite statement cache. Operators can override every value. Background jobs remain enabled so scanning and metadata work are available.
+
+## Uploader-prepared ingest boundary
+
+The preferred long-term processing boundary is **uploader-prepared ingest**, not a mandatory remote-worker tier. The device that already owns the source file may hash and inspect it before upload and may attach metadata, page/archive indexes, covers, or converted derivatives. An optional node performs the same producer role for clients that lack a capability or should not spend battery, memory, or time on a heavy transform. Nodes improve throughput; they are not required for storage, reading, or database access.
+
+The server remains authoritative. It authenticates the operation, enforces the target library and quota, streams the untouched original into server-owned staging, recomputes the full-file digest, checks the format and bounded structural invariants, validates every supplied artifact against its declared digest/type/source digest/processor version, and atomically commits the canonical file and database state. Client or node metadata is a candidate, never trusted state. Invalid optional artifacts are rejected or discarded without losing the verified original.
+
+A future neutral ingest contract should model:
+
+- an idempotency key, source filename, byte length, full SHA-256 digest, and detected media type;
+- producer identity/version and declared capabilities;
+- optional typed artifacts with their own byte lengths, digests, media types, and the source digest they derive from;
+- an explicit lifecycle such as `staging -> source_verified -> committed`, with artifact acceptance reported independently;
+- resumable, bounded byte transfer without exposing filesystem paths or database credentials.
+
+All ingress adapters must converge on one service rather than implement separate import semantics:
+
+```text
+web/desktop upload ─┐
+Expo upload ────────┼─> verify/stage IngestBook ─> atomic file + DB commit
+optional node ──────┘
+```
+
+The existing implementation does not yet provide this contract. Browser/desktop uploads are one-shot GraphQL multipart requests that copy files and enqueue a scan. Expo can already inspect EPUB/PDF and CBZ files through its native Readium/streamer modules, but it has no server-upload flow or full-content digest field. The Rust processors are filesystem/native-library oriented and are not a suitable browser WASM boundary. The first implementation should therefore extract `MediaBuilder`'s projection from an already processed file and the scanner's persistence transaction into a neutral ingest service, harden staging and limits, then add the digest-bound HTTP contract. Current GraphQL upload/scan behavior remains the all-in-one fallback until that path is proven end to end.
+
+### Metadata and book-lab pipeline (proposed)
+
+The following metadata and repair pipeline is **proposed (not implemented)**. It extends uploader-prepared ingest without making metadata lookup or archive repair a requirement of the always-on server. The uploader performs the work when it has the capability; an optional worker can perform it later. The server receives normalized, digest-bound results and remains the authority for acceptance.
+
+The proposed metadata layer has two engines:
+
+- a **books engine** for ebooks and other book-shaped inputs; and
+- a **comics engine** for comics, manga, and issue-shaped inputs.
+
+Both proposed engines share one provider trait and one candidate core. A provider returns typed candidates with a confidence value and provenance (provider, lookup inputs, response/version information, and timestamp), rather than directly mutating a library record. The shared core ranks and reconciles candidates, keeps competing evidence inspectable, and leaves low-confidence or conflicting fields for review. Engine-specific parsing and normalization may differ, but the candidate, confidence, provenance, digest, and acceptance semantics should not.
+
+The proposed provider policy is keyless-first. Embedded metadata and ISBN parsing are the first pass, followed by public or anonymous providers such as [Open Library](https://openlibrary.org/developers/api), [GCD](https://www.comics.org/api/), [MangaDex](https://api.mangadex.org/docs/), and [AniList](https://anilist.gitbook.io/anilist-apiv2-docs/). [Google Books](https://developers.google.com/books/docs/v1/using), [Metron](https://metron.cloud/), and [ComicVine](https://comicvine.gamespot.com/api/) are proposed optional keyed plugins, disabled when their credentials are absent. Credentials and provider-specific rate limits belong to the uploader or optional worker, not to the always-on server.
+
+Filename parsing is also proposed as a local, deterministic first pass. It should extract hints such as title, series, volume, issue/chapter, year, language, and edition from common naming patterns, while treating those hints as low-confidence candidates rather than stable identity. Network lookup should refine or reject filename evidence; it should never turn an ambiguous filename into an authoritative match by itself.
+
+The proposed EPUB repair lab is a separate, deterministic pipeline:
+
+1. Preserve the immutable uploaded bytes and their digest as the original; never repair in place.
+2. Analyze the original without mutation and emit a bounded structural report covering the ZIP container, `mimetype`, package metadata, navigation, spine, resources, and parseable content.
+3. Produce a structured repair plan from the analysis. AI may propose allowlisted actions in that plan, but it must not edit an archive, emit replacement bytes, or bypass deterministic validation.
+4. Apply the plan to a copy using deterministic transformations, producing a canonical EPUB only when each action is well-formed and applicable.
+5. Re-run [EPUBCheck](https://github.com/w3c/epubcheck) against the canonical EPUB. A failed revalidation rejects the derivative and retains the verified original.
+
+The proposed canonical EPUB is the source for a regenerable KEPUB derivative. KEPUB generation should use [kepubify](https://github.com/pgaskin/kepubify) from that canonical input rather than treating a device-produced KEPUB as a second source of truth. Original, canonical EPUB, and KEPUB outputs should be content-addressed independently. When a proposed repair makes no change, the original and canonical roles should reference the same digest instead of storing a duplicate; each derivative still records its source digest and processor/version provenance.
+
+The proposed uploader/worker handoff sends only normalized metadata candidates, the accepted lab report and plan, and any derivative descriptors or bytes whose source digest is the verified original digest. The server recomputes every received digest and accepts results only when the digest, media type, processor version, and dependency chain match the verified staged source. Unbound, malformed, or failed artifacts remain rejected candidates and must not replace the original or become trusted metadata.
+
+## Upcoming 0.1.7 compatibility constraints
+
+The upstream release notes supplied for the upcoming 0.1.7 branch cut highlight two high-impact areas awaiting feedback: PostgreSQL support ([#1191](https://github.com/stumpapp/stump/pull/1191), commit `5153d36`) and the Readium-compatible EPUB streaming/web reader ([#1288](https://github.com/stumpapp/stump/pull/1288), commit `e952771`). The checked-in `.github/CHANGELOG.md` still ends at 0.1.6, so these are recorded here as upcoming constraints rather than attributed to the generated changelog.
+
+- Every supported server aggregate retains PostgreSQL URL selection and migrations. SQLite-specific journal/cache behavior remains backend-guarded.
+- Readium manifest, positions, search, and resource streaming remain an API capability independent of `webui`. `headless` includes `readium`; only the explicitly minimal no-default profile omits that route module.
+- Memory measurements must identify the database backend. PostgreSQL deployment memory includes the external PostgreSQL process and cannot be compared directly with Stump's SQLite-only process RSS.
+
+## Metadata and PDF caveats
+
+### Metadata
+
+`metadata_integrations` still compiles its provider clients and retry/rate-limit dependencies as one package, but clients are created only when a provider is used. The HTTP cache now selects only the Moka manager and required standard URL parser; the unintended default CACache manager is no longer in the graph. Provider Cargo features remain a future compile-size optimization. They are not an idle-RAM fix by themselves because no provider client/cache exists before first use.
+
+### PDF
+
+[`core/src/filesystem/media/format/pdf.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/filesystem/media/format/pdf.rs) uses a process-wide `OnceLock<Result<Mutex<Pdfium>, FileError>>`. PDFium is initialized lazily on the first operation that needs it, and a failed initialization is cached until process restart. PDFium is used for more than the browser reader: scan-time processing/page counts and optional PDF metadata, page analysis, server-side page rendering/thumbnails, and OPDS/media page routes all depend on it.
+
+Consequently, omitting the SPA does not make PDFium optional for a server that still promises PDF scanning, page rendering, thumbnails, or OPDS/media page streaming. The Docker runtime currently packages PDFium for both `full` and `headless`; source builds need `PDFIUM_PATH` or a system library. The upstream implementation is [PDFium](https://pdfium.googlesource.com/pdfium/) and the container binary distribution is documented by [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries).
+
+A future split between a lightweight **proposed (not implemented)** `pdf-core` path (identify/index/download) and a **proposed (not implemented)** `pdf-render` path (PDFium, page rendering, thumbnails, and page streaming) must prove that scans, media readers, OPDS pages, and mobile downloads still work before changing the default profile. The current dependency diet retains Stump's existing GIF, JPEG, PNG, and WebP decoding paths while omitting unrelated default `image` codecs. AVIF, JPEG XL, and HEIF remain recognized input content types but unsupported by the image conversion path, as before; this change does not remove PDF, EPUB, ZIP, or RAR capabilities.
+
+## Komga and Komelia status
+
+Stump's Komga compatibility is implemented behind the `komga` Cargo feature in `apps/server` (included in the `headless` aggregate) and the `STUMP_ENABLE_KOMGA` runtime gate. The `stump_komga` contract crate (`crates/komga`) defines the compatibility DTOs and mapping contracts, while the route tree lives under `apps/server/src/routers/komga/`. The current endpoint and behavior specification is [Komga compatibility](/docs/developer/komga-compat).
+
+The external Grimmory project is a useful compatibility warning, not an implementation dependency:
+
+- [Grimmory issue #164](https://github.com/grimmory-tools/grimmory/issues/164), **“Support Komelia app in the Komga API”**, documents that Komelia uses a larger Komga API superset. Its open checklist includes remember-me cookies, matching series/read-progress/book/media/library/pageable DTOs, several list/readlist endpoints, and `/v1/books/{book_id}/manifest`.
+- [Grimmory PR #2333](https://github.com/grimmory-tools/grimmory/pull/2333) is open and addresses Komga remember-me authentication cookies, `JSESSIONID`, and the `komga-remember-me` cookie while keeping Basic auth behavior.
+- [Grimmory PR #2377](https://github.com/grimmory-tools/grimmory/pull/2377) is open and addresses missing `scanDirectoryExclusions` and nullable `oneshotsDirectory` fields in `KomgaLibraryDto`; it does not add persistence for those fields.
+
+A pinned Android capture against Komelia 0.19.0 and Komga 1.26.3 now supplies route-level evidence beyond Grimmory's checklist. It observed modern POST book/series lists; libraries and referential filters; book, series, page, thumbnail, and file reads; successful next-book navigation; `PATCH`/`DELETE` read-progress updates; nonempty read-list and collection traversal; collection updates; library scans; filesystem browsing; the SSE event stream; and Readium manifest, positions, resource, and progression routes. Separate contract probes observed unauthenticated and invalid-credential `401` responses. Komga's filesystem endpoint returned `200` to the server owner and `403` to a restricted user, so the visible directory picker is an administrative capability rather than evidence of anonymous access. Only normalized route, status, content-type, cache-marker, and JSON-shape evidence is retained; each raw phone flow is deleted after normalization.
+
+Reverse-proxy fidelity is part of the Readium contract. Mitmproxy reverse mode must preserve the client `Host` header (for example, `--set keep_host_header=true`). Without it, Komga emits absolute manifest resource links for the loopback upstream, while Komelia rejects links outside its configured server origin before requesting the first chapter. An EPUB failure captured under the rewritten-host topology is invalid capture evidence, not a Komga or Komelia incompatibility.
+
+With Host preservation corrected, two EPUBs rendered and hundreds of resource requests returned `200` or `304`. Progression writes returned `204`; for the book with `200` readbacks, the returned href, position, and progression matched the latest prior write in all three comparisons. Nevertheless, Komelia did not resume either book. The pinned 0.19.0 source computes the saved chapter index in `TtsuReaderState.getBookmark` but returns the first `readingOrder` href as `chapterReference`. Its table of contents also displays start-character offsets rather than page numbers and can render `0 / 0 (NaN%)` for a zero-character section. These are Komelia client-profile caveats, not missing Komga responses.
+
+The Komga contract crate and `/komga` adapter are implemented as described in the [Komga compatibility specification](/docs/developer/komga-compat). Grimmory and the pinned Komelia capture remain interoperability evidence: they inform the route/DTO matrix and compatibility boundaries without turning unlisted methods or unsupported behavior into promises.
+
+## Measurement gates
+
+### Measured idle baseline and result
+
+The measurements below are medians from five fresh launches per profile on the same 16-logical-CPU Linux host. Each launch used an empty SQLite database and state directory on tmpfs, waited for `/api/v2/health`, and then sampled `/proc/<pid>/smaps_rollup`, task count, and file descriptors 20 times. Runs were randomized and interleaved. They characterize this machine and idle workload; they are not a production memory guarantee.
+
+The pristine binary came from a separate worktree at `origin/nightly` commit `37fdb7d7340894a777c40d685d5262becceae007` (2026-08-31). Its `/api/v2/version` response embedded revision `37fdb7d7`; the measured ELF SHA-256 was `ce91170e6e1658ed5d6e1ed6f64827db625f42a9bf69fdedb86d967bf379569d`.
+
+| Release binary/profile | Runtime settings | RSS (KiB) | PSS (KiB) | Private dirty (KiB) | Threads | FDs |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Pristine `origin/nightly` full/default | Upstream defaults | 40,776 | 36,929 | 11,028 | 21 | 19 |
+| Optimized headless | 2 Tokio workers, 8 blocking max, DB max 2, statement cache 32, jobs enabled | 29,924 | 26,085 | 6,036 | 5 | 16 |
+| Optimized headless, lean runtime | Same, DB max 1, background jobs disabled | 28,708 | 24,866 | 5,908 | 4 | 14 |
+
+The supported headless container defaults correspond to the second row: all compiled backend protocols and background jobs remain available. Against pristine nightly, median idle RSS fell by 10,852 KiB (26.6%), PSS by 10,844 KiB (29.4%), and thread count from 21 to 5. Disabling background jobs and limiting SQLite to one connection is an opt-in lower bound, not the default capability profile.
+
+A later spot check of the same headless release binary with the Komga compatibility adapter compiled in measured the runtime toggle's idle cost: three interleaved launches each with `STUMP_ENABLE_KOMGA=false` and `=true` on tmpfs (health-wait plus a four-second settle, single sample) gave medians of 30,416 KiB RSS / 25,173 KiB PSS with the adapter disabled and 30,664 KiB RSS / 25,434 KiB PSS enabled, five threads in both cases. The roughly 0.2 MiB difference is within run-to-run noise; the adapter adds routes, not resident state, and its only per-connection allocation is the SSE subscription.
+
+Do not turn an RSS observation into a promised memory number. Before and after any modularity change, compare the current full/default build and the candidate headless build using the same commit, database, library, configuration, and workload. Record:
+
+- clean startup time and stable idle behavior;
+- process RSS **and**, where available, live-heap/allocation data, SQLite page-cache usage, mapped files/native libraries, and thread count;
+- scan peak and post-scan retained state, separating allocator-retained RSS from live objects;
+- image size, layer contents, frontend/PDFium presence, and build inputs;
+- route/auth smoke results for GraphQL HTTP+WS, REST/media/EPUB/range, OPDS 1.2/PSE, OPDS 2.0 auth/progression, KOReader, Kobo, and native/mobile SDK flows.
+
+The optimization-specific gates are equally strict:
+
+- Scanner mtime skip/results are identical, and the immutable mtime map is shared rather than repeatedly deep-copied.
+- `LibraryWatcher` command/public method behavior is unchanged; no `notify` backend exists before the first path is added, and the backend appears when that first path is added. Once created, the backend is retained until watcher shutdown, including after the last path is removed.
+- Full/default output and startup semantics remain unchanged.
+- The full image contains SPA assets and PDFium; the headless image contains no SPA assets (its target does not copy the frontend stage), and health/readiness reports the SPA dependency as disabled.
+
+## Incremental upstream PR sequence
+
+1. **Implemented here:** share scanner directory-mtime snapshots through `Arc`; no scan semantics change.
+2. **Implemented here:** lazily construct the `notify` backend; optionally omit the logical watcher/job lifecycle with an explicit disabled error.
+3. **Implemented here:** add `full`, `headless`, minimal, and leaf route features while keeping `webui` independent.
+4. **Implemented here:** make health/readiness, GraphiQL redirects, and OPDS logo links aware of the effective profile.
+5. **Implemented here:** build GraphQL schema/DataLoaders once on first authenticated use, and expose Tokio/database resource bounds without changing unset defaults.
+6. **Implemented here:** remove unused dependency defaults and narrow supported image-codec compilation without changing advertised formats.
+7. **Implemented here:** move shared request-origin/pagination and authentication context into dependency-light neutral crates, make GraphQL derives opt-in, and remove `async-graphql` from the minimal server graph without changing the generated schema.
+8. **Proposed:** make provider and processor dependencies optional in dependency-sized PRs. This requires capability-aware processor dispatch/error variants; a manifest-only flag would be misleading.
+9. **Proposed:** separate PDF core/index operations from PDFium rendering only after scan, media, OPDS, and mobile evidence passes.
+10. **Implemented here:** add the `komga` Cargo feature and `STUMP_ENABLE_KOMGA` runtime gate, implement the `stump_komga` contract crate and `/komga` route tree, and document the DTO, pagination, authentication, error, and route matrix; use Grimmory issue/PR status as interoperability evidence.
+
+This sequence keeps cheap runtime choices, compile-time dependency removal, and container asset selection independent so each change can be measured and upstreamed without changing the default server contract.
