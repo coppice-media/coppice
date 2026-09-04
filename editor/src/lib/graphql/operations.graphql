@@ -1,0 +1,511 @@
+fragment IngestDropItemFields on IngestDropItem {
+	id
+	libraryId
+	createdBy
+	filename
+	relativePath
+	sizeBytes
+	sourceSha256
+	mediaType
+	status
+	revision
+	pendingFields
+	error
+	createdAt
+	updatedAt
+	analysisJob {
+		id
+		dropItemId
+		jobId
+		status
+		phase
+		priorityScore
+		attempt
+		queuedAt
+		startedAt
+		completedAt
+		error
+	}
+	qualityReport {
+		id
+		dropItemId
+		sourceSha256
+		algorithmVersion
+		score
+		generatedAt
+		checks {
+			checkId
+			label
+			status
+			weight
+			normalizedScore
+			contribution
+			evidence
+		}
+	}
+	metadataCandidates {
+		id
+		dropItemId
+		provider
+		providerVersion
+		model
+		confidence
+		fields
+		fieldConfidences
+		sourceSha256
+		provenance
+		status
+		createdAt
+	}
+	media {
+		id
+		name
+	}
+	series {
+		id
+		name
+	}
+}
+
+fragment IngestPageInfoFields on PaginationInfo {
+	... on OffsetPaginationInfo {
+		totalPages
+		totalItems
+		currentPage
+		pageSize
+	}
+	... on CursorPaginationInfo {
+		currentCursor
+		nextCursor
+		limit
+	}
+}
+
+query Me {
+	me {
+		id
+		username
+		isServerOwner
+	}
+}
+
+query Libraries($pagination: Pagination!) {
+	libraries(pagination: $pagination) {
+		nodes {
+			id
+			name
+			emoji
+		}
+		pageInfo {
+			...IngestPageInfoFields
+		}
+	}
+}
+
+query IngestDropFolderAndItems(
+	$libraryId: ID!
+	$status: IngestDropItemStatus
+	$pagination: Pagination!
+) {
+	ingestDropFolder(libraryId: $libraryId) {
+		libraryId
+		displayPath
+		enabled
+		pendingCount
+		lastDiscoveredAt
+	}
+	ingestDropItems(libraryId: $libraryId, status: $status, pagination: $pagination) {
+		nodes {
+			...IngestDropItemFields
+		}
+		pageInfo {
+			...IngestPageInfoFields
+		}
+	}
+}
+
+query IngestItem($id: ID!) {
+	ingestItem(id: $id) {
+		...IngestDropItemFields
+	}
+}
+
+query IngestAnalysisQueue($status: JobStatus, $pagination: Pagination!) {
+	ingestAnalysisQueue(status: $status, pagination: $pagination) {
+		nodes {
+			id
+			dropItemId
+			jobId
+			status
+			phase
+			priorityScore
+			attempt
+			queuedAt
+			startedAt
+			completedAt
+			error
+		}
+		pageInfo {
+			...IngestPageInfoFields
+		}
+	}
+}
+
+query IngestAnalysisJob($id: ID!) {
+	ingestAnalysisJob(id: $id) {
+		id
+		dropItemId
+		jobId
+		status
+		phase
+		priorityScore
+		attempt
+		queuedAt
+		startedAt
+		completedAt
+		error
+	}
+}
+
+query IngestReworkItems($minScore: Float, $pagination: Pagination!) {
+	ingestReworkItems(minScore: $minScore, pagination: $pagination) {
+		nodes {
+			item {
+				...IngestDropItemFields
+			}
+			reasons {
+				checkId
+				status
+				message
+			}
+		}
+		pageInfo {
+			...IngestPageInfoFields
+		}
+	}
+}
+
+query IngestBulkItems($ids: [ID!]!) {
+	ingestBulkItems(ids: $ids) {
+		...IngestDropItemFields
+	}
+}
+
+query IngestProviderCatalog($includeDisabled: Boolean!) {
+	ingestProviderCatalog(includeDisabled: $includeDisabled) {
+		id
+		name
+		version
+		configured
+		capabilities
+		supportedMediaTypes
+		enabledByDefault
+		settings {
+			key
+			label
+			valueType
+			required
+			secret
+			defaultValue
+			description
+		}
+	}
+}
+
+query IngestProviderSettings($providerId: String!) {
+	ingestProviderSettings(providerId: $providerId) {
+		provider {
+			id
+			name
+			version
+			configured
+			capabilities
+			supportedMediaTypes
+			enabledByDefault
+			settings {
+				key
+				label
+				valueType
+				required
+				secret
+				defaultValue
+				description
+			}
+		}
+		enabled
+		optedIn
+		settings {
+			key
+			configured
+			secret
+			value
+		}
+		updatedAt
+	}
+}
+
+query IngestQualityCheckCatalog($includeDisabled: Boolean!) {
+	ingestQualityCheckCatalog(includeDisabled: $includeDisabled) {
+		id
+		name
+		version
+		available
+		weight
+		enabled
+		supportedMediaTypes
+		settings {
+			key
+			label
+			valueType
+			required
+			secret
+			defaultValue
+			description
+		}
+	}
+}
+
+query IngestQualityCheckSettings($checkId: String!) {
+	ingestQualityCheckSettings(checkId: $checkId) {
+		checkId
+		enabled
+		settings {
+			key
+			configured
+			secret
+			value
+		}
+		updatedAt
+	}
+}
+
+mutation StageIngestUploads($input: StageIngestUploadsInput!) {
+	stageIngestUploads(input: $input) {
+		items {
+			...IngestDropItemFields
+		}
+		deduplicated
+	}
+}
+
+mutation ScanIngestDropFolder($libraryId: ID!) {
+	scanIngestDropFolder(libraryId: $libraryId) {
+		libraryId
+		displayPath
+		enabled
+		pendingCount
+		lastDiscoveredAt
+	}
+}
+
+mutation EnqueueIngestAnalysis($input: EnqueueIngestAnalysisInput!) {
+	enqueueIngestAnalysis(input: $input) {
+		id
+		dropItemId
+		jobId
+		status
+		phase
+		priorityScore
+		attempt
+		queuedAt
+		startedAt
+		completedAt
+		error
+	}
+}
+
+mutation RequeueIngestAnalysis($dropItemId: ID!, $force: Boolean!) {
+	requeueIngestAnalysis(dropItemId: $dropItemId, force: $force) {
+		id
+		dropItemId
+		jobId
+		status
+		phase
+		priorityScore
+		attempt
+		queuedAt
+		startedAt
+		completedAt
+		error
+	}
+}
+
+mutation PauseIngestAnalysis($jobId: ID!) {
+	pauseIngestAnalysis(jobId: $jobId) {
+		id
+		dropItemId
+		jobId
+		status
+		phase
+		priorityScore
+		attempt
+		queuedAt
+		startedAt
+		completedAt
+		error
+	}
+}
+
+mutation ResumeIngestAnalysis($jobId: ID!) {
+	resumeIngestAnalysis(jobId: $jobId) {
+		id
+		dropItemId
+		jobId
+		status
+		phase
+		priorityScore
+		attempt
+		queuedAt
+		startedAt
+		completedAt
+		error
+	}
+}
+
+mutation RetryIngestAnalysis($jobId: ID!) {
+	retryIngestAnalysis(jobId: $jobId) {
+		id
+		dropItemId
+		jobId
+		status
+		phase
+		priorityScore
+		attempt
+		queuedAt
+		startedAt
+		completedAt
+		error
+	}
+}
+
+mutation CancelIngestAnalysis($jobId: ID!) {
+	cancelIngestAnalysis(jobId: $jobId) {
+		id
+		dropItemId
+		jobId
+		status
+		phase
+		priorityScore
+		attempt
+		queuedAt
+		startedAt
+		completedAt
+		error
+	}
+}
+
+mutation DiscardIngestItem($dropItemId: ID!, $reason: String) {
+	discardIngestItem(dropItemId: $dropItemId, reason: $reason) {
+		...IngestDropItemFields
+	}
+}
+
+mutation ApplyIngestMetadata($input: ApplyIngestMetadataInput!) {
+	applyIngestMetadata(input: $input) {
+		...IngestDropItemFields
+	}
+}
+
+mutation BulkApplyIngestMetadata($input: BulkApplyIngestMetadataInput!) {
+	bulkApplyIngestMetadata(input: $input) {
+		applied {
+			...IngestDropItemFields
+		}
+		failures {
+			dropItemId
+			message
+		}
+	}
+}
+
+mutation ApproveIngestItem($dropItemId: ID!, $strategy: MergeStrategy) {
+	approveIngestItem(dropItemId: $dropItemId, strategy: $strategy) {
+		...IngestDropItemFields
+	}
+}
+
+mutation RejectIngestItem($dropItemId: ID!, $reason: String) {
+	rejectIngestItem(dropItemId: $dropItemId, reason: $reason) {
+		...IngestDropItemFields
+	}
+}
+
+mutation SetIngestProviderSettings($input: SetIngestProviderSettingsInput!) {
+	setIngestProviderSettings(input: $input) {
+		provider {
+			id
+			name
+			version
+			configured
+			capabilities
+			supportedMediaTypes
+			enabledByDefault
+			settings {
+				key
+				label
+				valueType
+				required
+				secret
+				defaultValue
+				description
+			}
+		}
+		enabled
+		optedIn
+		settings {
+			key
+			configured
+			secret
+			value
+		}
+		updatedAt
+	}
+}
+
+mutation VerifyIngestProvider($providerId: String!, $settings: JSON) {
+	verifyIngestProvider(providerId: $providerId, settings: $settings) {
+		responseStatus
+		isValid
+		error
+	}
+}
+
+mutation SetIngestQualityCheckSettings($input: SetIngestQualityCheckSettingsInput!) {
+	setIngestQualityCheckSettings(input: $input) {
+		checkId
+		enabled
+		settings {
+			key
+			configured
+			secret
+			value
+		}
+		updatedAt
+	}
+}
+
+subscription IngestProgress(
+	$libraryId: ID
+	$dropItemId: ID
+	$analysisJobId: ID
+	$afterEventId: ID
+) {
+	ingestProgress(
+		libraryId: $libraryId
+		dropItemId: $dropItemId
+		analysisJobId: $analysisJobId
+		afterEventId: $afterEventId
+	) {
+		eventId
+		emittedAt
+		libraryId
+		dropItemId
+		analysisJobId
+		status
+		phase
+		completed
+		total
+		score
+		message
+	}
+}

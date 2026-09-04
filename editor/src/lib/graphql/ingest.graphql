@@ -1,0 +1,331 @@
+"A staged source item awaiting analysis or explicit commit."
+type IngestDropItem {
+  id: ID!
+  libraryId: ID!
+  createdBy: ID!
+  filename: String!
+  relativePath: String
+  sizeBytes: Int!
+  sourceSha256: String!
+  mediaType: String!
+  status: IngestDropItemStatus!
+  revision: Int!
+  analysisJob: IngestAnalysisJob
+  qualityReport: IngestQualityReport
+  metadataCandidates: [IngestMetadataCandidate!]!
+  pendingFields: JSON!
+  media: Media
+  series: Series
+  error: String
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+enum IngestDropItemStatus {
+  RECEIVED
+  STAGED
+  ANALYZING
+  AWAITING_REVIEW
+  READY
+  COMMITTED
+  REJECTED
+  FAILED
+}
+
+type IngestDropFolder {
+  libraryId: ID!
+  displayPath: String!
+  enabled: Boolean!
+  pendingCount: Int!
+  lastDiscoveredAt: DateTime
+}
+
+type IngestAnalysisJob {
+  id: ID!
+  dropItemId: ID!
+  jobId: String
+  status: JobStatus!
+  phase: IngestAnalysisPhase!
+  priorityScore: Float!
+  attempt: Int!
+  queuedAt: DateTime!
+  startedAt: DateTime
+  completedAt: DateTime
+  error: String
+}
+
+enum IngestAnalysisPhase {
+  STAGING
+  ANALYSIS
+  QUALITY
+  IDENTIFY
+  LOOKUP
+  REVIEW
+  COMMIT
+  DONE
+}
+
+type IngestQualityReport {
+  id: ID!
+  dropItemId: ID!
+  sourceSha256: String!
+  algorithmVersion: String!
+  score: Int!
+  checks: [IngestQualityCheckResult!]!
+  generatedAt: DateTime!
+}
+
+type IngestQualityCheckResult {
+  checkId: String!
+  label: String!
+  status: IngestQualityStatus!
+  weight: Int!
+  normalizedScore: Float!
+  contribution: Float!
+  evidence: JSON!
+}
+
+enum IngestQualityStatus {
+  PASS
+  WARN
+  FAIL
+  NOT_APPLICABLE
+}
+
+type IngestMetadataCandidate {
+  id: ID!
+  dropItemId: ID!
+  provider: String!
+  providerVersion: String!
+  model: String
+  confidence: Float!
+  fields: JSON!
+  fieldConfidences: JSON
+  sourceSha256: String!
+  provenance: JSON!
+  status: IngestCandidateStatus!
+  createdAt: DateTime!
+}
+
+enum IngestCandidateStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+type IngestReworkReason {
+  checkId: String!
+  status: IngestQualityStatus!
+  message: String!
+}
+
+type IngestReworkItem {
+  item: IngestDropItem!
+  reasons: [IngestReworkReason!]!
+}
+
+type PaginatedIngestDropItemResponse {
+  nodes: [IngestDropItem!]!
+  pageInfo: PaginationInfo!
+}
+
+type PaginatedIngestAnalysisJobResponse {
+  nodes: [IngestAnalysisJob!]!
+  pageInfo: PaginationInfo!
+}
+
+type PaginatedIngestReworkResponse {
+  nodes: [IngestReworkItem!]!
+  pageInfo: PaginationInfo!
+}
+
+enum IngestMetadataFieldMode {
+  KEEP_EXISTING
+  CANDIDATE
+  MANUAL
+  CLEAR
+}
+
+input IngestMetadataFieldSelectionInput {
+  field: MetadataField!
+  mode: IngestMetadataFieldMode!
+  candidateId: ID
+  value: JSON
+}
+
+type IngestBulkApplyFailure {
+  dropItemId: ID!
+  message: String!
+}
+
+type IngestBulkApplyPayload {
+  applied: [IngestDropItem!]!
+  failures: [IngestBulkApplyFailure!]!
+}
+
+type IngestProviderDescriptor {
+  id: String!
+  name: String!
+  version: String!
+  available: Boolean!
+  capabilities: [IngestProviderCapability!]!
+  supportedMediaTypes: [String!]!
+  enabledByDefault: Boolean!
+  settings: [IngestSettingDefinition!]!
+}
+
+enum IngestProviderCapability {
+  IDENTIFY
+  LOOKUP
+  TAGS
+  AI_ENRICHMENT
+}
+
+enum IngestSettingValueType {
+  BOOLEAN
+  INTEGER
+  NUMBER
+  STRING
+  JSON
+}
+
+type IngestSettingDefinition {
+  key: String!
+  label: String!
+  valueType: IngestSettingValueType!
+  required: Boolean!
+  secret: Boolean!
+  defaultValue: JSON
+  description: String
+}
+
+type IngestProviderSetting {
+  key: String!
+  configured: Boolean!
+  secret: Boolean!
+  value: JSON
+}
+
+type IngestProviderSettings {
+  provider: IngestProviderDescriptor!
+  enabled: Boolean!
+  optedIn: Boolean!
+  settings: [IngestProviderSetting!]!
+  updatedAt: DateTime
+}
+
+type IngestQualityCheckDescriptor {
+  id: String!
+  name: String!
+  version: String!
+  available: Boolean!
+  weight: Int!
+  enabled: Boolean!
+  supportedMediaTypes: [String!]!
+  settings: [IngestSettingDefinition!]!
+}
+
+type IngestQualityCheckSettings {
+  checkId: String!
+  enabled: Boolean!
+  settings: [IngestProviderSetting!]!
+  updatedAt: DateTime
+}
+
+type IngestProgressEvent {
+  eventId: ID!
+  emittedAt: DateTime!
+  libraryId: ID!
+  dropItemId: ID!
+  analysisJobId: ID
+  status: IngestDropItemStatus!
+  phase: IngestAnalysisPhase!
+  completed: Int!
+  total: Int!
+  score: Float
+  message: String
+}
+
+input IngestUploadFileInput {
+  file: Upload!
+  relativePath: String
+}
+
+input StageIngestUploadsInput {
+  libraryId: ID!
+  files: [IngestUploadFileInput!]!
+  idempotencyKey: String
+  startAnalysis: Boolean = true
+}
+
+type StageIngestUploadsPayload {
+  items: [IngestDropItem!]!
+  deduplicated: Int!
+}
+
+input EnqueueIngestAnalysisInput {
+  dropItemIds: [ID!]!
+  force: Boolean = false
+}
+
+input ApplyIngestMetadataInput {
+  dropItemId: ID!
+  selections: [IngestMetadataFieldSelectionInput!]!
+  strategy: MergeStrategy
+}
+
+input BulkApplyIngestMetadataInput {
+  dropItemIds: [ID!]!
+  selections: [IngestMetadataFieldSelectionInput!]!
+  strategy: MergeStrategy
+}
+
+input SetIngestProviderSettingsInput {
+  providerId: String!
+  enabled: Boolean
+  optedIn: Boolean
+  settings: JSON
+}
+
+input SetIngestQualityCheckSettingsInput {
+  checkId: String!
+  enabled: Boolean
+  settings: JSON
+}
+
+extend type Query {
+  ingestDropFolder(libraryId: ID!): IngestDropFolder
+  ingestDropItems(libraryId: ID, status: IngestDropItemStatus, pagination: Pagination!): PaginatedIngestDropItemResponse!
+  ingestItem(id: ID!): IngestDropItem
+  ingestAnalysisQueue(status: JobStatus, pagination: Pagination!): PaginatedIngestAnalysisJobResponse!
+  ingestAnalysisJob(id: ID!): IngestAnalysisJob
+  ingestReworkItems(minScore: Float, pagination: Pagination!): PaginatedIngestReworkResponse!
+  ingestBulkItems(ids: [ID!]!): [IngestDropItem!]!
+  ingestProviderCatalog(includeDisabled: Boolean = false): [IngestProviderDescriptor!]!
+  ingestProviderSettings(providerId: String!): IngestProviderSettings
+  ingestQualityCheckCatalog(includeDisabled: Boolean = false): [IngestQualityCheckDescriptor!]!
+  ingestQualityCheckSettings(checkId: String!): IngestQualityCheckSettings
+}
+
+extend type Mutation {
+  stageIngestUploads(input: StageIngestUploadsInput!): StageIngestUploadsPayload!
+  scanIngestDropFolder(libraryId: ID!): IngestDropFolder!
+  enqueueIngestAnalysis(input: EnqueueIngestAnalysisInput!): [IngestAnalysisJob!]!
+  requeueIngestAnalysis(dropItemId: ID!, force: Boolean = false): IngestAnalysisJob!
+  pauseIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+  resumeIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+  retryIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+  cancelIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+  discardIngestItem(dropItemId: ID!, reason: String): IngestDropItem!
+  applyIngestMetadata(input: ApplyIngestMetadataInput!): IngestDropItem!
+  bulkApplyIngestMetadata(input: BulkApplyIngestMetadataInput!): IngestBulkApplyPayload!
+  approveIngestItem(dropItemId: ID!, strategy: MergeStrategy): IngestDropItem!
+  rejectIngestItem(dropItemId: ID!, reason: String): IngestDropItem!
+  setIngestProviderSettings(input: SetIngestProviderSettingsInput!): IngestProviderSettings!
+  verifyIngestProvider(providerId: String!, settings: JSON): ProviderCredentialVerification!
+  setIngestQualityCheckSettings(input: SetIngestQualityCheckSettingsInput!): IngestQualityCheckSettings!
+}
+
+extend type Subscription {
+  ingestProgress(libraryId: ID, dropItemId: ID, analysisJobId: ID, afterEventId: ID): IngestProgressEvent!
+}
