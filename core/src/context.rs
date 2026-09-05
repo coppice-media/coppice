@@ -20,6 +20,7 @@ use crate::{
 	config::StumpConfig,
 	database,
 	event::CoreEvent,
+	filesystem::media::visible_pages::VisiblePagesCache,
 	ingest::services::IngestServices,
 	job::{stump_job::StumpJob, JobServices},
 	reading_state::ReadingHeadChanged,
@@ -50,6 +51,8 @@ pub struct Ctx {
 	/// out to their own clients (Komga SSE). Not part of [`CoreEvent`], which
 	/// is streamed to every GraphQL subscriber regardless of user.
 	reading_state_events: Arc<Sender<ReadingHeadChanged>>,
+	/// Per-media visible-page lists (duplicate-page skipping); shared with jobs.
+	visible_pages: Arc<VisiblePagesCache>,
 }
 
 impl Ctx {
@@ -91,6 +94,7 @@ impl Ctx {
 			ingest_services: Arc::new(OnceLock::new()),
 			devices: Arc::new(OnceLock::new()),
 			reading_state_events: Arc::new(channel::<ReadingHeadChanged>(256).0),
+			visible_pages: Arc::new(VisiblePagesCache::default()),
 		}
 	}
 
@@ -153,6 +157,7 @@ impl Ctx {
 					self.conn.clone(),
 					self.config.clone(),
 					self.event_channel.0.clone(),
+					self.visible_pages.clone(),
 				))))
 			})
 			.clone())

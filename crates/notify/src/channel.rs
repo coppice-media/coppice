@@ -52,7 +52,10 @@ impl NotificationKind {
 	/// Whether the kind concerns library administration rather than the
 	/// recipient's own devices. Hosts gate rule creation on this.
 	pub fn is_administrative(self) -> bool {
-		!matches!(self, Self::DevicePaired | Self::DeviceFirstSeen | Self::Test)
+		!matches!(
+			self,
+			Self::DevicePaired | Self::DeviceFirstSeen | Self::Test
+		)
 	}
 
 	/// ntfy-style emoji shortcodes describing the kind.
@@ -94,7 +97,11 @@ pub struct Attachment {
 }
 
 impl Attachment {
-	pub fn bytes(filename: impl Into<String>, mime: impl Into<String>, bytes: Vec<u8>) -> Self {
+	pub fn bytes(
+		filename: impl Into<String>,
+		mime: impl Into<String>,
+		bytes: Vec<u8>,
+	) -> Self {
 		Self {
 			filename: filename.into(),
 			mime: mime.into(),
@@ -102,7 +109,11 @@ impl Attachment {
 		}
 	}
 
-	pub fn path(filename: impl Into<String>, mime: impl Into<String>, path: PathBuf) -> Self {
+	pub fn path(
+		filename: impl Into<String>,
+		mime: impl Into<String>,
+		path: PathBuf,
+	) -> Self {
 		Self {
 			filename: filename.into(),
 			mime: mime.into(),
@@ -114,9 +125,11 @@ impl Attachment {
 	pub fn load(&self) -> Result<Cow<'_, [u8]>, ChannelError> {
 		match &self.content {
 			AttachmentContent::Bytes { bytes } => Ok(Cow::Borrowed(bytes)),
-			AttachmentContent::Path { path } => std::fs::read(path)
-				.map(Cow::Owned)
-				.map_err(|error| ChannelError::Attachment(format!("{}: {error}", path.display()))),
+			AttachmentContent::Path { path } => {
+				std::fs::read(path).map(Cow::Owned).map_err(|error| {
+					ChannelError::Attachment(format!("{}: {error}", path.display()))
+				})
+			},
 		}
 	}
 
@@ -126,7 +139,9 @@ impl Attachment {
 			AttachmentContent::Bytes { bytes } => Ok(bytes.len() as u64),
 			AttachmentContent::Path { path } => std::fs::metadata(path)
 				.map(|meta| meta.len())
-				.map_err(|error| ChannelError::Attachment(format!("{}: {error}", path.display()))),
+				.map_err(|error| {
+					ChannelError::Attachment(format!("{}: {error}", path.display()))
+				}),
 		}
 	}
 }
@@ -144,7 +159,11 @@ pub struct Notification {
 }
 
 impl Notification {
-	pub fn new(kind: NotificationKind, title: impl Into<String>, body: impl Into<String>) -> Self {
+	pub fn new(
+		kind: NotificationKind,
+		title: impl Into<String>,
+		body: impl Into<String>,
+	) -> Self {
 		Self {
 			kind,
 			title: title.into(),
@@ -184,7 +203,11 @@ pub struct Recipient {
 }
 
 impl Recipient {
-	pub fn new(user_id: impl Into<String>, username: impl Into<String>, settings: SettingValues) -> Self {
+	pub fn new(
+		user_id: impl Into<String>,
+		username: impl Into<String>,
+		settings: SettingValues,
+	) -> Self {
 		Self {
 			user_id: user_id.into(),
 			username: username.into(),
@@ -193,7 +216,11 @@ impl Recipient {
 	}
 
 	/// A non-empty string setting, or `MissingSetting`.
-	pub fn required_str(&self, channel: &'static str, key: &'static str) -> Result<&str, ChannelError> {
+	pub fn required_str(
+		&self,
+		channel: &'static str,
+		key: &'static str,
+	) -> Result<&str, ChannelError> {
 		self.optional_str(key)
 			.ok_or(ChannelError::MissingSetting { channel, key })
 	}
@@ -265,11 +292,18 @@ pub trait Channel: Send + Sync {
 			.collect()
 	}
 
-	async fn send(&self, recipient: &Recipient, notification: &Notification) -> Result<(), ChannelError>;
+	async fn send(
+		&self,
+		recipient: &Recipient,
+		notification: &Notification,
+	) -> Result<(), ChannelError>;
 
 	/// Poll the channel for messages the user sent back. Channels without an
 	/// inbound side return [`ChannelError::Unsupported`].
-	async fn receive(&self, _recipient: &Recipient) -> Result<Vec<Inbound>, ChannelError> {
+	async fn receive(
+		&self,
+		_recipient: &Recipient,
+	) -> Result<Vec<Inbound>, ChannelError> {
 		Err(ChannelError::Unsupported)
 	}
 }
@@ -278,11 +312,16 @@ mod base64_bytes {
 	use base64::{engine::general_purpose::STANDARD, Engine};
 	use serde::{Deserialize, Deserializer, Serializer};
 
-	pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+	pub fn serialize<S: Serializer>(
+		bytes: &[u8],
+		serializer: S,
+	) -> Result<S::Ok, S::Error> {
 		serializer.serialize_str(&STANDARD.encode(bytes))
 	}
 
-	pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+	pub fn deserialize<'de, D: Deserializer<'de>>(
+		deserializer: D,
+	) -> Result<Vec<u8>, D::Error> {
 		let encoded = String::deserialize(deserializer)?;
 		STANDARD.decode(encoded).map_err(serde::de::Error::custom)
 	}
@@ -305,15 +344,25 @@ mod tests {
 
 	#[test]
 	fn path_attachment_loads_lazily() {
-		let missing = Attachment::path("x.cbz", "application/zip", PathBuf::from("/definitely/missing"));
+		let missing = Attachment::path(
+			"x.cbz",
+			"application/zip",
+			PathBuf::from("/definitely/missing"),
+		);
 		assert!(matches!(missing.load(), Err(ChannelError::Attachment(_))));
 		assert_eq!(missing.size().is_err(), true);
 	}
 
 	#[test]
 	fn kind_names_are_stable_strings() {
-		assert_eq!(NotificationKind::IngestAwaitingReview.to_string(), "INGEST_AWAITING_REVIEW");
-		assert_eq!("SCAN_FINISHED".parse::<NotificationKind>().unwrap(), NotificationKind::ScanFinished);
+		assert_eq!(
+			NotificationKind::IngestAwaitingReview.to_string(),
+			"INGEST_AWAITING_REVIEW"
+		);
+		assert_eq!(
+			"SCAN_FINISHED".parse::<NotificationKind>().unwrap(),
+			NotificationKind::ScanFinished
+		);
 		assert!(!NotificationKind::Test.routable());
 		assert!(!NotificationKind::DevicePaired.is_administrative());
 		assert!(NotificationKind::ScanFinished.is_administrative());
@@ -329,7 +378,10 @@ mod tests {
 		assert_eq!(recipient.optional_str("token"), None);
 		assert!(matches!(
 			recipient.required_str("ntfy", "token"),
-			Err(ChannelError::MissingSetting { channel: "ntfy", key: "token" })
+			Err(ChannelError::MissingSetting {
+				channel: "ntfy",
+				key: "token"
+			})
 		));
 	}
 }

@@ -16,6 +16,7 @@ use tokio::sync::broadcast;
 use crate::{
 	config::StumpConfig,
 	event::CoreEvent,
+	filesystem::media::visible_pages::VisiblePagesCache,
 	filesystem::{
 		image::{PlaceholderGenerationJob, ThumbnailGenerationJob},
 		media::analysis::AnalyzeMediaJob,
@@ -34,6 +35,7 @@ pub struct JobServices {
 	pub conn: Arc<DatabaseConnection>,
 	pub config: Arc<StumpConfig>,
 	event_tx: broadcast::Sender<CoreEvent>,
+	visible_pages: Arc<VisiblePagesCache>,
 }
 
 impl JobServices {
@@ -41,12 +43,19 @@ impl JobServices {
 		conn: Arc<DatabaseConnection>,
 		config: Arc<StumpConfig>,
 		event_tx: broadcast::Sender<CoreEvent>,
+		visible_pages: Arc<VisiblePagesCache>,
 	) -> Self {
 		Self {
 			conn,
 			config,
 			event_tx,
+			visible_pages,
 		}
+	}
+
+	/// Drop the cached visible-page list for a media whose page hashes changed.
+	pub fn invalidate_visible_pages(&self, media_id: &str) {
+		self.visible_pages.invalidate_media(media_id);
 	}
 
 	/// Sends an event to the core event channel

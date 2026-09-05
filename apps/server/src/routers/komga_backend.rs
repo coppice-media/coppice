@@ -15,8 +15,8 @@ use models::{
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use stump_auth::AuthContext;
-use stump_devices::{CredentialRef, Protocol};
 use stump_core::{job::stump_job::StumpJob, reading_state::SourceProtocol, CoreEvent};
+use stump_devices::{CredentialRef, Protocol};
 use stump_media::{
 	get_saved_thumbnail,
 	image::{
@@ -885,7 +885,11 @@ impl KomgaBackend for KomgaBackendAdapter {
 		if let Err(error) = self
 			.ctx
 			.devices()
-			.touch(CredentialRef::ApiKey(api_key), Protocol::Komga, Some(summary))
+			.touch(
+				CredentialRef::ApiKey(api_key),
+				Protocol::Komga,
+				Some(summary),
+			)
 			.await
 		{
 			tracing::warn!(?error, "Failed to record the Komga sync on its device");

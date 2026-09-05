@@ -88,7 +88,12 @@ fn hash_page(path: &str, page: i32, config: &stump_media::MediaConfig) -> Option
 			match stump_media::page_dhash(&bytes) {
 				Ok(hash) => Some(hash as i64),
 				Err(error) => {
-					tracing::warn!(?error, path, page, "Failed to decode page for hashing");
+					tracing::warn!(
+						?error,
+						path,
+						page,
+						"Failed to decode page for hashing"
+					);
 					None
 				},
 			}
@@ -264,9 +269,12 @@ pub async fn safely_analyze_book(
 			.collect::<Vec<_>>();
 		if let Err(error) = page_hash::Entity::insert_many(rows)
 			.on_conflict(
-				OnConflict::columns([page_hash::Column::MediaId, page_hash::Column::Page])
-					.update_columns([page_hash::Column::Dhash, page_hash::Column::CreatedAt])
-					.to_owned(),
+				OnConflict::columns([
+					page_hash::Column::MediaId,
+					page_hash::Column::Page,
+				])
+				.update_columns([page_hash::Column::Dhash, page_hash::Column::CreatedAt])
+				.to_owned(),
 			)
 			.exec(ctx.conn())
 			.await
@@ -277,7 +285,7 @@ pub async fn safely_analyze_book(
 					.with_ctx(book.id.clone()),
 			);
 		} else {
-			ctx.invalidate_visible_pages(&book.id);
+			ctx.services().invalidate_visible_pages(&book.id);
 		}
 	}
 

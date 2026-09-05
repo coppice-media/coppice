@@ -1,5 +1,6 @@
 pub mod analysis;
 mod builder;
+pub mod visible_pages;
 
 pub(crate) use builder::{BuiltMedia, MediaBuilder};
 

@@ -464,7 +464,9 @@ pub async fn auth_middleware(
 	// A Komga remember-me token acts as the user; a device key must not be
 	// upgraded to one.
 	#[cfg(feature = "komga")]
-	if auth_header.starts_with("Basic ") && is_komga_basic_auth && req_ctx.api_key.is_none()
+	if auth_header.starts_with("Basic ")
+		&& is_komga_basic_auth
+		&& req_ctx.api_key.is_none()
 	{
 		req.extensions_mut().insert(KomgaBasicAuthSuccess);
 	}

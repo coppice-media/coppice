@@ -84,7 +84,10 @@ async fn test_komga_basic_request_with_device_key_updates_last_seen() {
 		.assert_status(StatusCode::NO_CONTENT);
 
 	let synced = devices.get(&owner, &device.id).await.expect("device");
-	assert!(synced.last_sync_at.is_some(), "last_sync_at was not recorded");
+	assert!(
+		synced.last_sync_at.is_some(),
+		"last_sync_at was not recorded"
+	);
 	let summary = synced.last_sync_summary.expect("sync summary");
 	assert_eq!(summary["protocol"], json!("komga"));
 	assert_eq!(summary["book_id"], json!(book.id));

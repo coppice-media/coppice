@@ -82,7 +82,6 @@ async fn skip_hashes_for_media(
 	conn: &DatabaseConnection,
 	media_id: &str,
 ) -> CoreResult<Vec<i64>> {
-	let Some(library_id) = media::Entity::find_by_id(media_id)
 	let Some(Some(library_id)) = media::Entity::find_by_id(media_id)
 		.select_only()
 		.column(series::Column::LibraryId)
@@ -93,6 +92,7 @@ async fn skip_hashes_for_media(
 	else {
 		return Ok(Vec::new());
 	};
+	Ok(known_duplicate_page::Entity::find()
 		.select_only()
 		.column(known_duplicate_page::Column::Dhash)
 		.filter(known_duplicate_page::Column::LibraryId.eq(library_id))
@@ -157,6 +157,8 @@ pub fn physical_page(visible: &[i32], page: i32) -> Option<i32> {
 		.and_then(|index| visible.get(index).copied())
 }
 
+#[cfg(test)]
+mod tests {
 	use super::*;
 	use chrono::Utc;
 	use models::{entity::library, shared::enums::FileStatus};
@@ -202,6 +204,13 @@ pub fn physical_page(visible: &[i32], page: i32) -> Option<i32> {
 		.insert(conn)
 		.await
 		.unwrap();
+		// Pages 1, 2, 3, 5 carry hashes; page 4 has none. Page 1 equals the
+		// SKIP mark exactly, page 3 differs by one bit.
+		for (page, dhash) in [(1, 0x00ffi64), (2, 0x0f0f), (3, 0x00fe), (5, 0xf0f0)] {
+			page_hash::ActiveModel {
+				media_id: Set("book".to_string()),
+				page: Set(page),
+				dhash: Set(dhash),
 				created_at: Set(Utc::now().into()),
 			}
 			.insert(conn)

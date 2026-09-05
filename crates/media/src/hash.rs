@@ -189,11 +189,20 @@ mod dhash_tests {
 		let base = dhash_image(&original);
 
 		let jpeg = page_dhash(&encode(&original, ImageFormat::Jpeg)).unwrap();
-		assert!(hamming(base, jpeg) <= 2, "jpeg drift {}", hamming(base, jpeg));
+		assert!(
+			hamming(base, jpeg) <= 2,
+			"jpeg drift {}",
+			hamming(base, jpeg)
+		);
 
-		let resized = original.resize_exact(300, 450, image::imageops::FilterType::Triangle);
+		let resized =
+			original.resize_exact(300, 450, image::imageops::FilterType::Triangle);
 		let png = page_dhash(&encode(&resized, ImageFormat::Png)).unwrap();
-		assert!(hamming(base, png) <= 2, "resize drift {}", hamming(base, png));
+		assert!(
+			hamming(base, png) <= 2,
+			"resize drift {}",
+			hamming(base, png)
+		);
 	}
 
 	#[test]

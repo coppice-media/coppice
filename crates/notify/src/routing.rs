@@ -68,7 +68,10 @@ pub fn resolve_channels<'a>(
 		}
 	}
 	for rule in rules.iter().filter(|rule| rule.user_id == user_id) {
-		if rule.event_kind == ANY_EVENT && rule.enabled && !exact.contains(rule.channel_id.as_str()) {
+		if rule.event_kind == ANY_EVENT
+			&& rule.enabled
+			&& !exact.contains(rule.channel_id.as_str())
+		{
 			enabled.insert(&rule.channel_id);
 		}
 	}
@@ -76,7 +79,11 @@ pub fn resolve_channels<'a>(
 }
 
 /// Every delivery for `kind` given the persisted rules and the event's audience.
-pub fn resolve_targets(rules: &[Rule], audience: &Audience, kind: NotificationKind) -> Vec<Target> {
+pub fn resolve_targets(
+	rules: &[Rule],
+	audience: &Audience,
+	kind: NotificationKind,
+) -> Vec<Target> {
 	let users: Vec<&str> = match audience {
 		Audience::Users(users) => users.iter().map(String::as_str).collect(),
 		Audience::Subscribers => rules
@@ -127,7 +134,10 @@ mod tests {
 			rule("a", ANY_EVENT, "email", true),
 			rule("a", "SCAN_FINISHED", "email", false),
 		];
-		assert_eq!(resolve_channels(&rules, "a", NotificationKind::ScanFinished), vec!["ntfy"]);
+		assert_eq!(
+			resolve_channels(&rules, "a", NotificationKind::ScanFinished),
+			vec!["ntfy"]
+		);
 		assert_eq!(
 			resolve_channels(&rules, "a", NotificationKind::DevicePaired),
 			vec!["email", "ntfy"]
@@ -140,13 +150,19 @@ mod tests {
 			rule("a", ANY_EVENT, "ntfy", false),
 			rule("a", "DEVICE_PAIRED", "ntfy", true),
 		];
-		assert_eq!(resolve_channels(&rules, "a", NotificationKind::DevicePaired), vec!["ntfy"]);
+		assert_eq!(
+			resolve_channels(&rules, "a", NotificationKind::DevicePaired),
+			vec!["ntfy"]
+		);
 		assert!(resolve_channels(&rules, "a", NotificationKind::ScanFinished).is_empty());
 	}
 
 	#[test]
 	fn test_kind_is_never_routed() {
-		let rules = [rule("a", ANY_EVENT, "ntfy", true), rule("a", "TEST", "ntfy", true)];
+		let rules = [
+			rule("a", ANY_EVENT, "ntfy", true),
+			rule("a", "TEST", "ntfy", true),
+		];
 		assert!(resolve_channels(&rules, "a", NotificationKind::Test).is_empty());
 	}
 
@@ -157,12 +173,22 @@ mod tests {
 			rule("b", ANY_EVENT, "webhook", true),
 			rule("c", "SCAN_FINISHED", "ntfy", false),
 		];
-		let targets = resolve_targets(&rules, &Audience::Subscribers, NotificationKind::ScanFinished);
+		let targets = resolve_targets(
+			&rules,
+			&Audience::Subscribers,
+			NotificationKind::ScanFinished,
+		);
 		assert_eq!(
 			targets,
 			vec![
-				Target { user_id: "a".into(), channel_id: "ntfy".into() },
-				Target { user_id: "b".into(), channel_id: "webhook".into() },
+				Target {
+					user_id: "a".into(),
+					channel_id: "ntfy".into()
+				},
+				Target {
+					user_id: "b".into(),
+					channel_id: "webhook".into()
+				},
 			]
 		);
 	}
@@ -173,7 +199,14 @@ mod tests {
 			rule("a", "DEVICE_PAIRED", "ntfy", true),
 			rule("b", "DEVICE_PAIRED", "ntfy", true),
 		];
-		let targets = resolve_targets(&rules, &Audience::user("b"), NotificationKind::DevicePaired);
-		assert_eq!(targets, vec![Target { user_id: "b".into(), channel_id: "ntfy".into() }]);
+		let targets =
+			resolve_targets(&rules, &Audience::user("b"), NotificationKind::DevicePaired);
+		assert_eq!(
+			targets,
+			vec![Target {
+				user_id: "b".into(),
+				channel_id: "ntfy".into()
+			}]
+		);
 	}
 }

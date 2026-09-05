@@ -60,7 +60,11 @@ impl MigrationTrait for Migration {
 							.big_integer()
 							.not_null(),
 					)
-					.col(ColumnDef::new(KnownDuplicatePages::Action).text().not_null())
+					.col(
+						ColumnDef::new(KnownDuplicatePages::Action)
+							.text()
+							.not_null(),
+					)
 					.col(ColumnDef::new(KnownDuplicatePages::CreatedBy).text())
 					.col(
 						ColumnDef::new(KnownDuplicatePages::CreatedAt)
@@ -74,14 +78,20 @@ impl MigrationTrait for Migration {
 					)
 					.foreign_key(
 						ForeignKey::create()
-							.from(KnownDuplicatePages::Table, KnownDuplicatePages::LibraryId)
+							.from(
+								KnownDuplicatePages::Table,
+								KnownDuplicatePages::LibraryId,
+							)
 							.to(Libraries::Table, Libraries::Id)
 							.on_update(ForeignKeyAction::Cascade)
 							.on_delete(ForeignKeyAction::Cascade),
 					)
 					.foreign_key(
 						ForeignKey::create()
-							.from(KnownDuplicatePages::Table, KnownDuplicatePages::CreatedBy)
+							.from(
+								KnownDuplicatePages::Table,
+								KnownDuplicatePages::CreatedBy,
+							)
 							.to(Users::Table, Users::Id)
 							.on_update(ForeignKeyAction::Cascade)
 							.on_delete(ForeignKeyAction::SetNull),
@@ -101,7 +111,12 @@ impl MigrationTrait for Migration {
 			)
 			.await?;
 		manager
-			.drop_table(Table::drop().table(PageHashes::Table).if_exists().to_owned())
+			.drop_table(
+				Table::drop()
+					.table(PageHashes::Table)
+					.if_exists()
+					.to_owned(),
+			)
 			.await
 	}
 }
