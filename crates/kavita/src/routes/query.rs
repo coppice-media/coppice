@@ -56,7 +56,8 @@ pub(crate) async fn load_series_inputs(
 		.iter()
 		.map(|row| row.series.id.clone())
 		.collect::<Vec<_>>();
-	let series_kavita_ids = KavitaIds::resolve_many(conn, IdKind::Series, &series_ids).await?;
+	let series_kavita_ids =
+		KavitaIds::resolve_many(conn, IdKind::Series, &series_ids).await?;
 
 	let mut library_ids = rows
 		.iter()
@@ -71,7 +72,8 @@ pub(crate) async fn load_series_inputs(
 		.into_iter()
 		.map(|library| (library.id.clone(), library.name))
 		.collect::<HashMap<_, _>>();
-	let library_kavita_ids = KavitaIds::resolve_many(conn, IdKind::Library, &library_ids).await?;
+	let library_kavita_ids =
+		KavitaIds::resolve_many(conn, IdKind::Library, &library_ids).await?;
 
 	let media_rows = media::ModelWithMetadata::find_for_user(user)
 		.filter(media::Column::SeriesId.is_in(series_ids.clone()))
@@ -84,7 +86,8 @@ pub(crate) async fn load_series_inputs(
 		.iter()
 		.map(|row| row.media.id.clone())
 		.collect::<Vec<_>>();
-	let media_kavita_ids = KavitaIds::resolve_many(conn, IdKind::Media, &media_ids).await?;
+	let media_kavita_ids =
+		KavitaIds::resolve_many(conn, IdKind::Media, &media_ids).await?;
 	let mut sessions = latest_sessions(conn, user, &media_ids).await?;
 
 	let mut media_by_series: HashMap<String, Vec<MediaInput>> = HashMap::new();
@@ -169,7 +172,12 @@ pub(crate) async fn library_for_series(
 	ctx: &dyn KavitaBackend,
 	user: &AuthUser,
 	input: &SeriesInput,
-) -> APIResult<Option<(library::Model, Option<models::entity::library_config::Model>)>> {
+) -> APIResult<
+	Option<(
+		library::Model,
+		Option<models::entity::library_config::Model>,
+	)>,
+> {
 	let Some(library_id) = input.series.library_id.as_deref() else {
 		return Ok(None);
 	};

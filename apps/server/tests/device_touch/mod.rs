@@ -28,7 +28,10 @@ async fn pair_liseur_device(app: &TestApp) -> (String, String) {
 	let nonce = started["nonce"].as_str().unwrap().to_string();
 
 	let approved = app
-		.execute_gql(APPROVE, Some(json!({ "pairingId": pairing_id, "code": code })))
+		.execute_gql(
+			APPROVE,
+			Some(json!({ "pairingId": pairing_id, "code": code })),
+		)
 		.await;
 	assert_eq!(
 		approved["data"]["approveDevicePairing"]["status"], "APPROVED",
@@ -37,7 +40,9 @@ async fn pair_liseur_device(app: &TestApp) -> (String, String) {
 
 	let issued = app
 		.server
-		.get(&format!("/api/v2/devices/pair/{pairing_id}/status?nonce={nonce}"))
+		.get(&format!(
+			"/api/v2/devices/pair/{pairing_id}/status?nonce={nonce}"
+		))
 		.await;
 	issued.assert_status_ok();
 	let issued: Value = issued.json();

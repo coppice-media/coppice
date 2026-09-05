@@ -182,8 +182,8 @@ pub fn page_progression(page: i32, pages: i32) -> Option<f64> {
 /// of the publication; readers that need a protocol-specific page URL derive
 /// it from `locations.position`.
 pub fn page_locator(media_id: &str, page: i32, pages: i32) -> ReadiumLocator {
-	let progression = page_progression(page, pages)
-		.and_then(|value| Decimal::try_from(value).ok());
+	let progression =
+		page_progression(page, pages).and_then(|value| Decimal::try_from(value).ok());
 	ReadiumLocator {
 		chapter_title: String::new(),
 		href: format!("/api/v2/media/{media_id}/page/{page}"),

@@ -103,12 +103,7 @@ impl MigrationTrait for Migration {
 				Table::create()
 					.table(Devices::Table)
 					.if_not_exists()
-					.col(
-						ColumnDef::new(Devices::Id)
-							.text()
-							.not_null()
-							.primary_key(),
-					)
+					.col(ColumnDef::new(Devices::Id).text().not_null().primary_key())
 					.col(ColumnDef::new(Devices::UserId).text().not_null())
 					.col(ColumnDef::new(Devices::Name).text().not_null())
 					.col(ColumnDef::new(Devices::Kind).text().not_null())

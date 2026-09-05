@@ -12,9 +12,7 @@ use std::{
 use chrono::Utc;
 use futures::{stream, StreamExt};
 use models::entity::source_health;
-use sea_orm::{
-	sea_query::OnConflict, ActiveValue::Set, ConnectionTrait, EntityTrait,
-};
+use sea_orm::{sea_query::OnConflict, ActiveValue::Set, ConnectionTrait, EntityTrait};
 
 use crate::catalog::{CatalogSnapshot, SourceTheme};
 
@@ -67,7 +65,8 @@ pub struct HealthProbe {
 impl HealthProbe {
 	/// The base URL answered successfully.
 	pub fn reachable(&self) -> bool {
-		self.http_status.is_some_and(|status| (200..400).contains(&status))
+		self.http_status
+			.is_some_and(|status| (200..400).contains(&status))
 	}
 
 	/// Fold this probe into the previous failure count: `(status, failures)`.
@@ -106,7 +105,11 @@ impl HealthChecker {
 
 	/// Probe `base_url`. `known_theme` skips markup sniffing when the theme
 	/// was detected by an earlier run.
-	pub async fn probe(&self, base_url: &str, known_theme: Option<SourceTheme>) -> HealthProbe {
+	pub async fn probe(
+		&self,
+		base_url: &str,
+		known_theme: Option<SourceTheme>,
+	) -> HealthProbe {
 		let mut probe = HealthProbe::default();
 		let started = Instant::now();
 		let head = self.client.head(base_url).send().await;
@@ -123,7 +126,8 @@ impl HealthChecker {
 				return probe;
 			},
 		};
-		probe.latency_ms = Some(started.elapsed().as_millis().min(u32::MAX as u128) as u32);
+		probe.latency_ms =
+			Some(started.elapsed().as_millis().min(u32::MAX as u128) as u32);
 		probe.http_status = Some(response.status().as_u16());
 		probe.redirect_url = redirect_target(base_url, response.url().as_str());
 		if !probe.reachable() {
@@ -144,7 +148,8 @@ impl HealthChecker {
 		}
 
 		if let Some(theme) = probe.theme {
-			let latest = format!("{}{}", base_url.trim_end_matches('/'), theme.latest_path());
+			let latest =
+				format!("{}{}", base_url.trim_end_matches('/'), theme.latest_path());
 			probe.latest_path_ok = Some(match self.client.get(&latest).send().await {
 				Ok(response) => response.status().is_success(),
 				Err(_) => false,
@@ -188,8 +193,13 @@ pub async fn check_catalog<C: ConnectionTrait>(
 		.collect();
 
 	// base_url -> catalog sources sharing it
-	let mut by_url: HashMap<String, Vec<(&crate::catalog::CatalogEntry, &crate::catalog::CatalogSource)>> =
-		HashMap::new();
+	let mut by_url: HashMap<
+		String,
+		Vec<(
+			&crate::catalog::CatalogEntry,
+			&crate::catalog::CatalogSource,
+		)>,
+	> = HashMap::new();
 	for entry in &snapshot.entries {
 		for source in &entry.sources {
 			if source.base_url.is_empty() {
@@ -263,13 +273,14 @@ pub async fn check_catalog<C: ConnectionTrait>(
 				name: Set(source.name.clone()),
 				lang: Set(source.lang.clone()),
 				base_url: Set(source.base_url.clone()),
-				theme: Set(probe
-					.theme
-					.map(|theme| theme.as_str().to_string())
-					.or_else(|| existing.get(&source.id).and_then(|row| row.theme.clone()))),
+				theme: Set(probe.theme.map(|theme| theme.as_str().to_string()).or_else(
+					|| existing.get(&source.id).and_then(|row| row.theme.clone()),
+				)),
 				status: Set(status.as_str().to_string()),
 				http_status: Set(probe.http_status.map(i32::from)),
-				latency_ms: Set(probe.latency_ms.map(|ms| ms.min(i32::MAX as u32) as i32)),
+				latency_ms: Set(probe
+					.latency_ms
+					.map(|ms| ms.min(i32::MAX as u32) as i32)),
 				redirect_url: Set(probe.redirect_url.clone()),
 				latest_path_ok: Set(probe.latest_path_ok),
 				consecutive_failures: Set(failures),
@@ -361,9 +372,14 @@ mod tests {
 		let server = MockServer::spawn(vec![
 			(
 				"/",
-				CannedResponse::html("<html><link href='/wp-content/themes/madara/x.css'></html>"),
+				CannedResponse::html(
+					"<html><link href='/wp-content/themes/madara/x.css'></html>",
+				),
 			),
-			("/manga/?m_orderby=latest", CannedResponse::html("<html>latest</html>")),
+			(
+				"/manga/?m_orderby=latest",
+				CannedResponse::html("<html>latest</html>"),
+			),
 		])
 		.await;
 		let checker = HealthChecker::with_client(reqwest::Client::new());
@@ -377,7 +393,9 @@ mod tests {
 
 		// A known theme skips the markup sniff: only HEAD + latest path.
 		let before = server.requests().len();
-		let probe = checker.probe(server.base_url(), Some(SourceTheme::Madara)).await;
+		let probe = checker
+			.probe(server.base_url(), Some(SourceTheme::Madara))
+			.await;
 		assert_eq!(probe.theme, Some(SourceTheme::Madara));
 		assert_eq!(server.requests().len() - before, 2);
 	}
@@ -391,7 +409,8 @@ mod tests {
 		assert!(!probe.reachable());
 		assert_eq!(probe.error.as_deref(), Some("HTTP 503"));
 
-		let target = MockServer::spawn(vec![("/", CannedResponse::html("<html/>"))]).await;
+		let target =
+			MockServer::spawn(vec![("/", CannedResponse::html("<html/>"))]).await;
 		let redirecting = MockServer::spawn(vec![(
 			"/",
 			CannedResponse::status(302).with_header("Location", target.base_url()),
@@ -400,7 +419,10 @@ mod tests {
 		let probe = checker.probe(redirecting.base_url(), None).await;
 		assert_eq!(probe.http_status, Some(200));
 		assert_eq!(
-			probe.redirect_url.as_deref().map(|u| u.trim_end_matches('/')),
+			probe
+				.redirect_url
+				.as_deref()
+				.map(|u| u.trim_end_matches('/')),
 			Some(target.base_url())
 		);
 
@@ -416,7 +438,8 @@ mod tests {
 	#[tokio::test]
 	async fn check_catalog_upserts_rows_and_tracks_consecutive_failures() {
 		let conn = ::tests::db::test_database().await;
-		let healthy = MockServer::spawn(vec![("/", CannedResponse::html("<html/>"))]).await;
+		let healthy =
+			MockServer::spawn(vec![("/", CannedResponse::html("<html/>"))]).await;
 		let broken = MockServer::spawn(vec![("/", CannedResponse::status(500))]).await;
 		let snapshot = CatalogSnapshot {
 			fetched_at: Utc::now(),

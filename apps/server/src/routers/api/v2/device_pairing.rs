@@ -477,9 +477,7 @@ async fn pairing_status(
 	}
 
 	let origin = RequestOrigin::new(details.host, details.scheme);
-	issue_credential(&ctx, &pairing, &origin)
-		.await
-		.map(Json)
+	issue_credential(&ctx, &pairing, &origin).await.map(Json)
 }
 
 /// PNG rendering of the QR payload for devices without a QR library. Same
@@ -601,8 +599,9 @@ mod tests {
 
 	#[test]
 	fn expires_at_is_rfc3339_utc_seconds() {
-		let at = DateTimeWithTimeZone::parse_from_rfc3339("2026-09-05T14:03:09.123456+02:00")
-			.unwrap();
+		let at =
+			DateTimeWithTimeZone::parse_from_rfc3339("2026-09-05T14:03:09.123456+02:00")
+				.unwrap();
 		assert_eq!(rfc3339_secs(at), "2026-09-05T12:03:09Z");
 	}
 

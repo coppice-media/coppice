@@ -32,9 +32,10 @@ pub(crate) fn spawn<X: JobExecutionContext>(
 
 			let worker = Arc::clone(&worker);
 			let handle = tokio::runtime::Handle::current();
-			let finished =
-				tokio::task::spawn_blocking(move || handle.block_on(dispatch(worker, job)))
-					.await;
+			let finished = tokio::task::spawn_blocking(move || {
+				handle.block_on(dispatch(worker, job))
+			})
+			.await;
 			if let Err(error) = finished {
 				tracing::error!(?error, "Inline job executor panicked");
 			}

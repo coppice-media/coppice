@@ -191,11 +191,7 @@ async fn cron_loop<X: ScheduledJobDispatcher>(
 
 		tracing::info!("Firing scheduled job");
 
-		if let Err(error) = runtime
-			.services()
-			.dispatch_scheduled(&job, &runtime)
-			.await
-		{
+		if let Err(error) = runtime.services().dispatch_scheduled(&job, &runtime).await {
 			tracing::error!(
 				id = job.id,
 				name = %job.name,

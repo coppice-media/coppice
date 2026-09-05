@@ -4,13 +4,13 @@ use crate::{
 	filesystem::media::analysis::analyze::{safely_analyze_book, MediaForProcessing},
 	job::JobServices,
 };
+use models::entity::{media, media_analysis, media_metadata, series};
+use sea_orm::{prelude::*, QuerySelect};
+use serde::{Deserialize, Serialize};
 use stump_jobs::{
 	JobContext, JobError, JobLifecycle, JobOutputExt, JobProgress, JobTaskOutput,
 	WorkingState,
 };
-use models::entity::{media, media_analysis, media_metadata, series};
-use sea_orm::{prelude::*, QuerySelect};
-use serde::{Deserialize, Serialize};
 
 type Id = String;
 

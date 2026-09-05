@@ -173,7 +173,11 @@ impl PageCache {
 	}
 
 	pub fn len(&self) -> usize {
-		self.state.lock().expect("page cache poisoned").entries.len()
+		self.state
+			.lock()
+			.expect("page cache poisoned")
+			.entries
+			.len()
 	}
 
 	pub fn is_empty(&self) -> bool {
@@ -248,15 +252,17 @@ impl PageCache {
 			return Err(error);
 		}
 
-		let previous = self
-			.state
-			.lock()
-			.expect("page cache poisoned")
-			.insert(index_key.clone(), extension.clone(), bytes.len() as u64);
+		let previous = self.state.lock().expect("page cache poisoned").insert(
+			index_key.clone(),
+			extension.clone(),
+			bytes.len() as u64,
+		);
 		if let Some(previous) = previous {
 			if previous.extension != extension {
-				let _ = tokio::fs::remove_file(self.file_path(&index_key, &previous.extension))
-					.await;
+				let _ = tokio::fs::remove_file(
+					self.file_path(&index_key, &previous.extension),
+				)
+				.await;
 			}
 		}
 		self.enforce_bound().await;
@@ -458,9 +464,18 @@ mod tests {
 	async fn invalidate_item_removes_all_pages_of_a_chapter() {
 		let dir = tempfile::tempdir().unwrap();
 		let cache = PageCache::open(dir.path(), 1024).await.unwrap();
-		cache.put(key("c1", 0), ContentType::PNG, b"a").await.unwrap();
-		cache.put(key("c1", 1), ContentType::PNG, b"b").await.unwrap();
-		cache.put(key("c2", 0), ContentType::PNG, b"c").await.unwrap();
+		cache
+			.put(key("c1", 0), ContentType::PNG, b"a")
+			.await
+			.unwrap();
+		cache
+			.put(key("c1", 1), ContentType::PNG, b"b")
+			.await
+			.unwrap();
+		cache
+			.put(key("c2", 0), ContentType::PNG, b"c")
+			.await
+			.unwrap();
 		cache.invalidate_item("mock", "c1").await;
 		assert!(!cache.contains(key("c1", 0)));
 		assert!(!cache.contains(key("c1", 1)));
@@ -473,7 +488,9 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let cache = PageCache::open(dir.path(), 1024).await.unwrap();
 		let fetched = cache
-			.get_or_fetch::<(), _>(key("c9", 0), async { Ok((ContentType::GIF, b"gif".to_vec())) })
+			.get_or_fetch::<(), _>(key("c9", 0), async {
+				Ok((ContentType::GIF, b"gif".to_vec()))
+			})
 			.await
 			.unwrap();
 		assert_eq!(fetched.0, ContentType::GIF);

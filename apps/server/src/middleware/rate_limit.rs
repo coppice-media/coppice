@@ -231,7 +231,12 @@ impl RateLimiter {
 		response
 	}
 
-	fn limited(&self, class: Class, identity: &Identity, retry_after: Duration) -> Response {
+	fn limited(
+		&self,
+		class: Class,
+		identity: &Identity,
+		retry_after: Duration,
+	) -> Response {
 		self.counters[class as usize]
 			.limited
 			.fetch_add(1, Ordering::Relaxed);
@@ -408,8 +413,10 @@ fn path_class(method: &Method, path: &str) -> PathClass {
 		}
 	}
 	if *method == Method::POST
-		&& matches!(path, "/api/v2/devices/pair/start" | "/v1/login" | "/v1/tokens")
-	{
+		&& matches!(
+			path,
+			"/api/v2/devices/pair/start" | "/v1/login" | "/v1/tokens"
+		) {
 		return PathClass::Fixed(Class::Auth);
 	}
 	if let Some(rest) = path.strip_prefix("/kobo/") {
@@ -598,8 +605,14 @@ mod tests {
 			.route("/api/graphql", post(|| async { StatusCode::OK }))
 			.route("/api/v1/books/{id}/pages/{page}", get(|| async { "page" }))
 			.route("/v1/login", post(|| async { StatusCode::OK }))
-			.route("/kobo/{key}/v1/library/sync", get(|| async { StatusCode::OK }))
-			.layer(middleware::from_fn_with_state(limiter, rate_limit_middleware))
+			.route(
+				"/kobo/{key}/v1/library/sync",
+				get(|| async { StatusCode::OK }),
+			)
+			.layer(middleware::from_fn_with_state(
+				limiter,
+				rate_limit_middleware,
+			))
 	}
 
 	fn request(method: Method, path: &str, ip: IpAddr) -> Request<Body> {
@@ -608,7 +621,8 @@ mod tests {
 			.uri(path)
 			.body(Body::empty())
 			.unwrap();
-		req.extensions_mut().insert(StumpRequestInfo { ip_addr: ip });
+		req.extensions_mut()
+			.insert(StumpRequestInfo { ip_addr: ip });
 		req
 	}
 
@@ -654,7 +668,10 @@ mod tests {
 		let body: serde_json::Value =
 			serde_json::from_slice(&to_bytes(response.into_body(), 1024).await.unwrap())
 				.unwrap();
-		assert_eq!(body, json!({ "status": 429, "message": "Too many requests" }));
+		assert_eq!(
+			body,
+			json!({ "status": 429, "message": "Too many requests" })
+		);
 
 		assert_eq!(
 			status(&app, request(Method::POST, "/api/v2/auth/login", ip(2))).await,
@@ -684,7 +701,10 @@ mod tests {
 			req
 		};
 		for _ in 0..20 {
-			assert_eq!(status(&app, basic(rand::random())).await, StatusCode::UNAUTHORIZED);
+			assert_eq!(
+				status(&app, basic(rand::random())).await,
+				StatusCode::UNAUTHORIZED
+			);
 		}
 		assert_eq!(
 			status(&app, basic(rand::random())).await,
@@ -753,8 +773,10 @@ mod tests {
 		// Query-over-POST stays a read.
 		for _ in 0..70 {
 			let mut req = request(Method::POST, "/api/v1/books/list", ip(1));
-			req.headers_mut()
-				.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer one"));
+			req.headers_mut().insert(
+				header::AUTHORIZATION,
+				HeaderValue::from_static("Bearer one"),
+			);
 			assert_eq!(status(&app, req).await, StatusCode::OK);
 		}
 		let health = limiter.health_status();
@@ -768,17 +790,26 @@ mod tests {
 		let limiter = limiter(RateLimitConfig::default());
 		let app = app(limiter.clone());
 		assert_eq!(
-			status(&app, request(Method::GET, "/kobo/stump_key/v1/library/sync", ip(1)))
-				.await,
+			status(
+				&app,
+				request(Method::GET, "/kobo/stump_key/v1/library/sync", ip(1))
+			)
+			.await,
 			StatusCode::OK
 		);
 		// The path key's first hit is AUTH; once verified the sync is a WRITE.
 		assert_eq!(
-			status(&app, request(Method::GET, "/kobo/stump_key/v1/library/sync", ip(1)))
-				.await,
+			status(
+				&app,
+				request(Method::GET, "/kobo/stump_key/v1/library/sync", ip(1))
+			)
+			.await,
 			StatusCode::OK
 		);
-		assert_eq!(status(&app, request(Method::POST, "/v1/login", ip(1))).await, StatusCode::OK);
+		assert_eq!(
+			status(&app, request(Method::POST, "/v1/login", ip(1))).await,
+			StatusCode::OK
+		);
 		let health = limiter.health_status();
 		assert_eq!(health["auth"]["allowed"], 2);
 		assert_eq!(health["write"]["allowed"], 1);
@@ -851,7 +882,8 @@ mod tests {
 					rate_limit_middleware,
 				))
 		};
-		let page = |ip_last: u8| request(Method::GET, "/api/v1/books/1/pages/1", ip(ip_last));
+		let page =
+			|ip_last: u8| request(Method::GET, "/api/v1/books/1/pages/1", ip(ip_last));
 
 		let in_flight: Vec<_> = (0..2)
 			.map(|_| {
@@ -891,10 +923,7 @@ mod tests {
 			assert_eq!(to_bytes(response.into_body(), 64).await.unwrap(), "page");
 		}
 		release.notify_one();
-		assert_eq!(
-			call(&app, page(1)).await.status(),
-			StatusCode::OK
-		);
+		assert_eq!(call(&app, page(1)).await.status(), StatusCode::OK);
 
 		let health = limiter.health_status();
 		assert_eq!(health["stream"]["allowed"], 4);
@@ -925,25 +954,52 @@ mod tests {
 		};
 		assert_eq!(fixed(Method::POST, "/api/v2/auth/login"), Class::Auth);
 		assert_eq!(fixed(Method::POST, "/api/v2/auth/register"), Class::Auth);
-		assert_eq!(fixed(Method::GET, "/api/v2/auth/oidc/callback"), Class::Auth);
+		assert_eq!(
+			fixed(Method::GET, "/api/v2/auth/oidc/callback"),
+			Class::Auth
+		);
 		assert_eq!(fixed(Method::GET, "/api/v2/auth/me"), Class::Stream);
-		assert_eq!(fixed(Method::POST, "/api/v2/devices/pair/start"), Class::Auth);
+		assert_eq!(
+			fixed(Method::POST, "/api/v2/devices/pair/start"),
+			Class::Auth
+		);
 		assert_eq!(fixed(Method::POST, "/v1/tokens"), Class::Auth);
 		assert_eq!(fixed(Method::POST, "/kobo/k/v1/auth/device"), Class::Auth);
 		assert_eq!(fixed(Method::GET, "/kobo/k/v1/library/sync"), Class::Write);
-		assert_eq!(fixed(Method::PUT, "/kobo/k/v1/library/b/state"), Class::Write);
-		assert_eq!(fixed(Method::PUT, "/koreader/k/syncs/progress"), Class::Write);
-		assert_eq!(fixed(Method::GET, "/koreader/k/syncs/progress/d"), Class::Stream);
+		assert_eq!(
+			fixed(Method::PUT, "/kobo/k/v1/library/b/state"),
+			Class::Write
+		);
+		assert_eq!(
+			fixed(Method::PUT, "/koreader/k/syncs/progress"),
+			Class::Write
+		);
+		assert_eq!(
+			fixed(Method::GET, "/koreader/k/syncs/progress/d"),
+			Class::Stream
+		);
 		assert_eq!(fixed(Method::POST, "/v1/ops"), Class::Write);
 		assert_eq!(fixed(Method::POST, "/v1/annotations"), Class::Write);
 		assert_eq!(fixed(Method::POST, "/v1/works/resolve"), Class::Stream);
 		assert_eq!(fixed(Method::POST, "/api/v1/series/list"), Class::Stream);
-		assert_eq!(fixed(Method::POST, "/komga/api/v1/books/list"), Class::Stream);
+		assert_eq!(
+			fixed(Method::POST, "/komga/api/v1/books/list"),
+			Class::Stream
+		);
 		assert_eq!(fixed(Method::POST, "/api/v2/version"), Class::Stream);
-		assert_eq!(fixed(Method::PATCH, "/api/v1/books/1/read-progress"), Class::Write);
-		assert_eq!(fixed(Method::PUT, "/opds/v2.0/books/1/progression"), Class::Write);
+		assert_eq!(
+			fixed(Method::PATCH, "/api/v1/books/1/read-progress"),
+			Class::Write
+		);
+		assert_eq!(
+			fixed(Method::PUT, "/opds/v2.0/books/1/progression"),
+			Class::Write
+		);
 		assert_eq!(fixed(Method::GET, "/api/v1/books/1/pages/1"), Class::Stream);
-		assert_eq!(fixed(Method::GET, "/opds/v1.2/books/1/file/x.cbz"), Class::Stream);
+		assert_eq!(
+			fixed(Method::GET, "/opds/v1.2/books/1/file/x.cbz"),
+			Class::Stream
+		);
 		assert_eq!(fixed(Method::HEAD, "/login"), Class::Stream);
 	}
 
@@ -969,20 +1025,23 @@ mod tests {
 			credential(&headers, "/api/v2/media"),
 			(Some(fingerprint(b"abc123")), false)
 		);
-		headers.insert(
-			KOMGA_API_KEY_HEADER,
-			HeaderValue::from_static("stump_key"),
-		);
+		headers.insert(KOMGA_API_KEY_HEADER, HeaderValue::from_static("stump_key"));
 		assert_eq!(
 			credential(&headers, "/api/v1/books"),
 			(Some(fingerprint(b"stump_key")), true)
 		);
-		headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer jwt"));
+		headers.insert(
+			header::AUTHORIZATION,
+			HeaderValue::from_static("Bearer jwt"),
+		);
 		assert_eq!(
 			credential(&headers, "/api/v1/books"),
 			(Some(fingerprint(b"Bearer jwt")), false)
 		);
-		headers.insert(header::AUTHORIZATION, HeaderValue::from_static("BASIC dXNlcjpwYXNz"));
+		headers.insert(
+			header::AUTHORIZATION,
+			HeaderValue::from_static("BASIC dXNlcjpwYXNz"),
+		);
 		assert_eq!(
 			credential(&headers, "/api/v1/books"),
 			(Some(fingerprint(b"BASIC dXNlcjpwYXNz")), true)

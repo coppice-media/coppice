@@ -17,8 +17,8 @@ use crate::{
 	dto::{AgeRating, MangaFormat, PublicationStatus},
 	errors::{APIError, APIResult},
 	filter::{
-		FilterCombination, FilterComparison, SeriesFilterField,
-		SeriesFilterV2Dto, SeriesSortField,
+		FilterCombination, FilterComparison, SeriesFilterField, SeriesFilterV2Dto,
+		SeriesSortField,
 	},
 	ids::{IdKind, KavitaIds},
 	mapper::name_id,
@@ -76,7 +76,9 @@ pub(crate) enum ProgressSort {
 
 impl FilterPlan {
 	pub fn needs_memory_pass(&self) -> bool {
-		!self.progress.statements.is_empty() || self.sort_by_progress.is_some() || self.limit_to > 0
+		!self.progress.statements.is_empty()
+			|| self.sort_by_progress.is_some()
+			|| self.limit_to > 0
 	}
 }
 
@@ -190,14 +192,12 @@ fn string_condition(
 			FilterComparison::EndsWith => column.clone().like(format!("%{value}")),
 			FilterComparison::Matches => column.clone().like(format!("%{value}%")),
 			FilterComparison::NotEqual => column.clone().ne(value),
-			FilterComparison::IsEmpty => column
-				.clone()
-				.is_null()
-				.or(column.clone().eq("")),
-			FilterComparison::IsNotEmpty => column
-				.clone()
-				.is_not_null()
-				.and(column.clone().ne("")),
+			FilterComparison::IsEmpty => {
+				column.clone().is_null().or(column.clone().eq(""))
+			},
+			FilterComparison::IsNotEmpty => {
+				column.clone().is_not_null().and(column.clone().ne(""))
+			},
 			_ => Expr::value(true),
 		}
 	};
@@ -261,7 +261,11 @@ async fn resolve_names(
 ) -> APIResult<Vec<String>> {
 	let mut wanted_ids = HashSet::new();
 	let mut names = Vec::new();
-	for raw in value.split(',').map(str::trim).filter(|raw| !raw.is_empty()) {
+	for raw in value
+		.split(',')
+		.map(str::trim)
+		.filter(|raw| !raw.is_empty())
+	{
 		match raw.parse::<i32>() {
 			Ok(id) => {
 				wanted_ids.insert(id);
@@ -297,17 +301,33 @@ const MEDIA_METADATA_TABLE: &str = "media_metadata";
 
 /// People fields map onto the series-level column when Stump has one and the
 /// per-media metadata column otherwise.
-fn people_columns(field: SeriesFilterField) -> (Option<series_metadata::Column>, Option<media_metadata::Column>) {
+fn people_columns(
+	field: SeriesFilterField,
+) -> (
+	Option<series_metadata::Column>,
+	Option<media_metadata::Column>,
+) {
 	match field {
-		SeriesFilterField::Writers => (Some(series_metadata::Column::Writers), Some(media_metadata::Column::Writers)),
-		SeriesFilterField::Publisher => (Some(series_metadata::Column::Publisher), Some(media_metadata::Column::Publisher)),
-		SeriesFilterField::Characters => (Some(series_metadata::Column::Characters), Some(media_metadata::Column::Characters)),
+		SeriesFilterField::Writers => (
+			Some(series_metadata::Column::Writers),
+			Some(media_metadata::Column::Writers),
+		),
+		SeriesFilterField::Publisher => (
+			Some(series_metadata::Column::Publisher),
+			Some(media_metadata::Column::Publisher),
+		),
+		SeriesFilterField::Characters => (
+			Some(series_metadata::Column::Characters),
+			Some(media_metadata::Column::Characters),
+		),
 		SeriesFilterField::Imprint => (Some(series_metadata::Column::Imprint), None),
 		SeriesFilterField::Penciller => (None, Some(media_metadata::Column::Pencillers)),
 		SeriesFilterField::Inker => (None, Some(media_metadata::Column::Inkers)),
 		SeriesFilterField::Colorist => (None, Some(media_metadata::Column::Colorists)),
 		SeriesFilterField::Letterer => (None, Some(media_metadata::Column::Letterers)),
-		SeriesFilterField::CoverArtist => (None, Some(media_metadata::Column::CoverArtists)),
+		SeriesFilterField::CoverArtist => {
+			(None, Some(media_metadata::Column::CoverArtists))
+		},
 		SeriesFilterField::Editor => (None, Some(media_metadata::Column::Editors)),
 		SeriesFilterField::Team => (None, Some(media_metadata::Column::Teams)),
 		_ => (None, None),
@@ -321,7 +341,9 @@ fn column_name<C: sea_orm::ColumnTrait + sea_orm::Iden>(column: C) -> String {
 /// The Stump `status` spellings that fold into each Kavita status.
 fn status_spellings(status: PublicationStatus) -> &'static [&'static str] {
 	match status {
-		PublicationStatus::OnGoing => &["ongoing", "on going", "on-going", "continuing", ""],
+		PublicationStatus::OnGoing => {
+			&["ongoing", "on going", "on-going", "continuing", ""]
+		},
 		PublicationStatus::Hiatus => &["hiatus", "on hiatus", "paused"],
 		PublicationStatus::Completed => &["completed", "complete", "finished"],
 		PublicationStatus::Cancelled => &["cancelled", "canceled", "abandoned"],
@@ -363,7 +385,10 @@ pub(crate) async fn plan(
 		let comparison = statement.comparison;
 		let value = statement.value.trim();
 		let Some(field) = statement.field.known() else {
-			tracing::debug!(field = statement.field.value(), "Ignoring unknown Kavita filter field");
+			tracing::debug!(
+				field = statement.field.value(),
+				"Ignoring unknown Kavita filter field"
+			);
 			continue;
 		};
 		match field {
@@ -371,7 +396,9 @@ pub(crate) async fn plan(
 				let ids = statement.int_values().map_err(bad_request)?;
 				let mut stump_ids = Vec::with_capacity(ids.len());
 				for id in ids {
-					if let Some(stump_id) = KavitaIds::lookup(conn, IdKind::Library, id).await? {
+					if let Some(stump_id) =
+						KavitaIds::lookup(conn, IdKind::Library, id).await?
+					{
 						stump_ids.push(stump_id);
 					} else {
 						// An unknown library id can never match; keep the
@@ -379,7 +406,10 @@ pub(crate) async fn plan(
 						stump_ids.push(format!("kavita-unknown-library-{id}"));
 					}
 				}
-				if matches!(comparison, FilterComparison::Equal | FilterComparison::Contains) {
+				if matches!(
+					comparison,
+					FilterComparison::Equal | FilterComparison::Contains
+				) {
 					include_libraries.extend(stump_ids);
 				} else {
 					exclude_libraries.extend(stump_ids);
@@ -416,7 +446,11 @@ pub(crate) async fn plan(
 			SeriesFilterField::Path => {
 				validate(comparison, STRING, "Series.FolderPath")?;
 				has_group_statement = true;
-				group = group.add(string_condition(comparison, value, &[series_col(series::Column::Path)]));
+				group = group.add(string_condition(
+					comparison,
+					value,
+					&[series_col(series::Column::Path)],
+				));
 			},
 			SeriesFilterField::FilePath => {
 				validate(comparison, STRING, "Series.FilePath")?;
@@ -433,8 +467,11 @@ pub(crate) async fn plan(
 					.map_err(bad_request)?
 					.into_iter()
 					.map(|value| {
-						PublicationStatus::try_from(value)
-							.map_err(|value| bad_request(format!("{value} is not a valid PublicationStatus")))
+						PublicationStatus::try_from(value).map_err(|value| {
+							bad_request(format!(
+								"{value} is not a valid PublicationStatus"
+							))
+						})
 					})
 					.collect::<APIResult<Vec<_>>>()?;
 				if statuses.is_empty() {
@@ -443,22 +480,31 @@ pub(crate) async fn plan(
 				validate(comparison, LIST_BASIC, "Series.PublicationStatus")?;
 				has_group_statement = true;
 				let selected = match comparison {
-					FilterComparison::Equal | FilterComparison::NotEqual => vec![statuses[0]],
+					FilterComparison::Equal | FilterComparison::NotEqual => {
+						vec![statuses[0]]
+					},
 					_ => statuses,
 				};
 				let spellings = selected
 					.iter()
-					.flat_map(|status| status_spellings(*status).iter().map(|s| String::from(*s)))
+					.flat_map(|status| {
+						status_spellings(*status).iter().map(|s| String::from(*s))
+					})
 					.collect::<Vec<_>>();
 				let includes_unset = selected.contains(&PublicationStatus::OnGoing);
 				let lowered = Func::lower(metadata_col(series_metadata::Column::Status));
-				let mut condition = Expr::expr(SimpleExpr::from(lowered)).is_in(spellings);
+				let mut condition =
+					Expr::expr(SimpleExpr::from(lowered)).is_in(spellings);
 				if includes_unset {
-					condition = condition.or(metadata_col(series_metadata::Column::Status).is_null());
+					condition = condition
+						.or(metadata_col(series_metadata::Column::Status).is_null());
 				}
 				group = group.add(negate_if(
 					condition,
-					matches!(comparison, FilterComparison::NotEqual | FilterComparison::NotContains),
+					matches!(
+						comparison,
+						FilterComparison::NotEqual | FilterComparison::NotContains
+					),
 				));
 			},
 			SeriesFilterField::Languages => {
@@ -477,9 +523,13 @@ pub(crate) async fn plan(
 				let condition = match comparison {
 					FilterComparison::Equal => column.eq(languages[0].clone()),
 					FilterComparison::NotEqual => column.ne(languages[0].clone()),
-					FilterComparison::Contains | FilterComparison::MustContains => column.is_in(languages),
+					FilterComparison::Contains | FilterComparison::MustContains => {
+						column.is_in(languages)
+					},
 					FilterComparison::NotContains => column.is_not_in(languages),
-					FilterComparison::Matches => column.like(format!("{}%", languages[0])),
+					FilterComparison::Matches => {
+						column.like(format!("{}%", languages[0]))
+					},
 					_ => Expr::value(true),
 				};
 				group = group.add(condition);
@@ -490,8 +540,9 @@ pub(crate) async fn plan(
 					.map_err(bad_request)?
 					.into_iter()
 					.map(|value| {
-						AgeRating::try_from(value)
-							.map_err(|value| bad_request(format!("{value} is not a valid AgeRating")))
+						AgeRating::try_from(value).map_err(|value| {
+							bad_request(format!("{value} is not a valid AgeRating"))
+						})
 					})
 					.collect::<APIResult<Vec<_>>>()?;
 				if ratings.is_empty() {
@@ -503,26 +554,44 @@ pub(crate) async fn plan(
 				let first = ratings[0];
 				let with_unknown = |ratings: &[AgeRating], condition: SimpleExpr| {
 					if ratings.contains(&AgeRating::Unknown) {
-						condition.or(metadata_col(series_metadata::Column::AgeRating).is_null())
+						condition
+							.or(metadata_col(series_metadata::Column::AgeRating)
+								.is_null())
 					} else {
 						condition
 					}
 				};
 				let condition = match comparison {
-					FilterComparison::Equal => with_unknown(&[first], column.is_in(ages_for_rating(first))),
-					FilterComparison::NotEqual => negate_if(with_unknown(&[first], column.is_in(ages_for_rating(first))), true),
+					FilterComparison::Equal => {
+						with_unknown(&[first], column.is_in(ages_for_rating(first)))
+					},
+					FilterComparison::NotEqual => negate_if(
+						with_unknown(&[first], column.is_in(ages_for_rating(first))),
+						true,
+					),
 					FilterComparison::Contains => {
-						let ages = ratings.iter().flat_map(|r| ages_for_rating(*r)).collect::<Vec<_>>();
+						let ages = ratings
+							.iter()
+							.flat_map(|r| ages_for_rating(*r))
+							.collect::<Vec<_>>();
 						with_unknown(&ratings, column.is_in(ages))
 					},
 					FilterComparison::NotContains => {
-						let ages = ratings.iter().flat_map(|r| ages_for_rating(*r)).collect::<Vec<_>>();
+						let ages = ratings
+							.iter()
+							.flat_map(|r| ages_for_rating(*r))
+							.collect::<Vec<_>>();
 						negate_if(with_unknown(&ratings, column.is_in(ages)), true)
 					},
-					FilterComparison::GreaterThan => column.gt(min_age_for_rating(first).max(ages_for_rating(first).into_iter().max().unwrap_or(0))),
-					FilterComparison::GreaterThanEqual => column.gte(min_age_for_rating(first)),
+					FilterComparison::GreaterThan => column.gt(min_age_for_rating(first)
+						.max(ages_for_rating(first).into_iter().max().unwrap_or(0))),
+					FilterComparison::GreaterThanEqual => {
+						column.gte(min_age_for_rating(first))
+					},
 					FilterComparison::LessThan => column.lt(min_age_for_rating(first)),
-					FilterComparison::LessThanEqual => column.lte(ages_for_rating(first).into_iter().max().unwrap_or(0)),
+					FilterComparison::LessThanEqual => {
+						column.lte(ages_for_rating(first).into_iter().max().unwrap_or(0))
+					},
 					_ => Expr::value(true),
 				};
 				group = group.add(condition);
@@ -531,8 +600,10 @@ pub(crate) async fn plan(
 				validate(comparison, LIST_WITH_EMPTY, "Series.Tags")?;
 				let tag_ids = statement.int_values().map_err(bad_request)?;
 				if tag_ids.is_empty()
-					&& !matches!(comparison, FilterComparison::IsEmpty | FilterComparison::IsNotEmpty)
-				{
+					&& !matches!(
+						comparison,
+						FilterComparison::IsEmpty | FilterComparison::IsNotEmpty
+					) {
 					continue;
 				}
 				has_group_statement = true;
@@ -552,8 +623,12 @@ pub(crate) async fn plan(
 						.to_owned(),
 				);
 				let condition = match comparison {
-					FilterComparison::Equal | FilterComparison::Contains => tagged(tag_ids),
-					FilterComparison::NotEqual | FilterComparison::NotContains => tagged(tag_ids).not(),
+					FilterComparison::Equal | FilterComparison::Contains => {
+						tagged(tag_ids)
+					},
+					FilterComparison::NotEqual | FilterComparison::NotContains => {
+						tagged(tag_ids).not()
+					},
 					FilterComparison::MustContains => tag_ids
 						.into_iter()
 						.map(|id| tagged(vec![id]))
@@ -567,7 +642,10 @@ pub(crate) async fn plan(
 			},
 			SeriesFilterField::Genres => {
 				validate(comparison, LIST_WITH_EMPTY, "Series.Genres")?;
-				let is_empty_check = matches!(comparison, FilterComparison::IsEmpty | FilterComparison::IsNotEmpty);
+				let is_empty_check = matches!(
+					comparison,
+					FilterComparison::IsEmpty | FilterComparison::IsNotEmpty
+				);
 				let names = if is_empty_check {
 					Vec::new()
 				} else {
@@ -575,8 +653,14 @@ pub(crate) async fn plan(
 						conn,
 						value,
 						&[
-							(SERIES_METADATA_TABLE, &column_name(series_metadata::Column::Genres)),
-							(MEDIA_METADATA_TABLE, &column_name(media_metadata::Column::Genres)),
+							(
+								SERIES_METADATA_TABLE,
+								&column_name(series_metadata::Column::Genres),
+							),
+							(
+								MEDIA_METADATA_TABLE,
+								&column_name(media_metadata::Column::Genres),
+							),
 						],
 					)
 					.await?
@@ -596,26 +680,43 @@ pub(crate) async fn plan(
 				}
 				has_group_statement = true;
 				let series_genres = metadata_col(series_metadata::Column::Genres);
-				let media_genres = Expr::col((media_metadata::Entity, media_metadata::Column::Genres));
+				let media_genres =
+					Expr::col((media_metadata::Entity, media_metadata::Column::Genres));
 				let any_genre = series_genres
 					.clone()
 					.is_not_null()
 					.and(series_genres.clone().ne(""))
 					.or(media_metadata_subquery(
-						media_genres.clone().is_not_null().and(media_genres.clone().ne("")),
+						media_genres
+							.clone()
+							.is_not_null()
+							.and(media_genres.clone().ne("")),
 					));
 				let condition = match comparison {
-					FilterComparison::Equal | FilterComparison::Contains => csv_contains(series_genres, &names)
-						.or(media_metadata_subquery(csv_contains(media_genres, &names))),
-					FilterComparison::NotEqual | FilterComparison::NotContains => csv_contains(series_genres, &names)
-						.or(media_metadata_subquery(csv_contains(media_genres, &names)))
-						.not(),
+					FilterComparison::Equal | FilterComparison::Contains => {
+						csv_contains(series_genres, &names).or(media_metadata_subquery(
+							csv_contains(media_genres, &names),
+						))
+					},
+					FilterComparison::NotEqual | FilterComparison::NotContains => {
+						csv_contains(series_genres, &names)
+							.or(media_metadata_subquery(csv_contains(
+								media_genres,
+								&names,
+							)))
+							.not()
+					},
 					FilterComparison::MustContains => names
 						.iter()
 						.map(|name| {
-							csv_contains(series_genres.clone(), std::slice::from_ref(name)).or(
-								media_metadata_subquery(csv_contains(media_genres.clone(), std::slice::from_ref(name))),
+							csv_contains(
+								series_genres.clone(),
+								std::slice::from_ref(name),
 							)
+							.or(media_metadata_subquery(csv_contains(
+								media_genres.clone(),
+								std::slice::from_ref(name),
+							)))
 						})
 						.reduce(|acc, next| acc.and(next))
 						.unwrap_or_else(|| Expr::value(true)),
@@ -640,7 +741,10 @@ pub(crate) async fn plan(
 			| SeriesFilterField::Location => {
 				validate(comparison, LIST_WITH_EMPTY, "Series.People")?;
 				let (series_column, media_column) = people_columns(field);
-				let is_empty_check = matches!(comparison, FilterComparison::IsEmpty | FilterComparison::IsNotEmpty);
+				let is_empty_check = matches!(
+					comparison,
+					FilterComparison::IsEmpty | FilterComparison::IsNotEmpty
+				);
 				let mut sources: Vec<(&str, String)> = Vec::new();
 				if let Some(column) = series_column {
 					sources.push((SERIES_METADATA_TABLE, column_name(column)));
@@ -670,7 +774,8 @@ pub(crate) async fn plan(
 				}
 				has_group_statement = true;
 				let series_expr = series_column.map(metadata_col);
-				let media_expr = media_column.map(|column| Expr::col((media_metadata::Entity, column)));
+				let media_expr = media_column
+					.map(|column| Expr::col((media_metadata::Entity, column)));
 				let contains = |names: &[String]| -> SimpleExpr {
 					let mut condition: Option<SimpleExpr> = None;
 					if let Some(column) = series_expr.clone() {
@@ -691,7 +796,9 @@ pub(crate) async fn plan(
 						condition = Some(column.clone().is_not_null().and(column.ne("")));
 					}
 					if let Some(column) = media_expr.clone() {
-						let sub = media_metadata_subquery(column.clone().is_not_null().and(column.ne("")));
+						let sub = media_metadata_subquery(
+							column.clone().is_not_null().and(column.ne("")),
+						);
 						condition = Some(match condition {
 							Some(existing) => existing.or(sub),
 							None => sub,
@@ -700,8 +807,12 @@ pub(crate) async fn plan(
 					condition.unwrap_or_else(|| Expr::value(false))
 				};
 				let condition = match comparison {
-					FilterComparison::Equal | FilterComparison::Contains => contains(&names),
-					FilterComparison::NotEqual | FilterComparison::NotContains => contains(&names).not(),
+					FilterComparison::Equal | FilterComparison::Contains => {
+						contains(&names)
+					},
+					FilterComparison::NotEqual | FilterComparison::NotContains => {
+						contains(&names).not()
+					},
 					FilterComparison::MustContains => names
 						.iter()
 						.map(|name| contains(std::slice::from_ref(name)))
@@ -725,7 +836,10 @@ pub(crate) async fn plan(
 					.flat_map(|format| extensions_for(*format))
 					.map(|ext| ext.to_owned())
 					.collect::<Vec<_>>();
-				let lowered = SimpleExpr::from(Func::lower(Expr::col((media::Entity, media::Column::Extension))));
+				let lowered = SimpleExpr::from(Func::lower(Expr::col((
+					media::Entity,
+					media::Column::Extension,
+				))));
 				let unknown_formats = formats.contains(&MangaFormat::Unknown);
 				let mut media_condition = Expr::expr(lowered.clone()).is_in(extensions);
 				if unknown_formats {
@@ -734,13 +848,17 @@ pub(crate) async fn plan(
 						.flat_map(|format| extensions_for(*format))
 						.map(|ext| ext.to_owned())
 						.collect::<Vec<_>>();
-					media_condition = media_condition.or(Expr::expr(lowered).is_not_in(known));
+					media_condition =
+						media_condition.or(Expr::expr(lowered).is_not_in(known));
 				}
 				// Kavita filters on the series format (its first file); the
 				// series-level match is any media of that format.
 				group = group.add(negate_if(
 					media_subquery(media_condition),
-					matches!(comparison, FilterComparison::NotEqual | FilterComparison::NotContains),
+					matches!(
+						comparison,
+						FilterComparison::NotEqual | FilterComparison::NotContains
+					),
 				));
 			},
 			SeriesFilterField::ReleaseYear => {
@@ -750,18 +868,30 @@ pub(crate) async fn plan(
 				validate(comparison, DATE, "Series.ReleaseYear")?;
 				has_group_statement = true;
 				let column = metadata_col(series_metadata::Column::Year);
-				let this_year = chrono::Utc::now().format("%Y").to_string().parse::<i32>().unwrap_or(0);
+				let this_year = chrono::Utc::now()
+					.format("%Y")
+					.to_string()
+					.parse::<i32>()
+					.unwrap_or(0);
 				let condition = match comparison {
 					FilterComparison::Equal => column.eq(year),
 					FilterComparison::NotEqual => column.ne(year),
-					FilterComparison::GreaterThan | FilterComparison::IsAfter => column.gt(year),
+					FilterComparison::GreaterThan | FilterComparison::IsAfter => {
+						column.gt(year)
+					},
 					FilterComparison::GreaterThanEqual => column.gte(year),
-					FilterComparison::LessThan | FilterComparison::IsBefore => column.lt(year),
+					FilterComparison::LessThan | FilterComparison::IsBefore => {
+						column.lt(year)
+					},
 					FilterComparison::LessThanEqual => column.lte(year),
 					FilterComparison::IsInLast => column.gte(this_year - year),
 					FilterComparison::IsNotInLast => column.lt(this_year - year),
-					FilterComparison::IsEmpty => column.clone().is_null().or(column.eq(0)),
-					FilterComparison::IsNotEmpty => column.clone().is_not_null().and(column.ne(0)),
+					FilterComparison::IsEmpty => {
+						column.clone().is_null().or(column.eq(0))
+					},
+					FilterComparison::IsNotEmpty => {
+						column.clone().is_not_null().and(column.ne(0))
+					},
 					_ => Expr::value(true),
 				};
 				group = group.add(condition);
@@ -780,25 +910,35 @@ pub(crate) async fn plan(
 			| SeriesFilterField::WantToRead
 			| SeriesFilterField::CollectionTags
 			| SeriesFilterField::CollapseSeriesRelationships => {
-				tracing::debug!(?field, "Kavita filter field has no Stump equivalent; ignored");
+				tracing::debug!(
+					?field,
+					"Kavita filter field has no Stump equivalent; ignored"
+				);
 			},
 		}
 	}
 
-	let mut condition = Condition::all().add(series_col(series::Column::DeletedAt).is_null());
+	let mut condition =
+		Condition::all().add(series_col(series::Column::DeletedAt).is_null());
 	// `ApplyLibraryFilter`: includes always apply; excludes only under AND.
 	if !include_libraries.is_empty() {
-		condition = condition.add(series_col(series::Column::LibraryId).is_in(include_libraries));
+		condition =
+			condition.add(series_col(series::Column::LibraryId).is_in(include_libraries));
 	}
 	if !exclude_libraries.is_empty() && combination == FilterCombination::And {
-		condition = condition.add(series_col(series::Column::LibraryId).is_not_in(exclude_libraries));
+		condition = condition
+			.add(series_col(series::Column::LibraryId).is_not_in(exclude_libraries));
 	}
 	if has_group_statement {
 		condition = condition.add(group);
 	}
 
 	let sort = filter.effective_sort();
-	let direction = if sort.is_ascending { Order::Asc } else { Order::Desc };
+	let direction = if sort.is_ascending {
+		Order::Asc
+	} else {
+		Order::Desc
+	};
 	let sort_name = SimpleExpr::from(Func::lower(Func::coalesce([
 		metadata_col(series_metadata::Column::TitleSort).into(),
 		metadata_col(series_metadata::Column::Title).into(),
@@ -806,10 +946,14 @@ pub(crate) async fn plan(
 	])));
 	let mut sort_by_progress = None;
 	let order: Vec<(SimpleExpr, Order)> = match sort.sort_field {
-		SeriesSortField::SortName | SeriesSortField::AverageRating | SeriesSortField::UserRating => {
+		SeriesSortField::SortName
+		| SeriesSortField::AverageRating
+		| SeriesSortField::UserRating => {
 			vec![(sort_name, direction)]
 		},
-		SeriesSortField::CreatedDate => vec![(series_col(series::Column::CreatedAt).into(), direction)],
+		SeriesSortField::CreatedDate => {
+			vec![(series_col(series::Column::CreatedAt).into(), direction)]
+		},
 		SeriesSortField::LastModifiedDate => vec![(
 			Func::coalesce([
 				series_col(series::Column::UpdatedAt).into(),
@@ -823,7 +967,10 @@ pub(crate) async fn plan(
 				None,
 				Box::new(
 					Query::select()
-						.expr(Func::max(Expr::col((media::Entity, media::Column::CreatedAt))))
+						.expr(Func::max(Expr::col((
+							media::Entity,
+							media::Column::CreatedAt,
+						))))
 						.from(media::Entity)
 						.and_where(
 							Expr::col((media::Entity, media::Column::SeriesId))
@@ -852,7 +999,10 @@ pub(crate) async fn plan(
 			),
 			direction,
 		)],
-		SeriesSortField::ReleaseYear => vec![(metadata_col(series_metadata::Column::Year).into(), direction)],
+		SeriesSortField::ReleaseYear => vec![(
+			metadata_col(series_metadata::Column::Year).into(),
+			direction,
+		)],
 		SeriesSortField::Random => vec![(Expr::cust("RANDOM()"), Order::Asc)],
 		SeriesSortField::ReadProgress => {
 			sort_by_progress = Some(ProgressSort::ReadProgress {
@@ -887,7 +1037,8 @@ fn extensions_for(format: MangaFormat) -> &'static [&'static str] {
 		MangaFormat::Epub => &["epub"],
 		MangaFormat::Pdf => &["pdf"],
 		MangaFormat::Image => &[
-			"png", "jpg", "jpeg", "webp", "gif", "avif", "bmp", "tiff", "tif", "jxl", "heif", "heic",
+			"png", "jpg", "jpeg", "webp", "gif", "avif", "bmp", "tiff", "tif", "jxl",
+			"heif", "heic",
 		],
 		MangaFormat::Unknown => &[],
 	}

@@ -9,8 +9,8 @@
 
 pub use models::domain::reading_state::{
 	page_locator, page_progression, project, resolve, HeadState, Outcome, Position,
-	Projection, ProtocolUpdate, Publication, Resolved, SourceProtocol,
-	TimestampKind, STALE_TOLERANCE_SECS,
+	Projection, ProtocolUpdate, Publication, Resolved, SourceProtocol, TimestampKind,
+	STALE_TOLERANCE_SECS,
 };
 pub use models::services::reading_state::{
 	apply, clear, head, heads, heads_since, latest_event, winning_event, Applied,
@@ -66,17 +66,16 @@ pub fn announce_cleared(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use ::tests::{db::test_database, fake_data};
 	use chrono::{DateTime, Duration, Utc};
 	use models::{
 		entity::{media, reading_head_event, user},
 		shared::readium::{ReadiumLocation, ReadiumLocator},
 	};
 	use sea_orm::{
-		prelude::Decimal, ColumnTrait, DbConn, EntityTrait, PaginatorTrait,
-		QueryFilter,
+		prelude::Decimal, ColumnTrait, DbConn, EntityTrait, PaginatorTrait, QueryFilter,
 	};
 	use serde_json::json;
-	use ::tests::{db::test_database, fake_data};
 
 	async fn setup(pages: i32) -> (DbConn, user::Model, media::Model) {
 		let db = test_database().await;
@@ -157,7 +156,10 @@ mod tests {
 		assert_eq!(locator.href, format!("/api/v2/media/{}/page/3", media.id));
 		let locations = locator.locations.expect("locations");
 		assert_eq!(locations.position, Some(3));
-		assert_eq!(locations.total_progression, Some(Decimal::try_from(0.3).unwrap()));
+		assert_eq!(
+			locations.total_progression,
+			Some(Decimal::try_from(0.3).unwrap())
+		);
 		assert_eq!(applied.event.timestamp_kind, TimestampKind::Server);
 		assert!(applied.event.applied);
 		assert_eq!(head.event_id, applied.event.id);
@@ -170,7 +172,13 @@ mod tests {
 			&db,
 			&user.id,
 			Publication::from(&media),
-			update(SourceProtocol::Opds, Position::Page(4), None, Some(true), None),
+			update(
+				SourceProtocol::Opds,
+				Position::Page(4),
+				None,
+				Some(true),
+				None,
+			),
 		)
 		.await
 		.unwrap();
@@ -289,7 +297,13 @@ mod tests {
 					"progress": "/body/DocFragment[7]/body/p[3]/text().0",
 					"percentage": 0.5
 				}),
-				..update(SourceProtocol::Koreader, Position::None, Some(0.5), None, None)
+				..update(
+					SourceProtocol::Koreader,
+					Position::None,
+					Some(0.5),
+					None,
+					None,
+				)
 			},
 		)
 		.await
@@ -362,7 +376,13 @@ mod tests {
 			&db,
 			&user.id,
 			Publication::from(&media),
-			update(SourceProtocol::Komga, Position::Page(5), None, None, Some(t0())),
+			update(
+				SourceProtocol::Komga,
+				Position::Page(5),
+				None,
+				None,
+				Some(t0()),
+			),
 		)
 		.await
 		.unwrap();
@@ -392,7 +412,13 @@ mod tests {
 			&db,
 			&user.id,
 			Publication::from(&media),
-			update(SourceProtocol::Komga, Position::Page(5), None, None, Some(t0())),
+			update(
+				SourceProtocol::Komga,
+				Position::Page(5),
+				None,
+				None,
+				Some(t0()),
+			),
 		)
 		.await
 		.unwrap();
@@ -433,7 +459,13 @@ mod tests {
 			&db,
 			&user.id,
 			Publication::from(&media),
-			update(SourceProtocol::Komga, Position::Page(5), None, None, Some(t0())),
+			update(
+				SourceProtocol::Komga,
+				Position::Page(5),
+				None,
+				None,
+				Some(t0()),
+			),
 		)
 		.await
 		.unwrap();
@@ -462,7 +494,13 @@ mod tests {
 			&db,
 			&user.id,
 			Publication::from(&media),
-			update(SourceProtocol::Komga, Position::Page(5), None, None, Some(t0())),
+			update(
+				SourceProtocol::Komga,
+				Position::Page(5),
+				None,
+				None,
+				Some(t0()),
+			),
 		)
 		.await
 		.unwrap();
@@ -491,7 +529,13 @@ mod tests {
 			&db,
 			&user.id,
 			Publication::from(&media),
-			update(SourceProtocol::Komga, Position::None, None, Some(true), Some(t0())),
+			update(
+				SourceProtocol::Komga,
+				Position::None,
+				None,
+				Some(true),
+				Some(t0()),
+			),
 		)
 		.await
 		.unwrap();
@@ -541,7 +585,13 @@ mod tests {
 			&db,
 			&user.id,
 			Publication::from(&media),
-			update(SourceProtocol::Komga, Position::Page(4), None, None, Some(t0())),
+			update(
+				SourceProtocol::Komga,
+				Position::Page(4),
+				None,
+				None,
+				Some(t0()),
+			),
 		)
 		.await
 		.unwrap();
@@ -640,7 +690,13 @@ mod tests {
 			&db,
 			&user.id,
 			Publication::from(&media),
-			update(SourceProtocol::Komga, Position::Page(9), None, None, Some(t0())),
+			update(
+				SourceProtocol::Komga,
+				Position::Page(9),
+				None,
+				None,
+				Some(t0()),
+			),
 		)
 		.await
 		.unwrap();
@@ -666,7 +722,10 @@ mod tests {
 			.await
 			.unwrap()
 			.unwrap();
-		assert_eq!(kobo.raw_payload["Statistics"]["SpentReadingMinutes"], json!(12));
+		assert_eq!(
+			kobo.raw_payload["Statistics"]["SpentReadingMinutes"],
+			json!(12)
+		);
 		assert!(!kobo.applied);
 		let winner = winning_event(&db, &stale.head).await.unwrap().unwrap();
 		assert_eq!(winner.protocol, SourceProtocol::Komga);
@@ -687,7 +746,13 @@ mod tests {
 				&db,
 				&user.id,
 				Publication::from(target),
-				update(SourceProtocol::Stump, Position::Page(page), None, None, None),
+				update(
+					SourceProtocol::Stump,
+					Position::Page(page),
+					None,
+					None,
+					None,
+				),
 			)
 			.await
 			.unwrap();
@@ -709,7 +774,13 @@ mod tests {
 			ctx.conn.as_ref(),
 			&user.id,
 			Publication::from(&media),
-			update(SourceProtocol::Komga, Position::Page(5), None, None, Some(t0())),
+			update(
+				SourceProtocol::Komga,
+				Position::Page(5),
+				None,
+				None,
+				Some(t0()),
+			),
 		)
 		.await
 		.unwrap();

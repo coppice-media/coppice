@@ -11,8 +11,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use sea_orm::{
-	prelude::*, ActiveValue::Set, ConnectionTrait, EntityTrait, QueryFilter,
-	QueryOrder,
+	prelude::*, ActiveValue::Set, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
 };
 
 use crate::{
@@ -98,7 +97,9 @@ pub async fn apply<C: ConnectionTrait>(
 					.locator
 					.or_else(|| previous.and_then(|head| head.locator.clone()))),
 				progression: Set(resolved.progression),
-				page: Set(projection.page.or_else(|| previous.and_then(|head| head.page))),
+				page: Set(projection
+					.page
+					.or_else(|| previous.and_then(|head| head.page))),
 				completed: Set(resolved.completed),
 				updated_at: Set(source_updated_at.into()),
 				created_at: Set(previous.map_or(now.into(), |head| head.created_at)),

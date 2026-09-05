@@ -23,7 +23,9 @@ where
 	route_ci(router, "/api/Filter/decode", post(decode_filter))
 }
 
-async fn list_filters(axum::Extension(_auth): axum::Extension<AuthContext>) -> Json<Vec<SmartFilterDto>> {
+async fn list_filters(
+	axum::Extension(_auth): axum::Extension<AuthContext>,
+) -> Json<Vec<SmartFilterDto>> {
 	Json(Vec::new())
 }
 
@@ -31,7 +33,8 @@ async fn decode_filter(
 	axum::Extension(_auth): axum::Extension<AuthContext>,
 	Json(body): Json<DecodeFilterDto>,
 ) -> APIResult<Json<SeriesFilterV2Dto>> {
-	let decoded = decode_series_filter(body.encoded_filter.as_deref().unwrap_or_default())
-		.map_err(APIError::BadRequest)?;
+	let decoded =
+		decode_series_filter(body.encoded_filter.as_deref().unwrap_or_default())
+			.map_err(APIError::BadRequest)?;
 	Ok(Json(decoded))
 }

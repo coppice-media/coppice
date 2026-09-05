@@ -7,7 +7,9 @@
 //! claims; only the signing key is Stump's own.
 
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{
+	decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation,
+};
 use serde::{Deserialize, Serialize};
 
 /// Kavita access tokens live three days (`DateTime.UtcNow.AddDays(3)`).

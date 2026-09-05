@@ -920,10 +920,17 @@ pub(crate) async fn authenticate(
 	// failure must never fail authentication.
 	if let Err(error) = ctx
 		.devices()
-		.touch(CredentialRef::LiseurToken(&token_id), Protocol::Liseur, None)
+		.touch(
+			CredentialRef::LiseurToken(&token_id),
+			Protocol::Liseur,
+			None,
+		)
 		.await
 	{
-		tracing::warn!(?error, "failed to record the liseur-sync token on its device");
+		tracing::warn!(
+			?error,
+			"failed to record the liseur-sync token on its device"
+		);
 	}
 
 	let kind = if token_kind.as_deref() == Some("session") {

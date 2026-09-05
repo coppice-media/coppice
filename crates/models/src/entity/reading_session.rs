@@ -144,8 +144,7 @@ impl FromQueryResult for ModelWithDevice {
 		_pre: &str,
 	) -> Result<Self, sea_orm::DbErr> {
 		let model = parse_query_to_model::<Model, Entity>(res)?;
-		let device =
-			parse_query_to_model_optional::<device::Model, device::Entity>(res)?;
+		let device = parse_query_to_model_optional::<device::Model, device::Entity>(res)?;
 		Ok(Self { model, device })
 	}
 }

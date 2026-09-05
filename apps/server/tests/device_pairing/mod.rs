@@ -26,7 +26,11 @@ const PENDING: &str = r#"
 "#;
 
 async fn start(app: &TestApp, body: Value) -> Value {
-	let response = app.server.post("/api/v2/devices/pair/start").json(&body).await;
+	let response = app
+		.server
+		.post("/api/v2/devices/pair/start")
+		.json(&body)
+		.await;
 	response.assert_status_ok();
 	response.json()
 }
@@ -67,8 +71,11 @@ fn first_error(body: &Value) -> String {
 }
 
 async fn approve(app: &TestApp, pairing_id: &str, code: &str) -> Value {
-	app.execute_gql(APPROVE, Some(json!({ "pairingId": pairing_id, "code": code })))
-		.await
+	app.execute_gql(
+		APPROVE,
+		Some(json!({ "pairingId": pairing_id, "code": code })),
+	)
+	.await
 }
 
 async fn admin_id(app: &TestApp) -> String {
@@ -107,7 +114,9 @@ async fn expire_now(app: &TestApp, pairing_id: &str) {
 	device_pairing::Entity::update_many()
 		.col_expr(
 			device_pairing::Column::ExpiresAt,
-			Expr::value(DateTimeWithTimeZone::from(Utc::now() - Duration::seconds(1))),
+			Expr::value(DateTimeWithTimeZone::from(
+				Utc::now() - Duration::seconds(1),
+			)),
 		)
 		.filter(device_pairing::Column::Id.eq(pairing_id))
 		.exec(app.conn())
@@ -128,12 +137,22 @@ async fn happy_path_issues_credential_exactly_once() {
 	assert_eq!(nonce.len(), 32);
 	assert_eq!(started["poll_interval_secs"], 2);
 	let qr_payload = started["qr_payload"].as_str().unwrap();
-	assert!(qr_payload.starts_with("stump://pair?host=http%3A%2F%2F"), "{qr_payload}");
-	assert!(qr_payload.ends_with(&format!("&id={pairing_id}&nonce={nonce}")), "{qr_payload}");
-	let expires_at = chrono::DateTime::parse_from_rfc3339(started["expires_at"].as_str().unwrap())
-		.expect("expires_at is RFC 3339");
+	assert!(
+		qr_payload.starts_with("stump://pair?host=http%3A%2F%2F"),
+		"{qr_payload}"
+	);
+	assert!(
+		qr_payload.ends_with(&format!("&id={pairing_id}&nonce={nonce}")),
+		"{qr_payload}"
+	);
+	let expires_at =
+		chrono::DateTime::parse_from_rfc3339(started["expires_at"].as_str().unwrap())
+			.expect("expires_at is RFC 3339");
 	let ttl = expires_at.with_timezone(&Utc) - Utc::now();
-	assert!(ttl > Duration::minutes(4) && ttl <= Duration::minutes(5), "{ttl}");
+	assert!(
+		ttl > Duration::minutes(4) && ttl <= Duration::minutes(5),
+		"{ttl}"
+	);
 
 	assert_eq!(status(&app, &started).await, json!({ "status": "pending" }));
 
@@ -194,7 +213,10 @@ async fn qr_nonce_approves_without_the_code() {
 			Some(json!({ "pairingId": pairing_id, "nonce": "0".repeat(32) })),
 		)
 		.await;
-	assert_eq!(first_error(&wrong), "Incorrect code or nonce (4 attempts left)");
+	assert_eq!(
+		first_error(&wrong),
+		"Incorrect code or nonce (4 attempts left)"
+	);
 
 	let both = app
 		.execute_gql(
@@ -453,7 +475,10 @@ async fn deny_settles_the_pairing() {
 	let denied = app
 		.execute_gql(DENY, Some(json!({ "pairingId": pairing_id })))
 		.await;
-	assert_eq!(denied["data"]["denyDevicePairing"]["status"], "DENIED", "{denied:#}");
+	assert_eq!(
+		denied["data"]["denyDevicePairing"]["status"], "DENIED",
+		"{denied:#}"
+	);
 	assert_eq!(
 		denied["data"]["denyDevicePairing"]["userId"],
 		admin_id(&app).await

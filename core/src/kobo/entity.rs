@@ -412,23 +412,24 @@ pub fn kobo_head_update(
 ) -> Result<ProtocolUpdate, String> {
 	let projection = map_kobo_reading_state(update)?;
 	let bookmark = update.current_bookmark.as_ref();
-	let updated_at = kobo_timestamp(bookmark.and_then(|bookmark| bookmark.last_modified.as_deref()))
-		.or_else(|| {
-			kobo_timestamp(
-				update
-					.status_info
-					.as_ref()
-					.and_then(|status| status.last_modified.as_deref()),
-			)
-		})
-		.or_else(|| {
-			kobo_timestamp(
-				update
-					.statistics
-					.as_ref()
-					.and_then(|statistics| statistics.last_modified.as_deref()),
-			)
-		});
+	let updated_at =
+		kobo_timestamp(bookmark.and_then(|bookmark| bookmark.last_modified.as_deref()))
+			.or_else(|| {
+				kobo_timestamp(
+					update
+						.status_info
+						.as_ref()
+						.and_then(|status| status.last_modified.as_deref()),
+				)
+			})
+			.or_else(|| {
+				kobo_timestamp(
+					update
+						.statistics
+						.as_ref()
+						.and_then(|statistics| statistics.last_modified.as_deref()),
+				)
+			});
 	let completed = match projection.status {
 		Some(ReadingStatus::Finished) => Some(true),
 		Some(ReadingStatus::NotStarted) => Some(false),
@@ -438,9 +439,7 @@ pub fn kobo_head_update(
 		protocol: SourceProtocol::Kobo,
 		device_id: device_id.filter(|id| !id.is_empty()),
 		updated_at,
-		position: projection
-			.locator
-			.map_or(Position::None, Position::Locator),
+		position: projection.locator.map_or(Position::None, Position::Locator),
 		progression: projection
 			.total_progression
 			.and_then(|value| value.to_f64()),
@@ -574,22 +573,35 @@ mod tests {
 		});
 		let update: super::ReadingStateUpdate =
 			serde_json::from_value(raw.clone()).expect("valid Kobo state");
-		let head = kobo_head_update(&update, raw, Some(String::new())).expect("state maps");
+		let head =
+			kobo_head_update(&update, raw, Some(String::new())).expect("state maps");
 		assert_eq!(head.position, Position::None);
 		assert_eq!(head.progression, None);
-		assert_eq!(head.completed, Some(false), "ReadyToRead is the explicit un-read");
+		assert_eq!(
+			head.completed,
+			Some(false),
+			"ReadyToRead is the explicit un-read"
+		);
 		assert_eq!(head.device_id, None);
 		assert_eq!(
 			head.updated_at.map(|at| at.to_rfc3339()),
 			Some("2026-09-05T11:00:00+00:00".to_string())
 		);
 
-		let reading: super::ReadingStateUpdate =
-			serde_json::from_value(serde_json::json!({ "StatusInfo": { "Status": "Reading" } }))
-				.expect("valid Kobo state");
-		let head = kobo_head_update(&reading, serde_json::json!({}), None).expect("state maps");
-		assert_eq!(head.completed, None, "Reading never clears sticky completion");
-		assert_eq!(head.updated_at, None, "no device time falls back to the server");
+		let reading: super::ReadingStateUpdate = serde_json::from_value(
+			serde_json::json!({ "StatusInfo": { "Status": "Reading" } }),
+		)
+		.expect("valid Kobo state");
+		let head =
+			kobo_head_update(&reading, serde_json::json!({}), None).expect("state maps");
+		assert_eq!(
+			head.completed, None,
+			"Reading never clears sticky completion"
+		);
+		assert_eq!(
+			head.updated_at, None,
+			"no device time falls back to the server"
+		);
 	}
 }
 

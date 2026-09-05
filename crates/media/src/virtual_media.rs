@@ -55,5 +55,8 @@ pub fn unregister() {
 /// The registered resolver that owns `path`, if any.
 pub fn resolver_for(path: &str) -> Option<Arc<dyn VirtualMediaResolver>> {
 	let guard = RESOLVER.read().expect("virtual media resolver poisoned");
-	guard.as_ref().filter(|resolver| resolver.owns(path)).cloned()
+	guard
+		.as_ref()
+		.filter(|resolver| resolver.owns(path))
+		.cloned()
 }

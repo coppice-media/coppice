@@ -89,7 +89,8 @@ async fn get_library(
 	library_id: i32,
 ) -> APIResult<Response> {
 	let user = auth.user();
-	let Some(stump_id) = KavitaIds::lookup(ctx.conn(), IdKind::Library, library_id).await?
+	let Some(stump_id) =
+		KavitaIds::lookup(ctx.conn(), IdKind::Library, library_id).await?
 	else {
 		return Ok(StatusCode::NO_CONTENT.into_response());
 	};

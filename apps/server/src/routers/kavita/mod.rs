@@ -66,7 +66,10 @@ fn api_key_query(query: Option<&str>) -> Option<String> {
 		.filter(|value| !value.is_empty())
 }
 
-async fn authenticate_api_key(ctx: &AppState, api_key: &str) -> Result<AuthContext, Response> {
+async fn authenticate_api_key(
+	ctx: &AppState,
+	api_key: &str,
+) -> Result<AuthContext, Response> {
 	let pak = PrefixedApiKey::from_string(api_key)
 		.map_err(|_| APIError::Unauthorized.into_response())?;
 	let user = validate_api_key(pak, ctx.conn.as_ref())
@@ -78,7 +81,10 @@ async fn authenticate_api_key(ctx: &AppState, api_key: &str) -> Result<AuthConte
 	})
 }
 
-async fn authenticate_bearer(ctx: &AppState, token: &str) -> Result<AuthContext, Response> {
+async fn authenticate_bearer(
+	ctx: &AppState,
+	token: &str,
+) -> Result<AuthContext, Response> {
 	if stump_kavita::auth::looks_like_jwt(token) {
 		if let Ok(secret) = access_token_secret(ctx.conn.as_ref()).await {
 			if let Ok(claims) = stump_kavita::verify_token(secret.as_bytes(), token) {
@@ -106,7 +112,8 @@ async fn kavita_auth_middleware(
 	mut req: Request,
 	next: Next,
 ) -> Result<Response, Response> {
-	let service = RequestOrigin::new(host_details.host.clone(), host_details.scheme.clone());
+	let service =
+		RequestOrigin::new(host_details.host.clone(), host_details.scheme.clone());
 	let headers = req.headers().clone();
 	let query_key = api_key_query(req.uri().query());
 	let header_key = headers

@@ -16,7 +16,6 @@ use models::{
 	},
 	shared::enums::ReadingStatus,
 };
-use rust_decimal::prelude::ToPrimitive;
 use sea_orm::{
 	prelude::Decimal, ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait,
 	IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, QueryTrait, TransactionTrait,
@@ -58,7 +57,9 @@ impl ReadProgressMutation {
 					device_id: input.device_id.clone(),
 					updated_at: None,
 					position: Position::Locator(input.locator.clone()),
-					progression: input.percentage.and_then(|value| value.to_f64()),
+					progression: input
+						.percentage
+						.and_then(|value| value.to_string().parse::<f64>().ok()),
 					completed: is_complete.then_some(true),
 					raw_payload,
 				};

@@ -19,7 +19,8 @@ async fn device_pairings_migration_creates_audit_table() {
 		.await
 		.expect("all migrations should apply on SQLite");
 
-	let columns = sqlite_rows(&db, "PRAGMA table_info('device_pairings')".to_string()).await;
+	let columns =
+		sqlite_rows(&db, "PRAGMA table_info('device_pairings')".to_string()).await;
 	let described = columns
 		.iter()
 		.map(|row| {
@@ -61,8 +62,11 @@ async fn device_pairings_migration_creates_audit_table() {
 	}
 	assert_eq!(described.len(), expected.len(), "{described:?}");
 
-	let foreign_keys =
-		sqlite_rows(&db, "PRAGMA foreign_key_list('device_pairings')".to_string()).await;
+	let foreign_keys = sqlite_rows(
+		&db,
+		"PRAGMA foreign_key_list('device_pairings')".to_string(),
+	)
+	.await;
 	assert!(
 		foreign_keys.iter().any(|row| {
 			row.try_get::<String>("", "table").unwrap() == "users"
@@ -72,7 +76,8 @@ async fn device_pairings_migration_creates_audit_table() {
 		"expected device_pairings.user_id -> users ON DELETE CASCADE"
 	);
 
-	let indexes = sqlite_rows(&db, "PRAGMA index_list('device_pairings')".to_string()).await;
+	let indexes =
+		sqlite_rows(&db, "PRAGMA index_list('device_pairings')".to_string()).await;
 	let index_names = indexes
 		.iter()
 		.map(|row| row.try_get::<String>("", "name").unwrap())
@@ -83,11 +88,13 @@ async fn device_pairings_migration_creates_audit_table() {
 	] {
 		assert!(index_names.contains(&index.to_string()), "{index_names:?}");
 	}
-	let status_index =
-		sqlite_rows(&db, "PRAGMA index_info('idx-device-pairings-status-expires')".to_string())
-			.await
-			.iter()
-			.map(|row| row.try_get::<String>("", "name").unwrap())
-			.collect::<Vec<_>>();
+	let status_index = sqlite_rows(
+		&db,
+		"PRAGMA index_info('idx-device-pairings-status-expires')".to_string(),
+	)
+	.await
+	.iter()
+	.map(|row| row.try_get::<String>("", "name").unwrap())
+	.collect::<Vec<_>>();
 	assert_eq!(status_index, ["status", "expires_at"]);
 }

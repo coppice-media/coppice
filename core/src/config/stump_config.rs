@@ -714,7 +714,10 @@ client_secret = "secret"
 		] {
 			assert!(written.contains(key), "missing `{key}` in:\n{written}");
 		}
-		assert!(!written.contains("[server]"), "groups must stay flat:\n{written}");
+		assert!(
+			!written.contains("[server]"),
+			"groups must stay flat:\n{written}"
+		);
 	}
 
 	#[test]

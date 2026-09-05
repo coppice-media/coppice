@@ -16,8 +16,8 @@ use stump_auth::AuthContext;
 
 use crate::{
 	dto::{
-		ChapterDto, PaginationHeader, SeriesDetailDto, SeriesDto, SeriesMetadataDto, TagDto,
-		VolumeDto,
+		ChapterDto, PaginationHeader, SeriesDetailDto, SeriesDto, SeriesMetadataDto,
+		TagDto, VolumeDto,
 	},
 	errors::{APIError, APIResult},
 	filter::SeriesFilterV2Dto,
@@ -79,7 +79,8 @@ impl UserParams {
 		if self.page_size == Self::MAX_PAGE_SIZE {
 			0
 		} else {
-			usize::try_from(self.page_number - 1).unwrap_or(0) * usize::try_from(self.page_size).unwrap_or(0)
+			usize::try_from(self.page_number - 1).unwrap_or(0)
+				* usize::try_from(self.page_size).unwrap_or(0)
 		}
 	}
 }
@@ -123,7 +124,10 @@ where
 	route_ci(router, "/api/Chapter", get(chapter_by_query))
 }
 
-fn pagination_response<T: serde::Serialize>(items: Vec<T>, header: PaginationHeader) -> APIResult<Response> {
+fn pagination_response<T: serde::Serialize>(
+	items: Vec<T>,
+	header: PaginationHeader,
+) -> APIResult<Response> {
 	let mut response = Json(items).into_response();
 	let value = serde_json::to_string(&header)?;
 	response.headers_mut().insert(
@@ -146,7 +150,8 @@ pub(crate) async fn list_series(
 	params: UserParams,
 ) -> APIResult<(Vec<SeriesDto>, PaginationHeader)> {
 	let plan = plan(ctx.conn(), user, filter).await?;
-	let mut query = series::ModelWithMetadata::find_for_user(user).filter(plan.condition.clone());
+	let mut query =
+		series::ModelWithMetadata::find_for_user(user).filter(plan.condition.clone());
 	for (expr, order) in &plan.order {
 		query = query.order_by(expr.clone(), order.clone());
 	}
@@ -158,7 +163,10 @@ pub(crate) async fn list_series(
 			.await?;
 		let inputs = load_series_inputs(ctx, user, rows).await?;
 		let (items, total) = paginate_in_memory(inputs, &plan, params);
-		return Ok((items, PaginationHeader::new(params.page_number, params.page_size, total)));
+		return Ok((
+			items,
+			PaginationHeader::new(params.page_number, params.page_size, total),
+		));
 	}
 
 	let total = i32::try_from(query.clone().count(ctx.conn()).await?)?;
@@ -173,7 +181,10 @@ pub(crate) async fn list_series(
 		.await?;
 	let inputs = load_series_inputs(ctx, user, rows).await?;
 	let items = inputs.iter().map(map_series).collect();
-	Ok((items, PaginationHeader::new(params.page_number, params.page_size, total)))
+	Ok((
+		items,
+		PaginationHeader::new(params.page_number, params.page_size, total),
+	))
 }
 
 fn progress_percentage(input: &SeriesInput) -> f32 {
@@ -204,7 +215,10 @@ fn paginate_in_memory(
 ) -> (Vec<SeriesDto>, i32) {
 	let mut inputs = inputs
 		.into_iter()
-		.filter(|input| plan.progress.matches(progress_percentage(input), plan.combination))
+		.filter(|input| {
+			plan.progress
+				.matches(progress_percentage(input), plan.combination)
+		})
 		.collect::<Vec<_>>();
 	match plan.sort_by_progress {
 		Some(ProgressSort::ReadProgress { ascending }) => {
@@ -212,13 +226,21 @@ fn paginate_in_memory(
 				let ordering = progress_percentage(left)
 					.partial_cmp(&progress_percentage(right))
 					.unwrap_or(std::cmp::Ordering::Equal);
-				if ascending { ordering } else { ordering.reverse() }
+				if ascending {
+					ordering
+				} else {
+					ordering.reverse()
+				}
 			});
 		},
 		Some(ProgressSort::UnreadCount { ascending }) => {
 			inputs.sort_by(|left, right| {
 				let ordering = unread_count(left).cmp(&unread_count(right));
-				if ascending { ordering } else { ordering.reverse() }
+				if ascending {
+					ordering
+				} else {
+					ordering.reverse()
+				}
 			});
 		},
 		None => {},
@@ -250,7 +272,8 @@ async fn series_all_v2(
 	Json(filter): Json<SeriesFilterV2Dto>,
 ) -> APIResult<Response> {
 	let user = auth.user();
-	let (items, header) = list_series(ctx.as_ref(), &user, &filter, user_params(&uri)).await?;
+	let (items, header) =
+		list_series(ctx.as_ref(), &user, &filter, user_params(&uri)).await?;
 	pagination_response(items, header)
 }
 
@@ -261,7 +284,8 @@ async fn series_v2(
 	Json(filter): Json<SeriesFilterV2Dto>,
 ) -> APIResult<Response> {
 	let user = auth.user();
-	let (items, header) = list_series(ctx.as_ref(), &user, &filter, user_params(&uri)).await?;
+	let (items, header) =
+		list_series(ctx.as_ref(), &user, &filter, user_params(&uri)).await?;
 	pagination_response(items, header)
 }
 
@@ -295,7 +319,8 @@ async fn series_volumes(
 	Query(query): Query<SeriesIdQuery>,
 ) -> APIResult<Json<Vec<VolumeDto>>> {
 	let user = auth.user();
-	let Some(input) = load_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default()).await?
+	let Some(input) =
+		load_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default()).await?
 	else {
 		return Ok(Json(Vec::new()));
 	};
@@ -338,7 +363,8 @@ async fn series_metadata(
 	Query(query): Query<SeriesIdQuery>,
 ) -> APIResult<Response> {
 	let user = auth.user();
-	let Some(input) = load_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default()).await?
+	let Some(input) =
+		load_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default()).await?
 	else {
 		return Ok(StatusCode::NO_CONTENT.into_response());
 	};
@@ -354,7 +380,8 @@ async fn series_detail(
 	Query(query): Query<SeriesIdQuery>,
 ) -> APIResult<Response> {
 	let user = auth.user();
-	let Some(input) = load_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default()).await?
+	let Some(input) =
+		load_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default()).await?
 	else {
 		return Ok((
 			StatusCode::BAD_REQUEST,
@@ -364,7 +391,8 @@ async fn series_detail(
 			.into_response());
 	};
 	let library = library_for_series(ctx.as_ref(), &user, &input).await?;
-	let library_type = library_type(library.as_ref().and_then(|(_, config)| config.as_ref()));
+	let library_type =
+		library_type(library.as_ref().and_then(|(_, config)| config.as_ref()));
 	let dto: SeriesDetailDto = map_series_detail(&input, library_type);
 	Ok(Json(dto).into_response())
 }
@@ -404,7 +432,8 @@ async fn chapter_by_query(
 	Query(query): Query<ChapterIdQuery>,
 ) -> APIResult<Response> {
 	let user = auth.user();
-	let Some((input, index)) = find_media(ctx.as_ref(), &user, query.chapter_id.unwrap_or_default()).await?
+	let Some((input, index)) =
+		find_media(ctx.as_ref(), &user, query.chapter_id.unwrap_or_default()).await?
 	else {
 		return Ok(StatusCode::NO_CONTENT.into_response());
 	};
@@ -439,7 +468,10 @@ mod tests {
 				page_size: 500
 			}
 		);
-		assert_eq!(UserParams::parse("PageSize=0").page_size, UserParams::MAX_PAGE_SIZE);
+		assert_eq!(
+			UserParams::parse("PageSize=0").page_size,
+			UserParams::MAX_PAGE_SIZE
+		);
 		assert_eq!(UserParams::parse("pageNumber=0").page_number, 1);
 		assert_eq!(
 			UserParams {

@@ -206,9 +206,15 @@ mod tests {
 	#[tokio::test]
 	async fn ids_are_stable_and_monotonic() {
 		let conn = db().await;
-		let first = KavitaIds::resolve(&conn, IdKind::Series, "a").await.unwrap();
-		let second = KavitaIds::resolve(&conn, IdKind::Series, "b").await.unwrap();
-		let again = KavitaIds::resolve(&conn, IdKind::Series, "a").await.unwrap();
+		let first = KavitaIds::resolve(&conn, IdKind::Series, "a")
+			.await
+			.unwrap();
+		let second = KavitaIds::resolve(&conn, IdKind::Series, "b")
+			.await
+			.unwrap();
+		let again = KavitaIds::resolve(&conn, IdKind::Series, "a")
+			.await
+			.unwrap();
 		assert_eq!(first, 1);
 		assert_eq!(second, 2);
 		assert_eq!(again, first);
@@ -216,11 +222,15 @@ mod tests {
 		let media = KavitaIds::resolve(&conn, IdKind::Media, "a").await.unwrap();
 		assert_eq!(media, 3);
 		assert_eq!(
-			KavitaIds::lookup(&conn, IdKind::Series, first).await.unwrap(),
+			KavitaIds::lookup(&conn, IdKind::Series, first)
+				.await
+				.unwrap(),
 			Some("a".to_owned())
 		);
 		assert_eq!(
-			KavitaIds::lookup(&conn, IdKind::Media, first).await.unwrap(),
+			KavitaIds::lookup(&conn, IdKind::Media, first)
+				.await
+				.unwrap(),
 			None
 		);
 	}
@@ -228,7 +238,9 @@ mod tests {
 	#[tokio::test]
 	async fn resolve_many_allocates_missing_and_keeps_existing() {
 		let conn = db().await;
-		let existing = KavitaIds::resolve(&conn, IdKind::Media, "m1").await.unwrap();
+		let existing = KavitaIds::resolve(&conn, IdKind::Media, "m1")
+			.await
+			.unwrap();
 		let ids = ["m1", "m2", "m3"]
 			.into_iter()
 			.map(str::to_owned)
@@ -255,6 +267,8 @@ mod tests {
 		let error = KavitaIds::require(&conn, IdKind::Series, 42, "Series")
 			.await
 			.unwrap_err();
-		assert!(matches!(error, APIError::NotFound(message) if message == "Series does not exist"));
+		assert!(
+			matches!(error, APIError::NotFound(message) if message == "Series does not exist")
+		);
 	}
 }

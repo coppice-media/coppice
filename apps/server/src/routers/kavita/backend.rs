@@ -6,7 +6,7 @@ use axum::{
 	http::{HeaderMap, Response},
 	response::IntoResponse,
 };
-use models::entity::{library_config, media, series, user::AuthUser, user};
+use models::entity::{library_config, media, series, user, user::AuthUser};
 use prefixed_api_key::PrefixedApiKey;
 use sea_orm::{prelude::*, DatabaseConnection, QueryOrder};
 use stump_auth::AuthContext;
@@ -51,9 +51,10 @@ pub(crate) async fn user_by_kavita_id(
 	claims: &KavitaClaims,
 ) -> KavitaResult<AuthUser> {
 	let kavita_id = claims.user_id().ok_or(KavitaError::Unauthorized)?;
-	let stump_id = stump_kavita::KavitaIds::lookup(conn, stump_kavita::IdKind::User, kavita_id)
-		.await?
-		.ok_or(KavitaError::Unauthorized)?;
+	let stump_id =
+		stump_kavita::KavitaIds::lookup(conn, stump_kavita::IdKind::User, kavita_id)
+			.await?
+			.ok_or(KavitaError::Unauthorized)?;
 	let user = user::LoginUser::find()
 		.filter(user::Column::Id.eq(stump_id))
 		.filter(user::Column::DeletedAt.is_null())
@@ -83,7 +84,8 @@ impl KavitaBackend for KavitaBackendAdapter {
 	}
 
 	async fn authenticate_api_key(&self, api_key: &str) -> KavitaResult<AuthUser> {
-		let pak = PrefixedApiKey::from_string(api_key).map_err(|_| KavitaError::Unauthorized)?;
+		let pak = PrefixedApiKey::from_string(api_key)
+			.map_err(|_| KavitaError::Unauthorized)?;
 		validate_api_key(pak, self.conn())
 			.await
 			.map_err(map_server_error)
@@ -132,13 +134,18 @@ impl KavitaBackend for KavitaBackendAdapter {
 			.one(self.conn())
 			.await?
 			.ok_or_else(|| KavitaError::NotFound("Chapter does not exist".to_owned()))?;
-		let (content_type, data) = get_page_async(&book.path, page, &self.ctx.config.media)
-			.await
-			.map_err(|error| map_server_error(APIError::from(error)))?;
+		let (content_type, data) =
+			get_page_async(&book.path, page, &self.ctx.config.media)
+				.await
+				.map_err(|error| map_server_error(APIError::from(error)))?;
 		Ok(KavitaImage::new(content_type.to_string(), data))
 	}
 
-	async fn media_thumbnail(&self, user: &AuthUser, media_id: &str) -> KavitaResult<KavitaImage> {
+	async fn media_thumbnail(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+	) -> KavitaResult<KavitaImage> {
 		let image = api_media::get_media_thumbnail_by_id(
 			self.ctx.as_ref(),
 			user,
@@ -149,7 +156,11 @@ impl KavitaBackend for KavitaBackendAdapter {
 		Ok(KavitaImage::new(image.content_type.to_string(), image.data))
 	}
 
-	async fn series_thumbnail(&self, user: &AuthUser, series_id: &str) -> KavitaResult<KavitaImage> {
+	async fn series_thumbnail(
+		&self,
+		user: &AuthUser,
+		series_id: &str,
+	) -> KavitaResult<KavitaImage> {
 		let series = series::Entity::find_for_user(user)
 			.filter(series::Column::Id.eq(series_id.to_owned()))
 			.into_model::<series::SeriesThumbSelect>()
@@ -166,11 +177,16 @@ impl KavitaBackend for KavitaBackendAdapter {
 			.filter(library_config::Column::LibraryId.eq(series.library_id.clone()))
 			.one(self.conn())
 			.await?;
-		let format = config.and_then(|config| config.thumbnail_config.map(|config| config.format));
-		let (content_type, data) =
-			api_series::get_series_thumbnail(&series, first_book, format, self.ctx.config.as_ref())
-				.await
-				.map_err(map_server_error)?;
+		let format =
+			config.and_then(|config| config.thumbnail_config.map(|config| config.format));
+		let (content_type, data) = api_series::get_series_thumbnail(
+			&series,
+			first_book,
+			format,
+			self.ctx.config.as_ref(),
+		)
+		.await
+		.map_err(map_server_error)?;
 		Ok(KavitaImage::new(content_type.to_string(), data))
 	}
 

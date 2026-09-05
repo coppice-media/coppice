@@ -12,10 +12,10 @@ use models::{
 	shared::enums::{DeviceKind, UserPermission},
 };
 use sea_orm::{prelude::*, sea_query::OnConflict, Set, TransactionTrait};
-use stump_core::reading_state;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use stump_auth::AuthContext;
+use stump_core::reading_state;
 use stump_devices::{CredentialRef, Protocol};
 
 use crate::{
@@ -127,7 +127,13 @@ pub(crate) async fn get_progress(
 	let winning = reading_state::winning_event(conn, &head).await?;
 	let native_progress = winning
 		.filter(|event| event.protocol == SourceProtocol::Koreader)
-		.and_then(|event| event.raw_payload.get("progress")?.as_str().map(String::from));
+		.and_then(|event| {
+			event
+				.raw_payload
+				.get("progress")?
+				.as_str()
+				.map(String::from)
+		});
 	let progress = match (head.completed, native_progress, head.page) {
 		(_, Some(native), _) => Some(native),
 		(_, None, Some(page)) => Some(page.to_string()),

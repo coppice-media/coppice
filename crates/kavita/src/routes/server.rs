@@ -43,7 +43,9 @@ async fn health() -> Response {
 /// Kavita's `installId` is an eight-character token generated on first
 /// start; Stump allocates one on first request and keeps it in `kavita_ids`
 /// (`kind = "install"`), so it is stable for the life of the database.
-pub(crate) async fn install_id(conn: &impl ConnectionTrait) -> Result<String, sea_orm::DbErr> {
+pub(crate) async fn install_id(
+	conn: &impl ConnectionTrait,
+) -> Result<String, sea_orm::DbErr> {
 	let existing = conn
 		.query_one(Statement::from_sql_and_values(
 			conn.get_database_backend(),
@@ -62,7 +64,9 @@ pub(crate) async fn install_id(conn: &impl ConnectionTrait) -> Result<String, se
 		vec![generated.clone().into()],
 	))
 	.await?;
-	install_id_existing(conn).await.map(|id| id.unwrap_or(generated))
+	install_id_existing(conn)
+		.await
+		.map(|id| id.unwrap_or(generated))
 }
 
 async fn install_id_existing(

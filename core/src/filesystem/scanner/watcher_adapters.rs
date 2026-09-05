@@ -55,7 +55,11 @@ pub(crate) struct EnqueueLibraryScan {
 impl ScanSubmitter for EnqueueLibraryScan {
 	async fn submit(&self, request: ScanRequest) -> Result<(), BoxError> {
 		self.runtime
-			.enqueue(StumpJob::library_scan(request.library_id, request.path, None))
+			.enqueue(StumpJob::library_scan(
+				request.library_id,
+				request.path,
+				None,
+			))
 			.await
 			.map_err(|error| error.into())
 	}

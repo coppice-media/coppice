@@ -95,7 +95,8 @@ impl MigrationTrait for Migration {
 					)
 					.col(ColumnDef::new(SourceHealth::Error).text())
 					.col(
-						ColumnDef::new(SourceHealth::CheckedAt).timestamp_with_time_zone(),
+						ColumnDef::new(SourceHealth::CheckedAt)
+							.timestamp_with_time_zone(),
 					)
 					.to_owned(),
 			)

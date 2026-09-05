@@ -119,7 +119,10 @@ pub struct CatalogSnapshot {
 }
 
 impl CatalogSnapshot {
-	pub fn find_source(&self, catalog_id: &str) -> Option<(&CatalogEntry, &CatalogSource)> {
+	pub fn find_source(
+		&self,
+		catalog_id: &str,
+	) -> Option<(&CatalogEntry, &CatalogSource)> {
 		self.entries.iter().find_map(|entry| {
 			entry
 				.sources
@@ -188,10 +191,14 @@ impl SourceCatalog {
 	}
 
 	/// Load the on-disk copy without touching the network.
-	pub async fn load_cached(&self) -> Result<Option<Arc<CatalogSnapshot>>, CatalogError> {
+	pub async fn load_cached(
+		&self,
+	) -> Result<Option<Arc<CatalogSnapshot>>, CatalogError> {
 		let bytes = match tokio::fs::read(&self.path).await {
 			Ok(bytes) => bytes,
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+				return Ok(None)
+			},
 			Err(error) => return Err(error.into()),
 		};
 		let fetched_at = tokio::fs::metadata(&self.path)
@@ -219,7 +226,9 @@ impl SourceCatalog {
 		if let Some(parent) = self.path.parent() {
 			tokio::fs::create_dir_all(parent).await?;
 		}
-		let temporary = self.path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+		let temporary = self
+			.path
+			.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
 		tokio::fs::write(&temporary, &bytes).await?;
 		tokio::fs::rename(&temporary, &self.path).await?;
 		let snapshot = Arc::new(CatalogSnapshot {
@@ -257,8 +266,8 @@ impl SourceCatalog {
 
 /// Parse either index shape into catalog entries.
 pub fn parse_index(bytes: &[u8]) -> Result<Vec<CatalogEntry>, CatalogError> {
-	let value: serde_json::Value =
-		serde_json::from_slice(bytes).map_err(|error| CatalogError::Parse(error.to_string()))?;
+	let value: serde_json::Value = serde_json::from_slice(bytes)
+		.map_err(|error| CatalogError::Parse(error.to_string()))?;
 	match value {
 		serde_json::Value::Array(_) => {
 			let entries: Vec<LegacyEntry> = serde_json::from_value(value)
@@ -399,10 +408,9 @@ impl From<RepoExtension> for CatalogEntry {
 			icon_url: extension.resources.icon_url,
 			lang,
 			version: extension.version_name,
-			nsfw: extension
-				.content_warning
-				.as_deref()
-				.is_some_and(|warning| warning.eq_ignore_ascii_case("CONTENT_WARNING_NSFW")),
+			nsfw: extension.content_warning.as_deref().is_some_and(|warning| {
+				warning.eq_ignore_ascii_case("CONTENT_WARNING_NSFW")
+			}),
 			sources: extension
 				.sources
 				.into_iter()
@@ -514,28 +522,43 @@ mod tests {
 			Some(SourceTheme::MangaThemesia)
 		);
 		assert_eq!(
-			SourceTheme::detect("<a href='/latest-release'>x</a><div class='mangas-list'>"),
+			SourceTheme::detect(
+				"<a href='/latest-release'>x</a><div class='mangas-list'>"
+			),
 			Some(SourceTheme::Mmrcms)
 		);
 		assert_eq!(SourceTheme::detect("<html></html>"), None);
 		assert_eq!(SourceTheme::parse("MADARA"), Some(SourceTheme::Madara));
-		assert_eq!(SourceTheme::Madara.latest_path(), "/manga/?m_orderby=latest");
+		assert_eq!(
+			SourceTheme::Madara.latest_path(),
+			"/manga/?m_orderby=latest"
+		);
 	}
 
 	#[tokio::test]
 	async fn load_cached_reads_index_from_disk() {
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join(INDEX_FILE_NAME), REPO_FIXTURE).unwrap();
-		let catalog =
-			SourceCatalog::new(reqwest::Client::new(), dir.path(), Some("http://127.0.0.1:9/".into()));
+		let catalog = SourceCatalog::new(
+			reqwest::Client::new(),
+			dir.path(),
+			Some("http://127.0.0.1:9/".into()),
+		);
 		assert!(catalog.current().is_none());
-		let snapshot = catalog.load_cached().await.unwrap().expect("cached snapshot");
+		let snapshot = catalog
+			.load_cached()
+			.await
+			.unwrap()
+			.expect("cached snapshot");
 		assert_eq!(snapshot.entries.len(), 4);
 		assert!(catalog.current().is_some());
 
 		let empty = tempfile::tempdir().unwrap();
-		let missing =
-			SourceCatalog::new(reqwest::Client::new(), empty.path(), Some("http://127.0.0.1:9/".into()));
+		let missing = SourceCatalog::new(
+			reqwest::Client::new(),
+			empty.path(),
+			Some("http://127.0.0.1:9/".into()),
+		);
 		assert!(missing.load_cached().await.unwrap().is_none());
 	}
 }

@@ -76,7 +76,8 @@ mod tests {
 
 	#[test]
 	fn kobo_endpoint_embeds_key_in_path() {
-		let endpoints = Endpoint::for_kind(DeviceKind::Kobo, &origin(), "al", "stump_a_b");
+		let endpoints =
+			Endpoint::for_kind(DeviceKind::Kobo, &origin(), "al", "stump_a_b");
 		assert_eq!(endpoints.len(), 1);
 		assert_eq!(endpoints[0].url, "https://stump.example/kobo/stump_a_b");
 		assert_eq!(endpoints[0].username, None);

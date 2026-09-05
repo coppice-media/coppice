@@ -4,10 +4,10 @@ use crate::config::state::AppState;
 
 mod api;
 mod ingest_editor;
-#[cfg(feature = "kobo")]
-mod kobo_backend;
 #[cfg(feature = "kavita")]
 mod kavita;
+#[cfg(feature = "kobo")]
+mod kobo_backend;
 #[cfg(feature = "komga")]
 mod komga;
 #[cfg(feature = "komga")]

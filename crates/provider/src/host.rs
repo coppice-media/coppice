@@ -64,7 +64,11 @@ impl SourceFactory {
 		format!(
 			"{}-{}",
 			self.implementation,
-			if lang.is_empty() { "all" } else { lang.as_str() }
+			if lang.is_empty() {
+				"all"
+			} else {
+				lang.as_str()
+			}
 		)
 	}
 }
@@ -100,9 +104,11 @@ pub enum ProviderError {
 impl From<ProviderError> for FileError {
 	fn from(error: ProviderError) -> Self {
 		match error {
-			ProviderError::PageOutOfRange { page, available } => FileError::PageNotFound {
-				page: page.max(0) as usize,
-				available,
+			ProviderError::PageOutOfRange { page, available } => {
+				FileError::PageNotFound {
+					page: page.max(0) as usize,
+					available,
+				}
 			},
 			ProviderError::Source(SourceError::NotFound(_)) => FileError::NotFound,
 			ProviderError::NotVirtual(path) => FileError::UnsupportedFileType(path),
@@ -161,7 +167,9 @@ impl ProviderHost {
 		factories: Vec<SourceFactory>,
 		config: ProviderHostConfig,
 	) -> Result<Arc<Self>, ProviderError> {
-		let cache = PageCache::open(config.cache_dir.join("pages"), config.cache_max_bytes).await?;
+		let cache =
+			PageCache::open(config.cache_dir.join("pages"), config.cache_max_bytes)
+				.await?;
 		let client = crate::http::build_client(None, crate::http::DEFAULT_TIMEOUT)?;
 		let catalog = SourceCatalog::new(client, &config.cache_dir, config.catalog_url);
 		let checker = HealthChecker::new()?;
@@ -201,10 +209,15 @@ impl ProviderHost {
 	}
 
 	pub fn factory_for_pkg(&self, pkg: &str) -> Option<&SourceFactory> {
-		self.factories.iter().find(|factory| factory.catalog_pkg == pkg)
+		self.factories
+			.iter()
+			.find(|factory| factory.catalog_pkg == pkg)
 	}
 
-	pub fn factory_for_implementation(&self, implementation: &str) -> Option<&SourceFactory> {
+	pub fn factory_for_implementation(
+		&self,
+		implementation: &str,
+	) -> Option<&SourceFactory> {
 		self.factories
 			.iter()
 			.find(|factory| factory.implementation == implementation)
@@ -257,7 +270,8 @@ impl ProviderHost {
 			.await?;
 		let mut built: Vec<(String, Arc<dyn Source>)> = Vec::with_capacity(rows.len());
 		for row in rows {
-			let Some(factory) = self.factory_for_implementation(&row.implementation) else {
+			let Some(factory) = self.factory_for_implementation(&row.implementation)
+			else {
 				tracing::warn!(
 					source = row.id,
 					implementation = row.implementation,
@@ -267,7 +281,9 @@ impl ProviderHost {
 			};
 			match (factory.build)(&row) {
 				Ok(source) => built.push((row.id.clone(), source)),
-				Err(error) => tracing::error!(?error, source = row.id, "Failed to build source"),
+				Err(error) => {
+					tracing::error!(?error, source = row.id, "Failed to build source")
+				},
 			}
 		}
 		let mut registry = self.sources.write().expect("source registry poisoned");
@@ -285,9 +301,10 @@ impl ProviderHost {
 		created_by: Option<&str>,
 	) -> Result<provider_source::Model, ProviderError> {
 		let snapshot = self.catalog.snapshot().await?;
-		let (entry, catalog_source) = snapshot
-			.find_source(catalog_id)
-			.ok_or_else(|| ProviderError::CatalogSourceNotFound(catalog_id.to_string()))?;
+		let (entry, catalog_source) =
+			snapshot.find_source(catalog_id).ok_or_else(|| {
+				ProviderError::CatalogSourceNotFound(catalog_id.to_string())
+			})?;
 		let factory = self
 			.factory_for_pkg(&entry.pkg)
 			.ok_or_else(|| ProviderError::NotImplemented(entry.pkg.clone()))?;
@@ -314,8 +331,15 @@ impl ProviderHost {
 		let factory = self
 			.factory_for_implementation(implementation)
 			.ok_or_else(|| ProviderError::NotImplemented(implementation.to_string()))?;
-		self.enable_instance(factory, lang, None, factory.name, factory.base_url, created_by)
-			.await
+		self.enable_instance(
+			factory,
+			lang,
+			None,
+			factory.name,
+			factory.base_url,
+			created_by,
+		)
+		.await
 	}
 
 	async fn enable_instance(
@@ -367,7 +391,9 @@ impl ProviderHost {
 
 	/// Disable an instance; materialised rows stay but pages stop resolving.
 	pub async fn disable_source(&self, id: &str) -> Result<bool, ProviderError> {
-		let Some(existing) = provider_source::Entity::find_by_id(id).one(&self.conn).await?
+		let Some(existing) = provider_source::Entity::find_by_id(id)
+			.one(&self.conn)
+			.await?
 		else {
 			return Ok(false);
 		};
@@ -400,8 +426,14 @@ impl ProviderHost {
 			.iter()
 			.map(|source| source.info().base_url.clone())
 			.collect();
-		Ok(health::check_catalog(&self.conn, &self.checker, &snapshot, &priority, concurrency)
-			.await?)
+		Ok(health::check_catalog(
+			&self.conn,
+			&self.checker,
+			&snapshot,
+			&priority,
+			concurrency,
+		)
+		.await?)
 	}
 
 	/// The page list for a chapter, re-resolved after [`MANIFEST_TTL`].
@@ -423,7 +455,8 @@ impl ProviderHost {
 				pages: pages.clone(),
 			},
 		);
-		self.store_page_count(source_id, chapter_id, pages.len()).await;
+		self.store_page_count(source_id, chapter_id, pages.len())
+			.await;
 		Ok(pages)
 	}
 
@@ -447,7 +480,12 @@ impl ProviderHost {
 			.exec(&self.conn)
 			.await;
 		if let Err(error) = result {
-			tracing::warn!(?error, source_id, chapter_id, "Failed to store provider page count");
+			tracing::warn!(
+				?error,
+				source_id,
+				chapter_id,
+				"Failed to store provider page count"
+			);
 		}
 	}
 
@@ -463,17 +501,20 @@ impl ProviderHost {
 			return Ok(hit);
 		}
 		let pages = self.pages(source_id, chapter_id).await?;
-		let page = pages
-			.iter()
-			.find(|page| page.index == index)
-			.ok_or(ProviderError::PageOutOfRange {
+		let page = pages.iter().find(|page| page.index == index).ok_or(
+			ProviderError::PageOutOfRange {
 				page: index as i32 + 1,
 				available: pages.len(),
-			})?;
+			},
+		)?;
 		let source = self.source(source_id)?;
 		let fetch = async {
 			let fetched = source.fetch_page(page).await?;
-			let content_type = content_type_of(fetched.content_type.as_deref(), &page.url, &fetched.bytes);
+			let content_type = content_type_of(
+				fetched.content_type.as_deref(),
+				&page.url,
+				&fetched.bytes,
+			);
 			Ok::<_, ProviderError>((content_type, fetched.bytes))
 		};
 		self.cache.get_or_fetch(key, fetch).await
@@ -499,7 +540,8 @@ impl ProviderHost {
 		};
 		let fetch = async {
 			let fetched = source.fetch_image(&url).await?;
-			let content_type = content_type_of(fetched.content_type.as_deref(), &url, &fetched.bytes);
+			let content_type =
+				content_type_of(fetched.content_type.as_deref(), &url, &fetched.bytes);
 			Ok::<_, ProviderError>((content_type, fetched.bytes))
 		};
 		self.cache.get_or_fetch(key, fetch).await
@@ -538,9 +580,11 @@ impl ProviderHost {
 		let mut cursor = Cursor::new(Vec::new());
 		{
 			let mut writer = ZipWriter::new(&mut cursor);
-			let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+			let options = SimpleFileOptions::default()
+				.compression_method(CompressionMethod::Stored);
 			for page in pages.iter() {
-				let (content_type, bytes) = self.page_bytes(source_id, chapter_id, page.index).await?;
+				let (content_type, bytes) =
+					self.page_bytes(source_id, chapter_id, page.index).await?;
 				let extension = match content_type.extension() {
 					"" => "jpg",
 					ext => ext,
@@ -565,7 +609,8 @@ impl ProviderHost {
 
 	/// Resolve a virtual media path to its parts, rejecting other paths.
 	pub fn parse_path(path: &str) -> Result<VirtualPath, ProviderError> {
-		VirtualPath::parse(path).ok_or_else(|| ProviderError::NotVirtual(path.to_string()))
+		VirtualPath::parse(path)
+			.ok_or_else(|| ProviderError::NotVirtual(path.to_string()))
 	}
 }
 
@@ -612,7 +657,11 @@ impl VirtualMediaResolver for ProviderHost {
 		VirtualPath::is_virtual(path)
 	}
 
-	async fn get_page(&self, path: &str, page: i32) -> Result<(ContentType, Vec<u8>), FileError> {
+	async fn get_page(
+		&self,
+		path: &str,
+		page: i32,
+	) -> Result<(ContentType, Vec<u8>), FileError> {
 		let virtual_path = Self::parse_path(path)?;
 		match virtual_path.remote_chapter_id {
 			Some(chapter) => {
@@ -651,16 +700,22 @@ impl VirtualMediaResolver for ProviderHost {
 	) -> Result<HashMap<i32, ContentType>, FileError> {
 		let virtual_path = Self::parse_path(path)?;
 		let Some(chapter) = virtual_path.remote_chapter_id else {
-			return Ok(pages.iter().map(|page| (*page, ContentType::JPEG)).collect());
+			return Ok(pages
+				.iter()
+				.map(|page| (*page, ContentType::JPEG))
+				.collect());
 		};
-		let manifest = self.cached_manifest(&format!("{}/{chapter}", virtual_path.source_id));
+		let manifest =
+			self.cached_manifest(&format!("{}/{chapter}", virtual_path.source_id));
 		Ok(pages
 			.iter()
 			.map(|page| {
 				let index = (*page - 1).max(0) as u32;
-				let cached = self
-					.cache
-					.content_type(CacheKey::page(&virtual_path.source_id, &chapter, index));
+				let cached = self.cache.content_type(CacheKey::page(
+					&virtual_path.source_id,
+					&chapter,
+					index,
+				));
 				let content_type = cached
 					.or_else(|| {
 						manifest.as_ref().and_then(|pages| {
@@ -688,17 +743,30 @@ mod tests {
 			ContentType::PNG
 		);
 		assert_eq!(
-			content_type_of(Some("application/octet-stream"), "https://x/1.webp?x=1", &[]),
+			content_type_of(
+				Some("application/octet-stream"),
+				"https://x/1.webp?x=1",
+				&[]
+			),
 			ContentType::WEBP
 		);
 		let png_magic = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
-		assert_eq!(content_type_of(None, "https://x/page", &png_magic), ContentType::PNG);
-		assert_eq!(content_type_of(None, "https://x/page", &[]), ContentType::JPEG);
+		assert_eq!(
+			content_type_of(None, "https://x/page", &png_magic),
+			ContentType::PNG
+		);
+		assert_eq!(
+			content_type_of(None, "https://x/page", &[]),
+			ContentType::JPEG
+		);
 	}
 
 	#[test]
 	fn archive_names_are_filesystem_safe() {
-		assert_eq!(sanitize_file_stem("Vol. 1 Ch. 2: Title?"), "Vol. 1 Ch. 2_ Title_");
+		assert_eq!(
+			sanitize_file_stem("Vol. 1 Ch. 2: Title?"),
+			"Vol. 1 Ch. 2_ Title_"
+		);
 		assert_eq!(sanitize_file_stem("  "), "chapter");
 	}
 

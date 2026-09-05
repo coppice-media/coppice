@@ -5,8 +5,8 @@ use std::{
 
 use crate::{
 	routes::progress::{
-		clear_books_progress, counts_for_progress_books, mark_book_read,
-		progress_books, KomgaSeriesReadProgressDto, KomgaSeriesReadProgressUpdateDto,
+		clear_books_progress, counts_for_progress_books, mark_book_read, progress_books,
+		KomgaSeriesReadProgressDto, KomgaSeriesReadProgressUpdateDto,
 	},
 	sse::KomgaEvent,
 	KomgaSeriesMetadataUpdateRequest, KomgaSeriesStatus, KomgaWebLink, PatchValue,

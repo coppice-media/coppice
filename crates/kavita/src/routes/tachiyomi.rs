@@ -58,7 +58,10 @@ where
 
 /// `TachiyomiService.CreateTachiyomiChapterDto`: a chapter whose `number`
 /// encodes a volume number as `number / 10000` (`R` round-trip formatting).
-pub(crate) fn encoded_volume_chapter(template: &MediaInput, volume_number: i32) -> TachiyomiChapterDto {
+pub(crate) fn encoded_volume_chapter(
+	template: &MediaInput,
+	volume_number: i32,
+) -> TachiyomiChapterDto {
 	let mut chapter: ChapterDto = map_chapter(template);
 	chapter.number = format_r(volume_number as f32 / 10_000.0);
 	chapter.files = Vec::<MangaFileDto>::new();
@@ -107,9 +110,13 @@ async fn latest_chapter(
 	Query(query): Query<SeriesQuery>,
 ) -> APIResult<Response> {
 	let user = auth.user();
-	let row = find_series_by_kavita_id(ctx.as_ref(), &user, query.series_id.unwrap_or_default())
-		.await?
-		.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
+	let row = find_series_by_kavita_id(
+		ctx.as_ref(),
+		&user,
+		query.series_id.unwrap_or_default(),
+	)
+	.await?
+	.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
 	let input = load_series_input(ctx.as_ref(), &user, row).await?;
 	match latest_chapter_for(&input) {
 		Some(chapter) => Ok(Json(chapter).into_response()),
@@ -128,9 +135,13 @@ async fn mark_chapter_until_as_read(
 	let user = auth.user();
 	let chapter_number = query.chapter_number.unwrap_or_default();
 	let _ = query.generate_reading_sessions;
-	let row = find_series_by_kavita_id(ctx.as_ref(), &user, query.series_id.unwrap_or_default())
-		.await?
-		.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
+	let row = find_series_by_kavita_id(
+		ctx.as_ref(),
+		&user,
+		query.series_id.unwrap_or_default(),
+	)
+	.await?
+	.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
 	let input = load_series_input(ctx.as_ref(), &user, row).await?;
 	let targets: Vec<&MediaInput> = if chapter_number == 0.0 {
 		Vec::new()

@@ -16,8 +16,7 @@ use tower_http::{
 
 use crate::{
 	config::{
-		cors, oidc::OidcProvider, rate_limit::RateLimitConfig,
-		session::get_session_layer,
+		cors, oidc::OidcProvider, rate_limit::RateLimitConfig, session::get_session_layer,
 	},
 	errors::{EntryError, ServerError, ServerResult},
 	middleware::rate_limit::{rate_limit_middleware, RateLimiter},
@@ -164,9 +163,13 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	};
 
 	let ip: std::net::IpAddr =
-		config.server.ip.parse().map_err(|e: std::net::AddrParseError| {
-			ServerError::ServerStartError(e.to_string())
-		})?;
+		config
+			.server
+			.ip
+			.parse()
+			.map_err(|e: std::net::AddrParseError| {
+				ServerError::ServerStartError(e.to_string())
+			})?;
 	let addr = SocketAddr::from((ip, config.server.port));
 	let listener = tokio::net::TcpListener::bind(&addr)
 		.await

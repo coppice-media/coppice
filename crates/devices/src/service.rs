@@ -20,8 +20,8 @@ use stump_api_types::RequestOrigin;
 
 use crate::{
 	credential::{
-		api_key_permissions_for, credential_kind_for, liseur, mint_api_key,
-		protocol_for, required_permissions, CredentialRef, IssuedCredential,
+		api_key_permissions_for, credential_kind_for, liseur, mint_api_key, protocol_for,
+		required_permissions, CredentialRef, IssuedCredential,
 	},
 	endpoint::Endpoint,
 	error::{DeviceError, DeviceResult},
@@ -74,7 +74,11 @@ impl DeviceService {
 	}
 
 	/// A device visible to `user`, or [`DeviceError::NotFound`].
-	pub async fn get(&self, user: &AuthUser, device_id: &str) -> DeviceResult<device::Model> {
+	pub async fn get(
+		&self,
+		user: &AuthUser,
+		device_id: &str,
+	) -> DeviceResult<device::Model> {
 		device::Entity::find_visible_to(user)
 			.filter(device::Column::Id.eq(device_id))
 			.one(self.conn())
@@ -153,7 +157,11 @@ impl DeviceService {
 
 	/// Invalidates the device's credential and marks the device revoked. The row
 	/// is kept so the device's history remains visible; revoking twice is a no-op.
-	pub async fn revoke(&self, user: &AuthUser, device_id: &str) -> DeviceResult<device::Model> {
+	pub async fn revoke(
+		&self,
+		user: &AuthUser,
+		device_id: &str,
+	) -> DeviceResult<device::Model> {
 		let device = self.get(user, device_id).await?;
 		if device.is_revoked() {
 			return Ok(device);
@@ -194,7 +202,9 @@ impl DeviceService {
 				DeviceCredentialKind::ApiKey => {
 					api_key::Entity::update_many()
 						.filter(api_key::Column::UserId.eq(&device.user_id))
-						.filter(api_key::Column::ShortToken.eq(&credential.credential_ref))
+						.filter(
+							api_key::Column::ShortToken.eq(&credential.credential_ref),
+						)
 						.col_expr(api_key::Column::Name, Expr::value(name.clone()))
 						.exec(&txn)
 						.await?;
@@ -363,7 +373,9 @@ fn kind_label(kind: DeviceKind) -> &'static str {
 fn validate_name(name: &str) -> DeviceResult<String> {
 	let name = name.trim();
 	if name.is_empty() {
-		return Err(DeviceError::InvalidName("name must not be empty".to_string()));
+		return Err(DeviceError::InvalidName(
+			"name must not be empty".to_string(),
+		));
 	}
 	if name.chars().count() > MAX_NAME_CHARS {
 		return Err(DeviceError::InvalidName(format!(

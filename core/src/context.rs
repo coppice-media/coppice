@@ -245,9 +245,8 @@ impl Ctx {
 	/// configured for watching. Returns whether a watcher was started.
 	pub async fn init_library_watcher(&self) -> CoreResult<bool> {
 		self.require_background_jobs()?;
-		let watched_library_count = watched_libraries_query()
-			.count(self.conn.as_ref())
-			.await?;
+		let watched_library_count =
+			watched_libraries_query().count(self.conn.as_ref()).await?;
 		if watched_library_count == 0 {
 			return Ok(false);
 		}
@@ -259,7 +258,9 @@ impl Ctx {
 
 	/// Adds a path to the logical library watcher, constructing it on demand.
 	pub async fn add_watcher(&self, path: std::path::PathBuf) -> CoreResult<()> {
-		self.get_or_init_library_watcher()?.add_watcher(path).await?;
+		self.get_or_init_library_watcher()?
+			.add_watcher(path)
+			.await?;
 		Ok(())
 	}
 
@@ -517,15 +518,17 @@ mod tests {
 
 		assert!(job_ctx.is_canceled());
 		assert_eq!(ctx.jobs_health_status(), "idle");
-		assert!(matches!(
-			runtime
-				.enqueue(StumpJob::analyze_media(AnalysisJobConfig {
-					scope: MediaAnalysisJobScope::Books(Vec::new()),
-					force_reanalysis: false,
-				}))
-				.await,
-			Err(JobError::Unknown(_))
-		) || runtime.backend() == "apalis");
+		assert!(
+			matches!(
+				runtime
+					.enqueue(StumpJob::analyze_media(AnalysisJobConfig {
+						scope: MediaAnalysisJobScope::Books(Vec::new()),
+						force_reanalysis: false,
+					}))
+					.await,
+				Err(JobError::Unknown(_))
+			) || runtime.backend() == "apalis"
+		);
 	}
 
 	#[tokio::test]

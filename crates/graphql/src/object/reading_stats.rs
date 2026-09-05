@@ -325,8 +325,14 @@ mod tests {
 	#[test]
 	fn spans_start_on_the_right_day() {
 		let today = day("2026-09-05");
-		assert_eq!(ReadingStatsSpan::Week.starts_on(today), Some(day("2026-08-30")));
-		assert_eq!(ReadingStatsSpan::Month.starts_on(today), Some(day("2026-08-07")));
+		assert_eq!(
+			ReadingStatsSpan::Week.starts_on(today),
+			Some(day("2026-08-30"))
+		);
+		assert_eq!(
+			ReadingStatsSpan::Month.starts_on(today),
+			Some(day("2026-08-07"))
+		);
 		assert_eq!(ReadingStatsSpan::AllTime.starts_on(today), None);
 	}
 
@@ -410,14 +416,44 @@ mod tests {
 			let today = Utc::now().date_naive();
 			let sessions = [
 				// today: 20 min, 10 pages, on the Kobo
-				(0, 1200, (Some(10), Some(20)), ReadingStatus::Reading, &["kobo-1"][..]),
+				(
+					0,
+					1200,
+					(Some(10), Some(20)),
+					ReadingStatus::Reading,
+					&["kobo-1"][..],
+				),
 				// yesterday: two sessions, one finished the book, both devices on one
-				(1, 600, (Some(20), Some(25)), ReadingStatus::Reading, &["kobo-1", "koreader-1"][..]),
-				(1, 300, (None, Some(40)), ReadingStatus::Finished, &["koreader-1"][..]),
+				(
+					1,
+					600,
+					(Some(20), Some(25)),
+					ReadingStatus::Reading,
+					&["kobo-1", "koreader-1"][..],
+				),
+				(
+					1,
+					300,
+					(None, Some(40)),
+					ReadingStatus::Finished,
+					&["koreader-1"][..],
+				),
 				// three days ago: breaks the streak, on an unregistered device
-				(3, 60, (Some(5), Some(2)), ReadingStatus::Reading, &["ghost"][..]),
+				(
+					3,
+					60,
+					(Some(5), Some(2)),
+					ReadingStatus::Reading,
+					&["ghost"][..],
+				),
 				// long ago: outside a week, inside a month
-				(20, 3600, (Some(0), Some(100)), ReadingStatus::Reading, &[][..]),
+				(
+					20,
+					3600,
+					(Some(0), Some(100)),
+					ReadingStatus::Reading,
+					&[][..],
+				),
 			];
 			for (days_ago, seconds, pages, status, devices) in sessions {
 				seed(
@@ -451,9 +487,10 @@ mod tests {
 			)
 			.await;
 
-			let week = ReadingStats::fetch(&conn, &user.id, today, ReadingStatsSpan::Week, None)
-				.await
-				.expect("week stats");
+			let week =
+				ReadingStats::fetch(&conn, &user.id, today, ReadingStatsSpan::Week, None)
+					.await
+					.expect("week stats");
 			assert_eq!(week.from, Some(today - Duration::days(6)));
 			assert_eq!(week.to, today);
 			assert_eq!(week.sessions, 4);
@@ -475,7 +512,14 @@ mod tests {
 			let by_device: Vec<_> = week
 				.devices
 				.iter()
-				.map(|d| (d.device_id.as_str(), d.name.as_deref(), d.sessions, d.minutes))
+				.map(|d| {
+					(
+						d.device_id.as_str(),
+						d.name.as_deref(),
+						d.sessions,
+						d.minutes,
+					)
+				})
 				.collect();
 			assert_eq!(
 				by_device,
@@ -488,33 +532,54 @@ mod tests {
 			assert_eq!(week.devices[0].kind, Some(DeviceKind::Kobo));
 			assert_eq!(week.devices[2].kind, None);
 
-			let month = ReadingStats::fetch(&conn, &user.id, today, ReadingStatsSpan::Month, None)
-				.await
-				.expect("month stats");
+			let month = ReadingStats::fetch(
+				&conn,
+				&user.id,
+				today,
+				ReadingStatsSpan::Month,
+				None,
+			)
+			.await
+			.expect("month stats");
 			assert_eq!(month.sessions, 5);
 			assert_eq!(month.minutes, week.minutes + 60);
 			assert_eq!(month.pages, week.pages + 100);
 
-			let all_time =
-				ReadingStats::fetch(&conn, &user.id, today, ReadingStatsSpan::AllTime, None)
-					.await
-					.expect("all time stats");
+			let all_time = ReadingStats::fetch(
+				&conn,
+				&user.id,
+				today,
+				ReadingStatsSpan::AllTime,
+				None,
+			)
+			.await
+			.expect("all time stats");
 			assert_eq!(all_time.from, Some(today - Duration::days(20)));
 			assert_eq!(all_time.sessions, 5);
 
-			let kobo_only =
-				ReadingStats::fetch(&conn, &user.id, today, ReadingStatsSpan::Week, Some("kobo-1"))
-					.await
-					.expect("device stats");
+			let kobo_only = ReadingStats::fetch(
+				&conn,
+				&user.id,
+				today,
+				ReadingStatsSpan::Week,
+				Some("kobo-1"),
+			)
+			.await
+			.expect("device stats");
 			assert_eq!(kobo_only.sessions, 2);
 			assert_eq!(kobo_only.minutes, 30);
 			assert_eq!(kobo_only.streak_days, 2);
 			assert_eq!(kobo_only.devices.len(), 2);
 
-			let nothing =
-				ReadingStats::fetch(&conn, "nobody", today, ReadingStatsSpan::AllTime, None)
-					.await
-					.expect("empty stats");
+			let nothing = ReadingStats::fetch(
+				&conn,
+				"nobody",
+				today,
+				ReadingStatsSpan::AllTime,
+				None,
+			)
+			.await
+			.expect("empty stats");
 			assert_eq!(nothing.sessions, 0);
 			assert_eq!(nothing.from, None);
 			assert_eq!(nothing.streak_days, 0);

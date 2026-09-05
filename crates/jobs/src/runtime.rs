@@ -31,9 +31,11 @@ impl<J: Send + Sync + 'static> QueueSender<J> {
 			#[cfg(feature = "apalis")]
 			Self::Apalis(storage) => {
 				use apalis::prelude::MessageQueue;
-				storage.clone().enqueue(job).await.map_err(|()| {
-					JobError::Unknown("Failed to enqueue job".to_string())
-				})
+				storage
+					.clone()
+					.enqueue(job)
+					.await
+					.map_err(|()| JobError::Unknown("Failed to enqueue job".to_string()))
 			},
 		}
 	}
@@ -105,7 +107,8 @@ impl<X: JobExecutionContext> JobRuntime<X> {
 			services,
 			QueueSender::Apalis(storage.clone()),
 		));
-		let (executor, handle) = crate::apalis_executor::spawn(Arc::clone(&worker), storage);
+		let (executor, handle) =
+			crate::apalis_executor::spawn(Arc::clone(&worker), storage);
 		Self {
 			worker,
 			stop: StopSignal::Apalis(handle),
@@ -165,7 +168,10 @@ impl<X: JobExecutionContext> JobRuntime<X> {
 			.take();
 		if let Some(executor) = executor {
 			let abort = executor.abort_handle();
-			if tokio::time::timeout(SHUTDOWN_GRACE, executor).await.is_err() {
+			if tokio::time::timeout(SHUTDOWN_GRACE, executor)
+				.await
+				.is_err()
+			{
 				tracing::warn!(
 					backend = self.backend,
 					"Job executor did not stop in time; abandoning it"

@@ -22,7 +22,9 @@ use crate::{
 	dto::{ChapterDto, KavitaDateTime, MarkReadDto, MarkVolumeReadDto, ProgressDto},
 	errors::{APIError, APIResult},
 	mapper::{map_chapter, MediaInput, SeriesInput},
-	progress::{finished_progression, last_progress_at, progression_for_page, KavitaProgress},
+	progress::{
+		finished_progression, last_progress_at, progression_for_page, KavitaProgress,
+	},
 };
 
 use super::{
@@ -67,8 +69,16 @@ where
 	let router = route_ci(router, "/api/Reader/has-progress", get(has_progress));
 	let router = route_ci(router, "/api/Reader/mark-read", post(mark_read));
 	let router = route_ci(router, "/api/Reader/mark-unread", post(mark_unread));
-	let router = route_ci(router, "/api/Reader/mark-volume-read", post(mark_volume_read));
-	route_ci(router, "/api/Reader/mark-volume-unread", post(mark_volume_unread))
+	let router = route_ci(
+		router,
+		"/api/Reader/mark-volume-read",
+		post(mark_volume_read),
+	);
+	route_ci(
+		router,
+		"/api/Reader/mark-volume-unread",
+		post(mark_volume_unread),
+	)
 }
 
 async fn reader_image(
@@ -90,7 +100,10 @@ async fn reader_image(
 		)));
 	}
 	let image = ctx.media_page(&user, &media.media.id, page + 1).await?;
-	let file_name = format!("{}-{page}.img", media.media.name.replace(['/', '\\', '"'], "_"));
+	let file_name = format!(
+		"{}-{page}.img",
+		media.media.name.replace(['/', '\\', '"'], "_")
+	);
 	Ok(image_response(image, &file_name))
 }
 
@@ -101,9 +114,10 @@ async fn reader_pdf(
 	headers: HeaderMap,
 ) -> APIResult<Response> {
 	let user = auth.user();
-	let (input, index) = find_media(ctx.as_ref(), &user, query.chapter_id.unwrap_or_default())
-		.await?
-		.ok_or_else(|| APIError::NotFound("Chapter does not exist".to_owned()))?;
+	let (input, index) =
+		find_media(ctx.as_ref(), &user, query.chapter_id.unwrap_or_default())
+			.await?
+			.ok_or_else(|| APIError::NotFound("Chapter does not exist".to_owned()))?;
 	let media_id = input.media[index].media.id.clone();
 	ctx.serve_media_file(auth, headers, &media_id).await
 }
@@ -153,16 +167,24 @@ async fn continue_point(
 	Query(query): Query<SeriesQuery>,
 ) -> APIResult<Json<ChapterDto>> {
 	let user = auth.user();
-	let row = find_series_by_kavita_id(ctx.as_ref(), &user, query.series_id.unwrap_or_default())
-		.await?
-		.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
+	let row = find_series_by_kavita_id(
+		ctx.as_ref(),
+		&user,
+		query.series_id.unwrap_or_default(),
+	)
+	.await?
+	.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
 	let input = load_series_input(ctx.as_ref(), &user, row).await?;
 	let media = continue_point_for(&input)
 		.ok_or_else(|| APIError::NotFound("Series has no chapters".to_owned()))?;
 	Ok(Json(map_chapter(media)))
 }
 
-fn progress_dto(input: &SeriesInput, media: &MediaInput, scroll_id: Option<String>) -> ProgressDto {
+fn progress_dto(
+	input: &SeriesInput,
+	media: &MediaInput,
+	scroll_id: Option<String>,
+) -> ProgressDto {
 	ProgressDto {
 		volume_id: media.id,
 		chapter_id: media.id,
@@ -189,7 +211,8 @@ async fn get_progress(
 	if media.session.is_none() {
 		return Ok(Json(ProgressDto::empty(chapter_id)));
 	}
-	let scroll_id = KavitaProgress::scroll_id(ctx.conn(), &user.id, &media.media.id).await?;
+	let scroll_id =
+		KavitaProgress::scroll_id(ctx.conn(), &user.id, &media.media.id).await?;
 	Ok(Json(progress_dto(&input, media, scroll_id)))
 }
 
@@ -215,12 +238,22 @@ async fn save_progress(
 	if existing.is_none() && page_num == 0 {
 		return Ok(StatusCode::OK);
 	}
-	let current_scroll = KavitaProgress::scroll_id(ctx.conn(), &user.id, &media.media.id).await?;
-	if existing.is_some() && media.pages_read() == page_num && current_scroll.as_deref() == scroll_id {
+	let current_scroll =
+		KavitaProgress::scroll_id(ctx.conn(), &user.id, &media.media.id).await?;
+	if existing.is_some()
+		&& media.pages_read() == page_num
+		&& current_scroll.as_deref() == scroll_id
+	{
 		return Ok(StatusCode::OK);
 	}
 	let txn = ctx.conn().begin().await?;
-	upsert_reading_session(&txn, &user, &media.media.id, progression_for_page(page_num, pages)).await?;
+	upsert_reading_session(
+		&txn,
+		&user,
+		&media.media.id,
+		progression_for_page(page_num, pages),
+	)
+	.await?;
 	KavitaProgress::set_scroll_id(&txn, &user.id, &media.media.id, scroll_id).await?;
 	reading_state::apply(
 		&txn,
@@ -251,7 +284,12 @@ async fn has_progress(
 	Query(query): Query<SeriesQuery>,
 ) -> APIResult<Json<bool>> {
 	let user = auth.user();
-	let Some(row) = find_series_by_kavita_id(ctx.as_ref(), &user, query.series_id.unwrap_or_default()).await?
+	let Some(row) = find_series_by_kavita_id(
+		ctx.as_ref(),
+		&user,
+		query.series_id.unwrap_or_default(),
+	)
+	.await?
 	else {
 		return Ok(Json(false));
 	};
@@ -266,7 +304,13 @@ pub(crate) async fn mark_media_read_for(
 ) -> APIResult<()> {
 	let txn = ctx.conn().begin().await?;
 	for item in media {
-		upsert_reading_session(&txn, user, &item.media.id, finished_progression(item.pages())).await?;
+		upsert_reading_session(
+			&txn,
+			user,
+			&item.media.id,
+			finished_progression(item.pages()),
+		)
+		.await?;
 		reading_state::apply(
 			&txn,
 			&user.id,
@@ -291,7 +335,11 @@ pub(crate) async fn mark_media_read_for(
 	Ok(())
 }
 
-async fn mark_media_unread(ctx: &dyn KavitaBackend, user: &AuthUser, media: &[&MediaInput]) -> APIResult<()> {
+async fn mark_media_unread(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	media: &[&MediaInput],
+) -> APIResult<()> {
 	let ids = media
 		.iter()
 		.map(|item| item.media.id.clone())

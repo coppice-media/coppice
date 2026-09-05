@@ -781,18 +781,16 @@ fn book_condition_filter(
 			operator: Equality::Is {
 				value: KomgaReadStatus::Read,
 			},
-		} => Ok(Some(Condition::all().add(
-			media::Column::Id
-				.in_subquery(visible_head_media_ids_subquery(user, Some(true))),
-		))),
+		} => Ok(Some(Condition::all().add(media::Column::Id.in_subquery(
+			visible_head_media_ids_subquery(user, Some(true)),
+		)))),
 		BookCondition::ReadStatus {
 			operator: Equality::Is {
 				value: KomgaReadStatus::InProgress,
 			},
-		} => Ok(Some(Condition::all().add(
-			media::Column::Id
-				.in_subquery(visible_head_media_ids_subquery(user, Some(false))),
-		))),
+		} => Ok(Some(Condition::all().add(media::Column::Id.in_subquery(
+			visible_head_media_ids_subquery(user, Some(false)),
+		)))),
 		BookCondition::ReadStatus {
 			operator: Equality::Is {
 				value: KomgaReadStatus::Unread,

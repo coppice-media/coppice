@@ -151,7 +151,9 @@ impl Serialize for StatementField {
 }
 
 impl<'de> Deserialize<'de> for StatementField {
-	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+	fn deserialize<D: serde::Deserializer<'de>>(
+		deserializer: D,
+	) -> Result<Self, D::Error> {
 		i32::deserialize(deserializer).map(Self::from)
 	}
 }
@@ -166,7 +168,11 @@ pub struct SeriesFilterStatementDto {
 }
 
 impl SeriesFilterStatementDto {
-	pub fn new(comparison: FilterComparison, field: SeriesFilterField, value: impl Into<String>) -> Self {
+	pub fn new(
+		comparison: FilterComparison,
+		field: SeriesFilterField,
+		value: impl Into<String>,
+	) -> Self {
 		Self {
 			comparison,
 			field: StatementField::Known(field),
@@ -309,7 +315,8 @@ pub fn encode_series_filter(filter: &SeriesFilterV2Dto) -> String {
 		Some(name) if !name.trim().is_empty() => format!("{NAME_KEY}{}&", escape(name)),
 		_ => String::new(),
 	};
-	let entity_type = format!("{ENTITY_TYPE_KEY}{}&", entity_type_name(filter.entity_type));
+	let entity_type =
+		format!("{ENTITY_TYPE_KEY}{}&", entity_type_name(filter.entity_type));
 	let statements = if filter.statements.is_empty() {
 		String::new()
 	} else {
@@ -425,7 +432,9 @@ fn decode_statements(encoded: &str) -> Result<Vec<SeriesFilterStatementDto>, Str
 					.unwrap_or_default()
 					.trim()
 					.parse::<i32>()
-					.map_err(|_| format!("'{}' is not a valid SeriesFilterField", parts[1]))?,
+					.map_err(|_| {
+						format!("'{}' is not a valid SeriesFilterField", parts[1])
+					})?,
 			),
 			value: unescape(parts[2].split_once('=').map_or("", |(_, value)| value)),
 		});
@@ -441,7 +450,8 @@ fn decode_sort_options(encoded: &str) -> Result<SeriesSortOptionDto, String> {
 		.find(|part| part.starts_with(IS_ASCENDING_KEY))
 		.map(|part| part.trim().replacen(IS_ASCENDING_KEY, "", 1))
 		.is_some_and(|value| value.eq_ignore_ascii_case("true"));
-	let Some(sort_field) = parts.iter().find(|part| part.starts_with(SORT_FIELD_KEY)) else {
+	let Some(sort_field) = parts.iter().find(|part| part.starts_with(SORT_FIELD_KEY))
+	else {
 		return Ok(SeriesSortOptionDto {
 			sort_field: SeriesSortField::SortName,
 			is_ascending: false,
@@ -523,7 +533,10 @@ mod tests {
 
 	#[test]
 	fn decode_without_sort_field_falls_back_like_kavita() {
-		let decoded = decode_series_filter("sortOptions=isAscending%3DTrue&limitTo=0&combination=1").unwrap();
+		let decoded = decode_series_filter(
+			"sortOptions=isAscending%3DTrue&limitTo=0&combination=1",
+		)
+		.unwrap();
 		let sort = decoded.sort_options.unwrap();
 		assert_eq!(sort.sort_field, SeriesSortField::SortName);
 		assert!(!sort.is_ascending);
@@ -535,14 +548,18 @@ mod tests {
 
 	#[test]
 	fn body_accepts_null_sort_options_and_missing_fields() {
-		let filter: SeriesFilterV2Dto =
-			serde_json::from_str(r#"{"statements":[],"combination":1,"sortOptions":null,"limitTo":0}"#)
-				.unwrap();
+		let filter: SeriesFilterV2Dto = serde_json::from_str(
+			r#"{"statements":[],"combination":1,"sortOptions":null,"limitTo":0}"#,
+		)
+		.unwrap();
 		assert_eq!(filter.sort_options, None);
 		assert_eq!(filter.effective_sort(), SeriesSortOptionDto::default());
 		let filter: SeriesFilterV2Dto = serde_json::from_str("{}").unwrap();
 		assert_eq!(filter.combination, FilterCombination::And);
-		assert!(serde_json::from_str::<SeriesFilterV2Dto>(r#"{"statements":[{"comparison":99,"field":1,"value":"x"}]}"#).is_err());
+		assert!(serde_json::from_str::<SeriesFilterV2Dto>(
+			r#"{"statements":[{"comparison":99,"field":1,"value":"x"}]}"#
+		)
+		.is_err());
 	}
 
 	#[test]

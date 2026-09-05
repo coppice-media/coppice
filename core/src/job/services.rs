@@ -130,7 +130,8 @@ impl JobExecutionContext for JobServices {
 				Expr::value(Some(Utc::now().fixed_offset())),
 			);
 		if outcome.status == JobStatus::Completed {
-			update = update.col_expr(job::Column::OutputData, Expr::value(outcome.output));
+			update =
+				update.col_expr(job::Column::OutputData, Expr::value(outcome.output));
 		}
 		update.exec(self.conn.as_ref()).await?;
 
@@ -197,9 +198,9 @@ async fn dispatch_library_scan(
 	job: &scheduled_job::Model,
 	runtime: &JobRuntime<JobServices>,
 ) -> Result<(), JobError> {
-	let config = job.library_scan_config().ok_or_else(|| {
-		JobError::Unknown("Invalid scheduled scan config".to_string())
-	})?;
+	let config = job
+		.library_scan_config()
+		.ok_or_else(|| JobError::Unknown("Invalid scheduled scan config".to_string()))?;
 	let conn = runtime.services().conn();
 
 	let libraries = if config.library_ids.is_empty() {

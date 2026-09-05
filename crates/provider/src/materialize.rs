@@ -199,7 +199,10 @@ async fn insert_chapters<C: ConnectionTrait>(
 			extension: Set("cbz".to_string()),
 			pages: Set(chapter.page_count.map(|count| count as i32).unwrap_or(0)),
 			modified_at: Set(chapter.uploaded_at.map(Into::into)),
-			path: Set(VirtualPath::chapter(source_id, remote_id, &chapter.remote_id).to_string()),
+			path: Set(
+				VirtualPath::chapter(source_id, remote_id, &chapter.remote_id)
+					.to_string(),
+			),
 			status: Set(FileStatus::Ready),
 			series_id: Set(Some(series_row.id.clone())),
 			source_provider: Set(Some(source_id.to_string())),
@@ -251,14 +254,18 @@ async fn insert_chapters<C: ConnectionTrait>(
 mod tests {
 	use std::sync::Arc;
 
-	use models::entity::{library, library_config, media, media_metadata, series_metadata};
+	use models::entity::{
+		library, library_config, media, media_metadata, series_metadata,
+	};
 	use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection};
 	use stump_media::{virtual_media::VirtualMediaResolver, ContentType};
 
 	use super::*;
 	use crate::{
 		host::{ProviderHostConfig, VirtualArchive},
-		mock::{MockSource, ALPHA_CHAPTERS, MOCK_SOURCE_ID, PAGES_PER_CHAPTER, SERIES_ALPHA},
+		mock::{
+			MockSource, ALPHA_CHAPTERS, MOCK_SOURCE_ID, PAGES_PER_CHAPTER, SERIES_ALPHA,
+		},
 	};
 
 	async fn library(conn: &DatabaseConnection) -> library::Model {
@@ -279,7 +286,9 @@ mod tests {
 		.unwrap()
 	}
 
-	async fn host(cache_max_bytes: u64) -> (Arc<ProviderHost>, Arc<MockSource>, tempfile::TempDir) {
+	async fn host(
+		cache_max_bytes: u64,
+	) -> (Arc<ProviderHost>, Arc<MockSource>, tempfile::TempDir) {
 		let conn = ::tests::db::test_database().await;
 		let dir = tempfile::tempdir().unwrap();
 		let host = ProviderHost::open(
@@ -311,7 +320,10 @@ mod tests {
 		let series_row = &first.series;
 		assert_eq!(series_row.name, "Alpha Adventures");
 		assert_eq!(series_row.path, "provider://mock-en/alpha");
-		assert_eq!(series_row.id, virtual_path::series_id(MOCK_SOURCE_ID, SERIES_ALPHA));
+		assert_eq!(
+			series_row.id,
+			virtual_path::series_id(MOCK_SOURCE_ID, SERIES_ALPHA)
+		);
 		assert_eq!(series_row.source_provider.as_deref(), Some(MOCK_SOURCE_ID));
 		assert_eq!(series_row.remote_id.as_deref(), Some(SERIES_ALPHA));
 		assert_eq!(series_row.library_id.as_deref(), Some(library.id.as_str()));
@@ -366,7 +378,9 @@ mod tests {
 		let library = library(host.conn()).await;
 		assert!(matches!(
 			add_series(&host, &library.id, MOCK_SOURCE_ID, "nope").await,
-			Err(ProviderError::Source(crate::source::SourceError::NotFound(_)))
+			Err(ProviderError::Source(crate::source::SourceError::NotFound(
+				_
+			)))
 		));
 		assert!(matches!(
 			add_series(&host, &library.id, "missing-source", SERIES_ALPHA).await,
@@ -403,21 +417,39 @@ mod tests {
 		assert_eq!(again, bytes);
 		assert_eq!(source.page_fetches(), 1, "second read is a cache hit");
 
-		let types = resolver.page_content_types(&chapter2.path, &[1, 2]).unwrap();
+		let types = resolver
+			.page_content_types(&chapter2.path, &[1, 2])
+			.unwrap();
 		assert_eq!(types[&2], ContentType::PNG);
-		assert_eq!(types[&1], ContentType::PNG, "manifest extension answers uncached pages");
+		assert_eq!(
+			types[&1],
+			ContentType::PNG,
+			"manifest extension answers uncached pages"
+		);
 
 		assert!(matches!(
 			resolver.get_page(&chapter2.path, 9).await,
-			Err(stump_media::FileError::PageNotFound { page: 9, available: 3 })
+			Err(stump_media::FileError::PageNotFound {
+				page: 9,
+				available: 3
+			})
 		));
 		assert!(resolver.get_page("/library/book.cbz", 1).await.is_err());
 
 		// The series path serves the cover through the same cache.
-		let (cover_type, cover) = resolver.get_page(&materialized.series.path, 1).await.unwrap();
+		let (cover_type, cover) = resolver
+			.get_page(&materialized.series.path, 1)
+			.await
+			.unwrap();
 		assert_eq!(cover_type, ContentType::PNG);
 		assert_eq!(cover, crate::mock::PNG_PIXEL);
-		assert_eq!(resolver.get_page_count(&materialized.series.path).await.unwrap(), 1);
+		assert_eq!(
+			resolver
+				.get_page_count(&materialized.series.path)
+				.await
+				.unwrap(),
+			1
+		);
 	}
 
 	#[tokio::test]
@@ -453,14 +485,19 @@ mod tests {
 		assert_eq!(contents, MockSource::page_bytes("alpha-ch1", 0));
 
 		// Pages fetched for the archive are cache hits afterwards.
-		let again = host.build_archive(MOCK_SOURCE_ID, "alpha-ch1", "x").await.unwrap();
+		let again = host
+			.build_archive(MOCK_SOURCE_ID, "alpha-ch1", "x")
+			.await
+			.unwrap();
 		assert_eq!(again.file_name, "x.cbz");
 		assert_eq!(source.page_fetches(), PAGES_PER_CHAPTER as usize);
 	}
 
 	#[tokio::test]
 	async fn enable_and_disable_instances_round_trip_through_the_registry() {
-		fn build(row: &models::entity::provider_source::Model) -> Result<Arc<dyn crate::source::Source>, ProviderError> {
+		fn build(
+			row: &models::entity::provider_source::Model,
+		) -> Result<Arc<dyn crate::source::Source>, ProviderError> {
 			assert_eq!(row.implementation, "mock");
 			Ok(MockSource::new())
 		}
@@ -502,7 +539,8 @@ mod tests {
 		assert_eq!(host.sources().len(), 1);
 
 		assert!(matches!(
-			host.enable_catalog_source("5498091984644576825", None).await,
+			host.enable_catalog_source("5498091984644576825", None)
+				.await,
 			Err(ProviderError::NotImplemented(_))
 		));
 		assert!(matches!(
@@ -512,11 +550,17 @@ mod tests {
 
 		assert!(host.disable_source("mock-en").await.unwrap());
 		assert!(host.sources().is_empty());
-		assert!(matches!(host.source("mock-en"), Err(ProviderError::UnknownSource(_))));
+		assert!(matches!(
+			host.source("mock-en"),
+			Err(ProviderError::UnknownSource(_))
+		));
 		assert!(!host.disable_source("never").await.unwrap());
 
 		// Re-enabling reuses the row and reload picks it up from the database.
-		let row = host.enable_implementation("mock", "EN", None).await.unwrap();
+		let row = host
+			.enable_implementation("mock", "EN", None)
+			.await
+			.unwrap();
 		assert_eq!(row.id, "mock-en");
 		assert!(row.updated_at.is_some());
 		host.clear_sources();

@@ -109,7 +109,10 @@ fn gen_debug_impl(config_vars: &[StumpConfigVariable]) -> TokenStream {
 	}
 }
 
-fn gen_with_file_impl(partial_struct_name: &Ident, config_file_loc: &Expr) -> TokenStream {
+fn gen_with_file_impl(
+	partial_struct_name: &Ident,
+	config_file_loc: &Expr,
+) -> TokenStream {
 	quote! {
 		#[doc="Looks for the config directory, loading its contents and replacing stored configuration"]
 		#[doc="variables with those contents. If the config file doesn't exist, the stored variables"]

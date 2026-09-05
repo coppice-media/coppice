@@ -13,15 +13,14 @@ use models::{
 	},
 	services::reading_progress::{upsert_reading_session, NormalizedProgression},
 };
-use rust_decimal::prelude::ToPrimitive;
-use stump_core::reading_state;
 use models::{
 	entity::{
-		device, library, media, media_metadata, reading_session, series,
-		series_metadata, user::AuthUser,
+		device, library, media, media_metadata, reading_session, series, series_metadata,
+		user::AuthUser,
 	},
 	shared::enums::{DeviceKind, ReadingStatus},
 };
+use rust_decimal::prelude::ToPrimitive;
 use sea_orm::{
 	prelude::*, sea_query::Expr, ActiveValue::Set, Condition, Order, QueryOrder,
 	QueryTrait, TransactionTrait,
@@ -30,6 +29,7 @@ use sea_orm::{PaginatorTrait, QuerySelect};
 use serde::{Deserialize, Serialize};
 use stump_api_types::OffsetPagination;
 use stump_auth::AuthContext;
+use stump_core::reading_state;
 use stump_core::{
 	opds::v2_0::{
 		authentication::{
@@ -1350,7 +1350,9 @@ pub(crate) async fn update_book_progression(
 		device_id,
 		updated_at: Some(input.modified.to_utc()),
 		position: locator.map_or(Position::None, Position::Locator),
-		progression: input.percentage_completed().and_then(|value| value.to_f64()),
+		progression: input
+			.percentage_completed()
+			.and_then(|value| value.to_f64()),
 		completed: did_complete.then_some(true),
 		raw_payload: serde_json::to_value(&input)
 			.map_err(|error| APIError::InternalServerError(error.to_string()))?,

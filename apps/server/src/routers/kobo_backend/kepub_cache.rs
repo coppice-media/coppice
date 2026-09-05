@@ -60,7 +60,9 @@ pub(crate) fn start(ctx: AppState) -> Arc<KepubWarmer> {
 				}
 			});
 
-			if ctx.config.protocols.kobo_kepub_preconvert && ctx.config.protocols.kobo_kepub_conversion {
+			if ctx.config.protocols.kobo_kepub_preconvert
+				&& ctx.config.protocols.kobo_kepub_conversion
+			{
 				let preconvert_ctx = ctx.clone();
 				tokio::spawn(
 					async move { scan_completion_listener(preconvert_ctx).await },

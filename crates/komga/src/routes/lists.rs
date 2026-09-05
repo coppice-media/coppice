@@ -12,8 +12,8 @@ use crate::{
 	},
 	read_list::{KomgaReadList, KomgaReadListId, KomgaReadListQuery},
 	routes::progress::{
-		counts_for_progress_books, mark_book_read, progress_books,
-		KomgaReadProgressDto, KomgaReadProgressUpdateDto,
+		counts_for_progress_books, mark_book_read, progress_books, KomgaReadProgressDto,
+		KomgaReadProgressUpdateDto,
 	},
 	series::KomgaSeriesId,
 	sse::KomgaEvent,

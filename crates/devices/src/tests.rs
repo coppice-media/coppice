@@ -139,7 +139,9 @@ async fn create_device_requires_the_kind_permissions() {
 		vec![UserPermission::AccessApiKeys, UserPermission::DownloadFile],
 	);
 	assert!(matches!(
-		service.create_device(&no_kobo, DeviceKind::Kobo, None).await,
+		service
+			.create_device(&no_kobo, DeviceKind::Kobo, None)
+			.await,
 		Err(DeviceError::Forbidden)
 	));
 
@@ -170,7 +172,11 @@ async fn liseur_device_mints_bound_device_token() {
 	let service = DeviceService::new(conn.clone());
 
 	let (device, issued) = service
-		.create_device(&user, DeviceKind::Liseur, Some("Kobo Clara (NickelStump)".into()))
+		.create_device(
+			&user,
+			DeviceKind::Liseur,
+			Some("Kobo Clara (NickelStump)".into()),
+		)
 		.await
 		.expect("device");
 
@@ -219,12 +225,20 @@ async fn rotate_replaces_the_api_key() {
 
 	// the old key no longer resolves to the device, the new one does
 	assert!(service
-		.touch(CredentialRef::ApiKey(&first.secret), DeviceProtocol::Opds, None)
+		.touch(
+			CredentialRef::ApiKey(&first.secret),
+			DeviceProtocol::Opds,
+			None
+		)
 		.await
 		.expect("touch")
 		.is_none());
 	assert!(service
-		.touch(CredentialRef::ApiKey(&second.secret), DeviceProtocol::Opds, None)
+		.touch(
+			CredentialRef::ApiKey(&second.secret),
+			DeviceProtocol::Opds,
+			None
+		)
 		.await
 		.expect("touch")
 		.is_some());
@@ -257,13 +271,18 @@ async fn revoke_deletes_credentials_and_blocks_rotation() {
 		.await
 		.expect("query")
 		.is_none());
-	let token = liseur_sync_token::Entity::find_by_id(liseur_issued.credential_ref.clone())
-		.one(conn.as_ref())
+	let token =
+		liseur_sync_token::Entity::find_by_id(liseur_issued.credential_ref.clone())
+			.one(conn.as_ref())
+			.await
+			.expect("query")
+			.expect("token row kept for audit");
+	assert!(token.revoked_at.is_some());
+	assert!(service
+		.credential(&device.id)
 		.await
 		.expect("query")
-		.expect("token row kept for audit");
-	assert!(token.revoked_at.is_some());
-	assert!(service.credential(&device.id).await.expect("query").is_none());
+		.is_none());
 	assert!(service
 		.credential(&liseur_device.id)
 		.await
@@ -278,7 +297,11 @@ async fn revoke_deletes_credentials_and_blocks_rotation() {
 	let again = service.revoke(&user, &device.id).await.expect("idempotent");
 	assert_eq!(again.revoked_at, revoked.revoked_at);
 	assert!(service
-		.touch(CredentialRef::ApiKey(&issued.secret), DeviceProtocol::Komga, None)
+		.touch(
+			CredentialRef::ApiKey(&issued.secret),
+			DeviceProtocol::Komga,
+			None
+		)
 		.await
 		.expect("touch")
 		.is_none());
@@ -314,11 +337,12 @@ async fn rename_updates_device_and_credential_names() {
 		.rename(&user, &liseur_device.id, "Boox")
 		.await
 		.expect("renamed");
-	let token = liseur_sync_token::Entity::find_by_id(liseur_issued.credential_ref.clone())
-		.one(conn.as_ref())
-		.await
-		.expect("query")
-		.expect("token");
+	let token =
+		liseur_sync_token::Entity::find_by_id(liseur_issued.credential_ref.clone())
+			.one(conn.as_ref())
+			.await
+			.expect("query")
+			.expect("token");
 	assert_eq!(token.name.as_deref(), Some("Boox"));
 
 	assert!(matches!(
@@ -363,7 +387,11 @@ async fn touch_records_sighting_and_sync_summary() {
 		.expect("device");
 
 	let first = service
-		.touch(CredentialRef::ApiKey(&issued.secret), DeviceProtocol::Kobo, None)
+		.touch(
+			CredentialRef::ApiKey(&issued.secret),
+			DeviceProtocol::Kobo,
+			None,
+		)
 		.await
 		.expect("touch")
 		.expect("recorded");
@@ -378,7 +406,11 @@ async fn touch_records_sighting_and_sync_summary() {
 
 	// a burst of requests within the interval is coalesced
 	let coalesced = service
-		.touch(CredentialRef::ApiKey(&issued.secret), DeviceProtocol::Kobo, None)
+		.touch(
+			CredentialRef::ApiKey(&issued.secret),
+			DeviceProtocol::Kobo,
+			None,
+		)
 		.await
 		.expect("touch");
 	assert!(coalesced.is_none());
@@ -403,7 +435,11 @@ async fn touch_records_sighting_and_sync_summary() {
 
 	// garbage and unknown credentials are ignored
 	assert!(service
-		.touch(CredentialRef::ApiKey("not a key"), DeviceProtocol::Api, None)
+		.touch(
+			CredentialRef::ApiKey("not a key"),
+			DeviceProtocol::Api,
+			None
+		)
 		.await
 		.expect("touch")
 		.is_none());
@@ -417,7 +453,11 @@ async fn touch_records_sighting_and_sync_summary() {
 		.expect("touch")
 		.is_none());
 	assert!(service
-		.touch(CredentialRef::LiseurToken("missing"), DeviceProtocol::Liseur, None)
+		.touch(
+			CredentialRef::LiseurToken("missing"),
+			DeviceProtocol::Liseur,
+			None
+		)
 		.await
 		.expect("touch")
 		.is_none());

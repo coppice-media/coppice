@@ -70,8 +70,11 @@ pub trait JobExecutionContext: Sized + Send + Sync + 'static {
 	async fn persist_started(&self, id: &str, job: &Self::Job) -> Result<(), JobError>;
 
 	/// Persist the terminal status, output, and logs of a job
-	async fn persist_finished(&self, id: &str, outcome: JobOutcome)
-		-> Result<(), JobError>;
+	async fn persist_finished(
+		&self,
+		id: &str,
+		outcome: JobOutcome,
+	) -> Result<(), JobError>;
 
 	/// Run a dequeued payload to completion under its per-execution context
 	async fn run(&self, job: Self::Job, ctx: &JobContext<Self>) -> Result<(), JobError>;

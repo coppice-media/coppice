@@ -31,13 +31,17 @@ enum Command {
 	Stop,
 }
 
-fn create_backend(sender: UnboundedSender<Command>) -> notify::Result<RecommendedWatcher> {
+fn create_backend(
+	sender: UnboundedSender<Command>,
+) -> notify::Result<RecommendedWatcher> {
 	notify::recommended_watcher(move |result: Result<Event, _>| match result {
 		Ok(event) => match event.kind {
 			notify::EventKind::Create(_) | notify::EventKind::Modify(_) => {
-				let _ = sender.send(Command::ChangedFiles(event.paths)).map_err(|e| {
-					tracing::error!(error = ?e, "Error sending file paths");
-				});
+				let _ = sender
+					.send(Command::ChangedFiles(event.paths))
+					.map_err(|e| {
+						tracing::error!(error = ?e, "Error sending file paths");
+					});
 			},
 			_ => {},
 		},
@@ -633,6 +637,8 @@ mod tests {
 		)
 		.await
 		.unwrap_err();
-		assert!(matches!(error, WatcherError::Submit { ref library_id, .. } if library_id == "42"));
+		assert!(
+			matches!(error, WatcherError::Submit { ref library_id, .. } if library_id == "42")
+		);
 	}
 }

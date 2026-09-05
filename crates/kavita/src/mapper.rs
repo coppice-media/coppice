@@ -54,7 +54,11 @@ pub fn split_csv(raw: Option<&str>) -> Vec<String> {
 	let mut values = Vec::new();
 	let mut seen = BTreeSet::new();
 	if let Some(raw) = raw {
-		for value in raw.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+		for value in raw
+			.split(',')
+			.map(str::trim)
+			.filter(|value| !value.is_empty())
+		{
 			if seen.insert(value.to_lowercase()) {
 				values.push(value.to_owned());
 			}
@@ -83,7 +87,9 @@ pub fn genres(raw: Option<&str>) -> Vec<GenreTagDto> {
 pub fn library_type(config: Option<&library_config::Model>) -> LibraryType {
 	match config.map(|config| config.library_type) {
 		Some(StumpLibraryType::Comic) => LibraryType::Comic,
-		Some(StumpLibraryType::Book) | Some(StumpLibraryType::WebNovel) => LibraryType::Book,
+		Some(StumpLibraryType::Book) | Some(StumpLibraryType::WebNovel) => {
+			LibraryType::Book
+		},
 		Some(StumpLibraryType::LightNovel) => LibraryType::LightNovel,
 		Some(StumpLibraryType::Manga)
 		| Some(StumpLibraryType::Manhwa)
@@ -103,7 +109,10 @@ pub fn map_library(
 		name: library.name.clone(),
 		r#type: library_type(config),
 		last_scanned: library.last_scanned_at.into(),
-		cover_image: library.thumbnail_path.as_ref().map(|_| format!("l{id}.png")),
+		cover_image: library
+			.thumbnail_path
+			.as_ref()
+			.map(|_| format!("l{id}.png")),
 		folder_watching: config.is_some_and(|config| config.watch),
 		include_in_dashboard: true,
 		include_in_recommended: true,
@@ -164,7 +173,10 @@ impl MediaInput {
 	/// The Kavita volume number for this media.
 	pub fn number(&self) -> i32 {
 		let metadata = self.metadata.as_ref();
-		if let Some(volume) = metadata.and_then(|metadata| metadata.volume).filter(|v| *v > 0) {
+		if let Some(volume) = metadata
+			.and_then(|metadata| metadata.volume)
+			.filter(|v| *v > 0)
+		{
 			return volume;
 		}
 		if let Some(number) = metadata
@@ -183,10 +195,7 @@ impl MediaInput {
 	}
 
 	fn modified(&self) -> KavitaDateTime {
-		self.media
-			.updated_at
-			.or(Some(self.media.created_at))
-			.into()
+		self.media.updated_at.or(Some(self.media.created_at)).into()
 	}
 
 	fn release_date(&self) -> KavitaDateTime {
@@ -197,10 +206,12 @@ impl MediaInput {
 		let date = year.and_then(|year| {
 			NaiveDate::from_ymd_opt(year, month.max(1) as u32, day.max(1) as u32)
 		});
-		KavitaDateTime(date.map(|date| DateTime::<Utc>::from_naive_utc_and_offset(
-			date.and_hms_opt(0, 0, 0).expect("midnight is valid"),
-			Utc,
-		)))
+		KavitaDateTime(date.map(|date| {
+			DateTime::<Utc>::from_naive_utc_and_offset(
+				date.and_hms_opt(0, 0, 0).expect("midnight is valid"),
+				Utc,
+			)
+		}))
 	}
 }
 
@@ -258,7 +269,9 @@ pub fn map_chapter(input: &MediaInput) -> ChapterDto {
 		release_date: input.release_date(),
 		title_name: title.unwrap_or_default(),
 		summary: metadata.and_then(|metadata| metadata.summary.clone()),
-		age_rating: AgeRating::from_min_age(metadata.and_then(|metadata| metadata.age_rating)),
+		age_rating: AgeRating::from_min_age(
+			metadata.and_then(|metadata| metadata.age_rating),
+		),
 		word_count: 0,
 		volume_title: String::new(),
 		min_hours_to_read: 0,
@@ -271,7 +284,10 @@ pub fn map_chapter(input: &MediaInput) -> ChapterDto {
 			.and_then(|metadata| metadata.identifier_isbn.clone())
 			.unwrap_or_default(),
 		people: PeopleDto {
-			writers: people(metadata.and_then(|m| m.writers.as_deref()), PersonRole::Writer),
+			writers: people(
+				metadata.and_then(|m| m.writers.as_deref()),
+				PersonRole::Writer,
+			),
 			cover_artists: people(
 				metadata.and_then(|m| m.cover_artists.as_deref()),
 				PersonRole::CoverArtist,
@@ -288,7 +304,10 @@ pub fn map_chapter(input: &MediaInput) -> ChapterDto {
 				metadata.and_then(|m| m.pencillers.as_deref()),
 				PersonRole::Penciller,
 			),
-			inkers: people(metadata.and_then(|m| m.inkers.as_deref()), PersonRole::Inker),
+			inkers: people(
+				metadata.and_then(|m| m.inkers.as_deref()),
+				PersonRole::Inker,
+			),
 			imprints: Vec::new(),
 			colorists: people(
 				metadata.and_then(|m| m.colorists.as_deref()),
@@ -298,7 +317,10 @@ pub fn map_chapter(input: &MediaInput) -> ChapterDto {
 				metadata.and_then(|m| m.letterers.as_deref()),
 				PersonRole::Letterer,
 			),
-			editors: people(metadata.and_then(|m| m.editors.as_deref()), PersonRole::Editor),
+			editors: people(
+				metadata.and_then(|m| m.editors.as_deref()),
+				PersonRole::Editor,
+			),
 			translators: Vec::new(),
 			teams: people(metadata.and_then(|m| m.teams.as_deref()), PersonRole::Team),
 			locations: Vec::new(),
@@ -493,7 +515,10 @@ pub fn map_series(input: &SeriesInput) -> SeriesDto {
 
 pub fn map_series_metadata(input: &SeriesInput, tags: Vec<TagDto>) -> SeriesMetadataDto {
 	let metadata = input.metadata.as_ref();
-	let first_media = input.media.first().and_then(|media| media.metadata.as_ref());
+	let first_media = input
+		.media
+		.first()
+		.and_then(|media| media.metadata.as_ref());
 	let language = metadata
 		.and_then(|metadata| metadata.language.clone())
 		.or_else(|| first_media.and_then(|metadata| metadata.language.clone()))
@@ -507,7 +532,10 @@ pub fn map_series_metadata(input: &SeriesInput, tags: Vec<TagDto>) -> SeriesMeta
 		genres: genres(metadata.and_then(|metadata| metadata.genres.as_deref())),
 		tags,
 		people: PeopleDto {
-			writers: people(metadata.and_then(|m| m.writers.as_deref()), PersonRole::Writer),
+			writers: people(
+				metadata.and_then(|m| m.writers.as_deref()),
+				PersonRole::Writer,
+			),
 			cover_artists: Vec::new(),
 			publishers: people(
 				metadata.and_then(|m| m.publisher.as_deref()),
@@ -519,7 +547,10 @@ pub fn map_series_metadata(input: &SeriesInput, tags: Vec<TagDto>) -> SeriesMeta
 			),
 			pencillers: Vec::new(),
 			inkers: Vec::new(),
-			imprints: people(metadata.and_then(|m| m.imprint.as_deref()), PersonRole::Imprint),
+			imprints: people(
+				metadata.and_then(|m| m.imprint.as_deref()),
+				PersonRole::Imprint,
+			),
 			colorists: Vec::new(),
 			letterers: Vec::new(),
 			editors: Vec::new(),
@@ -527,7 +558,9 @@ pub fn map_series_metadata(input: &SeriesInput, tags: Vec<TagDto>) -> SeriesMeta
 			teams: Vec::new(),
 			locations: Vec::new(),
 		},
-		age_rating: AgeRating::from_min_age(metadata.and_then(|metadata| metadata.age_rating)),
+		age_rating: AgeRating::from_min_age(
+			metadata.and_then(|metadata| metadata.age_rating),
+		),
 		release_year: metadata.and_then(|metadata| metadata.year).unwrap_or(0),
 		language,
 		max_count: metadata
@@ -551,7 +584,10 @@ pub fn map_series_metadata(input: &SeriesInput, tags: Vec<TagDto>) -> SeriesMeta
 	}
 }
 
-pub fn map_series_detail(input: &SeriesInput, library_type: LibraryType) -> SeriesDetailDto {
+pub fn map_series_detail(
+	input: &SeriesInput,
+	library_type: LibraryType,
+) -> SeriesDetailDto {
 	let volumes = input
 		.media
 		.iter()
@@ -635,8 +671,14 @@ mod tests {
 		assert_eq!(json["minNumber"], serde_json::json!(1));
 		assert_eq!(json["chapters"][0]["minNumber"], serde_json::json!(-100000));
 		assert_eq!(json["chapters"][0]["writers"], serde_json::json!([]));
-		assert_eq!(json["chapters"][0]["languageLocked"], serde_json::json!(false));
-		assert_eq!(json["created"], serde_json::json!("2026-09-05T00:30:44.0000000"));
+		assert_eq!(
+			json["chapters"][0]["languageLocked"],
+			serde_json::json!(false)
+		);
+		assert_eq!(
+			json["created"],
+			serde_json::json!("2026-09-05T00:30:44.0000000")
+		);
 	}
 
 	#[test]
@@ -696,7 +738,10 @@ mod tests {
 		assert_eq!(dto.sort_name, "Alpha");
 		assert_eq!(dto.cover_image, "v11_c11.png");
 		let json = serde_json::to_value(&dto).unwrap();
-		assert_eq!(json["latestReadDate"], serde_json::json!("0001-01-01T00:00:00"));
+		assert_eq!(
+			json["latestReadDate"],
+			serde_json::json!("0001-01-01T00:00:00")
+		);
 		assert_eq!(json["userRating"], serde_json::json!(0));
 		let detail = map_series_detail(&series, LibraryType::Book);
 		assert_eq!(detail.total_count, 2);

@@ -79,12 +79,17 @@ async fn series_cover(
 	Query(query): Query<SeriesCoverQuery>,
 ) -> APIResult<Response> {
 	let series_id = query.series_id.unwrap_or_default();
-	let stump_id = KavitaIds::require(ctx.conn(), IdKind::Series, series_id, "Series").await?;
+	let stump_id =
+		KavitaIds::require(ctx.conn(), IdKind::Series, series_id, "Series").await?;
 	let image = ctx.series_thumbnail(&auth.user(), &stump_id).await?;
 	Ok(image_response(image, &cover_name(series_id, series_id)))
 }
 
-async fn media_cover(ctx: &dyn KavitaBackend, auth: &AuthContext, id: i32) -> APIResult<Response> {
+async fn media_cover(
+	ctx: &dyn KavitaBackend,
+	auth: &AuthContext,
+	id: i32,
+) -> APIResult<Response> {
 	let stump_id = KavitaIds::lookup(ctx.conn(), IdKind::Media, id)
 		.await?
 		.ok_or_else(|| APIError::NotFound("Chapter does not exist".to_owned()))?;

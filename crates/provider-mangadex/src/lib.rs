@@ -79,7 +79,11 @@ impl MangaDexSource {
 			info: SourceInfo {
 				id: instance_id.to_string(),
 				name: "MangaDex".to_string(),
-				lang: if lang.is_empty() { "all".to_string() } else { lang },
+				lang: if lang.is_empty() {
+					"all".to_string()
+				} else {
+					lang
+				},
 				base_url: SITE_URL.to_string(),
 				capabilities: SourceCapabilities {
 					popular: true,
@@ -100,7 +104,10 @@ impl MangaDexSource {
 	fn manga_query(&self, page: u32, order: (&str, &str)) -> Vec<(&'static str, String)> {
 		let mut query = vec![
 			("limit", BROWSE_PAGE_SIZE.to_string()),
-			("offset", (page.saturating_sub(1) * BROWSE_PAGE_SIZE).to_string()),
+			(
+				"offset",
+				(page.saturating_sub(1) * BROWSE_PAGE_SIZE).to_string(),
+			),
 			("includes[]", "cover_art".to_string()),
 			("includes[]", "author".to_string()),
 			("includes[]", "artist".to_string()),
@@ -121,7 +128,7 @@ impl MangaDexSource {
 	) -> SourceResult<SourcePage<RemoteSeries>> {
 		let url = format!("{}/manga", self.api_url);
 		let response: MangaListResponse = self.http.get_json(&url, &query).await?;
-		let has_next = response.offset + response.data.len() as u32 < response.total;
+		let has_next = response.offset + (response.data.len() as u32) < response.total;
 		Ok(SourcePage {
 			items: response.data.into_iter().map(RemoteSeries::from).collect(),
 			has_next,
@@ -135,7 +142,14 @@ impl MangaDexSource {
 	}
 
 	/// Report an image fetch to the MangaDex@Home network (fire and forget).
-	fn report(&self, url: &str, success: bool, bytes: usize, duration_ms: u128, cached: bool) {
+	fn report(
+		&self,
+		url: &str,
+		success: bool,
+		bytes: usize,
+		duration_ms: u128,
+		cached: bool,
+	) {
 		let Some(report_url) = self.report_url.clone() else {
 			return;
 		};
@@ -280,7 +294,9 @@ impl Source for MangaDexSource {
 		let result = self.http.fetch_bytes(&page.url, &page.headers).await;
 		let duration_ms = started.elapsed().as_millis();
 		match &result {
-			Ok(fetched) => self.report(&page.url, true, fetched.bytes.len(), duration_ms, false),
+			Ok(fetched) => {
+				self.report(&page.url, true, fetched.bytes.len(), duration_ms, false)
+			},
 			Err(_) => self.report(&page.url, false, 0, duration_ms, false),
 		}
 		result
@@ -499,19 +515,30 @@ struct ChapterAttributes {
 
 impl Chapter {
 	fn into_remote(self, site_url: &str) -> RemoteChapter {
-		let scanlator = self.relationships.into_iter().find_map(|relationship| match relationship {
-			Relationship::ScanlationGroup { attributes } => attributes.and_then(|a| a.name),
-			_ => None,
-		});
+		let scanlator =
+			self.relationships
+				.into_iter()
+				.find_map(|relationship| match relationship {
+					Relationship::ScanlationGroup { attributes } => {
+						attributes.and_then(|a| a.name)
+					},
+					_ => None,
+				});
 		RemoteChapter {
 			url: Some(format!("{site_url}/chapter/{}", self.id)),
-			title: self.attributes.title.filter(|title| !title.trim().is_empty()),
+			title: self
+				.attributes
+				.title
+				.filter(|title| !title.trim().is_empty()),
 			number: self
 				.attributes
 				.chapter
 				.as_deref()
 				.and_then(|chapter| chapter.trim().parse::<f32>().ok()),
-			volume: self.attributes.volume.filter(|volume| !volume.trim().is_empty()),
+			volume: self
+				.attributes
+				.volume
+				.filter(|volume| !volume.trim().is_empty()),
 			lang: self.attributes.translated_language,
 			scanlator,
 			uploaded_at: self.attributes.publish_at,
@@ -640,7 +667,10 @@ mod tests {
 			series.url.as_deref(),
 			Some(&*format!("{SITE_URL}/title/{MANGA_ID}"))
 		);
-		assert_eq!(series.description.as_deref(), Some("Ten years ago, gates opened."));
+		assert_eq!(
+			series.description.as_deref(),
+			Some("Ten years ago, gates opened.")
+		);
 		assert_eq!(server.request_count(&query), 1);
 	}
 
@@ -682,8 +712,14 @@ mod tests {
 			"total": 3
 		});
 		let server = MockServer::spawn(vec![]).await;
-		server.set_route(&base.replace("{offset}", "0"), CannedResponse::json(first.to_string()));
-		server.set_route(&base.replace("{offset}", "2"), CannedResponse::json(second.to_string()));
+		server.set_route(
+			&base.replace("{offset}", "0"),
+			CannedResponse::json(first.to_string()),
+		);
+		server.set_route(
+			&base.replace("{offset}", "2"),
+			CannedResponse::json(second.to_string()),
+		);
 		let source = server_source(&server);
 
 		let chapters = source.chapters(MANGA_ID).await.unwrap();
@@ -714,7 +750,10 @@ mod tests {
 			&format!("/at-home/server/{CHAPTER_ID}"),
 			CannedResponse::json(at_home.to_string()),
 		);
-		server.set_route("/data/abc123/1-x.png", CannedResponse::ok("image/png", b"png".to_vec()));
+		server.set_route(
+			"/data/abc123/1-x.png",
+			CannedResponse::ok("image/png", b"png".to_vec()),
+		);
 		server.set_route("/report", CannedResponse::json(b"{}".to_vec()));
 		let source = server_source(&server);
 
@@ -773,7 +812,10 @@ mod tests {
 			},
 			other => panic!("expected rate limit, got {other:?}"),
 		}
-		assert!(matches!(source.details("bad").await, Err(SourceError::Decode(_))));
+		assert!(matches!(
+			source.details("bad").await,
+			Err(SourceError::Decode(_))
+		));
 	}
 
 	#[test]
@@ -787,9 +829,15 @@ mod tests {
 		);
 		assert!(source.language_filter().is_none());
 		let query = source.manga_query(2, ("followedCount", "desc"));
-		assert!(query.iter().any(|(key, value)| *key == "offset" && value == "20"));
-		assert!(!query.iter().any(|(key, _)| *key == "availableTranslatedLanguage[]"));
-		assert!(source.is_home_node("https://cmdxd98sb0x3yprd.mangadex.network/data/x/1.png"));
+		assert!(query
+			.iter()
+			.any(|(key, value)| *key == "offset" && value == "20"));
+		assert!(!query
+			.iter()
+			.any(|(key, _)| *key == "availableTranslatedLanguage[]"));
+		assert!(
+			source.is_home_node("https://cmdxd98sb0x3yprd.mangadex.network/data/x/1.png")
+		);
 		assert!(!source.is_home_node("https://uploads.mangadex.org/data/x/1.png"));
 	}
 

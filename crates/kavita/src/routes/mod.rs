@@ -83,7 +83,11 @@ pub trait KavitaBackend: Send + Sync {
 		page: i32,
 	) -> APIResult<KavitaImage>;
 
-	async fn media_thumbnail(&self, user: &AuthUser, media_id: &str) -> APIResult<KavitaImage>;
+	async fn media_thumbnail(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+	) -> APIResult<KavitaImage>;
 
 	async fn series_thumbnail(
 		&self,
@@ -104,7 +108,11 @@ pub trait KavitaBackend: Send + Sync {
 /// Kavita's ASP.NET routing is case-insensitive and the inventoried clients
 /// mix `/api/Series/...` with `/api/series/...`; every route is registered
 /// under its canonical casing and fully lower-cased.
-pub(crate) fn route_ci<S>(router: Router<S>, path: &str, handler: MethodRouter<S>) -> Router<S>
+pub(crate) fn route_ci<S>(
+	router: Router<S>,
+	path: &str,
+	handler: MethodRouter<S>,
+) -> Router<S>
 where
 	S: Clone + Send + Sync + 'static,
 {
@@ -150,13 +158,41 @@ where
 	// Controllers that already own a `/{param}` route at this depth
 	// (Series, Library, Volume) are excluded to keep the route tree conflict-free.
 	let router = [
-		"/api/Reader", "/api/Image", "/api/Chapter", "/api/Metadata", "/api/Filter",
-		"/api/Tachiyomi", "/api/Plugin", "/api/Account", "/api/Server", "/api/Collection",
-		"/api/ReadingList", "/api/Stream", "/api/Search", "/api/Book", "/api/Download",
-		"/api/Person", "/api/Rating", "/api/Stats", "/api/Annotation", "/api/Settings",
-		"/api/Font", "/api/Users", "/api/Panel", "/api/want-to-read", "/api/reading-profile",
-		"/api/Device", "/api/Scrobbling", "/api/Recommended", "/api/Review", "/api/Theme",
-		"/api/Upload", "/api/Cbl", "/api/Locale", "/api/Manage", "/api/Media",
+		"/api/Reader",
+		"/api/Image",
+		"/api/Chapter",
+		"/api/Metadata",
+		"/api/Filter",
+		"/api/Tachiyomi",
+		"/api/Plugin",
+		"/api/Account",
+		"/api/Server",
+		"/api/Collection",
+		"/api/ReadingList",
+		"/api/Stream",
+		"/api/Search",
+		"/api/Book",
+		"/api/Download",
+		"/api/Person",
+		"/api/Rating",
+		"/api/Stats",
+		"/api/Annotation",
+		"/api/Settings",
+		"/api/Font",
+		"/api/Users",
+		"/api/Panel",
+		"/api/want-to-read",
+		"/api/reading-profile",
+		"/api/Device",
+		"/api/Scrobbling",
+		"/api/Recommended",
+		"/api/Review",
+		"/api/Theme",
+		"/api/Upload",
+		"/api/Cbl",
+		"/api/Locale",
+		"/api/Manage",
+		"/api/Media",
 	]
 	.into_iter()
 	.fold(router, |router, prefix| {

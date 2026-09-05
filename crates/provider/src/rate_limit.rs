@@ -32,8 +32,8 @@ impl RateLimiter {
 	/// Panics when `requests` is zero or `per` is zero, which would make every
 	/// request wait forever.
 	pub fn new(requests: u32, per: Duration) -> Self {
-		let requests_nz =
-			NonZeroU32::new(requests).expect("rate limiter requires at least one request");
+		let requests_nz = NonZeroU32::new(requests)
+			.expect("rate limiter requires at least one request");
 		assert!(!per.is_zero(), "rate limiter window must be non-zero");
 		let replenish = per / requests;
 		let quota = Quota::with_period(replenish.max(Duration::from_nanos(1)))

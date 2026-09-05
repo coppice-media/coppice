@@ -10,8 +10,8 @@ use crate::{
 use chrono::{DateTime, NaiveDate, Utc};
 use models::{
 	entity::{
-		device, library, library_config, media, media_metadata, media_tag,
-		reading_head, series, series_tag, tag, user::AuthUser,
+		device, library, library_config, media, media_metadata, media_tag, reading_head,
+		series, series_tag, tag, user::AuthUser,
 	},
 	services::reading_state,
 	shared::enums::FileStatus,

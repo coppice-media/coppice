@@ -31,13 +31,14 @@ pub mod virtual_path;
 pub use cache::{CacheKey, PageCache};
 pub use catalog::{CatalogEntry, CatalogSource, SourceCatalog, SourceTheme};
 pub use health::{HealthProbe, HealthStatus};
-pub use host::{ProviderError, ProviderHost, ProviderHostConfig, SourceFactory, VirtualArchive};
-pub use materialize::{add_series, refresh_series, Materialized};
+pub use host::{
+	ProviderError, ProviderHost, ProviderHostConfig, SourceFactory, VirtualArchive,
+};
 pub use http::{SourceHttp, USER_AGENT};
+pub use materialize::{add_series, refresh_series, Materialized};
 pub use rate_limit::RateLimiter;
 pub use source::{
-	FetchedPage, RemoteChapter, RemotePage, RemoteSeries, SearchFilter,
-	SeriesStatus, Source, SourceCapabilities, SourceError, SourceInfo, SourcePage,
-	SourceResult,
+	FetchedPage, RemoteChapter, RemotePage, RemoteSeries, SearchFilter, SeriesStatus,
+	Source, SourceCapabilities, SourceError, SourceInfo, SourcePage, SourceResult,
 };
 pub use virtual_path::VirtualPath;

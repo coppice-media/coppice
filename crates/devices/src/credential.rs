@@ -42,12 +42,7 @@ impl CredentialRef<'_> {
 			Self::ApiKey(raw) => PrefixedApiKey::from_string(raw)
 				.ok()
 				.filter(|pak| pak.prefix() == API_KEY_PREFIX)
-				.map(|pak| {
-					(
-						DeviceCredentialKind::ApiKey,
-						pak.short_token().to_string(),
-					)
-				}),
+				.map(|pak| (DeviceCredentialKind::ApiKey, pak.short_token().to_string())),
 			Self::LiseurToken(id) => {
 				Some((DeviceCredentialKind::LiseurToken, (*id).to_string()))
 			},

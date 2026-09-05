@@ -127,7 +127,11 @@ impl MangaFormat {
 	/// Kavita derives the format from the file extension
 	/// (`Parser.ParseFormat`); Stump stores the extension without the dot.
 	pub fn from_extension(extension: &str) -> Self {
-		match extension.trim_start_matches('.').to_ascii_lowercase().as_str() {
+		match extension
+			.trim_start_matches('.')
+			.to_ascii_lowercase()
+			.as_str()
+		{
 			"cbz" | "cbr" | "cb7" | "cbt" | "zip" | "rar" | "7z" | "tar" => Self::Archive,
 			"epub" => Self::Epub,
 			"pdf" => Self::Pdf,
@@ -235,7 +239,12 @@ impl PublicationStatus {
 	/// Stump stores the free-form ComicInfo/series.json status text.
 	pub fn from_status_text(status: Option<&str>) -> Self {
 		let normalized = status
-			.map(|status| status.trim().to_ascii_lowercase().replace([' ', '-', '_'], ""))
+			.map(|status| {
+				status
+					.trim()
+					.to_ascii_lowercase()
+					.replace([' ', '-', '_'], "")
+			})
 			.unwrap_or_default();
 		match normalized.as_str() {
 			"completed" | "complete" | "finished" => Self::Completed,
@@ -875,8 +884,14 @@ mod tests {
 
 	#[test]
 	fn floats_render_whole_values_as_integers() {
-		assert_eq!(serde_json::to_string(&KavitaFloat(100000.0)).unwrap(), "100000");
-		assert_eq!(serde_json::to_string(&KavitaFloat(-100000.0)).unwrap(), "-100000");
+		assert_eq!(
+			serde_json::to_string(&KavitaFloat(100000.0)).unwrap(),
+			"100000"
+		);
+		assert_eq!(
+			serde_json::to_string(&KavitaFloat(-100000.0)).unwrap(),
+			"-100000"
+		);
 		assert_eq!(serde_json::to_string(&KavitaFloat(1.5)).unwrap(), "1.5");
 	}
 

@@ -1,9 +1,6 @@
 use sea_orm::entity::prelude::*;
 
-use crate::{
-	domain::reading_state::SourceProtocol,
-	shared::readium::ReadiumLocator,
-};
+use crate::{domain::reading_state::SourceProtocol, shared::readium::ReadiumLocator};
 
 /// The one canonical reading position per `(user, media)`.
 ///

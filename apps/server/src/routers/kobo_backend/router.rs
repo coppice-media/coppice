@@ -273,7 +273,11 @@ pub(crate) async fn library_sync(
 	});
 	if let Err(error) = ctx
 		.devices()
-		.touch(CredentialRef::ApiKey(&api_key), Protocol::Kobo, Some(sync_summary))
+		.touch(
+			CredentialRef::ApiKey(&api_key),
+			Protocol::Kobo,
+			Some(sync_summary),
+		)
 		.await
 	{
 		tracing::warn!(?error, "Failed to record the Kobo sync on its device");
@@ -403,7 +407,10 @@ fn reading_state_response(
 	KoboReadingStateResponse {
 		entitlement_id: book.id.clone(),
 		created: kobo_timestamp(
-			head.map_or_else(|| book.created_at.to_utc(), |head| head.created_at.to_utc()),
+			head.map_or_else(
+				|| book.created_at.to_utc(),
+				|head| head.created_at.to_utc(),
+			),
 		),
 		last_modified: kobo_timestamp(modified),
 		priority_timestamp: kobo_timestamp(modified),

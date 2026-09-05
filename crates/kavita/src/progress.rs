@@ -40,7 +40,11 @@ pub async fn latest_sessions(
 	let mut latest: HashMap<String, reading_session::Model> =
 		HashMap::with_capacity(media_ids.len());
 	for row in rows {
-		let key = (row.updated_at.unwrap_or(row.created_at), row.created_at, row.id);
+		let key = (
+			row.updated_at.unwrap_or(row.created_at),
+			row.created_at,
+			row.id,
+		);
 		let replace = latest.get(&row.media_id).is_none_or(|current| {
 			key > (
 				current.updated_at.unwrap_or(current.created_at),
@@ -70,7 +74,9 @@ pub fn pages_read(session: Option<&reading_session::Model>, pages: i32) -> i32 {
 	session
 		.end_percentage
 		.and_then(|percentage| percentage.to_f64())
-		.map(|percentage| ((percentage * f64::from(pages)).floor() as i32).clamp(0, pages))
+		.map(|percentage| {
+			((percentage * f64::from(pages)).floor() as i32).clamp(0, pages)
+		})
 		.unwrap_or(0)
 }
 
@@ -182,7 +188,8 @@ impl KavitaProgress {
 }
 
 /// `CREATE TABLE` used by the migration and by in-memory tests.
-pub const CREATE_KAVITA_PROGRESS_SQL: &str = "CREATE TABLE IF NOT EXISTS kavita_progress (
+pub const CREATE_KAVITA_PROGRESS_SQL: &str =
+	"CREATE TABLE IF NOT EXISTS kavita_progress (
     user_id TEXT NOT NULL,
     media_id TEXT NOT NULL,
     book_scroll_id TEXT,
@@ -268,7 +275,10 @@ mod tests {
 		))
 		.await
 		.unwrap();
-		assert_eq!(KavitaProgress::scroll_id(&conn, "u", "m").await.unwrap(), None);
+		assert_eq!(
+			KavitaProgress::scroll_id(&conn, "u", "m").await.unwrap(),
+			None
+		);
 		KavitaProgress::set_scroll_id(&conn, "u", "m", Some("//div[1]"))
 			.await
 			.unwrap();
@@ -279,10 +289,16 @@ mod tests {
 			KavitaProgress::scroll_id(&conn, "u", "m").await.unwrap(),
 			Some("//div[2]".to_owned())
 		);
-		assert_eq!(KavitaProgress::scroll_id(&conn, "v", "m").await.unwrap(), None);
+		assert_eq!(
+			KavitaProgress::scroll_id(&conn, "v", "m").await.unwrap(),
+			None
+		);
 		KavitaProgress::clear(&conn, "u", &["m".to_owned()])
 			.await
 			.unwrap();
-		assert_eq!(KavitaProgress::scroll_id(&conn, "u", "m").await.unwrap(), None);
+		assert_eq!(
+			KavitaProgress::scroll_id(&conn, "u", "m").await.unwrap(),
+			None
+		);
 	}
 }

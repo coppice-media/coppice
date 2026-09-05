@@ -57,7 +57,11 @@ where
 	S: Clone + Send + Sync + 'static,
 {
 	let router = Router::<S>::new();
-	let router = route_ci(router, "/api/Plugin/authenticate", post(plugin_authenticate));
+	let router = route_ci(
+		router,
+		"/api/Plugin/authenticate",
+		post(plugin_authenticate),
+	);
 	let router = route_ci(router, "/api/Plugin/version", get(plugin_version));
 	route_ci(router, "/api/Account/login", post(account_login))
 }
@@ -76,7 +80,9 @@ async fn plugin_authenticate(
 	let api_key = query
 		.api_key
 		.filter(|key| !key.trim().is_empty())
-		.ok_or_else(|| APIError::BadRequest("The apiKey field is required.".to_owned()))?;
+		.ok_or_else(|| {
+			APIError::BadRequest("The apiKey field is required.".to_owned())
+		})?;
 	let plugin_name = query.plugin_name.unwrap_or_default();
 	let user = ctx.authenticate_api_key(&api_key).await.map_err(|error| {
 		tracing::info!(
@@ -97,7 +103,9 @@ async fn plugin_version(
 	let api_key = query
 		.api_key
 		.filter(|key| !key.trim().is_empty())
-		.ok_or_else(|| APIError::BadRequest("The apiKey field is required.".to_owned()))?;
+		.ok_or_else(|| {
+			APIError::BadRequest("The apiKey field is required.".to_owned())
+		})?;
 	ctx.authenticate_api_key(&api_key).await?;
 	Ok((
 		[(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
@@ -144,7 +152,9 @@ pub(crate) async fn login_user(
 	})
 }
 
-fn age_restriction_dto(restriction: Option<&age_restriction::Model>) -> AgeRestrictionDto {
+fn age_restriction_dto(
+	restriction: Option<&age_restriction::Model>,
+) -> AgeRestrictionDto {
 	match restriction {
 		Some(restriction) => AgeRestrictionDto {
 			age_rating: AgeRating::from_min_age(Some(restriction.age)),

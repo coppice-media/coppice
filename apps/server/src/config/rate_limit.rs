@@ -34,8 +34,7 @@ pub struct RateLimitConfig {
 
 impl Default for RateLimitConfig {
 	fn default() -> Self {
-		Self::from_values(None, None, None, None)
-			.expect("rate limit defaults are valid")
+		Self::from_values(None, None, None, None).expect("rate limit defaults are valid")
 	}
 }
 
@@ -120,8 +119,9 @@ fn parse_positive_u32(
 	let parsed = value.trim().parse::<u32>().map_err(|error| {
 		format!("Invalid {key} value `{value}`: expected a positive integer ({error})")
 	})?;
-	NonZeroU32::new(parsed)
-		.ok_or_else(|| format!("Invalid {key} value `{value}`: it must be greater than zero"))
+	NonZeroU32::new(parsed).ok_or_else(|| {
+		format!("Invalid {key} value `{value}`: it must be greater than zero")
+	})
 }
 
 fn parse_positive_usize(
@@ -135,8 +135,9 @@ fn parse_positive_usize(
 	let parsed = value.trim().parse::<usize>().map_err(|error| {
 		format!("Invalid {key} value `{value}`: expected a positive integer ({error})")
 	})?;
-	NonZeroUsize::new(parsed)
-		.ok_or_else(|| format!("Invalid {key} value `{value}`: it must be greater than zero"))
+	NonZeroUsize::new(parsed).ok_or_else(|| {
+		format!("Invalid {key} value `{value}`: it must be greater than zero")
+	})
 }
 
 #[cfg(test)]
@@ -170,34 +171,27 @@ mod tests {
 		assert_eq!(config.write_burst.get(), 300);
 		assert_eq!(config.stream_concurrency.get(), 4);
 
-		let small = RateLimitConfig::from_values(
-			None,
-			Some("2".into()),
-			Some("30".into()),
-			None,
-		)
-		.unwrap();
+		let small =
+			RateLimitConfig::from_values(None, Some("2".into()), Some("30".into()), None)
+				.unwrap();
 		assert_eq!(small.auth_burst.get(), 20);
 		assert_eq!(small.write_burst.get(), 60);
 	}
 
 	#[test]
 	fn rejects_zero_and_garbage() {
-		let error =
-			RateLimitConfig::from_values(None, Some("0".into()), None, None)
-				.expect_err("zero must be rejected");
+		let error = RateLimitConfig::from_values(None, Some("0".into()), None, None)
+			.expect_err("zero must be rejected");
 		assert!(error.contains(RATELIMIT_AUTH_PER_MIN_KEY));
 		assert!(error.contains("greater than zero"));
 
-		let error =
-			RateLimitConfig::from_values(None, None, None, Some("many".into()))
-				.expect_err("garbage must be rejected");
+		let error = RateLimitConfig::from_values(None, None, None, Some("many".into()))
+			.expect_err("garbage must be rejected");
 		assert!(error.contains(RATELIMIT_STREAM_CONCURRENCY_KEY));
 		assert!(error.contains("positive integer"));
 
-		let error =
-			RateLimitConfig::from_values(Some("maybe".into()), None, None, None)
-				.expect_err("non-boolean must be rejected");
+		let error = RateLimitConfig::from_values(Some("maybe".into()), None, None, None)
+			.expect_err("non-boolean must be rejected");
 		assert!(error.contains(RATELIMIT_ENABLED_KEY));
 	}
 }

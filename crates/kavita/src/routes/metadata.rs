@@ -5,7 +5,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{extract::Query, routing::get, Extension, Json, Router};
-use models::entity::{media, media_metadata, series, series_metadata, tag, user::AuthUser};
+use models::entity::{
+	media, media_metadata, series, series_metadata, tag, user::AuthUser,
+};
 use sea_orm::{prelude::*, QueryOrder, QuerySelect};
 use serde::Deserialize;
 use stump_auth::AuthContext;
@@ -40,7 +42,11 @@ where
 	let router = route_ci(router, "/api/Metadata/age-ratings", get(age_ratings));
 	let router = route_ci(router, "/api/Metadata/languages", get(languages));
 	let router = route_ci(router, "/api/Metadata/people", get(people));
-	route_ci(router, "/api/Metadata/publication-status", get(publication_status))
+	route_ci(
+		router,
+		"/api/Metadata/publication-status",
+		get(publication_status),
+	)
 }
 
 /// Stump library ids selected by the `libraryIds` query, if any.
@@ -60,7 +66,8 @@ async fn library_scope(
 	}
 	let mut stump_ids = Vec::with_capacity(ids.len());
 	for id in ids {
-		if let Some(stump_id) = KavitaIds::lookup(ctx.conn(), IdKind::Library, id).await? {
+		if let Some(stump_id) = KavitaIds::lookup(ctx.conn(), IdKind::Library, id).await?
+		{
 			stump_ids.push(stump_id);
 		}
 	}
@@ -68,7 +75,8 @@ async fn library_scope(
 }
 
 fn scoped_series(user: &AuthUser, scope: Option<Vec<String>>) -> Select<series::Entity> {
-	let query = series::Entity::find_for_user(user).filter(series::Column::DeletedAt.is_null());
+	let query =
+		series::Entity::find_for_user(user).filter(series::Column::DeletedAt.is_null());
 	match scope {
 		Some(ids) => query.filter(series::Column::LibraryId.is_in(ids)),
 		None => query,
@@ -173,7 +181,10 @@ async fn tags(
 					sea_orm::sea_query::Query::select()
 						.column(models::entity::series_tag::Column::TagId)
 						.from(models::entity::series_tag::Entity)
-						.and_where(models::entity::series_tag::Column::SeriesId.is_in(chunk.to_vec()))
+						.and_where(
+							models::entity::series_tag::Column::SeriesId
+								.is_in(chunk.to_vec()),
+						)
 						.to_owned(),
 				),
 			)
@@ -189,7 +200,9 @@ async fn tags(
 			}
 		}
 	}
-	result.sort_by(|left, right| left.title.to_lowercase().cmp(&right.title.to_lowercase()));
+	result.sort_by(|left, right| {
+		left.title.to_lowercase().cmp(&right.title.to_lowercase())
+	});
 	Ok(Json(result))
 }
 
@@ -214,7 +227,11 @@ async fn age_ratings(
 /// renders the culture display name; the common codes are listed here and
 /// anything else echoes its code.
 fn language_title(code: &str) -> String {
-	let base = code.split(['-', '_']).next().unwrap_or(code).to_ascii_lowercase();
+	let base = code
+		.split(['-', '_'])
+		.next()
+		.unwrap_or(code)
+		.to_ascii_lowercase();
 	let title = match base.as_str() {
 		"en" => "English",
 		"ja" => "Japanese",
@@ -284,26 +301,77 @@ async fn people(
 ) -> APIResult<Json<Vec<PersonDto>>> {
 	let user = auth.user();
 	let scope = library_scope(ctx.as_ref(), &query).await?;
-	let sources: [(Option<series_metadata::Column>, Option<media_metadata::Column>, PersonRole); 11] = [
-		(Some(series_metadata::Column::Writers), Some(media_metadata::Column::Writers), PersonRole::Writer),
-		(Some(series_metadata::Column::Publisher), Some(media_metadata::Column::Publisher), PersonRole::Publisher),
-		(Some(series_metadata::Column::Characters), Some(media_metadata::Column::Characters), PersonRole::Character),
-		(Some(series_metadata::Column::Imprint), None, PersonRole::Imprint),
-		(None, Some(media_metadata::Column::Pencillers), PersonRole::Penciller),
-		(None, Some(media_metadata::Column::Inkers), PersonRole::Inker),
-		(None, Some(media_metadata::Column::Colorists), PersonRole::Colorist),
-		(None, Some(media_metadata::Column::Letterers), PersonRole::Letterer),
-		(None, Some(media_metadata::Column::CoverArtists), PersonRole::CoverArtist),
-		(None, Some(media_metadata::Column::Editors), PersonRole::Editor),
+	let sources: [(
+		Option<series_metadata::Column>,
+		Option<media_metadata::Column>,
+		PersonRole,
+	); 11] = [
+		(
+			Some(series_metadata::Column::Writers),
+			Some(media_metadata::Column::Writers),
+			PersonRole::Writer,
+		),
+		(
+			Some(series_metadata::Column::Publisher),
+			Some(media_metadata::Column::Publisher),
+			PersonRole::Publisher,
+		),
+		(
+			Some(series_metadata::Column::Characters),
+			Some(media_metadata::Column::Characters),
+			PersonRole::Character,
+		),
+		(
+			Some(series_metadata::Column::Imprint),
+			None,
+			PersonRole::Imprint,
+		),
+		(
+			None,
+			Some(media_metadata::Column::Pencillers),
+			PersonRole::Penciller,
+		),
+		(
+			None,
+			Some(media_metadata::Column::Inkers),
+			PersonRole::Inker,
+		),
+		(
+			None,
+			Some(media_metadata::Column::Colorists),
+			PersonRole::Colorist,
+		),
+		(
+			None,
+			Some(media_metadata::Column::Letterers),
+			PersonRole::Letterer,
+		),
+		(
+			None,
+			Some(media_metadata::Column::CoverArtists),
+			PersonRole::CoverArtist,
+		),
+		(
+			None,
+			Some(media_metadata::Column::Editors),
+			PersonRole::Editor,
+		),
 		(None, Some(media_metadata::Column::Teams), PersonRole::Team),
 	];
 	let mut people: BTreeMap<String, PersonDto> = BTreeMap::new();
 	for (series_column, media_column, role) in sources {
-		let values = distinct_values(ctx.as_ref(), &user, scope.clone(), series_column, media_column).await?;
+		let values = distinct_values(
+			ctx.as_ref(),
+			&user,
+			scope.clone(),
+			series_column,
+			media_column,
+		)
+		.await?;
 		for name in values {
-			let entry = people
-				.entry(name.to_lowercase())
-				.or_insert_with(|| PersonDto::new(name_id(&name), name.clone(), Vec::new()));
+			let entry = people.entry(name.to_lowercase()).or_insert_with(|| {
+				PersonDto::new(name_id(&name), name.clone(), Vec::new())
+			});
 			if !entry.roles.contains(&role) {
 				entry.roles.push(role);
 			}

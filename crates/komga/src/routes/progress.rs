@@ -334,8 +334,7 @@ async fn update_read_progress(
 		.unwrap_or_default();
 	let txn = conn.begin().await?;
 	upsert_reading_session(&txn, &user, &id, updates.session).await?;
-	reading_state::apply(&txn, &user.id, Publication::from(&book), updates.head)
-		.await?;
+	reading_state::apply(&txn, &user.id, Publication::from(&book), updates.head).await?;
 	txn.commit().await?;
 	events.send(KomgaEvent::ReadProgressChanged {
 		book_id: event_book_id.clone().into(),

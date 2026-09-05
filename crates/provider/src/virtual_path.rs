@@ -91,14 +91,17 @@ fn decode(component: &str) -> Option<String> {
 /// series/chapter always maps to the same Stump id regardless of how (or on
 /// which instance) it was materialised.
 const ID_NAMESPACE: uuid::Uuid = uuid::Uuid::from_bytes([
-	0x9f, 0x2c, 0x5a, 0x1e, 0x8b, 0x47, 0x4d, 0x3a, 0xa6, 0x0f, 0x1d, 0x2e, 0x7c, 0x4b, 0x9a,
-	0x31,
+	0x9f, 0x2c, 0x5a, 0x1e, 0x8b, 0x47, 0x4d, 0x3a, 0xa6, 0x0f, 0x1d, 0x2e, 0x7c, 0x4b,
+	0x9a, 0x31,
 ]);
 
 /// Deterministic `series.id` for `(source, remote_id)`.
 pub fn series_id(source_id: &str, remote_id: &str) -> String {
-	uuid::Uuid::new_v5(&ID_NAMESPACE, format!("series:{source_id}:{remote_id}").as_bytes())
-		.to_string()
+	uuid::Uuid::new_v5(
+		&ID_NAMESPACE,
+		format!("series:{source_id}:{remote_id}").as_bytes(),
+	)
+	.to_string()
 }
 
 /// Deterministic `media.id` for `(source, remote_chapter_id)`.
@@ -112,7 +115,8 @@ pub fn media_id(source_id: &str, remote_chapter_id: &str) -> String {
 
 /// Deterministic `library.id` for a virtual library over `source_id`.
 pub fn library_id(source_id: &str) -> String {
-	uuid::Uuid::new_v5(&ID_NAMESPACE, format!("library:{source_id}").as_bytes()).to_string()
+	uuid::Uuid::new_v5(&ID_NAMESPACE, format!("library:{source_id}").as_bytes())
+		.to_string()
 }
 
 #[cfg(test)]

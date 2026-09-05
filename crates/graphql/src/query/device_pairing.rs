@@ -6,7 +6,9 @@ use models::{
 };
 use sea_orm::{prelude::*, QueryOrder};
 
-use crate::{data::CoreContext, guard::PermissionGuard, object::device_pairing::DevicePairing};
+use crate::{
+	data::CoreContext, guard::PermissionGuard, object::device_pairing::DevicePairing,
+};
 
 #[derive(Default)]
 pub struct DevicePairingQuery;

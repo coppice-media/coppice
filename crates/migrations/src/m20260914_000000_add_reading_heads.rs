@@ -20,7 +20,11 @@ impl MigrationTrait for Migration {
 					)
 					.col(ColumnDef::new(ReadingHeadEvents::UserId).text().not_null())
 					.col(ColumnDef::new(ReadingHeadEvents::MediaId).text().not_null())
-					.col(ColumnDef::new(ReadingHeadEvents::Protocol).text().not_null())
+					.col(
+						ColumnDef::new(ReadingHeadEvents::Protocol)
+							.text()
+							.not_null(),
+					)
 					.col(ColumnDef::new(ReadingHeadEvents::DeviceId).text())
 					.col(
 						ColumnDef::new(ReadingHeadEvents::RawPayload)
@@ -118,7 +122,11 @@ impl MigrationTrait for Migration {
 					)
 					.col(ColumnDef::new(ReadingHeads::SourceDeviceId).text())
 					.col(ColumnDef::new(ReadingHeads::Revision).integer().not_null())
-					.col(ColumnDef::new(ReadingHeads::EventId).big_integer().not_null())
+					.col(
+						ColumnDef::new(ReadingHeads::EventId)
+							.big_integer()
+							.not_null(),
+					)
 					.primary_key(
 						Index::create()
 							.col(ReadingHeads::UserId)
@@ -156,7 +164,12 @@ impl MigrationTrait for Migration {
 
 	async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
 		manager
-			.drop_table(Table::drop().table(ReadingHeads::Table).if_exists().to_owned())
+			.drop_table(
+				Table::drop()
+					.table(ReadingHeads::Table)
+					.if_exists()
+					.to_owned(),
+			)
 			.await?;
 		manager
 			.drop_table(

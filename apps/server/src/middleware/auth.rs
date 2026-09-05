@@ -42,7 +42,6 @@ use sea_orm::{prelude::*, Condition, DatabaseConnection};
 use serde::Deserialize;
 use stump_api_types::RequestOrigin;
 use stump_auth::AuthContext;
-use stump_devices::{CredentialRef, Protocol};
 use stump_core::opds::v2_0::{
 	authentication::{
 		OPDSAuthenticationDocumentBuilder, OPDSSupportedAuthFlow,
@@ -50,6 +49,7 @@ use stump_core::opds::v2_0::{
 	},
 	link::OPDSLink,
 };
+use stump_devices::{CredentialRef, Protocol};
 use tower_sessions::Session;
 
 use crate::{

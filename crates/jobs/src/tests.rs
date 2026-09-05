@@ -26,7 +26,10 @@ use crate::{
 #[derive(Debug, Clone)]
 enum TestJob {
 	/// Runs `tasks` tasks, each taking `task_delay`
-	Count { tasks: u32, task_delay: Duration },
+	Count {
+		tasks: u32,
+		task_delay: Duration,
+	},
 	FailInit,
 	FailPersist,
 }
@@ -284,8 +287,10 @@ async fn inline_runtime_runs_job_to_completion() {
 	assert_eq!(runtime.backend(), "inline");
 
 	runtime.enqueue(count(3)).await.expect("enqueue");
-	wait_for("job completion", || async { !host.recorded().finished.is_empty() })
-		.await;
+	wait_for("job completion", || async {
+		!host.recorded().finished.is_empty()
+	})
+	.await;
 
 	let recorded = host.recorded();
 	let finished = &recorded.finished[0];
@@ -320,17 +325,16 @@ async fn inline_runtime_runs_job_to_completion() {
 async fn typed_counters_reach_zero_with_every_runtime() {
 	for runtime in runtimes() {
 		let host = Arc::clone(runtime.services());
-		runtime
-			.enqueue(count(2))
-			.await
-			.expect("enqueue first");
-		runtime
-			.enqueue(count(1))
-			.await
-			.expect("enqueue second");
+		runtime.enqueue(count(2)).await.expect("enqueue first");
+		runtime.enqueue(count(1)).await.expect("enqueue second");
 
 		let depth = runtime.queue_depth();
-		assert_eq!(depth.count, 2, "{}: both jobs are accounted for", runtime.backend());
+		assert_eq!(
+			depth.count,
+			2,
+			"{}: both jobs are accounted for",
+			runtime.backend()
+		);
 		assert_eq!(depth.count_by_type.get("TEST"), Some(&2));
 
 		wait_for("both jobs to finish", || async {
@@ -382,10 +386,15 @@ async fn init_failure_is_persisted_as_failed() {
 async fn failed_start_persistence_releases_the_queued_count() {
 	for runtime in runtimes() {
 		let host = Arc::clone(runtime.services());
-		runtime.enqueue(TestJob::FailPersist).await.expect("enqueue");
+		runtime
+			.enqueue(TestJob::FailPersist)
+			.await
+			.expect("enqueue");
 		wait_for("queued count to be released", || async {
 			runtime.queue_depth().count == 0
-				&& host.last_queue_status().is_some_and(|status| status.count == 0)
+				&& host
+					.last_queue_status()
+					.is_some_and(|status| status.count == 0)
 		})
 		.await;
 
@@ -416,7 +425,12 @@ async fn stop_cancels_the_running_job() {
 
 		let recorded = host.recorded();
 		let finished = recorded.finished.last().expect("cancelled job persisted");
-		assert_eq!(finished.outcome.status, JobStatus::Cancelled, "{}", runtime.backend());
+		assert_eq!(
+			finished.outcome.status,
+			JobStatus::Cancelled,
+			"{}",
+			runtime.backend()
+		);
 		drop(recorded);
 		assert!(runtime.is_idle());
 		assert_eq!(runtime.queue_depth().count, 0);
@@ -467,11 +481,12 @@ async fn migrated_database() -> DatabaseConnection {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scheduler_stays_idle_without_rows_and_never_creates_a_runtime() {
 	let conn = migrated_database().await;
-	let scheduler = JobScheduler::init(&conn, || -> Result<Arc<JobRuntime<TestHost>>, JobError> {
-		panic!("runtime factory must not run without scheduled rows")
-	})
-	.await
-	.expect("scheduler query");
+	let scheduler =
+		JobScheduler::init(&conn, || -> Result<Arc<JobRuntime<TestHost>>, JobError> {
+			panic!("runtime factory must not run without scheduled rows")
+		})
+		.await
+		.expect("scheduler query");
 	assert!(scheduler.is_none());
 }
 

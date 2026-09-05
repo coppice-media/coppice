@@ -1,11 +1,10 @@
 use models::entity::{
-	age_restriction, api_key, collection, collection_series, device,
-	device_credential, device_pairing, kobo_sync_session, library, library_config,
-	library_exclusion, liseur_sync_token, media, media_analysis, media_metadata,
-	media_tag, provider_source, reading_head, reading_head_event, reading_list,
-	reading_list_item, reading_list_rule, reading_session, refresh_token, series,
-	series_metadata, server_config, session, source_health, tag, user,
-	user_preferences,
+	age_restriction, api_key, collection, collection_series, device, device_credential,
+	device_pairing, kobo_sync_session, library, library_config, library_exclusion,
+	liseur_sync_token, media, media_analysis, media_metadata, media_tag, provider_source,
+	reading_head, reading_head_event, reading_list, reading_list_item, reading_list_rule,
+	reading_session, refresh_token, series, series_metadata, server_config, session,
+	source_health, tag, user, user_preferences,
 };
 use sea_orm::{ConnectionTrait, Database, DbBackend, DbConn, DbErr, Schema};
 pub async fn test_database() -> DbConn {

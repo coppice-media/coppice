@@ -106,9 +106,7 @@ impl From<JobEvent<CoreJobOutput>> for CoreEvent {
 		match event {
 			JobEvent::Started { id } => Self::JobStarted(JobStarted { id }),
 			JobEvent::Progress(update) => Self::JobUpdate(update),
-			JobEvent::Output { id, output } => {
-				Self::JobOutput(JobOutput { id, output })
-			},
+			JobEvent::Output { id, output } => Self::JobOutput(JobOutput { id, output }),
 			JobEvent::QueueStatus(status) => Self::JobQueueStatus(status),
 		}
 	}
