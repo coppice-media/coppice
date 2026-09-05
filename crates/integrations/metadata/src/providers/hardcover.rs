@@ -19,6 +19,7 @@ const HARDCOVER_DEFAULT_RATE_LIMIT: u32 = 5;
 pub struct HardcoverClient {
 	client: ClientWithMiddleware,
 	api_token: Option<String>,
+	api_url: String,
 	rate_limiter: RateLimiter,
 }
 
@@ -49,10 +50,19 @@ impl HardcoverClient {
 				RetryClientConfig::default(),
 			),
 			api_token: Some(api_token),
+			api_url: Self::API_URL.to_string(),
 			rate_limiter: RateLimiter::new(
 				rate_limit.unwrap_or(HARDCOVER_DEFAULT_RATE_LIMIT),
 			),
 		}
+	}
+
+	/// Test-only override of the API base URL, used to point the client at a
+	/// local mock server.
+	#[cfg(test)]
+	fn with_api_url(mut self, api_url: impl Into<String>) -> Self {
+		self.api_url = api_url.into();
+		self
 	}
 
 	pub fn token(&self) -> Result<String, MetadataProviderError> {
@@ -72,7 +82,7 @@ impl HardcoverClient {
 
 		let response = self
 			.client
-			.post(Self::API_URL)
+			.post(&self.api_url)
 			.bearer_auth(token)
 			.json(&body)
 			.send()
@@ -460,7 +470,7 @@ impl MetadataProvider for HardcoverClient {
 
 		let response = self
 			.client
-			.post(Self::API_URL)
+			.post(&self.api_url)
 			.bearer_auth(token)
 			.json(&body)
 			.send()
@@ -735,5 +745,115 @@ mod tests {
 			"Book: {:?} by {:?} ({:?} pages)",
 			meta.title, meta.writers, meta.page_count
 		);
+	}
+
+	#[tokio::test]
+	async fn search_media_maps_mocked_book_response() {
+		use crate::mock_http::{render_ok, MockServer};
+
+		let search_body = serde_json::json!({
+			"data": {
+				"search": {
+					"results": {
+						"hits": [{ "document": { "id": 52709 } }]
+					}
+				}
+			}
+		})
+		.to_string();
+		let book_body = serde_json::json!({
+			"data": {
+				"books": [
+					{
+						"id": 52709,
+						"slug": "the-long-way-to-a-small-angry-planet",
+						"title": "The Long Way to a Small, Angry Planet",
+						"description": "<p>A cozy science fiction novel.</p>",
+						"release_year": 2014,
+						"release_date": null,
+						"pages": 518,
+						"cached_image": { "url": "https://hardcover.app/cover.jpg" },
+						"cached_contributors": [
+							{
+								"contribution": "Author",
+								"author": { "name": "Becky Chambers" }
+							}
+						],
+						"cached_tags": {
+							"Genre": [{ "tag": "Science Fiction" }]
+						},
+						"featured_book_series": {
+							"position": 1.0,
+							"series": { "name": "Wayfarers" }
+						},
+						"featured_book_series_id": 123,
+						"default_physical_edition": {
+							"isbn_10": "1477818541",
+							"isbn_13": "9781477818542"
+						}
+					}
+				]
+			}
+		})
+		.to_string();
+
+		let server =
+			MockServer::spawn(vec![render_ok(&search_body), render_ok(&book_body)]);
+		let client = HardcoverClient::new("test-token".to_string(), Some(u32::MAX))
+			.with_api_url(format!("{}/v1/graphql", server.url));
+
+		let query = SearchQuery {
+			title: "The Long Way to a Small, Angry Planet".to_string(),
+			limit: Some(5),
+			..Default::default()
+		};
+		let outcome = client
+			.search_media(&query)
+			.await
+			.expect("search should succeed against the mock");
+
+		assert_eq!(outcome.requested, 1);
+		assert_eq!(outcome.candidates.len(), 1);
+		let candidate = &outcome.candidates[0];
+		assert_eq!(candidate.provider, "hardcover");
+		assert_eq!(candidate.external_id, "52709");
+
+		let media = candidate.metadata.as_media().unwrap();
+		assert_eq!(
+			media.title.as_deref(),
+			Some("The Long Way to a Small, Angry Planet")
+		);
+		assert_eq!(media.year, Some(2014));
+		assert_eq!(media.page_count, Some(518));
+		assert_eq!(
+			media.cover_url.as_deref(),
+			Some("https://hardcover.app/cover.jpg")
+		);
+		assert_eq!(
+			media.writers.as_deref(),
+			Some(["Becky Chambers".to_string()].as_slice())
+		);
+		assert_eq!(media.number, Some(1.0));
+		assert_eq!(media.series_name.as_deref(), Some("Wayfarers"));
+		assert_eq!(media.isbn.as_deref(), Some("1477818541"));
+		assert_eq!(
+			media.genres.as_deref(),
+			Some(["Science Fiction".to_string()].as_slice())
+		);
+
+		// The search POSTs the sanitized GraphQL query with the bearer token,
+		// then the per-hit book detail fetch queries by id.
+		let requests = server.requests();
+		assert_eq!(requests.len(), 2);
+		assert!(requests[0].starts_with("POST /v1/graphql"));
+		assert!(requests[0]
+			.to_lowercase()
+			.contains("authorization: bearer test-token"));
+		assert!(requests[0].contains("search(query:"));
+		assert!(requests[0].contains(r#"query_type: \"Book\""#));
+		assert!(requests[0].contains("per_page: 5"));
+		assert!(requests[0].contains("The Long Way"));
+		assert!(requests[1].contains("books(where:"));
+		assert!(requests[1].contains("_eq: 52709"));
 	}
 }

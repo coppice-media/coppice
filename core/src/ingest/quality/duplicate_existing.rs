@@ -67,10 +67,16 @@ impl QualityCheck for DuplicateExistingCheck {
 				message: error.to_string(),
 			})?;
 
+		// For library rework the snapshot's opaque target id is the media row
+		// under analysis; it must never be reported as its own duplicate.
+		// For staged runs no media row carries a drop-item id, so this is a
+		// no-op there.
+		let is_self = |media: &media::Model| media.id == book.drop_item_id;
 		let mut exact_hash_ids = rows
 			.iter()
 			.filter(|(media, _)| {
-				!book.source_sha256.is_empty()
+				!is_self(media)
+					&& !book.source_sha256.is_empty()
 					&& media.hash.as_deref() == Some(book.source_sha256.as_str())
 			})
 			.map(|(media, _)| media.id.clone())
@@ -122,6 +128,7 @@ impl QualityCheck for DuplicateExistingCheck {
 		let scorer = MatchScorer;
 		let mut matches = rows
 			.into_iter()
+			.filter(|(media, _)| !is_self(media))
 			.map(|(media, metadata)| {
 				let title = metadata
 					.as_ref()

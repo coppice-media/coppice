@@ -4,17 +4,19 @@ use std::{
 };
 
 use async_trait::async_trait;
+use futures::future::join_all;
 use metadata_integrations::{
 	ExternalMediaMetadata, ExternalMetadata, ExternalSeriesMetadata, MatchCandidate,
-	MediaType, MetadataProvider, MetadataProviderError, SearchQuery,
+	MediaType, MetadataProvider, MetadataProviderError,
+	SearchQuery as IntegrationSearchQuery,
 };
 use serde_json::{json, Value};
 
 use crate::ingest::{
 	contract::{
 		BookSnapshot, IngestMediaKind, IngestMetadataProvider, MetadataCandidate,
-		MetadataField, ProviderCapability, ProviderError, ProviderIdentity,
-		SettingDefinition, SettingValues,
+		MetadataField, ProviderCapability, ProviderError, ProviderIdentity, SearchHit,
+		SearchQuery, SettingDefinition, SettingValues,
 	},
 	quality::filename::parse_filename,
 };
@@ -197,6 +199,28 @@ impl IngestMetadataProvider for IntegrationProvider {
 			}),
 		)])
 	}
+
+	async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>, ProviderError> {
+		let integration_query = IntegrationSearchQuery {
+			title: query.text.clone(),
+			limit: Some(u32::from(query.limit.max(1))),
+			..IntegrationSearchQuery::default()
+		};
+		let outcome = self
+			.client
+			.search_media(&integration_query)
+			.await
+			.map_err(|error| self.map_error(error))?;
+		let text = query.text.trim().to_string();
+		let mut hits = Vec::with_capacity(outcome.candidates.len());
+		for candidate in &outcome.candidates {
+			if let Some(hit) = search_hit_from_match(self.id, &text, candidate) {
+				hits.push(hit);
+			}
+		}
+		hits.sort_by(score_order);
+		Ok(hits)
+	}
 }
 
 fn media_kinds(media_type: MediaType) -> Vec<IngestMediaKind> {
@@ -214,7 +238,7 @@ fn media_kinds(media_type: MediaType) -> Vec<IngestMediaKind> {
 	}
 }
 
-fn composed_query(book: &BookSnapshot) -> SearchQuery {
+fn composed_query(book: &BookSnapshot) -> IntegrationSearchQuery {
 	let parsed = parse_filename(&book.source_filename);
 	let embedded = book.embedded_metadata.as_ref();
 	let title = embedded
@@ -232,7 +256,7 @@ fn composed_query(book: &BookSnapshot) -> SearchQuery {
 		provider_hints.insert("filename_series".to_string(), series);
 	}
 
-	SearchQuery {
+	IntegrationSearchQuery {
 		title,
 		author,
 		isbn,
@@ -259,6 +283,89 @@ fn identity_from_match(candidate: MatchCandidate, result_kind: &str) -> Provider
 			"confidence_factors": candidate.confidence_factors,
 		}),
 	}
+}
+
+/// Map one match candidate onto a media-level search hit.  Series results are
+/// skipped: search feeds the editor's "use as candidate" flow, which resolves
+/// via `fetch_media_metadata`.  The score comes from the provider's scorer;
+/// unscored candidates fall back to title similarity.
+fn search_hit_from_match(
+	provider_id: &str,
+	query_text: &str,
+	candidate: &MatchCandidate,
+) -> Option<SearchHit> {
+	let metadata = candidate.metadata.as_media()?;
+	let title = metadata
+		.title
+		.clone()
+		.or_else(|| metadata.series_name.clone())
+		.filter(|title| !title.trim().is_empty())?;
+	let score = if candidate.confidence > 0.0 {
+		candidate.confidence.clamp(0.0, 1.0)
+	} else {
+		metadata_integrations::title_similarity(query_text, &title) as f32
+	};
+	Some(SearchHit {
+		provider_id: provider_id.to_string(),
+		external_id: candidate.external_id.clone(),
+		title,
+		year: metadata.year,
+		cover_url: metadata.cover_url.clone(),
+		summary: metadata.summary.clone(),
+		score,
+	})
+}
+
+/// Deterministic hit ordering: score descending, then provider id, then
+/// external id.
+fn score_order(left: &SearchHit, right: &SearchHit) -> std::cmp::Ordering {
+	right
+		.score
+		.partial_cmp(&left.score)
+		.unwrap_or(std::cmp::Ordering::Equal)
+		.then_with(|| left.provider_id.cmp(&right.provider_id))
+		.then_with(|| left.external_id.cmp(&right.external_id))
+}
+
+/// Fan a free-text search out over several providers.  Providers that are not
+/// enabled, lack the `Search` capability, or do not support the requested
+/// media kind are skipped.  Per-provider rate limiting stays inside the
+/// wrapped clients, exactly as it does for `identify`.  A provider failure is
+/// logged and isolated; hits are merged and sorted by
+/// [`score_order`].
+pub async fn search_all(
+	providers: &[Arc<dyn IngestMetadataProvider>],
+	query: &SearchQuery,
+	enabled: &[String],
+) -> Vec<SearchHit> {
+	let text = query.text.trim().to_string();
+	if text.is_empty() {
+		return Vec::new();
+	}
+	let participants = providers
+		.iter()
+		.filter(|provider| {
+			enabled.iter().any(|id| id == provider.id())
+				&& provider
+					.capabilities()
+					.contains(&ProviderCapability::Search)
+				&& query
+					.media_kind
+					.is_none_or(|kind| provider.supported_media_kinds().contains(&kind))
+		})
+		.map(|provider| provider.search(query))
+		.collect::<Vec<_>>();
+
+	let mut hits = Vec::new();
+	for result in join_all(participants).await {
+		match result {
+			Ok(mut found) => hits.append(&mut found),
+			Err(error) => tracing::warn!(?error, "Provider search failed"),
+		}
+	}
+
+	hits.sort_by(score_order);
+	hits
 }
 
 pub(crate) fn normalize_metadata(
@@ -449,6 +556,7 @@ mod tests {
 	use super::*;
 	use metadata_integrations::{
 		ConfidenceFactor, ExternalMediaMetadata, ExternalMetadata, MatchCandidate,
+		SearchOutcome,
 	};
 
 	#[test]
@@ -510,5 +618,336 @@ mod tests {
 			"2024-03-04"
 		);
 		assert_eq!(candidate.fields[&MetadataField::Authors], json!(["Writer"]));
+	}
+
+	// -- search -------------------------------------------------------------
+
+	struct StubProvider {
+		id: &'static str,
+		hits: Vec<SearchHit>,
+		fails: bool,
+		with_search: bool,
+	}
+
+	impl StubProvider {
+		fn new(
+			id: &'static str,
+			hits: Vec<SearchHit>,
+		) -> Arc<dyn IngestMetadataProvider> {
+			Arc::new(Self {
+				id,
+				hits,
+				fails: false,
+				with_search: true,
+			})
+		}
+
+		fn failing(id: &'static str) -> Arc<dyn IngestMetadataProvider> {
+			Arc::new(Self {
+				id,
+				hits: Vec::new(),
+				fails: true,
+				with_search: true,
+			})
+		}
+
+		fn without_search(id: &'static str) -> Arc<dyn IngestMetadataProvider> {
+			Arc::new(Self {
+				id,
+				hits: vec![hit(id, "1", 1.0)],
+				fails: false,
+				with_search: false,
+			})
+		}
+	}
+
+	#[async_trait]
+	impl IngestMetadataProvider for StubProvider {
+		fn id(&self) -> &'static str {
+			self.id
+		}
+
+		fn name(&self) -> &'static str {
+			self.id
+		}
+
+		fn version(&self) -> &'static str {
+			"stub"
+		}
+
+		fn supported_media_kinds(&self) -> &[IngestMediaKind] {
+			static KINDS: [IngestMediaKind; 2] =
+				[IngestMediaKind::ComicArchive, IngestMediaKind::Epub];
+			&KINDS
+		}
+
+		fn capabilities(&self) -> &[ProviderCapability] {
+			if self.with_search {
+				&[ProviderCapability::Search]
+			} else {
+				&[]
+			}
+		}
+
+		fn settings(&self) -> &[SettingDefinition] {
+			&[]
+		}
+
+		async fn identify(
+			&self,
+			_book: &BookSnapshot,
+			_settings: &SettingValues,
+		) -> Result<Vec<ProviderIdentity>, ProviderError> {
+			Ok(Vec::new())
+		}
+
+		async fn lookup(
+			&self,
+			_book: &BookSnapshot,
+			_identity: &ProviderIdentity,
+			_settings: &SettingValues,
+		) -> Result<Vec<MetadataCandidate>, ProviderError> {
+			Ok(Vec::new())
+		}
+
+		async fn search(
+			&self,
+			_query: &SearchQuery,
+		) -> Result<Vec<SearchHit>, ProviderError> {
+			if self.fails {
+				Err(ProviderError::RateLimited {
+					provider_id: self.id.to_string(),
+				})
+			} else {
+				Ok(self.hits.clone())
+			}
+		}
+	}
+
+	fn hit(provider: &str, external: &str, score: f32) -> SearchHit {
+		SearchHit {
+			provider_id: provider.to_string(),
+			external_id: external.to_string(),
+			title: "Title".to_string(),
+			year: None,
+			cover_url: None,
+			summary: None,
+			score,
+		}
+	}
+
+	fn search_query(media_kind: Option<IngestMediaKind>) -> SearchQuery {
+		SearchQuery {
+			text: "batman".to_string(),
+			media_kind,
+			limit: 10,
+		}
+	}
+
+	#[tokio::test]
+	async fn search_all_filters_disabled_and_sorts_by_score() {
+		let providers: Vec<Arc<dyn IngestMetadataProvider>> = vec![
+			StubProvider::new("a", vec![hit("a", "1", 0.4), hit("a", "2", 0.9)]),
+			StubProvider::new("b", vec![hit("b", "1", 0.7)]),
+			StubProvider::new("c", vec![hit("c", "1", 1.0)]),
+		];
+		let enabled = vec!["a".to_string(), "b".to_string()];
+		let hits = search_all(&providers, &search_query(None), &enabled).await;
+		let ids: Vec<String> = hits
+			.iter()
+			.map(|hit| format!("{}:{}", hit.provider_id, hit.external_id))
+			.collect();
+		assert_eq!(ids, vec!["a:2", "b:1", "a:1"]);
+	}
+
+	#[tokio::test]
+	async fn search_all_isolates_provider_errors_and_skips_capability() {
+		let providers: Vec<Arc<dyn IngestMetadataProvider>> = vec![
+			StubProvider::new("ok", vec![hit("ok", "1", 0.5)]),
+			StubProvider::failing("rate-limited"),
+			StubProvider::without_search("no-search"),
+		];
+		let enabled = vec![
+			"ok".to_string(),
+			"rate-limited".to_string(),
+			"no-search".to_string(),
+		];
+		let hits = search_all(&providers, &search_query(None), &enabled).await;
+		assert_eq!(hits.len(), 1);
+		assert_eq!(hits[0].provider_id, "ok");
+	}
+
+	#[tokio::test]
+	async fn search_all_filters_by_requested_media_kind() {
+		let providers: Vec<Arc<dyn IngestMetadataProvider>> =
+			vec![StubProvider::new("a", vec![hit("a", "1", 0.5)])];
+		let enabled = vec!["a".to_string()];
+		let hits = search_all(
+			&providers,
+			&search_query(Some(IngestMediaKind::Epub)),
+			&enabled,
+		)
+		.await;
+		assert_eq!(hits.len(), 1);
+		// ComicArchive is in the stub's supported kinds, but Pdf is not.
+		let hits = search_all(
+			&providers,
+			&search_query(Some(IngestMediaKind::Pdf)),
+			&enabled,
+		)
+		.await;
+		assert!(hits.is_empty());
+	}
+
+	#[tokio::test]
+	async fn search_all_ignores_blank_queries() {
+		let providers: Vec<Arc<dyn IngestMetadataProvider>> =
+			vec![StubProvider::new("a", vec![hit("a", "1", 0.5)])];
+		let enabled = vec!["a".to_string()];
+		let hits = search_all(
+			&providers,
+			&SearchQuery {
+				text: "   ".to_string(),
+				media_kind: None,
+				limit: 10,
+			},
+			&enabled,
+		)
+		.await;
+		assert!(hits.is_empty());
+	}
+
+	// -- IntegrationProvider::search ---------------------------------------
+
+	struct FakeIntegrationClient {
+		/// Last observed search limit, encoded as limit+1 (0 = none seen).
+		seen_limit: std::sync::atomic::AtomicU32,
+	}
+
+	#[async_trait::async_trait]
+	impl MetadataProvider for FakeIntegrationClient {
+		fn id(&self) -> &'static str {
+			"fake"
+		}
+
+		fn name(&self) -> &'static str {
+			"Fake"
+		}
+
+		fn supported_media_types(&self) -> Vec<MediaType> {
+			vec![MediaType::Comic]
+		}
+
+		async fn search_series(
+			&self,
+			_query: &IntegrationSearchQuery,
+		) -> Result<SearchOutcome, MetadataProviderError> {
+			Ok(SearchOutcome::default())
+		}
+
+		async fn search_media(
+			&self,
+			query: &IntegrationSearchQuery,
+		) -> Result<SearchOutcome, MetadataProviderError> {
+			self.seen_limit.store(
+				query.limit.unwrap_or(0) + 1,
+				std::sync::atomic::Ordering::Relaxed,
+			);
+			Ok(SearchOutcome {
+				candidates: vec![
+					MatchCandidate {
+						provider: "fake".to_string(),
+						external_id: "9".to_string(),
+						metadata: ExternalMetadata::Media(ExternalMediaMetadata {
+							external_id: "9".to_string(),
+							title: Some("Batman".to_string()),
+							year: Some(1940),
+							cover_url: Some("https://example.test/cover.png".to_string()),
+							summary: Some("The Dark Knight".to_string()),
+							..Default::default()
+						}),
+						// Unscored: exercises the title-similarity fallback.
+						confidence: 0.0,
+						confidence_factors: Vec::new(),
+					},
+					MatchCandidate {
+						provider: "fake".to_string(),
+						external_id: "8".to_string(),
+						metadata: ExternalMetadata::Media(ExternalMediaMetadata {
+							external_id: "8".to_string(),
+							title: Some("Detective Comics".to_string()),
+							..Default::default()
+						}),
+						confidence: 0.55,
+						confidence_factors: Vec::new(),
+					},
+				],
+				requested: 2,
+			})
+		}
+
+		async fn fetch_series_metadata(
+			&self,
+			_external_id: &str,
+		) -> Result<ExternalSeriesMetadata, MetadataProviderError> {
+			Err(MetadataProviderError::Other("unused".to_string()))
+		}
+
+		async fn fetch_media_metadata(
+			&self,
+			_external_id: &str,
+		) -> Result<ExternalMediaMetadata, MetadataProviderError> {
+			Err(MetadataProviderError::Other("unused".to_string()))
+		}
+
+		async fn verify_credentials(
+			&self,
+		) -> Result<
+			metadata_integrations::ProviderCredentialVerification,
+			MetadataProviderError,
+		> {
+			Ok(metadata_integrations::ProviderCredentialVerification {
+				response_status: 200,
+				is_valid: true,
+				error: None,
+			})
+		}
+	}
+
+	#[tokio::test]
+	async fn integration_search_maps_hits_and_falls_back_to_title_similarity() {
+		let client = Arc::new(FakeIntegrationClient {
+			seen_limit: std::sync::atomic::AtomicU32::new(0),
+		});
+		let provider = IntegrationProvider::new(client.clone());
+		let hits = provider
+			.search(&SearchQuery {
+				text: "Batman".to_string(),
+				media_kind: None,
+				limit: 7,
+			})
+			.await
+			.unwrap();
+
+		assert_eq!(
+			client.seen_limit.load(std::sync::atomic::Ordering::Relaxed),
+			8
+		);
+		assert_eq!(hits.len(), 2);
+		assert_eq!(hits[0].provider_id, "fake");
+		assert_eq!(hits[0].external_id, "9");
+		assert_eq!(hits[0].title, "Batman");
+		assert_eq!(hits[0].year, Some(1940));
+		assert_eq!(
+			hits[0].cover_url.as_deref(),
+			Some("https://example.test/cover.png")
+		);
+		assert!(
+			hits[0].score > 0.9,
+			"exact title should score high: {}",
+			hits[0].score
+		);
+		assert!((hits[1].score - 0.55).abs() < 1e-6);
+		assert_eq!(hits[1].external_id, "8");
 	}
 }

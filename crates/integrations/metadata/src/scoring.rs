@@ -95,6 +95,13 @@ fn token_overlap_score(query_title: &str, candidate_title: &str) -> f64 {
 	0.7 * candidate_coverage + 0.3 * query_coverage
 }
 
+/// Title-similarity fallback for search results that arrive without a
+/// provider-computed confidence.  Returns a value in `0.0..=1.0` from token
+/// overlap (query coverage weighted 0.3, candidate coverage 0.7).
+pub fn title_similarity(query_title: &str, candidate_title: &str) -> f64 {
+	token_overlap_score(query_title, candidate_title)
+}
+
 impl MatchScorer {
 	const ISBN_FLOOR: f32 = 0.98;
 	const EXACT_TITLE_FLOOR: f32 = 0.90;

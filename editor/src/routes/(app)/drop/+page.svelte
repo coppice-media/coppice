@@ -13,6 +13,7 @@
 	import ProgressIndicator from '$lib/components/ProgressIndicator.svelte';
 	import { getEditorSession } from '$lib/editor/session.svelte';
 	import { request, stageIngestUploads, type UploadFileInput } from '$lib/graphql/client';
+	import { uuid } from '$lib/utils/uuid';
 	import {
 		DiscardIngestItemDocument,
 		EnqueueIngestAnalysisDocument,
@@ -46,7 +47,7 @@
 				libraryId,
 				files: entries,
 				startAnalysis: true,
-				idempotencyKey: crypto.randomUUID()
+				idempotencyKey: uuid()
 			}),
 		onSuccess: (result) => {
 				files = [];

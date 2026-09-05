@@ -523,11 +523,20 @@ mod tests {
 	fn patch_authors_accept_komga_cover_role_spellings() {
 		// Komf sends `COVER` (Komga's role name); older clients may send `cover_artist`.
 		let columns = map_author_columns(&[
-			KomgaAuthor { name: "A".into(), role: "COVER".into() },
-			KomgaAuthor { name: "B".into(), role: "cover_artist".into() },
+			KomgaAuthor {
+				name: "A".into(),
+				role: "COVER".into(),
+			},
+			KomgaAuthor {
+				name: "B".into(),
+				role: "cover_artist".into(),
+			},
 		])
 		.unwrap();
-		assert_eq!(columns.cover_artists, vec!["A".to_string(), "B".to_string()]);
+		assert_eq!(
+			columns.cover_artists,
+			vec!["A".to_string(), "B".to_string()]
+		);
 	}
 
 	#[test]

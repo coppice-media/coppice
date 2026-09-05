@@ -1,6 +1,8 @@
 pub mod client;
 pub mod error;
 pub mod merge;
+#[cfg(test)]
+mod mock_http;
 mod provider;
 mod providers;
 pub mod rate_limit;
@@ -13,7 +15,7 @@ pub use error::{MetadataProviderError, MetadataResult};
 pub use merge::{AutoApplyConfig, FieldMerger, MergeStrategy, MetadataFieldOverride};
 pub use provider::{MetadataProvider, ProviderCredentialVerification};
 pub use rate_limit::RateLimiter;
-pub use scoring::MatchScorer;
+pub use scoring::{title_similarity, MatchScorer};
 pub use types::{
 	ConfidenceFactor, ExternalMediaMetadata, ExternalMetadata, ExternalSeriesMetadata,
 	MatchCandidate, MediaType, MetadataField, PublicationStatus, SearchOutcome,

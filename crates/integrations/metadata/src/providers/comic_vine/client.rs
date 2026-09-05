@@ -32,6 +32,7 @@ const COMIC_VINE_DEFAULT_RATE_LIMIT: u32 = 1;
 pub struct ComicVineClient {
 	client: ClientWithMiddleware,
 	api_key: String,
+	api_url: String,
 	rate_limiter: RateLimiter,
 }
 
@@ -64,10 +65,19 @@ impl ComicVineClient {
 		Self {
 			client: with_cache,
 			api_key,
+			api_url: Self::API_URL.to_string(),
 			rate_limiter: RateLimiter::new(
 				rate_limit.unwrap_or(COMIC_VINE_DEFAULT_RATE_LIMIT),
 			),
 		}
+	}
+
+	/// Test-only override of the API base URL, used to point the client at a
+	/// local mock server.
+	#[cfg(test)]
+	fn with_api_url(mut self, api_url: impl Into<String>) -> Self {
+		self.api_url = api_url.into();
+		self
 	}
 
 	/// Send a GET request to the ComicVine API
@@ -81,7 +91,7 @@ impl ComicVineClient {
 	) -> Result<T, MetadataProviderError> {
 		self.rate_limiter.until_ready().await;
 
-		let mut url = Url::parse(&format!("{}{}", Self::API_URL, path))
+		let mut url = Url::parse(&format!("{}{}", self.api_url, path))
 			.map_err(|e| MetadataProviderError::Other(format!("Invalid URL: {}", e)))?;
 
 		url.query_pairs_mut()
@@ -467,7 +477,7 @@ impl MetadataProvider for ComicVineClient {
 	async fn verify_credentials(
 		&self,
 	) -> Result<ProviderCredentialVerification, MetadataProviderError> {
-		let mut url = Url::parse("https://comicvine.gamespot.com/api/characters/")
+		let mut url = Url::parse(&format!("{}{}", self.api_url, "/characters/"))
 			.map_err(|e| MetadataProviderError::Other(format!("Invalid URL: {}", e)))?;
 
 		url.query_pairs_mut()
@@ -550,5 +560,91 @@ mod tests {
 		let verification = client.verify_credentials().await;
 		assert!(verification.is_ok());
 		assert!(verification.unwrap().is_valid);
+	}
+
+	#[tokio::test]
+	async fn search_media_maps_mocked_issue_response() {
+		use crate::mock_http::{render_ok, MockServer};
+
+		let search_body = serde_json::json!({
+			"error": "OK",
+			"status_code": 1,
+			"results": [{ "id": 2340 }]
+		})
+		.to_string();
+		let issue_body = serde_json::json!({
+			"error": "OK",
+			"status_code": 1,
+			"results": {
+				"id": 2340,
+				"name": "The Case of the Chemical Syndicate",
+				"description": "<p>First appearance of Batman.</p>",
+				"issue_number": "1",
+				"cover_date": "1939-05-01",
+				"volume": { "id": 796, "name": "Detective Comics" },
+				"image": {
+					"super_url": "https://comicvine.gamespot.com/cover.jpg"
+				},
+				"person_credits": [
+					{ "name": "Bill Finger", "role": "writer" },
+					{ "name": "Bob Kane", "role": "penciler" }
+				]
+			}
+		})
+		.to_string();
+
+		let server =
+			MockServer::spawn(vec![render_ok(&search_body), render_ok(&issue_body)]);
+		let client = ComicVineClient::new("test-key".to_string(), Some(u32::MAX))
+			.with_api_url(server.url.clone());
+
+		let query = SearchQuery {
+			title: "Batman".to_string(),
+			limit: Some(5),
+			..Default::default()
+		};
+		let outcome = client
+			.search_media(&query)
+			.await
+			.expect("search should succeed against the mock");
+
+		assert_eq!(outcome.requested, 1);
+		assert_eq!(outcome.candidates.len(), 1);
+		let candidate = &outcome.candidates[0];
+		assert_eq!(candidate.provider, "comic_vine");
+		assert_eq!(candidate.external_id, "2340");
+
+		let media = candidate.metadata.as_media().unwrap();
+		assert_eq!(
+			media.title.as_deref(),
+			Some("The Case of the Chemical Syndicate")
+		);
+		assert_eq!(media.series_name.as_deref(), Some("Detective Comics"));
+		assert_eq!(media.year, Some(1939));
+		assert_eq!(media.month, Some(5));
+		assert_eq!(media.day, Some(1));
+		assert_eq!(
+			media.cover_url.as_deref(),
+			Some("https://comicvine.gamespot.com/cover.jpg")
+		);
+		assert_eq!(
+			media.writers.as_deref(),
+			Some(["Bill Finger".to_string()].as_slice())
+		);
+		assert_eq!(
+			media.artists.as_deref(),
+			Some(["Bob Kane".to_string()].as_slice())
+		);
+
+		// The search hits /search/ with the issue resource and key, then the
+		// per-hit issue detail fetch uses the 4000 issue prefix.
+		let requests = server.requests();
+		assert_eq!(requests.len(), 2);
+		assert!(requests[0].starts_with("GET /search/?"));
+		assert!(requests[0].contains("api_key=test-key"));
+		assert!(requests[0].contains("format=json"));
+		assert!(requests[0].contains("query=Batman"));
+		assert!(requests[0].contains("resources=issue"));
+		assert!(requests[1].starts_with("GET /issue/4000-2340/"));
 	}
 }

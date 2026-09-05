@@ -61,7 +61,8 @@ pub struct IngestPageEntry {
 /// in particular they never get a database handle or a mutable library path.
 #[derive(Debug, Clone)]
 pub struct BookSnapshot {
-	/// Opaque drop-item id (never a filesystem path).
+	/// Opaque ingest target id (never a filesystem path): the drop item id
+	/// for staged runs, the media id for library-wide rework runs.
 	pub drop_item_id: String,
 	pub library_id: String,
 	/// Absolute path of the immutable staged copy.  Plugins may open it
@@ -273,12 +274,37 @@ pub struct MetadataCandidate {
 	pub provenance: Value,
 }
 
+/// A free-text catalog search request for the editor.  `text` is the raw user
+/// query; `media_kind` optionally restricts which providers participate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchQuery {
+	pub text: String,
+	pub media_kind: Option<IngestMediaKind>,
+	pub limit: u8,
+}
+
+/// One media-level hit from a provider catalog search (an issue, volume, or
+/// book -- never a series).  `score` is `0.0..=1.0` from the provider's own
+/// scorer, falling back to title similarity when the provider does not score.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchHit {
+	pub provider_id: String,
+	pub external_id: String,
+	pub title: String,
+	pub year: Option<i32>,
+	pub cover_url: Option<String>,
+	pub summary: Option<String>,
+	/// `0.0..=1.0`.
+	pub score: f32,
+}
+
 /// Capabilities a provider descriptor advertises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProviderCapability {
 	Identify,
 	Lookup,
+	Search,
 	Tags,
 	AiEnrichment,
 }
@@ -297,11 +323,14 @@ pub enum ProviderError {
 	},
 	#[error("provider {provider_id} rate limited")]
 	RateLimited { provider_id: String },
+	#[error("provider {provider_id} does not support this operation")]
+	Unsupported { provider_id: String },
 }
 
 /// Higher-level façade over `metadata_integrations::MetadataProvider`:
-/// `identify` finds candidates for "which external record is this", and
-/// `lookup` expands one identity into a field-level candidate.
+/// `identify` finds candidates for "which external record is this", `lookup`
+/// expands one identity into a field-level candidate, and `search` performs a
+/// free-text catalog search (editor-driven, media-level hits only).
 #[async_trait]
 pub trait IngestMetadataProvider: Send + Sync {
 	fn id(&self) -> &'static str;
@@ -321,6 +350,14 @@ pub trait IngestMetadataProvider: Send + Sync {
 		identity: &ProviderIdentity,
 		settings: &SettingValues,
 	) -> Result<Vec<MetadataCandidate>, ProviderError>;
+
+	/// Free-text search across the provider's catalog.  Default: unsupported.
+	async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>, ProviderError> {
+		let _ = query;
+		Err(ProviderError::Unsupported {
+			provider_id: self.id().to_string(),
+		})
+	}
 }
 
 /// How one field is resolved by an apply/merge request.

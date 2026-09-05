@@ -4,7 +4,7 @@ use async_graphql::{Context, Error, Object, Result, ID};
 use metadata_integrations::MergeStrategy;
 use models::{
 	entity::{
-		ingest_drop_item, ingest_metadata_application, ingest_plugin_setting,
+		ingest_drop_item, ingest_metadata_application, ingest_plugin_setting, media,
 		media_metadata,
 	},
 	shared::enums::UserPermission,
@@ -15,7 +15,7 @@ use sea_orm::{
 };
 use serde_json::{json, Value};
 use stump_core::ingest::{
-	contract::{FieldPick, SettingValues},
+	contract::{FieldPick, ProviderIdentity, SettingValues},
 	providers::apply::{
 		apply_to_media, resolve_picks_for_context, validate_picks, ResolvedFields,
 	},
@@ -31,9 +31,10 @@ use crate::{
 		StageIngestUploadsInput,
 	},
 	object::ingest::{
-		IngestAnalysisJob, IngestBulkApplyFailure, IngestBulkApplyPayload,
-		IngestDropFolder, IngestDropItem, IngestProviderDescriptor,
-		IngestProviderSettings, IngestQualityCheckDescriptor, IngestQualityCheckSettings,
+		IngestAnalysisJob, IngestApplyPayload, IngestBulkApplyFailure,
+		IngestBulkApplyPayload, IngestDropFolder, IngestDropItem,
+		IngestMetadataCandidate, IngestProviderDescriptor, IngestProviderSettings,
+		IngestQualityCheckDescriptor, IngestQualityCheckSettings,
 		StageIngestUploadsPayload,
 	},
 };
@@ -310,6 +311,45 @@ impl IngestMutation {
 			.map_err(core_error)
 	}
 
+	/// Run the staged quality checks over existing library media rows. One
+	/// analysis job processes the whole batch; reports persist against the
+	/// media ids.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageJobs)")]
+	async fn run_library_quality(
+		&self,
+		ctx: &Context<'_>,
+		media_ids: Vec<ID>,
+	) -> Result<IngestAnalysisJob> {
+		let ids = media_ids.into_iter().map(|id| id.to_string()).collect();
+		ctx.data::<CoreContext>()?
+			.ingest()
+			.coordinator
+			.enqueue_media(ids, None, false)
+			.await
+			.map(IngestAnalysisJob::from)
+			.map_err(core_error)
+	}
+
+	/// Run provider identify/lookup over existing library media rows,
+	/// optionally restricted to the given provider ids. Candidates persist
+	/// against the media ids and stay pending until applied.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageJobs)")]
+	async fn match_library_media(
+		&self,
+		ctx: &Context<'_>,
+		media_ids: Vec<ID>,
+		providers: Option<Vec<String>>,
+	) -> Result<IngestAnalysisJob> {
+		let ids = media_ids.into_iter().map(|id| id.to_string()).collect();
+		ctx.data::<CoreContext>()?
+			.ingest()
+			.coordinator
+			.enqueue_media(ids, providers, false)
+			.await
+			.map(IngestAnalysisJob::from)
+			.map_err(core_error)
+	}
+
 	#[graphql(
 		guard = "PermissionGuard::new(&[UserPermission::UploadFile, UserPermission::ManageLibrary])"
 	)]
@@ -333,65 +373,133 @@ impl IngestMutation {
 		&self,
 		ctx: &Context<'_>,
 		input: ApplyIngestMetadataInput,
-	) -> Result<IngestDropItem> {
+	) -> Result<IngestApplyPayload> {
 		let picks = convert_selections(input.selections)?;
 		let strategy = input.strategy.unwrap_or_default();
 		let core = ctx.data::<CoreContext>()?;
 		let auth = ctx.data::<stump_auth::AuthContext>()?;
-		let item_id = input.drop_item_id.to_string();
-		let item = core
-			.ingest()
-			.store
-			.item(&item_id)
-			.await
-			.map_err(core_error)?
-			.ok_or_else(|| Error::new("Ingest item not found"))?;
-		let candidates = core
-			.ingest()
-			.store
-			.candidates(&item_id)
-			.await
-			.map_err(core_error)?;
-		let existing = if let Some(media_id) = &item.media_id {
-			media_metadata::Entity::find()
-				.filter(media_metadata::Column::MediaId.eq(media_id))
-				.one(core.conn.as_ref())
-				.await?
-		} else {
-			None
-		};
-		let resolved = resolve_picks_for_context(
-			&picks,
-			&candidates,
-			existing.as_ref(),
-			&[],
-			strategy,
-			Some(&item.id),
-			Some(&item.source_sha256),
-		)
-		.map_err(core_error)?;
-		if let Some(media_id) = &item.media_id {
-			apply_to_media(core.conn.as_ref(), media_id, resolved, &auth.user.id)
-				.await
+		let drop_item_id = input.drop_item_id.map(|id| id.to_string());
+		let media_id = input.media_id.map(|id| id.to_string());
+		match (drop_item_id, media_id) {
+			(Some(item_id), None) => {
+				let item = core
+					.ingest()
+					.store
+					.item(&item_id)
+					.await
+					.map_err(core_error)?
+					.ok_or_else(|| Error::new("Ingest item not found"))?;
+				let candidates = core
+					.ingest()
+					.store
+					.candidates(&item_id)
+					.await
+					.map_err(core_error)?;
+				let existing = if let Some(linked_media_id) = &item.media_id {
+					media_metadata::Entity::find()
+						.filter(media_metadata::Column::MediaId.eq(linked_media_id))
+						.one(core.conn.as_ref())
+						.await?
+				} else {
+					None
+				};
+				let resolved = resolve_picks_for_context(
+					&picks,
+					&candidates,
+					existing.as_ref(),
+					&[],
+					strategy,
+					Some(&item.id),
+					Some(&item.source_sha256),
+				)
 				.map_err(core_error)?;
-		} else {
-			persist_pending_fields(
-				core,
-				&item,
-				&picks,
-				resolved,
-				strategy,
-				&auth.user.id,
-			)
-			.await?;
+				if let Some(linked_media_id) = &item.media_id {
+					apply_to_media(
+						core.conn.as_ref(),
+						linked_media_id,
+						resolved,
+						&auth.user.id,
+					)
+					.await
+					.map_err(core_error)?;
+				} else {
+					persist_pending_fields(
+						core,
+						&item,
+						&picks,
+						resolved,
+						strategy,
+						&auth.user.id,
+					)
+					.await?;
+				}
+				let item = core
+					.ingest()
+					.store
+					.item(&item_id)
+					.await
+					.map_err(core_error)?
+					.ok_or_else(|| {
+						Error::new("Ingest item disappeared after metadata apply")
+					})?;
+				Ok(IngestApplyPayload {
+					drop_item: Some(IngestDropItem::from(item)),
+					media: None,
+				})
+			},
+			(None, Some(media_id)) => {
+				let media_row = media::Entity::find_by_id(&media_id)
+					.one(core.conn.as_ref())
+					.await
+					.map_err(core_error)?
+					.ok_or_else(|| Error::new("Media not found"))?;
+				let candidates = core
+					.ingest()
+					.store
+					.candidates_for_media(&media_id)
+					.await
+					.map_err(core_error)?;
+				let existing = media_metadata::Entity::find()
+					.filter(media_metadata::Column::MediaId.eq(&media_id))
+					.one(core.conn.as_ref())
+					.await?;
+				// The media query already scopes candidates to this media row;
+				// the digest expectation is unnecessary here.
+				let resolved = resolve_picks_for_context(
+					&picks,
+					&candidates,
+					existing.as_ref(),
+					&[],
+					strategy,
+					None,
+					None,
+				)
+				.map_err(core_error)?;
+				// Same apply path used when approving a staged item that
+				// already produced its media row.
+				apply_to_media(core.conn.as_ref(), &media_id, resolved, &auth.user.id)
+					.await
+					.map_err(core_error)?;
+				let metadata = media_metadata::Entity::find()
+					.filter(media_metadata::Column::MediaId.eq(&media_id))
+					.one(core.conn.as_ref())
+					.await?
+					.map(crate::object::media_metadata::MediaMetadata::from);
+				Ok(IngestApplyPayload {
+					drop_item: None,
+					media: Some(crate::object::media::Media {
+						model: media_row,
+						metadata,
+					}),
+				})
+			},
+			(Some(_), Some(_)) => Err(Error::new(
+				"applyIngestMetadata accepts exactly one of dropItemId or mediaId",
+			)),
+			(None, None) => Err(Error::new(
+				"applyIngestMetadata requires dropItemId or mediaId",
+			)),
 		}
-		core.ingest()
-			.store
-			.item(&item_id)
-			.await
-			.map_err(core_error)?
-			.ok_or_else(|| Error::new("Ingest item disappeared after metadata apply"))
-			.map(IngestDropItem::from)
 	}
 
 	#[graphql(guard = "PermissionGuard::one(UserPermission::EditMetadata)")]
@@ -410,14 +518,21 @@ impl IngestMutation {
 				.apply_ingest_metadata(
 					ctx,
 					ApplyIngestMetadataInput {
-						drop_item_id: id,
+						drop_item_id: Some(id),
+						media_id: None,
 						selections: selections.clone(),
 						strategy,
 					},
 				)
 				.await
 			{
-				Ok(item) => applied.push(item),
+				Ok(payload) => match payload.drop_item {
+					Some(item) => applied.push(item),
+					None => failures.push(IngestBulkApplyFailure {
+						drop_item_id: drop_item_id.into(),
+						message: "bulk apply only supports drop items".to_string(),
+					}),
+				},
 				Err(error) => failures.push(IngestBulkApplyFailure {
 					drop_item_id: drop_item_id.into(),
 					message: error.message,
@@ -426,7 +541,6 @@ impl IngestMutation {
 		}
 		Ok(IngestBulkApplyPayload { applied, failures })
 	}
-
 	#[graphql(guard = "PermissionGuard::one(UserPermission::EditMetadata)")]
 	async fn approve_ingest_item(
 		&self,
@@ -524,6 +638,45 @@ impl IngestMutation {
 				error: None,
 			})
 			.map_err(core_error)
+	}
+
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageJobs)")]
+	async fn lookup_ingest_candidate(
+		&self,
+		ctx: &Context<'_>,
+		drop_item_id: ID,
+		provider_id: String,
+		external_id: String,
+	) -> Result<IngestMetadataCandidate> {
+		let core = ctx.data::<CoreContext>()?;
+		let services = core.ingest();
+		let item_id = drop_item_id.to_string();
+		let snapshot = services
+			.store
+			.snapshot(&item_id)
+			.await
+			.map_err(core_error)?;
+		let identity = ProviderIdentity {
+			provider_id,
+			display: external_id.clone(),
+			external_id,
+			confidence: 0.0,
+			factors: json!({ "result_kind": "media" }),
+		};
+		let candidate = services
+			.providers
+			.lookup(&snapshot, &identity)
+			.await
+			.map_err(core_error)?;
+		let mut saved = services
+			.store
+			.save_candidates(&item_id, &[candidate])
+			.await
+			.map_err(core_error)?;
+		saved
+			.pop()
+			.map(IngestMetadataCandidate::from)
+			.ok_or_else(|| Error::new("Candidate was not persisted"))
 	}
 
 	#[graphql(guard = "PermissionGuard::one(UserPermission::MetadataProviderManage)")]

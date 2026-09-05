@@ -20,6 +20,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '$lib/components/ui/table';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
+	import ProviderSearchDialog from '$lib/components/ProviderSearchDialog.svelte';
 	import { request } from '$lib/graphql/client';
 	import {
 		BulkApplyIngestMetadataDocument,
@@ -56,6 +57,8 @@
 	let year = $state('');
 	let genres = $state('');
 	let failures = $state<Failure[]>([]);
+	let searchOpen = $state(false);
+	let searchItemId = $state<string | null>(null);
 
 	const bulkQuery = createQuery(() => ({
 		queryKey: ['bulk-items', selectedIds],
@@ -104,6 +107,10 @@
 	function removeId(id: string): void {
 		selectedIds = selectedIds.filter((current) => current !== id);
 		table.resetRowSelection();
+	}
+	function openProviderSearch(id: string): void {
+		searchItemId = id;
+		searchOpen = true;
 	}
 
 	function parseValue(raw: string, field: string): unknown {
@@ -164,8 +171,16 @@
 		<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
 			<Card><CardHeader><CardTitle>Recipe</CardTitle><CardDescription>Only non-empty fields are sent as MANUAL picks; other metadata stays unchanged.</CardDescription></CardHeader><CardContent class="grid gap-4"><label class="grid gap-2 text-sm font-medium">Title<Input bind:value={title} /></label><label class="grid gap-2 text-sm font-medium">Summary<Textarea rows={3} bind:value={summary} /></label><label class="grid gap-2 text-sm font-medium">Publisher<Input bind:value={publisher} /></label><label class="grid gap-2 text-sm font-medium">Year<Input type="number" bind:value={year} /></label><label class="grid gap-2 text-sm font-medium">Genres<Textarea rows={2} bind:value={genres} /></label><Button disabled={!canApply || applyMutation.isPending} onclick={applyRecipe}>{applyMutation.isPending ? 'Applying…' : `Apply recipe to ${selectedCount} selected`}</Button></CardContent></Card>
 			<Card><CardHeader><CardTitle>Failures</CardTitle><CardDescription>Each failure is isolated to one item; successful items remain applied.</CardDescription></CardHeader><CardContent>{#if failures.length}<div class="flex flex-col gap-3">{#each failures as failure (failure.dropItemId)}<div class="rounded-lg border border-destructive/30 bg-destructive/5 p-3"><p class="font-medium">{failure.dropItemId}</p><p class="text-sm text-muted-foreground">{failure.message}</p></div>{/each}</div>{:else}<Empty><EmptyHeader><EmptyTitle>No failures</EmptyTitle><EmptyDescription>Bulk apply results will appear here when a recipe is submitted.</EmptyDescription></EmptyHeader></Empty>{/if}</CardContent></Card>
+			<CardContent class="p-0"><div class="overflow-x-auto"><Table><TableHeader><TableRow><TableHead class="w-12"><input type="checkbox" checked={table.getIsAllRowsSelected()} aria-label="Select all loaded items" onclick={() => table.toggleAllRowsSelected(!table.getIsAllRowsSelected())} /></TableHead><TableHead>Source</TableHead><TableHead>Size</TableHead><TableHead>Status</TableHead><TableHead>Quality</TableHead><TableHead class="text-right">Metadata</TableHead></TableRow></TableHeader><TableBody>{#each table.getRowModel().rows as row (row.id)}<TableRow data-state={row.getIsSelected() ? 'selected' : undefined}><TableCell><input type="checkbox" checked={row.getIsSelected()} aria-label={`Select ${row.original.filename}`} onclick={row.getToggleSelectedHandler()} /></TableCell><TableCell class="max-w-[28rem]"><div class="truncate font-medium">{row.original.filename}</div><div class="truncate text-xs text-muted-foreground">{row.original.id}</div></TableCell><TableCell class="whitespace-nowrap text-muted-foreground">{formatBytes(row.original.sizeBytes)}</TableCell><TableCell><StatusBadge status={row.original.status} /></TableCell><TableCell>{row.original.qualityReport?.score ?? '—'}</TableCell><TableCell class="text-right"><Button size="sm" variant="outline" onclick={() => openProviderSearch(row.original.id)}>Find metadata</Button></TableCell></TableRow>{/each}</TableBody></Table></div></CardContent>
 		</div>
 	{/if}
 	<Separator />
+	<ProviderSearchDialog
+		bind:open={searchOpen}
+		dropItemId={searchItemId}
+		onApplied={() => {
+			void queryClient.invalidateQueries({ queryKey: ['bulk-items'] });
+		}}
+	/>
 	<p class="text-sm text-muted-foreground">This table uses TanStack Table v9 row IDs, so selection remains tied to immutable drop-item IDs rather than row positions.</p>
 </div>

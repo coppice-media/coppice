@@ -67,8 +67,13 @@ input ApikeyPermissions @oneOf {
 
 union ApikeyPermissionsOutput = InheritPermissionStruct | UserPermissionStruct
 
+"""
+Exactly one of `drop_item_id` (staged item) or `media_id` (library-wide
+rework target) must be provided.
+"""
 input ApplyIngestMetadataInput {
-	dropItemId: ID!
+	dropItemId: ID
+	mediaId: ID
 	selections: [IngestMetadataFieldSelectionInput!]!
 	strategy: MergeStrategy
 }
@@ -967,7 +972,12 @@ input InProgressBooksInput {
 
 type IngestAnalysisJob {
 	id: ID!
-	dropItemId: ID!
+	dropItemId: ID
+	"""
+	Media targets of a library rework job; empty for staged drop-item
+	jobs.
+	"""
+	mediaIds: [ID!]!
 	jobId: String
 	status: JobStatus!
 	phase: IngestAnalysisPhase!
@@ -988,6 +998,15 @@ enum IngestAnalysisPhase {
 	REVIEW
 	COMMIT
 	DONE
+}
+
+"""
+Result of `applyIngestMetadata`: exactly one side is set, depending on
+whether the input targeted a drop item or a library media row.
+"""
+type IngestApplyPayload {
+	dropItem: IngestDropItem
+	media: Media
 }
 
 type IngestBulkApplyFailure {
@@ -1047,9 +1066,19 @@ enum IngestDropItemStatus {
 	FAILED
 }
 
+enum IngestMediaKind {
+	COMIC_ARCHIVE
+	COMIC_RAR_ARCHIVE
+	EPUB
+	PDF
+	UNKNOWN
+}
+
 type IngestMetadataCandidate {
 	id: ID!
-	dropItemId: ID!
+	dropItemId: ID
+	"Set when the candidate was produced by a library rework run."
+	mediaId: ID
 	provider: String!
 	providerVersion: String!
 	model: String
@@ -1093,6 +1122,7 @@ type IngestProgressEvent {
 enum IngestProviderCapability {
 	IDENTIFY
 	LOOKUP
+	SEARCH
 	TAGS
 	AI_ENRICHMENT
 }
@@ -1153,7 +1183,9 @@ type IngestQualityCheckSettings {
 
 type IngestQualityReport {
 	id: ID!
-	dropItemId: ID!
+	dropItemId: ID
+	"Set when the report was produced by a library rework run."
+	mediaId: ID
 	sourceSha256: String!
 	algorithmVersion: String!
 	score: Int!
@@ -1177,6 +1209,20 @@ type IngestReworkReason {
 	checkId: String!
 	status: IngestQualityStatus!
 	message: String!
+}
+
+"""
+One flattened result of a provider search.  Evidence only: the editor
+turns a chosen hit into a persisted candidate via `lookupIngestCandidate`.
+"""
+type IngestSearchHit {
+	providerId: String!
+	externalId: String!
+	title: String!
+	year: Int
+	coverUrl: String
+	summary: String
+	score: Float!
 }
 
 type IngestSettingDefinition {
@@ -2367,13 +2413,26 @@ type Mutation {
 	resumeIngestAnalysis(jobId: ID!): IngestAnalysisJob!
 	retryIngestAnalysis(jobId: ID!): IngestAnalysisJob!
 	cancelIngestAnalysis(jobId: ID!): IngestAnalysisJob!
+	"""
+	Run the staged quality checks over existing library media rows. One
+	analysis job processes the whole batch; reports persist against the
+	media ids.
+	"""
+	runLibraryQuality(mediaIds: [ID!]!): IngestAnalysisJob!
+	"""
+	Run provider identify/lookup over existing library media rows,
+	optionally restricted to the given provider ids. Candidates persist
+	against the media ids and stay pending until applied.
+	"""
+	matchLibraryMedia(mediaIds: [ID!]!, providers: [String!]): IngestAnalysisJob!
 	discardIngestItem(dropItemId: ID!, reason: String): IngestDropItem!
-	applyIngestMetadata(input: ApplyIngestMetadataInput!): IngestDropItem!
+	applyIngestMetadata(input: ApplyIngestMetadataInput!): IngestApplyPayload!
 	bulkApplyIngestMetadata(input: BulkApplyIngestMetadataInput!): IngestBulkApplyPayload!
 	approveIngestItem(dropItemId: ID!, strategy: MergeStrategy): IngestDropItem!
 	rejectIngestItem(dropItemId: ID!, reason: String): IngestDropItem!
 	setIngestProviderSettings(input: SetIngestProviderSettingsInput!): IngestProviderSettings!
 	verifyIngestProvider(providerId: String!, settings: JSON): ProviderCredentialVerification!
+	lookupIngestCandidate(dropItemId: ID!, providerId: String!, externalId: String!): IngestMetadataCandidate!
 	setIngestQualityCheckSettings(input: SetIngestQualityCheckSettingsInput!): IngestQualityCheckSettings!
 	createSmartList(input: SaveSmartListInput!): SmartList!
 	updateSmartList(id: ID!, input: SaveSmartListInput!): SmartList!
@@ -2844,8 +2903,20 @@ type Query {
 	ingestBulkItems(ids: [ID!]!): [IngestDropItem!]!
 	ingestProviderCatalog(includeDisabled: Boolean! = false): [IngestProviderDescriptor!]!
 	ingestProviderSettings(providerId: String!): IngestProviderSettings
+	ingestProviderSearch(query: String!, mediaKind: IngestMediaKind, providers: [String!], limit: Int = 10): [IngestSearchHit!]!
 	ingestQualityCheckCatalog(includeDisabled: Boolean! = false): [IngestQualityCheckDescriptor!]!
 	ingestQualityCheckSettings(checkId: String!): IngestQualityCheckSettings
+	"""
+	Latest quality report stored against a library media row (library-wide
+	rework). Batch a table column with GraphQL aliases: one field per
+	media id in a single document.
+	"""
+	ingestMediaQualityReport(mediaId: ID!): IngestQualityReport
+	"""
+	Metadata candidates stored against a library media row by a
+	`matchLibraryMedia` run.
+	"""
+	ingestMediaMetadataCandidates(mediaId: ID!): [IngestMetadataCandidate!]!
 	smartLists(input: SmartListsInput! = {all: null, mine: true, search: null}): [SmartList!]!
 	smartListById(id: ID!): SmartList
 	smartListMeta(id: ID!): SmartListMeta

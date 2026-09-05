@@ -1,0 +1,89 @@
+query LibraryMedia($filter: MediaFilterInput!, $pagination: Pagination!) {
+	media(filter: $filter, pagination: $pagination) {
+		nodes {
+			id
+			name
+			resolvedName
+			path
+			pages
+			libraryId
+			thumbnail {
+				url
+			}
+			series {
+				id
+				name
+			}
+		}
+		pageInfo {
+			...IngestPageInfoFields
+		}
+	}
+}
+
+query IngestMediaQualityScore($mediaId: ID!) {
+	ingestMediaQualityReport(mediaId: $mediaId) {
+		id
+		score
+	}
+}
+
+query IngestMediaQualityReport($mediaId: ID!) {
+	ingestMediaQualityReport(mediaId: $mediaId) {
+		id
+		score
+		algorithmVersion
+		generatedAt
+		checks {
+			checkId
+			label
+			status
+			weight
+			contribution
+			normalizedScore
+			evidence
+		}
+	}
+}
+
+query IngestMediaMetadataCandidates($mediaId: ID!) {
+	ingestMediaMetadataCandidates(mediaId: $mediaId) {
+		id
+		dropItemId
+		provider
+		providerVersion
+		model
+		confidence
+		fields
+		fieldConfidences
+		sourceSha256
+		provenance
+		status
+		createdAt
+	}
+}
+
+query LibraryAnalysisJob($id: ID!) {
+	ingestAnalysisJob(id: $id) {
+		id
+		status
+		phase
+		error
+	}
+}
+
+mutation RunLibraryQuality($mediaIds: [ID!]!) {
+	runLibraryQuality(mediaIds: $mediaIds) {
+		id
+		status
+		phase
+	}
+}
+
+mutation MatchLibraryMedia($mediaIds: [ID!]!, $providers: [String!]) {
+	matchLibraryMedia(mediaIds: $mediaIds, providers: $providers) {
+		id
+		status
+		phase
+	}
+}

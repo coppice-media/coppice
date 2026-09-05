@@ -99,6 +99,7 @@
 					<a class="rounded-md px-3 py-2 hover:bg-muted" href={resolve('/queue')}>Queue</a>
 					<a class="rounded-md px-3 py-2 hover:bg-muted" href={resolve('/rework')}>Rework</a>
 					<a class="rounded-md px-3 py-2 hover:bg-muted" href={resolve('/bulk')}>Bulk edit</a>
+					<a class="rounded-md px-3 py-2 hover:bg-muted" href={resolve('/library')}>Library</a>
 					<a class="rounded-md px-3 py-2 hover:bg-muted" href={resolve('/settings/providers')}>Settings</a>
 				</nav>
 				{#if session.libraries.length}

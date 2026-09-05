@@ -301,8 +301,23 @@ impl IngestAnalysisJob {
 		self.model.id.clone().into()
 	}
 
-	async fn drop_item_id(&self) -> ID {
-		self.model.drop_item_id.clone().into()
+	async fn drop_item_id(&self) -> Option<ID> {
+		self.model.drop_item_id.clone().map(ID::from)
+	}
+
+	/// Media targets of a library rework job; empty for staged drop-item
+	/// jobs.
+	async fn media_ids(&self) -> Vec<ID> {
+		stump_core::ingest::store::analysis_targets_from_plan(
+			&self.model.plan,
+			self.model.drop_item_id.as_deref(),
+		)
+		.into_iter()
+		.filter_map(|target| match target {
+			stump_core::ingest::store::AnalysisTarget::Media(id) => Some(ID::from(id)),
+			stump_core::ingest::store::AnalysisTarget::DropItem(_) => None,
+		})
+		.collect()
 	}
 
 	async fn job_id(&self) -> Option<&str> {
@@ -365,8 +380,13 @@ impl IngestQualityReport {
 		self.model.id.clone().into()
 	}
 
-	async fn drop_item_id(&self) -> ID {
-		self.model.drop_item_id.clone().into()
+	async fn drop_item_id(&self) -> Option<ID> {
+		self.model.drop_item_id.clone().map(ID::from)
+	}
+
+	/// Set when the report was produced by a library rework run.
+	async fn media_id(&self) -> Option<ID> {
+		self.model.media_id.clone().map(ID::from)
 	}
 
 	async fn source_sha256(&self) -> &str {
@@ -452,8 +472,13 @@ impl IngestMetadataCandidate {
 		self.model.id.clone().into()
 	}
 
-	async fn drop_item_id(&self) -> ID {
-		self.model.drop_item_id.clone().unwrap_or_default().into()
+	async fn drop_item_id(&self) -> Option<ID> {
+		self.model.drop_item_id.clone().map(ID::from)
+	}
+
+	/// Set when the candidate was produced by a library rework run.
+	async fn media_id(&self) -> Option<ID> {
+		self.model.media_id.clone().map(ID::from)
 	}
 
 	async fn provider(&self) -> &str {
@@ -586,6 +611,14 @@ pub struct IngestBulkApplyPayload {
 	pub failures: Vec<IngestBulkApplyFailure>,
 }
 
+/// Result of `applyIngestMetadata`: exactly one side is set, depending on
+/// whether the input targeted a drop item or a library media row.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct IngestApplyPayload {
+	pub drop_item: Option<IngestDropItem>,
+	pub media: Option<crate::object::media::Media>,
+}
+
 #[derive(Debug, Clone, SimpleObject)]
 pub struct IngestProviderDescriptor {
 	pub id: String,
@@ -627,19 +660,82 @@ impl From<stump_core::ingest::providers::ProviderDescriptor>
 pub enum IngestProviderCapability {
 	Identify,
 	Lookup,
+	Search,
 	Tags,
 	AiEnrichment,
 }
 
 impl From<stump_core::ingest::contract::ProviderCapability> for IngestProviderCapability {
 	fn from(capability: stump_core::ingest::contract::ProviderCapability) -> Self {
+		use stump_core::ingest::contract::ProviderCapability as Core;
 		match capability {
-			stump_core::ingest::contract::ProviderCapability::Identify => Self::Identify,
-			stump_core::ingest::contract::ProviderCapability::Lookup => Self::Lookup,
-			stump_core::ingest::contract::ProviderCapability::Tags => Self::Tags,
-			stump_core::ingest::contract::ProviderCapability::AiEnrichment => {
-				Self::AiEnrichment
-			},
+			Core::Identify => Self::Identify,
+			Core::Lookup => Self::Lookup,
+			Core::Search => Self::Search,
+			Core::Tags => Self::Tags,
+			Core::AiEnrichment => Self::AiEnrichment,
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, async_graphql::Enum)]
+pub enum IngestMediaKind {
+	ComicArchive,
+	ComicRarArchive,
+	Epub,
+	Pdf,
+	Unknown,
+}
+
+impl From<stump_core::ingest::contract::IngestMediaKind> for IngestMediaKind {
+	fn from(kind: stump_core::ingest::contract::IngestMediaKind) -> Self {
+		use stump_core::ingest::contract::IngestMediaKind as Core;
+		match kind {
+			Core::ComicArchive => Self::ComicArchive,
+			Core::ComicRarArchive => Self::ComicRarArchive,
+			Core::Epub => Self::Epub,
+			Core::Pdf => Self::Pdf,
+			Core::Unknown => Self::Unknown,
+		}
+	}
+}
+
+impl From<IngestMediaKind> for stump_core::ingest::contract::IngestMediaKind {
+	fn from(kind: IngestMediaKind) -> Self {
+		use stump_core::ingest::contract::IngestMediaKind as Core;
+		match kind {
+			IngestMediaKind::ComicArchive => Core::ComicArchive,
+			IngestMediaKind::ComicRarArchive => Core::ComicRarArchive,
+			IngestMediaKind::Epub => Core::Epub,
+			IngestMediaKind::Pdf => Core::Pdf,
+			IngestMediaKind::Unknown => Core::Unknown,
+		}
+	}
+}
+
+/// One flattened result of a provider search.  Evidence only: the editor
+/// turns a chosen hit into a persisted candidate via `lookupIngestCandidate`.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct IngestSearchHit {
+	pub provider_id: String,
+	pub external_id: String,
+	pub title: String,
+	pub year: Option<i32>,
+	pub cover_url: Option<String>,
+	pub summary: Option<String>,
+	pub score: f64,
+}
+
+impl From<stump_core::ingest::contract::SearchHit> for IngestSearchHit {
+	fn from(hit: stump_core::ingest::contract::SearchHit) -> Self {
+		Self {
+			provider_id: hit.provider_id,
+			external_id: hit.external_id,
+			title: hit.title,
+			year: hit.year,
+			cover_url: hit.cover_url,
+			summary: hit.summary,
+			score: f64::from(hit.score),
 		}
 	}
 }

@@ -15,10 +15,12 @@ use crate::{
 	filesystem::metadata::ProviderClientCache,
 	ingest::contract::{
 		BookSnapshot, IngestMediaKind, IngestMetadataProvider, MetadataCandidate,
-		ProviderCapability, ProviderError, SettingDefinition, SettingValues,
+		ProviderCapability, ProviderError, ProviderIdentity, SearchHit, SearchQuery,
+		SettingDefinition, SettingValues,
 	},
 };
 
+use super::facade::search_all;
 use super::{EmbeddedProvider, IntegrationProvider};
 
 /// Discovery information shown to the editor.  `available` describes whether
@@ -145,6 +147,7 @@ impl ProviderRegistry {
 				capabilities: vec![
 					ProviderCapability::Identify,
 					ProviderCapability::Lookup,
+					ProviderCapability::Search,
 				],
 				supported_media_kinds: kinds,
 				supported_media_types: spec
@@ -156,6 +159,30 @@ impl ProviderRegistry {
 				settings: Vec::new(),
 			});
 		}
+		let llm = super::llm::LlmProvider::new();
+		let llm_configured = self.has_plugin_setting(super::llm::LLM_PROVIDER_ID).await;
+		// `available` stays false until a settings row exists: without a
+		// base_url/model the provider cannot execute anything.
+		descriptors.push(ProviderDescriptor {
+			id: super::llm::LLM_PROVIDER_ID.to_string(),
+			name: llm.name().to_string(),
+			version: super::llm::LLM_PROVIDER_VERSION.to_string(),
+			available: llm_configured,
+			configured: llm_configured,
+			capabilities: llm.capabilities().to_vec(),
+			supported_media_kinds: llm.supported_media_kinds().to_vec(),
+			supported_media_types: vec![
+				"COMIC".to_string(),
+				"BOOK".to_string(),
+				"MANGA".to_string(),
+				"LIGHT_NOVEL".to_string(),
+				"MANHWA".to_string(),
+				"WEB_NOVEL".to_string(),
+				"WEBTOON".to_string(),
+			],
+			enabled_default: false,
+			settings: llm.settings().to_vec(),
+		});
 		for id in unknown_ids {
 			descriptors.push(ProviderDescriptor {
 				name: id.clone(),
@@ -183,14 +210,32 @@ impl ProviderRegistry {
 		library_id: &str,
 		user_id: Option<&str>,
 	) -> Vec<MetadataCandidate> {
+		self.identify_and_lookup_selected(book, library_id, user_id, None)
+			.await
+	}
+
+	/// [`Self::identify_and_lookup`] restricted to an allowlist of provider
+	/// ids; `None` selects every enabled provider.  Used by library-wide
+	/// match jobs so a batch only contacts the providers the caller picked.
+	pub async fn identify_and_lookup_selected(
+		&self,
+		book: &BookSnapshot,
+		library_id: &str,
+		user_id: Option<&str>,
+		selected: Option<&[String]>,
+	) -> Vec<MetadataCandidate> {
 		let _ = (library_id, user_id);
+		let selected_provider = |provider_id: &str| {
+			selected.is_none_or(|ids| ids.iter().any(|id| id == provider_id))
+		};
 		let mut candidates = Vec::new();
 		let settings = SettingValues::new();
 
-		if self
-			.embedded
-			.supported_media_kinds()
-			.contains(&book.media_kind)
+		if selected_provider(self.embedded.id())
+			&& self
+				.embedded
+				.supported_media_kinds()
+				.contains(&book.media_kind)
 		{
 			if let Ok(identities) = self.embedded.identify(book, &settings).await {
 				if let Some(identity) = best_identity(identities) {
@@ -215,6 +260,9 @@ impl ProviderRegistry {
 
 		for spec in INTEGRATIONS {
 			if !supported_by_snapshot(spec.media_types, book.media_kind) {
+				continue;
+			}
+			if !selected_provider(spec.id) {
 				continue;
 			}
 			let Some(config) = configs.get(&spec.provider_type) else {
@@ -270,6 +318,126 @@ impl ProviderRegistry {
 			}
 		}
 		candidates
+	}
+
+	/// Free-text search across the enabled/configured integration providers,
+	/// optionally restricted to `providers`.  Failures are isolated; hits are
+	/// merged and sorted by score descending (see [`search_all`]).
+	pub async fn search(
+		&self,
+		query: &SearchQuery,
+		providers: Option<&[String]>,
+	) -> Vec<SearchHit> {
+		let mut adapters: Vec<Arc<dyn IngestMetadataProvider>> = Vec::new();
+		let configs: HashMap<_, _> = self
+			.provider_configs()
+			.await
+			.into_iter()
+			.map(|config| (config.provider_type, config))
+			.collect();
+
+		for spec in INTEGRATIONS {
+			if let Some(filter) = providers {
+				if !filter.iter().any(|id| id == spec.id) {
+					continue;
+				}
+			}
+			if query
+				.media_kind
+				.is_some_and(|kind| !supported_by_snapshot(spec.media_types, kind))
+			{
+				continue;
+			}
+			let Some(config) = configs.get(&spec.provider_type) else {
+				continue;
+			};
+			if !config.enabled {
+				tracing::debug!(
+					provider = spec.id,
+					"Skipping disabled metadata provider"
+				);
+				continue;
+			}
+			if config.encrypted_api_token.is_none() {
+				tracing::debug!(
+					provider = spec.id,
+					"Skipping provider without credentials"
+				);
+				continue;
+			}
+			let client = match self.client_for(config).await {
+				Ok(client) => client,
+				Err(error) => {
+					tracing::warn!(
+						provider = spec.id,
+						?error,
+						"Skipping unavailable metadata provider"
+					);
+					continue;
+				},
+			};
+			adapters.push(Arc::new(IntegrationProvider::new(client)));
+		}
+
+		let enabled = adapters
+			.iter()
+			.map(|provider| provider.id().to_string())
+			.collect::<Vec<_>>();
+		search_all(&adapters, query, &enabled).await
+	}
+
+	/// Expand one identity (e.g. a picked search hit) into a full field-level
+	/// candidate for the given snapshot.  Explicit and user-driven: unlike the
+	/// scheduled identify flow this does not gate on the provider's enabled
+	/// flag, only on it being configured.
+	pub async fn lookup(
+		&self,
+		book: &BookSnapshot,
+		identity: &ProviderIdentity,
+	) -> Result<MetadataCandidate, ProviderError> {
+		if identity.provider_id == self.embedded.id() {
+			let mut found = self
+				.embedded
+				.lookup(book, identity, &SettingValues::new())
+				.await?;
+			return found.pop().ok_or_else(|| ProviderError::Request {
+				provider_id: self.embedded.id().to_string(),
+				message: "provider returned no candidates".to_string(),
+			});
+		}
+		let spec = INTEGRATIONS
+			.iter()
+			.find(|spec| spec.id == identity.provider_id)
+			.ok_or_else(|| ProviderError::NotConfigured {
+				provider_id: identity.provider_id.clone(),
+				message: "unknown provider".to_string(),
+			})?;
+		let config = metadata_provider_config::Entity::find()
+			.filter(metadata_provider_config::Column::ProviderType.eq(spec.provider_type))
+			.one(self.conn.as_ref())
+			.await
+			.map_err(|error| ProviderError::Request {
+				provider_id: identity.provider_id.clone(),
+				message: error.to_string(),
+			})?
+			.ok_or_else(|| ProviderError::NotConfigured {
+				provider_id: identity.provider_id.clone(),
+				message: "no metadata provider configuration exists".to_string(),
+			})?;
+		if config.encrypted_api_token.is_none() {
+			return Err(ProviderError::NotConfigured {
+				provider_id: identity.provider_id.clone(),
+				message: "API credentials are missing".to_string(),
+			});
+		}
+		let client = self.client_for(&config).await?;
+		let mut found = IntegrationProvider::new(client)
+			.lookup(book, identity, &SettingValues::new())
+			.await?;
+		found.pop().ok_or_else(|| ProviderError::Request {
+			provider_id: identity.provider_id.clone(),
+			message: "provider returned no candidates".to_string(),
+		})
 	}
 
 	pub async fn verify(
@@ -363,6 +531,27 @@ impl ProviderRegistry {
 		}
 	}
 
+	/// Whether a persisted `PROVIDER`-kind ingest plugin setting row exists
+	/// for `plugin_id`.  Used to derive the llm provider's configured state.
+	async fn has_plugin_setting(&self, plugin_id: &str) -> bool {
+		match ingest_plugin_setting::Entity::find()
+			.filter(ingest_plugin_setting::Column::Kind.eq("PROVIDER"))
+			.filter(ingest_plugin_setting::Column::PluginId.eq(plugin_id))
+			.one(self.conn.as_ref())
+			.await
+		{
+			Ok(Some(_)) => true,
+			Ok(None) => false,
+			Err(error) => {
+				tracing::warn!(
+					?error,
+					"Unable to load persisted ingest provider settings"
+				);
+				false
+			},
+		}
+	}
+
 	async fn client_for(
 		&self,
 		config: &metadata_provider_config::Model,
@@ -422,6 +611,13 @@ fn supported_by_snapshot(media_types: &[MediaType], kind: IngestMediaKind) -> bo
 	})
 }
 
+fn provider_id(provider: MetadataProvider) -> &'static str {
+	match provider {
+		MetadataProvider::ComicVine => "comic_vine",
+		MetadataProvider::Hardcover => "hardcover",
+	}
+}
+
 fn map_cache_error<E: std::fmt::Display>(
 	provider_type: MetadataProvider,
 	error: E,
@@ -449,13 +645,6 @@ fn map_cache_provider_error(
 	}
 }
 
-fn provider_id(provider: MetadataProvider) -> &'static str {
-	match provider {
-		MetadataProvider::ComicVine => "comic_vine",
-		MetadataProvider::Hardcover => "hardcover",
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -467,6 +656,7 @@ mod tests {
 			sea_orm::MockDatabase::new(sea_orm::DatabaseBackend::Sqlite)
 				.append_query_results([Vec::<metadata_provider_config::Model>::new()])
 				.append_query_results([Vec::<ingest_plugin_setting::Model>::new()])
+				.append_query_results([Vec::<ingest_plugin_setting::Model>::new()])
 				.into_connection(),
 		);
 		let registry = ProviderRegistry::new(config, conn);
@@ -475,8 +665,18 @@ mod tests {
 			.iter()
 			.map(|descriptor| descriptor.id.as_str())
 			.collect();
-		assert_eq!(ids, vec!["builtin:embedded", "comic_vine", "hardcover"]);
+		assert_eq!(
+			ids,
+			vec!["builtin:embedded", "comic_vine", "hardcover", "llm"]
+		);
 		assert!(catalog[0].enabled_default);
+		// The llm provider is dormant until an ingest_plugin_setting row
+		// exists for it.
+		let llm = catalog.last().unwrap();
+		assert_eq!(llm.id, "llm");
+		assert!(!llm.enabled_default);
+		assert!(!llm.available);
+		assert!(!llm.configured);
 	}
 
 	#[test]

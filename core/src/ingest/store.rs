@@ -9,7 +9,7 @@ use models::{
 	entity::{
 		ingest_analysis_job, ingest_drop_item, ingest_metadata_application,
 		ingest_metadata_candidate, ingest_plugin_setting, ingest_quality_report, library,
-		library_config, series,
+		library_config, media, series,
 	},
 	shared::enums::JobStatus,
 };
@@ -52,6 +52,72 @@ pub type QualityReportModel = ingest_quality_report::Model;
 pub type CandidateModel = ingest_metadata_candidate::Model;
 pub type ApplicationModel = ingest_metadata_application::Model;
 pub type PluginSettingModel = ingest_plugin_setting::Model;
+
+/// What one analysis job runs against: a staged drop item, or an existing
+/// library media row (library-wide rework).  Persisted in the job's `plan`
+/// JSON; single-target jobs also fill the matching id column.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AnalysisTarget {
+	DropItem(String),
+	Media(String),
+}
+
+impl AnalysisTarget {
+	pub fn id(&self) -> &str {
+		match self {
+			AnalysisTarget::DropItem(id) | AnalysisTarget::Media(id) => id,
+		}
+	}
+}
+
+fn analysis_plan(targets: &[AnalysisTarget], providers: Option<&[String]>) -> Value {
+	let targets = targets
+		.iter()
+		.map(|target| serde_json::to_value(target).expect("target is serializable"))
+		.collect::<Vec<_>>();
+	let mut plan = json!({ "targets": targets });
+	if let Some(providers) = providers {
+		plan["providers"] = json!(providers);
+	}
+	plan
+}
+
+/// Optional provider allowlist persisted with a library match job.
+pub fn analysis_providers_from_plan(plan: &Value) -> Option<Vec<String>> {
+	plan.get("providers")
+		.and_then(Value::as_array)
+		.map(|providers| {
+			providers
+				.iter()
+				.filter_map(Value::as_str)
+				.map(str::to_owned)
+				.collect::<Vec<_>>()
+		})
+		.filter(|providers| !providers.is_empty())
+}
+
+pub fn analysis_targets_from_plan(
+	plan: &Value,
+	drop_item_id: Option<&str>,
+) -> Vec<AnalysisTarget> {
+	let parsed = plan
+		.get("targets")
+		.and_then(Value::as_array)
+		.map(|targets| {
+			targets
+				.iter()
+				.filter_map(|target| serde_json::from_value(target.clone()).ok())
+				.collect::<Vec<AnalysisTarget>>()
+		})
+		.unwrap_or_default();
+	if !parsed.is_empty() {
+		return parsed;
+	}
+	drop_item_id
+		.map(|id| vec![AnalysisTarget::DropItem(id.to_string())])
+		.unwrap_or_default()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pagination {
@@ -385,6 +451,76 @@ impl IngestStore {
 			.map_err(|error| CoreError::Unknown(error.to_string()))?
 	}
 
+	pub async fn media(&self, id: &str) -> CoreResult<Option<media::Model>> {
+		media::Entity::find_by_id(id)
+			.one(self.conn.as_ref())
+			.await
+			.map_err(CoreError::from)
+	}
+
+	/// The library a media row belongs to, through its series.
+	pub(crate) async fn media_library(
+		&self,
+		media_row: &media::Model,
+	) -> CoreResult<String> {
+		let series_id = media_row.series_id.as_deref().ok_or_else(|| {
+			CoreError::BadRequest(format!("media {} has no series", media_row.id))
+		})?;
+		series::Entity::find_by_id(series_id)
+			.one(self.conn.as_ref())
+			.await?
+			.ok_or_else(|| CoreError::NotFound(format!("series {series_id}")))?
+			.library_id
+			.ok_or_else(|| {
+				CoreError::BadRequest(format!("series {series_id} has no library"))
+			})
+	}
+
+	/// Snapshot of an existing library file, built through the same
+	/// `snapshot_from_source` path as staged drop items — one shared
+	/// convention for parsing, pages, and digests.
+	pub async fn media_snapshot(&self, media_id: &str) -> CoreResult<BookSnapshot> {
+		let media_row = self
+			.media(media_id)
+			.await?
+			.ok_or_else(|| CoreError::NotFound(format!("media {media_id}")))?;
+		let path = PathBuf::from(&media_row.path);
+		if !path.is_file() {
+			return Err(CoreError::FileNotFound(media_row.path.clone()));
+		}
+		let library_id = self.media_library(&media_row).await?;
+		// Same digest convention as staging: SHA-256 over the file bytes; the
+		// `media.hash` column is optional and not guaranteed to be present.
+		let (source_sha256, byte_size) = staging::hash_file(&path).await?;
+		let source_filename = path
+			.file_name()
+			.and_then(|name| name.to_str())
+			.map(str::to_owned)
+			.ok_or_else(|| {
+				CoreError::BadRequest(format!(
+					"media path {} has no usable file name",
+					media_row.path
+				))
+			})?;
+		let config = self.config.clone();
+		tokio::task::spawn_blocking(move || {
+			snapshot_from_source(
+				SnapshotSource {
+					id: media_row.id,
+					library_id,
+					path,
+					source_filename,
+					source_sha256,
+					byte_size,
+					relative_path: String::new(),
+				},
+				&config,
+			)
+		})
+		.await
+		.map_err(|error| CoreError::Unknown(error.to_string()))?
+	}
+
 	pub async fn discard(&self, item_id: &str) -> CoreResult<DropItemModel> {
 		let item = self
 			.item(item_id)
@@ -628,7 +764,8 @@ impl IngestStore {
 		}
 		let model = ingest_quality_report::ActiveModel {
 			id: Set(Uuid::new_v4().to_string()),
-			drop_item_id: Set(drop_item_id.to_string()),
+			drop_item_id: Set(Some(drop_item_id.to_string())),
+			media_id: Set(None),
 			source_sha256: Set(report.source_sha256.clone()),
 			algorithm_version: Set(report.algorithm_version.clone()),
 			score: Set(i32::from(report.score)),
@@ -707,6 +844,90 @@ impl IngestStore {
 		Ok(saved)
 	}
 
+	/// Latest quality report stored against a library media row.
+	pub async fn report_for_media(
+		&self,
+		media_id: &str,
+	) -> CoreResult<Option<QualityReportModel>> {
+		ingest_quality_report::Entity::find()
+			.filter(ingest_quality_report::Column::MediaId.eq(media_id))
+			.order_by_desc(ingest_quality_report::Column::CreatedAt)
+			.order_by_desc(ingest_quality_report::Column::Id)
+			.one(self.conn.as_ref())
+			.await
+			.map_err(CoreError::from)
+	}
+
+	pub async fn save_report_for_media(
+		&self,
+		media_id: &str,
+		report: &QualityReport,
+	) -> CoreResult<QualityReportModel> {
+		self.media(media_id)
+			.await?
+			.ok_or_else(|| CoreError::NotFound(format!("media {media_id}")))?;
+		let model = ingest_quality_report::ActiveModel {
+			id: Set(Uuid::new_v4().to_string()),
+			drop_item_id: Set(None),
+			media_id: Set(Some(media_id.to_string())),
+			source_sha256: Set(report.source_sha256.clone()),
+			algorithm_version: Set(report.algorithm_version.clone()),
+			score: Set(i32::from(report.score)),
+			checks: Set(serde_json::to_value(&report.checks)?),
+			settings_snapshot: Set(serde_json::to_value(&report.settings_snapshot)?),
+			created_at: NotSet,
+		};
+		model
+			.insert(self.conn.as_ref())
+			.await
+			.map_err(CoreError::from)
+	}
+
+	/// Candidates stored against a library media row.
+	pub async fn candidates_for_media(
+		&self,
+		media_id: &str,
+	) -> CoreResult<Vec<CandidateModel>> {
+		ingest_metadata_candidate::Entity::find()
+			.filter(ingest_metadata_candidate::Column::MediaId.eq(media_id))
+			.order_by_asc(ingest_metadata_candidate::Column::ProviderId)
+			.order_by_asc(ingest_metadata_candidate::Column::Id)
+			.all(self.conn.as_ref())
+			.await
+			.map_err(CoreError::from)
+	}
+
+	pub async fn save_candidates_for_media(
+		&self,
+		media_id: &str,
+		candidates: &[MetadataCandidate],
+	) -> CoreResult<Vec<CandidateModel>> {
+		self.media(media_id)
+			.await?
+			.ok_or_else(|| CoreError::NotFound(format!("media {media_id}")))?;
+		let mut saved = Vec::with_capacity(candidates.len());
+		for candidate in candidates {
+			let active = ingest_metadata_candidate::ActiveModel {
+				id: Set(Uuid::new_v4().to_string()),
+				drop_item_id: Set(None),
+				media_id: Set(Some(media_id.to_string())),
+				provider_id: Set(candidate.provider_id.clone()),
+				provider_version: Set(candidate.provider_version.clone()),
+				external_id: Set(candidate.external_id.clone()),
+				source_sha256: Set(candidate.source_sha256.clone()),
+				confidence: Set(candidate.confidence),
+				fields: Set(serde_json::to_value(&candidate.fields)?),
+				field_confidence: Set(serde_json::to_value(&candidate.field_confidence)?),
+				provenance: Set(candidate.provenance.clone()),
+				status: Set("PENDING".to_string()),
+				created_at: NotSet,
+				updated_at: NotSet,
+			};
+			saved.push(active.insert(self.conn.as_ref()).await?);
+		}
+		Ok(saved)
+	}
+
 	pub async fn save_application(
 		&self,
 		application: ingest_metadata_application::ActiveModel,
@@ -724,6 +945,7 @@ impl IngestStore {
 	) -> CoreResult<(Vec<ApplicationModel>, u64)> {
 		let query = ingest_metadata_application::Entity::find()
 			.filter(ingest_metadata_application::Column::DropItemId.eq(item_id));
+
 		let total = query.clone().count(self.conn.as_ref()).await?;
 		let rows = query
 			.order_by_desc(ingest_metadata_application::Column::CreatedAt)
@@ -859,13 +1081,17 @@ impl IngestStore {
 		}
 		let active = ingest_analysis_job::ActiveModel {
 			id: Set(Uuid::new_v4().to_string()),
-			drop_item_id: Set(item.id.clone()),
+			drop_item_id: Set(Some(item.id.clone())),
+			media_id: Set(None),
 			job_id: Set(None),
 			status: Set(JobStatus::Queued),
 			phase: Set(phase_name(super::contract::AnalysisPhase::Staging)),
 			priority: Set(0),
 			attempts: Set(0),
-			plan: Set(json!({})),
+			plan: Set(analysis_plan(
+				&[AnalysisTarget::DropItem(item.id.clone())],
+				None,
+			)),
 			error: Set(None),
 			created_at: NotSet,
 			started_at: Set(None),
@@ -879,6 +1105,82 @@ impl IngestStore {
 		item.revision = Set(revision.saturating_add(1));
 		item.update(self.conn.as_ref()).await?;
 		Ok(job)
+	}
+
+	/// One library-rework analysis job for a batch of existing media rows.
+	/// A single-media job also fills the `media_id` column so the row cascades
+	/// with its target; larger batches live only in the `plan` targets.
+	pub(crate) async fn create_media_analysis_job(
+		&self,
+		media_ids: &[String],
+		providers: Option<&[String]>,
+	) -> CoreResult<AnalysisJobModel> {
+		let targets: Vec<AnalysisTarget> = media_ids
+			.iter()
+			.map(|id| AnalysisTarget::Media(id.clone()))
+			.collect();
+		let active = ingest_analysis_job::ActiveModel {
+			id: Set(Uuid::new_v4().to_string()),
+			drop_item_id: Set(None),
+			media_id: Set(match media_ids {
+				[single] => Some(single.clone()),
+				_ => None,
+			}),
+			job_id: Set(None),
+			status: Set(JobStatus::Queued),
+			phase: Set(phase_name(super::contract::AnalysisPhase::Staging)),
+			priority: Set(0),
+			attempts: Set(0),
+			plan: Set(analysis_plan(&targets, providers)),
+			error: Set(None),
+			created_at: NotSet,
+			started_at: Set(None),
+			finished_at: Set(None),
+		};
+		Ok(active.insert(self.conn.as_ref()).await?)
+	}
+
+	/// Resolved targets of an analysis job: the persisted `plan` targets when
+	/// present, otherwise the drop-item column for rows written before
+	/// library-wide rework existed.
+	pub(crate) fn job_targets(
+		&self,
+		job: &AnalysisJobModel,
+	) -> CoreResult<Vec<AnalysisTarget>> {
+		let targets = analysis_targets_from_plan(&job.plan, job.drop_item_id.as_deref());
+		if targets.is_empty() {
+			return Err(CoreError::InternalError(format!(
+				"analysis job {} has no target",
+				job.id
+			)));
+		}
+		Ok(targets)
+	}
+
+	/// A pending job whose media-target set is exactly `media_ids`, so a
+	/// repeated library-rework request does not enqueue a duplicate batch.
+	pub(crate) async fn latest_pending_media_job_matching(
+		&self,
+		media_ids: &[String],
+	) -> CoreResult<Option<AnalysisJobModel>> {
+		let jobs = ingest_analysis_job::Entity::find()
+			.filter(
+				ingest_analysis_job::Column::Status
+					.is_in([JobStatus::Queued, JobStatus::Running]),
+			)
+			.filter(ingest_analysis_job::Column::DropItemId.is_null())
+			.order_by_desc(ingest_analysis_job::Column::CreatedAt)
+			.all(self.conn.as_ref())
+			.await?;
+		Ok(jobs.into_iter().find(|job| {
+			analysis_targets_from_plan(&job.plan, job.drop_item_id.as_deref())
+				.iter()
+				.filter_map(|target| match target {
+					AnalysisTarget::Media(id) => Some(id.as_str()),
+					AnalysisTarget::DropItem(_) => None,
+				})
+				.eq(media_ids.iter().map(String::as_str))
+		}))
 	}
 
 	pub(crate) async fn queue_jobs(
@@ -1067,19 +1369,54 @@ fn media_kind_for_filename(filename: &str) -> IngestMediaKind {
 	}
 }
 
+/// File identity consumed by the shared snapshot builder: one `SnapshotSource`
+/// per ingest target, whether a staged drop item or an existing library file.
+struct SnapshotSource {
+	/// Opaque target id: drop item id for staged runs, media id for library
+	/// rework runs.
+	id: String,
+	library_id: String,
+	path: PathBuf,
+	source_filename: String,
+	source_sha256: String,
+	byte_size: u64,
+	relative_path: String,
+}
+
 fn build_snapshot(item: DropItemModel, config: &StumpConfig) -> CoreResult<BookSnapshot> {
 	let staged_path = PathBuf::from(&item.staging_path);
 	if !staged_path.is_file() {
 		return Err(CoreError::FileNotFound(item.staging_path));
 	}
-	let media_kind = media_kind_for_filename(&item.source_filename);
-	let embedded_metadata = process_metadata(&staged_path)
+	snapshot_from_source(
+		SnapshotSource {
+			id: item.id,
+			library_id: item.library_id,
+			path: staged_path,
+			source_filename: item.source_filename,
+			source_sha256: item.source_sha256,
+			byte_size: item.byte_size.max(0) as u64,
+			relative_path: item.relative_path.unwrap_or_default(),
+		},
+		config,
+	)
+}
+
+/// The one snapshot path shared by staged and library targets: embedded
+/// metadata via `process_metadata`, pages via the same format adapters the
+/// processor selection uses.
+fn snapshot_from_source(
+	source: SnapshotSource,
+	config: &StumpConfig,
+) -> CoreResult<BookSnapshot> {
+	let media_kind = media_kind_for_filename(&source.source_filename);
+	let embedded_metadata = process_metadata(&source.path)
 		.map_err(|error| CoreError::Unknown(error.to_string()))?;
 	let pages = match media_kind {
-		IngestMediaKind::ComicArchive => archive_pages(&staged_path)?,
+		IngestMediaKind::ComicArchive => archive_pages(&source.path)?,
 		IngestMediaKind::ComicRarArchive => {
 			let count =
-				get_page_count(staged_path.to_str().unwrap_or_default(), &config.media)
+				get_page_count(source.path.to_str().unwrap_or_default(), &config.media)
 					.map_err(|error| CoreError::Unknown(error.to_string()))?;
 			(0..count.max(0))
 				.map(|index| IngestPageEntry {
@@ -1090,10 +1427,10 @@ fn build_snapshot(item: DropItemModel, config: &StumpConfig) -> CoreResult<BookS
 				})
 				.collect()
 		},
-		IngestMediaKind::Epub => epub_pages(&staged_path)?,
+		IngestMediaKind::Epub => epub_pages(&source.path)?,
 		IngestMediaKind::Pdf => {
 			let count =
-				get_page_count(staged_path.to_str().unwrap_or_default(), &config.media)
+				get_page_count(source.path.to_str().unwrap_or_default(), &config.media)
 					.map_err(|error| CoreError::Unknown(error.to_string()))?;
 			(0..count.max(0))
 				.map(|index| IngestPageEntry {
@@ -1107,13 +1444,13 @@ fn build_snapshot(item: DropItemModel, config: &StumpConfig) -> CoreResult<BookS
 		IngestMediaKind::Unknown => Vec::new(),
 	};
 	Ok(BookSnapshot {
-		drop_item_id: item.id,
-		library_id: item.library_id,
-		staged_path,
-		source_sha256: item.source_sha256,
-		byte_size: item.byte_size.max(0) as u64,
-		source_filename: item.source_filename,
-		relative_path: item.relative_path.unwrap_or_default(),
+		drop_item_id: source.id,
+		library_id: source.library_id,
+		staged_path: source.path,
+		source_sha256: source.source_sha256,
+		byte_size: source.byte_size,
+		source_filename: source.source_filename,
+		relative_path: source.relative_path,
 		media_kind,
 		embedded_metadata,
 		pages,
@@ -1463,5 +1800,124 @@ mod tests {
 			Path::new(&first.item.staging_path).is_file(),
 			"dedup must not delete the existing item's staged file"
 		);
+	}
+
+	/// Applying field picks against a library media target: candidates saved
+	/// with `media_id` resolve and `apply_to_media` (the same path approve
+	/// uses) writes `media_metadata` and the audit row for the media.
+	#[tokio::test]
+	async fn apply_metadata_writes_media_metadata_for_media_target() {
+		use crate::ingest::providers::apply::apply_to_media;
+		use metadata_integrations::MergeStrategy;
+		use models::{
+			entity::{
+				ingest_metadata_application, library, library_config, media, series,
+			},
+			shared::enums::FileStatus,
+		};
+		use sea_orm::{
+			ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set,
+		};
+
+		let conn = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
+		migrations::Migrator::up(conn.as_ref(), None).await.unwrap();
+		let config = <library_config::ActiveModel as std::default::Default>::default()
+			.insert(conn.as_ref())
+			.await
+			.unwrap();
+		library::ActiveModel {
+			id: Set("library".to_string()),
+			name: Set("Library".to_string()),
+			path: Set("/tmp/library".to_string()),
+			status: Set(FileStatus::Ready),
+			config_id: Set(config.id),
+			..Default::default()
+		}
+		.insert(conn.as_ref())
+		.await
+		.unwrap();
+		series::ActiveModel {
+			id: Set("series".to_string()),
+			name: Set("Saga".to_string()),
+			path: Set("/tmp/library/Saga".to_string()),
+			status: Set(FileStatus::Ready),
+			library_id: Set(Some("library".to_string())),
+			..Default::default()
+		}
+		.insert(conn.as_ref())
+		.await
+		.unwrap();
+		media::ActiveModel {
+			id: Set("media-1".to_string()),
+			name: Set("Saga 001".to_string()),
+			size: Set(1024),
+			extension: Set("cbz".to_string()),
+			pages: Set(2),
+			hash: Set(Some("fixture-digest".to_string())),
+			path: Set("/tmp/library/Saga/Saga 001.cbz".to_string()),
+			series_id: Set(Some("series".to_string())),
+			..Default::default()
+		}
+		.insert(conn.as_ref())
+		.await
+		.unwrap();
+		let store = IngestStore::new(Arc::new(StumpConfig::debug()), conn.clone());
+
+		let candidate = MetadataCandidate {
+			provider_id: "test-provider".to_string(),
+			provider_version: "1".to_string(),
+			external_id: Some("external-1".to_string()),
+			source_sha256: "fixture-digest".to_string(),
+			confidence: 0.9,
+			fields: [(MetadataField::Title, json!("Saga Vol 1"))]
+				.into_iter()
+				.collect(),
+			field_confidence: [(MetadataField::Title, 0.9)].into_iter().collect(),
+			provenance: json!({"source": "test"}),
+		};
+		let saved = store
+			.save_candidates_for_media("media-1", &[candidate])
+			.await
+			.unwrap();
+		assert_eq!(saved.len(), 1);
+		assert_eq!(saved[0].media_id.as_deref(), Some("media-1"));
+		assert_eq!(saved[0].drop_item_id, None);
+
+		let candidates = store.candidates_for_media("media-1").await.unwrap();
+		let picks = vec![FieldPick::Candidate {
+			field: MetadataField::Title,
+			candidate_id: saved[0].id.clone(),
+		}];
+		let resolved = resolve_picks_for_context(
+			&picks,
+			&candidates,
+			None,
+			&[],
+			MergeStrategy::FillGaps,
+			None,
+			None,
+		)
+		.unwrap();
+		apply_to_media(store.conn(), "media-1", resolved, "tester")
+			.await
+			.unwrap();
+
+		let metadata = models::entity::media_metadata::Entity::find()
+			.filter(models::entity::media_metadata::Column::MediaId.eq("media-1"))
+			.one(conn.as_ref())
+			.await
+			.unwrap()
+			.expect("media metadata row created for the media target");
+		assert_eq!(metadata.title.as_deref(), Some("Saga Vol 1"));
+
+		let application = ingest_metadata_application::Entity::find()
+			.filter(ingest_metadata_application::Column::MediaId.eq("media-1"))
+			.one(conn.as_ref())
+			.await
+			.unwrap()
+			.expect("application audit row recorded for the media target");
+		assert_eq!(application.drop_item_id, None);
+		assert_eq!(application.media_id.as_deref(), Some("media-1"));
+		assert_eq!(application.actor, "tester");
 	}
 }

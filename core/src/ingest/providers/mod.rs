@@ -7,6 +7,7 @@
 pub mod apply;
 mod builtin_embedded;
 mod facade;
+mod llm;
 mod registry;
 pub use apply::{
 	apply_to_media, apply_to_media_txn, apply_to_media_txn_with_context, resolve_picks,

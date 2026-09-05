@@ -7,9 +7,10 @@ use serde_json::Value as JsonValue;
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
 	pub id: String,
-	#[sea_orm(column_type = "Text")]
-	pub drop_item_id: String,
-	#[sea_orm(column_type = "Text")]
+	#[sea_orm(column_type = "Text", nullable)]
+	pub drop_item_id: Option<String>,
+	#[sea_orm(column_type = "Text", nullable)]
+	pub media_id: Option<String>,
 	pub source_sha256: String,
 	#[sea_orm(column_type = "Text")]
 	pub algorithm_version: String,
@@ -32,11 +33,19 @@ pub enum Relation {
 		on_delete = "Cascade"
 	)]
 	DropItem,
+	#[sea_orm(
+		belongs_to = "super::media::Entity",
+		from = "Column::MediaId",
+		to = "super::media::Column::Id",
+		on_update = "Cascade",
+		on_delete = "Cascade"
+	)]
+	Media,
 }
 
-impl Related<super::ingest_drop_item::Entity> for Entity {
+impl Related<super::media::Entity> for Entity {
 	fn to() -> RelationDef {
-		Relation::DropItem.def()
+		Relation::Media.def()
 	}
 }
 

@@ -402,7 +402,14 @@ mutation DiscardIngestItem($dropItemId: ID!, $reason: String) {
 
 mutation ApplyIngestMetadata($input: ApplyIngestMetadataInput!) {
 	applyIngestMetadata(input: $input) {
-		...IngestDropItemFields
+		dropItem {
+			...IngestDropItemFields
+		}
+		media {
+			id
+			name
+			resolvedName
+		}
 	}
 }
 
@@ -507,5 +514,34 @@ subscription IngestProgress(
 		total
 		score
 		message
+	}
+}
+
+query IngestProviderSearch($query: String!, $mediaKind: IngestMediaKind, $providers: [String!], $limit: Int) {
+	ingestProviderSearch(query: $query, mediaKind: $mediaKind, providers: $providers, limit: $limit) {
+		providerId
+		externalId
+		title
+		year
+		coverUrl
+		summary
+		score
+	}
+}
+
+mutation LookupIngestCandidate($dropItemId: ID!, $providerId: String!, $externalId: String!) {
+	lookupIngestCandidate(dropItemId: $dropItemId, providerId: $providerId, externalId: $externalId) {
+		id
+		dropItemId
+		provider
+		providerVersion
+		model
+		confidence
+		fields
+		fieldConfidences
+		sourceSha256
+		provenance
+		status
+		createdAt
 	}
 }

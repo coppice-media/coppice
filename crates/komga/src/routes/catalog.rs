@@ -828,7 +828,9 @@ fn book_condition_filter(
 				Some("inker") => vec![media_metadata::Column::Inkers],
 				Some("colorist") => vec![media_metadata::Column::Colorists],
 				Some("letterer") => vec![media_metadata::Column::Letterers],
-				Some("cover") | Some("cover_artist") => vec![media_metadata::Column::CoverArtists],
+				Some("cover") | Some("cover_artist") => {
+					vec![media_metadata::Column::CoverArtists]
+				},
 				Some("editor") => vec![media_metadata::Column::Editors],
 				Some(_) => return Err(unsupported_filter("author role")),
 			};

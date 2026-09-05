@@ -1,15 +1,11 @@
-use async_graphql::{Context, Object, Result, ID};
-use models::shared::enums::{JobStatus, UserPermission};
-use sea_orm::EntityTrait;
-use stump_core::ingest::store::Pagination as StorePagination;
-
 use crate::{
 	data::CoreContext,
 	guard::PermissionGuard,
 	object::ingest::{
-		IngestAnalysisJob, IngestDropFolder, IngestDropItem, IngestProviderDescriptor,
-		IngestProviderSettings, IngestQualityCheckDescriptor, IngestQualityCheckSettings,
-		IngestQualityReport, IngestReworkItem, IngestReworkReason,
+		IngestAnalysisJob, IngestDropFolder, IngestDropItem, IngestMediaKind,
+		IngestMetadataCandidate, IngestProviderDescriptor, IngestProviderSettings,
+		IngestQualityCheckDescriptor, IngestQualityCheckSettings, IngestQualityReport,
+		IngestReworkItem, IngestReworkReason, IngestSearchHit,
 		PaginatedIngestAnalysisJobResponse, PaginatedIngestDropItemResponse,
 		PaginatedIngestReworkResponse,
 	},
@@ -17,6 +13,11 @@ use crate::{
 		CursorPaginationInfo, OffsetPaginationInfo, Pagination, PaginationInfo,
 	},
 };
+use async_graphql::{Context, Object, Result, ID};
+use models::shared::enums::{JobStatus, UserPermission};
+use sea_orm::EntityTrait;
+use stump_core::ingest::contract::SearchQuery;
+use stump_core::ingest::store::Pagination as StorePagination;
 
 #[derive(Default)]
 pub struct IngestQuery;
@@ -346,6 +347,35 @@ impl IngestQuery {
 			model,
 		)))
 	}
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageJobs)")]
+	async fn ingest_provider_search(
+		&self,
+		ctx: &Context<'_>,
+		query: String,
+		media_kind: Option<IngestMediaKind>,
+		providers: Option<Vec<String>>,
+		#[graphql(default = 10)] limit: Option<i32>,
+	) -> Result<Vec<IngestSearchHit>> {
+		let text = query.trim();
+		if text.is_empty() {
+			return Err("query must not be empty".into());
+		}
+		let limit = limit.unwrap_or(10).clamp(1, 50) as u8;
+		let core = ctx.data::<CoreContext>()?;
+		let hits = core
+			.ingest()
+			.providers
+			.search(
+				&SearchQuery {
+					text: text.to_string(),
+					media_kind: media_kind.map(Into::into),
+					limit,
+				},
+				providers.as_deref(),
+			)
+			.await;
+		Ok(hits.into_iter().map(IngestSearchHit::from).collect())
+	}
 
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ReadJobs)")]
 	async fn ingest_quality_check_catalog(
@@ -387,5 +417,75 @@ impl IngestQuery {
 			IngestQualityCheckDescriptor::from(descriptor),
 			model,
 		)))
+	}
+
+	/// Latest quality report stored against a library media row (library-wide
+	/// rework). Batch a table column with GraphQL aliases: one field per
+	/// media id in a single document.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ReadJobs)")]
+	async fn ingest_media_quality_report(
+		&self,
+		ctx: &Context<'_>,
+		media_id: ID,
+	) -> Result<Option<IngestQualityReport>> {
+		ctx.data::<CoreContext>()?
+			.ingest()
+			.store
+			.report_for_media(media_id.as_ref())
+			.await
+			.map(|report| report.map(IngestQualityReport::from))
+			.map_err(map_store_error)
+	}
+
+	/// Metadata candidates stored against a library media row by a
+	/// `matchLibraryMedia` run.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ReadJobs)")]
+	async fn ingest_media_metadata_candidates(
+		&self,
+		ctx: &Context<'_>,
+		media_id: ID,
+	) -> Result<Vec<IngestMetadataCandidate>> {
+		ctx.data::<CoreContext>()?
+			.ingest()
+			.store
+			.candidates_for_media(media_id.as_ref())
+			.await
+			.map(|candidates| {
+				candidates
+					.into_iter()
+					.map(IngestMetadataCandidate::from)
+					.collect()
+			})
+			.map_err(map_store_error)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+
+	/// The provider search surface is consumed by the editor's generated
+	/// GraphQL client; these tests pin the exact operation signatures.
+	#[test]
+	fn ingest_provider_search_sdl_is_stable() {
+		let sdl = crate::schema::build_schema_bare().sdl();
+		assert!(
+			sdl.contains(
+				"ingestProviderSearch(query: String!, mediaKind: IngestMediaKind, \
+				 providers: [String!], limit: Int = 10): [IngestSearchHit!]!"
+			),
+			"ingestProviderSearch signature drifted:\n{sdl}"
+		);
+	}
+
+	#[test]
+	fn lookup_ingest_candidate_sdl_is_stable() {
+		let sdl = crate::schema::build_schema_bare().sdl();
+		assert!(
+			sdl.contains(
+				"lookupIngestCandidate(dropItemId: ID!, providerId: String!, \
+				 externalId: String!): IngestMetadataCandidate!"
+			),
+			"lookupIngestCandidate signature drifted:\n{sdl}"
+		);
 	}
 }

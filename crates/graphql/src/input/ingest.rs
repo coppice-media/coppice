@@ -142,9 +142,12 @@ pub struct EnqueueIngestAnalysisInput {
 	pub force: bool,
 }
 
+/// Exactly one of `drop_item_id` (staged item) or `media_id` (library-wide
+/// rework target) must be provided.
 #[derive(Debug, InputObject)]
 pub struct ApplyIngestMetadataInput {
-	pub drop_item_id: async_graphql::ID,
+	pub drop_item_id: Option<async_graphql::ID>,
+	pub media_id: Option<async_graphql::ID>,
 	pub selections: Vec<IngestMetadataFieldSelectionInput>,
 	pub strategy: Option<MergeStrategy>,
 }
