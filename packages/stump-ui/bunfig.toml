@@ -1,0 +1,7 @@
+# The SvelteKit companion stack (editor included) runs graphql@17 across
+# packages whose declared peer ranges top out at 16 (graphql-config,
+# graphql-request). Auto-installing peers would nest a second graphql realm
+# and crash codegen with "Cannot use GraphQLScalarType ... from another
+# module or realm", so peers resolve up the tree instead.
+[install]
+peer = false

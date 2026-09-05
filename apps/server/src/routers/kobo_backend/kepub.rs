@@ -9,6 +9,7 @@ use axum::{
 use models::{entity::media, shared::enums::UserPermission};
 use sea_orm::{ColumnTrait, QueryFilter};
 use stump_auth::AuthContext;
+use super::comic_transform;
 use tower_http::services::ServeFile;
 
 use crate::{
@@ -29,7 +30,9 @@ pub(crate) async fn book_file(
 	book_id: String,
 	headers: HeaderMap,
 ) -> APIResult<Response> {
-	if !ctx.config.protocols.kobo_kepub_conversion {
+	if !ctx.config.protocols.kobo_kepub_conversion
+		&& !ctx.config.transform.transform_enabled
+	{
 		return serve_original(ctx, auth, book_id, headers).await;
 	}
 
@@ -46,6 +49,13 @@ pub(crate) async fn book_file(
 		.await?
 		.ok_or_else(|| APIError::NotFound("Book not found".to_string()))?;
 
+	// Comic containers (CBZ/CBR/PDF) are transformed into fixed-layout
+	// KEPUBs when the transform feature and a profile resolve; otherwise the
+	// original file is served.
+	if comic_transform::is_comic_source(&book.path) {
+		return comic_transform::serve_comic(ctx, auth, book, headers).await;
+	}
+
 	if !Path::new(&book.path)
 		.extension()
 		.and_then(|extension| extension.to_str())
@@ -57,6 +67,7 @@ pub(crate) async fn book_file(
 	let cache_path = ensure_cached(&ctx, &book).await?;
 	kepub_response(&book.path, &cache_path, headers).await
 }
+
 
 /// Return the stable cache location for a source EPUB.
 pub(crate) async fn cache_path_for(
@@ -156,7 +167,7 @@ async fn touch_cache_file(path: &Path) {
 	}
 }
 
-async fn serve_original(
+pub(crate) async fn serve_original(
 	ctx: AppState,
 	auth: AuthContext,
 	book_id: String,

@@ -752,6 +752,26 @@ pub struct SeriesDetailDto {
 	pub total_count: i32,
 }
 
+/// `GET /api/Series/recently-updated-series` item: one series with the number
+/// of chapters added to it recently (`GetRecentlyUpdatedSeriesAsync`).
+/// `chapterId`/`volumeId` are `0` as captured from `kavita-ref`; `id` is the
+/// 0-based group index Kavita assigns per response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupedSeriesDto {
+	pub series_name: String,
+	pub localized_series_name: String,
+	pub series_id: i32,
+	pub library_id: i32,
+	pub library_type: LibraryType,
+	pub created: KavitaDateTime,
+	pub chapter_id: i32,
+	pub volume_id: i32,
+	pub id: i32,
+	pub format: MangaFormat,
+	pub count: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressDto {

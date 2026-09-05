@@ -477,6 +477,12 @@ pub enum MetadataProvider {
 	MangaDex,
 	/// MangaUpdates (https://api.mangaupdates.com/v1)
 	MangaUpdates,
+	/// Open Library (https://openlibrary.org)
+	OpenLibrary,
+	/// Google Books (https://www.googleapis.com/books/v1)
+	GoogleBooks,
+	/// Metron (https://metron.cloud/api/)
+	Metron,
 }
 
 impl MetadataProvider {
@@ -504,6 +510,8 @@ impl MetadataProvider {
 				LibraryType::Manhwa,
 				LibraryType::Webtoon,
 			],
+			Self::OpenLibrary | Self::GoogleBooks => &[LibraryType::Book],
+			Self::Metron => &[LibraryType::Comic],
 		}
 	}
 }
@@ -989,4 +997,33 @@ pub enum DuplicatePageAction {
 	Skip,
 	/// The page was reviewed and stays visible; stop reporting it
 	Keep,
+}
+
+#[derive(
+	Default,
+	Eq,
+	Copy,
+	Hash,
+	Debug,
+	Clone,
+	EnumIter,
+	PartialEq,
+	Serialize,
+	Deserialize,
+	DeriveActiveEnum,
+	EnumString,
+	Display,
+)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[sea_orm(
+	rs_type = "String",
+	rename_all = "lowercase",
+	db_type = "String(StringLen::None)"
+)]
+#[strum(serialize_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum TagKind {
+	Genre,
+	#[default]
+	Tag,
 }

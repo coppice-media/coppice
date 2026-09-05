@@ -12,6 +12,13 @@ pub struct Model {
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]
 	pub updated_at: DateTimeWithTimeZone,
 	pub ordered: bool,
+	/// Whether this collection is projected to Kobo devices as a shelf `Tag`.
+	#[sea_orm(default_value = true)]
+	pub kobo_shelf: bool,
+	/// Device that last wrote this collection through the Kobo `tags`
+	/// write-back endpoints; `None` for native/Komga writes.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub source_device: Option<String>,
 	#[sea_orm(column_type = "Text")]
 	pub creating_user_id: String,
 }

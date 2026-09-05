@@ -23,6 +23,7 @@ use stump_media::{
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 use crate::{
+	browse::{BrowseKind, RemoteOrigin, VirtualBrowseCache},
 	cache::{CacheKey, PageCache},
 	catalog::{CatalogError, CatalogSnapshot, SourceCatalog},
 	health::{self, HealthChecker, HealthRunSummary},
@@ -124,6 +125,9 @@ pub struct ProviderHostConfig {
 	pub cache_dir: PathBuf,
 	pub cache_max_bytes: u64,
 	pub catalog_url: Option<String>,
+	/// How long virtual-library browse pages stay cached before the source is
+	/// hit again (`virtual_series_ttl`, five minutes by default).
+	pub virtual_series_ttl: Duration,
 }
 
 struct Manifest {
@@ -147,6 +151,7 @@ pub struct ProviderHost {
 	catalog: SourceCatalog,
 	checker: HealthChecker,
 	manifests: Mutex<HashMap<String, Manifest>>,
+	browse: VirtualBrowseCache,
 }
 
 impl std::fmt::Debug for ProviderHost {
@@ -155,6 +160,7 @@ impl std::fmt::Debug for ProviderHost {
 			.field("factories", &self.factories)
 			.field("cache", &self.cache)
 			.field("catalog", &self.catalog)
+			.field("browse", &self.browse)
 			.finish()
 	}
 }
@@ -167,6 +173,7 @@ impl ProviderHost {
 		factories: Vec<SourceFactory>,
 		config: ProviderHostConfig,
 	) -> Result<Arc<Self>, ProviderError> {
+		let browse = VirtualBrowseCache::new(config.virtual_series_ttl);
 		let cache =
 			PageCache::open(config.cache_dir.join("pages"), config.cache_max_bytes)
 				.await?;
@@ -181,6 +188,7 @@ impl ProviderHost {
 			catalog,
 			checker,
 			manifests: Mutex::new(HashMap::new()),
+			browse,
 		});
 		host.reload_sources().await?;
 		Ok(host)
@@ -605,6 +613,66 @@ impl ProviderHost {
 			content_type: ContentType::COMIC_ZIP,
 			bytes: cursor.into_inner(),
 		})
+	}
+
+	/// Live browse for a virtual library: page the source, caching the
+	/// result for `virtual_series_ttl` and indexing every returned series
+	/// under its deterministic id. No rows are written.
+	pub async fn browse(
+		&self,
+		source_id: &str,
+		library_id: &str,
+		kind: &BrowseKind,
+		page: u32,
+	) -> Result<Arc<crate::source::SourcePage<RemoteSeries>>, ProviderError> {
+		let key = VirtualBrowseCache::key(source_id, kind, page);
+		if let Some(cached) = self.browse.get(&key) {
+			return Ok(cached);
+		}
+		let source = self.source(source_id)?;
+		let result = match kind {
+			BrowseKind::Popular => source.popular(page).await?,
+			BrowseKind::Latest => source.latest(page).await?,
+			BrowseKind::Search { query, filters } => {
+				source.search(query, filters, page).await?
+			},
+		};
+		let result = Arc::new(result);
+		self.browse.insert(source_id, library_id, kind, page, result.clone());
+		Ok(result)
+	}
+
+	/// Details for a remote series, fetched live (details are cheap enough
+	/// not to cache; chapters and pages have their own flows).
+	pub async fn remote_series_details(
+		&self,
+		source_id: &str,
+		remote_id: &str,
+	) -> Result<RemoteSeries, ProviderError> {
+		Ok(self.source(source_id)?.details(remote_id).await?)
+	}
+
+	/// Where a deterministic series id served by a recent browse came from.
+	pub fn virtual_series_origin(&self, stump_series_id: &str) -> Option<RemoteOrigin>
+	{
+		self.browse.origin(stump_series_id)
+	}
+
+	/// The configured virtual-series TTL.
+	pub fn virtual_series_ttl(&self) -> std::time::Duration {
+		self.browse.ttl()
+	}
+
+	/// Materialise (or extend) a remote series into `library_id`. The first
+	/// call for a remote series creates the `series`/`media` rows under the
+	/// same deterministic ids the browse surface reported.
+	pub async fn materialise_series(
+		&self,
+		library_id: &str,
+		source_id: &str,
+		remote_id: &str,
+	) -> Result<crate::materialize::Materialized, ProviderError> {
+		crate::materialize::add_series(self, library_id, source_id, remote_id).await
 	}
 
 	/// Resolve a virtual media path to its parts, rejecting other paths.

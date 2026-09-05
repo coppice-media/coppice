@@ -135,6 +135,8 @@ pub struct KomgaLibraryCreateRequest {
 	#[serde(default = "default_true")]
 	pub hash_files: bool,
 	#[serde(default)]
+	pub hash_koreader: bool,
+	#[serde(default)]
 	pub hash_pages: bool,
 	#[serde(default = "default_true")]
 	pub analyze_dimensions: bool,
@@ -167,8 +169,8 @@ impl Default for KomgaLibraryCreateRequest {
 			repair_extensions: false,
 			convert_to_cbz: false,
 			empty_trash_after_scan: false,
-			series_cover: SeriesCover::First,
 			hash_files: true,
+			hash_koreader: false,
 			hash_pages: false,
 			analyze_dimensions: true,
 			oneshots_directory: None,

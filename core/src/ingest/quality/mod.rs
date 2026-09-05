@@ -27,6 +27,7 @@ use stump_media::{media::get_page, EpubProcessor, FileError, PathUtils};
 pub mod cover_not_page_two;
 pub mod cover_present;
 pub mod duplicate_existing;
+pub mod duplicate_pages_across_books;
 pub mod epub_toc_chapters;
 pub mod filename;
 pub mod image_dimensions_consistent;
@@ -36,6 +37,7 @@ pub mod registry;
 pub use cover_not_page_two::CoverNotPageTwoCheck;
 pub use cover_present::CoverPresentCheck;
 pub use duplicate_existing::DuplicateExistingCheck;
+pub use duplicate_pages_across_books::DuplicatePagesAcrossBooksCheck;
 pub use epub_toc_chapters::EpubTocChaptersCheck;
 pub use filename::{
 	parse_filename, FilenameParseStatus, FilenameSeriesParseCheck, FilenameTuple,

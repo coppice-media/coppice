@@ -2,19 +2,19 @@
 	import { browser } from '$app/environment';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
-	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
-	import { Button } from '$lib/components/ui/button';
-	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '$lib/components/ui/empty';
-	import { Input } from '$lib/components/ui/input';
-	import { Separator } from '$lib/components/ui/separator';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Switch } from '$lib/components/ui/switch';
-	import * as Tabs from '$lib/components/ui/tabs';
-	import * as Select from '$lib/components/ui/select';
+	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
+	import { Button } from '@stump/ui/components/ui/button';
+	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Badge } from '@stump/ui/components/ui/badge';
+	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
+	import { Input } from '@stump/ui/components/ui/input';
+	import { Separator } from '@stump/ui/components/ui/separator';
+	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import { Switch } from '@stump/ui/components/ui/switch';
+	import * as Tabs from '@stump/ui/components/ui/tabs';
+	import * as Select from '@stump/ui/components/ui/select';
 	import { getEditorSession } from '$lib/editor/session.svelte';
-	import { request } from '$lib/graphql/client';
+	import { request } from '@stump/ui/graphql/client';
 	import {
 		IngestProviderCatalogDocument,
 		IngestProviderSettingsDocument,

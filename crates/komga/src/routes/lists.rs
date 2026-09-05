@@ -7,10 +7,13 @@ use std::{
 use crate::{
 	book::{KomgaBookId, KomgaMediaStatus},
 	collection::{
-		KomgaCollection, KomgaCollectionId, KomgaCollectionQuery,
-		KomgaCollectionUpdateRequest,
+		KomgaCollection, KomgaCollectionCreateRequest, KomgaCollectionId,
+		KomgaCollectionQuery, KomgaCollectionUpdateRequest,
 	},
-	read_list::{KomgaReadList, KomgaReadListId, KomgaReadListQuery},
+	read_list::{
+		KomgaReadList, KomgaReadListCreateRequest, KomgaReadListId, KomgaReadListQuery,
+		KomgaReadListUpdateRequest,
+	},
 	routes::progress::{
 		counts_for_progress_books, mark_book_read, progress_books, KomgaReadProgressDto,
 		KomgaReadProgressUpdateDto,
@@ -24,7 +27,7 @@ use axum::{
 	extract::Path,
 	http::{HeaderMap, StatusCode},
 	response::Response,
-	routing::get,
+	routing::{get, post},
 	Extension, Json, Router,
 };
 use axum_extra::extract::Query;
@@ -64,8 +67,11 @@ where
 	S: Clone + Send + Sync + 'static,
 {
 	Router::<S>::new()
-		.route("/api/v1/readlists", get(get_readlists))
-		.route("/api/v1/readlists/{id}", get(get_readlist))
+		.route("/api/v1/readlists", get(get_readlists).post(create_readlist))
+		.route(
+			"/api/v1/readlists/{id}",
+			get(get_readlist).patch(patch_readlist).delete(delete_readlist),
+		)
 		.route(
 			"/api/v1/readlists/{id}/thumbnail",
 			get(get_readlist_thumbnail),
@@ -76,10 +82,12 @@ where
 			get(get_tachiyomi_readlist_progress).put(update_tachiyomi_readlist_progress),
 		)
 		.route("/api/v1/books/{id}/readlists", get(get_book_readlists))
-		.route("/api/v1/collections", get(get_collections))
+		.route("/api/v1/collections", get(get_collections).post(create_collection))
 		.route(
 			"/api/v1/collections/{id}",
-			get(get_collection).patch(patch_collection),
+			get(get_collection)
+				.patch(patch_collection)
+				.delete(delete_collection),
 		)
 		.route(
 			"/api/v1/collections/{id}/thumbnail",
@@ -1087,141 +1095,135 @@ async fn get_series_collections(
 	cached_json(&headers, &content)
 }
 
-fn validate_collection_patch(
-	patch: &KomgaCollectionUpdateRequest,
-) -> APIResult<Option<Vec<String>>> {
-	match &patch.series_ids {
-		crate::PatchValue::Unset | crate::PatchValue::None => Ok(None),
-		crate::PatchValue::Some(series_ids) => {
-			let mut seen = HashSet::with_capacity(series_ids.len());
-			let mut values = Vec::with_capacity(series_ids.len());
-			for series_id in series_ids {
-				if !seen.insert(series_id.0.clone()) {
-					return Err(APIError::BadRequest(
-						"seriesIds must not contain duplicate IDs".to_owned(),
-					));
-				}
-				values.push(series_id.0.clone());
-			}
-			Ok(Some(values))
-		},
-	}
+/// Creates a collection (Komga `POST /api/v1/collections`). Validation and
+/// the change event live in the canonical container service; the route
+/// renders the DTO from the created row plus the requested membership.
+async fn create_collection(
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(request): Json<KomgaCollectionCreateRequest>,
+) -> APIResult<Json<KomgaCollection>> {
+	let user = auth.user();
+	let series_ids: Vec<String> =
+		request.series_ids.iter().map(|id| id.0.clone()).collect();
+	let model = ctx
+		.create_collection(&user, request.name, request.ordered, series_ids.clone())
+		.await?;
+	Ok(Json(map_collection(model, series_ids)))
 }
 
-async fn apply_collection_patch(
-	txn: &DatabaseTransaction,
-	user: &AuthUser,
-	id: &str,
+fn collection_patch_fields(
 	patch: &KomgaCollectionUpdateRequest,
-	requested_series_ids: Option<&Vec<String>>,
-) -> APIResult<()> {
-	let model = collection::Entity::find_by_id(id.to_owned())
-		.one(txn)
-		.await?
-		.ok_or_else(|| APIError::NotFound("Collection not found".to_owned()))?;
-	if model.creating_user_id != user.id {
-		return Err(APIError::forbidden_discreet());
-	}
-
-	if let Some(series_ids) = requested_series_ids {
-		let visible_ids = series::Entity::find_for_user(user)
-			.filter(series::Column::Id.is_in(series_ids.clone()))
-			.select_only()
-			.column(series::Column::Id)
-			.into_tuple::<String>()
-			.all(txn)
-			.await?;
-		if visible_ids.len() != series_ids.len() {
-			return Err(APIError::NotFound(
-				"One or more series were not found".to_owned(),
-			));
-		}
-	}
-
-	let mut active_model = model.into_active_model();
-	if let crate::PatchValue::Some(name) = &patch.name {
-		active_model.name = Set(name.clone());
-	}
-	if let crate::PatchValue::Some(ordered) = &patch.ordered {
-		active_model.ordered = Set(*ordered);
-	}
-	active_model.updated_at = Set(DateTimeWithTimeZone::from(Utc::now()));
-	active_model.update(txn).await?;
-
-	if let Some(series_ids) = requested_series_ids {
-		collection_series::Entity::delete_many()
-			.filter(collection_series::Column::CollectionId.eq(id.to_owned()))
-			.exec(txn)
-			.await?;
-		if !series_ids.is_empty() {
-			let members = series_ids
-				.iter()
-				.enumerate()
-				.map(|(display_order, series_id)| {
-					Ok(collection_series::ActiveModel {
-						display_order: Set(i32::try_from(display_order)?),
-						series_id: Set(series_id.clone()),
-						collection_id: Set(id.to_owned()),
-						..Default::default()
-					})
-				})
-				.collect::<Result<Vec<_>, std::num::TryFromIntError>>()
-				.map_err(|error| APIError::InternalServerError(error.to_string()))?;
-			collection_series::Entity::insert_many(members)
-				.exec(txn)
-				.await?;
-		}
-	}
-
-	Ok(())
+) -> (Option<String>, Option<bool>, Option<Vec<String>>) {
+	let name = match &patch.name {
+		crate::PatchValue::Some(name) => Some(name.clone()),
+		_ => None,
+	};
+	let ordered = match &patch.ordered {
+		crate::PatchValue::Some(ordered) => Some(*ordered),
+		_ => None,
+	};
+	let series_ids = match &patch.series_ids {
+		crate::PatchValue::Some(ids) => {
+			Some(ids.iter().map(|id| id.0.clone()).collect())
+		},
+		_ => None,
+	};
+	(name, ordered, series_ids)
 }
 
 async fn patch_collection(
 	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
 	Extension(auth): Extension<AuthContext>,
-	Extension(events): Extension<KomgaEvents>,
 	Path(id): Path<String>,
 	Json(patch): Json<KomgaCollectionUpdateRequest>,
 ) -> APIResult<StatusCode> {
 	let user = auth.user();
-	let requested_series_ids = validate_collection_patch(&patch)?;
-	let txn = ctx.conn().begin().await?;
-	let result =
-		apply_collection_patch(&txn, &user, &id, &patch, requested_series_ids.as_ref())
-			.await;
-	match result {
-		Ok(()) => {
-			let series_ids =
-				if let Some(requested_series_ids) = requested_series_ids.as_ref() {
-					requested_series_ids
-						.iter()
-						.cloned()
-						.map(KomgaSeriesId::from)
-						.collect()
-				} else {
-					collection_series::Entity::find()
-						.filter(collection_series::Column::CollectionId.eq(id.clone()))
-						.order_by_asc(collection_series::Column::DisplayOrder)
-						.all(&txn)
-						.await?
-						.into_iter()
-						.map(|member| KomgaSeriesId::from(member.series_id))
-						.collect()
-				};
-			txn.commit().await?;
-			events.send(KomgaEvent::CollectionChanged {
-				collection_id: id.into(),
-				series_ids,
-			});
-			Ok(StatusCode::NO_CONTENT)
+	let (name, ordered, series_ids) = collection_patch_fields(&patch);
+	ctx.update_collection(&user, &id, name, ordered, series_ids)
+		.await?;
+	Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_collection(
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Path(id): Path<String>,
+) -> APIResult<StatusCode> {
+	ctx.delete_collection(auth.user(), &id).await?;
+	Ok(StatusCode::NO_CONTENT)
+}
+
+/// Creates a reading list (Komga `POST /api/v1/readlists`).
+async fn create_readlist(
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(request): Json<KomgaReadListCreateRequest>,
+) -> APIResult<Json<KomgaReadList>> {
+	let user = auth.user();
+	let book_ids: Vec<String> = request.book_ids.iter().map(|id| id.0.clone()).collect();
+	let model = ctx
+		.create_read_list(
+			&user,
+			request.name,
+			Some(request.summary),
+			request.ordered,
+			book_ids.clone(),
+		)
+		.await?;
+	Ok(Json(map_read_list(model, book_ids)))
+}
+
+fn read_list_patch_fields(
+	patch: &KomgaReadListUpdateRequest,
+) -> (
+	Option<String>,
+	Option<Option<String>>,
+	Option<bool>,
+	Option<Vec<String>>,
+) {
+	let name = match &patch.name {
+		crate::PatchValue::Some(name) => Some(name.clone()),
+		_ => None,
+	};
+	let summary = match &patch.summary {
+		crate::PatchValue::Some(summary) => Some(Some(summary.clone())),
+		crate::PatchValue::None => Some(None),
+		crate::PatchValue::Unset => None,
+	};
+	let ordered = match &patch.ordered {
+		crate::PatchValue::Some(ordered) => Some(*ordered),
+		_ => None,
+	};
+	let book_ids = match &patch.book_ids {
+		crate::PatchValue::Some(ids) => {
+			Some(ids.iter().map(|id| id.0.clone()).collect())
 		},
-		Err(error) => {
-			if let Err(rollback_error) = txn.rollback().await {
-				tracing::error!(error = ?rollback_error, "Failed to roll back Komga collection patch");
-			}
-			Err(error)
-		},
-	}
+		_ => None,
+	};
+	(name, summary, ordered, book_ids)
+}
+
+async fn patch_readlist(
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Path(id): Path<String>,
+	Json(patch): Json<KomgaReadListUpdateRequest>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	let (name, summary, ordered, book_ids) = read_list_patch_fields(&patch);
+	ctx.update_read_list(&user, &id, name, summary, ordered, book_ids)
+		.await?;
+	Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_readlist(
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Path(id): Path<String>,
+) -> APIResult<StatusCode> {
+	ctx.delete_read_list(auth.user(), &id).await?;
+	Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
@@ -1275,29 +1277,47 @@ mod tests {
 	}
 
 	#[test]
-	fn collection_patch_rejects_duplicate_members_before_writing() {
+	fn collection_patch_maps_dto_fields_onto_the_service_call() {
 		let patch = KomgaCollectionUpdateRequest {
-			name: PatchValue::Unset,
-			ordered: PatchValue::Unset,
+			name: PatchValue::Some("Renamed".to_owned()),
+			ordered: PatchValue::Some(true),
 			series_ids: PatchValue::Some(vec![
 				KomgaSeriesId::from("series-1"),
-				KomgaSeriesId::from("series-1"),
+				KomgaSeriesId::from("series-2"),
 			]),
 		};
-		let error = validate_collection_patch(&patch).unwrap_err();
-		assert!(
-			matches!(error, APIError::BadRequest(message) if message.contains("duplicate"))
+		let (name, ordered, series_ids) = collection_patch_fields(&patch);
+		assert_eq!(name.as_deref(), Some("Renamed"));
+		assert_eq!(ordered, Some(true));
+		assert_eq!(
+			series_ids,
+			Some(vec!["series-1".to_owned(), "series-2".to_owned()])
 		);
-	}
 
-	#[test]
-	fn collection_patch_allows_an_explicit_empty_membership() {
+		// Unset fields stay None so the service leaves them untouched, and an
+		// explicit empty membership clears the container.
 		let patch = KomgaCollectionUpdateRequest {
 			name: PatchValue::Unset,
 			ordered: PatchValue::Unset,
 			series_ids: PatchValue::Some(Vec::new()),
 		};
-		assert_eq!(validate_collection_patch(&patch).unwrap(), Some(Vec::new()));
+		let (name, ordered, series_ids) = collection_patch_fields(&patch);
+		assert!(name.is_none() && ordered.is_none());
+		assert_eq!(series_ids, Some(Vec::new()));
+	}
+
+	#[test]
+	fn read_list_patch_distinguishes_null_summary_from_unset() {
+		let patch = KomgaReadListUpdateRequest {
+			name: PatchValue::Unset,
+			summary: PatchValue::None,
+			ordered: PatchValue::Unset,
+			book_ids: PatchValue::Some(vec![KomgaBookId::from("book-1")]),
+		};
+		let (name, summary, ordered, book_ids) = read_list_patch_fields(&patch);
+		assert!(name.is_none() && ordered.is_none());
+		assert_eq!(summary, Some(None));
+		assert_eq!(book_ids, Some(vec!["book-1".to_owned()]));
 	}
 
 	#[test]

@@ -2,15 +2,15 @@
 	import { browser } from '$app/environment';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
-	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '$lib/components/ui/empty';
-	import { Input } from '$lib/components/ui/input';
-	import * as Select from '$lib/components/ui/select';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { request } from '$lib/graphql/client';
+	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
+	import { Badge } from '@stump/ui/components/ui/badge';
+	import { Button } from '@stump/ui/components/ui/button';
+	import * as Dialog from '@stump/ui/components/ui/dialog';
+	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
+	import { Input } from '@stump/ui/components/ui/input';
+	import * as Select from '@stump/ui/components/ui/select';
+	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import { request } from '@stump/ui/graphql/client';
 	import {
 		IngestProviderCatalogDocument,
 		IngestProviderSearchDocument,

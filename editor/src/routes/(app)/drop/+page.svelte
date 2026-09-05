@@ -2,18 +2,19 @@
 	import { browser } from '$app/environment';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
-	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
-	import { Button } from '$lib/components/ui/button';
-	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '$lib/components/ui/empty';
-	import { Separator } from '$lib/components/ui/separator';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '$lib/components/ui/table';
+	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
+	import { Button } from '@stump/ui/components/ui/button';
+	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
+	import { Separator } from '@stump/ui/components/ui/separator';
+	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@stump/ui/components/ui/table';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import ProgressIndicator from '$lib/components/ProgressIndicator.svelte';
 	import { getEditorSession } from '$lib/editor/session.svelte';
-	import { request, stageIngestUploads, type UploadFileInput } from '$lib/graphql/client';
-	import { uuid } from '$lib/utils/uuid';
+	import { request } from '@stump/ui/graphql/client';
+	import { stageIngestUploads, type UploadFileInput } from '$lib/ingest/uploads';
+	import { uuid } from '@stump/ui/utils/uuid';
 	import {
 		DiscardIngestItemDocument,
 		EnqueueIngestAnalysisDocument,

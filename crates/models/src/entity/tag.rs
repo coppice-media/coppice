@@ -10,6 +10,9 @@ pub struct Model {
 	pub id: i32,
 	#[sea_orm(column_type = "Text", unique)]
 	pub name: String,
+	/// Distinguishes Komga `genres` from `tags` so round trips preserve both.
+	#[sea_orm(default_value = "tag")]
+	pub kind: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

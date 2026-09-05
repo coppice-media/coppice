@@ -14,10 +14,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::{
 	body::Bytes,
-	extract::Path,
-	http::{HeaderMap, Method},
+	extract::{Path, Json},
+	http::{HeaderMap, Method, StatusCode},
 	response::{IntoResponse, Response},
-	routing::{get, post},
+	routing::{get, post, put},
 	Extension, Router,
 };
 use stump_auth::AuthContext;
@@ -118,7 +118,38 @@ pub trait KoboBackend: Send + Sync + 'static {
 		&self,
 		auth: AuthContext,
 	) -> Result<Response, Self::Error>;
+	/// Create a shelf for the device user. The shelf id is returned so the
+	/// device can address it later; creation is idempotent.
+	async fn create_tag(
+		&self,
+		auth: AuthContext,
+		request: TagCreateRequest,
+	) -> Result<String, Self::Error>;
+	/// Rename a shelf; last writer wins.
+	async fn rename_tag(
+		&self,
+		auth: AuthContext,
+		tag_id: String,
+		name: String,
+	) -> Result<(), Self::Error>;
+	/// Delete a shelf.
+	async fn delete_tag(&self, auth: AuthContext, tag_id: String) -> Result<(), Self::Error>;
+	/// Add book revision ids to a shelf (unknown books silently ignored).
+	async fn add_tag_items(
+		&self,
+		auth: AuthContext,
+		tag_id: String,
+		revision_ids: Vec<String>,
+	) -> Result<(), Self::Error>;
+	/// Remove book revision ids from a shelf (unknown books silently ignored).
+	async fn remove_tag_items(
+		&self,
+		auth: AuthContext,
+		tag_id: String,
+		revision_ids: Vec<String>,
+	) -> Result<(), Self::Error>;
 }
+
 
 #[derive(Debug, serde::Deserialize)]
 struct APIKeyPath {
@@ -170,6 +201,19 @@ where
 				)
 				.route("/v1/auth/device", post(auth_device::<B>))
 				.route("/v1/books/{book_id}/file/epub", get(book_file::<B>))
+				.route("/v1/library/tags", post(create_tag::<B>))
+				.route(
+					"/v1/library/tags/{tag_id}",
+					put(rename_tag::<B>).delete(delete_tag::<B>),
+				)
+				.route("/v1/library/tags/{tag_id}/items", post(add_tag_items::<B>))
+				// The device constructs this variant from the `tag_items`
+				// resource template served by `initialization`.
+				.route("/v1/library/tags/{tag_id}/Items", post(add_tag_items::<B>))
+				.route(
+					"/v1/library/tags/{tag_id}/items/delete",
+					post(remove_tag_items::<B>),
+				)
 				.route("/v1/{*path}", axum::routing::any(stubbed_route::<B>)),
 		),
 	)
@@ -321,6 +365,117 @@ async fn delete_sync_sessions<B: KoboBackend>(
 	backend.delete_sync_sessions(auth).await
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct TagPath {
+	api_key: String,
+	tag_id: String,
+}
+
+/// Wire body for `POST /v1/library/tags`:
+/// `{"Name": ..., "Items": [...]}` (Calibre-Web
+/// `HandleTagCreate@a97826402f1b39c45b7ea8d906efddc9f1750934`). An optional
+/// `Id` is honored when present so devices that pre-generate shelf ids keep
+/// them stable.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TagCreateRequest {
+	pub id: Option<String>,
+	pub name: String,
+	#[serde(default)]
+	pub items: Vec<TagItemPayload>,
+}
+
+/// Wire body for the add/remove item routes:
+/// `{"Items": [{"RevisionId": ..., "Type": "ProductRevisionTagItem"}]}`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TagItemsRequest {
+	#[serde(default)]
+	pub items: Vec<TagItemPayload>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TagItemPayload {
+	#[serde(rename = "Type")]
+	pub r#type: Option<String>,
+	pub revision_id: Option<String>,
+}
+
+/// Shelf items are keyed by book revision with an explicit item type;
+/// anything else is silently ignored, matching Calibre-Web
+/// (`add_items_to_shelf@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+pub(crate) fn known_revision_ids(items: &[TagItemPayload]) -> Vec<String> {
+	items
+		.iter()
+		.filter_map(|item| {
+			let known_type = item
+				.r#type
+				.as_deref()
+				.is_some_and(|kind| kind == "ProductRevisionTagItem");
+			known_type.then_some(()).and_then(|_| item.revision_id.clone())
+		})
+		.collect()
+}
+
+async fn create_tag<B: KoboBackend>(
+	Extension(backend): Extension<Arc<B>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(request): Json<TagCreateRequest>,
+) -> Result<(StatusCode, Json<String>), B::Error> {
+	let shelf_id = backend.create_tag(auth, request).await?;
+	Ok((StatusCode::CREATED, Json(shelf_id)))
+}
+
+/// Wire body for `PUT /v1/library/tags/{tag_id}`:
+/// `{"Name": "..."}` (Calibre-Web
+/// `HandleTagUpdate@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TagRenameRequest {
+	pub name: String,
+}
+
+async fn rename_tag<B: KoboBackend>(
+	Extension(backend): Extension<Arc<B>>,
+	Extension(auth): Extension<AuthContext>,
+	Path(TagPath { api_key: _, tag_id }): Path<TagPath>,
+	Json(request): Json<TagRenameRequest>,
+) -> Result<StatusCode, B::Error> {
+	backend.rename_tag(auth, tag_id, request.name).await?;
+	Ok(StatusCode::OK)
+}
+
+async fn delete_tag<B: KoboBackend>(
+	Extension(backend): Extension<Arc<B>>,
+	Extension(auth): Extension<AuthContext>,
+	Path(TagPath { api_key: _, tag_id }): Path<TagPath>,
+) -> Result<StatusCode, B::Error> {
+	backend.delete_tag(auth, tag_id).await?;
+	Ok(StatusCode::OK)
+}
+
+async fn add_tag_items<B: KoboBackend>(
+	Extension(backend): Extension<Arc<B>>,
+	Extension(auth): Extension<AuthContext>,
+	Path(TagPath { api_key: _, tag_id }): Path<TagPath>,
+	Json(request): Json<TagItemsRequest>,
+) -> Result<StatusCode, B::Error> {
+	let revision_ids = known_revision_ids(&request.items);
+	backend.add_tag_items(auth, tag_id, revision_ids).await?;
+	Ok(StatusCode::CREATED)
+}
+async fn remove_tag_items<B: KoboBackend>(
+	Extension(backend): Extension<Arc<B>>,
+	Extension(auth): Extension<AuthContext>,
+	Path(TagPath { api_key: _, tag_id }): Path<TagPath>,
+	Json(request): Json<TagItemsRequest>,
+) -> Result<StatusCode, B::Error> {
+	let revision_ids = known_revision_ids(&request.items);
+	backend.remove_tag_items(auth, tag_id, revision_ids).await?;
+	Ok(StatusCode::OK)
+}
+
 /// Middleware adapters can use this response helper for a successful empty result.
 pub fn no_content() -> Response {
 	axum::http::StatusCode::NO_CONTENT.into_response()
@@ -328,6 +483,7 @@ pub fn no_content() -> Response {
 
 pub mod routes {
 	pub use super::{
-		kobo_router, no_content, router, session_router, KoboBackend, ProviderHost,
+		kobo_router, no_content, router, session_router, TagCreateRequest, TagItemsRequest,
+		KoboBackend, ProviderHost,
 	};
 }

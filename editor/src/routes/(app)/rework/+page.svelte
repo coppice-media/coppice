@@ -2,18 +2,18 @@
 	import { browser } from '$app/environment';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
-	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '$lib/components/ui/empty';
-	import { Input } from '$lib/components/ui/input';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '$lib/components/ui/table';
+	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
+	import { Badge } from '@stump/ui/components/ui/badge';
+	import { Button } from '@stump/ui/components/ui/button';
+	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
+	import { Input } from '@stump/ui/components/ui/input';
+	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@stump/ui/components/ui/table';
 	import ReworkDetailSheet from '$lib/components/ReworkDetailSheet.svelte';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import { getEditorSession } from '$lib/editor/session.svelte';
-	import { request } from '$lib/graphql/client';
+	import { request } from '@stump/ui/graphql/client';
 	import { IngestReworkItemsDocument } from '$lib/graphql/generated/graphql';
 	import { formatBytes, humanize, offsetPagination } from '$lib/ingest/helpers';
 

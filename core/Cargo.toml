@@ -13,8 +13,10 @@ graphql = [
 	"metadata_integrations/graphql",
 	"stump_devices/graphql",
 	"stump_jobs/graphql",
+	"stump_notify/graphql",
 ]
 pdf = ["stump_media/pdf"]
+providers = ["dep:stump_provider", "dep:stump_provider_mangadex"]
 rar = ["stump_media/rar"]
 watcher = ["dep:stump_watcher"]
 
@@ -40,12 +42,16 @@ itertools.workspace = true
 metadata_integrations = { path = "../crates/integrations/metadata", default-features = false }
 migrations = { path = "../crates/migrations", default-features = false }
 models = { path = "../crates/models", default-features = false }
+stump_annotation_sync = { path = "../crates/annotation-sync" }
 stump_api_types = { path = "../crates/api-types" }
 stump_devices = { path = "../crates/devices", default-features = false }
 stump_jobs = { path = "../crates/jobs", default-features = false }
 stump_media = { path = "../crates/media", default-features = false }
 stump_scanner = { path = "../crates/scanner" }
+stump_notify = { path = "../crates/notify" }
 stump_watcher = { path = "../crates/watcher", optional = true }
+stump_provider = { path = "../crates/provider", optional = true }
+stump_provider_mangadex = { path = "../crates/provider-mangadex", optional = true }
 md5.workspace = true
 natord.workspace = true
 rand.workspace = true

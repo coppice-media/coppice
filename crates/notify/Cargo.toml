@@ -24,9 +24,10 @@ reqwest = { workspace = true, optional = true }
 ring = { version = "0.17.8", optional = true }
 serde.workspace = true
 serde_json.workspace = true
-stump_api_types = { path = "../api-types" }
+data-encoding.workspace = true
 strum.workspace = true
 thiserror.workspace = true
+stump_api_types = { path = "../api-types" }
 tracing.workspace = true
 
 [dev-dependencies]

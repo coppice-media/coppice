@@ -3,12 +3,13 @@
 	import { resolve } from '$app/paths';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { Toaster } from 'svelte-sonner';
-	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
-	import { Button } from '$lib/components/ui/button';
-	import { Separator } from '$lib/components/ui/separator';
+	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
+	import { Button } from '@stump/ui/components/ui/button';
+	import { Separator } from '@stump/ui/components/ui/separator';
 	import { createEditorSession, setEditorSession } from '$lib/editor/session.svelte';
-	import { LibrariesDocument, MeDocument } from '$lib/graphql/generated/graphql';
-	import { request } from '$lib/graphql/client';
+	import { LibrariesDocument } from '$lib/graphql/generated/graphql';
+	import { MeDocument } from '@stump/ui/graphql/generated';
+	import { request } from '@stump/ui/graphql/client';
 	import {
 		initialProgressState,
 		progressReducer,

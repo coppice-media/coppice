@@ -6,18 +6,23 @@
 
 use std::{str::FromStr, sync::Arc};
 
+pub mod annotation_sync;
 pub mod api_key;
+pub mod collections;
 pub mod config;
 mod context;
 pub mod database;
 pub mod error;
 mod event;
 pub mod filesystem;
-pub mod ingest;
 pub mod job;
+pub mod ingest;
 pub mod kobo;
 pub mod opds;
 pub mod reading_state;
+pub mod notification;
+#[cfg(feature = "providers")]
+pub mod providers;
 pub mod utils;
 
 use config::logging::STUMP_SHADOW_TEXT;
@@ -31,7 +36,10 @@ use stump_jobs::JobScheduler;
 
 pub use context::Ctx;
 pub use error::{CoreError, CoreResult};
-pub use event::{CoreEvent, DevicePairingRequested, MediaDeleted, SeriesDeleted};
+pub use event::{
+	CoreEvent, DevicePaired, DevicePairingRequested, LibraryCreated, LibraryDeleted,
+	LibraryUpdated, MediaDeleted, SeriesDeleted,
+};
 
 pub use email::{
 	AttachmentPayload, EmailContentType, EmailerClient, EmailerClientConfig,
@@ -75,12 +83,18 @@ pub struct StumpCore {
 impl StumpCore {
 	/// Creates a [StumpCore] from an existing [Ctx]
 	pub fn from_ctx(ctx: Ctx) -> StumpCore {
+		annotation_sync::spawn_debounce_loop(ctx.clone());
 		StumpCore { ctx }
 	}
 
 	/// Creates a new instance of [`StumpCore`] and returns it wrapped in an [`std::sync::Arc`].
 	pub async fn new(config: StumpConfig) -> StumpCore {
 		let core_ctx = Ctx::new(config).await;
+		// One listener maps routable core events to per-user notification
+		// dispatches; see `notification::spawn_listener`.
+		notification::spawn_listener(core_ctx.clone());
+		// Debounced annotation export; see `annotation_sync::spawn_debounce_loop`.
+		annotation_sync::spawn_debounce_loop(core_ctx.clone());
 		StumpCore { ctx: core_ctx }
 	}
 

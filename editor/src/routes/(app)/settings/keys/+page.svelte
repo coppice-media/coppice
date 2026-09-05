@@ -2,13 +2,13 @@
 	import { browser } from '$app/environment';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import type { ResultOf } from '@graphql-typed-document-node/core';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { Input } from '$lib/components/ui/input';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Switch } from '$lib/components/ui/switch';
-	import { request } from '$lib/graphql/client';
+	import { Badge } from '@stump/ui/components/ui/badge';
+	import { Button } from '@stump/ui/components/ui/button';
+	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Input } from '@stump/ui/components/ui/input';
+	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import { Switch } from '@stump/ui/components/ui/switch';
+	import { request } from '@stump/ui/graphql/client';
 	import {
 		CreateMetadataProviderDocument,
 		DeleteMetadataProviderDocument,

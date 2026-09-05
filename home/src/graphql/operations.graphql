@@ -1,0 +1,151 @@
+# Home-app-only GraphQL operations. The shared `Me` query lives in
+# packages/stump-ui/src/graphql/operations.graphql.
+
+fragment DeviceFields on Device {
+	id
+	name
+	kind
+	transformProfile
+	createdAt
+	lastSeenAt
+	lastSyncAt
+	lastSyncSummary
+	revokedAt
+	credential {
+		kind
+		protocol
+		secretHint
+	}
+}
+
+fragment DeviceCredentialFields on IssuedDeviceCredential {
+	kind
+	protocol
+	credentialRef
+	secret
+}
+
+fragment DeviceEndpointFields on DeviceEndpoint {
+	label
+	url
+	username
+	secretHint
+}
+
+query Devices {
+	devices {
+		...DeviceFields
+	}
+}
+
+mutation CreateDevice($kind: DeviceKind!, $name: String) {
+	createDevice(kind: $kind, name: $name) {
+		device {
+			...DeviceFields
+		}
+		credential {
+			...DeviceCredentialFields
+		}
+		endpoints {
+			...DeviceEndpointFields
+		}
+	}
+}
+
+mutation RenameDevice($id: String!, $name: String!) {
+	renameDevice(id: $id, name: $name) {
+		...DeviceFields
+	}
+}
+
+mutation RotateDeviceCredential($id: String!) {
+	rotateDeviceCredential(id: $id) {
+		device {
+			...DeviceFields
+		}
+		credential {
+			...DeviceCredentialFields
+		}
+		endpoints {
+			...DeviceEndpointFields
+		}
+	}
+}
+
+mutation RevokeDevice($id: String!) {
+	revokeDevice(id: $id) {
+		...DeviceFields
+	}
+}
+
+mutation SetDeviceTransformProfile($id: String!, $profile: JSON) {
+	setDeviceTransformProfile(id: $id, profile: $profile) {
+		...DeviceFields
+	}
+}
+
+query PendingDevicePairings {
+	pendingDevicePairings {
+		id
+		kind
+		name
+		remoteIp
+		status
+		failedAttempts
+		credentialIssued
+		createdAt
+		expiresAt
+		approvedAt
+	}
+}
+
+mutation ApproveDevicePairing($pairingId: ID!, $code: String) {
+	approveDevicePairing(pairingId: $pairingId, code: $code) {
+		id
+		status
+	}
+}
+
+mutation DenyDevicePairing($pairingId: ID!) {
+	denyDevicePairing(pairingId: $pairingId) {
+		id
+		status
+	}
+}
+
+subscription DeviceSeen($deviceId: String) {
+	deviceSeen(deviceId: $deviceId) {
+		deviceId
+		userId
+		protocol
+	}
+}
+
+query ReadingStats($span: ReadingStatsSpan!) {
+	readingStats(span: $span) {
+		span
+		from
+		to
+		sessions
+		minutes
+		pages
+		booksFinished
+		streakDays
+		days {
+			date
+			sessions
+			minutes
+			pages
+		}
+	}
+}
+
+query LoginActivity {
+	loginActivity {
+		id
+		ipAddress
+		userAgent
+		authenticationSuccessful
+		timestamp
+	}
+}

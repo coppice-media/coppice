@@ -19,11 +19,14 @@ mod media;
 mod media_metadata;
 mod metadata_provider;
 mod notifier;
+mod notification;
 mod reading_list;
 pub mod reading_progress;
 mod scheduled_job_config;
 mod series;
 mod series_metadata;
+#[cfg(feature = "providers")]
+mod provider;
 mod server_config;
 mod smart_list_view;
 mod smart_lists;
@@ -52,7 +55,10 @@ use log::LogMutation;
 use media::MediaMutation;
 use media_metadata::MediaMetadataMutation;
 use metadata_provider::MetadataProviderMutation;
+#[cfg(feature = "providers")]
+use provider::ProviderMutation;
 use notifier::NotifierMutation;
+use notification::NotificationMutation;
 use reading_list::ReadingListMutation;
 use reading_progress::ReadProgressMutation;
 use scheduled_job_config::ScheduledJobConfigMutation;
@@ -88,7 +94,12 @@ struct ContentMutations(
 );
 
 #[derive(async_graphql::MergedObject, Default)]
-struct UserAndNotifsMutations(UserMutation, EmailerMutation, EmailDeviceMutation);
+struct UserAndNotifsMutations(
+	UserMutation,
+	EmailerMutation,
+	EmailDeviceMutation,
+	NotificationMutation,
+);
 
 #[derive(async_graphql::MergedObject, Default)]
 struct SystemMutations(
@@ -99,6 +110,8 @@ struct SystemMutations(
 	ServerConfigMutation,
 	ScheduledJobConfigMutation,
 	MetadataProviderMutation,
+	#[cfg(feature = "providers")]
+	ProviderMutation,
 	IngestMutation,
 	DevicePairingMutation,
 );

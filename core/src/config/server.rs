@@ -57,6 +57,19 @@ pub struct ServerConfig {
 	#[default_value(false)]
 	#[env_key(TRUST_PROXY_HEADERS_KEY)]
 	pub trust_proxy_headers: bool,
+
+	/// Directory holding the built Home app (`home/build`). When set and it
+	/// contains `index.html`, the app is served under `/app`.
+	#[default_value(None)]
+	#[env_key(HOME_APP_DIR_KEY)]
+	pub home_app_dir: Option<String>,
+
+	/// Optional allowlist of filesystem roots for library creation and the
+	/// filesystem browser (comma-separated, e.g. `/data/books,/data/comics`).
+	/// When empty, no root constraint is applied.
+	#[default_value(vec![])]
+	#[env_key(LIBRARY_ROOTS_KEY)]
+	pub library_roots: Vec<String>,
 }
 
 impl ServerConfig {

@@ -46,6 +46,20 @@ pub fn roles_for(is_server_owner: bool, can_download: bool) -> Vec<String> {
 	roles
 }
 
+/// The roles `GET /api/Account/roles` reports: Kavita's
+/// `PolicyConstants` role list, as captured from `kavita-ref`.
+pub const ALL_ROLES: [&str; 9] = [
+	"Admin",
+	"Pleb",
+	"Download",
+	"Change Password",
+	"Bookmark",
+	"Change Restriction",
+	"Login",
+	"Read Only",
+	"Promote",
+];
+
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
 	#[error("failed to encode Kavita token: {0}")]

@@ -20,7 +20,7 @@ use stump_media::media::ProcessedMediaMetadata;
 /// Algorithm version stamped on every quality report produced by the
 /// built-in checks.  Bump when a check definition, weight, or threshold
 /// changes so old scores are never silently reinterpreted.
-pub const QUALITY_ALGORITHM_VERSION: &str = "ingest-quality-1";
+pub const QUALITY_ALGORITHM_VERSION: &str = "ingest-quality-2";
 
 /// Media container kinds the ingest layer understands.  Mirrors the
 /// processor selection in `filesystem::media::process` without exposing it.

@@ -3,7 +3,7 @@ use axum::Router;
 use crate::config::state::AppState;
 
 mod api;
-mod ingest_editor;
+mod static_apps;
 #[cfg(feature = "kavita")]
 mod kavita;
 #[cfg(feature = "kobo")]
@@ -12,6 +12,8 @@ mod kobo_backend;
 mod komga;
 #[cfg(feature = "komga")]
 mod komga_backend;
+#[cfg(feature = "providers")]
+pub(crate) mod provider_virtual;
 #[cfg(feature = "koreader")]
 mod koreader_backend;
 #[cfg(feature = "liseur-sync")]
@@ -66,11 +68,9 @@ pub async fn mount(app_state: AppState) -> Router<AppState> {
 		);
 	}
 
-	// Mounted before the web UI so `/editor/*` is not swallowed by the SPA
-	// fallback; both can coexist in a full build.
-	if let Some(dir) = ingest_editor::editor_dir(&app_state) {
-		app_router = app_router.merge(ingest_editor::mount(&dir));
-	}
+	// Mounted before the web UI so static app bases (`/editor`, `/app`) are
+	// not swallowed by the SPA fallback; they coexist with a full build.
+	app_router = app_router.merge(static_apps::mount(&app_state));
 
 	#[cfg(feature = "webui")]
 	if app_state.config.protocols.enable_webui {

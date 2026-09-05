@@ -2,17 +2,17 @@
 	import { browser } from '$app/environment';
 	import { createMutation, createQueries, createQuery, keepPreviousData, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
-	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '$lib/components/ui/empty';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '$lib/components/ui/table';
+	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
+	import { Badge } from '@stump/ui/components/ui/badge';
+	import { Button } from '@stump/ui/components/ui/button';
+	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Checkbox } from '@stump/ui/components/ui/checkbox';
+	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
+	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@stump/ui/components/ui/table';
 	import ReworkDetailSheet from '$lib/components/ReworkDetailSheet.svelte';
 	import { getEditorSession } from '$lib/editor/session.svelte';
-	import { request } from '$lib/graphql/client';
+	import { request } from '@stump/ui/graphql/client';
 	import {
 		IngestMediaQualityScoreDocument,
 		IngestProviderCatalogDocument,

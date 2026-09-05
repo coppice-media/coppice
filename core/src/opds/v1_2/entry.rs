@@ -116,11 +116,25 @@ pub trait IntoOPDSEntry {
 pub struct OPDSEntryBuilder<T> {
 	data: T,
 	api_key: Option<String>,
+	/// Visible page count override (duplicate-page skipping). When unset the
+	/// physical page count is used.
+	visible_page_count: Option<i32>,
 }
 
 impl<T> OPDSEntryBuilder<T> {
 	pub fn new(data: T, api_key: Option<String>) -> Self {
-		Self { data, api_key }
+		Self {
+			data,
+			api_key,
+			visible_page_count: None,
+		}
+	}
+
+	/// Override the PSE stream count with the visible page count of the
+	/// publication (duplicate-page skipping renumbering).
+	pub fn with_visible_page_count(mut self, count: Option<i32>) -> Self {
+		self.visible_page_count = count;
+		self
 	}
 
 	fn format_url(&self, path: &str) -> String {
@@ -262,10 +276,10 @@ impl IntoOPDSEntry for OPDSEntryBuilder<OPDSPublicationEntity> {
 			),
 		];
 
+		let page_count = self.visible_page_count.unwrap_or(self.data.media.pages);
 		let stream_link = OpdsStreamLink::new(
 			self.data.media.id.clone(),
-			self.data.media.pages.to_string(),
-			current_page_link_type.to_string(),
+			page_count.to_string(),
 			current_page.map(|page| page.to_string()),
 			last_read_at.map(|date| date.to_string()),
 		);

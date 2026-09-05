@@ -17,7 +17,7 @@ use models::{
 use serde::Deserialize;
 
 use crate::{
-	auth::{mint_token, roles_for},
+	auth::{mint_token, roles_for, ALL_ROLES},
 	dto::{
 		default_user_preferences, AgeRating, AgeRestrictionDto, IdentityProvider,
 		KavitaDateTime, LoginDto, UserDto,
@@ -26,6 +26,7 @@ use crate::{
 	ids::{IdKind, KavitaIds},
 	KAVITA_VERSION,
 };
+use stump_auth::AuthContext;
 
 use super::{route_ci, KavitaBackend};
 
@@ -70,7 +71,28 @@ pub(crate) fn routes<S>() -> Router<S>
 where
 	S: Clone + Send + Sync + 'static,
 {
-	Router::<S>::new()
+	let router = Router::<S>::new();
+	let router = route_ci(router, "/api/Account", get(account_current));
+	route_ci(router, "/api/Account/roles", get(account_roles))
+}
+
+/// `AccountController.GetCurrentUser`: the full `UserDto` of the
+/// authenticated user, without a token. Stump cannot reproduce
+/// `UserDto.apiKey` from the hashed key store, so it is only echoed when the
+/// request itself authenticated with the key.
+async fn account_current(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+) -> APIResult<Json<UserDto>> {
+	let mut dto = user_dto(ctx.as_ref(), auth.user(), auth.api_key(), true).await?;
+	dto.token = None;
+	dto.refresh_token = None;
+	Ok(Json(dto))
+}
+
+/// `AccountController.GetRoles`: the full Kavita `PolicyConstants` role list.
+async fn account_roles() -> Json<Vec<String>> {
+	Json(ALL_ROLES.iter().map(|role| (*role).to_owned()).collect())
 }
 
 async fn plugin_authenticate(
@@ -204,4 +226,73 @@ pub(crate) async fn user_dto(
 		primary_color: None,
 		secondary_color: None,
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::test_support::{auth_user, db, TestBackend};
+	use models::entity::user;
+	use ::tests::fake_data;
+
+	/// The `UserDto` wire shape must match Kavita's field set: Kamigura decodes
+	/// `username`/`roles`/`token` and Inkita reads the login record as-is.
+	#[tokio::test]
+	async fn user_dto_carries_the_kavita_field_set() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("kate").insert(&conn).await;
+		let backend = TestBackend { conn };
+		let dto = user_dto(
+			&backend,
+			auth_user(&user_row),
+			Some("stump_key".to_owned()),
+			true,
+		)
+		.await
+		.unwrap();
+
+		assert_eq!(dto.username, "kate");
+		assert_eq!(dto.api_key.as_deref(), Some("stump_key"));
+		assert!(dto.token.is_some(), "login mints a fresh token");
+		assert_eq!(dto.kavita_version.as_deref(), Some(KAVITA_VERSION));
+		assert!(dto.roles.contains(&"Login".to_owned()));
+		assert!(dto.roles.contains(&"Admin".to_owned()));
+		assert!(dto.preferences.is_some());
+		assert!(dto.age_restriction.is_some());
+
+		let value = serde_json::to_value(&dto).unwrap();
+		for key in [
+			"id",
+			"oidcId",
+			"username",
+			"email",
+			"roles",
+			"token",
+			"refreshToken",
+			"apiKey",
+			"preferences",
+			"ageRestriction",
+			"kavitaVersion",
+			"identityProvider",
+			"created",
+			"createdUtc",
+			"authKeys",
+			"coverImage",
+			"primaryColor",
+			"secondaryColor",
+		] {
+			assert!(value.get(key).is_some(), "missing UserDto key {key}");
+		}
+		assert_eq!(value["preferences"]["locale"], "en");
+		assert_eq!(value["ageRestriction"]["ageRating"], -1);
+		let _ = user::Entity;
+	}
+
+	#[test]
+	fn roles_route_reports_the_full_policy_list() {
+		assert_eq!(ALL_ROLES.len(), 9);
+		assert!(ALL_ROLES.contains(&"Admin"));
+		assert!(ALL_ROLES.contains(&"Login"));
+		assert!(ALL_ROLES.contains(&"Download"));
+	}
 }

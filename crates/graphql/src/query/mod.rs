@@ -21,9 +21,12 @@ pub(crate) mod media;
 mod media_metadata_overview;
 mod metadata_provider;
 mod notifier;
+mod notification;
 pub(crate) mod reading_list;
 mod reading_stats;
 mod series;
+#[cfg(feature = "providers")]
+mod provider;
 mod server_config;
 mod smart_list_view;
 mod smart_lists;
@@ -52,7 +55,10 @@ use log::LogQuery;
 use media::MediaQuery;
 use media_metadata_overview::MediaMetadataOverviewQuery;
 use metadata_provider::MetadataProviderQuery;
+#[cfg(feature = "providers")]
+use provider::ProviderQuery;
 use notifier::NotifierQuery;
+use notification::NotificationQuery;
 use reading_list::ReadingListQuery;
 use reading_stats::ReadingStatsQuery;
 use series::SeriesQuery;
@@ -89,7 +95,13 @@ struct ContentQueries(
 );
 
 #[derive(async_graphql::MergedObject, Default)]
-struct UserAndNotifsQueries(UserQuery, EmailerQuery, EmailDeviceQuery, NotifierQuery);
+struct UserAndNotifsQueries(
+	UserQuery,
+	EmailerQuery,
+	EmailDeviceQuery,
+	NotifierQuery,
+	NotificationQuery,
+);
 
 #[derive(async_graphql::MergedObject, Default)]
 struct SystemQueries(
@@ -102,6 +114,8 @@ struct SystemQueries(
 	FilesystemQuery,
 	IngestQuery,
 	DevicePairingQuery,
+	#[cfg(feature = "providers")]
+	ProviderQuery,
 );
 
 #[derive(async_graphql::MergedObject, Default)]

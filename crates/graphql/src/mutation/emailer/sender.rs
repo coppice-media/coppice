@@ -10,6 +10,7 @@ use email::{
 };
 use sea_orm::{prelude::*, IntoActiveModel, NotSet, Set};
 use stump_core::utils::encryption::decrypt_string;
+use stump_notify::{ChannelError, EmailChannel};
 use stump_media::{ContentType, FileParts, PathUtils};
 
 use models::entity::{
@@ -28,14 +29,16 @@ trait AttachmentSender {
 }
 
 struct AttachmentSenderImpl {
-	emailer_client: EmailerClient,
+	/// The single SMTP delivery path shared with the notification system:
+	/// `stump_notify`'s email channel wraps the same `EmailerClient`.
+	channel: EmailChannel,
 }
 
 impl AttachmentSenderImpl {
 	pub fn new(encryption_key: String, emailer: emailer::Model) -> Result<Self> {
 		let emailer_client_config = build_emailer_client_config(encryption_key, emailer)?;
 		Ok(Self {
-			emailer_client: EmailerClient::new(emailer_client_config),
+			channel: EmailChannel::new(emailer_client_config),
 		})
 	}
 }
@@ -46,9 +49,22 @@ impl AttachmentSender for AttachmentSenderImpl {
 		recipient: &str,
 		payloads: Vec<AttachmentPayload>,
 	) -> EmailResult<()> {
-		self.emailer_client
-			.send_attachments("Attachment from Stump", recipient, payloads)
+		self.channel
+			.deliver(recipient, "Attachment from Stump", payloads)
 			.await
+			.map_err(map_channel_error)
+	}
+}
+
+fn map_channel_error(error: ChannelError) -> EmailError {
+	match error {
+		ChannelError::Rejected(message) => EmailError::InvalidEmail(message),
+		ChannelError::Transport(message) => {
+			// The email channel only reports lettre SMTP failures as
+			// transport errors.
+			EmailError::InvalidEmail(message)
+		},
+		other => EmailError::InvalidEmail(other.to_string()),
 	}
 }
 

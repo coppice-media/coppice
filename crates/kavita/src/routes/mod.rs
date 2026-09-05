@@ -27,6 +27,7 @@ mod series;
 mod series_filter;
 mod server;
 mod tachiyomi;
+mod users;
 pub use account::LoginOutcome;
 
 /// Image bytes with their MIME type, as served by cover and page routes.
@@ -152,7 +153,8 @@ where
 		.merge(reader::routes::<S>())
 		.merge(tachiyomi::routes::<S>())
 		.merge(metadata::routes::<S>())
-		.merge(filter::routes::<S>());
+		.merge(filter::routes::<S>())
+		.merge(users::routes::<S>());
 	// Unimplemented Kavita controllers answer 404 here rather than falling
 	// through to the web UI; each miss is logged so the next wave sees it.
 	// Controllers that already own a `/{param}` route at this depth

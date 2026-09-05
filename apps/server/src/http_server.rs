@@ -87,6 +87,13 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 
 	let server_ctx = core.get_context();
 	let app_state = server_ctx.arced();
+	// The provider host (Mode B virtual libraries) starts only when
+	// `providers.enable_providers` is on; it registers the `provider://`
+	// media resolver for every protocol.
+	#[cfg(feature = "providers")]
+	stump_core::providers::init(server_ctx)
+		.await
+		.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
 	let cors_layer = cors::get_cors_layer(config.clone());
 	let rate_limiter = Arc::new(RateLimiter::new(
 		RateLimitConfig::from_env().map_err(ServerError::ServerStartError)?,

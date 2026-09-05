@@ -81,14 +81,6 @@ fragment IngestPageInfoFields on PaginationInfo {
 	}
 }
 
-query Me {
-	me {
-		id
-		username
-		isServerOwner
-	}
-}
-
 query Libraries($pagination: Pagination!) {
 	libraries(pagination: $pagination) {
 		nodes {

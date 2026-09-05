@@ -1,7 +1,7 @@
 use chrono::Utc;
 use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
 use models::{
-	entity::{media, media_metadata},
+	entity::{library, media, media_metadata, page_hash, series},
 	shared::enums::FileStatus,
 };
 use sea_orm::{ActiveModelTrait, DatabaseBackend, MockDatabase, Set};
@@ -25,6 +25,7 @@ use super::{
 	cover_not_page_two::CoverNotPageTwoCheck,
 	cover_present::CoverPresentCheck,
 	duplicate_existing::DuplicateExistingCheck,
+	duplicate_pages_across_books::DuplicatePagesAcrossBooksCheck,
 	epub_toc_chapters::EpubTocChaptersCheck,
 	filename::{parse_filename, FilenameParseStatus},
 	image_dimensions_consistent::ImageDimensionsConsistentCheck,
@@ -413,6 +414,133 @@ async fn duplicate_existing_covers_pass_warn_and_fail() {
 	assert_eq!(evidence["matching_media_ids"][0], "existing-hash");
 }
 
+
+async fn seed_library_book(
+	conn: &sea_orm::DatabaseConnection,
+	library_id: &str,
+	series_id: &str,
+	media_id: &str,
+) {
+	library::ActiveModel {
+		id: Set(library_id.to_string()),
+		name: Set(library_id.to_string()),
+		path: Set(format!("/{library_id}")),
+		status: Set(FileStatus::Ready),
+		config_id: Set(1),
+		created_at: Set(Utc::now().into()),
+		..Default::default()
+	}
+	.insert(conn)
+	.await
+	.expect("insert library fixture");
+	series::ActiveModel {
+		id: Set(series_id.to_string()),
+		name: Set(series_id.to_string()),
+		path: Set(format!("/{library_id}/{series_id}")),
+		status: Set(FileStatus::Ready),
+		library_id: Set(Some(library_id.to_string())),
+		created_at: Set(Utc::now().into()),
+		..Default::default()
+	}
+	.insert(conn)
+	.await
+	.expect("insert series fixture");
+	media::ActiveModel {
+		id: Set(media_id.to_string()),
+		name: Set(media_id.to_string()),
+		path: Set(format!("/{library_id}/{series_id}/{media_id}.cbz")),
+		extension: Set("cbz".to_string()),
+		series_id: Set(Some(series_id.to_string())),
+		pages: Set(1),
+		size: Set(1),
+		status: Set(FileStatus::Ready),
+		created_at: Set(Utc::now().into()),
+		..Default::default()
+	}
+	.insert(conn)
+	.await
+	.expect("insert media fixture");
+}
+
+async fn seed_page_hash(
+	conn: &sea_orm::DatabaseConnection,
+	media_id: &str,
+	page: i32,
+	dhash: i64,
+) {
+	page_hash::ActiveModel {
+		media_id: Set(media_id.to_string()),
+		page: Set(page),
+		dhash: Set(dhash),
+		created_at: Set(Utc::now().into()),
+	}
+	.insert(conn)
+	.await
+	.expect("insert page hash fixture");
+}
+
+#[tokio::test]
+async fn duplicate_pages_across_books_covers_statuses_and_threshold() {
+	// Not applicable for reflowable books.
+	let conn = ::tests::db::test_database().await;
+	let check = DuplicatePagesAcrossBooksCheck::new(Arc::new(conn));
+	let epub = synthetic_epub(false);
+	let book = snapshot(epub.path(), IngestMediaKind::Epub, 1);
+	let (status, _, _) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::NotApplicable);
+
+	let page = png(8, 8, [0, 0, 0, 255]);
+	let own_dhash = stump_media::page_dhash(&page).expect("hash fixture page") as i64;
+
+	// Pass when no analyzed page hashes exist in the library yet.
+	let conn = ::tests::db::test_database().await;
+	let file = cbz(&[("001.png", page.clone())]);
+	let mut book = snapshot(file.path(), IngestMediaKind::ComicArchive, 1);
+	book.library_id = "lib".to_string();
+	let check = DuplicatePagesAcrossBooksCheck::new(Arc::new(conn));
+	let (status, score, _) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::Pass);
+	assert_eq!(score, 1.0);
+
+	// Warn once the hash reaches the default threshold of 3 distinct books;
+	// the third book only matches within the Hamming tolerance and the book
+	// under rework never counts as its own duplicate.
+	let conn = ::tests::db::test_database().await;
+	seed_library_book(&conn, "lib", "series-a", "book-a").await;
+	seed_library_book(&conn, "lib", "series-b", "book-b").await;
+	seed_library_book(&conn, "lib", "series-c", "book-c").await;
+	seed_library_book(&conn, "lib", "series-self", "drop-test").await;
+	seed_page_hash(&conn, "book-a", 1, own_dhash).await;
+	seed_page_hash(&conn, "book-b", 1, own_dhash).await;
+	seed_page_hash(&conn, "book-c", 1, own_dhash ^ 0b11).await;
+	seed_page_hash(&conn, "drop-test", 1, own_dhash).await;
+	let check = DuplicatePagesAcrossBooksCheck::new(Arc::new(conn));
+	let mut book = snapshot(file.path(), IngestMediaKind::ComicArchive, 1);
+	book.library_id = "lib".to_string();
+	book.drop_item_id = "drop-test".to_string();
+	let (status, score, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::Warn);
+	assert_eq!(score, 0.5);
+	let books = evidence["duplicate_groups"][0]["books"].as_array().unwrap();
+	assert_eq!(books.len(), 3);
+	assert_eq!(evidence["duplicate_groups"][0]["dhash"], json!(format!("{own_dhash:016x}")));
+	assert_eq!(evidence["matched_books"].as_array().unwrap().len(), 3);
+
+	// Raising the threshold above the matched book count silences the check.
+	let conn = ::tests::db::test_database().await;
+	seed_library_book(&conn, "lib", "series-a", "book-a").await;
+	seed_library_book(&conn, "lib", "series-b", "book-b").await;
+	seed_page_hash(&conn, "book-a", 1, own_dhash).await;
+	seed_page_hash(&conn, "book-b", 1, own_dhash).await;
+	let check = DuplicatePagesAcrossBooksCheck::new(Arc::new(conn));
+	let mut book = snapshot(file.path(), IngestMediaKind::ComicArchive, 1);
+	book.library_id = "lib".to_string();
+	let mut settings = SettingValues::new();
+	settings.insert("minBooks".to_string(), json!(4));
+	let result = check.run(&book, &settings).await.expect("check succeeds");
+	assert_eq!(result.status, QualityStatus::Pass);
+}
+
 #[tokio::test]
 async fn filename_parser_covers_fixed_grammar() {
 	let cases = [
@@ -498,7 +626,7 @@ async fn filename_parser_covers_fixed_grammar() {
 async fn registry_and_score_preserve_contract_identities() {
 	let conn = MockDatabase::new(DatabaseBackend::Sqlite).into_connection();
 	let registry = QualityRegistry::builtin(Arc::new(conn));
-	assert_eq!(registry.checks().len(), 7);
+	assert_eq!(registry.checks().len(), 8);
 	assert_eq!(registry.total_weight(), 100);
 	assert_eq!(
 		registry
@@ -513,6 +641,7 @@ async fn registry_and_score_preserve_contract_identities() {
 			"image_dimensions_consistent",
 			"epub_toc_chapters",
 			"duplicate_existing",
+			"duplicate_pages_across_books",
 			"filename_series_parse",
 		]
 	);

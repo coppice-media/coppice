@@ -9,19 +9,19 @@
 		tableFeatures,
 		type ColumnDef
 	} from '@tanstack/svelte-table';
-	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '$lib/components/ui/empty';
-	import { Input } from '$lib/components/ui/input';
-	import { Textarea } from '$lib/components/ui/textarea';
-	import { Separator } from '$lib/components/ui/separator';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '$lib/components/ui/table';
+	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
+	import { Badge } from '@stump/ui/components/ui/badge';
+	import { Button } from '@stump/ui/components/ui/button';
+	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
+	import { Input } from '@stump/ui/components/ui/input';
+	import { Textarea } from '@stump/ui/components/ui/textarea';
+	import { Separator } from '@stump/ui/components/ui/separator';
+	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@stump/ui/components/ui/table';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import ProviderSearchDialog from '$lib/components/ProviderSearchDialog.svelte';
-	import { request } from '$lib/graphql/client';
+	import { request } from '@stump/ui/graphql/client';
 	import {
 		BulkApplyIngestMetadataDocument,
 		IngestBulkItemsDocument,

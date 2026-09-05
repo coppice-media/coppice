@@ -1,16 +1,24 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use models::shared::enums::JobStatus;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, broadcast};
 
 use super::{
-	contract::{AnalysisPhase, DropItemStatus, IngestProgressEvent},
+	contract::{
+		AnalysisPhase, DropItemStatus, IngestProgressEvent, QualityReport, QualityStatus,
+	},
 	progress::{CursorExpired, ProgressStream, StoredProgressStream},
 	providers::ProviderRegistry,
 	quality::QualityRegistry,
 	store::{AnalysisJobModel, AnalysisTarget, IngestStore, Pagination},
 };
-use crate::error::{CoreError, CoreResult};
+use crate::{
+	error::{CoreError, CoreResult},
+	event::{
+		AnalysisJobFailed, CoreEvent, IngestAwaitingReview, ProviderMatchDone,
+		QualityFailed,
+	},
+};
 
 /// Durable coordinator for staged analysis jobs. At most two jobs execute the
 /// expensive snapshot/check/provider path concurrently.
@@ -20,6 +28,9 @@ pub struct IngestCoordinator {
 	quality: Arc<QualityRegistry>,
 	providers: Arc<ProviderRegistry>,
 	semaphore: Arc<Semaphore>,
+	/// Core event sink for notification-routed outcomes (quality failures,
+	/// review waits, provider matches, job failures). `None` in tests.
+	events: Option<broadcast::Sender<CoreEvent>>,
 }
 
 impl IngestCoordinator {
@@ -33,7 +44,30 @@ impl IngestCoordinator {
 			quality,
 			providers,
 			semaphore: Arc::new(Semaphore::new(2)),
+			events: None,
 		}
+	}
+
+	/// Attach the core event channel so analysis outcomes are announced
+	/// (and routable to notification channels).
+	pub fn with_event_tx(mut self, events: broadcast::Sender<CoreEvent>) -> Self {
+		self.events = Some(events);
+		self
+	}
+
+	fn notify(&self, event: CoreEvent) {
+		if let Some(sender) = &self.events {
+			let _ = sender.send(event);
+		}
+	}
+
+	fn failed_check_ids(report: &QualityReport) -> Vec<String> {
+		report
+			.checks
+			.iter()
+			.filter(|check| check.outcome.status == QualityStatus::Fail)
+			.map(|check| check.outcome.check_id.clone())
+			.collect()
 	}
 
 	pub fn store(&self) -> &IngestStore {
@@ -267,6 +301,10 @@ impl IngestCoordinator {
 			},
 			Err(error) => {
 				self.store.fail_job(&job_id, &error.to_string()).await?;
+				self.notify(CoreEvent::AnalysisJobFailed(AnalysisJobFailed {
+					analysis_job_id: job_id.to_string(),
+					error: error.to_string(),
+				}));
 				Err(error)
 			},
 		}
@@ -354,9 +392,37 @@ impl IngestCoordinator {
 		)
 		.await?;
 		let saved_candidates = self.store.save_candidates(&item.id, &candidates).await?;
-		self.store
+		let failed_checks = Self::failed_check_ids(&report);
+		if !failed_checks.is_empty() {
+			self.notify(CoreEvent::QualityFailed(QualityFailed {
+				library_id: item.library_id.clone(),
+				drop_item_id: Some(item.id.clone()),
+				media_id: None,
+				created_by: item.created_by.clone(),
+				score,
+				failed_checks,
+			}));
+		}
+		let updated = self
+			.store
 			.set_item_analysis_result(&item.id, score, !saved_candidates.is_empty())
 			.await?;
+		if !saved_candidates.is_empty() {
+			self.notify(CoreEvent::ProviderMatchDone(ProviderMatchDone {
+				library_id: item.library_id.clone(),
+				drop_item_id: item.id.clone(),
+				created_by: item.created_by.clone(),
+				candidate_count: saved_candidates.len(),
+			}));
+		}
+		if updated.status == DropItemStatus::AwaitingReview {
+			self.notify(CoreEvent::IngestAwaitingReview(IngestAwaitingReview {
+				library_id: item.library_id.clone(),
+				drop_item_id: item.id.clone(),
+				source_filename: item.source_filename.clone(),
+				created_by: item.created_by.clone(),
+			}));
+		}
 		self.emit_phase(
 			job,
 			item,

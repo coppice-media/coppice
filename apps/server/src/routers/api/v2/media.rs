@@ -144,21 +144,42 @@ pub(crate) async fn get_media_page(
 ) -> APIResult<ImageResponse> {
 	let book = media::Entity::find_for_user(&req.user())
 		.filter(media::Column::Id.eq(id.clone()))
-		.into_model::<media::MediaIdentSelect>()
+		.into_model::<media::Model>()
 		.one(ctx.conn.as_ref())
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
 
-	let content =
-		match get_page_async(&book.path, page.try_into()?, &ctx.config.media).await {
-			Ok(result) => result,
-			Err(e) => {
-				if matches!(e, FileError::NoImageError) {
-					return Err(APIError::NotFound("Page not found".to_string()));
-				}
-				return Err(APIError::InternalServerError(e.to_string()));
-			},
-		};
+	// Duplicate-page skipping renumbers visible pages onto the physical file;
+	// a visible page past the end of the renumbered list does not exist.
+	let cache = ctx.visible_pages_cache();
+	let visible = stump_core::filesystem::media::visible_pages::visible_pages(
+		ctx.conn.as_ref(),
+		&cache,
+		&book.id,
+		book.pages,
+	)
+	.await?;
+	let physical = stump_core::filesystem::media::visible_pages::physical_page(
+		&visible,
+		page as i32,
+	)
+	.ok_or(APIError::NotFound("Page not found".to_string()))?;
+
+	let content = match get_page_async(
+		&book.path,
+		u32::try_from(physical)?,
+		&ctx.config.media,
+	)
+	.await
+	{
+		Ok(result) => result,
+		Err(e) => {
+			if matches!(e, FileError::NoImageError) {
+				return Err(APIError::NotFound("Page not found".to_string()));
+			}
+			return Err(APIError::InternalServerError(e.to_string()));
+		},
+	};
 
 	Ok(ImageResponse::from(content))
 }

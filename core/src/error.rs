@@ -41,6 +41,8 @@ pub enum CoreError {
 	NotFound(String),
 	#[error("{0}")]
 	BadRequest(String),
+	#[error("You do not have permission to perform this action: {0}")]
+	Forbidden(String),
 	#[error("Requested file could not be found: {0}")]
 	FileNotFound(String),
 	#[error("Failed to read file: {0}")]

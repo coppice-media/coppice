@@ -438,7 +438,128 @@ fn map_core_event(event: KomgaCoreEvent) -> Option<(EventVisibility, KomgaSseEve
 			};
 			event.map(|event| (visibility, event))
 		},
-		KomgaCoreEvent::Other => None,
+		KomgaCoreEvent::LibraryCreated { id } => {
+			let visibility = EventVisibility::Library(id.clone());
+			KomgaSseEvent::from_payload(
+				"LibraryAdded",
+				crate::sse::LibraryAdded {
+					library_id: id.into(),
+				},
+			)
+			.map(|event| (visibility, event))
+		},
+		KomgaCoreEvent::LibraryUpdated { id } => {
+			let visibility = EventVisibility::Library(id.clone());
+			KomgaSseEvent::from_payload(
+				"LibraryChanged",
+				crate::sse::LibraryChanged {
+					library_id: id.into(),
+				},
+			)
+			.map(|event| (visibility, event))
+		},
+		KomgaCoreEvent::LibraryDeleted { id } => {
+			// Upstream broadcasts library deletion to every subscriber: the
+			// row is already gone, so a library-scoped visibility lookup
+			// would filter the event out for everyone.
+			KomgaSseEvent::from_payload(
+				"LibraryDeleted",
+				crate::sse::LibraryDeleted {
+					library_id: id.into(),
+				},
+			)
+			.map(|event| (EventVisibility::Any, event))
+		},
+		KomgaCoreEvent::CollectionAdded {
+			collection_id,
+			series_ids,
+		} => {
+			let visibility =
+				EventVisibility::SeriesSet(series_ids.iter().map(|id| id.0.clone()).collect());
+			KomgaSseEvent::from_payload(
+				"CollectionAdded",
+				crate::sse::CollectionAdded {
+					collection_id,
+					series_ids,
+				},
+			)
+			.map(|event| (visibility, event))
+		},
+		KomgaCoreEvent::CollectionChanged {
+			collection_id,
+			series_ids,
+		} => {
+			let visibility =
+				EventVisibility::SeriesSet(series_ids.iter().map(|id| id.0.clone()).collect());
+			KomgaSseEvent::from_payload(
+				"CollectionChanged",
+				crate::sse::CollectionChanged {
+					collection_id,
+					series_ids,
+				},
+			)
+			.map(|event| (visibility, event))
+		},
+		KomgaCoreEvent::CollectionDeleted {
+			collection_id,
+			series_ids,
+		} => {
+			let visibility =
+				EventVisibility::SeriesSet(series_ids.iter().map(|id| id.0.clone()).collect());
+			KomgaSseEvent::from_payload(
+				"CollectionDeleted",
+				crate::sse::CollectionDeleted {
+					collection_id,
+					series_ids,
+				},
+			)
+			.map(|event| (visibility, event))
+		},
+		KomgaCoreEvent::ReadListAdded {
+			read_list_id,
+			book_ids,
+		} => {
+			let visibility =
+				EventVisibility::MediaSet(book_ids.iter().map(|id| id.0.clone()).collect());
+			KomgaSseEvent::from_payload(
+				"ReadListAdded",
+				crate::sse::ReadListAdded {
+					read_list_id,
+					book_ids,
+				},
+			)
+			.map(|event| (visibility, event))
+		},
+		KomgaCoreEvent::ReadListChanged {
+			read_list_id,
+			book_ids,
+		} => {
+			let visibility =
+				EventVisibility::MediaSet(book_ids.iter().map(|id| id.0.clone()).collect());
+			KomgaSseEvent::from_payload(
+				"ReadListChanged",
+				crate::sse::ReadListChanged {
+					read_list_id,
+					book_ids,
+				},
+			)
+			.map(|event| (visibility, event))
+		},
+		KomgaCoreEvent::ReadListDeleted {
+			read_list_id,
+			book_ids,
+		} => {
+			let visibility =
+				EventVisibility::MediaSet(book_ids.iter().map(|id| id.0.clone()).collect());
+			KomgaSseEvent::from_payload(
+				"ReadListDeleted",
+				crate::sse::ReadListDeleted {
+					read_list_id,
+					book_ids,
+				},
+			)
+			.map(|event| (visibility, event))
+		},
 	}
 }
 

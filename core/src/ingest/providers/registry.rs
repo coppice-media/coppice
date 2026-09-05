@@ -62,6 +62,9 @@ const MAL_MEDIA_TYPES: &[MediaType] =
 const MANGADEX_MEDIA_TYPES: &[MediaType] = &[MediaType::Manga, MediaType::Manhwa];
 const MANGAUPDATES_MEDIA_TYPES: &[MediaType] =
 	&[MediaType::Manga, MediaType::Manhwa, MediaType::Webtoon];
+const OPEN_LIBRARY_MEDIA_TYPES: &[MediaType] = &[MediaType::Book];
+const GOOGLE_BOOKS_MEDIA_TYPES: &[MediaType] = &[MediaType::Book];
+const METRON_MEDIA_TYPES: &[MediaType] = &[MediaType::Comic];
 const INTEGRATIONS: &[IntegrationSpec] = &[
 	IntegrationSpec {
 		id: "comic_vine",
@@ -110,6 +113,30 @@ const INTEGRATIONS: &[IntegrationSpec] = &[
 		media_types: MANGAUPDATES_MEDIA_TYPES,
 		requires_api_token: false,
 		enabled_default: true,
+	},
+	IntegrationSpec {
+		id: "openlibrary",
+		name: "Open Library",
+		provider_type: MetadataProvider::OpenLibrary,
+		media_types: OPEN_LIBRARY_MEDIA_TYPES,
+		requires_api_token: false,
+		enabled_default: true,
+	},
+	IntegrationSpec {
+		id: "googlebooks",
+		name: "Google Books",
+		provider_type: MetadataProvider::GoogleBooks,
+		media_types: GOOGLE_BOOKS_MEDIA_TYPES,
+		requires_api_token: false,
+		enabled_default: true,
+	},
+	IntegrationSpec {
+		id: "metron",
+		name: "Metron",
+		provider_type: MetadataProvider::Metron,
+		media_types: METRON_MEDIA_TYPES,
+		requires_api_token: true,
+		enabled_default: false,
 	},
 ];
 
@@ -678,6 +705,9 @@ fn provider_id(provider: MetadataProvider) -> &'static str {
 		MetadataProvider::Mal => "mal",
 		MetadataProvider::MangaDex => "mangadex",
 		MetadataProvider::MangaUpdates => "mangaupdates",
+		MetadataProvider::OpenLibrary => "openlibrary",
+		MetadataProvider::GoogleBooks => "googlebooks",
+		MetadataProvider::Metron => "metron",
 	}
 }
 
@@ -736,7 +766,17 @@ mod tests {
 			ids.windows(2).all(|pair| pair[0] < pair[1]),
 			"catalog must be sorted by id: {ids:?}"
 		);
-		for id in ["comic_vine", "hardcover", "anilist", "mal", "mangadex"] {
+		for id in [
+			"comic_vine",
+			"hardcover",
+			"anilist",
+			"mal",
+			"mangadex",
+			"mangaupdates",
+			"openlibrary",
+			"googlebooks",
+			"metron",
+		] {
 			assert!(ids.contains(&id), "missing integration provider {id}");
 		}
 		// The llm provider is dormant until an ingest_plugin_setting row
@@ -781,6 +821,26 @@ mod tests {
 			mangadex.supported_media_types,
 			vec!["MANGA".to_string(), "MANHWA".to_string()]
 		);
+		// Open Library and Google Books are keyless book providers, enabled
+		// by default like the other keyless integrations.
+		for id in ["openlibrary", "googlebooks"] {
+			let descriptor = catalog.iter().find(|d| d.id == id).unwrap();
+			assert!(descriptor.available, "{id} must be available");
+			assert!(!descriptor.configured);
+			assert!(descriptor.enabled_default);
+			assert!(!descriptor.requires_api_token);
+			assert!(descriptor.capabilities.contains(&ProviderCapability::Search));
+			assert_eq!(descriptor.supported_media_types, vec!["BOOK".to_string()]);
+		}
+		// Metron needs a `username:password` credential and ships disabled.
+		let metron = catalog.iter().find(|d| d.id == "metron").unwrap();
+		assert_eq!(metron.name, "Metron");
+		assert!(metron.available);
+		assert!(!metron.configured);
+		assert!(!metron.enabled_default);
+		assert!(metron.requires_api_token);
+		assert!(metron.capabilities.contains(&ProviderCapability::Search));
+		assert_eq!(metron.supported_media_types, vec!["COMIC".to_string()]);
 	}
 
 	#[test]

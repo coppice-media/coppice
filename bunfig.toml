@@ -1,0 +1,7 @@
+# Root bunfig for the `packages/*` Bun workspace (see packages/stump-ui).
+# Companion-app stacks run graphql@17 and svelte@5 against packages whose
+# declared peer ranges top out lower; auto-installing peers would nest a
+# second graphql realm and break `graphql-codegen` with
+# "Cannot use GraphQLScalarType ... from another module or realm".
+[install]
+peer = false

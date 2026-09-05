@@ -29,6 +29,7 @@ editing it.
 | `migrations` | `migrations` | Append-only SeaORM schema migrations, `migrate` CLI | always linked; `cli` feature off in server graph | README done |
 | `models` | `models` | SeaORM entities, stored value types, shared DB services | always linked; `graphql` derives opt-in | README done |
 | `opds` | `stump_opds` | OPDS 1.2/2.0 catalog routes and `OpdsBackend` trait | server `opds` | README by `ReadmeProtocols` |
+| `notify` | `stump_notify` | Notification channels (ntfy, email, webhook), routing-rule resolution, retry policy | always linked via `stump_core`; `graphql` derives opt-in (`stump_core/graphql`) | README done |
 | `scanner` | `stump_scanner` | Filesystem scan planning primitives | always linked via `stump_core` | README pending |
 | `tests` | `tests` | Shared test DB/fake-data helpers for integration tests | dev only | README pending (dirty: `src/db.rs`) |
 | `watcher` | `stump_watcher` | Library filesystem watching, debounced scan requests | core/server `watcher` (in `headless`, not `minimal`) | in flight (untracked; `WatcherCrate`) |

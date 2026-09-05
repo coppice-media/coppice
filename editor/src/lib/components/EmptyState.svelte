@@ -5,7 +5,7 @@
 		EmptyDescription,
 		EmptyHeader,
 		EmptyTitle
-	} from '$lib/components/ui/empty';
+	} from '@stump/ui/components/ui/empty';
 
 	let {
 		title,

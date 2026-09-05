@@ -14,8 +14,10 @@
 //! [`host::ProviderHost`], which implements
 //! [`stump_media::virtual_media::VirtualMediaResolver`].
 
+pub mod browse;
 pub mod cache;
 pub mod catalog;
+pub mod gc;
 pub mod health;
 pub mod host;
 pub mod http;
@@ -26,10 +28,13 @@ pub mod mock;
 pub mod mock_http;
 pub mod rate_limit;
 pub mod source;
+pub mod virtual_library;
 pub mod virtual_path;
 
+pub use browse::{BrowseKind, RemoteOrigin, VirtualBrowseCache};
 pub use cache::{CacheKey, PageCache};
 pub use catalog::{CatalogEntry, CatalogSource, SourceCatalog, SourceTheme};
+pub use gc::{gc_materialised_series, GcReport};
 pub use health::{HealthProbe, HealthStatus};
 pub use host::{
 	ProviderError, ProviderHost, ProviderHostConfig, SourceFactory, VirtualArchive,
@@ -41,4 +46,6 @@ pub use source::{
 	FetchedPage, RemoteChapter, RemotePage, RemoteSeries, SearchFilter, SeriesStatus,
 	Source, SourceCapabilities, SourceError, SourceInfo, SourcePage, SourceResult,
 };
+pub use virtual_library::create_virtual_library;
 pub use virtual_path::VirtualPath;
+

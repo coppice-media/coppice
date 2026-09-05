@@ -1,3 +1,4 @@
+use chrono::SecondsFormat;
 use models::entity::{
 	kobo_sync_session,
 	media::{self},
@@ -10,6 +11,7 @@ use sea_orm::prelude::*;
 use sea_orm::query::*;
 
 use crate::SyncToken;
+use stump_core::collections::{shelf_sync_delta, ShelfProjection};
 use stump_core::kobo::{entity::MediaWithMetadataAndReadingSessions, sync_types::*};
 
 pub struct KoboSync {
@@ -329,6 +331,8 @@ impl<'a> SyncPage<'a> {
 			}
 		}
 
+		self.append_shelf_items(&mut sync_items).await?;
+
 		tracing::debug!(
 			?self.offset,
 			?self.limit,
@@ -337,6 +341,62 @@ impl<'a> SyncPage<'a> {
 		);
 
 		Ok(sync_items)
+	}
+
+	/// Adds shelf (`Tag`) items to the page: `NewTag` for every shelf on a
+	/// full sync, `ChangedTag` for shelves written inside the incremental
+	/// window, and `DeletedTag` for tombstones in that window. See
+	/// `stump_core::collections`.
+	async fn append_shelf_items(
+		&self,
+		sync_items: &mut Vec<SyncItem>,
+	) -> Result<(), DbErr> {
+		let delta =
+			shelf_sync_delta(self.db, self.user, self.previous_sync_at).await?;
+
+		for shelf in delta.new {
+			sync_items.push(SyncItem::NewTag(kobo_tag_container(shelf)));
+		}
+		for shelf in delta.changed {
+			sync_items.push(SyncItem::ChangedTag(kobo_tag_container(shelf)));
+		}
+		for shelf_id in delta.deleted_ids {
+			sync_items.push(SyncItem::DeletedTag(KoboDeletedTag {
+				tag: KoboDeletedTagId {
+					id: shelf_id,
+					last_modified: kobo_timestamp(Utc::now()),
+				},
+			}));
+		}
+
+		Ok(())
+	}
+}
+
+/// Formats a timestamp the way Kobo devices expect it: second-precision,
+/// trailing `Z`.
+fn kobo_timestamp(timestamp: DateTime<Utc>) -> String {
+	timestamp.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+/// Projects a [`ShelfProjection`] into the Calibre-Web tag wire shape.
+fn kobo_tag_container(shelf: ShelfProjection) -> KoboTagContainer {
+	KoboTagContainer {
+		tag: KoboTag {
+			id: shelf.shelf_id,
+			name: shelf.name,
+			last_modified: kobo_timestamp(shelf.last_modified.with_timezone(&Utc)),
+			tag_type: "Manual".to_string(),
+			r#type: "UserTag".to_string(),
+			items: shelf
+				.items
+				.into_iter()
+				.map(|revision_id| KoboTagItem {
+					revision_id,
+					r#type: "ProductRevisionTagItem".to_string(),
+				})
+				.collect(),
+		},
 	}
 }
 

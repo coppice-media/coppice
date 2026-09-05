@@ -18,6 +18,9 @@ pub mod mapper;
 pub mod progress;
 pub mod routes;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use auth::{mint_token, verify_token, KavitaClaims, TokenError};
 pub use dto::*;
 pub use filter::{

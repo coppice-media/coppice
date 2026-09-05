@@ -7,14 +7,15 @@ default-run = "stump_server"
 [features]
 default = ["full"]
 full = ["headless", "webui"]
-headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "komga", "kavita", "liseur-sync", "watcher", "qr", "apalis"]
+headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "komga", "kavita", "liseur-sync", "providers", "watcher", "qr", "apalis"]
 # Apalis-backed job executor (links `apalis`); `minimal` runs jobs on the inline executor.
 apalis = ["stump_core/apalis"]
 # Media format backends that link native code; every profile keeps them on.
 # Turn one off explicitly (e.g. `--no-default-features --features minimal,rar`).
-formats = ["pdf", "rar"]
+formats = ["pdf", "rar", "transform"]
 pdf = ["stump_core/pdf", "stump_media/pdf"]
 rar = ["stump_core/rar", "stump_media/rar"]
+transform = ["stump_media/turbojpeg", "stump_media/fast-resize", "stump_media/kepub"]
 graphql = [
   "dep:async-graphql",
   "dep:async-graphql-axum",
@@ -30,6 +31,7 @@ koreader = ["dep:stump_koreader"]
 komga = ["readium", "dep:stump_komga"]
 kavita = ["dep:stump_kavita"]
 liseur-sync = ["dep:stump_liseur_sync"]
+providers = ["dep:stump_provider", "dep:stump_provider_mangadex", "stump_core/providers"]
 # Server-rendered PNG for the device-pairing QR payload (links `qrcode` + `image`
 # PNG encoding); omitted from `minimal`.
 qr = ["dep:qrcode", "dep:image"]
@@ -95,6 +97,8 @@ filetime = "0.2.25"
 stump_koreader = { path = "../../crates/koreader", optional = true }
 stump_liseur_sync = { path = "../../crates/liseur-sync", optional = true }
 stump_opds = { path = "../../crates/opds", optional = true }
+stump_provider = { path = "../../crates/provider", optional = true }
+stump_provider_mangadex = { path = "../../crates/provider-mangadex", optional = true }
 subtle.workspace = true
 tempfile = "3.13.0"
 tower-http = { version = "0.5.2", features = [

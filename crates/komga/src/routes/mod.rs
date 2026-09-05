@@ -7,20 +7,23 @@ use axum::{
 	routing::any,
 	Extension, Router,
 };
-use models::entity::{media as media_entity, user::AuthUser};
+use models::entity::{
+	collection as collection_entity, library as library_entity, media as media_entity,
+	reading_list as reading_list_entity,
+	user::AuthUser,
+};
 use sea_orm::DatabaseConnection;
 use stump_auth::AuthContext;
 use tokio::sync::broadcast::{self, Receiver, Sender};
 
 use crate::{
 	errors::APIResult, KomgaBookPage, KomgaBookThumbnail, KomgaEvent,
-	KomgaSeriesThumbnail,
+	KomgaLibraryCreateRequest, KomgaLibraryUpdateRequest, KomgaSeriesThumbnail,
 };
 mod book;
 mod catalog;
 mod grimmory;
 mod library;
-mod lists;
 mod mapper;
 mod media;
 mod progress;
@@ -92,6 +95,60 @@ pub enum KomgaCoreEvent {
 		#[serde(default)]
 		deleted: bool,
 	},
+	/// A library was created (any protocol; see `stump_core::library`).
+	LibraryCreated {
+		id: String,
+	},
+	/// A library's name, root, or configuration changed.
+	LibraryUpdated {
+		id: String,
+	},
+	/// A library was deleted.
+	LibraryDeleted {
+		id: String,
+	},
+	/// A collection was created (any protocol, incl. Kobo shelf write-back).
+	CollectionAdded {
+		#[serde(rename = "collectionId")]
+		collection_id: String,
+		#[serde(rename = "seriesIds", default)]
+		series_ids: Vec<String>,
+	},
+	/// A collection's name, ordering, or membership changed.
+	CollectionChanged {
+		#[serde(rename = "collectionId")]
+		collection_id: String,
+		#[serde(rename = "seriesIds", default)]
+		series_ids: Vec<String>,
+	},
+	/// A collection was deleted.
+	CollectionDeleted {
+		#[serde(rename = "collectionId")]
+		collection_id: String,
+		#[serde(rename = "seriesIds", default)]
+		series_ids: Vec<String>,
+	},
+	/// A reading list was created (any protocol, incl. Kobo shelf write-back).
+	ReadListAdded {
+		#[serde(rename = "readListId")]
+		read_list_id: String,
+		#[serde(rename = "bookIds", default)]
+		book_ids: Vec<String>,
+	},
+	/// A reading list's name, summary, ordering, or membership changed.
+	ReadListChanged {
+		#[serde(rename = "readListId")]
+		read_list_id: String,
+		#[serde(rename = "bookIds", default)]
+		book_ids: Vec<String>,
+	},
+	/// A reading list was deleted.
+	ReadListDeleted {
+		#[serde(rename = "readListId")]
+		read_list_id: String,
+		#[serde(rename = "bookIds", default)]
+		book_ids: Vec<String>,
+	},
 	#[serde(other)]
 	Other,
 }
@@ -123,6 +180,13 @@ pub trait KomgaBackend: Send + Sync {
 		&self,
 		book: &media_entity::Model,
 	) -> APIResult<Vec<KomgaBookPage>>;
+	/// Physical page numbers (1-based) that remain visible for `book` under
+	/// duplicate-page skipping, or `None` when nothing is skipped. Page
+	/// routes renumber their output onto this list.
+	async fn visible_pages(
+		&self,
+		book: &media_entity::Model,
+	) -> APIResult<Option<Vec<i32>>>;
 	async fn book_page(
 		&self,
 		user: &AuthUser,
@@ -220,7 +284,123 @@ pub trait KomgaBackend: Send + Sync {
 	/// credential belongs to. `summary` describes what was synced; the call
 	/// is best-effort and never fails the request.
 	async fn record_sync(&self, auth: &AuthContext, summary: serde_json::Value);
+
+	/// The provider source instance backing a virtual (Mode B) library, when
+	/// the backend can browse it live. Default: no provider support.
+	async fn virtual_library_source(&self, _library_id: &str) -> Option<String> {
+		None
+	}
+
+	/// One live page of series for a virtual library. Returns `None` when
+	/// this backend does not implement provider browsing; `Some(Err(...))`
+	/// surfaces source failures to the client. Default: `None`.
+	async fn virtual_series_list(
+		&self,
+		_library_id: String,
+		_search: &crate::KomgaSeriesSearch,
+		_sorts: &[String],
+		_page: i32,
+		_size: i32,
+		_unpaged: bool,
+	) -> Option<APIResult<crate::Page<crate::KomgaSeries>>> {
+		None
+	}
+
+
+	/// Live details for a series id that is not materialised. Returns
+	/// `None` when the id belongs to a stored (or unknown) series and the
+	/// ordinary database path should serve it. Default: `None`.
+	async fn virtual_series_by_id(
+		&self,
+		_series_id: &str,
+	) -> Option<APIResult<crate::KomgaSeries>> {
+		None
+	}
+
+	/// Materialise a virtual series before its books are listed. Returns
+	/// `Ok(false)` when the id is not a provider series. Default: no-op.
+	async fn virtual_materialise_series(&self, _series_id: &str) -> APIResult<bool> {
+		Ok(false)
+	}
+	/// Create a library from a Komga `LibraryCreationDto`. Returns the
+	/// created library row for DTO rendering by the route. Validation failures
+	/// (missing root, nesting conflicts, duplicate name) surface as `400`.
+	async fn create_library(
+		&self,
+		request: KomgaLibraryCreateRequest,
+	) -> APIResult<library_entity::Model>;
+
+	/// Apply a Komga `LibraryUpdateDto` patch to an existing library owned
+	/// by `user`. The adapter merges provided fields onto the stored row.
+	async fn update_library(
+		&self,
+		user: &AuthUser,
+		id: &str,
+		request: KomgaLibraryUpdateRequest,
+	) -> APIResult<()>;
+
+	/// Delete a library owned by `user` together with its series/media.
+	async fn delete_library(&self, user: &AuthUser, id: &str) -> APIResult<()>;
+
+	/// Enqueue the analysis job for every book of a series (Komf's
+	/// `POST /api/v1/series/{id}/analyze`).
+	async fn enqueue_series_analysis(&self, series_id: String) -> APIResult<()>;
+
+	/// Configured filesystem roots constraining library creation and the
+	/// filesystem browser (`STUMP_LIBRARY_ROOTS`). Empty means unconstrained.
+	fn library_roots(&self) -> Vec<String>;
+
+	/// Create a collection. The adapter validates member visibility against
+	/// `user` and emits the change event; the route renders the DTO.
+	async fn create_collection(
+		&self,
+		user: &AuthUser,
+		name: String,
+		ordered: bool,
+		series_ids: Vec<String>,
+	) -> APIResult<collection_entity::Model>;
+
+	/// Rename/reorder a collection. Passing `series_ids` replaces the full
+	/// ordered membership (Komga's reorder idiom). Only the creating user
+	/// may update a collection.
+	async fn update_collection(
+		&self,
+		user: &AuthUser,
+		id: &str,
+		name: Option<String>,
+		ordered: Option<bool>,
+		series_ids: Option<Vec<String>>,
+	) -> APIResult<()>;
+
+	/// Delete a collection owned by `user`.
+	async fn delete_collection(&self, user: &AuthUser, id: &str) -> APIResult<()>;
+
+	/// Create a reading list. `book_ids` must be visible to `user`.
+	async fn create_read_list(
+		&self,
+		user: &AuthUser,
+		name: String,
+		summary: Option<String>,
+		ordered: bool,
+		book_ids: Vec<String>,
+	) -> APIResult<reading_list_entity::Model>;
+
+	/// Rename/resummarize/reorder a reading list. Passing `book_ids`
+	/// replaces the full ordered membership.
+	async fn update_read_list(
+		&self,
+		user: &AuthUser,
+		id: &str,
+		name: Option<String>,
+		summary: Option<Option<String>>,
+		ordered: Option<bool>,
+		book_ids: Option<Vec<String>>,
+	) -> APIResult<()>;
+
+	/// Delete a reading list owned by `user`.
+	async fn delete_read_list(&self, user: &AuthUser, id: &str) -> APIResult<()>;
 }
+
 
 #[derive(Clone)]
 pub struct KomgaEvents {

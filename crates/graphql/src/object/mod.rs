@@ -30,6 +30,9 @@ pub mod media_metadata_overview;
 pub mod metadata_fetch_record;
 pub mod missing_entity;
 pub mod notifier;
+pub mod notification;
+#[cfg(feature = "providers")]
+pub mod provider;
 pub mod reading_list;
 pub mod reading_list_item;
 pub mod reading_session;

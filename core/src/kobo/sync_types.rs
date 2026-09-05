@@ -27,6 +27,57 @@ pub enum SyncItem {
 	ChangedEntitlement(BookEntitlementContainer),
 	ChangedProductMetadata(BookMetadata),
 	ChangedReadingState(ReadingStateContainer),
+	/// A shelf the device has never seen; the payload wraps the tag.
+	NewTag(KoboTagContainer),
+	/// A shelf whose name, membership, or timestamps changed.
+	ChangedTag(KoboTagContainer),
+	/// A shelf deleted since the previous sync; only the id survives.
+	DeletedTag(KoboDeletedTag),
+}
+
+/// Wire shape pinned to Calibre-Web `create_kobo_tag`
+/// (`cps/kobo.py:707-737@a97826402f1b39c45b7ea8d906efddc9f1750934`):
+/// `{"Tag": {...}}` with `Items` keyed by `RevisionId` and typed
+/// `ProductRevisionTagItem`, and the tag itself typed `UserTag`.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct KoboTagContainer {
+	pub tag: KoboTag,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct KoboTag {
+	pub id: String,
+	pub name: String,
+	pub last_modified: String,
+	pub tag_type: String,
+	#[serde(rename = "Type")]
+	pub r#type: String,
+	pub items: Vec<KoboTagItem>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct KoboTagItem {
+	pub revision_id: String,
+	#[serde(rename = "Type")]
+	pub r#type: String,
+}
+
+/// Wire shape for `DeletedTag`: `{"Tag": {"Id", "LastModified"}}`
+/// (`cps/kobo.py:655-681@a97826402f1b39c45b7ea8d906efddc9f1750934`).
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct KoboDeletedTag {
+	pub tag: KoboDeletedTagId,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct KoboDeletedTagId {
+	pub id: String,
+	pub last_modified: String,
 }
 
 #[derive(Serialize)]

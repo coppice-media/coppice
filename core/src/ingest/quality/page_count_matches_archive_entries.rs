@@ -34,7 +34,7 @@ impl QualityCheck for PageCountMatchesArchiveEntriesCheck {
 	}
 
 	fn weight(&self) -> u16 {
-		20
+		15
 	}
 
 	fn settings(&self) -> &[SettingDefinition] {

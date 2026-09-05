@@ -231,6 +231,10 @@ impl From<CoreError> for APIError {
 			CoreError::FeatureDisabled(feature) => APIError::ServiceUnavailable(format!(
 				"{feature} is disabled by server configuration"
 			)),
+			CoreError::NotFound(message) => APIError::NotFound(message),
+			CoreError::BadRequest(message) => APIError::BadRequest(message),
+			CoreError::Forbidden(message) => APIError::Forbidden(message),
+			CoreError::DBError(db_error) => APIError::DbError(db_error),
 			CoreError::InternalError(err) => APIError::InternalServerError(err),
 			CoreError::IoError(err) => APIError::InternalServerError(err.to_string()),
 			CoreError::MigrationError(err) => APIError::InternalServerError(err),

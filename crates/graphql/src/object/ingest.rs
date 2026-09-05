@@ -672,10 +672,14 @@ fn provider_help_url(provider_id: &str) -> Option<String> {
 	const COMIC_VINE_HELP_URL: &str = "https://comicvine.gamespot.com/api/";
 	const HARDCOVER_HELP_URL: &str = "https://hardcover.app/account/api";
 	const MAL_HELP_URL: &str = "https://myanimelist.net/apiconfig";
+	const METRON_HELP_URL: &str = "https://metron.cloud/accounts/signup/";
+	const GOOGLE_BOOKS_HELP_URL: &str = "https://console.cloud.google.com/apis/credentials";
 	match provider_id {
 		"comic_vine" => Some(COMIC_VINE_HELP_URL.to_string()),
 		"hardcover" => Some(HARDCOVER_HELP_URL.to_string()),
 		"mal" => Some(MAL_HELP_URL.to_string()),
+		"metron" => Some(METRON_HELP_URL.to_string()),
+		"googlebooks" => Some(GOOGLE_BOOKS_HELP_URL.to_string()),
 		_ => None,
 	}
 }

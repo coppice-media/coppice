@@ -1,7 +1,6 @@
-use std::{path::PathBuf, sync::Arc};
-use tokio::fs;
+use std::sync::Arc;
 
-use crate::{DirectoryListing, DirectoryRequest, KomgaBookPage, Path as KomgaPath};
+use crate::KomgaBookPage;
 use axum::{
 	body::Body,
 	extract::{Multipart, Path, Query},
@@ -26,7 +25,7 @@ use super::response::{cached_bytes, cached_json};
 /// Komelia's page numbering is one-based. The compatibility layer deliberately does not expose
 /// Komga's optional zero-based mode or content negotiation because Stump cannot honor either mode
 /// without changing the meaning of a requested page.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PageQuery {
 	#[serde(default)]
@@ -79,7 +78,6 @@ where
 		.route("/api/v1/books/{book_id}/file", get(get_book_file))
 		.route("/api/v1/libraries/{library_id}/scan", post(scan_library))
 		.route("/api/v1/books/{book_id}/analyze", post(analyze_book))
-		.route("/api/v1/filesystem", post(get_filesystem_listing))
 }
 async fn find_book(
 	conn: &DatabaseConnection,
@@ -183,8 +181,48 @@ async fn build_book_pages(
 	backend: &dyn KomgaBackend,
 	book: &media::Model,
 ) -> APIResult<Vec<KomgaBookPage>> {
-	backend.book_pages(book).await
+	let pages = backend.book_pages(book).await?;
+	// Duplicate-page skipping renumbers the visible pages onto the physical
+	// file: the list stays contiguous 1..=N while skipped physical pages
+	// disappear. Nothing changes when nothing is skipped.
+	let Some(visible) = backend.visible_pages(book).await? else {
+		return Ok(pages);
+	};
+	Ok(pages
+		.into_iter()
+		.filter(|page| visible.contains(&page.number))
+		.enumerate()
+		.map(|(index, mut page)| {
+			page.number = index as i32 + 1;
+			page.file_name = format!("page-{}", page.number);
+			page
+		})
+		.collect())
 }
+
+/// Map a visible 1-based page number onto its physical page. Returns the
+/// number unchanged when nothing is skipped; a visible number past the end
+/// of the renumbered list is not found.
+async fn visible_to_physical(
+	backend: &dyn KomgaBackend,
+	book: &media::Model,
+	page: u32,
+) -> APIResult<u32> {
+	let Some(visible) = backend.visible_pages(book).await? else {
+		return Ok(page);
+	};
+	let page = usize::try_from(page).map_err(|_| {
+		APIError::BadRequest("page index out of range".to_string())
+	})?;
+	visible
+		.get(page.checked_sub(1).ok_or_else(|| {
+			APIError::BadRequest("page index out of range".to_string())
+		})?)
+		.copied()
+		.and_then(|physical| u32::try_from(physical).ok())
+		.ok_or(APIError::NotFound("Page not found".to_string()))
+}
+
 async fn load_book_page(
 	backend: &dyn KomgaBackend,
 	user: &models::entity::user::AuthUser,
@@ -193,6 +231,7 @@ async fn load_book_page(
 ) -> APIResult<KomgaImage> {
 	backend.book_page(user, book_id, page).await
 }
+
 async fn get_book_pages(
 	Path(book_id): Path<String>,
 	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
@@ -214,7 +253,10 @@ async fn get_book_page(
 ) -> APIResult<Response<Body>> {
 	validate_page_number(page)?;
 	validate_page_query(&query)?;
-	let image = load_book_page(ctx.as_ref(), &req.user(), book_id, page).await?;
+	let user = req.user();
+	let book = find_book(ctx.conn(), &user, &book_id).await?;
+	let physical = visible_to_physical(ctx.as_ref(), &book, page).await?;
+	let image = load_book_page(ctx.as_ref(), &user, book_id, physical).await?;
 	cache_image(&headers, image)
 }
 
@@ -227,7 +269,10 @@ async fn get_book_page_thumbnail(
 ) -> APIResult<Response<Body>> {
 	validate_page_number(page)?;
 	validate_page_query(&query)?;
-	let image = ctx.book_page_thumbnail(&req.user(), book_id, page).await?;
+	let user = req.user();
+	let book = find_book(ctx.conn(), &user, &book_id).await?;
+	let physical = visible_to_physical(ctx.as_ref(), &book, page).await?;
+	let image = ctx.book_page_thumbnail(&user, book_id, physical).await?;
 	if !image.content_type.starts_with("image/") {
 		return Err(APIError::BadRequest(
 			"Only image pages have thumbnails".to_string(),
@@ -469,94 +514,6 @@ async fn analyze_book(
 	Ok(StatusCode::ACCEPTED)
 }
 
-async fn get_filesystem_listing(
-	Extension(_ctx): Extension<Arc<dyn KomgaBackend>>,
-	Extension(req): Extension<AuthContext>,
-	headers: HeaderMap,
-	axum::Json(request): axum::Json<DirectoryRequest>,
-) -> APIResult<Response<Body>> {
-	req.enforce_server_owner()
-		.map_err(|_| APIError::forbidden_discreet())?;
-
-	let requested = PathBuf::from(request.path);
-	if !requested.is_absolute() {
-		return Err(APIError::BadRequest("Path must be absolute".to_string()));
-	}
-
-	let canonical = fs::canonicalize(&requested)
-		.await
-		.map_err(|_| APIError::BadRequest("Path does not exist".to_string()))?;
-	let canonical_metadata = fs::metadata(&canonical)
-		.await
-		.map_err(|_| APIError::BadRequest("Path does not exist".to_string()))?;
-	if !canonical_metadata.is_dir() {
-		return Err(APIError::BadRequest(
-			"Path must refer to a directory".to_string(),
-		));
-	}
-
-	let mut entries = Vec::new();
-	let mut directory = fs::read_dir(&canonical)
-		.await
-		.map_err(|_| APIError::BadRequest("Path could not be listed".to_string()))?;
-	while let Some(entry) = directory
-		.next_entry()
-		.await
-		.map_err(|_| APIError::BadRequest("Path could not be listed".to_string()))?
-	{
-		let name = entry.file_name().to_string_lossy().into_owned();
-		if name.starts_with('.') {
-			continue;
-		}
-
-		let file_type = match entry.file_type().await {
-			Ok(file_type) => file_type,
-			Err(_) => continue,
-		};
-		if !file_type.is_dir() && !file_type.is_symlink() {
-			continue;
-		}
-
-		let child = match fs::canonicalize(entry.path()).await {
-			Ok(child) => child,
-			Err(_) => continue,
-		};
-		if child == canonical || !child.starts_with(&canonical) {
-			continue;
-		}
-		match fs::metadata(&child).await {
-			Ok(metadata) if metadata.is_dir() => {},
-			_ => continue,
-		}
-
-		entries.push(KomgaPath {
-			r#type: "directory".to_string(),
-			name,
-			path: child.to_string_lossy().into_owned(),
-		});
-	}
-
-	entries.sort_by(|left, right| {
-		left.name
-			.to_ascii_lowercase()
-			.cmp(&right.name.to_ascii_lowercase())
-			.then_with(|| left.name.cmp(&right.name))
-			.then_with(|| left.path.cmp(&right.path))
-	});
-
-	let parent = canonical
-		.parent()
-		.unwrap_or(canonical.as_path())
-		.to_string_lossy()
-		.into_owned();
-	cached_json(
-		&headers,
-		&DirectoryListing {
-			parent: Some(parent),
-			directories: entries,
-		},
-	)
-}
 
 #[cfg(test)]
 mod tests {
@@ -572,5 +529,376 @@ mod tests {
 			download_mime_type("cbz").as_deref(),
 			Some("application/x-cbr")
 		);
+	}
+}
+
+#[cfg(test)]
+mod renumbering_tests {
+	use super::{get_book_page, get_book_pages, PageQuery};
+	use crate::{
+		errors::APIError,
+		routes::{KomgaBackend, KomgaCoreEvent, KomgaImage},
+		KomgaBookPage, KomgaBookThumbnail, KomgaSeriesThumbnail,
+	};
+	use axum::{extract::{Path, Query}, Extension};
+	use models::{
+		entity::{library, media, series, user::AuthUser},
+		shared::enums::FileStatus,
+	};
+	use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
+	use stump_auth::AuthContext;
+	use std::sync::Arc;
+
+	struct RenumberBackend {
+		conn: Arc<DatabaseConnection>,
+	}
+
+	fn pages(count: i32) -> Vec<KomgaBookPage> {
+		(1..=count)
+			.map(|number| KomgaBookPage {
+				number,
+				file_name: format!("page-{number}"),
+				media_type: "image/jpeg".to_string(),
+				width: None,
+				height: None,
+				size_bytes: None,
+				size: "0 B".to_owned(),
+			})
+			.collect()
+	}
+
+	#[async_trait::async_trait]
+	impl KomgaBackend for RenumberBackend {
+		fn conn(&self) -> &DatabaseConnection {
+			&self.conn
+		}
+
+		fn conn_arc(&self) -> Arc<DatabaseConnection> {
+			self.conn.clone()
+		}
+
+		fn core_events(&self) -> tokio::sync::broadcast::Receiver<KomgaCoreEvent> {
+			tokio::sync::broadcast::channel(1).1
+		}
+
+		async fn book_pages(
+			&self,
+			_book: &media::Model,
+		) -> crate::errors::APIResult<Vec<KomgaBookPage>> {
+			Ok(pages(5))
+		}
+
+		async fn visible_pages(
+			&self,
+			book: &media::Model,
+		) -> crate::errors::APIResult<Option<Vec<i32>>> {
+			// Physical page 2 was marked SKIP in the seeded library; page 5
+			// is also skipped to prove non-contiguous renumbering.
+			if book.name == "skipped" {
+				Ok(Some(vec![1, 3, 4]))
+			} else {
+				Ok(None)
+			}
+		}
+
+		async fn book_page(
+			&self,
+			_user: &AuthUser,
+			_book_id: String,
+			page: u32,
+		) -> crate::errors::APIResult<KomgaImage> {
+			// The served bytes carry the physical page that was read.
+			Ok(KomgaImage::new("image/jpeg", vec![page as u8]))
+		}
+
+		async fn book_page_thumbnail(
+			&self,
+			user: &AuthUser,
+			book_id: String,
+			page: u32,
+		) -> crate::errors::APIResult<KomgaImage> {
+			let mut image = self.book_page(user, book_id, page).await?;
+			image.width = Some(1);
+			image.height = Some(1);
+			Ok(image)
+		}
+
+		async fn enqueue_library_scan(
+			&self,
+			_library_id: String,
+			_path: String,
+			_deep: bool,
+		) -> crate::errors::APIResult<()> {
+			unimplemented!("not used by the renumbering route test")
+		}
+
+		async fn enqueue_library_analysis(&self, _library_id: String) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		async fn enqueue_book_analysis(&self, _book_id: String) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		async fn book_thumbnail(
+			&self,
+			_user: &AuthUser,
+			_book_id: String,
+		) -> crate::errors::APIResult<KomgaImage> {
+			unimplemented!()
+		}
+
+		async fn book_thumbnails(
+			&self,
+			_user: &AuthUser,
+			_book_id: String,
+		) -> crate::errors::APIResult<Vec<KomgaBookThumbnail>> {
+			unimplemented!()
+		}
+
+		async fn book_thumbnail_by_id(
+			&self,
+			_user: &AuthUser,
+			_book_id: String,
+			_thumbnail_id: String,
+		) -> crate::errors::APIResult<KomgaImage> {
+			unimplemented!()
+		}
+
+		async fn upload_book_thumbnail(
+			&self,
+			_user: &AuthUser,
+			_book_id: String,
+			_bytes: Vec<u8>,
+			_selected: bool,
+		) -> crate::errors::APIResult<KomgaBookThumbnail> {
+			unimplemented!()
+		}
+
+		async fn delete_book_thumbnail(
+			&self,
+			_user: &AuthUser,
+			_book_id: String,
+			_thumbnail_id: String,
+		) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		async fn series_thumbnail(
+			&self,
+			_user: &AuthUser,
+			_series_id: &str,
+		) -> crate::errors::APIResult<KomgaImage> {
+			unimplemented!()
+		}
+
+		async fn series_thumbnails(
+			&self,
+			_user: &AuthUser,
+			_series_id: String,
+		) -> crate::errors::APIResult<Vec<KomgaSeriesThumbnail>> {
+			unimplemented!()
+		}
+
+		async fn series_thumbnail_by_id(
+			&self,
+			_user: &AuthUser,
+			_series_id: String,
+			_thumbnail_id: String,
+		) -> crate::errors::APIResult<KomgaImage> {
+			unimplemented!()
+		}
+
+		async fn upload_series_thumbnail(
+			&self,
+			_user: &AuthUser,
+			_series_id: String,
+			_bytes: Vec<u8>,
+			_selected: bool,
+		) -> crate::errors::APIResult<KomgaSeriesThumbnail> {
+			unimplemented!()
+		}
+
+		async fn delete_series_thumbnail(
+			&self,
+			_user: &AuthUser,
+			_series_id: String,
+			_thumbnail_id: String,
+		) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		async fn serve_book_file(
+			&self,
+			_auth: AuthContext,
+			_headers: axum::http::HeaderMap,
+			_book_id: String,
+		) -> crate::errors::APIResult<axum::response::Response<axum::body::Body>> {
+			unimplemented!()
+		}
+
+		async fn readium_manifest(
+			&self,
+			_path: String,
+			_base_url: String,
+		) -> crate::errors::APIResult<serde_json::Value> {
+			unimplemented!()
+		}
+
+		async fn readium_positions(
+			&self,
+			_path: String,
+			_base_url: String,
+		) -> crate::errors::APIResult<serde_json::Value> {
+			unimplemented!()
+		}
+
+		async fn readium_resource(
+			&self,
+			_path: String,
+			_resource_path: std::path::PathBuf,
+		) -> crate::errors::APIResult<KomgaImage> {
+			unimplemented!()
+		}
+
+		async fn record_sync(&self, _auth: &AuthContext, _summary: serde_json::Value) {
+			unimplemented!()
+		}
+ 	}
+
+	async fn seed_book(conn: &DatabaseConnection, name: &str) {
+		library::ActiveModel {
+			id: Set("lib".to_string()),
+			name: Set("Library".to_string()),
+			path: Set("/lib".to_string()),
+			status: Set(FileStatus::Ready),
+			config_id: Set(1),
+			..Default::default()
+		}
+		.insert(conn)
+		.await
+		.unwrap();
+		series::ActiveModel {
+			id: Set(format!("series-{name}")),
+			name: Set("Series".to_string()),
+			path: Set("/lib/series".to_string()),
+			status: Set(FileStatus::Ready),
+			library_id: Set(Some("lib".to_string())),
+			..Default::default()
+		}
+		.insert(conn)
+		.await
+		.unwrap();
+		media::ActiveModel {
+			id: Set(format!("book-{name}")),
+			name: Set(name.to_string()),
+			path: Set(format!("/lib/series/{name}.cbz")),
+			extension: Set("cbz".to_string()),
+			series_id: Set(Some(format!("series-{name}"))),
+			pages: Set(5),
+			size: Set(1),
+			status: Set(FileStatus::Ready),
+			..Default::default()
+		}
+		.insert(conn)
+		.await
+		.unwrap();
+	}
+
+	async fn body(response: axum::response::Response<axum::body::Body>) -> Vec<u8> {
+		axum::body::to_bytes(response.into_body(), usize::MAX)
+			.await
+			.unwrap()
+			.to_vec()
+	}
+
+	fn auth() -> Extension<AuthContext> {
+		Extension(AuthContext {
+			user: AuthUser::default(),
+			api_key: None,
+		})
+	}
+
+	#[tokio::test]
+	async fn page_routes_renumber_visible_pages() {
+		let conn = ::tests::db::test_database().await;
+		seed_book(&conn, "skipped").await;
+		seed_book(&conn, "plain").await;
+		let backend: Arc<dyn KomgaBackend> = Arc::new(RenumberBackend {
+			conn: Arc::new(conn),
+		});
+		let query = Query(PageQuery {
+			convert: None,
+			zero_based: None,
+			content_negotiation: None,
+		});
+
+		// The page list is renumbered 1..=3 while nothing else changes.
+		let response = get_book_pages(
+			Path("book-skipped".to_string()),
+			Extension(backend.clone()),
+			auth(),
+			Default::default(),
+		)
+		.await
+		.unwrap();
+		let listed = serde_json::from_slice::<Vec<KomgaBookPage>>(&body(response).await)
+			.unwrap();
+		assert_eq!(
+			listed.iter().map(|page| page.number).collect::<Vec<_>>(),
+			vec![1, 2, 3]
+		);
+
+		// Visible page 2 reads physical page 3; page 3 reads physical 4.
+		for (visible, physical) in [(1u32, 1u8), (2, 3), (3, 4)] {
+			let response = get_book_page(
+				Path(("book-skipped".to_string(), visible)),
+				query.clone(),
+				Extension(backend.clone()),
+				auth(),
+				Default::default(),
+			)
+			.await
+			.unwrap();
+			assert_eq!(body(response).await, vec![physical]);
+		}
+
+		// Past the end of the renumbered list there is no page.
+		let error = get_book_page(
+			Path(("book-skipped".to_string(), 4)),
+			query.clone(),
+			Extension(backend.clone()),
+			auth(),
+			Default::default(),
+		)
+		.await
+		.unwrap_err();
+		assert!(matches!(error, APIError::NotFound(_)));
+
+		// Without any skip mark, numbering is untouched.
+		let response = get_book_pages(
+			Path("book-plain".to_string()),
+			Extension(backend.clone()),
+			auth(),
+			Default::default(),
+		)
+		.await
+		.unwrap();
+		let listed = serde_json::from_slice::<Vec<KomgaBookPage>>(&body(response).await)
+			.unwrap();
+		assert_eq!(
+			listed.iter().map(|page| page.number).collect::<Vec<_>>(),
+			vec![1, 2, 3, 4, 5]
+		);
+		let response = get_book_page(
+			Path(("book-plain".to_string(), 2)),
+			query,
+			Extension(backend),
+			auth(),
+			Default::default(),
+		)
+		.await
+		.unwrap();
+		assert_eq!(body(response).await, vec![2]);
 	}
 }

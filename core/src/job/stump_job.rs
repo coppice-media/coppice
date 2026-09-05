@@ -41,6 +41,19 @@ pub enum StumpJob {
 	AnalyzeMedia {
 		config: AnalysisJobConfig,
 	},
+	/// Reclaims materialised provider series with no reading head older than
+	/// `provider_gc_days`. Scheduled internally; see `core/src/providers.rs`.
+	#[cfg(feature = "providers")]
+	ProviderGc,
+	/// Delivers queued notification targets; see `core/src/notification.rs`.
+	NotificationDispatch {
+		deliveries: Vec<crate::notification::QueuedDelivery>,
+	},
+	/// Exports one user's annotations to their enabled sinks; see
+	/// `core/src/annotation_sync.rs`.
+	AnnotationSync {
+		user_id: String,
+	},
 }
 
 impl JobPayload for StumpJob {
@@ -53,6 +66,8 @@ impl JobPayload for StumpJob {
 			StumpJob::PlaceholderGeneration { .. } => "placeholder_generation",
 			StumpJob::MetadataFetch { .. } => "metadata_fetch",
 			StumpJob::AnalyzeMedia { .. } => "analyze_media",
+			StumpJob::NotificationDispatch { .. } => "notification_dispatch",
+			StumpJob::AnnotationSync { .. } => "annotation_sync",
 		}
 	}
 
@@ -74,6 +89,12 @@ impl JobPayload for StumpJob {
 			StumpJob::AnalyzeMedia { config } => {
 				Some(format!("Analyze media: {:?}", config.scope))
 			},
+			StumpJob::NotificationDispatch { deliveries } => {
+				Some(format!("Deliver {} notification(s)", deliveries.len()))
+			},
+			StumpJob::AnnotationSync { user_id } => {
+				Some(format!("Export annotations for user {user_id}"))
+			},
 		}
 	}
 
@@ -82,6 +103,10 @@ impl JobPayload for StumpJob {
 		match self {
 			StumpJob::LibraryScan { .. } | StumpJob::SeriesScan { .. } => "SCAN",
 			StumpJob::AnalyzeMedia { .. } => "ANALYZE",
+			#[cfg(feature = "providers")]
+			StumpJob::ProviderGc => "GC",
+			StumpJob::NotificationDispatch { .. } => "NOTIFY",
+			StumpJob::AnnotationSync { .. } => "ANNOTATIONS",
 			StumpJob::MetadataFetch { .. } => "METADATA",
 			StumpJob::ThumbnailGeneration { .. }
 			| StumpJob::PlaceholderGeneration { .. } => "THUMBNAIL",

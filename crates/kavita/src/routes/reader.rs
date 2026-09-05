@@ -30,7 +30,7 @@ use crate::{
 use super::{
 	image::image_response,
 	query::{find_media, find_series_by_kavita_id, load_series_input},
-	route_ci, KavitaBackend,
+	route_ci, series::clear_on_deck_removal, KavitaBackend,
 };
 
 #[derive(Debug, Deserialize)]
@@ -275,6 +275,9 @@ async fn save_progress(
 	)
 	.await?;
 	txn.commit().await?;
+	// `ReaderService.SaveReadingProgress`: a read event puts the series back
+	// on deck.
+	clear_on_deck_removal(ctx.as_ref(), &user.id, &input.series.id).await?;
 	Ok(StatusCode::OK)
 }
 
@@ -379,9 +382,9 @@ async fn mark_read(
 	let input = series_input_or_bad_request(ctx.as_ref(), &user, body.series_id).await?;
 	let media = input.media.iter().collect::<Vec<_>>();
 	mark_media_read_for(ctx.as_ref(), &user, &media).await?;
+	clear_on_deck_removal(ctx.as_ref(), &user.id, &input.series.id).await?;
 	Ok(StatusCode::OK)
 }
-
 async fn mark_unread(
 	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
 	Extension(auth): Extension<AuthContext>,
@@ -411,6 +414,7 @@ async fn mark_volume_read(
 	let input = series_input_or_bad_request(ctx.as_ref(), &user, body.series_id).await?;
 	let media = volume_media(&input, body.volume_id).await;
 	mark_media_read_for(ctx.as_ref(), &user, &media).await?;
+	clear_on_deck_removal(ctx.as_ref(), &user.id, &input.series.id).await?;
 	Ok(StatusCode::OK)
 }
 

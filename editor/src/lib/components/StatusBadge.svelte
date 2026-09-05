@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Badge } from '$lib/components/ui/badge';
+	import { Badge } from '@stump/ui/components/ui/badge';
 	import { humanize, statusTone } from '$lib/ingest/helpers';
 
 	let { status }: { status: string } = $props();

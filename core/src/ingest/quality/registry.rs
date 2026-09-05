@@ -11,8 +11,8 @@ use crate::ingest::contract::{
 
 use super::{
 	CoverNotPageTwoCheck, CoverPresentCheck, DuplicateExistingCheck,
-	EpubTocChaptersCheck, FilenameSeriesParseCheck, ImageDimensionsConsistentCheck,
-	PageCountMatchesArchiveEntriesCheck,
+	DuplicatePagesAcrossBooksCheck, EpubTocChaptersCheck, FilenameSeriesParseCheck,
+	ImageDimensionsConsistentCheck, PageCountMatchesArchiveEntriesCheck,
 };
 
 /// Discovery information for one registered quality check.
@@ -40,7 +40,8 @@ impl QualityRegistry {
 				Arc::new(PageCountMatchesArchiveEntriesCheck::new()),
 				Arc::new(ImageDimensionsConsistentCheck::new()),
 				Arc::new(EpubTocChaptersCheck::new()),
-				Arc::new(DuplicateExistingCheck::new(conn)),
+				Arc::new(DuplicateExistingCheck::new(conn.clone())),
+				Arc::new(DuplicatePagesAcrossBooksCheck::new(conn.clone())),
 				Arc::new(FilenameSeriesParseCheck::new()),
 			],
 		}

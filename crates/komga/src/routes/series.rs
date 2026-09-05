@@ -38,6 +38,7 @@ where
 {
 	Router::<S>::new()
 		.route("/api/v1/series/{id}/metadata", patch(patch_series_metadata))
+		.route("/api/v1/series/{id}/analyze", post(analyze_series))
 		.route(
 			"/api/v1/series/{id}/read-progress",
 			post(mark_series_read).delete(delete_series_read_progress),
@@ -46,6 +47,21 @@ where
 			"/api/v2/series/{id}/read-progress/tachiyomi",
 			get(get_tachiyomi_series_progress).put(update_tachiyomi_series_progress),
 		)
+}
+
+/// Komf requests series-level analysis after metadata writes. Komga fans the
+/// request out to one analysis task per book of the series; Stump's analysis
+/// job accepts a series scope directly (upstream: `202 Accepted`).
+async fn analyze_series(
+	Path(id): Path<String>,
+	Extension(ctx): Extension<Arc<dyn KomgaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+) -> APIResult<StatusCode> {
+	enforce_manage_library(&auth)?;
+	let user = auth.user();
+	let series = find_visible_series(ctx.conn(), &user, &id).await?;
+	ctx.enqueue_series_analysis(series.id).await?;
+	Ok(StatusCode::ACCEPTED)
 }
 fn enforce_manage_library(auth: &AuthContext) -> APIResult<()> {
 	auth.enforce_permissions(&[UserPermission::ManageLibrary])

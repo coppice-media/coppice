@@ -11,6 +11,7 @@ use std::{env, path::PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::{
+	annotation_sync::{AnnotationSyncConfig, PartialAnnotationSyncConfig},
 	auth::{AuthConfig, PartialAuthConfig},
 	database::{DatabaseConfig, PartialDatabaseConfig},
 	env_keys::*,
@@ -21,6 +22,7 @@ use super::{
 	protocols::{PartialProtocolsConfig, ProtocolsConfig},
 	providers::{PartialProvidersConfig, ProvidersConfig},
 	server::{PartialServerConfig, ServerConfig},
+	transform::{PartialTransformConfig, TransformConfig},
 };
 use crate::{CoreError, CoreResult};
 use stump_config_gen::StumpConfigGenerator;
@@ -97,6 +99,12 @@ pub struct StumpConfig {
 	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub providers: ProvidersConfig,
 
+	/// Annotation export sink directories and debounce timing.
+	#[nested]
+	#[serde(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub annotation_sync: AnnotationSyncConfig,
+
 	/// Password hashing and session/token lifetimes.
 	#[nested]
 	#[serde(flatten)]
@@ -108,6 +116,12 @@ pub struct StumpConfig {
 	#[serde(flatten)]
 	#[cfg_attr(feature = "graphql", graphql(flatten))]
 	pub pdf: PdfConfig,
+
+	/// Comic page transform delivery settings.
+	#[nested]
+	#[serde(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(flatten))]
+	pub transform: TransformConfig,
 
 	/// The configuration root for the Stump application, contains thumbnails, cache, and logs.
 	#[debug_value(super::get_default_config_dir())]
@@ -244,6 +258,16 @@ impl StumpConfig {
 			.unwrap_or_else(|| self.get_config_dir().join("ingest/staging"))
 	}
 
+	/// Returns the configured annotation export root, defaulting below the
+	/// application configuration directory.
+	pub fn get_annotation_sync_root(&self) -> PathBuf {
+		self.annotation_sync
+			.annotation_sync_root
+			.as_deref()
+			.map(PathBuf::from)
+			.unwrap_or_else(|| self.get_config_dir().join("annotations"))
+	}
+
 	pub fn get_log_dir(&self) -> PathBuf {
 		match &self.server.log_dir {
 			Some(value) => PathBuf::from(value),
@@ -274,6 +298,11 @@ impl StumpConfig {
 	/// Returns a `PathBuf` to the PDF page cache directory
 	pub fn get_pdf_cache_dir(&self) -> PathBuf {
 		self.get_cache_dir().join("pdf_pages")
+	}
+
+	/// Returns a `PathBuf` to the comic transform cache directory
+	pub fn get_transform_cache_dir(&self) -> PathBuf {
+		self.get_cache_dir().join("transform")
 	}
 
 	/// Returns a `PathBuf` to the Stump log file.
@@ -361,6 +390,7 @@ mod tests {
 						"origin2".to_string()
 					]),
 					trust_proxy_headers: Some(false),
+					home_app_dir: None,
 				},
 				database: PartialDatabaseConfig {
 					db_path: Some("not_a_real_path".to_string()),
@@ -403,6 +433,8 @@ mod tests {
 				providers: PartialProvidersConfig {
 					enable_providers: Some(DEFAULT_ENABLE_PROVIDERS),
 					provider_cache_max_bytes: Some(DEFAULT_PROVIDER_CACHE_MAX_BYTES),
+					virtual_series_ttl: Some(DEFAULT_VIRTUAL_SERIES_TTL_SECS),
+					provider_gc_days: Some(DEFAULT_PROVIDER_GC_DAYS),
 				},
 				auth: PartialAuthConfig {
 					password_hash_cost: Some(DEFAULT_PASSWORD_HASH_COST),
@@ -473,6 +505,7 @@ mod tests {
 							log_dir: None,
 							colorful_logs: false,
 							allowed_origins: vec![],
+							home_app_dir: None,
 							trust_proxy_headers: false,
 						},
 						database: DatabaseConfig {
@@ -513,6 +546,8 @@ mod tests {
 						providers: ProvidersConfig {
 							enable_providers: DEFAULT_ENABLE_PROVIDERS,
 							provider_cache_max_bytes: DEFAULT_PROVIDER_CACHE_MAX_BYTES,
+							virtual_series_ttl: DEFAULT_VIRTUAL_SERIES_TTL_SECS,
+							provider_gc_days: DEFAULT_PROVIDER_GC_DAYS,
 						},
 						auth: AuthConfig {
 							password_hash_cost: 1,
@@ -622,6 +657,7 @@ client_secret = "secret"
 					"https://a.example".to_string(),
 					"https://b.example".to_string()
 				],
+				home_app_dir: None,
 				trust_proxy_headers: true,
 			}
 		);

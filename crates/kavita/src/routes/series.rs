@@ -1,5 +1,6 @@
 //! `SeriesController`, `VolumeController` and `ChapterController` reads.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::{
@@ -9,18 +10,22 @@ use axum::{
 	routing::{get, post},
 	Extension, Json, Router,
 };
-use models::entity::{series, series_tag, tag, user::AuthUser};
-use sea_orm::{prelude::*, QueryOrder, QuerySelect};
+use models::entity::{
+	kavita_on_deck_removal, library_config, media, series, series_tag, tag,
+	user::AuthUser,
+};
+use sea_orm::{prelude::*, Order, QueryOrder, QuerySelect};
 use serde::Deserialize;
 use stump_auth::AuthContext;
 
 use crate::{
 	dto::{
-		ChapterDto, PaginationHeader, SeriesDetailDto, SeriesDto, SeriesMetadataDto,
-		TagDto, VolumeDto,
+		ChapterDto, GroupedSeriesDto, PaginationHeader, SeriesDetailDto, SeriesDto,
+		SeriesMetadataDto, TagDto, VolumeDto,
 	},
 	errors::{APIError, APIResult},
 	filter::SeriesFilterV2Dto,
+	ids::{IdKind, KavitaIds},
 	mapper::{
 		library_type, map_chapter, map_series, map_series_detail, map_series_metadata,
 		map_volume, SeriesInput,
@@ -40,9 +45,16 @@ use super::{
 /// `UserParams`: `PageNumber` defaults to 1, `PageSize` to "everything".
 /// Query names are matched case-insensitively (the extension sends
 /// `pageNumber`, Turnleaf `PageNumber`).
+///
+/// Kavita's `PagedList` echoes the requested `PageNumber` verbatim in the
+/// `Pagination` header (Kamigura's dashboard sends `PageNumber=0`), while the
+/// skip math clamps it like SQLite clamps a negative `OFFSET`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct UserParams {
+	/// Clamped to `>= 1`; drives the skip offset.
 	pub page_number: i32,
+	/// The requested value verbatim (`1` when absent); echoed in the header.
+	pub requested_page_number: i32,
 	pub page_size: i32,
 }
 
@@ -71,6 +83,7 @@ impl UserParams {
 		}
 		Self {
 			page_number: page_number.max(1),
+			requested_page_number: page_number,
 			page_size,
 		}
 	}
@@ -113,6 +126,22 @@ where
 	let router = Router::<S>::new();
 	let router = route_ci(router, "/api/Series/all-v2", post(series_all_v2));
 	let router = route_ci(router, "/api/Series/v2", post(series_v2));
+	let router = route_ci(router, "/api/Series/on-deck", post(series_on_deck));
+	let router = route_ci(
+		router,
+		"/api/Series/recently-added-v2",
+		post(series_recently_added_v2),
+	);
+	let router = route_ci(
+		router,
+		"/api/Series/recently-updated-series",
+		post(series_recently_updated),
+	);
+	let router = route_ci(
+		router,
+		"/api/Series/remove-from-on-deck",
+		post(series_remove_from_on_deck),
+	);
 	let router = route_ci(router, "/api/Series/volumes", get(series_volumes));
 	let router = route_ci(router, "/api/Series/volume", get(volume_by_query));
 	let router = route_ci(router, "/api/Series/metadata", get(series_metadata));
@@ -135,23 +164,25 @@ fn pagination_response<T: serde::Serialize>(
 		HeaderValue::from_str(&value)
 			.map_err(|error| APIError::InternalServerError(error.to_string()))?,
 	);
-	response.headers_mut().insert(
-		header::ACCESS_CONTROL_EXPOSE_HEADERS,
-		HeaderValue::from_static(PaginationHeader::NAME),
-	);
 	Ok(response)
 }
-
-/// A page of series plus the `Pagination` header Kavita attaches.
+/// A page of series plus the `Pagination` header Kavita attaches. When
+/// `primary_order` is set it becomes the leading sort, ahead of any sort the
+/// filter carries (Kavita's `GetRecentlyAddedAsync` orders by `Created`
+/// descending after the filter pipeline).
 pub(crate) async fn list_series(
 	ctx: &dyn KavitaBackend,
 	user: &AuthUser,
 	filter: &SeriesFilterV2Dto,
 	params: UserParams,
+	primary_order: Option<(series::Column, Order)>,
 ) -> APIResult<(Vec<SeriesDto>, PaginationHeader)> {
 	let plan = plan(ctx.conn(), user, filter).await?;
 	let mut query =
 		series::ModelWithMetadata::find_for_user(user).filter(plan.condition.clone());
+	if let Some((column, order)) = primary_order {
+		query = query.order_by(column, order);
+	}
 	for (expr, order) in &plan.order {
 		query = query.order_by(expr.clone(), order.clone());
 	}
@@ -165,7 +196,11 @@ pub(crate) async fn list_series(
 		let (items, total) = paginate_in_memory(inputs, &plan, params);
 		return Ok((
 			items,
-			PaginationHeader::new(params.page_number, params.page_size, total),
+			PaginationHeader::new(
+				params.requested_page_number,
+				params.page_size,
+				total,
+			),
 		));
 	}
 
@@ -183,7 +218,7 @@ pub(crate) async fn list_series(
 	let items = inputs.iter().map(map_series).collect();
 	Ok((
 		items,
-		PaginationHeader::new(params.page_number, params.page_size, total),
+		PaginationHeader::new(params.requested_page_number, params.page_size, total),
 	))
 }
 
@@ -265,6 +300,16 @@ fn user_params(uri: &axum::http::Uri) -> UserParams {
 	UserParams::parse(uri.query().unwrap_or_default())
 }
 
+/// The `libraryId` query parameter (Kavita id, `0` meaning all libraries).
+fn library_id_param(uri: &axum::http::Uri) -> i32 {
+	uri.query().unwrap_or_default().split('&').find_map(|pair| {
+		let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+		(key.eq_ignore_ascii_case("libraryId"))
+			.then_some(())
+			.and_then(|()| value.trim().parse::<i32>().ok())
+	}).unwrap_or(0)
+}
+
 async fn series_all_v2(
 	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
 	Extension(auth): Extension<AuthContext>,
@@ -273,7 +318,7 @@ async fn series_all_v2(
 ) -> APIResult<Response> {
 	let user = auth.user();
 	let (items, header) =
-		list_series(ctx.as_ref(), &user, &filter, user_params(&uri)).await?;
+		list_series(ctx.as_ref(), &user, &filter, user_params(&uri), None).await?;
 	pagination_response(items, header)
 }
 
@@ -285,9 +330,292 @@ async fn series_v2(
 ) -> APIResult<Response> {
 	let user = auth.user();
 	let (items, header) =
-		list_series(ctx.as_ref(), &user, &filter, user_params(&uri)).await?;
+		list_series(ctx.as_ref(), &user, &filter, user_params(&uri), None).await?;
 	pagination_response(items, header)
 }
+
+/// `SeriesController.GetOnDeck`: the user's in-progress series (`pagesRead > 0`
+/// and `< pages`), newest progress first, then most recently added chapter.
+/// Kavita additionally restricts this to recent activity (30 days of progress,
+/// 7 days of chapter adds) and hides series removed via
+/// `remove-from-on-deck`; Stump keeps the series as long as it is in progress
+/// and honours the removals.
+async fn series_on_deck(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	uri: axum::http::Uri,
+) -> APIResult<Response> {
+	let user = auth.user();
+	let (items, header) =
+		list_on_deck(ctx.as_ref(), &user, library_id_param(&uri), user_params(&uri))
+			.await?;
+	pagination_response(items, header)
+}
+
+/// `SeriesController.GetRecentlyAddedV2`: the filter pipeline with `Created`
+/// descending as the primary sort.
+async fn series_recently_added_v2(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	uri: axum::http::Uri,
+	Json(filter): Json<SeriesFilterV2Dto>,
+) -> APIResult<Response> {
+	let user = auth.user();
+	let (items, header) = list_series(
+		ctx.as_ref(),
+		&user,
+		&filter,
+		user_params(&uri),
+		Some((series::Column::CreatedAt, Order::Desc)),
+	)
+	.await?;
+	pagination_response(items, header)
+}
+
+/// `SeriesController.GetRecentlyAddedChapters`: chapters created within the
+/// last 12 days, grouped per series with an added-chapter count, series in
+/// creation order of their newest chapter.
+async fn series_recently_updated(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	uri: axum::http::Uri,
+) -> APIResult<Response> {
+	let user = auth.user();
+	let items =
+		list_recently_updated(ctx.as_ref(), &user, user_params(&uri)).await?;
+	Ok(Json(items).into_response())
+}
+
+/// `SeriesController.RemoveFromOnDeck`: hide a series from on-deck until the
+/// next read event on it.
+async fn series_remove_from_on_deck(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Query(query): Query<SeriesIdQuery>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	let Some(row) = find_series_by_kavita_id(
+		ctx.as_ref(),
+		&user,
+		query.series_id.unwrap_or_default(),
+	)
+	.await?
+	else {
+		return Err(APIError::BadRequest("Series does not exist".to_owned()));
+	};
+	kavita_on_deck_removal::Entity::insert(kavita_on_deck_removal::ActiveModel {
+		user_id: sea_orm::Set(user.id.clone()),
+		series_id: sea_orm::Set(row.series.id.clone()),
+		created_at: sea_orm::Set(chrono::Utc::now().into()),
+	})
+	.on_conflict(
+		sea_orm::sea_query::OnConflict::columns([
+			kavita_on_deck_removal::Column::UserId,
+			kavita_on_deck_removal::Column::SeriesId,
+		])
+		.do_nothing()
+		.to_owned(),
+	)
+	.do_nothing()
+	.exec(ctx.conn())
+	.await?;
+	Ok(StatusCode::OK)
+}
+
+/// The on-deck listing behind [`series_on_deck`].
+pub(crate) async fn list_on_deck(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	library_id: i32,
+	params: UserParams,
+) -> APIResult<(Vec<SeriesDto>, PaginationHeader)> {
+	let mut query = series::ModelWithMetadata::find_for_user(user);
+	if library_id > 0 {
+		let Some(stump_library_id) =
+			KavitaIds::lookup(ctx.conn(), IdKind::Library, library_id).await?
+		else {
+			return Ok((
+				Vec::new(),
+				PaginationHeader::new(params.requested_page_number, params.page_size, 0),
+			));
+		};
+		query = query.filter(series::Column::LibraryId.eq(stump_library_id));
+	}
+	let rows = query
+		.into_model::<series::ModelWithMetadata>()
+		.all(ctx.conn())
+		.await?;
+
+	// Series the user removed from on-deck stay hidden until the next read
+	// event on them (`SeriesRepository.GetOnDeckAsync`).
+	let removed: HashSet<String> =
+		kavita_on_deck_removal::Entity::find_for_user(&user.id)
+			.all(ctx.conn())
+			.await?
+			.into_iter()
+			.map(|removal| removal.series_id)
+			.collect();
+	let rows = rows
+		.into_iter()
+		.filter(|row| !removed.contains(&row.series.id))
+		.collect();
+	let mut inputs = load_series_inputs(ctx, user, rows).await?;
+
+	inputs.retain(|input| {
+		let (pages, read) = (input.pages(), input.pages_read());
+		read > 0 && read < pages
+	});
+	inputs.sort_by(|left, right| {
+		right
+			.latest_read_at()
+			.cmp(&left.latest_read_at())
+			.then_with(|| {
+				right
+					.last_chapter_added_at()
+					.cmp(&left.last_chapter_added_at())
+			})
+			.then_with(|| left.id.cmp(&right.id))
+	});
+
+	let total = i32::try_from(inputs.len())?;
+	let page = if params.page_size == UserParams::MAX_PAGE_SIZE {
+		inputs.iter().map(map_series).collect()
+	} else {
+		inputs
+			.iter()
+			.skip(params.offset())
+			.take(usize::try_from(params.page_size).unwrap_or(0))
+			.map(map_series)
+			.collect()
+	};
+	Ok((
+		page,
+		PaginationHeader::new(params.requested_page_number, params.page_size, total),
+	))
+}
+
+/// `SeriesRepository.ClearOnDeckRemovalAsync`: a read event on a series puts
+/// it back on deck. Kavita fires this from `SaveReadingProgress` and the
+/// mark-read handlers.
+pub(crate) async fn clear_on_deck_removal(
+	ctx: &dyn KavitaBackend,
+	user_id: &str,
+	stump_series_id: &str,
+) -> APIResult<()> {
+	kavita_on_deck_removal::Entity::delete_many()
+		.filter(kavita_on_deck_removal::Column::UserId.eq(user_id))
+		.filter(kavita_on_deck_removal::Column::SeriesId.eq(stump_series_id))
+		.exec(ctx.conn())
+		.await?;
+	Ok(())
+}
+
+/// The recently-updated listing behind [`series_recently_updated`], following
+/// `SeriesRepository.GetRecentlyUpdatedSeriesAsync`: chapters created within
+/// the last 12 days, newest first, grouped per series with an added-chapter
+/// count, paginated by series with a 0-based group index per request.
+pub(crate) async fn list_recently_updated(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	params: UserParams,
+) -> APIResult<Vec<GroupedSeriesDto>> {
+	// One Stump media item is one Kavita chapter (`VolumeExtensions`).
+	let window_start = chrono::Utc::now() - chrono::Duration::days(12);
+	let chapters = media::Entity::find_for_user(user)
+		.filter(media::Column::DeletedAt.is_null())
+		.filter(media::Column::SeriesId.is_not_null())
+		.filter(media::Column::CreatedAt.gte(window_start))
+		.order_by_desc(media::Column::CreatedAt)
+		.order_by_desc(media::Column::Id)
+		.all(ctx.conn())
+		.await?;
+
+	let mut order: Vec<String> = Vec::new();
+	let mut counts: HashMap<String, i32> = HashMap::new();
+	let mut created: HashMap<String, DateTimeWithTimeZone> = HashMap::new();
+	for chapter in &chapters {
+		let Some(series_id) = chapter.series_id.clone() else {
+			continue;
+		};
+		counts
+			.entry(series_id.clone())
+			.and_modify(|count| *count += 1)
+			.or_insert_with(|| {
+				order.push(series_id.clone());
+				created.insert(series_id.clone(), chapter.created_at);
+				1
+			});
+	}
+
+	let take = usize::try_from(params.page_size).unwrap_or(0);
+	let page_ids: Vec<String> = order
+		.iter()
+		.skip(params.offset())
+		.take(take)
+		.cloned()
+		.collect();
+	if page_ids.is_empty() {
+		return Ok(Vec::new());
+	}
+
+	// Series-level facts come from the same loaders as the other listings, so
+	// visibility, ids, formats and library mapping stay consistent.
+	let rows = series::ModelWithMetadata::find_for_user(user)
+		.filter(series::Column::Id.is_in(page_ids.clone()))
+		.into_model::<series::ModelWithMetadata>()
+		.all(ctx.conn())
+		.await?;
+	let inputs = load_series_inputs(ctx, user, rows).await?;
+	let by_stump_id: HashMap<&str, &SeriesInput> = inputs
+		.iter()
+		.map(|input| (input.series.id.as_str(), input))
+		.collect();
+
+	let library_ids: Vec<String> = inputs
+		.iter()
+		.filter_map(|input| input.series.library_id.clone())
+		.collect();
+	let configs: HashMap<String, library_config::Model> =
+		library_config::Entity::find()
+			.filter(library_config::Column::LibraryId.is_in(library_ids.clone()))
+			.all(ctx.conn())
+			.await?
+			.into_iter()
+			.filter_map(|config| {
+				config
+					.library_id
+					.clone()
+					.map(|library_id| (library_id, config))
+			})
+			.collect();
+
+	let mut groups = Vec::with_capacity(page_ids.len());
+	for (index, series_id) in page_ids.iter().enumerate() {
+		let Some(input) = by_stump_id.get(series_id.as_str()) else {
+			continue;
+		};
+		let config = input
+			.series
+			.library_id
+			.as_deref()
+			.and_then(|library_id| configs.get(library_id));
+		groups.push(GroupedSeriesDto {
+			series_name: input.series.name.clone(),
+			localized_series_name: String::new(),
+			series_id: input.id,
+			library_id: input.library_id,
+			library_type: library_type(config),
+			created: created[series_id].into(),
+			chapter_id: 0,
+			volume_id: 0,
+			id: index as i32,
+			format: input.format(),
+			count: counts[series_id],
+		});
+	}
+	Ok(groups)
+}
+
 
 async fn load_input(
 	ctx: &dyn KavitaBackend,
@@ -451,6 +779,7 @@ mod tests {
 			UserParams::parse(""),
 			UserParams {
 				page_number: 1,
+				requested_page_number: 1,
 				page_size: UserParams::MAX_PAGE_SIZE
 			}
 		);
@@ -458,6 +787,7 @@ mod tests {
 			UserParams::parse("pageNumber=3&pageSize=20"),
 			UserParams {
 				page_number: 3,
+				requested_page_number: 3,
 				page_size: 20
 			}
 		);
@@ -465,6 +795,7 @@ mod tests {
 			UserParams::parse("PageNumber=1&PageSize=500&userId=2"),
 			UserParams {
 				page_number: 1,
+				requested_page_number: 1,
 				page_size: 500
 			}
 		);
@@ -472,10 +803,17 @@ mod tests {
 			UserParams::parse("PageSize=0").page_size,
 			UserParams::MAX_PAGE_SIZE
 		);
-		assert_eq!(UserParams::parse("pageNumber=0").page_number, 1);
+		// Kamigura's dashboard sends `PageNumber=0`: the skip math clamps it
+		// but the `Pagination` header echoes it verbatim, like Kavita's
+		// `PagedList`.
+		let zero = UserParams::parse("PageNumber=0&PageSize=20");
+		assert_eq!(zero.page_number, 1);
+		assert_eq!(zero.requested_page_number, 0);
+		assert_eq!(zero.offset(), 0);
 		assert_eq!(
 			UserParams {
 				page_number: 3,
+				requested_page_number: 3,
 				page_size: 20
 			}
 			.offset(),
@@ -483,3 +821,304 @@ mod tests {
 		);
 	}
 }
+
+#[cfg(test)]
+mod on_deck_user_params {
+	use super::*;
+	// `PageNumber=0` is not page 2: verify the on-deck route math.
+	#[test]
+	fn user_params_zero_page_offsets_like_sqlite() {
+		let params = UserParams::parse("PageNumber=0&PageSize=20");
+		assert_eq!(params.offset(), 0);
+	}
+}
+#[cfg(test)]
+mod on_deck {
+	use super::*;
+		use crate::test_support::{auth_user, db, TestBackend};
+		use models::entity::{reading_session, user};
+		use models::shared::enums::ReadingStatus;
+		use sea_orm::{
+			ActiveValue::Set, DbBackend, Statement,
+		};
+		use ::tests::fake_data;
+
+		async fn backend() -> (TestBackend, user::Model, AuthUser) {
+			let conn = db().await;
+			let user_row = fake_data::User::new("kate").insert(&conn).await;
+			let user = auth_user(&user_row);
+			(TestBackend { conn }, user_row, user)
+		}
+
+		/// One series with one media item of `pages` pages and an optional
+		/// reading session whose `updated_at` is pinned to `last_read` so the
+		/// ordering is deterministic.
+		async fn seed(
+			conn: &sea_orm::DatabaseConnection,
+			user_id: &str,
+			library_id: &str,
+			name: &str,
+			pages: i32,
+			read_percentage: Option<f32>,
+			last_read: Option<chrono::DateTime<chrono::FixedOffset>>,
+		) -> String {
+			let series = fake_data::Series {
+				name: Some(name.to_owned()),
+				library_id: Some(library_id.to_owned()),
+				..Default::default()
+			}
+			.insert(conn)
+			.await
+			;
+			let media = fake_data::Media {
+				series_id: series.id.clone(),
+				pages: Some(pages),
+				..Default::default()
+			}
+			.insert(conn)
+			.await
+			;
+			if let Some(percentage) = read_percentage {
+				let session = fake_data::ReadingSession {
+					media_id: media.id.clone(),
+					user_id: user_id.to_owned(),
+					end_percentage: percentage,
+					status: ReadingStatus::Reading,
+					..Default::default()
+				}
+				.insert(conn)
+				.await
+				;
+				if let Some(at) = last_read {
+					// `before_save` stamps `updated_at` with `now()` on every
+					// write, so pin it with a direct update instead.
+					conn.execute(Statement::from_sql_and_values(
+						DbBackend::Sqlite,
+						"UPDATE reading_sessions SET created_at = ?, updated_at = ? WHERE id = ?",
+						[at.clone().into(), at.into(), session.id.into()],
+					))
+					.await
+					.unwrap();
+				}
+			}
+			series.id
+		}
+
+		async fn on_deck(
+			backend: &TestBackend,
+			user: &AuthUser,
+			library_id: i32,
+			params: UserParams,
+		) -> (Vec<String>, PaginationHeader) {
+			let (items, header) =
+				list_on_deck(backend, user, library_id, params).await.unwrap();
+			(items.iter().map(|dto| dto.name.clone()).collect(), header)
+		}
+
+		#[tokio::test]
+		async fn keeps_in_progress_series_newest_read_first() {
+			let (backend, user_row, user) = backend().await;
+			let library = fake_data::Library::default()
+				.insert(&backend.conn)
+				.await
+				;
+			let now = chrono::Utc::now();
+			// Two days ago: oldest.
+			seed(
+				&backend.conn,
+				&user_row.id,
+				&library.id,
+				"Alpha",
+				100,
+				Some(0.5),
+				Some((now - chrono::Duration::days(2)).fixed_offset()),
+			)
+			.await;
+			// Today: newest, so first.
+			seed(
+				&backend.conn,
+				&user_row.id,
+				&library.id,
+				"Beta",
+				100,
+				Some(0.25),
+				Some(now.fixed_offset()),
+			)
+			.await;
+			// Fully read and untouched series are not on deck.
+			let completed = fake_data::Series {
+				name: Some("Gamma".to_owned()),
+				library_id: Some(library.id.clone()),
+				..Default::default()
+			}
+			.insert(&backend.conn)
+			.await
+			;
+			let media = fake_data::Media {
+				series_id: completed.id.clone(),
+				pages: Some(100),
+				..Default::default()
+			}
+			.insert(&backend.conn)
+			.await
+			;
+			fake_data::ReadingSession::completed(&media.id, &user_row.id)
+				.insert(&backend.conn)
+			.await
+			;
+			seed(
+				&backend.conn,
+				&user_row.id,
+				&library.id,
+				"Delta",
+				100,
+				None,
+				None,
+			)
+			.await;
+
+			let (names, header) =
+				on_deck(&backend, &user, 0, UserParams::parse("")).await;
+			assert_eq!(names, vec!["Beta".to_owned(), "Alpha".to_owned()]);
+			assert_eq!(header.current_page, 1);
+			assert_eq!(header.total_items, 2);
+		}
+
+		#[tokio::test]
+		async fn pages_like_kamigura_requests() {
+			let (backend, user_row, user) = backend().await;
+			let library = fake_data::Library::default()
+				.insert(&backend.conn)
+				.await
+				;
+			let now = chrono::Utc::now();
+			for (index, name) in ["Alpha", "Beta", "Gamma"].iter().enumerate() {
+				seed(
+					&backend.conn,
+					&user_row.id,
+					&library.id,
+					name,
+					100,
+					Some(0.1),
+					Some((now + chrono::Duration::hours(index as i64)).fixed_offset()),
+				)
+				.await;
+			}
+			let (names, header) = on_deck(
+				&backend,
+				&user,
+				0,
+				UserParams::parse("PageNumber=0&PageSize=2"),
+			)
+			.await;
+			// Newest first, two per page, and the header echoes the
+			// requested zero-based page like Kavita's `PagedList`.
+			assert_eq!(names, vec!["Gamma".to_owned(), "Beta".to_owned()]);
+			assert_eq!(header.current_page, 0);
+			assert_eq!(header.items_per_page, 2);
+			assert_eq!(header.total_items, 3);
+			assert_eq!(header.total_pages, 2);
+		}
+
+		#[tokio::test]
+		async fn removals_hide_until_the_next_read_event() {
+			let (backend, user_row, user) = backend().await;
+			let library = fake_data::Library::default()
+				.insert(&backend.conn)
+				.await
+				;
+			let now = chrono::Utc::now();
+			let alpha = seed(
+				&backend.conn,
+				&user_row.id,
+				&library.id,
+				"Alpha",
+				100,
+				Some(0.5),
+				Some((now - chrono::Duration::days(2)).fixed_offset()),
+			)
+			.await;
+			let beta = seed(
+				&backend.conn,
+				&user_row.id,
+				&library.id,
+				"Beta",
+				100,
+				Some(0.25),
+				Some(now.fixed_offset()),
+			)
+			.await;
+
+			kavita_on_deck_removal::Entity::insert(kavita_on_deck_removal::ActiveModel {
+				user_id: Set(user_row.id.clone()),
+				series_id: Set(beta.clone()),
+				created_at: Set(now.fixed_offset().into()),
+			})
+			.exec(&backend.conn)
+			.await
+			.unwrap();
+			let (names, header) =
+				on_deck(&backend, &user, 0, UserParams::parse("")).await;
+			assert_eq!(names, vec!["Alpha".to_owned()]);
+			assert_eq!(header.total_items, 1);
+
+			// A read event on the removed series puts it back on deck.
+			clear_on_deck_removal(&backend, &user_row.id, &beta).await.unwrap();
+			let (names, _) = on_deck(&backend, &user, 0, UserParams::parse("")).await;
+			assert_eq!(names, vec!["Beta".to_owned(), "Alpha".to_owned()]);
+			assert!(KavitaIds::lookup(&backend.conn, IdKind::Series, 1)
+				.await
+				.unwrap()
+				.is_some());
+			let _ = alpha;
+		}
+
+		#[tokio::test]
+		async fn library_filter_restricts_by_kavita_library_id() {
+			let (backend, user_row, user) = backend().await;
+			let first = fake_data::Library::default()
+				.insert(&backend.conn)
+				.await
+				;
+			let second = fake_data::Library::default()
+				.insert(&backend.conn)
+				.await
+				;
+			let now = chrono::Utc::now();
+			seed(
+				&backend.conn,
+				&user_row.id,
+				&first.id,
+				"Alpha",
+				100,
+				Some(0.5),
+				Some(now.fixed_offset()),
+			)
+			.await;
+			seed(
+				&backend.conn,
+				&user_row.id,
+				&second.id,
+				"Beta",
+				100,
+				Some(0.5),
+				Some(now.fixed_offset()),
+			)
+			.await;
+			let first_kavita_id = KavitaIds::resolve(&backend.conn, IdKind::Library, &first.id)
+				.await
+				.unwrap();
+
+			let (all, _) = on_deck(&backend, &user, 0, UserParams::parse("")).await;
+			assert_eq!(all.len(), 2);
+			let (filtered, header) =
+				on_deck(&backend, &user, first_kavita_id, UserParams::parse("")).await;
+			assert_eq!(filtered, vec!["Alpha".to_owned()]);
+			assert_eq!(header.total_items, 1);
+			// An unknown library id is an empty page, not an error.
+			let (empty, header) =
+				on_deck(&backend, &user, 999, UserParams::parse("")).await;
+			assert!(empty.is_empty());
+			assert_eq!(header.total_items, 0);
+		}
+	}

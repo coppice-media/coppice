@@ -53,6 +53,13 @@ pub struct Ctx {
 	reading_state_events: Arc<Sender<ReadingHeadChanged>>,
 	/// Per-media visible-page lists (duplicate-page skipping); shared with jobs.
 	visible_pages: Arc<VisiblePagesCache>,
+	/// Debounce deadlines for per-user annotation export runs; see
+	/// [`crate::annotation_sync::AnnotationSyncDebouncer`].
+	annotation_debounce: Arc<crate::annotation_sync::AnnotationSyncDebouncer>,
+	/// The remote provider host (`stump_provider`), created by
+	/// [`crate::providers::init`] when `STUMP_ENABLE_PROVIDERS` is on.
+	#[cfg(feature = "providers")]
+	provider_host: Arc<OnceLock<Arc<stump_provider::ProviderHost>>>,
 }
 
 impl Ctx {
@@ -93,8 +100,13 @@ impl Ctx {
 			scheduler: Arc::new(Mutex::new(None)),
 			ingest_services: Arc::new(OnceLock::new()),
 			devices: Arc::new(OnceLock::new()),
+			annotation_debounce: Arc::new(crate::annotation_sync::AnnotationSyncDebouncer::new(
+				config.annotation_sync.annotation_sync_debounce_secs,
+			)),
 			reading_state_events: Arc::new(channel::<ReadingHeadChanged>(256).0),
 			visible_pages: Arc::new(VisiblePagesCache::default()),
+			#[cfg(feature = "providers")]
+			provider_host: Arc::new(OnceLock::new()),
 		}
 	}
 
@@ -145,6 +157,12 @@ impl Ctx {
 	/// Returns whether the job runtime has already been initialized.
 	pub fn job_runtime_initialized(&self) -> bool {
 		self.job_runtime.get().is_some()
+	}
+
+	/// The shared per-media visible-page cache (duplicate-page skipping),
+	/// used by every page-serving route and invalidated by jobs and marks.
+	pub fn visible_pages_cache(&self) -> Arc<VisiblePagesCache> {
+		self.visible_pages.clone()
 	}
 
 	/// Returns the lazily-created job runtime, starting its executor on first use.
@@ -362,7 +380,10 @@ impl Ctx {
 	pub fn ingest(&self) -> Arc<IngestServices> {
 		self.ingest_services
 			.get_or_init(|| {
-				Arc::new(IngestServices::new(self.config.clone(), self.conn.clone()))
+				Arc::new(
+					IngestServices::new(self.config.clone(), self.conn.clone())
+						.with_event_tx(self.get_event_tx()),
+				)
 			})
 			.clone()
 	}
@@ -436,6 +457,34 @@ impl Ctx {
 	pub fn emit_reading_head_changed(&self, event: ReadingHeadChanged) {
 		// A send only fails when nobody is subscribed, which is not an error.
 		let _ = self.reading_state_events.send(event);
+	}
+
+	/// Records annotation/reading-head activity for `user_id`, (re)arming the
+	/// debounced annotation export. Callers: annotation mutations, bookmark
+	/// mutations, and the reading-head announce paths.
+	pub fn note_annotation_activity(&self, user_id: &str) {
+		self.annotation_debounce.note(user_id);
+	}
+
+	/// Whether a debounced annotation export is pending for `user_id`.
+	pub fn annotation_sync_pending(&self, user_id: &str) -> bool {
+		self.annotation_debounce.is_pending(user_id)
+	}
+
+	/// The provider host, when it has been initialized
+	/// ([`crate::providers::init`] with providers enabled).
+	#[cfg(feature = "providers")]
+	pub fn provider_host(&self) -> Option<Arc<stump_provider::ProviderHost>> {
+		self.provider_host.get().cloned()
+	}
+
+	/// Store the provider host; fails if one is already installed.
+	#[cfg(feature = "providers")]
+	pub(crate) fn set_provider_host(
+		&self,
+		host: Arc<stump_provider::ProviderHost>,
+	) -> Result<(), Arc<stump_provider::ProviderHost>> {
+		self.provider_host.set(host)
 	}
 
 	/// Retrieves the encryption key from the server configuration

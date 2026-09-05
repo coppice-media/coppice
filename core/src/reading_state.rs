@@ -45,6 +45,7 @@ pub fn announce(ctx: &Ctx, media: &media::Model, applied: &Applied) {
 		protocol: applied.head.source_protocol,
 		cleared: false,
 	});
+	ctx.note_annotation_activity(&applied.head.user_id);
 }
 
 /// Publish an explicit reset of the user's head for `media`.
@@ -61,6 +62,7 @@ pub fn announce_cleared(
 		protocol,
 		cleared: true,
 	});
+	ctx.note_annotation_activity(user_id);
 }
 
 #[cfg(test)]

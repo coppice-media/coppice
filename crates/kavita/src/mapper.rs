@@ -451,6 +451,25 @@ impl SeriesInput {
 			.into()
 	}
 
+	/// The most recent progress instant across the series' media: the
+	/// `LatestReadDate` primary sort of Kavita's on-deck query.
+	pub(crate) fn latest_read_at(&self) -> Option<chrono::DateTime<Utc>> {
+		self.media
+			.iter()
+			.filter_map(|media| last_progress_at(media.session.as_ref()))
+			.max()
+	}
+
+	/// The newest media creation instant, falling back to the series' own:
+	/// the `LastChapterAdded` tiebreak of Kavita's on-deck query.
+	pub(crate) fn last_chapter_added_at(&self) -> chrono::DateTime<Utc> {
+		self.media
+			.iter()
+			.map(|media| media.media.created_at.with_timezone(&Utc))
+			.max()
+			.unwrap_or(self.series.created_at.with_timezone(&Utc))
+	}
+
 	fn first_media_id(&self) -> i32 {
 		self.media.first().map(|media| media.id).unwrap_or(self.id)
 	}

@@ -138,56 +138,25 @@ impl EmailerClient {
 		self.send_attachments(subject, recipient, vec![payload])
 			.await
 	}
-
-	/// Send an email with the given subject and attachments to the given recipient.
-	/// The attachments are sent as a multipart email, with the first attachment being the email body.
-	///
-	/// # Example
-	/// ```no_run
-	/// use email::{AttachmentPayload, EmailerClient, EmailerClientConfig};
-	/// use lettre::message::header::ContentType;
-	///
-	/// async fn test() {
-	///     let config = EmailerClientConfig {
-	///         sender_email: "aaron@stumpapp.dev".to_string(),
-	///         sender_display_name: "Aaron's Stump Instance".to_string(),
-	///         username: "aaron@stumpapp.dev".to_string(),
-	///         password: Some("decrypted_password".to_string()),
-	///         host: "smtp.stumpapp.dev".to_string(),
-	///         port: 587,
-	///         tls_enabled: true,
-	///         max_attachment_size_bytes: Some(10_000_000),
-	///         max_num_attachments: Some(5),
-	///     };
-	///     let emailer = EmailerClient::new(config);
-	///
-	///     let result = emailer.send_attachments(
-	///         "Attachment Test",
-	///         "aaron@stumpapp.dev",
-	///         vec![
-	///             AttachmentPayload {
-	///                 name: "test.txt".to_string(),
-	///                 content: b"Hello, world!".to_vec(),
-	///                 content_type: "text/plain".parse().unwrap(),
-	///             },
-	///             AttachmentPayload {
-	///                 name: "test2.txt".to_string(),
-	///                 content: b"Hello, world again!".to_vec(),
-	///                 content_type: "text/plain".parse().unwrap(),
-	///             },
-	///         ],
-	///     ).await;
-	///     assert!(result.is_err()); // This will fail because the SMTP server is not real
-	/// }
-	/// ```
-	#[tracing::instrument(
-		skip(self, subject, payloads),
-		fields(host = %self.config.host, port = self.config.port, tls_enabled = self.config.tls_enabled,
-	))]
-	pub async fn send_attachments(
+	/// Send an email with a plain text body and attachments to the given
+	/// recipient. [`Self::send_attachments`] is this with the standard Stump
+	/// attachment notice as the body.
+	pub async fn send_message(
 		&self,
 		subject: &str,
 		recipient: &str,
+		body: String,
+		payloads: Vec<AttachmentPayload>,
+	) -> EmailResult<()> {
+		self.send_message_inner(subject, recipient, body, payloads)
+			.await
+	}
+
+	async fn send_message_inner(
+		&self,
+		subject: &str,
+		recipient: &str,
+		plain_text: String,
 		payloads: Vec<AttachmentPayload>,
 	) -> EmailResult<()> {
 		let address: Address = self
@@ -209,12 +178,6 @@ impl EmailerClient {
 		let to = recipient
 			.parse()
 			.map_err(|e: AddressError| EmailError::InvalidEmail(e.to_string()))?;
-
-		let plain_text = format!(
-			"You have a new attachment from Stump!\n\n\
-			 This email contains {} attachment(s).",
-			payloads.len()
-		);
 
 		let mut multipart_builder = MultiPart::mixed().singlepart(
 			SinglePart::builder()
@@ -268,14 +231,75 @@ impl EmailerClient {
 
 		match transport.send(&email) {
 			Ok(res) => {
-				tracing::debug!(?res, "Email with attachments was sent successfully");
+				tracing::debug!(?res, "Email was sent successfully");
 				Ok(())
 			},
 			Err(e) => {
-				tracing::error!(error = ?e, host = %self.config.host, port = self.config.port, "Failed to send email with attachments");
+				tracing::error!(error = ?e, host = %self.config.host, port = self.config.port, "Failed to send email");
 				Err(e.into())
 			},
 		}
+	}
+
+
+	/// Send an email with the given subject and attachments to the given recipient.
+	/// The attachments are sent as a multipart email, with the first attachment being the email body.
+	///
+	/// # Example
+	/// ```no_run
+	/// use email::{AttachmentPayload, EmailerClient, EmailerClientConfig};
+	/// use lettre::message::header::ContentType;
+	///
+	/// async fn test() {
+	///     let config = EmailerClientConfig {
+	///         sender_email: "aaron@stumpapp.dev".to_string(),
+	///         sender_display_name: "Aaron's Stump Instance".to_string(),
+	///         username: "aaron@stumpapp.dev".to_string(),
+	///         password: Some("decrypted_password".to_string()),
+	///         host: "smtp.stumpapp.dev".to_string(),
+	///         port: 587,
+	///         tls_enabled: true,
+	///         max_attachment_size_bytes: Some(10_000_000),
+	///         max_num_attachments: Some(5),
+	///     };
+	///     let emailer = EmailerClient::new(config);
+	///
+	///     let result = emailer.send_attachments(
+	///         "Attachment Test",
+	///         "aaron@stumpapp.dev",
+	///         vec![
+	///             AttachmentPayload {
+	///                 name: "test.txt".to_string(),
+	///                 content: b"Hello, world!".to_vec(),
+	///                 content_type: "text/plain".parse().unwrap(),
+	///             },
+	///             AttachmentPayload {
+	///                 name: "test2.txt".to_string(),
+	///                 content: b"Hello, world again!".to_vec(),
+	///                 content_type: "text/plain".parse().unwrap(),
+	///             },
+	///         ],
+	///     ).await;
+	///     assert!(result.is_err()); // This will fail because the SMTP server is not real
+	/// }
+	/// ```
+	#[tracing::instrument(
+		skip(self, subject, payloads),
+		fields(host = %self.config.host, port = self.config.port, tls_enabled = self.config.tls_enabled,
+	))]
+	pub async fn send_attachments(
+		&self,
+		subject: &str,
+		recipient: &str,
+		payloads: Vec<AttachmentPayload>,
+	) -> EmailResult<()> {
+		let plain_text = format!(
+			"You have a new attachment from Stump!\n\n\
+			 This email contains {} attachment(s).",
+			payloads.len()
+		);
+		self.send_message_inner(subject, recipient, plain_text, payloads)
+			.await
 	}
 }
 

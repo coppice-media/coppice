@@ -149,6 +149,33 @@ pub async fn visible_pages(
 	Ok(computed)
 }
 
+/// The visible page count for one media — the number a client should see in
+/// place lists and PSE counts — served from `cache` when present. Equals the
+/// physical count when nothing is skipped.
+pub async fn visible_page_count(
+	conn: &DatabaseConnection,
+	cache: &VisiblePagesCache,
+	media_id: &str,
+	pages: i32,
+) -> CoreResult<i32> {
+	Ok(visible_pages(conn, cache, media_id, pages).await?.len() as i32)
+}
+
+/// Visible page counts for a batch of `(media_id, physical_pages)` pairs,
+/// computed through the shared cache. Fails fast on the first database error.
+pub async fn visible_page_counts(
+	conn: &DatabaseConnection,
+	cache: &VisiblePagesCache,
+	media: impl IntoIterator<Item = (String, i32)>,
+) -> CoreResult<HashMap<String, i32>> {
+	let mut counts = HashMap::new();
+	for (media_id, pages) in media {
+		let count = visible_page_count(conn, cache, &media_id, pages).await?;
+		counts.insert(media_id, count);
+	}
+	Ok(counts)
+}
+
 /// Map a visible 1-based page number to its physical page, or `None` when it
 /// is past the end of the visible list.
 pub fn physical_page(visible: &[i32], page: i32) -> Option<i32> {

@@ -1087,9 +1087,9 @@ dependencies = [
 
 [[package]]
 name = "bytemuck"
-version = "1.16.3"
+version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "102087e286b4677862ea56cf8fc58bb2cdfa8725c40ffb80fe3a008eb7f2fc83"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
 
 [[package]]
 name = "byteorder"
@@ -2322,6 +2322,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "document-features"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
+dependencies = [
+ "litrs",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2624,6 +2633,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "495a39d30d624c2caabe6312bfead73e7717692b44e0b32df168c275a2e8e9e4"
 dependencies = [
  "ascii_utils",
+]
+
+[[package]]
+name = "fast_image_resize"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9c50201dc184ba6553da1695aac20a042efffbe2d84542cee31917c86c3ab1e"
+dependencies = [
+ "bytemuck",
+ "cfg-if",
+ "document-features",
+ "image",
+ "num-traits",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -2973,6 +2996,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "gcd"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d758ba1b47b00caf47f24925c0074ecb20d6dfcffe7f6d53395c0465674841a"
+
+[[package]]
 name = "gdk"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3208,6 +3237,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "git2"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddddbf932745a6be37109b6112d3ee09696106f848449069d3a57bba937ab82e"
+dependencies = [
+ "bitflags 2.13.0",
+ "libc",
+ "libgit2-sys",
+ "log",
+]
+
+[[package]]
 name = "glib"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3342,11 +3383,12 @@ dependencies = [
  "stump_core",
  "stump_devices",
  "stump_media",
+ "stump_notify",
+ "stump_provider",
  "stump_scanner",
  "subtle",
  "tempfile",
  "tests",
- "tokio",
  "tower-sessions",
  "tracing",
  "windows 0.58.0",
@@ -4645,6 +4687,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "libgit2-sys"
+version = "0.18.8+1.9.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f7c568b25d7489bc3fb2988ed69ab111d2944d2f5fec3d5c987fe545ea97b50"
+dependencies = [
+ "cc",
+ "libc",
+ "libz-sys",
+ "pkg-config",
+]
+
+[[package]]
 name = "libloading"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4712,6 +4766,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "libz-sys"
+version = "1.1.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85bc9657773828b90eeb625adff10eeac83cc21bbfd8e23a03eaa8a33c9e28d9"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
 name = "line-wrap"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4757,6 +4823,12 @@ name = "litemap"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
+
+[[package]]
+name = "litrs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "local-ip-address"
@@ -4956,6 +5028,7 @@ version = "0.1.6"
 dependencies = [
  "async-graphql",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "dateparser",
  "dotenvy",
@@ -8714,6 +8787,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "stump_annotation_sync"
+version = "0.1.6"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "git2",
+ "models",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "stump_api_types",
+ "tempfile",
+ "tests",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "stump_api_types"
 version = "0.1.6"
 dependencies = [
@@ -8777,10 +8869,14 @@ dependencies = [
  "serde_with",
  "simple_crypt",
  "stump-config-gen",
+ "stump_annotation_sync",
  "stump_api_types",
  "stump_devices",
  "stump_jobs",
  "stump_media",
+ "stump_notify",
+ "stump_provider",
+ "stump_provider_mangadex",
  "stump_scanner",
  "stump_watcher",
  "temp-env",
@@ -8884,6 +8980,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stump_auth",
+ "tests",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -8943,6 +9040,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "stump_auth",
+ "tests",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -8981,11 +9079,15 @@ name = "stump_media"
 version = "0.1.6"
 dependencies = [
  "alphanumeric-sort",
+ "async-stream",
  "async-trait",
  "base64 0.22.1",
  "chrono",
  "data-encoding",
  "epub",
+ "fast_image_resize",
+ "filetime",
+ "futures-util",
  "globset",
  "image",
  "imagesize",
@@ -9006,6 +9108,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "stump_kepub",
  "tempfile",
  "thiserror 2.0.17",
  "thumbhash",
@@ -9013,6 +9116,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "trash",
+ "turbojpeg",
  "unrar",
  "urlencoding",
  "walkdir",
@@ -9027,6 +9131,7 @@ dependencies = [
  "async-graphql",
  "async-trait",
  "base64 0.22.1",
+ "data-encoding",
  "email",
  "rand 0.9.2",
  "reqwest 0.13.4",
@@ -9171,6 +9276,8 @@ dependencies = [
  "stump_liseur_sync",
  "stump_media",
  "stump_opds",
+ "stump_provider",
+ "stump_provider_mangadex",
  "stump_scanner",
  "subtle",
  "tempfile",
@@ -10414,6 +10521,30 @@ dependencies = [
  "sha1",
  "thiserror 2.0.17",
  "utf-8",
+]
+
+[[package]]
+name = "turbojpeg"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81313fcd64aaa30ddfd59eaa122968136b2dd9cd41d9619b126cf71e67a01702"
+dependencies = [
+ "gcd",
+ "image",
+ "libc",
+ "thiserror 1.0.63",
+ "turbojpeg-sys",
+]
+
+[[package]]
+name = "turbojpeg-sys"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49b5a974bc59382d35927e3a07eef2ba9a24fe7227cefe52ec44b508e1b90f86"
+dependencies = [
+ "anyhow",
+ "cmake",
+ "libc",
 ]
 
 [[package]]

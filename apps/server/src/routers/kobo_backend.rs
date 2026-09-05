@@ -1,6 +1,8 @@
+mod comic_transform;
 mod kepub;
 mod kepub_cache;
 mod router;
+mod tags;
 use std::sync::Arc;
 
 use axum::{
@@ -244,4 +246,44 @@ impl KoboBackend for KoboBackendImpl {
 	) -> Result<Response, Self::Error> {
 		delete_sync_sessions(Extension(auth), State(self.0.clone())).await
 	}
+
+	async fn create_tag(
+		&self,
+		auth: AuthContext,
+		request: stump_kobo::routes::TagCreateRequest,
+	) -> Result<String, Self::Error> {
+		tags::create_tag(self.0.clone(), auth, request).await
+	}
+
+	async fn rename_tag(
+		&self,
+		auth: AuthContext,
+		tag_id: String,
+		name: String,
+	) -> Result<(), Self::Error> {
+		tags::rename_tag(self.0.clone(), auth, tag_id, name).await
+	}
+
+	async fn delete_tag(&self, auth: AuthContext, tag_id: String) -> Result<(), Self::Error> {
+		tags::delete_tag(self.0.clone(), auth, tag_id).await
+	}
+
+	async fn add_tag_items(
+		&self,
+		auth: AuthContext,
+		tag_id: String,
+		revision_ids: Vec<String>,
+	) -> Result<(), Self::Error> {
+		tags::add_tag_items(self.0.clone(), auth, tag_id, revision_ids).await
+	}
+
+	async fn remove_tag_items(
+		&self,
+		auth: AuthContext,
+		tag_id: String,
+		revision_ids: Vec<String>,
+	) -> Result<(), Self::Error> {
+		tags::remove_tag_items(self.0.clone(), auth, tag_id, revision_ids).await
+	}
 }
+

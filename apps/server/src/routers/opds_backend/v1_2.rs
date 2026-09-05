@@ -99,6 +99,40 @@ fn service_url(req_ctx: &AuthContext) -> String {
 	}
 }
 
+/// Visible page counts (duplicate-page skipping) for a batch of publication
+/// entries. Media missing from the map fall back to their physical count.
+async fn compute_visible_counts(
+	ctx: &AppState,
+	books: &[OPDSPublicationEntity],
+) -> std::collections::HashMap<String, i32> {
+	stump_core::filesystem::media::visible_pages::visible_page_counts(
+		ctx.conn.as_ref(),
+		&ctx.visible_pages_cache(),
+		books.iter().map(|book| (book.media.id.clone(), book.media.pages)),
+	)
+	.await
+	.unwrap_or_else(|error| {
+		tracing::warn!(?error, "Failed to compute visible page counts");
+		Default::default()
+	})
+}
+
+fn build_publication_entries(
+	books: Vec<OPDSPublicationEntity>,
+	visible_counts: &std::collections::HashMap<String, i32>,
+	api_key: Option<String>,
+) -> Vec<OpdsEntry> {
+	books
+		.into_iter()
+		.map(|book| {
+			let visible_page_count = visible_counts.get(&book.media.id).copied();
+			OPDSEntryBuilder::<OPDSPublicationEntity>::new(book, api_key.clone())
+				.with_visible_page_count(visible_page_count)
+				.into_opds_entry()
+		})
+		.collect()
+}
+
 pub(crate) async fn catalog(Extension(req): Extension<AuthContext>) -> APIResult<Xml> {
 	let entries = vec![
 		OpdsEntry::new(
@@ -234,13 +268,8 @@ pub(crate) async fn keep_reading(
 		.all(ctx.conn.as_ref())
 		.await?;
 
-	let entries = books
-		.into_iter()
-		.map(|m| {
-			OPDSEntryBuilder::<OPDSPublicationEntity>::new(m, req.api_key())
-				.into_opds_entry()
-		})
-		.collect::<Vec<OpdsEntry>>();
+	let visible_counts = compute_visible_counts(&ctx, &books).await;
+	let entries = build_publication_entries(books, &visible_counts, req.api_key());
 
 	let feed = OpdsFeed::new(
 		"keepReading".to_string(),
@@ -313,6 +342,7 @@ pub(crate) async fn get_library_by_id(
 		..
 	}): Path<OPDSURLParams<OPDSIDURLParams>>,
 	pagination: Query<OffsetPagination>,
+	Query(OPDSSearchQuery { search }): Query<OPDSSearchQuery>,
 	Extension(req): Extension<AuthContext>,
 ) -> APIResult<Xml> {
 	let user = req.user();
@@ -328,6 +358,20 @@ pub(crate) async fn get_library_by_id(
 		.one(ctx.conn.as_ref())
 		.await?
 		.ok_or(APIError::NotFound("Library not found".to_string()))?;
+
+	// Mode B: a virtual library browses its provider source live; there are
+	// no series rows to fall back to.
+	if let Some(feed) = virtual_library_feed_or_none(
+		&ctx,
+		&req,
+		&library,
+		&pagination,
+		search.as_deref(),
+	)
+	.await?
+	{
+		return Ok(feed);
+	}
 
 	let series = series::Entity::find_for_user(&user)
 		.filter(series::Column::LibraryId.eq(library.id.clone()))
@@ -361,6 +405,129 @@ pub(crate) async fn get_library_by_id(
 	})?;
 
 	Ok(Xml(feed.build()?))
+}
+
+
+/// Mode B: the live-browse feed for a virtual library, or `None` when the
+/// library is not provider-backed (or the providers feature is compiled
+/// out).
+#[cfg(feature = "providers")]
+async fn virtual_library_feed_or_none(
+	ctx: &AppState,
+	req: &AuthContext,
+	library: &library::LibraryIdentSelect,
+	pagination: &OffsetPagination,
+	search: Option<&str>,
+) -> APIResult<Option<Xml>> {
+	use stump_provider::virtual_path;
+
+	let Some(source_id) =
+		crate::routers::provider_virtual::virtual_library_source(ctx, &library.id)
+			.await
+	else {
+		return Ok(None);
+	};
+	let kind = crate::routers::provider_virtual::browse_kind(search, &[]);
+	let size = pagination.limit().max(1);
+	let page_index = (pagination.offset() / size) as u32;
+	let result =
+		crate::routers::provider_virtual::browse_page(ctx, &source_id, &library.id, &kind, page_index)
+			.await
+			.map_err(APIError::InternalServerError)?;
+
+	let entries = result
+		.items
+		.iter()
+		.map(|remote| {
+			let stump_id =
+				virtual_path::series_id(&source_id, &remote.remote_id);
+			OpdsEntry::new(
+				stump_id.clone(),
+				Utc::now().fixed_offset(),
+				remote.title.clone(),
+				None,
+				remote.description.clone(),
+				Some(remote.authors.clone()),
+				Some(vec![OpdsLink::new(
+					OpdsLinkType::Navigation,
+					OpdsLinkRel::Subsection,
+					catalog_url(req, &format!("series/{}", stump_id)),
+				)]),
+				None,
+			)
+		})
+		.collect::<Vec<OpdsEntry>>();
+
+	// Live browse has no total count; one phantom element past the current
+	// window marks a next page for OPDS clients when the source has one.
+	let count =
+		pagination.offset() + result.items.len() as u64 + u64::from(result.has_next);
+
+	let feed = OPDSFeedBuilder::new(req.api_key()).paginated(OPDSFeedBuilderParams {
+		id: library.id.clone(),
+		title: library.name.clone(),
+		entries,
+		href_postfix: format!("libraries/{}", library.id),
+		page_params: Some(OPDSFeedBuilderPageParams {
+			page: pagination.page,
+			count,
+		}),
+		search: None,
+	})?;
+
+	Ok(Some(Xml(feed.build()?)))
+}
+
+#[cfg(not(feature = "providers"))]
+async fn virtual_library_feed_or_none(
+	_ctx: &AppState,
+	_req: &AuthContext,
+	_library: &library::LibraryIdentSelect,
+	_pagination: &OffsetPagination,
+	_search: Option<&str>,
+) -> APIResult<Option<Xml>> {
+	Ok(None)
+}
+
+/// Mode B: materialise a live-only virtual series before its books are
+/// served. `None` when the series does not exist (or is not a provider
+/// series).
+#[cfg(feature = "providers")]
+async fn materialise_series_for_opds(
+	ctx: &AppState,
+	user: &models::entity::user::AuthUser,
+	id: &str,
+) -> APIResult<Option<series::ModelWithMetadata>> {
+	if series::Entity::find_by_id(id)
+		.one(ctx.conn.as_ref())
+		.await?
+		.is_none()
+	{
+		match crate::routers::provider_virtual::materialise_virtual_series(ctx, id)
+			.await
+		{
+			None => return Ok(None),
+			Some(Err(error)) => {
+				return Err(APIError::InternalServerError(error));
+			},
+			Some(Ok(_)) => {},
+		}
+	}
+	series::ModelWithMetadata::find_for_user(user)
+		.filter(series::Column::Id.eq(id.to_string()))
+		.into_model::<series::ModelWithMetadata>()
+		.one(ctx.conn.as_ref())
+		.await
+		.map_err(APIError::from)
+}
+
+#[cfg(not(feature = "providers"))]
+async fn materialise_series_for_opds(
+	_ctx: &AppState,
+	_user: &models::entity::user::AuthUser,
+	_id: &str,
+) -> APIResult<Option<series::ModelWithMetadata>> {
+	Ok(None)
 }
 
 // FIXME: Based on testing with Panels, it seems like pagination isn't an expected default when
@@ -472,13 +639,18 @@ pub(crate) async fn get_series_by_id(
 	Extension(req): Extension<AuthContext>,
 ) -> APIResult<Xml> {
 	let user = req.user();
-	let series::ModelWithMetadata { series, metadata } =
+	// Mode B: a live-only virtual series is materialised on first access,
+	// then served through the ordinary database path below.
+	let Some(series::ModelWithMetadata { series, metadata }) =
 		series::ModelWithMetadata::find_for_user(&user)
 			.filter(series::Column::Id.eq(id.clone()))
 			.into_model::<series::ModelWithMetadata>()
 			.one(ctx.conn.as_ref())
 			.await?
-			.ok_or(APIError::NotFound(format!("Series {id} not found")))?;
+			.or(materialise_series_for_opds(&ctx, &user, &id).await?)
+	else {
+		return Err(APIError::NotFound(format!("Series {id} not found")));
+	};
 
 	let books = OPDSPublicationEntity::find_for_user(&user)
 		.filter(media::Column::SeriesId.eq(id.clone()))
@@ -493,13 +665,8 @@ pub(crate) async fn get_series_by_id(
 		.count(ctx.conn.as_ref())
 		.await?;
 
-	let entries = books
-		.into_iter()
-		.map(|m| {
-			OPDSEntryBuilder::<OPDSPublicationEntity>::new(m, req.api_key())
-				.into_opds_entry()
-		})
-		.collect();
+	let visible_counts = compute_visible_counts(&ctx, &books).await;
+	let entries = build_publication_entries(books, &visible_counts, req.api_key());
 
 	let title = metadata
 		.and_then(|m| m.title.clone())
@@ -593,9 +760,12 @@ pub(crate) async fn search_feed(
 		.into_model::<OPDSPublicationEntity>()
 		.all(ctx.conn.as_ref())
 		.await?;
+	let visible_counts = compute_visible_counts(&ctx, &books).await;
 	for book in books {
+		let visible_page_count = visible_counts.get(&book.media.id).copied();
 		entries.push(
 			OPDSEntryBuilder::<OPDSPublicationEntity>::new(book, req.api_key())
+				.with_visible_page_count(visible_page_count)
 				.into_opds_entry(),
 		);
 	}
@@ -662,13 +832,8 @@ pub(crate) async fn get_books(
 		.count(ctx.conn.as_ref())
 		.await?;
 
-	let entries = books
-		.into_iter()
-		.map(|m| {
-			OPDSEntryBuilder::<OPDSPublicationEntity>::new(m, req.api_key())
-				.into_opds_entry()
-		})
-		.collect::<Vec<OpdsEntry>>();
+	let visible_counts = compute_visible_counts(&ctx, &books).await;
+	let entries = build_publication_entries(books, &visible_counts, req.api_key());
 
 	let feed = OPDSFeedBuilder::new(req.api_key()).paginated(OPDSFeedBuilderParams {
 		id: "allBooks".to_string(),
@@ -705,13 +870,8 @@ pub(crate) async fn get_latest_books(
 		.count(ctx.conn.as_ref())
 		.await?;
 
-	let entries = books
-		.into_iter()
-		.map(|m| {
-			OPDSEntryBuilder::<OPDSPublicationEntity>::new(m, req.api_key())
-				.into_opds_entry()
-		})
-		.collect::<Vec<OpdsEntry>>();
+	let visible_counts = compute_visible_counts(&ctx, &books).await;
+	let entries = build_publication_entries(books, &visible_counts, req.api_key());
 
 	let feed = OPDSFeedBuilder::new(req.api_key()).paginated(OPDSFeedBuilderParams {
 		id: "latestBooks".to_string(),
@@ -815,12 +975,31 @@ pub(crate) async fn get_book_page(
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
 
+	// Duplicate-page skipping renumbers visible pages onto the physical file.
+	// Progression stays in visible numbering so it lines up with the PSE
+	// count; the file read uses the mapped physical page.
+	let cache = ctx.visible_pages_cache();
+	let visible = stump_core::filesystem::media::visible_pages::visible_pages(
+		ctx.conn.as_ref(),
+		&cache,
+		&book.id,
+		book.pages,
+	)
+	.await?;
+	let physical_page =
+		stump_core::filesystem::media::visible_pages::physical_page(
+			&visible,
+			correct_page as i32,
+		)
+		.ok_or(APIError::NotFound("Page not found".to_string()))?;
+	let visible_count = visible.len() as i32;
+
 	if ctx.config.protocols.enable_opds_progression {
-		let percentage = compute_page_based_percentage(correct_page, book.pages);
+		let percentage = compute_page_based_percentage(correct_page, visible_count);
 		let progression = NormalizedProgression {
 			page: Some(correct_page),
 			percentage: Some(percentage),
-			did_complete: book.pages == correct_page,
+			did_complete: visible_count == correct_page as i32,
 			..Default::default()
 		};
 
@@ -829,8 +1008,12 @@ pub(crate) async fn get_book_page(
 		tracing::trace!(?reading_session, "Upserted active reading session");
 	}
 
-	let (content_type, image_buffer) =
-		get_page_async(PathBuf::from(book.path), correct_page, &ctx.config.media).await?;
+	let (content_type, image_buffer) = get_page_async(
+		PathBuf::from(book.path),
+		physical_page as i32,
+		&ctx.config.media,
+	)
+	.await?;
 
 	handle_opds_image_response(content_type, image_buffer)
 }

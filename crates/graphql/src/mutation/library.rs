@@ -275,77 +275,24 @@ impl LibraryMutation {
 	) -> Result<Library> {
 		let core = ctx.data::<CoreContext>()?;
 
-		enforce_valid_library_path(core.conn.as_ref(), &input.path, None).await?;
-
-		let scan_after_creation = input.scan_after_persist;
-		let add_watcher = input.config.as_ref().is_some_and(|config| config.watch);
-		let tags = input.tags.take();
-
-		if scan_after_creation {
-			core.require_background_jobs()
-				.map_err(crate::error::map_core_error)?;
-		}
-
-		let txn = core.conn.as_ref().begin().await?;
-
-		if let Some(thumbnail_config) = input
-			.config
-			.as_ref()
-			.and_then(|c| c.thumbnail_config.as_ref())
-		{
-			thumbnail_config.validate()?;
-		}
-
-		let (library, config) = input.into_active_model();
-
-		let created_config = config.insert(&txn).await?;
-		let created_library = library::ActiveModel {
-			id: Set(created_config
-				.library_id
-				.ok_or("Library config not created correctly")?),
-			config_id: Set(created_config.id),
-			status: Set(FileStatus::Ready),
-			..library
-		}
-		.insert(&txn)
-		.await?;
-
-		if let Some(tags) = tags {
-			let (to_connect, _) = super::tag::sync_tags(&txn, &tags, &[]).await?;
-
-			if !to_connect.is_empty() {
-				library_tag::Entity::insert_many(
-					to_connect
-						.into_iter()
-						.map(|tag_id| library_tag::ActiveModel {
-							library_id: Set(created_library.id.clone()),
-							tag_id: Set(tag_id),
-							..Default::default()
-						})
-						.collect::<Vec<library_tag::ActiveModel>>(),
-				)
-				.on_conflict_do_nothing()
-				.exec(&txn)
-				.await?;
-			}
-		}
-
-		txn.commit().await?;
-
-		if scan_after_creation {
-			core.enqueue(StumpJob::library_scan(
-				created_library.id.clone(),
-				created_library.path.clone(),
-				None,
-			))
-			.await
-			.map_err(crate::error::map_core_error)?;
-		}
-
-		if core.background_jobs_enabled() && add_watcher {
-			core.add_watcher(created_library.path.clone().into())
-				.await?;
-		}
+		let created_library = stump_core::library::create_library(
+			core,
+			stump_core::library::NewLibrary {
+				name: input.name,
+				path: input.path,
+				description: input.description,
+				emoji: input.emoji,
+				config: input
+					.config
+					.take()
+					.unwrap_or_default()
+					.into_active_model(),
+				tags: input.tags.take().unwrap_or_default(),
+				scan_after_persist: input.scan_after_persist,
+			},
+		)
+		.await
+		.map_err(crate::error::map_core_error)?;
 
 		Ok(Library::from(created_library))
 	}
@@ -442,120 +389,35 @@ impl LibraryMutation {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
-		let (existing_library, existing_config) = library::Entity::find_for_user(user)
-			.filter(library::Column::Id.eq(id.to_string()))
-			.find_also_related(library_config::Entity)
-			.one(core.conn.as_ref())
-			.await?
-			.ok_or("Library not found")?;
-
-		let Some(existing_config) = existing_config else {
-			return Err("Library is missing associated config!".into());
+		let watch = if input.config.as_ref().is_some_and(|config| config.watch) {
+			stump_core::library::WatchUpdate::Add
+		} else {
+			stump_core::library::WatchUpdate::Remove
 		};
 
-		enforce_valid_library_path(
-			core.conn.as_ref(),
-			&input.path,
-			Some(&existing_library.path),
-		)
-		.await?;
-
-		let existing_tags = tag::Entity::find()
-			.filter(
-				tag::Column::Id.in_subquery(
-					Query::select()
-						.column(library_tag::Column::TagId)
-						.from(library_tag::Entity)
-						.and_where(
-							library_tag::Column::LibraryId
-								.eq(existing_library.id.clone()),
-						)
-						.to_owned(),
+		let updated_library = stump_core::library::update_library(
+			core,
+			user,
+			&id.to_string(),
+			stump_core::library::UpdatedLibrary {
+				name: input.name,
+				path: input.path,
+				description: input.description,
+				emoji: input.emoji,
+				config: Some(
+					input
+						.config
+						.take()
+						.unwrap_or_default()
+						.into_active_model(),
 				),
-			)
-			.all(core.conn.as_ref())
-			.await?;
-
-		let scan_after_update = input.scan_after_persist;
-		let add_watcher = input.config.as_ref().is_some_and(|config| config.watch);
-		let tags = input.tags.take();
-
-		if scan_after_update {
-			core.require_background_jobs()
-				.map_err(crate::error::map_core_error)?;
-		}
-
-		let txn = core.conn.as_ref().begin().await?;
-
-		let (library, config) = input.into_active_model();
-
-		let _updated_config = library_config::ActiveModel {
-			id: Set(existing_config.id),
-			library_id: Set(existing_config.library_id.clone()),
-			..config
-		}
-		.update(&txn)
-		.await?;
-
-		let updated_library = library::ActiveModel {
-			id: Set(existing_library.id),
-			..library
-		}
-		.update(&txn)
-		.await?;
-
-		if let Some(tags) = tags {
-			let (to_connect, to_disconnect) =
-				super::tag::sync_tags(&txn, &tags, &existing_tags).await?;
-
-			if !to_disconnect.is_empty() {
-				library_tag::Entity::delete_many()
-					.filter(library_tag::Column::TagId.is_in(to_disconnect).and(
-						library_tag::Column::LibraryId.eq(updated_library.id.clone()),
-					))
-					.exec(&txn)
-					.await?;
-			}
-
-			if !to_connect.is_empty() {
-				let library_id = updated_library.id.clone();
-				library_tag::Entity::insert_many(
-					to_connect
-						.into_iter()
-						.map(|tag_id| library_tag::ActiveModel {
-							library_id: Set(library_id.clone()),
-							tag_id: Set(tag_id),
-							..Default::default()
-						})
-						.collect::<Vec<library_tag::ActiveModel>>(),
-				)
-				.on_conflict_do_nothing()
-				.exec(&txn)
-				.await?;
-			}
-		}
-
-		txn.commit().await?;
-
-		if scan_after_update {
-			core.enqueue(StumpJob::library_scan(
-				updated_library.id.clone(),
-				updated_library.path.clone(),
-				None,
-			))
-			.await
-			.map_err(crate::error::map_core_error)?;
-		}
-
-		if core.background_jobs_enabled() {
-			if add_watcher {
-				core.add_watcher(updated_library.path.clone().into())
-					.await?;
-			} else {
-				core.remove_watcher(existing_library.path.clone().into())
-					.await?;
-			}
-		}
+				tags: input.tags.take(),
+				scan_after_persist: input.scan_after_persist,
+				watch,
+			},
+		)
+		.await
+		.map_err(crate::error::map_core_error)?;
 
 		Ok(Library::from(updated_library))
 	}
@@ -774,74 +636,9 @@ impl LibraryMutation {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
-		let library = library::Entity::find_for_user(user)
-			.filter(library::Column::Id.eq(id.to_string()))
-			.one(core.conn.as_ref())
-			.await?
-			.ok_or("Library not found")?;
-
-		let txn = core.conn.as_ref().begin().await?;
-		let library_series = Query::select()
-			.column(series::Column::Id)
-			.from(series::Entity)
-			.and_where(series::Column::LibraryId.eq(library.id.clone()))
-			.to_owned();
-		let media_rows = media::Entity::find()
-			.filter(media::Column::SeriesId.in_subquery(library_series))
-			.all(&txn)
-			.await?;
-		let media_ids = media_rows
-			.iter()
-			.map(|media| media.id.clone())
-			.collect::<Vec<_>>();
-		let series_ids = series::Entity::find()
-			.select_only()
-			.column(series::Column::Id)
-			.filter(series::Column::LibraryId.eq(library.id.clone()))
-			.into_tuple::<String>()
-			.all(&txn)
-			.await?;
-
-		lists::remove_memberships_for_media(&txn, &media_ids).await?;
-		lists::remove_memberships_for_series(&txn, &series_ids).await?;
-		library.clone().delete(&txn).await?;
-		txn.commit().await?;
-
-		if !media_ids.is_empty() {
-			if let Err(error) =
-				remove_thumbnails(&media_ids, &core.config.get_thumbnails_dir()).await
-			{
-				tracing::error!(
-					?error,
-					"Failed to remove thumbnails for deleted library media"
-				);
-			}
-		}
-		if !series_ids.is_empty() {
-			if let Err(error) =
-				remove_thumbnails(&series_ids, &core.config.get_thumbnails_dir()).await
-			{
-				tracing::error!(
-					?error,
-					"Failed to remove thumbnails for deleted library series"
-				);
-			}
-		}
-		for media in media_rows {
-			if let Some(series_id) = media.series_id {
-				core.send_core_event(CoreEvent::MediaDeleted(MediaDeleted {
-					id: media.id,
-					series_id,
-					library_id: library.id.clone(),
-				}));
-			}
-		}
-		for series_id in &series_ids {
-			core.send_core_event(CoreEvent::SeriesDeleted(SeriesDeleted {
-				id: series_id.clone(),
-				library_id: library.id.clone(),
-			}));
-		}
+		let library = stump_core::library::delete_library(core, user, &id.to_string())
+			.await
+			.map_err(crate::error::map_core_error)?;
 
 		// Note: We return the full node so the ID may be pulled to properly update the cache.
 		// For obvious reasons, certain fields will error if accessed.
@@ -1197,95 +994,3 @@ impl LibraryMutation {
 	}
 }
 
-///  Normalises a path by removing trailing slashes
-fn normalize_path(path: &str) -> &str {
-	let trimmed = path.trim_end_matches(['/', '\\']);
-	if trimmed.is_empty() || path == "/" {
-		"/"
-	} else {
-		trimmed
-	}
-}
-/// Adds a single trailing slash to a path
-fn add_trailing_slash(path: &str) -> String {
-	if path.contains('/') {
-		if path.ends_with('/') {
-			path.to_string()
-		} else {
-			format!("{}/", path)
-		}
-	} else {
-		format!("{}\\", path)
-	}
-}
-/// A helper function to enforce that a library path is valid and does not conflict with
-/// other libraries.
-async fn enforce_valid_library_path(
-	conn: &DatabaseConnection,
-	path: &str,
-	existing_path: Option<&str>,
-) -> Result<()> {
-	// TODO: Move this to the core, Ideally we avoid pulling tokio for this crate
-	match fs::metadata(path).await {
-		Ok(metadata) => {
-			if !metadata.is_dir() {
-				return Err("Path is not a directory".into());
-			}
-		},
-		Err(error) => {
-			return Err(error.to_string().into());
-		},
-	}
-
-	if let Some(existing_path) = existing_path {
-		if existing_path == path {
-			return Ok(());
-		}
-	}
-
-	// example: new_path = "/books", existing_library = "/books/fiction"
-	// check if any libraries start with "/books/" (can't use "/books" else it flags e.g. "/books2")
-	let mut child_query = library::Entity::find().filter(
-		library::Column::Path.starts_with(add_trailing_slash(normalize_path(path))),
-	);
-
-	if let Some(existing_path) = existing_path {
-		child_query =
-			child_query.filter(library::Column::Path.ne(normalize_path(existing_path)));
-	}
-
-	let child_libraries_count = child_query.count(conn).await?;
-
-	if child_libraries_count > 0 {
-		return Err("Path is a parent of another library on the filesystem".into());
-	}
-
-	// example: new_path = "/data/books/fiction", existing_library = "/data/books"
-	// check if new_path matches the pattern "/data/books/_%".
-	let (parent_sql, parent_values): (String, Vec<sea_orm::Value>) = if let Some(ep) =
-		existing_path
-	{
-		(
-				r#"SELECT COUNT(*) AS count FROM libraries WHERE $1 LIKE "path" || '/_%' AND "path" != $2"#.to_string(),
-				vec![path.into(), ep.into()],
-			)
-	} else {
-		(
-			r#"SELECT COUNT(*) AS count FROM libraries WHERE $1 LIKE "path" || '/_%'"#
-				.to_string(),
-			vec![path.into()],
-		)
-	};
-
-	let parent_libraries_count: i64 = conn
-		.query_one(db_statement(conn, parent_sql, parent_values))
-		.await?
-		.ok_or("Failed to count parent libraries")?
-		.try_get("", "count")?;
-
-	if parent_libraries_count > 0 {
-		return Err("Path is a child of another library on the filesystem".into());
-	}
-
-	Ok(())
-}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Progress } from '$lib/components/ui/progress';
+	import { Progress } from '@stump/ui/components/ui/progress';
 	import { progressPercent } from '$lib/ingest/helpers';
 	import { getEditorSession } from '$lib/editor/session.svelte';
 

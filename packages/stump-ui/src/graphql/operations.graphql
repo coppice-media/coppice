@@ -1,0 +1,15 @@
+# Shared GraphQL operations used by more than one Stump companion app
+# (the ingest editor and the Home app). App-specific operations live in the
+# apps themselves (`editor/src/lib/graphql/operations.graphql` and
+# `home/src/lib/graphql/operations.graphql`).
+
+query Me {
+	me {
+		id
+		username
+		isServerOwner
+		oidcEmail
+		lastLogin
+		loginSessionsCount
+	}
+}

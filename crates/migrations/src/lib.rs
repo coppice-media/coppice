@@ -50,6 +50,9 @@ mod m20260912_000000_add_kavita_compat;
 mod m20260913_000000_add_provider_sources;
 mod m20260914_000000_add_reading_heads;
 mod m20260917_000000_add_page_hashes;
+mod m20260918_000000_add_container_shelves;
+mod m20260920_000000_add_annotation_sink_configs;
+mod m20260922_kavita_on_deck_removals;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -105,6 +108,9 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260913_000000_add_provider_sources::Migration),
 			Box::new(m20260914_000000_add_reading_heads::Migration),
 			Box::new(m20260917_000000_add_page_hashes::Migration),
+			Box::new(m20260918_000000_add_container_shelves::Migration),
+			Box::new(m20260920_000000_add_annotation_sink_configs::Migration),
+			Box::new(m20260922_kavita_on_deck_removals::Migration),
 		]
 	}
 }

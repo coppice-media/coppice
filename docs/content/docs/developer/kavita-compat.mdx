@@ -57,6 +57,13 @@ Kavita's `pageNum` is the zero-based page being read and `pageNum == pages` mean
 
 `GET /api/Filter` is always empty and `POST /api/Filter/decode` implements `SmartFilterHelper.Decode` (statement separator U+FFFD, inner separator U+00A6, double URL escaping), verified against `kavita-ref`.
 
+
+## Dashboard streams (Kamigura/Kover wave)
+
+`POST /api/Series/on-deck?PageNumber&PageSize&libraryId` (libraryId `0` = all) answers with the user's in-progress series — `pagesRead > 0 && pagesRead < pages` summed over the media's reading sessions, newest progress first, then most recently added chapter — as `SeriesDto[]` with the `Pagination` header, echoing the requested `PageNumber` verbatim (Kamigura sends `PageNumber=0` and the reference answers `currentPage: 0`). `POST /api/Series/remove-from-on-deck?seriesId` (`200`, `400` for an unknown series) records a per-user removal in `kavita_on_deck_removals` (migration `m20260922_kavita_on_deck_removals`, the `AppUserOnDeckRemoval` equivalent) that hides the series from on-deck until the next `Reader/progress` or mark-read event on it, mirroring `ClearOnDeckRemovalAsync`.
+
+Deviations from Kavita's `GetOnDeckAsync`: Stump applies no recent-activity window (Kavita restricts to 30 days of progress / 7 days of chapter adds, `OnDeckProgressDays`/`OnDeckUpdateDays`), so an in-progress series stays on deck however stale. `POST /api/Series/recently-added-v2` runs the `SeriesFilterV2Dto` pipeline with `Created` descending as the primary sort; `POST /api/Series/recently-updated-series` returns `GroupedSeriesDto[]` for media created within the last 12 days, grouped per series with an added-chapter `count` and a 0-based `id`, `chapterId`/`volumeId` `0` as captured from `kavita-ref`. `GET /api/Account` returns the full login `UserDto` with `token: null` (as Kavita documents); `apiKey` is only echoed when the request authenticated with it, because Stump stores API keys hashed. `GET /api/Account/roles` answers the full `PolicyConstants` role list and `GET /api/Users/has-library-access?libraryId` maps the Kavita library id and checks Stump's `library_exclusions`.
+
 ## Route matrix
 
 | Method | Route | Clients | Handler |
@@ -68,6 +75,11 @@ Kavita's `pageNum` is the zero-based page being read and `pageNum == pages` mean
 | GET | `/api/Server/server-info-slim` | extension | `routes/server.rs` |
 | GET | `/api/Library/libraries`, `/api/Library?libraryId`, `/api/Library/{id}` | all | `routes/library.rs` |
 | POST | `/api/Series/all-v2`, `/api/Series/v2` | all | `routes/series.rs` |
+| POST | `/api/Series/on-deck` | Kover, Kamigura, Inkita, Kamare | `routes/series.rs` |
+| POST | `/api/Series/recently-added-v2`, `/api/Series/recently-updated-series` | Kover, Kamigura, Inkita, Kamare | `routes/series.rs` |
+| POST | `/api/Series/remove-from-on-deck?seriesId` | Kover | `routes/series.rs` |
+| GET | `/api/Account`, `/api/Account/roles` | Kamigura, Inkita | `routes/account.rs` |
+| GET | `/api/Users/has-library-access?libraryId` | Inkita | `routes/users.rs` |
 | GET | `/api/Series/{id}`, `/volumes`, `/volume`, `/metadata`, `/series-detail`, `/chapter` | all | `routes/series.rs` |
 | GET | `/api/Volume?volumeId`, `/api/Volume/{id}`, `/api/Chapter?chapterId` | extension, Kamare, Inkita | `routes/series.rs` |
 | GET | `/api/Image/series-cover`, `/volume-cover`, `/chapter-cover` | all | `routes/image.rs` |

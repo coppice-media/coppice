@@ -1,3 +1,4 @@
+mod annotation_sync;
 mod auth;
 mod database;
 pub mod defaults;
@@ -10,10 +11,12 @@ mod pdf;
 mod protocols;
 mod providers;
 mod server;
+mod transform;
 mod stump_config;
 
 use std::env;
 
+pub use annotation_sync::AnnotationSyncConfig;
 pub use auth::AuthConfig;
 pub use database::DatabaseConfig;
 use env_keys::{CONFIG_DIR_KEY, IN_DOCKER_KEY};
@@ -24,6 +27,7 @@ pub use pdf::PdfConfig;
 pub use protocols::ProtocolsConfig;
 pub use providers::ProvidersConfig;
 pub use server::ServerConfig;
+pub use transform::TransformConfig;
 pub use stump_config::StumpConfig;
 
 /// Gets the default config directory located at `~/.stump` where `~` is the

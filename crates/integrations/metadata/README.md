@@ -3,9 +3,10 @@
 ## Purpose
 
 `metadata_integrations` owns the outbound *metadata provider* clients and the
-pure logic around them: the `MetadataProvider` trait, six provider
+pure logic around them: the `MetadataProvider` trait, nine provider
 implementations (Comic Vine, Hardcover, AniList, MyAnimeList, MangaDex,
-MangaUpdates), `create_provider`/`requires_api_token` registry, per-provider
+MangaUpdates, Open Library, Google Books, Metron),
+`create_provider`/`requires_api_token` registry, per-provider
 rate limiting (`governor`), retrying HTTP client, candidate scoring, and the
 `FieldMerger`/`MergeStrategy` rules that decide how external fields land on
 existing metadata. It deliberately does **not** persist anything, hold
@@ -26,14 +27,17 @@ enums/DTOs are opt-in (`graphql` feature).
 | MangaUpdates v1 `https://api.mangaupdates.com/v1` | `src/mangaupdates.rs:1-9` |
 | Comic Vine `https://comicvine.gamespot.com/api` (200 req/hour) | `src/providers/comic_vine/client.rs:27-30` |
 | Hardcover `https://api.hardcover.app/v1/graphql` | `src/providers/hardcover.rs:27,44`; account/progress sync is *proposed only* (`docs/.../hardcover-integration.mdx`) |
+| Open Library `https://openlibrary.org` (politeness ~1 req/s) | `src/providers/openlibrary.rs:1-16` |
+| Google Books `https://www.googleapis.com/books/v1` (1,000 req/day anonymous) | `src/providers/googlebooks.rs:1-13` |
+| Metron `https://metron.cloud/api` (Basic auth, ~30 req/min; field shapes from the official `Metron-Project/mokkari` client) | `src/providers/metron.rs:1-15` |
 
 ## Decisions
 
 | Decision | Why | Evidence |
 | --- | --- | --- |
-| Providers are constructed by string id (`COMIC_VINE`, `HARDCOVER`, `ANILIST`, `MANGA_UPDATES`, `MAL`, `MANGADEX`) via `create_provider` | The stored `metadata_provider_config.provider_type` is a string; adding a provider is one match arm + one `requires_api_token` entry. | `src/lib.rs:31-56` |
-| Keyless providers (AniList, MangaDex, MangaUpdates) ignore the token argument; MAL stores its client id *as* the API token | Avoids a second credential column; UI hides the key field when `requires_api_token` is false. | `src/lib.rs:38-48,53-56` |
-| Per-second `RateLimiter` per client with conservative defaults: Comic Vine 1, MAL 1, AniList 2, MangaUpdates 2, MangaDex 4, Hardcover 5 | Public APIs advertise minute/hour windows; per-second floors stay under all of them. | `*_DEFAULT_RATE_LIMIT` consts in each provider; `src/rate_limit.rs` |
+| Providers are constructed by string id (`COMIC_VINE`, `HARDCOVER`, `ANILIST`, `MANGA_UPDATES`, `MAL`, `MANGADEX`, `OPEN_LIBRARY`, `GOOGLE_BOOKS`, `METRON`) via `create_provider` | The stored `metadata_provider_config.provider_type` is a string; adding a provider is one match arm + one `requires_api_token` entry. | `src/lib.rs:36-70` |
+| Keyless providers (AniList, MangaDex, MangaUpdates, Open Library, Google Books) ignore the token argument; MAL stores its client id *as* the API token; Metron stores `username:password` (or a pre-encoded Basic token) as the token | Avoids a second credential column; UI hides the key field when `requires_api_token` is false. | `src/lib.rs:41-66`, `src/providers/metron.rs:431-448` |
+| Per-second `RateLimiter` per client with conservative defaults: Comic Vine 1, MAL 1, AniList 2, MangaUpdates 2, MangaDex 4, Hardcover 5; Open Library/Google Books 1; Metron 30 per **minute** | Public APIs advertise minute/hour windows; per-second floors stay under all of them — Metron publishes a per-minute quota, so it uses `RateLimiter::per_minute`. | `*_DEFAULT_RATE_LIMIT` consts in each provider; `src/rate_limit.rs` |
 | HTTP 429 maps to `MetadataProviderError` with `is_rate_limited() == true`; malformed JSON must not | Fetch jobs back off on rate limits but fail fast on provider bugs. | `src/providers/mal.rs:858-887`, `src/providers/mangadex.rs:763-802` |
 | Shared `build_client_with_retry` (reqwest-middleware + retry + http-cache) | One retry/backoff policy; cache manager narrowed to avoid CACache in the server graph. | `src/client.rs:35-49`; `docs/.../server-architecture.mdx:20` |
 | Scoring floors: ISBN ≥ 0.98, exact title ≥ 0.90, alt-title ≥ 0.80, fuzzy 0–0.75 (Dice-Sørensen + Jaro-Winkler), author +0.05 | Explicitly provisional baseline from upstream; tests pin current behaviour. | `src/scoring.rs:8-30` |
@@ -45,9 +49,9 @@ enums/DTOs are opt-in (`graphql` feature).
 
 | Path | Responsibility |
 | --- | --- |
+| `src/providers/{anilist,mal,mangadex,hardcover,openlibrary,googlebooks,metron}.rs`, `src/providers/comic_vine/` | Provider clients + mappers + tests |
 | `src/lib.rs` | Re-exports, `create_provider`, `requires_api_token` |
 | `src/provider.rs` | `MetadataProvider` trait (`search_series`, `search_media`, `score_search`, `fetch_*_metadata`, `verify_credentials`), `ProviderCredentialVerification` |
-| `src/providers/{anilist,mal,mangadex,hardcover}.rs`, `src/providers/comic_vine/` | Provider clients + mappers + tests |
 | `src/mangaupdates.rs` | MangaUpdates client (kept at crate root from upstream layout) |
 | `src/types/` | `ExternalMetadata`, `ExternalSeriesMetadata`, `ExternalMediaMetadata`, `MatchCandidate`, `SearchQuery`, `SearchOutcome`, enums |
 | `src/scoring.rs` | `MatchScorer`, `title_similarity` |
@@ -55,7 +59,7 @@ enums/DTOs are opt-in (`graphql` feature).
 | `src/rate_limit.rs`, `src/client.rs`, `src/error.rs`, `src/serde_utils.rs` | Infrastructure |
 | `src/mock_http.rs` | Test-only mock HTTP server |
 
-## How to verify
+cargo test -p metadata_integrations                    # ~110 tests, offline via MockServer
 
 ```text
 cargo test -p metadata_integrations                    # ~80 tests, offline via MockServer

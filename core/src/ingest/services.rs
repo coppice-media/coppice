@@ -5,7 +5,9 @@ use super::{
 	quality::QualityRegistry, store::IngestStore,
 };
 use crate::config::StumpConfig;
+use crate::event::CoreEvent;
 use sea_orm::DatabaseConnection;
+use tokio::sync::broadcast;
 
 /// Lazily constructed services backing the staged ingest workflow.
 pub struct IngestServices {
@@ -28,5 +30,12 @@ impl IngestServices {
 			quality,
 			providers,
 		}
+	}
+
+	/// Attach the core event channel so analysis outcomes are announced to
+	/// notification routing. Called by the host context at construction.
+	pub fn with_event_tx(mut self, events: broadcast::Sender<CoreEvent>) -> Self {
+		self.coordinator = self.coordinator.with_event_tx(events);
+		self
 	}
 }

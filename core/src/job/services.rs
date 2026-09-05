@@ -23,7 +23,10 @@ use crate::{
 		metadata::{MetadataFetchJob, MetadataFetchJobParams},
 		scanner::{LibraryScanJob, SeriesScanJob},
 	},
-	job::{stump_job::StumpJob, CoreJobOutput},
+	job::{
+		annotation_sync::AnnotationSyncJob, notification::NotificationDispatchJob,
+		stump_job::StumpJob, CoreJobOutput,
+	},
 };
 
 /// The host services core jobs run against: the database, the configuration, and the
@@ -183,8 +186,49 @@ impl JobExecutionContext for JobServices {
 			StumpJob::AnalyzeMedia { config } => {
 				run_job(ctx, &mut AnalyzeMediaJob { config }).await
 			},
+			StumpJob::NotificationDispatch { deliveries } => {
+				run_job(ctx, &mut NotificationDispatchJob::new(deliveries)).await
+			},
+			StumpJob::AnnotationSync { user_id } => {
+				run_job(ctx, &mut AnnotationSyncJob::new(user_id)).await
+			},
+			#[cfg(feature = "providers")]
+			StumpJob::ProviderGc => run_provider_gc(self).await,
 		}
 	}
+}
+
+#[cfg(feature = "providers")]
+async fn run_provider_gc(services: &JobServices) -> Result<(), JobError> {
+	let cutoff = crate::providers::gc_cutoff(services.config());
+	let thumbnails_dir = services.config().get_thumbnails_dir();
+	let report = stump_provider::gc_materialised_series(
+		services.conn(),
+		Some(&thumbnails_dir),
+		cutoff,
+	)
+	.await
+	.map_err(|error| JobError::Unknown(error.to_string()))?;
+
+	if report.series.is_empty() && report.media.is_empty() {
+		return Ok(());
+	}
+
+	for media in &report.media {
+		services.emit(CoreEvent::MediaDeleted(crate::event::MediaDeleted {
+			id: media.id.clone(),
+			series_id: media.series_id.clone(),
+			library_id: media.library_id.clone(),
+		}));
+	}
+	for series in &report.series {
+		services.emit(CoreEvent::SeriesDeleted(crate::event::SeriesDeleted {
+			id: series.id.clone(),
+			library_id: series.library_id.clone(),
+		}));
+	}
+
+	Ok(())
 }
 
 #[async_trait]

@@ -1,0 +1,94 @@
+---
+title: Notifications
+description: Channel architecture, routing rules, and the dispatch pipeline.
+---
+
+# Notifications
+
+Stump's notification system lets users route server events to delivery
+channels — ntfy push, email, or a signed webhook. Events flow one way:
+
+```
+CoreEvent ──▶ route_event (core::notification) ──▶ notification_rules lookup
+        ──▶ NotificationDispatch job ──▶ Channel::send (per user, per channel)
+```
+
+## Channels
+
+A channel implements the `stump_notify::Channel` trait: a stable `id`
+persisted in rules and settings rows, a per-user settings schema
+(`settings()`, expressed with the shared `SettingDefinition` type from
+`stump_api_types`), and an async `send(recipient, notification)`. Channels
+are stateless per user — everything user-specific arrives through
+`Recipient::settings`.
+
+| Channel | id | Settings | Delivery |
+| --- | --- | --- | --- |
+| ntfy | `ntfy` | `server_url`, `topic` (default `stump-<short user id>-<random>`), `access_token` (secret) | `POST {server}/{topic}` with `X-Title`/`X-Tags`/`X-Click`/`X-Message` headers; attachments ride the body with `X-Filename` + `Content-Type` |
+| Email | `email` | `recipient_email` | SMTP via the server-wide emailer config (`emailers` table), one shared delivery path with GraphQL `sendAttachmentEmail` |
+| Webhook | `webhook` | `url`, `secret` (secret) | JSON `POST`; with a secret configured the body is signed `X-Stump-Signature: sha256=<hex HMAC-SHA256>` |
+
+Telegram is intentionally not implemented yet; the trait's `receive` seam
+(returning `ChannelError::Unsupported` by default) is where bot-style inbound
+messages will land.
+
+## Events and routing
+
+`core::notification::route_event` maps `CoreEvent`s to notifications:
+
+| `NotificationKind` | Source event | Audience |
+| --- | --- | --- |
+| `DEVICE_PAIRED` | `CoreEvent::DevicePaired` (pairing poll mints the credential) | approving user |
+| `DEVICE_FIRST_SEEN` | `CoreEvent::DeviceSeen { first_seen: true }` | device owner |
+| `INGEST_AWAITING_REVIEW` | `CoreEvent::IngestAwaitingReview` (analysis finished, item needs a decision) | item owner, else subscribers |
+| `QUALITY_FAILED` | `CoreEvent::QualityFailed` (report contains failed checks) | item owner, else subscribers |
+| `SCAN_FINISHED` | `CoreEvent::JobOutput` with a library scan result | subscribers |
+| `ANALYSIS_JOB_FAILED` | `CoreEvent::AnalysisJobFailed` | subscribers |
+| `PROVIDER_MATCH_DONE` | `CoreEvent::ProviderMatchDone` (candidates stored) | item owner, else subscribers |
+
+"Audience" is resolved against `notification_rules`
+(migration `m20260919_000000_add_notification_rules`):
+
+- Each row is `(user_id, event_kind, channel_id, enabled)`; `event_kind` is a
+  `NotificationKind` name (`SCREAMING_SNAKE_CASE`, append-only) or `*`.
+- Per channel, an exact-kind rule wins over `*`; a disabled exact-kind rule
+  mutes that kind even when `*` is enabled (`stump_notify::routing`
+  implements the precedence and is unit-tested).
+- Only the server owner may create rules for administrative kinds
+  (`NotificationKind::is_administrative`): scans, ingest, metadata, analysis.
+- `TEST` never routes.
+
+## Dispatch and retry
+
+`stump_core::notification::spawn_listener` (started by `StumpCore::new`)
+resolves each routed event and enqueues `StumpJob::NotificationDispatch`.
+The `NotificationDispatchJob` delivers every (user, channel) target and:
+
+- loads the channel registry (ntfy + webhook always; email when a primary
+  emailer is configured, its password decrypted with the server key),
+- merges the user's stored `notification_channel_settings` over the channel
+  defaults, decrypting `secret` values, then
+- retries retryable failures (transport) after 1s / 2s / 4s; rejections
+  (4xx, bad config, unknown channel) are never retried.
+
+A delivery that exhausts its attempts is logged and counted in the job
+output (`sent`/`failed`); one bad channel never fails the job or blocks the
+other targets.
+
+## GraphQL
+
+- `notificationChannels` — available channels + settings schema.
+- `notificationChannelSettings` — the caller's effective values (secrets
+  redacted).
+- `setNotificationChannelSettings(channelId, settings)` — upsert; unknown
+  keys rejected, secret values stored encrypted.
+- `notificationRules` / `setNotificationRule(eventKind, channelId, enabled)`.
+- `testNotificationChannel(channelId)` — sends a test message; `true` on
+  success.
+
+## Verifying
+
+```bash
+cargo test -p stump_notify
+cargo test -p graphql -- notification
+```

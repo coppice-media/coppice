@@ -34,7 +34,7 @@ use rand::{rngs::OsRng, TryRngCore};
 use sea_orm::{prelude::*, ActiveValue::Set};
 use serde::{Deserialize, Serialize};
 use stump_api_types::RequestOrigin;
-use stump_core::{CoreEvent, DevicePairingRequested};
+use stump_core::{CoreEvent, DevicePaired, DevicePairingRequested};
 use stump_devices::{CredentialKind, Endpoint, IssuedCredential, Protocol};
 use subtle::ConstantTimeEq;
 
@@ -437,6 +437,12 @@ async fn issue_credential(
 		user_id = %approver.id,
 		"Issued device credential for pairing"
 	);
+
+	ctx.emit_event(CoreEvent::DevicePaired(DevicePaired {
+		device_id: device.id.clone(),
+		user_id: approver.id.clone(),
+		device_name: device.name.clone(),
+	}));
 
 	Ok(PairingStatusResponse {
 		status: WirePairingStatus::Approved,

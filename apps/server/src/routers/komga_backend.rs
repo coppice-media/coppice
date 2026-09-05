@@ -10,10 +10,12 @@ use axum::{
 	response::IntoResponse,
 };
 use models::{
-	entity::{media, series, user::AuthUser},
-	shared::image_processor_options::SupportedImageFormat,
+	entity::{
+		library as library_entity, library_config, media, series, user::AuthUser,
+	},
+	shared::ignore_rules::IgnoreRules,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set};
 use stump_auth::AuthContext;
 use stump_core::{job::stump_job::StumpJob, reading_state::SourceProtocol, CoreEvent};
 use stump_devices::{CredentialRef, Protocol};
@@ -36,6 +38,7 @@ use crate::{
 };
 use stump_komga::{
 	routes::{KomgaBackend, KomgaCoreEvent, KomgaImage},
+	KomgaLibraryCreateRequest, KomgaLibraryUpdateRequest, PatchValue, ScanInterval,
 	KomgaBookId, KomgaSeriesId, KomgaThumbnailId,
 };
 
@@ -81,7 +84,21 @@ impl KomgaBackendAdapter {
 							count_by_type: status.count_by_type,
 						});
 					},
-					Ok(_) => {},
+					Ok(CoreEvent::LibraryCreated(library)) => {
+						let _ = forwarder.send(KomgaCoreEvent::LibraryCreated {
+							id: library.id,
+						});
+					},
+					Ok(CoreEvent::LibraryUpdated(library)) => {
+						let _ = forwarder.send(KomgaCoreEvent::LibraryUpdated {
+							id: library.id,
+						});
+					},
+					Ok(CoreEvent::LibraryDeleted(library)) => {
+						let _ = forwarder.send(KomgaCoreEvent::LibraryDeleted {
+							id: library.id,
+						});
+					},
 					Err(broadcast::error::RecvError::Lagged(skipped)) => {
 						tracing::debug!(skipped, "Komga core event adapter lagged")
 					},
@@ -140,6 +157,42 @@ fn map_server_error(error: APIError) -> stump_komga::errors::APIError {
 			stump_komga::errors::APIError::Forbidden(error.to_string())
 		},
 		_ => stump_komga::errors::APIError::InternalServerError(error.to_string()),
+	}
+}
+
+/// Maps library-service core errors onto the Komga error surface with their
+/// precise status codes (`404` for missing libraries, `400` for validation,
+/// `503` for disabled background jobs).
+fn map_library_core_error(error: stump_core::CoreError) -> stump_komga::errors::APIError {
+	match error {
+		stump_core::CoreError::NotFound(message) => {
+			stump_komga::errors::APIError::NotFound(message)
+		},
+		stump_core::CoreError::BadRequest(message) => {
+			stump_komga::errors::APIError::BadRequest(message)
+		},
+		stump_core::CoreError::DbError(error) => {
+			stump_komga::errors::APIError::DbError(error)
+		},
+		stump_core::CoreError::FeatureDisabled(feature) => {
+			stump_komga::errors::APIError::ServiceUnavailable(format!(
+				"{feature} are disabled"
+			))
+		},
+		other => map_core_error(other),
+	}
+}
+
+/// Maps Komga's `ScanIntervalDto` onto a 5-field cron schedule for Stump's
+/// scheduled-job runner. `DISABLED` maps to `None` (no periodic scan).
+fn scan_interval_cron(interval: ScanInterval) -> Option<&'static str> {
+	match interval {
+		ScanInterval::Disabled => None,
+		ScanInterval::Hourly => Some("0 * * * *"),
+		ScanInterval::Every6h => Some("0 */6 * * *"),
+		ScanInterval::Every12h => Some("0 */12 * * *"),
+		ScanInterval::Daily => Some("0 0 * * *"),
+		ScanInterval::Weekly => Some("0 0 * * 0"),
 	}
 }
 
@@ -346,6 +399,28 @@ impl KomgaBackend for KomgaBackendAdapter {
 				.await
 				.map_err(|error| map_server_error(APIError::from(error)))?;
 		Ok(KomgaImage::new(content_type.to_string(), data))
+	}
+
+	async fn visible_pages(
+		&self,
+		book: &media::Model,
+	) -> stump_komga::errors::APIResult<Option<Vec<i32>>> {
+		// Physical pages (1-based) still visible under duplicate-page
+		// skipping; `None` when nothing is skipped.
+		let cache = self.ctx.visible_pages_cache();
+		let visible = stump_core::filesystem::media::visible_pages::visible_pages(
+			self.ctx.conn.as_ref(),
+			&cache,
+			&book.id,
+			book.pages,
+		)
+		.await
+		.map_err(map_core_error)?;
+		if visible.len() as i32 == book.pages.max(0) {
+			Ok(None)
+		} else {
+			Ok(Some(visible.to_vec()))
+		}
 	}
 
 	async fn book_page_thumbnail(
@@ -893,6 +968,265 @@ impl KomgaBackend for KomgaBackendAdapter {
 			.await
 		{
 			tracing::warn!(?error, "Failed to record the Komga sync on its device");
+		}
+	}
+
+	async fn virtual_library_source(&self, library_id: &str) -> Option<String> {
+		super::provider_virtual::virtual_library_source(&self.ctx, library_id).await
+	}
+
+
+	/// Mode B live browse for one virtual library page, as a Komga page
+	/// envelope. Live cards report zero books; the count is learned when the
+	/// series is materialised.
+	async fn virtual_series_list(
+		&self,
+		library_id: String,
+		search: &stump_komga::KomgaSeriesSearch,
+		sorts: &[String],
+		page: i32,
+		size: i32,
+		unpaged: bool,
+	) -> Option<stump_komga::errors::APIResult<stump_komga::Page<stump_komga::KomgaSeries>>>
+	{
+		let source_id = super::provider_virtual::virtual_library_source(
+			&self.ctx,
+			&library_id,
+		)
+		.await?;
+		let kind = super::provider_virtual::browse_kind(
+			search.full_text_search.as_deref(),
+			sorts,
+		);
+		let result =
+			super::provider_virtual::browse_page(&self.ctx, &source_id, &library_id, &kind, page.max(0) as u32)
+				.await;
+		let result = match result {
+			Ok(result) => result,
+			Err(error) => {
+				return Some(Err(map_core_error(error)));
+			},
+		};
+		let content: Vec<stump_komga::KomgaSeries> = result
+			.items
+			.iter()
+			.map(|remote| {
+				super::provider_virtual::map_remote_series(&source_id, &library_id, remote)
+			})
+			.collect();
+		// Live browse has no total count; one extra phantom element marks
+		// `hasNext` so Komga-style clients keep paging.
+		let total = if result.has_next {
+			(page.max(0) as i32).saturating_mul(size.max(1)) + content.len() as i32 + 1
+		} else {
+			(page.max(0) as i32).saturating_mul(size.max(1)) + content.len() as i32
+		};
+		Some(Ok(stump_komga::Page::new(content, page, size, total, unpaged)))
+	}
+
+	/// Creates a library from a Komga `LibraryCreationDto` and wires its
+	/// scheduled scan interval.
+	async fn create_library(
+		&self,
+		request: KomgaLibraryCreateRequest,
+	) -> stump_komga::errors::APIResult<library_entity::Model> {
+		let ignore_rules = if request.scan_directory_exclusions.is_empty() {
+			None
+		} else {
+			Some(
+				IgnoreRules::new(request.scan_directory_exclusions.clone())
+					.map_err(|error| {
+						stump_komga::errors::APIError::BadRequest(error.to_string())
+					})?,
+			)
+		};
+		let created = stump_core::library::create_library(
+			&self.ctx,
+			stump_core::library::NewLibrary {
+				name: request.name,
+				path: request.root,
+				description: None,
+				emoji: None,
+				// `hashFiles`/`hashKoreader` have direct config counterparts;
+				// the ComicInfo/EPUB import switches collapse onto the single
+				// `process_metadata` switch. Komga drives periodic scans via
+				// `scanInterval` instead of filesystem watching.
+				config: library_config::ActiveModel {
+					generate_file_hashes: Set(request.hash_files),
+					generate_koreader_hashes: Set(request.hash_koreader),
+					process_metadata: Set(request.import_comic_info_book),
+					ignore_rules: Set(ignore_rules),
+					watch: Set(false),
+					..Default::default()
+				},
+				tags: Vec::new(),
+				// Upstream always scans a freshly added library.
+				scan_after_persist: true,
+			},
+		)
+		.await
+		.map_err(map_library_core_error)?;
+
+		if let Some(cron) = scan_interval_cron(request.scan_interval) {
+			stump_core::library::sync_library_scan_schedule(
+				&self.ctx,
+				&created.id,
+				&created.name,
+				Some(cron),
+			)
+			.await
+			.map_err(map_library_core_error)?;
+		}
+
+		Ok(created)
+	}
+
+	async fn update_library(
+		&self,
+		user: &AuthUser,
+		id: &str,
+		request: KomgaLibraryUpdateRequest,
+	) -> stump_komga::errors::APIResult<()> {
+		let (existing_library, existing_config) = library_entity::Entity::find_for_user(user)
+			.filter(library_entity::Column::Id.eq(id.to_owned()))
+			.find_also_related(library_config::Entity)
+			.one(self.ctx.conn.as_ref())
+			.await
+			.map_err(stump_komga::errors::APIError::DbError)?
+			.ok_or_else(|| {
+				stump_komga::errors::APIError::NotFound("Library not found".to_owned())
+			})?;
+		let existing_config = existing_config.ok_or_else(|| {
+			stump_komga::errors::APIError::InternalServerError(
+				"Library is missing associated config!".to_owned(),
+			)
+		})?;
+
+		let name = request
+			.name
+			.clone()
+			.unwrap_or_else(|| existing_library.name.clone());
+		let path = request
+			.root
+			.clone()
+			.unwrap_or_else(|| existing_library.path.clone());
+
+		// The patch merges onto the stored config row; omitted fields keep
+		// their values, matching upstream's `LibraryUpdateDto` semantics.
+		let mut config = existing_config.into_active_model();
+		if let Some(hash_files) = request.hash_files {
+			config.generate_file_hashes = Set(hash_files);
+		}
+		if let Some(hash_koreader) = request.hash_koreader {
+			config.generate_koreader_hashes = Set(hash_koreader);
+		}
+		// `importComicInfoBook` is the primary import flag Stump can express.
+		if let Some(import_comic_info) = request.import_comic_info_book {
+			config.process_metadata = Set(import_comic_info);
+		}
+		match &request.scan_directory_exclusions {
+			PatchValue::Unset => {},
+			PatchValue::Some(rules) => {
+				config.ignore_rules = Set(if rules.is_empty() {
+					None
+				} else {
+					Some(IgnoreRules::new(rules.clone()).map_err(|error| {
+						stump_komga::errors::APIError::BadRequest(error.to_string())
+					})?)
+				});
+			},
+			PatchValue::None => config.ignore_rules = Set(None),
+		}
+
+		// Upstream rescans when scan-affecting fields change; the root is the
+		// one of those Stump can express. Komga patches have no watcher
+		// concept, so watcher state is left untouched.
+		let scan_after_persist = path != existing_library.path;
+
+		stump_core::library::update_library(
+			&self.ctx,
+			user,
+			id,
+			stump_core::library::UpdatedLibrary {
+				name,
+				path,
+				description: existing_library.description.clone(),
+				emoji: existing_library.emoji.clone(),
+				config: Some(config),
+				tags: None,
+				scan_after_persist,
+				watch: stump_core::library::WatchUpdate::Keep,
+			},
+		)
+		.await
+		.map_err(map_library_core_error)?;
+
+		if let Some(interval) = request.scan_interval {
+			stump_core::library::sync_library_scan_schedule(
+				&self.ctx,
+				id,
+				&name,
+				scan_interval_cron(interval),
+			)
+			.await
+			.map_err(map_library_core_error)?;
+		}
+
+		Ok(())
+	}
+
+	async fn delete_library(
+		&self,
+		user: &AuthUser,
+		id: &str,
+	) -> stump_komga::errors::APIResult<()> {
+		stump_core::library::delete_library(&self.ctx, user, id)
+			.await
+			.map_err(map_library_core_error)?;
+		Ok(())
+	}
+
+	async fn enqueue_series_analysis(
+		&self,
+		series_id: String,
+	) -> stump_komga::errors::APIResult<()> {
+		self.ctx
+			.enqueue(StumpJob::analyze_media(
+				stump_core::filesystem::media::analysis::AnalysisJobConfig {
+					force_reanalysis: true,
+					scope:
+						stump_core::filesystem::media::analysis::MediaAnalysisJobScope::Series(
+							series_id,
+						),
+				},
+			))
+			.await
+			.map_err(map_core_error)
+	}
+
+	fn library_roots(&self) -> Vec<String> {
+		self.ctx.config.server.library_roots.clone()
+	}
+	async fn virtual_series_by_id(
+		&self,
+		series_id: &str,
+	) -> Option<stump_komga::errors::APIResult<stump_komga::KomgaSeries>> {
+		let series = super::provider_virtual::virtual_series_by_id(&self.ctx, series_id)
+			.await?;
+		Some(Ok(series))
+	}
+
+	/// Materialise a live-only virtual series (or refresh a stored one).
+	async fn virtual_materialise_series(
+		&self,
+		series_id: &str,
+	) -> stump_komga::errors::APIResult<bool> {
+		match super::provider_virtual::materialise_virtual_series(&self.ctx, series_id)
+			.await
+		{
+			None => Ok(false),
+			Some(Ok(_row)) => Ok(true),
+			Some(Err(error)) => Err(map_core_error(error)),
 		}
 	}
 }

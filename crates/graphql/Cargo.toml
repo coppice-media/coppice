@@ -7,6 +7,9 @@ version.workspace = true
 name = "graphql-gen"
 path = "bin/main.rs"
 
+[features]
+providers = ["dep:stump_provider", "stump_core/providers"]
+
 [dependencies]
 alphanumeric-sort.workspace = true
 async-graphql.workspace = true
@@ -37,10 +40,11 @@ stump_auth = { path = "../auth" }
 stump_api_types = { path = "../api-types" }
 stump_core = { path = "../../core", default-features = false, features = ["graphql"] }
 stump_devices = { path = "../devices", features = ["graphql"] }
+stump_notify = { path = "../notify" }
 stump_media = { path = "../media", default-features = false }
 stump_scanner = { path = "../scanner" }
 subtle.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util"] }
+stump_provider = { path = "../provider", optional = true }
 tower-sessions.workspace = true
 tracing.workspace = true
 zip.workspace = true

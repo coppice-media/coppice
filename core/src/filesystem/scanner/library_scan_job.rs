@@ -110,30 +110,38 @@ impl LibraryScanJob {
 /// The data that is collected and updated during the execution of a library scan job
 #[derive(Clone, Serialize, Deserialize, Default, Debug)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
-#[serde(rename_all = "camelCase")]
 pub struct LibraryScanOutput {
 	/// The library whose scan produced this output.
 	#[serde(default)]
 	pub library_id: String,
 	/// The number of files visited during the scan
-	total_files: u64,
+	#[serde(default)]
+	pub total_files: u64,
 	/// The number of directories visited during the scan
-	total_directories: u64,
+	#[serde(default)]
+	pub total_directories: u64,
 	/// The number of files that were ignored during the scan
-	ignored_files: u64,
+	#[serde(default)]
+	pub ignored_files: u64,
 	/// The number of files that were deemed to be skipped during the scan, e.g. it
 	/// exists in the database but has not been modified since the last scan
-	skipped_files: u64,
+	#[serde(default)]
+	pub skipped_files: u64,
 	/// The number of ignored directories during the scan
-	ignored_directories: u64,
+	#[serde(default)]
+	pub ignored_directories: u64,
 	/// The number of media entities created
-	created_media: u64,
+	#[serde(default)]
+	pub created_media: u64,
 	/// The number of media entities updated
-	updated_media: u64,
+	#[serde(default)]
+	pub updated_media: u64,
 	/// The number of series entities created
-	created_series: u64,
+	#[serde(default)]
+	pub created_series: u64,
 	/// The number of series entities updated
-	updated_series: u64,
+	#[serde(default)]
+	pub updated_series: u64,
 }
 
 impl JobOutputExt for LibraryScanOutput {

@@ -16,6 +16,7 @@ pub mod content_type;
 pub mod directory_listing;
 pub mod error;
 pub mod hash;
+pub mod transform;
 pub mod image {
 	mod error;
 	mod generic;
@@ -96,7 +97,7 @@ pub mod media {
 	mod metadata;
 	mod process;
 	pub mod readium;
-	mod utils;
+	pub(crate) mod utils;
 
 	pub use epub_search::{
 		search_epub, EpubSearchCursor, EpubSearchError, EpubSearchOptions,
@@ -140,6 +141,10 @@ pub use media::{
 	EPUB_SEARCH_DEFAULT_LIMIT, EPUB_SEARCH_MAX_LIMIT,
 };
 pub use series_metadata::{ProcessedSeriesMetadata, SeriesJson};
+pub use transform::{
+	transform_pages, transform_pages_blocking, ComicContainer, TransformFormat,
+	TransformProfile,
+};
 
 /// The immutable configuration snapshot consumed by media processors.
 ///

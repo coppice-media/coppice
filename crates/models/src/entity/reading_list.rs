@@ -19,6 +19,13 @@ pub struct Model {
 	pub visibility: String,
 	#[sea_orm(column_type = "Text")]
 	pub ordering: String,
+	/// Whether this reading list is projected to Kobo devices as a shelf `Tag`.
+	#[sea_orm(default_value = true)]
+	pub kobo_shelf: bool,
+	/// Device that last wrote this reading list through the Kobo `tags`
+	/// write-back endpoints; `None` for native/Komga writes.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub source_device: Option<String>,
 	#[sea_orm(column_type = "Text")]
 	pub creating_user_id: String,
 }
