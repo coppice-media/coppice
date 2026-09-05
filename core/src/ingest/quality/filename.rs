@@ -2,12 +2,12 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use stump_api_types::settings::{SettingDefinition, SettingValues};
 use unicode_normalization::UnicodeNormalization;
 
 use super::{enabled_setting, outcome, QUALITY_VERSION};
 use crate::ingest::contract::{
 	BookSnapshot, QualityCheck, QualityCheckError, QualityCheckOutcome,
-	SettingDefinition, SettingValues,
 };
 
 /// The parser's deterministic confidence state.

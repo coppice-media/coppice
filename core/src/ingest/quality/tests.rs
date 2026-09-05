@@ -12,12 +12,13 @@ use std::{
 	path::{Path, PathBuf},
 	sync::Arc,
 };
+use stump_api_types::settings::SettingValues;
 use tempfile::NamedTempFile;
 use zip::{write::SimpleFileOptions, ZipWriter};
 
 use crate::ingest::contract::{
 	score_report, BookSnapshot, IngestMediaKind, IngestPageEntry, QualityCheck,
-	QualityStatus, SettingValues,
+	QualityStatus,
 };
 
 use super::{

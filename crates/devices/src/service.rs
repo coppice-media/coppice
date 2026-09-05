@@ -1,6 +1,10 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+	collections::{HashMap, HashSet},
+	sync::{Arc, Mutex},
+	time::Duration as StdDuration,
+};
 
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use models::{
 	entity::{
 		api_key, device, device_credential, session,
@@ -17,6 +21,7 @@ use sea_orm::{
 };
 use serde_json::Value as JsonValue;
 use stump_api_types::RequestOrigin;
+use tokio::time::Instant;
 
 use crate::{
 	credential::{
@@ -31,16 +36,25 @@ use crate::{
 /// Receives a [`DeviceSeen`] each time [`DeviceService::touch`] updates a device.
 pub type SeenListener = Arc<dyn Fn(DeviceSeen) + Send + Sync>;
 
-/// `last_seen_at` is written at most once per interval per device unless a
-/// sync summary is reported; protocol clients burst many requests per sync.
-const TOUCH_INTERVAL: Duration = Duration::seconds(30);
+/// `last_seen_at` is written at most once per interval per credential unless a
+/// sync summary is reported: protocol clients burst many requests per sync
+/// (page streams, cover fetches), and none of those may cost a SQLite write.
+/// The sighting is coalesced in memory, so a coalesced request does not even
+/// read the credential row.
+pub const TOUCH_INTERVAL: StdDuration = StdDuration::from_secs(60);
 
 const MAX_NAME_CHARS: usize = 128;
+
+/// The credential lookup key of a sighting written within [`TOUCH_INTERVAL`].
+type SeenKey = (DeviceCredentialKind, String);
 
 #[derive(Clone)]
 pub struct DeviceService {
 	conn: Arc<DatabaseConnection>,
 	on_seen: Option<SeenListener>,
+	/// When each credential's `last_seen_at` was last written. Shared by every
+	/// clone so the debounce is process-wide.
+	recently_seen: Arc<Mutex<HashMap<SeenKey, Instant>>>,
 }
 
 impl DeviceService {
@@ -48,6 +62,7 @@ impl DeviceService {
 		Self {
 			conn,
 			on_seen: None,
+			recently_seen: Arc::default(),
 		}
 	}
 
@@ -235,10 +250,38 @@ impl DeviceService {
 		Ok(active.update(self.conn()).await?)
 	}
 
+	/// The live (not revoked) device bound to `credential`, or `None` when the
+	/// reference is not a device credential or the device was revoked. The
+	/// lookup every protocol adapter uses to reach per-device state such as
+	/// the transform profile.
+	pub async fn device_for_credential(
+		&self,
+		credential: CredentialRef<'_>,
+	) -> DeviceResult<Option<device::Model>> {
+		let Some(key) = credential.lookup_key() else {
+			return Ok(None);
+		};
+		self.device_for_key(&key).await
+	}
+
+	async fn device_for_key(&self, key: &SeenKey) -> DeviceResult<Option<device::Model>> {
+		let found = device_credential::Entity::find()
+			.filter(device_credential::Column::CredentialKind.eq(key.0))
+			.filter(device_credential::Column::CredentialRef.eq(&key.1))
+			.find_also_related(device::Entity)
+			.one(self.conn())
+			.await?;
+		Ok(match found {
+			Some((_, Some(device))) if !device.is_revoked() => Some(device),
+			_ => None,
+		})
+	}
+
 	/// Records that `credential` just authenticated a request over `protocol`.
 	///
-	/// Updates `last_seen_at` (rate limited to once per [`TOUCH_INTERVAL`]) and,
-	/// when a sync `summary` is reported, `last_sync_at` + `last_sync_summary`.
+	/// Updates `last_seen_at` (coalesced in memory to one write per
+	/// [`TOUCH_INTERVAL`] per credential) and, when a sync `summary` is
+	/// reported, `last_sync_at` + `last_sync_summary`; a summary always lands.
 	/// Returns the sighting that was recorded and forwarded to the listener, or
 	/// `None` when the credential belongs to no live device or the sighting was
 	/// coalesced into the previous one.
@@ -248,31 +291,17 @@ impl DeviceService {
 		protocol: DeviceProtocol,
 		summary: Option<JsonValue>,
 	) -> DeviceResult<Option<DeviceSeen>> {
-		let Some((kind, reference)) = credential.lookup_key() else {
+		let Some(key) = credential.lookup_key() else {
 			return Ok(None);
 		};
-		let found = device_credential::Entity::find()
-			.filter(device_credential::Column::CredentialKind.eq(kind))
-			.filter(device_credential::Column::CredentialRef.eq(reference))
-			.find_also_related(device::Entity)
-			.one(self.conn())
-			.await?;
-		let Some((_, Some(device))) = found else {
+		if summary.is_none() && self.seen_within_interval(&key) {
+			return Ok(None);
+		}
+		let Some(device) = self.device_for_key(&key).await? else {
 			return Ok(None);
 		};
-		if device.is_revoked() {
-			return Ok(None);
-		}
 
-		let now = Utc::now();
-		let recently_seen = device
-			.last_seen_at
-			.is_some_and(|seen| now - seen.with_timezone(&Utc) < TOUCH_INTERVAL);
-		if summary.is_none() && recently_seen {
-			return Ok(None);
-		}
-
-		let now: DateTimeWithTimeZone = now.into();
+		let now: DateTimeWithTimeZone = Utc::now().into();
 		let mut update = device::Entity::update_many()
 			.filter(device::Column::Id.eq(&device.id))
 			.col_expr(device::Column::LastSeenAt, Expr::value(Some(now)));
@@ -282,16 +311,43 @@ impl DeviceService {
 				.col_expr(device::Column::LastSyncSummary, Expr::value(Some(summary)));
 		}
 		update.exec(self.conn()).await?;
+		self.mark_seen(key);
 
 		let seen = DeviceSeen {
 			device_id: device.id,
 			user_id: device.user_id,
 			protocol,
+			first_seen: device.last_seen_at.is_none(),
 		};
 		if let Some(listener) = &self.on_seen {
 			listener(seen.clone());
 		}
 		Ok(Some(seen))
+	}
+
+	/// Whether `key`'s sighting was written less than [`TOUCH_INTERVAL`] ago.
+	/// An expired entry is dropped when it is looked up, so the map holds at
+	/// most one entry per credential that authenticated since start-up.
+	fn seen_within_interval(&self, key: &SeenKey) -> bool {
+		let mut recently_seen = self.lock_recently_seen();
+		match recently_seen.get(key) {
+			Some(written_at) if written_at.elapsed() < TOUCH_INTERVAL => true,
+			Some(_) => {
+				recently_seen.remove(key);
+				false
+			},
+			None => false,
+		}
+	}
+
+	fn mark_seen(&self, key: SeenKey) {
+		self.lock_recently_seen().insert(key, Instant::now());
+	}
+
+	fn lock_recently_seen(&self) -> std::sync::MutexGuard<'_, HashMap<SeenKey, Instant>> {
+		self.recently_seen
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
 	}
 
 	/// The endpoints to configure on a device, with the secret redacted to a hint.

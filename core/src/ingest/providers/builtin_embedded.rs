@@ -3,13 +3,13 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use stump_api_types::settings::{SettingDefinition, SettingValues};
 use stump_media::media::ProcessedMediaMetadata;
 
 use crate::ingest::{
 	contract::{
 		BookSnapshot, IngestMediaKind, IngestMetadataProvider, MetadataCandidate,
 		MetadataField, ProviderCapability, ProviderError, ProviderIdentity,
-		SettingDefinition, SettingValues,
 	},
 	quality::filename::parse_filename,
 };

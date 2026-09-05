@@ -5,11 +5,11 @@ use std::{
 };
 
 use quick_xml::{events::Event, Reader};
+use stump_api_types::settings::{SettingDefinition, SettingValues};
 use stump_media::EpubProcessor;
 
 use crate::ingest::contract::{
 	BookSnapshot, IngestMediaKind, QualityCheck, QualityCheckError, QualityStatus,
-	SettingDefinition, SettingValues,
 };
 
 use super::{disabled_outcome, enabled_setting, outcome, QUALITY_VERSION};

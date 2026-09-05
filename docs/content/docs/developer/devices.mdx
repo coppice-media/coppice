@@ -54,7 +54,7 @@ The liseur-sync storage shares the secret format, hash, and default expiry with 
 
 ## Sightings
 
-`DeviceService::touch(credential, protocol, summary)` resolves the credential to its device, writes `last_seen_at` (coalesced to one write per 30 seconds per device), and, when a sync summary is given, `last_sync_at` + `last_sync_summary` (stored verbatim). Each recorded sighting is forwarded as `CoreEvent::DeviceSeen { deviceId, userId, protocol }` (`core/src/event.rs`). Revoked devices and unknown credentials are ignored.
+`DeviceService::touch(credential, protocol, summary)` resolves the credential to its device, writes `last_seen_at`, and, when a sync summary is given, `last_sync_at` + `last_sync_summary` (stored verbatim). Plain sightings are coalesced in memory to one database write per credential per 60 seconds (`TOUCH_INTERVAL`, `crates/devices/src/service.rs`); a coalesced request does not even read the credential row, so page streams and cover bursts cost the registry nothing. A summary always lands. Each recorded sighting is forwarded as `CoreEvent::DeviceSeen { deviceId, userId, protocol, firstSeen }` (`core/src/event.rs`), `firstSeen` being `true` for the first request the device ever authenticated. Revoked devices and unknown credentials are ignored. `DeviceService::device_for_credential(credential)` is the same lookup without the write, for adapters that need per-device state such as the transform profile.
 
 The registry is best effort at every call site: a failure is logged and never fails the request. The call sites are:
 
@@ -62,12 +62,17 @@ The registry is best effort at every call site: a failure is logged and never fa
 | --- | --- | --- |
 | `api_key_middleware`, `apps/server/src/middleware/auth.rs` — path keys on `/kobo/{key}`, `/koreader/{key}`, `/opds/{key}/v1.2` | from the mount prefix | none |
 | `auth_middleware`, same file — `X-API-Key` on the Komga-scoped paths | `komga` | none |
-| `auth_middleware`, same file — `Authorization: Bearer <api key>` | `komga` on Komga paths, `opds` on `/opds`, otherwise `api` | none |
-| `authenticate`, `apps/server/src/routers/liseur_sync/storage.rs` | `liseur` | none |
+| `auth_middleware`, same file — `Authorization: Bearer <api key>`, or `Authorization: Basic` whose password is a device key | `komga` on Komga paths, `opds` on `/opds`, otherwise `api` | none |
+| `authenticate`, `apps/server/src/routers/liseur_sync/storage.rs` — every liseur bearer request | `liseur` | none |
 | `library_sync`, `apps/server/src/routers/kobo_backend/router.rs` | `kobo` | `{"protocol":"kobo","items","new_entitlements","should_continue","kobo_device_id"}` |
 | `put_progress`, `apps/server/src/routers/koreader_backend/sync.rs` | `koreader` | `{"protocol":"koreader","document","progress","percentage","koreader_device","koreader_device_id"}` |
+| `update_read_progress`, `crates/komga/src/routes/progress.rs` via `KomgaBackend::record_sync` (`apps/server/src/routers/komga_backend.rs`) | `komga` | `{"protocol":"komga","book_id","page","completed"}` |
+| `append_ops`, `apps/server/src/routers/liseur_sync/storage.rs` — an accepted ops push | `liseur` | `{"protocol":"liseur","ops","applied","duplicate","conflict"}` |
+| `POST /api/v2/devices/me/touch`, `apps/server/src/routers/liseur_sync/touch.rs` | `liseur` | the request body, verbatim |
 
-Basic and session authentication carry no per-device credential and record nothing.
+### Basic authentication with a device key
+
+Clients that only speak `Authorization: Basic` (Mihon's Komga extension, OPDS 1.2 readers) can send the owner's username with the device key as the password. The key is validated exactly as a Bearer key and must belong to the named user; the request then acts as the device with the key's narrowed permissions, and the sighting is recorded. Such a request never opens a session or a Komga remember-me token, since either would act as the full user. A password that merely looks like a key still falls through to the bcrypt check. Session and password-Basic authentication carry no per-device credential and record nothing.
 
 ## GraphQL
 

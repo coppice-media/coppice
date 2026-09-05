@@ -29,7 +29,7 @@ async fn test_kobo_request_with_device_key_updates_last_seen() {
 	let mut events = app.ctx.get_client_receiver();
 
 	app.server
-		.post(&format!("/kobo/{}/v1/auth/device", issued.secret))
+		.get(&format!("/kobo/{}/v1/initialization", issued.secret))
 		.await
 		.assert_status_ok();
 
@@ -41,6 +41,7 @@ async fn test_kobo_request_with_device_key_updates_last_seen() {
 			assert_eq!(event.device_id, device.id);
 			assert_eq!(event.user_id, user.id);
 			assert_eq!(event.protocol, Protocol::Kobo);
+			assert!(event.first_seen);
 		},
 		other => panic!("unexpected event {other:?}"),
 	}

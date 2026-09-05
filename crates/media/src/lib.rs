@@ -118,7 +118,10 @@ pub use directory_listing::{
 	DirectoryListingInput,
 };
 pub use error::FileError;
-pub use hash::{generate, generate_koreader_hash, HASH_SAMPLE_COUNT, HASH_SAMPLE_SIZE};
+pub use hash::{
+	dhash_image, generate, generate_koreader_hash, hamming, page_dhash,
+	HASH_SAMPLE_COUNT, HASH_SAMPLE_SIZE,
+};
 pub use image::{
 	generate_image_metadata, generate_image_metadata_from_bytes, into_image_format,
 	process_image_colors, process_image_colors_from_bytes, process_image_thumbhash,

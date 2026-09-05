@@ -5,10 +5,10 @@ use metadata_integrations::{
 };
 use models::entity::{media, media_metadata};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use stump_api_types::settings::{SettingDefinition, SettingValues};
 
 use crate::ingest::contract::{
-	BookSnapshot, QualityCheck, QualityCheckError, QualityStatus, SettingDefinition,
-	SettingValues,
+	BookSnapshot, QualityCheck, QualityCheckError, QualityStatus,
 };
 
 use super::{

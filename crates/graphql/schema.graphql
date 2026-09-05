@@ -425,7 +425,7 @@ type ConfidenceFactor {
 }
 
 "An event that is emitted by the core and consumed by a client"
-union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | DiscoveredMissingLibrary | CreatedMedia | MediaDeleted | SeriesDeleted | CreatedManySeries | CreatedOrUpdatedManyMedia
+union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | DiscoveredMissingLibrary | CreatedMedia | MediaDeleted | SeriesDeleted | CreatedManySeries | CreatedOrUpdatedManyMedia | DeviceSeen | DevicePairingRequested
 
 union CoreJobOutput = LibraryScanOutput | SeriesScanOutput | ThumbnailGenerationOutput | PlaceholderGenerationOutput | MetadataFetchJobOutput | AnalyzeMediaOutput
 
@@ -584,6 +584,174 @@ type DeleteJobAssociatedLogs {
 type DeleteJobHistory {
 	"The number of logs deleted that were related to a job"
 	affectedRows: Int!
+}
+
+"""
+A registered client (Kobo, KOReader, Mihon, Komelia, Liseur, an OPDS
+reader, a script, or a browser) owned by a user.
+"""
+type Device {
+	id: String!
+	userId: String!
+	name: String!
+	kind: DeviceKind!
+	"""
+	A free-form, client-specific transform profile (e.g. KEPUB options for a
+	Kobo, image sizing for a phone). Interpreted by the protocol adapters.
+	"""
+	transformProfile: JSON
+	createdAt: DateTime!
+	"The last time any credential of this device authenticated a request"
+	lastSeenAt: DateTime
+	"The last time a protocol reported a completed sync for this device"
+	lastSyncAt: DateTime
+	"The protocol-specific summary of the last sync, stored verbatim"
+	lastSyncSummary: JSON
+	revokedAt: DateTime
+	"""
+	The device's credential, or `null` once it has been revoked or when the
+	device was registered by a protocol (KOReader, OPDS) and never minted one.
+	"""
+	credential: DeviceCredentialSummary
+}
+
+"The storage a device credential references"
+enum DeviceCredentialKind {
+	"`credential_ref` is an `api_keys.short_token`"
+	API_KEY
+	"`credential_ref` is a `liseur_sync_tokens.id`"
+	LISEUR_TOKEN
+	"`credential_ref` is a `sessions.session_id`"
+	SESSION
+}
+
+"The credential a device authenticates with, redacted."
+type DeviceCredentialSummary {
+	kind: DeviceCredentialKind!
+	"The protocol the credential was minted for"
+	protocol: DeviceProtocol!
+	"The visible part of the secret, e.g. `stump_abcdefgh_…`"
+	secretHint: String!
+}
+
+"""
+One thing a client has to be configured with: a URL plus, when the protocol
+wants them, a username and the device secret.
+"""
+type DeviceEndpoint {
+	label: String!
+	url: String!
+	username: String
+	"""
+	The device secret when it is known (right after minting), otherwise a
+	redacted hint such as `stump_abcdefgh_…`.
+	"""
+	secretHint: String!
+}
+
+"""
+The client family a registered device belongs to. The kind decides which
+credential is minted for the device and which endpoints it is handed.
+"""
+enum DeviceKind {
+	"A Kobo eReader using the native Kobo sync protocol"
+	KOBO
+	"A KOReader install using the KOReader progress sync protocol"
+	KOREADER
+	"Mihon (Tachiyomi) using the Komga-compatible profile"
+	MIHON
+	"Komelia using the Komga-compatible profile"
+	KOMELIA
+	"Liseur using the native liseur-sync protocol"
+	LISEUR
+	"A generic OPDS reader"
+	OPDS
+	"A script or integration using the native API"
+	API
+	"A browser session"
+	WEB
+}
+
+"""
+A device-pairing request as seen by a signed-in user. The code hash and the
+device's poll nonce are deliberately not exposed: knowing either would let a
+user approve (or hijack the credential of) somebody else's device.
+"""
+type DevicePairing {
+	id: String!
+	kind: DeviceKind!
+	"The name the device asked for; the devices service picks a default otherwise"
+	name: String
+	"Remote address the device started the pairing from"
+	remoteIp: String!
+	"Effective status at read time; pending rows past `expires_at` read as `EXPIRED`"
+	status: DevicePairingStatus!
+	"The user who approved or denied the pairing"
+	userId: String
+	failedAttempts: Int!
+	credentialIssued: Boolean!
+	createdAt: DateTime!
+	expiresAt: DateTime!
+	approvedAt: DateTime
+}
+
+"""
+An unauthenticated device asked to be paired; a signed-in user has until
+`expires_at` to approve it with the code shown on the device (or its QR).
+"""
+type DevicePairingRequested {
+	pairingId: String!
+	kind: DeviceKind!
+	name: String
+	remoteIp: String!
+	expiresAt: DateTime!
+}
+
+"""
+The lifecycle state of a device-pairing request. `Expired` is derived from
+`expires_at` for pending rows and persisted lazily once observed, so a row's
+stored status may still read `Pending` after the deadline; always go through
+[`Model::effective_status`].
+"""
+enum DevicePairingStatus {
+	PENDING
+	APPROVED
+	DENIED
+	EXPIRED
+}
+
+"The wire protocol through which a device credential was exercised"
+enum DeviceProtocol {
+	KOBO
+	KOREADER
+	KOMGA
+	OPDS
+	LISEUR
+	API
+}
+
+"""
+Emitted when a device credential authenticates a request and the device's
+last-seen state was updated.
+"""
+type DeviceSeen {
+	deviceId: String!
+	userId: String!
+	"""
+	The protocol the request arrived on, which may differ from the protocol
+	the credential was minted for (one key works on every path).
+	"""
+	protocol: DeviceProtocol!
+}
+
+"""
+A device together with a freshly minted credential. The secret inside
+`credential` and the endpoints is shown exactly once.
+"""
+type DeviceWithCredential {
+	device: Device!
+	credential: IssuedDeviceCredential!
+	endpoints: [DeviceEndpoint!]!
 }
 
 enum Dimension {
@@ -1280,6 +1448,18 @@ enum InterfaceRoundness {
 	PILL
 }
 
+"""
+A freshly minted credential. `secret` is the plaintext and is returned
+exactly once; only its hash is stored.
+"""
+type IssuedDeviceCredential {
+	kind: DeviceCredentialKind!
+	protocol: DeviceProtocol!
+	"The stored reference: the API key's short token, or the liseur token id"
+	credentialRef: String!
+	secret: String!
+}
+
 "A scalar that can represent any JSON value."
 scalar JSON
 
@@ -1305,6 +1485,7 @@ type JobOutput {
 	output: CoreJobOutput!
 }
 
+"Queued plus running jobs bucketed by [`JobPayload::kind`](crate::JobPayload::kind)"
 type JobQueueStatus {
 	count: Int!
 	countByType: JSONObject!
@@ -1358,6 +1539,12 @@ type Library {
 	emoji: String
 	configId: Int!
 	lastScannedAt: DateTime
+	"""
+	The provider source instance (`provider_sources.id`) backing a virtual
+	library. Set only for provider libraries, whose `path` is a `provider://`
+	URI and which the filesystem scanner skips.
+	"""
+	sourceProvider: String
 	authors: [Author!]!
 	config: LibraryConfig!
 	excludedUsers: [User!]!
@@ -1452,6 +1639,7 @@ enum LibraryModelOrdering {
 	EMOJI
 	CONFIG_ID
 	LAST_SCANNED_AT
+	SOURCE_PROVIDER
 }
 
 "The different patterns a library may be organized by"
@@ -1635,6 +1823,15 @@ type Media {
 	seriesId: String
 	"The timestamp of when the media was **soft** deleted. This will act like a trash bin."
 	deletedAt: DateTime
+	"""
+	The provider source instance (`provider_sources.id`) this media was materialised
+	from. Set only for remote chapters, whose `path` is a `provider://` URI.
+	"""
+	sourceProvider: String
+	"The remote series identifier on the provider source"
+	remoteId: String
+	"The remote chapter identifier on the provider source"
+	remoteChapterId: String
 	metadata: MediaMetadata
 	"If the media is an epub, this will return the parsed epub data from the file"
 	ebook: Epub
@@ -1936,6 +2133,9 @@ enum MediaModelOrdering {
 	THUMBNAIL_PATH
 	SERIES_ID
 	DELETED_AT
+	SOURCE_PROVIDER
+	REMOTE_ID
+	REMOTE_CHAPTER_ID
 }
 
 input MediaOrderBy @oneOf {
@@ -2449,6 +2649,18 @@ type Mutation {
 	verifyIngestProvider(providerId: String!, settings: JSON): ProviderCredentialVerification!
 	lookupIngestCandidate(dropItemId: ID!, providerId: String!, externalId: String!): IngestMetadataCandidate!
 	setIngestQualityCheckSettings(input: SetIngestQualityCheckSettingsInput!): IngestQualityCheckSettings!
+	"""
+	Approve a pending pairing and bind it to the calling user. Proof of
+	possession is either the 6-digit `code` shown on the device or the `nonce`
+	carried by its QR payload; exactly one must be given. After
+	`MAX_FAILED_ATTEMPTS` wrong proofs the pairing is denied.
+	"""
+	approveDevicePairing(pairingId: ID!, code: String, nonce: String): DevicePairing!
+	"""
+	Deny a pending pairing. Any user allowed to approve may deny, so a
+	suspicious request can be shut down by whoever sees it first.
+	"""
+	denyDevicePairing(pairingId: ID!): DevicePairing!
 	createSmartList(input: SaveSmartListInput!): SmartList!
 	updateSmartList(id: ID!, input: SaveSmartListInput!): SmartList!
 	deleteSmartList(id: ID!): SmartList!
@@ -2513,6 +2725,22 @@ type Mutation {
 	readthroughs
 	"""
 	clearSeriesReadingHistory(id: ID!): Int!
+	"""
+	Registers a device for the current user and mints its credential. The
+	registry enforces the permissions the kind needs (`ACCESS_API_KEYS` plus
+	the protocol permission for API-key kinds); the secret is returned once.
+	"""
+	createDevice(kind: DeviceKind!, name: String): DeviceWithCredential!
+	renameDevice(id: String!, name: String!): Device!
+	"""
+	Discards the device's credential and mints a replacement; the new secret
+	is returned once.
+	"""
+	rotateDeviceCredential(id: String!): DeviceWithCredential!
+	"Invalidates the device's credential; the device stays listed as revoked."
+	revokeDevice(id: String!): Device!
+	"Replaces the device's transform profile (`null` clears it)."
+	setDeviceTransformProfile(id: String!, profile: JSON): Device!
 }
 
 """
@@ -2932,6 +3160,12 @@ type Query {
 	`matchLibraryMedia` run.
 	"""
 	ingestMediaMetadataCandidates(mediaId: ID!): [IngestMetadataCandidate!]!
+	"""
+	Pairings waiting for approval, oldest first. Pending pairings are not yet
+	owned by anyone, so every user allowed to create device credentials sees
+	them; approving binds the pairing to the approver.
+	"""
+	pendingDevicePairings: [DevicePairing!]!
 	smartLists(input: SmartListsInput! = {all: null, mine: true, search: null}): [SmartList!]!
 	smartListById(id: ID!): SmartList
 	smartListMeta(id: ID!): SmartListMeta
@@ -2954,6 +3188,21 @@ type Query {
 	readingListById(id: ID!): ReadingList!
 	"List the custom emojis available on this server"
 	customEmojis: [CustomEmoji!]!
+	"The devices registered to the current user; every device for the server owner."
+	devices: [Device!]!
+	device(id: String!): Device!
+	"""
+	What to configure on the device for the server the request arrived at,
+	with the secret redacted; the full secret is only returned when a
+	credential is minted.
+	"""
+	deviceEndpoints(id: String!): [DeviceEndpoint!]!
+	"""
+	Reading activity over `span`, for the current user's sessions. With a
+	`deviceId` the stats cover the sessions that device contributed to, for
+	the device's owner (the server owner may name any device).
+	"""
+	readingStats(span: ReadingStatsSpan!, deviceId: String): ReadingStats!
 }
 
 "The different reading directions supported by any Stump reader"
@@ -3047,6 +3296,70 @@ type ReadingSessionConflictResolutionView {
 	by created_at ascending
 	"""
 	remoteSessions: [ReadingSession!]!
+}
+
+type ReadingStats {
+	span: ReadingStatsSpan!
+	"The first logical day counted; `null` for an unbounded span with no sessions"
+	from: NaiveDate
+	"The last logical day counted (today)"
+	to: NaiveDate!
+	"Reading sessions inside the span"
+	sessions: Int!
+	"Accumulated reading time inside the span"
+	minutes: Int!
+	"Pages turned inside the span (end page minus start page per session)"
+	pages: Int!
+	"Sessions inside the span that finished a book"
+	booksFinished: Int!
+	"""
+	Consecutive logical days with at least one session, ending today or
+	yesterday. Not bounded by the span.
+	"""
+	streakDays: Int!
+	"""
+	Days with activity inside the span, ascending; days without sessions
+	are omitted
+	"""
+	days: [ReadingStatsDay!]!
+	"""
+	Activity per contributing device inside the span, most sessions first.
+	A session that several devices contributed to counts toward each.
+	"""
+	devices: [ReadingStatsDevice!]!
+}
+
+type ReadingStatsDay {
+	date: NaiveDate!
+	sessions: Int!
+	minutes: Int!
+	pages: Int!
+}
+
+type ReadingStatsDevice {
+	deviceId: String!
+	"`null` when the id no longer resolves to a registered device"
+	name: String
+	kind: DeviceKind
+	sessions: Int!
+	minutes: Int!
+	pages: Int!
+}
+
+"""
+How far back reading statistics reach, counted in logical reading days
+ending today.
+"""
+enum ReadingStatsSpan {
+	"The last 7 days"
+	WEEK
+	"The last 30 days"
+	MONTH
+	"The last 90 days"
+	QUARTER
+	"The last 365 days"
+	YEAR
+	ALL_TIME
 }
 
 """
@@ -3288,6 +3601,13 @@ type Series {
 	thumbnailMeta: ImageMetadata
 	thumbnailPath: String
 	libraryId: String
+	"""
+	The provider source instance (`provider_sources.id`) this series was materialised
+	from. Set only for remote series, whose `path` is a `provider://` URI.
+	"""
+	sourceProvider: String
+	"The remote series identifier on the provider source"
+	remoteId: String
 	metadata: SeriesMetadata
 	isFavorite: Boolean!
 	resolvedName: String!
@@ -3483,6 +3803,8 @@ enum SeriesModelOrdering {
 	THUMBNAIL_META
 	THUMBNAIL_PATH
 	LIBRARY_ID
+	SOURCE_PROVIDER
+	REMOTE_ID
 }
 
 input SeriesOrderBy @oneOf {
@@ -3799,6 +4121,11 @@ type Subscription {
 	tailLogFile: String!
 	readEvents: CoreEvent!
 	ingestProgress(libraryId: ID, dropItemId: ID, analysisJobId: ID, afterEventId: ID): IngestProgressEvent!
+	"""
+	Sightings of the current user's devices (every device for the server
+	owner), optionally narrowed to one device.
+	"""
+	deviceSeen(deviceId: String): DeviceSeen!
 }
 
 input SuggestBookInput {

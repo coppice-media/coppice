@@ -15,6 +15,7 @@ use models::{
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use stump_auth::AuthContext;
+use stump_devices::{CredentialRef, Protocol};
 use stump_core::{job::stump_job::StumpJob, reading_state::SourceProtocol, CoreEvent};
 use stump_media::{
 	get_saved_thumbnail,
@@ -875,5 +876,19 @@ impl KomgaBackend for KomgaBackendAdapter {
 			EpubProcessor::get_resource_by_path(&path, "", resource_path)
 				.map_err(|error| map_server_error(APIError::from(error)))?;
 		Ok(KomgaImage::new(content_type.to_string(), data))
+	}
+
+	async fn record_sync(&self, auth: &AuthContext, summary: serde_json::Value) {
+		let Some(api_key) = auth.api_key.as_deref() else {
+			return;
+		};
+		if let Err(error) = self
+			.ctx
+			.devices()
+			.touch(CredentialRef::ApiKey(api_key), Protocol::Komga, Some(summary))
+			.await
+		{
+			tracing::warn!(?error, "Failed to record the Komga sync on its device");
+		}
 	}
 }

@@ -102,6 +102,15 @@ pub fn title_similarity(query_title: &str, candidate_title: &str) -> f64 {
 	token_overlap_score(query_title, candidate_title)
 }
 
+/// Strip separators from an ISBN and upper-case the ISBN-10 `X` check digit
+/// so hyphenated, spaced, and canonical forms compare equal.
+pub fn normalize_isbn(isbn: &str) -> String {
+	isbn.chars()
+		.filter(|c| c.is_ascii_digit() || *c == 'x' || *c == 'X')
+		.map(|c| c.to_ascii_uppercase())
+		.collect()
+}
+
 impl MatchScorer {
 	const ISBN_FLOOR: f32 = 0.98;
 	const EXACT_TITLE_FLOOR: f32 = 0.90;
@@ -249,12 +258,19 @@ impl MatchScorer {
 		strsim::jaro_winkler(&a.to_lowercase(), &b.to_lowercase()) > 0.90
 	}
 
+	/// ISBNs are compared on their bare digits (plus a trailing `X` check
+	/// digit) so hyphenated or spaced embedded identifiers still match the
+	/// canonical form providers return.
 	fn check_isbn_match(query_isbn: &str, metadata: &ExternalMetadata) -> bool {
+		let query = normalize_isbn(query_isbn);
+		if query.is_empty() {
+			return false;
+		}
 		match metadata {
-			ExternalMetadata::Media(m) => {
-				m.isbn.as_deref() == Some(query_isbn)
-					|| m.isbn_13.as_deref() == Some(query_isbn)
-			},
+			ExternalMetadata::Media(m) => [m.isbn.as_deref(), m.isbn_13.as_deref()]
+				.into_iter()
+				.flatten()
+				.any(|isbn| normalize_isbn(isbn) == query),
 			ExternalMetadata::Series(_) => false,
 		}
 	}
@@ -333,6 +349,24 @@ mod tests {
 			c.confidence
 		);
 		assert!(c.confidence_factors.iter().any(|f| f.factor == "isbn"));
+	}
+
+	#[test]
+	fn isbn_match_ignores_separators() {
+		let scorer = MatchScorer;
+		let query = SearchQuery {
+			title: "Irrelevant".into(),
+			isbn: Some("978-0-06-224239-5".into()),
+			..Default::default()
+		};
+		let mut c = make_media_candidate("Wrong Title", Some("9780062242395"), vec![]);
+		scorer.score_candidate(&query, &mut c);
+
+		assert!(
+			c.confidence >= 0.98,
+			"hyphenated query should match canonical ISBN, got {}",
+			c.confidence
+		);
 	}
 
 	#[test]

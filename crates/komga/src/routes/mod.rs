@@ -215,6 +215,11 @@ pub trait KomgaBackend: Send + Sync {
 		path: String,
 		resource_path: PathBuf,
 	) -> APIResult<KomgaImage>;
+
+	/// Record a completed read-progress sync on the device the request's
+	/// credential belongs to. `summary` describes what was synced; the call
+	/// is best-effort and never fails the request.
+	async fn record_sync(&self, auth: &AuthContext, summary: serde_json::Value);
 }
 
 #[derive(Clone)]

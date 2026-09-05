@@ -461,8 +461,11 @@ pub async fn auth_middleware(
 		},
 		_ => return Err(APIError::Unauthorized.into_response()),
 	};
+	// A Komga remember-me token acts as the user; a device key must not be
+	// upgraded to one.
 	#[cfg(feature = "komga")]
-	if auth_header.starts_with("Basic ") && is_komga_basic_auth {
+	if auth_header.starts_with("Basic ") && is_komga_basic_auth && req_ctx.api_key.is_none()
+	{
 		req.extensions_mut().insert(KomgaBasicAuthSuccess);
 	}
 
@@ -798,11 +801,30 @@ mod basic_auth_cache {
 	}
 }
 
+/// What a `Basic` header verified as: the user's password, or a device API
+/// key standing in for it.
+enum BasicVerified {
+	Password(user::LoginUser),
+	DeviceKey { user: AuthUser, api_key: String },
+}
+
 async fn verify_basic_credentials(
 	encoded_credentials: &str,
 	conn: &DatabaseConnection,
-) -> APIResult<user::LoginUser> {
+) -> APIResult<BasicVerified> {
 	let decoded_credentials = parse_basic_credentials(encoded_credentials)?;
+
+	// A device API key stands in for the password, so Basic-only clients
+	// (Mihon, Komelia, OPDS 1.2 readers) can act as their registered device
+	// with the key's narrowed permissions. A key that fails to validate is
+	// tried as a password below, so a password that merely looks like a key
+	// still works.
+	if let Some(user) = verify_basic_api_key(&decoded_credentials, conn).await {
+		return Ok(BasicVerified::DeviceKey {
+			user,
+			api_key: decoded_credentials.password,
+		});
+	}
 
 	let fetched_user = login_user_by_username_query(&decoded_credentials.username)
 		.into_model::<user::LoginUser>()
@@ -840,12 +862,27 @@ async fn verify_basic_credentials(
 		basic_auth_cache::insert(encoded_credentials, &user.id, &user.hashed_password);
 	}
 
-	Ok(user)
+	Ok(BasicVerified::Password(user))
+}
+
+/// The user a Basic password authenticates as when it is a prefixed API key
+/// belonging to the named user; `None` when it is not a key or the key does
+/// not validate for that user.
+async fn verify_basic_api_key(
+	credentials: &crate::utils::DecodedCredentials,
+	conn: &DatabaseConnection,
+) -> Option<AuthUser> {
+	let pak = PrefixedApiKey::from_string(&credentials.password)
+		.ok()
+		.filter(|pak| pak.prefix() == API_KEY_PREFIX)?;
+	let user = validate_api_key(pak, conn).await.ok()?;
+	(user.username == credentials.username).then_some(user)
 }
 
 /// A function to handle basic authentication. If the user is authenticated, an optional session
 /// will be created for the user. Session creation is used by OPDS only; compatibility clients
-/// send Basic credentials on each request.
+/// send Basic credentials on each request. A device key never gets a session: the session would
+/// act as the user, widening the key's permissions.
 #[tracing::instrument(skip_all)]
 async fn handle_basic_auth(
 	encoded_credentials: &str,
@@ -853,7 +890,15 @@ async fn handle_basic_auth(
 	session: &mut Session,
 	save_session: bool,
 ) -> APIResult<AuthContext> {
-	let user = verify_basic_credentials(encoded_credentials, conn).await?;
+	let user = match verify_basic_credentials(encoded_credentials, conn).await? {
+		BasicVerified::Password(user) => user,
+		BasicVerified::DeviceKey { user, api_key } => {
+			return Ok(AuthContext {
+				user,
+				api_key: Some(api_key),
+			})
+		},
+	};
 
 	if save_session {
 		tracing::trace!("Saving session for user");

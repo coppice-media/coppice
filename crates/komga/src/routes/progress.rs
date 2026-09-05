@@ -332,10 +332,17 @@ async fn update_read_progress(
 	let event_library_id = parent_series
 		.and_then(|series| series.library_id)
 		.unwrap_or_default();
+	let sync_summary = serde_json::json!({
+		"protocol": "komga",
+		"book_id": event_book_id,
+		"page": updates.session.page,
+		"completed": updates.session.did_complete,
+	});
 	let txn = conn.begin().await?;
 	upsert_reading_session(&txn, &user, &id, updates.session).await?;
 	reading_state::apply(&txn, &user.id, Publication::from(&book), updates.head).await?;
 	txn.commit().await?;
+	ctx.record_sync(&auth, sync_summary).await;
 	events.send(KomgaEvent::ReadProgressChanged {
 		book_id: event_book_id.clone().into(),
 		user_id: user.id.clone().into(),

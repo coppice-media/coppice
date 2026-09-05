@@ -15,7 +15,8 @@ use stump_api_types::RequestOrigin;
 use tests::{db::test_database, fake_data};
 
 use crate::{
-	credential::liseur, CredentialRef, DeviceError, DeviceSeen, DeviceService, Endpoint,
+	credential::liseur, service::TOUCH_INTERVAL, CredentialRef, DeviceError, DeviceSeen,
+	DeviceService, Endpoint,
 };
 
 async fn setup() -> (Arc<DatabaseConnection>, AuthUser) {
@@ -398,6 +399,7 @@ async fn touch_records_sighting_and_sync_summary() {
 	assert_eq!(first.device_id, device.id);
 	assert_eq!(first.user_id, user.id);
 	assert_eq!(first.protocol, DeviceProtocol::Kobo);
+	assert!(first.first_seen);
 
 	let stored = service.get(&user, &device.id).await.expect("device");
 	let last_seen = stored.last_seen_at.expect("last seen set");
@@ -427,6 +429,7 @@ async fn touch_records_sighting_and_sync_summary() {
 		.expect("touch")
 		.expect("recorded");
 	assert_eq!(synced.device_id, device.id);
+	assert!(!synced.first_seen);
 	let stored = service.get(&user, &device.id).await.expect("device");
 	assert!(stored.last_sync_at.is_some());
 	assert_eq!(stored.last_sync_summary, Some(summary));
@@ -460,6 +463,99 @@ async fn touch_records_sighting_and_sync_summary() {
 		)
 		.await
 		.expect("touch")
+		.is_none());
+}
+
+#[tokio::test]
+async fn touch_coalesces_sightings_per_credential_for_an_interval() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn.clone());
+	let (kobo, kobo_key) = service
+		.create_device(&user, DeviceKind::Kobo, None)
+		.await
+		.expect("kobo");
+	let (reader, reader_key) = service
+		.create_device(&user, DeviceKind::Opds, None)
+		.await
+		.expect("reader");
+	let touch = |secret: String| {
+		let service = service.clone();
+		async move {
+			service
+				.touch(CredentialRef::ApiKey(&secret), DeviceProtocol::Kobo, None)
+				.await
+				.expect("touch")
+		}
+	};
+
+	assert!(touch(kobo_key.secret.clone()).await.is_some());
+	assert!(touch(kobo_key.secret.clone()).await.is_none());
+	// every credential is coalesced on its own
+	assert!(touch(reader_key.secret.clone()).await.is_some());
+
+	// a coalesced sighting reaches neither the credential nor the device row:
+	// clear the stored timestamp and prove the next touch leaves it cleared
+	device::Entity::update_many()
+		.col_expr(
+			device::Column::LastSeenAt,
+			Expr::value(None::<DateTimeWithTimeZone>),
+		)
+		.exec(conn.as_ref())
+		.await
+		.expect("clear");
+	assert!(touch(kobo_key.secret.clone()).await.is_none());
+	assert!(service
+		.get(&user, &kobo.id)
+		.await
+		.expect("device")
+		.last_seen_at
+		.is_none());
+
+	// once the interval has elapsed the sighting is written again
+	tokio::time::pause();
+	tokio::time::advance(TOUCH_INTERVAL).await;
+	tokio::time::resume();
+	assert!(touch(kobo_key.secret.clone()).await.is_some());
+	assert!(service
+		.get(&user, &kobo.id)
+		.await
+		.expect("device")
+		.last_seen_at
+		.is_some());
+	assert!(service
+		.get(&user, &reader.id)
+		.await
+		.expect("device")
+		.last_seen_at
+		.is_none());
+}
+
+#[tokio::test]
+async fn device_for_credential_resolves_live_devices_only() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn);
+	let (device, issued) = service
+		.create_device(&user, DeviceKind::Kobo, None)
+		.await
+		.expect("device");
+
+	let found = service
+		.device_for_credential(CredentialRef::ApiKey(&issued.secret))
+		.await
+		.expect("lookup")
+		.expect("bound device");
+	assert_eq!(found.id, device.id);
+	assert!(service
+		.device_for_credential(CredentialRef::ApiKey("not a key"))
+		.await
+		.expect("lookup")
+		.is_none());
+
+	service.revoke(&user, &device.id).await.expect("revoke");
+	assert!(service
+		.device_for_credential(CredentialRef::ApiKey(&issued.secret))
+		.await
+		.expect("lookup")
 		.is_none());
 }
 

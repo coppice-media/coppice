@@ -40,6 +40,7 @@ itertools.workspace = true
 metadata_integrations = { path = "../crates/integrations/metadata", default-features = false }
 migrations = { path = "../crates/migrations", default-features = false }
 models = { path = "../crates/models", default-features = false }
+stump_api_types = { path = "../crates/api-types" }
 stump_devices = { path = "../crates/devices", default-features = false }
 stump_jobs = { path = "../crates/jobs", default-features = false }
 stump_media = { path = "../crates/media", default-features = false }

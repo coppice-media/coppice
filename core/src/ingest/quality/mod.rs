@@ -14,12 +14,12 @@ use data_encoding::HEXLOWER;
 use image::DynamicImage;
 use ring::digest::{Context, SHA256};
 use serde_json::{json, Value};
+use stump_api_types::settings::{SettingDefinition, SettingKind, SettingValues};
 
 use crate::{
 	config::StumpConfig,
 	ingest::contract::{
 		BookSnapshot, IngestMediaKind, QualityCheckOutcome, QualityStatus,
-		SettingDefinition, SettingKind, SettingValues,
 	},
 };
 use stump_media::{media::get_page, EpubProcessor, FileError, PathUtils};

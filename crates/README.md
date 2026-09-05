@@ -11,6 +11,7 @@ editing it.
 | `api-types` | `stump_api_types` | Transport-neutral `RequestOrigin` URL building and `OffsetPagination` | always linked | README done |
 | `auth` | `stump_auth` | `AuthContext` + `AuthorizationError`, permission/owner enforcement | always linked | README done |
 | `cli` | `cli` | Server CLI subcommands (account, config) embedded in `stump_server` | always linked | README pending (dirty: `commands/account.rs`, `config.rs`) |
+| `devices` | `stump_devices` | Unified device registry: per-device credentials, endpoints, last-seen/last-sync tracking | always linked via `stump_core`; `graphql` derives opt-in | README done |
 | `email` | `email` | SMTP sender via `lettre`, emailer config | always linked; `graphql` derives opt-in (`stump_core/graphql`) | README pending |
 | `graphql` | `graphql` | async-graphql schema, guards, loaders, `graphql-gen` | server `graphql` (in `headless`/`full`, not `minimal`) | README done |
 | `integrations/metadata` | `metadata_integrations` | Metadata provider clients (Comic Vine, Hardcover, AniList, MAL, MangaDex, MangaUpdates), scoring, merge | always linked via `stump_core`; `graphql` derives opt-in | README done |

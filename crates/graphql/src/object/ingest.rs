@@ -10,9 +10,10 @@ use models::{
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{json, Value};
+use stump_api_types::settings::{SettingDefinition, SettingKind};
 use stump_core::ingest::contract::{
 	AnalysisPhase, DropItemStatus, IngestProgressEvent as CoreIngestProgressEvent,
-	QualityReportCheck, QualityStatus, SettingDefinition, SettingKind,
+	QualityReportCheck, QualityStatus,
 };
 
 use crate::{

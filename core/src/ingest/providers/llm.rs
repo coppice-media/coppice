@@ -27,11 +27,12 @@ use std::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use stump_api_types::settings::{SettingDefinition, SettingKind, SettingValues};
 
 use crate::ingest::contract::{
 	BookSnapshot, IngestMediaKind, IngestMetadataProvider, MetadataCandidate,
 	MetadataField, ProviderCapability, ProviderError, ProviderIdentity, SearchHit,
-	SearchQuery, SettingDefinition, SettingKind, SettingValues,
+	SearchQuery,
 };
 
 pub const LLM_PROVIDER_ID: &str = "llm";

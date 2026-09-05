@@ -49,6 +49,7 @@ mod m20260911_000000_add_device_pairings;
 mod m20260912_000000_add_kavita_compat;
 mod m20260913_000000_add_provider_sources;
 mod m20260914_000000_add_reading_heads;
+mod m20260917_000000_add_page_hashes;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -103,6 +104,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260912_000000_add_kavita_compat::Migration),
 			Box::new(m20260913_000000_add_provider_sources::Migration),
 			Box::new(m20260914_000000_add_reading_heads::Migration),
+			Box::new(m20260917_000000_add_page_hashes::Migration),
 		]
 	}
 }

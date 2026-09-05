@@ -11,12 +11,13 @@ use metadata_integrations::{
 	SearchQuery as IntegrationSearchQuery,
 };
 use serde_json::{json, Value};
+use stump_api_types::settings::{SettingDefinition, SettingValues};
 
 use crate::ingest::{
 	contract::{
 		BookSnapshot, IngestMediaKind, IngestMetadataProvider, MetadataCandidate,
 		MetadataField, ProviderCapability, ProviderError, ProviderIdentity, SearchHit,
-		SearchQuery, SettingDefinition, SettingValues,
+		SearchQuery,
 	},
 	quality::filename::parse_filename,
 };

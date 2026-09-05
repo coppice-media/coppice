@@ -12,4 +12,7 @@ pub struct DeviceSeen {
 	/// The protocol the request arrived on, which may differ from the protocol
 	/// the credential was minted for (one key works on every path).
 	pub protocol: DeviceProtocol,
+	/// `true` for the first request the device ever authenticated: its
+	/// `last_seen_at` was unset before this sighting was written.
+	pub first_seen: bool,
 }

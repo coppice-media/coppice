@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
+use stump_api_types::settings::{SettingDefinition, SettingValues};
 use stump_media::media::analyze_page;
 
 use crate::ingest::contract::{
 	BookSnapshot, IngestMediaKind, QualityCheck, QualityCheckError, QualityStatus,
-	SettingDefinition, SettingValues,
 };
 
 use super::{

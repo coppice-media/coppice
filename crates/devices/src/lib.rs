@@ -11,6 +11,8 @@
 //! `models` and knows nothing about HTTP. The server calls
 //! [`DeviceService::touch`] from its protocol auth paths and forwards the
 //! returned [`DeviceSeen`] through the core event channel.
+//!
+//! Decisions, layout, and verification commands: `crates/devices/README.md`.
 
 mod credential;
 mod endpoint;

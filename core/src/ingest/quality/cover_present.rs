@@ -1,6 +1,7 @@
+use stump_api_types::settings::{SettingDefinition, SettingValues};
+
 use crate::ingest::contract::{
 	BookSnapshot, IngestMediaKind, QualityCheck, QualityCheckError, QualityStatus,
-	SettingDefinition, SettingValues,
 };
 
 use super::{

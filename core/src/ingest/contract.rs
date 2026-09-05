@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use models::shared::analysis::MediaAnalysisData;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use stump_api_types::settings::{SettingDefinition, SettingValues};
 
 use stump_media::media::ProcessedMediaMetadata;
 
@@ -192,37 +193,6 @@ pub fn score_report(
 		.collect();
 	(total.round().clamp(0.0, 100.0) as u8, checks)
 }
-
-/// Setting schema entry exposed to the UI for a provider or check.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SettingDefinition {
-	pub key: &'static str,
-	pub label: &'static str,
-	pub description: &'static str,
-	pub kind: SettingKind,
-	pub default: Value,
-	pub required: bool,
-	/// Secret values are stored encrypted and never returned to clients.
-	pub secret: bool,
-	/// Optional URL where a user can obtain or manage the credential this
-	/// setting holds (e.g. the provider's API key page).  Surfaced as
-	/// `helpUrl` so the editor can link to it.
-	pub help_url: Option<&'static str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum SettingKind {
-	Bool,
-	Int,
-	Float,
-	String,
-	Enum,
-	Json,
-}
-
-/// Effective setting values keyed by `SettingDefinition::key`.
-pub type SettingValues = BTreeMap<String, Value>;
 
 /// Canonical metadata fields a candidate may supply and a field pick may
 /// target.  Values are JSON so providers can carry lists (authors, tags).

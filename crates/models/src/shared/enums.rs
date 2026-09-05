@@ -960,3 +960,33 @@ pub enum DeviceCredentialKind {
 	/// `credential_ref` is a `sessions.session_id`
 	Session,
 }
+
+/// A librarian decision about a recurring page hash inside a library
+#[derive(
+	Eq,
+	Copy,
+	Hash,
+	Debug,
+	Clone,
+	EnumIter,
+	PartialEq,
+	Serialize,
+	Deserialize,
+	DeriveActiveEnum,
+	EnumString,
+	Display,
+)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[sea_orm(
+	rs_type = "String",
+	rename_all = "SCREAMING_SNAKE_CASE",
+	db_type = "String(StringLen::None)"
+)]
+#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DuplicatePageAction {
+	/// Hide pages with this hash from every page-serving route
+	Skip,
+	/// The page was reviewed and stays visible; stop reporting it
+	Keep,
+}

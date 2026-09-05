@@ -8719,6 +8719,7 @@ version = "0.1.6"
 dependencies = [
  "chrono",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -8776,6 +8777,7 @@ dependencies = [
  "serde_with",
  "simple_crypt",
  "stump-config-gen",
+ "stump_api_types",
  "stump_devices",
  "stump_jobs",
  "stump_media",

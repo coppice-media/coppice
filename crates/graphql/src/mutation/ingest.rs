@@ -14,8 +14,9 @@ use sea_orm::{
 	TransactionTrait,
 };
 use serde_json::{json, Value};
+use stump_api_types::settings::SettingValues;
 use stump_core::ingest::{
-	contract::{FieldPick, ProviderIdentity, SettingValues},
+	contract::{FieldPick, ProviderIdentity},
 	providers::apply::{
 		apply_to_media, resolve_picks_for_context, validate_picks, ResolvedFields,
 	},

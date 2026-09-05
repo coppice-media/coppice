@@ -26,6 +26,21 @@ impl RateLimiter {
 		}
 	}
 
+	/// Creates a new rate limiter with the specified requests per minute,
+	/// for APIs whose published quota is a per-minute burst window.
+	///
+	/// # Panics
+	/// Panics if `requests_per_minute` is 0
+	pub fn per_minute(requests_per_minute: u32) -> Self {
+		let quota = Quota::per_minute(
+			NonZeroU32::new(requests_per_minute)
+				.expect("requests_per_minute must be > 0"),
+		);
+		Self {
+			inner: Arc::new(GovernorLimiter::direct(quota)),
+		}
+	}
+
 	/// Waits until a request is permitted by the rate limiter
 	pub async fn until_ready(&self) {
 		self.inner.until_ready().await;

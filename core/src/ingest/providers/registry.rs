@@ -8,6 +8,7 @@ use models::{
 	shared::enums::MetadataProvider,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect, SelectColumns};
+use stump_api_types::settings::{SettingDefinition, SettingValues};
 use tokio::sync::OnceCell;
 
 use crate::{
@@ -16,7 +17,6 @@ use crate::{
 	ingest::contract::{
 		BookSnapshot, IngestMediaKind, IngestMetadataProvider, MetadataCandidate,
 		ProviderCapability, ProviderError, ProviderIdentity, SearchHit, SearchQuery,
-		SettingDefinition, SettingValues,
 	},
 };
 

@@ -1632,7 +1632,57 @@ pub(crate) async fn append_ops(
 		apply_op_to_head(&txn, user_id, device_id, &op).await?;
 	}
 	txn.commit().await.map_err(internal)?;
+	record_device_sync(ctx, user_id, device_id, &results).await;
 	Ok(results)
+}
+
+/// Records an accepted ops push as a sync on the device the liseur token is
+/// bound to. Registry-minted tokens carry the device id, and a token minted by
+/// the liseur login flow is bound to no device, so a miss is silent; a
+/// registry failure never fails the push.
+async fn record_device_sync(
+	ctx: &AppState,
+	user_id: &str,
+	device_id: &str,
+	results: &[OpResult],
+) {
+	let token_id = match ctx_conn(ctx)
+		.query_one(db_statement(
+			ctx_conn(ctx),
+			"SELECT id FROM liseur_sync_tokens
+             WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL
+             LIMIT 1",
+			vec![user_id.to_owned().into(), device_id.to_owned().into()],
+		))
+		.await
+		.map(|row| row.and_then(|row| row.try_get::<String>("", "id").ok()))
+	{
+		Ok(Some(token_id)) => token_id,
+		Ok(None) => return,
+		Err(error) => {
+			tracing::warn!(?error, "failed to resolve the liseur token of a device");
+			return;
+		},
+	};
+	let count = |status: &str| results.iter().filter(|op| op.status == status).count();
+	let summary = serde_json::json!({
+		"protocol": "liseur",
+		"ops": results.len(),
+		"applied": count("applied"),
+		"duplicate": count("duplicate"),
+		"conflict": count("conflict"),
+	});
+	if let Err(error) = ctx
+		.devices()
+		.touch(
+			CredentialRef::LiseurToken(&token_id),
+			Protocol::Liseur,
+			Some(summary),
+		)
+		.await
+	{
+		tracing::warn!(?error, "failed to record the liseur ops push on its device");
+	}
 }
 
 async fn high_water<C: ConnectionTrait>(

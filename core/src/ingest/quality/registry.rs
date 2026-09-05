@@ -2,10 +2,11 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use sea_orm::DatabaseConnection;
 use serde::Serialize;
+use stump_api_types::settings::{SettingDefinition, SettingValues};
 
 use crate::ingest::contract::{
-	BookSnapshot, QualityCheck, QualityCheckError, QualityReport, SettingDefinition,
-	SettingValues, QUALITY_ALGORITHM_VERSION,
+	BookSnapshot, QualityCheck, QualityCheckError, QualityReport,
+	QUALITY_ALGORITHM_VERSION,
 };
 
 use super::{

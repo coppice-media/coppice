@@ -9,6 +9,8 @@ mod epub;
 mod graphql;
 #[cfg(feature = "kobo")]
 mod kobo;
+#[cfg(feature = "komga")]
+mod komga;
 #[cfg(feature = "koreader")]
 mod koreader;
 #[cfg(feature = "opds")]

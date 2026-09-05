@@ -100,6 +100,120 @@ pub fn generate_koreader_hash<P: AsRef<std::path::Path>>(
 	Ok(hash)
 }
 
+/// Width of the difference grid: 9 luma columns yield 8 horizontal gradients.
+const DHASH_COLUMNS: u32 = 9;
+/// Height of the difference grid.
+const DHASH_ROWS: u32 = 8;
+
+/// Difference hash (dHash, 8×8) of an already decoded image.
+///
+/// The image is reduced to a 9×8 grid of box-averaged luma values; each of the
+/// 64 output bits is set when a cell is brighter than its right-hand
+/// neighbour. Box averaging over the full cell (rather than point sampling)
+/// keeps the hash stable across re-encoding, resizing, and mild JPEG noise.
+pub fn dhash_image(image: &image::DynamicImage) -> u64 {
+	let luma = image.to_luma8();
+	let (width, height) = luma.dimensions();
+	if width == 0 || height == 0 {
+		return 0;
+	}
+	let pixels = luma.as_raw();
+	let mut grid = [[0u32; DHASH_COLUMNS as usize]; DHASH_ROWS as usize];
+	for (row, cells) in grid.iter_mut().enumerate() {
+		let row = row as u32;
+		let y0 = (row * height / DHASH_ROWS) as usize;
+		let y1 = (((row + 1) * height / DHASH_ROWS).max(row * height / DHASH_ROWS + 1))
+			.min(height) as usize;
+		for (column, cell) in cells.iter_mut().enumerate() {
+			let column = column as u32;
+			let x0 = (column * width / DHASH_COLUMNS) as usize;
+			let x1 = (((column + 1) * width / DHASH_COLUMNS)
+				.max(column * width / DHASH_COLUMNS + 1))
+			.min(width) as usize;
+			let mut sum = 0u64;
+			for y in y0..y1 {
+				let line = &pixels[y * width as usize..(y + 1) * width as usize];
+				sum += line[x0..x1].iter().map(|&p| u64::from(p)).sum::<u64>();
+			}
+			let count = ((y1 - y0) * (x1 - x0)) as u64;
+			*cell = (sum / count) as u32;
+		}
+	}
+	let mut hash = 0u64;
+	for cells in &grid {
+		for column in 0..(DHASH_COLUMNS as usize - 1) {
+			hash = (hash << 1) | u64::from(cells[column] > cells[column + 1]);
+		}
+	}
+	hash
+}
+
+/// Decode an encoded page image and compute its [`dhash_image`].
+pub fn page_dhash(bytes: &[u8]) -> Result<u64, image::ImageError> {
+	Ok(dhash_image(&image::load_from_memory(bytes)?))
+}
+
+/// Number of differing bits between two page hashes.
+#[inline]
+pub fn hamming(left: u64, right: u64) -> u32 {
+	(left ^ right).count_ones()
+}
+
+#[cfg(test)]
+mod dhash_tests {
+	use super::{dhash_image, hamming, page_dhash};
+	use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb};
+	use std::io::Cursor;
+
+	/// A page-like gradient with a dark band, so neighbouring cells differ.
+	fn page(width: u32, height: u32, band: u32) -> DynamicImage {
+		DynamicImage::ImageRgb8(ImageBuffer::from_fn(width, height, |x, y| {
+			if (band..band + height / 10).contains(&y) {
+				Rgb([20, 20, 20])
+			} else {
+				let v = ((x * 255) / width) as u8;
+				Rgb([v, 255 - v, (y % 255) as u8])
+			}
+		}))
+	}
+
+	fn encode(image: &DynamicImage, format: ImageFormat) -> Vec<u8> {
+		let mut out = Cursor::new(Vec::new());
+		image.write_to(&mut out, format).unwrap();
+		out.into_inner()
+	}
+
+	#[test]
+	fn reencoded_and_resized_pages_stay_close() {
+		let original = page(600, 900, 300);
+		let base = dhash_image(&original);
+
+		let jpeg = page_dhash(&encode(&original, ImageFormat::Jpeg)).unwrap();
+		assert!(hamming(base, jpeg) <= 2, "jpeg drift {}", hamming(base, jpeg));
+
+		let resized = original.resize_exact(300, 450, image::imageops::FilterType::Triangle);
+		let png = page_dhash(&encode(&resized, ImageFormat::Png)).unwrap();
+		assert!(hamming(base, png) <= 2, "resize drift {}", hamming(base, png));
+	}
+
+	#[test]
+	fn different_pages_are_far_apart() {
+		let a = dhash_image(&page(600, 900, 300));
+		let b = dhash_image(&page(600, 900, 700).fliph());
+		assert!(hamming(a, b) > 10, "distance {}", hamming(a, b));
+		let blank = dhash_image(&DynamicImage::new_rgb8(64, 64));
+		assert_eq!(blank, 0);
+		assert!(hamming(a, blank) > 10);
+	}
+
+	#[test]
+	fn tiny_images_do_not_panic() {
+		let one = dhash_image(&DynamicImage::new_luma8(1, 1));
+		assert_eq!(one, 0);
+		let _ = dhash_image(&DynamicImage::new_luma8(3, 2));
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use std::path::PathBuf;
