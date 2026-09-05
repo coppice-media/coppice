@@ -399,10 +399,12 @@ observed revision semantics for mutable annotation identities.
 ## Migration outline from today's tables
 
 **[observed]** The current storage is split across the v2 reading-session row,
-reading-device registry, the KOReader hash/raw-progress fields, native
-annotation/bookmark rows, and Kobo synchronization cursors. `reading_devices`
-is a small id/name/kind/email registry
-(`crates/models/src/entity/reading_device.rs:1-24@37fdb7d7340894a777c40d685d5262becceae007`);
+the device registry, the KOReader hash/raw-progress fields, native
+annotation/bookmark rows, and Kobo synchronization cursors. `devices` is the
+unified registry (id, owner, name, kind, transform profile, last-seen / last-sync
+state) that `m20260910_000000_add_devices` folded the old `reading_devices`
+id/name rows into (`crates/models/src/entity/device.rs`,
+`crates/migrations/src/m20260910_000000_add_devices.rs`);
 `media.koreader_hash` is an optional KOReader identity hash
 (`crates/models/src/entity/media.rs:50-58@37fdb7d7340894a777c40d685d5262becceae007`);
 and `kobo_sync_sessions` stores user, selected media IDs, Kobo device id and
@@ -410,7 +412,7 @@ metadata, creation time, and previous-sync time
 (`crates/models/src/entity/kobo_sync_session.rs:1-40@37fdb7d7340894a777c40d685d5262becceae007`).
 There is no standalone `koreader` table in the entity index; KOReader state is
 stored in `media.koreader_hash`, `reading_session.koreader_progress`, and
-`reading_devices` (`crates/models/src/entity/mod.rs:1-48@37fdb7d7340894a777c40d685d5262becceae007`).
+`devices` (`crates/models/src/entity/mod.rs`).
 
 ### Phase 1 — add the unified event/head store
 

@@ -13,7 +13,7 @@ pub const SESSION_PATH: &str = "/";
 pub fn get_session_layer(ctx: Arc<Ctx>) -> SessionManagerLayer<StumpSessionStore> {
 	let store = StumpSessionStore::new(ctx.conn.clone(), ctx.config.clone());
 
-	let cleanup_interval = ctx.config.expired_session_cleanup_interval;
+	let cleanup_interval = ctx.config.auth.expired_session_cleanup_interval;
 	if cleanup_interval > 0 {
 		tracing::trace!(
 			cleanup_interval = cleanup_interval,
@@ -30,7 +30,7 @@ pub fn get_session_layer(ctx: Arc<Ctx>) -> SessionManagerLayer<StumpSessionStore
 	SessionManagerLayer::new(store)
 		.with_name(SESSION_NAME)
 		.with_expiry(Expiry::OnInactivity(Duration::seconds(
-			ctx.config.session_ttl,
+			ctx.config.auth.session_ttl,
 		)))
 		.with_path(SESSION_PATH.to_string())
 		.with_same_site(SameSite::Lax)

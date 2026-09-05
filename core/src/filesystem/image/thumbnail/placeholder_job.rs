@@ -4,16 +4,17 @@ use models::entity::{library, media, series};
 use sea_orm::{
 	prelude::*, ColumnTrait, EntityTrait, QueryFilter, QuerySelect, QueryTrait,
 };
+use stump_jobs::{
+	JobContext, JobError, JobLifecycle, JobOutputExt, JobProgress, JobTaskOutput,
+	WorkingState,
+};
 
 use crate::{
 	database::{chunk_vec_into, SQLITE_BIND_LIMIT},
 	filesystem::image::thumbnail::generate::{
 		safely_generate_placeholder_batch, GenerateImageSource,
 	},
-	job::{
-		error::JobError, JobContext, JobLifecycle, JobOutputExt, JobProgress,
-		JobTaskOutput, WorkingState,
-	},
+	job::JobServices,
 };
 
 // Note: Type aliasing for clarity
@@ -93,6 +94,7 @@ impl PlaceholderGenerationJob {
 impl JobLifecycle for PlaceholderGenerationJob {
 	const NAME: &'static str = "placeholder_generation";
 
+	type Context = JobServices;
 	type Output = PlaceholderGenerationOutput;
 	type Task = PlaceholderGenerationTask;
 
@@ -105,7 +107,7 @@ impl JobLifecycle for PlaceholderGenerationJob {
 
 	async fn init(
 		&mut self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 	) -> Result<WorkingState<Self::Output, Self::Task>, JobError> {
 		let init_config = match &self.config.scope {
 			PlaceholderGenerationJobScope::BooksInLibrary(id) => {
@@ -218,7 +220,7 @@ impl JobLifecycle for PlaceholderGenerationJob {
 
 	async fn execute_task(
 		&self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 		task: Self::Task,
 	) -> Result<JobTaskOutput<Self>, JobError> {
 		match task {

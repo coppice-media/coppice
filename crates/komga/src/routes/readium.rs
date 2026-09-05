@@ -17,9 +17,16 @@ use axum::{
 use axum_extra::extract::Host;
 use chrono::Utc;
 use models::{
-	entity::{media, reading_device, reading_session, series, user::AuthUser},
-	services::reading_progress::{upsert_reading_session, NormalizedProgression},
-	shared::readium::{ReadiumLocation, ReadiumLocator, ReadiumText},
+	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
+	entity::{device, media, series, user::AuthUser},
+	services::{
+		reading_progress::{upsert_reading_session, NormalizedProgression},
+		reading_state,
+	},
+	shared::{
+		enums::DeviceKind,
+		readium::{ReadiumLocation, ReadiumLocator, ReadiumText},
+	},
 };
 use sea_orm::{prelude::*, ActiveValue::Set, TransactionTrait};
 use stump_auth::AuthContext;
@@ -304,20 +311,12 @@ async fn get_progression(
 ) -> APIResult<Response<Body>> {
 	let user = auth.user();
 	find_visible_media(ctx.conn(), &user, &id).await?;
-	let session = reading_session::Entity::find_latest_for_user_and_media(&user, &id)
-		.one(ctx.conn())
-		.await?;
-	let Some(session) = session else {
+	let Some(head) = reading_state::head(ctx.conn(), &user.id, &id).await? else {
 		return Ok(axum::http::StatusCode::NO_CONTENT.into_response());
 	};
 
-	let device_id = session
-		.device_ids
-		.as_ref()
-		.and_then(|ids| ids.0.first())
-		.cloned();
-	let device = match device_id {
-		Some(id) => reading_device::Entity::find_by_id(id.clone())
+	let device = match head.source_device_id {
+		Some(id) => device::Entity::find_by_id(id.clone())
 			.one(ctx.conn())
 			.await?
 			.map(|device| R2Device {
@@ -333,12 +332,9 @@ async fn get_progression(
 			name: String::new(),
 		},
 	};
-	let modified = session
-		.updated_at
-		.unwrap_or(session.created_at)
-		.with_timezone(&Utc);
-	let locator = session
-		.end_locator
+	let modified = head.updated_at.with_timezone(&Utc);
+	let locator = head
+		.locator
 		.as_ref()
 		.map(r2_locator_from_model)
 		.unwrap_or_default();
@@ -433,24 +429,32 @@ async fn put_progression(
 	} else {
 		Some(input.device.id.clone())
 	};
+	let locator = model_locator_from_r2(&input.locator);
 	let progression = NormalizedProgression {
 		page,
-		locator: Some(model_locator_from_r2(&input.locator)),
+		locator: Some(locator.clone()),
 		percentage,
 		elapsed_seconds_delta: None,
 		did_complete,
 		device_id: device_id.clone(),
 		reset_elapsed_seconds: false,
 	};
+	let raw_payload = serde_json::to_value(&input)
+		.map_err(|error| APIError::InternalServerError(error.to_string()))?;
+	let head_update = ProtocolUpdate {
+		protocol: SourceProtocol::Komga,
+		device_id: device_id.clone(),
+		updated_at: Some(input.modified),
+		position: Position::Locator(locator),
+		progression: total_progression.map(f64::from),
+		completed: did_complete.then_some(true),
+		raw_payload,
+	};
 
 	let txn = conn.begin().await?;
-	let existing = reading_session::Entity::find_latest_for_user_and_media(&user, &id)
-		.one(&txn)
-		.await?;
-	if existing
-		.as_ref()
-		.and_then(|session| session.updated_at)
-		.is_some_and(|modified| modified > input.modified)
+	if reading_state::head(&txn, &user.id, &id)
+		.await?
+		.is_some_and(|head| head.updated_at > input.modified)
 	{
 		return Err(APIError::Conflict(
 			"Progression timestamp is older than existing session".to_string(),
@@ -458,16 +462,20 @@ async fn put_progression(
 	}
 
 	if let Some(device_id) = device_id {
-		let exists = reading_device::Entity::find_by_id(device_id.clone())
+		let exists = device::Entity::find_by_id(device_id.clone())
 			.one(&txn)
 			.await?
 			.is_some();
 		if !exists {
-			reading_device::ActiveModel {
+			// R2 progression clients register themselves by the device they report;
+			// Komelia is the Komga-profile client that writes progression.
+			device::ActiveModel {
 				id: Set(device_id),
+				user_id: Set(user.id.clone()),
 				name: Set(input.device.name.clone()),
-				kind: Set(None),
-				email: Set(None),
+				kind: Set(DeviceKind::Komelia),
+				last_seen_at: Set(Some(Utc::now().into())),
+				..Default::default()
 			}
 			.insert(&txn)
 			.await?;
@@ -475,6 +483,8 @@ async fn put_progression(
 	}
 
 	upsert_reading_session(&txn, &user, &id, progression).await?;
+	reading_state::apply(&txn, &user.id, Publication::from(&book), head_update)
+		.await?;
 	txn.commit().await?;
 	events.send(KomgaEvent::ReadProgressChanged {
 		book_id: event_book_id.clone().into(),

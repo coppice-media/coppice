@@ -5,8 +5,8 @@ use std::{
 
 use crate::{
 	routes::progress::{
-		counts_for_progress_books, finished_progression, progress_books,
-		KomgaSeriesReadProgressDto, KomgaSeriesReadProgressUpdateDto,
+		clear_books_progress, counts_for_progress_books, mark_book_read,
+		progress_books, KomgaSeriesReadProgressDto, KomgaSeriesReadProgressUpdateDto,
 	},
 	sse::KomgaEvent,
 	KomgaSeriesMetadataUpdateRequest, KomgaSeriesStatus, KomgaWebLink, PatchValue,
@@ -18,10 +18,7 @@ use axum::{
 	Extension, Json, Router,
 };
 use models::{
-	entity::{
-		media, reading_session, series, series_metadata, series_tag, tag, user::AuthUser,
-	},
-	services::reading_progress::upsert_reading_session,
+	entity::{media, series, series_metadata, series_tag, tag, user::AuthUser},
 	shared::enums::UserPermission,
 };
 use sea_orm::{
@@ -492,8 +489,7 @@ async fn update_tachiyomi_series_progress(
 	}
 	let txn = ctx.conn().begin().await?;
 	for book in &to_mark {
-		upsert_reading_session(&txn, &user, &book.id, finished_progression(book.pages))
-			.await?;
+		mark_book_read(&txn, &user, &book.id, book.pages).await?;
 	}
 	txn.commit().await?;
 	for book in &to_mark {
@@ -553,8 +549,7 @@ async fn mark_series_read(
 
 	let txn = ctx.conn().begin().await?;
 	for book in &books {
-		upsert_reading_session(&txn, &user, &book.id, finished_progression(book.pages))
-			.await?;
+		mark_book_read(&txn, &user, &book.id, book.pages).await?;
 	}
 	txn.commit().await?;
 	events.send(KomgaEvent::ReadProgressSeriesChanged {
@@ -590,11 +585,7 @@ async fn delete_series_read_progress(
 	}
 
 	let txn = ctx.conn().begin().await?;
-	reading_session::Entity::delete_many()
-		.filter(reading_session::Column::UserId.eq(user.id.clone()))
-		.filter(reading_session::Column::MediaId.is_in(book_ids.clone()))
-		.exec(&txn)
-		.await?;
+	clear_books_progress(&txn, &user, &book_ids).await?;
 	txn.commit().await?;
 	events.send(KomgaEvent::ReadProgressSeriesDeleted {
 		series_id: series.id.clone().into(),
@@ -786,12 +777,5 @@ mod tests {
 		}))
 		.unwrap();
 		assert!(validate_metadata_patch(&patch).is_ok());
-	}
-
-	#[test]
-	fn finished_progress_uses_last_zero_based_page() {
-		let progression = finished_progression(12);
-		assert_eq!(progression.page, Some(11));
-		assert!(progression.did_complete);
 	}
 }

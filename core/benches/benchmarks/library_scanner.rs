@@ -1,11 +1,9 @@
 use std::{
 	fmt::{Display, Formatter},
 	path::PathBuf,
-	sync::Arc,
 	time::Instant,
 };
 
-use apalis::prelude::MemoryStorage;
 use criterion::{criterion_group, BenchmarkId, Criterion};
 use models::{
 	entity::{job, library, library_config, media, series},
@@ -16,15 +14,12 @@ use models::{
 use sea_orm::prelude::*;
 use sea_orm::{ActiveValue::Set, DatabaseConnection};
 use stump_core::{
-	config::StumpConfig,
-	database::connect_at,
-	filesystem::scanner::LibraryScanJob,
-	job::{
-		stump_job::StumpJob, ApalisWorkerState, JobContext, JobLifecycle, JobOutputExt,
-	},
+	config::StumpConfig, database::connect_at, filesystem::scanner::LibraryScanJob,
+	job::stump_job::StumpJob, Ctx,
 };
+use stump_jobs::{JobLifecycle, JobOutputExt, WorkingState};
 use tempfile::{Builder as TempDirBuilder, TempDir};
-use tokio::{runtime::Builder, sync::broadcast};
+use tokio::runtime::Builder;
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -115,7 +110,7 @@ fn full_scan(c: &mut Criterion) {
 					.await
 					.expect("Failed to set up test");
 
-				let conn = test_ctx.job_ctx.conn.clone();
+				let conn = test_ctx.ctx.conn.clone();
 
 				println!("Starting benchmark: {}", size);
 				let start = Instant::now();
@@ -140,7 +135,7 @@ type LibraryWithConfig = (library::Model, library_config::Model);
 
 struct TestCtx {
 	job: LibraryScanJob,
-	job_ctx: Arc<ApalisWorkerState>,
+	ctx: Ctx,
 	job_id: String,
 }
 
@@ -258,19 +253,9 @@ async fn setup_test(
 
 	let config_dir = format!("{}/benches/config", env!("CARGO_MANIFEST_DIR"));
 	let config = StumpConfig::new(config_dir);
-	let job_storage = MemoryStorage::new();
-	let job_ctx = Arc::new(ApalisWorkerState::new(
-		Arc::new(conn),
-		Arc::new(config),
-		broadcast::channel(1024).0,
-		job_storage,
-	));
+	let ctx = Ctx::for_testing_with_config(conn, config);
 	Ok(Setup {
-		test_ctx: TestCtx {
-			job,
-			job_ctx,
-			job_id,
-		},
+		test_ctx: TestCtx { job, ctx, job_id },
 		library,
 		tempdirs,
 	})
@@ -333,25 +318,26 @@ async fn clean_up(
 async fn scan_new_library(test_ctx: TestCtx) {
 	let TestCtx {
 		mut job,
-		job_ctx,
+		ctx,
 		job_id,
 	} = test_ctx;
 
-	let handle = JobContext::new(
-		job_ctx,
-		job_id,
-		&StumpJob::LibraryScan {
-			id: job.id.clone(),
-			path: job.path.clone(),
-			options: Some(job.options),
-		},
-	)
-	.await
-	.expect("Failed to start job context");
+	let runtime = ctx.job_runtime().expect("Failed to start job runtime");
+	let handle = runtime
+		.open_job(
+			job_id,
+			&StumpJob::LibraryScan {
+				id: job.id.clone(),
+				path: job.path.clone(),
+				options: Some(job.options),
+			},
+		)
+		.await
+		.expect("Failed to start job context");
 
 	let working_state = job.init(&handle).await.expect("Failed to init job");
 
-	let stump_core::job::WorkingState {
+	let WorkingState {
 		output: initial_output,
 		mut tasks,
 		..

@@ -1,0 +1,28 @@
+[package]
+name = "stump_devices"
+version.workspace = true
+edition = "2021"
+description = "Unified device registry: per-device credentials, endpoints, and last-seen tracking"
+
+[features]
+default = []
+graphql = ["dep:async-graphql", "models/graphql"]
+
+[dependencies]
+async-graphql = { workspace = true, optional = true }
+chrono.workspace = true
+models = { path = "../models", default-features = false }
+prefixed-api-key.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+stump_api_types = { path = "../api-types" }
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+parking_lot = "0.12"
+tests = { path = "../tests" }
+tokio = { workspace = true, features = ["full", "test-util"] }

@@ -70,7 +70,7 @@ pub async fn handle_account_command(
 		},
 		Account::List { locked } => print_accounts(locked, config).await,
 		Account::ResetPassword { username } => {
-			reset_account_password(username, config.password_hash_cost, config).await
+			reset_account_password(username, config.auth.password_hash_cost, config).await
 		},
 		Account::ResetOwner => change_server_owner(config).await,
 		Account::MigrateOidc {

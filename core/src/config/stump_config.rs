@@ -8,117 +8,31 @@
 
 use std::{env, path::PathBuf};
 
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use super::oidc_config::OidcConfig;
+use super::{
+	auth::{AuthConfig, PartialAuthConfig},
+	database::{DatabaseConfig, PartialDatabaseConfig},
+	env_keys::*,
+	ingest::{IngestConfig, PartialIngestConfig},
+	jobs::{JobsConfig, PartialJobsConfig},
+	oidc_config::OidcConfig,
+	pdf::{PartialPdfConfig, PdfConfig},
+	protocols::{PartialProtocolsConfig, ProtocolsConfig},
+	providers::{PartialProvidersConfig, ProvidersConfig},
+	server::{PartialServerConfig, ServerConfig},
+};
 use crate::{CoreError, CoreResult};
 use stump_config_gen::StumpConfigGenerator;
 use stump_media::MediaConfig;
 
-// TODO(env): i think DatabaseConfig enum with e.g. SQLite and Postgres variants would be nice
-// TODO(postgres): the vars are not toml-supported atm, not sure if this really matters. i kept it
-// like that bc idk what to do about the password, and having all of the config except password in toml
-// felt funny? idk ill wait until someone complains maybe >:)
-// TODO(env): prefix with STUMP_ for consistency
-pub mod env_keys {
-	pub const CONFIG_DIR_KEY: &str = "STUMP_CONFIG_DIR";
-	pub const IN_DOCKER_KEY: &str = "STUMP_IN_DOCKER";
-	pub const PROFILE_KEY: &str = "STUMP_PROFILE";
-	pub const IP_KEY: &str = "STUMP_IP";
-	pub const PORT_KEY: &str = "STUMP_PORT";
-	pub const VERBOSITY_KEY: &str = "STUMP_VERBOSITY";
-	pub const PRETTY_LOGS_KEY: &str = "STUMP_PRETTY_LOGS";
-	pub const LOG_DIR_KEY: &str = "STUMP_LOG_DIR";
-	pub const COLORFUL_LOGS_KEY: &str = "STUMP_COLORFUL_LOGS";
-	pub const DB_PATH_KEY: &str = "STUMP_DB_PATH";
-	pub const DATABASE_URL_KEY: &str = "STUMP_DATABASE_URL";
-	pub const DB_PASSWORD_KEY: &str = "STUMP_DB_PASSWORD";
-	pub const DB_HOST_KEY: &str = "STUMP_DB_HOST";
-	pub const DB_PORT_KEY: &str = "STUMP_DB_PORT";
-	pub const DB_NAME_KEY: &str = "STUMP_DB_NAME";
-	pub const DB_USER_KEY: &str = "STUMP_DB_USER";
-	pub const DB_TIMEOUT_KEY: &str = "STUMP_DB_TIMEOUT_SECS";
-	pub const DB_MAX_CONNECTIONS_KEY: &str = "STUMP_DB_MAX_CONNECTIONS";
-	pub const DB_MIN_CONNECTIONS_KEY: &str = "STUMP_DB_MIN_CONNECTIONS";
-	pub const SQLITE_STATEMENT_CACHE_CAPACITY_KEY: &str =
-		"STUMP_SQLITE_STATEMENT_CACHE_CAPACITY";
-	pub const ENABLE_BACKGROUND_JOBS_KEY: &str = "STUMP_ENABLE_BACKGROUND_JOBS";
-	pub const CLIENT_KEY: &str = "STUMP_CLIENT_DIR";
-	pub const ENABLE_WEBUI_KEY: &str = "STUMP_ENABLE_WEBUI";
-	pub const ORIGINS_KEY: &str = "STUMP_ALLOWED_ORIGINS";
-	pub const PDFIUM_KEY: &str = "PDFIUM_PATH";
-	pub const ENABLE_PLAYGROUND_KEY: &str = "STUMP_ENABLE_PLAYGROUND";
-	pub const ENABLE_KOREADER_SYNC_KEY: &str = "ENABLE_KOREADER_SYNC";
-	pub const ENABLE_KOBO_SYNC_KEY: &str = "ENABLE_KOBO_SYNC";
-	pub const KOBO_KEPUB_CONVERSION_KEY: &str = "KOBO_KEPUB_CONVERSION";
-	pub const KOBO_KEPUB_PRECONVERT_KEY: &str = "KOBO_KEPUB_PRECONVERT";
-	pub const KOBO_KEPUB_CACHE_MAX_AGE_DAYS_KEY: &str = "KOBO_KEPUB_CACHE_MAX_AGE_DAYS";
-	pub const KOBO_KEPUB_DEFLATE_LEVEL_KEY: &str = "KOBO_KEPUB_DEFLATE_LEVEL";
-	pub const ENABLE_KOMGA_KEY: &str = "STUMP_ENABLE_KOMGA";
-
-	pub const ENABLE_OPDS_PROGRESSION_KEY: &str = "ENABLE_OPDS_PROGRESSION";
-	pub const HASH_COST_KEY: &str = "HASH_COST";
-	pub const SESSION_TTL_KEY: &str = "SESSION_TTL";
-	pub const SESSION_EXPIRY_INTERVAL_KEY: &str = "SESSION_EXPIRY_CLEANUP_INTERVAL";
-	pub const MAX_IMAGE_UPLOAD_SIZE_KEY: &str = "STUMP_MAX_IMAGE_UPLOAD_SIZE";
-	pub const ENABLE_UPLOAD_KEY: &str = "STUMP_ENABLE_UPLOAD";
-	pub const MAX_FILE_UPLOAD_SIZE_KEY: &str = "STUMP_MAX_FILE_UPLOAD_SIZE";
-	pub const PDF_RENDER_DPI_KEY: &str = "STUMP_PDF_RENDER_DPI";
-	pub const PDF_MAX_DIMENSION_KEY: &str = "STUMP_PDF_MAX_DIMENSION";
-	pub const PDF_RENDER_FORMAT_KEY: &str = "STUMP_PDF_RENDER_FORMAT";
-	pub const PDF_CACHE_PAGES_KEY: &str = "STUMP_PDF_CACHE_PAGES";
-	pub const PDF_PRERENDER_RANGE_KEY: &str = "STUMP_PDF_PRERENDER_RANGE";
-	pub const PDF_HIGH_QUALITY_KEY: &str = "STUMP_PDF_HIGH_QUALITY";
-	pub const OIDC_ENABLED_KEY: &str = "STUMP_OIDC_ENABLED";
-	pub const OIDC_CLIENT_ID_KEY: &str = "STUMP_OIDC_CLIENT_ID";
-	pub const OIDC_CLIENT_SECRET_KEY: &str = "STUMP_OIDC_CLIENT_SECRET";
-	pub const OIDC_ISSUER_URL_KEY: &str = "STUMP_OIDC_ISSUER_URL";
-	pub const OIDC_SCOPES_KEY: &str = "STUMP_OIDC_SCOPES";
-	pub const OIDC_ALLOW_REGISTRATION_KEY: &str = "STUMP_OIDC_ALLOW_REGISTRATION";
-	pub const OIDC_DISABLE_LOCAL_AUTH_KEY: &str = "STUMP_OIDC_DISABLE_LOCAL_AUTH";
-	pub const OIDC_EXTRA_AUDIENCES_KEY: &str = "STUMP_OIDC_EXTRA_AUDIENCES";
-	pub const OIDC_CA_CERT_FILE_KEY: &str = "STUMP_OIDC_CA_CERT_FILE";
-	pub const TRUST_PROXY_HEADERS_KEY: &str = "STUMP_TRUST_PROXY_HEADERS";
-	pub const PARALLELISM_MULTIPLIER_KEY: &str = "STUMP_PARALLELISM_MULTIPLIER";
-	pub const INGEST_DROP_DIR_KEY: &str = "INGEST_DROP_DIR";
-	pub const INGEST_STAGING_DIR_KEY: &str = "INGEST_STAGING_DIR";
-	pub const INGEST_EDITOR_DIR_KEY: &str = "INGEST_EDITOR_DIR";
-	pub const INGEST_PROGRESS_RETENTION_KEY: &str = "INGEST_PROGRESS_RETENTION";
-}
-use env_keys::*;
-
-pub mod defaults {
-	pub const DEFAULT_ENABLE_WEBUI: bool = true;
-	pub const DEFAULT_PASSWORD_HASH_COST: u32 = 12;
-	pub const DEFAULT_SESSION_TTL: i64 = 3600 * 24 * 3; // 3 days
-	pub const DEFAULT_ACCESS_TOKEN_TTL: i64 = 3600 * 24; // 1 days
-	pub const DEFAULT_REFRESH_TOKEN_TTL: i64 = 3600 * 24 * 30; // 30 days
-	pub const DEFAULT_SESSION_EXPIRY_CLEANUP_INTERVAL: u64 = 60 * 60 * 24; // 24 hours
-	pub const DEFAULT_MAX_IMAGE_UPLOAD_SIZE: usize = 20 * 1024 * 1024; // 20 MB
-	pub const DEFAULT_ENABLE_UPLOAD: bool = false;
-	pub const DEFAULT_MAX_FILE_UPLOAD_SIZE: usize = 20 * 1024 * 1024; // 20 MB
-	pub const DEFAULT_PDF_RENDER_DPI: u32 = 150; // Good balance of quality and performance
-	pub const DEFAULT_PDF_MAX_DIMENSION: u32 = 1200; // Optimized for faster rendering while maintaining quality
-	pub const DEFAULT_PDF_RENDER_FORMAT: &str = "webp"; // Default to WebP for better compression
-	pub const DEFAULT_PDF_CACHE_PAGES: bool = true; // Enable page caching by default
-	pub const DEFAULT_PDF_PRERENDER_RANGE: u32 = 5; // Pre-render 5 pages before/after current
-	pub const DEFAULT_PDF_HIGH_QUALITY: bool = true; // Enable high-quality rendering by default
-	pub const DEFAULT_BOOK_COMPLETION_DEDUP_TIMEOUT_SECS: i64 = 60 * 60 * 24; // 1 day
-	pub const DEFAULT_INGEST_PROGRESS_RETENTION: u32 = 10_000;
-	pub const DEFAULT_PARALLELISM_MULTIPLIER: usize = 2;
-	pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 10;
-	pub const DEFAULT_DB_MIN_CONNECTIONS: u32 = 0;
-	pub const DEFAULT_KOBO_KEPUB_CACHE_MAX_AGE_DAYS: u32 = 90;
-	pub const DEFAULT_KOBO_KEPUB_DEFLATE_LEVEL: u32 = 6;
-	pub const DEFAULT_SQLITE_STATEMENT_CACHE_CAPACITY: usize = 100;
-	pub const DEFAULT_ENABLE_BACKGROUND_JOBS: bool = true;
-}
-use defaults::*;
-
 /// Represents the configuration of a Stump application. This struct is generated at startup
 /// using a TOML file, environment variables, or both and is input when creating a `StumpCore`
 /// instance.
+///
+/// The settings are grouped into sub-structs (`server`, `database`, `jobs`, `protocols`,
+/// `ingest`, `providers`, `auth`, `pdf`) that are flattened for serialization, so `Stump.toml` and the
+/// environment keep their flat key set.
 ///
 /// Example:
 /// ```
@@ -147,114 +61,53 @@ use defaults::*;
 #[cfg_attr(feature = "graphql", graphql(name = "StumpConfig"))]
 #[config_file_location(self.get_config_dir().join("Stump.toml"))]
 pub struct StumpConfig {
-	/// The "release" | "debug" profile with which the application is running.
-	#[default_value("release".to_string())]
-	#[debug_value("debug".to_string())]
-	#[env_key(PROFILE_KEY)]
-	#[validator(do_validate_profile)]
-	pub profile: String,
+	/// HTTP listener, logging, and proxy settings.
+	#[nested]
+	#[serde(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(flatten))]
+	pub server: ServerConfig,
 
-	/// The IP address on which to listen on (default: "0.0.0.0").
-	#[default_value("0.0.0.0".to_string())]
-	#[env_key(IP_KEY)]
-	pub ip: String,
+	/// Database location and connection pool settings.
+	#[nested]
+	#[serde(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(flatten))]
+	pub database: DatabaseConfig,
 
-	/// The port from which to serve the application (default: 10801).
-	#[default_value(10801)]
-	#[env_key(PORT_KEY)]
-	pub port: u16,
+	/// Background job and scan concurrency settings.
+	#[nested]
+	#[serde(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(flatten))]
+	pub jobs: JobsConfig,
 
-	/// The verbosity with which system logs are visible (default: 1).
-	#[default_value(1)]
-	#[env_key(VERBOSITY_KEY)]
-	pub verbosity: u64,
+	/// Runtime switches for optional protocol routers, the web UI, and uploads.
+	#[nested]
+	#[serde(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(flatten))]
+	pub protocols: ProtocolsConfig,
 
-	/// Whether or not to pretty print logs.
-	#[default_value(true)]
-	#[env_key(PRETTY_LOGS_KEY)]
-	pub pretty_logs: bool,
-
-	/// The directory where the applicaiton logs will be stored
-	#[default_value(None)]
-	#[env_key(LOG_DIR_KEY)]
-	pub log_dir: Option<String>,
-
-	/// Whether or not to include ANSI color codes in log files.
-	#[default_value(false)]
-	#[env_key(COLORFUL_LOGS_KEY)]
-	pub colorful_logs: bool,
-
-	/// An optional custom path for the database.
-	#[default_value(None)]
-	#[env_key(DB_PATH_KEY)]
-	pub db_path: Option<String>,
-
-	#[default_value(30)]
-	#[env_key(DB_TIMEOUT_KEY)]
-	pub db_timeout_secs: u64,
-
-	/// The maximum number of database connections in the pool.
-	#[default_value(DEFAULT_DB_MAX_CONNECTIONS)]
-	#[env_key(DB_MAX_CONNECTIONS_KEY)]
+	/// Staged ingest directories and progress retention.
+	#[nested]
+	#[serde(flatten)]
 	#[cfg_attr(feature = "graphql", graphql(skip))]
-	pub db_max_connections: u32,
+	pub ingest: IngestConfig,
 
-	/// The minimum number of database connections to keep in the pool.
-	#[default_value(DEFAULT_DB_MIN_CONNECTIONS)]
-	#[env_key(DB_MIN_CONNECTIONS_KEY)]
+	/// Metadata/content provider host settings.
+	#[nested]
+	#[serde(flatten)]
 	#[cfg_attr(feature = "graphql", graphql(skip))]
-	pub db_min_connections: u32,
+	pub providers: ProvidersConfig,
 
-	/// The number of prepared statements cached per SQLite connection.
-	#[default_value(DEFAULT_SQLITE_STATEMENT_CACHE_CAPACITY)]
-	#[env_key(SQLITE_STATEMENT_CACHE_CAPACITY_KEY)]
-	#[cfg_attr(feature = "graphql", graphql(skip))]
-	pub sqlite_statement_cache_capacity: usize,
+	/// Password hashing and session/token lifetimes.
+	#[nested]
+	#[serde(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(flatten))]
+	pub auth: AuthConfig,
 
-	/// The client directory.
-	#[default_value("./client".to_string())]
-	#[debug_value(env!("CARGO_MANIFEST_DIR").to_string() + "/../web/dist")]
-	#[env_key(CLIENT_KEY)]
-	pub client_dir: String,
-
-	/// Indicates if the web UI and its SPA fallback routes should be served.
-	#[default_value(DEFAULT_ENABLE_WEBUI)]
-	#[env_key(ENABLE_WEBUI_KEY)]
-	#[cfg_attr(feature = "graphql", graphql(skip))]
-	pub enable_webui: bool,
-
-	/// Whether background jobs such as scheduled scans are enabled.
-	#[default_value(DEFAULT_ENABLE_BACKGROUND_JOBS)]
-	#[env_key(ENABLE_BACKGROUND_JOBS_KEY)]
-	#[cfg_attr(feature = "graphql", graphql(skip))]
-	pub enable_background_jobs: bool,
-
-	/// Optional root for files admitted by the staged ingest drop-folder watcher.
-	/// When unset, this resolves to `<config_dir>/ingest/drop`.
-	#[default_value(None)]
-	#[env_key(INGEST_DROP_DIR_KEY)]
-	#[cfg_attr(feature = "graphql", graphql(skip))]
-	pub ingest_drop_dir: Option<String>,
-
-	/// Optional root for immutable staged ingest files.
-	/// When unset, this resolves to `<config_dir>/ingest/staging`.
-	#[default_value(None)]
-	#[env_key(INGEST_STAGING_DIR_KEY)]
-	#[cfg_attr(feature = "graphql", graphql(skip))]
-	pub ingest_staging_dir: Option<String>,
-
-	/// Directory holding the built ingest editor (`editor/build`). When set and
-	/// it contains `index.html`, the editor is served under `/editor`.
-	#[default_value(None)]
-	#[env_key(INGEST_EDITOR_DIR_KEY)]
-	#[cfg_attr(feature = "graphql", graphql(skip))]
-	pub ingest_editor_dir: Option<String>,
-
-	/// Number of typed ingest progress events retained for replay.
-	#[default_value(DEFAULT_INGEST_PROGRESS_RETENTION)]
-	#[env_key(INGEST_PROGRESS_RETENTION_KEY)]
-	#[cfg_attr(feature = "graphql", graphql(skip))]
-	pub ingest_progress_retention: u32,
+	/// PDFium location and PDF rendering settings.
+	#[nested]
+	#[serde(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(flatten))]
+	pub pdf: PdfConfig,
 
 	/// The configuration root for the Stump application, contains thumbnails, cache, and logs.
 	#[debug_value(super::get_default_config_dir())]
@@ -262,139 +115,6 @@ pub struct StumpConfig {
 	#[required_by_new]
 	pub config_dir: String,
 
-	/// A list of origins for CORS.
-	#[default_value(vec![])]
-	#[env_key(ORIGINS_KEY)]
-	pub allowed_origins: Vec<String>,
-
-	/// Path to the PDFium binary for PDF support.
-	#[default_value(None)]
-	#[env_key(PDFIUM_KEY)]
-	pub pdfium_path: Option<String>,
-
-	/// Indicates if the GraphQL playground should be enabled.
-	#[default_value(false)]
-	#[env_key(ENABLE_PLAYGROUND_KEY)]
-	pub enable_playground: bool,
-
-	/// Indicates if the KoReader sync feature should be enabled.
-	#[default_value(false)]
-	#[env_key(ENABLE_KOREADER_SYNC_KEY)]
-	#[debug_value(true)]
-	pub enable_koreader_sync: bool,
-
-	/// Indicates if the Kobo sync feature should be enabled.
-	#[default_value(false)]
-	#[env_key(ENABLE_KOBO_SYNC_KEY)]
-	#[debug_value(true)]
-	pub enable_kobo_sync: bool,
-	/// Whether EPUB files should be converted to KEPUB after a library scan.
-	#[default_value(false)]
-	#[env_key(KOBO_KEPUB_PRECONVERT_KEY)]
-	pub kobo_kepub_preconvert: bool,
-
-	/// Number of days an unused KEPUB cache entry is retained.
-	#[default_value(DEFAULT_KOBO_KEPUB_CACHE_MAX_AGE_DAYS)]
-	#[env_key(KOBO_KEPUB_CACHE_MAX_AGE_DAYS_KEY)]
-	pub kobo_kepub_cache_max_age_days: u32,
-
-	/// Deflate level used for generated KEPUB files.
-	#[default_value(DEFAULT_KOBO_KEPUB_DEFLATE_LEVEL)]
-	#[env_key(KOBO_KEPUB_DEFLATE_LEVEL_KEY)]
-	#[validator(validate_kobo_kepub_deflate_level)]
-	pub kobo_kepub_deflate_level: u32,
-	/// Whether Kobo downloads should be converted to KEPUB with deterministic Kobo spans.
-	#[default_value(false)]
-	#[env_key(KOBO_KEPUB_CONVERSION_KEY)]
-	pub kobo_kepub_conversion: bool,
-
-	/// Indicates if the Komga compatibility feature should be enabled.
-	#[default_value(false)]
-	#[env_key(ENABLE_KOMGA_KEY)]
-	#[debug_value(true)]
-	#[cfg_attr(feature = "graphql", graphql(skip))]
-	pub enable_komga: bool,
-
-	/// Indicates if OPDS page access should automatically track reading progression.
-	/// When disabled, clients loading/preloading pages won't trigger progress updates.
-	#[default_value(false)]
-	#[env_key(ENABLE_OPDS_PROGRESSION_KEY)]
-	pub enable_opds_progression: bool,
-
-	/// Password hash cost
-	#[default_value(DEFAULT_PASSWORD_HASH_COST)]
-	#[env_key(HASH_COST_KEY)]
-	pub password_hash_cost: u32,
-
-	/// The time in seconds that a login session will be valid for.
-	#[default_value(DEFAULT_SESSION_TTL)]
-	#[env_key(SESSION_TTL_KEY)]
-	pub session_ttl: i64,
-
-	#[default_value(DEFAULT_ACCESS_TOKEN_TTL)]
-	#[env_key("ACCESS_TOKEN_TTL")]
-	pub access_token_ttl: i64,
-
-	#[default_value(DEFAULT_REFRESH_TOKEN_TTL)]
-	#[env_key("REFRESH_TOKEN_TTL")]
-	pub refresh_token_ttl: i64,
-
-	/// The interval at which automatic deleted session cleanup is performed.
-	#[default_value(DEFAULT_SESSION_EXPIRY_CLEANUP_INTERVAL)]
-	#[env_key(SESSION_EXPIRY_INTERVAL_KEY)]
-	pub expired_session_cleanup_interval: u64,
-
-	/// A multiplier applied to the number of logical CPUs to derive the default scanner concurrency
-	/// limit. Increasing can speed things up but will increase resource usage
-	#[default_value(DEFAULT_PARALLELISM_MULTIPLIER)]
-	#[env_key(PARALLELISM_MULTIPLIER_KEY)]
-	pub parallelism_multiplier: usize,
-
-	/// The maximum file size, in bytes, of images that can be uploaded, e.g., as thumbnails for users,
-	/// libraries, series, or media.
-	#[default_value(DEFAULT_MAX_IMAGE_UPLOAD_SIZE)]
-	#[env_key(MAX_IMAGE_UPLOAD_SIZE_KEY)]
-	pub max_image_upload_size: usize,
-
-	/// Whether or not the server will allow users with the appropriate permissions to upload books and series.
-	#[default_value(DEFAULT_ENABLE_UPLOAD)]
-	#[env_key(ENABLE_UPLOAD_KEY)]
-	pub enable_upload: bool,
-
-	/// The maximum size, in bytes, of files that can be uploaded to be included in libraries.
-	#[default_value(DEFAULT_MAX_FILE_UPLOAD_SIZE)]
-	#[env_key(MAX_FILE_UPLOAD_SIZE_KEY)]
-	pub max_file_upload_size: usize,
-
-	/// The DPI (dots per inch) to use when rendering PDF pages as images.
-	#[default_value(DEFAULT_PDF_RENDER_DPI)]
-	#[env_key(PDF_RENDER_DPI_KEY)]
-	pub pdf_render_dpi: u32,
-
-	/// The maximum width or height dimension for rendered PDF pages.
-	#[default_value(DEFAULT_PDF_MAX_DIMENSION)]
-	#[env_key(PDF_MAX_DIMENSION_KEY)]
-	pub pdf_max_dimension: u32,
-
-	/// The image format to use for rendered PDF pages (webp, png, jpeg).
-	#[default_value(DEFAULT_PDF_RENDER_FORMAT.to_string())]
-	#[env_key(PDF_RENDER_FORMAT_KEY)]
-	pub pdf_render_format: String,
-
-	/// Whether to enable disk caching for rendered PDF pages.
-	#[default_value(DEFAULT_PDF_CACHE_PAGES)]
-	#[env_key(PDF_CACHE_PAGES_KEY)]
-	pub pdf_cache_pages: bool,
-
-	/// Number of pages to pre-render before and after the current page.
-	#[default_value(DEFAULT_PDF_PRERENDER_RANGE)]
-	#[env_key(PDF_PRERENDER_RANGE_KEY)]
-	pub pdf_prerender_range: u32,
-
-	/// Whether to enable high-quality rendering with smoothing (slower but better quality).
-	#[default_value(DEFAULT_PDF_HIGH_QUALITY)]
-	#[env_key(PDF_HIGH_QUALITY_KEY)]
-	pub pdf_high_quality: bool,
 	/// The precomputed media-processing configuration. This is populated when
 	/// the complete Stump configuration has been loaded.
 	#[serde(skip)]
@@ -402,41 +122,30 @@ pub struct StumpConfig {
 	#[default_value(MediaConfig::default())]
 	#[debug_value(MediaConfig::default())]
 	pub media: MediaConfig,
+
 	/// OIDC authentication configuration
 	#[serde(default)]
 	#[cfg_attr(feature = "graphql", graphql(skip))]
 	#[default_value(None)]
 	pub oidc: Option<OidcConfig>,
-
-	/// Whether to trust proxy headers for determining client IP and scheme (e.g., X-Forwarded-For)
-	#[default_value(false)]
-	#[env_key(TRUST_PROXY_HEADERS_KEY)]
-	pub trust_proxy_headers: bool,
 }
 
 impl StumpConfig {
-	/// Refreshes the media configuration after all user and environment values
-	/// have been applied.
-	pub fn finalize_media_config(&mut self) {
+	/// Computes the derived, read-only snapshots (currently the media-processing
+	/// configuration) after all user and environment values have been applied.
+	/// Must be called once before the config is shared.
+	pub fn finalize(&mut self) {
 		self.media = MediaConfig::from_values(
 			self.get_config_dir(),
-			self.pdfium_path.as_deref().map(PathBuf::from),
-			self.pdf_cache_pages,
-			self.pdf_prerender_range,
-			self.pdf_render_dpi,
-			self.pdf_max_dimension,
-			self.pdf_high_quality,
-			self.pdf_render_format.clone(),
-			self.cpu_concurrency_limit(),
+			self.pdf.pdfium_path.as_deref().map(PathBuf::from),
+			self.pdf.pdf_cache_pages,
+			self.pdf.pdf_prerender_range,
+			self.pdf.pdf_render_dpi,
+			self.pdf.pdf_max_dimension,
+			self.pdf.pdf_high_quality,
+			self.pdf.pdf_render_format.clone(),
+			self.jobs.cpu_concurrency_limit(),
 		);
-	}
-	/// returns a sensible default concurrency limit based on the number of logical cpus
-	/// available to the process, scaled by `parallelism_multiplier`.
-	pub fn cpu_concurrency_limit(&self) -> usize {
-		let multiplier = std::cmp::max(self.parallelism_multiplier, 1);
-		std::thread::available_parallelism()
-			.map(|n| n.get() * multiplier)
-			.unwrap_or(multiplier)
 	}
 
 	/// Ensures that the configuration directory exists and saves the `StumpConfig`'s current values
@@ -507,17 +216,19 @@ impl StumpConfig {
 
 	/// Returns True if the configuration profile is "debug" and False otherwise.
 	pub fn is_debug(&self) -> bool {
-		self.profile.as_str() == "debug"
+		self.server.is_debug()
 	}
 
 	/// Returns a `PathBuf` to the Stump configuration directory.
 	pub fn get_config_dir(&self) -> PathBuf {
 		PathBuf::from(&self.config_dir)
 	}
+
 	/// Returns the configured ingest drop-folder root, defaulting below the
 	/// application configuration directory.
 	pub fn get_ingest_drop_dir(&self) -> PathBuf {
-		self.ingest_drop_dir
+		self.ingest
+			.ingest_drop_dir
 			.as_deref()
 			.map(PathBuf::from)
 			.unwrap_or_else(|| self.get_config_dir().join("ingest/drop"))
@@ -526,14 +237,15 @@ impl StumpConfig {
 	/// Returns the configured immutable ingest staging root, defaulting below
 	/// the application configuration directory.
 	pub fn get_ingest_staging_dir(&self) -> PathBuf {
-		self.ingest_staging_dir
+		self.ingest
+			.ingest_staging_dir
 			.as_deref()
 			.map(PathBuf::from)
 			.unwrap_or_else(|| self.get_config_dir().join("ingest/staging"))
 	}
 
 	pub fn get_log_dir(&self) -> PathBuf {
-		match &self.log_dir {
+		match &self.server.log_dir {
 			Some(value) => PathBuf::from(value),
 			None => self.get_config_dir(),
 		}
@@ -568,50 +280,13 @@ impl StumpConfig {
 	pub fn get_log_file(&self) -> PathBuf {
 		self.get_config_dir().join("Stump.log")
 	}
-
-	/// Parse the configured PDF render format into a SupportedImageFormat.
-	/// Falls back to WebP if the configured format is invalid.
-	pub fn get_pdf_render_format(
-		&self,
-	) -> models::shared::image_processor_options::SupportedImageFormat {
-		use models::shared::image_processor_options::SupportedImageFormat;
-
-		match self.pdf_render_format.to_lowercase().as_str() {
-			"webp" => SupportedImageFormat::Webp,
-			"jpeg" | "jpg" => SupportedImageFormat::Jpeg,
-			"png" => SupportedImageFormat::Png,
-			_ => {
-				tracing::warn!(
-					format = self.pdf_render_format,
-					"Invalid PDF render format, falling back to WebP"
-				);
-				SupportedImageFormat::Webp
-			},
-		}
-	}
-}
-fn validate_kobo_kepub_deflate_level(level: &u32) -> bool {
-	if (1..=12).contains(level) {
-		return true;
-	}
-
-	eprintln!("Invalid Kobo KEPUB deflate level {level}; expected 1..=12");
-	false
-}
-
-fn do_validate_profile(profile: &String) -> bool {
-	if profile == "release" || profile == "debug" {
-		return true;
-	}
-
-	eprintln!("Invalid profile value: {profile}");
-	false
 }
 
 #[cfg(test)]
 mod tests {
 	use tempfile;
 
+	use super::super::defaults::*;
 	use super::*;
 
 	#[test]
@@ -624,29 +299,37 @@ mod tests {
 
 		// Apply a partial config to set the values
 		let partial_config = PartialStumpConfig {
-			profile: Some("release".to_string()),
-			port: Some(1337),
-			verbosity: Some(3),
-			pretty_logs: Some(true),
-			log_dir: None,
-			colorful_logs: None,
-			db_path: Some("not_a_real_path".to_string()),
-			client_dir: Some("not_a_real_dir".to_string()),
-			enable_webui: Some(true),
-			parallelism_multiplier: Some(DEFAULT_PARALLELISM_MULTIPLIER),
-			enable_opds_progression: Some(false),
-			ip: None,
-			config_dir: None,
-			allowed_origins: Some(vec!["origin1".to_string(), "origin2".to_string()]),
-			pdfium_path: Some("not_a_path_to_pdfium".to_string()),
-			enable_playground: Some(false),
-			enable_koreader_sync: Some(false),
-			enable_kobo_sync: Some(false),
-			kobo_kepub_preconvert: None,
-			kobo_kepub_cache_max_age_days: None,
-			kobo_kepub_deflate_level: None,
-			kobo_kepub_conversion: None,
-			enable_komga: Some(false),
+			server: PartialServerConfig {
+				profile: Some("release".to_string()),
+				port: Some(1337),
+				verbosity: Some(3),
+				pretty_logs: Some(true),
+				allowed_origins: Some(vec!["origin1".to_string(), "origin2".to_string()]),
+				..Default::default()
+			},
+			database: PartialDatabaseConfig {
+				db_path: Some("not_a_real_path".to_string()),
+				..Default::default()
+			},
+			jobs: PartialJobsConfig {
+				parallelism_multiplier: Some(DEFAULT_PARALLELISM_MULTIPLIER),
+				..Default::default()
+			},
+			protocols: PartialProtocolsConfig {
+				client_dir: Some("not_a_real_dir".to_string()),
+				enable_webui: Some(true),
+				enable_opds_progression: Some(false),
+				enable_playground: Some(false),
+				enable_koreader_sync: Some(false),
+				enable_kobo_sync: Some(false),
+				enable_komga: Some(false),
+				enable_kavita: Some(false),
+				..Default::default()
+			},
+			pdf: PartialPdfConfig {
+				pdfium_path: Some("not_a_path_to_pdfium".to_string()),
+				..Default::default()
+			},
 			..Default::default()
 		};
 
@@ -665,61 +348,83 @@ mod tests {
 		assert_eq!(
 			new_toml_vals,
 			PartialStumpConfig {
-				profile: Some("release".to_string()),
-				ip: Some("0.0.0.0".to_string()),
-				port: Some(1337),
-				verbosity: Some(3),
-				pretty_logs: Some(true),
-				log_dir: None,
-				colorful_logs: Some(false),
-				db_path: Some("not_a_real_path".to_string()),
-				db_timeout_secs: Some(30),
-				client_dir: Some("not_a_real_dir".to_string()),
-				db_max_connections: Some(DEFAULT_DB_MAX_CONNECTIONS),
-				db_min_connections: Some(DEFAULT_DB_MIN_CONNECTIONS),
-				sqlite_statement_cache_capacity: Some(
-					DEFAULT_SQLITE_STATEMENT_CACHE_CAPACITY
-				),
-				enable_background_jobs: Some(DEFAULT_ENABLE_BACKGROUND_JOBS),
-				ingest_drop_dir: None,
-				ingest_staging_dir: None,
-				ingest_editor_dir: None,
-				ingest_progress_retention: Some(DEFAULT_INGEST_PROGRESS_RETENTION),
-				enable_webui: Some(true),
+				server: PartialServerConfig {
+					profile: Some("release".to_string()),
+					ip: Some("0.0.0.0".to_string()),
+					port: Some(1337),
+					verbosity: Some(3),
+					pretty_logs: Some(true),
+					log_dir: None,
+					colorful_logs: Some(false),
+					allowed_origins: Some(vec![
+						"origin1".to_string(),
+						"origin2".to_string()
+					]),
+					trust_proxy_headers: Some(false),
+				},
+				database: PartialDatabaseConfig {
+					db_path: Some("not_a_real_path".to_string()),
+					db_timeout_secs: Some(DEFAULT_DB_TIMEOUT_SECS),
+					db_max_connections: Some(DEFAULT_DB_MAX_CONNECTIONS),
+					db_min_connections: Some(DEFAULT_DB_MIN_CONNECTIONS),
+					sqlite_statement_cache_capacity: Some(
+						DEFAULT_SQLITE_STATEMENT_CACHE_CAPACITY
+					),
+				},
+				jobs: PartialJobsConfig {
+					enable_background_jobs: Some(DEFAULT_ENABLE_BACKGROUND_JOBS),
+					parallelism_multiplier: Some(DEFAULT_PARALLELISM_MULTIPLIER),
+				},
+				protocols: PartialProtocolsConfig {
+					enable_koreader_sync: Some(false),
+					enable_kobo_sync: Some(false),
+					kobo_kepub_preconvert: Some(false),
+					kobo_kepub_cache_max_age_days: Some(
+						DEFAULT_KOBO_KEPUB_CACHE_MAX_AGE_DAYS
+					),
+					kobo_kepub_deflate_level: Some(DEFAULT_KOBO_KEPUB_DEFLATE_LEVEL),
+					kobo_kepub_conversion: Some(false),
+					enable_komga: Some(false),
+					enable_kavita: Some(false),
+					enable_opds_progression: Some(false),
+					enable_upload: Some(DEFAULT_ENABLE_UPLOAD),
+					max_file_upload_size: Some(DEFAULT_MAX_FILE_UPLOAD_SIZE),
+					max_image_upload_size: Some(DEFAULT_MAX_IMAGE_UPLOAD_SIZE),
+					enable_webui: Some(true),
+					enable_playground: Some(false),
+					client_dir: Some("not_a_real_dir".to_string()),
+				},
+				ingest: PartialIngestConfig {
+					ingest_drop_dir: None,
+					ingest_staging_dir: None,
+					ingest_editor_dir: None,
+					ingest_progress_retention: Some(DEFAULT_INGEST_PROGRESS_RETENTION),
+				},
+				providers: PartialProvidersConfig {
+					enable_providers: Some(DEFAULT_ENABLE_PROVIDERS),
+					provider_cache_max_bytes: Some(DEFAULT_PROVIDER_CACHE_MAX_BYTES),
+				},
+				auth: PartialAuthConfig {
+					password_hash_cost: Some(DEFAULT_PASSWORD_HASH_COST),
+					session_ttl: Some(DEFAULT_SESSION_TTL),
+					access_token_ttl: Some(DEFAULT_ACCESS_TOKEN_TTL),
+					refresh_token_ttl: Some(DEFAULT_REFRESH_TOKEN_TTL),
+					expired_session_cleanup_interval: Some(
+						DEFAULT_SESSION_EXPIRY_CLEANUP_INTERVAL
+					),
+				},
+				pdf: PartialPdfConfig {
+					pdfium_path: Some("not_a_path_to_pdfium".to_string()),
+					pdf_render_dpi: Some(DEFAULT_PDF_RENDER_DPI),
+					pdf_max_dimension: Some(DEFAULT_PDF_MAX_DIMENSION),
+					pdf_render_format: Some(DEFAULT_PDF_RENDER_FORMAT.to_string()),
+					pdf_cache_pages: Some(DEFAULT_PDF_CACHE_PAGES),
+					pdf_prerender_range: Some(DEFAULT_PDF_PRERENDER_RANGE),
+					pdf_high_quality: Some(DEFAULT_PDF_HIGH_QUALITY),
+				},
 				config_dir: Some(config_dir),
-				parallelism_multiplier: Some(DEFAULT_PARALLELISM_MULTIPLIER),
-				allowed_origins: Some(vec!["origin1".to_string(), "origin2".to_string()]),
-				pdfium_path: Some("not_a_path_to_pdfium".to_string()),
-				enable_opds_progression: Some(false),
-				enable_playground: Some(false),
-				enable_koreader_sync: Some(false),
-				enable_kobo_sync: Some(false),
-				kobo_kepub_preconvert: Some(false),
-				kobo_kepub_cache_max_age_days: Some(
-					DEFAULT_KOBO_KEPUB_CACHE_MAX_AGE_DAYS
-				),
-				kobo_kepub_deflate_level: Some(DEFAULT_KOBO_KEPUB_DEFLATE_LEVEL),
-				kobo_kepub_conversion: Some(false),
-				enable_komga: Some(false),
-				password_hash_cost: Some(DEFAULT_PASSWORD_HASH_COST),
-				session_ttl: Some(DEFAULT_SESSION_TTL),
-				access_token_ttl: Some(DEFAULT_ACCESS_TOKEN_TTL),
-				refresh_token_ttl: Some(DEFAULT_REFRESH_TOKEN_TTL),
-				expired_session_cleanup_interval: Some(
-					DEFAULT_SESSION_EXPIRY_CLEANUP_INTERVAL
-				),
-				max_image_upload_size: Some(DEFAULT_MAX_IMAGE_UPLOAD_SIZE),
-				enable_upload: Some(DEFAULT_ENABLE_UPLOAD),
-				max_file_upload_size: Some(DEFAULT_MAX_FILE_UPLOAD_SIZE),
-				pdf_render_dpi: Some(DEFAULT_PDF_RENDER_DPI),
-				pdf_max_dimension: Some(DEFAULT_PDF_MAX_DIMENSION),
-				pdf_render_format: Some(DEFAULT_PDF_RENDER_FORMAT.to_string()),
-				pdf_cache_pages: Some(DEFAULT_PDF_CACHE_PAGES),
-				pdf_prerender_range: Some(DEFAULT_PDF_PRERENDER_RANGE),
-				pdf_high_quality: Some(DEFAULT_PDF_HIGH_QUALITY),
-				oidc: None,
 				media: None,
-				trust_proxy_headers: Some(false),
+				oidc: None,
 			}
 		);
 
@@ -743,6 +448,7 @@ mod tests {
 				(ENABLE_WEBUI_KEY, Some("false")),
 				(HASH_COST_KEY, Some("1")),
 				(ENABLE_KOMGA_KEY, Some("true")),
+				(ENABLE_KAVITA_KEY, Some("true")),
 			],
 			|| {
 				let tempdir =
@@ -758,84 +464,280 @@ mod tests {
 				assert_eq!(
 					generated,
 					StumpConfig {
-						profile: "release".to_string(),
-						ip: "0.0.0.0".to_string(),
-						port: 1337,
-						verbosity: 2,
-						pretty_logs: true,
-						log_dir: None,
-						colorful_logs: false,
-						db_path: None,
-						db_timeout_secs: 30,
-						client_dir: "./client".to_string(),
-						enable_webui: false,
+						server: ServerConfig {
+							profile: "release".to_string(),
+							ip: "0.0.0.0".to_string(),
+							port: 1337,
+							verbosity: 2,
+							pretty_logs: true,
+							log_dir: None,
+							colorful_logs: false,
+							allowed_origins: vec![],
+							trust_proxy_headers: false,
+						},
+						database: DatabaseConfig {
+							db_path: None,
+							db_timeout_secs: DEFAULT_DB_TIMEOUT_SECS,
+							db_max_connections: 2,
+							db_min_connections: 1,
+							sqlite_statement_cache_capacity: 32,
+						},
+						jobs: JobsConfig {
+							enable_background_jobs: false,
+							parallelism_multiplier: DEFAULT_PARALLELISM_MULTIPLIER,
+						},
+						protocols: ProtocolsConfig {
+							enable_koreader_sync: false,
+							enable_kobo_sync: false,
+							kobo_kepub_preconvert: false,
+							kobo_kepub_cache_max_age_days:
+								DEFAULT_KOBO_KEPUB_CACHE_MAX_AGE_DAYS,
+							kobo_kepub_deflate_level: DEFAULT_KOBO_KEPUB_DEFLATE_LEVEL,
+							kobo_kepub_conversion: false,
+							enable_komga: true,
+							enable_kavita: true,
+							enable_opds_progression: false,
+							enable_upload: DEFAULT_ENABLE_UPLOAD,
+							max_file_upload_size: DEFAULT_MAX_FILE_UPLOAD_SIZE,
+							max_image_upload_size: DEFAULT_MAX_IMAGE_UPLOAD_SIZE,
+							enable_webui: false,
+							enable_playground: true,
+							client_dir: "./client".to_string(),
+						},
+						ingest: IngestConfig {
+							ingest_drop_dir: None,
+							ingest_staging_dir: None,
+							ingest_editor_dir: None,
+							ingest_progress_retention: DEFAULT_INGEST_PROGRESS_RETENTION,
+						},
+						providers: ProvidersConfig {
+							enable_providers: DEFAULT_ENABLE_PROVIDERS,
+							provider_cache_max_bytes: DEFAULT_PROVIDER_CACHE_MAX_BYTES,
+						},
+						auth: AuthConfig {
+							password_hash_cost: 1,
+							session_ttl: DEFAULT_SESSION_TTL,
+							access_token_ttl: DEFAULT_ACCESS_TOKEN_TTL,
+							refresh_token_ttl: DEFAULT_REFRESH_TOKEN_TTL,
+							expired_session_cleanup_interval:
+								DEFAULT_SESSION_EXPIRY_CLEANUP_INTERVAL,
+						},
+						pdf: PdfConfig {
+							pdfium_path: None,
+							pdf_render_dpi: DEFAULT_PDF_RENDER_DPI,
+							pdf_max_dimension: DEFAULT_PDF_MAX_DIMENSION,
+							pdf_render_format: DEFAULT_PDF_RENDER_FORMAT.to_string(),
+							pdf_cache_pages: DEFAULT_PDF_CACHE_PAGES,
+							pdf_prerender_range: DEFAULT_PDF_PRERENDER_RANGE,
+							pdf_high_quality: DEFAULT_PDF_HIGH_QUALITY,
+						},
 						config_dir,
-						db_max_connections: 2,
-						ingest_drop_dir: None,
-						ingest_staging_dir: None,
-						ingest_editor_dir: None,
-						ingest_progress_retention: DEFAULT_INGEST_PROGRESS_RETENTION,
-						db_min_connections: 1,
-						sqlite_statement_cache_capacity: 32,
-						enable_background_jobs: false,
-						allowed_origins: vec![],
-						pdfium_path: None,
-						enable_playground: true,
-						enable_koreader_sync: false,
-						enable_kobo_sync: false,
-						kobo_kepub_preconvert: false,
-						kobo_kepub_cache_max_age_days:
-							DEFAULT_KOBO_KEPUB_CACHE_MAX_AGE_DAYS,
-						kobo_kepub_deflate_level: DEFAULT_KOBO_KEPUB_DEFLATE_LEVEL,
-						kobo_kepub_conversion: false,
-						enable_komga: true,
-						enable_opds_progression: false,
-						password_hash_cost: 1,
-						session_ttl: DEFAULT_SESSION_TTL,
-						access_token_ttl: DEFAULT_ACCESS_TOKEN_TTL,
-						refresh_token_ttl: DEFAULT_REFRESH_TOKEN_TTL,
-						expired_session_cleanup_interval:
-							DEFAULT_SESSION_EXPIRY_CLEANUP_INTERVAL,
-						parallelism_multiplier: DEFAULT_PARALLELISM_MULTIPLIER,
-
-						max_image_upload_size: DEFAULT_MAX_IMAGE_UPLOAD_SIZE,
-						enable_upload: DEFAULT_ENABLE_UPLOAD,
-						max_file_upload_size: DEFAULT_MAX_FILE_UPLOAD_SIZE,
-						pdf_render_dpi: DEFAULT_PDF_RENDER_DPI,
-						pdf_max_dimension: DEFAULT_PDF_MAX_DIMENSION,
-						pdf_render_format: DEFAULT_PDF_RENDER_FORMAT.to_string(),
-						pdf_cache_pages: DEFAULT_PDF_CACHE_PAGES,
-						pdf_prerender_range: DEFAULT_PDF_PRERENDER_RANGE,
-						pdf_high_quality: DEFAULT_PDF_HIGH_QUALITY,
-						oidc: None,
 						media: MediaConfig::default(),
-						trust_proxy_headers: false,
+						oidc: None,
 					}
 				);
 			},
 		);
 	}
+
+	/// A `Stump.toml` written before the config was split into groups (flat keys,
+	/// original field order) must load unchanged: the groups are pure structure.
+	#[test]
+	fn test_pre_split_toml_loads_into_grouped_config() {
+		let tempdir = tempfile::tempdir().expect("Failed to create temporary directory");
+		let config_dir = tempdir.path().to_string_lossy().to_string();
+		std::fs::write(
+			tempdir.path().join("Stump.toml"),
+			format!(
+				r#"profile = "debug"
+ip = "127.0.0.1"
+port = 1337
+verbosity = 3
+pretty_logs = false
+colorful_logs = true
+db_path = "/var/lib/stump"
+db_timeout_secs = 45
+db_max_connections = 4
+db_min_connections = 2
+sqlite_statement_cache_capacity = 64
+client_dir = "/srv/stump/client"
+enable_webui = false
+enable_background_jobs = false
+ingest_drop_dir = "/ingest/drop"
+ingest_progress_retention = 42
+config_dir = "{config_dir}"
+allowed_origins = ["https://a.example", "https://b.example"]
+pdfium_path = "/opt/pdfium/libpdfium.so"
+enable_playground = true
+enable_koreader_sync = true
+enable_kobo_sync = true
+kobo_kepub_preconvert = true
+kobo_kepub_cache_max_age_days = 7
+kobo_kepub_deflate_level = 9
+kobo_kepub_conversion = true
+enable_komga = true
+enable_opds_progression = true
+password_hash_cost = 4
+session_ttl = 10
+access_token_ttl = 20
+refresh_token_ttl = 30
+expired_session_cleanup_interval = 40
+parallelism_multiplier = 3
+max_image_upload_size = 1000
+enable_upload = true
+max_file_upload_size = 2000
+pdf_render_dpi = 72
+pdf_max_dimension = 800
+pdf_render_format = "png"
+pdf_cache_pages = false
+pdf_prerender_range = 0
+pdf_high_quality = false
+trust_proxy_headers = true
+
+[oidc]
+enabled = true
+client_id = "stump"
+issuer_url = "https://issuer.example"
+client_secret = "secret"
+"#
+			),
+		)
+		.unwrap();
+
+		let loaded = StumpConfig::new(config_dir.clone())
+			.with_config_file()
+			.expect("pre-split Stump.toml must load");
+
+		assert_eq!(
+			loaded.server,
+			ServerConfig {
+				profile: "debug".to_string(),
+				ip: "127.0.0.1".to_string(),
+				port: 1337,
+				verbosity: 3,
+				pretty_logs: false,
+				log_dir: None,
+				colorful_logs: true,
+				allowed_origins: vec![
+					"https://a.example".to_string(),
+					"https://b.example".to_string()
+				],
+				trust_proxy_headers: true,
+			}
+		);
+		assert_eq!(
+			loaded.database,
+			DatabaseConfig {
+				db_path: Some("/var/lib/stump".to_string()),
+				db_timeout_secs: 45,
+				db_max_connections: 4,
+				db_min_connections: 2,
+				sqlite_statement_cache_capacity: 64,
+			}
+		);
+		assert_eq!(
+			loaded.jobs,
+			JobsConfig {
+				enable_background_jobs: false,
+				parallelism_multiplier: 3,
+			}
+		);
+		assert_eq!(
+			loaded.protocols,
+			ProtocolsConfig {
+				enable_koreader_sync: true,
+				enable_kobo_sync: true,
+				kobo_kepub_preconvert: true,
+				kobo_kepub_cache_max_age_days: 7,
+				kobo_kepub_deflate_level: 9,
+				kobo_kepub_conversion: true,
+				enable_komga: true,
+				enable_kavita: false,
+				enable_opds_progression: true,
+				enable_upload: true,
+				max_file_upload_size: 2000,
+				max_image_upload_size: 1000,
+				enable_webui: false,
+				enable_playground: true,
+				client_dir: "/srv/stump/client".to_string(),
+			}
+		);
+		assert_eq!(
+			loaded.ingest,
+			IngestConfig {
+				ingest_drop_dir: Some("/ingest/drop".to_string()),
+				ingest_staging_dir: None,
+				ingest_editor_dir: None,
+				ingest_progress_retention: 42,
+			}
+		);
+		assert_eq!(
+			loaded.auth,
+			AuthConfig {
+				password_hash_cost: 4,
+				session_ttl: 10,
+				access_token_ttl: 20,
+				refresh_token_ttl: 30,
+				expired_session_cleanup_interval: 40,
+			}
+		);
+		assert_eq!(
+			loaded.pdf,
+			PdfConfig {
+				pdfium_path: Some("/opt/pdfium/libpdfium.so".to_string()),
+				pdf_render_dpi: 72,
+				pdf_max_dimension: 800,
+				pdf_render_format: "png".to_string(),
+				pdf_cache_pages: false,
+				pdf_prerender_range: 0,
+				pdf_high_quality: false,
+			}
+		);
+		assert_eq!(loaded.providers, ProvidersConfig::new());
+		assert_eq!(loaded.config_dir, config_dir);
+		let oidc = loaded.oidc.as_ref().expect("oidc table must still load");
+		assert!(oidc.enabled);
+		assert_eq!(oidc.client_id, "stump");
+
+		// And the grouped config still serializes to the same flat key set.
+		let written = toml::to_string(&loaded).unwrap();
+		for key in [
+			"profile = \"debug\"",
+			"db_timeout_secs = 45",
+			"enable_background_jobs = false",
+			"kobo_kepub_deflate_level = 9",
+			"ingest_progress_retention = 42",
+			"password_hash_cost = 4",
+			"pdf_render_format = \"png\"",
+			"trust_proxy_headers = true",
+			"[oidc]",
+		] {
+			assert!(written.contains(key), "missing `{key}` in:\n{written}");
+		}
+		assert!(!written.contains("[server]"), "groups must stay flat:\n{written}");
+	}
+
+	#[test]
+	fn test_finalize_snapshots_pdf_and_jobs_settings() {
+		let mut config = StumpConfig::new("/tmp/stump-finalize".to_string());
+		config.pdf.pdf_render_dpi = 96;
+		config.pdf.pdfium_path = Some("/opt/pdfium".to_string());
+		config.jobs.parallelism_multiplier = 1;
+		config.finalize();
+
+		assert_eq!(config.media.pdf_render_dpi, 96);
+		assert_eq!(config.media.pdfium_path, Some(PathBuf::from("/opt/pdfium")));
+		assert_eq!(
+			config.media.cpu_concurrency_limit(),
+			config.jobs.cpu_concurrency_limit()
+		);
+		assert_eq!(config.media.get_config_dir(), config.get_config_dir());
+	}
+
 	#[test]
 	fn test_komga_defaults() {
 		let release = StumpConfig::new("/tmp/stump-komga-defaults".to_string());
-		assert!(!release.enable_komga);
-		assert!(StumpConfig::debug().enable_komga);
-	}
-	#[test]
-	fn test_kobo_kepub_defaults_and_deflate_bounds() {
-		let config = StumpConfig::new("/tmp/stump-kobo-kepub-defaults".to_string());
-		assert!(!config.kobo_kepub_preconvert);
-		assert_eq!(config.kobo_kepub_cache_max_age_days, 90);
-		assert_eq!(config.kobo_kepub_deflate_level, 6);
-		assert!(validate_kobo_kepub_deflate_level(&1));
-		assert!(validate_kobo_kepub_deflate_level(&12));
-		assert!(!validate_kobo_kepub_deflate_level(&0));
-		assert!(!validate_kobo_kepub_deflate_level(&13));
-		assert_eq!(KOBO_KEPUB_PRECONVERT_KEY, "KOBO_KEPUB_PRECONVERT");
-		assert_eq!(
-			KOBO_KEPUB_CACHE_MAX_AGE_DAYS_KEY,
-			"KOBO_KEPUB_CACHE_MAX_AGE_DAYS"
-		);
-		assert_eq!(KOBO_KEPUB_DEFLATE_LEVEL_KEY, "KOBO_KEPUB_DEFLATE_LEVEL");
+		assert!(!release.protocols.enable_komga);
+		assert!(StumpConfig::debug().protocols.enable_komga);
 	}
 }

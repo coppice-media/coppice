@@ -3,8 +3,11 @@ use std::collections::HashMap;
 use async_graphql::{Context, Object, Result, ID};
 use chrono::Utc;
 use models::{
-	domain::reading_progress::{
-		calculate_logical_date, compute_page_based_percentage, should_extend_session,
+	domain::{
+		reading_progress::{
+			calculate_logical_date, compute_page_based_percentage, should_extend_session,
+		},
+		reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
 	},
 	entity::{media, reading_session},
 	services::reading_progress::{
@@ -13,10 +16,12 @@ use models::{
 	},
 	shared::enums::ReadingStatus,
 };
+use rust_decimal::prelude::ToPrimitive;
 use sea_orm::{
 	prelude::Decimal, ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait,
 	IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, QueryTrait, TransactionTrait,
 };
+use stump_core::reading_state;
 
 use crate::{
 	data::CoreContext, input::media::MediaProgressInput,
@@ -40,35 +45,60 @@ impl ReadProgressMutation {
 		let conn = core.conn.as_ref();
 
 		let reset_elapsed_seconds = input.reset_elapsed_seconds();
+		let raw_payload = serde_json::json!({ "input": format!("{input:?}") });
+		let book_pages = get_book_pages(id.to_string(), conn).await?;
 
-		let progression = match input {
+		let (progression, head_update) = match input {
 			MediaProgressInput::Epub(input) => {
 				let is_complete = input.is_complete.unwrap_or(
 					input.percentage.unwrap_or_default() >= Decimal::new(1, 0),
 				);
-				NormalizedProgression {
-					page: None,
-					locator: Some(input.locator),
-					percentage: input.percentage,
-					elapsed_seconds_delta: input.elapsed_seconds_delta,
-					did_complete: is_complete,
-					device_id: input.device_id,
-					reset_elapsed_seconds,
-				}
+				let head_update = ProtocolUpdate {
+					protocol: SourceProtocol::Stump,
+					device_id: input.device_id.clone(),
+					updated_at: None,
+					position: Position::Locator(input.locator.clone()),
+					progression: input.percentage.and_then(|value| value.to_f64()),
+					completed: is_complete.then_some(true),
+					raw_payload,
+				};
+				(
+					NormalizedProgression {
+						page: None,
+						locator: Some(input.locator),
+						percentage: input.percentage,
+						elapsed_seconds_delta: input.elapsed_seconds_delta,
+						did_complete: is_complete,
+						device_id: input.device_id,
+						reset_elapsed_seconds,
+					},
+					head_update,
+				)
 			},
 			MediaProgressInput::Paged(input) => {
-				let book_pages = get_book_pages(id.to_string(), conn).await?;
 				let is_complete = input.page >= book_pages;
 				let percentage = compute_page_based_percentage(input.page, book_pages);
-				NormalizedProgression {
-					page: Some(input.page),
-					locator: None,
-					percentage: Some(percentage),
-					elapsed_seconds_delta: input.elapsed_seconds_delta,
-					did_complete: is_complete,
-					device_id: input.device_id,
-					reset_elapsed_seconds,
-				}
+				let head_update = ProtocolUpdate {
+					protocol: SourceProtocol::Stump,
+					device_id: input.device_id.clone(),
+					updated_at: None,
+					position: Position::Page(input.page),
+					progression: None,
+					completed: is_complete.then_some(true),
+					raw_payload,
+				};
+				(
+					NormalizedProgression {
+						page: Some(input.page),
+						locator: None,
+						percentage: Some(percentage),
+						elapsed_seconds_delta: input.elapsed_seconds_delta,
+						did_complete: is_complete,
+						device_id: input.device_id,
+						reset_elapsed_seconds,
+					},
+					head_update,
+				)
 			},
 		};
 
@@ -77,8 +107,27 @@ impl ReadProgressMutation {
 		let session = upsert_reading_session(&upsert_txn, user, id.as_ref(), progression)
 			.await
 			.map(ReadingSession::from)?;
+		let applied = reading_state::apply(
+			&upsert_txn,
+			&user.id,
+			Publication {
+				media_id: id.as_ref(),
+				pages: book_pages,
+			},
+			head_update,
+		)
+		.await?;
 
 		upsert_txn.commit().await?;
+		if applied.accepted() {
+			core.emit_reading_head_changed(reading_state::ReadingHeadChanged {
+				user_id: user.id.clone(),
+				media_id: id.to_string(),
+				series_id: None,
+				protocol: SourceProtocol::Stump,
+				cleared: false,
+			});
+		}
 
 		Ok(session)
 	}

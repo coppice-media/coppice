@@ -1,10 +1,9 @@
 use models::{
 	entity::{
-		library_exclusion,
+		device, library_exclusion,
 		media::{self, get_age_restriction_filter},
-		media_analysis, media_metadata, reading_device, reading_session, series,
-		series_metadata,
-		user::AuthUser,
+		media_analysis, media_metadata, reading_head, reading_session, series,
+		series_metadata, user::AuthUser,
 	},
 	prefixer::{parse_query_to_model, parse_query_to_model_optional, Prefixer},
 	shared::analysis::MediaAnalysisData,
@@ -12,7 +11,7 @@ use models::{
 use sea_orm::{
 	entity::prelude::*,
 	sea_query::{ConditionType, Expr},
-	Condition, FromQueryResult, JoinType, QuerySelect,
+	Condition, FromQueryResult, JoinType, QuerySelect, SelectModel, Selector,
 };
 
 #[derive(Clone, Debug)]
@@ -138,29 +137,15 @@ pub struct OPDSProgressionBookRef {
 	pub analysis: Option<MediaAnalysisData>,
 }
 
-pub struct OPDSProgressionEntity {
-	pub session: reading_session::Model,
-
-	pub device: Option<reading_device::Model>,
-	pub book: OPDSProgressionBookRef,
-}
-
-impl OPDSProgressionEntity {
-	pub fn find() -> Select<reading_session::Entity> {
-		Prefixer::new(reading_session::Entity::find().select_only())
-			.add_columns(reading_session::Entity)
-			.add_named_columns(
-				&[
-					media::Column::Id,
-					media::Column::Extension,
-					media::Column::Pages,
-				],
-				"bookref",
-			)
-			.add_named_columns(&[media_analysis::Column::Data], "bookref")
-			.add_columns(reading_device::Entity)
-			.selector
-			.inner_join(media::Entity)
+impl OPDSProgressionBookRef {
+	/// The page-count, extension, and analysis context a progression needs.
+	pub fn find_by_media_id(media_id: &str) -> Selector<SelectModel<Self>> {
+		media::Entity::find_by_id(media_id.to_string())
+			.select_only()
+			.column(media::Column::Id)
+			.column(media::Column::Extension)
+			.column(media::Column::Pages)
+			.column_as(media_analysis::Column::Data, "analysis")
 			.join_rev(
 				JoinType::LeftJoin,
 				media_analysis::Entity::belongs_to(media::Entity)
@@ -168,51 +153,13 @@ impl OPDSProgressionEntity {
 					.to(media::Column::Id)
 					.into(),
 			)
-			// TODO(devices): this is a bit scuffed. it will generated roughly:
-			/*
-				left join reading_devices on reading_sessions.device_ids = reading_devices.id OR (
-					json_extract(reading_sessions.device_ids, '$[0]') = reading_devices.id
-				)
-			*/
-			// which _works_ but the former condition is redundant and will never actually match anything,
-			// but sea-orm seems to always imbue the join with that default predicate...
-			.join(
-				JoinType::LeftJoin,
-				reading_session::Entity::belongs_to(reading_device::Entity)
-					.from(reading_session::Column::DeviceIds)
-					.to(reading_device::Column::Id)
-					.condition_type(ConditionType::Any)
-					// https://sqlite.org/json1.html#the_json_extract_function
-					.on_condition(|_left, _right| {
-						// TODO(devices): sessions now store multiple devices, so not sure how to approach this.
-						// we don't use it for now, so it's fine, but should be revisited. maybe i just add e.g.
-						// find_with_kind("koreader") or something
-						Condition::all().add(Expr::cust(
-							"json_extract(reading_sessions.device_ids, '$[0]') = reading_devices.id",
-						))
-					})
-					.into(),
-			)
+			.into_model::<Self>()
 	}
 }
 
-impl FromQueryResult for OPDSProgressionEntity {
-	fn from_query_result(
-		res: &sea_orm::QueryResult,
-		_pre: &str,
-	) -> Result<Self, sea_orm::DbErr> {
-		let session =
-			parse_query_to_model::<reading_session::Model, reading_session::Entity>(res)?;
-		let book = OPDSProgressionBookRef::from_query_result(res, "bookref")?;
-		let device = parse_query_to_model_optional::<
-			reading_device::Model,
-			reading_device::Entity,
-		>(res)?;
-
-		Ok(OPDSProgressionEntity {
-			session,
-			device,
-			book,
-		})
-	}
+/// The unified reading head projected onto the OPDS 2.0 progression resource.
+pub struct OPDSProgressionEntity {
+	pub head: reading_head::Model,
+	pub device: Option<device::Model>,
+	pub book: OPDSProgressionBookRef,
 }

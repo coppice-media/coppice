@@ -1,0 +1,88 @@
+---
+title: Kavita compatibility profile
+description: The client-derived Kavita API profile (wave 1) served for Kavita readers and trackers
+---
+
+This page is the authoritative specification for Stump's Kavita compatibility profile. It describes the **implemented profile**, not the full Kavita API: the routes and DTOs that the inventoried Kavita clients call, reproduced against Kavita **0.9.1.4** (`develop` `d77d956b9551227d8be2ee488b08f14aa3a341e5`, `openapi.json` captured from the `kavita-ref` container). An endpoint or field not listed here is not implied to be supported.
+
+## Scope and evidence
+
+- Clients inventoried (commit-pinned): the Kavita Tachiyomi extension (`Kareadita/tach-extension` `5f3c068c`), the Mihon Kavita tracker (`mihonapp/mihon` `5fadea61`), Kover (`rodonisi/kover` `0bd8d084`), Turnleaf (`sgerner/turnleaf` `b54f1f71`), Kamigura (`KamiguraApp/Kamigura` `f4baeff4`), Kamare (`fpammer/kamare.koplugin` `b85ab0a8`) and Inkita (`dom-53/Inkita` `67c1f4a9`).
+- Contract types live in [`crates/kavita/src/dto.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/kavita/src/dto.rs) and [`crates/kavita/src/filter.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/kavita/src/filter.rs); routes in `crates/kavita/src/routes/`; the server adapter and authentication in [`apps/server/src/routers/kavita/`](https://github.com/stumpapp/stump/tree/nightly/apps/server/src/routers/kavita).
+- Replay harness: `specs/kavita.hurl` and `make replay-kavita` in the `komga-compat` sibling repository replay the extension, Mihon, Turnleaf and Kover sequences with `x-api-key`, the `apiKey` query and the `Plugin/authenticate` JWT.
+
+## Enabling
+
+The profile is compiled with the `kavita` Cargo feature (on in `headless` and `full`, off in `minimal`) and mounted when `STUMP_ENABLE_KAVITA=true` (`config.protocols.enable_kavita`, default `false`, `true` in debug builds). Every route lives directly under `/api/<Controller>/...`; Stump's own `/api/v1`, `/api/v2` and `/api/graphql` namespaces are untouched, and `stump_kavita::is_kavita_path` names the boundary.
+
+Kavita's ASP.NET routing is case-insensitive; every route is registered under its canonical casing and fully lower-cased (`/api/Series/all-v2` and `/api/series/all-v2`), which covers every casing the inventoried clients use.
+
+## Authentication
+
+| Credential | Where | Behaviour |
+| --- | --- | --- |
+| `apiKey` query parameter | any Kavita route | A Stump API key (`stump_...`). Checked first, as Kavita does; an invalid value is `401` even if a valid header is present. |
+| `x-api-key` header | any Kavita route | A Stump API key. |
+| `Authorization: Bearer <token>` | any Kavita route | A Kavita token minted by `POST /api/Plugin/authenticate` or `POST /api/Account/login` (HS512, claims `name`, `nameid`, `role`, `nbf`, `exp`, `iat`, three-day lifetime, signed with Stump's access-token secret), or a Stump access token / API key. |
+
+`POST /api/Plugin/authenticate?apiKey&pluginName` and `GET /api/Plugin/version?apiKey` validate the Stump API key; `POST /api/Account/login` accepts `{apiKey}` or `{username, password}`. The `UserDto.apiKey` echoes the key used to log in and is `null` after a password login (Stump never reveals stored keys). `refreshToken` is `null`; there is no refresh endpoint in this wave. `preferences` is the Kavita 0.9.1.4 default object; `roles` are `Admin` (server owner), `Login`, and `Download` (`DownloadFile` permission).
+
+Unauthenticated requests answer `401` with `WWW-Authenticate: Bearer` and an empty body, like Kavita. Missing, deleted and hidden entities are indistinguishable.
+
+## Identity mapping
+
+Kavita ids are integers. The `kavita_ids` table (migration `m20260912_000000_add_kavita_compat`) allocates one stable id per `(kind, stump_id)`; ids never change or get reused. Kinds: `library`, `series`, `media`, `user`, plus the `install` id reported by `server-info-slim`.
+
+| Kavita | Stump |
+| --- | --- |
+| Library | Library. `type` from the library's `library_type`: Comic→`1`, Book/WebNovel→`2`, LightNovel→`4`, everything else (Manga, Manhwa, Webtoon, Mixed)→`0`. `folders` is the library path; `libraryFileTypes` is always Archive/Epub/Pdf/Images. |
+| Series | Series. `name` is the metadata title or series name, `sortName` the metadata sort title, `pages`/`pagesRead` are sums over the media, `format` follows the first media's extension (Archive `1`, Epub `3`, Pdf `4`, Image `0`, Unknown `2`). |
+| Volume | One per media item, in Kavita's single-file-volume shape: `minNumber == maxNumber == number`, one chapter. The number is the media metadata volume, else an integral metadata number, else the media's 1-based position in name order. |
+| Chapter | The media item again with the same id as its volume (`volumeId == chapterId`), `number: "-100000"` / `minNumber: -100000` (`Parser.DefaultChapterNumber`), `isSpecial: false`, `range`/`title` from the file name or metadata title, one `MangaFileDto` (`extension` with the leading dot, `koreaderHash`). |
+| People, genres | Kavita entities with ids; Stump stores comma-separated text. Ids are a stable FNV-1a hash of the lower-cased name (`mapper::name_id`) and round-trip through `Metadata/genres`, `Metadata/people` and the series filters. Tags use Stump's real tag ids. |
+| Age rating | Stump's minimum age mapped onto the closest `AgeRating` (`AgeRating::from_min_age`). |
+| Publication status | Stump's free-text status folded onto `PublicationStatus` (`ongoing`/`continuing` `0`, `hiatus` `1`, `completed` `2`, `cancelled` `3`, `ended` `4`). |
+
+Timestamps render as .NET `DateTime` strings without an offset and with seven fractional digits (`2026-09-05T00:30:44.5870451`); unset values are `0001-01-01T00:00:00`. Local and UTC pairs (`created`/`createdUtc`) both carry the UTC instant. Whole floats render without a fractional part (`100000`, not `100000.0`).
+
+## Reading progress
+
+Kavita's `pageNum` is the zero-based page being read and `pageNum == pages` means finished; Stump's reading session stores the one-based page and completion. `pagesRead` is `pages` for a finished session, `end_page - 1` for an open one, and `percentage × pages` for locator-only (EPUB) sessions. `POST /api/Reader/progress` writes `pageNum + 1` and marks the session finished when `pageNum >= pages`, ignores `pageNum: 0` with no existing progress and unchanged pages (like `ReaderService.SaveReadingProgress`), and stores `bookScrollId` per user and media in `kavita_progress`. Every write also updates the unified reading head (`SourceProtocol::Kavita`). `mark-unread`/`mark-volume-unread` delete the user's sessions for the affected media.
+
+`GET /api/Reader/continue-point` follows `ReaderService.GetContinuePoint` over the volumes in order. `GET /api/Tachiyomi/latest-chapter` returns `204` without progress and otherwise a chapter whose `number` is the volume number divided by 10 000 (`R` formatting), which `POST /api/Tachiyomi/mark-chapter-until-as-read?chapterNumber` decodes back (`0` is ignored, values `< 1` are encoded volumes).
+
+## Series filters
+
+`POST /api/Series/all-v2` and `/v2` accept `SeriesFilterV2Dto` with `PageNumber`/`PageSize` (default: page 1, everything; `0` means everything) and answer with the `Pagination` header (`{currentPage, itemsPerPage, totalItems, totalPages}`, exposed through `Access-Control-Expose-Headers`). Supported statements: `SeriesName`, `Summary`, `Path`, `FilePath`, `PublicationStatus`, `Languages`, `AgeRating`, `Tags`, `Genres`, all people fields (ids or, as the extension sends them, names), `Libraries`, `Formats`, `ReleaseYear`, `ReadProgress`. Comparisons are validated per field as in `SeriesFilter.cs` (an inapplicable comparison is `400`, where Kavita answers `500`). Sorts: `SortName`, `CreatedDate`, `LastModifiedDate`, `LastChapterAdded`, `TimeToRead` (page count), `ReleaseYear`, `Random`, `ReadProgress`, `UnreadChapterCount`; `AverageRating`/`UserRating` fall back to sort name. `limitTo` truncates after sorting. Fields with no Stump equivalent (`UserRating`, `AverageRating`, `ReadTime`, `ReadingDate`, `ReadLast`, `FileSize`, `WantToRead`, `CollectionTags`, `CollapseSeriesRelationships`) and unknown field numbers are ignored.
+
+`GET /api/Filter` is always empty and `POST /api/Filter/decode` implements `SmartFilterHelper.Decode` (statement separator U+FFFD, inner separator U+00A6, double URL escaping), verified against `kavita-ref`.
+
+## Route matrix
+
+| Method | Route | Clients | Handler |
+| --- | --- | --- | --- |
+| POST | `/api/Plugin/authenticate` | extension, Mihon, Kover, Kamigura, Kamare | `routes/account.rs` |
+| GET | `/api/Plugin/version` | Kamare | `routes/account.rs` |
+| POST | `/api/Account/login` | Kamigura | `routes/account.rs` |
+| GET | `/api/Health` | Turnleaf, Kamigura | `routes/server.rs` |
+| GET | `/api/Server/server-info-slim` | extension | `routes/server.rs` |
+| GET | `/api/Library/libraries`, `/api/Library?libraryId`, `/api/Library/{id}` | all | `routes/library.rs` |
+| POST | `/api/Series/all-v2`, `/api/Series/v2` | all | `routes/series.rs` |
+| GET | `/api/Series/{id}`, `/volumes`, `/volume`, `/metadata`, `/series-detail`, `/chapter` | all | `routes/series.rs` |
+| GET | `/api/Volume?volumeId`, `/api/Volume/{id}`, `/api/Chapter?chapterId` | extension, Kamare, Inkita | `routes/series.rs` |
+| GET | `/api/Image/series-cover`, `/volume-cover`, `/chapter-cover` | all | `routes/image.rs` |
+| GET | `/api/Reader/image`, `/pdf`, `/continue-point`, `/get-progress`, `/has-progress` | all | `routes/reader.rs` |
+| POST | `/api/Reader/progress`, `/mark-read`, `/mark-unread`, `/mark-volume-read`, `/mark-volume-unread` | Inkita, Kover, Turnleaf, Kamigura, Kamare | `routes/reader.rs` |
+| GET/POST | `/api/Tachiyomi/latest-chapter`, `/mark-chapter-until-as-read` | Mihon | `routes/tachiyomi.rs` |
+| GET | `/api/Metadata/genres`, `/tags`, `/age-ratings`, `/languages`, `/people`, `/publication-status` | extension, Inkita | `routes/metadata.rs` |
+| GET/POST | `/api/Filter`, `/api/Filter/decode` | extension, Kover, Kamare, Inkita | `routes/filter.rs` |
+
+Status codes mirror `kavita-ref`: unknown series `404` on `/api/Series/{id}` and `continue-point`, `400 "Series does not exist"` on `series-detail`, `204` on `/api/Library`, `/api/Volume`, `/api/Chapter` and `/api/Series/metadata`, `[]` on `/api/Series/volumes`, and the empty `ProgressDto` on `get-progress`. Every other Kavita controller answers `404` and logs the miss.
+
+## Known deviations
+
+- `/api/Library/{id}` and `/api/Volume/{id}` are served although Kavita 0.9.1.4 itself answers `404` for the path form (the extension requests them and degrades on failure).
+- EPUB `pages` is Stump's synthetic page count, not Kavita's spine length; `pageNum` for EPUBs therefore addresses Stump pages.
+- `wordCount`, hours-to-read, ratings, colours, external ids and locks are zero/false/null; `coverImage` names (`v{id}_c{id}.png`) are synthetic and only need to be non-blank.
+- `Plugin/authenticate` returns the real mapped user id where Kavita returns `0`.
+- `firstInstallDate` is `null` (Stump keeps no install timestamp); `isDocker` reports `/.dockerenv`.

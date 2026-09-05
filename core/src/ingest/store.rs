@@ -162,7 +162,7 @@ impl IngestStore {
 	pub fn new(config: Arc<StumpConfig>, conn: Arc<DatabaseConnection>) -> Self {
 		let progress = Arc::new(ProgressHub::new(
 			conn.clone(),
-			config.ingest_progress_retention,
+			config.ingest.ingest_progress_retention,
 		));
 		Self {
 			config,
@@ -1774,7 +1774,7 @@ mod tests {
 		.unwrap();
 		let temporary = tempfile::tempdir().unwrap();
 		let mut stump_config = StumpConfig::debug();
-		stump_config.ingest_staging_dir = Some(
+		stump_config.ingest.ingest_staging_dir = Some(
 			temporary
 				.path()
 				.join("staging")

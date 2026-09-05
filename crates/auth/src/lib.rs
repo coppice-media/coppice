@@ -1,3 +1,9 @@
+//! Transport-neutral authenticated request context and authorization errors.
+//!
+//! Authentication itself (sessions, Basic/Bearer, OIDC) lives in the server
+//! middleware; this crate only carries the resolved user and enforces
+//! permissions. See `crates/auth/README.md` for decisions and verification.
+
 use models::{
 	entity::user::AuthUser,
 	shared::{enums::UserPermission, permission_set::user_has_all_permissions},

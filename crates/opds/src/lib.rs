@@ -1,3 +1,14 @@
+//! OPDS 1.2 (+ Page Streaming Extension) and OPDS 2.0 route contract.
+//!
+//! This crate owns [`ProviderHost`], v2 [`BrowseParams`], the [`OpdsBackend`]
+//! trait, and the unprefixed [`v1_router`]/[`v2_router`] trees. Wire types stay
+//! in `stump_core::opds`; authentication, mounting (`/opds/v1.2`,
+//! `/opds/{api_key}/v1.2`, `/opds/v2.0`), and persistence stay in the host.
+//!
+//! See `crates/opds/README.md` for spec URLs, the Liseur `31f8182d` client
+//! (OPDS 1.2 device-verified; OPDS 2.0 unsupported by the app), decisions,
+//! and verification.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

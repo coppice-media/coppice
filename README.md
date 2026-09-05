@@ -59,7 +59,7 @@ Any compiled profile can be tuned without rebuilding (from [Server configuration
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `STUMP_ENABLE_WEBUI` | `true` | Serves the web UI/SPA. Only effective when compiled with the `webui` feature; a headless build cannot re-enable it. |
-| `STUMP_ENABLE_BACKGROUND_JOBS` | `true` | Scheduled jobs, library watcher, Apalis worker. `false` keeps HTTP/database up; job/watcher calls return an explicit disabled error. |
+| `STUMP_ENABLE_BACKGROUND_JOBS` | `true` | Scheduled jobs, library watcher, job executor. `false` keeps HTTP/database up; job/watcher calls return an explicit disabled error. |
 | `STUMP_ENABLE_KOMGA` | `false` (`true` in debug builds) | Mounts the Komga compatibility routes (requires the `komga` Cargo feature). |
 | `STUMP_ENABLE_UPLOAD` | `false` | Enables the file upload interface. |
 | `ENABLE_KOBO_SYNC` | `false` in release (debug differs) | Mounts Kobo sync routes. |
@@ -84,6 +84,7 @@ Any compiled profile can be tuned without rebuilding (from [Server configuration
 | --- | --- |
 | `crates/media` (`stump_media`) | File/image processing: format processors (EPUB, ZIP, PDF behind `pdf`, RAR behind `rar`), content types, hashing, Readium manifests, thumbnails. |
 | `crates/scanner` (`stump_scanner`) | Library scanning and the shared directory-mtime snapshot walker. |
+| `crates/jobs` (`stump_jobs`) | Job-type-agnostic queue, executor (Apalis behind the `apalis` feature, inline blocking-pool otherwise), `JobLifecycle`/`JobContext` contracts, queue counters, and cron scheduler. |
 | `crates/komga` (`stump_komga`) | Komga compatibility DTOs, pagination, and error mapping. |
 | `crates/kobo` (`stump_kobo`) | Kobo backend traits and contracts. |
 | `crates/kepub` | KEPUB conversion (Kobo pagination wrappers, `koboSpan` anchors); conversion-only. |

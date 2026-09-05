@@ -1,0 +1,20 @@
+[package]
+name = "stump_provider_mangadex"
+version.workspace = true
+edition = "2021"
+description = "MangaDex API source for the Stump provider host"
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+models = { path = "../models", default-features = false }
+reqwest = { workspace = true, features = ["query"] }
+serde.workspace = true
+serde_json.workspace = true
+stump_provider = { path = "../provider" }
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+stump_provider = { path = "../provider", features = ["mock"] }
+tokio = { workspace = true, features = ["full"] }

@@ -1,0 +1,280 @@
+---
+title: Device pairing
+description: How reader apps obtain a Stump credential without a password — the start/approve/poll protocol, its routes and GraphQL operations, the threat model, and a curl walkthrough
+---
+
+Device pairing is the only way the clients Stump ships (the Mihon extension,
+the NickelStump Kobo plugin, future companions) authenticate against a Stump
+server. The device never sees a password: it displays a short code (or a QR
+code), a signed-in user approves the request from Stump's UI, and the device
+then collects a device-scoped credential minted by the devices service
+(`crates/devices`). The credential is an ordinary Stump API key or liseur-sync
+token bound to a `devices` row, so it can be inspected, rotated, and revoked
+like any other device credential.
+
+The flow is modelled on the OAuth 2.0 device authorization grant (RFC 8628):
+the device holds a secret poll handle, the human transfers a short code, and
+the server never has to trust the network the device sits on.
+
+## Sequence
+
+```text
+ Device (Kobo / Mihon)             Stump server                    User (Home / mobile app)
+ ───────────────────               ────────────                    ────────────────────────
+ POST /api/v2/devices/pair/start ─►
+   {kind, name?}                   create device_pairings row:
+                                   code (6 digits, bcrypt-hashed),
+                                   nonce (128-bit), expires_at = now + 5 min
+                                   emit CoreEvent::DevicePairingRequested ─► toast: "Kobo 'Clara'
+ ◄─ {pairing_id, code, nonce,                                                  from 192.168.8.20
+     qr_payload, expires_at,                                                   wants to pair"
+     poll_interval_secs}
+ show code / QR
+                                                                    (a) types the code, or
+                                                                    (b) scans the QR → stump://pair?…&nonce=
+                                   ◄─ GraphQL approveDevicePairing(pairingId, code | nonce)
+                                   verify proof, status = APPROVED,
+                                   user_id = approver, approved_at = now
+                                   (5 wrong proofs → DENIED)
+ GET …/pair/{id}/status?nonce= ──►
+                                   first approved poll: claim credential_issued,
+                                   devices.create_device(approver, kind, name),
+                                   devices.endpoints(…)
+ ◄─ {status: "approved", credential {secret…}, device, endpoints}
+ store the secret; done
+ GET …/status?nonce= (again) ────►
+ ◄─ {status: "approved", credential_issued: true}          ← never repeats the secret
+```
+
+Every row in `device_pairings` is kept as the audit record of the request:
+who approved or denied it, from which remote address the device started it,
+how many wrong proofs were entered, and whether the credential was collected.
+
+## Device-side REST API
+
+All three routes are unauthenticated (the device has nothing yet) and live in
+`apps/server/src/routers/api/v2/device_pairing.rs`. JSON is `snake_case`.
+
+### `POST /api/v2/devices/pair/start`
+
+Rate limited as an authentication attempt (AUTH class, keyed by client IP, see
+`apps/server/src/middleware/rate_limit.rs`), and additionally capped at 10
+open (pending, unexpired) pairings per remote IP — the 11th returns `429`.
+
+Request:
+
+```json
+{ "kind": "kobo", "name": "Clara" }
+```
+
+`kind` is a `DeviceKind` (`kobo | koreader | mihon | komelia | liseur | opds |
+api | web`) and decides which credential the devices service mints (`liseur` →
+liseur-sync token, everything else → prefixed API key with the protocol's
+permission set). `name` is optional, trimmed, at most 100 characters; the
+devices service picks a default such as `Al's Kobo` when it is absent. An
+unknown `kind` is rejected with `422`.
+
+Response `200`:
+
+```json
+{
+  "pairing_id": "2f4c9f8a-2c9c-4d5c-a3ff-3d7d0f1f8b1e",
+  "code": "048213",
+  "nonce": "8d3f6c7a1b2e4f5061728394a5b6c7d8",
+  "qr_payload": "stump://pair?host=http%3A%2F%2F192.168.8.153%3A25640&id=2f4c9f8a-…&nonce=8d3f6c7a…",
+  "expires_at": "2026-09-05T12:34:56Z",
+  "poll_interval_secs": 2
+}
+```
+
+- `code` is a **string** of six digits with leading zeros preserved. It is
+  drawn from the OS RNG (`rand::rngs::OsRng`, rejection-sampled so the
+  distribution is exactly uniform) and stored only as a bcrypt hash using the
+  server's configured password hash cost. Show it to the user; it is never
+  returned again.
+- `nonce` is 16 bytes of OS entropy, hex encoded. It is the device's poll
+  secret and the machine-readable proof of possession carried by the QR
+  payload. Keep `pairing_id` and `nonce` private to the device.
+- `expires_at` is RFC 3339 UTC with second precision; the pairing reads as
+  `expired` after it (TTL 5 minutes, `PAIRING_TTL_SECS`).
+
+### `GET /api/v2/devices/pair/{pairing_id}/status?nonce=<nonce>`
+
+The `nonce` query parameter is required. An unknown `pairing_id` and a wrong
+nonce are indistinguishable (`404`), so the id space cannot be probed and
+users who see a pairing id in the pending list still cannot poll for its
+credential. Otherwise the response is always `200` with a `status`:
+
+| Body | Meaning |
+| --- | --- |
+| `{"status":"pending"}` | Waiting for a user. Poll again after `poll_interval_secs`. |
+| `{"status":"denied"}` | A user denied it, or five wrong proofs were entered. Stop. |
+| `{"status":"expired"}` | The five-minute window passed. Start over. |
+| `{"status":"approved","credential_issued":true,"device":{…},"credential":{…},"endpoints":[…]}` | **Once**, on the first poll after approval. Store `credential.secret` immediately. |
+| `{"status":"approved","credential_issued":true}` | Every later poll. The secret is gone; if the device lost it the user must revoke the device and pair again. |
+
+The credential is minted lazily by that first approved poll (not at approval
+time), so no plaintext secret is ever stored, an abandoned approval creates no
+orphan device, and `endpoints` are rendered for the origin the *device* used
+to reach the server. `credential` is the devices service's `IssuedCredential`:
+
+```json
+{
+  "kind": "api_key",
+  "protocol": "kobo",
+  "credential_ref": "17",
+  "secret": "stump_XXXXXXXX_YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"
+}
+```
+
+`kind ∈ api_key | liseur_token | session`, `protocol ∈ kobo | koreader | komga
+| opds | liseur | api`. `device` is `{id, name, kind}`. `endpoints` is a list
+of `{label, url, username, secret_hint}` with complete, ready-to-use URLs
+(for URL-embedded keys such as `/kobo/{api_key}/…`) or the header the client
+must send. API keys are presented as `Authorization: Bearer <secret>` on
+`/api/v2/*` and `/api/graphql`, as `X-API-Key` on the Komga-compatible paths,
+and embedded in the path for Kobo, KOReader and OPDS; liseur-sync tokens are
+`Authorization: Bearer <secret>` on `/v1/*`.
+
+Two devices racing on the same approved pairing cannot both receive the
+secret: the handler first flips `credential_issued` with a conditional
+`UPDATE … WHERE status = 'APPROVED' AND credential_issued = FALSE` and only the
+poll that changed the row mints. If minting then fails, the claim is released
+so the next poll can retry.
+
+### `GET /api/v2/devices/pair/{pairing_id}/qr.png?nonce=<nonce>`
+
+A PNG rendering of `qr_payload` (error correction level M, 8 px modules,
+quiet zone, `Cache-Control: no-store`) for surfaces without a QR library such
+as the Kobo plugin. Same nonce rule as the status poll, because the image
+contains the nonce. The route exists only when the server is built with the
+`qr` Cargo feature (`headless` and `full` enable it; `minimal` does not, and the
+path is then a plain `404`). The 6-digit code is always sufficient on its own.
+
+## User-side GraphQL API
+
+All three operations are gated by `UserPermission::AccessApiKeys` (server
+owners pass implicitly), the same permission the devices service requires to
+mint a credential, so an approval can never produce a key its owner could not
+have created directly. Files: `crates/graphql/src/{query,mutation,object}/device_pairing.rs`.
+
+- `pendingDevicePairings: [DevicePairing!]!` — pending, unexpired requests,
+  oldest first. Pending pairings are not owned by anyone yet, so every user
+  who may approve sees them (kind, requested name, remote IP, deadline).
+  Neither the code hash nor the nonce is ever exposed.
+- `approveDevicePairing(pairingId: ID!, code: String, nonce: String): DevicePairing!`
+  — exactly one of `code` (typed from the device screen) or `nonce` (from the
+  scanned `stump://pair?host=…&id=…&nonce=…` deep link) must be provided.
+  On success `status = APPROVED`, `userId` is the caller and `approvedAt` is
+  set. A wrong proof answers `Incorrect code or nonce (N attempts left)`; the
+  fifth wrong proof denies the pairing (`MAX_FAILED_ATTEMPTS = 5`). Expired,
+  approved and denied pairings are rejected with a message naming the state.
+- `denyDevicePairing(pairingId: ID!): DevicePairing!` — settles a pending
+  pairing as `DENIED` and records the caller in `userId`. Anyone allowed to
+  approve may deny, so a suspicious toast can be shut down by whoever sees it.
+
+`DevicePairing` fields: `id`, `kind`, `name`, `remoteIp`, `status`
+(`PENDING | APPROVED | DENIED | EXPIRED`, computed from `expiresAt` for pending
+rows), `userId`, `failedAttempts`, `credentialIssued`, `createdAt`,
+`expiresAt`, `approvedAt`.
+
+`CoreEvent::DevicePairingRequested { pairingId, kind, name, remoteIp,
+expiresAt }` is broadcast on the core event channel when a pairing starts, so a
+UI subscribed to `readEvents` can show a live toast that deep-links to the
+approval.
+
+## Storage
+
+Migration `m20260911_000000_add_device_pairings` creates:
+
+```text
+device_pairings(
+  id TEXT PK, kind TEXT, name TEXT NULL, code_hash TEXT, nonce TEXT,
+  remote_ip TEXT, user_id TEXT NULL → users.id ON DELETE CASCADE,
+  status TEXT DEFAULT 'PENDING', failed_attempts INTEGER DEFAULT 0,
+  credential_issued BOOLEAN DEFAULT FALSE,
+  created_at, expires_at, approved_at NULL
+)
+idx-device-pairings-status-expires (status, expires_at)
+idx-device-pairings-remote-ip (remote_ip)
+```
+
+`EXPIRED` is derived from `expires_at` for pending rows and persisted lazily
+when a poll or a mutation observes it, so rows stay self-describing without a
+background sweeper. Rows are never purged automatically; they are the audit
+trail.
+
+## Threat model
+
+| Threat | Mitigation |
+| --- | --- |
+| **Brute-forcing the code.** An authenticated user (or a malicious one) guesses the 6-digit code of a pending pairing to bind somebody else's device to their own account. | Codes are uniformly random (10⁶ space), stored as bcrypt hashes, and `MAX_FAILED_ATTEMPTS = 5` wrong proofs deny the pairing for good, so the success probability is 5 × 10⁻⁶ per pairing. The approval mutation requires an authenticated session with `AccessApiKeys`; the 5-minute TTL bounds the window; every attempt is logged with the user id. |
+| **Replay / credential theft by polling.** Someone who learns a `pairing_id` (it appears in the pending list of every user allowed to approve, and in server logs) polls the status endpoint and grabs the credential when the owner approves. | Polls are nonce-bound: without the 128-bit nonce handed only to the device the poll is a `404`. The credential is returned exactly once (`credential_issued` claimed atomically), so even the legitimate device cannot fetch it twice and a late attacker gets a bare `approved`. Pairings are single-use: a settled row cannot be approved, denied or re-issued. The QR PNG needs the same nonce, so the image (which embeds the nonce) is not fetchable by id alone. |
+| **Phishing a user into approving.** An attacker starts a pairing from their own device and convinces a user to type the code (or scan their QR), turning the attacker's device into a credential for the victim's account. | The proof of possession only proves that the approver is looking at *some* device screen, so this is fundamentally a social-engineering risk. The UI shows the device kind, the requested name and the remote IP before approval so a request from an unexpected network stands out; the approver must hold `AccessApiKeys`, and the credential is a device row on the victim's account that Home lists with last-seen data and a revoke action, so a mistaken approval is visible and reversible. Codes are only ever displayed by the device and never sent by Stump over email or chat; anyone asking a user to "read them a code" is outside the protocol. |
+| **Pending-list spam / DoS.** Unauthenticated `start` requests flood the table and the toasts. | `start` is in the AUTH rate-limit class (per-IP token bucket) and each remote IP may hold at most 10 open pairings. A bcrypt hash per start bounds CPU to the same budget as a login attempt. |
+| **Downgrade to a weaker approval.** A client tries to approve with both a code and a nonce, or with neither. | The mutation demands exactly one proof and counts any mismatch against the attempt budget; nonce comparison is constant-time (`subtle`). |
+
+What pairing does **not** protect against: a compromised approver account
+(it can create keys directly), a compromised server database (it holds the
+same secrets every other credential does), or a device that leaks the secret
+it stored — revoke the device in Home in all three cases.
+
+## curl walkthrough
+
+The same sequence is what `apps/server/tests/device_pairing/mod.rs` drives
+against the in-memory server. To run it by hand, start an instance with
+`STUMP_PORT=25641 scripts/dev-fixture-server.sh` (copied fixture config,
+`PDFIUM_PATH=/tmp/libpdfium.so`); the comments show the response shapes with
+secrets redacted. This transcript has not yet been captured against a live
+instance in this working tree.
+
+```bash
+BASE=http://127.0.0.1:25641
+
+# 1. The device starts a pairing (no auth)
+curl -s -X POST $BASE/api/v2/devices/pair/start \
+  -H 'content-type: application/json' \
+  -d '{"kind":"kobo","name":"Walkthrough Kobo"}'
+# {"pairing_id":"<id>","code":"<6 digits>","nonce":"<32 hex>","qr_payload":"stump://pair?host=http%3A%2F%2F127.0.0.1%3A25641&id=<id>&nonce=<nonce>","expires_at":"2026-09-05T…Z","poll_interval_secs":2}
+
+# 2. Still pending
+curl -s "$BASE/api/v2/devices/pair/$ID/status?nonce=$NONCE"
+# {"status":"pending"}
+
+# 3. The user signs in (session cookie) and approves over GraphQL
+curl -s -c cookies.txt -X POST $BASE/api/v2/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"<user>","password":"<password>"}' > /dev/null
+curl -s -b cookies.txt -X POST $BASE/api/graphql -H 'content-type: application/json' \
+  -d '{"query":"mutation($id: ID!, $code: String) { approveDevicePairing(pairingId: $id, code: $code) { id status userId credentialIssued } }","variables":{"id":"'$ID'","code":"'$CODE'"}}'
+# {"data":{"approveDevicePairing":{"id":"<id>","status":"APPROVED","userId":"<user id>","credentialIssued":false}}}
+
+# 4. First poll after approval returns the credential
+curl -s "$BASE/api/v2/devices/pair/$ID/status?nonce=$NONCE"
+# {"status":"approved","credential_issued":true,"device":{"id":"<device id>","name":"Walkthrough Kobo","kind":"kobo"},"credential":{"kind":"api_key","protocol":"kobo","credential_ref":"<api key id>","secret":"stump_…"},"endpoints":[…]}
+
+# 5. Second poll: approved, no credential
+curl -s "$BASE/api/v2/devices/pair/$ID/status?nonce=$NONCE"
+# {"status":"approved","credential_issued":true}
+
+# 6. Wrong nonce is indistinguishable from an unknown id
+curl -s -o /dev/null -w '%{http_code}\n' "$BASE/api/v2/devices/pair/$ID/status?nonce=deadbeef"
+# 404
+
+# 7. The QR rendering (feature `qr`)
+curl -s -o qr.png -w '%{content_type}\n' "$BASE/api/v2/devices/pair/$ID/qr.png?nonce=$NONCE"
+# image/png
+```
+
+## Tests
+
+- `cargo test -p stump_server --test api_tests device_pairing` — end-to-end
+  over the in-memory server: happy path, credential returned exactly once,
+  five wrong codes → denied, expired, nonce mismatch → 404, QR-nonce approval,
+  approval bound to the approver and blocked for others, permission gate, deny,
+  per-IP cap and input validation, QR PNG (with `qr`).
+- `cargo test -p stump_server --lib device_pairing` — code/nonce generation,
+  payload encoding, PNG rendering.
+- `cargo test -p models device_pairing` — effective-status rules.
+- `cargo test -p migrations --test device_pairings` — schema, defaults,
+  indexes and the cascading foreign key.

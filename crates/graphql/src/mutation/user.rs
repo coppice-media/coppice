@@ -87,10 +87,10 @@ impl UserMutation {
 		}
 
 		match value.size() {
-			Ok(size) if size as usize > core.config.max_image_upload_size => {
+			Ok(size) if size as usize > core.config.protocols.max_image_upload_size => {
 				return Err(format!(
 					"File size exceeds maximum upload size of {} bytes",
-					core.config.max_image_upload_size
+					core.config.protocols.max_image_upload_size
 				)
 				.into());
 			},
@@ -203,7 +203,7 @@ impl UserMutation {
 	) -> Result<User> {
 		let core_ctx = ctx.data::<CoreContext>()?;
 		let hashed_password =
-			bcrypt::hash(input.password, core_ctx.config.password_hash_cost)?;
+			bcrypt::hash(input.password, core_ctx.config.auth.password_hash_cost)?;
 
 		let conn = core_ctx.conn.as_ref();
 
@@ -615,7 +615,7 @@ async fn update_user(
 		if !by_user.has_permission(UserPermission::ChangePassword) {
 			return Err("You do not have permission to change the password".into());
 		}
-		let hashed_password = bcrypt::hash(password, config.password_hash_cost)?;
+		let hashed_password = bcrypt::hash(password, config.auth.password_hash_cost)?;
 		update_user.hashed_password = Set(hashed_password);
 	}
 

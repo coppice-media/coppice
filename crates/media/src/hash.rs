@@ -76,21 +76,22 @@ pub fn generate_koreader_hash<P: AsRef<std::path::Path>>(
 	let step = 1024i64;
 	let size = 1024i64;
 
+	let mut buffer = vec![0u8; size as usize];
 	for i in -1..=10 {
 		let offset = if i == -1 { 0 } else { step << (2 * i) };
 		file.seek(std::io::SeekFrom::Start(offset as u64))?;
 
-		let mut buffer = vec![0u8; size as usize];
 		let bytes_read = file.read(&mut buffer)?;
-
-		// println!("Offset: {}, Bytes Read: {}, i: {i}", offset, bytes_read,);
-
 		if bytes_read == 0 {
 			tracing::trace!(?offset, "Reached end of file");
 			break;
 		}
 
-		md5_context.consume(&buffer);
+		// KOReader's util.partialMD5 hashes only the bytes actually read
+		// (`frontend/util.lua`): a short final sample must not be zero-padded,
+		// otherwise files whose size falls inside a sample window get a hash
+		// KOReader never presents.
+		md5_context.consume(&buffer[..bytes_read]);
 	}
 
 	let hash = format!("{:x}", md5_context.finalize());
@@ -130,5 +131,31 @@ mod tests {
 			generate_koreader_hash(pdf_path()).unwrap(),
 			"41cce710f34e5ec21315e19c99821415".to_string()
 		)
+	}
+}
+
+#[cfg(test)]
+mod koreader_partial_md5 {
+	use super::generate_koreader_hash;
+	use std::io::Write;
+
+	/// A 5000-byte file is sampled at offsets 0, 1024 and 4096; the last read
+	/// returns 904 bytes. KOReader hashes exactly those bytes. The expected
+	/// value is what `md5` produces over the concatenation of the sampled
+	/// ranges, i.e. what KOReader's `util.partialMD5` reports for this file.
+	#[test]
+	fn short_final_sample_is_not_zero_padded() {
+		let mut file = tempfile::NamedTempFile::new().unwrap();
+		let bytes: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+		file.write_all(&bytes).unwrap();
+		file.flush().unwrap();
+
+		let mut expected = md5::Context::new();
+		expected.consume(&bytes[0..1024]);
+		expected.consume(&bytes[1024..2048]);
+		expected.consume(&bytes[4096..5000]);
+		let expected = format!("{:x}", expected.finalize());
+
+		assert_eq!(generate_koreader_hash(file.path()).unwrap(), expected);
 	}
 }

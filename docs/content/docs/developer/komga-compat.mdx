@@ -63,7 +63,7 @@ The current harness/replay evidence covers the route and DTO observations used h
 Two independent gates must both allow the adapter:
 
 1. **Cargo feature:** the server must be compiled with the `komga` feature. In [`apps/server/Cargo.toml`](https://github.com/stumpapp/stump/blob/nightly/apps/server/Cargo.toml), `komga` enables `readium` and the optional `stump_komga` contract crate. The route module itself is compiled only under `#[cfg(feature = "komga")]` in [`apps/server/src/routers/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/mod.rs).
-2. **Runtime configuration:** the effective `enable_komga` setting must be `true` (normally set with `STUMP_ENABLE_KOMGA=true`). [`core/src/config/stump_config.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/config/stump_config.rs) defines this key, defaulting to `false` in release configuration and `true` for the debug configuration.
+2. **Runtime configuration:** the effective `enable_komga` setting must be `true` (normally set with `STUMP_ENABLE_KOMGA=true`). [`core/src/config/protocols.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/config/protocols.rs) defines this key (`StumpConfig.protocols.enable_komga`), defaulting to `false` in release configuration and `true` for the debug configuration.
 
 When both gates are open, `routers::mount` merges the Komga router. If `STUMP_ENABLE_KOMGA=true` is used with a binary compiled without the `komga` feature, the server logs a warning and does not mount the Komga route tree; native API routes remain available. This distinction is enforced in [`apps/server/src/routers/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/mod.rs).
 

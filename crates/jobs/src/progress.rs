@@ -1,7 +1,6 @@
+use models::shared::enums::JobStatus;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-
-use super::JobStatus;
 
 /// An update event that is emitted by a job
 #[derive(Debug, Clone, Deserialize, Serialize)]

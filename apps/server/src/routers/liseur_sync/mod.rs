@@ -10,6 +10,7 @@ use stump_liseur_sync::{
 };
 
 mod storage;
+mod touch;
 
 #[derive(Clone)]
 pub(crate) struct Backend {
@@ -24,9 +25,12 @@ impl Backend {
 
 /// Mount the feature-gated native liseur-sync router.  The protocol crate
 /// owns routing and bearer middleware; this adapter only supplies the Stump
-/// database backend through an extension.
+/// database backend through an extension.  The device summary route shares
+/// the same bearer credentials and is therefore mounted here.
 pub(crate) fn mount(ctx: AppState) -> Router<AppState> {
-	stump_liseur_sync::routes::<AppState, Backend>().layer(Extension(Backend::new(ctx)))
+	stump_liseur_sync::routes::<AppState, Backend>()
+		.merge(touch::router())
+		.layer(Extension(Backend::new(ctx)))
 }
 
 #[async_trait::async_trait]

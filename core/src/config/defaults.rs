@@ -1,0 +1,29 @@
+//! Default values shared by [`super::StumpConfig`] groups and their tests.
+
+pub const DEFAULT_ENABLE_WEBUI: bool = true;
+pub const DEFAULT_PASSWORD_HASH_COST: u32 = 12;
+pub const DEFAULT_SESSION_TTL: i64 = 3600 * 24 * 3; // 3 days
+pub const DEFAULT_ACCESS_TOKEN_TTL: i64 = 3600 * 24; // 1 days
+pub const DEFAULT_REFRESH_TOKEN_TTL: i64 = 3600 * 24 * 30; // 30 days
+pub const DEFAULT_SESSION_EXPIRY_CLEANUP_INTERVAL: u64 = 60 * 60 * 24; // 24 hours
+pub const DEFAULT_MAX_IMAGE_UPLOAD_SIZE: usize = 20 * 1024 * 1024; // 20 MB
+pub const DEFAULT_ENABLE_UPLOAD: bool = false;
+pub const DEFAULT_MAX_FILE_UPLOAD_SIZE: usize = 20 * 1024 * 1024; // 20 MB
+pub const DEFAULT_PDF_RENDER_DPI: u32 = 150; // Good balance of quality and performance
+pub const DEFAULT_PDF_MAX_DIMENSION: u32 = 1200; // Optimized for faster rendering while maintaining quality
+pub const DEFAULT_PDF_RENDER_FORMAT: &str = "webp"; // Default to WebP for better compression
+pub const DEFAULT_PDF_CACHE_PAGES: bool = true; // Enable page caching by default
+pub const DEFAULT_PDF_PRERENDER_RANGE: u32 = 5; // Pre-render 5 pages before/after current
+pub const DEFAULT_PDF_HIGH_QUALITY: bool = true; // Enable high-quality rendering by default
+pub const DEFAULT_BOOK_COMPLETION_DEDUP_TIMEOUT_SECS: i64 = 60 * 60 * 24; // 1 day
+pub const DEFAULT_INGEST_PROGRESS_RETENTION: u32 = 10_000;
+pub const DEFAULT_PARALLELISM_MULTIPLIER: usize = 2;
+pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 10;
+pub const DEFAULT_DB_MIN_CONNECTIONS: u32 = 0;
+pub const DEFAULT_DB_TIMEOUT_SECS: u64 = 30;
+pub const DEFAULT_KOBO_KEPUB_CACHE_MAX_AGE_DAYS: u32 = 90;
+pub const DEFAULT_KOBO_KEPUB_DEFLATE_LEVEL: u32 = 6;
+pub const DEFAULT_SQLITE_STATEMENT_CACHE_CAPACITY: usize = 100;
+pub const DEFAULT_ENABLE_BACKGROUND_JOBS: bool = true;
+pub const DEFAULT_ENABLE_PROVIDERS: bool = false;
+pub const DEFAULT_PROVIDER_CACHE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB

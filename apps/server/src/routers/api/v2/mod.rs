@@ -1,4 +1,5 @@
 pub(crate) mod auth;
+pub(crate) mod device_pairing;
 pub(crate) mod emoji;
 #[cfg(feature = "readium")]
 pub(crate) mod epub;
@@ -9,12 +10,14 @@ mod oidc;
 pub(crate) mod series;
 mod user;
 
+use std::sync::Arc;
+
 use axum::{
 	extract::State,
 	http::StatusCode,
 	response::IntoResponse,
 	routing::{get, post},
-	Json, Router,
+	Extension, Json, Router,
 };
 use models::entity;
 use reqwest::header::USER_AGENT;
@@ -25,11 +28,13 @@ use serde_json::json;
 use crate::{
 	config::state::AppState,
 	errors::{APIError, APIResult},
+	middleware::rate_limit::RateLimiter,
 };
 
 pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 	let router = Router::new()
 		.merge(auth::mount(app_state.clone()))
+		.merge(device_pairing::mount(app_state.clone()))
 		.merge(oidc::mount())
 		.merge(emoji::mount(app_state.clone()))
 		.merge(ingest_events::mount(app_state.clone()))
@@ -139,7 +144,12 @@ async fn check_for_updates() -> APIResult<Json<UpdateCheck>> {
 	}
 }
 
-async fn health(State(ctx): State<AppState>) -> impl IntoResponse {
+/// The rate limiter is attached in `run_http_server`; test routers built
+/// without it report the limiter as disabled, which is what it is there.
+async fn health(
+	State(ctx): State<AppState>,
+	rate_limiter: Option<Extension<Arc<RateLimiter>>>,
+) -> impl IntoResponse {
 	let ok_status = json!({"status": "ok"});
 
 	let (db_ready, db_data) = match ctx.conn.ping().await {
@@ -147,9 +157,9 @@ async fn health(State(ctx): State<AppState>) -> impl IntoResponse {
 		Err(e) => (false, json!({"status": "error", "message": e.to_string()})),
 	};
 
-	let webui_enabled = cfg!(feature = "webui") && ctx.config.enable_webui;
+	let webui_enabled = cfg!(feature = "webui") && ctx.config.protocols.enable_webui;
 	let (spa_available, spa_data) = if webui_enabled {
-		match tokio::fs::metadata(&ctx.config.client_dir).await {
+		match tokio::fs::metadata(&ctx.config.protocols.client_dir).await {
 			Ok(metadata) if metadata.is_dir() => (true, ok_status),
 			Ok(_) => (
 				false,
@@ -170,6 +180,9 @@ async fn health(State(ctx): State<AppState>) -> impl IntoResponse {
 		"status": if status_code == StatusCode::OK { "ok" } else { "error" },
 		"jobs": ctx.jobs_health_status(),
 		"watcher": ctx.watcher_health_status(),
+		"rate_limit": rate_limiter
+			.map(|Extension(limiter)| limiter.health_status())
+			.unwrap_or_else(|| json!({"status": "disabled"})),
 		"dependencies": {
 			"database": db_data,
 			"spa": spa_data

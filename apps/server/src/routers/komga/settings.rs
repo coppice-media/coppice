@@ -76,8 +76,8 @@ async fn get_settings(
 	headers: HeaderMap,
 ) -> APIResult<Response<Body>> {
 	let remember_me_duration_days =
-		i32::try_from(ctx.config.session_ttl / SECONDS_PER_DAY)?;
-	let server_port = i32::from(ctx.config.port);
+		i32::try_from(ctx.config.auth.session_ttl / SECONDS_PER_DAY)?;
+	let server_port = i32::from(ctx.config.server.port);
 	let settings = KomgaSettings {
 		// Stump does not have Komga's empty-collection deletion setting.
 		delete_empty_collections: false,
@@ -664,7 +664,7 @@ mod tests {
 	#[test]
 	fn password_hash_uses_configured_cost() {
 		let mut config = stump_core::config::StumpConfig::debug();
-		config.password_hash_cost = 4;
+		config.auth.password_hash_cost = 4;
 		let hash = hash_password("new-password", &config).expect("password should hash");
 		let parts: bcrypt::HashParts = hash.parse().expect("hash should parse");
 		assert_eq!(parts.get_cost(), 4);

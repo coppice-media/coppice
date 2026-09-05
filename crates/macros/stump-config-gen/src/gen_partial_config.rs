@@ -13,8 +13,18 @@ pub fn gen_partial_stump_config(
 
 	for var in config_vars {
 		let name = &var.variable_name;
-		let type_name = &var.variable_type;
 
+		if var.attributes.nested {
+			let partial_type = var.nested_partial_ident();
+			struct_defs.push(quote! {
+				#[serde(flatten)]
+				pub #name: #partial_type
+			});
+			empty_setters.push(quote! {#name: #partial_type::empty()});
+			continue;
+		}
+
+		let type_name = &var.variable_type;
 		struct_defs.push(quote! {pub #name: Option<#type_name>});
 		empty_setters.push(quote! {#name: None});
 	}
@@ -25,7 +35,7 @@ pub fn gen_partial_stump_config(
 
 	quote! {
 		#[derive(serde::Deserialize, Debug, Default, Clone, PartialEq)]
-		struct #partial_struct_name {
+		pub(crate) struct #partial_struct_name {
 			#(#struct_defs),*
 		}
 
@@ -63,6 +73,12 @@ fn gen_apply_impl(
 
 fn config_var_to_setter(var: &StumpConfigVariable) -> TokenStream {
 	let var_name = &var.variable_name;
+
+	if var.attributes.nested {
+		return quote! {
+			self.#var_name.apply_to_config(&mut config.#var_name);
+		};
+	}
 
 	let setter = match (var.is_vec, var.is_optional) {
 		(true, true) => {

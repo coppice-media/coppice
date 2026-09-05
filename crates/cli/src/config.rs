@@ -21,7 +21,7 @@ impl CliConfig {
 			config.config_dir = config_dir.to_string_lossy().to_string();
 		}
 		if let Some(hash_cost) = self.password_hash_cost {
-			config.password_hash_cost = hash_cost;
+			config.auth.password_hash_cost = hash_cost;
 		}
 
 		config

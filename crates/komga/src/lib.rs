@@ -1,3 +1,15 @@
+//! Komga compatibility profile: the REST/SSE subset used by Komelia, Mihon,
+//! Liseur, Komf and Grimmory, served from Stump's own models.
+//!
+//! This crate owns the Komga DTOs, error mapping, pagination, and every
+//! `/api/v1`, `/api/v2`, `/sse/v1` route handler; persistence and platform
+//! operations are injected through [`routes::KomgaBackend`]. Identity,
+//! settings, auth middleware and mounting stay in `apps/server`.
+//!
+//! See `crates/komga/README.md` for pinned clients (Komga 1.26.3, komga-client
+//! 0.11.0, Komelia `65f92fde`, Mihon `21af65b`, Liseur `31f8182d`), decisions,
+//! and how to verify.
+
 pub mod errors;
 pub mod routes;
 

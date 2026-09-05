@@ -26,8 +26,8 @@ impl ConfigQuery {
 	async fn upload_config(&self, ctx: &Context<'_>) -> Result<UploadConfig> {
 		let config = ctx.data::<CoreContext>()?.config.as_ref();
 		Ok(UploadConfig {
-			enabled: config.enable_upload,
-			max_file_upload_size: config.max_file_upload_size,
+			enabled: config.protocols.enable_upload,
+			max_file_upload_size: config.protocols.max_file_upload_size,
 		})
 	}
 }

@@ -15,7 +15,7 @@ use models::{
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use stump_auth::AuthContext;
-use stump_core::{job::stump_job::StumpJob, CoreEvent};
+use stump_core::{job::stump_job::StumpJob, reading_state::SourceProtocol, CoreEvent};
 use stump_media::{
 	get_saved_thumbnail,
 	image::{
@@ -83,6 +83,31 @@ impl KomgaBackendAdapter {
 					Ok(_) => {},
 					Err(broadcast::error::RecvError::Lagged(skipped)) => {
 						tracing::debug!(skipped, "Komga core event adapter lagged")
+					},
+					Err(broadcast::error::RecvError::Closed) => break,
+				}
+			}
+		});
+		// Reading heads moved by other protocols (Kobo, KOReader, OPDS, the
+		// native API) surface as Komga read-progress events, so Komelia sees
+		// them the same way it sees its own writes. Komga's own routes publish
+		// directly on the route-local bus and are not announced here.
+		let mut heads = ctx.reading_state_events();
+		let forwarder = sender.clone();
+		tokio::spawn(async move {
+			loop {
+				match heads.recv().await {
+					Ok(changed) if changed.protocol != SourceProtocol::Komga => {
+						let _ = forwarder.send(KomgaCoreEvent::ReadProgressChanged {
+							book_id: changed.media_id,
+							series_id: changed.series_id.unwrap_or_default(),
+							user_id: changed.user_id,
+							deleted: changed.cleared,
+						});
+					},
+					Ok(_) => {},
+					Err(broadcast::error::RecvError::Lagged(skipped)) => {
+						tracing::debug!(skipped, "Komga reading-state adapter lagged")
 					},
 					Err(broadcast::error::RecvError::Closed) => break,
 				}
@@ -481,7 +506,7 @@ impl KomgaBackend for KomgaBackendAdapter {
 				"Thumbnail file is empty".to_owned(),
 			));
 		}
-		if bytes.len() > self.ctx.config.max_file_upload_size {
+		if bytes.len() > self.ctx.config.protocols.max_file_upload_size {
 			return Err(stump_komga::errors::APIError::BadRequest(
 				"Thumbnail file exceeds the configured upload limit".to_owned(),
 			));
@@ -704,7 +729,7 @@ impl KomgaBackend for KomgaBackendAdapter {
 				"Thumbnail file is empty".to_owned(),
 			));
 		}
-		if bytes.len() > self.ctx.config.max_file_upload_size {
+		if bytes.len() > self.ctx.config.protocols.max_file_upload_size {
 			return Err(stump_komga::errors::APIError::BadRequest(
 				"Thumbnail file exceeds the configured upload limit".to_owned(),
 			));

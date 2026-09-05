@@ -4,6 +4,9 @@
 //! [`MediaConfig`] snapshot when processing media.  The default feature set keeps
 //! PDFium and RAR support enabled, while `pdf` and `rar` can be disabled for
 //! smaller deployments.
+//!
+//! Upstream provenance, feature/dispatch decisions, hash compatibility rules,
+//! and verification commands are in `crates/media/README.md`.
 
 use std::path::{Path, PathBuf};
 
@@ -106,6 +109,7 @@ pub mod media {
 }
 pub mod serde;
 pub mod series_metadata;
+pub mod virtual_media;
 
 pub use common::*;
 pub use content_type::ContentType;

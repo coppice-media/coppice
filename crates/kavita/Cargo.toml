@@ -1,0 +1,25 @@
+[package]
+name = "stump_kavita"
+version.workspace = true
+edition = "2021"
+description = "Serde contract types and routes for the client-derived Kavita compatibility API"
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+axum-extra = { version = "0.10.0", features = ["query"] }
+chrono.workspace = true
+jsonwebtoken = "9.3.0"
+models = { path = "../models", default-features = false }
+rust_decimal.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+stump_auth = { path = "../auth" }
+thiserror.workspace = true
+tracing = { workspace = true }
+uuid.workspace = true
+urlencoding.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }

@@ -10,14 +10,15 @@ use crate::{
 use chrono::{DateTime, NaiveDate, Utc};
 use models::{
 	entity::{
-		library, library_config, media, media_metadata, media_tag, reading_session,
-		series, series_tag, tag, user::AuthUser,
+		device, library, library_config, media, media_metadata, media_tag,
+		reading_head, series, series_tag, tag, user::AuthUser,
 	},
+	services::reading_state,
 	shared::enums::FileStatus,
 };
 use sea_orm::{
 	prelude::DateTimeWithTimeZone, ColumnTrait, DatabaseConnection, EntityTrait,
-	QueryFilter, QueryOrder,
+	QueryFilter,
 };
 
 use crate::errors::APIResult;
@@ -119,7 +120,7 @@ pub(crate) async fn map_books(
 		.collect();
 
 	let media_ids = unique_ids(books.iter().map(|book| book.media.id.clone()));
-	let sessions = load_latest_sessions(conn, user, &media_ids).await?;
+	let heads = load_heads(conn, user, &media_ids).await?;
 	let tags = load_media_tags(conn, &media_ids).await?;
 
 	Ok(books
@@ -134,7 +135,7 @@ pub(crate) async fn map_books(
 			map_book(
 				book,
 				related_series,
-				sessions.get(&media_id),
+				heads.get(&media_id),
 				tags.get(&media_id).map(Vec::as_slice).unwrap_or(&[]),
 			)
 		})
@@ -164,7 +165,7 @@ pub(crate) async fn map_series(
 			.await?
 	};
 	let media_ids = unique_ids(books.iter().map(|book| book.media.id.clone()));
-	let sessions = load_latest_sessions(conn, user, &media_ids).await?;
+	let heads = load_heads(conn, user, &media_ids).await?;
 	let media_tags = load_media_tags(conn, &media_ids).await?;
 	let series_tags = load_series_tags(conn, &series_ids).await?;
 
@@ -184,7 +185,7 @@ pub(crate) async fn map_series(
 			map_series_row(
 				row,
 				&books,
-				&sessions,
+				&heads,
 				series_tags.get(&id).map(Vec::as_slice).unwrap_or(&[]),
 				&media_tags,
 			)
@@ -195,7 +196,7 @@ pub(crate) async fn map_series(
 fn map_book(
 	book: media::ModelWithMetadata,
 	related_series: Option<&series::ModelWithMetadata>,
-	session: Option<&reading_session::ModelWithDevice>,
+	head: Option<&HeadWithDevice>,
 	tags: &[String],
 ) -> KomgaBook {
 	let media = book.media;
@@ -261,7 +262,7 @@ fn map_book(
 			number_text,
 			number_sort,
 		),
-		read_progress: session.map(map_read_progress),
+		read_progress: head.map(map_read_progress),
 		deleted: media.deleted_at.is_some(),
 		file_hash: media.hash.unwrap_or_default(),
 		// Stump has no book-level one-shot flag.  A series-level ComicInfo booktype is
@@ -330,7 +331,7 @@ fn map_book_metadata(
 fn map_series_row(
 	row: series::ModelWithMetadata,
 	books: &[media::ModelWithMetadata],
-	sessions: &HashMap<String, reading_session::ModelWithDevice>,
+	heads: &HashMap<String, HeadWithDevice>,
 	series_tags: &[String],
 	media_tags: &HashMap<String, Vec<String>>,
 ) -> KomgaSeries {
@@ -353,19 +354,12 @@ fn map_series_row(
 		books
 			.iter()
 			.fold((0_i32, 0_i32), |(read, in_progress), book| {
-				match sessions
-					.get(&book.media.id)
-					.map(|session| session.model.status)
-				{
-					Some(models::shared::enums::ReadingStatus::Finished) => {
-						(read + 1, in_progress)
-					},
-					Some(models::shared::enums::ReadingStatus::Reading) => {
-						(read, in_progress + 1)
-					},
-					// Abandoned and not-started books are unread from Komga's three-state
+				match heads.get(&book.media.id).map(|head| head.head.completed) {
+					Some(true) => (read + 1, in_progress),
+					Some(false) => (read, in_progress + 1),
+					// Books without a head are unread from Komga's three-state
 					// perspective.
-					_ => (read, in_progress),
+					None => (read, in_progress),
 				}
 			});
 	let books_count = len_i32(books.len());
@@ -513,36 +507,44 @@ fn map_series_books_metadata(
 	}
 }
 
-async fn load_latest_sessions(
+/// A user's reading head together with the device that produced it.
+pub(crate) struct HeadWithDevice {
+	pub head: reading_head::Model,
+	pub device: Option<device::Model>,
+}
+
+async fn load_heads(
 	conn: &DatabaseConnection,
 	user: &AuthUser,
 	media_ids: &[String],
-) -> APIResult<HashMap<String, reading_session::ModelWithDevice>> {
-	if media_ids.is_empty() {
-		return Ok(HashMap::new());
-	}
-	let rows = reading_session::ModelWithDevice::find()
-		.filter(reading_session::Column::UserId.eq(user.id.clone()))
-		.filter(reading_session::Column::MediaId.is_in(media_ids.to_vec()))
-		.order_by_desc(reading_session::Column::UpdatedAt)
-		.order_by_desc(reading_session::Column::CreatedAt)
-		.order_by_desc(reading_session::Column::Id)
-		.into_model::<reading_session::ModelWithDevice>()
-		.all(conn)
-		.await?;
-
-	let mut latest: HashMap<String, reading_session::ModelWithDevice> =
-		HashMap::with_capacity(rows.len());
-	for row in rows {
-		let media_id = row.model.media_id.clone();
-		let replace = latest.get(&media_id).is_none_or(|current| {
-			session_order_key(&row.model) > session_order_key(&current.model)
-		});
-		if replace {
-			latest.insert(media_id, row);
-		}
-	}
-	Ok(latest)
+) -> APIResult<HashMap<String, HeadWithDevice>> {
+	let heads = reading_state::heads(conn, &user.id, media_ids).await?;
+	let device_ids = unique_ids(
+		heads
+			.values()
+			.filter_map(|head| head.source_device_id.clone()),
+	);
+	let mut devices = if device_ids.is_empty() {
+		HashMap::new()
+	} else {
+		device::Entity::find()
+			.filter(device::Column::Id.is_in(device_ids))
+			.all(conn)
+			.await?
+			.into_iter()
+			.map(|device| (device.id.clone(), device))
+			.collect::<HashMap<_, _>>()
+	};
+	Ok(heads
+		.into_iter()
+		.map(|(media_id, head)| {
+			let device = head
+				.source_device_id
+				.as_ref()
+				.and_then(|id| devices.remove(id));
+			(media_id, HeadWithDevice { head, device })
+		})
+		.collect())
 }
 
 async fn load_media_tags(
@@ -597,36 +599,22 @@ fn finish_tag_map(
 	Ok(tags)
 }
 
-fn map_read_progress(session: &reading_session::ModelWithDevice) -> ReadProgress {
-	let model = &session.model;
-	let device_id = model
-		.device_ids
-		.as_ref()
-		.and_then(|ids| ids.0.first())
-		.cloned()
-		.unwrap_or_default();
+fn map_read_progress(head: &HeadWithDevice) -> ReadProgress {
+	let model = &head.head;
 	ReadProgress {
-		page: model.end_page.or(model.start_page).unwrap_or_default(),
-		completed: model.is_complete(),
-		read_date: model
-			.updated_at
-			.as_ref()
-			.map(to_utc)
-			.unwrap_or_else(|| to_utc(&model.created_at)),
-		device_id,
+		page: model.page.unwrap_or_default(),
+		completed: model.completed,
+		read_date: to_utc(&model.updated_at),
+		device_id: model.source_device_id.clone().unwrap_or_default(),
 		// A device name is optional in Stump.  Empty is intentional when the linked
-		// reading-device row does not exist; no synthetic device name is invented.
-		device_name: session
+		// device row does not exist; no synthetic device name is invented.
+		device_name: head
 			.device
 			.as_ref()
 			.map(|device| device.name.clone())
 			.unwrap_or_default(),
 		created: to_utc(&model.created_at),
-		last_modified: model
-			.updated_at
-			.as_ref()
-			.map(to_utc)
-			.unwrap_or_else(|| to_utc(&model.created_at)),
+		last_modified: to_utc(&model.changed_at),
 	}
 }
 
@@ -883,20 +871,6 @@ fn updated_or_created(
 	created: DateTime<Utc>,
 ) -> DateTime<Utc> {
 	updated.map(to_utc).unwrap_or(created)
-}
-
-fn session_order_key(
-	session: &reading_session::Model,
-) -> (DateTime<Utc>, DateTime<Utc>, i32) {
-	(
-		session
-			.updated_at
-			.as_ref()
-			.map(to_utc)
-			.unwrap_or_else(|| to_utc(&session.created_at)),
-		to_utc(&session.created_at),
-		session.id,
-	)
 }
 
 fn unique_ids<I>(ids: I) -> Vec<String>

@@ -26,7 +26,7 @@ const ASSETS: &str = "/assets";
 const DIST: &str = "/dist";
 
 pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
-	let dist_path = Path::new(&app_state.config.client_dir);
+	let dist_path = Path::new(&app_state.config.protocols.client_dir);
 	let static_assets = ServiceBuilder::new()
 		.layer(SetResponseHeaderLayer::if_not_present(
 			header::VARY,
@@ -127,7 +127,7 @@ async fn serve_dist_file(
 	let mut req = Request::new(Body::empty());
 	*req.headers_mut() = headers;
 
-	match ServeFile::new(Path::new(&ctx.config.client_dir).join(path))
+	match ServeFile::new(Path::new(&ctx.config.protocols.client_dir).join(path))
 		.try_call(req)
 		.await
 	{

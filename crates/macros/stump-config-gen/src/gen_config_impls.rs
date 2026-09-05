@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
-use syn::Ident;
+use syn::{Expr, Ident};
 
 use crate::{config_vars::StumpConfigVariable, InputAttributes};
 
@@ -13,18 +13,31 @@ pub fn gen_stump_config_impls(
 	let debug_impl = gen_debug_impl(config_vars);
 
 	let partial_struct_name = format_ident!("Partial{struct_ident}");
-	let with_file_impl = gen_with_file_impl(&partial_struct_name, input_attrs);
-	let with_env_impl = gen_with_env_impl(&partial_struct_name, config_vars);
+	let from_env_impl = gen_from_env_impl(&partial_struct_name, config_vars);
+
+	// Only a root config struct (one with a `config_file_location`) gets the
+	// file/environment loaders; nested groups are loaded through their parent.
+	let loaders = input_attrs.config_file_location.as_ref().map(|location| {
+		let with_file_impl = gen_with_file_impl(&partial_struct_name, location);
+		let with_env_impl = gen_with_env_impl(&partial_struct_name);
+		quote! {
+			impl #struct_ident {
+				#with_file_impl
+
+				#with_env_impl
+			}
+		}
+	});
 
 	quote! {
 	impl #struct_ident {
 	  #new_impl
 		#debug_impl
-
-	  #with_file_impl
-
-	  #with_env_impl
 		}
+
+		#from_env_impl
+
+		#loaders
 	}
 }
 
@@ -35,7 +48,10 @@ fn gen_new_impl(config_vars: &[StumpConfigVariable]) -> TokenStream {
 	for var in config_vars {
 		let name = &var.variable_name;
 
-		if var.attributes.required_by_new {
+		if var.attributes.nested {
+			let var_type = &var.variable_type;
+			setters.push(quote! {#name: #var_type::new()});
+		} else if var.attributes.required_by_new {
 			let var_type = &var.variable_type;
 
 			args.push(quote! {#name: #var_type});
@@ -68,6 +84,12 @@ fn gen_debug_impl(config_vars: &[StumpConfigVariable]) -> TokenStream {
 	for var in config_vars {
 		let name = &var.variable_name;
 
+		if var.attributes.nested {
+			let var_type = &var.variable_type;
+			setters.push(quote! {#name: #var_type::debug()});
+			continue;
+		}
+
 		let setter = match (&var.attributes.debug_value, &var.attributes.default_value) {
 			(Some(debug), _) => quote! {#name: #debug},
 			(None, Some(default)) => quote! {#name: #default},
@@ -87,11 +109,7 @@ fn gen_debug_impl(config_vars: &[StumpConfigVariable]) -> TokenStream {
 	}
 }
 
-fn gen_with_file_impl(
-	partial_struct_name: &Ident,
-	input_attrs: &InputAttributes,
-) -> TokenStream {
-	let config_file_loc = &input_attrs.config_file_location;
+fn gen_with_file_impl(partial_struct_name: &Ident, config_file_loc: &Expr) -> TokenStream {
 	quote! {
 		#[doc="Looks for the config directory, loading its contents and replacing stored configuration"]
 		#[doc="variables with those contents. If the config file doesn't exist, the stored variables"]
@@ -116,27 +134,47 @@ fn gen_with_file_impl(
 	}
 }
 
-fn gen_with_env_impl(
-	partial_struct_name: &Ident,
-	config_vars: &[StumpConfigVariable],
-) -> TokenStream {
-	let env_var_extractors = config_vars.iter().map(gen_env_var_extractors);
-
+fn gen_with_env_impl(partial_struct_name: &Ident) -> TokenStream {
 	quote! {
 		#[doc="Loads configuration variables from the environment, replacing stored"]
 		#[doc="values with the environment values."]
 	  pub fn with_environment(mut self) -> crate::CoreResult<Self> {
-		  let mut env_configs = #partial_struct_name::empty();
-
-		  #(#env_var_extractors)*
-
+			let env_configs = #partial_struct_name::from_environment()?;
 			env_configs.apply_to_config(&mut self);
 			Ok(self)
 	  }
 	}
 }
 
+fn gen_from_env_impl(
+	partial_struct_name: &Ident,
+	config_vars: &[StumpConfigVariable],
+) -> TokenStream {
+	let env_var_extractors = config_vars.iter().map(gen_env_var_extractors);
+
+	quote! {
+		impl #partial_struct_name {
+			#[doc="Collects every configuration variable present in the environment."]
+			pub fn from_environment() -> crate::CoreResult<Self> {
+				let mut env_configs = Self::empty();
+
+				#(#env_var_extractors)*
+
+				Ok(env_configs)
+			}
+		}
+	}
+}
+
 fn gen_env_var_extractors(var: &StumpConfigVariable) -> TokenStream {
+	if var.attributes.nested {
+		let var_name = &var.variable_name;
+		let partial_type = var.nested_partial_ident();
+		return quote! {
+			env_configs.#var_name = #partial_type::from_environment()?;
+		};
+	}
+
 	if let Some(var_env_key) = &var.attributes.env_key {
 		let env_key_str = var_env_key.to_token_stream().to_string();
 		let var_name = &var.variable_name;

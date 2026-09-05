@@ -15,8 +15,12 @@ use tower_http::{
 };
 
 use crate::{
-	config::{cors, oidc::OidcProvider, session::get_session_layer},
+	config::{
+		cors, oidc::OidcProvider, rate_limit::RateLimitConfig,
+		session::get_session_layer,
+	},
 	errors::{EntryError, ServerError, ServerResult},
+	middleware::rate_limit::{rate_limit_middleware, RateLimiter},
 	routers,
 	utils::shutdown_signal_with_cleanup,
 };
@@ -30,7 +34,7 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 
 	// Cancel any islanded jobs from a previous run. This is a direct database
 	// operation and deliberately does not create the lazy job runtime.
-	if config.enable_background_jobs {
+	if config.jobs.enable_background_jobs {
 		core.cancel_islanded_jobs()
 			.await
 			.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
@@ -56,7 +60,7 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 
 	// The scheduler and watcher are optional server-owned startup handles. The
 	// context can start either one later when a request changes configuration.
-	let _scheduler = if config.enable_background_jobs {
+	let _scheduler = if config.jobs.enable_background_jobs {
 		core.init_scheduler()
 			.await
 			.map_err(|e| ServerError::ServerStartError(e.to_string()))?
@@ -64,13 +68,11 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 		None
 	};
 
-	let _library_watcher = if config.enable_background_jobs {
+	if config.jobs.enable_background_jobs {
 		core.init_library_watcher()
 			.await
-			.map_err(|e| ServerError::ServerStartError(e.to_string()))?
-	} else {
-		None
-	};
+			.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
+	}
 	let oidc_provider: Option<Arc<OidcProvider>> = {
 		if let Some(oidc_config) = config.oidc.as_ref().filter(|c| c.is_configured()) {
 			let state = OidcProvider::new(oidc_config).await.map_err(|e| {
@@ -87,6 +89,10 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	let server_ctx = core.get_context();
 	let app_state = server_ctx.arced();
 	let cors_layer = cors::get_cors_layer(config.clone());
+	let rate_limiter = Arc::new(RateLimiter::new(
+		RateLimitConfig::from_env().map_err(ServerError::ServerStartError)?,
+		config.server.trust_proxy_headers,
+	));
 
 	println!("{}", core.get_shadow_text());
 
@@ -108,10 +114,16 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 		.and(NotForContentType::const_new("application/x-cbr"))
 		.and(NotForContentType::const_new("application/x-cbz"));
 
+	// The rate limiter sits outside the session layer so rejected requests
+	// never load a session; it is also exposed to `/api/v2/health`.
 	let app = Router::new()
 		.merge(app_router)
 		.with_state(app_state.clone())
-		.layer(get_session_layer(app_state.clone()));
+		.layer(get_session_layer(app_state.clone()))
+		.layer(axum::middleware::from_fn_with_state(
+			rate_limiter.clone(),
+			rate_limit_middleware,
+		));
 
 	// Komga clients (Komelia) keep separate HTTP clients that share one cookie
 	// jar; a session-clearing `Set-Cookie` on a 401 from any of them (for
@@ -132,12 +144,13 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 		.layer(TraceLayer::new_for_http().make_span_with(
 			tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::DEBUG),
 		))
-		.layer(Extension(oidc_provider));
+		.layer(Extension(oidc_provider))
+		.layer(Extension(rate_limiter));
 
 	// TODO: Refactor to use https://docs.rs/async-shutdown/latest/async_shutdown/
 	let cleanup = {
 		let server_ctx = server_ctx.clone();
-		let background_jobs_enabled = config.enable_background_jobs;
+		let background_jobs_enabled = config.jobs.enable_background_jobs;
 		move || async move {
 			println!("Initializing graceful shutdown...");
 			if background_jobs_enabled {
@@ -151,10 +164,10 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	};
 
 	let ip: std::net::IpAddr =
-		config.ip.parse().map_err(|e: std::net::AddrParseError| {
+		config.server.ip.parse().map_err(|e: std::net::AddrParseError| {
 			ServerError::ServerStartError(e.to_string())
 		})?;
-	let addr = SocketAddr::from((ip, config.port));
+	let addr = SocketAddr::from((ip, config.server.port));
 	let listener = tokio::net::TcpListener::bind(&addr)
 		.await
 		.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
@@ -186,7 +199,7 @@ pub async fn bootstrap_http_server_config() -> Result<StumpConfig, EntryError> {
 	// level is used for logging.
 	init_tracing(&config);
 
-	if config.verbosity >= 3 {
+	if config.server.verbosity >= 3 {
 		tracing::trace!(?config, "App config");
 	}
 

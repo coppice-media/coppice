@@ -460,6 +460,7 @@ mod tests {
 			description: None,
 			emoji: None,
 			last_scanned_at: None,
+			source_provider: None,
 			config_id: 1,
 			path: String::default(),
 			status: FileStatus::Ready,

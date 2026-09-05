@@ -1,7 +1,8 @@
 use crate::{
 	filesystem::media::analysis::job::{AnalyzeMediaJob, AnalyzeMediaOutput},
-	job::{error::JobError, JobContext, JobExecuteLog, JobProgress, JobTaskOutput},
+	job::JobServices,
 };
+use stump_jobs::{JobContext, JobError, JobExecuteLog, JobProgress, JobTaskOutput};
 use stump_media::media::{analyze_page, AnalyzedPage};
 
 use std::sync::{
@@ -61,7 +62,7 @@ async fn analyze_book_page(
 	path: String,
 	page: i32,
 	existing_analysis: ExistingPageAnalysis,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	force_reanalysis: bool,
 ) -> Result<BookPageAnalysisOutput, JobError> {
 	// If we aren't force reanalyzing and we have all of the things we need, return early
@@ -80,7 +81,8 @@ async fn analyze_book_page(
 		width,
 	} = tokio::task::spawn_blocking(move || analyze_page(&path_owned, page, &config_owned))
 		.await
-		.map_err(|e| JobError::Unknown(e.to_string()))??;
+		.map_err(|e| JobError::Unknown(e.to_string()))?
+		.map_err(|e| JobError::TaskFailed(e.to_string()))?;
 
 	let dimensions = PageDimension { height, width };
 
@@ -93,7 +95,7 @@ async fn analyze_book_page(
 pub async fn safely_analyze_book(
 	book: MediaForProcessing,
 	existing_analysis: Option<MediaAnalysisData>,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	force_reanalysis: bool,
 ) -> JobTaskOutput<AnalyzeMediaJob> {
 	let mut output = AnalyzeMediaOutput::default();

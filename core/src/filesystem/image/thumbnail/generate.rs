@@ -20,8 +20,9 @@ use crate::{
 		PlaceholderGenerationJob, PlaceholderGenerationOutput, ThumbnailGenerationJob,
 		ThumbnailGenerationOutput,
 	},
-	job::{JobContext, JobExecuteLog, JobTaskOutput},
+	job::JobServices,
 };
+use stump_jobs::{JobContext, JobExecuteLog, JobTaskOutput};
 use stump_media::media::{get_page, get_page_async};
 use stump_media::FileError;
 use stump_media::{
@@ -217,7 +218,7 @@ pub async fn generate_book_thumbnail(
 async fn copy_thumbnail_to_entity<E>(
 	entity_id: &str,
 	first_book: media::MediaThumbSelect,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	options: GenerateThumbnailOptions,
 	update_fn: impl FnOnce(String, Option<ImageMetadata>) -> sea_orm::UpdateMany<E>,
 ) -> Result<GenerateOutput, ThumbnailGenerateError>
@@ -294,7 +295,7 @@ where
 #[tracing::instrument(skip_all)]
 async fn generate_series_thumbnail(
 	series: &series::SeriesThumbSelect,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	options: GenerateThumbnailOptions,
 ) -> Result<GenerateOutput, ThumbnailGenerateError> {
 	if let (false, Some(thumbnail_path)) = (options.force_regen, &series.thumbnail_path) {
@@ -357,7 +358,7 @@ async fn generate_series_thumbnail(
 #[tracing::instrument(skip_all)]
 async fn generate_library_thumbnail(
 	library: &library::LibraryThumbSelect,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	options: GenerateThumbnailOptions,
 ) -> Result<GenerateOutput, ThumbnailGenerateError> {
 	if let (false, Some(thumbnail_path)) = (options.force_regen, &library.thumbnail_path)
@@ -429,14 +430,14 @@ pub enum GenerateImageSource {
 #[tracing::instrument(skip_all)]
 pub async fn safely_generate_batch(
 	sources: Vec<GenerateImageSource>,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	options: GenerateThumbnailOptions,
 	reporter: impl Fn(usize),
 ) -> JobTaskOutput<ThumbnailGenerationJob> {
 	let mut output = ThumbnailGenerationOutput::default();
 	let mut logs = vec![];
 
-	let max_concurrency = options.core_config.cpu_concurrency_limit();
+	let max_concurrency = options.core_config.jobs.cpu_concurrency_limit();
 	let batch_size = max_concurrency;
 	let total_sources = sources.len();
 	tracing::debug!(
@@ -529,7 +530,7 @@ pub async fn safely_generate_batch(
 #[tracing::instrument(skip_all)]
 pub async fn generate_book_placeholder(
 	book: &media::MediaThumbSelect,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	force_regen: bool,
 ) -> Result<(), ThumbnailGenerateError> {
 	// Skip if metadata exists and not forcing regeneration
@@ -573,7 +574,7 @@ pub async fn generate_book_placeholder(
 
 async fn get_series_thumbnail_candidate(
 	series: &series::SeriesThumbSelect,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 ) -> Result<Option<Vec<u8>>, ThumbnailGenerateError> {
 	let Some(first_book) = media::Entity::find()
 		.filter(media::Column::SeriesId.eq(series.id.clone()))
@@ -605,7 +606,7 @@ async fn get_series_thumbnail_candidate(
 #[tracing::instrument(skip_all)]
 async fn generate_series_placeholder(
 	series: &series::SeriesThumbSelect,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	force_regen: bool,
 ) -> Result<(), ThumbnailGenerateError> {
 	// Skip if metadata exists and not forcing regeneration
@@ -649,7 +650,7 @@ async fn generate_series_placeholder(
 
 async fn get_library_thumbnail_candidate(
 	library: &library::LibraryThumbSelect,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 ) -> Result<Option<Vec<u8>>, ThumbnailGenerateError> {
 	let first_book = media::Entity::find()
 		.filter(
@@ -693,7 +694,7 @@ async fn get_library_thumbnail_candidate(
 #[tracing::instrument(skip_all)]
 async fn generate_library_placeholder(
 	library: &library::LibraryThumbSelect,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	force_regen: bool,
 ) -> Result<(), ThumbnailGenerateError> {
 	// Skip if metadata exists and not forcing regeneration
@@ -739,14 +740,14 @@ async fn generate_library_placeholder(
 #[tracing::instrument(skip_all)]
 pub async fn safely_generate_placeholder_batch(
 	sources: Vec<GenerateImageSource>,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	force_regen: bool,
 	reporter: impl Fn(usize),
 ) -> JobTaskOutput<PlaceholderGenerationJob> {
 	let mut output = PlaceholderGenerationOutput::default();
 	let mut logs = vec![];
 
-	let max_concurrency = ctx.config().cpu_concurrency_limit();
+	let max_concurrency = ctx.config().jobs.cpu_concurrency_limit();
 	let batch_size = max_concurrency;
 	let total_sources = sources.len();
 	tracing::debug!(

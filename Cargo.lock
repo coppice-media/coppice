@@ -222,26 +222,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3948d2051795c769e6a44a46549879af39d5e8e4fb113e0011cf99f7cd21b657"
 dependencies = [
  "futures",
- "futures-timer",
  "pin-project-lite",
  "serde",
  "thiserror 2.0.17",
  "tower 0.5.2",
  "ulid",
-]
-
-[[package]]
-name = "apalis-cron"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82ce16ed2870e0226b02b242ef7b552f015ee9592bb797c20b32fb37bd796e2d"
-dependencies = [
- "apalis-core",
- "async-stream",
- "chrono",
- "cron",
- "futures",
- "tower 0.5.2",
 ]
 
 [[package]]
@@ -1711,17 +1696,6 @@ checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
 dependencies = [
  "cast",
  "itertools 0.10.5",
-]
-
-[[package]]
-name = "cron"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5877d3fbf742507b66bc2a1945106bd30dd8504019d596901ddd012a4dd01740"
-dependencies = [
- "chrono",
- "once_cell",
- "winnow 0.6.26",
 ]
 
 [[package]]
@@ -3366,9 +3340,12 @@ dependencies = [
  "stump_api_types",
  "stump_auth",
  "stump_core",
+ "stump_devices",
  "stump_media",
  "stump_scanner",
+ "subtle",
  "tempfile",
+ "tests",
  "tokio",
  "tower-sessions",
  "tracing",
@@ -6749,6 +6726,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+dependencies = [
+ "image",
+]
+
+[[package]]
 name = "quanta"
 version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7186,6 +7172,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -8129,6 +8116,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8742,16 +8735,12 @@ name = "stump_core"
 version = "0.1.6"
 dependencies = [
  "alphanumeric-sort",
- "apalis",
- "apalis-cron",
  "async-channel",
  "async-graphql",
  "async-trait",
  "base64 0.22.1",
  "chrono",
  "criterion",
- "croner",
- "dashmap 6.1.0",
  "data-encoding",
  "derivative",
  "derive_builder",
@@ -8772,7 +8761,6 @@ dependencies = [
  "migrations",
  "models",
  "natord",
- "notify 8.0.0",
  "palette",
  "prefixed-api-key",
  "quick-xml",
@@ -8788,8 +8776,11 @@ dependencies = [
  "serde_with",
  "simple_crypt",
  "stump-config-gen",
+ "stump_devices",
+ "stump_jobs",
  "stump_media",
  "stump_scanner",
+ "stump_watcher",
  "temp-env",
  "tempfile",
  "tests",
@@ -8830,6 +8821,72 @@ dependencies = [
  "tokio",
  "tracing",
  "zbus_names",
+]
+
+[[package]]
+name = "stump_devices"
+version = "0.1.6"
+dependencies = [
+ "async-graphql",
+ "chrono",
+ "models",
+ "parking_lot",
+ "prefixed-api-key",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2",
+ "stump_api_types",
+ "tests",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "uuid 1.18.1",
+]
+
+[[package]]
+name = "stump_jobs"
+version = "0.1.6"
+dependencies = [
+ "apalis",
+ "async-graphql",
+ "async-trait",
+ "chrono",
+ "croner",
+ "dashmap 6.1.0",
+ "migrations",
+ "models",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid 1.18.1",
+]
+
+[[package]]
+name = "stump_kavita"
+version = "0.1.6"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-extra",
+ "chrono",
+ "jsonwebtoken",
+ "models",
+ "rust_decimal",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "stump_auth",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "urlencoding",
+ "uuid 1.18.1",
 ]
 
 [[package]]
@@ -8922,6 +8979,7 @@ name = "stump_media"
 version = "0.1.6"
 dependencies = [
  "alphanumeric-sort",
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "data-encoding",
@@ -8973,6 +9031,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "stump_provider"
+version = "0.1.6"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "governor",
+ "md5",
+ "models",
+ "reqwest 0.13.4",
+ "rust_decimal",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "stump_media",
+ "tempfile",
+ "tests",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "urlencoding",
+ "uuid 1.18.1",
+ "zip 1.1.3",
+]
+
+[[package]]
+name = "stump_provider_mangadex"
+version = "0.1.6"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "models",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "stump_provider",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "stump_scanner"
 version = "0.1.6"
 dependencies = [
@@ -8995,8 +9094,6 @@ name = "stump_server"
 version = "0.1.6"
 dependencies = [
  "alphanumeric-sort",
- "apalis",
- "apalis-cron",
  "async-graphql",
  "async-graphql-axum",
  "async-stream",
@@ -9010,10 +9107,14 @@ dependencies = [
  "bcrypt",
  "chrono",
  "cli",
+ "data-encoding",
  "filetime",
  "futures-util",
+ "governor",
  "graphql",
+ "http-body 1.1.0",
  "hyper 0.14.27",
+ "image",
  "infer 0.19.0",
  "itertools 0.14.0",
  "jsonwebtoken",
@@ -9025,6 +9126,7 @@ dependencies = [
  "openidconnect",
  "openssl",
  "prefixed-api-key",
+ "qrcode",
  "rand 0.9.2",
  "reqwest 0.13.4",
  "rust_decimal",
@@ -9038,6 +9140,8 @@ dependencies = [
  "stump_api_types",
  "stump_auth",
  "stump_core",
+ "stump_devices",
+ "stump_kavita",
  "stump_kepub",
  "stump_kobo",
  "stump_komga",
@@ -9046,6 +9150,7 @@ dependencies = [
  "stump_media",
  "stump_opds",
  "stump_scanner",
+ "subtle",
  "tempfile",
  "tests",
  "thiserror 2.0.17",
@@ -10560,6 +10665,7 @@ dependencies = [
  "getrandom 0.3.1",
  "js-sys",
  "serde",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

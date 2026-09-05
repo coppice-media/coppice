@@ -853,3 +853,110 @@ pub enum ScheduledJobKind {
 	/// Retry fetching metadata for records that were rate-limited or failed
 	MetadataRetry,
 }
+
+/// The client family a registered device belongs to. The kind decides which
+/// credential is minted for the device and which endpoints it is handed.
+#[derive(
+	Eq,
+	Copy,
+	Hash,
+	Debug,
+	Clone,
+	EnumIter,
+	PartialEq,
+	Serialize,
+	Deserialize,
+	DeriveActiveEnum,
+	EnumString,
+	Display,
+)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[sea_orm(
+	rs_type = "String",
+	rename_all = "snake_case",
+	db_type = "String(StringLen::None)"
+)]
+#[strum(serialize_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+	/// A Kobo eReader using the native Kobo sync protocol
+	Kobo,
+	/// A KOReader install using the KOReader progress sync protocol
+	Koreader,
+	/// Mihon (Tachiyomi) using the Komga-compatible profile
+	Mihon,
+	/// Komelia using the Komga-compatible profile
+	Komelia,
+	/// Liseur using the native liseur-sync protocol
+	Liseur,
+	/// A generic OPDS reader
+	Opds,
+	/// A script or integration using the native API
+	Api,
+	/// A browser session
+	Web,
+}
+
+/// The wire protocol through which a device credential was exercised
+#[derive(
+	Eq,
+	Copy,
+	Hash,
+	Debug,
+	Clone,
+	EnumIter,
+	PartialEq,
+	Serialize,
+	Deserialize,
+	DeriveActiveEnum,
+	EnumString,
+	Display,
+)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[sea_orm(
+	rs_type = "String",
+	rename_all = "snake_case",
+	db_type = "String(StringLen::None)"
+)]
+#[strum(serialize_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceProtocol {
+	Kobo,
+	Koreader,
+	Komga,
+	Opds,
+	Liseur,
+	Api,
+}
+
+/// The storage a device credential references
+#[derive(
+	Eq,
+	Copy,
+	Hash,
+	Debug,
+	Clone,
+	EnumIter,
+	PartialEq,
+	Serialize,
+	Deserialize,
+	DeriveActiveEnum,
+	EnumString,
+	Display,
+)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[sea_orm(
+	rs_type = "String",
+	rename_all = "snake_case",
+	db_type = "String(StringLen::None)"
+)]
+#[strum(serialize_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceCredentialKind {
+	/// `credential_ref` is an `api_keys.short_token`
+	ApiKey,
+	/// `credential_ref` is a `liseur_sync_tokens.id`
+	LiseurToken,
+	/// `credential_ref` is a `sessions.session_id`
+	Session,
+}

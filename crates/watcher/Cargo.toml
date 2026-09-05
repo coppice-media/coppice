@@ -1,0 +1,15 @@
+[package]
+name = "stump_watcher"
+version.workspace = true
+edition = "2021"
+description = "Filesystem change watching and debounced scan requests for Stump libraries"
+
+[dependencies]
+async-trait.workspace = true
+notify = "8.0.0"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

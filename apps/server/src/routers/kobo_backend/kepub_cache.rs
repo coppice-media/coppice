@@ -60,7 +60,7 @@ pub(crate) fn start(ctx: AppState) -> Arc<KepubWarmer> {
 				}
 			});
 
-			if ctx.config.kobo_kepub_preconvert && ctx.config.kobo_kepub_conversion {
+			if ctx.config.protocols.kobo_kepub_preconvert && ctx.config.protocols.kobo_kepub_conversion {
 				let preconvert_ctx = ctx.clone();
 				tokio::spawn(
 					async move { scan_completion_listener(preconvert_ctx).await },
@@ -196,7 +196,7 @@ async fn worker(mut rx: mpsc::Receiver<WarmRequest>, warmer: Arc<KepubWarmer>) {
 async fn evict_once(ctx: &AppState) {
 	let path = ctx.config.get_cache_dir().join("kepub");
 	if let Err(error) =
-		evict_cache_dir(&path, ctx.config.kobo_kepub_cache_max_age_days).await
+		evict_cache_dir(&path, ctx.config.protocols.kobo_kepub_cache_max_age_days).await
 	{
 		tracing::debug!(?error, path = ?path, "KEPUB cache eviction failed");
 	}

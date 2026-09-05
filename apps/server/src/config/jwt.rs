@@ -20,6 +20,11 @@ static ACCESS_TOKEN_SECRET: OnceLock<String> = OnceLock::new();
 /// for the value and cache it for consecutive calls
 static REFRESH_TOKEN_SECRET: OnceLock<String> = OnceLock::new();
 
+/// The access-token secret, shared with the Kavita profile's JWT minting.
+pub(crate) async fn access_token_secret(conn: &DatabaseConnection) -> APIResult<String> {
+	get_access_token_secret(conn).await
+}
+
 async fn get_access_token_secret(conn: &DatabaseConnection) -> APIResult<String> {
 	if let Some(secret) = ACCESS_TOKEN_SECRET.get() {
 		return Ok(secret.clone());
@@ -150,8 +155,8 @@ async fn generate_access_token(
 ) -> APIResult<CreatedToken> {
 	let now = Utc::now();
 	let iat = now.timestamp() as usize;
-	let exp = (now + Duration::seconds(config.access_token_ttl)).timestamp() as usize;
-	let expires_at = DateTime::from(now + Duration::seconds(config.access_token_ttl));
+	let exp = (now + Duration::seconds(config.auth.access_token_ttl)).timestamp() as usize;
+	let expires_at = DateTime::from(now + Duration::seconds(config.auth.access_token_ttl));
 	let claims = AccessTokenClaims {
 		sub: user_id.to_string(),
 		exp,
@@ -178,8 +183,8 @@ async fn generate_refresh_token(
 ) -> APIResult<(String, CreatedToken)> {
 	let now = Utc::now();
 	let iat = now.timestamp() as usize;
-	let exp = (now + Duration::seconds(config.refresh_token_ttl)).timestamp() as usize;
-	let expires_at = DateTime::from(now + Duration::seconds(config.refresh_token_ttl));
+	let exp = (now + Duration::seconds(config.auth.refresh_token_ttl)).timestamp() as usize;
+	let expires_at = DateTime::from(now + Duration::seconds(config.auth.refresh_token_ttl));
 	let jti = Uuid::new_v4().to_string();
 	let claims = RefreshTokenClaims {
 		sub: user_id.to_string(),

@@ -22,8 +22,8 @@ use axum::{
 };
 use axum_extra::extract::Query;
 use models::entity::{
-	library, library_config, media, media_metadata, media_tag, reading_list,
-	reading_list_item, reading_session, series, series_metadata, series_tag, tag,
+	library, library_config, media, media_metadata, media_tag, reading_head,
+	reading_list, reading_list_item, series, series_metadata, series_tag, tag,
 	user::AuthUser,
 };
 use models::shared::enums::FileStatus;
@@ -643,19 +643,21 @@ fn visible_series_ids_for_media_series_ids_subquery(
 		.into_query()
 }
 
-fn visible_session_media_ids_subquery(
+/// Media ids the user has a reading head for, optionally narrowed to
+/// completed (`Some(true)`) or in-progress (`Some(false)`) heads.
+fn visible_head_media_ids_subquery(
 	user: &AuthUser,
-	statuses: Option<&[models::shared::enums::ReadingStatus]>,
+	completed: Option<bool>,
 ) -> SelectStatement {
-	let mut query = reading_session::Entity::find_for_user(user)
+	let mut query = reading_head::Entity::find_for_user(&user.id)
 		.select_only()
-		.column(reading_session::Column::MediaId)
+		.column(reading_head::Column::MediaId)
 		.filter(
-			reading_session::Column::MediaId
+			reading_head::Column::MediaId
 				.in_subquery(visible_media_ids_subquery(user, None, None, None)),
 		);
-	if let Some(statuses) = statuses {
-		query = query.filter(reading_session::Column::Status.is_in(statuses.to_vec()));
+	if let Some(completed) = completed {
+		query = query.filter(reading_head::Column::Completed.eq(completed));
 	}
 	query.into_query()
 }
@@ -704,25 +706,21 @@ fn series_ids_for_read_status(
 		);
 	match status {
 		KomgaReadStatus::Read => {
-			media_query = media_query.filter(media::Column::Id.in_subquery(
-				visible_session_media_ids_subquery(
-					user,
-					Some(&[models::shared::enums::ReadingStatus::Finished]),
-				),
-			));
+			media_query = media_query.filter(
+				media::Column::Id
+					.in_subquery(visible_head_media_ids_subquery(user, Some(true))),
+			);
 		},
 		KomgaReadStatus::InProgress => {
-			media_query = media_query.filter(media::Column::Id.in_subquery(
-				visible_session_media_ids_subquery(
-					user,
-					Some(&[models::shared::enums::ReadingStatus::Reading]),
-				),
-			));
+			media_query = media_query.filter(
+				media::Column::Id
+					.in_subquery(visible_head_media_ids_subquery(user, Some(false))),
+			);
 		},
 		KomgaReadStatus::Unread => {
 			media_query = media_query.filter(
 				media::Column::Id
-					.not_in_subquery(visible_session_media_ids_subquery(user, None)),
+					.not_in_subquery(visible_head_media_ids_subquery(user, None)),
 			);
 		},
 	}
@@ -783,22 +781,18 @@ fn book_condition_filter(
 			operator: Equality::Is {
 				value: KomgaReadStatus::Read,
 			},
-		} => Ok(Some(Condition::all().add(media::Column::Id.in_subquery(
-			visible_session_media_ids_subquery(
-				user,
-				Some(&[models::shared::enums::ReadingStatus::Finished]),
-			),
-		)))),
+		} => Ok(Some(Condition::all().add(
+			media::Column::Id
+				.in_subquery(visible_head_media_ids_subquery(user, Some(true))),
+		))),
 		BookCondition::ReadStatus {
 			operator: Equality::Is {
 				value: KomgaReadStatus::InProgress,
 			},
-		} => Ok(Some(Condition::all().add(media::Column::Id.in_subquery(
-			visible_session_media_ids_subquery(
-				user,
-				Some(&[models::shared::enums::ReadingStatus::Reading]),
-			),
-		)))),
+		} => Ok(Some(Condition::all().add(
+			media::Column::Id
+				.in_subquery(visible_head_media_ids_subquery(user, Some(false))),
+		))),
 		BookCondition::ReadStatus {
 			operator: Equality::Is {
 				value: KomgaReadStatus::Unread,
@@ -806,7 +800,7 @@ fn book_condition_filter(
 		} => Ok(Some(
 			Condition::all().add(
 				media::Column::Id
-					.not_in_subquery(visible_session_media_ids_subquery(user, None)),
+					.not_in_subquery(visible_head_media_ids_subquery(user, None)),
 			),
 		)),
 		BookCondition::Author {
@@ -1175,16 +1169,11 @@ fn release_date_sort_expr() -> SimpleExpr {
 }
 
 fn latest_read_date_sort_expr(user: &AuthUser) -> SimpleExpr {
-	let latest_read_date = reading_session::Entity::find_for_user(user)
+	let latest_read_date = reading_head::Entity::find_for_user(&user.id)
 		.select_only()
-		.expr(Func::max(Func::coalesce([
-			Expr::col((reading_session::Entity, reading_session::Column::UpdatedAt))
-				.into(),
-			Expr::col((reading_session::Entity, reading_session::Column::CreatedAt))
-				.into(),
-		])))
+		.column(reading_head::Column::UpdatedAt)
 		.filter(
-			Expr::col((reading_session::Entity, reading_session::Column::MediaId))
+			Expr::col((reading_head::Entity, reading_head::Column::MediaId))
 				.equals((media::Entity, media::Column::Id)),
 		)
 		.into_query();
@@ -1902,22 +1891,22 @@ WITH visible_media AS (
 ), user_read_series AS (
     SELECT DISTINCT vm.series_id
     FROM visible_media vm
-    JOIN reading_sessions rs ON rs.media_id = vm.id
-    WHERE rs.user_id = $1 AND rs.status = 'FINISHED'
+    JOIN reading_heads rh ON rh.media_id = vm.id
+    WHERE rh.user_id = $1 AND rh.completed = 1
 ), user_active_series AS (
     SELECT DISTINCT vm.series_id
     FROM visible_media vm
-    JOIN reading_sessions rs ON rs.media_id = vm.id
-    WHERE rs.user_id = $1 AND rs.status = 'READING'
+    JOIN reading_heads rh ON rh.media_id = vm.id
+    WHERE rh.user_id = $1 AND rh.completed = 0
 ), user_read_media AS (
-    SELECT DISTINCT rs.media_id
-    FROM reading_sessions rs
-    WHERE rs.user_id = $1 AND rs.status IN ('FINISHED', 'READING')
+    SELECT DISTINCT rh.media_id
+    FROM reading_heads rh
+    WHERE rh.user_id = $1
 ), series_last_read AS (
-    SELECT vm.series_id, MAX(COALESCE(rs.updated_at, rs.created_at)) AS series_last_read_date
+    SELECT vm.series_id, MAX(rh.updated_at) AS series_last_read_date
     FROM visible_media vm
-    JOIN reading_sessions rs ON rs.media_id = vm.id
-    WHERE rs.user_id = $1 AND rs.status = 'FINISHED'
+    JOIN reading_heads rh ON rh.media_id = vm.id
+    WHERE rh.user_id = $1 AND rh.completed = 1
     GROUP BY vm.series_id
 ), next_in_series AS (
     SELECT vm.id, vm.name, vm.created_at, vm.updated_at,

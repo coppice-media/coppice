@@ -6,6 +6,8 @@ mod book_club_invitation;
 mod book_club_member;
 mod book_club_suggestion;
 mod custom_emoji;
+mod device;
+mod device_pairing;
 mod email_device;
 mod emailer;
 mod epub;
@@ -39,6 +41,8 @@ use book_club_invitation::BookClubInvitationMutation;
 use book_club_member::BookClubMemberMutation;
 use book_club_suggestion::BookClubSuggestionMutation;
 use custom_emoji::CustomEmojiMutation;
+use device::DeviceMutation;
+use device_pairing::DevicePairingMutation;
 use email_device::EmailDeviceMutation;
 use emailer::EmailerMutation;
 use epub::EpubMutation;
@@ -96,6 +100,7 @@ struct SystemMutations(
 	ScheduledJobConfigMutation,
 	MetadataProviderMutation,
 	IngestMutation,
+	DevicePairingMutation,
 );
 
 #[derive(async_graphql::MergedObject, Default)]
@@ -114,4 +119,5 @@ pub struct Mutation(
 	SystemMutations,
 	ListMutations,
 	ReadProgressMutation,
+	DeviceMutation,
 );

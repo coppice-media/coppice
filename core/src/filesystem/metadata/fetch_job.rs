@@ -16,10 +16,12 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::job::{
-	error::JobError, JobContext, JobExecuteLog, JobLifecycle, JobOutputExt, JobProgress,
+use stump_jobs::{
+	JobContext, JobError, JobExecuteLog, JobLifecycle, JobOutputExt, JobProgress,
 	JobTaskOutput, WorkingState,
 };
+
+use crate::{job::JobServices, utils::encryption::fetch_encryption_key};
 
 use super::{apply, ProviderClientCache};
 
@@ -167,13 +169,13 @@ impl MetadataFetchJob {
 
 	async fn get_or_init_cache(
 		&mut self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 	) -> Result<Arc<ProviderClientCache>, JobError> {
 		if let Some(cache) = &self.provider_cache {
 			return Ok(Arc::clone(cache));
 		}
 
-		let encryption_key = ctx.get_encryption_key().await?;
+		let encryption_key = fetch_encryption_key(ctx.conn()).await?;
 
 		let cache = Arc::new(ProviderClientCache::new(encryption_key));
 		self.provider_cache = Some(Arc::clone(&cache));
@@ -185,6 +187,7 @@ impl MetadataFetchJob {
 impl JobLifecycle for MetadataFetchJob {
 	const NAME: &'static str = "metadata_fetch";
 
+	type Context = JobServices;
 	type Output = MetadataFetchJobOutput;
 	type Task = MetadataFetchTask;
 
@@ -210,7 +213,7 @@ impl JobLifecycle for MetadataFetchJob {
 
 	async fn init(
 		&mut self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 	) -> Result<WorkingState<Self::Output, Self::Task>, JobError> {
 		let conn = ctx.conn();
 
@@ -381,7 +384,7 @@ impl JobLifecycle for MetadataFetchJob {
 
 	async fn execute_task(
 		&self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 		task: Self::Task,
 	) -> Result<JobTaskOutput<Self>, JobError> {
 		let conn = ctx.conn();

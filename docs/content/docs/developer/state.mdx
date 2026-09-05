@@ -52,9 +52,13 @@ OPDS 1.2, and KOReader sync; it has no OPDS 2 parser (app limit). Details in
 - Lazy lifecycle: `Ctx` owns config/conn/events only; `JobRuntime` on first
   enqueue, watcher only when needed, scheduler only for enabled scheduled-job
   rows; server stops only what it created. `/api/v2/health` reports `jobs`
-  (disabled/enabled/idle/running) and `watcher` (disabled/inactive/active).
-  Verified live on the fixture (`core/src/context.rs`,
-  `apps/server/src/http_server.rs`).
+  (disabled/enabled/idle/running) and `watcher`
+  (unavailable/disabled/inactive/active). Verified live on the fixture
+  (`core/src/context.rs`, `apps/server/src/http_server.rs`).
+- Watcher crate: `stump_watcher` (`crates/watcher`) owns `notify`, debounce and
+  lifecycle behind the `WatchedLibraries`/`ScanSubmitter` traits; core adapters
+  in `core/src/filesystem/scanner/watcher_adapters.rs`. `notify` links only
+  with the `watcher` feature (default/headless on, `minimal` off).
 - Idle RSS: the lifecycle change itself is noise (62→66 MB debug, 19 threads,
   same fixture copy); the structural win is lazy construction. Measured idle
   RSS for optimized headless vs pristine nightly: 29,924 vs 40,776 KiB RSS,

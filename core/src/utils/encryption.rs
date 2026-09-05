@@ -1,5 +1,19 @@
 use crate::{CoreError, CoreResult};
+use models::entity::server_config;
+use sea_orm::{DatabaseConnection, EntityTrait, SelectColumns};
 use simple_crypt::{decrypt, encrypt};
+
+/// Retrieves the encryption key from the persisted server configuration
+pub async fn fetch_encryption_key(conn: &DatabaseConnection) -> CoreResult<String> {
+	let record = server_config::Entity::find()
+		.select_column(server_config::Column::EncryptionKey)
+		.one(conn)
+		.await?;
+
+	record
+		.and_then(|config| config.encryption_key)
+		.ok_or(CoreError::EncryptionKeyNotSet)
+}
 
 pub fn create_encryption_key() -> CoreResult<String> {
 	let random_bytes = rand::random::<[u8; 32]>();

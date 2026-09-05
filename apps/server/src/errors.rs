@@ -115,6 +115,8 @@ pub enum APIError {
 	Forbidden(String),
 	#[error("{0}")]
 	Conflict(String),
+	#[error("Too many requests")]
+	TooManyRequests,
 	#[error("This functionality has not been implemented yet")]
 	NotImplemented,
 	#[error("This functionality is not supported")]
@@ -165,6 +167,7 @@ impl APIError {
 			APIError::Conflict(_) => StatusCode::CONFLICT,
 			APIError::NotImplemented => StatusCode::NOT_IMPLEMENTED,
 			APIError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+			APIError::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
 			APIError::BadGateway(_) => StatusCode::BAD_GATEWAY,
 			APIError::DbError(sea_orm::error::DbErr::RecordNotFound(_)) => {
 				StatusCode::NOT_FOUND
@@ -312,6 +315,20 @@ impl From<ProcessorError> for APIError {
 impl From<std::io::Error> for APIError {
 	fn from(error: std::io::Error) -> APIError {
 		APIError::InternalServerError(error.to_string())
+	}
+}
+
+impl From<stump_devices::DeviceError> for APIError {
+	fn from(error: stump_devices::DeviceError) -> Self {
+		use stump_devices::DeviceError;
+		match error {
+			DeviceError::NotFound => APIError::NotFound(error.to_string()),
+			DeviceError::Forbidden => APIError::Forbidden(error.to_string()),
+			DeviceError::Revoked => APIError::Conflict(error.to_string()),
+			DeviceError::InvalidName(_) => APIError::BadRequest(error.to_string()),
+			DeviceError::Credential(_) => APIError::InternalServerError(error.to_string()),
+			DeviceError::Database(error) => APIError::DbError(error),
+		}
 	}
 }
 

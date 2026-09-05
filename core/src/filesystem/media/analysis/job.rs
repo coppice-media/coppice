@@ -2,10 +2,11 @@ use std::path::Path;
 
 use crate::{
 	filesystem::media::analysis::analyze::{safely_analyze_book, MediaForProcessing},
-	job::{
-		error::JobError, JobContext, JobLifecycle, JobOutputExt, JobProgress,
-		JobTaskOutput, WorkingState,
-	},
+	job::JobServices,
+};
+use stump_jobs::{
+	JobContext, JobError, JobLifecycle, JobOutputExt, JobProgress, JobTaskOutput,
+	WorkingState,
 };
 use models::entity::{media, media_analysis, media_metadata, series};
 use sea_orm::{prelude::*, QuerySelect};
@@ -69,6 +70,7 @@ impl AnalyzeMediaJob {
 impl JobLifecycle for AnalyzeMediaJob {
 	const NAME: &'static str = "analyze_media";
 
+	type Context = JobServices;
 	type Output = AnalyzeMediaOutput;
 	type Task = AnalyzeMediaTask;
 
@@ -91,7 +93,7 @@ impl JobLifecycle for AnalyzeMediaJob {
 
 	async fn init(
 		&mut self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 	) -> Result<WorkingState<Self::Output, Self::Task>, JobError> {
 		let output = Self::Output::default();
 
@@ -144,7 +146,7 @@ impl JobLifecycle for AnalyzeMediaJob {
 
 	async fn execute_task(
 		&self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 		task: Self::Task,
 	) -> Result<JobTaskOutput<Self>, JobError> {
 		let mut output = Self::Output::default();

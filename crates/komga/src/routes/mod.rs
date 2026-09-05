@@ -81,6 +81,17 @@ pub enum KomgaCoreEvent {
 		#[serde(rename = "countByType")]
 		count_by_type: BTreeMap<String, i32>,
 	},
+	/// A reading head moved (or was cleared) through a non-Komga protocol.
+	ReadProgressChanged {
+		#[serde(rename = "bookId")]
+		book_id: String,
+		#[serde(rename = "seriesId")]
+		series_id: String,
+		#[serde(rename = "userId")]
+		user_id: String,
+		#[serde(default)]
+		deleted: bool,
+	},
 	#[serde(other)]
 	Other,
 }

@@ -815,7 +815,7 @@ pub(crate) async fn get_book_page(
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
 
-	if ctx.config.enable_opds_progression {
+	if ctx.config.protocols.enable_opds_progression {
 		let percentage = compute_page_based_percentage(correct_page, book.pages);
 		let progression = NormalizedProgression {
 			page: Some(correct_page),

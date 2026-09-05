@@ -7,7 +7,9 @@ default-run = "stump_server"
 [features]
 default = ["full"]
 full = ["headless", "webui"]
-headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "komga", "liseur-sync"]
+headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "komga", "kavita", "liseur-sync", "watcher", "qr", "apalis"]
+# Apalis-backed job executor (links `apalis`); `minimal` runs jobs on the inline executor.
+apalis = ["stump_core/apalis"]
 # Media format backends that link native code; every profile keeps them on.
 # Turn one off explicitly (e.g. `--no-default-features --features minimal,rar`).
 formats = ["pdf", "rar"]
@@ -26,7 +28,13 @@ readium = []
 kobo = ["dep:stump_kobo", "dep:stump_kepub"]
 koreader = ["dep:stump_koreader"]
 komga = ["readium", "dep:stump_komga"]
+kavita = ["dep:stump_kavita"]
 liseur-sync = ["dep:stump_liseur_sync"]
+# Server-rendered PNG for the device-pairing QR payload (links `qrcode` + `image`
+# PNG encoding); omitted from `minimal`.
+qr = ["dep:qrcode", "dep:image"]
+# Filesystem library watcher (links `notify`); omitted from `minimal`.
+watcher = ["stump_core/watcher"]
 webui = []
 
 [dependencies]
@@ -46,11 +54,15 @@ base64.workspace = true
 bcrypt.workspace = true
 cli = { path = "../../crates/cli" }
 chrono.workspace = true
+data-encoding.workspace = true
 models = { path = "../../crates/models", default-features = false }
 futures-util.workspace = true
 graphql = { path = "../../crates/graphql", optional = true }
+governor = "0.6"
 hyper = "0.14.27"
+http-body = "1"
 infer.workspace = true
+image = { version = "0.25.2", default-features = false, features = ["png"], optional = true }
 itertools.workspace = true
 jsonwebtoken = "9.3.0"
 linemux = { git = "https://github.com/jmagnuson/linemux.git", rev = "acaafc602afac5d7a9cd3e087dafc937cac1e364" }
@@ -58,6 +70,7 @@ local-ip-address = "0.6.2"
 openidconnect = { version = "4.0.1", default-features = false }
 oauth2-reqwest = { version = "0.1.0-alpha.3" }
 prefixed-api-key = { workspace = true}
+qrcode = { workspace = true, optional = true }
 rand = { workspace = true }
 reqwest.workspace = true
 sea-orm.workspace = true
@@ -73,15 +86,16 @@ stump_media = { path = "../../crates/media", default-features = false }
 stump_scanner = { path = "../../crates/scanner" }
 stump_auth = { path = "../../crates/auth" }
 stump_api_types = { path = "../../crates/api-types" }
+stump_devices = { path = "../../crates/devices" }
 stump_komga = { path = "../../crates/komga", optional = true }
+stump_kavita = { path = "../../crates/kavita", optional = true }
 stump_kobo = { path = "../../crates/kobo", optional = true }
 stump_kepub = { path = "../../crates/kepub", optional = true }
 filetime = "0.2.25"
 stump_koreader = { path = "../../crates/koreader", optional = true }
 stump_liseur_sync = { path = "../../crates/liseur-sync", optional = true }
 stump_opds = { path = "../../crates/opds", optional = true }
-apalis.workspace = true
-apalis-cron.workspace = true
+subtle.workspace = true
 tempfile = "3.13.0"
 tower-http = { version = "0.5.2", features = [
   "fs",

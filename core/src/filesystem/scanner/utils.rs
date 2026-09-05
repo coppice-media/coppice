@@ -27,9 +27,10 @@ use crate::{
 		media::{BuiltMedia, MediaBuilder},
 		series::{BuiltSeries, SeriesBuilder},
 	},
-	job::{error::JobError, JobContext, JobExecuteLog, JobProgress},
+	job::JobServices,
 	CoreEvent,
 };
+use stump_jobs::{JobContext, JobError, JobExecuteLog, JobProgress};
 use stump_scanner::{BookVisitOperation, CustomVisitResult, TagCache};
 
 const MAX_INSERT_CHUNK_SIZE: usize = 250;
@@ -361,7 +362,7 @@ pub(crate) struct MediaOperationOutput {
 /// Handles missing media by updating the database with the latest information. A media is
 /// considered missing if it was previously marked as ready and is no longer found on disk.
 pub(crate) async fn handle_missing_media(
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	series_id: &str,
 	paths: Vec<PathBuf>,
 ) -> MediaOperationOutput {
@@ -414,7 +415,7 @@ pub(crate) async fn handle_missing_media(
 /// media is considered restored if it was previously marked as missing and has been
 /// found on disk.
 pub(crate) async fn handle_restored_media(
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	series_id: &str,
 	ids: Vec<String>,
 ) -> MediaOperationOutput {
@@ -496,7 +497,7 @@ pub(crate) async fn safely_build_series(
 	let mut logs = vec![];
 	let mut created_series = Vec::with_capacity(paths.len());
 
-	let concurrency = config.cpu_concurrency_limit();
+	let concurrency = config.jobs.cpu_concurrency_limit();
 	let total_series = paths.len();
 	tracing::debug!(total_series, concurrency, "Processing series");
 
@@ -692,7 +693,7 @@ pub(crate) async fn safely_build_and_insert_media(
 		series_id,
 		library_config,
 	}: MediaBuildOperation,
-	worker_ctx: &JobContext,
+	worker_ctx: &JobContext<JobServices>,
 	paths: Vec<PathBuf>,
 ) -> Result<MediaOperationOutput, JobError> {
 	if paths.is_empty() {
@@ -711,7 +712,7 @@ pub(crate) async fn safely_build_and_insert_media(
 		return Ok(output);
 	};
 
-	let concurrency = worker_ctx.apalis_state.config.cpu_concurrency_limit();
+	let concurrency = worker_ctx.config().jobs.cpu_concurrency_limit();
 	let book_count = paths.len();
 	tracing::debug!(book_count, concurrency, "Processing media");
 
@@ -720,7 +721,7 @@ pub(crate) async fn safely_build_and_insert_media(
 
 	worker_ctx.report_progress(JobProgress::msg("Building media from disk"));
 
-	let config_arc = Arc::clone(&worker_ctx.apalis_state.config);
+	let config_arc = Arc::clone(&worker_ctx.services().config);
 	let mut futures: BuiltEntityFutures<BuiltMedia> = FuturesUnordered::new();
 	let mut cursor = 0i32;
 
@@ -916,7 +917,7 @@ pub(crate) async fn visit_and_update_media(
 		series_id,
 		library_config,
 	}: MediaBuildOperation,
-	worker_ctx: &JobContext,
+	worker_ctx: &JobContext<JobServices>,
 	params: Vec<(PathBuf, BookVisitOperation)>,
 ) -> Result<MediaOperationOutput, JobError> {
 	let mut output = MediaOperationOutput::default();
@@ -951,7 +952,7 @@ pub(crate) async fn visit_and_update_media(
 		));
 	}
 
-	let concurrency = worker_ctx.apalis_state.config.cpu_concurrency_limit();
+	let concurrency = worker_ctx.config().jobs.cpu_concurrency_limit();
 	let book_count = media.len();
 	tracing::debug!(book_count, concurrency, "Processing media visit");
 
@@ -960,7 +961,7 @@ pub(crate) async fn visit_and_update_media(
 
 	worker_ctx.report_progress(JobProgress::msg("Visiting media on disk"));
 
-	let config_arc = Arc::clone(&worker_ctx.apalis_state.config);
+	let config_arc = Arc::clone(&worker_ctx.services().config);
 	let mut futures: BuiltEntityFutures<BookVisitResult, String> =
 		FuturesUnordered::new();
 	let mut cursor = 0i32;

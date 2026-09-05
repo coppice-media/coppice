@@ -9,7 +9,8 @@ use models::{
 use tokio::{sync::oneshot, task::spawn_blocking};
 
 use crate::{
-	content_type::ContentType, error::FileError, FileParts, MediaConfig, PathUtils,
+	content_type::ContentType, error::FileError, virtual_media, FileParts, MediaConfig,
+	PathUtils,
 };
 
 #[cfg(feature = "pdf")]
@@ -371,6 +372,9 @@ pub async fn get_page_async(
 	config: &MediaConfig,
 ) -> Result<(ContentType, Vec<u8>), FileError> {
 	let path_str = path.as_ref().to_str().unwrap_or_default();
+	if let Some(resolver) = virtual_media::resolver_for(path_str) {
+		return resolver.get_page(path_str, page).await;
+	}
 	let mime = ContentType::from_file(path_str).mime_type();
 
 	// Use optimized PDF rendering for PDF files (includes caching if enabled).
@@ -437,6 +441,10 @@ pub async fn get_page_count_async(
 	path: impl AsRef<Path>,
 	config: &MediaConfig,
 ) -> Result<i32, FileError> {
+	let path_str = path.as_ref().to_str().unwrap_or_default();
+	if let Some(resolver) = virtual_media::resolver_for(path_str) {
+		return resolver.get_page_count(path_str).await;
+	}
 	let (tx, rx) = oneshot::channel();
 
 	let handle = spawn_blocking({
@@ -474,6 +482,9 @@ pub fn get_content_types_for_pages(
 	path: &str,
 	pages: Vec<i32>,
 ) -> Result<HashMap<i32, ContentType>, FileError> {
+	if let Some(resolver) = virtual_media::resolver_for(path) {
+		return resolver.page_content_types(path, &pages);
+	}
 	dispatch_processor!(Path::new(path), get_page_content_types, path, pages)
 }
 

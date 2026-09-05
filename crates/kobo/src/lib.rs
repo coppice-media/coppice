@@ -1,3 +1,14 @@
+//! Kobo store-API compatibility for stock Kobo firmware under `/kobo/{api_key}`.
+//!
+//! This crate owns the route tree, the opaque [`SyncToken`], and the
+//! database-backed [`KoboSync`] full/incremental pagination. Authentication,
+//! media serving, the `ReadingState` projection (`core/src/kobo`) and KEPUB
+//! conversion (`stump_kepub`) are supplied by the host through [`KoboBackend`].
+//!
+//! See `crates/kobo/README.md` for the Calibre-Web/Komga/kepubify pins, the
+//! Liseur `31f8182d` client, decisions, and verification (harness only; no
+//! physical Kobo has been tested).
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

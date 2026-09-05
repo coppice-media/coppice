@@ -3,15 +3,21 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{sse::KomgaEvent, KomgaBookReadProgressUpdateRequest};
 use axum::{extract::Path, http::StatusCode, routing::patch, Extension, Json, Router};
 use models::{
-	domain::reading_progress::compute_page_based_percentage,
-	entity::{media, reading_session, series, user::AuthUser},
-	services::reading_progress::{upsert_reading_session, NormalizedProgression},
+	domain::{
+		reading_progress::compute_page_based_percentage,
+		reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
+	},
+	entity::{media, reading_head, reading_session, series, user::AuthUser},
+	services::{
+		reading_progress::{upsert_reading_session, NormalizedProgression},
+		reading_state,
+	},
 };
 use stump_auth::AuthContext;
 
 use super::{KomgaBackend, KomgaEvents};
 use crate::errors::{APIError, APIResult};
-use sea_orm::{prelude::*, DatabaseConnection, QueryOrder, TransactionTrait};
+use sea_orm::{prelude::*, ConnectionTrait, DatabaseConnection, TransactionTrait};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -88,47 +94,6 @@ pub(crate) fn progress_books(
 	books.into_iter().map(|book| progress_book(&book)).collect()
 }
 
-async fn latest_sessions(
-	conn: &DatabaseConnection,
-	user: &AuthUser,
-	media_ids: &[String],
-) -> APIResult<HashMap<String, reading_session::Model>> {
-	if media_ids.is_empty() {
-		return Ok(HashMap::new());
-	}
-	let rows = reading_session::Entity::find()
-		.filter(reading_session::Column::UserId.eq(user.id.clone()))
-		.filter(reading_session::Column::MediaId.is_in(media_ids.to_vec()))
-		.order_by_desc(reading_session::Column::UpdatedAt)
-		.order_by_desc(reading_session::Column::CreatedAt)
-		.order_by_desc(reading_session::Column::Id)
-		.all(conn)
-		.await?;
-	let mut latest = HashMap::with_capacity(media_ids.len());
-	for row in rows {
-		let id = row.media_id.clone();
-		let key = (
-			row.updated_at.unwrap_or(row.created_at),
-			row.created_at,
-			row.id,
-		);
-		let replace = latest
-			.get(&id)
-			.is_none_or(|current: &reading_session::Model| {
-				let current_key = (
-					current.updated_at.unwrap_or(current.created_at),
-					current.created_at,
-					current.id,
-				);
-				key > current_key
-			});
-		if replace {
-			latest.insert(id, row);
-		}
-	}
-	Ok(latest)
-}
-
 fn continuous_prefix(
 	states: &[(Option<f64>, bool)],
 	order_by_number: bool,
@@ -152,7 +117,7 @@ fn continuous_prefix(
 
 fn counts_for_books(
 	books: &[ProgressBook],
-	sessions: &HashMap<String, reading_session::Model>,
+	heads: &HashMap<String, reading_head::Model>,
 	order_by_number: bool,
 ) -> ProgressCounts {
 	let books_count = i32::try_from(books.len()).unwrap_or(i32::MAX);
@@ -161,9 +126,9 @@ fn counts_for_books(
 	let states = books
 		.iter()
 		.map(|book| {
-			let session = sessions.get(&book.id);
-			let is_read = session.is_some_and(reading_session::Model::is_complete);
-			let is_in_progress = session.is_some_and(|session| !session.is_complete());
+			let head = heads.get(&book.id);
+			let is_read = head.is_some_and(|head| head.completed);
+			let is_in_progress = head.is_some_and(|head| !head.completed);
 			read += i32::from(is_read);
 			in_progress += i32::from(is_in_progress);
 			(book.number, is_read)
@@ -199,18 +164,64 @@ pub(crate) async fn counts_for_progress_books(
 	order_by_number: bool,
 ) -> APIResult<ProgressCounts> {
 	let ids = books.iter().map(|book| book.id.clone()).collect::<Vec<_>>();
-	let sessions = latest_sessions(conn, user, &ids).await?;
-	Ok(counts_for_books(books, &sessions, order_by_number))
+	let heads = reading_state::heads(conn, &user.id, &ids).await?;
+	Ok(counts_for_books(books, &heads, order_by_number))
 }
 
-pub(crate) fn finished_progression(pages: i32) -> NormalizedProgression {
-	let page = (pages > 0).then_some(pages - 1);
+fn finished_progression(pages: i32) -> NormalizedProgression {
+	let page = (pages > 0).then_some(pages);
 	NormalizedProgression {
 		page,
 		percentage: page.map(|page| compute_page_based_percentage(page, pages)),
 		did_complete: true,
 		..Default::default()
 	}
+}
+
+/// Mark one book read for `user`: the session history (statistics) and the
+/// unified head, in the caller's transaction.
+pub(crate) async fn mark_book_read<C: ConnectionTrait>(
+	txn: &C,
+	user: &AuthUser,
+	book_id: &str,
+	pages: i32,
+) -> APIResult<()> {
+	upsert_reading_session(txn, user, book_id, finished_progression(pages)).await?;
+	reading_state::apply(
+		txn,
+		&user.id,
+		Publication {
+			media_id: book_id,
+			pages,
+		},
+		ProtocolUpdate {
+			protocol: SourceProtocol::Komga,
+			device_id: None,
+			updated_at: None,
+			position: Position::None,
+			progression: None,
+			completed: Some(true),
+			raw_payload: serde_json::json!({ "completed": true }),
+		},
+	)
+	.await?;
+	Ok(())
+}
+
+/// Delete the user's progress for `book_ids`: the session history and the
+/// unified heads, in the caller's transaction.
+pub(crate) async fn clear_books_progress<C: ConnectionTrait>(
+	txn: &C,
+	user: &AuthUser,
+	book_ids: &[String],
+) -> APIResult<()> {
+	reading_session::Entity::delete_many()
+		.filter(reading_session::Column::UserId.eq(user.id.clone()))
+		.filter(reading_session::Column::MediaId.is_in(book_ids.to_vec()))
+		.exec(txn)
+		.await?;
+	reading_state::clear(txn, &user.id, book_ids, SourceProtocol::Komga, None).await?;
+	Ok(())
 }
 
 /// The Komelia book progress endpoints. Authentication is applied by the parent router.
@@ -224,16 +235,27 @@ where
 	)
 }
 
-/// Convert a Komga patch into Stump's normalized progression representation.
+/// The session and head updates a Komga read-progress patch resolves to.
+#[derive(Debug)]
+struct PatchUpdates {
+	session: NormalizedProgression,
+	head: ProtocolUpdate,
+}
+
+/// Convert a Komga patch into Stump's normalized progression and the unified
+/// head update.
 ///
-/// Komga pages are zero-based and use a half-open range: for a media item with
-/// `pages == n`, valid page values are `0..n`. Media with zero (or negative)
-/// pages has no addressable pages, so callers must omit `page` and may still
-/// update only the completion state.
+/// Komga pages are one-based: for a media item with `pages == n`, valid page
+/// values are `1..=n`, and reaching page `n` completes the book unless the
+/// patch says otherwise (Komelia `ReaderState.kt:121-124,233-241@65f92fde`
+/// starts at page `1` and echoes `readProgress.page` verbatim). Media with
+/// zero (or negative) pages has no addressable pages, so callers must omit
+/// `page` and may still update only the completion state. Completion is
+/// sticky on the head: only an explicit `completed: false` clears it.
 fn normalize_patch(
 	patch: KomgaBookReadProgressUpdateRequest,
 	media_pages: i32,
-) -> Result<NormalizedProgression, String> {
+) -> Result<PatchUpdates, String> {
 	if patch.page.is_none() && patch.completed.is_none() {
 		return Err("At least one progress field must be provided".to_string());
 	}
@@ -242,9 +264,9 @@ fn normalize_patch(
 		if media_pages <= 0 {
 			return Err("This media has no addressable pages".to_string());
 		}
-		if page < 0 || page >= media_pages {
+		if page < 1 || page > media_pages {
 			return Err(format!(
-				"Page {page} is out of bounds (valid range: 0..{media_pages})"
+				"Page {page} is out of bounds (valid range: 1..={media_pages})"
 			));
 		}
 	}
@@ -252,15 +274,30 @@ fn normalize_patch(
 	let percentage = patch
 		.page
 		.map(|page| compute_page_based_percentage(page, media_pages));
+	let completed = patch
+		.completed
+		.or_else(|| (patch.page == Some(media_pages)).then_some(true));
+	let raw_payload = serde_json::to_value(&patch).map_err(|error| error.to_string())?;
 
-	Ok(NormalizedProgression {
-		page: patch.page,
-		locator: None,
-		percentage,
-		elapsed_seconds_delta: None,
-		did_complete: patch.completed.unwrap_or(false),
-		device_id: None,
-		reset_elapsed_seconds: false,
+	Ok(PatchUpdates {
+		session: NormalizedProgression {
+			page: patch.page,
+			locator: None,
+			percentage,
+			elapsed_seconds_delta: None,
+			did_complete: completed.unwrap_or(false),
+			device_id: None,
+			reset_elapsed_seconds: false,
+		},
+		head: ProtocolUpdate {
+			protocol: SourceProtocol::Komga,
+			device_id: None,
+			updated_at: None,
+			position: patch.page.map_or(Position::None, Position::Page),
+			progression: None,
+			completed,
+			raw_payload,
+		},
 	})
 }
 
@@ -281,7 +318,7 @@ async fn update_read_progress(
 		.one(conn)
 		.await?
 		.ok_or_else(|| APIError::NotFound("Book not found".to_string()))?;
-	let progression = normalize_patch(patch, book.pages).map_err(APIError::BadRequest)?;
+	let updates = normalize_patch(patch, book.pages).map_err(APIError::BadRequest)?;
 	let parent_series = if let Some(series_id) = book.series_id.as_deref() {
 		series::Entity::find_for_user(&user)
 			.filter(series::Column::Id.eq(series_id))
@@ -296,7 +333,9 @@ async fn update_read_progress(
 		.and_then(|series| series.library_id)
 		.unwrap_or_default();
 	let txn = conn.begin().await?;
-	upsert_reading_session(&txn, &user, &id, progression).await?;
+	upsert_reading_session(&txn, &user, &id, updates.session).await?;
+	reading_state::apply(&txn, &user.id, Publication::from(&book), updates.head)
+		.await?;
 	txn.commit().await?;
 	events.send(KomgaEvent::ReadProgressChanged {
 		book_id: event_book_id.clone().into(),
@@ -348,11 +387,9 @@ async fn delete_read_progress(
 		.and_then(|series| series.library_id)
 		.unwrap_or_default();
 
-	reading_session::Entity::delete_many()
-		.filter(reading_session::Column::UserId.eq(user.id.clone()))
-		.filter(reading_session::Column::MediaId.eq(id))
-		.exec(conn)
-		.await?;
+	let txn = conn.begin().await?;
+	clear_books_progress(&txn, &user, std::slice::from_ref(&id)).await?;
+	txn.commit().await?;
 	events.send(KomgaEvent::ReadProgressDeleted {
 		book_id: event_book_id.clone().into(),
 		user_id: user.id.clone().into(),
@@ -387,34 +424,55 @@ mod tests {
 	}
 
 	#[test]
-	fn page_is_zero_based_and_percentage_is_a_fraction() {
+	fn page_is_one_based_and_percentage_is_a_fraction() {
 		let patch = KomgaBookReadProgressUpdateRequest {
 			page: Some(2),
 			completed: Some(false),
 		};
-		let progression = normalize_patch(patch, 10).unwrap();
-		assert_eq!(progression.page, Some(2));
+		let updates = normalize_patch(patch, 10).unwrap();
+		assert_eq!(updates.session.page, Some(2));
 		assert_eq!(
-			progression.percentage.unwrap(),
+			updates.session.percentage.unwrap(),
 			sea_orm::prelude::Decimal::new(2, 1)
 		);
-		assert!(!progression.did_complete);
+		assert!(!updates.session.did_complete);
+		assert_eq!(updates.head.position, Position::Page(2));
+		assert_eq!(updates.head.completed, Some(false));
+		assert_eq!(updates.head.protocol, SourceProtocol::Komga);
+		assert_eq!(
+			updates.head.raw_payload,
+			serde_json::json!({ "page": 2, "completed": false })
+		);
 	}
 
 	#[test]
-	fn zero_and_last_pages_are_valid() {
-		for page in [0, 9] {
-			let patch = KomgaBookReadProgressUpdateRequest {
-				page: Some(page),
+	fn first_and_last_pages_are_valid_and_last_page_completes() {
+		let first = normalize_patch(
+			KomgaBookReadProgressUpdateRequest {
+				page: Some(1),
 				completed: None,
-			};
-			assert!(normalize_patch(patch, 10).is_ok());
-		}
+			},
+			10,
+		)
+		.unwrap();
+		assert_eq!(first.head.completed, None, "completion stays sticky");
+		assert!(!first.session.did_complete);
+
+		let last = normalize_patch(
+			KomgaBookReadProgressUpdateRequest {
+				page: Some(10),
+				completed: None,
+			},
+			10,
+		)
+		.unwrap();
+		assert_eq!(last.head.completed, Some(true));
+		assert!(last.session.did_complete);
 	}
 
 	#[test]
-	fn negative_and_upper_bound_pages_are_rejected() {
-		for page in [-1, 10] {
+	fn zero_and_upper_bound_pages_are_rejected() {
+		for page in [-1, 0, 11] {
 			let patch = KomgaBookReadProgressUpdateRequest {
 				page: Some(page),
 				completed: None,
@@ -424,15 +482,15 @@ mod tests {
 	}
 
 	#[test]
-	fn zero_page_media_accepts_completion_without_page_but_not_page_zero() {
+	fn zero_page_media_accepts_completion_without_page_but_not_a_page() {
 		let completion = KomgaBookReadProgressUpdateRequest {
 			page: None,
 			completed: Some(true),
 		};
-		assert!(normalize_patch(completion, 0).unwrap().did_complete);
+		assert!(normalize_patch(completion, 0).unwrap().session.did_complete);
 
 		let page = KomgaBookReadProgressUpdateRequest {
-			page: Some(0),
+			page: Some(1),
 			completed: None,
 		};
 		assert!(normalize_patch(page, 0).is_err());
@@ -444,10 +502,61 @@ mod tests {
 			page: None,
 			completed: Some(true),
 		};
-		let progression = normalize_patch(patch, 10).unwrap();
-		assert_eq!(progression.page, None);
-		assert_eq!(progression.percentage, None);
+		let updates = normalize_patch(patch, 10).unwrap();
+		assert_eq!(updates.session.page, None);
+		assert_eq!(updates.session.percentage, None);
+		assert!(updates.session.did_complete);
+		assert_eq!(updates.head.position, Position::None);
+		assert_eq!(updates.head.completed, Some(true));
+	}
+
+	#[test]
+	fn finished_progress_uses_last_one_based_page() {
+		let progression = finished_progression(12);
+		assert_eq!(progression.page, Some(12));
 		assert!(progression.did_complete);
+		assert_eq!(finished_progression(0).page, None);
+	}
+
+	#[test]
+	fn counts_derive_from_heads() {
+		use chrono::Utc;
+		let head = |media_id: &str, completed: bool| reading_head::Model {
+			user_id: "u".to_owned(),
+			media_id: media_id.to_owned(),
+			locator: None,
+			progression: if completed { 1.0 } else { 0.5 },
+			page: None,
+			completed,
+			updated_at: Utc::now().into(),
+			created_at: Utc::now().into(),
+			changed_at: Utc::now().into(),
+			source_protocol: SourceProtocol::Kobo,
+			source_device_id: None,
+			revision: 1,
+			event_id: 1,
+		};
+		let books = ["a", "b", "c"]
+			.iter()
+			.enumerate()
+			.map(|(index, id)| ProgressBook {
+				id: (*id).to_owned(),
+				number: Some(index as f64 + 1.0),
+				source_number: true,
+				pages: 10,
+				series_id: None,
+			})
+			.collect::<Vec<_>>();
+		let heads = HashMap::from([
+			("a".to_owned(), head("a", true)),
+			("b".to_owned(), head("b", false)),
+		]);
+		let counts = counts_for_books(&books, &heads, true);
+		assert_eq!(counts.books_read_count, 1);
+		assert_eq!(counts.books_in_progress_count, 1);
+		assert_eq!(counts.books_unread_count, 1);
+		assert_eq!(counts.continuous_prefix_count, 1);
+		assert_eq!(counts.last_read_continuous_number_sort, 1.0);
 	}
 	#[test]
 	fn continuous_prefix_stops_at_a_gap() {

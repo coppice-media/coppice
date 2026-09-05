@@ -62,7 +62,7 @@ pub fn get_cors_layer(config: StumpConfig) -> CorsLayer {
 		.allow_credentials(true);
 
 	// If allowed origins include the general wildcard ("*") then we can return a permissive CORS layer and exit early.
-	if config.allowed_origins.contains(&"*".to_string()) {
+	if config.server.allowed_origins.contains(&"*".to_string()) {
 		cors_layer = cors_layer.allow_origin(AllowOrigin::any());
 
 		#[cfg(debug_assertions)]
@@ -76,6 +76,7 @@ pub fn get_cors_layer(config: StumpConfig) -> CorsLayer {
 
 	// Convert allowed origins from config into `HeaderValue`s for CORS layer.
 	let allowed_origins: Vec<_> = config
+		.server
 		.allowed_origins
 		.into_iter()
 		.filter_map(|origin| match origin.parse::<HeaderValue>() {
@@ -100,7 +101,7 @@ pub fn get_cors_layer(config: StumpConfig) -> CorsLayer {
 	let local_origins = if local_ip.is_empty() {
 		vec![]
 	} else {
-		let port = config.port;
+		let port = config.server.port;
 		let mut base = vec![
 			format!("http://{local_ip}:{port}"),
 			format!("https://{local_ip}:{port}"),

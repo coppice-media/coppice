@@ -43,6 +43,11 @@ pub struct Model {
 	pub config_id: i32,
 	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
 	pub last_scanned_at: Option<DateTimeWithTimeZone>,
+	/// The provider source instance (`provider_sources.id`) backing a virtual
+	/// library. Set only for provider libraries, whose `path` is a `provider://`
+	/// URI and which the filesystem scanner skips.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub source_provider: Option<String>,
 }
 
 impl Entity {

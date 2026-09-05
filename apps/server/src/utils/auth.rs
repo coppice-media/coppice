@@ -17,7 +17,7 @@ pub struct DecodedCredentials {
 }
 
 pub fn hash_password(password: &str, config: &StumpConfig) -> Result<String, AuthError> {
-	Ok(bcrypt::hash(password, config.password_hash_cost)?)
+	Ok(bcrypt::hash(password, config.auth.password_hash_cost)?)
 }
 
 /// Verify a password against a hash using the bcrypt algorithm

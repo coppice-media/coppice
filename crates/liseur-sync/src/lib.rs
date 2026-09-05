@@ -1,9 +1,13 @@
-//! The native liseur-sync wire contract.
+//! The native liseur-sync wire contract (`/v1/*`).
 //!
-//! The crate deliberately owns the protocol DTOs and HTTP handlers, while the
-//! application supplies persistence through [`LiseurSyncBackend`].  This keeps
-//! the protocol usable by a headless server without coupling it to Stump's
-//! database implementation.
+//! The crate deliberately owns the protocol DTOs, bearer middleware, validation
+//! and HTTP handlers, while the application supplies persistence through
+//! [`LiseurSyncBackend`].  This keeps the protocol usable by a headless server
+//! without coupling it to Stump's database implementation.
+//!
+//! See `crates/liseur-sync/README.md` for the pins (liseur-sync `f8ce32b7`
+//! OpenAPI 1.0, Liseur `31f8182d` — device-verified and replayed by
+//! `make replay-liseur-sync`), decisions, and verification.
 
 use std::{collections::HashSet, fmt};
 

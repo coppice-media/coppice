@@ -69,7 +69,7 @@ where
 			.await
 			.map_err(|_| APIError::BadRequest("Invalid host".to_string()))?;
 		let app_state = AppState::from_ref(state);
-		let trust_proxy_headers = app_state.config.trust_proxy_headers;
+		let trust_proxy_headers = app_state.config.server.trust_proxy_headers;
 
 		let scheme = parse_scheme(parts, trust_proxy_headers).unwrap_or_else(|| {
 			tracing::warn!(?host, "No scheme found in request, defaulting to http");
@@ -79,7 +79,7 @@ where
 		let via_proxy = trust_proxy_headers
 			&& (parts.headers.contains_key(X_FORWARDED_PROTO_HEADER_KEY)
 				|| parts.headers.contains_key(FORWARDED));
-		let host = resolve_host(host.0, &scheme, app_state.config.port, via_proxy);
+		let host = resolve_host(host.0, &scheme, app_state.config.server.port, via_proxy);
 
 		Ok(HostExtractor(HostDetails { host, scheme }))
 	}
@@ -176,7 +176,7 @@ where
 		state: &S,
 	) -> Result<Self, Self::Rejection> {
 		let app_state = AppState::from_ref(state);
-		let trust_proxy_headers = app_state.config.trust_proxy_headers;
+		let trust_proxy_headers = app_state.config.server.trust_proxy_headers;
 
 		let ip = extract_client_ip(&parts.headers, &parts.extensions, trust_proxy_headers)
 			.unwrap_or_else(|| {
@@ -187,7 +187,7 @@ where
 	}
 }
 
-fn extract_client_ip(
+pub(crate) fn extract_client_ip(
 	headers: &HeaderMap,
 	extensions: &Extensions,
 	trust_proxy_headers: bool,

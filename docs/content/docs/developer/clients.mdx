@@ -8,7 +8,8 @@ cell is only as strong as its evidence. Verification levels follow
 [client verification](/docs/developer/client-verification): **device** = run on
 a real app against the fixture server, **harness** = replayed Hurl spec or
 server-side probe (proves the server contract, not the app), **source** =
-implemented against pinned client source, no run yet.
+implemented against pinned client source, no run yet. Hardware, device-side
+tools, and the servers we impersonate are on [platforms](/docs/developer/platforms).
 
 ## Komelia (Android)
 
@@ -77,7 +78,8 @@ Five profiles against Stump; evidence is
 ## Kobo eReaders (stock firmware)
 
 - **Protocol:** Kobo sync under `/kobo/{api_key}`: initialization, library
-  sync, metadata, thumbnails, device-auth stub, EPUB/KEPUB download.
+  sync, metadata, thumbnails, device-auth stub, EPUB/KEPUB download, and
+  `library/{id}/state` GET/PUT.
 - **Setup:** point the device at the server (Kobo store-proxy style) with an
   API key in the path; owner needs `AccessKoboSync`. Optional KEPUB
   conversion via `KOBO_KEPUB_CONVERSION=true`.
@@ -87,11 +89,20 @@ Five profiles against Stump; evidence is
   tested yet. Evidence: [client verification](/docs/developer/client-verification),
   [sync platforms](/docs/developer/sync-platforms),
   [Kobo capabilities](/docs/developer/kobo-sync-capabilities).
-- **Device format limit:** stock Kobo firmware renders JPEG, PNG, GIF, BMP and TIFF only — no WebP in CBZ or KEPUB ([Kobo supported formats](https://help.kobo.com/hc/en-us/articles/360017763713-File-formats-your-Kobo-eReader-and-Kobo-Books-app-support)); WebP pages show blank or the book is hidden. Stump's PDF renderer defaults to WebP output and most Mihon sources serve WebP, so Kobo delivery of comics needs a JPEG re-encode step (see the comics-for-Kobo phase in the [roadmap](/docs/developer/roadmap)). KOReader on a Kobo does render WebP.
-- **Known gaps:** shelf/tag and `reading_state` endpoints are empty-`{}`
-  stubs — no inbound reading-state write and no tags/collections sync;
-  emitted sync items are only `NewEntitlement` and
-  `ChangedProductMetadata`; no annotations.
+- **Device format limit:** stock Kobo firmware renders JPEG, PNG, GIF, BMP and TIFF only — no WebP in CBZ or KEPUB ([Kobo supported formats](https://help.kobo.com/hc/en-us/articles/360017763713-File-formats-your-Kobo-eReader-and-Kobo-Books-app-support)); WebP pages show blank or the book is hidden. Stump's PDF renderer defaults to WebP output and most Mihon sources serve WebP, so Kobo delivery of comics needs a JPEG re-encode step (see the comics-for-Kobo phase in the [roadmap](/docs/developer/roadmap)). KOReader renders WebP in CBZ ([koreader#3016](https://github.com/koreader/koreader/issues/3016), closed 2022.08).
+- **Models, device-side tools, and the on-device data model** (per-model panel
+  and stylus table, stock Nickel vs KOReader vs NickelStump, `KoboReader.sqlite`
+  tables) are on [platforms](/docs/developer/platforms). Two facts matter for
+  annotations: stylus markups live outside the database as
+  `.kobo/markups/*.svg` (strokes) + `*.jpg` (page snapshot) with opaque file
+  stems attributed through `KoboReader.sqlite`
+  ([composite markup tool](https://github.com/leldr/Unofficial-Chrome-Based-Kobo-Composite-Markup-Generator)),
+  and Kobo states that handwritten notes in EPUB/KEPUB stay on the device and
+  cannot be exported, while PDF markups are written into the PDF
+  ([Kobo help](https://help.kobo.com/hc/en-us/articles/1500001927562)). No
+  Stump component reads either today.
+- **Known gaps:** shelf/tag endpoints are empty-`{}` stubs — no tags/collections
+  sync; `auth/device` returns dummy tokens; no annotations over the sync API.
 
 ## Grimmory (as a consumer of our alias)
 
@@ -107,15 +118,30 @@ Five profiles against Stump; evidence is
 - **Known gaps:** no progression route is implied by the shim; Liseur's
   Grimmory provider therefore pairs KOReader sync separately for positions.
 
-## Komf (planned)
+## Komf (server-side, live-verified)
 
-Not yet supported. A pinned study of Komf master
-(`428dac60`, via `komga-client` 0.10.3) against Stump found: most read/catalog
-operations covered, but API metadata patching is partial, thumbnail
-upload/delete and series analyze are missing, and automatic Komf mode cannot
-flush without a `TaskQueueStatus` response (Komf's SSE event handler only
-dispatches on a zero-count task queue). Evidence:
-`local://komf-compat-study.md`, [provider status](/docs/developer/provider-status).
+Komf treats Stump as Komga (`STUMP_ENABLE_KOMGA=true`, Basic auth, SSE).
+Pinned Komf master `428dac6` (komga-client 0.10.3) in the `sndxr/komf:latest`
+container against the fixture, 2026-09-04: manual identify → series `PATCH`
+204, book `PATCH` 204, cover upload + previous-cover `DELETE`, and
+`TaskQueueStatus` observed on `/sse/v1/events`; `replay-komf` 16/16. The
+first run rejected the author role `COVER` (Komga's role name is `cover`);
+fixed the same day. Automatic mode on a real `BookAdded` burst has not been
+exercised. Evidence: [client verification](/docs/developer/client-verification),
+`local://komf-compat-study.md`, [roadmap phase 1](/docs/developer/roadmap).
+
+## Kavita clients (Inkita, Kover, Turnleaf, Kamigura, Kamare, tach-extension, Mihon Kavita tracker)
+
+Not yet verifiable. The Kavita profile is being implemented against Kavita
+`d77d956b` with a reference instance (`kavita-ref`, Kavita 0.9.1.4,
+`jvmilazz0/kavita@sha256:31181a32…`, port 25620) and a Playwright capture of
+its own web UI (858 `/api/*` requests, 90 unique endpoints) in
+`../komga-compat/kavita/`. Seven clients are pinned in
+`local://kavita-clients-inventory.md`: Inkita `67c1f4a`, Kover `0bd8d08`,
+Turnleaf `b54f1f7`, Kamigura `f4baeff`, Kamare `b85ab0a`, Kareadita
+tach-extension `5f3c068`, Mihon tracker `5fadea6`. Wave 1 (API-key +
+`Plugin/authenticate` JWT, libraries, series, progress, images) is in progress;
+none of the seven has run against Stump. Per-client rows: [platforms](/docs/developer/platforms).
 
 ## Generic OPDS readers (Panels, Moon+ Reader, Librera)
 
@@ -147,8 +173,10 @@ combination. Cells cite the row's section above.
 | Liseur — OPDS 2.0 | ❌ (app has no OPDS 2 parser) | ❌ | ❌ | ❌ | ❌ |
 | Liseur — liseur-sync | ✅ | ✅ (download) | ✅ | ✅ | ✅ (CAS bridge) |
 | KOReader | ❌ (no catalog protocol) | n/a | ❌ | ✅ | ❌ (protocol limit) |
-| Kobo (stock) | 🧪 (`library/sync`) | 🧪 (KEPUB delivery) | 🧪 | ❌ (inbound write stubbed) | ❌ |
+| Kobo (stock) | 🧪 (`library/sync`) | 🧪 (KEPUB delivery) | 🧪 | 🧪 (`state` PUT/GET round-trip) | ❌ |
 | Grimmory alias | 🧪 | n/a | 🧪 | ❌ (no shim route) | ❌ |
+| Komf (server-side) | 🧪 (libraries/series/books, live) | n/a | n/a | n/a | n/a — writes: metadata PATCH, cover upload/delete (live) |
+| Kavita clients (7 pinned) | not verified | not verified | not verified | not verified | not verified |
 | Panels | ✅ (upstream guide) | ✅ | ✅ | ❌ | ❌ |
 | Moon+ Reader | ✅ (upstream guide) | ✅ | ✅ | ❌ | ❌ |
 | Librera | ⚠️ file names, not titles | ✅ | ✅ | ❌ | ❌ |

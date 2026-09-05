@@ -420,6 +420,9 @@ mod tests {
 			deleted_at: None,
 			thumbnail_meta: None,
 			thumbnail_path: None,
+			source_provider: None,
+			remote_id: None,
+			remote_chapter_id: None,
 		}
 	}
 

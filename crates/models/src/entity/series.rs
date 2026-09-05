@@ -47,6 +47,13 @@ pub struct Model {
 	pub thumbnail_path: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub library_id: Option<String>,
+	/// The provider source instance (`provider_sources.id`) this series was materialised
+	/// from. Set only for remote series, whose `path` is a `provider://` URI.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub source_provider: Option<String>,
+	/// The remote series identifier on the provider source
+	#[sea_orm(column_type = "Text", nullable)]
+	pub remote_id: Option<String>,
 }
 
 pub fn get_age_restriction_filter(min_age: i32, restrict_on_unset: bool) -> Condition {

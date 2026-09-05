@@ -56,7 +56,16 @@ use gen_partial_config::gen_partial_stump_config;
 /// This attribute should be applied directly to the input struct (i.e., below the `derive` line)
 /// and provides an expression that can be used to determine the config file path that should be
 /// opened when the `with_config_file` function runs. Any expression works here, including a
-/// reference to a private function of the input struct.
+/// reference to a private function of the input struct. Structs without it are nested groups:
+/// they get `new`, `debug`, and a `Partial<Name>` with `from_environment`, but no
+/// `with_config_file`/`with_environment` loaders of their own.
+///
+/// ### `#[nested]`
+///
+/// This attribute marks a field whose type is itself a config struct deriving this macro.
+/// The field is constructed with `Type::new()`/`Type::debug()`, and its `Partial<Type>`
+/// (which must be in scope) is embedded `#[serde(flatten)]` into the parent's partial so
+/// that TOML keys stay flat. Combine it with `#[serde(flatten)]` on the field itself.
 ///
 #[proc_macro_derive(
 	StumpConfigGenerator,
@@ -66,6 +75,7 @@ use gen_partial_config::gen_partial_stump_config;
 		required_by_new,
 		env_key,
 		validator,
+		nested,
 		config_file_location
 	)
 )]
@@ -97,23 +107,21 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 
 struct InputAttributes {
-	pub config_file_location: Expr,
+	pub config_file_location: Option<Expr>,
 }
 
 fn parse_input_attrs(ast: &DeriveInput) -> InputAttributes {
-	let mut maybe_config_file_location = None;
+	let mut config_file_location = None;
 
 	for attr in &ast.attrs {
 		if attr.path().is_ident("config_file_location") {
 			let config_file_expr: Expr = attr
 				.parse_args()
 				.expect("Failed to parse config_file_location expression");
-			maybe_config_file_location = Some(config_file_expr);
+			config_file_location = Some(config_file_expr);
 		}
 	}
 
-	let config_file_location =
-		maybe_config_file_location.expect("config_file_location must be defined.");
 	InputAttributes {
 		config_file_location,
 	}

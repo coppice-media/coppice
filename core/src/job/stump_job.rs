@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use stump_jobs::JobPayload;
 use stump_scanner::ScanOptions;
 
 use crate::filesystem::{
@@ -10,7 +11,7 @@ use crate::filesystem::{
 use models::shared::image_processor_options::ImageProcessorOptions;
 
 /// A unified job enum that can represent any job in the system.
-/// This is the type stored in the apalis `MemoryStorage` and is what
+/// This is the type queued by the job runtime and is what
 /// gets enqueued via `Ctx::enqueue()`.
 ///
 /// Each variant contains the data needed to construct and run the corresponding job.
@@ -42,9 +43,9 @@ pub enum StumpJob {
 	},
 }
 
-impl StumpJob {
+impl JobPayload for StumpJob {
 	/// Returns the human-readable name of the job
-	pub fn name(&self) -> &'static str {
+	fn name(&self) -> &'static str {
 		match self {
 			StumpJob::LibraryScan { .. } => "library_scan",
 			StumpJob::SeriesScan { .. } => "series_scan",
@@ -56,7 +57,7 @@ impl StumpJob {
 	}
 
 	/// Returns a description for the job
-	pub fn description(&self) -> Option<String> {
+	fn description(&self) -> Option<String> {
 		match self {
 			StumpJob::LibraryScan { path, .. } => Some(path.clone()),
 			StumpJob::SeriesScan { path, .. } => Some(path.clone()),
@@ -76,6 +77,19 @@ impl StumpJob {
 		}
 	}
 
+	/// The Komga-style queue bucket reported in job queue status events
+	fn kind(&self) -> &'static str {
+		match self {
+			StumpJob::LibraryScan { .. } | StumpJob::SeriesScan { .. } => "SCAN",
+			StumpJob::AnalyzeMedia { .. } => "ANALYZE",
+			StumpJob::MetadataFetch { .. } => "METADATA",
+			StumpJob::ThumbnailGeneration { .. }
+			| StumpJob::PlaceholderGeneration { .. } => "THUMBNAIL",
+		}
+	}
+}
+
+impl StumpJob {
 	pub fn library_scan(id: String, path: String, options: Option<ScanOptions>) -> Self {
 		StumpJob::LibraryScan { id, path, options }
 	}

@@ -1,0 +1,88 @@
+---
+title: Devices
+description: The unified device registry, its credentials, endpoints, and last-seen tracking
+---
+
+A *device* is a registered client owned by a user: a Kobo, a KOReader install, Mihon, Komelia, Liseur, a generic OPDS reader, a script using the API, or a browser. The registry lives in `crates/devices` (`stump_devices`) and is reached through `Ctx::devices()` (`core/src/context.rs`). It mints the credential a device authenticates with, tells the client which URLs to configure, and records when each device was last seen and last synced.
+
+## Storage
+
+Migration `m20260910_000000_add_devices` (`crates/migrations/src/m20260910_000000_add_devices.rs`) creates two tables and folds the old `reading_devices` registry into the first one:
+
+| Table | Columns |
+| --- | --- |
+| `devices` | `id` (text PK), `user_id` (FK `users`, cascade), `name`, `kind`, `transform_profile` (JSON, nullable), `created_at`, `last_seen_at`, `last_sync_at`, `last_sync_summary` (JSON, nullable), `revoked_at` |
+| `device_credentials` | `id`, `device_id` (FK `devices`, cascade), `protocol`, `credential_kind`, `credential_ref`; unique on `(credential_kind, credential_ref)` |
+
+`kind` is one of `kobo | koreader | mihon | komelia | liseur | opds | api | web`; `protocol` is `kobo | koreader | komga | opds | liseur | api`; `credential_kind` is `api_key | liseur_token | session` (`models::shared::enums::{DeviceKind, DeviceProtocol, DeviceCredentialKind}`). `credential_ref` is polymorphic and therefore has no foreign key: the `api_keys.short_token` for an API key, the `liseur_sync_tokens.id` for a liseur token, the `sessions.session_id` for a session.
+
+The old `reading_devices` rows (KOReader and OPDS progression clients registering themselves by id + name) become `devices` rows owned by the user whose reading sessions reference them, with kind `koreader` when any of those sessions carries a `koreader_progress` and `opds` otherwise. Rows no session references are dropped with the table. `reading_sessions.device_ids` keeps pointing at these ids as a JSON array; replacing it with a junction table that carries a foreign key to `devices` is the documented follow-up. The KOReader adapter (`apps/server/src/routers/koreader_backend/sync.rs`), the OPDS 2.0 progression route (`apps/server/src/routers/opds_backend/v2_0.rs`), and the Komga Readium progression route (`crates/komga/src/routes/readium.rs`) now register their client-reported devices directly in `devices`.
+
+## Credentials
+
+`DeviceService::create_device(user, kind, name)` mints the credential the kind needs and stores its reference on the device. The name defaults to `"<Username>'s <Kind>"` and is numbered on collision.
+
+| Kind | Credential | Minted permissions |
+| --- | --- | --- |
+| `kobo` | prefixed API key | `ACCESS_KOBO_SYNC`, `DOWNLOAD_FILE` |
+| `koreader` | prefixed API key | `ACCESS_KOREADER_SYNC` |
+| `opds`, `mihon`, `komelia` | prefixed API key | `DOWNLOAD_FILE` |
+| `api`, `web` | prefixed API key | inherit the user's permissions |
+| `liseur` | liseur-sync device token (`liseur-<uuid>`, scopes `sync`, `read-insights`, `library-read`, bound to the device id) | n/a |
+
+A key never grants what its owner does not hold, and an API key only authenticates for users allowed to use API keys (`validate_api_key` in `apps/server/src/middleware/auth.rs`), so creating an API-key device requires `ACCESS_API_KEYS` plus the minted permissions; the server owner bypasses the check. The plaintext secret is returned exactly once (`IssuedCredential`), afterwards only a hint such as `stump_abcdefgh_…` is available.
+
+`rotate_credential` deletes the API key row (or revokes the liseur token) and mints a replacement. `revoke` does the same without a replacement, drops the credential rows, and stamps `revoked_at`; the device row stays so its history remains visible. `rename` also renames the API key / liseur token; `set_transform_profile` stores a free-form JSON profile for the protocol adapters.
+
+The liseur-sync storage shares the secret format, hash, and default expiry with the registry through `stump_devices::liseur_token::{new_secret, hash_secret, DEVICE_TOKEN_TTL_SECS}`, so tokens minted either way authenticate through the same bearer middleware.
+
+## Endpoints
+
+`Endpoint::for_kind(kind, origin, username, secret)` describes what to configure on the client, where `origin` is the scheme and host the request arrived at:
+
+| Kind | Endpoints |
+| --- | --- |
+| `kobo` | `{origin}/kobo/{key}` |
+| `koreader` | `{origin}/koreader/{key}` with the username |
+| `opds` | `{origin}/opds/{key}/v1.2` and `{origin}/opds/v2.0` (Bearer) |
+| `mihon` | `{origin}` as a Komga server with username + `X-API-Key`, plus `{origin}/api` (Bearer) |
+| `komelia` | `{origin}` as a Komga server with username + `X-API-Key` |
+| `liseur` | `{origin}` as the liseur-sync server (Bearer) |
+| `api`, `web` | `{origin}/api` (Bearer) |
+
+`deviceEndpoints(id)` returns these with the secret redacted; `createDevice` and `rotateDeviceCredential` return them with the full secret.
+
+## Sightings
+
+`DeviceService::touch(credential, protocol, summary)` resolves the credential to its device, writes `last_seen_at` (coalesced to one write per 30 seconds per device), and, when a sync summary is given, `last_sync_at` + `last_sync_summary` (stored verbatim). Each recorded sighting is forwarded as `CoreEvent::DeviceSeen { deviceId, userId, protocol }` (`core/src/event.rs`). Revoked devices and unknown credentials are ignored.
+
+The registry is best effort at every call site: a failure is logged and never fails the request. The call sites are:
+
+| Site | Protocol | Summary |
+| --- | --- | --- |
+| `api_key_middleware`, `apps/server/src/middleware/auth.rs` — path keys on `/kobo/{key}`, `/koreader/{key}`, `/opds/{key}/v1.2` | from the mount prefix | none |
+| `auth_middleware`, same file — `X-API-Key` on the Komga-scoped paths | `komga` | none |
+| `auth_middleware`, same file — `Authorization: Bearer <api key>` | `komga` on Komga paths, `opds` on `/opds`, otherwise `api` | none |
+| `authenticate`, `apps/server/src/routers/liseur_sync/storage.rs` | `liseur` | none |
+| `library_sync`, `apps/server/src/routers/kobo_backend/router.rs` | `kobo` | `{"protocol":"kobo","items","new_entitlements","should_continue","kobo_device_id"}` |
+| `put_progress`, `apps/server/src/routers/koreader_backend/sync.rs` | `koreader` | `{"protocol":"koreader","document","progress","percentage","koreader_device","koreader_device_id"}` |
+
+Basic and session authentication carry no per-device credential and record nothing.
+
+## GraphQL
+
+Every field is scoped to the caller: users see their own devices, the server owner sees all of them (`crates/graphql/src/{query,mutation,object,subscription}/device.rs`).
+
+| Field | Notes |
+| --- | --- |
+| `devices: [Device!]!`, `device(id): Device!` | `Device` flattens the row and adds `credential { kind protocol secretHint }` |
+| `deviceEndpoints(id): [DeviceEndpoint!]!` | secret redacted |
+| `createDevice(kind, name): DeviceWithCredential!` | `{ device, credential { kind protocol credentialRef secret }, endpoints }`; permissions enforced by the registry as above |
+| `renameDevice(id, name)`, `revokeDevice(id)`, `setDeviceTransformProfile(id, profile)` | owner or server owner |
+| `rotateDeviceCredential(id): DeviceWithCredential!` | rejected with a conflict once the device is revoked |
+| `readingStats(span, deviceId): ReadingStats!` | see below |
+| `subscription deviceSeen(deviceId)` | filtered `DeviceSeen` events; `readEvents` also carries them |
+
+### Reading statistics
+
+`readingStats(span: WEEK | MONTH | QUARTER | YEAR | ALL_TIME, deviceId)` (`crates/graphql/src/object/reading_stats.rs`) aggregates the caller's `reading_sessions` by logical reading day (`session_date`, which already honours the user's day-reset offset): `sessions`, `minutes` (`elapsed_seconds / 60`), `pages` (end page minus start page per session), `booksFinished`, `streakDays` (consecutive days ending today or yesterday, not bounded by the span), per-day buckets (`days`, active days only), and a per-device breakdown (`devices`, one row per contributing id with the registered name and kind when the id still resolves). With a `deviceId` the stats cover the sessions that device contributed to, computed for the device's owner; the server owner may name any device.

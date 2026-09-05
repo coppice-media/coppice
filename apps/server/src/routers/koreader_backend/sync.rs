@@ -6,16 +6,17 @@ use axum::{
 };
 use chrono::Utc;
 use models::{
-	entity::{media, reading_device, reading_session},
+	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
+	entity::{device, media, reading_session},
 	services::reading_progress::{upsert_reading_session, NormalizedProgression},
-	shared::enums::{ReadingStatus, UserPermission},
+	shared::enums::{DeviceKind, UserPermission},
 };
-use sea_orm::{
-	prelude::*, sea_query::OnConflict, Iterable, QueryOrder, Set, TransactionTrait,
-};
+use sea_orm::{prelude::*, sea_query::OnConflict, Set, TransactionTrait};
+use stump_core::reading_state;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use stump_auth::AuthContext;
+use stump_devices::{CredentialRef, Protocol};
 
 use crate::{
 	config::state::AppState,
@@ -100,76 +101,45 @@ pub(crate) async fn get_progress(
 ) -> APIResult<Json<GetProgressResponse>> {
 	let conn = ctx.conn.as_ref();
 	let user = req.user();
-	let document_cpy = document.clone();
 
-	let latest_query = reading_session::ModelWithDevice::find()
-		.inner_join(media::Entity)
-		.filter(reading_session::Column::UserId.eq(user.id.clone()))
-		.filter(media::Column::KoreaderHash.eq(document_cpy.clone()))
-		.order_by_desc(reading_session::Column::UpdatedAt);
-
-	let latest_session = latest_query
-		.clone()
-		.into_model::<reading_session::ModelWithDevice>()
+	let book = media::Entity::find()
+		.filter(media::Column::KoreaderHash.eq(document.clone()))
 		.one(conn)
 		.await?;
-
-	let active_session = latest_session
-		.as_ref()
-		.filter(|s| s.model.status == ReadingStatus::Reading)
-		.cloned();
-
-	let finished_session = match latest_session {
-		Some(session) if session.model.is_finalized() => Some(session),
-		// there still might be a previous one
-		Some(_) => {
-			let latest_finished = latest_query
-				.filter(reading_session::Column::Status.eq(ReadingStatus::Finished))
-				.order_by_desc(reading_session::Column::CreatedAt)
-				.into_model::<reading_session::ModelWithDevice>()
-				.one(conn)
-				.await?;
-			latest_finished
-		},
-		_ => None,
+	let head = match &book {
+		Some(book) => reading_state::head(conn, &user.id, &book.id).await?,
+		None => None,
+	};
+	let Some(head) = head else {
+		return Ok(Json(GetProgressResponse {
+			document,
+			..Default::default()
+		}));
 	};
 
-	let progress = match (active_session, finished_session) {
-		(Some(active_session), _) => GetProgressResponse {
-			document,
-			percentage: active_session
-				.model
-				.end_percentage
-				.map(|dec| dec.try_into().unwrap_or(0.0)),
-			timestamp: Some(
-				active_session
-					.model
-					.updated_at
-					.unwrap_or_else(|| chrono::Utc::now().into())
-					.timestamp_millis() as u64,
-			),
-			device: active_session.device.as_ref().map(|d| d.name.clone()),
-			device_id: active_session.device.as_ref().map(|d| d.id.clone()),
-			progress: active_session
-				.model
-				.koreader_progress
-				.or_else(|| active_session.model.end_page.map(|p| p.to_string())),
-		},
-		(_, Some(finished_session)) => GetProgressResponse {
-			document,
-			percentage: Some(1.0),
-			timestamp: finished_session
-				.model
-				.updated_at
-				.map(|t| t.timestamp_millis() as u64),
-			device: finished_session.device.as_ref().map(|d| d.name.clone()),
-			device_id: finished_session.device.as_ref().map(|d| d.id.clone()),
-			..Default::default()
-		},
-		_ => GetProgressResponse {
-			document,
-			..Default::default()
-		},
+	let device = match head.source_device_id.as_deref() {
+		Some(id) => device::Entity::find_by_id(id).one(conn).await?,
+		None => None,
+	};
+	// KOReader's own position (an x-pointer or a page string) is replayed
+	// verbatim when this lane produced the head; otherwise the head page is
+	// the only coordinate KOReader can use.
+	let winning = reading_state::winning_event(conn, &head).await?;
+	let native_progress = winning
+		.filter(|event| event.protocol == SourceProtocol::Koreader)
+		.and_then(|event| event.raw_payload.get("progress")?.as_str().map(String::from));
+	let progress = match (head.completed, native_progress, head.page) {
+		(_, Some(native), _) => Some(native),
+		(_, None, Some(page)) => Some(page.to_string()),
+		_ => None,
+	};
+	let progress = GetProgressResponse {
+		document,
+		percentage: Some(head.progression as f32),
+		timestamp: Some(head.updated_at.timestamp_millis() as u64),
+		device: device.as_ref().map(|d| d.name.clone()),
+		device_id: device.as_ref().map(|d| d.id.clone()),
+		progress,
 	};
 
 	Ok(Json(progress))
@@ -229,38 +199,38 @@ pub(crate) async fn put_progress(
 
 	let tx = ctx.conn.as_ref().begin().await?;
 
-	let on_conflict = OnConflict::new()
-		.update_columns(
-			reading_device::Column::iter()
-				.filter(|col| matches!(col, reading_device::Column::Name)),
-		)
+	// KOReader identifies itself by a device id + name on every push; register
+	// it as a device of the syncing user (name follows KOReader's setting).
+	let on_conflict = OnConflict::column(device::Column::Id)
+		.update_columns([device::Column::Name, device::Column::LastSeenAt])
 		.to_owned();
 
-	let _device_record = reading_device::Entity::insert(reading_device::ActiveModel {
+	let _device_record = device::Entity::insert(device::ActiveModel {
 		id: Set(device_id.clone()),
+		user_id: Set(user.id.clone()),
 		name: Set(device.clone()),
+		kind: Set(DeviceKind::Koreader),
+		last_seen_at: Set(Some(Utc::now().into())),
 		..Default::default()
 	})
 	.on_conflict(on_conflict)
 	.exec(&tx)
 	.await?;
 
-	let mut progression = NormalizedProgression {
+	let page = parse_progress(&progress);
+	if page.is_none() {
+		tracing::debug!(
+			progress,
+			"Failed to parse progress string, assuming x-pointer"
+		);
+	}
+	let progression = NormalizedProgression {
+		page,
 		percentage: Decimal::try_from(percentage).ok(),
 		did_complete: is_completed,
 		device_id: Some(device_id.clone()),
 		..Default::default()
 	};
-
-	match parse_progress(&progress) {
-		Some(page) => progression.page = Some(page),
-		None => {
-			tracing::debug!(
-				progress,
-				"Failed to parse progress string, assuming x-pointer"
-			);
-		},
-	}
 
 	let session =
 		upsert_reading_session(&tx, &user, book.id.as_ref(), progression).await?;
@@ -271,7 +241,54 @@ pub(crate) async fn put_progress(
 		active.update(&tx).await?;
 	}
 
+	let applied = reading_state::apply(
+		&tx,
+		&user.id,
+		Publication::from(&book),
+		ProtocolUpdate {
+			protocol: SourceProtocol::Koreader,
+			device_id: Some(device_id.clone()),
+			updated_at: None,
+			position: page.map_or(Position::None, Position::Page),
+			progression: Some(f64::from(percentage)),
+			completed: is_completed.then_some(true),
+			raw_payload: serde_json::json!({
+				"document": document,
+				"progress": progress,
+				"percentage": percentage,
+				"device": device,
+				"device_id": device_id,
+			}),
+		},
+	)
+	.await?;
+
 	tx.commit().await?;
+	reading_state::announce(&ctx, &book, &applied);
+
+	// Record the sync on the device this key belongs to; the sync itself must
+	// never fail because of the registry.
+	if let Some(api_key) = req.api_key() {
+		let sync_summary = serde_json::json!({
+			"protocol": "koreader",
+			"document": document,
+			"progress": progress,
+			"percentage": percentage,
+			"koreader_device": device,
+			"koreader_device_id": device_id,
+		});
+		if let Err(error) = ctx
+			.devices()
+			.touch(
+				CredentialRef::ApiKey(&api_key),
+				Protocol::Koreader,
+				Some(sync_summary),
+			)
+			.await
+		{
+			tracing::warn!(?error, "Failed to record the KOReader sync on its device");
+		}
+	}
 
 	Ok(Json(PutProgressResponse {
 		document,

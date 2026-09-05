@@ -9,7 +9,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-	entity::reading_device,
+	entity::device,
 	prefixer::{parse_query_to_model, parse_query_to_model_optional, Prefixer},
 	shared::{enums::ReadingStatus, readium::ReadiumLocator},
 };
@@ -104,33 +104,33 @@ impl Model {
 #[derive(Debug, Clone)]
 pub struct ModelWithDevice {
 	pub model: Model,
-	pub device: Option<reading_device::Model>,
+	pub device: Option<device::Model>,
 }
 
 impl ModelWithDevice {
 	pub fn find() -> Select<Entity> {
 		Prefixer::new(Entity::find().select_only())
 			.add_columns(Entity)
-			.add_columns(reading_device::Entity)
+			.add_columns(device::Entity)
 			.selector
 			// TODO(devices): this is a bit scuffed. it will generated roughly:
 			/*
-				left join reading_devices on reading_sessions.device_ids = reading_devices.id OR (
-					json_extract(reading_sessions.device_ids, '$[0]') = reading_devices.id
+				left join devices on reading_sessions.device_ids = devices.id OR (
+					json_extract(reading_sessions.device_ids, '$[0]') = devices.id
 				)
 			*/
 			// which _works_ but the former condition is redundant and will never actually match anything,
 			// but sea-orm seems to always imbue the join with that default predicate...
 			.join(
 				JoinType::LeftJoin,
-				Entity::belongs_to(reading_device::Entity)
+				Entity::belongs_to(device::Entity)
 					.from(Column::DeviceIds)
-					.to(reading_device::Column::Id)
+					.to(device::Column::Id)
 					.condition_type(ConditionType::Any)
 					// https://sqlite.org/json1.html#the_json_extract_function
 					.on_condition(|_left, _right| {
 						Condition::all().add(Expr::cust(
-							"json_extract(reading_sessions.device_ids, '$[0]') = reading_devices.id",
+							"json_extract(reading_sessions.device_ids, '$[0]') = devices.id",
 						))
 					})
 					.into(),
@@ -144,10 +144,8 @@ impl FromQueryResult for ModelWithDevice {
 		_pre: &str,
 	) -> Result<Self, sea_orm::DbErr> {
 		let model = parse_query_to_model::<Model, Entity>(res)?;
-		let device = parse_query_to_model_optional::<
-			reading_device::Model,
-			reading_device::Entity,
-		>(res)?;
+		let device =
+			parse_query_to_model_optional::<device::Model, device::Entity>(res)?;
 		Ok(Self { model, device })
 	}
 }

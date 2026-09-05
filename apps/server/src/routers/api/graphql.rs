@@ -29,8 +29,8 @@ pub(crate) async fn mount(app_state: AppState) -> Router<AppState> {
 
 	let mut method_router = post(graphql_handler);
 	if cfg!(feature = "webui")
-		&& app_state.config.enable_webui
-		&& (app_state.config.enable_playground || cfg!(debug_assertions))
+		&& app_state.config.protocols.enable_webui
+		&& (app_state.config.protocols.enable_playground || cfg!(debug_assertions))
 	{
 		method_router = method_router.get(playground);
 	}

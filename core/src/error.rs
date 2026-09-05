@@ -72,6 +72,20 @@ impl From<stump_media::FileError> for CoreError {
 		}
 	}
 }
+#[cfg(feature = "watcher")]
+impl From<stump_watcher::WatcherError> for CoreError {
+	fn from(error: stump_watcher::WatcherError) -> Self {
+		Self::InitializationError(error.to_string())
+	}
+}
+impl From<stump_jobs::JobError> for CoreError {
+	fn from(error: stump_jobs::JobError) -> Self {
+		match error {
+			stump_jobs::JobError::DbError(err) => Self::DBError(err),
+			error => Self::InternalError(error.to_string()),
+		}
+	}
+}
 impl From<chrono::ParseError> for CoreError {
 	fn from(error: chrono::ParseError) -> Self {
 		Self::InternalError(error.to_string())

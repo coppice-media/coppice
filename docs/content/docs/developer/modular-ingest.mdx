@@ -15,8 +15,8 @@ The current path is deliberately preserved:
 
 - GraphQL `uploadBooks` and `uploadSeries` receive multipart `Upload` values, copy them into a library path, and enqueue a library scan. They return only `Boolean`; there is no durable drop-item or analysis-report identity ([observed — `crates/graphql/src/mutation/upload.rs:43-102,108-167`]).
 - The library watcher receives create/modify notifications, accumulates paths, waits until the tree has been quiet for its debounce interval, and submits a `library_scan` job ([observed — `core/src/filesystem/scanner/library_watcher.rs:15-104`]).
-- Apalis-backed `StumpJob` currently contains library/series scans, thumbnail work, metadata fetches, and media analysis. `AnalyzeMediaJob` accepts book, list-of-books, library, and series scopes and creates one `ProcessBook` task per selected media ([observed — `core/src/job/stump_job.rs:10-103`; `core/src/filesystem/media/analysis/job.rs:12-136`]).
-- Page analysis currently stores dimensions and content types in `MediaAnalysisData`; it reuses complete existing page entries unless forced and reports task/subtask progress through the job event channel ([observed — `core/src/filesystem/media/analysis/analyze.rs:99-194`; `core/src/job/progress.rs:8-53`]).
+- `StumpJob`, queued through the `stump_jobs` runtime, currently contains library/series scans, thumbnail work, metadata fetches, and media analysis. `AnalyzeMediaJob` accepts book, list-of-books, library, and series scopes and creates one `ProcessBook` task per selected media ([observed — `core/src/job/stump_job.rs:19-44`; `core/src/filesystem/media/analysis/job.rs:12-136`]).
+- Page analysis currently stores dimensions and content types in `MediaAnalysisData`; it reuses complete existing page entries unless forced and reports task/subtask progress through the job event channel ([observed — `core/src/filesystem/media/analysis/analyze.rs:99-194`; `crates/jobs/src/progress.rs:6-45`]).
 - The existing `metadata_integrations::MetadataProvider` has provider identity, supported media types, series/media search, scoring, detail fetch, and credential verification methods. `MatchCandidate` already carries provider, external ID, metadata, confidence, and confidence factors ([observed — `crates/integrations/metadata/src/provider.rs:19-75`; `crates/integrations/metadata/src/types/match_candidate.rs:5-44`]).
 - Core metadata fetches enabled providers, stores candidates in `metadata_fetch_records`, and can auto-apply through the existing merge path. Current records are one media or series target at a time; the existing GraphQL surface exposes `pendingMetadataMatches`, candidate acceptance/rejection, field locks, bulk accept/reject, and provider configuration ([observed — `core/src/filesystem/metadata/fetch.rs:114-224,247-378`; `core/src/filesystem/metadata/apply.rs:17-124`; `crates/graphql/schema.graphql:1648-1780,1884-1908,1959-1964,2086-2094`]).
 - The existing GraphQL `readEvents` subscription forwards the core broadcast stream of `JobStarted`, `JobUpdate`, `JobOutput`, and scan events. `JobProgress` is a patch, so omitted fields must be retained by a client ([observed — `crates/graphql/src/subscription/event.rs:6-32`; `core/src/event.rs:1-58`; `core/src/job/progress.rs:8-27`]).
@@ -101,7 +101,7 @@ The check registry must expose the same IDs, weights, algorithm version, and set
 
 ### Two plugin traits
 
-The proposed ingest layer has exactly two logical plugin seams. They are shown as Rust-like contracts; they are not current exported Rust APIs.
+The ingest layer has exactly two logical plugin seams. The provider seam is now implemented as `IngestMetadataProvider` in `core/src/ingest/contract.rs:334-365` (with `capabilities`, `settings`, a `settings` argument on `identify`/`lookup`, and a default `search`); the sketch below is the original proposal and is kept for the quality-check seam. The per-provider inventory — ids, domains, key type and `help_url`, client rate limits, capabilities, defaults, fields filled, Komf reference, and test counts — plus the facade fan-out, scoring, apply path, missing policy layer, and planned providers are maintained in [Provider status › Metadata providers](/docs/developer/provider-status#metadata-providers); this page does not duplicate that table.
 
 ```rust
 #[async_trait]
@@ -154,9 +154,9 @@ The existing integration is reused through an adapter rather than renamed:
 | `lookup` | **Reuse:** call existing `fetch_media_metadata`/`fetch_series_metadata`, `ProviderClientCache`, retry/rate-limit handling, and `ExternalMediaMetadata`/`ExternalSeriesMetadata`. **New:** normalize fields into `metadata_candidate.fields` and bind them to the staged source digest. |
 | Candidate persistence | **Reuse:** existing `metadata_fetch_records` is the compatibility view for a committed media/series target. **New:** a drop item needs many candidates before a `Media` exists, plus provenance/source digest and field-level confidence. |
 | Apply/merge | **Reuse:** `FieldMerger`, locked fields, `MergeStrategy`, `apply_media_match`, `apply_series_match`, and current metadata permissions. **New:** field-level candidate/manual picks and a transactional pending-item projection. |
-| Queue execution | **Reuse:** `StumpJob`, `JobLifecycle`, Apalis state, cancellation, logs, and `JobProgress`. **New:** durable drop-item/analysis-job priority and typed progress/replay. |
+| Queue execution | **Reuse:** `StumpJob`, `JobLifecycle`, the `stump_jobs` runtime, cancellation, logs, and `JobProgress`. **New:** durable drop-item/analysis-job priority and typed progress/replay. |
 
-The existing `metadata_integrations::MetadataProvider` is the lower-level client contract and remains source-compatible ([observed — `crates/integrations/metadata/src/provider.rs:19-75`]). It currently has separate `search_*` and `fetch_*` methods rather than `identify`/`lookup`; the adapter supplies those higher-level semantics without renaming an existing type.
+The existing `metadata_integrations::MetadataProvider` is the lower-level client contract and remains source-compatible ([observed — `crates/integrations/metadata/src/provider.rs:19-75`]). It has separate `search_*` and `fetch_*` methods rather than `identify`/`lookup`; `IntegrationProvider` (`core/src/ingest/providers/facade.rs:40-224`) supplies those higher-level semantics without renaming an existing type. Implemented providers, their settings stores, and the registry are documented in [Provider status](/docs/developer/provider-status#metadata-providers).
 
 ### Registration and discovery
 
@@ -220,7 +220,7 @@ The exact endpoint and retention store are **implemented**. SSE must enforce the
 
 ## Editor screen map
 
-The editor is GraphQL-first; it does not need to know SeaORM tables or Apalis internals. Existing operations listed in the last column remain available during migration.
+The editor is GraphQL-first; it does not need to know SeaORM tables or job runtime internals. Existing operations listed in the last column remain available during migration.
 
 | Screen | Initial query reads | User mutations | Live progress | Existing compatibility fallback |
 | --- | --- | --- | --- | --- |

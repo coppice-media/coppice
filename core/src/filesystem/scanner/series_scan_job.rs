@@ -10,6 +10,10 @@ use models::{
 };
 use sea_orm::{prelude::*, sea_query::Query, Condition, UpdateResult};
 use serde::{Deserialize, Serialize};
+use stump_jobs::{
+	JobContext, JobError, JobLifecycle, JobOutputExt, JobProgress, JobTaskOutput,
+	WorkingState,
+};
 
 use crate::{
 	event,
@@ -17,10 +21,7 @@ use crate::{
 		PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope,
 		ThumbnailGenerationJobParams,
 	},
-	job::{
-		error::JobError, stump_job::StumpJob, CoreJobOutput, JobContext, JobLifecycle,
-		JobOutputExt, JobProgress, JobTaskOutput, WorkingState,
-	},
+	job::{stump_job::StumpJob, CoreJobOutput, JobServices},
 	utils::chain_optional_iter,
 	CoreEvent,
 };
@@ -102,6 +103,7 @@ impl JobOutputExt for SeriesScanOutput {
 impl JobLifecycle for SeriesScanJob {
 	const NAME: &'static str = "series_scan";
 
+	type Context = JobServices;
 	type Output = SeriesScanOutput;
 	type Task = SeriesScanTask;
 
@@ -111,7 +113,7 @@ impl JobLifecycle for SeriesScanJob {
 
 	async fn init(
 		&mut self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 	) -> Result<WorkingState<Self::Output, Self::Task>, JobError> {
 		let mut output = Self::Output::default();
 		let path_buf = PathBuf::from(self.path.clone());
@@ -166,7 +168,7 @@ impl JobLifecycle for SeriesScanJob {
 			skipped_files,
 			..
 		} = {
-			let scan_source = SeaOrmScanSource::new(ctx.apalis_state.conn.clone());
+			let scan_source = SeaOrmScanSource::new(ctx.services().conn.clone());
 			walk_series(
 				PathBuf::from(self.path.clone()).as_path(),
 				&scan_source,
@@ -222,11 +224,11 @@ impl JobLifecycle for SeriesScanJob {
 
 	async fn finalize(
 		&self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 		output: &Self::Output,
 	) -> Result<(), JobError> {
 		ctx.emit_event(CoreEvent::JobOutput(event::JobOutput {
-			id: ctx.job_id.clone(),
+			id: ctx.job_id().to_owned(),
 			output: CoreJobOutput::SeriesScan(output.clone()),
 		}));
 
@@ -284,7 +286,7 @@ impl JobLifecycle for SeriesScanJob {
 
 	async fn execute_task(
 		&self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 		task: Self::Task,
 	) -> Result<JobTaskOutput<Self>, JobError> {
 		let mut output = Self::Output::default();

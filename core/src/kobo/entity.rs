@@ -1,4 +1,5 @@
 use models::{
+	domain::reading_state::{Position, ProtocolUpdate, SourceProtocol},
 	entity::{media, media_metadata, reading_session, user::AuthUser},
 	prefixer::{parse_query_to_model, parse_query_to_model_optional},
 	shared::{
@@ -389,11 +390,73 @@ pub fn map_kobo_reading_state(
 	})
 }
 
+fn kobo_timestamp(value: Option<&str>) -> Option<chrono::DateTime<Utc>> {
+	value
+		.and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+		.map(|value| value.to_utc())
+}
+
+/// Convert a Kobo state request into the unified head update.
+///
+/// The bookmark's `LastModified` is the effective device time (Komga's
+/// `KoboController.kt:573-609@656001eb` uses the same field), falling back to
+/// the status and statistics timestamps; without any, the server stamps
+/// ingestion time. `Finished` completes the head, `ReadyToRead` is the explicit
+/// un-read, and `Reading` leaves the sticky completion untouched. The complete
+/// request is retained as provenance so statistics and foreign location types
+/// survive without a Readium projection.
+pub fn kobo_head_update(
+	update: &ReadingStateUpdate,
+	raw_payload: serde_json::Value,
+	device_id: Option<String>,
+) -> Result<ProtocolUpdate, String> {
+	let projection = map_kobo_reading_state(update)?;
+	let bookmark = update.current_bookmark.as_ref();
+	let updated_at = kobo_timestamp(bookmark.and_then(|bookmark| bookmark.last_modified.as_deref()))
+		.or_else(|| {
+			kobo_timestamp(
+				update
+					.status_info
+					.as_ref()
+					.and_then(|status| status.last_modified.as_deref()),
+			)
+		})
+		.or_else(|| {
+			kobo_timestamp(
+				update
+					.statistics
+					.as_ref()
+					.and_then(|statistics| statistics.last_modified.as_deref()),
+			)
+		});
+	let completed = match projection.status {
+		Some(ReadingStatus::Finished) => Some(true),
+		Some(ReadingStatus::NotStarted) => Some(false),
+		_ => None,
+	};
+	Ok(ProtocolUpdate {
+		protocol: SourceProtocol::Kobo,
+		device_id: device_id.filter(|id| !id.is_empty()),
+		updated_at,
+		position: projection
+			.locator
+			.map_or(Position::None, Position::Locator),
+		progression: projection
+			.total_progression
+			.and_then(|value| value.to_f64()),
+		completed,
+		raw_payload,
+	})
+}
+
 #[cfg(test)]
 mod tests {
-	use super::map_kobo_reading_state;
+	use super::{kobo_head_update, map_kobo_reading_state};
 	use crate::kobo::sync_types::ReadingStateUpdateRequest;
-	use models::shared::enums::ReadingStatus;
+	use models::{
+		domain::reading_state::{Position, SourceProtocol},
+		shared::enums::ReadingStatus,
+	};
 	use rust_decimal::Decimal;
 
 	#[test]
@@ -471,6 +534,62 @@ mod tests {
 			}))
 			.expect("valid Kobo request");
 		assert_eq!(request.reading_states.len(), 1);
+	}
+
+	#[test]
+	fn head_update_uses_bookmark_time_locator_and_finished_status() {
+		let raw = serde_json::json!({
+			"CurrentBookmark": {
+				"LastModified": "2026-09-05T10:00:00Z",
+				"ProgressPercent": 73.0,
+				"ContentSourceProgressPercent": 42.0,
+				"Location": { "Value": "kobo.3.7", "Type": "KoboSpan", "Source": "chapter.xhtml" }
+			},
+			"Statistics": { "SpentReadingMinutes": 12 },
+			"StatusInfo": { "Status": "Finished", "LastModified": "2026-09-05T11:00:00Z" }
+		});
+		let update: super::ReadingStateUpdate =
+			serde_json::from_value(raw.clone()).expect("valid Kobo state");
+		let head = kobo_head_update(&update, raw.clone(), Some("kobo-1".into()))
+			.expect("state maps");
+		assert_eq!(head.protocol, SourceProtocol::Kobo);
+		assert_eq!(head.device_id.as_deref(), Some("kobo-1"));
+		assert_eq!(
+			head.updated_at.map(|at| at.to_rfc3339()),
+			Some("2026-09-05T10:00:00+00:00".to_string())
+		);
+		assert_eq!(head.completed, Some(true));
+		assert!((head.progression.unwrap() - 0.73).abs() < 1e-9);
+		let Position::Locator(locator) = head.position else {
+			panic!("bookmark projects a locator");
+		};
+		assert_eq!(locator.kobo_span.as_deref(), Some("kobo.3.7"));
+		assert_eq!(head.raw_payload, raw);
+	}
+
+	#[test]
+	fn head_update_status_only_keeps_position_and_reads_status_time() {
+		let raw = serde_json::json!({
+			"StatusInfo": { "Status": "ReadyToRead", "LastModified": "2026-09-05T11:00:00Z" }
+		});
+		let update: super::ReadingStateUpdate =
+			serde_json::from_value(raw.clone()).expect("valid Kobo state");
+		let head = kobo_head_update(&update, raw, Some(String::new())).expect("state maps");
+		assert_eq!(head.position, Position::None);
+		assert_eq!(head.progression, None);
+		assert_eq!(head.completed, Some(false), "ReadyToRead is the explicit un-read");
+		assert_eq!(head.device_id, None);
+		assert_eq!(
+			head.updated_at.map(|at| at.to_rfc3339()),
+			Some("2026-09-05T11:00:00+00:00".to_string())
+		);
+
+		let reading: super::ReadingStateUpdate =
+			serde_json::from_value(serde_json::json!({ "StatusInfo": { "Status": "Reading" } }))
+				.expect("valid Kobo state");
+		let head = kobo_head_update(&reading, serde_json::json!({}), None).expect("state maps");
+		assert_eq!(head.completed, None, "Reading never clears sticky completion");
+		assert_eq!(head.updated_at, None, "no device time falls back to the server");
 	}
 }
 

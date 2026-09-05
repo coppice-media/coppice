@@ -27,3 +27,7 @@
 - Local working-tree docs need no pins until this fork is committed; external client/repository pins are immutable. Use pinned clients, not Komga OpenAPI alone, for client-facing contracts.
 - Follow `.github/CONTRIBUTING.md`; do not commit or push from this bootstrap.
 - The only definition of green is the exact gate and post-build replay in `.omp/PROJECT_STATE.md`; never claim an unrun command or smoke result.
+
+## Crate documentation
+
+- Every crate under `crates/` ships a `README.md` in the template indexed by `crates/README.md` (Purpose, Reference / upstream, Decisions, Layout, How to verify, Deep docs; ≤ 120 lines, tables over prose) and a `//!` crate doc in `lib.rs` pointing at it. Any behaviour change updates that crate's Decisions table (decision | why | evidence) in the same change; new crates add a row to `crates/README.md`.

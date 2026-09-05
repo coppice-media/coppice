@@ -8,7 +8,8 @@ use axum::{
 };
 use chrono::{DateTime, SecondsFormat, Utc};
 use models::{
-	entity::{media, reading_session},
+	domain::reading_state::{Publication, SourceProtocol},
+	entity::{media, reading_head, reading_head_event},
 	shared::{
 		enums::UserPermission,
 		image_processor_options::{
@@ -21,13 +22,17 @@ use sea_orm::{ColumnTrait, QueryFilter, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map};
 use stump_auth::AuthContext;
-use stump_core::kobo::{
-	entity::{
-		map_kobo_reading_state, persist_kobo_reading_state,
-		MediaWithMetadataAndReadingSessions,
+use stump_core::{
+	kobo::{
+		entity::{
+			kobo_head_update, persist_kobo_reading_state,
+			MediaWithMetadataAndReadingSessions,
+		},
+		sync_types::*,
 	},
-	sync_types::*,
+	reading_state,
 };
+use stump_devices::{CredentialRef, Protocol};
 use stump_kobo::{KoboSync, SyncToken};
 use stump_media::{
 	image::{GenericImageProcessor, ImageProcessor},
@@ -243,7 +248,7 @@ pub(crate) async fn library_sync(
 
 	let kobo_api_base_url = format!("{}/kobo/{}", host.url(), api_key);
 	let sync_items = sync_page.sync_items(kobo_api_base_url.as_str()).await?;
-	if ctx.config.kobo_kepub_conversion {
+	if ctx.config.protocols.kobo_kepub_conversion {
 		for item in &sync_items {
 			if let SyncItem::NewEntitlement(entitlement) = item {
 				super::kepub_cache::enqueue(
@@ -252,6 +257,26 @@ pub(crate) async fn library_sync(
 				);
 			}
 		}
+	}
+
+	// Record the sync on the device this key belongs to; the sync itself must
+	// never fail because of the registry.
+	let sync_summary = serde_json::json!({
+		"protocol": "kobo",
+		"items": sync_items.len(),
+		"new_entitlements": sync_items
+			.iter()
+			.filter(|item| matches!(item, SyncItem::NewEntitlement(_)))
+			.count(),
+		"should_continue": sync_page.should_continue,
+		"kobo_device_id": device_id,
+	});
+	if let Err(error) = ctx
+		.devices()
+		.touch(CredentialRef::ApiKey(&api_key), Protocol::Kobo, Some(sync_summary))
+		.await
+	{
+		tracing::warn!(?error, "Failed to record the Kobo sync on its device");
 	}
 
 	// if we don't send a sync token the client will send no sync token on its next sync,
@@ -273,23 +298,23 @@ fn kobo_timestamp(timestamp: DateTime<Utc>) -> String {
 	timestamp.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+/// The raw Kobo state request retained as provenance for `event`.
 fn raw_reading_state_update(
-	session: Option<&reading_session::Model>,
+	event: Option<&reading_head_event::Model>,
 ) -> Option<ReadingStateUpdate> {
-	session
-		.and_then(|session| session.kobo_state.as_ref())
-		.and_then(|raw| {
-			serde_json::from_value::<ReadingStateUpdateRequest>(raw.clone()).ok()
+	event
+		.and_then(|event| {
+			serde_json::from_value::<ReadingStateUpdateRequest>(event.raw_payload.clone())
+				.ok()
 		})
 		.and_then(|request| request.reading_states.into_iter().next())
 }
 
-fn reading_status_name(status: models::shared::enums::ReadingStatus) -> &'static str {
-	match status {
-		models::shared::enums::ReadingStatus::Finished => "Finished",
-		models::shared::enums::ReadingStatus::Reading => "Reading",
-		models::shared::enums::ReadingStatus::NotStarted
-		| models::shared::enums::ReadingStatus::Abandoned => "ReadyToRead",
+fn head_status_name(head: Option<&reading_head::Model>) -> &'static str {
+	match head {
+		Some(head) if head.completed => "Finished",
+		Some(_) => "Reading",
+		None => "ReadyToRead",
 	}
 }
 
@@ -320,16 +345,28 @@ fn response_location(
 	})
 }
 
+/// Project the unified head back into Kobo's `ReadingState`.
+///
+/// Progress and location come from the head; when the head was last moved by
+/// this Kobo lane (`kobo_event` is its winning event) the raw bookmark values
+/// are echoed for an exact round trip. Statistics and status extras always
+/// come from the latest Kobo request, whether or not it won the head.
 fn reading_state_response(
 	book: &media::Model,
-	session: Option<&reading_session::Model>,
+	head: Option<&reading_head::Model>,
+	kobo_event: Option<&reading_head_event::Model>,
 ) -> KoboReadingStateResponse {
-	let modified = session
-		.map(|session| session.updated_at.unwrap_or(session.created_at).to_utc())
+	let modified = head
+		.map(|head| head.updated_at.to_utc())
 		.unwrap_or_else(|| book.modified_at.unwrap_or(book.created_at).to_utc());
-	let raw_update = raw_reading_state_update(session);
+	let raw_update = raw_reading_state_update(kobo_event);
+	let kobo_won = match (head, kobo_event) {
+		(Some(head), Some(event)) => head.event_id == event.id,
+		_ => false,
+	};
 	let raw_bookmark = raw_update
 		.as_ref()
+		.filter(|_| kobo_won)
 		.and_then(|update| update.current_bookmark.as_ref());
 	let raw_statistics = raw_update
 		.as_ref()
@@ -338,47 +375,41 @@ fn reading_state_response(
 		.as_ref()
 		.and_then(|update| update.status_info.as_ref());
 
-	let status = session
-		.map(|session| session.status)
-		.unwrap_or(models::shared::enums::ReadingStatus::NotStarted);
-	let database_progress = session
-		.and_then(|session| session.end_percentage)
-		.and_then(|value| rust_decimal::prelude::ToPrimitive::to_f32(&value))
-		.map(|value| value * 100.0);
-	let database_content_progress = session
-		.and_then(|session| session.end_locator.as_ref())
+	let status = raw_status_info
+		.filter(|_| kobo_won)
+		.and_then(|status_info| status_info.status.clone())
+		.unwrap_or_else(|| head_status_name(head).to_string());
+	let head_progress = head.map(|head| head.progression as f32 * 100.0);
+	let head_content_progress = head
+		.and_then(|head| head.locator.as_ref())
 		.and_then(|locator| locator.locations.as_ref())
 		.and_then(|locations| locations.progression)
 		.and_then(|value| rust_decimal::prelude::ToPrimitive::to_f32(&value))
 		.map(|value| value * 100.0);
 	let progress_percent = raw_bookmark
 		.and_then(|bookmark| bookmark.progress_percent)
-		.or(database_progress);
+		.or(head_progress);
 	let content_source_progress_percent = raw_bookmark
 		.and_then(|bookmark| bookmark.content_source_progress_percent)
-		.or(database_content_progress)
+		.or(head_content_progress)
 		.or(progress_percent);
 
 	let times_started_reading = raw_status_info
 		.and_then(|status_info| status_info.times_started_reading)
-		.unwrap_or_else(|| {
-			if status == models::shared::enums::ReadingStatus::Reading {
-				1
-			} else {
-				0
-			}
-		});
+		.unwrap_or_else(|| u32::from(head.is_some_and(|head| !head.completed)));
 	let last_time_started_reading = raw_status_info
 		.and_then(|status_info| status_info.last_time_started_reading.clone());
 
 	KoboReadingStateResponse {
 		entitlement_id: book.id.clone(),
-		created: kobo_timestamp(book.created_at.to_utc()),
+		created: kobo_timestamp(
+			head.map_or_else(|| book.created_at.to_utc(), |head| head.created_at.to_utc()),
+		),
 		last_modified: kobo_timestamp(modified),
 		priority_timestamp: kobo_timestamp(modified),
 		status_info: KoboStatusInfoResponse {
 			last_modified: kobo_timestamp(modified),
-			status: reading_status_name(status).to_string(),
+			status,
 			times_started_reading,
 			last_time_started_reading,
 		},
@@ -395,7 +426,7 @@ fn reading_state_response(
 			content_source_progress_percent,
 			location: response_location(
 				raw_bookmark.and_then(|bookmark| bookmark.location.as_ref()),
-				session.and_then(|session| session.end_locator.as_ref()),
+				head.and_then(|head| head.locator.as_ref()),
 			),
 		},
 	}
@@ -414,12 +445,16 @@ pub(crate) async fn book_state(
 		.one(conn)
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
-	let session =
-		reading_session::Entity::find_latest_for_user_and_media(&user, &book.id)
-			.one(conn)
+	let head = reading_state::head(conn, &user.id, &book.id).await?;
+	let kobo_event =
+		reading_state::latest_event(conn, &user.id, &book.id, SourceProtocol::Kobo)
 			.await?;
 
-	Ok(Json(vec![reading_state_response(&book, session.as_ref())]))
+	Ok(Json(vec![reading_state_response(
+		&book,
+		head.as_ref(),
+		kobo_event.as_ref(),
+	)]))
 }
 
 #[tracing::instrument(skip_all, fields(book_id = %book_id), err)]
@@ -437,26 +472,27 @@ pub(crate) async fn update_book_state(
 	let update = update_request.reading_states.first().ok_or_else(|| {
 		APIError::BadRequest("ReadingStates must contain one state".to_string())
 	})?;
-	map_kobo_reading_state(update).map_err(APIError::BadRequest)?;
 	let raw_payload =
 		serde_json::from_slice::<serde_json::Value>(&body).map_err(|error| {
 			APIError::BadRequest(format!("Malformed Kobo state request: {error}"))
 		})?;
+	let device_id = headers
+		.get("x-kobo-deviceid")
+		.and_then(|value| value.to_str().ok())
+		.map(str::to_string);
+	let head_update = kobo_head_update(update, raw_payload.clone(), device_id.clone())
+		.map_err(APIError::BadRequest)?;
 
 	let user = req.user();
 	let conn = ctx.conn.as_ref();
-	media::Entity::find_for_user(&user)
+	let book = media::Entity::find_for_user(&user)
 		.filter(media::Column::Id.eq(book_id.clone()))
 		.one(conn)
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
 
-	let device_id = headers
-		.get("x-kobo-deviceid")
-		.and_then(|value| value.to_str().ok())
-		.map(str::to_string);
 	let transaction = conn.begin().await?;
-	let session = persist_kobo_reading_state(
+	persist_kobo_reading_state(
 		&transaction,
 		&user,
 		&book_id,
@@ -465,9 +501,17 @@ pub(crate) async fn update_book_state(
 		device_id,
 	)
 	.await?;
+	let applied = reading_state::apply(
+		&transaction,
+		&user.id,
+		Publication::from(&book),
+		head_update,
+	)
+	.await?;
 	transaction.commit().await?;
+	reading_state::announce(&ctx, &book, &applied);
 
-	let modified = session.updated_at.unwrap_or(session.created_at).to_utc();
+	let modified = applied.head.updated_at.to_utc();
 	let result = KoboStateUpdateResult {
 		entitlement_id: book_id,
 		current_bookmark_result: update.current_bookmark.as_ref().map(|_| {
@@ -519,7 +563,7 @@ pub(crate) async fn book_metadata(
 		m.media.id
 	);
 
-	let format = if ctx.config.kobo_kepub_conversion
+	let format = if ctx.config.protocols.kobo_kepub_conversion
 		&& m.media.extension.eq_ignore_ascii_case("epub")
 	{
 		Format::KEPUB

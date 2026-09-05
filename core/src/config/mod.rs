@@ -1,12 +1,30 @@
+mod auth;
+mod database;
+pub mod defaults;
+pub mod env_keys;
+mod ingest;
+mod jobs;
 pub mod logging;
 pub mod oidc_config;
+mod pdf;
+mod protocols;
+mod providers;
+mod server;
 mod stump_config;
 
 use std::env;
 
+pub use auth::AuthConfig;
+pub use database::DatabaseConfig;
+use env_keys::{CONFIG_DIR_KEY, IN_DOCKER_KEY};
+pub use ingest::IngestConfig;
+pub use jobs::JobsConfig;
 pub use oidc_config::OidcConfig;
-use stump_config::env_keys::{CONFIG_DIR_KEY, IN_DOCKER_KEY};
-pub use stump_config::{defaults, env_keys, StumpConfig};
+pub use pdf::PdfConfig;
+pub use protocols::ProtocolsConfig;
+pub use providers::ProvidersConfig;
+pub use server::ServerConfig;
+pub use stump_config::StumpConfig;
 
 /// Gets the default config directory located at `~/.stump` where `~` is the
 /// user's home directory.

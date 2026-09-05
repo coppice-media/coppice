@@ -1,3 +1,7 @@
+//! Append-only SeaORM schema migrations. `stump_core` runs [`Migrator::up`] on
+//! every connect. Never reorder or remove published entries; one SQLite
+//! column per `alter_table`. See `crates/migrations/README.md`.
+
 use sea_orm_migration::async_trait::async_trait;
 pub use sea_orm_migration::*;
 
@@ -40,6 +44,11 @@ mod m20260906_000000_add_liseur_token_metadata;
 mod m20260907_000000_add_ingest;
 mod m20260908_000000_add_series_metadata_komga_fields;
 mod m20260909_000000_add_ingest_media_targets;
+mod m20260910_000000_add_devices;
+mod m20260911_000000_add_device_pairings;
+mod m20260912_000000_add_kavita_compat;
+mod m20260913_000000_add_provider_sources;
+mod m20260914_000000_add_reading_heads;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -89,6 +98,11 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260907_000000_add_ingest::Migration),
 			Box::new(m20260908_000000_add_series_metadata_komga_fields::Migration),
 			Box::new(m20260909_000000_add_ingest_media_targets::Migration),
+			Box::new(m20260910_000000_add_devices::Migration),
+			Box::new(m20260911_000000_add_device_pairings::Migration),
+			Box::new(m20260912_000000_add_kavita_compat::Migration),
+			Box::new(m20260913_000000_add_provider_sources::Migration),
+			Box::new(m20260914_000000_add_reading_heads::Migration),
 		]
 	}
 }

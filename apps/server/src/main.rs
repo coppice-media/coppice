@@ -54,7 +54,7 @@ async fn run() -> Result<(), EntryError> {
 			tracing::info!(enabled = oidc.enabled, "OIDC configuration loaded");
 		}
 
-		if resolved_config.verbosity >= 3 {
+		if resolved_config.server.verbosity >= 3 {
 			tracing::trace!(?resolved_config, "App config");
 		}
 

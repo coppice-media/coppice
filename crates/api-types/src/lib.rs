@@ -1,3 +1,8 @@
+//! Transport-neutral request contracts: [`RequestOrigin`] URL building and
+//! [`OffsetPagination`] arithmetic shared by HTTP handlers, GraphQL and the
+//! protocol crates. No Axum/GraphQL dependency by design.
+//! See `crates/api-types/README.md`.
+
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 

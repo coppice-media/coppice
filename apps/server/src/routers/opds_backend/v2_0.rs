@@ -7,15 +7,20 @@ use axum::{
 	Extension, Json,
 };
 use models::{
-	domain::reading_progress::compute_page_based_percentage,
+	domain::{
+		reading_progress::compute_page_based_percentage,
+		reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
+	},
 	services::reading_progress::{upsert_reading_session, NormalizedProgression},
 };
+use rust_decimal::prelude::ToPrimitive;
+use stump_core::reading_state;
 use models::{
 	entity::{
-		library, media, media_metadata, reading_device, reading_session, series,
+		device, library, media, media_metadata, reading_session, series,
 		series_metadata, user::AuthUser,
 	},
-	shared::enums::ReadingStatus,
+	shared::enums::{DeviceKind, ReadingStatus},
 };
 use sea_orm::{
 	prelude::*, sea_query::Expr, ActiveValue::Set, Condition, Order, QueryOrder,
@@ -31,7 +36,7 @@ use stump_core::{
 			OPDSAuthenticationDocument, OPDSAuthenticationDocumentBuilder,
 			OPDSSupportedAuthFlow, OPDS_AUTHENTICATION_DOCUMENT_TYPE,
 		},
-		entity::{OPDSProgressionEntity, OPDSPublicationEntity},
+		entity::{OPDSProgressionBookRef, OPDSProgressionEntity, OPDSPublicationEntity},
 		feed::{OPDSFeed, OPDSFeedBuilder},
 		group::OPDSFeedGroupBuilder,
 		link::{
@@ -216,7 +221,7 @@ pub(crate) async fn auth(
 	HostExtractor(host): HostExtractor,
 ) -> APIResult<OPDSAuthDocWrapper> {
 	let mut links = vec![OPDSLink::help()];
-	if let Some(favicon_path) = relative_favicon_path(ctx.config.enable_webui) {
+	if let Some(favicon_path) = relative_favicon_path(ctx.config.protocols.enable_webui) {
 		links.push(OPDSLink::logo(format!("{}{}", host.url(), favicon_path)));
 	}
 
@@ -1237,25 +1242,25 @@ pub(crate) async fn get_book_progression(
 	let link_finalizer = OPDSLinkFinalizer::from(host);
 
 	let user = req.user();
-	let newer_exists = reading_session::Entity::newer_session_exists_subquery();
-
-	let active_reading_session = OPDSProgressionEntity::find()
-		.filter(
-			Condition::all()
-				.add(reading_session::Column::UserId.eq(user.id.clone()))
-				.add(reading_session::Column::MediaId.eq(id.clone()))
-				.add(reading_session::Column::Status.eq(ReadingStatus::Reading))
-				.add(Expr::expr(Expr::exists(newer_exists)).not()),
-		)
-		.into_model::<OPDSProgressionEntity>()
-		.one(ctx.conn.as_ref())
-		.await?;
-
-	let Some(reading_session) = active_reading_session else {
+	let conn = ctx.conn.as_ref();
+	let Some(head) = reading_state::head(conn, &user.id, &id).await? else {
 		return Ok(Json(OPDSProgression::default()));
 	};
+	let Some(book) = OPDSProgressionBookRef::find_by_media_id(&id)
+		.one(conn)
+		.await?
+	else {
+		return Ok(Json(OPDSProgression::default()));
+	};
+	let device = match head.source_device_id.as_deref() {
+		Some(device_id) => device::Entity::find_by_id(device_id).one(conn).await?,
+		None => None,
+	};
 
-	Ok(Json(OPDSProgression::new(reading_session, link_finalizer)?))
+	Ok(Json(OPDSProgression::new(
+		OPDSProgressionEntity { head, device, book },
+		link_finalizer,
+	)?))
 }
 
 /// A route handler which updates the progression of a book for a user
@@ -1277,35 +1282,32 @@ pub(crate) async fn update_book_progression(
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
 
-	let existing_session =
-		reading_session::Entity::find_latest_for_user_and_media(&user, &id)
-			.one(conn)
-			.await?;
-
-	match existing_session {
-		Some(ref session) if session.updated_at.is_some_and(|ts| ts > input.modified) => {
-			return Err(APIError::Conflict(
-				"Progression timestamp is older than existing session".to_string(),
-			));
-		},
-		_ => {},
+	if reading_state::head(conn, &user.id, &id)
+		.await?
+		.is_some_and(|head| head.updated_at > input.modified)
+	{
+		return Err(APIError::Conflict(
+			"Progression timestamp is older than existing session".to_string(),
+		));
 	}
 
 	let device_id = if let Some(input_device) = input.device() {
-		let existing_device = reading_device::Entity::find_by_id(&input_device.id)
+		let existing_device = device::Entity::find_by_id(&input_device.id)
 			.one(conn)
 			.await?;
 
 		if existing_device.is_none() {
-			let new_device = reading_device::ActiveModel {
+			// OPDS 2.0 progression clients register themselves by the device
+			// they report; the row is owned by the syncing user.
+			let new_device = device::ActiveModel {
 				id: Set(input_device.id.clone()),
+				user_id: Set(user.id.clone()),
 				name: Set(input_device.name.clone()),
-				kind: Set(None),
-				email: Set(None),
+				kind: Set(DeviceKind::Opds),
+				last_seen_at: Set(Some(chrono::Utc::now().into())),
+				..Default::default()
 			};
-			reading_device::Entity::insert(new_device)
-				.exec(conn)
-				.await?;
+			device::Entity::insert(new_device).exec(conn).await?;
 		}
 
 		Some(input_device.id.clone())
@@ -1336,17 +1338,31 @@ pub(crate) async fn update_book_progression(
 	let locator = input.locator();
 	let progression = NormalizedProgression {
 		page,
-		locator,
+		locator: locator.clone(),
 		percentage,
 		elapsed_seconds_delta: None,
 		did_complete,
-		device_id,
+		device_id: device_id.clone(),
 		reset_elapsed_seconds: false,
+	};
+	let head_update = ProtocolUpdate {
+		protocol: SourceProtocol::Opds,
+		device_id,
+		updated_at: Some(input.modified.to_utc()),
+		position: locator.map_or(Position::None, Position::Locator),
+		progression: input.percentage_completed().and_then(|value| value.to_f64()),
+		completed: did_complete.then_some(true),
+		raw_payload: serde_json::to_value(&input)
+			.map_err(|error| APIError::InternalServerError(error.to_string()))?,
 	};
 
 	let txn = conn.begin().await?;
 	upsert_reading_session(&txn, &user, &id, progression).await?;
+	let applied =
+		reading_state::apply(&txn, &user.id, Publication::from(&book), head_update)
+			.await?;
 	txn.commit().await?;
+	reading_state::announce(&ctx, &book, &applied);
 
 	Ok(axum::http::StatusCode::NO_CONTENT)
 }

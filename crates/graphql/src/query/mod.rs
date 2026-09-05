@@ -7,6 +7,8 @@ mod book_club_invitation;
 mod book_club_suggestion;
 mod config;
 mod custom_emoji;
+mod device;
+mod device_pairing;
 mod email_device;
 mod emailer;
 mod epub;
@@ -20,6 +22,7 @@ mod media_metadata_overview;
 mod metadata_provider;
 mod notifier;
 pub(crate) mod reading_list;
+mod reading_stats;
 mod series;
 mod server_config;
 mod smart_list_view;
@@ -37,6 +40,8 @@ use book_club_invitation::BookClubInvitationQuery;
 use book_club_suggestion::BookClubSuggestionQuery;
 use config::ConfigQuery;
 use custom_emoji::CustomEmojiQuery;
+use device::DeviceQuery;
+use device_pairing::DevicePairingQuery;
 use email_device::EmailDeviceQuery;
 use emailer::EmailerQuery;
 use epub::EpubQuery;
@@ -49,6 +54,7 @@ use media_metadata_overview::MediaMetadataOverviewQuery;
 use metadata_provider::MetadataProviderQuery;
 use notifier::NotifierQuery;
 use reading_list::ReadingListQuery;
+use reading_stats::ReadingStatsQuery;
 use series::SeriesQuery;
 use server_config::ServerConfigQuery;
 use smart_list_view::SmartListViewQuery;
@@ -95,6 +101,7 @@ struct SystemQueries(
 	ServerConfigQuery,
 	FilesystemQuery,
 	IngestQuery,
+	DevicePairingQuery,
 );
 
 #[derive(async_graphql::MergedObject, Default)]
@@ -106,10 +113,14 @@ struct ListQueries(
 );
 
 #[derive(async_graphql::MergedObject, Default)]
+struct DeviceQueries(DeviceQuery, ReadingStatsQuery);
+
+#[derive(async_graphql::MergedObject, Default)]
 pub struct Query(
 	BookClubQueries,
 	ContentQueries,
 	UserAndNotifsQueries,
 	SystemQueries,
 	ListQueries,
+	DeviceQueries,
 );

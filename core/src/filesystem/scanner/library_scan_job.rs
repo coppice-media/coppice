@@ -17,6 +17,10 @@ use sea_orm::{
 	QuerySelect, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
+use stump_jobs::{
+	JobContext, JobError, JobExecuteLog, JobLifecycle, JobOutputExt, JobProgress,
+	JobTaskOutput, WorkingState,
+};
 
 use crate::{
 	database::SQLITE_BIND_LIMIT,
@@ -29,10 +33,7 @@ use crate::{
 		metadata::MetadataFetchJobParams,
 		scanner::utils::safely_insert_series,
 	},
-	job::{
-		error::JobError, stump_job::StumpJob, CoreJobOutput, JobContext, JobExecuteLog,
-		JobLifecycle, JobOutputExt, JobProgress, JobTaskOutput, WorkingState,
-	},
+	job::{stump_job::StumpJob, CoreJobOutput, JobServices},
 	utils::chain_optional_iter,
 	CoreEvent,
 };
@@ -153,6 +154,7 @@ impl JobOutputExt for LibraryScanOutput {
 impl JobLifecycle for LibraryScanJob {
 	const NAME: &'static str = "library_scan";
 
+	type Context = JobServices;
 	type Output = LibraryScanOutput;
 	type Task = LibraryScanTask;
 
@@ -162,7 +164,7 @@ impl JobLifecycle for LibraryScanJob {
 
 	async fn init(
 		&mut self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 	) -> Result<WorkingState<Self::Output, Self::Task>, JobError> {
 		let mut output = Self::Output {
 			library_id: self.id.clone(),
@@ -223,7 +225,7 @@ impl JobLifecycle for LibraryScanJob {
 			ignored_directories,
 			seen_directories,
 		} = {
-			let scan_source = SeaOrmScanSource::new(ctx.apalis_state.conn.clone());
+			let scan_source = SeaOrmScanSource::new(ctx.services().conn.clone());
 			walk_library(
 				&self.path,
 				&scan_source,
@@ -301,11 +303,11 @@ impl JobLifecycle for LibraryScanJob {
 
 	async fn finalize(
 		&self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 		output: &Self::Output,
 	) -> Result<(), JobError> {
 		ctx.emit_event(CoreEvent::JobOutput(event::JobOutput {
-			id: ctx.job_id.clone(),
+			id: ctx.job_id().to_owned(),
 			output: CoreJobOutput::LibraryScan(output.clone()),
 		}));
 
@@ -455,7 +457,7 @@ impl JobLifecycle for LibraryScanJob {
 
 	async fn execute_task(
 		&self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 		task: Self::Task,
 	) -> Result<JobTaskOutput<Self>, JobError> {
 		let mut output = Self::Output::default();
@@ -578,7 +580,7 @@ impl JobLifecycle for LibraryScanJob {
 					let (built_series, failure_logs) = safely_build_series(
 						&self.id,
 						series_to_create,
-						Arc::clone(&ctx.apalis_state.config),
+						Arc::clone(&ctx.services().config),
 						|position| {
 							ctx.report_progress(JobProgress::subtask_position(
 								position as i32,
@@ -687,7 +689,7 @@ impl JobLifecycle for LibraryScanJob {
 					map.get(&path_buf.to_string_lossy().to_string()).cloned()
 				});
 
-				let scan_source = SeaOrmScanSource::new(ctx.apalis_state.conn.clone());
+				let scan_source = SeaOrmScanSource::new(ctx.services().conn.clone());
 				let walk_result = walk_series(
 					path_buf.as_path(),
 					&scan_source,
@@ -996,7 +998,7 @@ pub async fn handle_missing_library(
 
 async fn handle_scan_complete(
 	job: &LibraryScanJob,
-	ctx: &JobContext,
+	ctx: &JobContext<JobServices>,
 	options: &ScanOptions,
 ) -> Result<(), JobError> {
 	let conn = ctx.conn();
@@ -1031,7 +1033,7 @@ async fn handle_scan_complete(
 		library_scan_record::Entity::insert(library_scan_record::ActiveModel {
 			options: Set(persisted_options),
 			timestamp: Set(now.into()),
-			job_id: Set(Some(ctx.job_id.clone())),
+			job_id: Set(Some(ctx.job_id().to_owned())),
 			library_id: Set(job.id.clone()),
 			..Default::default()
 		})

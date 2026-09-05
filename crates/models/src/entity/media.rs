@@ -75,6 +75,16 @@ pub struct Model {
 	/// The timestamp of when the media was **soft** deleted. This will act like a trash bin.
 	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
 	pub deleted_at: Option<DateTimeWithTimeZone>,
+	/// The provider source instance (`provider_sources.id`) this media was materialised
+	/// from. Set only for remote chapters, whose `path` is a `provider://` URI.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub source_provider: Option<String>,
+	/// The remote series identifier on the provider source
+	#[sea_orm(column_type = "Text", nullable)]
+	pub remote_id: Option<String>,
+	/// The remote chapter identifier on the provider source
+	#[sea_orm(column_type = "Text", nullable)]
+	pub remote_chapter_id: Option<String>,
 }
 
 pub fn get_age_restriction_filter(min_age: i32, restrict_on_unset: bool) -> Condition {

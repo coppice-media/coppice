@@ -1,3 +1,13 @@
+//! KOReader progress-sync (kosync) wire contract under `/koreader/{api_key}`.
+//!
+//! Three routes (`users/auth`, `PUT syncs/progress`, `GET syncs/progress/{document}`),
+//! two DTOs, and the [`KoreaderBackend`] trait. Authentication (Stump API key
+//! in the path, `AccessKoreaderSync`), persistence, and the partial-MD5
+//! `koreader_hash` live in the host.
+//!
+//! See `crates/koreader/README.md` for the kosync pin (`009367df`), the Liseur
+//! `31f8182d` client (device-verified), decisions, and verification.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

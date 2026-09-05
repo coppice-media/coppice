@@ -42,12 +42,7 @@ impl OPDSProgression {
 		OPDSProgressionBuilder::default()
 			.device(device)
 			.locator(OPDSProgressionLocator::new(&data, &link_finalizer)?)
-			.modified(
-				data.session
-					.updated_at
-					.map(|dt| dt.to_rfc3339())
-					.unwrap_or_else(default_now),
-			)
+			.modified(data.head.updated_at.to_rfc3339())
 			.build()
 	}
 }
@@ -70,10 +65,10 @@ impl OPDSProgressionLocator {
 		data: &OPDSProgressionEntity,
 		link_finalizer: &OPDSLinkFinalizer,
 	) -> CoreResult<Self> {
-		let percentage_completed = data.session.end_percentage.and_then(|d| d.to_f64());
+		let percentage_completed = Some(data.head.progression);
 
 		if data.book.extension.eq_ignore_ascii_case("epub") {
-			return Self::epub(data.session.end_locator.as_ref(), percentage_completed);
+			return Self::epub(data.head.locator.as_ref(), percentage_completed);
 		}
 
 		Self::paged(data, link_finalizer, percentage_completed)
@@ -120,7 +115,7 @@ impl OPDSProgressionLocator {
 		link_finalizer: &OPDSLinkFinalizer,
 		percentage_completed: Option<f64>,
 	) -> CoreResult<Self> {
-		let Some(current_page) = data.session.end_page else {
+		let Some(current_page) = data.head.page else {
 			return OPDSProgressionLocatorBuilder::default().build();
 		};
 		let href = link_finalizer.format_link(format!(
@@ -172,7 +167,7 @@ struct OPDSProgressionDevice {
 }
 
 /// The input type for updating book progression via OPDS v2
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OPDSProgressionInput {
 	pub modified: chrono::DateTime<chrono::FixedOffset>,
@@ -181,7 +176,7 @@ pub struct OPDSProgressionInput {
 }
 
 /// Device information for progression input
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OPDSProgressionDeviceInput {
 	pub id: String,
 	pub name: String,
@@ -189,7 +184,7 @@ pub struct OPDSProgressionDeviceInput {
 
 /// Locator input following Readium Locator schema
 /// See: https://readium.org/architecture/schema/locator.schema.json
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OPDSProgressionLocatorInput {
 	/// URI of the resource in the publication (required per spec)
@@ -206,7 +201,7 @@ pub struct OPDSProgressionLocatorInput {
 }
 
 /// Location information within a resource
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OPDSProgressionLocationInput {
 	pub fragments: Option<Vec<String>>,
@@ -216,7 +211,7 @@ pub struct OPDSProgressionLocationInput {
 }
 
 /// Text context around the reading position
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OPDSProgressionTextInput {
 	pub before: Option<String>,
 	pub highlight: Option<String>,

@@ -203,7 +203,7 @@ impl UploadMutation {
 
 		let value = file.value(ctx)?;
 
-		enforce_max_size(&value, core.config.max_file_upload_size)?;
+		enforce_max_size(&value, core.config.protocols.max_file_upload_size)?;
 		enforce_valid_content_type(&value)?;
 
 		let mut image_buf = Vec::new();
@@ -311,7 +311,7 @@ impl UploadMutation {
 
 		let value = file.value(ctx)?;
 
-		enforce_max_size(&value, core.config.max_file_upload_size)?;
+		enforce_max_size(&value, core.config.protocols.max_file_upload_size)?;
 		enforce_valid_content_type(&value)?;
 
 		let mut image_buf = Vec::new();
@@ -415,7 +415,7 @@ impl UploadMutation {
 
 		let value = file.value(ctx)?;
 
-		enforce_max_size(&value, core.config.max_file_upload_size)?;
+		enforce_max_size(&value, core.config.protocols.max_file_upload_size)?;
 		enforce_valid_content_type(&value)?;
 
 		let mut image_buf = Vec::new();
@@ -516,7 +516,7 @@ impl UploadMutation {
 		}
 
 		let (image_buf, extension) =
-			decode_base64_image(&image, core.config.max_file_upload_size)?;
+			decode_base64_image(&image, core.config.protocols.max_file_upload_size)?;
 
 		let path_buf = replace_thumbnail(
 			&series.series.id,
@@ -611,7 +611,7 @@ impl UploadMutation {
 		}
 
 		let (image_buf, extension) =
-			decode_base64_image(&image, core.config.max_file_upload_size)?;
+			decode_base64_image(&image, core.config.protocols.max_file_upload_size)?;
 
 		let path_buf =
 			replace_thumbnail(&book.media.id, &extension, &image_buf, &core.config.media)

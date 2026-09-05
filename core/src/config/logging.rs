@@ -14,7 +14,7 @@ pub fn init_tracing(config: &StumpConfig) {
 	let log_dir = config.get_log_dir();
 	let file_appender = tracing_appender::rolling::never(log_dir, "Stump.log");
 
-	let max_level = match config.verbosity {
+	let max_level = match config.server.verbosity {
 		0 => LevelFilter::OFF,
 		1 => LevelFilter::INFO,
 		2 => LevelFilter::DEBUG,
@@ -53,7 +53,7 @@ pub fn init_tracing(config: &StumpConfig) {
 				.expect("Error invalid tracing directive for tower_http!"),
 		);
 
-	if config.verbosity > 2 {
+	if config.server.verbosity > 2 {
 		env_filter = env_filter.add_directive(
 			"sqlx::query=debug"
 				.parse()
@@ -74,7 +74,7 @@ pub fn init_tracing(config: &StumpConfig) {
 		.with(env_filter);
 
 	// TODO: This is likely unnecessary duplication(?), and should be revisited
-	if config.pretty_logs {
+	if config.server.pretty_logs {
 		base_layer
 			.with(
 				tracing_subscriber::fmt::layer()
@@ -85,7 +85,7 @@ pub fn init_tracing(config: &StumpConfig) {
 			.with(
 				tracing_subscriber::fmt::layer()
 					.pretty()
-					.with_ansi(config.colorful_logs)
+					.with_ansi(config.server.colorful_logs)
 					.with_writer(file_appender),
 			)
 			.init();
@@ -98,11 +98,11 @@ pub fn init_tracing(config: &StumpConfig) {
 			)
 			.with(
 				tracing_subscriber::fmt::layer()
-					.with_ansi(config.colorful_logs)
+					.with_ansi(config.server.colorful_logs)
 					.with_writer(file_appender),
 			)
 			.init();
 	};
 
-	tracing::info!(verbosity = ?max_level, verbosity_num = config.verbosity, "Tracing initialized");
+	tracing::info!(verbosity = ?max_level, verbosity_num = config.server.verbosity, "Tracing initialized");
 }

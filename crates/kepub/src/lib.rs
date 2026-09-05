@@ -3,6 +3,10 @@
 //! The content transform follows kepubify @9546034.  EPUB entries which are
 //! not package/content documents are copied through the ZIP reader unchanged;
 //! only the XML/HTML documents selected by the package manifest are rewritten.
+//!
+//! Design decisions, the parity contract against the pinned kepubify build,
+//! the XML 1.1 deviation, cache-key rules, measured throughput, and the
+//! `KOBO_KEPUB_*` server switches are documented in `crates/kepub/README.md`.
 
 use std::{
 	borrow::Cow,

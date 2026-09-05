@@ -17,20 +17,21 @@ pub mod ingest;
 pub mod job;
 pub mod kobo;
 pub mod opds;
+pub mod reading_state;
 pub mod utils;
 
 use config::logging::STUMP_SHADOW_TEXT;
 use config::StumpConfig;
-use job::JobScheduler;
 use models::entity::server_config;
 use sea_orm::{
 	prelude::*, ActiveValue::Set, DatabaseBackend, EntityTrait, PaginatorTrait,
 	QuerySelect, SelectColumns, Statement,
 };
+use stump_jobs::JobScheduler;
 
-pub use context::{Ctx, JobRuntime};
+pub use context::Ctx;
 pub use error::{CoreError, CoreResult};
-pub use event::{CoreEvent, JobQueueStatus, MediaDeleted, SeriesDeleted};
+pub use event::{CoreEvent, DevicePairingRequested, MediaDeleted, SeriesDeleted};
 
 pub use email::{
 	AttachmentPayload, EmailContentType, EmailerClient, EmailerClientConfig,
@@ -106,7 +107,7 @@ impl StumpCore {
 			config.oidc = Some(env_oidc);
 		}
 
-		config.finalize_media_config();
+		config.finalize();
 		database::validate_pool_config(&config)?;
 
 		// Write ensure that config directory exists and write Stump.toml
@@ -311,9 +312,9 @@ impl StumpCore {
 		self.ctx.stop_scheduler().await;
 	}
 
-	pub async fn init_library_watcher(
-		&self,
-	) -> CoreResult<Option<Arc<filesystem::scanner::LibraryWatcher>>> {
+	/// Starts watching library roots when at least one ready library enables
+	/// watching. Returns whether a watcher was started.
+	pub async fn init_library_watcher(&self) -> CoreResult<bool> {
 		self.ctx.init_library_watcher().await
 	}
 
@@ -323,7 +324,7 @@ impl StumpCore {
 		self.ctx.cancel_islanded_jobs().await
 	}
 
-	/// Stops the Apalis monitor if it was initialized.
+	/// Stops the job executor if the runtime was initialized.
 	pub async fn stop_job_runtime(&self) {
 		self.ctx.stop_job_runtime().await;
 	}

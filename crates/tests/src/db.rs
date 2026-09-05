@@ -1,8 +1,10 @@
 use models::entity::{
-	age_restriction, api_key, collection, collection_series, kobo_sync_session, library,
-	library_config, library_exclusion, media, media_analysis, media_metadata, media_tag,
-	reading_device, reading_list, reading_list_item, reading_list_rule, reading_session,
-	refresh_token, series, series_metadata, server_config, session, tag, user,
+	age_restriction, api_key, collection, collection_series, device,
+	device_credential, device_pairing, kobo_sync_session, library, library_config,
+	library_exclusion, liseur_sync_token, media, media_analysis, media_metadata,
+	media_tag, provider_source, reading_head, reading_head_event, reading_list,
+	reading_list_item, reading_list_rule, reading_session, refresh_token, series,
+	series_metadata, server_config, session, source_health, tag, user,
 	user_preferences,
 };
 use sea_orm::{ConnectionTrait, Database, DbBackend, DbConn, DbErr, Schema};
@@ -36,7 +38,9 @@ pub async fn create_database_tables(db: &DbConn) -> Result<(), DbErr> {
 		schema.create_table_from_entity(library::Entity),
 		schema.create_table_from_entity(library_config::Entity),
 		schema.create_table_from_entity(reading_session::Entity),
-		schema.create_table_from_entity(reading_device::Entity),
+		schema.create_table_from_entity(device::Entity),
+		schema.create_table_from_entity(device_credential::Entity),
+		schema.create_table_from_entity(liseur_sync_token::Entity),
 		schema.create_table_from_entity(tag::Entity),
 		schema.create_table_from_entity(media_tag::Entity),
 		schema.create_table_from_entity(server_config::Entity),
@@ -47,6 +51,11 @@ pub async fn create_database_tables(db: &DbConn) -> Result<(), DbErr> {
 		schema.create_table_from_entity(reading_list_rule::Entity),
 		schema.create_table_from_entity(collection::Entity),
 		schema.create_table_from_entity(collection_series::Entity),
+		schema.create_table_from_entity(device_pairing::Entity),
+		schema.create_table_from_entity(provider_source::Entity),
+		schema.create_table_from_entity(source_health::Entity),
+		schema.create_table_from_entity(reading_head::Entity),
+		schema.create_table_from_entity(reading_head_event::Entity),
 	];
 
 	for stmt in tables {

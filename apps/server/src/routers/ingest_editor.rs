@@ -24,7 +24,7 @@ pub const EDITOR_BASE: &str = "/editor";
 
 /// Resolve the editor directory when it is configured and holds a build.
 pub(crate) fn editor_dir(app_state: &AppState) -> Option<PathBuf> {
-	let dir = PathBuf::from(app_state.config.ingest_editor_dir.as_deref()?);
+	let dir = PathBuf::from(app_state.config.ingest.ingest_editor_dir.as_deref()?);
 	if dir.join("index.html").is_file() {
 		Some(dir)
 	} else {

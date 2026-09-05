@@ -1,4 +1,5 @@
 use proc_macro2::{Span, TokenStream};
+use quote::format_ident;
 use syn::{DataStruct, Expr, Field, Fields, Ident};
 
 use crate::type_utils;
@@ -19,6 +20,7 @@ pub struct StumpConfigVariableAttributes {
 	pub required_by_new: bool,
 	pub env_key: Option<Expr>,
 	pub validator: Option<Ident>,
+	pub nested: bool,
 }
 
 impl StumpConfigVariable {
@@ -42,6 +44,13 @@ impl StumpConfigVariable {
 
 	pub fn error<T: std::fmt::Display>(&self, err: T) -> TokenStream {
 		syn::Error::new(self.span, err).into_compile_error()
+	}
+
+	/// The name of the partial struct generated for a `#[nested]` config struct,
+	/// i.e. `Partial<TypeName>`. The partial must be in scope where the parent
+	/// config struct derives the generator.
+	pub fn nested_partial_ident(&self) -> Ident {
+		format_ident!("Partial{}", self.variable_type.to_string().trim())
 	}
 }
 
@@ -117,6 +126,11 @@ fn parse_config_var_attributes(field: &Field) -> StumpConfigVariableAttributes {
 				panic!("Failed to parse validator identity for {field_ident}: {e}")
 			});
 			config_var_attributes.validator = Some(validator_ident);
+		}
+
+		// #[nested]
+		if attr.path().is_ident("nested") {
+			config_var_attributes.nested = true;
 		}
 	}
 

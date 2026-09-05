@@ -1,0 +1,34 @@
+[package]
+name = "stump_jobs"
+version.workspace = true
+edition = "2021"
+description = "Job-type-agnostic background job runtime, lifecycle contracts, and cron scheduler for Stump"
+
+[features]
+default = ["apalis"]
+# Apalis-backed queue and worker. Without it `JobRuntime::new` runs jobs on an
+# inline executor that serializes work on the Tokio blocking pool.
+apalis = ["dep:apalis"]
+graphql = ["dep:async-graphql", "models/graphql"]
+
+[dependencies]
+apalis = { workspace = true, optional = true }
+async-graphql = { workspace = true, optional = true }
+async-trait.workspace = true
+chrono.workspace = true
+croner.workspace = true
+dashmap = "6.1.0"
+models = { path = "../models", default-features = false }
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
+tokio-util = "0.7.10"
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+migrations = { path = "../migrations", default-features = false }
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }

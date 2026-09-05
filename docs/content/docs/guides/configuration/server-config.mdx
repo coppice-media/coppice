@@ -13,6 +13,24 @@ If you're using Stump with Docker, you'll want to specify environment variables 
 
 Below are the available configuration options, loosely grouped by category. If you encounter any values which are not documented, please open an issue or submit a pull request to add them to the documentation.
 
+### Key groups
+
+Internally the server keeps these settings in `StumpConfig`, split into flattened groups (`core/src/config/`). Grouping is structural only: every key below stays a top-level `Stump.toml` key and environment variable, so existing config files load unchanged. The group name is the field path used in server code (`config.server.port`, `config.protocols.enable_komga`, ...).
+
+| Group (`StumpConfig` field) | Source file                  | TOML keys                                                                                                                                                                                                                                                                                                             |
+| --------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server`                    | `core/src/config/server.rs`    | `profile`, `ip`, `port`, `verbosity`, `pretty_logs`, `log_dir`, `colorful_logs`, `allowed_origins`, `trust_proxy_headers`                                                                                                                                                                                             |
+| `database`                  | `core/src/config/database.rs`  | `db_path`, `db_timeout_secs`, `db_max_connections`, `db_min_connections`, `sqlite_statement_cache_capacity`                                                                                                                                                                                                           |
+| `jobs`                      | `core/src/config/jobs.rs`      | `enable_background_jobs`, `parallelism_multiplier`                                                                                                                                                                                                                                                                    |
+| `protocols`                 | `core/src/config/protocols.rs` | `enable_koreader_sync`, `enable_kobo_sync`, `kobo_kepub_preconvert`, `kobo_kepub_cache_max_age_days`, `kobo_kepub_deflate_level`, `kobo_kepub_conversion`, `enable_komga`, `enable_kavita`, `enable_opds_progression`, `enable_upload`, `max_file_upload_size`, `max_image_upload_size`, `enable_webui`, `enable_playground`, `client_dir` |
+| `ingest`                    | `core/src/config/ingest.rs`    | `ingest_drop_dir`, `ingest_staging_dir`, `ingest_editor_dir`, `ingest_progress_retention`                                                                                                                                                                                                                             |
+| `providers`                 | `core/src/config/providers.rs` | `enable_providers`, `provider_cache_max_bytes`                                                                                                                                                                                                                                                                        |
+| `auth`                      | `core/src/config/auth.rs`      | `password_hash_cost`, `session_ttl`, `access_token_ttl`, `refresh_token_ttl`, `expired_session_cleanup_interval`                                                                                                                                                                                                      |
+| `pdf`                       | `core/src/config/pdf.rs`       | `pdfium_path`, `pdf_render_dpi`, `pdf_max_dimension`, `pdf_render_format`, `pdf_cache_pages`, `pdf_prerender_range`, `pdf_high_quality`                                                                                                                                                                               |
+| _(top level)_               | `core/src/config/stump_config.rs` | `config_dir`, `[oidc]` table; `media` is a derived, non-serialized snapshot computed by `StumpConfig::finalize()`                                                                                                                                                                                                  |
+
+The PostgreSQL connection variables (`STUMP_DATABASE_URL`, `STUMP_DB_HOST`, `STUMP_DB_PORT`, `STUMP_DB_USER`, `STUMP_DB_PASSWORD`, `STUMP_DB_NAME`) are environment-only and are read by `core/src/database.rs` rather than stored in any group.
+
 ## Core
 
 ### STUMP_IP
@@ -335,6 +353,22 @@ A **comma-separated** list of additional trusted audiences for ID token verifica
 **Example:** `360960386461073457,another-audience`
 
 ## Integrations
+
+### STUMP_ENABLE_KOMGA
+
+Whether to mount the Komga-compatible API. The server must also be compiled with the `komga` Cargo feature; otherwise the setting only logs a warning. See [Komga compatibility](/docs/developer/komga-compat).
+
+| Type    | Default Value | TOML Key       |
+| ------- | ------------- | -------------- |
+| Boolean | `false`       | `enable_komga` |
+
+### STUMP_ENABLE_KAVITA
+
+Whether to mount the Kavita-compatible API (`/api/{Library,Series,Reader,...}`). The server must also be compiled with the `kavita` Cargo feature. See [Kavita compatibility](/docs/developer/kavita-compat).
+
+| Type    | Default Value | TOML Key        |
+| ------- | ------------- | --------------- |
+| Boolean | `false`       | `enable_kavita` |
 
 ### ENABLE_KOBO_SYNC
 

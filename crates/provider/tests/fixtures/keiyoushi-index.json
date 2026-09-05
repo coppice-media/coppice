@@ -1,0 +1,113 @@
+{
+  "name": "Keiyoushi",
+  "badgeLabel": "KEI",
+  "signingKey": "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2",
+  "contact": {
+    "website": "https://keiyoushi.github.io",
+    "discord": "https://discord.gg/3FbCpdKbdY"
+  },
+  "extensionList": {
+    "extensions": [
+      {
+        "name": "MangaDex",
+        "packageName": "eu.kanade.tachiyomi.extension.all.mangadex",
+        "resources": {
+          "apkUrl": "https://github.com/keiyoushi/extensions/releases/download/7bd0361-0/tachiyomi-all.mangadex-v1.4.212.apk",
+          "iconUrl": "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/all/mangadex/res/mipmap-xhdpi/ic_launcher.png",
+          "jarUrl": "https://github.com/keiyoushi/extensions/releases/download/0ca8b46-0/tachiyomi-all.mangadex-v1.4.212.jar"
+        },
+        "extensionLib": "1.4",
+        "versionCode": "104212",
+        "versionName": "1.4.212",
+        "contentWarning": "CONTENT_WARNING_MIXED",
+        "sources": [
+          {
+            "id": "2499283573021220255",
+            "name": "MangaDex",
+            "language": "en",
+            "homeUrl": "https://mangadex.org"
+          },
+          {
+            "id": "1411768577036936240",
+            "name": "MangaDex",
+            "language": "ja",
+            "homeUrl": "https://mangadex.org"
+          },
+          {
+            "id": "2655149515337070132",
+            "name": "MangaDex",
+            "language": "pt-BR",
+            "homeUrl": "https://mangadex.org"
+          }
+        ]
+      },
+      {
+        "name": "3600000 Beauty",
+        "packageName": "eu.kanade.tachiyomi.extension.all.beauty3600000",
+        "resources": {
+          "apkUrl": "https://github.com/keiyoushi/extensions/releases/download/7bd0361-0/tachiyomi-all.beauty3600000-v1.4.6.apk",
+          "iconUrl": "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/all/beauty3600000/res/mipmap-xhdpi/ic_launcher.png",
+          "jarUrl": "https://github.com/keiyoushi/extensions/releases/download/0ca8b46-0/tachiyomi-all.beauty3600000-v1.4.6.jar"
+        },
+        "extensionLib": "1.4",
+        "versionCode": "104006",
+        "versionName": "1.4.6",
+        "contentWarning": "CONTENT_WARNING_NSFW",
+        "sources": [
+          {
+            "id": "5498091984644576825",
+            "name": "3600000 Beauty",
+            "language": "all",
+            "homeUrl": "https://3600000.xyz"
+          }
+        ]
+      },
+      {
+        "name": "MangaRead.org",
+        "packageName": "eu.kanade.tachiyomi.extension.en.mangareadorg",
+        "resources": {
+          "apkUrl": "https://github.com/keiyoushi/extensions/releases/download/0ca8b46-0/tachiyomi-en.mangareadorg-v1.6.57.apk",
+          "iconUrl": "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/en/mangareadorg/res/mipmap-xhdpi/ic_launcher.png",
+          "jarUrl": "https://github.com/keiyoushi/extensions/releases/download/0ca8b46-0/tachiyomi-en.mangareadorg-v1.6.57.jar"
+        },
+        "extensionLib": "1.6",
+        "versionCode": "106057",
+        "versionName": "1.6.57",
+        "contentWarning": "CONTENT_WARNING_MIXED",
+        "sources": [
+          {
+            "id": "2681651342533848540",
+            "name": "MangaRead.org",
+            "language": "en",
+            "homeUrl": "https://www.mangaread.org"
+          }
+        ]
+      },
+      {
+        "name": "Comick (Unoriginal)",
+        "packageName": "eu.kanade.tachiyomi.extension.all.comicklive",
+        "resources": {
+          "apkUrl": "https://github.com/keiyoushi/extensions/releases/download/34e4d51-0/tachiyomi-all.comicklive-v1.4.5.apk",
+          "iconUrl": "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/all/comicklive/res/mipmap-xhdpi/ic_launcher.png",
+          "jarUrl": "https://github.com/keiyoushi/extensions/releases/download/0ca8b46-0/tachiyomi-all.comicklive-v1.4.5.jar"
+        },
+        "extensionLib": "1.4",
+        "versionCode": "104005",
+        "versionName": "1.4.5",
+        "contentWarning": "CONTENT_WARNING_MIXED",
+        "sources": [
+          {
+            "id": "4972933717624256217",
+            "name": "Comick (Unoriginal)",
+            "language": "en",
+            "homeUrl": "https://comick.live",
+            "mirrorUrls": [
+              "https://comick.live",
+              "https://comick.art"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

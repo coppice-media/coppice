@@ -113,7 +113,7 @@ impl SessionStore for StumpSessionStore {
 	#[tracing::instrument(skip(self))]
 	async fn save(&self, record: &Record) -> session_store::Result<()> {
 		let expiry_time: DateTime<FixedOffset> =
-			(Utc::now() + Duration::seconds(self.config.session_ttl)).into();
+			(Utc::now() + Duration::seconds(self.config.auth.session_ttl)).into();
 
 		let user_id = record
 			.data

@@ -1,3 +1,8 @@
+//! Outbound metadata provider clients (Comic Vine, Hardcover, AniList, MAL,
+//! MangaDex, MangaUpdates), rate limiting, candidate scoring and field-merge
+//! rules. Persistence, credentials and fetch jobs live in `stump_core`.
+//! See `crates/integrations/metadata/README.md`.
+
 pub mod client;
 pub mod error;
 mod mangaupdates;

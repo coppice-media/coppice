@@ -36,8 +36,10 @@ strum.workspace = true
 stump_auth = { path = "../auth" }
 stump_api_types = { path = "../api-types" }
 stump_core = { path = "../../core", default-features = false, features = ["graphql"] }
+stump_devices = { path = "../devices", features = ["graphql"] }
 stump_media = { path = "../media", default-features = false }
 stump_scanner = { path = "../scanner" }
+subtle.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util"] }
 tower-sessions.workspace = true
 tracing.workspace = true
@@ -52,3 +54,4 @@ maplit.workspace = true
 tempfile.workspace = true
 pretty_assertions.workspace = true
 async-graphql-axum.workspace = true
+tests = { path = "../tests" }

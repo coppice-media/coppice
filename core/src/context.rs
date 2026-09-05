@@ -1,144 +1,55 @@
-use std::{
-	sync::{Arc, OnceLock},
-	time::Duration,
-};
+use std::sync::{Arc, OnceLock};
 
-use apalis::{
-	layers::WorkerBuilderExt,
-	prelude::{MemoryStorage, Monitor, WorkerBuilder, WorkerFactoryFn},
-};
 use chrono::Utc;
-use models::entity::{job, library, library_config, server_config};
-use sea_orm::{prelude::*, DatabaseConnection, MockDatabase, SelectColumns};
+use models::{entity::job, shared::enums::JobStatus};
+use sea_orm::{prelude::*, DatabaseConnection, MockDatabase};
+use stump_devices::DeviceService;
+use stump_jobs::{JobError, JobRuntime, JobScheduler};
+#[cfg(feature = "watcher")]
+use stump_watcher::{Watcher, DEFAULT_DEBOUNCE};
 use tokio::sync::{
 	broadcast::{channel, Receiver, Sender},
-	Mutex, Notify,
+	Mutex,
 };
 
+#[cfg(feature = "watcher")]
+use crate::filesystem::scanner::watcher_adapters::{
+	watched_libraries_query, EnqueueLibraryScan, WatchedLibraryRoots,
+};
 use crate::{
 	config::StumpConfig,
 	database,
-	event::{CoreEvent, JobQueueStatus},
-	filesystem::scanner::LibraryWatcher,
+	event::CoreEvent,
 	ingest::services::IngestServices,
-	job::{
-		dispatch_job, state::ApalisWorkerState, stump_job::StumpJob, JobScheduler,
-		JobStatus,
-	},
+	job::{stump_job::StumpJob, JobServices},
+	reading_state::ReadingHeadChanged,
+	utils::encryption::fetch_encryption_key,
 	CoreError, CoreResult,
 };
 
 type EventChannel = (Sender<CoreEvent>, Receiver<CoreEvent>);
 
-/// The lazily-created Apalis queue and worker state for a context.
-///
-/// Keeping the monitor handle with the runtime makes the first enqueue the
-/// lifecycle boundary: a context that never receives background work does not
-/// allocate a queue, worker state, or monitor task.
-pub struct JobRuntime {
-	pub storage: MemoryStorage<StumpJob>,
-	pub apalis_state: Arc<ApalisWorkerState>,
-	shutdown_notify: Arc<Notify>,
-	monitor: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-}
-
-impl JobRuntime {
-	fn new(
-		conn: Arc<DatabaseConnection>,
-		config: Arc<StumpConfig>,
-		event_tx: Sender<CoreEvent>,
-	) -> Self {
-		let shutdown_notify = Arc::new(Notify::new());
-		let monitor_shutdown_notify = shutdown_notify.clone();
-		let storage = MemoryStorage::<StumpJob>::new();
-		let apalis_state = Arc::new(ApalisWorkerState::new(
-			conn,
-			config,
-			event_tx,
-			storage.clone(),
-		));
-
-		let monitor = Monitor::new()
-			.register(
-				WorkerBuilder::new("stump-worker")
-					.enable_tracing()
-					.data(apalis_state.clone())
-					.concurrency(1)
-					.backend(storage.clone())
-					.build_fn(dispatch_job),
-			)
-			.with_terminator(tokio::time::sleep(Duration::from_secs(30)));
-		let monitor = tokio::spawn(async move {
-			let result = monitor
-				.run_with_signal(async move {
-					monitor_shutdown_notify.notified().await;
-					Ok(())
-				})
-				.await;
-			if let Err(error) = result {
-				tracing::error!(?error, "Apalis monitor stopped with an error");
-			}
-		});
-
-		Self {
-			storage,
-			apalis_state,
-			shutdown_notify,
-			monitor: std::sync::Mutex::new(Some(monitor)),
-		}
-	}
-
-	/// Returns a lock-free snapshot of queued and running background jobs.
-	pub fn queue_depth(&self) -> JobQueueStatus {
-		self.apalis_state.queue_state.snapshot()
-	}
-
-	async fn stop(&self) {
-		for entry in self.apalis_state.cancellation_tokens.iter() {
-			entry.value().cancel();
-		}
-		self.shutdown_notify.notify_one();
-		let monitor = self
-			.monitor
-			.lock()
-			.expect("job runtime monitor mutex poisoned")
-			.take();
-		if let Some(monitor) = monitor {
-			let _ = monitor.await;
-		}
-		self.apalis_state.cancellation_tokens.clear();
-	}
-}
-
-impl Drop for JobRuntime {
-	fn drop(&mut self) {
-		for entry in self.apalis_state.cancellation_tokens.iter() {
-			entry.value().cancel();
-		}
-		self.shutdown_notify.notify_one();
-		if let Some(monitor) = self
-			.monitor
-			.lock()
-			.expect("job runtime monitor mutex poisoned")
-			.take()
-		{
-			monitor.abort();
-		}
-	}
-}
-
 /// Struct that holds the main context for a Stump application. This is passed around
 /// to all the different parts of the application, and is used to access the database
 /// and manage the event channels.
+///
+/// The job runtime, library watcher, and scheduler are created lazily: a context that
+/// never receives background work allocates none of them.
 #[derive(Clone)]
 pub struct Ctx {
 	pub config: Arc<StumpConfig>,
 	pub conn: Arc<DatabaseConnection>,
 	pub event_channel: Arc<EventChannel>,
-	job_runtime: Arc<OnceLock<Arc<JobRuntime>>>,
-	library_watcher: Arc<OnceLock<Arc<LibraryWatcher>>>,
+	job_runtime: Arc<OnceLock<Arc<JobRuntime<JobServices>>>>,
+	#[cfg(feature = "watcher")]
+	library_watcher: Arc<OnceLock<Arc<Watcher>>>,
 	scheduler: Arc<Mutex<Option<JobScheduler>>>,
 	ingest_services: Arc<OnceLock<Arc<IngestServices>>>,
+	devices: Arc<OnceLock<Arc<DeviceService>>>,
+	/// Accepted head changes from every protocol, for adapters that fan them
+	/// out to their own clients (Komga SSE). Not part of [`CoreEvent`], which
+	/// is streamed to every GraphQL subscriber regardless of user.
+	reading_state_events: Arc<Sender<ReadingHeadChanged>>,
 }
 
 impl Ctx {
@@ -158,7 +69,7 @@ impl Ctx {
 	/// }
 	/// ```
 	pub async fn new(mut config: StumpConfig) -> Ctx {
-		config.finalize_media_config();
+		config.finalize();
 		let config = Arc::new(config);
 		let conn = Arc::new(
 			database::connect(&config)
@@ -174,9 +85,12 @@ impl Ctx {
 			conn,
 			event_channel: Arc::new(channel::<CoreEvent>(1024)),
 			job_runtime: Arc::new(OnceLock::new()),
+			#[cfg(feature = "watcher")]
 			library_watcher: Arc::new(OnceLock::new()),
 			scheduler: Arc::new(Mutex::new(None)),
 			ingest_services: Arc::new(OnceLock::new()),
+			devices: Arc::new(OnceLock::new()),
+			reading_state_events: Arc::new(channel::<ReadingHeadChanged>(256).0),
 		}
 	}
 
@@ -192,7 +106,7 @@ impl Ctx {
 		conn: DatabaseConnection,
 		mut config: StumpConfig,
 	) -> Ctx {
-		config.finalize_media_config();
+		config.finalize();
 		Self::from_parts(Arc::new(config), Arc::new(conn))
 	}
 
@@ -224,27 +138,22 @@ impl Ctx {
 		Arc::new(self.clone())
 	}
 
-	/// Returns whether the Apalis runtime has already been initialized.
+	/// Returns whether the job runtime has already been initialized.
 	pub fn job_runtime_initialized(&self) -> bool {
 		self.job_runtime.get().is_some()
 	}
 
-	/// Returns whether the logical library watcher has already been initialized.
-	pub fn library_watcher_initialized(&self) -> bool {
-		self.library_watcher.get().is_some()
-	}
-
-	/// Returns the lazily-created Apalis runtime.
-	pub fn job_runtime(&self) -> CoreResult<Arc<JobRuntime>> {
+	/// Returns the lazily-created job runtime, starting its executor on first use.
+	pub fn job_runtime(&self) -> CoreResult<Arc<JobRuntime<JobServices>>> {
 		self.require_background_jobs()?;
 		Ok(self
 			.job_runtime
 			.get_or_init(|| {
-				Arc::new(JobRuntime::new(
+				Arc::new(JobRuntime::new(Arc::new(JobServices::new(
 					self.conn.clone(),
 					self.config.clone(),
 					self.event_channel.0.clone(),
-				))
+				))))
 			})
 			.clone())
 	}
@@ -259,28 +168,17 @@ impl Ctx {
 			return "enabled";
 		};
 
-		if runtime.apalis_state.cancellation_tokens.is_empty() {
+		if runtime.is_idle() {
 			"idle"
 		} else {
 			"running"
 		}
 	}
 
-	/// Reports the current watcher lifecycle state without creating it.
-	pub fn watcher_health_status(&self) -> &'static str {
-		if !self.background_jobs_enabled() {
-			"disabled"
-		} else if self.library_watcher.get().is_some() {
-			"active"
-		} else {
-			"inactive"
-		}
-	}
-
 	/// Cancels jobs left marked as running by a previous server process.
 	///
 	/// This is deliberately a direct database operation and does not initialize
-	/// the lazy Apalis runtime.
+	/// the lazy job runtime.
 	pub async fn cancel_islanded_jobs(&self) -> CoreResult<()> {
 		let affected_rows = job::Entity::update_many()
 			.filter(job::Column::Status.eq(JobStatus::Running.to_string()))
@@ -304,46 +202,65 @@ impl Ctx {
 	pub fn cancel_job(&self, job_id: &str) -> bool {
 		self.job_runtime
 			.get()
-			.is_some_and(|runtime| runtime.apalis_state.cancel_job(job_id))
+			.is_some_and(|runtime| runtime.cancel_job(job_id))
+	}
+}
+
+#[cfg(feature = "watcher")]
+impl Ctx {
+	/// Returns whether the logical library watcher has already been initialized.
+	pub fn library_watcher_initialized(&self) -> bool {
+		self.library_watcher.get().is_some()
 	}
 
-	fn get_or_init_library_watcher(&self) -> CoreResult<Arc<LibraryWatcher>> {
+	/// Reports the current watcher lifecycle state without creating it.
+	pub fn watcher_health_status(&self) -> &'static str {
+		if !self.background_jobs_enabled() {
+			"disabled"
+		} else if self.library_watcher.get().is_some() {
+			"active"
+		} else {
+			"inactive"
+		}
+	}
+
+	fn get_or_init_library_watcher(&self) -> CoreResult<Arc<Watcher>> {
 		self.require_background_jobs()?;
 		let runtime = self.job_runtime()?;
 		Ok(self
 			.library_watcher
 			.get_or_init(|| {
-				Arc::new(LibraryWatcher::new_with_enabled_and_queue(
-					self.conn.clone(),
-					runtime.storage.clone(),
-					runtime.apalis_state.queue_state.clone(),
-					true,
+				Arc::new(Watcher::new(
+					WatchedLibraryRoots {
+						conn: self.conn.clone(),
+					},
+					EnqueueLibraryScan { runtime },
+					DEFAULT_DEBOUNCE,
 				))
 			})
 			.clone())
 	}
+
 	/// Initializes the library watcher only when at least one ready library is
-	/// configured for watching.
-	pub async fn init_library_watcher(&self) -> CoreResult<Option<Arc<LibraryWatcher>>> {
+	/// configured for watching. Returns whether a watcher was started.
+	pub async fn init_library_watcher(&self) -> CoreResult<bool> {
 		self.require_background_jobs()?;
-		let watched_library_count = library::Entity::find()
-			.inner_join(library_config::Entity)
-			.filter(library::Column::Status.eq("READY"))
-			.filter(library_config::Column::Watch.eq(true))
+		let watched_library_count = watched_libraries_query()
 			.count(self.conn.as_ref())
 			.await?;
 		if watched_library_count == 0 {
-			return Ok(None);
+			return Ok(false);
 		}
 
 		let watcher = self.get_or_init_library_watcher()?;
 		watcher.init().await?;
-		Ok(Some(watcher))
+		Ok(true)
 	}
 
 	/// Adds a path to the logical library watcher, constructing it on demand.
 	pub async fn add_watcher(&self, path: std::path::PathBuf) -> CoreResult<()> {
-		self.get_or_init_library_watcher()?.add_watcher(path).await
+		self.get_or_init_library_watcher()?.add_watcher(path).await?;
+		Ok(())
 	}
 
 	/// Removes a path from the logical library watcher when one exists.
@@ -363,21 +280,58 @@ impl Ctx {
 		}
 		Ok(())
 	}
+}
 
+/// Without the `watcher` feature no filesystem watcher is linked: library `watch`
+/// settings are persisted but never acted on, and health reports `unavailable`.
+#[cfg(not(feature = "watcher"))]
+impl Ctx {
+	pub fn library_watcher_initialized(&self) -> bool {
+		false
+	}
+
+	pub fn watcher_health_status(&self) -> &'static str {
+		"unavailable"
+	}
+
+	pub async fn init_library_watcher(&self) -> CoreResult<bool> {
+		self.require_background_jobs()?;
+		Ok(false)
+	}
+
+	pub async fn add_watcher(&self, path: std::path::PathBuf) -> CoreResult<()> {
+		self.require_background_jobs()?;
+		tracing::debug!(path = %path.display(), "Compiled without the watcher feature; not watching path");
+		Ok(())
+	}
+
+	pub async fn remove_watcher(&self, _path: std::path::PathBuf) -> CoreResult<()> {
+		self.require_background_jobs()
+	}
+
+	pub async fn stop_library_watcher(&self) -> CoreResult<()> {
+		self.require_background_jobs()
+	}
+}
+
+impl Ctx {
 	/// Starts or refreshes the scheduler when enabled scheduled-job rows exist.
+	///
+	/// The job runtime is only created once a valid scheduled row needs it.
 	pub async fn start_scheduler(&self) -> CoreResult<Option<JobScheduler>> {
 		self.require_background_jobs()?;
 		let mut scheduler = self.scheduler.lock().await;
+		let runtime = || self.job_runtime().map_err(JobError::from);
 
 		if let Some(existing) = scheduler.clone() {
-			if existing.reload(self.arced()).await? {
+			if existing.reload(self.conn.as_ref(), runtime).await? {
 				return Ok(Some(existing));
 			}
 			scheduler.take();
 			return Ok(None);
 		}
 
-		let Some(created) = JobScheduler::init(self.arced()).await? else {
+		let Some(created) = JobScheduler::init(self.conn.as_ref(), runtime).await? else {
 			return Ok(None);
 		};
 		scheduler.replace(created.clone());
@@ -391,7 +345,7 @@ impl Ctx {
 		}
 	}
 
-	/// Stops the Apalis monitor if the runtime was initialized.
+	/// Stops the job executor if the runtime was initialized.
 	pub async fn stop_job_runtime(&self) {
 		if let Some(runtime) = self.job_runtime.get() {
 			runtime.stop().await;
@@ -403,6 +357,21 @@ impl Ctx {
 		self.ingest_services
 			.get_or_init(|| {
 				Arc::new(IngestServices::new(self.config.clone(), self.conn.clone()))
+			})
+			.clone()
+	}
+
+	/// Returns the device registry, constructing it lazily on first use. Device
+	/// sightings recorded through it are forwarded as [`CoreEvent::DeviceSeen`].
+	pub fn devices(&self) -> Arc<DeviceService> {
+		self.devices
+			.get_or_init(|| {
+				let event_tx = self.event_channel.0.clone();
+				Arc::new(DeviceService::new(self.conn.clone()).with_seen_listener(
+					move |seen| {
+						let _ = event_tx.send(CoreEvent::DeviceSeen(seen));
+					},
+				))
 			})
 			.clone()
 	}
@@ -422,7 +391,7 @@ impl Ctx {
 	}
 
 	pub fn background_jobs_enabled(&self) -> bool {
-		self.config.enable_background_jobs
+		self.config.jobs.enable_background_jobs
 	}
 
 	pub fn require_background_jobs(&self) -> CoreResult<()> {
@@ -433,14 +402,13 @@ impl Ctx {
 		}
 	}
 
-	/// Enqueue a job into apalis storage, starting the runtime on first use.
+	/// Enqueue a job, starting the runtime on first use.
 	pub async fn enqueue(&self, job: StumpJob) -> CoreResult<()> {
 		let runtime = self.job_runtime()?;
 		runtime
-			.apalis_state
-			.enqueue_job(job)
+			.enqueue(job)
 			.await
-			.map_err(|_| CoreError::InternalError("Failed to enqueue job".to_string()))?;
+			.map_err(|error| CoreError::InternalError(error.to_string()))?;
 		Ok(())
 	}
 
@@ -453,18 +421,20 @@ impl Ctx {
 		}
 	}
 
+	/// Subscribe to accepted reading-head changes from every protocol.
+	pub fn reading_state_events(&self) -> Receiver<ReadingHeadChanged> {
+		self.reading_state_events.subscribe()
+	}
+
+	/// Publish an accepted reading-head change to protocol adapters.
+	pub fn emit_reading_head_changed(&self, event: ReadingHeadChanged) {
+		// A send only fails when nobody is subscribed, which is not an error.
+		let _ = self.reading_state_events.send(event);
+	}
+
 	/// Retrieves the encryption key from the server configuration
 	pub async fn get_encryption_key(&self) -> CoreResult<String> {
-		let record = server_config::Entity::find()
-			.select_column(server_config::Column::EncryptionKey)
-			.one(self.conn.as_ref())
-			.await?;
-
-		let encryption_key = record
-			.and_then(|config| config.encryption_key)
-			.ok_or(CoreError::EncryptionKeyNotSet)?;
-
-		Ok(encryption_key)
+		fetch_encryption_key(self.conn.as_ref()).await
 	}
 }
 
@@ -475,6 +445,7 @@ mod tests {
 	use migrations::{Migrator, MigratorTrait};
 	use models::{entity::job, shared::enums::JobStatus};
 	use sea_orm::{Database, EntityTrait, QueryOrder};
+	use std::time::Duration;
 	use tokio::time::{sleep, timeout};
 
 	async fn migrated_database() -> DatabaseConnection {
@@ -488,7 +459,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn enqueue_initializes_runtime_once_and_monitor_completes_job() {
+	async fn enqueue_initializes_runtime_once_and_executor_completes_job() {
 		let ctx = Ctx::for_testing(migrated_database().await);
 		assert!(!ctx.job_runtime_initialized());
 		assert_eq!(ctx.jobs_health_status(), "enabled");
@@ -523,34 +494,44 @@ mod tests {
 		.await
 		.expect("test job did not complete");
 		assert_eq!(completed.name, "analyze_media");
+		assert!(completed.output_data.is_some());
 		assert_eq!(ctx.jobs_health_status(), "idle");
+		assert_eq!(runtime.queue_depth().count, 0);
 	}
 
 	#[tokio::test]
-	async fn stopping_runtime_cancels_running_jobs_and_stops_monitor() {
+	async fn stopping_runtime_cancels_running_jobs_and_stops_executor() {
 		let ctx = Ctx::for_testing(migrated_database().await);
 		let runtime = ctx.job_runtime().expect("runtime should initialize");
-		let token = tokio_util::sync::CancellationToken::new();
-		runtime
-			.apalis_state
-			.cancellation_tokens
-			.insert("running-job".to_string(), token.clone());
+		let job = StumpJob::analyze_media(AnalysisJobConfig {
+			scope: MediaAnalysisJobScope::Books(Vec::new()),
+			force_reanalysis: false,
+		});
+		let job_ctx = runtime
+			.open_job("running-job".to_string(), &job)
+			.await
+			.expect("job context");
+		assert_eq!(ctx.jobs_health_status(), "running");
 
 		ctx.stop_job_runtime().await;
 
-		assert!(token.is_cancelled());
-		assert!(runtime
-			.monitor
-			.lock()
-			.expect("job runtime monitor mutex poisoned")
-			.is_none());
-		assert!(runtime.apalis_state.cancellation_tokens.is_empty());
+		assert!(job_ctx.is_canceled());
+		assert_eq!(ctx.jobs_health_status(), "idle");
+		assert!(matches!(
+			runtime
+				.enqueue(StumpJob::analyze_media(AnalysisJobConfig {
+					scope: MediaAnalysisJobScope::Books(Vec::new()),
+					force_reanalysis: false,
+				}))
+				.await,
+			Err(JobError::Unknown(_))
+		) || runtime.backend() == "apalis");
 	}
 
 	#[tokio::test]
 	async fn disabled_background_jobs_do_not_create_runtime() {
 		let mut config = StumpConfig::debug();
-		config.enable_background_jobs = false;
+		config.jobs.enable_background_jobs = false;
 		let ctx = Ctx::for_testing_with_config(migrated_database().await, config);
 
 		assert_eq!(ctx.jobs_health_status(), "disabled");
@@ -572,7 +553,8 @@ mod tests {
 	#[tokio::test]
 	async fn scheduler_with_no_rows_creates_no_scheduler_or_runtime() {
 		let ctx = Ctx::for_testing(migrated_database().await);
-		let scheduler = JobScheduler::init(ctx.arced())
+		let scheduler = ctx
+			.start_scheduler()
 			.await
 			.expect("scheduler query should succeed");
 
@@ -583,15 +565,85 @@ mod tests {
 	#[tokio::test]
 	async fn watcher_without_watched_libraries_is_not_constructed() {
 		let ctx = Ctx::for_testing(migrated_database().await);
-		assert_eq!(ctx.watcher_health_status(), "inactive");
+		let expected = if cfg!(feature = "watcher") {
+			"inactive"
+		} else {
+			"unavailable"
+		};
+		assert_eq!(ctx.watcher_health_status(), expected);
 
-		let watcher = ctx
+		let started = ctx
 			.init_library_watcher()
 			.await
 			.expect("watcher initialization query should succeed");
 
-		assert!(watcher.is_none());
+		assert!(!started);
 		assert!(!ctx.library_watcher_initialized());
 		assert!(!ctx.job_runtime_initialized());
+	}
+
+	#[tokio::test]
+	async fn disabled_background_jobs_reject_watcher_operations() {
+		let mut config = StumpConfig::debug();
+		config.jobs.enable_background_jobs = false;
+		let ctx = Ctx::for_testing_with_config(migrated_database().await, config);
+		let path = std::path::PathBuf::from("/tmp/stump");
+
+		assert!(matches!(
+			ctx.init_library_watcher().await,
+			Err(CoreError::FeatureDisabled("background jobs"))
+		));
+		assert!(matches!(
+			ctx.add_watcher(path.clone()).await,
+			Err(CoreError::FeatureDisabled("background jobs"))
+		));
+		assert!(matches!(
+			ctx.remove_watcher(path).await,
+			Err(CoreError::FeatureDisabled("background jobs"))
+		));
+		assert!(matches!(
+			ctx.stop_library_watcher().await,
+			Err(CoreError::FeatureDisabled("background jobs"))
+		));
+		assert!(!ctx.library_watcher_initialized());
+		assert!(!ctx.job_runtime_initialized());
+	}
+
+	#[cfg(feature = "watcher")]
+	#[tokio::test]
+	async fn watched_library_starts_watcher_from_database_roots() {
+		use models::{entity::library_config, shared::enums::FileStatus};
+		use sea_orm::ActiveModelTrait;
+
+		let db = migrated_database().await;
+		let root = tempfile::tempdir().expect("tempdir");
+		let library = ::tests::fake_data::Library {
+			path: Some(root.path().to_string_lossy().to_string()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		assert_eq!(library.status, FileStatus::Ready);
+		library_config::ActiveModel {
+			id: sea_orm::Set(library.config_id),
+			watch: sea_orm::Set(true),
+			..Default::default()
+		}
+		.update(&db)
+		.await
+		.expect("failed to enable watching");
+
+		let ctx = Ctx::for_testing(db);
+		let started = ctx
+			.init_library_watcher()
+			.await
+			.expect("watcher should start for a watched, existing root");
+
+		assert!(started);
+		assert!(ctx.library_watcher_initialized());
+		assert_eq!(ctx.watcher_health_status(), "active");
+		ctx.stop_library_watcher()
+			.await
+			.expect("watcher should stop");
 	}
 }

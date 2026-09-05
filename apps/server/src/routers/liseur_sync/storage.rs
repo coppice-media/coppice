@@ -8,11 +8,13 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, SecondsFormat, Utc};
 use models::{
+	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
 	entity::{
 		library, media, media_metadata, series,
 		user::{self, AuthUser, LoginUser},
 	},
-	shared::enums::FileStatus,
+	services::reading_state,
+	shared::{enums::FileStatus, readium::ReadiumLocator},
 };
 use sea_orm::{
 	ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
@@ -22,6 +24,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stump_auth::AuthContext;
+use stump_devices::{
+	liseur_token::{hash_secret, new_secret, DEVICE_TOKEN_TTL_SECS},
+	CredentialRef, Protocol,
+};
 use stump_liseur_sync::{
 	AnnotationInput, AnnotationRecord, AnnotationResult, CatalogBook, CatalogBookSeries,
 	CatalogBooksPage, CatalogContributor, CatalogCover, CatalogDownload, CatalogFolder,
@@ -36,7 +42,6 @@ use crate::config::state::AppState;
 use crate::utils::verify_password;
 
 const TOKEN_TTL_SECS: i64 = 60 * 60;
-const DEVICE_TOKEN_DEFAULT_TTL_SECS: i64 = 10 * 365 * 24 * 60 * 60;
 
 fn db_statement<C: ConnectionTrait>(
 	conn: &C,
@@ -54,14 +59,162 @@ fn now_string() -> String {
 	Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 
-fn hash_token(token: &str) -> String {
-	let mut digest = Sha256::new();
-	digest.update(token.as_bytes());
-	format!("{:x}", digest.finalize())
-}
-
 fn ctx_conn(ctx: &AppState) -> &DatabaseConnection {
 	ctx.conn.as_ref()
+}
+
+/// The Stump media a liseur work resolved to for `user_id`, when any.
+async fn linked_media<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	work_id: &str,
+) -> Result<Option<media::Model>, LiseurSyncError> {
+	let row = conn
+		.query_one(db_statement(
+			conn,
+			"SELECT media_id FROM liseur_sync_media_links
+             WHERE user_id = $1 AND work_id = $2",
+			vec![user_id.to_owned().into(), work_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?;
+	let Some(row) = row else {
+		return Ok(None);
+	};
+	let media_id: String = row.try_get("", "media_id").map_err(internal)?;
+	media::Entity::find_by_id(media_id)
+		.one(conn)
+		.await
+		.map_err(internal)
+}
+
+/// Project an accepted liseur position op onto the unified reading head of
+/// the media its work resolved to. The opaque locator is parsed as a Readium
+/// locator only when it validates; the op itself stays the raw provenance.
+async fn apply_op_to_head<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	device_id: &str,
+	op: &OpInput,
+) -> Result<(), LiseurSyncError> {
+	let Some(media) = linked_media(conn, user_id, &op.work_id).await? else {
+		return Ok(());
+	};
+	let locator = op
+		.locator
+		.clone()
+		.and_then(|value| serde_json::from_value::<ReadiumLocator>(value).ok())
+		.filter(|locator| !locator.href.is_empty());
+	let progression = op.progression.expect("validated progression");
+	reading_state::apply(
+		conn,
+		user_id,
+		Publication::from(&media),
+		ProtocolUpdate {
+			protocol: SourceProtocol::Liseur,
+			device_id: Some(device_id.to_owned()),
+			updated_at: DateTime::parse_from_rfc3339(&op.client_ts)
+				.ok()
+				.map(|at| at.to_utc()),
+			position: locator.map_or(Position::None, Position::Locator),
+			progression: Some(progression),
+			completed: (progression >= 1.0).then_some(true),
+			raw_payload: serde_json::to_value(op).map_err(internal)?,
+		},
+	)
+	.await
+	.map_err(internal)?;
+	Ok(())
+}
+
+/// Idempotency key of the op that mirrors a head materialized by `event_id`.
+fn mirrored_op_id(event_id: i64) -> String {
+	format!("stump-head:{event_id}")
+}
+
+/// Append one op per linked head that another protocol moved since it was
+/// last mirrored, so liseur clients pull Kobo/Komga/KOReader/OPDS progress
+/// through the ordinary change feed. Liseur-originated heads are already in
+/// the log and are skipped; the op id is derived from the winning event, so a
+/// head is mirrored at most once per change.
+async fn mirror_heads(ctx: &AppState, user_id: &str) -> Result<(), LiseurSyncError> {
+	let conn = ctx_conn(ctx);
+	let links = conn
+		.query_all(db_statement(
+			conn,
+			"SELECT media_id, work_id, edition_sha FROM liseur_sync_media_links
+             WHERE user_id = $1",
+			vec![user_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?;
+	if links.is_empty() {
+		return Ok(());
+	}
+	let mut by_media = HashMap::with_capacity(links.len());
+	for row in links {
+		let media_id: String = row.try_get("", "media_id").map_err(internal)?;
+		let work_id: String = row.try_get("", "work_id").map_err(internal)?;
+		let edition_sha: String = row.try_get("", "edition_sha").map_err(internal)?;
+		by_media.insert(media_id, (work_id, edition_sha));
+	}
+	let media_ids = by_media.keys().cloned().collect::<Vec<_>>();
+	let heads = reading_state::heads(conn, user_id, &media_ids)
+		.await
+		.map_err(internal)?;
+
+	let txn = conn.begin().await.map_err(internal)?;
+	ensure_counter(&txn, user_id).await?;
+	for (media_id, head) in heads {
+		if head.source_protocol == SourceProtocol::Liseur {
+			continue;
+		}
+		let op_id = mirrored_op_id(head.event_id);
+		if find_op(&txn, user_id, &op_id).await?.is_some() {
+			continue;
+		}
+		let Some((work_id, edition_sha)) = by_media.get(&media_id) else {
+			continue;
+		};
+		let seq = next_op_seq(&txn, user_id).await?;
+		let locator = head
+			.locator
+			.as_ref()
+			.map(serde_json::to_value)
+			.transpose()
+			.map_err(internal)?;
+		txn.execute(db_statement(
+			&txn,
+			"INSERT INTO liseur_sync_ops
+                (id, user_id, seq, op_id, work_id, edition_sha, device_id,
+                 client_ts, progression, locator, foreign_pos, origin, received_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+			vec![
+				Uuid::new_v4().to_string().into(),
+				user_id.to_owned().into(),
+				seq.into(),
+				op_id.into(),
+				work_id.clone().into(),
+				Some(edition_sha.clone()).into(),
+				head.source_device_id
+					.clone()
+					.unwrap_or_else(|| format!("stump:{}", head.source_protocol))
+					.into(),
+				head.updated_at
+					.to_utc()
+					.to_rfc3339_opts(SecondsFormat::Nanos, true)
+					.into(),
+				head.progression.into(),
+				locator_to_db(&locator)?.into(),
+				Option::<String>::None.into(),
+				head.source_protocol.to_string().into(),
+				now_string().into(),
+			],
+		))
+		.await
+		.map_err(internal)?;
+	}
+	txn.commit().await.map_err(internal)
 }
 #[derive(Debug, Deserialize, Serialize)]
 struct FolderCursor {
@@ -584,7 +737,7 @@ pub(crate) async fn login(
 	// recording this credential as a token-management-only session. Device
 	// tokens minted through /v1/tokens are separate rows and carry scopes and
 	// a device name of their own.
-	let secret = format!("liseur-{}", Uuid::new_v4());
+	let secret = new_secret();
 	let token_id = Uuid::new_v4().to_string();
 	let device_id = Uuid::new_v4().to_string();
 	let created_at = now_string();
@@ -603,7 +756,7 @@ pub(crate) async fn login(
 				token_id.into(),
 				user.id.clone().into(),
 				device_id.into(),
-				hash_token(&secret).into(),
+				hash_secret(&secret).into(),
 				scopes.into(),
 				created_at.into(),
 				expires_at.into(),
@@ -629,7 +782,7 @@ pub(crate) async fn mint_token(
 ) -> Result<TokenCreateResult, LiseurSyncError> {
 	let token_id = Uuid::new_v4().to_string();
 	let device_id = Uuid::new_v4().to_string();
-	let secret = format!("liseur-{}", Uuid::new_v4());
+	let secret = new_secret();
 	let created_at = now_string();
 	let expires_at = expires_in_seconds
 		.filter(|seconds| *seconds > 0)
@@ -641,7 +794,7 @@ pub(crate) async fn mint_token(
 	// sentinel in that NOT NULL column while the wire response preserves the
 	// OpenAPI null for an unbounded device token.
 	let stored_expires_at = expires_at.clone().unwrap_or_else(|| {
-		(Utc::now() + chrono::Duration::seconds(DEVICE_TOKEN_DEFAULT_TTL_SECS))
+		(Utc::now() + chrono::Duration::seconds(DEVICE_TOKEN_TTL_SECS))
 			.to_rfc3339_opts(SecondsFormat::Nanos, true)
 	});
 	let scopes_json = serde_json::to_string(&scopes).map_err(internal)?;
@@ -656,7 +809,7 @@ pub(crate) async fn mint_token(
 				token_id.clone().into(),
 				user_id.to_owned().into(),
 				device_id.clone().into(),
-				hash_token(&secret).into(),
+				hash_secret(&secret).into(),
 				scopes_json.into(),
 				created_at.into(),
 				stored_expires_at.into(),
@@ -716,7 +869,7 @@ pub(crate) async fn authenticate(
 			"SELECT id, user_id, device_id, name, scopes, expires_at, token_kind
              FROM liseur_sync_tokens
              WHERE secret_hash = $1 AND revoked_at IS NULL",
-			vec![hash_token(token).into()],
+			vec![hash_secret(token).into()],
 		))
 		.await
 		.map_err(internal)?
@@ -761,6 +914,16 @@ pub(crate) async fn authenticate(
 			?error,
 			"failed to update liseur-sync token last-used timestamp"
 		);
+	}
+
+	// Record the sighting on the device this token belongs to; a registry
+	// failure must never fail authentication.
+	if let Err(error) = ctx
+		.devices()
+		.touch(CredentialRef::LiseurToken(&token_id), Protocol::Liseur, None)
+		.await
+	{
+		tracing::warn!(?error, "failed to record the liseur-sync token on its device");
 	}
 
 	let kind = if token_kind.as_deref() == Some("session") {
@@ -1440,13 +1603,13 @@ pub(crate) async fn append_ops(
 				user_id.to_owned().into(),
 				seq.into(),
 				op.op_id.clone().into(),
-				op.work_id.into(),
-				op.edition_sha.into(),
+				op.work_id.clone().into(),
+				op.edition_sha.clone().into(),
 				device_id.to_owned().into(),
-				op.client_ts.into(),
+				op.client_ts.clone().into(),
 				op.progression.expect("validated progression").into(),
 				locator_to_db(&op.locator)?.into(),
-				op.foreign_pos.into(),
+				op.foreign_pos.clone().into(),
 				"native".into(),
 				received_at.into(),
 			],
@@ -1454,11 +1617,12 @@ pub(crate) async fn append_ops(
 		.await
 		.map_err(internal)?;
 		results.push(OpResult {
-			op_id: op.op_id,
+			op_id: op.op_id.clone(),
 			status: "applied".into(),
 			seq: Some(seq),
 			reason: None,
 		});
+		apply_op_to_head(&txn, user_id, device_id, &op).await?;
 	}
 	txn.commit().await.map_err(internal)?;
 	Ok(results)
@@ -1489,6 +1653,7 @@ pub(crate) async fn changes(
 	since: i64,
 	limit: usize,
 ) -> Result<ChangesPage, LiseurSyncError> {
+	mirror_heads(ctx, user_id).await?;
 	let conn = ctx_conn(ctx);
 	let high_water = high_water(conn, user_id).await?;
 	let rows = conn
@@ -1523,6 +1688,7 @@ pub(crate) async fn heads(
 	ctx: &AppState,
 	user_id: &str,
 ) -> Result<HeadsPage, LiseurSyncError> {
+	mirror_heads(ctx, user_id).await?;
 	let conn = ctx_conn(ctx);
 	let snapshot_seq = high_water(conn, user_id).await?;
 	let rows = conn
@@ -1554,6 +1720,7 @@ pub(crate) async fn positions(
 	work_id: &str,
 	limit: usize,
 ) -> Result<Vec<OpRecord>, LiseurSyncError> {
+	mirror_heads(ctx, user_id).await?;
 	let conn = ctx_conn(ctx);
 	if !work_exists(conn, user_id, work_id).await? {
 		return Err(LiseurSyncError::NotFound("work not found".into()));
@@ -2071,7 +2238,7 @@ mod tests {
 
 	#[test]
 	fn token_hash_is_stable_and_not_plaintext() {
-		let hash = hash_token("secret");
+		let hash = hash_secret("secret");
 		assert_eq!(hash.len(), 64);
 		assert_ne!(hash, "secret");
 	}

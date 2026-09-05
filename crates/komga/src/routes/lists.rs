@@ -12,7 +12,7 @@ use crate::{
 	},
 	read_list::{KomgaReadList, KomgaReadListId, KomgaReadListQuery},
 	routes::progress::{
-		counts_for_progress_books, finished_progression, progress_books,
+		counts_for_progress_books, mark_book_read, progress_books,
 		KomgaReadProgressDto, KomgaReadProgressUpdateDto,
 	},
 	series::KomgaSeriesId,
@@ -29,12 +29,9 @@ use axum::{
 };
 use axum_extra::extract::Query;
 use chrono::{DateTime, Utc};
-use models::{
-	entity::{
-		collection, collection_series, media, reading_list, reading_list_item, series,
-		user::AuthUser,
-	},
-	services::reading_progress::upsert_reading_session,
+use models::entity::{
+	collection, collection_series, media, reading_list, reading_list_item, series,
+	user::AuthUser,
 };
 use sea_orm::{
 	prelude::*,
@@ -683,8 +680,7 @@ async fn update_tachiyomi_readlist_progress(
 		.collect::<HashMap<_, _>>();
 	let txn = ctx.conn().begin().await?;
 	for book in &to_mark {
-		upsert_reading_session(&txn, &user, &book.id, finished_progression(book.pages))
-			.await?;
+		mark_book_read(&txn, &user, &book.id, book.pages).await?;
 	}
 	txn.commit().await?;
 	for book in &to_mark {

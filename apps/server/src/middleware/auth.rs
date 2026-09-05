@@ -42,6 +42,7 @@ use sea_orm::{prelude::*, Condition, DatabaseConnection};
 use serde::Deserialize;
 use stump_api_types::RequestOrigin;
 use stump_auth::AuthContext;
+use stump_devices::{CredentialRef, Protocol};
 use stump_core::opds::v2_0::{
 	authentication::{
 		OPDSAuthenticationDocumentBuilder, OPDSSupportedAuthFlow,
@@ -75,7 +76,7 @@ pub(crate) const KOMGA_REMEMBER_ME_COOKIE_NAME: &str = "komga-remember-me";
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct KomgaBasicAuthSuccess;
 
-fn inject_avatar_url(mut user: AuthUser, service: RequestOrigin) -> AuthUser {
+pub(crate) fn inject_avatar_url(mut user: AuthUser, service: RequestOrigin) -> AuthUser {
 	user.avatar = ImageRef {
 		url: service.cache_friendly_url(
 			format!("/api/v2/users/{}/avatar", user.id),
@@ -346,8 +347,8 @@ pub async fn auth_middleware(
 		matches!(request_uri.as_str(), "/api/graphql" | "/api/graphql/")
 			&& *req.method() == Method::GET;
 	let is_playground_allowed = cfg!(feature = "webui")
-		&& ctx.config.enable_webui
-		&& (ctx.config.enable_playground || cfg!(debug_assertions));
+		&& ctx.config.protocols.enable_webui
+		&& (ctx.config.protocols.enable_playground || cfg!(debug_assertions));
 	let is_playground = is_playground_request && is_playground_allowed;
 	#[cfg(feature = "komga")]
 	let is_komga_basic_auth = is_komga_basic_auth_path(&request_uri);
@@ -371,6 +372,7 @@ pub async fn auth_middleware(
 					authenticate_komga_api_key(Some(api_key), ctx.conn.as_ref())
 						.await
 						.map_err(|error| error.into_response())?;
+				record_device_sighting(&ctx, api_key, Protocol::Komga).await;
 				req_ctx.user = inject_avatar_url(req_ctx.user, service);
 				req.extensions_mut().insert(req_ctx);
 				return Ok(next.run(req).await);
@@ -419,7 +421,7 @@ pub async fn auth_middleware(
 			return Err(OPDSBasicAuth::new(
 				opds_version,
 				host_details.url(),
-				ctx.config.enable_webui,
+				ctx.config.protocols.enable_webui,
 			)
 			.into_response());
 		} else if is_playground {
@@ -465,6 +467,17 @@ pub async fn auth_middleware(
 	}
 
 	req_ctx.user = inject_avatar_url(req_ctx.user, service);
+
+	if let Some(api_key) = req_ctx.api_key.as_deref() {
+		let protocol = if is_komga_basic_auth {
+			Protocol::Komga
+		} else if is_opds {
+			Protocol::Opds
+		} else {
+			Protocol::Api
+		};
+		record_device_sighting(&ctx, api_key, protocol).await;
+	}
 
 	req.extensions_mut().insert(req_ctx);
 
@@ -513,12 +526,37 @@ pub async fn api_key_middleware(
 		.await
 		.map_err(|e| e.into_response())?;
 
+	// The middleware is mounted on the path-key routers only, so the mount
+	// prefix names the protocol.
+	let request_path = req.extensions().get::<OriginalUri>().map_or_else(
+		|| req.uri().path().to_owned(),
+		|uri| uri.0.path().to_owned(),
+	);
+	let protocol = match request_path.trim_start_matches('/').split('/').next() {
+		Some("kobo") => Protocol::Kobo,
+		Some("koreader") => Protocol::Koreader,
+		_ => Protocol::Opds,
+	};
+	record_device_sighting(&ctx, &api_key, protocol).await;
+
 	req.extensions_mut().insert(AuthContext {
 		user,
 		api_key: Some(api_key),
 	});
 
 	Ok(next.run(req).await)
+}
+
+/// Records that a device credential authenticated a request. The registry is
+/// best-effort: a failure is logged and never fails the request.
+async fn record_device_sighting(ctx: &AppState, api_key: &str, protocol: Protocol) {
+	if let Err(error) = ctx
+		.devices()
+		.touch(CredentialRef::ApiKey(api_key), protocol, None)
+		.await
+	{
+		tracing::warn!(?error, ?protocol, "Failed to record device sighting");
+	}
 }
 
 pub async fn validate_api_key(
@@ -591,7 +629,7 @@ pub async fn validate_api_key(
 /// A function to handle bearer token authentication. This function will verify the token and
 /// return the user if the token is valid.
 #[tracing::instrument(skip_all)]
-async fn handle_bearer_auth(
+pub(crate) async fn handle_bearer_auth(
 	token: String,
 	conn: &DatabaseConnection,
 ) -> APIResult<AuthContext> {

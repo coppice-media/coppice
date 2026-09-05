@@ -117,8 +117,8 @@ impl Guard for OptionalFeatureGuard {
 		let core = ctx.data::<CoreContext>()?;
 
 		let permitted = match self.feature {
-			OptionalFeature::Upload => core.config.enable_upload,
-			OptionalFeature::KoReader => core.config.enable_koreader_sync,
+			OptionalFeature::Upload => core.config.protocols.enable_upload,
+			OptionalFeature::KoReader => core.config.protocols.enable_koreader_sync,
 		};
 
 		if permitted {

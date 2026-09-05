@@ -42,7 +42,7 @@ fn resolve_database_url(config: &StumpConfig) -> String {
 
 	// Fall back to SQLite
 	let config_dir = config.get_config_dir();
-	if let Some(path) = config.db_path.clone() {
+	if let Some(path) = config.database.db_path.clone() {
 		format!("sqlite://{path}/stump.db?mode=rwc")
 	} else if cfg!(debug_assertions) {
 		format!("sqlite://{}/dev.db?mode=rwc", env!("CARGO_MANIFEST_DIR"))
@@ -52,16 +52,16 @@ fn resolve_database_url(config: &StumpConfig) -> String {
 }
 
 pub fn validate_pool_config(config: &StumpConfig) -> Result<(), CoreError> {
-	if config.db_max_connections == 0 {
+	if config.database.db_max_connections == 0 {
 		return Err(CoreError::InitializationError(format!(
 			"Invalid database pool configuration: db_max_connections must be greater than zero (got {})",
-			config.db_max_connections
+			config.database.db_max_connections
 		)));
 	}
-	if config.db_min_connections > config.db_max_connections {
+	if config.database.db_min_connections > config.database.db_max_connections {
 		return Err(CoreError::InitializationError(format!(
 			"Invalid database pool configuration: db_min_connections ({}) cannot exceed db_max_connections ({})",
-			config.db_min_connections, config.db_max_connections
+			config.database.db_min_connections, config.database.db_max_connections
 		)));
 	}
 
@@ -70,9 +70,9 @@ pub fn validate_pool_config(config: &StumpConfig) -> Result<(), CoreError> {
 
 fn sqlite_pool_options(config: &StumpConfig) -> SqlitePoolOptions {
 	SqlitePoolOptions::new()
-		.max_connections(config.db_max_connections)
-		.min_connections(config.db_min_connections)
-		.acquire_timeout(Duration::from_secs(config.db_timeout_secs))
+		.max_connections(config.database.db_max_connections)
+		.min_connections(config.database.db_min_connections)
+		.acquire_timeout(Duration::from_secs(config.database.db_timeout_secs))
 }
 
 fn postgres_connect_options(
@@ -80,9 +80,9 @@ fn postgres_connect_options(
 	config: &StumpConfig,
 ) -> sea_orm::ConnectOptions {
 	sea_orm::ConnectOptions::new(connection_url)
-		.max_connections(config.db_max_connections)
-		.min_connections(config.db_min_connections)
-		.acquire_timeout(Duration::from_secs(config.db_timeout_secs))
+		.max_connections(config.database.db_max_connections)
+		.min_connections(config.database.db_min_connections)
+		.acquire_timeout(Duration::from_secs(config.database.db_timeout_secs))
 		.to_owned()
 }
 
@@ -99,10 +99,10 @@ fn sqlite_connect_options(
 		// - maybe some sql magic (e.g., update sqlite_master set sql = replace(sql, 'collate NOCASE', 'collate NATURALSORT') WHERE type = 'table' AND name IN (...))
 		// - will need to verify ^ doesn't break comparisons where case matters, though
 		.collation("NATURALSORT", natord::compare)
-		.statement_cache_capacity(config.sqlite_statement_cache_capacity)
+		.statement_cache_capacity(config.database.sqlite_statement_cache_capacity)
 		// TODO(sqlite): do proper eval for NORMAL synchronous mode
 		// .synchronous(SqliteSynchronous::Normal)
-		.busy_timeout(Duration::from_secs(config.db_timeout_secs)))
+		.busy_timeout(Duration::from_secs(config.database.db_timeout_secs)))
 }
 
 pub async fn connect(config: &StumpConfig) -> Result<DatabaseConnection, CoreError> {
@@ -250,7 +250,7 @@ mod tests {
 	#[test]
 	fn rejects_zero_max_connections_before_connecting() {
 		let mut config = test_config();
-		config.db_max_connections = 0;
+		config.database.db_max_connections = 0;
 
 		let error = validate_pool_config(&config).expect_err("zero max must be rejected");
 		assert!(matches!(
@@ -264,8 +264,8 @@ mod tests {
 	#[test]
 	fn rejects_min_connections_above_max() {
 		let mut config = test_config();
-		config.db_max_connections = 2;
-		config.db_min_connections = 3;
+		config.database.db_max_connections = 2;
+		config.database.db_min_connections = 3;
 
 		let error =
 			validate_pool_config(&config).expect_err("min above max must be rejected");
@@ -280,9 +280,9 @@ mod tests {
 	#[test]
 	fn applies_pool_limits_to_sqlite_and_postgres_options() {
 		let mut config = test_config();
-		config.db_max_connections = 2;
-		config.db_min_connections = 1;
-		config.sqlite_statement_cache_capacity = 32;
+		config.database.db_max_connections = 2;
+		config.database.db_min_connections = 1;
+		config.database.sqlite_statement_cache_capacity = 32;
 
 		let sqlite_pool = sqlite_pool_options(&config);
 		assert_eq!(sqlite_pool.get_max_connections(), 2);

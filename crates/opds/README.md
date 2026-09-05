@@ -1,0 +1,94 @@
+# stump_opds
+
+## Purpose
+
+`stump_opds` is the OPDS 1.2 (+ Page Streaming Extension) and OPDS 2.0 route
+contract: `ProviderHost` (proxy-aware origin for absolute links), v2
+`BrowseParams`, the 32-method `OpdsBackend` trait (14 v1.2 + 18 v2.0), and the
+two unprefixed Axum route trees (`v1_router`, `v2_router`). Handlers do protocol extraction and
+dispatch only. The crate deliberately does **not** own the wire types (Atom/XML
+and JSON feed models stay in `core/src/opds/{v1_2,v2_0}`), authentication
+(mounted by `apps/server` with `auth_middleware` / `api_key_middleware`),
+database or media access, or reading-session writes. It carries no SeaORM
+dependency.
+
+## Reference / upstream
+
+| Reference | Pin | Used for |
+| --- | --- | --- |
+| OPDS 1.2 | <https://specs.opds.io/opds-1.2> | Atom catalog/acquisition feeds (`core/src/opds/v1_2/mod.rs:1-2`) |
+| OPDS Page Streaming Extension | <https://github.com/anansi-project/opds-pse/blob/master/v1.2.md> | `pse:count`/page links on `/books/{id}/pages/{page}` (`core/src/opds/v1_2/link.rs`) |
+| OPDS 2.0 draft | <https://drafts.opds.io/opds-2.0> | JSON catalog, groups, auth document (`core/src/opds/v2_0/mod.rs:1-3`) |
+| Readium Web Publication / locator | `application/vnd.readium.progression+json` | v2 `progression` GET/PUT body (`core/src/opds/v2_0/progression.rs`) |
+| Liseur (OPDS 1.2 client) | [`31f8182d`](https://github.com/chmouel/liseur/commit/31f8182d524e3536cf9020594185e709a033094f) | Only pinned real client; its `OpdsHttp.kt:93` accepts Atom only, so OPDS 2.0 is unreachable from it |
+
+Client-verification status (`docs/content/docs/developer/client-verification.mdx:26-27`,
+`clients.mdx:120-134`):
+
+| Client | Level | Notes |
+| --- | --- | --- |
+| Liseur OPDS 1.2 | **Device** (2026-09-04) | login, merged-library browse with covers, read, download; progress via separate KOReader pairing |
+| Liseur OPDS 2.0 | Not supported by the app | Stump serves a valid 2.0 catalog; Liseur has no `application/opds+json` parser |
+| Panels, Moon+ Reader, Librera | Upstream-guide claims only | Not this fork's verification; Librera shows file names instead of titles on 1.2 and cannot use 2.0 |
+
+No Hurl spec in `/home/al/Code/komga-compat` targets OPDS; `make replay` covers
+the Komga profile only.
+
+## Decisions
+
+| Decision | Why | Evidence |
+| --- | --- | --- |
+| Feature-only gate (`opds` Cargo feature, in `headless`); no runtime switch | OPDS is part of the base server contract; nothing to keep dormant | `apps/server/Cargo.toml` `opds = ["dep:stump_opds"]`; `apps/server/src/routers/mod.rs:89-92` |
+| Three mounts: `/opds/v1.2` (session/Basic), `/opds/{api_key}/v1.2` (key in path), `/opds/v2.0` (session/Basic); no v2 path-key alias | v1 alias exists for readers that cannot send headers; v2 path-key contract undefined | `apps/server/src/routers/opds_backend.rs:49-77`; `docs/content/docs/developer/standards.mdx:30` |
+| `ProviderHost` lives here, injected by the server's `HostExtractor` middleware | Absolute links must honour `X-Forwarded-*`; the crate must not depend on server middleware | `src/lib.rs:15-33`; `apps/server/src/routers/opds_backend.rs:28-47` |
+| `BrowseParams` mirrors Readium metadata query names and flattens `OffsetPagination` | v2 browse filters (`author`, `penciler`, … `teams`) are spec vocabulary | `src/lib.rs:35-51` |
+| v1.2 page GET writes progress only when `ENABLE_OPDS_PROGRESSION=true` (default `false`) | Readers preload pages; counting loads would corrupt progress | `apps/server/src/routers/opds_backend/v1_2.rs:788-830`; `core/src/config/protocols.rs:64-66` |
+| v2 `PUT /books/{id}/progression` is explicit: 204, 409 on stale `modified`, 400 on out-of-range page; unaffected by the switch | Timestamp-conflict rule shared with Komga Readium and liseur-sync | `apps/server/src/routers/opds_backend/v2_0.rs:1261-1363`; `docs/content/docs/developer/unified-reading-state.mdx:352-357` |
+| `GET /opds/v2.0/auth` is public and advertises Basic | OPDS 2 authentication-document flow | `core/src/opds/v2_0/authentication.rs:31-43` |
+| Facets, EPUB chapter/resource streaming, v1 strict mode not implemented | Open TODOs in core/adapter; not needed by any verified client | `core/src/opds/v2_0/mod.rs:20`; `apps/server/src/routers/opds_backend/v2_0.rs:1225-1227`; `v1_2.rs:731-736` |
+| Errors are the server's `APIError` (`{status,message}`, `no-store`); DB not-found → 404, other DB → 500 | Same shape as native routes | `apps/server/src/routers/opds_backend.rs:80`; `apps/server/src/errors.rs:140-183` |
+
+Route trees (`src/lib.rs:245-277`, `288-340`):
+
+| v1.2 (`/opds/v1.2`, `/opds/{api_key}/v1.2`) | v2.0 (`/opds/v2.0`) |
+| --- | --- |
+| `GET /catalog`, `/search`, `/search/feed`, `/keep-reading` | `GET /auth`, `/catalog`, `/search` |
+| `GET /libraries/`, `/libraries/{id}` | `GET /libraries/`, `/libraries/{id}/`, `/libraries/{id}/books/`, `/libraries/{id}/books/latest` |
+| `GET /series/`, `/series/latest`, `/series/{id}` | `GET /series/`, `/series/{id}/` |
+| `GET /books/`, `/books/latest` | `GET /books/browse`, `/books/latest`, `/books/keep-reading`, `/books/{id}/` |
+| `GET /books/{id}/thumbnail`, `/books/{id}/pages/{page}`, `/books/{id}/file/{filename}` | `GET /books/{id}/thumbnail`, `/books/{id}/pages/{page}`, `GET+PUT /books/{id}/progression`, `GET /books/{id}/file` |
+
+## Layout
+
+| File | Responsibility |
+| --- | --- |
+| `src/lib.rs` | `ProviderHost`, `BrowseParams`, `OpdsBackend`, `v1_routes`/`v2_routes`, `v1_router`/`v2_router`, extractor→backend wrappers |
+| `apps/server/src/routers/opds_backend.rs` | host injection, three mounts, `OpdsBackendImpl` forwarding to `v1_2`/`v2_0` handlers |
+| `apps/server/src/routers/opds_backend/v1_2.rs` | XML catalog/search/navigation, pagination, thumbnails, pages (optional progress side effect), acquisition |
+| `apps/server/src/routers/opds_backend/v2_0.rs` | auth document, JSON catalog/groups/browse, pages, progression GET/PUT, acquisition |
+| `core/src/opds/v1_2/` | Atom feed/entry/link/author/OpenSearch serializers |
+| `core/src/opds/v2_0/` | authentication, feed, group, link, metadata, publication, progression, `OPDSV2Error` |
+
+## How to verify
+
+```text
+cargo test -p stump_opds --lib --tests                # no unit tests today; compile proof
+cargo test -p stump_server --test api_tests opds      # 2 progression + 3 keep-reading integration tests
+cargo check -p stump_server --no-default-features --features minimal   # feature-off build (both trees absent)
+```
+
+Live probe against the fixture (`scripts/dev-fixture-server.sh`, base
+`http://127.0.0.1:25600`, credentials from the generated `ENDPOINTS.md`):
+`GET /opds/v1.2/catalog` with Basic → 200 `application/atom+xml`;
+`GET /opds/v2.0/auth` unauthenticated → 200 JSON; `GET /opds/v2.0/catalog`
+with Basic → 200 `application/opds+json`. Device evidence is the Liseur OPDS 1.2
+row in `client-verification.mdx`.
+
+## Deep docs
+
+- `docs/content/docs/developer/standards.mdx` (OPDS 1.2 / OPDS 2.0 tables) — one-screen contract summary.
+- `docs/content/docs/developer/provider-status.mdx` (OPDS section) — status per feature, auth variants, TODOs.
+- `docs/content/docs/developer/server-architecture.mdx` — feature profiles and `ENABLE_OPDS_PROGRESSION` default.
+- `docs/content/docs/developer/unified-reading-state.mdx` (OPDS projection) — progression mapping and conflict rule.
+- `docs/content/docs/developer/clients.mdx`, `client-verification.mdx` — Liseur OPDS rows and generic-reader claims.
+- `docs/content/docs/guides/features/opds.mdx` — user-facing URLs and reader compatibility table.

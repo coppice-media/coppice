@@ -29,7 +29,7 @@ pub(crate) async fn book_file(
 	book_id: String,
 	headers: HeaderMap,
 ) -> APIResult<Response> {
-	if !ctx.config.kobo_kepub_conversion {
+	if !ctx.config.protocols.kobo_kepub_conversion {
 		return serve_original(ctx, auth, book_id, headers).await;
 	}
 
@@ -73,7 +73,7 @@ pub(crate) async fn cache_path_for(
 		.and_then(|mtime| mtime.duration_since(UNIX_EPOCH).ok())
 		.map_or(0, |duration| duration.as_nanos());
 	let write_options = stump_kepub::WriteOptions {
-		deflate_level: ctx.config.kobo_kepub_deflate_level.clamp(1, 12),
+		deflate_level: ctx.config.protocols.kobo_kepub_deflate_level.clamp(1, 12),
 	};
 	let cache_dir = ctx.config.get_cache_dir().join("kepub");
 	let base_name = stump_kepub::cache_file_name(
@@ -122,7 +122,7 @@ pub(crate) async fn ensure_cached(
 	if let Err(error) = convert_epub_to_file(
 		&book.path,
 		&temporary_path,
-		ctx.config.kobo_kepub_deflate_level.clamp(1, 12),
+		ctx.config.protocols.kobo_kepub_deflate_level.clamp(1, 12),
 	)
 	.await
 	{

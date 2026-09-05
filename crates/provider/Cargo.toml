@@ -1,0 +1,35 @@
+[package]
+name = "stump_provider"
+version.workspace = true
+edition = "2021"
+description = "Remote source host: Mihon-shaped Source trait, Keiyoushi catalog, source health, bounded page cache, and provider-backed media materialisation"
+
+[features]
+default = []
+# Exposes the in-memory `MockSource` for router/integration tests in other crates.
+mock = []
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+futures.workspace = true
+governor = "0.6"
+md5.workspace = true
+models = { path = "../models", default-features = false }
+reqwest = { workspace = true, features = ["query"] }
+rust_decimal.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+stump_media = { path = "../media", default-features = false }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "time"] }
+tracing.workspace = true
+urlencoding.workspace = true
+uuid = { workspace = true, features = ["v5"] }
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tests = { path = "../tests" }
+tokio = { workspace = true, features = ["full"] }

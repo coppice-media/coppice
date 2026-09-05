@@ -1,4 +1,8 @@
 mod common;
+#[cfg(feature = "graphql")]
+mod device_pairing;
+#[cfg(all(feature = "graphql", feature = "liseur-sync"))]
+mod device_touch;
 #[cfg(feature = "readium")]
 mod epub;
 #[cfg(feature = "graphql")]

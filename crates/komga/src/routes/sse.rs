@@ -412,6 +412,32 @@ fn map_core_event(event: KomgaCoreEvent) -> Option<(EventVisibility, KomgaSseEve
 			},
 		)
 		.map(|event| (EventVisibility::Any, event)),
+		KomgaCoreEvent::ReadProgressChanged {
+			book_id,
+			series_id: _,
+			user_id,
+			deleted,
+		} => {
+			let visibility = EventVisibility::User(user_id.clone());
+			let event = if deleted {
+				KomgaSseEvent::from_payload(
+					"ReadProgressDeleted",
+					crate::sse::ReadProgressDeleted {
+						book_id: book_id.into(),
+						user_id: user_id.into(),
+					},
+				)
+			} else {
+				KomgaSseEvent::from_payload(
+					"ReadProgressChanged",
+					crate::sse::ReadProgressChanged {
+						book_id: book_id.into(),
+						user_id: user_id.into(),
+					},
+				)
+			};
+			event.map(|event| (visibility, event))
+		},
 		KomgaCoreEvent::Other => None,
 	}
 }

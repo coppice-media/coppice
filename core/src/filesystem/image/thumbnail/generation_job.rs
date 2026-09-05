@@ -5,16 +5,17 @@ use models::{
 	shared::image_processor_options::ImageProcessorOptions,
 };
 use sea_orm::{prelude::*, QuerySelect, QueryTrait};
+use stump_jobs::{
+	JobContext, JobError, JobLifecycle, JobOutputExt, JobProgress, JobTaskOutput,
+	WorkingState,
+};
 
 use crate::{
 	database::{chunk_vec_into, SQLITE_BIND_LIMIT},
 	filesystem::image::thumbnail::generate::{
 		safely_generate_batch, GenerateImageSource, GenerateThumbnailOptions,
 	},
-	job::{
-		error::JobError, JobContext, JobLifecycle, JobOutputExt, JobProgress,
-		JobTaskOutput, WorkingState,
-	},
+	job::JobServices,
 };
 
 // Note: I am type aliasing for the sake of clarity in what the provided Strings represent
@@ -131,6 +132,7 @@ impl ThumbnailGenerationJob {
 impl JobLifecycle for ThumbnailGenerationJob {
 	const NAME: &'static str = "thumbnail_generation";
 
+	type Context = JobServices;
 	type Output = ThumbnailGenerationOutput;
 	type Task = ThumbnailGenerationTask;
 
@@ -162,7 +164,7 @@ impl JobLifecycle for ThumbnailGenerationJob {
 
 	async fn init(
 		&mut self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 	) -> Result<WorkingState<Self::Output, Self::Task>, JobError> {
 		// If we aren't force regenerating thumbnails, we don't need to process books
 		// that already have their thumbnails set in the database
@@ -276,7 +278,7 @@ impl JobLifecycle for ThumbnailGenerationJob {
 
 	async fn execute_task(
 		&self,
-		ctx: &JobContext,
+		ctx: &JobContext<JobServices>,
 		task: Self::Task,
 	) -> Result<JobTaskOutput<Self>, JobError> {
 		let mut output = Self::Output::default();

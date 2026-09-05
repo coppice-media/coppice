@@ -1,0 +1,76 @@
+//! Environment variable names read by [`super::StumpConfig`] and its groups.
+
+// TODO(env): i think DatabaseConfig enum with e.g. SQLite and Postgres variants would be nice
+// TODO(postgres): the vars are not toml-supported atm, not sure if this really matters. i kept it
+// like that bc idk what to do about the password, and having all of the config except password in toml
+// felt funny? idk ill wait until someone complains maybe >:)
+// TODO(env): prefix with STUMP_ for consistency
+
+pub const CONFIG_DIR_KEY: &str = "STUMP_CONFIG_DIR";
+pub const IN_DOCKER_KEY: &str = "STUMP_IN_DOCKER";
+pub const PROFILE_KEY: &str = "STUMP_PROFILE";
+pub const IP_KEY: &str = "STUMP_IP";
+pub const PORT_KEY: &str = "STUMP_PORT";
+pub const VERBOSITY_KEY: &str = "STUMP_VERBOSITY";
+pub const PRETTY_LOGS_KEY: &str = "STUMP_PRETTY_LOGS";
+pub const LOG_DIR_KEY: &str = "STUMP_LOG_DIR";
+pub const COLORFUL_LOGS_KEY: &str = "STUMP_COLORFUL_LOGS";
+pub const DB_PATH_KEY: &str = "STUMP_DB_PATH";
+pub const DATABASE_URL_KEY: &str = "STUMP_DATABASE_URL";
+pub const DB_PASSWORD_KEY: &str = "STUMP_DB_PASSWORD";
+pub const DB_HOST_KEY: &str = "STUMP_DB_HOST";
+pub const DB_PORT_KEY: &str = "STUMP_DB_PORT";
+pub const DB_NAME_KEY: &str = "STUMP_DB_NAME";
+pub const DB_USER_KEY: &str = "STUMP_DB_USER";
+pub const DB_TIMEOUT_KEY: &str = "STUMP_DB_TIMEOUT_SECS";
+pub const DB_MAX_CONNECTIONS_KEY: &str = "STUMP_DB_MAX_CONNECTIONS";
+pub const DB_MIN_CONNECTIONS_KEY: &str = "STUMP_DB_MIN_CONNECTIONS";
+pub const SQLITE_STATEMENT_CACHE_CAPACITY_KEY: &str =
+	"STUMP_SQLITE_STATEMENT_CACHE_CAPACITY";
+pub const ENABLE_BACKGROUND_JOBS_KEY: &str = "STUMP_ENABLE_BACKGROUND_JOBS";
+pub const CLIENT_KEY: &str = "STUMP_CLIENT_DIR";
+pub const ENABLE_WEBUI_KEY: &str = "STUMP_ENABLE_WEBUI";
+pub const ORIGINS_KEY: &str = "STUMP_ALLOWED_ORIGINS";
+pub const PDFIUM_KEY: &str = "PDFIUM_PATH";
+pub const ENABLE_PLAYGROUND_KEY: &str = "STUMP_ENABLE_PLAYGROUND";
+pub const ENABLE_KOREADER_SYNC_KEY: &str = "ENABLE_KOREADER_SYNC";
+pub const ENABLE_KOBO_SYNC_KEY: &str = "ENABLE_KOBO_SYNC";
+pub const KOBO_KEPUB_CONVERSION_KEY: &str = "KOBO_KEPUB_CONVERSION";
+pub const KOBO_KEPUB_PRECONVERT_KEY: &str = "KOBO_KEPUB_PRECONVERT";
+pub const KOBO_KEPUB_CACHE_MAX_AGE_DAYS_KEY: &str = "KOBO_KEPUB_CACHE_MAX_AGE_DAYS";
+pub const KOBO_KEPUB_DEFLATE_LEVEL_KEY: &str = "KOBO_KEPUB_DEFLATE_LEVEL";
+pub const ENABLE_KOMGA_KEY: &str = "STUMP_ENABLE_KOMGA";
+pub const ENABLE_KAVITA_KEY: &str = "STUMP_ENABLE_KAVITA";
+
+pub const ENABLE_OPDS_PROGRESSION_KEY: &str = "ENABLE_OPDS_PROGRESSION";
+pub const HASH_COST_KEY: &str = "HASH_COST";
+pub const SESSION_TTL_KEY: &str = "SESSION_TTL";
+pub const ACCESS_TOKEN_TTL_KEY: &str = "ACCESS_TOKEN_TTL";
+pub const REFRESH_TOKEN_TTL_KEY: &str = "REFRESH_TOKEN_TTL";
+pub const SESSION_EXPIRY_INTERVAL_KEY: &str = "SESSION_EXPIRY_CLEANUP_INTERVAL";
+pub const MAX_IMAGE_UPLOAD_SIZE_KEY: &str = "STUMP_MAX_IMAGE_UPLOAD_SIZE";
+pub const ENABLE_UPLOAD_KEY: &str = "STUMP_ENABLE_UPLOAD";
+pub const MAX_FILE_UPLOAD_SIZE_KEY: &str = "STUMP_MAX_FILE_UPLOAD_SIZE";
+pub const PDF_RENDER_DPI_KEY: &str = "STUMP_PDF_RENDER_DPI";
+pub const PDF_MAX_DIMENSION_KEY: &str = "STUMP_PDF_MAX_DIMENSION";
+pub const PDF_RENDER_FORMAT_KEY: &str = "STUMP_PDF_RENDER_FORMAT";
+pub const PDF_CACHE_PAGES_KEY: &str = "STUMP_PDF_CACHE_PAGES";
+pub const PDF_PRERENDER_RANGE_KEY: &str = "STUMP_PDF_PRERENDER_RANGE";
+pub const PDF_HIGH_QUALITY_KEY: &str = "STUMP_PDF_HIGH_QUALITY";
+pub const OIDC_ENABLED_KEY: &str = "STUMP_OIDC_ENABLED";
+pub const OIDC_CLIENT_ID_KEY: &str = "STUMP_OIDC_CLIENT_ID";
+pub const OIDC_CLIENT_SECRET_KEY: &str = "STUMP_OIDC_CLIENT_SECRET";
+pub const OIDC_ISSUER_URL_KEY: &str = "STUMP_OIDC_ISSUER_URL";
+pub const OIDC_SCOPES_KEY: &str = "STUMP_OIDC_SCOPES";
+pub const OIDC_ALLOW_REGISTRATION_KEY: &str = "STUMP_OIDC_ALLOW_REGISTRATION";
+pub const OIDC_DISABLE_LOCAL_AUTH_KEY: &str = "STUMP_OIDC_DISABLE_LOCAL_AUTH";
+pub const OIDC_EXTRA_AUDIENCES_KEY: &str = "STUMP_OIDC_EXTRA_AUDIENCES";
+pub const OIDC_CA_CERT_FILE_KEY: &str = "STUMP_OIDC_CA_CERT_FILE";
+pub const TRUST_PROXY_HEADERS_KEY: &str = "STUMP_TRUST_PROXY_HEADERS";
+pub const PARALLELISM_MULTIPLIER_KEY: &str = "STUMP_PARALLELISM_MULTIPLIER";
+pub const INGEST_DROP_DIR_KEY: &str = "INGEST_DROP_DIR";
+pub const INGEST_STAGING_DIR_KEY: &str = "INGEST_STAGING_DIR";
+pub const INGEST_EDITOR_DIR_KEY: &str = "INGEST_EDITOR_DIR";
+pub const INGEST_PROGRESS_RETENTION_KEY: &str = "INGEST_PROGRESS_RETENTION";
+pub const ENABLE_PROVIDERS_KEY: &str = "STUMP_ENABLE_PROVIDERS";
+pub const PROVIDER_CACHE_MAX_BYTES_KEY: &str = "STUMP_PROVIDER_CACHE_MAX_BYTES";
