@@ -8778,6 +8778,7 @@ dependencies = [
  "quick-xml",
  "rand 0.9.2",
  "regex",
+ "reqwest 0.13.4",
  "ring",
  "rust_decimal",
  "sea-orm",

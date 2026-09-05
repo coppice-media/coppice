@@ -61,3 +61,4 @@ tarpaulin-report.html
 # The ingest editor is a SvelteKit app; upstream's lib/ and static patterns must not swallow its sources
 !/editor/src/lib/
 !/editor/static/
+/target-full/
