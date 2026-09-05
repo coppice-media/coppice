@@ -204,7 +204,13 @@ pub(crate) async fn user_dto(
 		user.has_permission(UserPermission::DownloadFile),
 	);
 	let secret = ctx.token_secret().await?;
-	let token = mint_token(&secret, &user.username, kavita_user_id, &roles)
+	let token = mint_token(
+		&secret,
+		&user.username,
+		kavita_user_id,
+		&roles,
+		api_key.as_deref(),
+	)
 		.map_err(|error| APIError::InternalServerError(error.to_string()))?;
 	Ok(UserDto {
 		id: kavita_user_id,

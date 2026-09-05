@@ -1,8 +1,15 @@
 use sea_orm_migration::prelude::*;
 
 /// Per-user Kavita on-deck removals: `POST /api/Series/remove-from-on-deck`
-/// records a series here and `GET`-time on-deck queries exclude it until the
-/// next read event clears the row (Kavita's `AppUserOnDeckRemoval`).
+/// records a Kavita series here and `GET`-time on-deck queries exclude it
+/// until the next read event clears the row (Kavita's `AppUserOnDeckRemoval`).
+///
+/// A Kavita series is a Stump series in Manga/Comic libraries and a single
+/// media item in Book/LightNovel libraries, so the row stores the target as
+/// `(target_kind, target_id)` with `target_kind` `series` or `media`. Neither
+/// target carries a foreign key: the Kavita read-event path deletes the row,
+/// and a row whose target has since been deleted hides nothing because the
+/// target no longer lists.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -12,38 +19,32 @@ impl MigrationTrait for Migration {
 		manager
 			.create_table(
 				Table::create()
-					.table(OnDeckRemovals::Table)
+					.table(KavitaOnDeckRemovals::Table)
 					.if_not_exists()
+					.col(ColumnDef::new(KavitaOnDeckRemovals::UserId).text().not_null())
 					.col(
-						ColumnDef::new(OnDeckRemovals::UserId)
+						ColumnDef::new(KavitaOnDeckRemovals::TargetKind)
 							.text()
-							.not_null()
-							.primary_key(),
+							.not_null(),
 					)
+					.col(ColumnDef::new(KavitaOnDeckRemovals::TargetId).text().not_null())
 					.col(
-						ColumnDef::new(OnDeckRemovals::SeriesId)
-							.text()
-							.not_null()
-							.primary_key(),
-					)
-					.col(
-						ColumnDef::new(OnDeckRemovals::CreatedAt)
+						ColumnDef::new(KavitaOnDeckRemovals::CreatedAt)
 							.timestamp_with_time_zone()
 							.not_null(),
 					)
-					.foreign_key(
-						ForeignKey::create()
-							.name("fk_on_deck_removals_user")
-							.from(OnDeckRemovals::Table, OnDeckRemovals::UserId)
-							.to(Users::Table, Users::Id)
-							.on_update(ForeignKeyAction::Cascade)
-							.on_delete(ForeignKeyAction::Cascade),
+					.primary_key(
+						Index::create()
+							.name("pk-kavita_on_deck_removals")
+							.col(KavitaOnDeckRemovals::UserId)
+							.col(KavitaOnDeckRemovals::TargetKind)
+							.col(KavitaOnDeckRemovals::TargetId),
 					)
 					.foreign_key(
 						ForeignKey::create()
-							.name("fk_on_deck_removals_series")
-							.from(OnDeckRemovals::Table, OnDeckRemovals::SeriesId)
-							.to(Series::Table, Series::Id)
+							.name("fk_kavita_on_deck_removals_user")
+							.from(KavitaOnDeckRemovals::Table, KavitaOnDeckRemovals::UserId)
+							.to(Users::Table, Users::Id)
 							.on_update(ForeignKeyAction::Cascade)
 							.on_delete(ForeignKeyAction::Cascade),
 					)
@@ -54,27 +55,22 @@ impl MigrationTrait for Migration {
 
 	async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
 		manager
-			.drop_table(Table::drop().table(OnDeckRemovals::Table).to_owned())
+			.drop_table(Table::drop().table(KavitaOnDeckRemovals::Table).to_owned())
 			.await
 	}
 }
 
 #[derive(DeriveIden)]
-enum OnDeckRemovals {
+enum KavitaOnDeckRemovals {
 	Table,
 	UserId,
-	SeriesId,
+	TargetKind,
+	TargetId,
 	CreatedAt,
 }
 
 #[derive(DeriveIden)]
 enum Users {
-	Table,
-	Id,
-}
-
-#[derive(DeriveIden)]
-enum Series {
 	Table,
 	Id,
 }

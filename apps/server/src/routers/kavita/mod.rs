@@ -93,7 +93,7 @@ async fn authenticate_bearer(
 					.map_err(|error| error.into_response())?;
 				return Ok(AuthContext {
 					user,
-					api_key: None,
+					api_key: claims.api_key.clone(),
 				});
 			}
 		}

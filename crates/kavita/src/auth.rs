@@ -25,6 +25,11 @@ pub struct KavitaClaims {
 	pub nbf: i64,
 	pub exp: i64,
 	pub iat: i64,
+	/// The Stump API key the token was minted from (`Plugin/authenticate`),
+	/// so `GET /api/Account` can echo `apiKey` the way Kavita does. Absent
+	/// for password logins: Stump stores keys hashed and cannot recover them.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub api_key: Option<String>,
 }
 
 impl KavitaClaims {
@@ -74,6 +79,7 @@ pub fn mint_token(
 	username: &str,
 	kavita_user_id: i32,
 	roles: &[String],
+	api_key: Option<&str>,
 ) -> Result<String, TokenError> {
 	let now = Utc::now();
 	let claims = KavitaClaims {
@@ -83,6 +89,7 @@ pub fn mint_token(
 		nbf: now.timestamp(),
 		exp: (now + TOKEN_TTL).timestamp(),
 		iat: now.timestamp(),
+		api_key: api_key.map(str::to_owned),
 	};
 	encode(
 		&Header::new(Algorithm::HS512),
@@ -118,7 +125,7 @@ mod tests {
 	fn mint_and_verify_round_trip() {
 		let secret = b"unit-test-secret";
 		let roles = roles_for(true, false);
-		let token = mint_token(secret, "admin", 7, &roles).unwrap();
+		let token = mint_token(secret, "admin", 7, &roles, Some("stump_k")).unwrap();
 		assert!(looks_like_jwt(&token));
 		let header = jsonwebtoken::decode_header(&token).unwrap();
 		assert_eq!(header.alg, Algorithm::HS512);
@@ -128,11 +135,17 @@ mod tests {
 		assert_eq!(claims.role, vec!["Admin", "Login", "Download"]);
 		assert_eq!(claims.exp - claims.iat, TOKEN_TTL.num_seconds());
 		assert_eq!(claims.nbf, claims.iat);
+		assert_eq!(claims.api_key.as_deref(), Some("stump_k"));
+
+		// Password logins mint without a key; older tokens without the claim
+		// still verify.
+		let bare = mint_token(secret, "admin", 7, &roles, None).unwrap();
+		assert_eq!(verify_token(secret, &bare).unwrap().api_key, None);
 	}
 
 	#[test]
 	fn rejects_foreign_secret_and_algorithm() {
-		let token = mint_token(b"a", "admin", 1, &[]).unwrap();
+		let token = mint_token(b"a", "admin", 1, &[], None).unwrap();
 		assert!(verify_token(b"b", &token).is_err());
 
 		let hs256 = encode(
@@ -144,6 +157,7 @@ mod tests {
 				nbf: 0,
 				exp: Utc::now().timestamp() + 60,
 				iat: 0,
+				api_key: None,
 			},
 			&EncodingKey::from_secret(b"a"),
 		)
