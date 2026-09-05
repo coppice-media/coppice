@@ -204,6 +204,10 @@ pub struct SettingDefinition {
 	pub required: bool,
 	/// Secret values are stored encrypted and never returned to clients.
 	pub secret: bool,
+	/// Optional URL where a user can obtain or manage the credential this
+	/// setting holds (e.g. the provider's API key page).  Surfaced as
+	/// `helpUrl` so the editor can link to it.
+	pub help_url: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

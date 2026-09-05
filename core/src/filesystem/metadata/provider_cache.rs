@@ -37,17 +37,26 @@ impl ProviderClientCache {
 			}
 		}
 
-		let encrypted_token = config
-			.encrypted_api_token
-			.as_ref()
-			.ok_or(ProviderCacheError::MissingApiToken)?;
-
-		let decrypted_token = decrypt_string(encrypted_token, &self.encryption_key)
-			.map_err(|e| ProviderCacheError::DecryptionFailed(e.to_string()))?;
-
 		let provider_type_str = config.provider_type.to_string();
-		let client = create_provider(&provider_type_str, decrypted_token)
-			.map_err(ProviderCacheError::ProviderCreationFailed)?;
+		let client = match &config.encrypted_api_token {
+			Some(encrypted_token) => {
+				let decrypted_token =
+					decrypt_string(encrypted_token, &self.encryption_key).map_err(
+						|e| ProviderCacheError::DecryptionFailed(e.to_string()),
+					)?;
+				create_provider(&provider_type_str, decrypted_token)
+					.map_err(ProviderCacheError::ProviderCreationFailed)?
+			},
+			None => {
+				// Keyless providers are constructed without credentials;
+				// anything that requires a token still fails here.
+				if metadata_integrations::requires_api_token(&provider_type_str) {
+					return Err(ProviderCacheError::MissingApiToken);
+				}
+				create_provider(&provider_type_str, String::new())
+					.map_err(ProviderCacheError::ProviderCreationFailed)?
+			},
+		};
 
 		let client_arc: Arc<dyn MetadataProvider + Send + Sync> = Arc::from(client);
 

@@ -41,6 +41,7 @@ pub const SETTING_ENABLED: &str = "enabled";
 pub const SETTING_BASE_URL: &str = "base_url";
 pub const SETTING_API_KEY: &str = "api_key";
 pub const SETTING_MODEL: &str = "model";
+pub const SETTING_EXTRA_INSTRUCTIONS: &str = "extra_instructions";
 
 /// Confidence assigned to every LLM-derived field.  Model output is plausible
 /// rather than authoritative, so it sits at the filename-parser level (0.6),
@@ -119,6 +120,7 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			default: Value::Bool(false),
 			required: false,
 			secret: false,
+			help_url: None,
 		},
 		SettingDefinition {
 			key: SETTING_BASE_URL,
@@ -128,6 +130,7 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			default: Value::String(String::new()),
 			required: true,
 			secret: false,
+			help_url: None,
 		},
 		SettingDefinition {
 			key: SETTING_MODEL,
@@ -137,15 +140,27 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			default: Value::String(String::new()),
 			required: true,
 			secret: false,
+			help_url: None,
 		},
 		SettingDefinition {
 			key: SETTING_API_KEY,
 			label: "API key",
-			description: "Bearer token; leave empty for local servers that need no authentication.",
+			description: "Bearer token; any OpenAI-compatible endpoint works — OpenAI (https://platform.openai.com/api-keys), DeepSeek (https://platform.deepseek.com), OpenRouter, or a local server like Ollama with an empty key.",
 			kind: SettingKind::String,
 			default: Value::String(String::new()),
 			required: false,
 			secret: true,
+			help_url: Some("https://platform.openai.com/api-keys"),
+		},
+		SettingDefinition {
+			key: SETTING_EXTRA_INSTRUCTIONS,
+			label: "Extra instructions",
+			description: "Free-form guidance appended to the system prompt, e.g. naming conventions like `Series - vNN`.",
+			kind: SettingKind::String,
+			default: Value::String(String::new()),
+			required: false,
+			secret: false,
+			help_url: None,
 		},
 	]
 });
@@ -155,6 +170,7 @@ struct LlmConfig {
 	base_url: String,
 	api_key: Option<String>,
 	model: String,
+	extra_instructions: Option<String>,
 }
 
 impl LlmConfig {
@@ -178,7 +194,19 @@ impl LlmConfig {
 			base_url,
 			api_key: string_setting(settings, SETTING_API_KEY),
 			model,
+			extra_instructions: string_setting(settings, SETTING_EXTRA_INSTRUCTIONS),
 		})
+	}
+}
+/// Compose the final system prompt: the base instruction block plus, when
+/// the library owner supplied `extra_instructions`, that text as a final
+/// paragraph under a fixed attribution header.
+fn compose_system_prompt(base: &str, extra_instructions: Option<&str>) -> String {
+	match extra_instructions {
+		Some(extra) => {
+			format!("{base}\n\nAdditional instructions from the library owner:\n{extra}")
+		},
+		None => base.to_string(),
 	}
 }
 
@@ -335,7 +363,10 @@ impl LlmProvider {
 		let content = self
 			.complete(
 				config,
-				IDENTIFY_SYSTEM_PROMPT,
+				&compose_system_prompt(
+					IDENTIFY_SYSTEM_PROMPT,
+					config.extra_instructions.as_deref(),
+				),
 				&user,
 				"book_metadata",
 				&METADATA_SCHEMA,
@@ -350,6 +381,36 @@ impl LlmProvider {
 	}
 
 	/// One strict-JSON chat completion; returns the parsed JSON content.
+	/// Verify the configured endpoint answers a minimal structured completion.
+	/// One cheap request; the model only has to echo `{"ok": true}`.
+	pub async fn verify(&self, settings: &SettingValues) -> Result<(), ProviderError> {
+		let config = LlmConfig::from_settings(settings)?;
+		let schema = json!({
+			"type": "object",
+			"properties": { "ok": { "type": "boolean" } },
+			"required": ["ok"],
+			"additionalProperties": false
+		});
+		let value = self
+			.complete(
+				&config,
+				"Respond only with JSON matching the requested schema.",
+				"Reply with {\"ok\": true}.",
+				"verify",
+				&schema,
+			)
+			.await?;
+		if value.get("ok").and_then(Value::as_bool) == Some(true) {
+			Ok(())
+		} else {
+			Err(ProviderError::Request {
+				provider_id: LLM_PROVIDER_ID.to_string(),
+				message: "model did not return the expected verification payload"
+					.to_string(),
+			})
+		}
+	}
+
 	async fn complete(
 		&self,
 		config: &LlmConfig,
@@ -638,7 +699,10 @@ impl IngestMetadataProvider for LlmProvider {
 		let content = self
 			.complete(
 				&config,
-				REFORMULATE_SYSTEM_PROMPT,
+				&compose_system_prompt(
+					REFORMULATE_SYSTEM_PROMPT,
+					config.extra_instructions.as_deref(),
+				),
 				&user,
 				"search_query",
 				&REFORMULATE_SCHEMA,
@@ -948,5 +1012,76 @@ mod tests {
 			.await
 			.unwrap_err();
 		assert!(matches!(error, ProviderError::NotConfigured { .. }));
+	}
+
+	#[tokio::test]
+	async fn extra_instructions_are_appended_to_system_prompt() {
+		let stub = spawn_stub(
+			"200 OK",
+			completion_body("{\"search_query\": \"saga chapter one 2024\"}"),
+		);
+		let provider = LlmProvider::new();
+		let mut values = settings(&stub.base_url);
+		values.insert(
+			SETTING_EXTRA_INSTRUCTIONS.to_string(),
+			json!("Series - vNN"),
+		);
+		provider.set_search_settings(values);
+
+		provider
+			.search(&SearchQuery {
+				text: "Saga 3.cbz".to_string(),
+				media_kind: None,
+				limit: 5,
+			})
+			.await
+			.expect("search succeeds");
+
+		let requests = captured_requests(&stub);
+		assert_eq!(requests.len(), 1);
+		let body = requests[0]
+			.rsplit("\r\n")
+			.next()
+			.expect("request has a body");
+		let payload: Value = serde_json::from_str(body).expect("body is JSON");
+		assert_eq!(
+			payload["messages"][0]["content"],
+			json!(format!(
+				"{REFORMULATE_SYSTEM_PROMPT}\n\nAdditional instructions from the library owner:\nSeries - vNN"
+			))
+		);
+	}
+
+	#[tokio::test]
+	async fn empty_extra_instructions_leave_system_prompt_unchanged() {
+		let stub = spawn_stub(
+			"200 OK",
+			completion_body("{\"search_query\": \"saga chapter one 2024\"}"),
+		);
+		let provider = LlmProvider::new();
+		let mut values = settings(&stub.base_url);
+		values.insert(SETTING_EXTRA_INSTRUCTIONS.to_string(), json!("   "));
+		provider.set_search_settings(values);
+
+		provider
+			.search(&SearchQuery {
+				text: "Saga 3.cbz".to_string(),
+				media_kind: None,
+				limit: 5,
+			})
+			.await
+			.expect("search succeeds");
+
+		let requests = captured_requests(&stub);
+		assert_eq!(requests.len(), 1);
+		let body = requests[0]
+			.rsplit("\r\n")
+			.next()
+			.expect("request has a body");
+		let payload: Value = serde_json::from_str(body).expect("body is JSON");
+		assert_eq!(
+			payload["messages"][0]["content"],
+			json!(REFORMULATE_SYSTEM_PROMPT)
+		);
 	}
 }

@@ -39,6 +39,7 @@ pub struct ProviderDescriptor {
 	/// String media names are retained for the GraphQL discovery surface.
 	pub supported_media_types: Vec<String>,
 	pub enabled_default: bool,
+	pub requires_api_token: bool,
 	pub settings: Vec<SettingDefinition>,
 }
 
@@ -47,23 +48,68 @@ struct IntegrationSpec {
 	name: &'static str,
 	provider_type: MetadataProvider,
 	media_types: &'static [MediaType],
+	/// Keyless providers work without credentials; their configuration rows
+	/// may carry an empty token (or none at all).
+	requires_api_token: bool,
+	enabled_default: bool,
 }
 
 const COMIC_VINE_MEDIA_TYPES: &[MediaType] = &[MediaType::Comic];
 const HARDCOVER_MEDIA_TYPES: &[MediaType] = &[MediaType::Book];
-/// Registry of the two currently registered remote integrations.
+const ANILIST_MEDIA_TYPES: &[MediaType] = &[MediaType::Manga, MediaType::LightNovel];
+const MAL_MEDIA_TYPES: &[MediaType] =
+	&[MediaType::Manga, MediaType::LightNovel, MediaType::Webtoon];
+const MANGADEX_MEDIA_TYPES: &[MediaType] = &[MediaType::Manga, MediaType::Manhwa];
+const MANGAUPDATES_MEDIA_TYPES: &[MediaType] =
+	&[MediaType::Manga, MediaType::Manhwa, MediaType::Webtoon];
 const INTEGRATIONS: &[IntegrationSpec] = &[
 	IntegrationSpec {
 		id: "comic_vine",
 		name: "ComicVine",
 		provider_type: MetadataProvider::ComicVine,
 		media_types: COMIC_VINE_MEDIA_TYPES,
+		requires_api_token: true,
+		enabled_default: false,
 	},
 	IntegrationSpec {
 		id: "hardcover",
 		name: "Hardcover",
 		provider_type: MetadataProvider::Hardcover,
 		media_types: HARDCOVER_MEDIA_TYPES,
+		requires_api_token: true,
+		enabled_default: false,
+	},
+	IntegrationSpec {
+		id: "anilist",
+		name: "AniList",
+		provider_type: MetadataProvider::AniList,
+		media_types: ANILIST_MEDIA_TYPES,
+		requires_api_token: false,
+		enabled_default: true,
+	},
+	IntegrationSpec {
+		id: "mal",
+		name: "MyAnimeList",
+		provider_type: MetadataProvider::Mal,
+		media_types: MAL_MEDIA_TYPES,
+		requires_api_token: true,
+		enabled_default: false,
+	},
+	IntegrationSpec {
+		id: "mangadex",
+		name: "MangaDex",
+		provider_type: MetadataProvider::MangaDex,
+		media_types: MANGADEX_MEDIA_TYPES,
+		requires_api_token: false,
+		enabled_default: true,
+	},
+	IntegrationSpec {
+		id: "mangaupdates",
+		name: "MangaUpdates",
+		provider_type: MetadataProvider::MangaUpdates,
+		media_types: MANGAUPDATES_MEDIA_TYPES,
+		requires_api_token: false,
+		enabled_default: true,
 	},
 ];
 
@@ -93,10 +139,16 @@ impl ProviderRegistry {
 	pub async fn catalog(&self) -> Vec<ProviderDescriptor> {
 		let configs = self.provider_configs().await;
 		let unknown_ids = self.unknown_plugin_ids().await;
-		let configured = |provider_type: MetadataProvider| {
+		let configured = |spec: &IntegrationSpec| {
 			configs.iter().any(|config| {
-				config.provider_type == provider_type
-					&& config.encrypted_api_token.is_some()
+				config.provider_type == spec.provider_type
+					&& if spec.requires_api_token {
+						config.encrypted_api_token.is_some()
+					} else {
+						// Keyless providers are "configured" as soon as an
+						// enabled configuration row exists.
+						config.enabled
+					}
 			})
 		};
 		let mut descriptors = vec![ProviderDescriptor {
@@ -118,6 +170,7 @@ impl ProviderRegistry {
 			],
 			enabled_default: true,
 			settings: self.embedded.settings().to_vec(),
+			requires_api_token: true,
 		}];
 		for spec in INTEGRATIONS {
 			let kinds = spec
@@ -143,7 +196,7 @@ impl ProviderRegistry {
 				name: spec.name.to_string(),
 				version: super::facade::INTEGRATION_PROVIDER_VERSION.to_string(),
 				available: true,
-				configured: configured(spec.provider_type),
+				configured: configured(spec),
 				capabilities: vec![
 					ProviderCapability::Identify,
 					ProviderCapability::Lookup,
@@ -155,7 +208,8 @@ impl ProviderRegistry {
 					.iter()
 					.map(|media_type| format!("{media_type:?}").to_uppercase())
 					.collect(),
-				enabled_default: false,
+				enabled_default: spec.enabled_default,
+				requires_api_token: spec.requires_api_token,
 				settings: Vec::new(),
 			});
 		}
@@ -181,6 +235,7 @@ impl ProviderRegistry {
 				"WEBTOON".to_string(),
 			],
 			enabled_default: false,
+			requires_api_token: true,
 			settings: llm.settings().to_vec(),
 		});
 		for id in unknown_ids {
@@ -194,6 +249,7 @@ impl ProviderRegistry {
 				supported_media_kinds: Vec::new(),
 				supported_media_types: Vec::new(),
 				enabled_default: false,
+				requires_api_token: true,
 				settings: Vec::new(),
 			});
 		}
@@ -275,7 +331,7 @@ impl ProviderRegistry {
 				);
 				continue;
 			}
-			if config.encrypted_api_token.is_none() {
+			if config.encrypted_api_token.is_none() && spec.requires_api_token {
 				tracing::debug!(
 					provider = spec.id,
 					"Skipping provider without credentials"
@@ -358,7 +414,7 @@ impl ProviderRegistry {
 				);
 				continue;
 			}
-			if config.encrypted_api_token.is_none() {
+			if config.encrypted_api_token.is_none() && spec.requires_api_token {
 				tracing::debug!(
 					provider = spec.id,
 					"Skipping provider without credentials"
@@ -424,7 +480,7 @@ impl ProviderRegistry {
 				provider_id: identity.provider_id.clone(),
 				message: "no metadata provider configuration exists".to_string(),
 			})?;
-		if config.encrypted_api_token.is_none() {
+		if config.encrypted_api_token.is_none() && spec.requires_api_token {
 			return Err(ProviderError::NotConfigured {
 				provider_id: identity.provider_id.clone(),
 				message: "API credentials are missing".to_string(),
@@ -443,10 +499,13 @@ impl ProviderRegistry {
 	pub async fn verify(
 		&self,
 		provider_id: &str,
-		_settings: &SettingValues,
+		settings: &SettingValues,
 	) -> Result<(), ProviderError> {
 		if provider_id == self.embedded.id() {
 			return Ok(());
+		}
+		if provider_id == super::llm::LLM_PROVIDER_ID {
+			return super::llm::LlmProvider::new().verify(settings).await;
 		}
 		let spec = INTEGRATIONS
 			.iter()
@@ -467,7 +526,7 @@ impl ProviderRegistry {
 				provider_id: provider_id.to_string(),
 				message: "no metadata provider configuration exists".to_string(),
 			})?;
-		if config.encrypted_api_token.is_none() {
+		if config.encrypted_api_token.is_none() && spec.requires_api_token {
 			return Err(ProviderError::NotConfigured {
 				provider_id: provider_id.to_string(),
 				message: "API credentials are missing".to_string(),
@@ -615,6 +674,10 @@ fn provider_id(provider: MetadataProvider) -> &'static str {
 	match provider {
 		MetadataProvider::ComicVine => "comic_vine",
 		MetadataProvider::Hardcover => "hardcover",
+		MetadataProvider::AniList => "anilist",
+		MetadataProvider::Mal => "mal",
+		MetadataProvider::MangaDex => "mangadex",
+		MetadataProvider::MangaUpdates => "mangaupdates",
 	}
 }
 
@@ -665,18 +728,59 @@ mod tests {
 			.iter()
 			.map(|descriptor| descriptor.id.as_str())
 			.collect();
-		assert_eq!(
-			ids,
-			vec!["builtin:embedded", "comic_vine", "hardcover", "llm"]
+		assert!(
+			ids.contains(&"builtin:embedded"),
+			"missing embedded provider: {ids:?}"
 		);
-		assert!(catalog[0].enabled_default);
+		assert!(
+			ids.windows(2).all(|pair| pair[0] < pair[1]),
+			"catalog must be sorted by id: {ids:?}"
+		);
+		for id in ["comic_vine", "hardcover", "anilist", "mal", "mangadex"] {
+			assert!(ids.contains(&id), "missing integration provider {id}");
+		}
 		// The llm provider is dormant until an ingest_plugin_setting row
 		// exists for it.
-		let llm = catalog.last().unwrap();
-		assert_eq!(llm.id, "llm");
+		let llm = catalog.iter().find(|d| d.id == "llm").unwrap();
 		assert!(!llm.enabled_default);
 		assert!(!llm.available);
 		assert!(!llm.configured);
+		// MAL keeps the token path: a client id is required and stored as
+		// the encrypted token, so it is unavailable until configured, and
+		// it is disabled by default.
+		let mal = catalog.iter().find(|d| d.id == "mal").unwrap();
+		assert_eq!(mal.name, "MyAnimeList");
+		assert!(mal.available);
+		assert!(!mal.configured);
+		assert!(!mal.enabled_default);
+		assert!(mal.requires_api_token);
+		assert!(mal.capabilities.contains(&ProviderCapability::Search));
+		// AniList is keyless: enabled by default, configured as soon as an
+		// enabled configuration row exists, and it never asks for a token.
+		let anilist = catalog.iter().find(|d| d.id == "anilist").unwrap();
+		assert_eq!(anilist.name, "AniList");
+		assert!(anilist.available);
+		assert!(!anilist.configured);
+		assert!(anilist.enabled_default);
+		assert!(!anilist.requires_api_token);
+		assert!(anilist.capabilities.contains(&ProviderCapability::Search));
+		assert_eq!(
+			anilist.supported_media_types,
+			vec!["MANGA".to_string(), "LIGHTNOVEL".to_string()]
+		);
+		// MangaDex is keyless like AniList and enabled by default; it covers
+		// manga and manhwa libraries.
+		let mangadex = catalog.iter().find(|d| d.id == "mangadex").unwrap();
+		assert_eq!(mangadex.name, "MangaDex");
+		assert!(mangadex.available);
+		assert!(!mangadex.configured);
+		assert!(mangadex.enabled_default);
+		assert!(!mangadex.requires_api_token);
+		assert!(mangadex.capabilities.contains(&ProviderCapability::Search));
+		assert_eq!(
+			mangadex.supported_media_types,
+			vec!["MANGA".to_string(), "MANHWA".to_string()]
+		);
 	}
 
 	#[test]

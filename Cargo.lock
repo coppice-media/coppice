@@ -9062,6 +9062,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "stump_watcher"
+version = "0.1.6"
+dependencies = [
+ "async-trait",
+ "notify 8.0.0",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "subtle"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

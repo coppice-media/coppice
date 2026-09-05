@@ -628,13 +628,18 @@ pub struct IngestProviderDescriptor {
 	pub capabilities: Vec<IngestProviderCapability>,
 	pub supported_media_types: Vec<String>,
 	pub enabled_by_default: bool,
+	/// Whether this provider needs an API credential; keyless providers can
+	/// be enabled without one.
+	pub requires_api_token: bool,
 	pub settings: Vec<IngestSettingDefinition>,
+	pub help_url: Option<String>,
 }
 
 impl From<stump_core::ingest::providers::ProviderDescriptor>
 	for IngestProviderDescriptor
 {
 	fn from(descriptor: stump_core::ingest::providers::ProviderDescriptor) -> Self {
+		let help_url = provider_help_url(&descriptor.id);
 		Self {
 			id: descriptor.id,
 			name: descriptor.name,
@@ -647,12 +652,30 @@ impl From<stump_core::ingest::providers::ProviderDescriptor>
 				.collect(),
 			supported_media_types: descriptor.supported_media_types,
 			enabled_by_default: descriptor.enabled_default,
+			requires_api_token: descriptor.requires_api_token,
 			settings: descriptor
 				.settings
 				.into_iter()
 				.map(IngestSettingDefinition::from)
 				.collect(),
+			help_url,
 		}
+	}
+}
+
+/// Where a user obtains or manages the credential for providers whose keys
+/// live in the encrypted `metadata_provider_configs` store rather than in
+/// ingest plugin settings.  Providers without a key (embedded, keyless
+/// remotes) resolve to `None`.
+fn provider_help_url(provider_id: &str) -> Option<String> {
+	const COMIC_VINE_HELP_URL: &str = "https://comicvine.gamespot.com/api/";
+	const HARDCOVER_HELP_URL: &str = "https://hardcover.app/account/api";
+	const MAL_HELP_URL: &str = "https://myanimelist.net/apiconfig";
+	match provider_id {
+		"comic_vine" => Some(COMIC_VINE_HELP_URL.to_string()),
+		"hardcover" => Some(HARDCOVER_HELP_URL.to_string()),
+		"mal" => Some(MAL_HELP_URL.to_string()),
+		_ => None,
 	}
 }
 
@@ -770,6 +793,7 @@ pub struct IngestSettingDefinition {
 	pub secret: bool,
 	pub default_value: Option<Json<Value>>,
 	pub description: Option<String>,
+	pub help_url: Option<String>,
 }
 
 impl From<SettingDefinition> for IngestSettingDefinition {
@@ -782,6 +806,7 @@ impl From<SettingDefinition> for IngestSettingDefinition {
 			secret: definition.secret,
 			default_value: Some(Json(definition.default)),
 			description: Some(definition.description.to_owned()),
+			help_url: definition.help_url.map(str::to_owned),
 		}
 	}
 }
@@ -805,7 +830,9 @@ fn settings_for_definitions(
 			let value = values.and_then(|values| values.get(&definition.key));
 			IngestProviderSetting {
 				key: definition.key.clone(),
-				configured: value.is_some_and(|value| !value.is_null()),
+				configured: value.is_some_and(|value| {
+					!value.is_null() && !value.as_str().is_some_and(str::is_empty)
+				}),
 				secret: definition.secret,
 				value: (!definition.secret)
 					.then(|| value.cloned().map(Json))

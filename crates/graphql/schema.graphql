@@ -1135,7 +1135,13 @@ type IngestProviderDescriptor {
 	capabilities: [IngestProviderCapability!]!
 	supportedMediaTypes: [String!]!
 	enabledByDefault: Boolean!
+	"""
+	Whether this provider needs an API credential; keyless providers can
+	be enabled without one.
+	"""
+	requiresApiToken: Boolean!
 	settings: [IngestSettingDefinition!]!
+	helpUrl: String
 }
 
 type IngestProviderSetting {
@@ -1233,6 +1239,7 @@ type IngestSettingDefinition {
 	secret: Boolean!
 	defaultValue: JSON
 	description: String
+	helpUrl: String
 }
 
 enum IngestSettingValueType {
@@ -2082,6 +2089,14 @@ enum MetadataProvider {
 	HARDCOVER
 	"ComicVine (https://comicvine.gamespot.com/api/)"
 	COMIC_VINE
+	"AniList (https://anilist.co)"
+	ANI_LIST
+	"MyAnimeList (https://myanimelist.net/apiconfig/references/api/v2)"
+	MAL
+	"MangaDex (https://api.mangadex.org)"
+	MANGA_DEX
+	"MangaUpdates (https://api.mangaupdates.com/v1)"
+	MANGA_UPDATES
 }
 
 type MetadataProviderConfigModel {

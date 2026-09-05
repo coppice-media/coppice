@@ -469,6 +469,14 @@ pub enum MetadataProvider {
 	Hardcover,
 	/// ComicVine (https://comicvine.gamespot.com/api/)
 	ComicVine,
+	/// AniList (https://anilist.co)
+	AniList,
+	/// MyAnimeList (https://myanimelist.net/apiconfig/references/api/v2)
+	Mal,
+	/// MangaDex (https://api.mangadex.org)
+	MangaDex,
+	/// MangaUpdates (https://api.mangaupdates.com/v1)
+	MangaUpdates,
 }
 
 impl MetadataProvider {
@@ -482,6 +490,20 @@ impl MetadataProvider {
 				LibraryType::LightNovel,
 			],
 			Self::ComicVine => &[LibraryType::Comic],
+			Self::AniList => &[LibraryType::Manga, LibraryType::LightNovel],
+			Self::Mal => &[
+				LibraryType::Manga,
+				LibraryType::LightNovel,
+				LibraryType::Manhwa,
+				LibraryType::Webtoon,
+			],
+			Self::MangaDex => &[LibraryType::Manga, LibraryType::Manhwa],
+			Self::MangaUpdates => &[
+				LibraryType::Manga,
+				LibraryType::LightNovel,
+				LibraryType::Manhwa,
+				LibraryType::Webtoon,
+			],
 		}
 	}
 }
