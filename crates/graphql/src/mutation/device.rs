@@ -1,6 +1,6 @@
-use async_graphql::{Context, Object, Result};
+use async_graphql::{Context, Object, Result, ID};
 use models::shared::enums::DeviceKind;
-use stump_devices::{Device as DeviceModel, IssuedCredential};
+use stump_devices::{Device as DeviceModel, IssuedCredential, LibraryScope};
 
 use crate::{
 	data::CoreContext,
@@ -83,6 +83,53 @@ impl DeviceMutation {
 		Ok(Device::from(
 			core.devices()
 				.set_transform_profile(user, &id, profile)
+				.await?,
+		))
+	}
+
+	/// Restricts the device to `library_ids`, or clears the restriction when
+	/// `library_ids` is null so the device inherits its user's visibility. The
+	/// scope is intersected with that visibility, so it can only narrow what
+	/// the device sees and never reveal a library the user cannot see; an
+	/// empty list is a device that sees nothing.
+	async fn set_device_library_scope(
+		&self,
+		ctx: &Context<'_>,
+		id: String,
+		library_ids: Option<Vec<ID>>,
+	) -> Result<Device> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+
+		let library_ids =
+			library_ids.map(|ids| ids.into_iter().map(|id| id.to_string()).collect());
+
+		Ok(Device::from(
+			core.devices()
+				.set_library_scope(user, &id, LibraryScope::from(library_ids))
+				.await?,
+		))
+	}
+
+	/// Sets the device's Amazon *Send to Kindle* address, or clears it when
+	/// `email` is null. A device with an address is a `sendToKindle` target;
+	/// one without cannot be sent to. The address is validated syntactically
+	/// before it is stored, but never verified with Amazon — only a delivery
+	/// can do that.
+	async fn set_device_kindle_email(
+		&self,
+		ctx: &Context<'_>,
+		id: String,
+		email: Option<String>,
+	) -> Result<Device> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+
+		Ok(Device::from(
+			core.devices()
+				.set_kindle_email(user, &id, email.as_deref())
 				.await?,
 		))
 	}

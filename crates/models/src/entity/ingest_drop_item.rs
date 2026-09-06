@@ -38,6 +38,11 @@ pub struct Model {
 	pub error: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub idempotency_key: Option<String>,
+	/// When the optional ingest preprocess hook last succeeded for this item.
+	/// `NULL` = never (including after a failed hook), which is what keeps the
+	/// hook to one successful run per item across retries and re-analysis.
+	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
+	pub preprocessed_at: Option<DateTimeWithTimeZone>,
 	pub revision: i32,
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]
 	pub created_at: DateTimeWithTimeZone,

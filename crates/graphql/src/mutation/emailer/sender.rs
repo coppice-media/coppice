@@ -194,7 +194,7 @@ async fn get_attachments(
 	Ok((attachments_meta_data, attachments))
 }
 
-async fn update_send_records(
+pub(crate) async fn update_send_records(
 	emailer: emailer::Model,
 	conn: &DatabaseConnection,
 	record_creates: Vec<emailer_send_record::ActiveModel>,
@@ -292,7 +292,7 @@ async fn book_to_attachment_with_content(
 	Ok((attachment_meta, attachment))
 }
 
-fn build_emailer_client_config(
+pub(crate) fn build_emailer_client_config(
 	encryption_key: String,
 	emailer: emailer::Model,
 ) -> Result<EmailerClientConfig> {
@@ -319,7 +319,7 @@ fn build_emailer_client_config(
 	})
 }
 
-async fn get_emailer(conn: &DatabaseConnection) -> Result<emailer::Model> {
+pub(crate) async fn get_emailer(conn: &DatabaseConnection) -> Result<emailer::Model> {
 	let emailer = emailer::Entity::find()
 		.filter(emailer::Column::IsPrimary.eq(true))
 		.one(conn)
@@ -368,7 +368,7 @@ async fn get_and_validate_recipients(
 	Ok(recipients)
 }
 
-async fn check_forbidden_recipients(
+pub(crate) async fn check_forbidden_recipients(
 	user: &AuthUser,
 	conn: &DatabaseConnection,
 	recipients: &[String],

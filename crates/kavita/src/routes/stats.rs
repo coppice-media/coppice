@@ -91,6 +91,9 @@ async fn stats_subject(
 		permissions: Vec::new(),
 		age_restriction: None,
 		preferences: None,
+		// The subject is another user, not the authenticated request: it
+		// carries no device and therefore no device scope.
+		device_library_scope: None,
 	})
 }
 

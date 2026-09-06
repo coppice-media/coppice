@@ -1,4 +1,5 @@
 pub(crate) mod annotation;
+mod annotation_attachment;
 mod api_key;
 mod author;
 mod book_club;
@@ -37,6 +38,7 @@ mod tag;
 pub(crate) mod user;
 
 use annotation::AnnotationQuery;
+use annotation_attachment::AnnotationAttachmentQuery;
 use api_key::APIKeyQuery;
 use author::AuthorQuery;
 use book_club::BookClubQuery;
@@ -131,7 +133,12 @@ struct ListQueries(
 );
 
 #[derive(async_graphql::MergedObject, Default)]
-struct DeviceQueries(DeviceQuery, ReadingStatsQuery, AnnotationQuery);
+struct DeviceQueries(
+	DeviceQuery,
+	ReadingStatsQuery,
+	AnnotationQuery,
+	AnnotationAttachmentQuery,
+);
 
 #[derive(async_graphql::MergedObject, Default)]
 pub struct Query(

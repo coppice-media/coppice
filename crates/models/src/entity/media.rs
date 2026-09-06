@@ -16,7 +16,8 @@ use crate::{
 	shared::enums::FileStatus,
 };
 
-use super::{library_exclusion, media_metadata, series, series_metadata, user::AuthUser};
+use super::{media_metadata, series, series_metadata};
+use crate::shared::visibility::VisibilityScope;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
@@ -170,36 +171,50 @@ fn apply_series_metadata_join(query: Select<Entity>) -> Select<Entity> {
 	)
 }
 
-fn apply_library_hidden_filter(query: Select<Entity>, user: &AuthUser) -> Select<Entity> {
-	query.filter(series::Column::LibraryId.not_in_subquery(
-		library_exclusion::Entity::library_hidden_to_user_query(user),
-	))
+fn apply_library_hidden_filter(
+	query: Select<Entity>,
+	scope: VisibilityScope<'_>,
+) -> Select<Entity> {
+	query.filter(scope.library_condition(series::Column::LibraryId))
 }
 
 impl Entity {
-	pub fn find_for_user(user: &AuthUser) -> Select<Entity> {
+	/// Books the request may see: the user's non-excluded libraries narrowed
+	/// by the authenticating device's scope, then the user's age restriction.
+	pub fn find_for_user<'a>(scope: impl Into<VisibilityScope<'a>>) -> Select<Entity> {
+		let scope = scope.into();
 		let select = Entity::find().left_join(media_metadata::Entity);
 		let select = apply_series_metadata_join(select);
-		let select = apply_library_hidden_filter(select, user);
-		apply_age_restriction_filter(select, user.age_restriction.clone())
+		let select = apply_library_hidden_filter(select, scope);
+		apply_age_restriction_filter(select, scope.user().age_restriction.clone())
 	}
 
-	pub fn apply_for_user(user: &AuthUser, select: Select<Entity>) -> Select<Entity> {
+	pub fn apply_for_user<'a>(
+		scope: impl Into<VisibilityScope<'a>>,
+		select: Select<Entity>,
+	) -> Select<Entity> {
+		let scope = scope.into();
 		let select = select.left_join(media_metadata::Entity);
 		let select = apply_series_metadata_join(select);
-		let select = apply_library_hidden_filter(select, user);
-		apply_age_restriction_filter(select, user.age_restriction.clone())
+		let select = apply_library_hidden_filter(select, scope);
+		apply_age_restriction_filter(select, scope.user().age_restriction.clone())
 	}
 
-	pub fn find_media_ids_for_user(id: String, user: &AuthUser) -> Select<Entity> {
-		Self::find_for_user(user)
+	pub fn find_media_ids_for_user<'a>(
+		id: String,
+		scope: impl Into<VisibilityScope<'a>>,
+	) -> Select<Entity> {
+		Self::find_for_user(scope)
 			.select_only()
 			.columns(vec![Column::Id, Column::Path])
 			.filter(Column::Id.eq(id))
 	}
 
-	pub fn find_for_series_id(user: &AuthUser, series_id: String) -> Select<Self> {
-		Self::find_for_user(user).filter(series::Column::Id.eq(series_id))
+	pub fn find_for_series_id<'a>(
+		scope: impl Into<VisibilityScope<'a>>,
+		series_id: String,
+	) -> Select<Self> {
+		Self::find_for_user(scope).filter(series::Column::Id.eq(series_id))
 	}
 }
 
@@ -242,18 +257,23 @@ impl ModelWithMetadata {
 			.left_join(media_metadata::Entity)
 	}
 
-	pub fn find_for_user(user: &AuthUser) -> Select<Entity> {
+	pub fn find_for_user<'a>(scope: impl Into<VisibilityScope<'a>>) -> Select<Entity> {
+		let scope = scope.into();
 		let select = ModelWithMetadata::find();
 		let select = apply_series_metadata_join(select);
-		let select = apply_library_hidden_filter(select, user);
-		apply_age_restriction_filter(select, user.age_restriction.clone())
+		let select = apply_library_hidden_filter(select, scope);
+		apply_age_restriction_filter(select, scope.user().age_restriction.clone())
 	}
 
-	pub fn find_by_id_for_user(id: String, user: &AuthUser) -> Select<Entity> {
+	pub fn find_by_id_for_user<'a>(
+		id: String,
+		scope: impl Into<VisibilityScope<'a>>,
+	) -> Select<Entity> {
+		let scope = scope.into();
 		let select = ModelWithMetadata::find_by_id(id);
 		let select = apply_series_metadata_join(select);
-		let select = apply_library_hidden_filter(select, user);
-		apply_age_restriction_filter(select, user.age_restriction.clone())
+		let select = apply_library_hidden_filter(select, scope);
+		apply_age_restriction_filter(select, scope.user().age_restriction.clone())
 	}
 }
 

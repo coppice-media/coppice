@@ -35,13 +35,17 @@ rows, QR flow) lives in `apps/server/src/routers/api/v2/device_pairing.rs` and
 | Liseur device tokens are bound to the device id (`liseur_sync_tokens.device_id`) | The liseur ops push only knows the token's device id and must reach the registry device | `src/credential.rs::liseur::mint`; `apps/server/src/routers/liseur_sync/storage.rs::record_device_sync` |
 | Default names are `"<Username>'s <Kind>"`, numbered on collision; names are unique per user | Rename also renames the credential row so API key lists stay readable | `src/service.rs::create_device`, `rename`; test `default_names_are_numbered_on_collision` |
 | Every `DeviceService` write transaction opens with `models::txn::begin_write` (SQLite `BEGIN IMMEDIATE`) | `create_device` and `rename` read (`existing_names`, `find_credential`) before they write, and a deferred `BEGIN` cannot promote that read snapshot to the write lock while a scan job holds it | `src/service.rs`; `crates/models/src/txn.rs` |
+| A device's `library_scope` is intersected with its owner's visibility, never unioned; `Only(vec![])` means the device sees nothing and `NULL` inherits. Entitlement deltas are recorded only for `DeviceKind::Kobo` | The scope must not become a way to hand a device a library its user cannot open, so it is an `AND` in the shared query funnel and ids are validated against the owner's libraries on write. Every protocol but Kobo re-queries visibility per request; Kobo's incremental sync would otherwise never notice a book that entered or left the scope | `src/scope.rs`, `src/service.rs::set_library_scope`, `record_entitlement_deltas`; `crates/models/src/shared/visibility.rs`; tests `empty_array_is_a_restriction_to_nothing`, `malformed_column_falls_back_to_inherit` |
+| A Kindle is an address (`devices.kindle_email`), not a `DeviceKind`: `record_delivery` writes `last_sync_at` + `last_sync_summary` and never `last_seen_at`; the address is validated syntactically and its domain is not pinned | A Kindle never authenticates — Stump mails a book out — so there is no credential to mint, no endpoint to describe, and no sighting to claim; Amazon runs several regional Send-to-Kindle domains and operators forward through their own hosts, so pinning `kindle.com` would refuse working setups | `src/kindle.rs`, `src/service.rs::{set_kindle_email,record_delivery}`; tests `kindle_email_round_trips_and_clears`, `kindle_email_rejects_malformed_addresses`, `record_delivery_writes_a_sync_summary_without_a_sighting`; lane in `crates/graphql/src/mutation/kindle.rs` |
 
 ## Layout
 
 | File | Responsibility |
 | --- | --- |
 | `src/lib.rs` | Re-exports; `liseur_token` helpers shared with the server storage |
-| `src/service.rs` | `DeviceService`: list/get/create/rename/rotate/revoke/transform profile, `device_for_credential`, `touch` with the in-memory debounce, endpoints |
+| `src/service.rs` | `DeviceService`: list/get/create/rename/rotate/revoke/transform profile, `set_library_scope`, `set_kindle_email`, `record_delivery`, `device_for_credential`, `touch` with the in-memory debounce, `authenticate`, endpoints |
+| `src/scope.rs` | `LibraryScope`: the `devices.library_scope` column ↔ `Inherit`/`Only(ids)` mapping |
+| `src/kindle.rs` | `KINDLE_EMAIL_PROTOCOL`, `KindleSendSummary`, `normalize_kindle_email`: the send-to-Kindle address and delivery summary |
 | `src/credential.rs` | `CredentialRef`, kind → protocol / credential kind / permissions maps, API key and liseur token minting |
 | `src/endpoint.rs` | `Endpoint::for_kind`: what to configure on each device kind |
 | `src/event.rs` | `DeviceSeen` |

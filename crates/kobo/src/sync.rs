@@ -1,11 +1,13 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use models::entity::{
-	kobo_sync_session,
+	device_entitlement_delta, kobo_sync_session,
 	media::{self},
 	reading_session,
 	user::AuthUser,
 };
+use models::shared::visibility::VisibilityScope;
 use sea_orm::Set;
+use std::collections::HashSet;
 
 use sea_orm::prelude::*;
 use sea_orm::query::*;
@@ -106,9 +108,19 @@ impl KoboSync {
 			None => query.column(media::Column::Id).into_tuple().all(db).await?,
 		};
 
-		// ReadingState updates are independent of media metadata changes. Include
-		// those books in the sync session so a state-only PUT can emit a
-		// ChangedReadingState item on the next device sync.
+		// Two things change what a device should see without touching
+		// `media.created_at` or `media.modified_at`, so both are folded into
+		// the session's id list here:
+		//
+		// - a ReadingState PUT, which is independent of media metadata, so a
+		//   state-only write can still emit a ChangedReadingState item; and
+		// - a book that entered this device's library scope, which did not
+		//   change at all — it only became visible (see
+		//   [`device_entitlement_delta`]).
+		//
+		// Books that *left* scope are deliberately absent: they no longer pass
+		// the visibility filter above, so [`SyncPage`] loads them separately
+		// and carries them as removals.
 		if let Some(previous_sync_at) = previous_sync_at {
 			let reading_state_media_ids = reading_session::Entity::find()
 				.select_only()
@@ -123,8 +135,28 @@ impl KoboSync {
 				.all(db)
 				.await?;
 			media_ids.extend(reading_state_media_ids);
+
+			if let Some(device_id) = device_id {
+				let entered_scope_media_ids = device_entitlement_delta::Entity::find()
+					.select_only()
+					.column(device_entitlement_delta::Column::MediaId)
+					.filter(device_entitlement_delta::Column::DeviceId.eq(device_id))
+					.filter(device_entitlement_delta::Column::Removed.eq(false))
+					.filter(
+						device_entitlement_delta::Column::CreatedAt.gte(previous_sync_at),
+					)
+					.into_tuple::<String>()
+					.all(db)
+					.await?;
+				media_ids.extend(entered_scope_media_ids);
+			}
+
 			media_ids.sort_unstable();
 			media_ids.dedup();
+		}
+
+		if let Some(device_id) = device_id {
+			Self::prune_entitlement_deltas(db, device_id, previous_sync_at).await?;
 		}
 
 		let sync_session = kobo_sync_session::ActiveModel {
@@ -147,6 +179,37 @@ impl KoboSync {
 		Ok(Self {
 			model: sync_session,
 		})
+	}
+
+	/// Drop the entitlement deltas a sync no longer needs to carry.
+	///
+	/// An incremental session supersedes the one that began at
+	/// `previous_sync_at`, and that session already handed the device every
+	/// transition older than its own window. A full sync starts from no device
+	/// state at all — the transitions describe movement relative to a session
+	/// the device is no longer resuming, and the whole in-scope set is about to
+	/// be re-sent — so every row for the device goes.
+	async fn prune_entitlement_deltas(
+		db: &DatabaseConnection,
+		device_id: &str,
+		previous_sync_at: Option<DateTimeWithTimeZone>,
+	) -> Result<(), sea_orm::DbErr> {
+		let mut delete = device_entitlement_delta::Entity::delete_many()
+			.filter(device_entitlement_delta::Column::DeviceId.eq(device_id));
+		if let Some(previous_sync_at) = previous_sync_at {
+			delete = delete
+				.filter(device_entitlement_delta::Column::CreatedAt.lt(previous_sync_at));
+		}
+
+		let res = delete.exec(db).await?;
+		if res.rows_affected != 0 {
+			tracing::debug!(
+				rows_affected = res.rows_affected,
+				"Pruned delivered Kobo entitlement deltas"
+			);
+		}
+
+		Ok(())
 	}
 
 	/// Advance the device's sync session by one page.
@@ -213,6 +276,7 @@ impl KoboSync {
 		Ok(SyncPage::new(
 			db,
 			user,
+			device_id.map(str::to_string),
 			session.model.id.clone(),
 			&session.model.media_ids.0,
 			offset,
@@ -227,6 +291,13 @@ impl KoboSync {
 pub struct SyncPage<'a> {
 	db: &'a DatabaseConnection,
 	user: &'a AuthUser,
+
+	/// the device whose credential authenticated the sync, when the request
+	/// identified one. Library-scope transitions are recorded per device (see
+	/// [`device_entitlement_delta`]); owned rather than borrowed because
+	/// [`KoboSync::next_page`] receives it with a lifetime unrelated to this
+	/// page's.
+	device_id: Option<String>,
 
 	/// an offset from the beginning of all the updates in this session.
 	offset: usize,
@@ -257,6 +328,7 @@ impl<'a> SyncPage<'a> {
 	fn new(
 		db: &'a DatabaseConnection,
 		user: &'a AuthUser,
+		device_id: Option<String>,
 		sync_id: String,
 		media_ids: &[String],
 		offset: usize,
@@ -273,6 +345,7 @@ impl<'a> SyncPage<'a> {
 		SyncPage {
 			db,
 			user,
+			device_id,
 
 			offset,
 			limit,
@@ -299,11 +372,11 @@ impl<'a> SyncPage<'a> {
 			.into_model::<MediaWithMetadataAndReadingSessions>()
 			.all(self.db)
 			.await?;
+		let entered_scope = self.entered_scope_ids().await?;
 
 		let mut sync_items = Vec::with_capacity(items.len());
 		for m in items {
-			let book_url =
-				format!("{}/v1/books/{}/file/epub", kobo_api_base_url, m.media.id);
+			let book_url = book_download_url(kobo_api_base_url, &m.media.id);
 			let format = download_format(&m.media.extension);
 
 			let created_since_last_sync = self
@@ -322,7 +395,9 @@ impl<'a> SyncPage<'a> {
 					})
 				});
 
-			if created_since_last_sync {
+			// A widening hands the device a book it has never held, however old
+			// the file is, so an entered-scope delta is newness too.
+			if created_since_last_sync || entered_scope.contains(&m.media.id) {
 				sync_items.push(SyncItem::NewEntitlement(
 					BookEntitlementContainer::from_media_with_format(m, book_url, format),
 				));
@@ -349,9 +424,12 @@ impl<'a> SyncPage<'a> {
 			}
 		}
 
-		// Shelves are page-independent, so they ride on the final page of a
-		// session: by then every entitlement they reference has been delivered.
+		// Removals and shelves are page-independent, so they ride on the final
+		// page of a session: by then every entitlement they reference has been
+		// delivered.
 		if !self.should_continue {
+			self.append_removed_entitlements(&mut sync_items, kobo_api_base_url)
+				.await?;
 			self.append_shelf_items(&mut sync_items).await?;
 		}
 
@@ -395,6 +473,95 @@ impl<'a> SyncPage<'a> {
 
 		Ok(())
 	}
+
+	/// The ids on this page that a library-scope widening made visible.
+	///
+	/// Nothing on the media row says the device has never held these books —
+	/// they may be years old and untouched — so the recorded delta is the only
+	/// evidence (see [`device_entitlement_delta`]). A full sync needs no
+	/// lookup: every book is new to the device there by definition.
+	async fn entered_scope_ids(&self) -> Result<HashSet<String>, DbErr> {
+		let (Some(device_id), Some(previous_sync_at)) =
+			(self.device_id.as_deref(), self.previous_sync_at)
+		else {
+			return Ok(HashSet::new());
+		};
+		if self.media_ids.is_empty() {
+			return Ok(HashSet::new());
+		}
+
+		let ids = device_entitlement_delta::Entity::find()
+			.select_only()
+			.column(device_entitlement_delta::Column::MediaId)
+			.filter(device_entitlement_delta::Column::DeviceId.eq(device_id))
+			.filter(device_entitlement_delta::Column::Removed.eq(false))
+			.filter(device_entitlement_delta::Column::CreatedAt.gte(previous_sync_at))
+			.filter(
+				device_entitlement_delta::Column::MediaId
+					.is_in(self.media_ids.iter().map(String::as_str)),
+			)
+			.into_tuple::<String>()
+			.all(self.db)
+			.await?;
+
+		Ok(ids.into_iter().collect())
+	}
+
+	/// Adds a `ChangedEntitlement` carrying `IsRemoved` for every book that
+	/// left this device's library scope inside the incremental window.
+	///
+	/// The books are loaded with [`VisibilityScope::inherit`] — the explicit
+	/// opt-out from the request's device scope — because the item describes a
+	/// book the *user* owns that this *device* may no longer see: the
+	/// device-scoped query cannot return it, that is what "removed" means. A
+	/// book the user genuinely lost, deleted or in a library they have
+	/// excluded, does not load and produces no item, which is right: there is
+	/// no metadata left to describe it with.
+	async fn append_removed_entitlements(
+		&self,
+		sync_items: &mut Vec<SyncItem>,
+		kobo_api_base_url: &str,
+	) -> Result<(), DbErr> {
+		let (Some(device_id), Some(previous_sync_at)) =
+			(self.device_id.as_deref(), self.previous_sync_at)
+		else {
+			return Ok(());
+		};
+
+		let removed_ids: Vec<String> = device_entitlement_delta::Entity::find()
+			.select_only()
+			.column(device_entitlement_delta::Column::MediaId)
+			.filter(device_entitlement_delta::Column::DeviceId.eq(device_id))
+			.filter(device_entitlement_delta::Column::Removed.eq(true))
+			.filter(device_entitlement_delta::Column::CreatedAt.gte(previous_sync_at))
+			.into_tuple()
+			.all(self.db)
+			.await?;
+		if removed_ids.is_empty() {
+			return Ok(());
+		}
+
+		let removed: Vec<MediaWithMetadataAndReadingSessions> =
+			MediaWithMetadataAndReadingSessions::find_by_ids_for_user(
+				&removed_ids,
+				VisibilityScope::inherit(self.user),
+			)
+			.filter(media::Column::Extension.is_in(self.extensions.iter().copied()))
+			.into_model::<MediaWithMetadataAndReadingSessions>()
+			.all(self.db)
+			.await?;
+
+		for m in removed {
+			let book_url = book_download_url(kobo_api_base_url, &m.media.id);
+			let format = download_format(&m.media.extension);
+			sync_items.push(SyncItem::ChangedEntitlement(
+				BookEntitlementContainer::from_media_with_format(m, book_url, format)
+					.into_removed(),
+			));
+		}
+
+		Ok(())
+	}
 }
 
 /// Formats a timestamp the way Kobo devices expect it: second-precision,
@@ -412,6 +579,14 @@ fn download_format(extension: &str) -> Format {
 	} else {
 		Format::KEPUB
 	}
+}
+
+/// Where a device downloads a book from. The path says `epub` whatever
+/// [`download_format`] advertises: Kobo discovers this URL during sync, and
+/// the host decides which bytes it serves there (see
+/// `kobo_backend::kepub::book_file`).
+fn book_download_url(kobo_api_base_url: &str, media_id: &str) -> String {
+	format!("{kobo_api_base_url}/v1/books/{media_id}/file/epub")
 }
 
 /// Projects a [`ShelfProjection`] into the Calibre-Web tag wire shape.
@@ -438,10 +613,11 @@ fn kobo_tag_container(shelf: ShelfProjection) -> KoboTagContainer {
 #[cfg(test)]
 mod tests {
 	use chrono::Days;
-	use models::entity::{kobo_sync_session, user};
+	use models::entity::{device, device_entitlement_delta, kobo_sync_session, user};
+	use models::shared::enums::DeviceKind;
 	use sea_orm::prelude::DateTimeWithTimeZone;
 	use sea_orm::query::*;
-	use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+	use sea_orm::{ActiveModelTrait, DbConn, EntityTrait, Set};
 	use tests::db::test_database;
 	use tests::fake_data;
 
@@ -670,6 +846,7 @@ mod tests {
 		let sync_page = SyncPage::new(
 			&db,
 			&user,
+			None,
 			"sync_1234".to_string(),
 			std::slice::from_ref(&new_book.id),
 			0,
@@ -719,6 +896,7 @@ mod tests {
 		let sync_page = SyncPage::new(
 			&db,
 			&user,
+			None,
 			"sync_1234".to_string(),
 			std::slice::from_ref(&new_book.id),
 			0,
@@ -1112,5 +1290,262 @@ mod tests {
 		assert!(tags[0]["DeletedTag"]["Tag"]["LastModified"].is_string());
 		let (_, items) = sync(Some(page.sync_token), 10).await;
 		assert!(tag_items(&items).is_empty());
+	}
+
+	/// The delta table has a foreign key on `devices.id`, so a scope change
+	/// needs a real device row behind it.
+	async fn insert_device(db: &DbConn, id: &str, user_id: &str) {
+		device::ActiveModel {
+			id: Set(id.to_string()),
+			user_id: Set(user_id.to_string()),
+			name: Set(id.to_string()),
+			kind: Set(DeviceKind::Kobo),
+			..Default::default()
+		}
+		.insert(db)
+		.await
+		.expect("failed to insert device");
+	}
+
+	/// What `DeviceService::set_library_scope` records when a device's
+	/// library scope moves a book in (`removed = false`) or out
+	/// (`removed = true`) of view.
+	async fn insert_scope_delta(
+		db: &DbConn,
+		device_id: &str,
+		media_id: &str,
+		removed: bool,
+		created_at: DateTimeWithTimeZone,
+	) {
+		device_entitlement_delta::ActiveModel {
+			device_id: Set(device_id.to_string()),
+			media_id: Set(media_id.to_string()),
+			removed: Set(removed),
+			created_at: Set(created_at),
+			..Default::default()
+		}
+		.insert(db)
+		.await
+		.expect("failed to insert entitlement delta");
+	}
+
+	/// A completed session the device is resuming from, timestamped so the
+	/// next sync's incremental window starts there.
+	async fn insert_previous_session(
+		db: &DbConn,
+		id: &str,
+		user_id: &str,
+		device_id: &str,
+		created_at: DateTimeWithTimeZone,
+	) {
+		let session = kobo_sync_session::ActiveModel {
+			id: Set(id.to_string()),
+			user_id: Set(user_id.to_string()),
+			media_ids: Set(kobo_sync_session::MediaIds(vec![])),
+			device_id: Set(device_id.to_string()),
+			device_metadata: Set(serde_json::json!({})),
+			..Default::default()
+		}
+		.insert(db)
+		.await
+		.expect("failed to insert prior sync");
+
+		let mut session: kobo_sync_session::ActiveModel = session.into();
+		session.created_at = Set(created_at);
+		session
+			.update(db)
+			.await
+			.expect("failed to timestamp prior sync");
+	}
+
+	/// Narrowing a device's library scope must tell it to drop what it lost.
+	/// The delta row is the only evidence: the departed book cannot pass the
+	/// device-scoped visibility filter any more, so it is absent from the
+	/// session's media ids and can only be described through
+	/// `VisibilityScope::inherit`.
+	#[tokio::test]
+	async fn test_narrowed_scope_removes_entitlement() {
+		let db = test_database().await;
+
+		let user = fake_data::User::new("ishmael").insert(&db).await;
+		let in_scope = fake_data::Library::default().insert(&db).await;
+		let out_of_scope = fake_data::Library::default().insert(&db).await;
+
+		let kept_series = fake_data::Series {
+			library_id: Some(in_scope.id.clone()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let dropped_series = fake_data::Series {
+			library_id: Some(out_of_scope.id.clone()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+
+		// both books predate the sync window: only the delta distinguishes them.
+		fake_data::Media {
+			series_id: kept_series.id,
+			id: Some("kept-book".to_string()),
+			created_at: Some("2025-01-01T00:00:00Z".parse().unwrap()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let dropped = fake_data::Media {
+			series_id: dropped_series.id,
+			id: Some("dropped-book".to_string()),
+			created_at: Some("2025-01-01T00:00:00Z".parse().unwrap()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+
+		let previous_sync_at: DateTimeWithTimeZone =
+			"2026-01-01T00:00:00Z".parse().unwrap();
+
+		// the request authenticated with a device now restricted to one library,
+		// which is what the auth middleware resolves onto the user.
+		let user = user::AuthUser {
+			id: user.id,
+			permissions: vec![],
+			device_library_scope: Some(vec![in_scope.id.clone()]),
+			..Default::default()
+		};
+		insert_device(&db, "kobo-1", &user.id).await;
+		insert_previous_session(&db, "previous", &user.id, "kobo-1", previous_sync_at)
+			.await;
+		insert_scope_delta(
+			&db,
+			"kobo-1",
+			&dropped.id,
+			true,
+			previous_sync_at.checked_add_days(Days::new(1)).unwrap(),
+		)
+		.await;
+
+		let sync_page = KoboSync::next_page(
+			&db,
+			&user,
+			Some("kobo-1"),
+			serde_json::json!({}),
+			Some(&SyncToken::CompletedV1 {
+				sync_id: "previous".to_string(),
+			}),
+			10,
+			EPUB_ONLY,
+		)
+		.await
+		.expect("failed to initiate sync");
+
+		// nothing the device can still see changed, and the departed book is
+		// deliberately not paged out as an ordinary entitlement.
+		assert!(sync_page.media_ids.is_empty());
+
+		let sync_items = sync_page
+			.sync_items("https://stump.example.org/")
+			.await
+			.expect("failed to retrieve sync items");
+
+		let removals: Vec<_> = sync_items
+			.iter()
+			.filter_map(|item| match item {
+				SyncItem::ChangedEntitlement(entitlement) => {
+					Some(&entitlement.book_entitlement)
+				},
+				_ => None,
+			})
+			.collect();
+		assert_eq!(removals.len(), 1);
+		assert_eq!(removals[0].id, dropped.id);
+		assert!(removals[0].is_removed);
+		// a removal is the ordinary entitlement with one flag flipped; the
+		// status is not what carries the removal.
+		assert_eq!(removals[0].status, "Active");
+
+		assert!(
+			!sync_items
+				.iter()
+				.any(|item| matches!(item, SyncItem::NewEntitlement(_))),
+			"a lost book must not also be advertised as new"
+		);
+	}
+
+	/// Widening a device's library scope is invisible to the incremental
+	/// window: the book did not change, it only became visible. The delta row
+	/// is what pulls it into the session and makes it a `NewEntitlement`
+	/// rather than nothing at all.
+	#[tokio::test]
+	async fn test_widened_scope_yields_new_entitlement() {
+		let db = test_database().await;
+
+		let user = fake_data::User::new("ishmael").insert(&db).await;
+		let library = fake_data::Library::default().insert(&db).await;
+		let series = fake_data::Series {
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+
+		let previous_sync_at: DateTimeWithTimeZone =
+			"2026-01-01T00:00:00Z".parse().unwrap();
+
+		// long since imported and untouched: no timestamp puts it in the window.
+		let old_book = fake_data::Media {
+			series_id: series.id,
+			id: Some("old-book".to_string()),
+			created_at: Some(previous_sync_at.checked_sub_days(Days::new(400)).unwrap()),
+			modified_at: Some(previous_sync_at.checked_sub_days(Days::new(300)).unwrap()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+
+		let user = user::AuthUser {
+			id: user.id,
+			permissions: vec![],
+			..Default::default()
+		};
+		insert_device(&db, "kobo-1", &user.id).await;
+		insert_previous_session(&db, "previous", &user.id, "kobo-1", previous_sync_at)
+			.await;
+		insert_scope_delta(
+			&db,
+			"kobo-1",
+			&old_book.id,
+			false,
+			previous_sync_at.checked_add_days(Days::new(1)).unwrap(),
+		)
+		.await;
+
+		let sync_page = KoboSync::next_page(
+			&db,
+			&user,
+			Some("kobo-1"),
+			serde_json::json!({}),
+			Some(&SyncToken::CompletedV1 {
+				sync_id: "previous".to_string(),
+			}),
+			10,
+			EPUB_ONLY,
+		)
+		.await
+		.expect("failed to initiate sync");
+
+		assert_eq!(vec![old_book.id.clone()], sync_page.media_ids);
+
+		let sync_items = sync_page
+			.sync_items("https://stump.example.org/")
+			.await
+			.expect("failed to retrieve sync items");
+
+		assert_eq!(sync_items.len(), 1);
+		let SyncItem::NewEntitlement(entitlement) = &sync_items[0] else {
+			panic!("expected a NewEntitlement")
+		};
+		assert_eq!(entitlement.book_entitlement.id, old_book.id);
+		assert!(!entitlement.book_entitlement.is_removed);
 	}
 }

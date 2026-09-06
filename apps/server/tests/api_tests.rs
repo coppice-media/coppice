@@ -13,6 +13,10 @@ mod kobo;
 mod komga;
 #[cfg(feature = "koreader")]
 mod koreader;
+#[cfg(any(feature = "komga", feature = "kavita", feature = "opds"))]
+mod library_scope;
+#[cfg(feature = "liseur-sync")]
+mod liseur;
 #[cfg(feature = "opds")]
 mod opds;
 #[cfg(feature = "graphql")]

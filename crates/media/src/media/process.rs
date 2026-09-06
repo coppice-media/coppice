@@ -18,7 +18,9 @@ use super::format::pdf::PdfProcessor;
 #[cfg(feature = "rar")]
 use super::format::rar::RarProcessor;
 use super::metadata::ProcessedMediaMetadata;
-use super::{format::epub::EpubProcessor, format::zip::ZipProcessor};
+use super::{
+	format::epub::EpubProcessor, format::mobi::MobiProcessor, format::zip::ZipProcessor,
+};
 
 /// A struct representing the options for processing a file. This is a subset of [`LibraryConfig`]
 /// and is used to pass options to the [`FileProcessor`] implementations.
@@ -156,6 +158,7 @@ enum ProcessorType {
 	Zip,
 	Rar,
 	Epub,
+	Mobi,
 	Pdf,
 }
 
@@ -180,6 +183,14 @@ fn determine_processor(path: &Path) -> Result<ProcessorType, FileError> {
 		("application/epub+zip", _) => Ok(ProcessorType::Epub),
 		("application/zip", "epub") => Ok(ProcessorType::Epub),
 		("application/pdf", _) => Ok(ProcessorType::Pdf),
+		// Every Kindle format is one `BOOKMOBI` Palm database, which is what
+		// `infer` reports; the extension only says which markup generation is
+		// inside, and one processor reads both.
+		("application/x-mobipocket-ebook" | "application/vnd.amazon.mobi8-ebook", _) => {
+			Ok(ProcessorType::Mobi)
+		},
+		// A `TEXtREAd` PalmDOC has no magic `infer` knows.
+		(_, "mobi" | "prc" | "azw" | "azw3") => Ok(ProcessorType::Mobi),
 		_ => Err(FileError::UnsupportedFileType(path.display().to_string())),
 	}
 }
@@ -206,6 +217,7 @@ macro_rules! dispatch_processor {
 				}
 			},
 			ProcessorType::Epub => EpubProcessor::$method($($arg),*),
+			ProcessorType::Mobi => MobiProcessor::$method($($arg),*),
 			ProcessorType::Pdf => {
 				#[cfg(feature = "pdf")]
 				{

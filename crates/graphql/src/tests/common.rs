@@ -27,6 +27,7 @@ pub fn get_default_user() -> AuthUser {
 		permissions: vec![],
 		age_restriction: None,
 		preferences: None,
+		device_library_scope: None,
 	}
 }
 

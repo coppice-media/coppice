@@ -350,6 +350,7 @@ mod tests {
 				pending_fields: Set(None),
 				error: Set(None),
 				idempotency_key: Set(None),
+				preprocessed_at: Set(None),
 				revision: Set(1),
 				created_at: NotSet,
 				updated_at: NotSet,

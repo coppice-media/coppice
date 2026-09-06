@@ -953,25 +953,37 @@ pub(crate) async fn plan(
 				let extensions = formats
 					.iter()
 					.flat_map(|format| extensions_for(*format))
-					.map(|ext| ext.to_owned())
+					.map(|ext| String::from(*ext))
 					.collect::<Vec<_>>();
-				let lowered =
-					SimpleExpr::from(Func::lower(media_col(media::Column::Extension)));
 				let unknown_formats = formats.contains(&MangaFormat::Unknown);
-				let mut media_condition = Expr::expr(lowered.clone()).is_in(extensions);
-				if unknown_formats {
-					let known = MangaFormat::ALL
-						.iter()
-						.flat_map(|format| extensions_for(*format))
-						.map(|ext| ext.to_owned())
-						.collect::<Vec<_>>();
-					media_condition =
-						media_condition.or(Expr::expr(lowered).is_not_in(known));
-				}
-				// Kavita filters on the series format (its first file); the
-				// series-level match is any media of that format.
+				let known = MangaFormat::ALL
+					.iter()
+					.flat_map(|format| extensions_for(*format))
+					.map(|ext| String::from(*ext))
+					.collect::<Vec<_>>();
+				// Kavita keys a series by format, so `Series.Format` is a
+				// single value; Stump reports the format of the series' first
+				// media (`SeriesInput::format`). The statement matches that
+				// file's extension, never any file's: a manga series holding a
+				// stray EPUB stays out of `Formats = Epub`.
 				groups.add(|target| {
-					negate_if(through_media(target, media_condition.clone()), negated)
+					let condition = match target {
+						Target::Series => first_media_format_condition(
+							&extensions,
+							unknown_formats,
+							&known,
+						),
+						// A book series *is* its media row.
+						Target::Book => extension_format_condition(
+							SimpleExpr::from(Func::lower(media_col(
+								media::Column::Extension,
+							))),
+							&extensions,
+							unknown_formats,
+							&known,
+						),
+					};
+					negate_if(condition, negated)
 				});
 			},
 			SeriesFilterField::ReleaseYear => {
@@ -1228,6 +1240,85 @@ fn extensions_for(format: MangaFormat) -> &'static [&'static str] {
 	}
 }
 
+/// A format statement over one already-lowered extension expression: the
+/// wanted extensions, plus everything Stump cannot classify when the
+/// statement asks for `Unknown`.
+fn extension_format_condition(
+	extension: SimpleExpr,
+	extensions: &[String],
+	unknown_formats: bool,
+	known: &[String],
+) -> SimpleExpr {
+	let condition = Expr::expr(extension.clone()).is_in(extensions.to_vec());
+	if unknown_formats {
+		condition.or(Expr::expr(extension).is_not_in(known.to_vec()))
+	} else {
+		condition
+	}
+}
+
+/// The format of a grouped series: the extension of its *first* media, the
+/// same file `SeriesInput::format` reports. `mapper::sort_media` orders media
+/// by volume number (falling back to an integral chapter number, else the
+/// media's 1-based position in name order) and then by name, so the ordering
+/// is rebuilt here with window functions.
+fn first_media_format_condition(
+	extensions: &[String],
+	unknown_formats: bool,
+	known: &[String],
+) -> SimpleExpr {
+	let placeholders = |count: usize| vec!["?"; count].join(", ");
+	let mut predicate =
+		format!(r#""first"."ext" IN ({})"#, placeholders(extensions.len()));
+	let mut values = extensions
+		.iter()
+		.map(|ext| Value::from(ext.clone()))
+		.collect::<Vec<_>>();
+	if unknown_formats {
+		predicate.push_str(&format!(
+			r#" OR "first"."ext" NOT IN ({})"#,
+			placeholders(known.len())
+		));
+		values.extend(known.iter().map(|ext| Value::from(ext.clone())));
+	}
+	Expr::cust_with_values(
+		format!(
+			r#""series"."id" IN (
+	SELECT "first"."series_id" FROM (
+		SELECT
+			"ranked"."series_id" AS "series_id",
+			"ranked"."ext" AS "ext",
+			ROW_NUMBER() OVER (
+				PARTITION BY "ranked"."series_id"
+				ORDER BY "ranked"."number", "ranked"."name"
+			) AS "position"
+		FROM (
+			SELECT
+				"m"."series_id" AS "series_id",
+				LOWER("m"."extension") AS "ext",
+				"m"."name" AS "name",
+				CASE
+					WHEN "mm"."volume" > 0 THEN "mm"."volume"
+					WHEN CAST("mm"."number" AS REAL) > 0
+						AND CAST("mm"."number" AS REAL)
+							= CAST(CAST("mm"."number" AS INTEGER) AS REAL)
+						THEN CAST("mm"."number" AS INTEGER)
+					ELSE ROW_NUMBER() OVER (
+						PARTITION BY "m"."series_id" ORDER BY "m"."name"
+					)
+				END AS "number"
+			FROM "media" AS "m"
+			LEFT JOIN "media_metadata" AS "mm" ON "mm"."media_id" = "m"."id"
+			WHERE "m"."deleted_at" IS NULL AND "m"."series_id" IS NOT NULL
+		) AS "ranked"
+	) AS "first"
+	WHERE "first"."position" = 1 AND ({predicate})
+)"#
+		),
+		values,
+	)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1264,5 +1355,116 @@ mod tests {
 				assert_eq!(PublicationStatus::from_status_text(Some(spelling)), *status);
 			}
 		}
+	}
+
+	/// `kavita-ref` `25620`: `Formats Contains 3` lists the EPUB *series*, not
+	/// every series that happens to hold an EPUB file. Kavita keys a series by
+	/// format; Stump reports the first media's format, so a manga series with
+	/// one stray EPUB keeps its `Archive` format and stays out.
+	#[tokio::test]
+	async fn formats_match_the_series_own_format() {
+		use crate::dto::MangaFormat;
+		use crate::filter::SeriesFilterStatementDto;
+		use crate::routes::series::{list_series, UserParams};
+		use crate::test_support::{
+			auth_user, db, library_of_type, series_with_files, TestBackend,
+		};
+		use models::shared::enums::LibraryType as StumpLibraryType;
+
+		let conn = db().await;
+		let user_row = ::tests::fake_data::User::new("reader").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let manga = library_of_type(&conn, StumpLibraryType::Manga).await;
+		let books = library_of_type(&conn, StumpLibraryType::Book).await;
+		series_with_files(
+			&conn,
+			&manga.id,
+			"Mixed",
+			&[("v01", "cbz", 20), ("v02", "epub", 20)],
+		)
+		.await;
+		series_with_files(&conn, &books.id, "Shelf", &[("alice", "epub", 15)]).await;
+		// Volume metadata, not the file name, decides which file is first: the
+		// EPUB sorts first by name but is volume 2.
+		let (_, volumes) = series_with_files(
+			&conn,
+			&manga.id,
+			"Volumed",
+			&[("a-extra", "epub", 20), ("b-main", "cbz", 20)],
+		)
+		.await;
+		for (media, volume) in volumes.iter().zip([2, 1]) {
+			models::entity::media_metadata::ActiveModel {
+				media_id: sea_orm::ActiveValue::Set(Some(media.id.clone())),
+				volume: sea_orm::ActiveValue::Set(Some(volume)),
+				..Default::default()
+			}
+			.insert(&conn)
+			.await
+			.unwrap();
+		}
+		let backend = TestBackend::new(conn);
+
+		let listed = |comparison: FilterComparison, formats: &str| {
+			let filter = SeriesFilterV2Dto {
+				statements: vec![SeriesFilterStatementDto {
+					comparison,
+					field: SeriesFilterField::Formats.into(),
+					value: formats.to_owned(),
+				}],
+				..Default::default()
+			};
+			let backend = &backend;
+			let user = &user;
+			async move {
+				list_series(backend, user, &filter, UserParams::parse(""), None, None)
+					.await
+					.unwrap()
+					.0
+			}
+		};
+
+		let epub = listed(
+			FilterComparison::Contains,
+			&(MangaFormat::Epub as i32).to_string(),
+		)
+		.await;
+		assert_eq!(
+			epub.iter().map(|dto| dto.name.as_str()).collect::<Vec<_>>(),
+			["alice"],
+			"the mixed manga series is not an EPUB series"
+		);
+		assert_eq!(epub[0].format, MangaFormat::Epub);
+
+		let archive = listed(
+			FilterComparison::Contains,
+			&(MangaFormat::Archive as i32).to_string(),
+		)
+		.await;
+		assert_eq!(
+			archive
+				.iter()
+				.map(|dto| (dto.name.as_str(), dto.format))
+				.collect::<Vec<_>>(),
+			[
+				("Mixed", MangaFormat::Archive),
+				("Volumed", MangaFormat::Archive)
+			],
+			"a series keeps the format of its first file, volume order first"
+		);
+
+		// The negated form is the complement over the same series format.
+		let not_epub = listed(
+			FilterComparison::NotContains,
+			&(MangaFormat::Epub as i32).to_string(),
+		)
+		.await;
+		assert_eq!(
+			not_epub
+				.iter()
+				.map(|dto| dto.name.as_str())
+				.collect::<Vec<_>>(),
+			["Mixed", "Volumed"]
+		);
 	}
 }

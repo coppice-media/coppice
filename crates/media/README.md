@@ -3,8 +3,9 @@
 ## Purpose
 
 File and image processing for Stump: the per-format `FileProcessor`
-implementations (`ZipProcessor`, `EpubProcessor`, `PdfProcessor` behind `pdf`,
-`RarProcessor` behind `rar`), `ContentType` detection, the unified `FileError`,
+implementations (`ZipProcessor`, `EpubProcessor`, `MobiProcessor`,
+`PdfProcessor` behind `pdf`, `RarProcessor` behind `rar`), `ContentType`
+detection, the unified `FileError`,
 Stump's sampled SHA-256 and the KOReader partial-MD5 hashes, Readium Web
 Publication Manifest generation, bounded EPUB text search, image resize /
 thumbnail / colour / ThumbHash primitives, `series.json` parsing, and the
@@ -23,6 +24,7 @@ stays in `core/src/filesystem/`, and the scanner walker lives in
 | Readium Web Publication Manifest | `src/media/readium.rs` | Manifest, positions, `/resource/` URL encoding consumed by `apps/server` readium routes and the Komga/Kavita adapters |
 | PDFium | `pdfium-render 0.9.1` (`Cargo.toml:28`), library loaded from `MediaConfig.pdfium_path` (`PDFIUM_PATH`) | Only PDF backend; see `docs/content/docs/developer/server-architecture.mdx:239-243` |
 | DRM/encryption markers | EPUB 3.3 §4.2.6.3.2 / §4.4.5 <https://www.w3.org/TR/epub-33/>; epubcheck `OCFEncryptionFileHandler` <https://github.com/w3c/epubcheck>; MobileRead <https://wiki.mobileread.com/wiki/MOBI> and <https://wiki.mobileread.com/wiki/PDB>; ISO 32000-1 §7.5.5; DeDRM_tools `v10.0.3` (`epubtest.py` is Unlicense) | Documented byte/path markers only, reimplemented in `src/drm.rs`; no GPL code is copied and nothing here decrypts anything. Prose in `docs/content/docs/developer/calibre-tooling.mdx` |
+| MOBI / KF8 | MobileRead <https://wiki.mobileread.com/wiki/MOBI>, <https://wiki.mobileread.com/wiki/PDB>, <https://wiki.mobileread.com/wiki/PalmDOC>, <https://wiki.mobileread.com/wiki/KF8>; HUFF/CDIC and KF8 skeleton/fragment notes from Kindling's `README.md` (MIT, <https://github.com/ciscoriordan/kindling>, linked from the MobileRead MOBI page as further format documentation) | `src/media/format/mobi.rs` is clean-room from those descriptions plus the record bytes of the committed fixtures; nothing is derived from calibre, KindleUnpack, libmobi or boko, and every structure cites the page it comes from |
 
 ## Decisions
 
@@ -46,6 +48,11 @@ stays in `core/src/filesystem/`, and the scanner walker lives in
 | `src/drm.rs` detects protection but never removes it, and treats the two font-obfuscation algorithms as *not* DRM | `META-INF/encryption.xml` is also how EPUB font obfuscation is declared, so flagging its mere presence would fail every obfuscated-font book; epubcheck classifies exactly `http://www.idpf.org/2008/embedding` and `http://ns.adobe.com/pdf/enc#RC` as font mangling and everything else as encryption it cannot decrypt | `src/drm.rs` `FONT_OBFUSCATION_ALGORITHMS`, `font_obfuscation_only_is_not_drm`, `content_encryption_without_a_vendor_marker_is_reported` |
 | A MOBI/AZW verdict comes from the PalmDOC encryption type (and the MOBI DRM key block), never from EXTH `209` alone | EXTH 209/1/2/3 survive in DRM-free Amazon files, while encryption type `0` proves the text records are plaintext; the EXTH types are still recorded as evidence | `src/drm.rs` `detect_mobi_drm`/`mobi_exth_drm_records`, `unencrypted_mobi_is_not_drm_even_with_tamper_proof_keys` |
 | Containers are sniffed by magic bytes, and a `{adept}user` UUID is deliberately never recorded | A MOBI named `.epub` must still be classified; the ADEPT user UUID identifies the purchaser's account and quality reports are persisted evidence | `src/drm.rs` `detect_drm`/`adept_encrypted_key`, `detect_drm_dispatches_on_container_magic_not_extension` |
+| One `MobiProcessor` reads MOBI 6 and KF8, and a dual-format file is read through its KF8 half | Both are the same Palm database and `infer` reports both as `application/x-mobipocket-ebook`; EXTH `121` names the KF8 boundary, and every record number in that part's header is relative to it | `src/media/format/mobi.rs` `MobiBook::open`, `a_dual_format_file_reads_its_kf8_half` |
+| A Kindle page count is the section count, not a synthetic byte budget like an EPUB's | A Kindle book is one compressed text stream: there is no per-document compressed size to divide, and the reassembled sections already *are* the reading unit | `src/media/format/mobi.rs` `get_page_count`; contrast `src/media/format/epub.rs` `spine_page_budget` |
+| The PalmDOC header's `text length` is recorded but never used to truncate | A KF8 producer may count only the markup flow, leaving the style-sheet flow past the declared end; `FDST` delimits KF8 flows and `</body>` delimits MOBI 6 content | `src/media/format/mobi.rs` `read_text`, `kf8_sections_are_reassembled_from_the_skeleton_and_fragment_indices` |
+| MOBI 6 splitting and link rewriting work on raw bytes, not on decoded text | A `filepos` link is a *byte* offset into the text; decoding CP1252 first moves every offset past the first non-ASCII character | `src/media/format/mobi.rs` `build_mobi6_sections`, `mobi6_recindex_images_and_filepos_links_are_rewritten`, `cp1252_text_is_decoded_through_the_windows_high_block` |
+| A protected Kindle file is refused with `FileError::DrmProtected` carrying `detect_mobi_drm`'s own reason, and the KF8 half's encryption type is checked separately | Its text records are ciphertext, so decompressing them yields garbage rather than a book; the detector only reads record 0 | `src/media/format/mobi.rs` `MobiBook::open`, `a_drm_protected_book_is_refused_with_the_detectors_reason` |
 
 ## Layout
 
@@ -53,7 +60,8 @@ stays in `core/src/filesystem/`, and the scanner walker lives in
 | --- | --- |
 | `src/lib.rs` | Module tree, re-exports, async `resize_image`, `MediaConfig` |
 | `src/media/process.rs` | `FileProcessor` / `FileConverter` traits, `FileProcessorOptions`, `ProcessedFile`, `ProcessedFileHashes`, MIME+extension dispatch, sync/async wrappers |
-| `src/media/format/{zip,epub,pdf,rar}.rs` | Per-format processors; `pdf`/`rar` are `cfg`-gated in `format/mod.rs` |
+| `src/media/format/{zip,epub,mobi,pdf,rar}.rs` | Per-format processors; `pdf`/`rar` are `cfg`-gated in `format/mod.rs` |
+| `src/media/format/mobi.rs` | `MobiProcessor` plus the `MobiBook` model (PDB records, MOBI/EXTH headers, PalmDOC and HUFF/CDIC decompression, trailing entries, INDX/TAGX, KF8 `FDST`/skeleton/fragment reassembly, `kindle:` link rewriting). Consumed by `stump_tools`' `mobi2epub` |
 | `src/media/metadata.rs`, `src/media/utils.rs`, `src/serde.rs` | ComicInfo / OPF / PDF metadata normalisation, cover-name rules, PDF date parsing, custom deserialisers |
 | `src/media/readium.rs` | `ReadiumManifestGenerator` (manifest, positions, resource URLs) |
 | `src/media/epub_search.rs` | `search_epub` with cursor, limits, Readium locators |
@@ -62,7 +70,7 @@ stays in `core/src/filesystem/`, and the scanner walker lives in
 | `src/hash.rs` | `generate` (sampled SHA-256), `generate_koreader_hash` |
 | `src/common.rs`, `src/directory_listing.rs`, `src/archive.rs`, `src/series_metadata.rs` | Thumbnail lookup, `PathUtils`/`FileParts`, directory listing DTOs, ZIP creation, `series.json` |
 | `src/image/*` | `ImageProcessor` trait, `GenericImageProcessor` (JPEG/PNG), `WebpProcessor`, placeholder metadata (colours, ThumbHash), thumbnail file helpers |
-| `integration-tests/data/` | Fixtures: `book.{zip,rar,epub}`, `book-complex-tree.{zip,rar}`, `book-zip-mime.epub`, `book-image-format-test.zip`, `leaves.epub`, `tall.pdf`, `rust_book.pdf`, `science_comics_001.cbz`, `nested-macos-compressed.cbz`, `book.opf`, `calibre*.opf`, `example.{avif,jpeg,jxl,png,webp}`, `mock-stump.toml` (helper map `src/lib.rs:246-303`) |
+| `integration-tests/data/` | Fixtures: `book.{zip,rar,epub}`, `book-complex-tree.{zip,rar}`, `book-zip-mime.epub`, `book-image-format-test.zip`, `leaves.epub`, `kindle-formats.azw3` (13 KB, `boko convert` from a purpose-built EPUB: 4 KF8 sections, 2 PNG resources, 1 style flow, 3 NCX entries), `tall.pdf`, `rust_book.pdf`, `science_comics_001.cbz`, `nested-macos-compressed.cbz`, `book.opf`, `calibre*.opf`, `example.{avif,jpeg,jxl,png,webp}`, `mock-stump.toml` (helper map `src/lib.rs:246-303`) |
 | `cache/` | Untracked, empty, not gitignored. `MediaConfig::default()` resolves `cache_dir` to the relative `cache` (`src/lib.rs:157-171,186`), so tests using the default config from the crate directory can create it; not a source tree |
 
 Consumers (all `default-features = false`, forwarding `pdf`/`rar`):
@@ -77,6 +85,7 @@ cargo test -p stump_media --no-default-features    # 121 tests; feature_gate_tes
 cargo test -p stump_media --no-default-features --features pdf
 cargo test -p stump_media --no-default-features --features rar
 cargo test -p stump_media --no-default-features --lib drm   # 23 DRM-detector tests, synthetic fixtures only
+cargo test -p stump_media --no-default-features --lib mobi  # Kindle reader; the AZW3 fixture plus byte-built MOBI 6/KF8 headers
 cargo check -p stump_server --no-default-features --features minimal   # structural change gate (.omp/PROJECT_STATE.md)
 ```
 

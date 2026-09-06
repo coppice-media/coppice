@@ -57,31 +57,19 @@ fn target_formats_map_to_the_extension_ebook_convert_dispatches_on() {
 // Fake calibre
 // ---------------------------------------------------------------------------
 
-/// Serializes every test that writes a fake binary *and* spawns a child.
-///
-/// `execve` fails with `ETXTBSY` ("Text file busy") when any process holds the
-/// image open for writing. `fs::write` closes its descriptor promptly, but a
-/// concurrent `Command::spawn` in another test thread forks a child that
-/// inherits that descriptor and keeps it open until its own `exec`. Serializing
-/// the write-then-exec tests removes the window; nothing else in this crate
-/// spawns a process.
-static FAKE_CALIBRE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(unix)]
-fn fake_lock() -> std::sync::MutexGuard<'static, ()> {
-	// A failing test poisons the mutex; the guarded data is `()`, so recover.
-	FAKE_CALIBRE_LOCK
-		.lock()
-		.unwrap_or_else(|poisoned| poisoned.into_inner())
-}
+/// The crate-wide fake-binary lock. Writing an executable and spawning it
+/// races with every other module that writes fake binaries — `execve` fails
+/// with `ETXTBSY` while any process holds the image open for writing — so all
+/// of them share one lock; see [`crate::test_support::fake_binary_lock`].
+use crate::test_support::fake_binary_lock;
 
 /// A directory holding a fake `ebook-convert` / `ebook-meta` pair. Every
 /// invocation appends its argv to `calls.txt`, so tests can assert the exact
 /// command line without a real calibre.
 ///
-/// Holding [`FAKE_CALIBRE_LOCK`] for the fake's whole lifetime is what keeps
-/// `ETXTBSY` away, so a test needing two fakes must let the first one drop
-/// before building the second.
+/// Holding the crate-wide fake-binary lock for the fake's whole lifetime is
+/// what keeps `ETXTBSY` away, so a test needing two fakes must let the first
+/// one drop before building the second.
 #[cfg(unix)]
 struct FakeCalibre {
 	dir: TempDir,
@@ -92,7 +80,7 @@ struct FakeCalibre {
 impl FakeCalibre {
 	/// `body` is shell run after the argv log; `$@` holds the arguments.
 	fn new(version_banner: &str, body: &str) -> Self {
-		let guard = fake_lock();
+		let guard = fake_binary_lock();
 		let dir = TempDir::new().expect("temp dir");
 		let script = format!(
 			"#!/bin/sh\n\

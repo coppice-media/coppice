@@ -11,3 +11,4 @@ pub mod ordering;
 pub mod permission_set;
 pub mod readium;
 pub mod series_metadata;
+pub mod visibility;

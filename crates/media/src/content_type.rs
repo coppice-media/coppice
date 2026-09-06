@@ -15,6 +15,8 @@ pub enum ContentType {
 	HTML,
 	PDF,
 	EPUB_ZIP,
+	MOBI,
+	AZW3,
 	ZIP,
 	COMIC_ZIP,
 	RAR,
@@ -73,6 +75,12 @@ impl ContentType {
 			"html" => ContentType::HTML,
 			"pdf" => ContentType::PDF,
 			"epub" => ContentType::EPUB_ZIP,
+			// The Kindle family is one Palm database with two markup
+			// generations; `.prc` and `.azw` are MOBI 6 (KF7) and `.azw3` is
+			// KF8 (MobileRead <https://wiki.mobileread.com/wiki/MOBI>,
+			// <https://wiki.mobileread.com/wiki/KF8>).
+			"mobi" | "prc" | "azw" => ContentType::MOBI,
+			"azw3" => ContentType::AZW3,
 			"zip" => ContentType::ZIP,
 			"cbz" => ContentType::COMIC_ZIP,
 			"rar" => ContentType::RAR,
@@ -279,7 +287,25 @@ impl ContentType {
 			(ContentType::EPUB_ZIP, ContentType::ZIP)
 				| (ContentType::COMIC_ZIP, ContentType::ZIP)
 				| (ContentType::COMIC_RAR, ContentType::RAR)
+				// `infer` classifies every `BOOKMOBI` Palm database as
+				// `application/x-mobipocket-ebook`, so only the extension can
+				// say that the file is the KF8 generation.
+				| (ContentType::AZW3, ContentType::MOBI)
 		)
+	}
+
+	/// Returns true if the content type is one of the Kindle/Mobipocket Palm
+	/// database formats (`.mobi`, `.prc`, `.azw`, `.azw3`).
+	///
+	/// ## Example
+	///
+	/// ```no_run
+	/// use stump_media::ContentType;
+	///
+	/// assert!(ContentType::AZW3.is_kindle());
+	/// ```
+	pub fn is_kindle(&self) -> bool {
+		matches!(self, ContentType::MOBI | ContentType::AZW3)
 	}
 
 	/// Returns true if the content type is a RAR archive.
@@ -319,6 +345,8 @@ impl ContentType {
 			ContentType::HTML => "html",
 			ContentType::PDF => "pdf",
 			ContentType::EPUB_ZIP => "epub",
+			ContentType::MOBI => "mobi",
+			ContentType::AZW3 => "azw3",
 			ContentType::ZIP => "zip",
 			ContentType::COMIC_ZIP => "cbz",
 			ContentType::RAR => "rar",
@@ -348,6 +376,13 @@ impl From<&str> for ContentType {
 			"text/html" => ContentType::HTML,
 			"application/pdf" => ContentType::PDF,
 			"application/epub+zip" => ContentType::EPUB_ZIP,
+			// `application/x-mobipocket-ebook` is what `infer` reports for a
+			// `BOOKMOBI` Palm database; `application/vnd.amazon.ebook` is the
+			// type Amazon registered for `.azw`.
+			"application/x-mobipocket-ebook" | "application/vnd.amazon.ebook" => {
+				ContentType::MOBI
+			},
+			"application/vnd.amazon.mobi8-ebook" => ContentType::AZW3,
 			"application/zip" => ContentType::ZIP,
 			"application/vnd.comicbook+zip" => ContentType::COMIC_ZIP,
 			"application/vnd.rar" => ContentType::RAR,
@@ -372,6 +407,8 @@ impl std::fmt::Display for ContentType {
 			ContentType::HTML => write!(f, "text/html"),
 			ContentType::PDF => write!(f, "application/pdf"),
 			ContentType::EPUB_ZIP => write!(f, "application/epub+zip"),
+			ContentType::MOBI => write!(f, "application/x-mobipocket-ebook"),
+			ContentType::AZW3 => write!(f, "application/vnd.amazon.mobi8-ebook"),
 			ContentType::ZIP => write!(f, "application/zip"),
 			ContentType::COMIC_ZIP => write!(f, "application/vnd.comicbook+zip"),
 			ContentType::RAR => write!(f, "application/vnd.rar"),
@@ -428,6 +465,8 @@ impl TryFrom<ContentType> for image::ImageFormat {
 			ContentType::HTML => Err(unsupported_error("ContentType::HTML")),
 			ContentType::PDF => Err(unsupported_error("ContentType::PDF")),
 			ContentType::EPUB_ZIP => Err(unsupported_error("ContentType::EPUB_ZIP")),
+			ContentType::MOBI => Err(unsupported_error("ContentType::MOBI")),
+			ContentType::AZW3 => Err(unsupported_error("ContentType::AZW3")),
 			ContentType::ZIP => Err(unsupported_error("ContentType::ZIP")),
 			ContentType::COMIC_ZIP => Err(unsupported_error("ContentType::COMIC_ZIP")),
 			ContentType::RAR => Err(unsupported_error("ContentType::RAR")),

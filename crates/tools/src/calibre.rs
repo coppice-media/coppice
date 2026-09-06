@@ -16,17 +16,15 @@
 use std::{
 	ffi::OsString,
 	fmt,
-	fs::File,
-	io::{Read, Seek, SeekFrom},
 	path::{Path, PathBuf},
-	process::{Command, Stdio},
-	time::{Duration, Instant},
+	time::Duration,
 };
 
 use quick_xml::{events::Event, Reader};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+	external::{ExternalTool, MinVersion},
 	Action, Plan, ProgressSink, Report, Severity, Tool, ToolError, ToolInput, ToolResult,
 	Warning,
 };
@@ -45,14 +43,6 @@ const EBOOK_META: &str = "ebook-meta";
 /// the ceiling is generous but always finite.
 const DEFAULT_TIMEOUT_SECS: u64 = 600;
 
-/// How often a running child is polled for exit.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
-
-/// Trailing bytes kept from a child's stdout and stderr. It is a *tail*: a
-/// conversion log can be arbitrarily long, and the useful part of a calibre
-/// failure is always its last lines.
-const OUTPUT_TAIL: usize = 4096;
-
 /// On macOS the CLI tools live inside the application bundle
 /// ([CLI index](https://manual.calibre-ebook.com/generated/en/cli-index.html)).
 #[cfg(target_os = "macos")]
@@ -67,6 +57,28 @@ const INSTALL_HINT: &str = "install calibre 7.0 or newer and put its command \
 // ---------------------------------------------------------------------------
 // Locating calibre
 // ---------------------------------------------------------------------------
+
+/// calibre as the crate knows every external tool: probed through
+/// `ebook-convert`, versioned from calibre's own `%prog (calibre <version>)`
+/// banner, floored at [`MIN_VERSION`], and searched for on `PATH` and then in
+/// the macOS application bundle.
+///
+/// `calibre-polish` drives the same installation, so it locates, runs and
+/// reports through this too ([`crate::calibre_polish`]).
+pub(crate) static CALIBRE_TOOL: ExternalTool = ExternalTool {
+	name: "calibre",
+	probe: EBOOK_CONVERT,
+	version_arg: "--version",
+	anchor: "calibre ",
+	min: MinVersion::MajorMinor(MIN_VERSION.0, MIN_VERSION.1),
+	extra_dirs: bundle_dirs,
+	searched: "PATH",
+	hint: INSTALL_HINT,
+};
+
+fn bundle_dirs() -> Vec<PathBuf> {
+	BUNDLE_DIRS.iter().map(PathBuf::from).collect()
+}
 
 /// A located, version-checked calibre installation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,34 +96,11 @@ impl Calibre {
 	/// calibre formats as `%prog (calibre <version>)`
 	/// ([`OptionParser`](https://github.com/kovidgoyal/calibre/blob/master/src/calibre/utils/config.py)).
 	pub fn locate(bin_dir: Option<&Path>) -> ToolResult<Self> {
-		let dir = resolve_dir(bin_dir)?;
-		let output = run(
-			&binary_in(&dir, EBOOK_CONVERT),
-			&[OsString::from("--version")],
-			Duration::from_secs(30),
-		)?;
-		if !output.succeeded() {
-			return Err(missing(format!(
-				"`{EBOOK_CONVERT} --version` failed ({}): {}",
-				output.describe_status(),
-				first_line(&output.stderr)
-			)));
-		}
-		let combined = format!("{}\n{}", output.stdout, output.stderr);
-		let Some(version) = parse_version(&combined) else {
-			return Err(missing(format!(
-				"could not parse a version from `{EBOOK_CONVERT} --version` \
-				 output {:?}",
-				first_line(&combined)
-			)));
-		};
-		if (version.0, version.1) < MIN_VERSION {
-			return Err(missing(format!(
-				"calibre {}.{}.{} is older than the required {}.{}",
-				version.0, version.1, version.2, MIN_VERSION.0, MIN_VERSION.1
-			)));
-		}
-		Ok(Self { dir, version })
+		let install = CALIBRE_TOOL.locate(bin_dir)?;
+		Ok(Self {
+			dir: install.dir,
+			version: install.version,
+		})
 	}
 
 	pub fn dir(&self) -> &Path {
@@ -123,201 +112,22 @@ impl Calibre {
 	}
 
 	pub fn binary(&self, name: &str) -> PathBuf {
-		binary_in(&self.dir, name)
+		CALIBRE_TOOL.binary(&self.dir, name)
 	}
 
-	fn describe(&self) -> String {
+	pub(crate) fn describe(&self) -> String {
 		let (major, minor, patch) = self.version;
 		format!("calibre {major}.{minor}.{patch} in {}", self.dir.display())
 	}
 }
 
-fn missing(reason: String) -> ToolError {
-	ToolError::ExternalToolMissing {
-		tool: "calibre".to_string(),
-		reason,
-		hint: INSTALL_HINT.to_string(),
-	}
-}
-
-fn binary_in(dir: &Path, name: &str) -> PathBuf {
-	if cfg!(windows) {
-		dir.join(format!("{name}.exe"))
-	} else {
-		dir.join(name)
-	}
-}
-
-fn resolve_dir(bin_dir: Option<&Path>) -> ToolResult<PathBuf> {
-	if let Some(dir) = bin_dir {
-		if is_executable(&binary_in(dir, EBOOK_CONVERT)) {
-			return Ok(dir.to_path_buf());
-		}
-		return Err(missing(format!(
-			"no executable `{EBOOK_CONVERT}` in the configured bin_dir {}",
-			dir.display()
-		)));
-	}
-
-	let path = std::env::var_os("PATH").unwrap_or_default();
-	let candidates = std::env::split_paths(&path)
-		.chain(BUNDLE_DIRS.iter().map(PathBuf::from))
-		.filter(|dir| !dir.as_os_str().is_empty());
-	for dir in candidates {
-		if is_executable(&binary_in(&dir, EBOOK_CONVERT)) {
-			return Ok(dir);
-		}
-	}
-	Err(missing(format!("`{EBOOK_CONVERT}` was not found on PATH")))
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-	use std::os::unix::fs::PermissionsExt;
-
-	std::fs::metadata(path).is_ok_and(|metadata| {
-		metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-	})
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-	std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
-}
-
-/// Version out of an `ebook-convert --version` banner.
-///
-/// The documented shape is `%prog (calibre <version>)`, so the search is
-/// anchored just after the literal `calibre ` when it is present; a wrapper
-/// script that prints a versioned path first would otherwise win. Without the
-/// anchor it falls back to the first `major.minor[.patch]` triple anywhere.
+/// Version out of an `ebook-convert --version` banner: the crate-wide banner
+/// rule anchored on calibre's own wording. Behaviour lives in
+/// [`ExternalTool::parse_version`]; this is the name the module's tests pin it
+/// through.
+#[cfg(test)]
 fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
-	let anchor = text
-		.to_ascii_lowercase()
-		.find("calibre ")
-		.map(|at| at + "calibre ".len())
-		.unwrap_or(0);
-	first_triple(&text[anchor..]).or_else(|| first_triple(text))
-}
-
-fn first_triple(text: &str) -> Option<(u32, u32, u32)> {
-	let bytes = text.as_bytes();
-	let mut index = 0;
-	while index < bytes.len() {
-		if !bytes[index].is_ascii_digit() {
-			index += 1;
-			continue;
-		}
-		let start = index;
-		while index < bytes.len() && bytes[index].is_ascii_digit() {
-			index += 1;
-		}
-		let mut parts = vec![&text[start..index]];
-		while index < bytes.len()
-			&& bytes[index] == b'.'
-			&& bytes.get(index + 1).is_some_and(u8::is_ascii_digit)
-		{
-			index += 1;
-			let start = index;
-			while index < bytes.len() && bytes[index].is_ascii_digit() {
-				index += 1;
-			}
-			parts.push(&text[start..index]);
-		}
-		if parts.len() >= 2 {
-			let number = |at: usize| parts.get(at).and_then(|p| p.parse().ok());
-			return Some((number(0)?, number(1)?, number(2).unwrap_or(0)));
-		}
-	}
-	None
-}
-
-// ---------------------------------------------------------------------------
-// Child process handling
-// ---------------------------------------------------------------------------
-
-/// What a calibre invocation produced.
-#[derive(Debug, Clone)]
-pub struct Output {
-	pub status: Option<i32>,
-	pub timed_out: bool,
-	pub stdout: String,
-	pub stderr: String,
-}
-
-impl Output {
-	pub fn succeeded(&self) -> bool {
-		!self.timed_out && self.status == Some(0)
-	}
-
-	fn describe_status(&self) -> String {
-		match (self.timed_out, self.status) {
-			(true, _) => "timed out".to_string(),
-			(_, Some(code)) => format!("exit code {code}"),
-			(_, None) => "killed by a signal".to_string(),
-		}
-	}
-}
-
-/// Run `program` with `args`, killing it after `timeout`.
-///
-/// stdout and stderr are redirected to temporary files rather than pipes: a
-/// polling parent that reads pipes only after exit would deadlock as soon as a
-/// chatty conversion filled the pipe buffer.
-fn run(program: &Path, args: &[OsString], timeout: Duration) -> ToolResult<Output> {
-	let mut stdout = tempfile::tempfile()?;
-	let mut stderr = tempfile::tempfile()?;
-	let mut child = Command::new(program)
-		.args(args)
-		.stdin(Stdio::null())
-		.stdout(Stdio::from(stdout.try_clone()?))
-		.stderr(Stdio::from(stderr.try_clone()?))
-		.spawn()
-		.map_err(|error| {
-			if error.kind() == std::io::ErrorKind::NotFound {
-				missing(format!("{} could not be executed", program.display()))
-			} else {
-				ToolError::Io(error)
-			}
-		})?;
-
-	let deadline = Instant::now() + timeout;
-	let mut timed_out = false;
-	let status = loop {
-		match child.try_wait()? {
-			Some(status) => break status.code(),
-			None if Instant::now() >= deadline => {
-				timed_out = true;
-				let _ = child.kill();
-				let _ = child.wait();
-				break None;
-			},
-			None => std::thread::sleep(POLL_INTERVAL),
-		}
-	};
-
-	Ok(Output {
-		status,
-		timed_out,
-		stdout: read_tail(&mut stdout)?,
-		stderr: read_tail(&mut stderr)?,
-	})
-}
-
-fn read_tail(file: &mut File) -> ToolResult<String> {
-	let len = file.seek(SeekFrom::End(0))?;
-	let take = len.min(OUTPUT_TAIL as u64);
-	file.seek(SeekFrom::Start(len - take))?;
-	let mut bytes = Vec::with_capacity(take as usize);
-	file.read_to_end(&mut bytes)?;
-	Ok(String::from_utf8_lossy(&bytes).trim().to_string())
-}
-
-fn first_line(text: &str) -> &str {
-	text.lines()
-		.map(str::trim)
-		.find(|line| !line.is_empty())
-		.unwrap_or("")
+	CALIBRE_TOOL.parse_version(text)
 }
 
 // ---------------------------------------------------------------------------
@@ -558,7 +368,7 @@ impl Tool for CalibreConvert {
 
 			let mut args = vec![source.as_os_str().to_owned(), target.into()];
 			args.extend(detail.extra_args.iter().map(OsString::from));
-			let output = run(
+			let output = CALIBRE_TOOL.run(
 				&calibre.binary(EBOOK_CONVERT),
 				&args,
 				Duration::from_secs(detail.timeout_secs),
@@ -587,7 +397,7 @@ impl Tool for CalibreConvert {
 				format!(
 					"{EBOOK_CONVERT} {}: {}",
 					output.describe_status(),
-					// Both streams are already capped to OUTPUT_TAIL.
+					// Both streams are already capped to a tail.
 					if output.stderr.is_empty() {
 						&output.stdout
 					} else {
@@ -745,7 +555,7 @@ impl Tool for CalibreMeta {
 			};
 
 			let opf = workspace.path().join(format!("{index}.opf"));
-			let output = run(
+			let output = CALIBRE_TOOL.run(
 				&calibre.binary(EBOOK_META),
 				&[
 					source.as_os_str().to_owned(),

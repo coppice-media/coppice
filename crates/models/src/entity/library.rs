@@ -12,7 +12,7 @@ use sea_orm::{
 use crate::shared::ordering::{OrderBy, OrderDirection};
 use crate::shared::{enums::FileStatus, image::ImageMetadata};
 
-use super::{library_exclusion, user::AuthUser};
+use crate::shared::visibility::VisibilityScope;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
@@ -51,10 +51,10 @@ pub struct Model {
 }
 
 impl Entity {
-	pub fn find_for_user(user: &AuthUser) -> Select<Entity> {
-		Entity::find().filter(Column::Id.not_in_subquery(
-			library_exclusion::Entity::library_hidden_to_user_query(user),
-		))
+	/// Libraries the request may see: the user's non-excluded libraries,
+	/// narrowed by the authenticating device's scope when it has one.
+	pub fn find_for_user<'a>(scope: impl Into<VisibilityScope<'a>>) -> Select<Entity> {
+		Entity::find().filter(scope.into().library_condition(Column::Id))
 	}
 }
 

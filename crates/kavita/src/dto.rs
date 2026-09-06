@@ -1437,6 +1437,16 @@ pub struct RefreshSeriesDto {
 	pub force_colorscape: bool,
 }
 
+/// `SeriesByIdsDto`: the body of `POST /api/Series/series-by-ids`. `seriesIds`
+/// is nullable in the reference's OpenAPI and a body without it is rejected,
+/// so the absence has to survive deserialization.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesByIdsDto {
+	#[serde(default)]
+	pub series_ids: Option<Vec<i32>>,
+}
+
 /// `AnnotationDto`: a highlight and/or note. Stump stores the Readium locator
 /// and one note per annotation, so the social, spoiler and slot fields of
 /// Kavita's annotation model are the constants an unshared annotation has.

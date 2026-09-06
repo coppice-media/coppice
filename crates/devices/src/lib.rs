@@ -18,6 +18,8 @@ mod credential;
 mod endpoint;
 mod error;
 mod event;
+pub mod kindle;
+pub mod scope;
 pub mod service;
 
 #[cfg(test)]
@@ -30,12 +32,14 @@ pub use credential::{
 pub use endpoint::Endpoint;
 pub use error::{DeviceError, DeviceResult};
 pub use event::DeviceSeen;
+pub use kindle::{normalize_kindle_email, KindleSendSummary, KINDLE_EMAIL_PROTOCOL};
 pub use models::entity::device::Model as Device;
 pub use models::entity::device_credential::Model as DeviceCredential;
 pub use models::shared::enums::{
 	DeviceCredentialKind as CredentialKind, DeviceKind, DeviceProtocol as Protocol,
 };
-pub use service::{DeviceService, SeenListener};
+pub use scope::LibraryScope;
+pub use service::{DeviceAuth, DeviceService, SeenListener};
 
 pub mod liseur_token {
 	//! Secret generation, hashing, and expiry shared with the liseur-sync storage.

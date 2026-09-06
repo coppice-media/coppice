@@ -6,7 +6,10 @@
 
 use models::{
 	entity::user::AuthUser,
-	shared::{enums::UserPermission, permission_set::user_has_all_permissions},
+	shared::{
+		enums::UserPermission, permission_set::user_has_all_permissions,
+		visibility::VisibilityScope,
+	},
 };
 
 /// The error returned when an authenticated user is not authorized to perform an action.
@@ -32,12 +35,33 @@ pub enum AuthorizationError {
 pub struct AuthContext {
 	pub user: AuthUser,
 	pub api_key: Option<String>,
+	/// The device whose credential authenticated this request, when the
+	/// credential belongs to one. `None` for a session, a bare password, or a
+	/// key that is not registered to a device.
+	///
+	/// Set wherever a credential resolves to a device (API key over Bearer,
+	/// Basic, `X-API-Key` or a path key; a liseur-sync token; a Kavita JWT
+	/// minted from a key). The device's library scope is resolved at the same
+	/// point onto [`AuthUser::device_library_scope`].
+	pub device_id: Option<String>,
 }
 
 impl AuthContext {
 	/// Get the current user.
 	pub fn user(&self) -> AuthUser {
 		self.user.clone()
+	}
+
+	/// What this request may see: the user's visibility narrowed by the
+	/// authenticating device's library scope. The single input to every
+	/// library/series/book query.
+	pub fn scope(&self) -> VisibilityScope<'_> {
+		VisibilityScope::for_user(&self.user)
+	}
+
+	/// The id of the device whose credential authenticated this request.
+	pub fn device_id(&self) -> Option<&str> {
+		self.device_id.as_deref()
 	}
 
 	/// Get the ID of the current user.
@@ -114,6 +138,7 @@ mod tests {
 		AuthContext {
 			user,
 			api_key: None,
+			device_id: None,
 		}
 	}
 
@@ -126,6 +151,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: Some("api-key".to_string()),
+			device_id: None,
 		};
 
 		assert!(user.is(&request_context.user()));

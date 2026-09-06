@@ -137,6 +137,10 @@ pub use media::format::pdf::PdfProcessor;
 pub use media::format::rar::RarProcessor;
 pub use media::format::{
 	epub::{EpubNavEntry, EpubProcessor, EpubStructure},
+	mobi::{
+		MobiBook, MobiFlow, MobiNavEntry, MobiProcessor, MobiResource, MobiSection,
+		KINDLE_EXTENSIONS,
+	},
 	zip::ZipProcessor,
 };
 pub use media::{

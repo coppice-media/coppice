@@ -269,6 +269,13 @@ impl StumpConfig {
 			.unwrap_or_else(|| self.get_config_dir().join("annotations"))
 	}
 
+	/// Returns a `PathBuf` to the annotation attachment root. Attachment bytes
+	/// live at `<root>/<annotation_id>/<sha256>.<ext>`; the database stores
+	/// that path relative to this root.
+	pub fn get_attachments_dir(&self) -> PathBuf {
+		self.get_config_dir().join("attachments")
+	}
+
 	pub fn get_log_dir(&self) -> PathBuf {
 		match &self.server.log_dir {
 			Some(value) => PathBuf::from(value),
@@ -422,6 +429,7 @@ mod tests {
 					enable_upload: Some(DEFAULT_ENABLE_UPLOAD),
 					max_file_upload_size: Some(DEFAULT_MAX_FILE_UPLOAD_SIZE),
 					max_image_upload_size: Some(DEFAULT_MAX_IMAGE_UPLOAD_SIZE),
+					attachment_max_bytes: Some(DEFAULT_ATTACHMENT_MAX_BYTES),
 					enable_webui: Some(true),
 					enable_playground: Some(false),
 					client_dir: Some("not_a_real_dir".to_string()),
@@ -431,6 +439,10 @@ mod tests {
 					ingest_staging_dir: None,
 					ingest_editor_dir: None,
 					ingest_progress_retention: Some(DEFAULT_INGEST_PROGRESS_RETENTION),
+					ingest_preprocess_command: None,
+					ingest_preprocess_timeout_secs: Some(
+						DEFAULT_INGEST_PREPROCESS_TIMEOUT_SECS,
+					),
 				},
 				providers: PartialProvidersConfig {
 					enable_providers: Some(DEFAULT_ENABLE_PROVIDERS),
@@ -553,6 +565,7 @@ mod tests {
 							enable_upload: DEFAULT_ENABLE_UPLOAD,
 							max_file_upload_size: DEFAULT_MAX_FILE_UPLOAD_SIZE,
 							max_image_upload_size: DEFAULT_MAX_IMAGE_UPLOAD_SIZE,
+							attachment_max_bytes: DEFAULT_ATTACHMENT_MAX_BYTES,
 							enable_webui: false,
 							enable_playground: true,
 							client_dir: "./client".to_string(),
@@ -562,6 +575,9 @@ mod tests {
 							ingest_staging_dir: None,
 							ingest_editor_dir: None,
 							ingest_progress_retention: DEFAULT_INGEST_PROGRESS_RETENTION,
+							ingest_preprocess_command: None,
+							ingest_preprocess_timeout_secs:
+								DEFAULT_INGEST_PREPROCESS_TIMEOUT_SECS,
 						},
 						providers: ProvidersConfig {
 							enable_providers: DEFAULT_ENABLE_PROVIDERS,
@@ -729,6 +745,7 @@ client_secret = "secret"
 				enable_upload: true,
 				max_file_upload_size: 2000,
 				max_image_upload_size: 1000,
+				attachment_max_bytes: DEFAULT_ATTACHMENT_MAX_BYTES,
 				enable_webui: false,
 				enable_playground: true,
 				client_dir: "/srv/stump/client".to_string(),
@@ -741,6 +758,8 @@ client_secret = "secret"
 				ingest_staging_dir: None,
 				ingest_editor_dir: None,
 				ingest_progress_retention: 42,
+				ingest_preprocess_command: None,
+				ingest_preprocess_timeout_secs: DEFAULT_INGEST_PREPROCESS_TIMEOUT_SECS,
 			}
 		);
 		assert_eq!(

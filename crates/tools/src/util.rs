@@ -216,6 +216,97 @@ where
 	write_atomic(target, |file| write_cbz(file, comic_info, pages))
 }
 
+/// Where a tool writes a *derived* copy of `source`: `output_dir` when it is
+/// given and is not the source's own directory, otherwise the source's
+/// directory with `suffix` appended to the stem.
+///
+/// The suffix is what keeps a sibling output from being its own source. The
+/// tools' default suffixes are bracketed or parenthesised, which
+/// [`stump_scanner::clean_name`] strips, so a derived file still identifies as
+/// the same series/volume/chapter during a scan.
+pub fn derived_target(
+	source: &Path,
+	output_dir: Option<&Path>,
+	suffix: &str,
+	extension: &str,
+) -> ToolResult<PathBuf> {
+	let stem = source
+		.file_stem()
+		.map(|stem| stem.to_string_lossy().into_owned())
+		.ok_or_else(|| {
+			ToolError::Invalid(format!("{} has no file name", source.display()))
+		})?;
+	let parent = source.parent().unwrap_or_else(|| Path::new(""));
+	let directory = output_dir.unwrap_or(parent);
+	let stem = if same_directory(directory, parent) {
+		format!("{stem}{suffix}")
+	} else {
+		stem
+	};
+
+	Ok(directory.join(format!("{stem}.{extension}")))
+}
+
+/// True when both paths name the same directory. Canonical paths are compared
+/// when both resolve, so `.` and its absolute form are not read as two
+/// different output directories.
+fn same_directory(a: &Path, b: &Path) -> bool {
+	match (a.canonicalize(), b.canonicalize()) {
+		(Ok(a), Ok(b)) => a == b,
+		_ => a == b,
+	}
+}
+
+/// Replace — or insert — exactly one entry of a zip container in place,
+/// atomically.
+///
+/// Every other member is written back with its original compressed bytes
+/// (`raw_copy_file`), so a metadata edit provably cannot alter a page, a
+/// content document, a font or a style sheet. A replaced entry keeps its
+/// position and its unix mode; a new entry is written first, where Stump's own
+/// containers put `ComicInfo.xml` and where an EPUB's `mimetype` already is.
+pub fn replace_archive_entry(
+	path: &Path,
+	entry: &str,
+	bytes: &[u8],
+	compression: CompressionMethod,
+) -> ToolResult<()> {
+	let permissions = std::fs::metadata(path).map(|meta| meta.permissions()).ok();
+	let mut archive = zip::ZipArchive::new(File::open(path)?)?;
+	let existed = archive.index_for_name(entry).is_some();
+	let options = SimpleFileOptions::default().compression_method(compression);
+
+	write_atomic(path, |sink| {
+		let mut writer = zip::ZipWriter::new(sink);
+		if !existed {
+			writer.start_file(entry, options.unix_permissions(0o644))?;
+			writer.write_all(bytes)?;
+		}
+
+		for index in 0..archive.len() {
+			let member = archive.by_index_raw(index)?;
+			if member.name() == entry {
+				let mode = member.unix_mode().unwrap_or(0o644);
+				writer.start_file(entry, options.unix_permissions(mode))?;
+				writer.write_all(bytes)?;
+				continue;
+			}
+			writer.raw_copy_file(member)?;
+		}
+
+		writer.finish()?;
+		Ok(())
+	})?;
+
+	// `write_atomic` stages through a 0600 temp file, so an in-place rewrite
+	// has to put the library file's own mode back.
+	if let Some(permissions) = permissions {
+		let _ = std::fs::set_permissions(path, permissions);
+	}
+
+	Ok(())
+}
+
 /// The `ComicInfo.xml` fields Stump's tools generate.
 ///
 /// Element names and order follow the ComicInfo v2.0 schema
@@ -233,6 +324,9 @@ pub struct ComicInfo {
 	pub month: Option<i32>,
 	pub day: Option<i32>,
 	pub writers: Vec<String>,
+	pub publisher: Option<String>,
+	/// Free-form tags, written as one comma-separated `<Tags>` element.
+	pub tags: Vec<String>,
 	pub page_count: Option<usize>,
 	/// BCP 47 language tag, written as `<LanguageISO>`.
 	pub language: Option<String>,
@@ -251,6 +345,8 @@ impl ComicInfo {
 			&& self.month.is_none()
 			&& self.day.is_none()
 			&& self.writers.is_empty()
+			&& self.publisher.is_none()
+			&& self.tags.is_empty()
 			&& self.language.is_none()
 	}
 
@@ -271,6 +367,10 @@ impl ComicInfo {
 		push_number(&mut xml, "Day", self.day);
 		if !self.writers.is_empty() {
 			push_text(&mut xml, "Writer", Some(&self.writers.join(", ")));
+		}
+		push_text(&mut xml, "Publisher", self.publisher.as_deref());
+		if !self.tags.is_empty() {
+			push_text(&mut xml, "Tags", Some(&self.tags.join(", ")));
 		}
 		push_number(&mut xml, "PageCount", self.page_count.map(|c| c as i32));
 		push_text(&mut xml, "LanguageISO", self.language.as_deref());
@@ -376,6 +476,8 @@ mod tests {
 			month: Some(8),
 			day: Some(25),
 			writers: vec!["Kentaro Miura".to_string()],
+			publisher: Some("Hakusensha".to_string()),
+			tags: vec!["dark fantasy".to_string(), "seinen".to_string()],
 			page_count: Some(2),
 			language: Some("ja".to_string()),
 		};
@@ -393,6 +495,11 @@ mod tests {
 		);
 		assert_eq!(parsed.writers, Some(vec!["Kentaro Miura".to_string()]));
 		assert_eq!(parsed.page_count, Some(2));
+		assert_eq!(parsed.publisher.as_deref(), Some("Hakusensha"));
+		assert_eq!(
+			parsed.tags,
+			Some(vec!["dark fantasy".to_string(), "seinen".to_string()])
+		);
 	}
 
 	#[test]
@@ -488,5 +595,104 @@ mod tests {
 			]
 		);
 		assert_eq!(sorted_dirs(dir.path()).unwrap(), vec![nested]);
+	}
+
+	#[test]
+	fn a_derived_target_only_takes_the_suffix_beside_its_source() {
+		let dir = tempfile::tempdir().unwrap();
+		let source = dir.path().join("Berserk v01.cbz");
+		std::fs::write(&source, b"cbz").unwrap();
+		let elsewhere = dir.path().join("out");
+		std::fs::create_dir(&elsewhere).unwrap();
+
+		// Beside the source the suffix is what keeps the output from being its
+		// own input.
+		assert_eq!(
+			derived_target(&source, None, " [webp]", "cbz").unwrap(),
+			dir.path().join("Berserk v01 [webp].cbz")
+		);
+		// In another directory the name is kept as it is.
+		assert_eq!(
+			derived_target(&source, Some(&elsewhere), " [webp]", "cbz").unwrap(),
+			elsewhere.join("Berserk v01.cbz")
+		);
+		// An output directory that only *spells* the source's differently is
+		// still the source's directory.
+		let same = dir.path().join(".");
+		assert_eq!(
+			derived_target(&source, Some(&same), " (polished)", "epub").unwrap(),
+			same.join("Berserk v01 (polished).epub")
+		);
+	}
+
+	#[test]
+	fn replacing_one_entry_keeps_every_other_byte_and_its_position() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("book.cbz");
+		let pages = [
+			("0001.jpg", b"page-one".to_vec()),
+			("0002.jpg", b"two".to_vec()),
+		];
+		write_atomic(&path, |file| {
+			write_cbz(
+				file,
+				Some(b"<ComicInfo><Series>Old</Series></ComicInfo>"),
+				pages
+					.iter()
+					.map(|(name, bytes)| Ok((name.to_string(), bytes.clone()))),
+			)
+			.map(|_| ())
+		})
+		.unwrap();
+
+		replace_archive_entry(
+			&path,
+			COMIC_INFO_ENTRY,
+			b"<ComicInfo><Series>New</Series></ComicInfo>",
+			CompressionMethod::Stored,
+		)
+		.unwrap();
+
+		let entries = read_all(&path);
+		assert_eq!(
+			entries
+				.iter()
+				.map(|(name, _)| name.as_str())
+				.collect::<Vec<_>>(),
+			vec![COMIC_INFO_ENTRY, "0001.jpg", "0002.jpg"],
+			"a replaced entry keeps its position"
+		);
+		assert_eq!(entries[0].1, b"<ComicInfo><Series>New</Series></ComicInfo>");
+		assert_eq!(entries[1].1, b"page-one");
+		assert_eq!(entries[2].1, b"two");
+
+		// A new entry is written first, where Stump's containers keep metadata.
+		replace_archive_entry(&path, "extra.txt", b"note", CompressionMethod::Stored)
+			.unwrap();
+		let entries = read_all(&path);
+		assert_eq!(
+			entries
+				.iter()
+				.map(|(name, _)| name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["extra.txt", COMIC_INFO_ENTRY, "0001.jpg", "0002.jpg"]
+		);
+		assert_eq!(entries[2].1, b"page-one");
+	}
+
+	fn read_all(path: &Path) -> Vec<(String, Vec<u8>)> {
+		use std::io::Read;
+
+		let mut archive =
+			zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+		(0..archive.len())
+			.map(|index| {
+				let mut entry = archive.by_index(index).unwrap();
+				let name = entry.name().to_string();
+				let mut bytes = Vec::new();
+				entry.read_to_end(&mut bytes).unwrap();
+				(name, bytes)
+			})
+			.collect()
 	}
 }

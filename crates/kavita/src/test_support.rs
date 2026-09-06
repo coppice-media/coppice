@@ -71,6 +71,7 @@ pub(crate) fn auth_user(user: &models::entity::user::Model) -> AuthUser {
 		permissions: Vec::new(),
 		age_restriction: None,
 		preferences: None,
+		device_library_scope: None,
 	}
 }
 
@@ -189,6 +190,9 @@ pub(crate) async fn request(
 		stump_auth::AuthContext {
 			user: user.clone(),
 			api_key: None,
+			// A test request authenticates as the user, with no device, so
+			// visibility is the user's own.
+			device_id: None,
 		},
 	));
 	let builder = axum::http::Request::builder().method(method).uri(uri);
@@ -244,15 +248,18 @@ impl KavitaBackend for TestBackend {
 		}
 	}
 
+	/// A recognisable stand-in for the rendered page, so a route test can
+	/// tell "the page was served" from "the page was refused".
 	async fn media_page(
 		&self,
 		_user: &AuthUser,
 		media_id: &str,
-		_page: i32,
+		page: i32,
 	) -> APIResult<KavitaImage> {
-		Err(APIError::NotFound(format!(
-			"unreachable in tests: {media_id}"
-		)))
+		Ok(KavitaImage::new(
+			"image/png".to_owned(),
+			format!("{media_id}:{page}").into_bytes(),
+		))
 	}
 
 	async fn media_thumbnail(
@@ -375,6 +382,17 @@ impl KavitaBackend for TestBackend {
 			.insert(&self.conn)
 			.await?;
 		}
+		Ok(())
+	}
+
+	async fn delete_read_list(&self, _user: &AuthUser, id: &str) -> APIResult<()> {
+		reading_list_item::Entity::delete_many()
+			.filter(reading_list_item::Column::ReadingListId.eq(id.to_owned()))
+			.exec(&self.conn)
+			.await?;
+		reading_list::Entity::delete_by_id(id.to_owned())
+			.exec(&self.conn)
+			.await?;
 		Ok(())
 	}
 

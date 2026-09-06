@@ -6,6 +6,8 @@ fragment DeviceFields on Device {
 	name
 	kind
 	transformProfile
+	libraryScope
+	kindleEmail
 	createdAt
 	lastSeenAt
 	lastSyncAt
@@ -80,6 +82,22 @@ mutation RevokeDevice($id: String!) {
 
 mutation SetDeviceTransformProfile($id: String!, $profile: JSON) {
 	setDeviceTransformProfile(id: $id, profile: $profile) {
+		...DeviceFields
+	}
+}
+
+# `libraryIds: null` clears the restriction so the device inherits its user's
+# visibility; a list narrows it (the server intersects, never widens).
+mutation SetDeviceLibraryScope($id: String!, $libraryIds: [ID!]) {
+	setDeviceLibraryScope(id: $id, libraryIds: $libraryIds) {
+		...DeviceFields
+	}
+}
+
+# `email: null` clears the address, which also removes the device from the
+# "Send to Kindle" targets on the book rows.
+mutation SetDeviceKindleEmail($id: String!, $email: String) {
+	setDeviceKindleEmail(id: $id, email: $email) {
 		...DeviceFields
 	}
 }

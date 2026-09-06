@@ -11,6 +11,13 @@ server contract, not the app), **source-derived** (implemented or described from
 pinned source, never run), **not verified**. Facts about hardware and third-party
 tools cite the public page they come from; nothing here is inferred from memory.
 
+Every row below is a device in the registry, and what a device sees is not
+fixed by its protocol: `devices.library_scope` restricts one device to a subset
+of its user's libraries, enforced in the shared query funnel rather than in any
+adapter, so the same restriction applies to Kobo sync, Komga, Kavita, OPDS,
+KOReader, liseur-sync, and GraphQL alike, and two devices of the same user can
+see different libraries ([devices — library scope](/docs/developer/devices#library-scope)).
+
 ## Kobo eReaders
 
 Two facts hold for every model below. Stock Nickel renders JPEG, GIF, PNG, BMP,
@@ -68,6 +75,18 @@ database for writes (NickelHardcover uses `SQLITE_OPEN_READ_ONLY`, kobuddy
 `immutable=1`); copy through a backup API or capture main + `-wal`/`-shm`
 together; absence in a later snapshot is not a tombstone
 ([Kobo device DB](/docs/developer/kobo-device-database)).
+
+## Amazon Kindle
+
+A Kindle is the one device family that never talks to Stump. It has no sync
+protocol, no credential, and no endpoint: Amazon's *Send to Kindle* service
+delivers whatever an approved sender mails to the device's own address, so the
+address on the device row (`devices.kindle_email`) is the entire transport and
+the direction is one-way — nothing comes back, not progress, not annotations.
+
+| Device family | Reached over | Works today | Gaps | Status | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| Kindle (Paperwhite, Oasis, Scribe, Colorsoft, basic) | `sendToKindle(mediaId, deviceId)`: primary emailer → `<name>@kindle.com`, EPUB converted to AZW3 by the operator's `boko` when present, otherwise mailed as EPUB (Amazon converts it), recorded as `{"protocol":"kindle-email","bytes","format"}` | One book per call to one device address; refuses formats Amazon discards (CBZ/CBR); emailer size cap enforced before the SMTP connection | One-way: no progress, no annotations, no browse, no download. The sender address must be on the operator's Amazon *Approved Personal Document E-mail List* — Stump cannot check that, so a rejected send only shows up as a bounce in the operator's mailbox. No KFX (`boko` can write it; AZW3 is the safer sideload) | not verified — no Kindle and no live Amazon delivery; the lane's conversion, EPUB fallback, refusals, and recording are covered by `cargo test -p graphql --lib kindle` with a fake mailer and a fake `boko` | [devices — send to Kindle](/docs/developer/devices#send-to-kindle), [calibre tooling](/docs/developer/calibre-tooling), [Send to Kindle by e-mail](https://www.amazon.com/sendtokindle/email) |
 
 ## Android
 

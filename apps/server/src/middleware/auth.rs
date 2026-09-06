@@ -264,6 +264,8 @@ async fn authenticate_komga_api_key(
 	Ok(AuthContext {
 		user,
 		api_key: Some(api_key_header.to_owned()),
+		// The caller binds the device: see `bind_device`.
+		device_id: None,
 	})
 }
 
@@ -334,6 +336,10 @@ pub async fn auth_middleware(
 		req.extensions_mut().insert(AuthContext {
 			user: inject_avatar_url(user, service),
 			api_key: None,
+			// A session never carries a device: a device credential is
+			// deliberately never upgraded to one (see `handle_basic_auth`),
+			// so a session request inherits its user's visibility.
+			device_id: None,
 		});
 		return Ok(next.run(req).await);
 	}
@@ -372,7 +378,14 @@ pub async fn auth_middleware(
 					authenticate_komga_api_key(Some(api_key), ctx.conn.as_ref())
 						.await
 						.map_err(|error| error.into_response())?;
-				record_device_sighting(&ctx, api_key, Protocol::Komga).await;
+				bind_device(
+					&ctx,
+					&mut req_ctx,
+					CredentialRef::ApiKey(api_key),
+					Protocol::Komga,
+				)
+				.await
+				.map_err(|error| error.into_response())?;
 				req_ctx.user = inject_avatar_url(req_ctx.user, service);
 				req.extensions_mut().insert(req_ctx);
 				return Ok(next.run(req).await);
@@ -403,6 +416,8 @@ pub async fn auth_middleware(
 			req.extensions_mut().insert(AuthContext {
 				user: inject_avatar_url(AuthUser::from(user), service),
 				api_key: None,
+				// A remember-me token acts as the user, not as a device.
+				device_id: None,
 			});
 			return Ok(next.run(req).await);
 		}
@@ -473,7 +488,7 @@ pub async fn auth_middleware(
 
 	req_ctx.user = inject_avatar_url(req_ctx.user, service);
 
-	if let Some(api_key) = req_ctx.api_key.as_deref() {
+	if let Some(api_key) = req_ctx.api_key.clone() {
 		let protocol = if is_komga_basic_auth {
 			Protocol::Komga
 		} else if is_opds {
@@ -481,7 +496,14 @@ pub async fn auth_middleware(
 		} else {
 			Protocol::Api
 		};
-		record_device_sighting(&ctx, api_key, protocol).await;
+		bind_device(
+			&ctx,
+			&mut req_ctx,
+			CredentialRef::ApiKey(&api_key),
+			protocol,
+		)
+		.await
+		.map_err(|error| error.into_response())?;
 	}
 
 	req.extensions_mut().insert(req_ctx);
@@ -542,26 +564,57 @@ pub async fn api_key_middleware(
 		Some("koreader") => Protocol::Koreader,
 		_ => Protocol::Opds,
 	};
-	record_device_sighting(&ctx, &api_key, protocol).await;
-
-	req.extensions_mut().insert(AuthContext {
+	let mut req_ctx = AuthContext {
 		user,
-		api_key: Some(api_key),
-	});
+		api_key: Some(api_key.clone()),
+		device_id: None,
+	};
+	bind_device(
+		&ctx,
+		&mut req_ctx,
+		CredentialRef::ApiKey(&api_key),
+		protocol,
+	)
+	.await
+	.map_err(|error| error.into_response())?;
+
+	req.extensions_mut().insert(req_ctx);
 
 	Ok(next.run(req).await)
 }
 
-/// Records that a device credential authenticated a request. The registry is
-/// best-effort: a failure is logged and never fails the request.
-async fn record_device_sighting(ctx: &AppState, api_key: &str, protocol: Protocol) {
-	if let Err(error) = ctx
+/// Binds an authenticated request to the device its credential belongs to:
+/// records the sighting and narrows the request's visibility to the device's
+/// library scope.
+///
+/// One device lookup serves both, and nothing caches the result, so a
+/// `setDeviceLibraryScope` write is in force on the device's very next
+/// request. The sighting itself stays best-effort inside the registry; an
+/// error here means the device behind the credential could not be
+/// determined, and a request whose visible library set is unknown is refused
+/// rather than served with the user's full visibility.
+pub(crate) async fn bind_device(
+	ctx: &AppState,
+	auth: &mut AuthContext,
+	credential: CredentialRef<'_>,
+	protocol: Protocol,
+) -> APIResult<()> {
+	let device = ctx
 		.devices()
-		.touch(CredentialRef::ApiKey(api_key), protocol, None)
+		.authenticate(credential, protocol)
 		.await
-	{
-		tracing::warn!(?error, ?protocol, "Failed to record device sighting");
+		.map_err(|error| {
+			tracing::error!(?error, ?protocol, "Failed to resolve the request's device");
+			APIError::InternalServerError(
+				"Could not resolve the device for this credential".to_string(),
+			)
+		})?;
+	if let Some(device) = device {
+		auth.user.device_library_scope =
+			device.library_scope.library_ids().map(<[String]>::to_vec);
+		auth.device_id = Some(device.device_id);
 	}
+	Ok(())
 }
 
 pub async fn validate_api_key(
@@ -645,6 +698,8 @@ pub(crate) async fn handle_bearer_auth(
 				.map(|user| AuthContext {
 					user,
 					api_key: Some(token),
+					// The caller binds the device: see `bind_device`.
+					device_id: None,
 				});
 		},
 		_ => (),
@@ -677,6 +732,8 @@ pub(crate) async fn handle_bearer_auth(
 	Ok(AuthContext {
 		user: AuthUser::from(user),
 		api_key: None,
+		// A JWT acts as the user, not as a device.
+		device_id: None,
 	})
 }
 
@@ -898,7 +955,9 @@ async fn handle_basic_auth(
 			return Ok(AuthContext {
 				user,
 				api_key: Some(api_key),
-			})
+				// The caller binds the device: see `bind_device`.
+				device_id: None,
+			});
 		},
 	};
 
@@ -913,6 +972,8 @@ async fn handle_basic_auth(
 	Ok(AuthContext {
 		user: AuthUser::from(user),
 		api_key: None,
+		// A password acts as the user, not as a device.
+		device_id: None,
 	})
 }
 
@@ -1025,6 +1086,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: None,
+			device_id: None,
 		};
 		assert!(user.is(&request_context.user()));
 	}
@@ -1035,6 +1097,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: None,
+			device_id: None,
 		};
 		assert_eq!(user.id, request_context.id());
 	}
@@ -1048,6 +1111,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: None,
+			device_id: None,
 		};
 		assert!(request_context
 			.enforce_permissions(&[UserPermission::AccessBookClub])
@@ -1063,6 +1127,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: None,
+			device_id: None,
 		};
 		assert!(request_context
 			.enforce_permissions(&[UserPermission::AccessBookClub])
@@ -1075,6 +1140,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: None,
+			device_id: None,
 		};
 		assert!(request_context
 			.enforce_permissions(&[UserPermission::AccessBookClub])
@@ -1090,6 +1156,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: None,
+			device_id: None,
 		};
 		assert!(request_context
 			.enforce_permissions(&[
@@ -1108,6 +1175,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: None,
+			device_id: None,
 		};
 		assert!(user.is(&request_context
 			.user_and_enforce_permissions(&[UserPermission::AccessBookClub])
@@ -1120,6 +1188,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: None,
+			device_id: None,
 		};
 		assert!(request_context
 			.user_and_enforce_permissions(&[UserPermission::AccessBookClub])
@@ -1135,6 +1204,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: None,
+			device_id: None,
 		};
 		assert!(request_context.enforce_server_owner().is_ok());
 	}
@@ -1145,6 +1215,7 @@ mod tests {
 		let request_context = AuthContext {
 			user: user.clone(),
 			api_key: None,
+			device_id: None,
 		};
 		assert!(request_context.enforce_server_owner().is_err());
 	}

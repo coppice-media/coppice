@@ -12,16 +12,25 @@
 #![warn(clippy::dbg_macro)]
 
 mod error;
+pub mod external;
 mod plan;
+#[cfg(test)]
+mod test_support;
 pub mod util;
 
 // One module per tool; module name is the tool id with underscores.
+pub mod boko;
 pub mod calibre;
+pub mod calibre_polish;
 pub mod cbz_covers;
 pub mod cbzit;
 pub mod epub2cbz;
 pub mod epub_check;
+pub mod epub_polish;
+pub mod meta_edit;
 pub mod missing_sequence;
+pub mod mobi2epub;
+pub mod webp_convert;
 
 pub use error::{ToolError, ToolResult};
 pub use plan::{Action, Plan, Report, Severity, Warning};
@@ -98,13 +107,19 @@ pub trait Tool: Send + Sync {
 /// Every tool known to the build, in registration order.
 pub fn registry() -> Vec<Box<dyn Tool>> {
 	vec![
+		Box::new(boko::BokoConvert),
 		Box::new(calibre::CalibreConvert),
 		Box::new(calibre::CalibreMeta),
+		Box::new(calibre_polish::CalibrePolish),
 		Box::new(cbz_covers::CbzCovers),
 		Box::new(cbzit::Cbzit),
 		Box::new(epub2cbz::Epub2Cbz),
 		Box::new(epub_check::EpubCheck),
+		Box::new(epub_polish::EpubPolish),
+		Box::new(meta_edit::MetaEdit),
 		Box::new(missing_sequence::MissingSequence),
+		Box::new(mobi2epub::Mobi2Epub),
+		Box::new(webp_convert::WebpConvert),
 	]
 }
 

@@ -22,8 +22,8 @@ use stump_auth::AuthContext;
 use crate::{
 	dto::{
 		BookmarkDto, ChapterDto, ChapterInfoDto, FileDimensionDto, KavitaDateTime,
-		MarkChapterReadDto, MarkReadDto, MarkVolumeReadDto, MarkVolumesReadDto,
-		ProgressDto,
+		MangaFormat, MarkChapterReadDto, MarkReadDto, MarkVolumeReadDto,
+		MarkVolumesReadDto, ProgressDto,
 	},
 	errors::{APIError, APIResult},
 	filter::SeriesFilterV2Dto,
@@ -159,6 +159,23 @@ async fn unmatched_verb() -> StatusCode {
 	StatusCode::NOT_FOUND
 }
 
+/// Kavita has no image lane for an EPUB. `kavita-ref` 0.9.1.4 answers `404`
+/// for `GET /api/Reader/image?chapterId=3&page=N` on its EPUB chapter for
+/// every page and every flag combination, including after the
+/// `chapter-info?extractPdf=true` extraction that does turn a PDF chapter
+/// into `200 image/png`. Stump's EPUB `get_page` hands back the cover for
+/// page 1 and the spine document's XHTML for every page after it, so without
+/// this guard an image reader — Kamigura's is the only reader it ships
+/// (`reader/ReaderScreen.kt:687-692`) — renders the cover on page 0 and then
+/// fails to decode `application/xhtml+xml` as an image on every page after
+/// it, which is indistinguishable from a hung reader.
+fn reject_page_image(media: &MediaInput) -> APIResult<()> {
+	if media.format() == MangaFormat::Epub {
+		return Err(APIError::NotFound("Chapter has no page images".to_owned()));
+	}
+	Ok(())
+}
+
 async fn reader_image(
 	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
 	Extension(auth): Extension<AuthContext>,
@@ -171,6 +188,7 @@ async fn reader_image(
 		.await?
 		.ok_or_else(|| APIError::NotFound("Chapter does not exist".to_owned()))?;
 	let media = &input.media[index];
+	reject_page_image(media)?;
 	let pages = media.pages();
 	if pages > 0 && page >= pages {
 		return Err(APIError::NotFound(format!(
@@ -891,7 +909,8 @@ async fn remove_bookmark(
 ///
 /// Kavita keeps a copy of the bookmarked image on disk and serves that; Stump
 /// renders the page from the file it is bookmarked in, so the bookmark must
-/// still resolve to a readable chapter. `page` is Kavita's zero-based page
+/// still resolve to a readable chapter, and an EPUB page is refused for the
+/// same reason `Reader/image` refuses it. `page` is Kavita's zero-based page
 /// number, the same space `Reader/image` uses.
 async fn bookmark_image(
 	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
@@ -920,6 +939,7 @@ async fn bookmark_image(
 		return Err(APIError::NotFound("Bookmark does not exist".to_owned()));
 	};
 	let media = &input.media[*media_index];
+	reject_page_image(media)?;
 	let image = ctx.media_page(&user, &media.media.id, page + 1).await?;
 	Ok(image_response(
 		image,
@@ -1178,6 +1198,109 @@ mod chapter_info_tests {
 		)
 		.await
 		.is_err());
+	}
+
+	/// `kavita-ref` 0.9.1.4 answers `404` for `Reader/image` on its EPUB
+	/// chapter at every page, so the same chapter that reports a positive
+	/// `chapter-info.pages` has no image lane at all — an image-only reader
+	/// such as Kamigura's must fail on page 0 rather than be handed a cover
+	/// followed by undecodable XHTML. An archive chapter still serves.
+	#[tokio::test]
+	async fn an_epub_has_no_page_image_lane() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("reader").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let backend = std::sync::Arc::new(TestBackend::new(conn));
+		let books = library_of_type(backend.conn(), StumpLibraryType::Book).await;
+		let (_, book_files) = series_with_files(
+			backend.conn(),
+			&books.id,
+			"Collection",
+			&[("alice", "epub", 15)],
+		)
+		.await;
+		let comics = library_of_type(backend.conn(), StumpLibraryType::Comic).await;
+		let (comic_series, comic_files) = series_with_files(
+			backend.conn(),
+			&comics.id,
+			"science comics",
+			&[("science_comics_001", "cbz", 36)],
+		)
+		.await;
+		let epub_chapter =
+			KavitaIds::resolve(backend.conn(), IdKind::Media, &book_files[0].id)
+				.await
+				.unwrap();
+		let comic_chapter =
+			KavitaIds::resolve(backend.conn(), IdKind::Media, &comic_files[0].id)
+				.await
+				.unwrap();
+		let comic_series_id =
+			KavitaIds::resolve(backend.conn(), IdKind::Series, &comic_series.id)
+				.await
+				.unwrap();
+		let book_series_id =
+			KavitaIds::resolve(backend.conn(), IdKind::BookSeries, &book_files[0].id)
+				.await
+				.unwrap();
+
+		// The EPUB still reports pages, exactly as the reference does.
+		let info = chapter_info_for(backend.as_ref(), &user, epub_chapter, true)
+			.await
+			.unwrap();
+		assert_eq!((info.series_format, info.pages), (MangaFormat::Epub, 15));
+
+		for page in [0, 1, 14] {
+			let (status, _) = crate::test_support::request(
+				backend.clone(),
+				&user,
+				"GET",
+				&format!("/api/Reader/image?chapterId={epub_chapter}&page={page}"),
+				None,
+			)
+			.await;
+			assert_eq!(status, StatusCode::NOT_FOUND, "epub page {page}");
+		}
+		let (status, _) = crate::test_support::request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Reader/image?chapterId={comic_chapter}&page=0"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+
+		// `bookmark-image` renders through the same projection, so a
+		// bookmark on an EPUB page is refused too while a comic's is served.
+		for (series_id, chapter_id, expected) in [
+			(book_series_id, epub_chapter, StatusCode::NOT_FOUND),
+			(comic_series_id, comic_chapter, StatusCode::OK),
+		] {
+			let (status, _) = crate::test_support::request(
+				backend.clone(),
+				&user,
+				"POST",
+				"/api/Reader/bookmark",
+				Some(serde_json::json!({
+					"chapterId": chapter_id,
+					"volumeId": chapter_id,
+					"seriesId": series_id,
+					"page": 2,
+				})),
+			)
+			.await;
+			assert_eq!(status, StatusCode::OK, "bookmarking {chapter_id}");
+			let (status, _) = crate::test_support::request(
+				backend.clone(),
+				&user,
+				"GET",
+				&format!("/api/Reader/bookmark-image?seriesId={series_id}&page=2"),
+				None,
+			)
+			.await;
+			assert_eq!(status, expected, "bookmark image for {chapter_id}");
+		}
 	}
 }
 

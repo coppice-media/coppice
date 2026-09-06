@@ -3,7 +3,9 @@ use stump_auth::AuthContext;
 
 use crate::{
 	data::CoreContext,
-	object::annotation::{AnnotationSink, AnnotationSyncStatus},
+	input::annotation::AnnotationFilterInput,
+	object::annotation::{AnnotationPage, AnnotationSink, AnnotationSyncStatus},
+	pagination::OffsetPagination,
 };
 
 #[derive(Default)]
@@ -17,6 +19,29 @@ impl AnnotationQuery {
 			.into_iter()
 			.map(AnnotationSink::from)
 			.collect()
+	}
+
+	/// Every highlight, note, and bookmark the current user has, across every
+	/// book and every source: the native `media_annotations`/`bookmarks` rows
+	/// and the liseur-sync CAS records pushed by their devices (NickelStump
+	/// on a Kobo, KOReader, Liseur). Results are book-contiguous so a page
+	/// can be grouped as it arrives.
+	async fn annotations(
+		&self,
+		ctx: &Context<'_>,
+		filter: Option<AnnotationFilterInput>,
+		pagination: Option<OffsetPagination>,
+	) -> Result<AnnotationPage> {
+		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+
+		AnnotationPage::fetch(
+			core.conn.as_ref(),
+			user,
+			&filter.unwrap_or_default(),
+			&pagination.unwrap_or_default(),
+		)
+		.await
 	}
 
 	/// The annotation sync state for a user: configured sinks, last runs,

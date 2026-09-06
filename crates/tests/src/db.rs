@@ -1,10 +1,11 @@
 use models::entity::{
 	age_restriction, api_key, collection, collection_series, device, device_credential,
-	device_pairing, kobo_sync_session, library, library_config, library_exclusion,
-	liseur_sync_token, media, media_analysis, media_metadata, media_tag,
-	provider_series_identity, provider_series_link, provider_source, reading_head,
-	reading_head_event, reading_list, reading_list_item, reading_list_rule,
-	reading_session, refresh_token, series, series_metadata, server_config, session,
+	device_entitlement_delta, device_pairing, emailer, emailer_send_record,
+	kobo_sync_session, library, library_config, library_exclusion, liseur_sync_token,
+	media, media_analysis, media_metadata, media_tag, provider_series_identity,
+	provider_series_link, provider_source, reading_head, reading_head_event,
+	reading_list, reading_list_item, reading_list_rule, reading_session, refresh_token,
+	registered_email_device, series, series_metadata, server_config, session,
 	source_health, tag, user, user_preferences,
 };
 use models::entity::{known_duplicate_page, kobo_shelf_tombstone, page_hash};
@@ -62,6 +63,10 @@ pub async fn create_database_tables(db: &DbConn) -> Result<(), DbErr> {
 		schema.create_table_from_entity(page_hash::Entity),
 		schema.create_table_from_entity(known_duplicate_page::Entity),
 		schema.create_table_from_entity(kobo_shelf_tombstone::Entity),
+		schema.create_table_from_entity(device_entitlement_delta::Entity),
+		schema.create_table_from_entity(emailer::Entity),
+		schema.create_table_from_entity(emailer_send_record::Entity),
+		schema.create_table_from_entity(registered_email_device::Entity),
 	];
 
 	for stmt in tables {

@@ -1,3 +1,4 @@
+pub mod annotation_attachment;
 pub mod library;
 pub mod lists;
 pub mod reading_progress;

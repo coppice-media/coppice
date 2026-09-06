@@ -74,6 +74,42 @@ The registry is best effort at every call site: a failure is logged and never fa
 
 Clients that only speak `Authorization: Basic` (Mihon's Komga extension, OPDS 1.2 readers) can send the owner's username with the device key as the password. The key is validated exactly as a Bearer key and must belong to the named user; the request then acts as the device with the key's narrowed permissions, and the sighting is recorded. Such a request never opens a session or a Komga remember-me token, since either would act as the full user. A password that merely looks like a key still falls through to the bcrypt check. Session and password-Basic authentication carry no per-device credential and record nothing.
 
+## Library scope
+
+A device can be restricted to a subset of the libraries its user can see, so the same protocol routes resolve to a different visible library set depending on which device authenticated. Migration `m20260925_000000_add_device_library_scope` adds `devices.library_scope`: a JSON array of library ids, or `NULL` for "inherit whatever the user sees". `stump_devices::LibraryScope` is the typed form (`Inherit` or `Only(ids)`), and `device::Model::library_scope_ids` falls back to inherit and logs when the column holds anything that is not an array of ids, because a corrupt scope must not hide a device's whole library.
+
+`setDeviceLibraryScope(id: String!, libraryIds: [ID!]): Device!` writes it: `libraryIds: null` clears the restriction back to inherit, `[]` restricts the device to nothing. `Device.libraryScope: [String!]` reads it back, `null` again meaning inherit. The caller must own the device or be the server owner — the same `DeviceService::get` check the other device mutations use — and every id must name a library the device's *owner* can see, or the write is rejected with `DeviceError::InvalidScope` (`crates/devices/src/service.rs::set_library_scope`). Validating against the owner rather than the caller keeps a server-owner edit from naming a library the device's user cannot open.
+
+Enforcement is not per protocol. `models::shared::visibility::VisibilityScope` is the single funnel behind the `find_for_user` family on `library`, `series`, and `media`, and its `library_condition` `AND`s the user's `library_exclusions` subquery with `<library column> IN (scope)`. Komga, Kavita, OPDS 1.2 and 2.0, Kobo, KOReader, liseur-sync, and GraphQL all read through those helpers, so one scope narrows every one of them at once. `From<&AuthUser>` yields the request's resolved scope, which is why existing call sites are scoped without being touched; `VisibilityScope::inherit(user)` is the only, explicit opt-out and is reserved for describing what a *user* owns rather than what a device sees.
+
+| Device scope | Library in the user's visibility | Result |
+| --- | --- | --- |
+| `NULL` (inherit) | yes | visible |
+| `NULL` (inherit) | no — excluded by `library_exclusions` | hidden |
+| lists the library | yes | visible |
+| lists the library | no — excluded by `library_exclusions` | hidden; the scope is an intersection, never a widening |
+| omits the library | yes | hidden |
+| `[]` | any | nothing visible |
+
+The scope is resolved once per request from the credential that authenticated it (`DeviceService::authenticate`) onto `AuthUser::device_library_scope`, and `AuthContext::scope()` hands that to the query helpers. A session or password-Basic request carries no device credential, so it has no scope and inherits. Nothing caches the resolved value, so a change is in force on the device's next request. Kobo is the one protocol that needs further bookkeeping, because its sync is incremental and a book that entered or left a scope has no timestamp change for the incremental window to notice; both directions are recorded in `device_entitlement_deltas` (see [Kobo capabilities](/docs/developer/kobo-sync-capabilities)).
+
+## Send to Kindle
+
+A Kindle speaks no sync protocol. Amazon's *Send to Kindle* service takes an e-mail from an approved sender with the book attached and delivers it to the device that owns the recipient address, so the address is the whole transport. Migration `m20260928_000000_add_device_kindle_email` adds `devices.kindle_email` (text, nullable) for exactly that, next to the transform profile and the library scope.
+
+No `kind` is a Kindle: a Kindle never authenticates, so it has no credential, no endpoints, and nothing to mint. Any device row may carry an address — in practice the row that stands for the operator's reading setup — and a row with one is a `sendToKindle` target. `setDeviceKindleEmail(id: String!, email: String): Device!` writes it (`email: null` clears it) and `Device.kindleEmail: String` reads it back. The address is validated syntactically by `stump_devices::normalize_kindle_email` — trimmed, one `@`, a non-empty local part, a hostname domain — and refused with `DeviceError::InvalidEmail` (HTTP 400) otherwise. The domain is deliberately not pinned: Amazon runs several regional Send-to-Kindle domains and an operator may point the device at their own forwarder. Nothing verifies the address with Amazon; only a delivery can.
+
+`sendToKindle(mediaId: ID!, deviceId: ID!): KindleDelivery!` (`crates/graphql/src/mutation/kindle.rs`, `EMAIL_SEND` permission) is one book to one device:
+
+| Step | Rule |
+| --- | --- |
+| Format | Amazon accepts `azw3`, `doc`, `docx`, `epub`, `htm`, `html`, `mobi`, `pdf`, `rtf`, `txt`. Anything else — a CBZ, a CBR — is refused locally: a Kindle cannot open it and Amazon discards it, which would look like a successful send. |
+| Conversion | An EPUB becomes AZW3 through the `boko-convert` tool in its pinned send-to-Kindle shape (`stump_tools::boko::KindleExport`) when the operator has `boko` on `PATH`. Without it the EPUB is mailed as it is — Amazon converts EPUB itself — and the delivery reports why in `note`. A missing converter is therefore normal, not an error. See [calibre tooling](/docs/developer/calibre-tooling). |
+| Delivery | The primary emailer and `stump_notify::EmailChannel`, i.e. the same SMTP client, size cap, and error mapping as `sendAttachmentEmail`, and the same forbidden-recipient list. The subject is the book's name; Stump never sends Amazon's magic `Convert` subject, so it never asks the service to reflow a PDF on the operator's behalf. |
+| Recording | Only what actually went out: one `emailer_send_records` row (so the emailer history shows every send, whichever lane made it) plus `DeviceService::record_delivery`, which writes `last_sync_at` and `last_sync_summary` = `{"protocol":"kindle-email","bytes","format"}`. `last_seen_at` deliberately does not move — nothing authenticated, the device was written to, not seen. |
+
+The converted file is a temporary under the server's cache directory and is removed when the request ends; the library file is never touched. `KindleDelivery` returns `{ deviceId, deviceName, recipient, format, bytes, converted, note }`, so the caller can say "sent Dune.azw3 (412 KB) to al@kindle.com" without a second query.
+
 ## GraphQL
 
 Every field is scoped to the caller: users see their own devices, the server owner sees all of them (`crates/graphql/src/{query,mutation,object,subscription}/device.rs`).
@@ -84,6 +120,9 @@ Every field is scoped to the caller: users see their own devices, the server own
 | `deviceEndpoints(id): [DeviceEndpoint!]!` | secret redacted |
 | `createDevice(kind, name): DeviceWithCredential!` | `{ device, credential { kind protocol credentialRef secret }, endpoints }`; permissions enforced by the registry as above |
 | `renameDevice(id, name)`, `revokeDevice(id)`, `setDeviceTransformProfile(id, profile)` | owner or server owner |
+| `setDeviceLibraryScope(id, libraryIds)` | owner or server owner; `libraryIds: null` restores inherit — see [Library scope](#library-scope) |
+| `setDeviceKindleEmail(id, email)` | owner or server owner; `email: null` clears it — see [Send to Kindle](#send-to-kindle) |
+| `sendToKindle(mediaId, deviceId): KindleDelivery!` | `EMAIL_SEND`; mails one book to the device's address — see [Send to Kindle](#send-to-kindle) |
 | `rotateDeviceCredential(id): DeviceWithCredential!` | rejected with a conflict once the device is revoked |
 | `readingStats(span, deviceId): ReadingStats!` | see below |
 | `subscription deviceSeen(deviceId)` | filtered `DeviceSeen` events; `readEvents` also carries them |

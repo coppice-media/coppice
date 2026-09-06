@@ -81,6 +81,12 @@ pub struct ProtocolsConfig {
 	#[env_key(MAX_IMAGE_UPLOAD_SIZE_KEY)]
 	pub max_image_upload_size: usize,
 
+	/// The maximum size, in bytes, of a single annotation attachment accepted
+	/// by `PUT /v1/annotations/{id}/attachments/{kind}`.
+	#[default_value(DEFAULT_ATTACHMENT_MAX_BYTES)]
+	#[env_key(ATTACHMENT_MAX_BYTES_KEY)]
+	pub attachment_max_bytes: usize,
+
 	/// Indicates if the web UI and its SPA fallback routes should be served.
 	#[default_value(DEFAULT_ENABLE_WEBUI)]
 	#[env_key(ENABLE_WEBUI_KEY)]

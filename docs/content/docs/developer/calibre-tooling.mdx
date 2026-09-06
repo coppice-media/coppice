@@ -1,20 +1,28 @@
 ---
 title: Calibre and external e-book tooling
-description: What calibre's command line does that Stump cannot, how the GPL-3 licence constrains the integration to shelling out, and how ingest detects DRM-protected files without ever removing DRM.
+description: What calibre's command line does that Stump cannot, why boko is the preferred converter for the Kindle formats and calibre the fallback, how the GPL-3 licence constrains both integrations to shelling out, and how ingest detects DRM-protected files without ever removing DRM.
 ---
 
 # Calibre and external e-book tooling
 
 Stump converts and inspects a narrow set of formats natively:
-`stump_media` reads ZIP/RAR/EPUB/PDF containers, `stump_kepub` converts EPUB to
-KEPUB in-process, and `stump_tools` owns the Kavita-style maintenance tools
-(`cbzit`, `epub2cbz`, `cbz-covers`, `epub-check`, `missing-sequence`).
-Everything outside that set — MOBI, AZW3, KFX, DOCX, FB2, LIT, PDB, and writing
-metadata back into a book — is calibre's territory.
+`stump_media` reads ZIP/RAR/EPUB/PDF containers and — since the Kindle reader
+landed — MOBI/PRC/AZW/AZW3 as well (see
+[native Kindle formats](#native-kindle-formats-no-converter-at-all)),
+`stump_kepub` converts EPUB to KEPUB in-process, `stump_tools`' `mobi2epub`
+converts Kindle books to EPUB 3 with no external binary, and `stump_tools`
+owns the Kavita-style maintenance tools (`cbzit`, `epub2cbz`, `cbz-covers`,
+`epub-check`, `missing-sequence`).
+*Writing* the Kindle formats is **boko's** territory, not calibre's:
+`boko-convert` converts EPUB, AZW3/KF8 and KFX in both directions with no
+plugin, no Kindle Previewer and no Wine (see
+[boko](#boko-the-preferred-kindle-converter) below). What is left for calibre
+is everything neither Stump nor boko can do: MOBI *output*, PDF, DOCX, FB2,
+LIT, PDB, and writing metadata back into a book.
 
-This page records exactly what calibre offers, why the integration is a
-subprocess and never a library, and what the ingest pipeline does when a file
-turns out to be DRM-protected.
+This page records what calibre offers, where boko replaces it, why both
+integrations are a subprocess and never a library, and what the ingest pipeline
+does when a file turns out to be DRM-protected.
 
 <Callout type="info">
 	Version and flag claims on this page are taken from the calibre manual for
@@ -92,8 +100,12 @@ Word 2007 and newer.
 
 <Callout type="warn">
 	KFX is not in calibre's built-in input list. Reading KFX needs the
-	third-party **KFX Input** plugin installed in the operator's calibre; that is
-	outside Stump's control and outside this integration's promises.
+	third-party **KFX Input** plugin installed in the operator's calibre; its
+	KFX *Output* plugin does not write KFX itself either — it drives Amazon's
+	Kindle Previewer. Both are outside Stump's control and outside this
+	integration's promises, which is exactly why
+	[boko](#boko-the-preferred-kindle-converter) is the preferred converter for
+	KFX and AZW3.
 </Callout>
 
 ### Metadata support per format
@@ -144,9 +156,12 @@ Table-of-contents control lives on `ebook-convert`, not `ebook-polish`:
 
 ## What Stump wires up
 
-Two tools in `crates/tools/src/calibre.rs`, both following the crate's
-plan/apply contract: `plan` only reads, `apply` performs exactly the planned
-actions, and originals are never modified.
+Three tools — `calibre-convert` and `calibre-meta` in
+`crates/tools/src/calibre.rs`, `calibre-polish` in
+`crates/tools/src/calibre_polish.rs` (it reuses the same `Calibre::locate` and
+timed subprocess runner) — all following the crate's plan/apply contract:
+`plan` only reads, `apply` performs exactly the planned actions, and originals
+are never modified without an explicit option.
 
 `calibre::Calibre::locate` resolves the binaries once. `stump_tools` stays
 `stump_core`-free, so there is deliberately **no** `STUMP_CALIBRE_BIN_DIR`
@@ -169,7 +184,7 @@ what selects calibre's output plugin, so the `to` option maps 1:1 onto it:
 	`ebook-convert` dispatches the KEPUB output plugin from. Kobo sideloading
 	wants the file renamed to `Book.kepub.epub`. For EPUB sources prefer the
 	in-process `stump_kepub` converter (see
-	[Comics transform](/developer/comics-transform)); `calibre-convert` exists for
+	[Comics transform](/docs/developer/comics-transform)); `calibre-convert` exists for
 	sources `stump_kepub` cannot read at all.
 </Callout>
 
@@ -193,12 +208,174 @@ extensions. Series comes from calibre's own OPF 2.0 extension,
 `<meta name="calibre:series">` and `calibre:series_index`
 ([`opf2.py`](https://github.com/kovidgoyal/calibre/blob/master/src/calibre/ebooks/metadata/opf2.py)).
 
-This pass is **read-only**. Writing metadata back (`ebook-meta --from-opf`,
-`--title`, `--authors`, …) is not implemented: it mutates the original file, so
-it needs the same explicit-apply and backup story as the other mutating tools
-and is left for a later change.
+This pass is **read-only**. Writing metadata back through calibre
+(`ebook-meta --from-opf`, `--title`, `--authors`, …) is not implemented: the
+in-process `meta-edit` tool already edits `ComicInfo.xml` and EPUB package
+metadata under the crate's plan/apply contract, without a subprocess and
+without touching anything else in the container.
 
-Per-option tables for both tools live in `crates/tools/README.md`.
+### `calibre-polish`
+
+Runs `ebook-polish <source> <target> [--flags...]` per book, with a finite
+timeout, and maps seven options 1:1 onto the documented flags:
+`subset_fonts`, `smarten_punctuation`, `jacket`, `remove_jacket`,
+`upgrade_book`, `compress_images`, `add_soft_hyphens` — always emitted in that
+order, whatever order they were given in. The output file is optional in the
+manual; this adapter always passes it, so calibre never rewrites the file it is
+reading. A run with no flag selected is refused (it would rewrite books for no
+effect), and a source that is not AZW3, EPUB or KEPUB is reported rather than
+attempted, because those are the only formats `ebook-polish` reads.
+
+`in_place` is the one mutating path: the polish is written into a
+`.stump-tools-polish-*` directory beside the source (same filesystem), the
+original is copied to `<file name>.bak` first, and only finished bytes are
+renamed over it. A failure therefore leaves the original byte-identical, and a
+backup this run created is removed so the retry is not refused.
+`Calibre::locate` only proves `ebook-convert` exists, so the plan additionally
+verifies `ebook-polish` is executable and fails once with an install hint
+instead of skipping every book at apply time.
+
+Per-option tables for all three tools live in `crates/tools/README.md`.
+
+## boko: the preferred Kindle converter
+
+[boko](https://github.com/zacharydenton/boko) is a native Rust e-book
+converter, and for the Kindle formats it is what Stump reaches for first:
+`boko-convert` (`crates/tools/src/boko.rs`) converts EPUB, AZW3/KF8 and KFX in
+both directions with no plugin, no Kindle Previewer and no Wine, so a headless
+server can produce a Kindle file at all. `calibre-convert` stays as the
+**fallback** for what boko cannot do.
+
+<Callout type="info">
+	Claims here are taken from `boko --help` / `boko convert --help` of a real
+	**0.5.0** install and from the format matrix in the
+	[project README](https://github.com/zacharydenton/boko#formats).
+	`stump_tools` requires **0.5.0 or newer** (`crates/tools/src/boko.rs`,
+	`MIN_VERSION`), and compares the whole triple, because a pre-1.0 crate can
+	move its CLI in a minor release.
+</Callout>
+
+boko is **GPL-3.0-or-later**, so it is governed by exactly the rules in
+[Licence: shell out, never link](#licence-shell-out-never-link): it is invoked
+as a separate process over `argv` and files, never linked, vendored, bundled,
+or added to a `Cargo.toml`, and the operator installs it themselves with
+`cargo install boko`. Nothing here removes DRM.
+
+| Format | boko reads | boko writes | Who does it otherwise |
+| --- | --- | --- | --- |
+| EPUB | yes | yes | `stump_media` reads it natively; `stump_kepub` writes KEPUB |
+| AZW3 (KF8) | yes | yes | calibre, slower and with worse KFX support |
+| KFX | yes | yes | calibre only via KFX Input/Output plugins + Kindle Previewer |
+| MOBI | yes | **no** | calibre (`ebook-convert in.epub out.mobi`) |
+| Markdown, plain text | no | yes | not wired up: neither is a library format |
+
+### `boko-convert`
+
+Runs `boko convert --quiet <source> <target> [extra_args...]` once per file,
+with a finite timeout, and follows the same failure rules as
+[`calibre-convert`](#calibre-convert): a non-zero exit, a timeout, or a
+"success" that produced no file is a `skipped` entry carrying the exit status
+and the captured stderr tail, and any partial output is deleted. A pre-existing
+target is refused at plan time unless `overwrite` is set, and refused again at
+apply time.
+
+`--quiet` is not optional. boko prints its progress (`Converting <in> -> <out>`
+and `Done.`) on **stderr**, so without it every successful conversion would
+come back carrying captured "error output"; `--quiet` suppresses only those
+lines, and a real `error: ...` diagnostic still arrives, which is what the
+`boko-stderr` warning reports.
+
+The binary is located once, by `boko::locate`: the tool's own `bin_dir` option,
+else `PATH`, else `$CARGO_HOME/bin`, else `~/.cargo/bin` — `cargo install` is
+boko's only distribution channel and a server started by a service manager
+rarely carries that directory in `PATH`. The version comes from
+`boko --version`, whose banner is `boko 0.5.0`; a missing, non-executable,
+unparseable or too-old binary raises `ToolError::ExternalToolMissing` with a
+`cargo install boko` hint.
+
+<Callout type="warn">
+	`to: "mobi"` is refused. boko reads MOBI but never writes it — `boko convert
+	in.epub out.mobi` exits 1 with `error: MOBI output is not supported; use
+	.azw3 instead` — so the request is rejected once at plan time, before boko
+	is even located, with a pointer to `calibre-convert`. That beats one failed
+	child process per book.
+</Callout>
+
+### The send-to-Kindle path
+
+`to: "azw3"` from an EPUB source is the one conversion an operator asks for by
+*device* rather than by format, so it has a name: `boko::KindleExport`. It is
+not a separate tool — it is `boko-convert` with the pair pinned
+(`KindleExport::options`/`::input` build the options blob) — and the planner
+attaches an informational `kindle-export` warning to every action that matches,
+so the CLI can say out loud that the output is ready to sideload over USB or to
+mail to a Kindle address. AZW3 is the safe choice there: every Kindle since the
+Paperwhite 1 accepts it. `to: "kfx"` renders better on a current device
+(hyphenation, kerning, ligatures) and is the better *reading* format, but it is
+the newer container.
+
+Per-option tables live in `crates/tools/README.md`.
+
+## Native Kindle formats: no converter at all
+
+Reading a Kindle book needs neither calibre nor boko. `stump_media` has its own
+reader — `crates/media/src/media/format/mobi.rs`, `MobiProcessor` /
+`MobiBook` — so `.mobi`, `.prc`, `.azw` and `.azw3` are first-class Stump
+media: the scanner accepts them, `ContentType` names them
+(`application/x-mobipocket-ebook` and `application/vnd.amazon.mobi8-ebook`),
+and the processor dispatch routes them like any other format.
+
+What the reader does:
+
+| Structure | What it gives Stump |
+| --- | --- |
+| PDB header + record info list | The record table, and the database name as a last-resort title |
+| PalmDOC header | Compression type, text record count, and the encryption type the DRM verdict rests on |
+| MOBI header | Text encoding (CP1252 or UTF-8), file version (6 vs 8), the first resource record, the HUFF/CDIC record numbers, the trailing-entry flags, and the KF8 index pointers |
+| EXTH | `100` author, `101` publisher, `103` description, `104` ISBN, `105` subject, `106` date, `113`/`504` ASIN, `121` KF8 boundary, `201`/`202` cover and thumbnail offsets, `503` title, `524` language |
+| PalmDOC LZ77 and HUFF/CDIC | The text of every record, with the multibyte and TBS trailing entries stripped first |
+| MOBI 6 markup | Sections split on `<mbp:pagebreak>`; `recindex` images and `filepos` links rewritten onto real names and anchors |
+| KF8 `FDST` + `SKEL`/`FRAG` indices | The flow table, then each source file reassembled from its skeleton and its fragments; `kindle:pos:fid:`, `kindle:flow:` and `kindle:embed:` links resolved |
+| NCX index (`INDX`/`TAGX`/CNCX) | The navigation tree, each entry resolved onto the section its text position lands in |
+
+A dual-format `.mobi` (a MOBI 6 part and a KF8 part in one Palm database) is
+read through its KF8 half, which is what every current reader does; EXTH `121`
+names the boundary and every record number in that part's header is relative to
+it.
+
+The reader is **clean-room**. Every structure is implemented from the MobileRead
+wiki ([MOBI](https://wiki.mobileread.com/wiki/MOBI),
+[PDB](https://wiki.mobileread.com/wiki/PDB),
+[PalmDOC](https://wiki.mobileread.com/wiki/PalmDOC),
+[KF8](https://wiki.mobileread.com/wiki/KF8)) plus, for HUFF/CDIC and the
+skeleton/fragment semantics the wiki does not spell out, the MOBI format notes
+in [Kindling](https://github.com/ciscoriordan/kindling)'s `README.md` — MIT
+licensed, and linked from the MobileRead MOBI page itself as further format
+documentation — cross-checked against the record bytes of a real huffdic file.
+No code is derived from calibre, KindleUnpack, DeDRM_tools, libmobi or boko, and
+each structure cites the page it comes from in its doc comment.
+
+### `mobi2epub`
+
+With the reader in place, converting a Kindle book to EPUB 3 is a container
+rewrite rather than a subprocess: `mobi2epub`
+(`crates/tools/src/mobi2epub.rs`) takes the reassembled sections, the resource
+records, the style-sheet flows, the EXTH metadata and the NCX navigation, and
+writes an OCF container to the same rules `epub-check` validates — `mimetype`
+first and stored, one `container.xml` rootfile, a package document with a
+resolving `unique-identifier`, `dc:title`, `dc:language`, a `nav` document and
+a `cover-image` property, plus an EPUB 2 NCX under `spine@toc`. Its own test
+asserts zero `epub-check` findings and re-opens the result with
+`EpubProcessor`.
+
+That leaves the external converters for what Stump genuinely cannot do:
+`boko-convert` for KFX and for *writing* AZW3, `calibre-convert` for MOBI
+output, PDF, DOCX, FB2, LIT and PDB, and `calibre-meta`/`calibre-polish` for
+writing metadata back into a book.
+
+Nothing here removes DRM: `MobiBook::open` refuses a protected file with the
+DRM detector's own verdict, so a `mobi2epub` run over a library reports it as
+an `unreadable` warning and converts the rest.
 
 ## DRM
 
@@ -237,7 +414,7 @@ answer that does not involve this project.
 
 The detector is `stump_media::drm` (`crates/media/src/drm.rs`); the ingest
 check that consumes it is `core/src/ingest/quality/drm_protected.rs`, with its
-weight row in [Modular ingest](/developer/modular-ingest). The check has
+weight row in [Modular ingest](/docs/developer/modular-ingest). The check has
 **weight 0** and is a blocking gate: a protected file is not a low-quality
 book, it is a file the server cannot decode, so it fails with a named scheme,
 the exact markers that matched, and a plain-language reason instead of moving a
@@ -333,10 +510,18 @@ cargo test -p stump_media --no-default-features --lib drm
 # The blocking ingest gate and the registry identities it joins
 cargo test -p stump_core --lib quality
 
-# calibre adapters against a fake `ebook-convert`/`ebook-meta` in a temp dir;
-# no real calibre is installed or required
+# calibre adapters against a fake `ebook-convert`/`ebook-meta`/`ebook-polish`
+# in a temp dir; no real calibre is installed or required
 cargo test -p stump_tools calibre
+
+# boko adapter against a fake `boko` in a temp dir; no real boko required
+cargo test -p stump_tools boko
 ```
 
-None of these tests invoke a real calibre, and none of them require a
-DRM-protected file to exist.
+None of these tests invoke a real calibre or a real boko, and none of them
+require a DRM-protected file to exist. The boko adapter was additionally
+verified against a real `boko` 0.5.0: the fixture EPUB
+(`The_Lottery_-_Shirley_Jackson.epub`, 32,381 bytes) converted to AZW3 (45,649
+bytes), back to EPUB (32,233 bytes) and to KFX (50,883 bytes), each output
+reopening with its title, author, language, cover and three spine documents
+intact.

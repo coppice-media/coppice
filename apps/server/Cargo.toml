@@ -124,6 +124,8 @@ axum-test = "17.2.0"
 maplit.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }
 tests = { path = "../../crates/tests" }
+migrations = { path = "../../crates/migrations", default-features = false }
+tempfile.workspace = true
 
 [build-dependencies]
 chrono.workspace = true

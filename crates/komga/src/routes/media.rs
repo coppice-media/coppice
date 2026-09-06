@@ -909,6 +909,7 @@ mod renumbering_tests {
 		Extension(AuthContext {
 			user: AuthUser::default(),
 			api_key: None,
+			device_id: None,
 		})
 	}
 

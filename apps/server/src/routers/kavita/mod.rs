@@ -23,13 +23,14 @@ use axum::{
 use prefixed_api_key::PrefixedApiKey;
 use stump_api_types::RequestOrigin;
 use stump_auth::AuthContext;
+use stump_devices::{CredentialRef, Protocol};
 use stump_kavita::routes::KavitaBackend;
 
 use crate::{
 	config::{jwt::access_token_secret, state::AppState},
 	errors::APIError,
 	middleware::{
-		auth::{handle_bearer_auth, inject_avatar_url, validate_api_key},
+		auth::{bind_device, handle_bearer_auth, inject_avatar_url, validate_api_key},
 		host::HostExtractor,
 	},
 };
@@ -75,12 +76,18 @@ async fn authenticate_api_key(
 	let user = validate_api_key(pak, ctx.conn.as_ref())
 		.await
 		.map_err(|error| error.into_response())?;
-	Ok(AuthContext {
+	let mut auth = AuthContext {
 		user,
 		api_key: Some(api_key.to_owned()),
-	})
+		device_id: None,
+	};
+	bind_kavita_device(ctx, &mut auth).await?;
+	Ok(auth)
 }
 
+/// Kavita's own token is a JWT this server minted, and it carries the API key
+/// the client logged in with (`claims.api_key`), so a Kavita session stays
+/// bound to the device that key belongs to for its whole lifetime.
 async fn authenticate_bearer(
 	ctx: &AppState,
 	token: &str,
@@ -91,14 +98,35 @@ async fn authenticate_bearer(
 				let user = backend::user_by_kavita_id(ctx.conn.as_ref(), &claims)
 					.await
 					.map_err(|error| error.into_response())?;
-				return Ok(AuthContext {
+				let mut auth = AuthContext {
 					user,
 					api_key: claims.api_key.clone(),
-				});
+					device_id: None,
+				};
+				bind_kavita_device(ctx, &mut auth).await?;
+				return Ok(auth);
 			}
 		}
 	}
-	handle_bearer_auth(token.to_owned(), ctx.conn.as_ref())
+	let mut auth = handle_bearer_auth(token.to_owned(), ctx.conn.as_ref())
+		.await
+		.map_err(|error| error.into_response())?;
+	bind_kavita_device(ctx, &mut auth).await?;
+	Ok(auth)
+}
+
+/// Narrows the request to the library scope of the device its API key belongs
+/// to. Kavita is a compatibility surface rather than a protocol the device
+/// registry mints credentials for, so a sighting is recorded under the
+/// generic [`Protocol::Api`] bucket.
+async fn bind_kavita_device(
+	ctx: &AppState,
+	auth: &mut AuthContext,
+) -> Result<(), Response> {
+	let Some(api_key) = auth.api_key.clone() else {
+		return Ok(());
+	};
+	bind_device(ctx, auth, CredentialRef::ApiKey(&api_key), Protocol::Api)
 		.await
 		.map_err(|error| error.into_response())
 }

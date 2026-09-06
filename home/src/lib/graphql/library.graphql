@@ -347,3 +347,26 @@ mutation ConsoleSplitSeries($mediaIds: [ID!]!, $name: String!) {
 		libraryId
 	}
 }
+
+# The devices a book can be mailed to. Only rows with a `kindleEmail` are
+# targets, so the book rows offer "Send to Kindle" only when one exists.
+query ConsoleKindleTargets {
+	devices {
+		id
+		name
+		kindleEmail
+		revokedAt
+	}
+}
+
+mutation ConsoleSendToKindle($mediaId: ID!, $deviceId: ID!) {
+	sendToKindle(mediaId: $mediaId, deviceId: $deviceId) {
+		deviceId
+		deviceName
+		recipient
+		format
+		bytes
+		converted
+		note
+	}
+}

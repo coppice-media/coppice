@@ -4,8 +4,8 @@ use filter_gen::Ordering;
 #[cfg(feature = "graphql")]
 use sea_orm::QueryOrder;
 use sea_orm::{
-	entity::prelude::*, prelude::async_trait::async_trait, sea_query::Query, ActiveValue,
-	Condition, FromQueryResult, Linked, QuerySelect, QueryTrait,
+	entity::prelude::*, prelude::async_trait::async_trait, ActiveValue, Condition,
+	FromQueryResult, Linked, QuerySelect, QueryTrait,
 };
 
 #[cfg(feature = "graphql")]
@@ -15,7 +15,8 @@ use crate::{
 	shared::{enums::FileStatus, image::ImageMetadata},
 };
 
-use super::{library_exclusion, series_metadata, user::AuthUser};
+use super::{series_metadata, user::AuthUser};
+use crate::shared::visibility::VisibilityScope;
 
 // TODO: Properly support soft deletion
 
@@ -71,30 +72,35 @@ pub fn get_age_restriction_filter(min_age: i32, restrict_on_unset: bool) -> Cond
 impl Entity {
 	// TODO: This conditional join with metadata means the caller might not be able to
 	// know if they should join
-	pub fn find_for_user(user: &AuthUser) -> Select<Entity> {
+	/// Series the request may see: the user's non-excluded libraries narrowed
+	/// by the authenticating device's scope, then the user's age restriction.
+	pub fn find_for_user<'a>(scope: impl Into<VisibilityScope<'a>>) -> Select<Entity> {
+		let scope = scope.into();
 		let age_restriction_filter =
-			user.age_restriction.as_ref().map(|age_restriction| {
-				get_age_restriction_filter(
-					age_restriction.age,
-					age_restriction.restrict_on_unset,
-				)
-			});
+			scope
+				.user()
+				.age_restriction
+				.as_ref()
+				.map(|age_restriction| {
+					get_age_restriction_filter(
+						age_restriction.age,
+						age_restriction.restrict_on_unset,
+					)
+				});
 
 		Entity::find()
 			.filter(Column::DeletedAt.is_null())
-			.filter(Column::LibraryId.not_in_subquery(
-				library_exclusion::Entity::library_hidden_to_user_query(user),
-			))
+			.filter(scope.library_condition(Column::LibraryId))
 			.apply_if(age_restriction_filter, |query, filter| {
 				query.left_join(series_metadata::Entity).filter(filter)
 			})
 	}
 
-	pub fn find_series_ident_for_user_and_id(
-		user: &AuthUser,
+	pub fn find_series_ident_for_user_and_id<'a>(
+		scope: impl Into<VisibilityScope<'a>>,
 		id: String,
 	) -> Select<Self> {
-		Self::find_for_user(user)
+		Self::find_for_user(scope)
 			.select_only()
 			.columns(vec![Column::Id, Column::Path])
 			.filter(Column::Id.eq(id))
@@ -180,32 +186,33 @@ impl ModelWithMetadata {
 			.left_join(series_metadata::Entity)
 	}
 
-	pub fn find_for_user(user: &AuthUser) -> Select<Entity> {
+	pub fn find_for_user<'a>(scope: impl Into<VisibilityScope<'a>>) -> Select<Entity> {
+		let scope = scope.into();
 		let select = ModelWithMetadata::find();
-		apply_age_restriction_filter(user, apply_hidden_library_filter(user, select))
+		apply_age_restriction_filter(
+			scope.user(),
+			apply_hidden_library_filter(scope, select),
+		)
 	}
 
-	pub fn find_by_id_for_user(id: String, user: &AuthUser) -> Select<Entity> {
+	pub fn find_by_id_for_user<'a>(
+		id: String,
+		scope: impl Into<VisibilityScope<'a>>,
+	) -> Select<Entity> {
+		let scope = scope.into();
 		let select = ModelWithMetadata::find_by_id(id);
-		apply_age_restriction_filter(user, apply_hidden_library_filter(user, select))
+		apply_age_restriction_filter(
+			scope.user(),
+			apply_hidden_library_filter(scope, select),
+		)
 	}
 }
 
 fn apply_hidden_library_filter(
-	user: &AuthUser,
+	scope: VisibilityScope<'_>,
 	select: Select<Entity>,
 ) -> Select<Entity> {
-	select
-		.filter(
-			Column::LibraryId.not_in_subquery(
-				Query::select()
-					.column(library_exclusion::Column::LibraryId)
-					.from(library_exclusion::Entity)
-					.and_where(library_exclusion::Column::UserId.eq(user.id.clone()))
-					.to_owned(),
-			),
-		)
-		.to_owned()
+	select.filter(scope.library_condition(Column::LibraryId))
 }
 
 fn apply_age_restriction_filter(

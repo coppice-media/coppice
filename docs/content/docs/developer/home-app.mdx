@@ -54,12 +54,14 @@ Routes are relative to the base.
 | `/library/[id]` | The browser for one library (`prerender = false`). A *Series* tab (`series`, grid or table) and a *Books* tab (`media`, table with progress and mark read/unread), a grid/table toggle, and filters for read status, format, tag, publisher, author, and title. Every filter, the tab, the view, and the page live in the query string, so the entity grids can link straight into a filtered view and the back button works. `SeriesFilterInput` carries no book-level fields, so setting format, tag, publisher, or author switches to the *Books* tab instead of silently dropping the filter. |
 | `/series/[id]` | One series (`prerender = false`): cover, progress, tags, metadata, and its books with per-book *Mark read* / *Mark unread* (`finishMediaProgress`; `clearMediaProgress` + `deleteMediaReadingHistory`), plus `finishSeriesProgress` and `clearSeriesReadingHistory` for the whole series. *Reshape* opens the sheet described in [Series reshape](#series-reshape). |
 | `/entities/{authors,publishers,tags}` | Grids of the metadata behind the books, each tile linking into `/library/[id]` pre-filtered. Authors come from `authors(search, libraryId)` and count the books the query already carries; publishers from `libraryById.publishers`; tags from `tags`. Neither publishers nor tags have an aggregate on the server, so those tiles count their own books with one small `media` query each (bounded by the page size of 24). A library selector scopes the grid and the links. |
+| `/annotations` | The annotation hub: every highlight, note, and bookmark the user has from one `annotations(filter, pagination)` query, grouped by book with a kind badge, a source badge, and the chapter/page/percentage the anchor carries. Filters for kind, source, book, `since`, and a text search live in the query string; notes on native rows are edited in place (`updateAnnotation`) or removed (`deleteAnnotation`), and *Open in reader* deep-links into `/reader/[mediaId]`. *Export now* runs `runAnnotationSync`, next to a link to `/settings/annotations`. |
 | `/reader/[mediaId]` | The reader. EPUBs render with [foliate-js](https://github.com/johnfactotum/foliate-js) over the server's Readium routes; comics and PDFs render as paged images. Position is persisted through `updateMediaProgress`; stored annotations (`annotationsByMediaId`) are drawn as read-only highlights. See [Reader](#reader). |
 | `/settings/notifications` | The routing matrix (`notificationRules` × `notificationChannels`, one `setNotificationRule` per switch) and a settings form per channel built from the channel's `IngestSettingDefinition` schema (`notificationChannelSettings`, `setNotificationChannelSettings`, `testNotificationChannel`). Administrative kinds are owner-only, mirroring `NotificationKind::is_administrative`; a `*` rule is reported, not edited. |
+| `/settings/annotations` | The [annotation-sync](/docs/developer/annotation-sync) export sinks: one card per `annotationSinks` entry with a form built from its `IngestSettingDefinition` schema, the per-sink `annotationSyncStatus` (enabled, last run, last error), *Enable*/*Disable*/*Save settings* through `setAnnotationSinkSettings`, and *Export now* (`runAnnotationSync`). Stored values are never returned, so secret fields are write-only and an empty one keeps what is stored. |
 | `/account` | Profile from `me` (username, owner badge, OIDC email, last login, active sessions) and the user's own sign-in history from `loginActivityById(id: me.id)`.                                                                                                                                                                                                  |
 
 `/` redirects to `/dashboard`, which is also where `/login` lands. The nav is
-Dashboard, Library, Reading, Devices, Account. The `(app)` layout loads `me`, exposes it through
+Dashboard, Library, Reading, Annotations, Devices, Account. The `(app)` layout loads `me`, exposes it through
 a Svelte context (`src/lib/session.svelte.ts`), and logs out through
 `POST /api/v2/auth/logout`. A `401` from any GraphQL request redirects to
 `/login?returnTo=…` (shared client).
@@ -125,7 +127,7 @@ renderer's own `relocate` (the `<foliate-view>` event only exposes a
 publication-wide fraction measured at the page's *end*, which drifts forward
 one page per restore). `href` is the package-relative path, never the
 server-generated URL, per the converter contract in
-[unified reading state](./unified-reading-state); reads accept either form:
+[unified reading state](/docs/developer/unified-reading-state); reads accept either form:
 
 ```json
 {
@@ -150,6 +152,24 @@ and disambiguated with the stored `text.before`. Annotations that no longer
 match are counted as *unanchored* instead of being placed by guesswork. On a
 paged book an annotation is placed by `locations.position` (the page) and shown
 as a marker over the image.
+
+The annotation hub links into the reader with an opening override in the query
+string, so the same route serves both "continue reading" and "show me this
+highlight":
+
+| Parameter | Lane | Meaning |
+| --------- | ---- | ------- |
+| `href` | EPUB | Package-relative resource path; selects the section to open |
+| `fragment` | EPUB | Fragment id inside that resource — the only precise in-resource anchor an annotation carries |
+| `progression` | EPUB | Whole-publication fraction in `0..=1`; picks the closest resource when `href` is absent or gone from this edition |
+| `page` | paged | Visible page number |
+
+The override replaces the stored position for the **opening** only, and the
+relocation it causes is dropped instead of being written back, so following a
+link never moves the book's saved position until the reader is actually paged.
+A resource-local offset is deliberately not accepted: an annotation's
+`progression` is publication-wide, and inventing an in-resource fraction from
+it would place the reader by guesswork.
 
 ### Live device activity
 

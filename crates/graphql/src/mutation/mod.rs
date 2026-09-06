@@ -15,6 +15,7 @@ mod emailer;
 mod epub;
 mod ingest;
 mod job;
+mod kindle;
 mod library;
 mod log;
 mod media;
@@ -54,6 +55,7 @@ use email_device::EmailDeviceMutation;
 use emailer::EmailerMutation;
 use epub::EpubMutation;
 use job::JobMutation;
+use kindle::KindleMutation;
 use library::LibraryMutation;
 use log::LogMutation;
 use media::MediaMutation;
@@ -103,6 +105,7 @@ struct UserAndNotifsMutations(
 	UserMutation,
 	EmailerMutation,
 	EmailDeviceMutation,
+	KindleMutation,
 	NotificationMutation,
 );
 

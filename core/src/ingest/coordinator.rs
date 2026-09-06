@@ -326,6 +326,11 @@ impl IngestCoordinator {
 			"Staging source",
 		)
 		.await?;
+		// Still inside the staging phase: the optional preprocess hook owns the
+		// staged bytes before anything reads them, and its result (a re-hashed
+		// row, or a failed item) is what the rest of the phases work from.
+		let preprocessed = self.store.run_preprocess(item).await?;
+		let item = &preprocessed;
 		let snapshot = self.store.snapshot(&item.id).await?;
 		self.emit_phase(
 			job,
@@ -735,6 +740,131 @@ mod tests {
 			.iter()
 			.all(|candidate| candidate.drop_item_id.is_none()
 				&& candidate.media_id.as_deref() == Some("media-1")));
+	}
+
+	/// End-to-end staged analysis with a preprocess hook configured: the hook
+	/// replaces the staged file before anything parses it, so the quality
+	/// report describes the post-hook bytes and the item carries their digest.
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn preprocess_hook_runs_before_staged_analysis() {
+		use migrations::MigratorTrait;
+		use models::{
+			entity::{ingest_drop_item, library, library_config},
+			shared::enums::FileStatus,
+		};
+		use sea_orm::{ActiveModelTrait, Database, Set};
+		use std::{io::Write as _, os::unix::fs::PermissionsExt};
+
+		let conn = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
+		migrations::Migrator::up(conn.as_ref(), None).await.unwrap();
+		let config = <library_config::ActiveModel as std::default::Default>::default()
+			.insert(conn.as_ref())
+			.await
+			.unwrap();
+		library::ActiveModel {
+			id: Set("library".to_string()),
+			name: Set("Library".to_string()),
+			path: Set("/tmp/library".to_string()),
+			status: Set(FileStatus::Ready),
+			config_id: Set(config.id),
+			..Default::default()
+		}
+		.insert(conn.as_ref())
+		.await
+		.unwrap();
+
+		let temp = tempfile::tempdir().unwrap();
+		let cbz = |path: &std::path::Path, pages: &[&str]| {
+			let file = std::fs::File::create(path).unwrap();
+			let mut archive = zip::ZipWriter::new(file);
+			let options = zip::write::SimpleFileOptions::default()
+				.compression_method(zip::CompressionMethod::Stored);
+			for name in pages {
+				archive.start_file(*name, options).unwrap();
+				archive.write_all(&png_fixture(40, 60)).unwrap();
+			}
+			archive.finish().unwrap();
+		};
+		// The staged file starts as one page; the hook swaps in the two-page
+		// archive, which only a hook that ran before parsing can explain.
+		let staged_path = temp.path().join("Saga 001.cbz");
+		cbz(&staged_path, &["page-1.png"]);
+		let replacement = temp.path().join("normalised.cbz");
+		cbz(&replacement, &["page-1.png", "page-2.png"]);
+		let (staged_sha, staged_size) = crate::ingest::staging::hash_file(&staged_path)
+			.await
+			.unwrap();
+		let (expected_sha, _) = crate::ingest::staging::hash_file(&replacement)
+			.await
+			.unwrap();
+
+		let hook = temp.path().join("hook.sh");
+		std::fs::write(
+			&hook,
+			format!("#!/bin/sh\ncp '{}' \"$1\"\n", replacement.to_string_lossy()),
+		)
+		.unwrap();
+		std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+		ingest_drop_item::ActiveModel {
+			id: Set("item-1".to_string()),
+			library_id: Set("library".to_string()),
+			source_filename: Set("Saga 001.cbz".to_string()),
+			byte_size: Set(staged_size as i64),
+			source_sha256: Set(staged_sha),
+			media_kind: Set("COMIC_ARCHIVE".to_string()),
+			staging_path: Set(staged_path.to_string_lossy().into_owned()),
+			status: Set(DropItemStatus::Staged.as_str().to_string()),
+			revision: Set(1),
+			..Default::default()
+		}
+		.insert(conn.as_ref())
+		.await
+		.unwrap();
+
+		let mut stump_config = crate::config::StumpConfig::debug();
+		stump_config.ingest.ingest_preprocess_command =
+			Some(hook.to_string_lossy().into_owned());
+		let stump_config = Arc::new(stump_config);
+		let store =
+			super::super::store::IngestStore::new(stump_config.clone(), conn.clone());
+		let quality = Arc::new(QualityRegistry::builtin(conn.clone()));
+		let providers =
+			Arc::new(ProviderRegistry::new(stump_config.clone(), conn.clone()));
+		let coordinator = IngestCoordinator::new(store, quality, providers);
+
+		let jobs = coordinator
+			.enqueue(vec!["item-1".to_string()], true)
+			.await
+			.unwrap();
+		let job_id = jobs[0].id.clone();
+		// Run in-process instead of racing the spawned task.
+		coordinator.run(job_id.clone()).await.unwrap();
+		assert_eq!(
+			coordinator.job(&job_id).await.unwrap().unwrap().status,
+			JobStatus::Completed
+		);
+
+		let item = coordinator
+			.store()
+			.item("item-1")
+			.await
+			.unwrap()
+			.expect("item still exists");
+		assert_eq!(item.source_sha256, expected_sha);
+		assert!(item.preprocessed_at.is_some());
+
+		let report = coordinator
+			.store()
+			.report_for_item("item-1")
+			.await
+			.unwrap()
+			.expect("quality report stored for the staged item");
+		assert_eq!(
+			report.source_sha256, expected_sha,
+			"analysis must describe the post-hook bytes"
+		);
 	}
 
 	fn png_fixture(width: u32, height: u32) -> Vec<u8> {

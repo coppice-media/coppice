@@ -2,13 +2,15 @@ use crate::config::state::AppState;
 use axum::{Extension, Router};
 use stump_auth::AuthContext;
 use stump_liseur_sync::{
-	AnnotationInput, AnnotationRecord, AnnotationResult, CatalogBook, CatalogBookSeries,
+	AnnotationInput, AnnotationRecord, AnnotationResult, AttachmentRecord,
+	AttachmentUpload, AttachmentUploadResult, CatalogBook, CatalogBookSeries,
 	CatalogBooksPage, CatalogCover, CatalogDownload, CatalogFoldersPage,
 	CatalogResolveResult, ChangesPage, DeleteAnnotationResult, HeadsPage,
 	LiseurSyncBackend, LiseurSyncError, LiseurToken, LoginResult, OpInput, OpRecord,
 	OpResult, ResolveRequest, ResolveResult, SessionInput, TokenCreateResult,
 };
 
+mod attachments;
 mod storage;
 mod touch;
 
@@ -30,6 +32,7 @@ impl Backend {
 pub(crate) fn mount(ctx: AppState) -> Router<AppState> {
 	stump_liseur_sync::routes::<AppState, Backend>()
 		.merge(touch::router())
+		.merge(attachments::router(ctx.clone()))
 		.layer(Extension(Backend::new(ctx)))
 }
 
@@ -214,5 +217,26 @@ impl LiseurSyncBackend for Backend {
 		rev: i64,
 	) -> Result<DeleteAnnotationResult, LiseurSyncError> {
 		storage::delete_annotation(&self.ctx, user_id, id, rev).await
+	}
+
+	fn attachment_max_bytes(&self) -> usize {
+		self.ctx.config.protocols.attachment_max_bytes
+	}
+
+	async fn put_attachment(
+		&self,
+		user_id: &str,
+		annotation_id: &str,
+		upload: AttachmentUpload,
+	) -> Result<AttachmentUploadResult, LiseurSyncError> {
+		attachments::put(&self.ctx, user_id, annotation_id, upload).await
+	}
+
+	async fn attachments(
+		&self,
+		user_id: &str,
+		annotation_id: &str,
+	) -> Result<Vec<AttachmentRecord>, LiseurSyncError> {
+		attachments::list(&self.ctx, user_id, annotation_id).await
 	}
 }

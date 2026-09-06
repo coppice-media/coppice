@@ -356,7 +356,9 @@ impl From<stump_devices::DeviceError> for APIError {
 			DeviceError::NotFound => APIError::NotFound(error.to_string()),
 			DeviceError::Forbidden => APIError::Forbidden(error.to_string()),
 			DeviceError::Revoked => APIError::Conflict(error.to_string()),
-			DeviceError::InvalidName(_) => APIError::BadRequest(error.to_string()),
+			DeviceError::InvalidName(_)
+			| DeviceError::InvalidScope(_)
+			| DeviceError::InvalidEmail(_) => APIError::BadRequest(error.to_string()),
 			DeviceError::Credential(_) => {
 				APIError::InternalServerError(error.to_string())
 			},

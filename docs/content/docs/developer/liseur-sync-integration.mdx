@@ -14,7 +14,7 @@ wire contract is grounded in the pinned liseur-sync
 specific status is called out below.
 
 The server remains authoritative and the adapter remains optional, consistent
-with the [server architecture](./server-architecture). The implementation
+with the [server architecture](/docs/developer/server-architecture). The implementation
 stores a user-scoped sync identity and revision bridge; it does not make a
 remote liseur-sync service a prerequisite for local Stump annotations.
 
@@ -29,6 +29,7 @@ remote liseur-sync service a prerequisite for local Stump annotations.
 | Position sync | **implemented** | `POST /v1/ops`, `GET /v1/changes`, `GET /v1/heads`, and `GET /v1/works/{id}/positions` use per-user sequence counters and idempotent `op_id` writes. |
 | Sessions | **implemented** | `POST /v1/sessions` stores immutable, idempotent closed sessions. |
 | Annotations | **implemented (bridge only)** | Push, CAS delete, change feed, and live-work reads preserve revisions, sequences, opaque locators, and tombstones in adapter-owned tables; local `media_annotations`/`bookmarks` projection is deferred. |
+| Attachments | **implemented (Stump extension)** | `PUT /v1/annotations/{id}/attachments/{kind}` and `GET .../attachments` store markup/notebook bytes as side objects keyed by annotation id, idempotent on SHA-256; downloads go through an authenticated `/api/v2` route. Not part of the pinned OpenAPI. |
 | Catalog | **implemented (read-only)** | `GET /v1/folders`, folder books/search, book detail/cover/download/series, and `POST /v1/books/{id}/resolve` are mounted. Folder and book pages use bounded opaque cursors; uploads, deletes, and series-claim mutations remain deferred. |
 
 The package is compiled only when the server's `liseur-sync` feature is
@@ -64,10 +65,10 @@ annotations ([`docs/adr/0028-annotation-sync.md`](https://github.com/chmouel/lis
 The other observed lanes are insufficient as annotation contracts:
 
 - **Komga:** the Liseur Komga client uses an API key and synchronizes catalog/file and `R2Progression` position data. Its position fallback can fetch saved positions, but the client has no annotation endpoint or annotation object ([ResearchLiseurSync, `docs/SERVER_CAPABILITIES.md:10-74`; Liseur `KomgaCatalogClient.kt:1-180`, `KomgaProgressionClient.kt:1-220`).
-- **Kobo:** Stump's current Kobo surface is a library/metadata/download compatibility adapter. Its advertised reading-state and tag routes are handled by compatibility stubs, and its inbound contract does not provide annotation text, notes, bookmarks, or Readium ranges ([`sync-platforms.mdx`](./sync-platforms) and ResearchLiseurSync, `docs/SERVER_CAPABILITIES.md:10-74`).
-- **OPDS:** OPDS 1.2/2.0 surfaces catalog and progression/download capabilities; they do not define a user-scoped, revisioned annotation resource or delta feed. OPDS progression therefore cannot be stretched into annotation replication without inventing a second protocol ([`server-architecture.mdx`](./server-architecture) and ResearchLiseurSync, `docs/adr/0028-annotation-sync.md:266-280`).
+- **Kobo:** Stump's current Kobo surface is a library/metadata/download compatibility adapter. Its advertised reading-state and tag routes are handled by compatibility stubs, and its inbound contract does not provide annotation text, notes, bookmarks, or Readium ranges ([`sync-platforms.mdx`](/docs/developer/sync-platforms) and ResearchLiseurSync, `docs/SERVER_CAPABILITIES.md:10-74`).
+- **OPDS:** OPDS 1.2/2.0 surfaces catalog and progression/download capabilities; they do not define a user-scoped, revisioned annotation resource or delta feed. OPDS progression therefore cannot be stretched into annotation replication without inventing a second protocol ([`server-architecture.mdx`](/docs/developer/server-architecture) and ResearchLiseurSync, `docs/adr/0028-annotation-sync.md:266-280`).
 
-This is a protocol distinction, not a claim that those clients cannot display local annotations. Stump's native GraphQL/EPUB path already stores user-owned annotations and bookmarks; the missing piece is a durable cross-device wire contract ([`sync-platforms.mdx`](./sync-platforms)).
+This is a protocol distinction, not a claim that those clients cannot display local annotations. Stump's native GraphQL/EPUB path already stores user-owned annotations and bookmarks; the missing piece is a durable cross-device wire contract ([`sync-platforms.mdx`](/docs/developer/sync-platforms)).
 
 ## Verified liseur-sync contract
 
@@ -89,6 +90,72 @@ A successful write starts at revision 1 and increments the revision. The changes
 A live wire record includes `id`, `rev`, `seq`, `work_id`, `edition_sha`, `kind`, `locator`, `progression`, `excerpt`, `color`, `body`, `device_id`, `client_ts`, `updated_at`, and deletion flags. A tombstone carries only `id`, `rev`, `seq`, `updated_at`, `deleted`, and `deleted_at` ([ResearchLiseurSync, `docs/openapi.yaml:2766-2788`; `internal/api/annotations.go:1-80`).
 
 The server never merges stale edits. A stale `base_rev` returns the current copy; the client must show or choose a copy and retry from the new revision. The batch can fail items independently, while malformed, empty, over-100-item, or impossible-sized requests are rejected as a whole ([ResearchLiseurSync, `docs/integrating.md:298-312`; `docs/openapi.yaml:625-670`).
+
+## Attachments
+
+A Stump extension, not part of the pinned liseur-sync OpenAPI: `AnnotationInput`
+carries only bounded text (`locator` and `body` 16 KiB, `excerpt` 1 KiB), so a
+Kobo handwritten markup — an SVG stroke layer plus a JPEG page snapshot of a
+few hundred KiB — has nowhere to go. Attachments are **side objects keyed by
+annotation id**: storing one never touches the record's revision or feed
+sequence, so the compare-and-set contract above is unchanged and a client that
+ignores these routes sees exactly the protocol it pinned.
+
+| Route | Scope | Behavior |
+| --- | --- | --- |
+| `PUT /v1/annotations/{id}/attachments/{kind}` | `sync` | Raw body. `Content-Type` is the media type, `X-Attachment-Sha256` the lowercase-hex digest of the bytes, `Content-Length` the size. `200` returns `{id, sha256, byte_size}`. |
+| `GET /v1/annotations/{id}/attachments` | `sync` | `{ attachments: [{id, annotation_id, kind, media_type, byte_size, sha256, created_at}] }`, oldest first. |
+| `GET /api/v2/annotations/{id}/attachments/{attachment_id}` | owner | The bytes, with the stored media type and `Cache-Control: private, max-age=31536000, immutable` (the path is content-addressed). Accepts the owner's Stump session/API key **or** the liseur device secret already used on `/v1/*`. |
+| `annotationAttachments(annotationId: ID!)` | any user, own records | GraphQL metadata list, including the filename `extension` the bytes are stored under. |
+
+`kind` is closed: `markup-svg` (handwritten strokes), `markup-page` (the page
+snapshot they were drawn on), or `notebook` (a device notebook export). The
+accepted media types are per kind — `markup-svg` requires `image/svg+xml`,
+`markup-page` accepts `image/jpeg` or `image/png`, and `notebook` accepts PDF,
+ZIP, EPUB, DOCX, HTML, plain text, or one of those images. Anything else is a
+`400`.
+
+**Limits.** One attachment is at most `STUMP_ATTACHMENT_MAX_BYTES`
+(`protocols.attachment_max_bytes`, 8 MiB by default). A `Content-Length` over
+the limit is refused with `413` before the body is streamed; a chunked body is
+cut off by the same bound while reading. An empty body is a `400`. The
+annotation id names the directory the bytes live in, so an id carrying
+attachments must match `[A-Za-z0-9._-]` and must not start with a dot; a
+`400` says so rather than letting a client-chosen id escape the attachment
+root. The annotation lane itself keeps accepting any bounded id.
+
+**Idempotency.** The digest is the key. The server hashes the received bytes
+and compares them to `X-Attachment-Sha256`; a mismatch is `409` and nothing is
+stored. A repeat of the same digest returns the **same attachment id** and
+writes nothing, so a device replaying a batch on its backup URL costs one
+request and never a second copy. A *different* digest for the same
+`(annotation, kind)` replaces the slot: the row keeps its id, the new bytes
+land, and the superseded file is unlinked. An unknown or tombstoned annotation
+is `404`; a missing or invalid bearer is `401`, and a login session (or a
+device token without `sync`) is `403`.
+
+**Storage.** Bytes live at
+`<config_dir>/attachments/<annotation_id>/<sha256>.<ext>` and the row stores
+that path relative to the attachment root, so moving the configuration
+directory does not invalidate rows. Writes go through a sibling `.partial`
+file and a rename, so a reader never sees a half-written content-addressed
+file. `annotation_attachments` (migration `m20260926`) carries
+`id`, `user_id`, `annotation_id`, `kind`, `media_type`, `byte_size`, `sha256`,
+`storage_path` and `created_at`, with a unique index on
+`(user_id, annotation_id, kind)` and a foreign key to the annotation's
+`(user_id, annotation_id)` unique index that cascades on delete — a liseur
+annotation id is client-chosen and therefore unique per user, never globally.
+A CAS delete cascades explicitly: the tombstone keeps identity and revision,
+not content, so the rows are dropped and the files unlinked in the same
+transaction that writes the tombstone.
+
+The first producer is NickelStump, which uploads both halves of a
+`.kobo/markups/<BookmarkID>.{svg,jpg}` pair and keeps a per-book digest ledger
+so a steady-state sync uploads nothing
+(`nickelstump/docs/PROTOCOL.md`, "Handwritten markups"). Kobo notebook exports
+still do not travel: the `notebook` kind exists, but an attachment needs an
+annotation to hang off and a notebook has no `Bookmark` row.
+
 ## Catalog
 
 The read-only catalog is implemented for the routes the pinned Android client
@@ -318,17 +385,12 @@ provider fully interoperable with the entire upstream server:
 - **Retention and remaining administration:** the current pass has no
   tombstone/session retention worker, compaction horizon, token listing or
   scope-update API, or insight route.
-- **No attachment or binary lane:** `AnnotationInput` carries only bounded
-  text (`locator` and `body` are 16 KiB each, `excerpt` 1 KiB) and the pinned
-  liseur-sync OpenAPI defines no attachment resource. NickelStump, the first
-  device-side producer on this route, therefore sends a Kobo handwritten
-  markup's identity, anchor, file names, sizes and SHA-256 digests, and the
-  SVG source inline only when it fits `body`; a page snapshot (hundreds of
-  KiB) and a Kobo notebook export (multi-MB DOCX/PDF) cannot travel at all
-  (`nickelstump/docs/PROTOCOL.md`, "Handwritten markups"). Adding an
-  attachment lane is an upstream protocol decision, not a field this adapter
-  may invent: no annotation contract change was needed or made for that
-  client.
+- **Attachment retention:** the attachment lane below stores bytes under
+  `<config_dir>/attachments`. A tombstoned annotation unlinks its files, and
+  the table's foreign key cascades rows when a work or an account is removed,
+  but nothing sweeps the bytes a hard row delete leaves behind. A
+  `<config_dir>/attachments/<annotation_id>` directory with no rows is
+  therefore harmless but unreclaimed until a retention worker exists.
 
 Until those deferred capabilities are deliberately specified, the safe
 behavior is to retain raw evidence, report unresolved/conflict states, and

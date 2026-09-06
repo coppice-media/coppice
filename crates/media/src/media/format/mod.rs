@@ -1,4 +1,5 @@
 pub mod epub;
+pub mod mobi;
 #[cfg(feature = "pdf")]
 pub mod pdf;
 #[cfg(feature = "rar")]

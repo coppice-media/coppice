@@ -600,6 +600,8 @@ fn comic_info(metadata: ProcessedMediaMetadata, page_count: usize) -> util::Comi
 		month: metadata.month,
 		day: metadata.day,
 		writers: metadata.writers.unwrap_or_default(),
+		publisher: metadata.publisher,
+		tags: metadata.tags.unwrap_or_default(),
 		page_count: Some(page_count),
 		language: metadata.language,
 	}

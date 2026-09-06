@@ -47,6 +47,12 @@ stump_devices = { path = "../devices", features = ["graphql"] }
 stump_notify = { path = "../notify" }
 stump_media = { path = "../media", default-features = false }
 stump_scanner = { path = "../scanner" }
+# `boko-convert` for the send-to-Kindle lane (shells out to the operator's
+# own boko; nothing GPL is linked).
+stump_tools = { path = "../tools" }
+# The send-to-Kindle lane converts into a temporary directory under the
+# server's cache dir and removes it with the resolver.
+tempfile.workspace = true
 subtle.workspace = true
 stump_provider = { path = "../provider", optional = true }
 tower-sessions.workspace = true
@@ -60,7 +66,6 @@ windows = { version = "0.58.0", features = ["Win32_Storage_FileSystem", "Win32_F
 
 [dev-dependencies]
 maplit.workspace = true
-tempfile.workspace = true
 pretty_assertions.workspace = true
 async-graphql-axum.workspace = true
 tests = { path = "../tests" }

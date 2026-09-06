@@ -28,9 +28,54 @@
 	} from '$lib/graphql/generated/graphql';
 	import EpubReader from '$lib/components/reader/EpubReader.svelte';
 	import PagedReader from '$lib/components/reader/PagedReader.svelte';
-	import { decimal } from '$lib/components/reader/locator';
+	import { decimal, type ReaderLocator } from '$lib/components/reader/locator';
 
 	const mediaId = $derived(pageState.params.mediaId ?? '');
+
+	/**
+	 * A deep link from the annotation hub: `?href=…&fragment=…&progression=…`
+	 * anchors an EPUB, `?page=…` a paged book. `progression` is the
+	 * whole-publication fraction (the hub's `progression`), so it selects a
+	 * resource, never an in-resource offset — `fragment` is the only precise
+	 * in-resource anchor an annotation carries.
+	 *
+	 * It decides where the reader opens and nothing else: the relocation it
+	 * causes is not written back, so following a link never moves the book's
+	 * saved position until the reader is actually paged.
+	 */
+	const deepLink = $derived.by(() => {
+		const params = pageState.url.searchParams;
+		const href = params.get('href');
+		const fragment = params.get('fragment');
+		const progression = params.has('progression')
+			? Number(params.get('progression'))
+			: Number.NaN;
+		const startPage = Number.parseInt(params.get('page') ?? '', 10);
+		const percentage = Number.isFinite(progression) ? progression : undefined;
+		const page = Number.isFinite(startPage) ? startPage : undefined;
+		if (!href && !fragment && percentage === undefined && page === undefined) return null;
+		return {
+			locator: href
+				? ({
+						chapterTitle: '',
+						href,
+						title: null,
+						type: 'application/xhtml+xml',
+						locations: {
+							fragments: fragment ? [fragment] : null,
+							progression: null,
+							position: page ?? null,
+							totalProgression: percentage ?? null,
+							cssSelector: null,
+							partialCfi: null
+						},
+						text: null
+					} satisfies ReaderLocator)
+				: null,
+			percentage,
+			page
+		};
+	});
 
 	const bookQuery = createQuery(() => ({
 		queryKey: ['readerBook', mediaId],
@@ -79,6 +124,25 @@
 	let reportedSeconds = 0;
 	let pending: MediaProgressInput | null = null;
 	let timer: ReturnType<typeof setTimeout> | null = null;
+	// A deep link opens the reader where the user has not read to, and the
+	// renderer reports that opening — plus every layout settle after it — as a
+	// relocation. `holdOpening` swallows those: writes resume on the first
+	// relocation that reports a *different* position, which is the first real
+	// page turn.
+	let holdOpening = $state(false);
+	let openingPosition: string | null = null;
+
+	// Both renderers read their opening position untracked, so a second deep
+	// link into the same book has to remount them; `search` is the only query
+	// this route carries.
+	const anchorKey = $derived(pageState.url.search);
+
+	$effect(() => {
+		// Re-armed for every deep link, including one that arrives while the
+		// reader is already open.
+		holdOpening = deepLink !== null;
+		openingPosition = null;
+	});
 
 	function flush(): void {
 		if (timer) {
@@ -101,6 +165,16 @@
 	}
 
 	function schedule(input: MediaProgressInput): void {
+		if (holdOpening) {
+			// The payload is a pure function of the position, so an identical
+			// one is the same place, not a page turn.
+			const position = JSON.stringify(input);
+			if (openingPosition === null || openingPosition === position) {
+				openingPosition = position;
+				return;
+			}
+			holdOpening = false;
+		}
 		pending = input;
 		if (timer) clearTimeout(timer);
 		timer = setTimeout(flush, WRITE_DELAY_MS);
@@ -165,14 +239,17 @@
 			</EmptyHeader>
 		</Empty>
 	{:else if isEpub}
-		<EpubReader
-			{mediaId}
-			storedLocator={book.readProgress?.locator ?? null}
-			storedPercentage={decimal(book.readProgress?.percentageCompleted)}
-			{annotations}
-			onLocator={({ locator, percentage, isComplete }) =>
-				schedule({ epub: { locator, percentage, isComplete } })}
-		/>
+		{#key anchorKey}
+			<EpubReader
+				{mediaId}
+				storedLocator={deepLink?.locator ?? book.readProgress?.locator ?? null}
+				storedPercentage={deepLink?.percentage ??
+					decimal(book.readProgress?.percentageCompleted)}
+				{annotations}
+				onLocator={({ locator, percentage, isComplete }) =>
+					schedule({ epub: { locator, percentage, isComplete } })}
+			/>
+		{/key}
 	{:else if visiblePagesQuery.isPending}
 		<Skeleton class="h-[70vh] min-h-[420px] rounded-xl" />
 	{:else if visiblePagesQuery.isError}
@@ -194,12 +271,14 @@
 			</EmptyHeader>
 		</Empty>
 	{:else}
-		<PagedReader
-			{mediaId}
-			{pageCount}
-			startPage={book.readProgress?.page ?? 1}
-			{annotations}
-			onPage={(value) => schedule({ paged: { page: value } })}
-		/>
+		{#key anchorKey}
+			<PagedReader
+				{mediaId}
+				{pageCount}
+				startPage={deepLink?.page ?? book.readProgress?.page ?? 1}
+				{annotations}
+				onPage={(value) => schedule({ paged: { page: value } })}
+			/>
+		{/key}
 	{/if}
 </div>

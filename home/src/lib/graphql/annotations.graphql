@@ -1,0 +1,127 @@
+# Annotation hub (`/annotations`) and sink settings (`/settings/annotations`).
+#
+# Names are prefixed `Console*` because codegen merges every document under
+# `src/lib/graphql/**/*.graphql` into one set where operation and fragment
+# names must be unique.
+
+fragment ConsoleAnnotationFields on AnnotationEntry {
+	id
+	kind
+	source
+	sourceDeviceId
+	sourceDeviceName
+	editable
+	chapterTitle
+	href
+	fragment
+	page
+	progression
+	excerpt
+	note
+	color
+	createdAt
+	updatedAt
+	book {
+		key
+		mediaId
+		title
+		authors
+		seriesId
+		seriesName
+		libraryId
+		extension
+	}
+}
+
+query ConsoleAnnotations($filter: AnnotationFilterInput, $pagination: OffsetPagination) {
+	annotations(filter: $filter, pagination: $pagination) {
+		total
+		bookCount
+		hasNext
+		items {
+			...ConsoleAnnotationFields
+		}
+	}
+}
+
+# The filter bar's book selector and the per-book export target: every book the
+# user has annotated, without paging the annotations themselves.
+query ConsoleAnnotationBooks {
+	annotations(pagination: { page: 1, pageSize: 500 }) {
+		items {
+			book {
+				key
+				mediaId
+				title
+			}
+		}
+	}
+}
+
+mutation ConsoleUpdateAnnotation($input: UpdateAnnotationInput!) {
+	updateAnnotation(input: $input) {
+		id
+		annotationText
+		updatedAt
+	}
+}
+
+mutation ConsoleDeleteAnnotation($id: String!) {
+	deleteAnnotation(id: $id) {
+		id
+	}
+}
+
+query ConsoleAnnotationSinks {
+	annotationSinks {
+		id
+		name
+		description
+		settings {
+			key
+			label
+			valueType
+			required
+			secret
+			defaultValue
+			description
+			helpUrl
+		}
+	}
+	annotationSyncStatus {
+		userId
+		pending
+		sinks {
+			sinkId
+			enabled
+			lastRunAt
+			lastError
+		}
+	}
+}
+
+mutation ConsoleSetAnnotationSinkSettings($sinkId: String!, $settings: JSON, $enabled: Boolean) {
+	setAnnotationSinkSettings(sinkId: $sinkId, settings: $settings, enabled: $enabled) {
+		userId
+		pending
+		sinks {
+			sinkId
+			enabled
+			lastRunAt
+			lastError
+		}
+	}
+}
+
+mutation ConsoleRunAnnotationSync {
+	runAnnotationSync {
+		userId
+		pending
+		sinks {
+			sinkId
+			enabled
+			lastRunAt
+			lastError
+		}
+	}
+}

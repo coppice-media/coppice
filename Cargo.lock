@@ -3390,6 +3390,7 @@ dependencies = [
  "stump_notify",
  "stump_provider",
  "stump_scanner",
+ "stump_tools",
  "subtle",
  "tempfile",
  "tests",
@@ -9077,6 +9078,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "sha2",
  "stump_api_types",
  "stump_auth",
  "thiserror 2.0.17",
@@ -9259,6 +9261,7 @@ dependencies = [
  "linemux",
  "local-ip-address",
  "maplit",
+ "migrations",
  "models",
  "oauth2-reqwest",
  "openidconnect",
@@ -9311,7 +9314,9 @@ name = "stump_tools"
 version = "0.1.6"
 dependencies = [
  "alphanumeric-sort",
+ "chrono",
  "epub",
+ "image",
  "pretty_assertions",
  "quick-xml",
  "regex",

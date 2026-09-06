@@ -23,7 +23,7 @@ Internally the server keeps these settings in `StumpConfig`, split into flattene
 | `database`                  | `core/src/config/database.rs`  | `db_path`, `db_timeout_secs`, `db_max_connections`, `db_min_connections`, `sqlite_statement_cache_capacity`                                                                                                                                                                                                           |
 | `jobs`                      | `core/src/config/jobs.rs`      | `enable_background_jobs`, `parallelism_multiplier`                                                                                                                                                                                                                                                                    |
 | `protocols`                 | `core/src/config/protocols.rs` | `enable_koreader_sync`, `enable_kobo_sync`, `kobo_kepub_preconvert`, `kobo_kepub_cache_max_age_days`, `kobo_kepub_deflate_level`, `kobo_kepub_conversion`, `enable_komga`, `enable_kavita`, `enable_opds_progression`, `enable_upload`, `max_file_upload_size`, `max_image_upload_size`, `enable_webui`, `enable_playground`, `client_dir` |
-| `ingest`                    | `core/src/config/ingest.rs`    | `ingest_drop_dir`, `ingest_staging_dir`, `ingest_editor_dir`, `ingest_progress_retention`                                                                                                                                                                                                                             |
+| `ingest`                    | `core/src/config/ingest.rs`    | `ingest_drop_dir`, `ingest_staging_dir`, `ingest_editor_dir`, `ingest_progress_retention`, `ingest_preprocess_command`, `ingest_preprocess_timeout_secs`                                                                                                                                                               |
 | `providers`                 | `core/src/config/providers.rs` | `enable_providers`, `provider_cache_max_bytes`, `virtual_series_ttl`, `provider_gc_days`, `provider_health_interval_secs`, `provider_health_dead_after`                                                                                                                                                                                                       |
 | `auth`                      | `core/src/config/auth.rs`      | `password_hash_cost`, `session_ttl`, `access_token_ttl`, `refresh_token_ttl`, `expired_session_cleanup_interval`                                                                                                                                                                                                      |
 | `pdf`                       | `core/src/config/pdf.rs`       | `pdfium_path`, `pdf_render_dpi`, `pdf_max_dimension`, `pdf_render_format`, `pdf_cache_pages`, `pdf_prerender_range`, `pdf_high_quality`                                                                                                                                                                               |
@@ -459,6 +459,40 @@ receive `CURSOR_EXPIRED` and must refetch.
 | Type    | Default Value | TOML Key                    |
 | ------- | ------------- | --------------------------- |
 | Integer | `10000`       | `ingest_progress_retention` |
+
+### STUMP_INGEST_PREPROCESS
+
+Executable run once per dropped ingest item, before analysis, as
+`<command> <absolute staged file path>` with `STUMP_INGEST_ITEM_ID` and
+`STUMP_INGEST_LIBRARY_ID` in its environment. Any executable works; typical
+uses are format normalisation and running your own conversion pipeline.
+
+This is an executable path (absolute, or a name resolved on `PATH`), not a
+shell line: arguments are not parsed out of it, so wrap multi-step work in
+your own script. A command that does not resolve to an executable file fails
+startup rather than silently skipping every item.
+
+Exit `0` continues analysis with whatever bytes are now at that path — the
+file is re-hashed, so the hook may rewrite it in place or replace it at the
+same path. A non-zero exit fails the item, with the exit code and the tail of
+the hook's stderr as the failure reason shown in the ingest editor. A
+successful run is recorded on the item, so re-analysis and retries never run
+the hook twice. Unset by default; the ingest pipeline is then unchanged. See
+the [modular ingest](/docs/developer/modular-ingest) developer page.
+
+| Type   | Default Value | TOML Key                    |
+| ------ | ------------- | --------------------------- |
+| String | (unset)       | `ingest_preprocess_command` |
+
+### STUMP_INGEST_PREPROCESS_TIMEOUT_SECS
+
+Wall-clock budget for one `STUMP_INGEST_PREPROCESS` run. A hook that outlives
+it is killed and its item fails with a timeout reason. Must be greater than
+zero whenever a preprocess command is set.
+
+| Type    | Default Value | TOML Key                         |
+| ------- | ------------- | -------------------------------- |
+| Integer | `600`         | `ingest_preprocess_timeout_secs` |
 
 ### INGEST_EDITOR_DIR
 

@@ -10,6 +10,10 @@ pub enum DeviceError {
 	Revoked,
 	#[error("invalid device name: {0}")]
 	InvalidName(String),
+	#[error("invalid library scope: {0}")]
+	InvalidScope(String),
+	#[error("invalid Kindle address: {0}")]
+	InvalidEmail(String),
 	#[error("failed to mint credential: {0}")]
 	Credential(String),
 	#[error(transparent)]

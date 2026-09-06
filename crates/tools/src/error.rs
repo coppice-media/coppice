@@ -34,6 +34,8 @@ pub enum ToolError {
 	#[error("{0}")]
 	Media(#[from] stump_media::error::FileError),
 	#[error("{0}")]
+	Transform(#[from] stump_media::transform::TransformError),
+	#[error("{0}")]
 	Archive(#[from] zip::result::ZipError),
 	#[error("{0}")]
 	Xml(#[from] quick_xml::Error),

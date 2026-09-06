@@ -23,19 +23,19 @@ editing it.
 | `kobo` | `stump_kobo` | Kobo sync protocol routes and `KoboBackend` trait | server `kobo` | README by `ReadmeProtocols` |
 | `komga` | `stump_komga` | Komga-compatible API surface and `KomgaBackend` trait | server `komga` (implies `readium`) | README by `ReadmeProtocols` |
 | `koreader` | `stump_koreader` | KOReader sync API and `KoreaderBackend` trait | server `koreader` | README by `ReadmeProtocols` |
-| `liseur-sync` | `stump_liseur_sync` | Native liseur-sync wire contract and `LiseurSyncBackend` trait | server `liseur-sync` | README by `ReadmeProtocols` |
+| `liseur-sync` | `stump_liseur_sync` | Native liseur-sync wire contract, annotation attachment lane, and `LiseurSyncBackend` trait | server `liseur-sync` | README by `ReadmeProtocols` |
 | `macros/filter-gen` | `filter-gen` | Proc macro generating filter/ordering enums for entities | always linked (`models`, `graphql`) | README pending |
 | `macros/stump-config-gen` | `stump-config-gen` | Proc macro generating `StumpConfig` env/partial-config impls | always linked (`stump_core`) | in flight (dirty `lib.rs`; `ConfigSplit`) — skipped |
 | `media` | `stump_media` | File/image processing, archive formats, thumbnails, DRM/encryption detection (`drm`) | `pdf` (PDFium), `rar` (unrar) via server `formats` | README by `ReadmeMediaKepub` (Decisions/Layout rows for `src/drm.rs` by `CalibreAdapter`) |
 | `migrations` | `migrations` | Append-only SeaORM schema migrations, `migrate` CLI | always linked; `cli` feature off in server graph | README done |
-| `models` | `models` | SeaORM entities, stored value types, shared DB services | always linked; `graphql` derives opt-in | README done |
+| `models` | `models` | SeaORM entities, stored value types, shared DB services (reading progress, annotation attachments) | always linked; `graphql` derives opt-in | README done |
 | `opds` | `stump_opds` | OPDS 1.2/2.0 catalog routes and `OpdsBackend` trait | server `opds` | README by `ReadmeProtocols` |
 | `notify` | `stump_notify` | Notification channels (ntfy, email, webhook), routing-rule resolution, retry policy | always linked via `stump_core`; `graphql` derives opt-in (`stump_core/graphql`) | README done |
 | `provider` | `stump_provider` | Remote source host: `Source` trait, page cache, Keiyoushi catalog/health, materialisation, virtual-library browse, GC | server/core/graphql `providers` (in `headless`, not `minimal`) + runtime `STUMP_ENABLE_PROVIDERS` | README done |
 | `provider-mangadex` | `stump_provider_mangadex` | MangaDex `Source` implementation (API + MangaDex@Home pages) | via `providers` | covered by `provider/README.md` |
 | `scanner` | `stump_scanner` | Filesystem scan planning primitives | always linked via `stump_core` | README pending |
 | `tests` | `tests` | Shared test DB/fake-data helpers for integration tests | dev only | README pending (dirty: `src/db.rs`) |
-| `tools` | `stump_tools` | Library maintenance tools (Kavita "external tools" parity): the `Tool` plan/apply contract plus `calibre-convert`, `calibre-meta`, `cbz-covers`, `cbzit`, `epub-check`, `epub2cbz`, `missing-sequence`, driven by `stump tools list`/`plan`/`apply` | always linked via `cli`; not in the server route graph | in flight (untracked; `ToolsCore` + per-tool workers) |
+| `tools` | `stump_tools` | Library maintenance tools (Kavita/MangaManager "external tools" parity): the `Tool` plan/apply contract plus `calibre-convert`, `calibre-meta`, `calibre-polish`, `cbz-covers`, `cbzit`, `epub-check`, `epub2cbz`, `meta-edit`, `missing-sequence`, `webp-convert`, driven by `stump tools list`/`plan`/`apply` | always linked via `cli`; not in the server route graph | in flight (untracked; `ToolsCore` + per-tool workers) |
 | `watcher` | `stump_watcher` | Library filesystem watching, debounced scan requests | core/server `watcher` (in `headless`, not `minimal`) | in flight (untracked; `WatcherCrate`) |
 
 ## README template

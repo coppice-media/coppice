@@ -1,3 +1,4 @@
+pub mod annotation;
 pub mod api_key;
 pub mod book_club;
 pub mod email_device;

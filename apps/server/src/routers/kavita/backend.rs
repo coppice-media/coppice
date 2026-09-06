@@ -334,6 +334,12 @@ impl KavitaBackend for KavitaBackendAdapter {
 		.map_err(map_core_error)
 	}
 
+	async fn delete_read_list(&self, user: &AuthUser, id: &str) -> KavitaResult<()> {
+		stump_core::collections::delete_read_list(&self.ctx, user, id)
+			.await
+			.map_err(map_core_error)
+	}
+
 	async fn create_collection(
 		&self,
 		user: &AuthUser,

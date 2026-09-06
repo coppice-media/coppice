@@ -65,3 +65,50 @@ export function presetOf(profile: unknown): string {
 	}
 	return NO_PRESET;
 }
+
+/** The value shown in the library selector for a device with no scope. */
+export const INHERIT_LIBRARIES = 'inherit';
+
+/**
+ * How the device's `libraryScope` reads at a glance. `null` is inherit: the
+ * device sees exactly what its user sees. A list is intersected with that
+ * visibility server-side, so ids naming a library the user can no longer see
+ * are counted but never resolvable — hence the count is of the stored scope,
+ * not of what happens to be visible right now.
+ */
+export function libraryScopeSummary(
+	scope: readonly string[] | null | undefined,
+	total: number
+): string {
+	if (!scope) return 'All libraries';
+	if (scope.length === 0) return 'No libraries';
+	return `${scope.length} of ${total} ${total === 1 ? 'library' : 'libraries'}`;
+}
+
+/**
+ * What a change in the library selector means for the device's stored scope:
+ * `null` to clear the restriction, a list to narrow it, or `undefined` when
+ * the selection changed nothing.
+ *
+ * `INHERIT_LIBRARIES` and a concrete selection are mutually exclusive, and a
+ * multi-select reports only the new set — so `current` is what says which
+ * entry the user just toggled. Picking "All (inherit)" while restricted
+ * clears the scope; picking a library while inheriting starts one.
+ * Un-toggling "All (inherit)" on its own means nothing, because a device that
+ * sees no library at all should take deselecting them one by one rather than
+ * one stray click.
+ */
+export function nextLibraryScope(
+	values: readonly string[],
+	current: readonly string[] | null | undefined
+): string[] | null | undefined {
+	const restricted = current !== null && current !== undefined;
+	const picked = values.filter((value) => value !== INHERIT_LIBRARIES);
+
+	if (restricted && values.includes(INHERIT_LIBRARIES)) return null;
+	if (!restricted && picked.length === 0) return undefined;
+	// Select values are unique, so equal length plus containment is equality.
+	const unchanged =
+		!!current && picked.length === current.length && picked.every((id) => current.includes(id));
+	return unchanged ? undefined : picked;
+}

@@ -17,6 +17,13 @@ pub enum FileError {
 	EpubOpenError(String),
 	#[error("Error while attempting to read .epub file: {0}")]
 	EpubReadError(String),
+	#[error("Unable to read .mobi/.azw file: {0}")]
+	MobiReadError(String),
+	/// The file is protected: `crate::drm::detect_drm` produced a verdict, and
+	/// the string is that verdict's user-facing reason. Processors return this
+	/// instead of decoding ciphertext into garbage.
+	#[error("{0}")]
+	DrmProtected(String),
 	#[error("Page {page} does not exist; the file has {available} pages")]
 	PageNotFound { page: usize, available: usize },
 	#[error("Resource {0} does not exist in the file")]

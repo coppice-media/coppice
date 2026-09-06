@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { createMutation, useQueryClient } from '@tanstack/svelte-query';
+	import { browser } from '$app/environment';
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
@@ -9,16 +10,22 @@
 	import * as Select from '@stump/ui/components/ui/select';
 	import { request } from '@stump/ui/graphql/client';
 	import {
+		ConsoleLibraryOptionsDocument,
 		RenameDeviceDocument,
 		RevokeDeviceDocument,
 		RotateDeviceCredentialDocument,
+		SetDeviceKindleEmailDocument,
+		SetDeviceLibraryScopeDocument,
 		SetDeviceTransformProfileDocument
 	} from '$lib/graphql/generated/graphql';
 	import {
 		DEVICE_KIND_LABELS,
+		INHERIT_LIBRARIES,
 		NO_PRESET,
 		TRANSFORMABLE_KINDS,
 		TRANSFORM_PRESETS,
+		libraryScopeSummary,
+		nextLibraryScope,
 		presetOf,
 		type Device,
 		type IssuedCredential
@@ -37,13 +44,37 @@
 	);
 	const syncSummary = $derived(summarizeSync(device.lastSyncSummary));
 
+	// Shares the `libraryOptions` cache entry with the entity screens, so the
+	// whole card list resolves the picker's names in one request.
+	const librariesQuery = createQuery(() => ({
+		queryKey: ['libraryOptions'],
+		queryFn: () => request(ConsoleLibraryOptionsDocument, {}),
+		enabled: browser
+	}));
+	const libraries = $derived(librariesQuery.data?.libraries.nodes ?? []);
+	// `libraryScope` is null when the device inherits its user's visibility;
+	// the selector shows that as the `INHERIT_LIBRARIES` entry being picked.
+	const scopeValue = $derived(
+		device.libraryScope ? [...device.libraryScope] : [INHERIT_LIBRARIES]
+	);
+	const scopeSummary = $derived(libraryScopeSummary(device.libraryScope, libraries.length));
+
 	let renaming = $state(false);
 	let draftName = $state('');
 	let rotated = $state<IssuedCredential | null>(null);
 	let rotatedOpen = $state(false);
+	// The address field is uncontrolled until it is edited: `null` means
+	// untouched, so it always shows the stored value and a background refetch
+	// can never overwrite what the operator is typing.
+	let kindleEmailEdit = $state<string | null>(null);
+	const storedKindleEmail = $derived(device.kindleEmail ?? '');
+	const draftKindleEmail = $derived(kindleEmailEdit ?? storedKindleEmail);
 
 	function invalidate(): void {
 		void queryClient.invalidateQueries({ queryKey: ['devices'] });
+		// A saved or cleared address changes which books can be sent, so the
+		// library rows' target list has to be refetched too.
+		void queryClient.invalidateQueries({ queryKey: ['kindleTargets'] });
 	}
 
 	function failure(fallback: string): (error: unknown) => void {
@@ -87,6 +118,42 @@
 		},
 		onError: failure('Unable to save the transform preset.')
 	}));
+	const setScope = createMutation(() => ({
+		mutationFn: (libraryIds: string[] | null) =>
+			request(SetDeviceLibraryScopeDocument, { id: device.id, libraryIds }),
+		onSuccess: () => {
+			toast.success(`Visible libraries saved for ${device.name}.`);
+			invalidate();
+		},
+		onError: failure('Unable to save the visible libraries.')
+	}));
+	const setKindleEmail = createMutation(() => ({
+		mutationFn: (email: string | null) =>
+			request(SetDeviceKindleEmailDocument, { id: device.id, email }),
+		onSuccess: (result) => {
+			// Back to showing the stored value.
+			kindleEmailEdit = null;
+			toast.success(
+				result.setDeviceKindleEmail.kindleEmail
+					? `${device.name} will receive books at ${result.setDeviceKindleEmail.kindleEmail}.`
+					: `${device.name} can no longer be sent to.`
+			);
+			invalidate();
+		},
+		onError: failure('Unable to save the Kindle address.')
+	}));
+
+	function submitKindleEmail(event: SubmitEvent): void {
+		event.preventDefault();
+		const email = draftKindleEmail.trim();
+		// An empty field clears the address rather than storing an empty one.
+		setKindleEmail.mutate(email === '' ? null : email);
+	}
+
+	function applyScope(values: string[]): void {
+		const next = nextLibraryScope(values, device.libraryScope);
+		if (next !== undefined) setScope.mutate(next);
+	}
 
 	function startRename(): void {
 		draftName = device.name;
@@ -200,6 +267,61 @@
 						</Select.Group>
 					</Select.Content>
 				</Select.Root>
+			</div>
+		{/if}
+		{#if !revoked}
+			<div class="mt-2 flex flex-col gap-1 sm:col-span-2">
+				<span class="text-muted-foreground">Libraries</span>
+				<Select.Root
+					type="multiple"
+					value={scopeValue}
+					onValueChange={applyScope}
+					disabled={setScope.isPending || librariesQuery.isPending}
+				>
+					<Select.Trigger class="w-full sm:max-w-sm" aria-label="Visible libraries">
+						{scopeSummary}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value={INHERIT_LIBRARIES} label="All (inherit)" />
+						<Select.Group>
+							<Select.Label>Restrict to</Select.Label>
+							{#each libraries as library (library.id)}
+								<Select.Item
+									value={library.id}
+									label={library.emoji ? `${library.emoji} ${library.name}` : library.name}
+								/>
+							{/each}
+						</Select.Group>
+					</Select.Content>
+				</Select.Root>
+			</div>
+		{/if}
+		{#if !revoked}
+			<div class="mt-2 flex flex-col gap-1 sm:col-span-2">
+				<span class="text-muted-foreground">Kindle address</span>
+				<form class="flex items-center gap-2" onsubmit={submitKindleEmail}>
+					<Input
+						value={draftKindleEmail}
+						oninput={(event) => (kindleEmailEdit = event.currentTarget.value)}
+						type="email"
+						maxlength={254}
+						placeholder="name@kindle.com"
+						aria-label="Kindle address"
+						class="h-8 sm:max-w-sm"
+					/>
+					<Button
+						type="submit"
+						size="sm"
+						variant="outline"
+						disabled={setKindleEmail.isPending || draftKindleEmail.trim() === storedKindleEmail}
+					>
+						Save
+					</Button>
+				</form>
+				<span class="text-xs text-muted-foreground">
+					Books can be mailed to this device with Send to Kindle. Your emailer's sender address
+					must be on Amazon's approved list; an empty field clears the address.
+				</span>
 			</div>
 		{/if}
 	</CardContent>

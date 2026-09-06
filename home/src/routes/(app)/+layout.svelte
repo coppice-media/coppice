@@ -28,6 +28,7 @@
 		{ href: resolve('/dashboard'), label: 'Dashboard' },
 		{ href: resolve('/library'), label: 'Library' },
 		{ href: resolve('/reading'), label: 'Reading' },
+		{ href: resolve('/annotations'), label: 'Annotations' },
 		{ href: resolve('/devices'), label: 'Devices' },
 		{ href: resolve('/account'), label: 'Account' }
 	];

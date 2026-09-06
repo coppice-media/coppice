@@ -51,6 +51,13 @@ impl Device {
 				secret_hint: secret_hint(&credential),
 			}))
 	}
+
+	/// The libraries this device may see, or `null` when the device inherits
+	/// its user's visibility. The scope is intersected with that visibility,
+	/// so it only ever narrows; an empty list is a device that sees nothing.
+	async fn library_scope(&self) -> Option<Vec<String>> {
+		self.model.library_scope_ids()
+	}
 }
 
 /// A device together with a freshly minted credential. The secret inside

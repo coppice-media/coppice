@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum_test::{TestResponse, TestServer};
 use sea_orm::DatabaseConnection;
 use serde_json::{json, Value};
-use stump_core::{Ctx, StumpCore};
+use stump_core::{config::StumpConfig, Ctx, StumpCore};
 use stump_server::config::session::get_session_layer;
 use stump_server::routers;
 use tests::db::test_database;
@@ -20,9 +20,17 @@ pub struct TestApp {
 
 impl TestApp {
 	pub async fn new() -> Self {
-		let db = test_database().await;
+		Self::with_parts(test_database().await, StumpConfig::debug()).await
+	}
 
-		let ctx = Ctx::for_testing(db);
+	/// A [TestApp] on an explicit database and configuration.
+	///
+	/// Suites that need the real migrated schema use this: the liseur-sync
+	/// tables have no SeaORM entities, so the entity-built schema of
+	/// [`tests::db::test_database`] cannot serve them. It is also the way to
+	/// point a suite at a throwaway `config_dir` before it writes files.
+	pub async fn with_parts(db: DatabaseConnection, config: StumpConfig) -> Self {
+		let ctx = Ctx::for_testing_with_config(db, config);
 		let core = StumpCore::from_ctx(ctx);
 
 		core.init_server_config()

@@ -8,6 +8,8 @@ stump_media = { path = "../media", default-features = false }
 stump_scanner = { path = "../scanner" }
 
 alphanumeric-sort.workspace = true
+# `dcterms:modified` timestamps for the EPUB 3 upgrade (`epub-polish`).
+chrono.workspace = true
 epub.workspace = true
 quick-xml.workspace = true
 regex.workspace = true
@@ -22,4 +24,7 @@ uuid.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+# Synthesises decodable page images for the `webp-convert` fixtures; the same
+# version `stump_media` already builds against, so no new lockfile entry.
+image = { version = "0.25.2", default-features = false, features = ["jpeg", "png", "webp"] }
 pretty_assertions.workspace = true

@@ -45,6 +45,161 @@ type AnalyzeMediaOutput {
 	mediaUpdated: Int!
 }
 
+"""
+A binary side object of a liseur-sync annotation.
+
+Attachments are keyed by annotation id and never take part in the
+annotation's compare-and-set revision: uploading one does not change the
+record a device replicates. Bytes are fetched from
+`GET /api/v2/annotations/{annotationId}/attachments/{id}` with the caller's
+session or its liseur device credential.
+"""
+type AnnotationAttachment {
+	id: ID!
+	"""
+	The liseur-sync annotation this hangs off, not a native
+	`media_annotations` id.
+	"""
+	annotationId: ID!
+	"""
+	`markup-svg` (handwritten strokes), `markup-page` (the page snapshot
+	they were drawn on), or `notebook` (a device notebook export).
+	"""
+	kind: String!
+	mediaType: String!
+	byteSize: Int!
+	"Lowercase hex SHA-256 of the bytes; also the upload idempotency key."
+	sha256: String!
+	"""
+	The filename extension the bytes are stored under, so a client can
+	name a download without parsing the media type.
+	"""
+	extension: String!
+	createdAt: String!
+}
+
+"The book an annotation belongs to."
+type AnnotationBook {
+	"""
+	Stable grouping key — `native:<media_id>` or `liseur:<work_id>`, the
+	same key the annotation-sync export uses for its per-book file.
+	"""
+	key: String!
+	"""
+	The Stump book, when the annotation anchors to one. `null` for a
+	liseur work with no link to a book this user can see; those
+	annotations are listed but cannot be opened in a reader.
+	"""
+	mediaId: ID
+	title: String!
+	authors: [String!]!
+	seriesId: ID
+	seriesName: String
+	libraryId: ID
+	"The book's file extension, so a client can pick a reader lane"
+	extension: String
+}
+
+"One highlight, note, or bookmark, wherever it came from."
+type AnnotationEntry {
+	id: ID!
+	kind: AnnotationKind!
+	"""
+	Where the annotation came from. Native rows carry no per-row device,
+	so they report `WEB` — the native lane, i.e. this server's readers and
+	GraphQL API. A liseur-sync CAS record reports the kind of the device
+	that pushed it (`KOBO` for NickelStump on a Kobo, `KOREADER`,
+	`LISEUR`), falling back to `LISEUR` when that device is no longer
+	registered.
+	"""
+	source: DeviceKind!
+	sourceDeviceId: ID
+	sourceDeviceName: String
+	"""
+	Whether `updateAnnotation`/`deleteAnnotation` accept this row. Only
+	native rows are editable here: a liseur CAS record is owned by its
+	device and replicated with compare-and-set revisions.
+	"""
+	editable: Boolean!
+	"The chapter the anchor names, when the locator carries one"
+	chapterTitle: String
+	"The publication-relative resource the anchor points into"
+	href: String
+	"The in-resource fragment id, when the anchor carries one"
+	fragment: String
+	"The page, for a paged book's bookmark or a positioned locator"
+	page: Int
+	"Whole-publication progression in `0..=1`, when known"
+	progression: Float
+	"""
+	The selected passage: the locator's `text.highlight`, the liseur
+	`excerpt`, or a bookmark's preview text
+	"""
+	excerpt: String
+	"The user's own note, distinct from the selected passage"
+	note: String
+	"Liseur palette token (`yellow`, `green`, …); native rows have no colour"
+	color: String
+	createdAt: DateTime
+	updatedAt: DateTime
+	book: AnnotationBook!
+}
+
+"""
+Narrows the cross-book annotation hub. Every field is a conjunction; an
+empty list is the same as omitting it.
+"""
+input AnnotationFilterInput {
+	"One book, by its Stump media id"
+	mediaId: ID
+	"Every book of one series"
+	seriesId: ID
+	"Every book of one library"
+	libraryId: ID
+	kind: [AnnotationKind!]
+	"""
+	Where the annotation came from, as reported by
+	[`AnnotationEntry::source`](crate::object::annotation::AnnotationEntry)
+	"""
+	source: [DeviceKind!]
+	"""
+	Case-insensitive substring match over the selected passage, the note,
+	and the book title
+	"""
+	query: String
+	"Only annotations created at or after this instant"
+	since: DateTime
+}
+
+"""
+What an annotation is.
+
+A native `media_annotations` row always carries a Readium locator, so the
+kind follows the locator's `text.highlight`: a row with that selected
+passage is a `HIGHLIGHT`, a row carrying only the user's text is a `NOTE`.
+Native `bookmarks` rows and liseur `bookmark` records are `BOOKMARK`.
+"""
+enum AnnotationKind {
+	HIGHLIGHT
+	NOTE
+	BOOKMARK
+}
+
+"One page of the cross-book annotation hub."
+type AnnotationPage {
+	"""
+	Book-contiguous: books ordered by their most recent annotation
+	(newest first), annotations inside a book by `(createdAt, id)`
+	ascending, so a page can be grouped by `book.key` as it arrives.
+	"""
+	items: [AnnotationEntry!]!
+	"Matching annotations across every book, before pagination"
+	total: Int!
+	"Distinct books among the matches"
+	bookCount: Int!
+	hasNext: Boolean!
+}
+
 "A compiled-in annotation export sink and its setting schema."
 type AnnotationSink {
 	id: String!
@@ -664,6 +819,13 @@ type Device {
 	Kobo, image sizing for a phone). Interpreted by the protocol adapters.
 	"""
 	transformProfile: JSON
+	"""
+	The Amazon *Send to Kindle* address of this device, or `NULL` when it
+	has none. Only a Kindle is reachable this way: Amazon delivers what an
+	approved sender mails to the address, so this is the whole transport
+	for a device that speaks no sync protocol.
+	"""
+	kindleEmail: String
 	createdAt: DateTime!
 	"The last time any credential of this device authenticated a request"
 	lastSeenAt: DateTime
@@ -677,6 +839,12 @@ type Device {
 	device was registered by a protocol (KOReader, OPDS) and never minted one.
 	"""
 	credential: DeviceCredentialSummary
+	"""
+	The libraries this device may see, or `null` when the device inherits
+	its user's visibility. The scope is intersected with that visibility,
+	so it only ever narrows; an empty list is a device that sees nothing.
+	"""
+	libraryScope: [String!]
 }
 
 "The storage a device credential references"
@@ -1649,6 +1817,29 @@ type JobUpdate {
 	completedSubtasks: Int
 	"The number of subtasks that exist in the current task"
 	totalSubtasks: Int
+}
+
+"What one send-to-Kindle delivery did."
+type KindleDelivery {
+	deviceId: String!
+	deviceName: String!
+	"The address the book was mailed to, as registered on the device."
+	recipient: String!
+	"""
+	Extension of the attachment that went out: `azw3` when it was
+	converted for the Kindle, otherwise the book's own format.
+	"""
+	format: String!
+	"Size of that attachment."
+	bytes: Int!
+	"Whether the book was converted before sending."
+	converted: Boolean!
+	"""
+	Why the book was sent unconverted — usually that the operator has no
+	`boko` installed. `null` when it was converted, and never an error:
+	Amazon converts an EPUB itself.
+	"""
+	note: String
 }
 
 "A librarian decision about one recurring page hash inside a library."
@@ -2816,6 +3007,15 @@ type Mutation {
 	patchEmailDevice(id: Int!, input: PatchEmailDeviceInput!): RegisteredEmailDevice!
 	deleteEmailDevice(id: Int!): RegisteredEmailDevice!
 	"""
+	Mails `media_id` to the Kindle address registered on `device_id`,
+	converting an EPUB to AZW3 first when the operator has `boko`
+	installed.
+	
+	Requires the same `EMAIL_SEND` permission as `sendAttachmentEmail`,
+	which is the same SMTP path this uses.
+	"""
+	sendToKindle(mediaId: ID!, deviceId: ID!): KindleDelivery!
+	"""
 	Upsert the current user's settings for one channel. Unknown keys are
 	rejected; secret values are stored encrypted and never returned.
 	"""
@@ -3021,6 +3221,22 @@ type Mutation {
 	revokeDevice(id: String!): Device!
 	"Replaces the device's transform profile (`null` clears it)."
 	setDeviceTransformProfile(id: String!, profile: JSON): Device!
+	"""
+	Restricts the device to `library_ids`, or clears the restriction when
+	`library_ids` is null so the device inherits its user's visibility. The
+	scope is intersected with that visibility, so it can only narrow what
+	the device sees and never reveal a library the user cannot see; an
+	empty list is a device that sees nothing.
+	"""
+	setDeviceLibraryScope(id: String!, libraryIds: [ID!]): Device!
+	"""
+	Sets the device's Amazon *Send to Kindle* address, or clears it when
+	`email` is null. A device with an address is a `sendToKindle` target;
+	one without cannot be sent to. The address is validated syntactically
+	before it is stored, but never verified with Amazon — only a delivery
+	can do that.
+	"""
+	setDeviceKindleEmail(id: String!, email: String): Device!
 	"""
 	Configures one annotation export sink for the current user: replaces
 	the settings map (secret values are encrypted at rest) and sets
@@ -3781,11 +3997,28 @@ type Query {
 	"The compiled-in annotation export sinks and their setting schemas."
 	annotationSinks: [AnnotationSink!]!
 	"""
+	Every highlight, note, and bookmark the current user has, across every
+	book and every source: the native `media_annotations`/`bookmarks` rows
+	and the liseur-sync CAS records pushed by their devices (NickelStump
+	on a Kobo, KOReader, Liseur). Results are book-contiguous so a page
+	can be grouped as it arrives.
+	"""
+	annotations(filter: AnnotationFilterInput, pagination: OffsetPagination): AnnotationPage!
+	"""
 	The annotation sync state for a user: configured sinks, last runs,
 	errors, and whether a debounced export is pending. Defaults to the
 	calling user; other users require the server owner.
 	"""
 	annotationSyncStatus(userId: ID): AnnotationSyncStatus!
+	"""
+	The attachments of one liseur-sync annotation, oldest first.
+	
+	Always the caller's own: a liseur annotation id is chosen by the client
+	and is therefore unique per user, so there is no server-wide annotation
+	to target. An unknown annotation has no attachments and returns an
+	empty list rather than an error.
+	"""
+	annotationAttachments(annotationId: ID!): [AnnotationAttachment!]!
 }
 
 type ReadListAdded {
@@ -4757,6 +4990,11 @@ type StumpConfig {
 	libraries, series, or media.
 	"""
 	maxImageUploadSize: Int!
+	"""
+	The maximum size, in bytes, of a single annotation attachment accepted
+	by `PUT /v1/annotations/{id}/attachments/{kind}`.
+	"""
+	attachmentMaxBytes: Int!
 	"Indicates if the GraphQL playground should be enabled."
 	enablePlayground: Boolean!
 	"The client directory."

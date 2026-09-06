@@ -15,6 +15,7 @@
 	} from '$lib/graphql/generated/graphql';
 	import { bytesLabel, countLabel, relativeTime } from '$lib/format';
 	import { READING_STATUS_LABELS, bookProgress, progressPercent } from '$lib/library';
+	import SendToKindleButton from './SendToKindleButton.svelte';
 
 	let {
 		books,
@@ -148,6 +149,7 @@
 							>
 								Read
 							</Button>
+							<SendToKindleButton mediaId={book.id} />
 							{#if progress.status === 'FINISHED'}
 								<Button
 									size="xs"

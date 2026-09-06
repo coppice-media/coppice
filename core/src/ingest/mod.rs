@@ -5,6 +5,7 @@
 pub mod contract;
 pub mod coordinator;
 pub mod drop_folder;
+pub mod preprocess;
 pub mod progress;
 pub mod providers;
 pub mod quality;

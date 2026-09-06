@@ -30,6 +30,7 @@ use super::{
 		MetadataCandidate, MetadataField, QualityReport,
 	},
 	drop_folder,
+	preprocess::{HookOutcome, PreprocessHook},
 	progress::{ProgressHub, ProgressStream, StoredProgressStream},
 	providers::apply::{
 		apply_to_media_txn_with_context, resolve_picks_for_context, validate_picks,
@@ -250,6 +251,7 @@ impl IngestStore {
 			pending_fields: Set(Some(Value::Object(Default::default()))),
 			error: Set(None),
 			idempotency_key: Set(idempotency_key.map(str::to_owned)),
+			preprocessed_at: Set(None),
 			revision: Set(1),
 			created_at: NotSet,
 			updated_at: NotSet,
@@ -326,6 +328,7 @@ impl IngestStore {
 				pending_fields: Set(Some(Value::Object(Default::default()))),
 				error: Set(None),
 				idempotency_key: Set(None),
+				preprocessed_at: Set(None),
 				revision: Set(1),
 				created_at: NotSet,
 				updated_at: NotSet,
@@ -1339,6 +1342,90 @@ impl IngestStore {
 			.await
 			.map_err(CoreError::from)
 	}
+
+	/// Run the configured preprocess hook for `item`, at most once in the
+	/// item's lifetime, and return the item analysis should work from.
+	///
+	/// The hook may rewrite the staged file in place or replace it at the same
+	/// path, so a successful run re-hashes the file and persists the post-hook
+	/// digest and size: the staged path is never renamed, and `source_sha256`
+	/// always describes the bytes analysis actually saw. A failing hook fails
+	/// the item with its stderr tail as the reason and leaves
+	/// `preprocessed_at` unset, so fixing the command and retrying runs it
+	/// again.
+	pub(crate) async fn run_preprocess(
+		&self,
+		item: &DropItemModel,
+	) -> CoreResult<DropItemModel> {
+		if item.preprocessed_at.is_some() {
+			return Ok(item.clone());
+		}
+		let Some(hook) = PreprocessHook::from_config(&self.config)? else {
+			return Ok(item.clone());
+		};
+		let path = PathBuf::from(&item.staging_path);
+		if let HookOutcome::Fail(reason) =
+			hook.run(&item.id, &item.library_id, &path).await
+		{
+			self.fail_item(&item.id, &reason).await?;
+			return Err(CoreError::InternalError(reason));
+		}
+
+		// Exit 0 with the staged file gone is the classic hook mistake: it
+		// wrote its output somewhere else. Fail the item where the reason can
+		// still name the hook, not later as a bare missing-file error.
+		let readable = fs::metadata(&path)
+			.await
+			.map(|metadata| metadata.is_file())
+			.unwrap_or(false);
+		if !readable {
+			let reason = format!(
+				"preprocess hook succeeded but left no file at {}",
+				path.display()
+			);
+			self.fail_item(&item.id, &reason).await?;
+			return Err(CoreError::InternalError(reason));
+		}
+
+		let (source_sha256, byte_size) = staging::hash_file(&path).await?;
+		let byte_size = i64::try_from(byte_size).map_err(|_| {
+			CoreError::BadRequest(
+				"preprocessed file is too large for the database".to_string(),
+			)
+		})?;
+		tracing::debug!(
+			item_id = %item.id,
+			rewritten = source_sha256 != item.source_sha256,
+			"Ingest preprocess hook completed"
+		);
+		let revision = item.revision;
+		let mut active = item.clone().into_active_model();
+		active.source_sha256 = Set(source_sha256);
+		active.byte_size = Set(byte_size);
+		active.preprocessed_at = Set(Some(Utc::now().into()));
+		active.revision = Set(revision.saturating_add(1));
+		active
+			.update(self.conn.as_ref())
+			.await
+			.map_err(CoreError::from)
+	}
+
+	/// Terminal failure of one item, with the reason the editor displays.
+	async fn fail_item(&self, item_id: &str, reason: &str) -> CoreResult<DropItemModel> {
+		let item = self
+			.item(item_id)
+			.await?
+			.ok_or_else(|| CoreError::NotFound(format!("ingest item {item_id}")))?;
+		let revision = item.revision;
+		let mut active = item.into_active_model();
+		active.status = Set(DropItemStatus::Failed.as_str().to_string());
+		active.error = Set(Some(reason.to_string()));
+		active.revision = Set(revision.saturating_add(1));
+		active
+			.update(self.conn.as_ref())
+			.await
+			.map_err(CoreError::from)
+	}
 }
 fn phase_name(phase: super::contract::AnalysisPhase) -> String {
 	serde_json::to_string(&phase)
@@ -1910,5 +1997,174 @@ mod tests {
 		assert_eq!(application.drop_item_id, None);
 		assert_eq!(application.media_id.as_deref(), Some("media-1"));
 		assert_eq!(application.actor, "tester");
+	}
+
+	/// A staged item on a real file, plus the store that owns it. The hook
+	/// tests all need the same fixture: one library, one item, one file whose
+	/// bytes the hook is free to rewrite.
+	#[cfg(unix)]
+	async fn preprocess_fixture(
+		hook_body: &str,
+		contents: &[u8],
+	) -> (tempfile::TempDir, IngestStore, DropItemModel) {
+		use models::{
+			entity::{ingest_drop_item, library, library_config},
+			shared::enums::FileStatus,
+		};
+		use std::os::unix::fs::PermissionsExt;
+
+		let conn = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
+		migrations::Migrator::up(conn.as_ref(), None).await.unwrap();
+		let library_config =
+			<library_config::ActiveModel as std::default::Default>::default()
+				.insert(conn.as_ref())
+				.await
+				.unwrap();
+		library::ActiveModel {
+			id: Set("library".to_string()),
+			name: Set("Library".to_string()),
+			path: Set("/tmp/library".to_string()),
+			status: Set(FileStatus::Ready),
+			config_id: Set(library_config.id),
+			..Default::default()
+		}
+		.insert(conn.as_ref())
+		.await
+		.unwrap();
+
+		let temporary = tempfile::tempdir().unwrap();
+		let hook = temporary.path().join("hook.sh");
+		std::fs::write(&hook, hook_body).unwrap();
+		std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+		let staged = temporary.path().join("book.cbz");
+		std::fs::write(&staged, contents).unwrap();
+
+		let mut config = StumpConfig::debug();
+		config.ingest.ingest_preprocess_command =
+			Some(hook.to_string_lossy().into_owned());
+		config.ingest.ingest_preprocess_timeout_secs = 30;
+		let store = IngestStore::new(Arc::new(config), conn.clone());
+
+		let item = ingest_drop_item::ActiveModel {
+			id: Set("item-1".to_string()),
+			library_id: Set("library".to_string()),
+			source_filename: Set("book.cbz".to_string()),
+			byte_size: Set(contents.len() as i64),
+			source_sha256: Set(staging::hash_file(&staged).await.unwrap().0),
+			media_kind: Set("COMIC_ARCHIVE".to_string()),
+			staging_path: Set(staged.to_string_lossy().into_owned()),
+			status: Set(DropItemStatus::Staged.as_str().to_string()),
+			revision: Set(1),
+			..Default::default()
+		}
+		.insert(conn.as_ref())
+		.await
+		.unwrap();
+		(temporary, store, item)
+	}
+
+	/// The hook rewrites the staged file in place, so the item must carry the
+	/// digest and size of the bytes analysis will actually read.
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn preprocess_hook_rewrite_is_rehashed_onto_the_item() {
+		let (_temporary, store, item) =
+			preprocess_fixture("#!/bin/sh\nprintf 'rewritten' > \"$1\"\n", b"original")
+				.await;
+
+		let updated = store.run_preprocess(&item).await.unwrap();
+		let path = Path::new(&updated.staging_path);
+		let (expected_sha, expected_size) = staging::hash_file(path).await.unwrap();
+		assert_eq!(std::fs::read(path).unwrap(), b"rewritten");
+		assert_eq!(updated.source_sha256, expected_sha);
+		assert_ne!(updated.source_sha256, item.source_sha256);
+		assert_eq!(updated.byte_size, expected_size as i64);
+		assert!(updated.preprocessed_at.is_some());
+
+		let persisted = store.item("item-1").await.unwrap().unwrap();
+		assert_eq!(persisted.source_sha256, expected_sha);
+		assert_eq!(persisted.byte_size, expected_size as i64);
+	}
+
+	/// A non-zero exit fails the item, and the reason the editor lists is the
+	/// hook's own stderr tail.
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn preprocess_hook_failure_fails_the_item_with_the_stderr_tail() {
+		let (_temporary, store, item) = preprocess_fixture(
+			"#!/bin/sh\necho 'unsupported input format' >&2\nexit 3\n",
+			b"original",
+		)
+		.await;
+
+		let error = store
+			.run_preprocess(&item)
+			.await
+			.expect_err("a non-zero exit must fail the analysis");
+		assert!(
+			error.to_string().contains("unsupported input format"),
+			"{error}"
+		);
+
+		let failed = store.item("item-1").await.unwrap().unwrap();
+		assert_eq!(failed.status, DropItemStatus::Failed.as_str());
+		let reason = failed.error.expect("failure reason is stored on the item");
+		assert!(reason.contains("exited with 3"), "{reason}");
+		assert!(reason.contains("unsupported input format"), "{reason}");
+		assert!(
+			failed.preprocessed_at.is_none(),
+			"a failed hook must stay retryable"
+		);
+		assert_eq!(
+			failed.source_sha256, item.source_sha256,
+			"a failed hook must not re-hash the item"
+		);
+	}
+
+	/// Re-analysis must not run the hook again: a conversion pipeline is not
+	/// idempotent, and running it over its own output corrupts the file.
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn preprocess_hook_runs_once_per_item() {
+		let (_temporary, store, item) =
+			preprocess_fixture("#!/bin/sh\nprintf 'x' >> \"$1\"\n", b"original").await;
+
+		let first = store.run_preprocess(&item).await.unwrap();
+		let second = store.run_preprocess(&first).await.unwrap();
+
+		assert_eq!(
+			std::fs::read(&first.staging_path).unwrap(),
+			b"originalx",
+			"the hook ran exactly once"
+		);
+		assert_eq!(second.source_sha256, first.source_sha256);
+		assert_eq!(second.preprocessed_at, first.preprocessed_at);
+		assert_eq!(second.revision, first.revision);
+	}
+
+	/// A hook that writes its output elsewhere and removes the input exits 0,
+	/// so the item must fail naming the hook rather than surfacing a bare
+	/// missing-file error from the next phase.
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn preprocess_hook_that_removes_the_file_fails_the_item() {
+		let (_temporary, store, item) =
+			preprocess_fixture("#!/bin/sh\nrm \"$1\"\n", b"original").await;
+
+		store
+			.run_preprocess(&item)
+			.await
+			.expect_err("a vanished staged file must fail the analysis");
+
+		let failed = store.item("item-1").await.unwrap().unwrap();
+		assert_eq!(failed.status, DropItemStatus::Failed.as_str());
+		assert!(
+			failed
+				.error
+				.expect("failure reason is stored on the item")
+				.contains("left no file"),
+			"the reason must name the hook"
+		);
+		assert!(failed.preprocessed_at.is_none());
 	}
 }

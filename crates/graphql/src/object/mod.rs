@@ -1,4 +1,5 @@
 pub mod annotation;
+pub mod annotation_attachment;
 pub mod api_key;
 pub mod author;
 pub mod book_club;

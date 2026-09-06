@@ -124,6 +124,7 @@ impl StumpCore {
 
 		config.finalize();
 		database::validate_pool_config(&config)?;
+		ingest::preprocess::validate_config(&config)?;
 
 		// Write ensure that config directory exists and write Stump.toml
 		config.write_config_dir()?;

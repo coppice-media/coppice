@@ -14,17 +14,18 @@ use std::{collections::HashSet, fmt};
 use async_trait::async_trait;
 
 use axum::{
-	body::Body,
+	body::{Body, Bytes},
 	extract::{rejection::JsonRejection, Json, Path, Query, Request},
 	http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
 	middleware::Next,
 	response::{IntoResponse, Response},
-	routing::{any, delete, get, post},
+	routing::{any, delete, get, post, put},
 	Extension, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use stump_auth::AuthContext;
 use thiserror::Error;
 use tower_http::services::ServeFile;
@@ -39,6 +40,12 @@ const MAX_LOCATOR_BYTES: usize = 16 * 1024;
 const MAX_EXCERPT_BYTES: usize = 1024;
 const MAX_BODY_BYTES: usize = 16 * 1024;
 const MAX_TOKEN_NAME_BYTES: usize = 256;
+
+/// Upper bound on one attachment when the host does not override it through
+/// [`LiseurSyncBackend::attachment_max_bytes`].
+pub const DEFAULT_ATTACHMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
+const MAX_MEDIA_TYPE_BYTES: usize = 128;
+const ATTACHMENT_SHA256_HEADER: &str = "x-attachment-sha256";
 
 const KNOWN_SCOPES: [&str; 7] = [
 	"sync",
@@ -63,6 +70,8 @@ pub enum LiseurSyncError {
 	Gone(String),
 	#[error("{0}")]
 	Conflict(String),
+	#[error("{0}")]
+	PayloadTooLarge(String),
 	#[error("identifiers resolve to multiple works")]
 	IdentityConflict(Vec<String>),
 	#[error("{0}")]
@@ -390,6 +399,46 @@ pub struct DeleteAnnotationResult {
 	pub seq: i64,
 	pub server: Option<AnnotationRecord>,
 }
+
+/// Every attachment kind the wire accepts, in `PUT` path order.
+///
+/// `markup-svg` is the handwritten stroke layer of a Kobo on-page markup,
+/// `markup-page` the page snapshot it was drawn on, and `notebook` a device
+/// notebook export. The kinds are closed: a client cannot invent one.
+pub const ATTACHMENT_KINDS: [&str; 3] = ["markup-svg", "markup-page", "notebook"];
+
+/// Verified bytes accepted by `PUT /v1/annotations/{id}/attachments/{kind}`.
+///
+/// The digest is the client's `X-Attachment-Sha256`, already compared against
+/// the received bytes, so a backend stores it without re-hashing.
+#[derive(Clone, Debug)]
+pub struct AttachmentUpload {
+	pub kind: String,
+	pub media_type: String,
+	pub sha256: String,
+	pub bytes: Bytes,
+}
+
+/// The stored identity of an attachment, returned by an upload.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttachmentUploadResult {
+	pub id: String,
+	pub sha256: String,
+	pub byte_size: i64,
+}
+
+/// One attachment as listed by `GET /v1/annotations/{id}/attachments`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttachmentRecord {
+	pub id: String,
+	pub annotation_id: String,
+	pub kind: String,
+	pub media_type: String,
+	pub byte_size: i64,
+	pub sha256: String,
+	pub created_at: String,
+}
+
 /// One folder exposed by the catalog.
 #[derive(Clone, Debug, Serialize)]
 pub struct CatalogFolder {
@@ -666,6 +715,31 @@ pub trait LiseurSyncBackend: Clone + Send + Sync + 'static {
 		id: &str,
 		rev: i64,
 	) -> Result<DeleteAnnotationResult, LiseurSyncError>;
+
+	/// Upper bound on one accepted attachment. A host that exposes a
+	/// configuration key overrides this.
+	fn attachment_max_bytes(&self) -> usize {
+		DEFAULT_ATTACHMENT_MAX_BYTES
+	}
+
+	/// Store `upload` in the annotation's `kind` slot. A repeat of the same
+	/// digest is idempotent and keeps the original attachment id; a different
+	/// digest replaces the slot. Neither touches the annotation's revision.
+	///
+	/// An unknown or tombstoned annotation is
+	/// [`LiseurSyncError::NotFound`].
+	async fn put_attachment(
+		&self,
+		user_id: &str,
+		annotation_id: &str,
+		upload: AttachmentUpload,
+	) -> Result<AttachmentUploadResult, LiseurSyncError>;
+
+	async fn attachments(
+		&self,
+		user_id: &str,
+		annotation_id: &str,
+	) -> Result<Vec<AttachmentRecord>, LiseurSyncError>;
 }
 
 /// Build the native liseur-sync routes for any Axum application state.
@@ -691,6 +765,14 @@ where
 		.route("/v1/annotations", post(push_annotations::<B>))
 		.route("/v1/annotations/changes", get(annotation_changes::<B>))
 		.route("/v1/annotations/{id}", delete(delete_annotation::<B>))
+		.route(
+			"/v1/annotations/{id}/attachments",
+			get(list_attachments::<B>),
+		)
+		.route(
+			"/v1/annotations/{id}/attachments/{kind}",
+			put(put_attachment::<B>),
+		)
 		.route("/v1/works/{id}/annotations", get(work_annotations::<B>))
 		.route("/v1/folders", get(folders::<B>))
 		.route("/v1/folders/{folder}/books", get(folder_books::<B>))
@@ -1484,6 +1566,190 @@ where
 	)
 		.into_response())
 }
+
+#[derive(Debug, Serialize)]
+struct AttachmentsResponse {
+	attachments: Vec<AttachmentRecord>,
+}
+
+async fn list_attachments<B>(
+	Path(annotation_id): Path<String>,
+	Extension(auth): Extension<AuthContext>,
+	Extension(token): Extension<LiseurToken>,
+	Extension(backend): Extension<B>,
+) -> Result<Json<AttachmentsResponse>, Response>
+where
+	B: LiseurSyncBackend,
+{
+	require_sync(&token).map_err(error_response)?;
+	let attachments = backend
+		.attachments(&auth.id(), &annotation_id)
+		.await
+		.map_err(error_response)?;
+	Ok(Json(AttachmentsResponse { attachments }))
+}
+
+async fn put_attachment<B>(
+	Path((annotation_id, kind)): Path<(String, String)>,
+	Extension(auth): Extension<AuthContext>,
+	Extension(token): Extension<LiseurToken>,
+	Extension(backend): Extension<B>,
+	headers: HeaderMap,
+	body: Body,
+) -> Result<Json<AttachmentUploadResult>, Response>
+where
+	B: LiseurSyncBackend,
+{
+	require_sync(&token).map_err(error_response)?;
+	let upload = read_attachment(
+		&annotation_id,
+		&kind,
+		&headers,
+		body,
+		backend.attachment_max_bytes(),
+	)
+	.await
+	.map_err(error_response)?;
+	backend
+		.put_attachment(&auth.id(), &annotation_id, upload)
+		.await
+		.map(Json)
+		.map_err(error_response)
+}
+
+/// Validate the upload envelope and read at most `max_bytes` of body.
+///
+/// `Content-Length` is honoured first so an oversized upload is refused
+/// before its bytes are streamed; a chunked body without the header is caught
+/// by the read limit instead. The digest is compared here so every backend
+/// reports the same `409` for a corrupted transfer.
+async fn read_attachment(
+	annotation_id: &str,
+	kind: &str,
+	headers: &HeaderMap,
+	body: Body,
+	max_bytes: usize,
+) -> Result<AttachmentUpload, LiseurSyncError> {
+	validate_attachment_annotation_id(annotation_id)?;
+	if !ATTACHMENT_KINDS.contains(&kind) {
+		return Err(LiseurSyncError::BadRequest(format!(
+			"kind must be one of {}",
+			ATTACHMENT_KINDS.join(", ")
+		)));
+	}
+	let media_type = attachment_media_type(kind, headers)?;
+	let expected = attachment_digest(headers)?;
+
+	if let Some(declared) = headers
+		.get(header::CONTENT_LENGTH)
+		.and_then(|value| value.to_str().ok())
+		.and_then(|value| value.parse::<usize>().ok())
+	{
+		if declared > max_bytes {
+			return Err(LiseurSyncError::PayloadTooLarge(format!(
+				"attachment exceeds {max_bytes} bytes"
+			)));
+		}
+	}
+
+	let bytes = axum::body::to_bytes(body, max_bytes).await.map_err(|_| {
+		LiseurSyncError::PayloadTooLarge(format!("attachment exceeds {max_bytes} bytes"))
+	})?;
+	if bytes.is_empty() {
+		return Err(LiseurSyncError::BadRequest(
+			"attachment body is empty".into(),
+		));
+	}
+	let actual = format!("{:x}", Sha256::digest(&bytes));
+	if actual != expected {
+		return Err(LiseurSyncError::Conflict(
+			"X-Attachment-Sha256 does not match the uploaded bytes".into(),
+		));
+	}
+
+	Ok(AttachmentUpload {
+		kind: kind.to_owned(),
+		media_type,
+		sha256: actual,
+		bytes,
+	})
+}
+
+/// An annotation id names the directory its attachments are stored in, so it
+/// must be a safe single path segment. Ids that carry no attachments are
+/// unaffected: the annotation lane itself keeps accepting any bounded id.
+fn validate_attachment_annotation_id(id: &str) -> Result<(), LiseurSyncError> {
+	let safe = !id.is_empty()
+		&& id.len() <= MAX_ID_BYTES
+		&& !id.starts_with('.')
+		&& id.bytes().all(|byte| {
+			byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+		});
+	if safe {
+		Ok(())
+	} else {
+		Err(LiseurSyncError::BadRequest(
+			"an annotation carrying attachments needs an id of [A-Za-z0-9._-] not starting with a dot".into(),
+		))
+	}
+}
+
+/// The declared `Content-Type`, without parameters, checked against the kind.
+fn attachment_media_type(
+	kind: &str,
+	headers: &HeaderMap,
+) -> Result<String, LiseurSyncError> {
+	let raw = headers
+		.get(header::CONTENT_TYPE)
+		.and_then(|value| value.to_str().ok())
+		.filter(|value| value.len() <= MAX_MEDIA_TYPE_BYTES)
+		.ok_or_else(|| LiseurSyncError::BadRequest("Content-Type required".into()))?;
+	let media_type = raw
+		.split(';')
+		.next()
+		.unwrap_or_default()
+		.trim()
+		.to_ascii_lowercase();
+	let accepted: &[&str] = match kind {
+		"markup-svg" => &["image/svg+xml"],
+		"markup-page" => &["image/jpeg", "image/png"],
+		_ => &[
+			"application/pdf",
+			"application/epub+zip",
+			"application/zip",
+			"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+			"text/html",
+			"text/plain",
+			"image/jpeg",
+			"image/png",
+			"image/svg+xml",
+		],
+	};
+	if accepted.contains(&media_type.as_str()) {
+		Ok(media_type)
+	} else {
+		Err(LiseurSyncError::BadRequest(format!(
+			"{kind} accepts {}",
+			accepted.join(", ")
+		)))
+	}
+}
+
+/// The client's `X-Attachment-Sha256`, normalized to lowercase hex.
+fn attachment_digest(headers: &HeaderMap) -> Result<String, LiseurSyncError> {
+	let digest = headers
+		.get(ATTACHMENT_SHA256_HEADER)
+		.and_then(|value| value.to_str().ok())
+		.map(|value| value.trim().to_ascii_lowercase())
+		.filter(|value| {
+			value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+		});
+	digest.ok_or_else(|| {
+		LiseurSyncError::BadRequest(
+			"X-Attachment-Sha256 must be 64 hex characters".into(),
+		)
+	})
+}
 fn require_library_read(token: &LiseurToken) -> Result<(), LiseurSyncError> {
 	if token.is_login_session() || !token.allows_scope("library-read") {
 		Err(LiseurSyncError::Forbidden(
@@ -1682,6 +1948,7 @@ fn error_response(error: LiseurSyncError) -> Response {
 		LiseurSyncError::Conflict(_) | LiseurSyncError::IdentityConflict(_) => {
 			StatusCode::CONFLICT
 		},
+		LiseurSyncError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
 		LiseurSyncError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
 	};
 	let body = match error {
@@ -1872,6 +2139,7 @@ mod tests {
 			context: AuthContext {
 				user: Default::default(),
 				api_key: None,
+				device_id: None,
 			},
 			device_id: "session-device".into(),
 			name: "login".into(),
@@ -1895,6 +2163,7 @@ mod tests {
 			context: AuthContext {
 				user: Default::default(),
 				api_key: None,
+				device_id: None,
 			},
 			device_id: "device-id".into(),
 			name: "Boox Palma".into(),
@@ -2013,6 +2282,21 @@ mod tests {
 			_: &str,
 			_: i64,
 		) -> Result<DeleteAnnotationResult, LiseurSyncError> {
+			unreachable!()
+		}
+		async fn put_attachment(
+			&self,
+			_: &str,
+			_: &str,
+			_: AttachmentUpload,
+		) -> Result<AttachmentUploadResult, LiseurSyncError> {
+			unreachable!()
+		}
+		async fn attachments(
+			&self,
+			_: &str,
+			_: &str,
+		) -> Result<Vec<AttachmentRecord>, LiseurSyncError> {
 			unreachable!()
 		}
 	}

@@ -2,21 +2,24 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use models::{
-	entity::{api_key, device, device_credential, liseur_sync_token, user::AuthUser},
+	entity::{
+		api_key, device, device_credential, device_entitlement_delta, liseur_sync_token,
+		user::AuthUser,
+	},
 	shared::{
 		api_key::APIKeyPermissions,
 		enums::{DeviceCredentialKind, DeviceKind, DeviceProtocol, UserPermission},
 	},
 };
 use parking_lot::Mutex;
-use sea_orm::{prelude::*, ActiveValue::Set, DatabaseConnection};
+use sea_orm::{prelude::*, ActiveValue::Set, DatabaseConnection, QueryOrder};
 use serde_json::json;
 use stump_api_types::RequestOrigin;
 use tests::{db::test_database, fake_data};
 
 use crate::{
 	credential::liseur, service::TOUCH_INTERVAL, CredentialRef, DeviceError, DeviceSeen,
-	DeviceService, Endpoint,
+	DeviceService, Endpoint, KindleSendSummary, LibraryScope, KINDLE_EMAIL_PROTOCOL,
 };
 
 async fn setup() -> (Arc<DatabaseConnection>, AuthUser) {
@@ -703,4 +706,352 @@ async fn protocol_registered_devices_are_listed_without_credentials() {
 		.await
 		.expect("rotated");
 	assert_eq!(issued.protocol, DeviceProtocol::Koreader);
+}
+
+/// A scope is stored as a JSON array, `Inherit` clears it back to NULL, and
+/// the round trip through the column preserves what was set.
+#[tokio::test]
+async fn set_library_scope_restricts_and_clears() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn.clone());
+	let library = fake_data::Library::default().insert(conn.as_ref()).await;
+	let other = fake_data::Library::default().insert(conn.as_ref()).await;
+	let (device, _) = service
+		.create_device(&user, DeviceKind::Komelia, None)
+		.await
+		.expect("device");
+
+	assert_eq!(LibraryScope::of(&device), LibraryScope::Inherit);
+
+	let scoped = service
+		.set_library_scope(
+			&user,
+			&device.id,
+			LibraryScope::Only(vec![library.id.clone()]),
+		)
+		.await
+		.expect("scope");
+	assert_eq!(
+		LibraryScope::of(&scoped),
+		LibraryScope::Only(vec![library.id.clone()])
+	);
+	assert_eq!(scoped.library_scope, Some(json!([library.id])));
+
+	// An empty scope is a restriction to nothing, not a reset.
+	let empty = service
+		.set_library_scope(&user, &device.id, LibraryScope::Only(vec![]))
+		.await
+		.expect("scope");
+	assert_eq!(empty.library_scope, Some(json!([])));
+
+	let inherited = service
+		.set_library_scope(&user, &device.id, LibraryScope::Inherit)
+		.await
+		.expect("scope");
+	assert_eq!(inherited.library_scope, None);
+	assert!(LibraryScope::of(&inherited).is_inherit());
+
+	// A library the owner cannot see would be inert once intersected, so it
+	// is rejected at the write instead of silently ignored.
+	let error = service
+		.set_library_scope(
+			&user,
+			&device.id,
+			LibraryScope::Only(vec![other.id.clone(), "no-such-library".to_string()]),
+		)
+		.await
+		.expect_err("unknown library must be rejected");
+	assert!(matches!(error, DeviceError::InvalidScope(_)), "{error:?}");
+	assert_eq!(
+		service
+			.get(&user, &device.id)
+			.await
+			.expect("device")
+			.library_scope,
+		None,
+		"a rejected scope must not be persisted"
+	);
+}
+
+/// A user may scope their own device; another non-owner user may not even see
+/// it, and the server owner may scope anyone's.
+#[tokio::test]
+async fn set_library_scope_is_owner_or_device_user_only() {
+	let (conn, owner) = setup().await;
+	let service = DeviceService::new(conn.clone());
+	let library = fake_data::Library::default().insert(conn.as_ref()).await;
+	let reader_row = fake_data::User::new("reader").insert(conn.as_ref()).await;
+	let reader_user = reader(&reader_row.id, vec![UserPermission::AccessApiKeys]);
+	let stranger_row = fake_data::User::new("stranger").insert(conn.as_ref()).await;
+	let stranger_user = reader(&stranger_row.id, vec![UserPermission::AccessApiKeys]);
+
+	let (device, _) = service
+		.create_device(&reader_user, DeviceKind::Api, None)
+		.await
+		.expect("device");
+
+	let scope = LibraryScope::Only(vec![library.id.clone()]);
+	assert!(service
+		.set_library_scope(&reader_user, &device.id, scope.clone())
+		.await
+		.is_ok());
+	assert!(matches!(
+		service
+			.set_library_scope(&stranger_user, &device.id, scope.clone())
+			.await,
+		Err(DeviceError::NotFound)
+	));
+	assert!(service
+		.set_library_scope(&owner, &device.id, LibraryScope::Inherit)
+		.await
+		.is_ok());
+}
+
+/// `authenticate` hands the auth path the device and its scope on every
+/// request, including the ones whose `last_seen_at` write is coalesced, and a
+/// scope write is in force on the very next request.
+#[tokio::test]
+async fn authenticate_reports_the_current_scope_every_request() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn.clone());
+	let library = fake_data::Library::default().insert(conn.as_ref()).await;
+	let (device, issued) = service
+		.create_device(&user, DeviceKind::Komelia, None)
+		.await
+		.expect("device");
+
+	let first = service
+		.authenticate(CredentialRef::ApiKey(&issued.secret), DeviceProtocol::Komga)
+		.await
+		.expect("authenticate")
+		.expect("device credential");
+	assert_eq!(first.device_id, device.id);
+	assert_eq!(first.library_scope, LibraryScope::Inherit);
+
+	service
+		.set_library_scope(
+			&user,
+			&device.id,
+			LibraryScope::Only(vec![library.id.clone()]),
+		)
+		.await
+		.expect("scope");
+
+	// No re-authentication, no TTL wait: the next request sees the new scope.
+	let second = service
+		.authenticate(CredentialRef::ApiKey(&issued.secret), DeviceProtocol::Komga)
+		.await
+		.expect("authenticate")
+		.expect("device credential");
+	assert_eq!(second.library_scope, LibraryScope::Only(vec![library.id]));
+
+	assert!(service
+		.authenticate(
+			CredentialRef::ApiKey("stump_nope_nope"),
+			DeviceProtocol::Api
+		)
+		.await
+		.expect("authenticate")
+		.is_none());
+}
+
+/// Narrowing a Kobo's scope tombstones the books that left; widening records
+/// the ones that entered. Other kinds re-query per request and record nothing.
+#[tokio::test]
+async fn kobo_scope_changes_record_entitlement_deltas() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn.clone());
+
+	let kept = fake_data::Library::default().insert(conn.as_ref()).await;
+	let dropped = fake_data::Library::default().insert(conn.as_ref()).await;
+	let kept_book = book_in(conn.as_ref(), &kept.id).await;
+	let dropped_book = book_in(conn.as_ref(), &dropped.id).await;
+
+	let (kobo, _) = service
+		.create_device(&user, DeviceKind::Kobo, None)
+		.await
+		.expect("device");
+
+	// Inherit -> only `kept`: the book in `dropped` left the device's view.
+	service
+		.set_library_scope(&user, &kobo.id, LibraryScope::Only(vec![kept.id.clone()]))
+		.await
+		.expect("scope");
+	assert_eq!(
+		deltas(conn.as_ref(), &kobo.id).await,
+		vec![(dropped_book.clone(), true)]
+	);
+
+	// Back to inherit: the same book entered, so the row flips rather than
+	// accumulating a second one.
+	service
+		.set_library_scope(&user, &kobo.id, LibraryScope::Inherit)
+		.await
+		.expect("scope");
+	assert_eq!(
+		deltas(conn.as_ref(), &kobo.id).await,
+		vec![(dropped_book, false)]
+	);
+	assert!(
+		!deltas(conn.as_ref(), &kobo.id)
+			.await
+			.iter()
+			.any(|(id, _)| *id == kept_book),
+		"a library that never changed side must record nothing"
+	);
+
+	let (komelia, _) = service
+		.create_device(&user, DeviceKind::Komelia, None)
+		.await
+		.expect("device");
+	service
+		.set_library_scope(
+			&user,
+			&komelia.id,
+			LibraryScope::Only(vec![kept.id.clone()]),
+		)
+		.await
+		.expect("scope");
+	assert!(
+		deltas(conn.as_ref(), &komelia.id).await.is_empty(),
+		"only Kobo needs entitlement bookkeeping"
+	);
+}
+
+/// A Kindle address round-trips through the column, is trimmed on the way in,
+/// and `None` clears it again.
+#[tokio::test]
+async fn kindle_email_round_trips_and_clears() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn);
+	let (device, _) = service
+		.create_device(&user, DeviceKind::Komelia, None)
+		.await
+		.expect("device");
+	assert_eq!(device.kindle_email, None);
+
+	let stored = service
+		.set_kindle_email(&user, &device.id, Some("  al@kindle.com  "))
+		.await
+		.expect("stored");
+	assert_eq!(stored.kindle_email.as_deref(), Some("al@kindle.com"));
+
+	let cleared = service
+		.set_kindle_email(&user, &device.id, None)
+		.await
+		.expect("cleared");
+	assert_eq!(cleared.kindle_email, None);
+}
+
+/// A malformed address is refused before it is stored, so a send never fails
+/// at the SMTP layer for a typo the operator could have been told about.
+#[tokio::test]
+async fn kindle_email_rejects_malformed_addresses() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn);
+	let (device, _) = service
+		.create_device(&user, DeviceKind::Komelia, None)
+		.await
+		.expect("device");
+
+	for bad in [
+		"",
+		"   ",
+		"al",
+		"al@kindle",
+		"@kindle.com",
+		"al@@kindle.com",
+		"al kindle@kindle.com",
+		"al@.kindle.com",
+	] {
+		let error = service
+			.set_kindle_email(&user, &device.id, Some(bad))
+			.await
+			.expect_err("refused");
+		assert!(
+			matches!(error, DeviceError::InvalidEmail(_)),
+			"{bad:?} was accepted as {error:?}"
+		);
+	}
+
+	let stored = service.get(&user, &device.id).await.expect("device");
+	assert_eq!(stored.kindle_email, None);
+}
+
+/// Only the device's user (or the server owner) may set its address; another
+/// user cannot even see the device.
+#[tokio::test]
+async fn kindle_email_is_owner_or_device_user_only() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn);
+	let (device, _) = service
+		.create_device(&user, DeviceKind::Komelia, None)
+		.await
+		.expect("device");
+
+	let stranger = reader("someone-else", vec![UserPermission::AccessApiKeys]);
+	let error = service
+		.set_kindle_email(&stranger, &device.id, Some("al@kindle.com"))
+		.await
+		.expect_err("hidden");
+	assert!(matches!(error, DeviceError::NotFound), "{error:?}");
+}
+
+/// A send-to-Kindle delivery is a sync summary, not a sighting: Stump mailed
+/// the book out, so `last_sync_at` advances and `last_seen_at` must not.
+#[tokio::test]
+async fn record_delivery_writes_a_sync_summary_without_a_sighting() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn);
+	let (device, _) = service
+		.create_device(&user, DeviceKind::Komelia, None)
+		.await
+		.expect("device");
+
+	let summary = KindleSendSummary::new(4096, "azw3");
+	service
+		.record_delivery(&device.id, &summary)
+		.await
+		.expect("recorded");
+
+	let stored = service.get(&user, &device.id).await.expect("device");
+	assert!(stored.last_seen_at.is_none(), "nothing authenticated");
+	let synced = stored.last_sync_at.expect("last sync set");
+	assert!(Utc::now() - synced.with_timezone(&Utc) < Duration::seconds(5));
+	assert_eq!(
+		stored.last_sync_summary,
+		Some(json!({
+			"protocol": KINDLE_EMAIL_PROTOCOL,
+			"bytes": 4096,
+			"format": "azw3",
+		}))
+	);
+}
+
+async fn book_in(conn: &DatabaseConnection, library_id: &str) -> String {
+	let series = fake_data::Series {
+		library_id: Some(library_id.to_string()),
+		..Default::default()
+	}
+	.insert(conn)
+	.await;
+	fake_data::Media {
+		series_id: series.id,
+		..Default::default()
+	}
+	.insert(conn)
+	.await
+	.id
+}
+
+async fn deltas(conn: &DatabaseConnection, device_id: &str) -> Vec<(String, bool)> {
+	device_entitlement_delta::Entity::find()
+		.filter(device_entitlement_delta::Column::DeviceId.eq(device_id))
+		.order_by_asc(device_entitlement_delta::Column::MediaId)
+		.all(conn)
+		.await
+		.expect("deltas")
+		.into_iter()
+		.map(|row| (row.media_id, row.removed))
+		.collect()
 }

@@ -48,9 +48,9 @@ pub const ACTION_REPAIR: &str = "repair-epub";
 
 const MIMETYPE_ENTRY: &str = "mimetype";
 const EPUB_MEDIA_TYPE: &str = "application/epub+zip";
-const CONTAINER_ENTRY: &str = "META-INF/container.xml";
+pub(crate) const CONTAINER_ENTRY: &str = "META-INF/container.xml";
 const OPF_MEDIA_TYPE: &str = "application/oebps-package+xml";
-const NCX_MEDIA_TYPE: &str = "application/x-dtbncx+xml";
+pub(crate) const NCX_MEDIA_TYPE: &str = "application/x-dtbncx+xml";
 const DC_NAMESPACE: &str = "http://purl.org/dc/elements/1.1/";
 /// ISO 639-2 "undetermined": the only honest value for a missing language.
 const UNDETERMINED_LANGUAGE: &str = "und";
@@ -58,7 +58,7 @@ const UNDETERMINED_LANGUAGE: &str = "und";
 const FALLBACK_IDENTIFIER_ID: &str = "bookid";
 /// The manifest id Stump itself treats as the cover, mirroring
 /// `DEFAULT_EPUB_COVER_ID` in `crates/media/src/media/format/epub.rs`.
-const DEFAULT_COVER_ID: &str = "cover";
+pub(crate) const DEFAULT_COVER_ID: &str = "cover";
 
 /// Stable finding codes: callers filter on these, never on prose.
 pub mod codes {
@@ -402,7 +402,7 @@ fn read_entries<R: Read + Seek>(archive: &mut ZipArchive<R>) -> ToolResult<Vec<E
 	Ok(entries)
 }
 
-fn read_entry_text<R: Read + Seek>(
+pub(crate) fn read_entry_text<R: Read + Seek>(
 	archive: &mut ZipArchive<R>,
 	name: &str,
 ) -> ToolResult<Option<String>> {
@@ -807,7 +807,12 @@ fn check_cover(
 
 /// A finding. `entry` is the archive member it is about, so a multi-file run
 /// stays unambiguous: `<book.epub>/OEBPS/content.opf`.
-fn finding(code: &str, path: &Path, entry: Option<&str>, message: String) -> Warning {
+pub(crate) fn finding(
+	code: &str,
+	path: &Path,
+	entry: Option<&str>,
+	message: String,
+) -> Warning {
 	let at = match entry {
 		Some(entry) => path.join(entry),
 		None => path.to_path_buf(),
@@ -1005,7 +1010,7 @@ fn rewrite_opf(xml: &str, repair: &RepairPlan) -> ToolResult<Vec<u8>> {
 	Ok(writer.into_inner())
 }
 
-fn flush(
+pub(crate) fn flush(
 	writer: &mut Writer<Vec<u8>>,
 	pending: &mut Option<BytesText<'static>>,
 ) -> ToolResult<()> {
@@ -1191,26 +1196,26 @@ fn write_dc_element(
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, Clone, PartialEq)]
-struct Opf {
-	version: Option<String>,
-	unique_identifier: Option<String>,
+pub(crate) struct Opf {
+	pub(crate) version: Option<String>,
+	pub(crate) unique_identifier: Option<String>,
 	/// The `id` of every `<dc:identifier>`, in document order.
-	identifier_ids: Vec<Option<String>>,
-	titles: Vec<String>,
-	languages: Vec<String>,
-	items: Vec<ManifestItem>,
-	itemrefs: Vec<String>,
-	meta_cover: Option<String>,
+	pub(crate) identifier_ids: Vec<Option<String>>,
+	pub(crate) titles: Vec<String>,
+	pub(crate) languages: Vec<String>,
+	pub(crate) items: Vec<ManifestItem>,
+	pub(crate) itemrefs: Vec<String>,
+	pub(crate) meta_cover: Option<String>,
 	/// `spine/@toc`, the EPUB 2 pointer at the NCX item.
-	spine_toc: Option<String>,
+	pub(crate) spine_toc: Option<String>,
 	/// Every `id` in the document, so a minted id cannot collide.
-	all_ids: BTreeSet<String>,
+	pub(crate) all_ids: BTreeSet<String>,
 }
 
 impl Opf {
 	/// EPUB 3 requires a `nav` document; EPUB 2 (and a package with no usable
 	/// version) is checked against the NCX rules instead.
-	fn is_epub3(&self) -> bool {
+	pub(crate) fn is_epub3(&self) -> bool {
 		self.version
 			.as_deref()
 			.is_some_and(|version| version.trim().starts_with('3'))
@@ -1230,21 +1235,21 @@ impl Opf {
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-struct ManifestItem {
-	id: String,
-	href: String,
-	media_type: Option<String>,
-	properties: Option<String>,
+pub(crate) struct ManifestItem {
+	pub(crate) id: String,
+	pub(crate) href: String,
+	pub(crate) media_type: Option<String>,
+	pub(crate) properties: Option<String>,
 }
 
 impl ManifestItem {
-	fn has_property(&self, property: &str) -> bool {
+	pub(crate) fn has_property(&self, property: &str) -> bool {
 		self.properties.as_deref().is_some_and(|properties| {
 			properties.split_whitespace().any(|token| token == property)
 		})
 	}
 
-	fn is_image(&self) -> bool {
+	pub(crate) fn is_image(&self) -> bool {
 		self.media_type
 			.as_deref()
 			.is_some_and(|media_type| media_type.starts_with("image/"))
@@ -1253,7 +1258,7 @@ impl ManifestItem {
 
 /// The `full-path` of the first `<rootfile>` with the package media type, or of
 /// the first `<rootfile>` at all when none declares it.
-fn parse_container(xml: &str) -> Result<Option<String>, quick_xml::Error> {
+pub(crate) fn parse_container(xml: &str) -> Result<Option<String>, quick_xml::Error> {
 	let mut reader = Reader::from_str(xml);
 	let mut fallback = None;
 	loop {
@@ -1278,7 +1283,7 @@ fn parse_container(xml: &str) -> Result<Option<String>, quick_xml::Error> {
 	Ok(fallback)
 }
 
-fn parse_opf(xml: &str) -> Result<Opf, quick_xml::Error> {
+pub(crate) fn parse_opf(xml: &str) -> Result<Opf, quick_xml::Error> {
 	let mut reader = Reader::from_str(xml);
 	let mut opf = Opf::default();
 	let mut stack: Vec<Vec<u8>> = Vec::new();
@@ -1311,6 +1316,13 @@ fn parse_opf(xml: &str) -> Result<Opf, quick_xml::Error> {
 			Event::CData(data) => {
 				if let Some((_, buffer)) = collecting.as_mut() {
 					buffer.push_str(&String::from_utf8_lossy(data.as_ref()));
+				}
+			},
+			// quick-xml reports `&amp;` and friends as their own event, so a
+			// title around one arrives in three pieces, not one.
+			Event::GeneralRef(reference) => {
+				if let Some((_, buffer)) = collecting.as_mut() {
+					buffer.push_str(&resolve_reference(reference.as_ref()));
 				}
 			},
 			Event::End(_) => {
@@ -1391,19 +1403,19 @@ fn read_element(
 // Small helpers
 // ---------------------------------------------------------------------------
 
-fn local_name(name: &[u8]) -> &[u8] {
+pub(crate) fn local_name(name: &[u8]) -> &[u8] {
 	match name.iter().position(|byte| *byte == b':') {
 		Some(index) => &name[index + 1..],
 		None => name,
 	}
 }
 
-fn local_string(name: &[u8]) -> String {
+pub(crate) fn local_string(name: &[u8]) -> String {
 	String::from_utf8_lossy(local_name(name)).into_owned()
 }
 
 /// Unescape leniently: a checker must not abort on an exotic entity.
-fn decode(bytes: &[u8]) -> String {
+pub(crate) fn decode(bytes: &[u8]) -> String {
 	let raw = String::from_utf8_lossy(bytes);
 	match unescape(&raw) {
 		Ok(Cow::Owned(value)) => value,
@@ -1411,7 +1423,13 @@ fn decode(bytes: &[u8]) -> String {
 	}
 }
 
-fn attribute(
+/// The text a `&name;`/`&#nn;` reference stands for, or the reference itself
+/// when it names an entity this crate cannot resolve.
+pub(crate) fn resolve_reference(content: &[u8]) -> String {
+	decode(format!("&{};", String::from_utf8_lossy(content)).as_bytes())
+}
+
+pub(crate) fn attribute(
 	element: &BytesStart<'_>,
 	key: &str,
 ) -> Result<Option<String>, quick_xml::Error> {
@@ -1426,7 +1444,7 @@ fn attribute(
 
 /// Replace `key`'s value, appending the attribute when it is absent. Every
 /// other attribute keeps its original bytes and position.
-fn set_attribute(
+pub(crate) fn set_attribute(
 	element: &mut BytesStart<'_>,
 	key: &str,
 	value: &str,
@@ -1471,11 +1489,11 @@ fn remove_attribute(
 	Ok(())
 }
 
-fn is_whitespace(bytes: &[u8]) -> bool {
+pub(crate) fn is_whitespace(bytes: &[u8]) -> bool {
 	!bytes.is_empty() && bytes.iter().all(u8::is_ascii_whitespace)
 }
 
-fn zip_parent(path: &str) -> &str {
+pub(crate) fn zip_parent(path: &str) -> &str {
 	match path.rfind('/') {
 		Some(index) => &path[..index],
 		None => "",
@@ -1489,7 +1507,7 @@ fn normalize_zip_path(path: &str) -> String {
 /// Resolve a manifest `href` against the package document's directory: strip
 /// the fragment and query, percent-decode, normalize `.`/`..`. `None` means
 /// "not an archive-local path" (absolute URL, or `..` escaping the root).
-fn resolve_href(base: &str, href: &str) -> Option<String> {
+pub(crate) fn resolve_href(base: &str, href: &str) -> Option<String> {
 	let href = href.split(['#', '?']).next().unwrap_or(href);
 	if href.is_empty()
 		|| href.contains("://")
@@ -1542,7 +1560,7 @@ fn percent_decode(input: &str) -> String {
 
 /// Expand the caller's paths into the EPUBs to check: a file is taken as-is, a
 /// directory is walked recursively for `*.epub`.
-fn collect_epubs(paths: &[PathBuf]) -> ToolResult<Vec<PathBuf>> {
+pub(crate) fn collect_epubs(paths: &[PathBuf]) -> ToolResult<Vec<PathBuf>> {
 	if paths.is_empty() {
 		return Err(ToolError::Invalid("no input paths".to_string()));
 	}

@@ -1,4 +1,5 @@
 pub mod age_restriction;
+pub mod annotation_attachment;
 pub mod annotation_sink_config;
 pub mod api_key;
 pub mod book_club;
@@ -17,6 +18,7 @@ pub mod collection_series;
 pub mod custom_emoji;
 pub mod device;
 pub mod device_credential;
+pub mod device_entitlement_delta;
 pub mod device_pairing;
 pub mod emailer;
 pub mod emailer_send_record;

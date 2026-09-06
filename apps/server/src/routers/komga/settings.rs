@@ -680,6 +680,7 @@ mod tests {
 				..Default::default()
 			},
 			api_key: None,
+			device_id: None,
 		};
 		assert!(!can_change_password(&auth, "another-user"));
 		assert!(can_change_password(&auth, "reader"));

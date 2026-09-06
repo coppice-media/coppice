@@ -226,6 +226,10 @@ pub trait KavitaBackend: Send + Sync {
 		book_ids: Vec<String>,
 	) -> APIResult<()>;
 
+	/// Delete a reading list owned by `user`
+	/// (`DELETE /api/ReadingList?readingListId=`).
+	async fn delete_read_list(&self, user: &AuthUser, id: &str) -> APIResult<()>;
+
 	/// Create a collection owned by `user` with the given members
 	/// (`POST /api/Collection/update-for-series` with `collectionTagId: 0`).
 	async fn create_collection(

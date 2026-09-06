@@ -65,6 +65,16 @@ pub struct AuthUser {
 	pub permissions: Vec<UserPermission>,
 	pub age_restriction: Option<super::age_restriction::Model>,
 	pub preferences: Option<user_preferences::Model>,
+	/// The library ids the device whose credential authenticated this request
+	/// is restricted to, or `None` when the request has no device (a session,
+	/// a bare password) or the device inherits its user's visibility.
+	///
+	/// Resolved once per request by the auth middleware and consumed by
+	/// [`VisibilityScope`](crate::shared::visibility::VisibilityScope); it
+	/// only ever narrows what the user can already see. Never serialised: it
+	/// is request state, not part of the user's public shape.
+	#[serde(skip)]
+	pub device_library_scope: Option<Vec<String>>,
 }
 
 impl AuthUser {
@@ -136,6 +146,7 @@ impl FromQueryResult for AuthUser {
 			permissions,
 			age_restriction,
 			preferences,
+			device_library_scope: None,
 		})
 	}
 }
@@ -238,6 +249,7 @@ impl From<LoginUser> for AuthUser {
 			permissions: user.permissions,
 			age_restriction: user.age_restriction,
 			preferences: user.preferences,
+			device_library_scope: None,
 		}
 	}
 }

@@ -56,6 +56,10 @@ mod m20260920_000000_add_annotation_sink_configs;
 mod m20260922_kavita_on_deck_removals;
 mod m20260923_000000_backfill_reading_heads;
 mod m20260924_000000_add_provider_series_links;
+mod m20260925_000000_add_device_library_scope;
+mod m20260926_000000_add_annotation_attachments;
+mod m20260927_000000_add_ingest_preprocess;
+mod m20260928_000000_add_device_kindle_email;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -117,6 +121,10 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260922_kavita_on_deck_removals::Migration),
 			Box::new(m20260923_000000_backfill_reading_heads::Migration),
 			Box::new(m20260924_000000_add_provider_series_links::Migration),
+			Box::new(m20260925_000000_add_device_library_scope::Migration),
+			Box::new(m20260926_000000_add_annotation_attachments::Migration),
+			Box::new(m20260927_000000_add_ingest_preprocess::Migration),
+			Box::new(m20260928_000000_add_device_kindle_email::Migration),
 		]
 	}
 }

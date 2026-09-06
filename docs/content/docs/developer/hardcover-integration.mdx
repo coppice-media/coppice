@@ -5,7 +5,7 @@ description: Proposed account, progress, highlights, and Readium locator integra
 
 This page is the design for a future, optional Hardcover integration. **The integration is proposed and not implemented.** Stump does not currently provide a Hardcover account link, Personal Access Token (PAT) store, Hardcover journal importer, or Hardcover outbound-sync job. The models and APIs cited below are existing source facts; the account, mapping, queue, reconciliation, and rollout decisions are proposals.
 
-The server remains authoritative and light, consistent with the [server architecture](./server-architecture). A device or optional worker may do expensive EPUB/KEPUB parsing and locator reconstruction, but no remote worker or Hardcover account is a prerequisite for storing, reading, or syncing local Stump data.
+The server remains authoritative and light, consistent with the [server architecture](/docs/developer/server-architecture). A device or optional worker may do expensive EPUB/KEPUB parsing and locator reconstruction, but no remote worker or Hardcover account is a prerequisite for storing, reading, or syncing local Stump data.
 
 ## Scope and non-goals
 
@@ -262,7 +262,7 @@ The preferred pipeline is an uploader-side or optional-worker normalizer that se
 7. **Retain auxiliary evidence.** Store `kobo_span` only when observed, plus the source paths, source byte/file digest, converter identifier, and `import_mode = exact_kobo_cfi` in the provenance relation.
 8. **Verify before commit.** Confirm the reconstructed range yields the captured text. If it does not, reject the exact mode and retain an unresolved source record rather than silently storing a nearby match.
 
-A server-side normalizer may be added later, but it must remain bounded and optional. The source device or worker already holding the publication is the preferred place for byte/DOM work; this follows the uploader-prepared ingest boundary in [server architecture](./server-architecture).
+A server-side normalizer may be added later, but it must remain bounded and optional. The source device or worker already holding the publication is the preferred place for byte/DOM work; this follows the uploader-prepared ingest boundary in [server architecture](/docs/developer/server-architecture).
 
 ### Proposed fallback mapping (not implemented)
 

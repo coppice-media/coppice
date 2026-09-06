@@ -20,7 +20,7 @@ use stump_auth::AuthContext;
 
 use crate::{
 	dto::{
-		ChapterDto, GroupedSeriesDto, PaginationHeader, RefreshSeriesDto,
+		ChapterDto, GroupedSeriesDto, PaginationHeader, RefreshSeriesDto, SeriesByIdsDto,
 		SeriesDetailDto, SeriesDto, SeriesMetadataDto, TagDto, VolumeDto,
 	},
 	errors::{APIError, APIResult},
@@ -35,8 +35,8 @@ use crate::{
 use super::{
 	query::{
 		book_library_ids, find_media, find_series_input, library_for_series,
-		load_by_keys, load_kavita_series, on_deck_removals, restrict_plan,
-		select_series_keys, SeriesKey,
+		load_by_keys, load_kavita_series, on_deck_removals, resolve_series_key,
+		restrict_plan, select_series_keys, SeriesKey,
 	},
 	route_ci,
 	series_filter::{plan, FilterPlan, ProgressSort, SortKey},
@@ -150,6 +150,7 @@ where
 	let router = route_ci(router, "/api/Series/chapter", get(chapter_by_query));
 	let router = route_ci(router, "/api/Series/scan", post(series_scan));
 	let router = route_ci(router, "/api/Series/analyze", post(series_analyze));
+	let router = route_ci(router, "/api/Series/series-by-ids", post(series_by_ids));
 	let router = route_ci(
 		router,
 		"/api/Series/refresh-metadata",
@@ -739,6 +740,55 @@ async fn series_by_id(
 	Ok(Json(map_series(&input)))
 }
 
+/// `SeriesController.GetAllSeriesById`: the visible series among `seriesIds`,
+/// sorted by `sortName` like `GetSeriesDtoForIdsAsync`. Kamigura opens a
+/// reading list by mapping its items onto series ids and asking for them in
+/// one call (`library/SearchScreens.kt:637-639`), so without this route the
+/// list opens empty. Unknown and invisible ids are skipped rather than
+/// refused; a body without `seriesIds` is `400 "Invalid payload"`, both as
+/// `kavita-ref` answers.
+pub(crate) async fn series_by_ids_for(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	series_ids: &[i32],
+) -> APIResult<Vec<SeriesDto>> {
+	let mut keys = Vec::with_capacity(series_ids.len());
+	for id in series_ids {
+		if let Some(key) = resolve_series_key(ctx, *id).await? {
+			keys.push(key);
+		}
+	}
+	if keys.is_empty() {
+		return Ok(Vec::new());
+	}
+	let mut items = load_by_keys(ctx, user, &keys)
+		.await?
+		.iter()
+		.map(map_series)
+		.collect::<Vec<_>>();
+	items.sort_by(|left, right| {
+		left.sort_name
+			.to_lowercase()
+			.cmp(&right.sort_name.to_lowercase())
+			.then_with(|| left.id.cmp(&right.id))
+	});
+	Ok(items)
+}
+
+async fn series_by_ids(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(body): Json<SeriesByIdsDto>,
+) -> APIResult<Json<Vec<SeriesDto>>> {
+	let user = auth.user();
+	let series_ids = body
+		.series_ids
+		.ok_or_else(|| APIError::BadRequest("Invalid payload".to_owned()))?;
+	Ok(Json(
+		series_by_ids_for(ctx.as_ref(), &user, &series_ids).await?,
+	))
+}
+
 /// Kavita returns an empty list for an unknown series.
 async fn series_volumes(
 	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
@@ -1227,7 +1277,7 @@ mod books {
 	use crate::dto::{LibraryType, MangaFormat};
 	use crate::filter::{FilterComparison, SeriesFilterField, SeriesFilterStatementDto};
 	use crate::test_support::{
-		auth_user, db, library_of_type, series_with_files, TestBackend,
+		auth_user, db, library_of_type, request, series_with_files, TestBackend,
 	};
 	use ::tests::fake_data;
 	use models::shared::enums::LibraryType as StumpLibraryType;
@@ -1479,6 +1529,95 @@ mod books {
 		.await
 		.unwrap();
 		assert_eq!(recent[0].name, "Beta");
+	}
+
+	/// `POST /api/Series/series-by-ids` is the second half of Kamigura's
+	/// "open a reading list" (`library/SearchScreens.kt:637-639`): the items'
+	/// series ids come back as `SeriesDto`s sorted by `sortName`. It has to
+	/// be registered as a literal segment, or `POST` falls through to the
+	/// `GET /api/Series/{seriesId}` route and answers `405` with an empty
+	/// grid in the client. Unknown ids are skipped; a body without
+	/// `seriesIds` is `400`, both as `kavita-ref` answers.
+	#[tokio::test]
+	async fn series_by_ids_answers_the_reading_list_grid() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("bookworm").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let backend = std::sync::Arc::new(TestBackend::new(conn));
+		let books = library_of_type(backend.conn(), StumpLibraryType::Book).await;
+		let (_, files) = series_with_files(
+			backend.conn(),
+			&books.id,
+			"Shelf",
+			&[("zeta", "epub", 5), ("alpha", "epub", 7)],
+		)
+		.await;
+		let comics = library_of_type(backend.conn(), StumpLibraryType::Comic).await;
+		let (comic_series, _) = series_with_files(
+			backend.conn(),
+			&comics.id,
+			"middle",
+			&[("science_comics_001", "cbz", 36)],
+		)
+		.await;
+		let mut ids = Vec::new();
+		for file in &files {
+			ids.push(
+				KavitaIds::resolve(backend.conn(), IdKind::BookSeries, &file.id)
+					.await
+					.unwrap(),
+			);
+		}
+		ids.push(
+			KavitaIds::resolve(backend.conn(), IdKind::Series, &comic_series.id)
+				.await
+				.unwrap(),
+		);
+
+		let (status, body) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Series/series-by-ids",
+			Some(serde_json::json!({ "seriesIds": [ids[0], ids[1], ids[2], 999_999] })),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(
+			body.as_array()
+				.unwrap()
+				.iter()
+				.map(|dto| dto["name"].as_str().unwrap())
+				.collect::<Vec<_>>(),
+			["alpha", "middle", "zeta"],
+			"sorted by sortName, unknown ids skipped"
+		);
+
+		for empty in [
+			serde_json::json!({ "seriesIds": [] }),
+			serde_json::json!({ "seriesIds": [999_999] }),
+		] {
+			let (status, body) = request(
+				backend.clone(),
+				&user,
+				"POST",
+				"/api/series/series-by-ids",
+				Some(empty),
+			)
+			.await;
+			assert_eq!(status, StatusCode::OK);
+			assert!(body.as_array().unwrap().is_empty());
+		}
+
+		let (status, _) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Series/series-by-ids",
+			Some(serde_json::json!({})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::BAD_REQUEST);
 	}
 }
 

@@ -5,6 +5,7 @@ use models::{
 	shared::{
 		enums::ReadingStatus,
 		readium::{ReadiumLocation, ReadiumLocator},
+		visibility::VisibilityScope,
 	},
 };
 use rust_decimal::prelude::ToPrimitive;
@@ -168,13 +169,20 @@ impl MediaWithMetadataAndReadingSessions {
 		apply_reading_session_joins(select, user)
 	}
 
-	pub fn find_by_ids_for_user(
+	/// The books among `ids` that `scope` may see.
+	///
+	/// Takes a scope rather than a bare user so a caller can pass
+	/// [`VisibilityScope::inherit`] and describe a book the *user* owns but
+	/// the authenticating *device* no longer sees; an `&AuthUser` still
+	/// resolves to the request's own device scope.
+	pub fn find_by_ids_for_user<'a>(
 		ids: &[String],
-		user: &AuthUser,
+		scope: impl Into<VisibilityScope<'a>>,
 	) -> Select<media::Entity> {
-		let select = media::ModelWithMetadata::find_for_user(user)
+		let scope = scope.into();
+		let select = media::ModelWithMetadata::find_for_user(scope)
 			.filter(media::Column::Id.is_in(ids));
-		apply_reading_session_joins(select, user)
+		apply_reading_session_joins(select, scope.user())
 	}
 }
 
@@ -915,6 +923,20 @@ impl BookEntitlementContainer {
 			book_metadata: BookMetadata::from_media_with_format(&m, book_url, format),
 			reading_state: Some(reading_state),
 		}
+	}
+
+	/// The same entitlement, marked as one the device should drop.
+	///
+	/// A removal is not its own wire shape: Calibre-Web's
+	/// `create_book_entitlement`
+	/// (`cps/kobo.py:372-388@a97826402f1b39c45b7ea8d906efddc9f1750934`) fills
+	/// `IsRemoved` from the book's archived flag and leaves `Status`
+	/// `"Active"`, so only that one flag moves here. The metadata and reading
+	/// state ride along unchanged, which is what lets a device match the item
+	/// to the entitlement it already holds.
+	pub fn into_removed(mut self) -> Self {
+		self.book_entitlement.is_removed = true;
+		self
 	}
 }
 

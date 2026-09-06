@@ -26,6 +26,23 @@ pub struct Model {
 	/// Kobo, image sizing for a phone). Interpreted by the protocol adapters.
 	#[sea_orm(column_type = "Json", nullable)]
 	pub transform_profile: Option<Json>,
+	/// The library ids this device may see, as a JSON array. `NULL` means the
+	/// device inherits its user's visibility; `[]` is a device that sees
+	/// nothing. Only ever intersected with the user's visibility, so it
+	/// narrows and never widens — see
+	/// [`VisibilityScope`](crate::shared::visibility::VisibilityScope).
+	///
+	/// Exposed to GraphQL as the typed `Device.libraryScope: [String!]`
+	/// (see `graphql::object::device`), not as the raw JSON column.
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	#[sea_orm(column_type = "Json", nullable)]
+	pub library_scope: Option<Json>,
+	/// The Amazon *Send to Kindle* address of this device, or `NULL` when it
+	/// has none. Only a Kindle is reachable this way: Amazon delivers what an
+	/// approved sender mails to the address, so this is the whole transport
+	/// for a device that speaks no sync protocol.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub kindle_email: Option<String>,
 	pub created_at: DateTimeWithTimeZone,
 	/// The last time any credential of this device authenticated a request
 	pub last_seen_at: Option<DateTimeWithTimeZone>,
@@ -40,6 +57,37 @@ pub struct Model {
 impl Model {
 	pub fn is_revoked(&self) -> bool {
 		self.revoked_at.is_some()
+	}
+
+	/// The parsed [`Self::library_scope`], or `None` when the device inherits
+	/// its user's visibility. A stored value that is not an array of strings
+	/// is treated as inherit and logged: a corrupt scope must not silently
+	/// hide a user's whole library.
+	pub fn library_scope_ids(&self) -> Option<Vec<String>> {
+		let value = self.library_scope.as_ref()?;
+		if value.is_null() {
+			return None;
+		}
+		match value.as_array() {
+			Some(entries) => entries
+				.iter()
+				.map(|entry| entry.as_str().map(str::to_owned))
+				.collect::<Option<Vec<String>>>()
+				.or_else(|| {
+					tracing::error!(
+						device_id = %self.id,
+						"device library_scope holds a non-string entry; treating as inherit"
+					);
+					None
+				}),
+			None => {
+				tracing::error!(
+					device_id = %self.id,
+					"device library_scope is not an array; treating as inherit"
+				);
+				None
+			},
+		}
 	}
 }
 

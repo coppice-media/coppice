@@ -44,7 +44,7 @@ use crate::utils::verify_password;
 
 const TOKEN_TTL_SECS: i64 = 60 * 60;
 
-fn db_statement<C: ConnectionTrait>(
+pub(super) fn db_statement<C: ConnectionTrait>(
 	conn: &C,
 	sql: &str,
 	values: Vec<DbValue>,
@@ -52,7 +52,7 @@ fn db_statement<C: ConnectionTrait>(
 	Statement::from_sql_and_values(conn.get_database_backend(), sql, values)
 }
 
-fn internal(error: impl ToString) -> LiseurSyncError {
+pub(super) fn internal(error: impl ToString) -> LiseurSyncError {
 	LiseurSyncError::Internal(error.to_string())
 }
 
@@ -917,22 +917,23 @@ pub(crate) async fn authenticate(
 		);
 	}
 
-	// Record the sighting on the device this token belongs to; a registry
-	// failure must never fail authentication.
-	if let Err(error) = ctx
-		.devices()
-		.touch(
-			CredentialRef::LiseurToken(&token_id),
-			Protocol::Liseur,
-			None,
-		)
-		.await
-	{
-		tracing::warn!(
-			?error,
-			"failed to record the liseur-sync token on its device"
-		);
-	}
+	let mut context = AuthContext {
+		user: AuthUser::from(user),
+		api_key: None,
+		device_id: None,
+	};
+	// Records the sighting on the device this token belongs to and narrows the
+	// request to that device's library scope. A registry failure means the
+	// device could not be determined, and a request whose visible library set
+	// is unknown must not be served.
+	crate::middleware::auth::bind_device(
+		ctx,
+		&mut context,
+		CredentialRef::LiseurToken(&token_id),
+		Protocol::Liseur,
+	)
+	.await
+	.map_err(internal)?;
 
 	let kind = if token_kind.as_deref() == Some("session") {
 		LiseurTokenKind::LoginSession
@@ -940,10 +941,7 @@ pub(crate) async fn authenticate(
 		LiseurTokenKind::Device
 	};
 	Ok(LiseurToken {
-		context: AuthContext {
-			user: AuthUser::from(user),
-			api_key: None,
-		},
+		context,
 		device_id,
 		name: name.unwrap_or_else(|| {
 			if kind == LiseurTokenKind::LoginSession {
@@ -2283,7 +2281,11 @@ pub(crate) async fn delete_annotation(
 	))
 	.await
 	.map_err(internal)?;
+	// A tombstone keeps identity and revision, not content: the annotation's
+	// side objects go with its body.
+	let detached = super::attachments::detach_all(&txn, user_id, id).await?;
 	txn.commit().await.map_err(internal)?;
+	super::attachments::unlink_all(ctx, &detached).await;
 	ctx.note_annotation_activity(user_id);
 	Ok(DeleteAnnotationResult {
 		id: id.into(),

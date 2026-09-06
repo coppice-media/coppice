@@ -35,4 +35,22 @@ pub struct IngestConfig {
 	#[default_value(DEFAULT_INGEST_PROGRESS_RETENTION)]
 	#[env_key(INGEST_PROGRESS_RETENTION_KEY)]
 	pub ingest_progress_retention: u32,
+
+	/// Optional executable run once per dropped item, before analysis, as
+	/// `<command> <absolute staged file path>`. Any executable works; typical
+	/// uses are format normalisation and running your own conversion pipeline.
+	///
+	/// This is an executable path (absolute, or a name resolved on `PATH`), not
+	/// a shell line: arguments are not parsed out of it, so wrap multi-step
+	/// work in your own script. A command that cannot be resolved to an
+	/// executable file fails startup rather than silently skipping every item.
+	#[default_value(None)]
+	#[env_key(INGEST_PREPROCESS_KEY)]
+	pub ingest_preprocess_command: Option<String>,
+
+	/// Wall-clock budget for one preprocess hook run. A hook that outlives it
+	/// is killed and its item fails.
+	#[default_value(DEFAULT_INGEST_PREPROCESS_TIMEOUT_SECS)]
+	#[env_key(INGEST_PREPROCESS_TIMEOUT_KEY)]
+	pub ingest_preprocess_timeout_secs: u64,
 }

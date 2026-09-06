@@ -63,7 +63,11 @@ where
 	S: Clone + Send + Sync + 'static,
 {
 	let router = Router::<S>::new();
-	let router = route_ci(router, "/api/ReadingList", get(reading_list_by_id));
+	let router = route_ci(
+		router,
+		"/api/ReadingList",
+		get(reading_list_by_id).delete(delete_reading_list),
+	);
 	let router = route_ci(router, "/api/ReadingList/lists", post(reading_lists));
 	let router = route_ci(
 		router,
@@ -156,6 +160,20 @@ fn map_lists(
 		.collect()
 }
 
+/// Kavita's default list ordering is by title; ties break on the Kavita id so
+/// two lists that share a title — the replay harness makes exactly that —
+/// keep a stable place across refreshes.
+fn by_title(
+	left: &(reading_list::Model, i32, i32),
+	right: &(reading_list::Model, i32, i32),
+) -> std::cmp::Ordering {
+	left.0
+		.name
+		.to_lowercase()
+		.cmp(&right.0.name.to_lowercase())
+		.then_with(|| left.1.cmp(&right.1))
+}
+
 /// `ReadingListController.GetListsForUser`: the user's lists, sorted by last
 /// modified (newest first) or by title, paged with the `Pagination` header.
 /// Stump has no promoted lists, so `includePromoted` adds nothing.
@@ -169,13 +187,7 @@ pub(crate) async fn list_reading_lists(
 	if sort_by_last_modified {
 		lists.sort_by(|left, right| right.0.updated_at.cmp(&left.0.updated_at));
 	} else {
-		lists.sort_by(|left, right| {
-			left.0
-				.name
-				.to_lowercase()
-				.cmp(&right.0.name.to_lowercase())
-				.then_with(|| left.1.cmp(&right.1))
-		});
+		lists.sort_by(by_title);
 	}
 	let total = i32::try_from(lists.len()).unwrap_or(i32::MAX);
 	let page = if params.page_size == UserParams::MAX_PAGE_SIZE {
@@ -245,8 +257,52 @@ async fn reading_list_by_id(
 	))
 }
 
+/// Kavita's `ReadingListController.DeleteList` reply, verbatim: `200` with a
+/// plain-text body whether or not anything was deleted.
+const DELETED: &str = "Reading List was deleted";
+
+/// `DELETE /api/ReadingList?readingListId=`.
+///
+/// Kavita deletes from the caller's own lists (`user.ReadingLists`) and
+/// answers `200 "Reading List was deleted"` regardless — `kavita-ref` 0.9.1.4
+/// says it for an id that never existed too — so a list the caller can read
+/// but does not own is left alone rather than refused, and a client's retry
+/// of a delete it already made is not an error.
+pub(crate) async fn delete_reading_list_for(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	reading_list_id: i32,
+) -> APIResult<&'static str> {
+	let owned =
+		visible_lists(ctx, user)
+			.await?
+			.into_iter()
+			.find(|(list, kavita_id, _)| {
+				*kavita_id == reading_list_id && list.creating_user_id == user.id
+			});
+	if let Some((list, _, _)) = owned {
+		ctx.delete_read_list(user, &list.id).await?;
+	}
+	Ok(DELETED)
+}
+
+async fn delete_reading_list(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Query(query): Query<ReadingListIdQuery>,
+) -> APIResult<&'static str> {
+	let user = auth.user();
+	delete_reading_list_for(
+		ctx.as_ref(),
+		&user,
+		query.reading_list_id.unwrap_or_default(),
+	)
+	.await
+}
+
 /// `ReadingListController.GetListsForSeries`: the lists that already hold at
-/// least one chapter of the series.
+/// least one chapter of the series, in the same title order as
+/// `ReadingList/lists`.
 pub(crate) async fn lists_for_series_for(
 	ctx: &dyn KavitaBackend,
 	user: &AuthUser,
@@ -270,11 +326,12 @@ pub(crate) async fn lists_for_series_for(
 		.into_iter()
 		.map(|item| item.reading_list_id)
 		.collect::<std::collections::HashSet<_>>();
-	let lists = visible_lists(ctx, user)
+	let mut lists = visible_lists(ctx, user)
 		.await?
 		.into_iter()
 		.filter(|(list, _, _)| holding.contains(&list.id))
 		.collect::<Vec<_>>();
+	lists.sort_by(by_title);
 	let owners = owner_names(ctx, &lists).await?;
 	Ok(map_lists(lists, &owners))
 }
@@ -645,5 +702,131 @@ mod tests {
 				.await
 				.is_err()
 		);
+	}
+
+	/// `DELETE /api/ReadingList?readingListId=` removes the caller's list and
+	/// answers Kavita's plain-text body; an unknown id and a list the caller
+	/// can see but does not own both answer the same way without deleting
+	/// anything, which is what `kavita-ref` 0.9.1.4 does.
+	#[tokio::test]
+	async fn deleting_a_reading_list_is_owner_scoped_and_idempotent() {
+		let conn = db().await;
+		let owner_row = fake_data::User::new("owner").insert(&conn).await;
+		let other_row = fake_data::User::new("other").insert(&conn).await;
+		let owner = auth_user(&owner_row);
+		let other = auth_user(&other_row);
+		let backend = TestBackend::new(conn);
+		let library = library_of_type(&backend.conn, StumpLibraryType::Comic).await;
+		let (series, _) = series_with_files(
+			&backend.conn,
+			&library.id,
+			"Science Comics",
+			&[("science_comics_001", "cbz", 36)],
+		)
+		.await;
+		let series_id = KavitaIds::resolve(&backend.conn, IdKind::Series, &series.id)
+			.await
+			.unwrap();
+
+		let created = create_reading_list_for(&backend, &owner, "Mine")
+			.await
+			.unwrap();
+		update_by_series_for(&backend, &owner, created.id, series_id)
+			.await
+			.unwrap();
+
+		assert_eq!(
+			delete_reading_list_for(&backend, &other, created.id)
+				.await
+				.unwrap(),
+			DELETED
+		);
+		assert_eq!(
+			list_reading_lists(&backend, &owner, false, UserParams::parse(""))
+				.await
+				.unwrap()
+				.0
+				.len(),
+			1,
+			"a non-owner's delete is a no-op, not a deletion"
+		);
+
+		assert_eq!(
+			delete_reading_list_for(&backend, &owner, created.id)
+				.await
+				.unwrap(),
+			DELETED
+		);
+		assert!(
+			list_reading_lists(&backend, &owner, false, UserParams::parse(""))
+				.await
+				.unwrap()
+				.0
+				.is_empty()
+		);
+		assert!(
+			lists_for_series_for(&backend, &owner, series_id)
+				.await
+				.unwrap()
+				.is_empty(),
+			"the deleted list stops holding the series"
+		);
+		assert_eq!(
+			delete_reading_list_for(&backend, &owner, created.id)
+				.await
+				.unwrap(),
+			DELETED,
+			"repeating the delete is not an error"
+		);
+		assert_eq!(
+			delete_reading_list_for(&backend, &owner, 999_999)
+				.await
+				.unwrap(),
+			DELETED
+		);
+	}
+
+	/// Two lists that share a title — the shape the replay harness leaves
+	/// behind — come back in a stable order from both `lists` and
+	/// `lists-for-series`, so a client's refresh does not reshuffle them.
+	#[tokio::test]
+	async fn same_titled_lists_keep_a_stable_order() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("lister").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let backend = TestBackend::new(conn);
+		let library = library_of_type(&backend.conn, StumpLibraryType::Comic).await;
+		let (series, _) = series_with_files(
+			&backend.conn,
+			&library.id,
+			"Science Comics",
+			&[("science_comics_001", "cbz", 36)],
+		)
+		.await;
+		let series_id = KavitaIds::resolve(&backend.conn, IdKind::Series, &series.id)
+			.await
+			.unwrap();
+
+		let mut ids = Vec::new();
+		for _ in 0..3 {
+			let list = create_reading_list_for(&backend, &user, "hurl replay list")
+				.await
+				.unwrap();
+			update_by_series_for(&backend, &user, list.id, series_id)
+				.await
+				.unwrap();
+			ids.push(list.id);
+		}
+		ids.sort_unstable();
+
+		let (lists, _) =
+			list_reading_lists(&backend, &user, false, UserParams::parse(""))
+				.await
+				.unwrap();
+		assert_eq!(lists.iter().map(|list| list.id).collect::<Vec<_>>(), ids);
+		let holding = lists_for_series_for(&backend, &user, series_id)
+			.await
+			.unwrap();
+		assert_eq!(holding.iter().map(|list| list.id).collect::<Vec<_>>(), ids);
 	}
 }
