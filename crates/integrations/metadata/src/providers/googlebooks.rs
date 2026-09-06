@@ -187,7 +187,10 @@ impl MetadataProvider for GoogleBooksClient {
 					requested: 1,
 				});
 			}
-			tracing::debug!(isbn, "No Google Books volume for ISBN; falling back to search");
+			tracing::debug!(
+				isbn,
+				"No Google Books volume for ISBN; falling back to search"
+			);
 		}
 
 		let mut q = format!("intitle:{}", query.title.trim());
@@ -214,7 +217,8 @@ impl MetadataProvider for GoogleBooksClient {
 		&self,
 		external_id: &str,
 	) -> Result<ExternalMediaMetadata, MetadataProviderError> {
-		let volume: GoogleBooksVolume = self.get(&format!("/volumes/{external_id}"), &[]).await?;
+		let volume: GoogleBooksVolume =
+			self.get(&format!("/volumes/{external_id}"), &[]).await?;
 		Ok(media_metadata(self.id(), volume))
 	}
 
@@ -251,7 +255,12 @@ fn media_metadata(provider_id: &str, volume: GoogleBooksVolume) -> ExternalMedia
 	let cover_url = info
 		.image_links
 		.as_ref()
-		.and_then(|links| links.thumbnail.clone().or_else(|| links.small_thumbnail.clone()))
+		.and_then(|links| {
+			links
+				.thumbnail
+				.clone()
+				.or_else(|| links.small_thumbnail.clone())
+		})
 		.map(clean_cover_url);
 	let provider_url = info
 		.canonical_volume_link
@@ -441,7 +450,10 @@ mod tests {
 			media.summary.as_deref(),
 			Some("A clever fox outwits three farmers.")
 		);
-		assert_eq!((media.year, media.month, media.day), (Some(2007), Some(8), Some(16)));
+		assert_eq!(
+			(media.year, media.month, media.day),
+			(Some(2007), Some(8), Some(16))
+		);
 		assert_eq!(media.page_count, Some(96));
 		assert_eq!(media.isbn.as_deref(), Some("0140328726"));
 		assert_eq!(media.isbn_13.as_deref(), Some("9780140328721"));
@@ -510,8 +522,10 @@ mod tests {
 
 	#[tokio::test]
 	async fn isbn_miss_falls_back_to_title_search() {
-		let empty = serde_json::json!({ "kind": "books#volumes", "totalItems": 0 }).to_string();
-		let server = MockServer::spawn(vec![render_ok(&empty), render_ok(&list_response())]);
+		let empty =
+			serde_json::json!({ "kind": "books#volumes", "totalItems": 0 }).to_string();
+		let server =
+			MockServer::spawn(vec![render_ok(&empty), render_ok(&list_response())]);
 		let client = GoogleBooksClient::new(None, None).with_api_url(server.url.clone());
 
 		let outcome = client
@@ -525,7 +539,11 @@ mod tests {
 		assert_eq!(outcome.candidates.len(), 1);
 		let requests = server.requests();
 		assert_eq!(requests.len(), 2);
-		assert!(requests[0].contains("q=isbn%3A9780000000000"), "{}", requests[0]);
+		assert!(
+			requests[0].contains("q=isbn%3A9780000000000"),
+			"{}",
+			requests[0]
+		);
 		assert!(
 			requests[1].contains("q=intitle%3AFantastic+Mr.+Fox"),
 			"{}",
@@ -546,7 +564,11 @@ mod tests {
 		assert_eq!(media.title.as_deref(), Some("Fantastic Mr. Fox"));
 
 		let requests = server.requests();
-		assert!(requests[0].starts_with("GET /volumes/abc123"), "{}", requests[0]);
+		assert!(
+			requests[0].starts_with("GET /volumes/abc123"),
+			"{}",
+			requests[0]
+		);
 	}
 
 	#[tokio::test]

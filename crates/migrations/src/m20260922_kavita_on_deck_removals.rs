@@ -21,13 +21,21 @@ impl MigrationTrait for Migration {
 				Table::create()
 					.table(KavitaOnDeckRemovals::Table)
 					.if_not_exists()
-					.col(ColumnDef::new(KavitaOnDeckRemovals::UserId).text().not_null())
+					.col(
+						ColumnDef::new(KavitaOnDeckRemovals::UserId)
+							.text()
+							.not_null(),
+					)
 					.col(
 						ColumnDef::new(KavitaOnDeckRemovals::TargetKind)
 							.text()
 							.not_null(),
 					)
-					.col(ColumnDef::new(KavitaOnDeckRemovals::TargetId).text().not_null())
+					.col(
+						ColumnDef::new(KavitaOnDeckRemovals::TargetId)
+							.text()
+							.not_null(),
+					)
 					.col(
 						ColumnDef::new(KavitaOnDeckRemovals::CreatedAt)
 							.timestamp_with_time_zone()
@@ -43,7 +51,10 @@ impl MigrationTrait for Migration {
 					.foreign_key(
 						ForeignKey::create()
 							.name("fk_kavita_on_deck_removals_user")
-							.from(KavitaOnDeckRemovals::Table, KavitaOnDeckRemovals::UserId)
+							.from(
+								KavitaOnDeckRemovals::Table,
+								KavitaOnDeckRemovals::UserId,
+							)
 							.to(Users::Table, Users::Id)
 							.on_update(ForeignKeyAction::Cascade)
 							.on_delete(ForeignKeyAction::Cascade),

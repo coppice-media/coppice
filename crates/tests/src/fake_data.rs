@@ -1,9 +1,15 @@
 use chrono::Utc;
+use models::domain::reading_state::{
+	Position, ProtocolUpdate, Publication, SourceProtocol,
+};
 use models::entity::{library, library_config, media, reading_session, series, user};
+use models::services::reading_state;
 use models::shared::enums::{FileStatus, ReadingStatus};
 use rand::distr::SampleString;
 use rust_decimal::prelude::FromPrimitive;
-use sea_orm::{prelude::DateTimeWithTimeZone, ActiveModelTrait, ActiveValue, DbConn};
+use sea_orm::{
+	prelude::DateTimeWithTimeZone, ActiveModelTrait, ActiveValue, DbConn, EntityTrait,
+};
 use uuid::Uuid;
 
 // note that None here means "use some default", not necessarily "set the value to None".
@@ -213,7 +219,7 @@ impl ReadingSession {
 			.expect("could not insert reading session v2");
 
 		// `created_at` is overridden by `ActiveModelBehavior` so updating after
-		match self.created_at {
+		let session = match self.created_at {
 			Some(t) => {
 				let mut model: reading_session::ActiveModel = insert_result.into();
 				model.created_at = ActiveValue::Set(t);
@@ -223,6 +229,44 @@ impl ReadingSession {
 					.expect("could not update reading session")
 			},
 			None => insert_result,
-		}
+		};
+
+		self.materialize_head(db, &session).await;
+
+		session
+	}
+
+	/// Every protocol that writes a session also applies the same update to the
+	/// unified reading head, which is what the read paths (KOReader, Komga,
+	/// Kobo, OPDS 2.0, GraphQL) report. A fixture that only inserted the
+	/// session would look like a book with no progress.
+	async fn materialize_head(&self, db: &DbConn, session: &reading_session::Model) {
+		let media = media::Entity::find_by_id(&self.media_id)
+			.one(db)
+			.await
+			.expect("could not query the reading session's media")
+			.expect("a reading session's media must exist");
+
+		reading_state::apply(
+			db,
+			&self.user_id,
+			Publication::from(&media),
+			ProtocolUpdate {
+				protocol: SourceProtocol::Stump,
+				device_id: None,
+				// Stump's own writes carry no device clock, so the head is
+				// stamped with the server's ingestion time.
+				updated_at: None,
+				position: session.end_page.map_or(Position::None, Position::Page),
+				progression: Some(f64::from(self.end_percentage)),
+				completed: (self.status == ReadingStatus::Finished).then_some(true),
+				raw_payload: serde_json::json!({
+					"fixture": "reading_session",
+					"session_id": session.id,
+				}),
+			},
+		)
+		.await
+		.expect("could not materialize the reading head");
 	}
 }

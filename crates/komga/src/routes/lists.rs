@@ -1,8 +1,4 @@
-use std::{
-	collections::{HashMap, HashSet},
-	convert::TryFrom,
-	sync::Arc,
-};
+use std::{collections::HashMap, convert::TryFrom, sync::Arc};
 
 use crate::{
 	book::{KomgaBookId, KomgaMediaStatus},
@@ -27,7 +23,7 @@ use axum::{
 	extract::Path,
 	http::{HeaderMap, StatusCode},
 	response::Response,
-	routing::{get, post},
+	routing::get,
 	Extension, Json, Router,
 };
 use axum_extra::extract::Query;
@@ -39,9 +35,7 @@ use models::entity::{
 use sea_orm::{
 	prelude::*,
 	sea_query::{Condition, SelectStatement},
-	ActiveValue::Set,
-	DatabaseTransaction, IntoActiveModel, QueryOrder, QuerySelect, QueryTrait,
-	TransactionTrait,
+	QueryOrder, QuerySelect, QueryTrait, TransactionTrait,
 };
 use serde::Deserialize;
 use stump_auth::AuthContext;
@@ -67,10 +61,15 @@ where
 	S: Clone + Send + Sync + 'static,
 {
 	Router::<S>::new()
-		.route("/api/v1/readlists", get(get_readlists).post(create_readlist))
+		.route(
+			"/api/v1/readlists",
+			get(get_readlists).post(create_readlist),
+		)
 		.route(
 			"/api/v1/readlists/{id}",
-			get(get_readlist).patch(patch_readlist).delete(delete_readlist),
+			get(get_readlist)
+				.patch(patch_readlist)
+				.delete(delete_readlist),
 		)
 		.route(
 			"/api/v1/readlists/{id}/thumbnail",
@@ -82,7 +81,10 @@ where
 			get(get_tachiyomi_readlist_progress).put(update_tachiyomi_readlist_progress),
 		)
 		.route("/api/v1/books/{id}/readlists", get(get_book_readlists))
-		.route("/api/v1/collections", get(get_collections).post(create_collection))
+		.route(
+			"/api/v1/collections",
+			get(get_collections).post(create_collection),
+		)
 		.route(
 			"/api/v1/collections/{id}",
 			get(get_collection)
@@ -1124,9 +1126,7 @@ fn collection_patch_fields(
 		_ => None,
 	};
 	let series_ids = match &patch.series_ids {
-		crate::PatchValue::Some(ids) => {
-			Some(ids.iter().map(|id| id.0.clone()).collect())
-		},
+		crate::PatchValue::Some(ids) => Some(ids.iter().map(|id| id.0.clone()).collect()),
 		_ => None,
 	};
 	(name, ordered, series_ids)
@@ -1150,7 +1150,7 @@ async fn delete_collection(
 	Extension(auth): Extension<AuthContext>,
 	Path(id): Path<String>,
 ) -> APIResult<StatusCode> {
-	ctx.delete_collection(auth.user(), &id).await?;
+	ctx.delete_collection(&auth.user(), &id).await?;
 	Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1196,9 +1196,7 @@ fn read_list_patch_fields(
 		_ => None,
 	};
 	let book_ids = match &patch.book_ids {
-		crate::PatchValue::Some(ids) => {
-			Some(ids.iter().map(|id| id.0.clone()).collect())
-		},
+		crate::PatchValue::Some(ids) => Some(ids.iter().map(|id| id.0.clone()).collect()),
 		_ => None,
 	};
 	(name, summary, ordered, book_ids)
@@ -1222,7 +1220,7 @@ async fn delete_readlist(
 	Extension(auth): Extension<AuthContext>,
 	Path(id): Path<String>,
 ) -> APIResult<StatusCode> {
-	ctx.delete_read_list(auth.user(), &id).await?;
+	ctx.delete_read_list(&auth.user(), &id).await?;
 	Ok(StatusCode::NO_CONTENT)
 }
 

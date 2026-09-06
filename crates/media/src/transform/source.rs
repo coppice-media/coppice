@@ -1,6 +1,6 @@
 //! Source-side page extraction for comic containers.
 //!
-//! Produces the `Iterator<Item = Vec<u8>>` that [`super::transform_pages`]
+//! Produces the `Iterator<Item = TransformResult<Vec<u8>>>` that [`super::transform_pages`]
 //! consumes: ZIP/CBZ pages stream straight out of the archive in natural page
 //! order; PDF pages are rendered through the `pdf` feature's processor; RAR
 //! pages through the `rar` feature's processor.
@@ -9,8 +9,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::content_type::ContentType;
+#[cfg(any(feature = "pdf", feature = "rar"))]
 use crate::error::FileError;
-use crate::{FileProcessor, MediaConfig, PathUtils};
+#[cfg(any(feature = "pdf", feature = "rar"))]
+use crate::FileProcessor;
+use crate::{MediaConfig, PathUtils};
 
 use super::error::{TransformError, TransformResult};
 
@@ -30,15 +33,19 @@ pub fn is_comic_source(path: &str) -> bool {
 }
 
 /// The ordered page bytes of a comic container.
+#[derive(Debug)]
 pub struct ComicPages {
 	source: PathBuf,
 	kind: ComicKind,
 	page_count: usize,
 }
 
+#[derive(Debug)]
 enum ComicKind {
 	Zip(Vec<String>),
+	#[cfg(feature = "pdf")]
 	Pdf,
+	#[cfg(feature = "rar")]
 	Rar,
 }
 
@@ -48,6 +55,8 @@ impl ComicPages {
 	/// `media_config` supplies the PDFium path and render settings for PDF
 	/// sources.
 	pub fn open(path: &Path, media_config: &MediaConfig) -> TransformResult<Self> {
+		#[cfg(not(any(feature = "pdf", feature = "rar")))]
+		let _ = media_config;
 		let extension = path
 			.extension()
 			.and_then(|extension| extension.to_str())
@@ -114,6 +123,8 @@ impl ComicPages {
 		self,
 		media_config: &MediaConfig,
 	) -> Box<dyn Iterator<Item = TransformResult<Vec<u8>>> + Send> {
+		#[cfg(not(any(feature = "pdf", feature = "rar")))]
+		let _ = media_config;
 		match self.kind {
 			ComicKind::Zip(names) => Box::new(ZipPageIter {
 				archive: None,
@@ -135,10 +146,6 @@ impl ComicPages {
 					.map_err(archive_error)
 				}))
 			},
-			#[cfg(not(feature = "pdf"))]
-			ComicKind::Pdf => Box::new(std::iter::once(Err(
-				TransformError::FeatureDisabled("PDF"),
-			))),
 			#[cfg(feature = "rar")]
 			ComicKind::Rar => {
 				let path = self.source.to_string_lossy().into_owned();
@@ -153,10 +160,6 @@ impl ComicPages {
 					.map_err(archive_error)
 				}))
 			},
-			#[cfg(not(feature = "rar"))]
-			ComicKind::Rar => Box::new(std::iter::once(Err(
-				TransformError::FeatureDisabled("RAR"),
-			))),
 		}
 	}
 }
@@ -210,10 +213,7 @@ fn zip_page_names(path: &Path) -> TransformResult<Vec<String>> {
 		));
 	}
 
-	let mut names: Vec<String> = archive
-		.file_names()
-		.map(str::to_owned)
-		.collect();
+	let mut names: Vec<String> = archive.file_names().map(str::to_owned).collect();
 	crate::media::utils::sort_file_names(&mut names);
 
 	let mut pages = Vec::new();
@@ -245,6 +245,7 @@ fn zip_page_names(path: &Path) -> TransformResult<Vec<String>> {
 }
 
 /// Map a [`FileError`] from the format processors onto the transform error.
+#[cfg(any(feature = "pdf", feature = "rar"))]
 fn archive_error(error: FileError) -> TransformError {
 	match error {
 		FileError::FileIoError(io) => TransformError::Io(io),
@@ -256,7 +257,7 @@ fn archive_error(error: FileError) -> TransformError {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::tests::get_test_cbz_path;
+	use std::io::Write;
 
 	#[test]
 	fn comic_source_detection_by_extension() {
@@ -271,36 +272,74 @@ mod tests {
 		assert!(!is_comic_source("/books/a"));
 	}
 
+	/// Write a CBZ whose entries are deliberately out of order and padded with
+	/// everything the page enumeration must skip.
+	fn scrambled_cbz() -> tempfile::NamedTempFile {
+		let file = tempfile::NamedTempFile::with_suffix(".cbz").unwrap();
+		{
+			let mut zip = zip::ZipWriter::new(file.as_file());
+			let options: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+			for (name, contents) in [
+				("book/10.png", &b"page-10"[..]),
+				("book/2.png", b"page-2"),
+				("ComicInfo.xml", b"<ComicInfo/>"),
+				("__MACOSX/book/._1.png", b"resource-fork"),
+				("book/.hidden.png", b"hidden"),
+				("book/notes.txt", b"not a page"),
+				("book/1.png", b"page-1"),
+			] {
+				zip.start_file(name, options).unwrap();
+				zip.write_all(contents).unwrap();
+			}
+			zip.add_directory("book/empty", options).unwrap();
+			zip.finish().unwrap();
+		}
+		file
+	}
+
 	#[test]
-	fn zip_source_enumerates_image_pages_in_order() {
-		let path = get_test_cbz_path();
+	fn zip_source_yields_only_image_entries_in_natural_order() {
+		let cbz = scrambled_cbz();
+		let config = MediaConfig::default();
+		let comic = ComicPages::open(cbz.path(), &config).expect("cbz opens");
+		assert_eq!(comic.page_count(), 3);
+
+		let pages: Vec<Vec<u8>> = comic
+			.into_iter(&config)
+			.collect::<TransformResult<_>>()
+			.expect("every page reads");
+		assert_eq!(
+			pages,
+			[b"page-1".to_vec(), b"page-2".to_vec(), b"page-10".to_vec()]
+		);
+	}
+
+	#[test]
+	fn zip_source_skips_macos_shadow_entries() {
+		// Three real pages plus `__MACOSX` shadows, `.DS_Store`s, and directories.
+		let path = crate::tests::get_nested_macos_compressed_cbz_path();
 		let config = MediaConfig::default();
 		let comic = ComicPages::open(Path::new(&path), &config).expect("cbz opens");
-		assert!(comic.page_count() > 0);
+		assert_eq!(comic.page_count(), 3);
 
-		let pages: Vec<TransformResult<Vec<u8>>> =
-			comic.into_iter(&config).collect();
-		assert_eq!(pages.len(), comic.page_count());
-		assert!(
-			pages.iter().all(|page| page.is_ok()),
-			"fixture pages must decode-ready"
-		);
-
-		// Every page is a decodable image (the pipeline will confirm the
-		// format; here just check non-empty).
+		let pages: Vec<Vec<u8>> = comic
+			.into_iter(&config)
+			.collect::<TransformResult<_>>()
+			.expect("every page reads");
+		assert_eq!(pages.len(), 3);
 		for page in &pages {
-			assert!(!page.as_ref().unwrap().is_empty());
+			assert!(page.starts_with(&[0xFF, 0xD8, 0xFF]), "pages are the JPEGs");
 		}
 	}
 
 	#[test]
-	fn zip_source_skips_non_images() {
-		// book-complex-tree.zip contains directories and non-image files.
+	fn zip_source_without_images_has_no_pages() {
+		// Only `.ico` files and metadata: nothing a reader could show.
 		let path = crate::tests::get_test_complex_zip_path();
 		let config = MediaConfig::default();
 		let comic = ComicPages::open(Path::new(&path), &config).expect("zip opens");
-		let pages: Vec<_> = comic.into_iter(&config).collect();
-		assert_eq!(pages.len(), comic.page_count());
+		assert_eq!(comic.page_count(), 0);
+		assert_eq!(comic.into_iter(&config).count(), 0);
 	}
 
 	#[test]
@@ -320,20 +359,26 @@ mod tests {
 
 	#[cfg(feature = "pdf")]
 	#[test]
-	fn pdf_source_renders_pages() {
-		let path = crate::tests::get_test_cbz_path(); // not used for pdf
-		let _ = path;
-		let config = crate::MediaConfig::default();
-		// tall.pdf is a tiny PDF fixture.
+	fn pdf_source_renders_every_page() {
+		if crate::media::format::pdf::PdfProcessor::renderer(&None).is_err() {
+			eprintln!("Skipping test: PDFium is not configured or available.");
+			return;
+		}
+		let config = MediaConfig::default();
 		let pdf_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 			.join("integration-tests/data/tall.pdf");
-		if !pdf_path.exists() {
-			return; // fixture absence is not a failure of this unit
+		let comic = ComicPages::open(&pdf_path, &config).expect("pdf opens with pdfium");
+		let page_count = comic.page_count();
+		assert!(page_count > 0);
+
+		let pages: Vec<Vec<u8>> = comic
+			.into_iter(&config)
+			.collect::<TransformResult<_>>()
+			.expect("every page renders");
+		assert_eq!(pages.len(), page_count);
+		for page in &pages {
+			image::load_from_memory(page).expect("rendered page decodes");
 		}
-		let comic =
-			ComicPages::open(&pdf_path, &config).expect("pdf opens with pdfium");
-		let pages: Vec<_> = comic.into_iter(&config).collect();
-		assert!(!pages.is_empty());
 	}
 
 	#[cfg(not(feature = "rar"))]
@@ -342,5 +387,27 @@ mod tests {
 		let config = MediaConfig::default();
 		let error = ComicPages::open(Path::new("/books/a.cbr"), &config).unwrap_err();
 		assert!(matches!(error, TransformError::FeatureDisabled("RAR")));
+	}
+
+	#[cfg(feature = "rar")]
+	#[test]
+	fn rar_source_yields_only_image_entries_in_natural_order() {
+		// `scrambled.cbr`: 10.jpg, 2.jpg, ComicInfo.xml, __MACOSX/._1.jpg, 1.jpg
+		// in that archive order; the pages are 10, 20, and 30 px wide.
+		let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("integration-tests/data/scrambled.cbr");
+		let config = MediaConfig::default();
+		let comic = ComicPages::open(&path, &config).expect("cbr opens");
+		assert_eq!(comic.page_count(), 3);
+
+		let widths: Vec<u32> = comic
+			.into_iter(&config)
+			.map(|page| {
+				image::load_from_memory(&page.expect("page extracts"))
+					.expect("extracted page decodes")
+					.width()
+			})
+			.collect();
+		assert_eq!(widths, [10, 20, 30]);
 	}
 }

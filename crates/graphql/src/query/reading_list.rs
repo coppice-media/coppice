@@ -85,6 +85,8 @@ mod tests {
 			updated_at: "2021-08-01T00:00:00Z".parse().unwrap(),
 			visibility: "PUBLIC".to_string(),
 			ordering: "MANUAL".to_string(),
+			kobo_shelf: true,
+			source_device: None,
 			creating_user_id: "42".to_string(),
 		}
 	}

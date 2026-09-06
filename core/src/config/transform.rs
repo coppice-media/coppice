@@ -56,10 +56,7 @@ mod tests {
 		let config = TransformConfig::new();
 		assert!(!config.transform_enabled);
 		assert_eq!(config.transform_kobo_profile, "clara");
-		assert_eq!(
-			config.transform_cache_max_bytes,
-			DEFAULT_TRANSFORM_CACHE_MAX_BYTES
-		);
+		assert_eq!(config.transform_cache_max_bytes, 2 * 1024 * 1024 * 1024);
 		assert_eq!(TRANSFORM_ENABLED_KEY, "STUMP_TRANSFORM_ENABLED");
 		assert_eq!(TRANSFORM_KOBO_PROFILE_KEY, "STUMP_TRANSFORM_KOBO_PROFILE");
 		assert_eq!(

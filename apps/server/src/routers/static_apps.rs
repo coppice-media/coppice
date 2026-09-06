@@ -18,6 +18,8 @@ use tower_http::{
 	set_header::SetResponseHeaderLayer,
 };
 
+use stump_core::config::env_keys::{HOME_APP_DIR_KEY, INGEST_EDITOR_DIR_KEY};
+
 use crate::config::state::AppState;
 
 /// URL prefix the ingest editor is built for (`paths.base` in `editor/svelte.config.js`).
@@ -40,7 +42,7 @@ fn configured_apps(app_state: &AppState) -> Vec<StaticApp> {
 
 	if let Some(dir) = validated_dir(
 		app_state.config.ingest.ingest_editor_dir.as_deref(),
-		"INGEST_EDITOR_DIR",
+		INGEST_EDITOR_DIR_KEY,
 		"the ingest editor",
 	) {
 		apps.push(StaticApp {
@@ -52,7 +54,7 @@ fn configured_apps(app_state: &AppState) -> Vec<StaticApp> {
 
 	if let Some(dir) = validated_dir(
 		app_state.config.server.home_app_dir.as_deref(),
-		"STUMP_HOME_APP_DIR",
+		HOME_APP_DIR_KEY,
 		"the Home app",
 	) {
 		apps.push(StaticApp {

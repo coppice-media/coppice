@@ -18,11 +18,7 @@ impl MigrationTrait for Migration {
 							.auto_increment()
 							.primary_key(),
 					)
-					.col(
-						ColumnDef::new(NotificationRules::UserId)
-							.text()
-							.not_null(),
-					)
+					.col(ColumnDef::new(NotificationRules::UserId).text().not_null())
 					.col(
 						ColumnDef::new(NotificationRules::EventKind)
 							.text()

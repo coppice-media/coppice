@@ -1,14 +1,15 @@
-//! Annotation export wiring: the debounce hub, the [`AnnotationSyncJob`],
-//! and the settings-value encryption helpers.
+//! Annotation export wiring: the debounce hub, the settings-value encryption
+//! helpers, and the per-user sink config rows.
 //!
 //! The canonical model and the concrete sinks live in
-//! `stump_annotation_sync`; this module hosts them onto Stump's job runtime:
+//! `stump_annotation_sync`; this module hosts them onto Stump:
 //!
-//! - every accepted annotation or reading-head change calls
+//! - every accepted annotation, bookmark, or reading-head change calls
 //!   [`Ctx::note_annotation_activity`], which (re)arms a per-user deadline in
 //!   the [`AnnotationSyncDebouncer`];
 //! - a daemon loop (spawned by `StumpCore`) drains due users and enqueues
-//!   [`StumpJob::AnnotationSync`];
+//!   [`StumpJob::AnnotationSync`], which runs
+//!   [`crate::job::annotation_sync::AnnotationSyncJob`];
 //! - the job loads the user's enabled `annotation_sink_configs` rows, builds
 //!   the canonical batch (incremental by liseur CAS `seq`, full rebuild for
 //!   native books), and runs each enabled sink, persisting the sink state and
@@ -20,26 +21,19 @@
 
 use std::{
 	collections::HashMap,
-	sync::{Arc, Mutex},
+	sync::Mutex,
 	time::{Duration, Instant},
 };
 
 use models::entity::annotation_sink_config;
-use sea_orm::{prelude::*, ActiveValue::Set, QueryFilter};
-use serde::{Deserialize, Serialize};
+use sea_orm::{prelude::*, ActiveValue::Set, QueryFilter, QueryOrder};
 use serde_json::Value;
-use stump_annotation_sync::{sink::SinkState, BuildOptions, ExportBatch};
 use stump_api_types::settings::{SettingDefinition, SettingValues};
-use stump_jobs::{
-	JobContext, JobError, JobExecuteLog, JobLifecycle, JobOutputExt, JobTaskOutput,
-	WorkingState,
-};
 
 use crate::{
-	config::StumpConfig,
-	job::{stump_job::StumpJob, JobServices},
-	utils::encryption::{decrypt_string, encrypt_string, fetch_encryption_key},
-	CoreResult, Ctx,
+	job::stump_job::StumpJob,
+	utils::encryption::{decrypt_string, encrypt_string},
+	CoreError, CoreResult, Ctx,
 };
 
 /// JSON marker wrapping encrypted secret setting values.
@@ -67,20 +61,25 @@ impl AnnotationSyncDebouncer {
 
 	/// (Re)arms the deadline for `user_id`.
 	pub fn note(&self, user_id: &str) {
+		self.note_at(user_id, Instant::now());
+	}
+
+	/// (Re)arms the deadline for `user_id` relative to `now`.
+	pub fn note_at(&self, user_id: &str, now: Instant) {
 		let mut deadlines = self
 			.deadlines
 			.lock()
 			.expect("annotation sync debounce poisoned");
-		deadlines.insert(user_id.to_owned(), Instant::now() + self.delay);
+		deadlines.insert(user_id.to_owned(), now + self.delay);
 	}
 
-	/// Removes and returns every user whose deadline has passed.
+	/// Removes and returns every user whose deadline has passed, sorted.
 	pub fn take_due(&self, now: Instant) -> Vec<String> {
 		let mut deadlines = self
 			.deadlines
 			.lock()
 			.expect("annotation sync debounce poisoned");
-		let due: Vec<String> = deadlines
+		let mut due: Vec<String> = deadlines
 			.iter()
 			.filter(|(_, deadline)| **deadline <= now)
 			.map(|(user_id, _)| user_id.clone())
@@ -120,7 +119,9 @@ pub fn spawn_debounce_loop(ctx: Ctx) {
 			}
 			for user_id in ctx.annotation_debounce.take_due(Instant::now()) {
 				tracing::debug!(user_id = %user_id, "Annotation sync debounce elapsed");
-				if let Err(error) = ctx.enqueue(StumpJob::AnnotationSync { user_id }).await {
+				if let Err(error) =
+					ctx.enqueue(StumpJob::AnnotationSync { user_id }).await
+				{
 					tracing::error!(error = ?error, "Failed to enqueue annotation sync");
 				}
 			}
@@ -132,307 +133,79 @@ pub fn spawn_debounce_loop(ctx: Ctx) {
 // Settings-value encryption helpers (host side; sinks see plaintext)
 // ---------------------------------------------------------------------------
 
-/// Encrypts every secret-marked value in `values` with the server encryption
-/// key. Encrypted values are stored as `{"__stump_encrypted": "<base64>"}`.
+/// Encrypts every secret-marked string value in `values` with the server
+/// encryption key. Encrypted values are stored as
+/// `{"__stump_encrypted": "<base64>"}`.
 pub fn encrypt_sink_values(
 	definitions: &[SettingDefinition],
 	values: &SettingValues,
 	encryption_key: &str,
 ) -> CoreResult<SettingValues> {
+	let encryption_key = encryption_key.to_owned();
 	values
 		.iter()
 		.map(|(key, value)| {
 			let is_secret = definitions
 				.iter()
 				.any(|definition| definition.key == key && definition.secret);
-			if !is_secret {
-				return Ok((key.clone(), value.clone()));
+			match value.as_str().filter(|_| is_secret) {
+				Some(plain) => {
+					let encrypted = encrypt_string(plain, &encryption_key)?;
+					Ok((
+						key.clone(),
+						serde_json::json!({ ENCRYPTED_MARKER: encrypted }),
+					))
+				},
+				None => Ok((key.clone(), value.clone())),
 			}
-			let Some(plain) = value.as_str() else {
-				return Ok((key.clone(), value.clone()));
-			};
-			let encrypted = encrypt_string(plain, &encryption_key.to_owned())?;
-			Ok((
-				key.clone(),
-				serde_json::json!({ ENCRYPTED_MARKER: encrypted }),
-			))
 		})
 		.collect()
 }
 
-/// Reverses [`encrypt_sink_values`]. Values without the marker pass through.
+/// Reverses [`encrypt_sink_values`]. Values without the marker pass through;
+/// an encrypted value without a key is [`CoreError::EncryptionKeyNotSet`].
 pub fn decrypt_sink_values(
 	values: &SettingValues,
-	encryption_key: &str,
+	encryption_key: Option<&str>,
 ) -> CoreResult<SettingValues> {
+	let encryption_key = encryption_key.map(str::to_owned);
 	values
 		.iter()
 		.map(|(key, value)| {
-			let Some(marker_value) = value.get(ENCRYPTED_MARKER).and_then(Value::as_str) else {
+			let Some(encrypted) = value.get(ENCRYPTED_MARKER).and_then(Value::as_str)
+			else {
 				return Ok((key.clone(), value.clone()));
 			};
-			let plain = decrypt_string(marker_value, &encryption_key.to_owned())?;
+			let encryption_key = encryption_key
+				.as_ref()
+				.ok_or(CoreError::EncryptionKeyNotSet)?;
+			let plain = decrypt_string(encrypted, encryption_key)?;
 			Ok((key.clone(), Value::String(plain)))
 		})
 		.collect()
 }
 
 // ---------------------------------------------------------------------------
-// Job
+// Sink config rows
 // ---------------------------------------------------------------------------
 
-/// Per-sink work item for one annotation sync run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AnnotationSyncTask {
-	pub sink_id: String,
-	/// The row's configured values (secret values still encrypted).
-	pub settings: Option<Value>,
-	/// The row's persisted sink state.
-	pub state: Option<Value>,
-}
-
-/// Output persisted with the job record when the run completes.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
-#[serde(rename_all = "camelCase")]
-pub struct AnnotationSyncOutput {
-	pub user_id: String,
-	pub books: usize,
-	pub sinks: Vec<AnnotationSinkRun>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
-#[serde(rename_all = "camelCase")]
-pub struct AnnotationSinkRun {
-	pub sink_id: String,
-	pub books: usize,
-	pub error: Option<String>,
-}
-
-/// Exports one user's annotations to every enabled sink.
-pub struct AnnotationSyncJob {
-	user_id: String,
-	batch: Option<ExportBatch>,
-	encryption_key: Option<Arc<String>>,
-}
-
-impl AnnotationSyncJob {
-	pub fn new(user_id: String) -> Self {
-		Self {
-			user_id,
-			batch: None,
-			encryption_key: None,
-		}
-	}
-}
-
-#[async_trait::async_trait]
-impl JobLifecycle for AnnotationSyncJob {
-	const NAME: &'static str = "annotation_sync";
-
-	type Context = JobServices;
-	type Output = AnnotationSyncOutput;
-	type Task = AnnotationSyncTask;
-
-	fn description(&self) -> Option<String> {
-		Some(format!("Export annotations for user {}", self.user_id))
-	}
-
-	async fn init(
-		&mut self,
-		ctx: &JobContext<Self::Context>,
-	) -> Result<WorkingState<Self::Output, Self::Task>, JobError> {
-		ctx.report_progress(stump_jobs::JobProgress::status_msg(
-			models::shared::enums::JobStatus::Running,
-			"Loading annotation sinks",
-		));
-
-		// Secrets are only decryptable when the server encryption key exists;
-		// sinks without secret settings are unaffected.
-		self.encryption_key = match fetch_encryption_key(ctx.conn()).await {
-			Ok(key) => Some(Arc::new(key)),
-			Err(_) => None,
-		};
-
-		let rows = annotation_sink_config::Entity::find()
-			.filter(annotation_sink_config::Column::UserId.eq(&self.user_id))
-			.filter(annotation_sink_config::Column::Enabled.eq(true))
-			.all(ctx.conn())
-			.await?;
-
-		let mut output = AnnotationSyncOutput {
-			user_id: self.user_id.clone(),
-			books: 0,
-			sinks: Vec::new(),
-		};
-
-		if rows.is_empty() {
-			return Ok(WorkingState {
-				output: Some(output),
-				tasks: Default::default(),
-				logs: Vec::new(),
-			});
-		}
-
-		// Build one batch from the oldest cursor so no sink misses data; the
-		// cursor in each row's state advances to the same high-water mark.
-		let from_seq = rows
-			.iter()
-			.map(|row| {
-				row.state
-					.as_ref()
-					.and_then(|state| serde_json::from_value::<SinkState>(state.clone()).ok())
-					.map(|state| state.liseur_seq)
-					.unwrap_or(0)
-			})
-			.min()
-			.unwrap_or(0);
-
-		let batch = stump_annotation_sync::build_export_batch(
-			ctx.conn(),
-			&self.user_id,
-			BuildOptions {
-				liseur_from_seq: from_seq,
-			},
-		)
-		.await
-		.map_err(|error| JobError::Unknown(error.to_string()))?;
-		output.books = batch.books.len();
-		self.batch = Some(batch);
-
-		let tasks = rows
-			.into_iter()
-			.map(|row| AnnotationSyncTask {
-				sink_id: row.sink_id,
-				settings: row.settings,
-				state: row.state,
-			})
-			.collect();
-
-		Ok(WorkingState {
-			output: Some(output),
-			tasks,
-			logs: Vec::new(),
-		})
-	}
-
-	async fn execute_task(
-		&self,
-		ctx: &JobContext<Self::Context>,
-		task: Self::Task,
-	) -> Result<JobTaskOutput<Self>, JobError> {
-		let batch = self
-			.batch
-			.as_ref()
-			.ok_or_else(|| JobError::TaskFailed("annotation batch was not initialized".to_string()))?;
-
-		let definitions = stump_annotation_sync::registry::catalog()
-			.into_iter()
-			.find(|descriptor| descriptor.id == task.sink_id)
-			.ok_or_else(|| JobError::TaskFailed(format!("unknown annotation sink {}", task.sink_id)))?
-			.settings
-			.to_vec();
-
-		let configured: SettingValues = task
-			.settings
-			.clone()
-			.and_then(|value| serde_json::from_value::<SettingValues>(value).ok())
-			.unwrap_or_default();
-		let values = match &self.encryption_key {
-			Some(key) => crate::annotation_sync::decrypt_sink_values(&configured, key)
-				.map_err(|error| JobError::Unknown(error.to_string()))?,
-			None => configured,
-		};
-
-		let state: SinkState = task
-			.state
-			.clone()
-			.and_then(|value| serde_json::from_value(value).ok())
-			.unwrap_or_default();
-
-		let root = ctx.config().get_annotation_sync_root();
-		let sink = stump_annotation_sync::registry::sink(&task.sink_id, &root, &values)
-			.map_err(|error| JobError::Unknown(error.to_string()))?;
-
-		let result = sink.export(batch, &state).await;
-		let new_state = match &result {
-			Ok(new_state) => SinkState {
-				liseur_seq: batch.liseur_high_water,
-				data: new_state.data.clone(),
-			},
-			Err(_) => state.clone(),
-		};
-
-		let (last_error, error_for_output) = match &result {
-			Ok(_) => (None, None),
-			Err(error) => (Some(error.to_string()), Some(error.to_string())),
-		};
-
-		annotation_sink_config::Entity::update_many()
-			.filter(annotation_sink_config::Column::UserId.eq(&batch.user_id))
-			.filter(annotation_sink_config::Column::SinkId.eq(&task.sink_id))
-			.col_expr(
-				annotation_sink_config::Column::State,
-				sea_orm::sea_query::Expr::value(
-					serde_json::to_value(&new_state)
-						.map_err(|error| JobError::Unknown(error.to_string()))?,
-				),
-			)
-			.col_expr(
-				annotation_sink_config::Column::LastRunAt,
-				sea_orm::sea_query::Expr::value(chrono::Utc::now().fixed_offset()),
-			)
-			.col_expr(
-				annotation_sink_config::Column::LastError,
-				sea_orm::sea_query::Expr::value(last_error),
-			)
-			.exec(ctx.conn())
-			.await?;
-
-		match result {
-			Ok(_) => Ok(JobTaskOutput {
-				output: AnnotationSyncOutput {
-					user_id: batch.user_id.clone(),
-					books: batch.books.len(),
-					sinks: vec![AnnotationSinkRun {
-						sink_id: task.sink_id.clone(),
-						books: batch.books.len(),
-						error: None,
-					}],
-				},
-				subtasks: Vec::new(),
-				logs: vec![JobExecuteLog::new(
-					format!("Exported {} books to sink {}", batch.books.len(), task.sink_id),
-					models::shared::enums::LogLevel::Info,
-				)],
-			}),
-			Err(error) => Err(JobError::Unknown(error.to_string())),
-		}
-	}
-}
-
-/// Resolves the export root a sink would use for `user_id`; exposed for the
-/// GraphQL status surface.
-pub fn sink_root(config: &StumpConfig) -> std::path::PathBuf {
-	config.get_annotation_sync_root()
-}
-
-/// Result of resolving a sink config row for status rendering.
+/// One user's configuration row for a sink, for status rendering.
 pub struct SinkStatusRow {
 	pub sink_id: String,
 	pub enabled: bool,
-	pub last_run_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
+	pub last_run_at: Option<DateTimeWithTimeZone>,
 	pub last_error: Option<String>,
 }
 
-/// Loads the per-sink status rows for a user (enabled and disabled).
+/// Loads the per-sink status rows for a user (enabled and disabled), sorted
+/// by sink id.
 pub async fn sink_status_rows(
 	conn: &DatabaseConnection,
 	user_id: &str,
 ) -> CoreResult<Vec<SinkStatusRow>> {
 	let rows = annotation_sink_config::Entity::find()
 		.filter(annotation_sink_config::Column::UserId.eq(user_id))
+		.order_by_asc(annotation_sink_config::Column::SinkId)
 		.all(conn)
 		.await?;
 	Ok(rows
@@ -446,7 +219,9 @@ pub async fn sink_status_rows(
 		.collect())
 }
 
-/// Upserts one sink config row for a user. Values must already be encrypted.
+/// Upserts one sink config row for a user, replacing its settings and
+/// enabled flag. Values must already be encrypted; the export state and
+/// last-run bookkeeping are preserved.
 pub async fn upsert_sink_config(
 	conn: &DatabaseConnection,
 	user_id: &str,
@@ -460,35 +235,106 @@ pub async fn upsert_sink_config(
 		.one(conn)
 		.await?;
 
-	if let Some(row) = existing {
-		let mut active: annotation_sink_config::ActiveModel = row.into();
-		active.settings = Set(settings);
-		active.enabled = Set(enabled);
-		active.updated_at = Set(chrono::Utc::now().fixed_offset());
-		active.update(conn).await?;
-	} else {
-		let active = annotation_sink_config::ActiveModel {
-			user_id: Set(user_id.to_owned()),
-			sink_id: Set(sink_id.to_owned()),
-			settings: Set(settings),
-			enabled: Set(enabled),
-			last_run_at: Set(None),
-			last_error: Set(None),
-			state: Set(None),
-			updated_at: Set(chrono::Utc::now().fixed_offset()),
-		};
-		active.insert(conn).await?;
+	let now = chrono::Utc::now().fixed_offset();
+	match existing {
+		Some(row) => {
+			let mut active: annotation_sink_config::ActiveModel = row.into();
+			active.settings = Set(settings);
+			active.enabled = Set(enabled);
+			active.updated_at = Set(now);
+			active.update(conn).await?;
+		},
+		None => {
+			annotation_sink_config::ActiveModel {
+				user_id: Set(user_id.to_owned()),
+				sink_id: Set(sink_id.to_owned()),
+				settings: Set(settings),
+				enabled: Set(enabled),
+				last_run_at: Set(None),
+				last_error: Set(None),
+				state: Set(None),
+				updated_at: Set(now),
+			}
+			.insert(conn)
+			.await?;
+		},
 	}
 
 	Ok(())
 }
 
-/// Merges per-sink task outputs into the run output; the run-level book
-/// count comes from the batch built in `init`.
-impl JobOutputExt for AnnotationSyncOutput {
-	fn update(&mut self, updated: Self) {
-		self.user_id = updated.user_id;
-		self.books = self.books.max(updated.books);
-		self.sinks.extend(updated.sinks);
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::utils::encryption::create_encryption_key;
+
+	#[test]
+	fn debounce_rearms_on_activity_and_drains_once() {
+		let debouncer = AnnotationSyncDebouncer::new(30);
+		let start = Instant::now();
+		let secs = Duration::from_secs;
+
+		debouncer.note_at("alice", start);
+		assert!(debouncer.is_pending("alice"));
+		assert!(debouncer.take_due(start + secs(29)).is_empty());
+
+		// Activity at t=20 pushes the deadline out to t=50.
+		debouncer.note_at("alice", start + secs(20));
+		assert!(
+			debouncer.take_due(start + secs(31)).is_empty(),
+			"deadline must move with the latest activity"
+		);
+
+		assert_eq!(
+			debouncer.take_due(start + secs(50)),
+			vec!["alice".to_string()]
+		);
+		assert!(!debouncer.is_pending("alice"));
+		assert!(debouncer.take_due(start + secs(60)).is_empty());
+	}
+
+	#[test]
+	fn take_due_is_per_user_and_sorted() {
+		let debouncer = AnnotationSyncDebouncer::new(0);
+		debouncer.note("zoe");
+		debouncer.note("bob");
+		debouncer.note("alice");
+		assert_eq!(
+			debouncer.take_due(Instant::now()),
+			vec!["alice".to_string(), "bob".to_string(), "zoe".to_string()]
+		);
+	}
+
+	#[test]
+	fn secret_values_round_trip_and_require_key() {
+		let definitions = vec![SettingDefinition {
+			key: "token",
+			label: "Token",
+			description: "",
+			kind: stump_api_types::settings::SettingKind::String,
+			default: Value::Null,
+			required: false,
+			secret: true,
+			help_url: None,
+		}];
+		let key = create_encryption_key().unwrap();
+		let values: SettingValues = [
+			("token".to_string(), Value::String("s3cret".into())),
+			("branch".to_string(), Value::String("main".into())),
+		]
+		.into_iter()
+		.collect();
+
+		let stored = encrypt_sink_values(&definitions, &values, &key).unwrap();
+		assert_eq!(stored["branch"], Value::String("main".into()));
+		assert!(stored["token"].get(ENCRYPTED_MARKER).is_some());
+		assert_ne!(stored["token"], values["token"]);
+
+		assert_eq!(decrypt_sink_values(&stored, Some(&key)).unwrap(), values);
+		assert!(matches!(
+			decrypt_sink_values(&stored, None),
+			Err(CoreError::EncryptionKeyNotSet)
+		));
+		assert_eq!(decrypt_sink_values(&values, None).unwrap(), values);
 	}
 }

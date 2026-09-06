@@ -35,7 +35,8 @@ OPDS 1.2, and KOReader sync; it has no OPDS 2 parser (app limit). Details in
 | --- | --- | --- |
 | Staged ingest | Contract `core/src/ingest/contract.rs`, entities `crates/models/src/entity/ingest_*.rs`, migration `m20260907_000000_add_ingest`, drop folder/store/coordinator, seven quality checks, provider façade + `builtin:embedded` field-pick, GraphQL `ingest*` + `ingestProgress` subscription + `GET /api/v2/ingest/events` SSE. Verified live end-to-end (drop → scan → analyze → apply → approve → Komga download) | [Modular Ingest](/docs/developer/modular-ingest) |
 | Uploads/mutations | `stageIngestUploads` multipart (`relativePath`, auto-analysis), dedup of identical re-uploads, `bulkApplyIngestMetadata` (no partial writes), `requeueIngestAnalysis`, `rejectIngestItem` (file to `staging/rejected/`), `discardIngestItem` | `core/src/ingest/` |
-| Editor app | SvelteKit 2 / Svelte 5 / Tailwind 4 / shadcn-svelte static app in `editor/`; built app served by the headless server at `/editor` (`INGEST_EDITOR_DIR`, SPA fallback); browser-verified against the fixture | `apps/server/src/routers/ingest_editor.rs` |
+| Editor app | SvelteKit 2 / Svelte 5 / Tailwind 4 / shadcn-svelte static app in `editor/`; built app served by the headless server at `/editor` (`INGEST_EDITOR_DIR`, SPA fallback); browser-verified against the fixture | `apps/server/src/routers/static_apps.rs` |
+| Home app | SvelteKit 2 / Svelte 5 static app in `home/` (login with OIDC button, Devices with add-client/rotate/revoke/presets/pairing approval and live `deviceSeen`, Reading stats, Account); served at `/app` (`STUMP_HOME_APP_DIR`); shares `packages/stump-ui` (GraphQL client, shadcn components) with the editor via a linked-source `@stump/ui` alias — see [Home app](/docs/developer/home-app) | `apps/server/src/routers/static_apps.rs`, `home/`, `packages/stump-ui/` |
 
 ## Media and scanner crates
 

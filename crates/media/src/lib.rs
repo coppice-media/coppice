@@ -14,6 +14,7 @@ pub mod archive;
 pub mod common;
 pub mod content_type;
 pub mod directory_listing;
+pub mod drm;
 pub mod error;
 pub mod hash;
 pub mod transform;
@@ -118,6 +119,7 @@ pub use directory_listing::{
 	DirectoryListing, DirectoryListingFile, DirectoryListingIgnoreParams,
 	DirectoryListingInput,
 };
+pub use drm::{detect_drm, DrmContainer, DrmReport, DrmScheme};
 pub use error::FileError;
 pub use hash::{
 	dhash_image, generate, generate_koreader_hash, hamming, page_dhash,
@@ -133,7 +135,10 @@ pub use image::{
 pub use media::format::pdf::PdfProcessor;
 #[cfg(feature = "rar")]
 pub use media::format::rar::RarProcessor;
-pub use media::format::{epub::EpubProcessor, zip::ZipProcessor};
+pub use media::format::{
+	epub::{EpubNavEntry, EpubProcessor, EpubStructure},
+	zip::ZipProcessor,
+};
 pub use media::{
 	search_epub, EpubSearchCursor, EpubSearchError, EpubSearchOptions,
 	EpubSearchResponse, FileProcessor, FileProcessorOptions, ProcessedFile,

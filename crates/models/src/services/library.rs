@@ -2,7 +2,7 @@
 ///
 /// Shared by library validation (core) and the Komga filesystem browser, which
 /// must agree on how configured roots and request paths compare.
-pub(crate) fn normalize_path(path: &str) -> &str {
+pub fn normalize_path(path: &str) -> &str {
 	let trimmed = path.trim_end_matches(['/', '\\']);
 	if trimmed.is_empty() || path == "/" {
 		"/"
@@ -12,7 +12,7 @@ pub(crate) fn normalize_path(path: &str) -> &str {
 }
 
 /// Adds a single trailing slash to a path.
-pub(crate) fn add_trailing_slash(path: &str) -> String {
+pub fn add_trailing_slash(path: &str) -> String {
 	if path.contains('/') {
 		if path.ends_with('/') {
 			path.to_string()
@@ -34,8 +34,36 @@ pub fn path_within_roots(path: &str, roots: &[String]) -> bool {
 		return true;
 	}
 	let normalized = normalize_path(path);
-	roots
-		.iter()
-		.map(|root| normalize_path(root))
-		.any(|root| normalized == root || normalized.starts_with(&add_trailing_slash(root)))
+	roots.iter().map(|root| normalize_path(root)).any(|root| {
+		normalized == root || normalized.starts_with(&add_trailing_slash(root))
+	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::path_within_roots;
+
+	fn roots() -> Vec<String> {
+		vec!["/data/books/".to_owned(), "/mnt/comics".to_owned()]
+	}
+
+	#[test]
+	fn no_roots_means_unconstrained() {
+		assert!(path_within_roots("/anywhere", &[]));
+	}
+
+	#[test]
+	fn root_itself_and_descendants_are_inside() {
+		assert!(path_within_roots("/data/books", &roots()));
+		assert!(path_within_roots("/data/books/", &roots()));
+		assert!(path_within_roots("/data/books/fiction", &roots()));
+		assert!(path_within_roots("/mnt/comics/marvel/", &roots()));
+	}
+
+	#[test]
+	fn sibling_with_shared_prefix_is_outside() {
+		assert!(!path_within_roots("/data/books2", &roots()));
+		assert!(!path_within_roots("/data", &roots()));
+		assert!(!path_within_roots("/mnt/comics-old/x", &roots()));
+	}
 }

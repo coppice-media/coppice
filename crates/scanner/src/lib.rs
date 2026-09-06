@@ -8,12 +8,18 @@
 //! `crates/scanner/README.md`.
 
 mod options;
+pub mod sequence;
 mod source;
 mod tag_cache;
 mod walk;
 
 pub use options::{
 	BookVisitOperation, CustomVisit, CustomVisitResult, ScanConfig, ScanOptions,
+};
+pub use sequence::{
+	analyze_sequence, clean_name, parse_identifier, parse_identifier_of, to_ranges,
+	ParsedIdentifier, SequenceAnalysis, SequenceEntry, SequenceKind, SequenceNumber,
+	SequenceRange, SequenceSource,
 };
 pub use source::{
 	MediaIdentity, ScanError, ScanResult, ScanSource, ScanStatus, SeriesIdentity,

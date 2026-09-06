@@ -45,9 +45,9 @@ pub enum StumpJob {
 	/// `provider_gc_days`. Scheduled internally; see `core/src/providers.rs`.
 	#[cfg(feature = "providers")]
 	ProviderGc,
-	/// Delivers queued notification targets; see `core/src/notification.rs`.
+	/// Delivers queued notification targets; see `core/src/job/notification.rs`.
 	NotificationDispatch {
-		deliveries: Vec<crate::notification::QueuedDelivery>,
+		deliveries: Vec<crate::job::notification::QueuedDelivery>,
 	},
 	/// Exports one user's annotations to their enabled sinks; see
 	/// `core/src/annotation_sync.rs`.
@@ -66,6 +66,8 @@ impl JobPayload for StumpJob {
 			StumpJob::PlaceholderGeneration { .. } => "placeholder_generation",
 			StumpJob::MetadataFetch { .. } => "metadata_fetch",
 			StumpJob::AnalyzeMedia { .. } => "analyze_media",
+			#[cfg(feature = "providers")]
+			StumpJob::ProviderGc => "provider_gc",
 			StumpJob::NotificationDispatch { .. } => "notification_dispatch",
 			StumpJob::AnnotationSync { .. } => "annotation_sync",
 		}
@@ -89,6 +91,8 @@ impl JobPayload for StumpJob {
 			StumpJob::AnalyzeMedia { config } => {
 				Some(format!("Analyze media: {:?}", config.scope))
 			},
+			#[cfg(feature = "providers")]
+			StumpJob::ProviderGc => Some("Reclaim stale materialised provider series".to_string()),
 			StumpJob::NotificationDispatch { deliveries } => {
 				Some(format!("Deliver {} notification(s)", deliveries.len()))
 			},

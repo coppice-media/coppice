@@ -15,8 +15,10 @@ cli = ["sea-orm-migration/cli"]
 postgres-tests = []
 
 [dependencies]
+chrono = { workspace = true }
 sea-orm = { workspace = true }
 sea-orm-migration = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 
 models = { path = "../models" }

@@ -22,6 +22,7 @@ stays in `core/src/filesystem/`, and the scanner walker lives in
 | KOReader partial MD5 | https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/frontend/util.lua#L1109-L1125; test vectors `spec/unit/util_spec.lua#L338-L345` at the same commit | `generate_koreader_hash` must keep producing KOReader's document identity (`src/hash.rs:62-99,117-130`) |
 | Readium Web Publication Manifest | `src/media/readium.rs` | Manifest, positions, `/resource/` URL encoding consumed by `apps/server` readium routes and the Komga/Kavita adapters |
 | PDFium | `pdfium-render 0.9.1` (`Cargo.toml:28`), library loaded from `MediaConfig.pdfium_path` (`PDFIUM_PATH`) | Only PDF backend; see `docs/content/docs/developer/server-architecture.mdx:239-243` |
+| DRM/encryption markers | EPUB 3.3 §4.2.6.3.2 / §4.4.5 <https://www.w3.org/TR/epub-33/>; epubcheck `OCFEncryptionFileHandler` <https://github.com/w3c/epubcheck>; MobileRead <https://wiki.mobileread.com/wiki/MOBI> and <https://wiki.mobileread.com/wiki/PDB>; ISO 32000-1 §7.5.5; DeDRM_tools `v10.0.3` (`epubtest.py` is Unlicense) | Documented byte/path markers only, reimplemented in `src/drm.rs`; no GPL code is copied and nothing here decrypts anything. Prose in `docs/content/docs/developer/calibre-tooling.mdx` |
 
 ## Decisions
 
@@ -37,6 +38,14 @@ stays in `core/src/filesystem/`, and the scanner walker lives in
 | EPUB search is bounded and uncached (query 2–128 chars, limit 20/max 50, ≤128 spine items, 32 MiB total / 16 MiB per item, 20 matches per spine item) | Keeps a single request's memory and CPU predictable without an index | `src/media/epub_search.rs:1-5,26-35` |
 | Image crate limited to GIF/JPEG/PNG/WebP; colours via `kmeans_colors` (7 + average), ThumbHash ≤100 px, WebP encoder quality 100 | Smaller build; placeholder metadata computed once per thumbnail | `Cargo.toml:18,22,38,46`; `src/image/placeholder.rs:90-104,142-190,216-230`; `src/image/webp.rs:17-83` |
 | PDF page cache/prerender lives here, keyed under `MediaConfig.pdf_cache_dir` | Rendering is the expensive step; `pdf_cache_pages`, `pdf_prerender_range`, `pdf_render_dpi`, `pdf_max_dimension`, `pdf_render_format` are plain config values | `src/lib.rs:143-149,225-243`; `src/media/format/pdf.rs:360-389,432-467` |
+| `transform` module: `TransformProfile` + device presets (`clara`, `libra`, `sage`, `elipsa`, `nia`, `*-colour`, `koreader`, `phone`), decode → tall-page split → resize → tone LUT → encode on `concurrency` threads with in-order output; sources are `Iterator<Item = TransformResult<Vec<u8>>>` so a bad page fails alone | One CPU pipeline for every device; never upscales; Kobo presets are grayscale JPEG because Kobo renders no WebP | `src/transform/{profile,pipeline,source}.rs`; tests `transform::pipeline::tests`, `transform::source::tests` |
+| Features `fast-resize` (`fast_image_resize` Lanczos3), `turbojpeg` (libjpeg-turbo), `kepub` (`stump_kepub` content transform), default on; feature-off falls back to `image` CatmullRom / `image` JPEG, and `build_kepub` returns `FeatureDisabled("KEPUB")` | They remove native code from the build; server forwards them as `transform` | `Cargo.toml:6-12`; `src/transform/pipeline.rs` (`cfg(feature = ...)`); `src/transform/container.rs` `kepub_is_disabled_without_the_feature` |
+| Containers stream: CBZ stored with `ComicInfo.xml` first; KEPUB writes `mimetype` (stored), pages as they arrive, `content.opf` last | A whole comic is never held in memory | `src/transform/container.rs` `build_cbz`/`build_kepub`; tests `kepub_container_is_structurally_valid` |
+| `TransformCache`: `<media-id>-<mtime ns>-<profile digest>.<ext>`, UUID `.tmp` → rename, hits touch mtime, LRU sweep to a byte budget skipping `.tmp` | Same discipline as the KEPUB cache; profile changes never serve stale bytes | `src/transform/cache.rs`; `src/transform/profile.rs` `digest` |
+| Fixtures `scrambled.cbr` (10/2/1.jpg + `ComicInfo.xml` + `__MACOSX` shadow, scrambled order) and an in-test scrambled CBZ prove natural page order and hidden-entry skipping | The shipped RAR/ZIP fixtures hold only `.ico` files | `src/transform/source.rs` tests; `integration-tests/data/scrambled.cbr` |
+| `src/drm.rs` detects protection but never removes it, and treats the two font-obfuscation algorithms as *not* DRM | `META-INF/encryption.xml` is also how EPUB font obfuscation is declared, so flagging its mere presence would fail every obfuscated-font book; epubcheck classifies exactly `http://www.idpf.org/2008/embedding` and `http://ns.adobe.com/pdf/enc#RC` as font mangling and everything else as encryption it cannot decrypt | `src/drm.rs` `FONT_OBFUSCATION_ALGORITHMS`, `font_obfuscation_only_is_not_drm`, `content_encryption_without_a_vendor_marker_is_reported` |
+| A MOBI/AZW verdict comes from the PalmDOC encryption type (and the MOBI DRM key block), never from EXTH `209` alone | EXTH 209/1/2/3 survive in DRM-free Amazon files, while encryption type `0` proves the text records are plaintext; the EXTH types are still recorded as evidence | `src/drm.rs` `detect_mobi_drm`/`mobi_exth_drm_records`, `unencrypted_mobi_is_not_drm_even_with_tamper_proof_keys` |
+| Containers are sniffed by magic bytes, and a `{adept}user` UUID is deliberately never recorded | A MOBI named `.epub` must still be classified; the ADEPT user UUID identifies the purchaser's account and quality reports are persisted evidence | `src/drm.rs` `detect_drm`/`adept_encrypted_key`, `detect_drm_dispatches_on_container_magic_not_extension` |
 
 ## Layout
 
@@ -49,6 +58,7 @@ stays in `core/src/filesystem/`, and the scanner walker lives in
 | `src/media/readium.rs` | `ReadiumManifestGenerator` (manifest, positions, resource URLs) |
 | `src/media/epub_search.rs` | `search_epub` with cursor, limits, Readium locators |
 | `src/content_type.rs`, `src/error.rs` | `ContentType` detection/predicates, `FileError` |
+| `src/drm.rs` | `detect_drm` container sniffing plus the EPUB/MOBI/PDF/Topaz/KFX marker rules, `DrmReport`; detection only, never removal |
 | `src/hash.rs` | `generate` (sampled SHA-256), `generate_koreader_hash` |
 | `src/common.rs`, `src/directory_listing.rs`, `src/archive.rs`, `src/series_metadata.rs` | Thumbnail lookup, `PathUtils`/`FileParts`, directory listing DTOs, ZIP creation, `series.json` |
 | `src/image/*` | `ImageProcessor` trait, `GenericImageProcessor` (JPEG/PNG), `WebpProcessor`, placeholder metadata (colours, ThumbHash), thumbnail file helpers |
@@ -66,6 +76,7 @@ cargo test -p stump_media                          # 134 tests with default feat
 cargo test -p stump_media --no-default-features    # 121 tests; feature_gate_tests assert the typed errors
 cargo test -p stump_media --no-default-features --features pdf
 cargo test -p stump_media --no-default-features --features rar
+cargo test -p stump_media --no-default-features --lib drm   # 23 DRM-detector tests, synthetic fixtures only
 cargo check -p stump_server --no-default-features --features minimal   # structural change gate (.omp/PROJECT_STATE.md)
 ```
 

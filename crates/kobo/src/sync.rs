@@ -1,4 +1,4 @@
-use chrono::SecondsFormat;
+use chrono::{DateTime, SecondsFormat, Utc};
 use models::entity::{
 	kobo_sync_session,
 	media::{self},
@@ -83,9 +83,10 @@ impl KoboSync {
 		device_id: Option<&str>,
 		device_metadata: serde_json::Value,
 		previous_sync_at: Option<DateTimeWithTimeZone>,
+		extensions: &[&str],
 	) -> Result<Self, sea_orm::DbErr> {
 		let query = media::Entity::find_for_user(user)
-			.filter(media::Column::Extension.eq("epub"));
+			.filter(media::Column::Extension.is_in(extensions.iter().copied()));
 
 		let mut media_ids = match previous_sync_at {
 			// load things created or modified since the last sync session
@@ -148,6 +149,13 @@ impl KoboSync {
 		})
 	}
 
+	/// Advance the device's sync session by one page.
+	///
+	/// `extensions` scopes the session to those media extensions (lowercase).
+	/// EPUBs are advertised as `EPUB3`; any other extension is only meaningful
+	/// when the host serves a KEPUB at the book URL and is advertised as
+	/// `KEPUB`. The scope is fixed when a session begins, so a continued
+	/// session keeps the media it was created with.
 	pub async fn next_page<'a>(
 		db: &'a DatabaseConnection,
 		user: &'a AuthUser,
@@ -155,6 +163,7 @@ impl KoboSync {
 		device_metadata: serde_json::Value,
 		client_sync_token: Option<&SyncToken>,
 		limit: usize,
+		extensions: &'a [&'a str],
 	) -> Result<SyncPage<'a>, sea_orm::DbErr> {
 		// there are 3 possibilities here:
 		// 1. the client did not provide a sync token (or did not provide a valid sync token)
@@ -193,6 +202,7 @@ impl KoboSync {
 					device_id,
 					device_metadata,
 					previous_sync_began_at,
+					extensions,
 				)
 				.await?;
 
@@ -208,6 +218,7 @@ impl KoboSync {
 			offset,
 			limit,
 			session.model.previous_sync_at,
+			extensions,
 		))
 	}
 }
@@ -230,6 +241,9 @@ pub struct SyncPage<'a> {
 	/// IDs of database media objects that should be returned in this page.
 	media_ids: Vec<String>,
 
+	/// media extensions this session covers; see [`KoboSync::next_page`].
+	extensions: &'a [&'a str],
+
 	/// are there more pages to retrieve in this sync session?
 	pub should_continue: bool,
 
@@ -239,6 +253,7 @@ pub struct SyncPage<'a> {
 }
 
 impl<'a> SyncPage<'a> {
+	#[allow(clippy::too_many_arguments)]
 	fn new(
 		db: &'a DatabaseConnection,
 		user: &'a AuthUser,
@@ -247,6 +262,7 @@ impl<'a> SyncPage<'a> {
 		offset: usize,
 		limit: usize,
 		previous_sync_at: Option<DateTimeWithTimeZone>,
+		extensions: &'a [&'a str],
 	) -> SyncPage<'a> {
 		let len = media_ids.len();
 		let start = offset.min(len);
@@ -263,6 +279,7 @@ impl<'a> SyncPage<'a> {
 			previous_sync_at,
 
 			media_ids: media_ids[start..next_offset].to_vec(),
+			extensions,
 			should_continue,
 
 			sync_token: SyncToken::new(sync_id, !should_continue, next_offset),
@@ -278,7 +295,7 @@ impl<'a> SyncPage<'a> {
 				&self.media_ids,
 				self.user,
 			)
-			.filter(media::Column::Extension.eq("epub"))
+			.filter(media::Column::Extension.is_in(self.extensions.iter().copied()))
 			.into_model::<MediaWithMetadataAndReadingSessions>()
 			.all(self.db)
 			.await?;
@@ -287,6 +304,7 @@ impl<'a> SyncPage<'a> {
 		for m in items {
 			let book_url =
 				format!("{}/v1/books/{}/file/epub", kobo_api_base_url, m.media.id);
+			let format = download_format(&m.media.extension);
 
 			let created_since_last_sync = self
 				.previous_sync_at
@@ -306,14 +324,14 @@ impl<'a> SyncPage<'a> {
 
 			if created_since_last_sync {
 				sync_items.push(SyncItem::NewEntitlement(
-					BookEntitlementContainer::from_media(m, book_url),
+					BookEntitlementContainer::from_media_with_format(m, book_url, format),
 				));
 				continue;
 			}
 
 			if metadata_changed_since_last_sync {
 				sync_items.push(SyncItem::ChangedProductMetadata(
-					BookMetadata::from_media(&m, book_url.clone()),
+					BookMetadata::from_media_with_format(&m, book_url.clone(), format),
 				));
 			}
 
@@ -331,7 +349,11 @@ impl<'a> SyncPage<'a> {
 			}
 		}
 
-		self.append_shelf_items(&mut sync_items).await?;
+		// Shelves are page-independent, so they ride on the final page of a
+		// session: by then every entitlement they reference has been delivered.
+		if !self.should_continue {
+			self.append_shelf_items(&mut sync_items).await?;
+		}
 
 		tracing::debug!(
 			?self.offset,
@@ -345,14 +367,16 @@ impl<'a> SyncPage<'a> {
 
 	/// Adds shelf (`Tag`) items to the page: `NewTag` for every shelf on a
 	/// full sync, `ChangedTag` for shelves written inside the incremental
-	/// window, and `DeletedTag` for tombstones in that window. See
+	/// window, and `DeletedTag` for tombstones in that window. Shelf items
+	/// are scoped to the session's media extensions. See
 	/// `stump_core::collections`.
 	async fn append_shelf_items(
 		&self,
 		sync_items: &mut Vec<SyncItem>,
 	) -> Result<(), DbErr> {
 		let delta =
-			shelf_sync_delta(self.db, self.user, self.previous_sync_at).await?;
+			shelf_sync_delta(self.db, self.user, self.previous_sync_at, self.extensions)
+				.await?;
 
 		for shelf in delta.new {
 			sync_items.push(SyncItem::NewTag(kobo_tag_container(shelf)));
@@ -377,6 +401,17 @@ impl<'a> SyncPage<'a> {
 /// trailing `Z`.
 fn kobo_timestamp(timestamp: DateTime<Utc>) -> String {
 	timestamp.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+/// The download format advertised for a synced file: EPUBs are served as they
+/// are; anything else in the sync scope is served as a KEPUB by the host (see
+/// [`KoboSync::next_page`]).
+fn download_format(extension: &str) -> Format {
+	if extension.eq_ignore_ascii_case("epub") {
+		Format::EPUB3
+	} else {
+		Format::KEPUB
+	}
 }
 
 /// Projects a [`ShelfProjection`] into the Calibre-Web tag wire shape.
@@ -411,7 +446,10 @@ mod tests {
 	use tests::fake_data;
 
 	use crate::{KoboSync, SyncPage, SyncToken};
-	use stump_core::kobo::sync_types::SyncItem;
+	use stump_core::kobo::sync_types::{Format, SyncItem};
+
+	const EPUB_ONLY: &[&str] = &["epub"];
+	const WITH_COMICS: &[&str] = &["epub", "cbz", "pdf"];
 
 	#[tokio::test]
 	async fn test_first_sync() {
@@ -462,6 +500,7 @@ mod tests {
 			serde_json::json!({}),
 			None,
 			10,
+			EPUB_ONLY,
 		)
 		.await
 		.expect("failed to initiate sync");
@@ -505,6 +544,7 @@ mod tests {
 			serde_json::json!({}),
 			None,
 			3,
+			EPUB_ONLY,
 		)
 		.await
 		.expect("failed to initiate sync");
@@ -525,6 +565,7 @@ mod tests {
 			serde_json::json!({}),
 			Some(&first_page.sync_token),
 			3,
+			EPUB_ONLY,
 		)
 		.await
 		.expect("failed to continue sync");
@@ -563,6 +604,7 @@ mod tests {
 			serde_json::json!({}),
 			None,
 			5,
+			EPUB_ONLY,
 		)
 		.await
 		.expect("failed to initiate sync");
@@ -590,6 +632,7 @@ mod tests {
 			serde_json::json!({}),
 			Some(&sync_page.sync_token),
 			5,
+			EPUB_ONLY,
 		)
 		.await
 		.expect("failed to initiate sync");
@@ -632,6 +675,7 @@ mod tests {
 			0,
 			10,
 			Some(previous_sync_at),
+			EPUB_ONLY,
 		);
 		let sync_items = sync_page
 			.sync_items("https://stump.example.org/")
@@ -680,6 +724,7 @@ mod tests {
 			0,
 			10,
 			Some(previous_sync_at),
+			EPUB_ONLY,
 		);
 		let sync_items = sync_page
 			.sync_items("https://stump.example.org/")
@@ -750,6 +795,7 @@ mod tests {
 				sync_id: "previous".to_string(),
 			}),
 			10,
+			EPUB_ONLY,
 		)
 		.await
 		.expect("failed to initiate state sync");
@@ -797,6 +843,7 @@ mod tests {
 				serde_json::json!({}),
 				sync_token.as_ref(),
 				10,
+				EPUB_ONLY,
 			)
 			.await
 			.expect("failed to initiate sync");
@@ -872,11 +919,198 @@ mod tests {
 			serde_json::json!({}),
 			None,
 			10,
+			EPUB_ONLY,
 		)
 		.await
 		.expect("failed to initiate sync");
 
-		// we don't include CBZs or PDFs
-		assert_eq!(vec!["don-quixote",], sync_page.media_ids,);
+		// the default scope is EPUB-only: CBZs and PDFs are invisible
+		assert_eq!(vec!["don-quixote"], sync_page.media_ids);
+
+		// a comic-scoped session (transform delivery on) includes them and
+		// advertises the KEPUB the host will serve, EPUB3 for the EPUB
+		let sync_page = KoboSync::next_page(
+			&db,
+			&user,
+			Some("kobo-2"),
+			serde_json::json!({}),
+			None,
+			10,
+			WITH_COMICS,
+		)
+		.await
+		.expect("failed to initiate comic-scoped sync");
+		assert_eq!(
+			vec!["don-quixote", "action-comics-i", "voynich-manuscript"],
+			sync_page.media_ids
+		);
+
+		let sync_items = sync_page
+			.sync_items("https://stump.example.org/")
+			.await
+			.expect("failed to retrieve sync items");
+		let mut formats: Vec<(String, Format)> = sync_items
+			.iter()
+			.filter_map(|item| match item {
+				SyncItem::NewEntitlement(entitlement) => Some((
+					entitlement.book_entitlement.id.clone(),
+					entitlement.book_metadata.download_urls[0].format,
+				)),
+				_ => None,
+			})
+			.collect();
+		formats.sort();
+		assert_eq!(
+			formats,
+			vec![
+				("action-comics-i".to_string(), Format::KEPUB),
+				("don-quixote".to_string(), Format::EPUB3),
+				("voynich-manuscript".to_string(), Format::KEPUB),
+			]
+		);
+	}
+
+	/// Device writes through the `tags` endpoints and the sync feed must agree
+	/// on one shelf id: create + add → `ChangedTag` (incremental) / `NewTag`
+	/// (full, final page only), rename + remove → `ChangedTag`, delete →
+	/// `DeletedTag`.
+	#[tokio::test]
+	async fn test_shelf_round_trip_tags_follow_device_writes() {
+		use stump_core::collections::{
+			add_shelf_items, create_device_shelf, delete_shelf, remove_shelf_items,
+			rename_shelf,
+		};
+		use stump_core::Ctx;
+
+		let db = test_database().await;
+		let user = fake_data::User::new("ishmael").insert(&db).await;
+		let series = fake_data::Series::default().insert(&db).await;
+		for i in 1..=2 {
+			fake_data::Media {
+				series_id: series.id.clone(),
+				id: Some(format!("book-{i}")),
+				created_at: Some("2020-01-01T00:00:00Z".parse().unwrap()),
+				..Default::default()
+			}
+			.insert(&db)
+			.await;
+		}
+		let user = user::AuthUser {
+			id: user.id,
+			permissions: vec![],
+			..Default::default()
+		};
+		let ctx = Ctx::for_testing(db);
+		let db = ctx.conn.as_ref();
+		let device = Some("Kobo Clara".to_string());
+
+		let sync = |token: Option<SyncToken>, limit: usize| {
+			let user = &user;
+			async move {
+				let page = KoboSync::next_page(
+					db,
+					user,
+					Some("kobo-1"),
+					serde_json::json!({}),
+					token.as_ref(),
+					limit,
+					EPUB_ONLY,
+				)
+				.await
+				.expect("failed to sync");
+				let items = page
+					.sync_items("https://stump.example.org/")
+					.await
+					.expect("failed to retrieve sync items");
+				(page, items)
+			}
+		};
+		fn tag_items(items: &[SyncItem]) -> Vec<serde_json::Value> {
+			items
+				.iter()
+				.map(|item| serde_json::to_value(item).unwrap())
+				.filter(|value| {
+					["NewTag", "ChangedTag", "DeletedTag"]
+						.iter()
+						.any(|key| value.get(key).is_some())
+				})
+				.collect()
+		}
+
+		// Nothing on the shelves yet: a full sync carries only entitlements.
+		let (page, items) = sync(None, 10).await;
+		assert_eq!(items.len(), 2);
+		assert!(tag_items(&items).is_empty());
+
+		// The device creates a shelf with its own id and puts book-1 on it.
+		let shelf_id = "0f1e2d3c-4b5a-4968-8776-655443322110".to_string();
+		let shelf = create_device_shelf(
+			&ctx,
+			&user,
+			Some(shelf_id.clone()),
+			"Beach".to_string(),
+			device.clone(),
+		)
+		.await
+		.unwrap();
+		assert_eq!(shelf.id, shelf_id);
+		add_shelf_items(
+			&ctx,
+			&user,
+			&shelf_id,
+			vec!["book-1".to_string()],
+			device.clone(),
+		)
+		.await
+		.unwrap();
+
+		// Incremental: no book changed, so the page is tag-only.
+		let (page, items) = sync(Some(page.sync_token), 10).await;
+		assert!(page.media_ids.is_empty());
+		let tags = tag_items(&items);
+		assert_eq!(tags.len(), 1, "one ChangedTag, got {items:?}", items = tags);
+		let tag = &tags[0]["ChangedTag"]["Tag"];
+		assert_eq!(tag["Id"], shelf_id);
+		assert_eq!(tag["Name"], "Beach");
+		assert_eq!(tag["TagType"], "Manual");
+		assert_eq!(tag["Type"], "UserTag");
+		assert_eq!(tag["Items"][0]["RevisionId"], "book-1");
+		assert_eq!(tag["Items"][0]["Type"], "ProductRevisionTagItem");
+		assert!(tag["LastModified"].as_str().unwrap().ends_with('Z'));
+
+		// Full sync over two pages: shelves ride only on the final page.
+		let (first, items) = sync(None, 1).await;
+		assert!(first.should_continue);
+		assert!(tag_items(&items).is_empty());
+		let (last, items) = sync(Some(first.sync_token), 1).await;
+		assert!(!last.should_continue);
+		let tags = tag_items(&items);
+		assert_eq!(tags.len(), 1);
+		assert_eq!(tags[0]["NewTag"]["Tag"]["Id"], shelf_id);
+
+		// Rename and empty the shelf on the device.
+		rename_shelf(&ctx, &user, &shelf_id, "Pool".to_string(), device.clone())
+			.await
+			.unwrap();
+		remove_shelf_items(&ctx, &user, &shelf_id, vec!["book-1".to_string()], device)
+			.await
+			.unwrap();
+		let (page, items) = sync(Some(last.sync_token), 10).await;
+		let tags = tag_items(&items);
+		assert_eq!(tags.len(), 1);
+		let tag = &tags[0]["ChangedTag"]["Tag"];
+		assert_eq!(tag["Id"], shelf_id);
+		assert_eq!(tag["Name"], "Pool");
+		assert_eq!(tag["Items"].as_array().unwrap().len(), 0);
+
+		// Delete it: the tombstone surfaces as DeletedTag, then never again.
+		delete_shelf(&ctx, &user, &shelf_id).await.unwrap();
+		let (page, items) = sync(Some(page.sync_token), 10).await;
+		let tags = tag_items(&items);
+		assert_eq!(tags.len(), 1);
+		assert_eq!(tags[0]["DeletedTag"]["Tag"]["Id"], shelf_id);
+		assert!(tags[0]["DeletedTag"]["Tag"]["LastModified"].is_string());
+		let (_, items) = sync(Some(page.sync_token), 10).await;
+		assert!(tag_items(&items).is_empty());
 	}
 }

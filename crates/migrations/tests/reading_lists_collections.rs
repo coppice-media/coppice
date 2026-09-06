@@ -188,7 +188,7 @@ async fn reading_lists_and_collections_migration_has_neutral_schema() {
 		"reading_list_items",
 		"reading_lists",
 		"reading_list_id",
-		"RESTRICT",
+		"CASCADE",
 	)
 	.await;
 	assert_foreign_key(&db, "reading_list_items", "media", "media_id", "RESTRICT").await;
@@ -197,7 +197,7 @@ async fn reading_lists_and_collections_migration_has_neutral_schema() {
 		"reading_list_rules",
 		"reading_lists",
 		"reading_list_id",
-		"RESTRICT",
+		"CASCADE",
 	)
 	.await;
 	assert_foreign_key(&db, "collections", "users", "creating_user_id", "CASCADE").await;
@@ -276,9 +276,19 @@ async fn reading_lists_and_collections_migration_has_neutral_schema() {
 	)
 	.await;
 
-	Migrator::down(&db, Some(1))
+	// Roll back everything from the reading-lists migration onwards; later
+	// migrations alter these tables, so a single step no longer removes them.
+	let steps = Migrator::migrations()
+		.iter()
+		.rev()
+		.position(|migration| {
+			migration.name() == "m20260902_000000_add_reading_lists_and_collections"
+		})
+		.expect("reading lists migration is registered")
+		+ 1;
+	Migrator::down(&db, Some(steps as u32))
 		.await
-		.expect("latest migration should roll back on SQLite");
+		.expect("migrations should roll back on SQLite");
 	for table in [
 		"reading_lists",
 		"reading_list_items",

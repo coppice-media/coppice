@@ -9,7 +9,7 @@ use axum::{
 use models::{entity::media, shared::enums::UserPermission};
 use sea_orm::{ColumnTrait, QueryFilter};
 use stump_auth::AuthContext;
-use super::comic_transform;
+use stump_media::transform::is_comic_source;
 use tower_http::services::ServeFile;
 
 use crate::{
@@ -17,12 +17,16 @@ use crate::{
 	errors::{APIError, APIResult},
 };
 
-/// Serve a Kobo book, converting EPUB bytes to KEPUB when configured.
+/// Serve a Kobo book: comics as device-transformed fixed-layout KEPUBs when
+/// `transform_enabled`, EPUBs as KEPUBs when `kobo_kepub_conversion` is on,
+/// everything else as the original file.
 ///
 /// The route and backend seam intentionally remain named `file/epub`: Kobo
 /// discovers that URL during sync, while the response's bytes and filename
 /// identify the optional KEPUB representation. Conversion is lazy and cached
-/// under `<config>/cache/kepub/<media-id>-<mtime>-<options>-d<deflate level>.kepub.epub`.
+/// under `<config>/cache/kepub/<media-id>-<mtime>-<options>-d<deflate level>.kepub.epub`
+/// (EPUBs) and `<config>/cache/transform/<media-id>-<mtime>-<profile digest>.kepub.epub`
+/// (comics).
 #[tracing::instrument(skip_all, fields(book_id = %book_id), err)]
 pub(crate) async fn book_file(
 	ctx: AppState,
@@ -30,9 +34,9 @@ pub(crate) async fn book_file(
 	book_id: String,
 	headers: HeaderMap,
 ) -> APIResult<Response> {
-	if !ctx.config.protocols.kobo_kepub_conversion
-		&& !ctx.config.transform.transform_enabled
-	{
+	let transform_comics = ctx.config.transform.transform_enabled;
+	let convert_epubs = ctx.config.protocols.kobo_kepub_conversion;
+	if !transform_comics && !convert_epubs {
 		return serve_original(ctx, auth, book_id, headers).await;
 	}
 
@@ -49,25 +53,21 @@ pub(crate) async fn book_file(
 		.await?
 		.ok_or_else(|| APIError::NotFound("Book not found".to_string()))?;
 
-	// Comic containers (CBZ/CBR/PDF) are transformed into fixed-layout
-	// KEPUBs when the transform feature and a profile resolve; otherwise the
-	// original file is served.
-	if comic_transform::is_comic_source(&book.path) {
-		return comic_transform::serve_comic(ctx, auth, book, headers).await;
+	if transform_comics && is_comic_source(&book.path) {
+		return super::comic_transform::serve_comic(ctx, auth, book, headers).await;
 	}
 
-	if !Path::new(&book.path)
+	let is_epub = Path::new(&book.path)
 		.extension()
 		.and_then(|extension| extension.to_str())
-		.is_some_and(|extension| extension.eq_ignore_ascii_case("epub"))
-	{
+		.is_some_and(|extension| extension.eq_ignore_ascii_case("epub"));
+	if !convert_epubs || !is_epub {
 		return serve_original(ctx, auth, book_id, headers).await;
 	}
 
 	let cache_path = ensure_cached(&ctx, &book).await?;
 	kepub_response(&book.path, &cache_path, headers).await
 }
-
 
 /// Return the stable cache location for a source EPUB.
 pub(crate) async fn cache_path_for(

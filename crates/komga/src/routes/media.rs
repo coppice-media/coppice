@@ -211,13 +211,14 @@ async fn visible_to_physical(
 	let Some(visible) = backend.visible_pages(book).await? else {
 		return Ok(page);
 	};
-	let page = usize::try_from(page).map_err(|_| {
-		APIError::BadRequest("page index out of range".to_string())
-	})?;
+	let page = usize::try_from(page)
+		.map_err(|_| APIError::BadRequest("page index out of range".to_string()))?;
 	visible
-		.get(page.checked_sub(1).ok_or_else(|| {
-			APIError::BadRequest("page index out of range".to_string())
-		})?)
+		.get(
+			page.checked_sub(1).ok_or_else(|| {
+				APIError::BadRequest("page index out of range".to_string())
+			})?,
+		)
 		.copied()
 		.and_then(|physical| u32::try_from(physical).ok())
 		.ok_or(APIError::NotFound("Page not found".to_string()))
@@ -514,7 +515,6 @@ async fn analyze_book(
 	Ok(StatusCode::ACCEPTED)
 }
 
-
 #[cfg(test)]
 mod tests {
 	use super::download_mime_type;
@@ -540,14 +540,17 @@ mod renumbering_tests {
 		routes::{KomgaBackend, KomgaCoreEvent, KomgaImage},
 		KomgaBookPage, KomgaBookThumbnail, KomgaSeriesThumbnail,
 	};
-	use axum::{extract::{Path, Query}, Extension};
+	use axum::{
+		extract::{Path, Query},
+		Extension,
+	};
 	use models::{
-		entity::{library, media, series, user::AuthUser},
+		entity::{media, series, user::AuthUser},
 		shared::enums::FileStatus,
 	};
 	use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
-	use stump_auth::AuthContext;
 	use std::sync::Arc;
+	use stump_auth::AuthContext;
 
 	struct RenumberBackend {
 		conn: Arc<DatabaseConnection>,
@@ -632,11 +635,112 @@ mod renumbering_tests {
 			unimplemented!("not used by the renumbering route test")
 		}
 
-		async fn enqueue_library_analysis(&self, _library_id: String) -> crate::errors::APIResult<()> {
+		async fn enqueue_library_analysis(
+			&self,
+			_library_id: String,
+		) -> crate::errors::APIResult<()> {
 			unimplemented!()
 		}
 
-		async fn enqueue_book_analysis(&self, _book_id: String) -> crate::errors::APIResult<()> {
+		async fn create_library(
+			&self,
+			_request: crate::KomgaLibraryCreateRequest,
+		) -> crate::errors::APIResult<models::entity::library::Model> {
+			unimplemented!()
+		}
+
+		async fn update_library(
+			&self,
+			_user: &models::entity::user::AuthUser,
+			_id: &str,
+			_request: crate::KomgaLibraryUpdateRequest,
+		) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		async fn delete_library(
+			&self,
+			_user: &models::entity::user::AuthUser,
+			_id: &str,
+		) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		async fn enqueue_series_analysis(
+			&self,
+			_series_id: String,
+		) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		fn library_roots(&self) -> Vec<String> {
+			Vec::new()
+		}
+
+		async fn create_collection(
+			&self,
+			_user: &models::entity::user::AuthUser,
+			_name: String,
+			_ordered: bool,
+			_series_ids: Vec<String>,
+		) -> crate::errors::APIResult<models::entity::collection::Model> {
+			unimplemented!()
+		}
+
+		async fn update_collection(
+			&self,
+			_user: &models::entity::user::AuthUser,
+			_id: &str,
+			_name: Option<String>,
+			_ordered: Option<bool>,
+			_series_ids: Option<Vec<String>>,
+		) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		async fn delete_collection(
+			&self,
+			_user: &models::entity::user::AuthUser,
+			_id: &str,
+		) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		async fn create_read_list(
+			&self,
+			_user: &models::entity::user::AuthUser,
+			_name: String,
+			_summary: Option<String>,
+			_ordered: bool,
+			_book_ids: Vec<String>,
+		) -> crate::errors::APIResult<models::entity::reading_list::Model> {
+			unimplemented!()
+		}
+
+		async fn update_read_list(
+			&self,
+			_user: &models::entity::user::AuthUser,
+			_id: &str,
+			_name: Option<String>,
+			_summary: Option<Option<String>>,
+			_ordered: Option<bool>,
+			_book_ids: Option<Vec<String>>,
+		) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		async fn delete_read_list(
+			&self,
+			_user: &models::entity::user::AuthUser,
+			_id: &str,
+		) -> crate::errors::APIResult<()> {
+			unimplemented!()
+		}
+
+		async fn enqueue_book_analysis(
+			&self,
+			_book_id: String,
+		) -> crate::errors::APIResult<()> {
 			unimplemented!()
 		}
 
@@ -764,20 +868,9 @@ mod renumbering_tests {
 		async fn record_sync(&self, _auth: &AuthContext, _summary: serde_json::Value) {
 			unimplemented!()
 		}
- 	}
+	}
 
 	async fn seed_book(conn: &DatabaseConnection, name: &str) {
-		library::ActiveModel {
-			id: Set("lib".to_string()),
-			name: Set("Library".to_string()),
-			path: Set("/lib".to_string()),
-			status: Set(FileStatus::Ready),
-			config_id: Set(1),
-			..Default::default()
-		}
-		.insert(conn)
-		.await
-		.unwrap();
 		series::ActiveModel {
 			id: Set(format!("series-{name}")),
 			name: Set("Series".to_string()),
@@ -822,6 +915,12 @@ mod renumbering_tests {
 	#[tokio::test]
 	async fn page_routes_renumber_visible_pages() {
 		let conn = ::tests::db::test_database().await;
+		::tests::fake_data::Library {
+			id: Some("lib".to_string()),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await;
 		seed_book(&conn, "skipped").await;
 		seed_book(&conn, "plain").await;
 		let backend: Arc<dyn KomgaBackend> = Arc::new(RenumberBackend {
@@ -842,8 +941,8 @@ mod renumbering_tests {
 		)
 		.await
 		.unwrap();
-		let listed = serde_json::from_slice::<Vec<KomgaBookPage>>(&body(response).await)
-			.unwrap();
+		let listed =
+			serde_json::from_slice::<Vec<KomgaBookPage>>(&body(response).await).unwrap();
 		assert_eq!(
 			listed.iter().map(|page| page.number).collect::<Vec<_>>(),
 			vec![1, 2, 3]
@@ -884,8 +983,8 @@ mod renumbering_tests {
 		)
 		.await
 		.unwrap();
-		let listed = serde_json::from_slice::<Vec<KomgaBookPage>>(&body(response).await)
-			.unwrap();
+		let listed =
+			serde_json::from_slice::<Vec<KomgaBookPage>>(&body(response).await).unwrap();
 		assert_eq!(
 			listed.iter().map(|page| page.number).collect::<Vec<_>>(),
 			vec![1, 2, 3, 4, 5]

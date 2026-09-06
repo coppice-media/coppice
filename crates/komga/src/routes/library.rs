@@ -5,7 +5,7 @@ use axum::{
 	extract::Path,
 	http::{HeaderMap, Response, StatusCode},
 	routing::{delete as delete_route, patch, post},
-	Json, Extension, Router,
+	Extension, Json, Router,
 };
 use models::{
 	entity::{library, library_config, media, series, user::AuthUser},
@@ -111,10 +111,18 @@ async fn update_library(
 	enforce_manage_library(&auth)?;
 
 	// Upstream validates `NullOrNotBlank` on both patchable identity fields.
-	if request.name.as_deref().is_some_and(|name| name.trim().is_empty()) {
+	if request
+		.name
+		.as_deref()
+		.is_some_and(|name| name.trim().is_empty())
+	{
 		return Err(APIError::BadRequest("name must not be blank".to_owned()));
 	}
-	if request.root.as_deref().is_some_and(|root| root.trim().is_empty()) {
+	if request
+		.root
+		.as_deref()
+		.is_some_and(|root| root.trim().is_empty())
+	{
 		return Err(APIError::BadRequest("root must not be blank".to_owned()));
 	}
 
@@ -187,7 +195,8 @@ async fn empty_library_trash(
 		.all(&txn)
 		.await?;
 
-	models::services::lists::remove_memberships_for_media(&txn, &trashed_media_ids).await?;
+	models::services::lists::remove_memberships_for_media(&txn, &trashed_media_ids)
+		.await?;
 	media::Entity::delete_many()
 		.filter(media::Column::Id.is_in(trashed_media_ids))
 		.exec(&txn)

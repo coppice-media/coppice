@@ -36,8 +36,9 @@ use stump_media::MediaConfig;
 /// `ingest`, `providers`, `auth`, `pdf`) that are flattened for serialization, so `Stump.toml` and the
 /// environment keep their flat key set.
 ///
-/// Example:
-/// ```
+/// Example (boots a real core against the configured directory, so it is
+/// not executed as a doctest):
+/// ```no_run
 /// use stump_core::{config::{self, StumpConfig}, StumpCore};
 ///
 /// #[tokio::main]
@@ -391,6 +392,7 @@ mod tests {
 					]),
 					trust_proxy_headers: Some(false),
 					home_app_dir: None,
+					library_roots: Some(vec![]),
 				},
 				database: PartialDatabaseConfig {
 					db_path: Some("not_a_real_path".to_string()),
@@ -436,6 +438,12 @@ mod tests {
 					virtual_series_ttl: Some(DEFAULT_VIRTUAL_SERIES_TTL_SECS),
 					provider_gc_days: Some(DEFAULT_PROVIDER_GC_DAYS),
 				},
+				annotation_sync: PartialAnnotationSyncConfig {
+					annotation_sync_root: None,
+					annotation_sync_debounce_secs: Some(
+						DEFAULT_ANNOTATION_SYNC_DEBOUNCE_SECS
+					),
+				},
 				auth: PartialAuthConfig {
 					password_hash_cost: Some(DEFAULT_PASSWORD_HASH_COST),
 					session_ttl: Some(DEFAULT_SESSION_TTL),
@@ -453,6 +461,13 @@ mod tests {
 					pdf_cache_pages: Some(DEFAULT_PDF_CACHE_PAGES),
 					pdf_prerender_range: Some(DEFAULT_PDF_PRERENDER_RANGE),
 					pdf_high_quality: Some(DEFAULT_PDF_HIGH_QUALITY),
+				},
+				transform: PartialTransformConfig {
+					transform_enabled: Some(DEFAULT_TRANSFORM_ENABLED),
+					transform_kobo_profile: Some(
+						DEFAULT_TRANSFORM_KOBO_PROFILE.to_string()
+					),
+					transform_cache_max_bytes: Some(DEFAULT_TRANSFORM_CACHE_MAX_BYTES),
 				},
 				config_dir: Some(config_dir),
 				media: None,
@@ -507,6 +522,7 @@ mod tests {
 							allowed_origins: vec![],
 							home_app_dir: None,
 							trust_proxy_headers: false,
+							library_roots: vec![],
 						},
 						database: DatabaseConfig {
 							db_path: None,
@@ -549,6 +565,11 @@ mod tests {
 							virtual_series_ttl: DEFAULT_VIRTUAL_SERIES_TTL_SECS,
 							provider_gc_days: DEFAULT_PROVIDER_GC_DAYS,
 						},
+						annotation_sync: AnnotationSyncConfig {
+							annotation_sync_root: None,
+							annotation_sync_debounce_secs:
+								DEFAULT_ANNOTATION_SYNC_DEBOUNCE_SECS,
+						},
 						auth: AuthConfig {
 							password_hash_cost: 1,
 							session_ttl: DEFAULT_SESSION_TTL,
@@ -565,6 +586,12 @@ mod tests {
 							pdf_cache_pages: DEFAULT_PDF_CACHE_PAGES,
 							pdf_prerender_range: DEFAULT_PDF_PRERENDER_RANGE,
 							pdf_high_quality: DEFAULT_PDF_HIGH_QUALITY,
+						},
+						transform: TransformConfig {
+							transform_enabled: DEFAULT_TRANSFORM_ENABLED,
+							transform_kobo_profile: DEFAULT_TRANSFORM_KOBO_PROFILE
+								.to_string(),
+							transform_cache_max_bytes: DEFAULT_TRANSFORM_CACHE_MAX_BYTES,
 						},
 						config_dir,
 						media: MediaConfig::default(),
@@ -659,6 +686,7 @@ client_secret = "secret"
 				],
 				home_app_dir: None,
 				trust_proxy_headers: true,
+				library_roots: vec![],
 			}
 		);
 		assert_eq!(

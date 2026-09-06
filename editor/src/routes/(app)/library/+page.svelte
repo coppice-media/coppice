@@ -10,6 +10,8 @@
 	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@stump/ui/components/ui/table';
+	import * as Tabs from '@stump/ui/components/ui/tabs';
+	import DuplicatePagesPanel from '$lib/components/DuplicatePagesPanel.svelte';
 	import ReworkDetailSheet from '$lib/components/ReworkDetailSheet.svelte';
 	import { getEditorSession } from '$lib/editor/session.svelte';
 	import { request } from '@stump/ui/graphql/client';
@@ -36,6 +38,7 @@
 	let sheetOpen = $state(false);
 	let sheetItemId = $state<string | null>(null);
 	let sheetItemTitle = $state<string | null>(null);
+	let tab = $state('books');
 
 	let libraryId = $derived(session.selectedLibraryId);
 
@@ -165,6 +168,9 @@
 		<p class="mt-1 max-w-2xl text-muted-foreground">Run quality checks and provider matching against books already in this library, then review and apply metadata without a drop folder.</p>
 	</div>
 
+	<Tabs.Root bind:value={tab}>
+		<Tabs.List class="h-auto w-fit"><Tabs.Trigger value="books">Books</Tabs.Trigger><Tabs.Trigger value="duplicates">Duplicate pages</Tabs.Trigger></Tabs.List>
+		<Tabs.Content value="books">
 	<Card>
 		<CardHeader>
 			<CardTitle>Library books</CardTitle>
@@ -260,6 +266,11 @@
 			{/if}
 		</CardContent>
 	</Card>
+		</Tabs.Content>
+		<Tabs.Content value="duplicates">
+			<DuplicatePagesPanel {libraryId} />
+		</Tabs.Content>
+	</Tabs.Root>
 
 	<ReworkDetailSheet
 		bind:open={sheetOpen}

@@ -474,13 +474,12 @@ fn map_core_event(event: KomgaCoreEvent) -> Option<(EventVisibility, KomgaSseEve
 			collection_id,
 			series_ids,
 		} => {
-			let visibility =
-				EventVisibility::SeriesSet(series_ids.iter().map(|id| id.0.clone()).collect());
+			let visibility = EventVisibility::SeriesSet(series_ids.clone());
 			KomgaSseEvent::from_payload(
 				"CollectionAdded",
 				crate::sse::CollectionAdded {
-					collection_id,
-					series_ids,
+					collection_id: collection_id.into(),
+					series_ids: series_ids.into_iter().map(Into::into).collect(),
 				},
 			)
 			.map(|event| (visibility, event))
@@ -489,13 +488,12 @@ fn map_core_event(event: KomgaCoreEvent) -> Option<(EventVisibility, KomgaSseEve
 			collection_id,
 			series_ids,
 		} => {
-			let visibility =
-				EventVisibility::SeriesSet(series_ids.iter().map(|id| id.0.clone()).collect());
+			let visibility = EventVisibility::SeriesSet(series_ids.clone());
 			KomgaSseEvent::from_payload(
 				"CollectionChanged",
 				crate::sse::CollectionChanged {
-					collection_id,
-					series_ids,
+					collection_id: collection_id.into(),
+					series_ids: series_ids.into_iter().map(Into::into).collect(),
 				},
 			)
 			.map(|event| (visibility, event))
@@ -504,13 +502,12 @@ fn map_core_event(event: KomgaCoreEvent) -> Option<(EventVisibility, KomgaSseEve
 			collection_id,
 			series_ids,
 		} => {
-			let visibility =
-				EventVisibility::SeriesSet(series_ids.iter().map(|id| id.0.clone()).collect());
+			let visibility = EventVisibility::SeriesSet(series_ids.clone());
 			KomgaSseEvent::from_payload(
 				"CollectionDeleted",
 				crate::sse::CollectionDeleted {
-					collection_id,
-					series_ids,
+					collection_id: collection_id.into(),
+					series_ids: series_ids.into_iter().map(Into::into).collect(),
 				},
 			)
 			.map(|event| (visibility, event))
@@ -519,13 +516,12 @@ fn map_core_event(event: KomgaCoreEvent) -> Option<(EventVisibility, KomgaSseEve
 			read_list_id,
 			book_ids,
 		} => {
-			let visibility =
-				EventVisibility::MediaSet(book_ids.iter().map(|id| id.0.clone()).collect());
+			let visibility = EventVisibility::MediaSet(book_ids.clone());
 			KomgaSseEvent::from_payload(
 				"ReadListAdded",
 				crate::sse::ReadListAdded {
-					read_list_id,
-					book_ids,
+					read_list_id: read_list_id.into(),
+					book_ids: book_ids.into_iter().map(Into::into).collect(),
 				},
 			)
 			.map(|event| (visibility, event))
@@ -534,13 +530,12 @@ fn map_core_event(event: KomgaCoreEvent) -> Option<(EventVisibility, KomgaSseEve
 			read_list_id,
 			book_ids,
 		} => {
-			let visibility =
-				EventVisibility::MediaSet(book_ids.iter().map(|id| id.0.clone()).collect());
+			let visibility = EventVisibility::MediaSet(book_ids.clone());
 			KomgaSseEvent::from_payload(
 				"ReadListChanged",
 				crate::sse::ReadListChanged {
-					read_list_id,
-					book_ids,
+					read_list_id: read_list_id.into(),
+					book_ids: book_ids.into_iter().map(Into::into).collect(),
 				},
 			)
 			.map(|event| (visibility, event))
@@ -549,17 +544,17 @@ fn map_core_event(event: KomgaCoreEvent) -> Option<(EventVisibility, KomgaSseEve
 			read_list_id,
 			book_ids,
 		} => {
-			let visibility =
-				EventVisibility::MediaSet(book_ids.iter().map(|id| id.0.clone()).collect());
+			let visibility = EventVisibility::MediaSet(book_ids.clone());
 			KomgaSseEvent::from_payload(
 				"ReadListDeleted",
 				crate::sse::ReadListDeleted {
-					read_list_id,
-					book_ids,
+					read_list_id: read_list_id.into(),
+					book_ids: book_ids.into_iter().map(Into::into).collect(),
 				},
 			)
 			.map(|event| (visibility, event))
 		},
+		KomgaCoreEvent::Other => None,
 	}
 }
 

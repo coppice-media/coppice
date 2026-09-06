@@ -17,10 +17,9 @@ use models::{
 	shared::enums::{FileStatus, ScheduledJobKind},
 };
 use sea_orm::{
-	prelude::*,
-	sea_query::Query,
-	ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
-	QuerySelect, Set, Statement, TransactionTrait, Value,
+	prelude::*, sea_query::Query, ActiveModelTrait, ColumnTrait, ConnectionTrait,
+	DatabaseTransaction, EntityTrait, IntoActiveModel, QueryFilter, QuerySelect, Set,
+	Statement, TransactionTrait, Value,
 };
 use stump_media::image::{remove_thumbnails, ImageProcessorOptionsExt};
 use uuid::Uuid;
@@ -81,10 +80,7 @@ pub struct UpdatedLibrary {
 
 /// Creates a library (config row + library row + tags) and, on success, wires
 /// the initial scan, the watcher, and the `LibraryCreated` core event.
-pub async fn create_library(
-	ctx: &Ctx,
-	params: NewLibrary,
-) -> CoreResult<library::Model> {
+pub async fn create_library(ctx: &Ctx, params: NewLibrary) -> CoreResult<library::Model> {
 	if params.scan_after_persist {
 		ctx.require_background_jobs()?;
 	}
@@ -112,10 +108,9 @@ pub async fn create_library(
 	.await?;
 
 	let created_library = library::ActiveModel {
-		id: Set(created_config
-			.library_id
-			.clone()
-			.ok_or_else(|| CoreError::InternalError("Library config not created correctly".into()))?),
+		id: Set(created_config.library_id.clone().ok_or_else(|| {
+			CoreError::InternalError("Library config not created correctly".into())
+		})?),
 		config_id: Set(created_config.id),
 		status: Set(FileStatus::Ready),
 		name: Set(params.name),
@@ -186,8 +181,9 @@ pub async fn update_library(
 		.one(ctx.conn.as_ref())
 		.await?
 		.ok_or_else(|| CoreError::NotFound("Library not found".into()))?;
-	let existing_config = existing_config
-		.ok_or_else(|| CoreError::InternalError("Library is missing associated config!".into()))?;
+	let existing_config = existing_config.ok_or_else(|| {
+		CoreError::InternalError("Library is missing associated config!".into())
+	})?;
 
 	if params.scan_after_persist {
 		ctx.require_background_jobs()?;
@@ -241,9 +237,9 @@ pub async fn update_library(
 		if !to_disconnect.is_empty() {
 			library_tag::Entity::delete_many()
 				.filter(
-					library_tag::Column::TagId
-						.is_in(to_disconnect)
-						.and(library_tag::Column::LibraryId.eq(updated_library.id.clone())),
+					library_tag::Column::TagId.is_in(to_disconnect).and(
+						library_tag::Column::LibraryId.eq(updated_library.id.clone()),
+					),
 				)
 				.exec(&txn)
 				.await?;
@@ -303,7 +299,11 @@ pub async fn update_library(
 /// Deletes a library together with its series/media list memberships, removes
 /// the thumbnails of its media and series, and emits the per-media/series
 /// deletion events plus a final `LibraryDeleted` core event.
-pub async fn delete_library(ctx: &Ctx, user: &AuthUser, id: &str) -> CoreResult<library::Model> {
+pub async fn delete_library(
+	ctx: &Ctx,
+	user: &AuthUser,
+	id: &str,
+) -> CoreResult<library::Model> {
 	let library = library::Entity::find_for_user(user)
 		.filter(library::Column::Id.eq(id.to_owned()))
 		.one(ctx.conn.as_ref())
@@ -338,15 +338,23 @@ pub async fn delete_library(ctx: &Ctx, user: &AuthUser, id: &str) -> CoreResult<
 	txn.commit().await?;
 
 	if !media_ids.is_empty() {
-		if let Err(error) = remove_thumbnails(&media_ids, &ctx.config.get_thumbnails_dir()).await
+		if let Err(error) =
+			remove_thumbnails(&media_ids, &ctx.config.get_thumbnails_dir()).await
 		{
-			tracing::error!(?error, "Failed to remove thumbnails for deleted library media");
+			tracing::error!(
+				?error,
+				"Failed to remove thumbnails for deleted library media"
+			);
 		}
 	}
 	if !series_ids.is_empty() {
-		if let Err(error) = remove_thumbnails(&series_ids, &ctx.config.get_thumbnails_dir()).await
+		if let Err(error) =
+			remove_thumbnails(&series_ids, &ctx.config.get_thumbnails_dir()).await
 		{
-			tracing::error!(?error, "Failed to remove thumbnails for deleted library series");
+			tracing::error!(
+				?error,
+				"Failed to remove thumbnails for deleted library series"
+			);
 		}
 	}
 	for media in media_rows {
@@ -468,7 +476,6 @@ fn validate_config(config: &library_config::ActiveModel) -> CoreResult<()> {
 	Ok(())
 }
 
-
 /// A helper function to enforce that a library path is valid and does not conflict with
 /// other libraries.
 pub(crate) async fn enforce_valid_library_path(
@@ -537,7 +544,9 @@ pub(crate) async fn enforce_valid_library_path(
 	let parent_libraries_count: i64 = conn
 		.query_one(db_statement(conn, parent_sql, parent_values))
 		.await?
-		.ok_or_else(|| CoreError::InternalError("Failed to count parent libraries".into()))?
+		.ok_or_else(|| {
+			CoreError::InternalError("Failed to count parent libraries".into())
+		})?
 		.try_get("", "count")?;
 
 	if parent_libraries_count > 0 {

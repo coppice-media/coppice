@@ -137,9 +137,7 @@ fn sweep_inputs(dir: &Path) -> io::Result<Vec<(PathBuf, u64, i64)>> {
 	let mut entries = Vec::new();
 	let read = match std::fs::read_dir(dir) {
 		Ok(read) => read,
-		Err(error) if error.kind() == io::ErrorKind::NotFound => {
-			return Ok(entries)
-		},
+		Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(entries),
 		Err(error) => return Err(error),
 	};
 

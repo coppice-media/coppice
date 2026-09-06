@@ -1,3 +1,4 @@
+pub mod annotation;
 pub mod api_key;
 pub mod author;
 pub mod book_club;
@@ -12,6 +13,7 @@ pub mod custom_emoji;
 pub mod device;
 pub mod device_pairing;
 pub mod directory_listing;
+pub mod duplicate_page;
 pub mod email_device;
 pub mod emailer;
 pub mod emailer_send_record;
@@ -29,8 +31,8 @@ pub mod media_metadata;
 pub mod media_metadata_overview;
 pub mod metadata_fetch_record;
 pub mod missing_entity;
-pub mod notifier;
 pub mod notification;
+pub mod notifier;
 #[cfg(feature = "providers")]
 pub mod provider;
 pub mod reading_list;

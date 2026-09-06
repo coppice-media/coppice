@@ -426,26 +426,51 @@ as a value; normalization is an additional column, never an in-place rewrite.
 
 ### Phase 2 — deterministic backfill
 
-1. **[inference] Reading sessions:** emit one Stump position event per
-   session's end state. Map `end_locator`, `end_page`, `end_percentage`,
-   status, device IDs, notes, elapsed seconds, media/user IDs, and timestamps;
-   retain start fields and the complete row in raw payload/provenance. Order
-   equal timestamps by the existing session `id` when seeding `server_seq`.
-2. **[inference] Legacy CFI:** if a deployed database still has the legacy
-   `epubcfi` value, retain it verbatim and conditionally populate
-   `partial_cfi`; never claim successful conversion without edition
-   validation. The v2 migration's legacy copy is evidence that this value is
-   historical input, not a new provider contract.
-3. **[inference] KOReader:** copy `media.koreader_hash` into provider identity
-   aliases/edition provenance, not into a locator. For every session with
-   `koreader_progress`, create a raw KOReader event containing
-   document=`media.koreader_hash` when available, `progress`, percentage,
-   and device. Numeric strings can seed page; an x-pointer seeds raw
-   foreign position and percentage only.
-4. **[inference] Devices:** import `reading_devices` into the unified device
-   registry and preserve all `reading_session.device_ids`. The materialized
-   head may expose one winning device, but provenance retains the complete
-   contributing set.
+**[observed]** Reading positions are backfilled by
+`crates/migrations/src/m20260923_000000_backfill_reading_heads.rs`, which runs
+after `m20260914_000000_add_reading_heads` created the empty head/provenance
+tables. For every `(user_id, media_id)` that has `reading_sessions` rows but no
+`reading_heads` row it replays the newest session — `ORDER BY
+COALESCE(updated_at, created_at) DESC, id DESC` — as one provenance event and
+materializes its head, reproducing the rules of
+`models::domain::reading_state::{project, resolve}` in SQL plus Rust instead of
+calling the entities, so an append-only migration does not break when those
+types change. The events are inserted ordered by `(COALESCE(updated_at,
+created_at), id)`, so the `reading_head_events.id` sequence — the `server_seq`
+of the conflict rule — orders equal timestamps by the existing session id. The
+backfill is idempotent (a pair that already has a head is skipped, so
+re-running inserts nothing) and `down` is a no-op, because from the moment the
+heads exist a protocol write may have advanced one and deleting it would
+discard newer progress (`crates/migrations/tests/backfill_reading_heads.rs`).
+
+| Session source | Unified event / head field | Rule |
+| --- | --- | --- |
+| `end_locator` | `locator`, `page` | The stored locator is carried verbatim; `page` is its `locations.position`, never `end_page`, matching `project`. |
+| `end_page` without `end_locator` | `page`, synthesized `locator` | `page_locator(media_id, page, media.pages)`: Stump's own page route as a provider-derived anchor, `image/jpeg`, decimals formatted the way `Option<Decimal>` serializes so the row is indistinguishable from a live write. |
+| `end_percentage` | `progression` | The asserted whole-publication progression, clamped to `0..=1`; it wins over `locations.totalProgression`, which wins over `position`/`end_page` divided by `media.pages`. |
+| no locator, page, or percentage | `progression`, `page` | A completed pair lands on `media.pages` at `1.0` (`project`'s completion fallback) and no locator is synthesized; anything else materializes `progression = 0.0`. |
+| `status` | `completed` | True when **any** readthrough of the pair is `FINISHED`, not only the newest session: `resolve` keeps completion sticky until an explicit un-read, so a re-read must not report the book as unfinished. The count is retained as `raw_payload.finished_readthroughs`. |
+| `device_ids` | `source_device_id`, `device_id` | The last id that still has a `devices` row owned by the same user; the complete contributing set stays in the raw payload. |
+| `koreader_progress` | `protocol` and the KOReader payload | Present: a `koreader` event whose payload carries `document` (= `media.koreader_hash`), the verbatim `progress` string (a page or an x-pointer), `percentage` and `device` — the shape `get_progress` replays off the winning event. Absent: a `stump` event. |
+| the complete row | `raw_payload.session` | Every column, including the start fields, notes, elapsed seconds, `readthrough_number`, `kobo_state`, `device_ids` and both timestamps as RFC 3339. |
+| `COALESCE(updated_at, created_at)` | `source_updated_at`, `head.updated_at` | `timestamp_kind = server`: a session timestamp is server ingestion time, because neither the Stump nor the KOReader write DTO carries a device clock. |
+| — | `received_at`, `head.created_at`, `head.changed_at`, `revision`, `applied` | The migration's run time, `revision = 1`, `applied = true`, and `raw_payload.backfill` naming the migration so a backfilled head stays attributable. |
+
+1. **[observed] Reading sessions:** implemented as above — one Stump position
+   event per backfilled pair, carrying the complete row in provenance.
+2. **[observed] Legacy CFI:** no longer reachable.
+   `m20260816_000000_drop_legacy_epubcfi` dropped
+   `reading_sessions.epubcfi` (and `bookmarks.epubcfi`) before the head store
+   existed, so no deployed database can carry a legacy CFI into an event and
+   the backfill never attempts the conversion.
+3. **[observed] KOReader:** implemented as above. `media.koreader_hash` is an
+   identity alias in the event payload, never a locator; an x-pointer stays a
+   raw foreign position with a percentage, and only a numeric progress string
+   could seed a page.
+4. **[observed] Devices:** `m20260910_000000_add_devices` already folded
+   `reading_devices` into the unified registry, and the backfill preserves
+   every `reading_session.device_ids` entry in provenance while exposing one
+   winning device on the head.
 5. **[inference] Native annotations/bookmarks:** backfill
    `media_annotations` as highlight/note records and `bookmarks` as bookmark
    records with `revision=1`, `tombstone=false`, source `stump`, and raw rows.

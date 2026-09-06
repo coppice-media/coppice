@@ -5,6 +5,9 @@
 //! The crate owns request routing and DTO mapping; the server supplies the
 //! [`routes::KavitaBackend`] adapter over its context and authenticates
 //! requests with the API-key/JWT rules documented in `kavita-compat.mdx`.
+//! A Kavita series is a Stump series in Manga/Comic libraries and a single
+//! media item in Book/LightNovel libraries ([`mapper::SeriesKind`]).
+//! Design decisions and their evidence live in `crates/kavita/README.md`.
 
 #[macro_use]
 mod macros;

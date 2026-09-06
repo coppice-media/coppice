@@ -1,42 +1,34 @@
-//! Notification routing: `CoreEvent` → `Notification` mapping, the dispatch
-//! job, and the per-user channel settings resolution.
+//! Notification routing: `CoreEvent` → `Notification` mapping, the listener
+//! that enqueues dispatch jobs, and the per-user channel settings resolution.
 //!
 //! One listener task subscribes to the core event channel (see
 //! [`spawn_listener`], started by `StumpCore::new`). Each routed event is
 //! resolved against the persisted `notification_rules` rows and enqueued as a
-//! [`StumpJob::NotificationDispatch`]; the job delivers every (user, channel)
-//! target with retry/backoff for retryable transport failures. See
-//! `crates/notify/README.md`.
+//! [`StumpJob::NotificationDispatch`]; the job
+//! ([`crate::job::notification::NotificationDispatchJob`]) delivers every
+//! (user, channel) target with retry/backoff for retryable transport failures.
+//! See `crates/notify/README.md`.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use email::EmailerClientConfig;
-use stump_jobs::{
-	JobContext, JobError, JobExecuteLog, JobLifecycle, JobOutputExt,
-	JobProgress, JobTaskOutput, WorkingState,
-};
+use models::entity::{emailer, notification_channel_setting, notification_rule, user};
+use sea_orm::{prelude::*, DatabaseConnection};
+use stump_devices::DeviceSeen;
 use stump_notify::{
-	Audience, Channel, ChannelError, ChannelRegistry, EmailChannel, Notification,
-	NotificationKind, NtfyChannel, Recipient, WebhookChannel, resolve_targets,
+	resolve_targets, Audience, Channel, ChannelError, ChannelRegistry, EmailChannel,
+	Notification, NotificationKind, NtfyChannel, Recipient, WebhookChannel,
 };
 
 use crate::{
 	event::{
-		AnalysisJobFailed, CoreEvent, DevicePaired, DeviceSeen, IngestAwaitingReview,
+		AnalysisJobFailed, CoreEvent, DevicePaired, IngestAwaitingReview,
 		ProviderMatchDone, QualityFailed,
 	},
-	job::{output::NotificationDispatchOutput, stump_job::StumpJob, CoreJobOutput, JobServices},
+	job::{notification::QueuedDelivery, stump_job::StumpJob, CoreJobOutput},
 	utils::encryption::{decrypt_string, encrypt_string, fetch_encryption_key},
-	Ctx, CoreError, CoreResult,
+	CoreResult, Ctx,
 };
-
-/// The default retry schedule for a failed delivery attempt. Only
-/// [`ChannelError::is_retryable`] failures are retried.
-pub const RETRY_DELAYS: [Duration; 3] = [
-	Duration::from_secs(1),
-	Duration::from_secs(2),
-	Duration::from_secs(4),
-];
 
 /// One event routed to the notification pipeline.
 pub struct RoutedNotification {
@@ -73,7 +65,9 @@ pub fn route_event(event: &CoreEvent) -> Option<RoutedNotification> {
 			Notification::new(
 				NotificationKind::DeviceFirstSeen,
 				"Device first seen",
-				format!("A {protocol} device connected to your account for the first time."),
+				format!(
+					"A {protocol} device connected to your account for the first time."
+				),
 			),
 		),
 		CoreEvent::IngestAwaitingReview(IngestAwaitingReview {
@@ -211,7 +205,10 @@ pub fn spawn_listener(ctx: Ctx) {
 					}
 				},
 				Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
-					tracing::warn!(count, "Notification listener lagged behind core events");
+					tracing::warn!(
+						count,
+						"Notification listener lagged behind core events"
+					);
 				},
 				Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
 			}
@@ -223,8 +220,10 @@ pub fn spawn_listener(ctx: Ctx) {
 /// available; the email channel is registered when a primary emailer is
 /// configured (its password is decrypted with the server's encryption key).
 pub async fn channel_registry(conn: &DatabaseConnection) -> CoreResult<ChannelRegistry> {
-	let mut channels: Vec<Arc<dyn Channel>> =
-		vec![Arc::new(NtfyChannel::new()), Arc::new(WebhookChannel::new())];
+	let mut channels: Vec<Arc<dyn Channel>> = vec![
+		Arc::new(NtfyChannel::new()),
+		Arc::new(WebhookChannel::new()),
+	];
 
 	let emailer = emailer::Entity::find()
 		.filter(emailer::Column::IsPrimary.eq(true))
@@ -239,11 +238,17 @@ pub async fn channel_registry(conn: &DatabaseConnection) -> CoreResult<ChannelRe
 					channels.insert(0, Arc::new(EmailChannel::new(config)));
 				},
 				Err(error) => {
-					tracing::warn!(?error, "Emailer config invalid; email channel unavailable")
+					tracing::warn!(
+						?error,
+						"Emailer config invalid; email channel unavailable"
+					)
 				},
 			},
 			Err(error) => {
-				tracing::warn!(?error, "Encryption key unavailable; email channel unavailable")
+				tracing::warn!(
+					?error,
+					"Encryption key unavailable; email channel unavailable"
+				)
 			},
 		}
 	}
@@ -253,9 +258,9 @@ pub async fn channel_registry(conn: &DatabaseConnection) -> CoreResult<ChannelRe
 
 fn emailer_config(
 	emailer: &emailer::Model,
-	encryption_key: &str,
+	encryption_key: &String,
 ) -> Result<EmailerClientConfig, ChannelError> {
-	let password = decrypt_string(&emailer.encrypted_password, &encryption_key.to_string())
+	let password = decrypt_string(&emailer.encrypted_password, encryption_key)
 		.map_err(|error| ChannelError::Rejected(error.to_string()))?;
 	Ok(EmailerClientConfig {
 		sender_email: emailer.sender_email.clone(),
@@ -275,7 +280,7 @@ fn emailer_config(
 /// decrypted.
 pub async fn recipient_for(
 	conn: &DatabaseConnection,
-	encryption_key: &str,
+	encryption_key: &String,
 	channel: &dyn Channel,
 	user_id: &str,
 ) -> Result<Recipient, ChannelError> {
@@ -304,15 +309,18 @@ pub async fn recipient_for(
 		}
 	}
 	for definition in channel.settings() {
-		if definition.secret {
-			if let Some(value) = settings.get(definition.key).and_then(|v| v.as_str()) {
-				if !value.is_empty() {
-					let decrypted = decrypt_string(value, &encryption_key.to_string())
-						.map_err(|error| ChannelError::Rejected(error.to_string()))?;
-					settings.insert(definition.key.to_string(), decrypted.into());
-				}
-			}
+		if !definition.secret {
+			continue;
 		}
+		let Some(value) = settings.get(definition.key).and_then(|v| v.as_str()) else {
+			continue;
+		};
+		if value.is_empty() {
+			continue;
+		}
+		let decrypted = decrypt_string(value, encryption_key)
+			.map_err(|error| ChannelError::Rejected(error.to_string()))?;
+		settings.insert(definition.key.to_string(), decrypted.into());
 	}
 
 	Ok(Recipient::new(user_id, username, settings))
@@ -323,17 +331,20 @@ pub async fn recipient_for(
 pub fn encrypt_secret_values(
 	channel: &dyn Channel,
 	values: &mut serde_json::Map<String, serde_json::Value>,
-	encryption_key: &str,
+	encryption_key: &String,
 ) -> CoreResult<()> {
 	for definition in channel.settings() {
-		if definition.secret {
-			if let Some(value) = values.get(definition.key).and_then(|v| v.as_str()) {
-				if !value.is_empty() {
-					let encrypted = encrypt_string(value, &encryption_key.to_string())?;
-					values.insert(definition.key.to_string(), encrypted.into());
-				}
-			}
+		if !definition.secret {
+			continue;
 		}
+		let Some(value) = values.get(definition.key).and_then(|v| v.as_str()) else {
+			continue;
+		};
+		if value.is_empty() {
+			continue;
+		}
+		let encrypted = encrypt_string(value, encryption_key)?;
+		values.insert(definition.key.to_string(), encrypted.into());
 	}
 	Ok(())
 }
@@ -351,176 +362,40 @@ pub fn redact_secret_values(
 	}
 }
 
-/// One (user, channel, notification) delivery persisted in the job payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueuedDelivery {
-	pub user_id: String,
-	pub channel_id: String,
-	pub notification: Notification,
-}
-
-/// The dispatch job: delivers queued notifications with retry/backoff. A
-/// delivery that exhausts its retryable attempts is logged and counted, never
-/// fails the whole job — one misconfigured channel must not block the others.
-pub struct NotificationDispatchJob {
-	pub deliveries: Vec<QueuedDelivery>,
-	pub retry_delays: Vec<Duration>,
-	pub(crate) registry: Option<Arc<ChannelRegistry>>,
-}
-
-impl NotificationDispatchJob {
-	pub fn new(deliveries: Vec<QueuedDelivery>) -> Self {
-		Self {
-			deliveries,
-			retry_delays: RETRY_DELAYS.to_vec(),
-			registry: None,
-		}
-	}
-
-	async fn deliver(
-		&self,
-		ctx: &JobContext<JobServices>,
-		delivery: &QueuedDelivery,
-	) -> Result<(), ChannelError> {
-		let registry = self
-			.registry
-			.as_ref()
-			.ok_or_else(|| ChannelError::Transport("registry missing".to_string()))?;
-		let channel = registry.get(&delivery.channel_id).ok_or_else(|| {
-			ChannelError::Rejected(format!("unknown channel `{}`", delivery.channel_id))
-		})?;
-
-		let encryption_key = fetch_encryption_key(ctx.conn())
-			.await
-			.map_err(|error| ChannelError::Transport(error.to_string()))?;
-		let recipient =
-			recipient_for(ctx.conn(), &encryption_key, channel.as_ref(), &delivery.user_id)
-				.await?;
-
-		let attempts = self.retry_delays.len() + 1;
-		for attempt in 0..attempts {
-			if attempt > 0 {
-				tokio::time::sleep(self.retry_delays[attempt - 1]).await;
-			}
-			match channel.send(&recipient, &delivery.notification).await {
-				Ok(()) => return Ok(()),
-				// A rejected delivery is permanent; retrying cannot fix it.
-				Err(error) if !error.is_retryable() => return Err(error),
-				Err(error) => {
-					tracing::debug!(
-						attempt = attempt + 1,
-						channel_id = %delivery.channel_id,
-						?error,
-						"Retryable notification delivery failure"
-					);
-				},
-			}
-		}
-		Err(ChannelError::Transport(
-			"all retry attempts exhausted".to_string(),
-		))
-	}
-}
-
-#[async_trait::async_trait]
-impl JobLifecycle for NotificationDispatchJob {
-	const NAME: &'static str = "notification_dispatch";
-
-	type Context = JobServices;
-	type Output = NotificationDispatchOutput;
-	type Task = QueuedDelivery;
-
-	fn description(&self) -> Option<String> {
-		Some(format!("Deliver {} notification(s)", self.deliveries.len()))
-	}
-
-	async fn init(
-		&mut self,
-		ctx: &JobContext<Self::Context>,
-	) -> Result<WorkingState<Self::Output, Self::Task>, JobError> {
-		ctx.report_progress(JobProgress::msg("Resolving channels"));
-		let registry = channel_registry(ctx.conn())
-			.await
-			.map_err(|error| JobError::InitFailed(error.to_string()))?;
-		self.registry = Some(Arc::new(registry));
-
-		Ok(WorkingState {
-			output: Some(Self::Output::default()),
-			tasks: self.deliveries.clone().into(),
-			logs: vec![],
-		})
-	}
-
-	async fn execute_task(
-		&self,
-		_ctx: &JobContext<Self::Context>,
-		task: Self::Task,
-	) -> Result<JobTaskOutput<Self>, JobError> {
-		let mut output = Self::Output::default();
-		let mut logs = Vec::new();
-
-		match self.deliver(_ctx, &task).await {
-			Ok(()) => output.sent += 1,
-			Err(error) => {
-				output.failed += 1;
-				tracing::warn!(
-					user_id = %task.user_id,
-					channel_id = %task.channel_id,
-					?error,
-					"Notification delivery failed"
-				);
-				logs.push(
-					JobExecuteLog::warn(format!(
-						"{} for {}: {error}",
-						task.channel_id, task.user_id
-					))
-					.with_ctx(task.notification.kind.to_string()),
-				);
-			},
-		}
-
-		Ok(JobTaskOutput {
-			output,
-			subtasks: vec![],
-			logs,
-		})
-	}
-}
-
 #[cfg(test)]
 mod tests {
+	use models::shared::enums::DeviceProtocol;
+
 	use super::*;
 
 	fn routed(event: &CoreEvent) -> RoutedNotification {
 		route_event(event).expect("event should route")
 	}
 
-	#[test]
-	fn device_seen_only_routes_first_sighting() {
-		let first = CoreEvent::DeviceSeen(DeviceSeen {
-			device_id: "d1".into(),
-			user_id: "u1".into(),
-			protocol: stump_devices::Protocol::Kobo,
-			first_seen: true,
-		});
-		let routed = routed(&first);
-		assert_eq!(routed.kind, NotificationKind::DeviceFirstSeen);
-		assert!(matches!(&routed.audience, Audience::Users(users) if users == &["u1".to_string()]));
-
-		let repeat = CoreEvent::DeviceSeen(DeviceSeen {
-			first_seen: false,
-			..first_payload()
-		});
-		assert!(route_event(&repeat).is_none());
-	}
-
-	fn first_payload() -> DeviceSeen {
+	fn first_sighting() -> DeviceSeen {
 		DeviceSeen {
 			device_id: "d1".into(),
 			user_id: "u1".into(),
-			protocol: stump_devices::Protocol::Kobo,
+			protocol: DeviceProtocol::Kobo,
 			first_seen: true,
 		}
+	}
+
+	#[test]
+	fn device_seen_only_routes_first_sighting() {
+		let first = CoreEvent::DeviceSeen(first_sighting());
+		let routed = routed(&first);
+		assert_eq!(routed.kind, NotificationKind::DeviceFirstSeen);
+		assert!(
+			matches!(&routed.audience, Audience::Users(users) if users == &["u1".to_string()])
+		);
+		assert!(routed.notification.body.contains("kobo"));
+
+		let repeat = CoreEvent::DeviceSeen(DeviceSeen {
+			first_seen: false,
+			..first_sighting()
+		});
+		assert!(route_event(&repeat).is_none());
 	}
 
 	#[test]
@@ -541,9 +416,9 @@ mod tests {
 			analysis_job_id: "job".into(),
 			error: "boom".into(),
 		});
-		let routed = routed(&failed);
-		assert_eq!(routed.kind, NotificationKind::AnalysisJobFailed);
-		assert!(matches!(routed.audience, Audience::Subscribers));
+		let failed = route_event(&failed).expect("event should route");
+		assert_eq!(failed.kind, NotificationKind::AnalysisJobFailed);
+		assert!(matches!(failed.audience, Audience::Subscribers));
 
 		let matched = CoreEvent::ProviderMatchDone(ProviderMatchDone {
 			library_id: "lib".into(),
@@ -558,16 +433,21 @@ mod tests {
 	fn scan_finished_summary_counts_media() {
 		let output = CoreEvent::JobOutput(crate::event::JobOutput {
 			id: "job".into(),
-			output: CoreJobOutput::LibraryScan(crate::filesystem::scanner::LibraryScanOutput {
-				library_id: "lib".into(),
-				created_media: 2,
-				updated_media: 5,
-				skipped_files: 9,
-				..Default::default()
-			}),
+			output: CoreJobOutput::LibraryScan(
+				crate::filesystem::scanner::LibraryScanOutput {
+					library_id: "lib".into(),
+					created_media: 2,
+					updated_media: 5,
+					skipped_files: 9,
+					..Default::default()
+				},
+			),
 		});
 		let routed = routed(&output);
 		assert_eq!(routed.kind, NotificationKind::ScanFinished);
-		assert_eq!(routed.notification.body, "2 media added, 5 updated, 9 skipped.");
+		assert_eq!(
+			routed.notification.body,
+			"2 media added, 5 updated, 9 skipped."
+		);
 	}
 }

@@ -113,6 +113,7 @@ export KOBO_KEPUB_CONVERSION="${KOBO_KEPUB_CONVERSION:-true}"
 export PDFIUM_PATH="${PDFIUM_PATH:-/tmp/libpdfium.so}"
 export STUMP_ENABLE_UPLOAD="${STUMP_ENABLE_UPLOAD:-true}"
 export INGEST_EDITOR_DIR="${INGEST_EDITOR_DIR:-/home/al/Code/stump/editor/build}"
+export STUMP_HOME_APP_DIR="${STUMP_HOME_APP_DIR:-/home/al/Code/stump/home/build}"
 export ENABLE_KOREADER_SYNC="${ENABLE_KOREADER_SYNC:-true}"
 
 cd "$FIXTURE_ROOT"

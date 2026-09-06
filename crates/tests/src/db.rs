@@ -6,7 +6,7 @@ use models::entity::{
 	reading_session, refresh_token, series, series_metadata, server_config, session,
 	source_health, tag, user, user_preferences,
 };
-use models::entity::{known_duplicate_page, page_hash};
+use models::entity::{known_duplicate_page, kobo_shelf_tombstone, page_hash};
 use sea_orm::{ConnectionTrait, Database, DbBackend, DbConn, DbErr, Schema};
 pub async fn test_database() -> DbConn {
 	let db = Database::connect("sqlite::memory:")
@@ -58,6 +58,7 @@ pub async fn create_database_tables(db: &DbConn) -> Result<(), DbErr> {
 		schema.create_table_from_entity(reading_head_event::Entity),
 		schema.create_table_from_entity(page_hash::Entity),
 		schema.create_table_from_entity(known_duplicate_page::Entity),
+		schema.create_table_from_entity(kobo_shelf_tombstone::Entity),
 	];
 
 	for stmt in tables {

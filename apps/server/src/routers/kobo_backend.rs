@@ -264,7 +264,11 @@ impl KoboBackend for KoboBackendImpl {
 		tags::rename_tag(self.0.clone(), auth, tag_id, name).await
 	}
 
-	async fn delete_tag(&self, auth: AuthContext, tag_id: String) -> Result<(), Self::Error> {
+	async fn delete_tag(
+		&self,
+		auth: AuthContext,
+		tag_id: String,
+	) -> Result<(), Self::Error> {
 		tags::delete_tag(self.0.clone(), auth, tag_id).await
 	}
 
@@ -286,4 +290,3 @@ impl KoboBackend for KoboBackendImpl {
 		tags::remove_tag_items(self.0.clone(), auth, tag_id, revision_ids).await
 	}
 }
-

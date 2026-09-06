@@ -1305,6 +1305,7 @@ pub(crate) async fn update_book_progression(
 				name: Set(input_device.name.clone()),
 				kind: Set(DeviceKind::Opds),
 				last_seen_at: Set(Some(chrono::Utc::now().into())),
+				created_at: Set(chrono::Utc::now().into()),
 				..Default::default()
 			};
 			device::Entity::insert(new_device).exec(conn).await?;

@@ -159,7 +159,8 @@ impl OpenLibraryClient {
 
 	/// Resolve author keys to display names, tolerating individual misses.
 	async fn fetch_author_names(&self, keys: &[String]) -> Vec<String> {
-		let mut names = Vec::with_capacity(keys.len().min(OPEN_LIBRARY_MAX_AUTHOR_FETCHES));
+		let mut names =
+			Vec::with_capacity(keys.len().min(OPEN_LIBRARY_MAX_AUTHOR_FETCHES));
 		for key in keys.iter().take(OPEN_LIBRARY_MAX_AUTHOR_FETCHES) {
 			let key = strip_prefix(key);
 			match self
@@ -167,7 +168,8 @@ impl OpenLibraryClient {
 				.await
 			{
 				Ok(author) => {
-					if let Some(name) = author.name.filter(|name| !name.trim().is_empty()) {
+					if let Some(name) = author.name.filter(|name| !name.trim().is_empty())
+					{
 						names.push(name);
 					}
 				},
@@ -198,7 +200,8 @@ impl OpenLibraryClient {
 		if let Some(author) = query.author.as_deref().filter(|a| !a.trim().is_empty()) {
 			params.push(("author", author));
 		}
-		let response: OpenLibrarySearchResponse = self.get("/search.json", &params).await?;
+		let response: OpenLibrarySearchResponse =
+			self.get("/search.json", &params).await?;
 		Ok(response.docs)
 	}
 
@@ -210,16 +213,18 @@ impl OpenLibraryClient {
 		query_isbn: Option<&str>,
 	) -> ExternalMediaMetadata {
 		let work = match edition.works.first() {
-			Some(reference) => match self.fetch_work(strip_prefix(&reference.key)).await {
-				Ok(work) => Some(work),
-				Err(error) => {
-					tracing::warn!(
-						work = reference.key,
-						?error,
-						"Open Library work lookup failed; using edition only"
-					);
-					None
-				},
+			Some(reference) => {
+				match self.fetch_work(strip_prefix(&reference.key)).await {
+					Ok(work) => Some(work),
+					Err(error) => {
+						tracing::warn!(
+							work = reference.key,
+							?error,
+							"Open Library work lookup failed; using edition only"
+						);
+						None
+					},
+				}
 			},
 			None => None,
 		};
@@ -245,9 +250,15 @@ impl OpenLibraryClient {
 			.description
 			.as_ref()
 			.and_then(OpenLibraryText::text)
-			.or_else(|| work.as_ref().and_then(|w| w.description.as_ref()).and_then(OpenLibraryText::text));
+			.or_else(|| {
+				work.as_ref()
+					.and_then(|w| w.description.as_ref())
+					.and_then(OpenLibraryText::text)
+			});
 		let subjects = if edition.subjects.is_empty() {
-			work.as_ref().map(|w| w.subjects.clone()).unwrap_or_default()
+			work.as_ref()
+				.map(|w| w.subjects.clone())
+				.unwrap_or_default()
 		} else {
 			edition.subjects
 		};
@@ -263,7 +274,12 @@ impl OpenLibraryClient {
 			year,
 			month,
 			day,
-			tags: filled_or_none(subjects.into_iter().take(OPEN_LIBRARY_MAX_SUBJECTS).collect()),
+			tags: filled_or_none(
+				subjects
+					.into_iter()
+					.take(OPEN_LIBRARY_MAX_SUBJECTS)
+					.collect(),
+			),
 			isbn,
 			isbn_13,
 			writers: filled_or_none(writers),
@@ -353,7 +369,10 @@ impl MetadataProvider for OpenLibraryClient {
 					});
 				},
 				Err(MetadataProviderError::NotFound(_)) => {
-					tracing::debug!(isbn, "No Open Library edition for ISBN; falling back to search");
+					tracing::debug!(
+						isbn,
+						"No Open Library edition for ISBN; falling back to search"
+					);
 				},
 				Err(error) => return Err(error),
 			}
@@ -365,7 +384,8 @@ impl MetadataProvider for OpenLibraryClient {
 		let candidates = docs
 			.into_iter()
 			.filter_map(|doc| {
-				let metadata = media_from_search_doc(self.id(), doc, query_isbn.as_deref())?;
+				let metadata =
+					media_from_search_doc(self.id(), doc, query_isbn.as_deref())?;
 				Some(MatchCandidate {
 					external_id: metadata.external_id.clone(),
 					metadata: ExternalMetadata::Media(metadata),
@@ -412,7 +432,10 @@ impl MetadataProvider for OpenLibraryClient {
 		self.rate_limiter.until_ready().await;
 		let response = self
 			.client
-			.get(format!("{}/search.json?q=the&limit=1&fields=key", self.api_url))
+			.get(format!(
+				"{}/search.json?q=the&limit=1&fields=key",
+				self.api_url
+			))
 			.send()
 			.await?;
 		let status = response.status().as_u16();
@@ -523,7 +546,7 @@ fn parse_publish_date(date: Option<&str>) -> (Option<i32>, Option<i32>, Option<i
 	let Some(date) = date.map(str::trim).filter(|d| !d.is_empty()) else {
 		return (None, None, None);
 	};
-	if let Ok(parsed) = dateparser::parse(date) {
+	if let Ok(parsed) = dateparser::parse_with_timezone(date, &chrono::Utc) {
 		return (
 			Some(parsed.year()),
 			Some(parsed.month() as i32),
@@ -704,7 +727,8 @@ mod tests {
 	}
 
 	fn author_response() -> String {
-		serde_json::json!({ "key": "/authors/OL34184A", "name": "Roald Dahl" }).to_string()
+		serde_json::json!({ "key": "/authors/OL34184A", "name": "Roald Dahl" })
+			.to_string()
 	}
 
 	#[tokio::test]
@@ -819,7 +843,10 @@ mod tests {
 		);
 		assert_eq!(media.isbn.as_deref(), Some("0140328726"));
 		assert_eq!(media.isbn_13.as_deref(), Some("9780140328721"));
-		assert_eq!((media.year, media.month, media.day), (Some(1988), Some(10), Some(1)));
+		assert_eq!(
+			(media.year, media.month, media.day),
+			(Some(1988), Some(10), Some(1))
+		);
 		assert_eq!(media.series_name.as_deref(), Some("Puffin Books"));
 		assert_eq!(
 			media.writers.as_deref(),
@@ -853,10 +880,8 @@ mod tests {
 	#[tokio::test]
 	async fn isbn_miss_falls_back_to_title_search() {
 		let not_found = "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
-		let server = MockServer::spawn(vec![
-			not_found.to_string(),
-			render_ok(&search_response()),
-		]);
+		let server =
+			MockServer::spawn(vec![not_found.to_string(), render_ok(&search_response())]);
 		let client = OpenLibraryClient::new().with_api_url(server.url.clone());
 
 		let outcome = client

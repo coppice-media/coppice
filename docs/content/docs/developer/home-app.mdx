@@ -1,0 +1,131 @@
+---
+title: Home app
+description: The user-facing companion app served at /app — devices, reading activity, and account — and the shared UI package it is built on
+---
+
+The *Home app* is a static SvelteKit 2 / Svelte 5 single-page app in `home/`
+that a signed-in user opens to manage their own devices, look at their
+reading activity, and inspect their account. It is the second companion app
+after the [ingest editor](/docs/developer/modular-ingest) and shares its
+foundation with it through `packages/stump-ui`.
+
+## Serving
+
+The headless server serves built companion apps itself from
+`apps/server/src/routers/static_apps.rs`, one mount per configured directory:
+
+| Base      | Directory (env / TOML)                  | App                          |
+| --------- | --------------------------------------- | ---------------------------- |
+| `/editor` | `INGEST_EDITOR_DIR` / `ingest_editor_dir` | Ingest editor (`editor/build`) |
+| `/app`    | `STUMP_HOME_APP_DIR` / `home_app_dir`     | Home app (`home/build`)        |
+
+A directory is mounted only when it contains `index.html`; a configured but
+empty directory logs a warning and is skipped. Hashed assets under
+`<base>/_app/immutable/*` get `Cache-Control: public, max-age=31536000,
+immutable`; everything else is `no-cache` and unknown paths under the base
+fall back to `index.html` so client-side routes deep-link. The mounts are
+merged before the web UI's SPA fallback, so they coexist with a `full` build.
+This is a runtime switch, not a Cargo feature: nothing is linked in, only
+files are served. `scripts/dev-fixture-server.sh` exports both variables for
+the local fixture.
+
+```sh
+cd home && bun install && bun run build
+STUMP_HOME_APP_DIR=/path/to/stump/home/build stump_server
+# → http://<server>/app
+```
+
+`paths.base` is `/app` (`svelte.config.js`; override with `HOME_BASE_PATH` at
+build time). In development `bun run dev` serves on port 5175 and proxies
+`/api` (including the `graphql-ws` socket) to `HOME_SERVER_URL`, default
+`http://127.0.0.1:25600`.
+
+## Screens
+
+Routes are relative to the base.
+
+| Route      | What it does                                                                                                                                                                                                                                                                                                                                              |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/login`   | Cookie session via `POST /api/v2/auth/login`. Reads `GET /api/v2/auth/oidc/config`: when `enabled`, shows a *Sign in with single sign-on* button that opens `/api/v2/auth/oidc/authorize`; when `disableLocalAuth`, hides the password form. The OIDC callback creates the session and redirects to `/` (the server's choice), so the user re-opens `/app` afterwards. |
+| `/devices` | Cards for every device from the `devices` query (kind, credential hint and protocol, last seen, last sync + summary, registered). *Add client* runs `createDevice` and reveals the one-time secret with an endpoint card per `DeviceEndpoint` (URL, username, secret, copy buttons, QR code of the URL). Rename (`renameDevice`), rotate (`rotateDeviceCredential`, same reveal), revoke (`revokeDevice`). Kobo and KOReader cards get a comic transform preset selector (`setDeviceTransformProfile`). Pending pairings (`pendingDevicePairings`, polled every 10 s) are approved with the device's code (`approveDevicePairing`) or denied. |
+| `/reading` | `readingStats` for a selectable span (7/30/90 days, year, all time): totals, streak, a per-day bar strip, and a per-device table.                                                                                                                                                                                                                          |
+| `/account` | Profile from `me` (username, owner badge, OIDC email, last login, active sessions) and the user's own sign-in history from `loginActivityById(id: me.id)`.                                                                                                                                                                                                  |
+
+`/` redirects to `/devices`. The `(app)` layout loads `me`, exposes it through
+a Svelte context (`src/lib/session.svelte.ts`), and logs out through
+`POST /api/v2/auth/logout`. A `401` from any GraphQL request redirects to
+`/login?returnTo=…` (shared client).
+
+### Live device activity
+
+The Devices screen subscribes to `deviceSeen` over `graphql-ws`
+(`/api/graphql/ws`); every event refetches the `devices` query so *last seen*
+updates within a round-trip after a Kobo, KOReader, Komga-profile, OPDS, or
+API credential authenticates. If the socket cannot be opened the page shows a
+*Live updates paused* notice and falls back to reload-time freshness. A
+one-minute ticker keeps the relative timestamps honest in between.
+
+### Transform presets
+
+`Device.transformProfile` is free-form JSON interpreted by
+`stump_media::transform::TransformProfile::from_device_profile`. The Home app
+writes `{"preset": "<name>"}` (or `null` for *Server default*) and reads either
+that shape or a bare preset string; a hand-written full profile shows as
+*Custom*. Preset names are the ones in `TransformProfile::preset_names()`:
+`clara`, `libra`, `sage`, `elipsa`, `nia`, `clara-colour`, `libra-colour`,
+`sage-colour`, `koreader`, `phone` (`home/src/lib/devices.ts`).
+
+### QR codes
+
+The endpoint QR encodes the endpoint URL, rendered client-side with
+`qrcode-generator`; readers that add a catalog by scanning a URL (OPDS apps)
+can use it directly. The server's own `GET /api/v2/devices/pair/{id}/qr.png`
+belongs to the [device-pairing](/docs/developer/device-pairing) flow, which
+starts on the device, not here.
+
+## Shared UI package
+
+`packages/stump-ui` holds what both companion apps need:
+
+| Path                            | Contents                                                                                             |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `src/graphql/client.ts`         | `graphQLClient`, `request` (typed, redirects on 401), `redirectToLogin`, `subscribe` (`graphql-ws`) |
+| `src/graphql/operations.graphql` | Operations used by more than one app (`Me`); generated into `src/graphql/generated/`                |
+| `src/components/ui/*`           | shadcn-svelte components (`bits-ui`, `vaul-svelte`, `@lucide/svelte`)                                |
+| `src/utils.ts`, `src/utils/uuid.ts` | `cn` and a secure-context-safe `uuid`                                                            |
+
+The package is **source-only**. Each app links `packages/stump-ui/src` into
+its tree as `src/lib/stump-ui` (a committed symlink) and aliases `@stump/ui`
+to it in `svelte.config.js`; `preserveSymlinks` in the app's `tsconfig.json`
+and `vite.config.ts` keeps the files inside the project, so they are
+typechecked by `svelte-check` like any other source and resolve `svelte`,
+`bits-ui`, `graphql`, … from the app's own `node_modules` — one copy of every
+runtime per app, no second realm for `graphql`. The package declares those
+runtimes as `peerDependencies`; each app installs them. It is not part of the
+root Yarn workspace's install (it has no `dependencies`), and no `bun install`
+is run inside it.
+
+Codegen order after a schema change (`cargo dump-schema`):
+
+```sh
+(cd packages/stump-ui && bun run codegen)   # shared docs, via editor/'s toolchain
+(cd editor && bun run codegen)
+(cd home && bun run codegen)
+```
+
+App-specific operations stay in each app (`src/lib/graphql/operations.graphql`)
+and import generated documents from `$lib/graphql/generated/graphql`; shared
+ones come from `@stump/ui/graphql/generated/graphql`. New shadcn components are
+added from an app directory (`bunx shadcn-svelte@latest add <name>`); its
+`components.json` aliases point at the package through `@stump/ui`.
+
+## Verification
+
+```sh
+cd editor && bun run check && bun run build
+cd home && bun run check && bun run build
+```
+
+Then start the fixture (`scripts/dev-fixture-server.sh`) and open
+`http://127.0.0.1:25600/app` — sign in, register a client, and watch its card
+update after the client's first authenticated request.

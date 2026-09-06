@@ -165,13 +165,7 @@ pub(crate) async fn get_media_page(
 	)
 	.ok_or(APIError::NotFound("Page not found".to_string()))?;
 
-	let content = match get_page_async(
-		&book.path,
-		u32::try_from(physical)?,
-		&ctx.config.media,
-	)
-	.await
-	{
+	let content = match get_page_async(&book.path, physical, &ctx.config.media).await {
 		Ok(result) => result,
 		Err(e) => {
 			if matches!(e, FileError::NoImageError) {

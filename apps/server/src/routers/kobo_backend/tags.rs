@@ -11,12 +11,12 @@
 //! - unknown shelf ids are 404, unknown books are silently ignored,
 //! - rename/delete/item routes require the shelf owner.
 
-use models::entity::{device, device_credential};
+use models::entity::{device, device_credential, media, user::AuthUser};
 use models::shared::enums::DeviceCredentialKind;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 use stump_auth::AuthContext;
 use stump_core::collections;
-use stump_kobo::routes::{TagCreateRequest, TagItemsRequest};
+use stump_kobo::routes::TagCreateRequest;
 
 use crate::{config::state::AppState, errors::APIResult};
 
@@ -27,8 +27,21 @@ pub(crate) async fn create_tag(
 ) -> APIResult<String> {
 	let user = auth.user();
 	let device = device_name(&ctx, auth.api_key.as_deref()).await;
-	let model =
-		collections::create_device_shelf(&ctx, user, request.id, request.name, device).await?;
+	let revision_ids = request.revision_ids();
+	let model = collections::create_device_shelf(
+		&ctx,
+		&user,
+		request.id,
+		request.name,
+		device.clone(),
+	)
+	.await?;
+	// Unknown books are silently ignored (Calibre-Web behavior), so filter to
+	// the books this user can actually see before touching the container.
+	let visible = visible_books(&ctx, &user, &revision_ids).await?;
+	if !visible.is_empty() {
+		collections::add_shelf_items(&ctx, &user, &model.id, visible, device).await?;
+	}
 	Ok(model.id)
 }
 
@@ -40,12 +53,16 @@ pub(crate) async fn rename_tag(
 ) -> APIResult<()> {
 	let user = auth.user();
 	let device = device_name(&ctx, auth.api_key.as_deref()).await;
-	collections::rename_shelf(&ctx, user, &tag_id, name, device).await?;
+	collections::rename_shelf(&ctx, &user, &tag_id, name, device).await?;
 	Ok(())
 }
 
-pub(crate) async fn delete_tag(ctx: AppState, auth: AuthContext, tag_id: String) -> APIResult<()> {
-	collections::delete_shelf(&ctx, auth.user(), &tag_id).await?;
+pub(crate) async fn delete_tag(
+	ctx: AppState,
+	auth: AuthContext,
+	tag_id: String,
+) -> APIResult<()> {
+	collections::delete_shelf(&ctx, &auth.user(), &tag_id).await?;
 	Ok(())
 }
 
@@ -59,8 +76,8 @@ pub(crate) async fn add_tag_items(
 	let device = device_name(&ctx, auth.api_key.as_deref()).await;
 	// Unknown books are silently ignored (Calibre-Web behavior), so filter to
 	// the books this user can actually see before touching the container.
-	let visible = visible_books(&ctx, user, &revision_ids).await?;
-	collections::add_shelf_items(&ctx, user, &tag_id, visible, device).await?;
+	let visible = visible_books(&ctx, &user, &revision_ids).await?;
+	collections::add_shelf_items(&ctx, &user, &tag_id, visible, device).await?;
 	Ok(())
 }
 
@@ -72,23 +89,23 @@ pub(crate) async fn remove_tag_items(
 ) -> APIResult<()> {
 	let user = auth.user();
 	let device = device_name(&ctx, auth.api_key.as_deref()).await;
-	collections::remove_shelf_items(&ctx, user, &tag_id, revision_ids, device).await?;
+	collections::remove_shelf_items(&ctx, &user, &tag_id, revision_ids, device).await?;
 	Ok(())
 }
 
 async fn visible_books(
 	ctx: &AppState,
-	user: &models::entity::user::AuthUser,
+	user: &AuthUser,
 	book_ids: &[String],
 ) -> APIResult<Vec<String>> {
 	if book_ids.is_empty() {
 		return Ok(Vec::new());
 	}
-	let visible = models::entity::media::Entity::find_for_user(user)
-		.filter(models::entity::media::Column::Id.is_in(book_ids.to_vec()))
-		.filter(models::entity::media::Column::DeletedAt.is_null())
+	let visible = media::Entity::find_for_user(user)
+		.filter(media::Column::Id.is_in(book_ids.to_vec()))
+		.filter(media::Column::DeletedAt.is_null())
 		.select_only()
-		.column(models::entity::media::Column::Id)
+		.column(media::Column::Id)
 		.into_tuple::<String>()
 		.all(ctx.conn.as_ref())
 		.await?;
@@ -103,7 +120,9 @@ async fn device_name(ctx: &AppState, api_key: Option<&str>) -> Option<String> {
 	let api_key = api_key?;
 	let pak = PrefixedApiKey::from_string(api_key).ok()?;
 	let credential = device_credential::Entity::find()
-		.filter(device_credential::Column::CredentialKind.eq(DeviceCredentialKind::ApiKey))
+		.filter(
+			device_credential::Column::CredentialKind.eq(DeviceCredentialKind::ApiKey),
+		)
 		.filter(device_credential::Column::CredentialRef.eq(pak.short_token().to_owned()))
 		.one(ctx.conn.as_ref())
 		.await

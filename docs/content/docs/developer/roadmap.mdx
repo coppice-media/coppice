@@ -137,6 +137,53 @@ table); deliberately last, none block the phases above.
 - **Backups/metrics**: backup/restore surface, `/metrics` or OpenTelemetry
   export, and dependency-specific readiness checks.
 
+## Gaps vs peers
+
+Derived from [Feature comparison](/docs/developer/comparison), which cites a
+file:line for every claim about this fork and a URL for every competitor
+claim. These are candidate items, unordered and unprioritised: nothing here is
+scheduled, and some may end up as non-goals. Each names the peer that already
+ships it, because that peer's behaviour is the specification to read — never
+its code, since BookOrbit and Grimmory are AGPL-3.0 and this tree is MIT.
+
+Missing:
+
+- **Audiobook formats (M4B/MP3/OPUS).** No audio processor exists in
+  `stump_media` (`crates/README.md:29`). Peers: BookOrbit, Grimmory,
+  Audiobookshelf.
+- **Web audio player.** The reader set is ebook, image, PDF
+  (`docs/content/docs/apps/web/readers.mdx:5-38`). Depends on the format work
+  above. Peers: BookOrbit, Grimmory, Audiobookshelf.
+- **First-party KOReader plugin.** We serve the kosync API
+  (`docs/content/docs/developer/provider-status.mdx:174-180`) and ship a Kobo
+  Nickel plugin (`docs/content/docs/developer/platforms.mdx:52`), but nothing
+  runs inside KOReader — so no highlights, no device sweep, no in-reader
+  catalog. Peers: BookOrbit, Calibre-Web Automated.
+- **Achievements.** The home app has devices, reading, account
+  (`docs/content/docs/developer/home-app.mdx:47-52`). Peer: BookOrbit.
+
+Partial:
+
+- **Kavita profile beyond wave 1** (`docs/content/docs/developer/kavita-compat.mdx:6`)
+  — already tracked as phase 6.
+- **Per-field metadata provider rules and merge.** Provider priority per field,
+  title-language preference, and cover policy are unimplemented
+  (`docs/content/docs/developer/provider-status.mdx:65-70`) — the policy half of
+  phase 5. Peer: BookOrbit.
+- **Bulk metadata edit outside ingest.** `bulkApplyIngestMetadata` only touches
+  staged drop items (`docs/content/docs/developer/state.mdx:37`). Peer:
+  Calibre-Web Automated.
+- **One annotation model.** Native rows and liseur CAS rows are stored side by
+  side and never reconciled
+  (`docs/content/docs/developer/provider-status.mdx:245`). Peer: BookOrbit,
+  which also records per-format positions and a repair state.
+- **Cross-book annotation workspace.** Annotations exist in the `full` web
+  reader (`docs/content/docs/apps/web/readers.mdx:11`); there is no search,
+  filter, or bulk surface over all books. Peers: BookOrbit, Kavita.
+- **Configurable dashboard.** One reading screen exists
+  (`docs/content/docs/developer/home-app.mdx:51`). Peers: BookOrbit, Kavita,
+  Calibre-Web Automated.
+
 ## Non-goals
 
 Explicitly out of scope for this fork; do not open tracks for them.

@@ -6,12 +6,13 @@ use crate::{
 };
 use async_graphql::Result;
 use email::{
-	AttachmentPayload, EmailContentType, EmailResult, EmailerClient, EmailerClientConfig,
+	AttachmentPayload, EmailContentType, EmailError, EmailResult, EmailerClient,
+	EmailerClientConfig,
 };
 use sea_orm::{prelude::*, IntoActiveModel, NotSet, Set};
 use stump_core::utils::encryption::decrypt_string;
-use stump_notify::{ChannelError, EmailChannel};
 use stump_media::{ContentType, FileParts, PathUtils};
+use stump_notify::{ChannelError, EmailChannel};
 
 use models::entity::{
 	emailer,
@@ -56,12 +57,12 @@ impl AttachmentSender for AttachmentSenderImpl {
 	}
 }
 
+/// `EmailChannel` folds the emailer's failures into channel errors; the
+/// attachment flow reports them as `EmailError::InvalidEmail`, which is how
+/// the send records already classify a refused delivery.
 fn map_channel_error(error: ChannelError) -> EmailError {
 	match error {
-		ChannelError::Rejected(message) => EmailError::InvalidEmail(message),
-		ChannelError::Transport(message) => {
-			// The email channel only reports lettre SMTP failures as
-			// transport errors.
+		ChannelError::Rejected(message) | ChannelError::Transport(message) => {
 			EmailError::InvalidEmail(message)
 		},
 		other => EmailError::InvalidEmail(other.to_string()),

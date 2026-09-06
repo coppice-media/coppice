@@ -829,7 +829,9 @@ mod tests {
 			assert!(!descriptor.configured);
 			assert!(descriptor.enabled_default);
 			assert!(!descriptor.requires_api_token);
-			assert!(descriptor.capabilities.contains(&ProviderCapability::Search));
+			assert!(descriptor
+				.capabilities
+				.contains(&ProviderCapability::Search));
 			assert_eq!(descriptor.supported_media_types, vec!["BOOK".to_string()]);
 		}
 		// Metron needs a `username:password` credential and ships disabled.

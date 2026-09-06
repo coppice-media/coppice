@@ -1,10 +1,10 @@
 import type { CodegenConfig } from '@graphql-codegen/cli';
 
 const config: CodegenConfig = {
-	schema: '../../crates/graphql/schema.graphql',
-	documents: ['src/graphql/**/*.graphql'],
+	schema: '../crates/graphql/schema.graphql',
+	documents: ['src/lib/graphql/**/*.graphql'],
 	generates: {
-		'src/graphql/generated/': {
+		'src/lib/graphql/generated/': {
 			preset: 'client',
 			presetConfig: {
 				fragmentMasking: false
@@ -13,6 +13,7 @@ const config: CodegenConfig = {
 				enumsAsTypes: true,
 				scalars: {
 					DateTime: 'string',
+					NaiveDate: 'string',
 					JSON: 'unknown',
 					Upload: 'File'
 				},

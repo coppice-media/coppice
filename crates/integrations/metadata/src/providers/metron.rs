@@ -220,7 +220,10 @@ impl MetronClient {
 		})
 	}
 
-	fn series_from_list_item(&self, item: MetronSeriesListItem) -> ExternalSeriesMetadata {
+	fn series_from_list_item(
+		&self,
+		item: MetronSeriesListItem,
+	) -> ExternalSeriesMetadata {
 		ExternalSeriesMetadata {
 			provider: self.id().to_string(),
 			external_id: item.id.to_string(),
@@ -327,7 +330,8 @@ impl MetadataProvider for MetronClient {
 		&self,
 		external_id: &str,
 	) -> Result<ExternalSeriesMetadata, MetadataProviderError> {
-		let series: MetronSeries = self.get(&format!("/series/{external_id}/"), &[]).await?;
+		let series: MetronSeries =
+			self.get(&format!("/series/{external_id}/"), &[]).await?;
 		let publisher = series.publisher.map(|publisher| publisher.name);
 
 		Ok(ExternalSeriesMetadata {
@@ -768,11 +772,16 @@ mod tests {
 		assert_eq!(requests.len(), 1);
 		let request = &requests[0];
 		assert!(request.starts_with("GET /issue/"), "{request}");
-		assert!(request.contains("series_name=Fantastic+Mr+Fox"), "{request}");
+		assert!(
+			request.contains("series_name=Fantastic+Mr+Fox"),
+			"{request}"
+		);
 		assert!(request.contains("limit=5"), "{request}");
 		// Basic auth must ride along on every request
 		assert!(
-			request.to_ascii_lowercase().contains("authorization: basic dxnlcjpwyxnz"),
+			request
+				.to_ascii_lowercase()
+				.contains("authorization: basic dxnlcjpwyxnz"),
 			"{request}"
 		);
 	}
@@ -848,7 +857,10 @@ mod tests {
 			media.genres.as_deref(),
 			Some(["Anthology".to_string()].as_slice())
 		);
-		assert_eq!(media.tags.as_deref(), Some(["The Fox Arc".to_string()].as_slice()));
+		assert_eq!(
+			media.tags.as_deref(),
+			Some(["The Fox Arc".to_string()].as_slice())
+		);
 		assert_eq!(
 			media.writers.as_deref(),
 			Some(["Roald Dahl".to_string()].as_slice())
@@ -880,7 +892,9 @@ mod tests {
 		let request = &server.requests()[0];
 		assert!(request.starts_with("GET /issue/406984/"), "{request}");
 		assert!(
-			request.to_ascii_lowercase().contains("authorization: basic dxnlcjpwyxnz"),
+			request
+				.to_ascii_lowercase()
+				.contains("authorization: basic dxnlcjpwyxnz"),
 			"{request}"
 		);
 	}
@@ -1009,7 +1023,10 @@ Connection: close
 			parse_status(Some("completed")),
 			Some(PublicationStatus::Completed)
 		);
-		assert_eq!(parse_status(Some("Hiatus")), Some(PublicationStatus::Hiatus));
+		assert_eq!(
+			parse_status(Some("Hiatus")),
+			Some(PublicationStatus::Hiatus)
+		);
 		assert_eq!(
 			parse_status(Some("Cancelled")),
 			Some(PublicationStatus::Cancelled)

@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use stump_api_types::settings::{SettingDefinition, SettingKind, SettingValues};
 
 use crate::ingest::contract::{
-	BookSnapshot, IngestMediaKind, QualityCheck, QualityCheckError, QualityStatus,
+	BookSnapshot, QualityCheck, QualityCheckError, QualityCheckOutcome, QualityStatus,
 };
 
 use super::{disabled_outcome, enabled_setting, outcome, QUALITY_VERSION};
@@ -15,7 +15,7 @@ use super::{disabled_outcome, enabled_setting, outcome, QUALITY_VERSION};
 /// Default number of distinct books a page hash must appear in before the
 /// check flags it. A page shared by one or two books is usually intentional
 /// (a re-used cover, a credits page); three or more suggests scraped filler.
-pub(crate) const MIN_DUPLICATE_BOOKS_DEFAULT: i64 = 3;
+pub const MIN_DUPLICATE_BOOKS_DEFAULT: i64 = 3;
 
 /// Upper bound on the duplicate groups recorded in evidence so reports stay
 /// bounded regardless of how repetitive a library is.
@@ -58,11 +58,12 @@ fn min_books(settings: &SettingValues) -> i64 {
 
 /// Formats a stored `i64` dHash as the lowercase hexadecimal form used by
 /// every duplicate-page API surface (quality evidence, GraphQL, editor).
-pub(crate) fn dhash_hex(dhash: i64) -> String {
+pub fn dhash_hex(dhash: i64) -> String {
 	format!("{:016x}", dhash as u64)
 }
 
-fn parse_dhash_hex(value: &str) -> Option<i64> {
+/// Parses the hexadecimal dHash form shared by the API surfaces.
+pub fn parse_dhash(value: &str) -> Option<i64> {
 	u64::from_str_radix(value.trim().trim_start_matches("0x"), 16)
 		.ok()
 		.map(|hash| hash as i64)
@@ -99,7 +100,10 @@ impl QualityCheck for DuplicatePagesAcrossBooksCheck {
 	}
 
 	fn weight(&self) -> u16 {
-		10
+		// Halved when `missing_chapters_in_series` joined the registry: both
+		// are advisory, WARN-only library-hygiene signals and now share the
+		// 10 points this check used to hold alone.
+		5
 	}
 
 	fn settings(&self) -> &[SettingDefinition] {
@@ -254,12 +258,6 @@ fn own_page_hashes(book: &BookSnapshot) -> Vec<(i32, i64)> {
 		}
 	}
 	hashes
-}
-
-/// Parses the hexadecimal dHash form shared by the API surfaces; exposed for
-/// sibling modules and tests.
-pub fn parse_dhash(value: &str) -> Option<i64> {
-	parse_dhash_hex(value)
 }
 
 #[cfg(test)]

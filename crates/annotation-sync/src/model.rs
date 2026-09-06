@@ -13,10 +13,16 @@
 //!   the linked Stump media's book via `liseur_sync_media_links`,
 //! - reading heads + reading sessions, rendered as a summary block.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
-use models::entity::{bookmark, media, media_annotation, media_metadata, reading_head, reading_session};
+use models::{
+	entity::{
+		bookmark, media, media_annotation, media_metadata, reading_head, reading_session,
+	},
+	shared::readium::ReadiumLocator,
+};
+use rust_decimal::prelude::ToPrimitive;
 use sea_orm::{prelude::*, DbBackend, QueryOrder, QuerySelect, Statement};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -107,7 +113,10 @@ pub enum ExportAnnotationKind {
 pub enum AnnotationOrigin {
 	Native,
 	/// A liseur-sync CAS row; `rev`/`seq` are its CAS coordinates.
-	Liseur { rev: i64, seq: i64 },
+	Liseur {
+		rev: i64,
+		seq: i64,
+	},
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -168,17 +177,20 @@ pub struct BuildOptions {
 /// Builds the canonical export batch for a user.
 ///
 /// Native books (every media with at least one annotation or bookmark) are
-/// always rebuilt in full: native rows are hard-deleted on removal, so a
-/// cursor-based delta would miss deletions. The annotated-media set is bounded
-/// by the user's actual annotation count, not library size. Liseur works are
-/// incremental by CAS `seq`; deletions are tombstones and therefore visible.
+/// always rebuilt in full, folding in every liseur work linked to the media:
+/// native rows are hard-deleted on removal, so a cursor-based delta would
+/// miss deletions, and a partial rebuild would drop the linked works. The
+/// annotated-media set is bounded by the user's actual annotation count, not
+/// library size. Liseur works are incremental by CAS `seq` (a changed work
+/// surfaces its book, linked or standalone, in full); deletions are
+/// tombstones and therefore visible.
 pub async fn build_export_batch(
 	conn: &DatabaseConnection,
 	user_id: &str,
 	options: BuildOptions,
 ) -> Result<ExportBatch, AnnotationSyncError> {
 	let mut books: Vec<ExportBook> = Vec::new();
-	let mut book_by_key: HashMap<String, usize> = HashMap::new();
+	let mut built: BTreeSet<String> = BTreeSet::new();
 
 	// ---- native books ---------------------------------------------------
 	let annotation_media_ids: Vec<String> = media_annotation::Entity::find()
@@ -202,41 +214,32 @@ pub async fn build_export_batch(
 	native_media_ids.extend(annotation_media_ids);
 	native_media_ids.extend(bookmark_media_ids);
 
-	for media_id in native_media_ids {
-		if let Some(book) = build_native_book(conn, user_id, &media_id).await? {
-			book_by_key.insert(book.key.clone(), books.len());
-			books.push(book);
-		}
-	}
-
 	// ---- liseur CAS works ------------------------------------------------
 	let (changed_work_ids, high_water) =
 		liseur_changed_works(conn, user_id, options.liseur_from_seq).await?;
 
-	// Linked works fold into their media's book; standalone works get their
-	// own book. A linked work may also surface a book the user has no native
-	// annotations for (the media exists but was only annotated via liseur).
+	// A changed linked work surfaces its media's book even when the user has
+	// no native annotations for it; standalone works get their own book.
+	let mut standalone_work_ids: Vec<String> = Vec::new();
 	for work_id in changed_work_ids {
-		let linked_media_id = liseur_linked_media(conn, user_id, &work_id).await?;
-		match linked_media_id {
+		match liseur_linked_media(conn, user_id, &work_id).await? {
 			Some(media_id) => {
-				let key = book_key(&BookSource::Native { media_id: media_id.clone() });
-				if let Some(index) = book_by_key.get(&key).copied() {
-					fold_liseur_work(conn, user_id, &work_id, &mut books[index]).await?;
-				} else if let Some(mut book) = build_native_book(conn, user_id, &media_id).await? {
-					fold_liseur_work(conn, user_id, &work_id, &mut book).await?;
-					book_by_key.insert(book.key.clone(), books.len());
-					books.push(book);
-				}
+				native_media_ids.insert(media_id);
 			},
-			None => {
-				let mut book = build_liseur_work_book(conn, user_id, &work_id).await?;
-				// A standalone liseur work has no unified head/session rows
-				// (those are keyed by media; a linked work would not be here).
-				book.reading = None;
-				book_by_key.insert(book.key.clone(), books.len());
-				books.push(book);
-			},
+			None => standalone_work_ids.push(work_id),
+		}
+	}
+
+	for media_id in native_media_ids {
+		if let Some(book) = build_native_book(conn, user_id, &media_id).await? {
+			built.insert(book.key.clone());
+			books.push(book);
+		}
+	}
+	for work_id in standalone_work_ids {
+		let book = build_liseur_work_book(conn, user_id, &work_id).await?;
+		if built.insert(book.key.clone()) {
+			books.push(book);
 		}
 	}
 
@@ -269,7 +272,12 @@ async fn build_native_book(
 		.as_ref()
 		.and_then(|metadata| metadata.title.clone())
 		.unwrap_or_else(|| media.name.clone());
-	let mut book = ExportBook::new(BookSource::Native { media_id: media_id.to_owned() }, title);
+	let mut book = ExportBook::new(
+		BookSource::Native {
+			media_id: media_id.to_owned(),
+		},
+		title,
+	);
 
 	if let Some(metadata) = metadata {
 		if let Some(writers) = &metadata.writers {
@@ -313,9 +321,14 @@ async fn build_native_book(
 				kind: ExportAnnotationKind::Highlight,
 				origin: AnnotationOrigin::Native,
 				locator: Some(serde_json::to_value(&annotation.locator)?),
-				progression: None,
+				progression: locator_progression(&annotation.locator),
 				color: None,
-				excerpt: None,
+				excerpt: annotation
+					.locator
+					.text
+					.as_ref()
+					.and_then(|text| text.highlight.clone())
+					.filter(|highlight| !highlight.is_empty()),
 				note: annotation.annotation_text.clone(),
 				created_at: Some(annotation.created_at),
 				updated_at: Some(annotation.updated_at),
@@ -337,11 +350,7 @@ async fn build_native_book(
 		.map(|row| {
 			Ok(ExportBookmark {
 				id: row.id.clone(),
-				locator: row
-					.locator
-					.as_ref()
-					.map(serde_json::to_value)
-					.transpose()?,
+				locator: row.locator.as_ref().map(serde_json::to_value).transpose()?,
 				preview_content: row.preview_content.clone(),
 				page: row.page,
 				created_at: row.created_at,
@@ -350,6 +359,10 @@ async fn build_native_book(
 		.collect::<Result<Vec<_>, serde_json::Error>>()?;
 
 	book.reading = build_reading_summary(conn, user_id, media_id).await?;
+
+	for work_id in liseur_works_for_media(conn, user_id, media_id).await? {
+		fold_liseur_work(conn, user_id, &work_id, &mut book).await?;
+	}
 
 	Ok(Some(book))
 }
@@ -392,7 +405,9 @@ async fn build_reading_summary(
 		progression: head.as_ref().map(|head| head.progression),
 		page: head.as_ref().and_then(|head| head.page),
 		completed: head.as_ref().is_some_and(|head| head.completed),
-		last_read_at: head.as_ref().map(|head| head.changed_at.with_timezone(&Utc)),
+		last_read_at: head
+			.as_ref()
+			.map(|head| head.changed_at.with_timezone(&Utc)),
 		source_protocol: head.as_ref().map(|head| head.source_protocol.to_string()),
 		session_count,
 		total_seconds,
@@ -408,7 +423,12 @@ async fn build_liseur_work_book(
 	work_id: &str,
 ) -> Result<ExportBook, AnnotationSyncError> {
 	let (title, author) = liseur_work_meta(conn, user_id, work_id).await?;
-	let mut book = ExportBook::new(BookSource::LiseurWork { work_id: work_id.to_owned() }, title);
+	let mut book = ExportBook::new(
+		BookSource::LiseurWork {
+			work_id: work_id.to_owned(),
+		},
+		title,
+	);
 	if let Some(author) = author.filter(|author| !author.is_empty()) {
 		book.authors.push(author);
 	}
@@ -455,6 +475,16 @@ async fn merge_annotations(
 fn sort_identifiers(identifiers: &mut Vec<ExportIdentifier>) {
 	identifiers.sort_by(|a, b| (&a.scheme, &a.value).cmp(&(&b.scheme, &b.value)));
 	identifiers.dedup_by(|a, b| a.scheme == b.scheme && a.value == b.value);
+}
+
+/// Whole-publication progression carried by a Readium locator, falling back
+/// to the resource-local progression.
+fn locator_progression(locator: &ReadiumLocator) -> Option<f64> {
+	let locations = locator.locations.as_ref()?;
+	locations
+		.total_progression
+		.or(locations.progression)
+		.and_then(|value| value.to_f64())
 }
 
 /// Reads the liseur CAS high-water and the works changed above `from_seq`.
@@ -515,6 +545,28 @@ async fn liseur_linked_media(
 		.flatten())
 }
 
+/// Every liseur work linked to a media, in link order.
+async fn liseur_works_for_media(
+	conn: &DatabaseConnection,
+	user_id: &str,
+	media_id: &str,
+) -> Result<Vec<String>, AnnotationSyncError> {
+	let backend = conn.get_database_backend();
+	let rows = conn
+		.query_all(statement(
+			backend,
+			"SELECT work_id FROM liseur_sync_media_links
+             WHERE user_id = $1 AND media_id = $2
+             ORDER BY created_at ASC, id ASC",
+			vec![user_id.into(), media_id.into()],
+		))
+		.await?;
+	Ok(rows
+		.iter()
+		.map(|row| row.try_get::<String>("", "work_id"))
+		.collect::<Result<Vec<_>, _>>()?)
+}
+
 /// Returns `(title, author)` for a liseur work; the work id stands in for a
 /// missing title.
 async fn liseur_work_meta(
@@ -567,7 +619,9 @@ async fn liseur_work_identifiers(
 			})
 		})
 		.collect::<Result<Vec<_>, _>>()?;
-	identifiers.retain(|identifier| !identifier.scheme.is_empty() && !identifier.value.is_empty());
+	identifiers.retain(|identifier| {
+		!identifier.scheme.is_empty() && !identifier.value.is_empty()
+	});
 	sort_identifiers(&mut identifiers);
 	Ok(identifiers)
 }
@@ -644,4 +698,377 @@ async fn liseur_annotations(
 /// `$`-prefixed parameters, matching the liseur-sync storage convention).
 fn statement(backend: DbBackend, sql: &str, values: Vec<sea_orm::Value>) -> Statement {
 	Statement::from_sql_and_values(backend, sql, values)
+}
+
+#[cfg(test)]
+mod tests {
+	use ::tests::{db::test_database, fake_data};
+	use chrono::TimeZone;
+	use models::{
+		domain::reading_state::SourceProtocol,
+		entity::{bookmark, media_annotation, media_metadata, reading_head},
+		shared::readium::{ReadiumLocation, ReadiumLocator, ReadiumText},
+	};
+	use rust_decimal::Decimal;
+	use sea_orm::{ActiveValue::Set, ConnectionTrait, DbBackend, Schema};
+
+	use super::*;
+
+	const LISEUR_DDL: &[&str] = &[
+		"CREATE TABLE liseur_sync_counters (user_id TEXT PRIMARY KEY, op_seq BIGINT NOT NULL DEFAULT 0, annotation_seq BIGINT NOT NULL DEFAULT 0)",
+		"CREATE TABLE liseur_sync_works (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, author TEXT NOT NULL)",
+		"CREATE TABLE liseur_sync_aliases (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, work_id TEXT NOT NULL)",
+		"CREATE TABLE liseur_sync_media_links (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, media_id TEXT NOT NULL, work_id TEXT NOT NULL, edition_sha TEXT NOT NULL, resolution_status TEXT NOT NULL, created_at TEXT NOT NULL)",
+		"CREATE TABLE liseur_sync_annotations (
+			row_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, annotation_id TEXT NOT NULL,
+			rev BIGINT NOT NULL, seq BIGINT NOT NULL, work_id TEXT NOT NULL, edition_sha TEXT, kind TEXT NOT NULL,
+			locator TEXT, progression DOUBLE, excerpt TEXT NOT NULL, color TEXT NOT NULL, body TEXT NOT NULL,
+			device_id TEXT NOT NULL, client_ts TEXT NOT NULL, updated_at TEXT NOT NULL,
+			deleted BOOLEAN NOT NULL DEFAULT FALSE, deleted_at TEXT, payload TEXT NOT NULL)",
+	];
+
+	async fn seeded_db() -> (DatabaseConnection, String, String) {
+		let conn = test_database().await;
+		let schema = Schema::new(DbBackend::Sqlite);
+		for stmt in [
+			schema.create_table_from_entity(media_annotation::Entity),
+			schema.create_table_from_entity(bookmark::Entity),
+		] {
+			conn.execute(conn.get_database_backend().build(&stmt))
+				.await
+				.unwrap();
+		}
+		for sql in LISEUR_DDL {
+			conn.execute(Statement::from_string(DbBackend::Sqlite, *sql))
+				.await
+				.unwrap();
+		}
+
+		let user = fake_data::User::new("reader").insert(&conn).await;
+		let series = fake_data::Series::default().insert(&conn).await;
+		let media = fake_data::Media {
+			series_id: series.id.clone(),
+			id: Some("m1".to_string()),
+			name: Some("dune.epub".to_string()),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await;
+		media_metadata::ActiveModel {
+			media_id: Set(Some(media.id.clone())),
+			title: Set(Some("Dune".to_string())),
+			writers: Set(Some("Frank Herbert, Brian Herbert".to_string())),
+			identifier_isbn: Set(Some("9780441172696".to_string())),
+			identifier_uuid: Set(Some("".to_string())),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+		(conn, user.id, media.id)
+	}
+
+	fn ts(secs: i64) -> DateTime<Utc> {
+		Utc.timestamp_opt(1_700_000_000 + secs, 0).unwrap()
+	}
+
+	async fn insert_native_annotation(
+		conn: &DatabaseConnection,
+		user_id: &str,
+		media_id: &str,
+		id: &str,
+		created: DateTime<Utc>,
+		note: Option<&str>,
+	) {
+		let locator = ReadiumLocator {
+			href: "ch1.xhtml".to_string(),
+			locations: Some(ReadiumLocation {
+				fragments: None,
+				progression: Some(Decimal::new(5, 1)),
+				position: None,
+				total_progression: Some(Decimal::new(25, 2)),
+				css_selector: None,
+				partial_cfi: None,
+			}),
+			text: Some(ReadiumText {
+				after: None,
+				before: None,
+				highlight: Some(format!("highlight {id}")),
+			}),
+			..Default::default()
+		};
+		let inserted = media_annotation::ActiveModel {
+			id: Set(id.to_string()),
+			locator: Set(locator),
+			annotation_text: Set(note.map(str::to_string)),
+			media_id: Set(media_id.to_string()),
+			user_id: Set(user_id.to_string()),
+			..Default::default()
+		}
+		.insert(conn)
+		.await
+		.unwrap();
+		// `before_save` stamps `created_at`; pin it for deterministic ordering.
+		let mut active: media_annotation::ActiveModel = inserted.into();
+		active.created_at = Set(created);
+		active.update(conn).await.unwrap();
+	}
+
+	async fn exec(conn: &DatabaseConnection, sql: &str, values: Vec<sea_orm::Value>) {
+		conn.execute(statement(DbBackend::Sqlite, sql, values))
+			.await
+			.unwrap();
+	}
+
+	async fn insert_liseur_annotation(
+		conn: &DatabaseConnection,
+		user_id: &str,
+		work_id: &str,
+		id: &str,
+		seq: i64,
+		kind: &str,
+		deleted: bool,
+	) {
+		exec(
+			conn,
+			"INSERT INTO liseur_sync_annotations
+				(user_id, annotation_id, rev, seq, work_id, edition_sha, kind, locator, progression,
+				 excerpt, color, body, device_id, client_ts, updated_at, deleted, deleted_at, payload)
+			 VALUES ($1, $2, 1, $3, $4, NULL, $5, '{\"cfi\":\"/6/4\"}', 0.5, 'excerpt', 'yellow', '',
+				 'd1', $6, $6, $7, NULL, '{}')",
+			vec![
+				user_id.into(),
+				id.into(),
+				seq.into(),
+				work_id.into(),
+				kind.into(),
+				ts(seq * 10).to_rfc3339().into(),
+				deleted.into(),
+			],
+		)
+		.await;
+		exec(
+			conn,
+			"UPDATE liseur_sync_counters SET annotation_seq = MAX(annotation_seq, $1) WHERE user_id = $2",
+			vec![seq.into(), user_id.into()],
+		)
+		.await;
+	}
+
+	#[tokio::test]
+	async fn builds_native_and_liseur_books_in_canonical_order() {
+		let (conn, user_id, media_id) = seeded_db().await;
+		exec(
+			&conn,
+			"INSERT INTO liseur_sync_counters (user_id) VALUES ($1)",
+			vec![user_id.clone().into()],
+		)
+		.await;
+
+		// Native rows inserted out of chronological order.
+		insert_native_annotation(&conn, &user_id, &media_id, "n2", ts(20), None).await;
+		insert_native_annotation(&conn, &user_id, &media_id, "n1", ts(10), Some("first"))
+			.await;
+		bookmark::ActiveModel {
+			id: Set("b1".to_string()),
+			preview_content: Set(Some("preview".to_string())),
+			locator: Set(None),
+			page: Set(Some(7)),
+			media_id: Set(media_id.clone()),
+			user_id: Set(user_id.clone()),
+			created_at: Set(ts(30)),
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+		fake_data::ReadingSession::completed(&media_id, &user_id)
+			.insert(&conn)
+			.await;
+		// The session fixture materializes the head like every writer does; a
+		// later Kobo write is what this book's summary must report.
+		reading_head::ActiveModel {
+			user_id: Set(user_id.clone()),
+			media_id: Set(media_id.clone()),
+			locator: Set(None),
+			progression: Set(0.42),
+			page: Set(Some(100)),
+			completed: Set(false),
+			updated_at: Set(ts(40).fixed_offset()),
+			created_at: Set(ts(40).fixed_offset()),
+			changed_at: Set(ts(41).fixed_offset()),
+			source_protocol: Set(SourceProtocol::Kobo),
+			source_device_id: Set(None),
+			revision: Set(1),
+			event_id: Set(1),
+		}
+		.update(&conn)
+		.await
+		.unwrap();
+
+		// A liseur work linked to the media (folded) and a standalone one.
+		for (work, title, author) in [
+			("w-linked", "Dune (liseur)", "Frank Herbert"),
+			("w-alone", "Standalone", "Someone Else"),
+		] {
+			exec(
+				&conn,
+				"INSERT INTO liseur_sync_works (id, user_id, title, author) VALUES ($1, $2, $3, $4)",
+				vec![work.into(), user_id.clone().into(), title.into(), author.into()],
+			)
+			.await;
+		}
+		exec(
+			&conn,
+			"INSERT INTO liseur_sync_media_links (id, user_id, media_id, work_id, edition_sha, resolution_status, created_at)
+			 VALUES ('link-1', $1, $2, 'w-linked', 'sha', 'verified', '2026-01-01T00:00:00Z')",
+			vec![user_id.clone().into(), media_id.clone().into()],
+		)
+		.await;
+		for (id, kind, value, work) in [
+			("al-1", "isbn", "9780441172696", "w-linked"),
+			("al-2", "goodreads", "234", "w-linked"),
+			("al-3", "isbn", "111", "w-alone"),
+		] {
+			exec(
+				&conn,
+				"INSERT INTO liseur_sync_aliases (id, user_id, kind, value, work_id) VALUES ($1, $2, $3, $4, $5)",
+				vec![id.into(), user_id.clone().into(), kind.into(), value.into(), work.into()],
+			)
+			.await;
+		}
+		insert_liseur_annotation(
+			&conn,
+			&user_id,
+			"w-linked",
+			"l1",
+			1,
+			"highlight",
+			false,
+		)
+		.await;
+		insert_liseur_annotation(&conn, &user_id, "w-linked", "l2", 2, "note", true)
+			.await;
+		insert_liseur_annotation(&conn, &user_id, "w-alone", "s1", 3, "bookmark", false)
+			.await;
+
+		let batch = build_export_batch(&conn, &user_id, BuildOptions::default())
+			.await
+			.unwrap();
+		assert_eq!(batch.liseur_high_water, 3);
+		assert_eq!(
+			batch
+				.books
+				.iter()
+				.map(|book| book.key.as_str())
+				.collect::<Vec<_>>(),
+			vec!["liseur:w-alone", "native:m1"]
+		);
+
+		let native = &batch.books[1];
+		assert_eq!(native.title, "Dune");
+		assert_eq!(native.authors, vec!["Frank Herbert", "Brian Herbert"]);
+		assert_eq!(
+			native
+				.identifiers
+				.iter()
+				.map(|id| format!("{}:{}", id.scheme, id.value))
+				.collect::<Vec<_>>(),
+			vec!["goodreads:234", "isbn:9780441172696"],
+			"identifiers are merged, sorted, deduplicated, and empty ones dropped"
+		);
+		assert_eq!(
+			native
+				.annotations
+				.iter()
+				.map(|annotation| annotation.id.as_str())
+				.collect::<Vec<_>>(),
+			vec!["n1", "n2", "l1", "l2"],
+			"native rows by created_at, then the folded liseur rows"
+		);
+		let n1 = &native.annotations[0];
+		assert_eq!(n1.excerpt.as_deref(), Some("highlight n1"));
+		assert_eq!(n1.note.as_deref(), Some("first"));
+		assert_eq!(n1.progression, Some(0.25));
+		assert_eq!(n1.origin, AnnotationOrigin::Native);
+		let l2 = &native.annotations[3];
+		assert!(l2.deleted);
+		assert_eq!(l2.kind, ExportAnnotationKind::Note);
+		assert_eq!(l2.origin, AnnotationOrigin::Liseur { rev: 1, seq: 2 });
+		assert_eq!(native.bookmarks.len(), 1);
+		assert_eq!(native.bookmarks[0].page, Some(7));
+		let reading = native.reading.as_ref().unwrap();
+		assert_eq!(reading.progression, Some(0.42));
+		assert_eq!(reading.page, Some(100));
+		assert_eq!(reading.source_protocol.as_deref(), Some("kobo"));
+		assert_eq!(reading.session_count, 1);
+		assert!(reading.finished);
+		assert_eq!(reading.last_read_at, Some(ts(41)));
+
+		let alone = &batch.books[0];
+		assert_eq!(alone.title, "Standalone");
+		assert_eq!(alone.authors, vec!["Someone Else"]);
+		assert_eq!(alone.annotations.len(), 1);
+		assert_eq!(alone.annotations[0].kind, ExportAnnotationKind::Bookmark);
+		assert!(alone.reading.is_none());
+
+		// Incremental: nothing above the cursor still rebuilds the native
+		// book in full (linked liseur rows included) and drops the untouched
+		// standalone work.
+		let batch =
+			build_export_batch(&conn, &user_id, BuildOptions { liseur_from_seq: 3 })
+				.await
+				.unwrap();
+		assert_eq!(batch.liseur_high_water, 3);
+		assert_eq!(
+			batch
+				.books
+				.iter()
+				.map(|book| book.key.as_str())
+				.collect::<Vec<_>>(),
+			vec!["native:m1"]
+		);
+		assert_eq!(batch.books[0].annotations.len(), 4);
+
+		// A changed linked work surfaces the media even without native rows.
+		media_annotation::Entity::delete_many()
+			.exec(&conn)
+			.await
+			.unwrap();
+		bookmark::Entity::delete_many().exec(&conn).await.unwrap();
+		insert_liseur_annotation(
+			&conn,
+			&user_id,
+			"w-linked",
+			"l3",
+			4,
+			"highlight",
+			false,
+		)
+		.await;
+		let batch =
+			build_export_batch(&conn, &user_id, BuildOptions { liseur_from_seq: 3 })
+				.await
+				.unwrap();
+		assert_eq!(batch.liseur_high_water, 4);
+		assert_eq!(batch.books.len(), 1);
+		assert_eq!(batch.books[0].key, "native:m1");
+		assert_eq!(
+			batch.books[0]
+				.annotations
+				.iter()
+				.map(|annotation| annotation.id.as_str())
+				.collect::<Vec<_>>(),
+			vec!["l1", "l2", "l3"]
+		);
+	}
+
+	#[tokio::test]
+	async fn user_without_annotations_yields_empty_batch() {
+		let (conn, user_id, _) = seeded_db().await;
+		let batch = build_export_batch(&conn, &user_id, BuildOptions::default())
+			.await
+			.unwrap();
+		assert!(batch.books.is_empty());
+		assert_eq!(batch.liseur_high_water, 0);
+	}
 }

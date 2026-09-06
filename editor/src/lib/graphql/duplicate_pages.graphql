@@ -1,0 +1,37 @@
+query DuplicatePageCandidates($libraryId: ID!, $minBooks: Int, $limit: Int) {
+	duplicatePageCandidates(libraryId: $libraryId, minBooks: $minBooks, limit: $limit) {
+		dhash
+		bookCount
+		pageCount
+		occurrences {
+			mediaId
+			mediaName
+			page
+			visiblePage
+			dhash
+		}
+	}
+}
+
+query KnownDuplicatePages($libraryId: ID!) {
+	knownDuplicatePages(libraryId: $libraryId) {
+		libraryId
+		dhash
+		action
+		createdBy
+		createdAt
+	}
+}
+
+mutation MarkDuplicatePage($libraryId: ID!, $dhash: String!, $action: DuplicatePageAction!) {
+	markDuplicatePage(libraryId: $libraryId, dhash: $dhash, action: $action) {
+		libraryId
+		dhash
+		action
+		createdAt
+	}
+}
+
+mutation UnmarkDuplicatePage($libraryId: ID!, $dhash: String!) {
+	unmarkDuplicatePage(libraryId: $libraryId, dhash: $dhash)
+}

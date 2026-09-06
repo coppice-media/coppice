@@ -1,0 +1,219 @@
+---
+title: Shelves and collections
+description: One canonical container model behind Komga collections/read lists, Kobo shelves, and the native API
+---
+
+Stump keeps exactly two kinds of user-curated containers: **collections**
+(sets of series) and **reading lists** (sets of books). Every protocol that
+speaks of "shelves", "collections", or "read lists" is a projection of those
+two tables. This page is the cross-protocol contract: what each client can
+read and write, how conflicting writes are resolved, and where a projection
+is lossy.
+
+Statements marked **[observed]** cite Stump source in the `headless-modular`
+working tree or a pinned upstream revision. Statements marked
+**[inference]** are the design choices this contract makes on top of them.
+
+## 1. Canonical model
+
+**[observed]** Both container tables use Text UUID primary keys and carry
+`updated_at`, `kobo_shelf`, `source_device`, and `creating_user_id`
+(`crates/models/src/entity/collection.rs`, `crates/models/src/entity/reading_list.rs`).
+Membership rows are `collection_series` (series, `display_order`) and
+`reading_list_items` (media, `display_order`). Migration
+`crates/migrations/src/m20260918_000000_add_container_shelves.rs` adds the
+shelf columns, `tags.kind`, and the `kobo_shelf_tombstones` table.
+
+| Column | Meaning |
+| --- | --- |
+| `kobo_shelf` (default `true`) | The container is projected to Kobo devices as a `Tag`. Clearing it hides the shelf from devices without deleting the container. |
+| `source_device` | Name of the Kobo device that last wrote through the `tags` endpoints; `NULL` after any native or Komga write of `name`. |
+| `updated_at` | Bumped by every write through the service. Incremental Kobo syncs emit `ChangedTag` for containers whose `updated_at` is at or after the previous sync. |
+| `kobo_shelf_tombstones` | `(user_id, shelf_id, deleted_at)` rows written when a projected container is deleted, so a device's next incremental sync emits `DeletedTag`; pruned after 30 days. |
+| `tags.kind` (`tag` \| `genre`) | Keeps Komga `genres` and `tags` apart across round trips; genres are otherwise stored in `series_metadata.genres`. |
+
+**[inference]** The **stable shelf id is the container id itself**. A shelf
+created on a Kobo device keeps its device-supplied id when it parses as a
+UUID; otherwise a fresh UUID is minted and returned to the device. Renames
+and reorders never change the id, so Kobo, Komga, and the native API all
+address the same row with the same string.
+
+All mutations go through `stump_core::collections` (`core/src/collections/`):
+`create_collection`, `update_collection`, `delete_collection`,
+`create_read_list`, `update_read_list`, `delete_read_list` for the native and
+Komga surfaces, and `create_device_shelf`, `rename_shelf`, `add_shelf_items`,
+`remove_shelf_items`, `delete_shelf` for Kobo write-back. Each one validates
+membership against the actor's visible series/books, runs in one
+transaction, and emits a `CoreEvent`
+(`CollectionAdded|Changed|Deleted`, `ReadListAdded|Changed|Deleted`) only
+after the commit.
+
+## 2. Mapping matrix
+
+| Canonical concept | Komga (Komelia) | Kobo (stock firmware) | Native GraphQL | OPDS / KOReader / Kavita / Liseur |
+| --- | --- | --- | --- | --- |
+| Collection (series set) | `collections` DTO | `Tag` when `kobo_shelf`; items are the books of the member series | not exposed | not exposed |
+| Reading list (book set) | `readlists` DTO | `Tag` when `kobo_shelf`; items are the list's books | `readingLists` query, `createReadingList`, `deleteReadingList` | not exposed |
+| Tag (`kind = tag`) | `tags` filters | none | `tags` query/mutations | none |
+| Genre (`kind = genre`, `series_metadata.genres`) | `genres` filters | none | series metadata | none |
+
+Per operation:
+
+| Operation | Komga | Kobo | Native GraphQL |
+| --- | --- | --- | --- |
+| Read | `GET /api/v1/collections[/{id}[/series]]`, `GET /api/v1/readlists[/{id}[/books]]`, `GET /api/v1/series/{id}/collections`, `GET /api/v1/books/{id}/readlists` | `NewTag` / `ChangedTag` / `DeletedTag` items in `GET /v1/library/sync` | `readingLists`, `readingList(id)` |
+| Create | `POST /api/v1/collections` → 200 DTO; `POST /api/v1/readlists` → 200 DTO | `POST /v1/library/tags` → 201 + JSON string shelf id (always a collection) | `createReadingList` |
+| Rename | `PATCH …/{id}` with `name` → 204 | `PUT /v1/library/tags/{id}` `{"Name"}` → 200 | `updateReadingList` returns "Not implemented" |
+| Reorder / replace members | `PATCH …/{id}` with `seriesIds` / `bookIds` (full ordered list) → 204 | `POST /v1/library/tags/{id}/items` → 201 (append), `POST /v1/library/tags/{id}/items/delete` → 200 | none |
+| Delete | `DELETE …/{id}` → 204 | `DELETE /v1/library/tags/{id}` → 200 | `deleteReadingList` |
+
+## 3. Komga
+
+**[observed]** Routes live in `crates/komga/src/routes/lists.rs`; the
+handlers call `KomgaBackend::{create,update,delete}_{collection,read_list}`
+(`crates/komga/src/routes/mod.rs`), implemented on the server adapter in
+`apps/server/src/routers/komga_backend.rs` on top of
+`stump_core::collections`. Request and response DTOs are
+`KomgaCollection{,CreateRequest,UpdateRequest}` and
+`KomgaReadList{,CreateRequest,UpdateRequest}` (`crates/komga/src/collection.rs`,
+`crates/komga/src/read_list.rs`); patch fields use `PatchValue`, so an
+omitted field keeps its stored value and `"summary": null` clears the
+summary.
+
+Rules:
+
+- Only the creating user may `PATCH` or `DELETE` a container (403 otherwise).
+  Any authenticated user may read one; member lists are filtered by the
+  reader's library access.
+- `seriesIds` / `bookIds` in a patch replace the full ordered membership.
+  Duplicate ids are a 400; ids the actor cannot see are a 404 (the whole
+  request is rejected, never a partial write). **[inference]** Komga itself
+  does not validate member existence on create; Stump must, because the
+  membership foreign keys are `ON DELETE RESTRICT`.
+- A blank `name` is a 400, mirroring upstream bean validation.
+- A read list's `ordered` maps to `reading_lists.ordering`: `MANUAL` when
+  ordered, `CREATED_AT` otherwise.
+
+**[observed]** Every mutation, whichever protocol performed it, reaches
+Komelia as an SSE event on `/sse/v1/events`: `CollectionAdded`,
+`CollectionChanged`, `CollectionDeleted`, `ReadListAdded`, `ReadListChanged`,
+`ReadListDeleted` with `collectionId`/`seriesIds` or `readListId`/`bookIds`
+(`crates/komga/src/routes/sse.rs`, `map_core_event`). Event visibility is
+derived from the member set (any visible series/book), so an event about a
+container with **no** members is delivered to nobody.
+
+Replay: `make replay-containers SERIES_ID=… BOOK_ID=…` in `komga-compat` runs
+`specs/readlists-collections.hurl` (create → read back → patch → reorder →
+delete, plus the 400/404 edges).
+
+## 4. Kobo
+
+**[observed]** The wire shapes are pinned to Calibre-Web
+`a97826402f1b39c45b7ea8d906efddc9f1750934` (`cps/kobo.py`): `NewTag` and
+`ChangedTag` wrap `{"Tag": {"Id", "Name", "LastModified", "TagType":
+"Manual", "Type": "UserTag", "Items": [{"RevisionId", "Type":
+"ProductRevisionTagItem"}]}}`; `DeletedTag` wraps `{"Tag": {"Id",
+"LastModified"}}` (`core/src/kobo/sync_types.rs`). Item payloads whose `Type`
+is not `ProductRevisionTagItem` are ignored, as are `RevisionId`s the user
+cannot see — Calibre-Web's "unknown to calibre" rule.
+
+### Sync feed
+
+`crates/kobo/src/sync.rs` appends shelf items to the **final page** of a sync
+session, after every entitlement the shelves reference has been delivered
+(`SyncPage::append_shelf_items`, gated on `!should_continue`). The delta comes
+from `stump_core::collections::shelf_sync_delta`:
+
+| Session | Emitted |
+| --- | --- |
+| Full (no valid sync token) | `NewTag` for every projected container the user can see. |
+| Incremental | `ChangedTag` for containers with `updated_at >= previous_sync_at`; `DeletedTag` for tombstones with `deleted_at >= previous_sync_at`. |
+
+Shelf items are scoped to the session's media extensions (the same set the
+entitlements use), so a shelf never references a book the device was not
+entitled to.
+
+Which containers are projected: collections the user created, and reading
+lists the user can read under the standard reading-list RBAC (creator, or
+`PUBLIC`/`SHARED` with a reader rule). Items are the non-deleted matching
+books: for a collection, every book of every member series ordered by
+membership then book name; for a reading list, the items in list order.
+
+### Write-back
+
+`apps/server/src/routers/kobo_backend/tags.rs` implements
+`KoboBackend::{create_tag, rename_tag, delete_tag, add_tag_items, remove_tag_items}`:
+
+| Route | Behaviour | Status |
+| --- | --- | --- |
+| `POST /v1/library/tags` `{"Name", "Items", ["Id"]}` | Creates a **collection** with `kobo_shelf = true`; honours a UUID `Id`; an existing shelf of this user with the same id or the same name is reused; then the visible `Items` are added. | 201, body = JSON string shelf id |
+| `PUT /v1/library/tags/{id}` `{"Name"}` | Renames the container; last writer wins. | 200 |
+| `DELETE /v1/library/tags/{id}` | Deletes the container, records a tombstone, emits the deleted event. | 200 |
+| `POST /v1/library/tags/{id}/items` (`/Items` alias from the resource map) | Adds books. On a collection shelf each book contributes its **series**; on a reading-list shelf the books become items. Already-present members are skipped. | 201 |
+| `POST /v1/library/tags/{id}/items/delete` | Removes books. On a collection shelf the book's whole series leaves the collection. | 200 |
+
+Provenance: the device name behind the request's API key is written to
+`source_device` on every write-back; it is cleared by the next native/Komga
+`name` write. Permission: the creating user, or the server owner, may write
+to a shelf (403 otherwise); an unknown shelf id is a 404; a blank name is a
+400. All of it lives in `stump_core::collections::service`.
+
+## 5. Native API
+
+**[observed]** `crates/graphql/src/mutation/reading_list.rs` offers
+`createReadingList` (client-supplied id, name, visibility, media ids; the row
+gets `kobo_shelf = true` from the column default), `updateReadingList`
+(returns "Not implemented"), and `deleteReadingList`, which goes through
+`stump_core::collections::delete_read_list` so a projected list leaves a
+tombstone and Komga clients receive `ReadListDeleted`. Collections have no
+native mutations yet.
+
+## 6. Precedence and conflict rules
+
+- **Name:** last writer wins, across protocols. Kobo writes set
+  `source_device`; native/Komga writes clear it. No merge, no rename
+  history.
+- **Membership:** Komga patches replace the whole ordered list; Kobo
+  add/remove are incremental. A Komga patch that lands after a device add
+  simply wins. Order on a collection is `collection_series.display_order`;
+  device-added members are appended after the current ones.
+- **Timestamps:** every write bumps `updated_at`; the incremental window is
+  inclusive (`>=`) so a write in the same second as a sync is not lost, at
+  the cost of a possible duplicate `ChangedTag`, which devices accept.
+- **Deletes:** the row is removed immediately for every protocol; only Kobo
+  needs the tombstone, and only for containers that were projected
+  (`kobo_shelf = true` at deletion time).
+- **Ownership:** Komga and native mutations require the creating user;
+  Kobo write-back additionally allows the server owner.
+
+## 7. Known breakage and limits
+
+- A collection cannot express per-book membership. Adding one book of a
+  series to a collection shelf puts the **whole series** on the shelf;
+  removing one book removes the series. Reading-list shelves are exact.
+  Books without a series cannot be added to a collection shelf (400).
+- Incremental syncs cannot distinguish a container created after the
+  previous sync from one merely updated (containers carry only
+  `updated_at`), so new shelves arrive as `ChangedTag`; stock firmware
+  treats an unknown id in `ChangedTag` as a creation.
+- Tombstones are pruned after 30 days (`KOBO_SHELF_TOMBSTONE_TTL`); a device
+  that syncs less often misses the deletion until it performs a full sync.
+- Shared reading lists are projected to every reader's device, but a reader
+  who is not the creator (or the server owner) gets 403 on write-back.
+- Komga SSE events for containers with no visible members are not delivered
+  (visibility is derived from the member set).
+- `createReadingList` (native) does not emit the Komga SSE event;
+  `updateReadingList` is not implemented.
+- Kobo shelves always materialise as collections; there is no device gesture
+  that creates a reading list.
+
+## 8. Verification
+
+- `cargo test -p stump_core --lib collections` — service rules (owner
+  checks, visible-member validation, provenance, tombstones, event
+  emission) against an in-memory SQLite database.
+- `cargo test -p stump_kobo` — sync feed projection, including the tag
+  round-trip test `test_shelf_round_trip_tags_follow_device_writes`
+  (device create/add/rename/remove/delete → `NewTag`/`ChangedTag`/`DeletedTag`).
+- `make replay-containers` in `komga-compat` — Komga create/patch/reorder/delete
+  replay against a local Stump.

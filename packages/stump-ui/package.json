@@ -1,33 +1,24 @@
 {
-  "name": "@stump/ui",
-  "private": true,
-  "version": "0.0.1",
-  "type": "module",
-  "description": "Shared Svelte UI foundation for Stump companion apps (editor, home): GraphQL client, shared GraphQL operations, shadcn-svelte components and small utilities. Consumed through each app's SvelteKit `@stump/ui` alias; installed into the root Bun workspace with `bun install --filter './packages/stump-ui'`.",
-  "scripts": {
-    "codegen": "graphql-codegen --config codegen.ts"
-  },
-  "exports": {
-    ".": "./src/index.ts",
-    "./graphql/client": "./src/graphql/client.ts",
-    "./graphql/generated": "./src/graphql/generated/graphql.ts",
-    "./graphql/operations.graphql": "./src/graphql/operations.graphql",
-    "./components/ui/*": "./src/components/ui/*/index.ts",
-    "./utils": "./src/utils.ts",
-    "./utils/uuid": "./src/utils/uuid.ts"
-  },
-  "dependencies": {
-    "@graphql-typed-document-node/core": "3.2.0",
-    "@lucide/svelte": "1.40.0",
-    "bits-ui": "2.19.0",
-    "clsx": "2.1.1",
-    "graphql": "17.0.2",
-    "graphql-request": "7.4.0",
-    "tailwind-merge": "3.6.0",
-    "tailwind-variants": "3.3.1",
-    "vaul-svelte": "1.0.0-next.7"
-  },
-  "peerDependencies": {
-    "svelte": "^5.33.0"
-  }
+	"name": "@stump/ui",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"description": "Shared Svelte UI foundation for the Stump companion apps (editor/, home/): GraphQL client, shared GraphQL operations, shadcn-svelte components and small utilities. Source-only: each app links `src/` into its tree (`src/lib/stump-ui`) and aliases `@stump/ui` to it, so the package is typechecked, bundled and installed through the consuming app. Runtime dependencies are declared as peers and installed by each app.",
+	"scripts": {
+		"codegen": "../../editor/node_modules/.bin/graphql-codegen --config codegen.ts"
+	},
+	"peerDependencies": {
+		"@graphql-typed-document-node/core": "^3.2.0",
+		"@lucide/svelte": "^1.40.0",
+		"@sveltejs/kit": "^2.63.0",
+		"bits-ui": "^2.19.0",
+		"clsx": "^2.1.1",
+		"graphql": "^17.0.2",
+		"graphql-request": "^7.4.0",
+		"graphql-ws": "^6.2.1",
+		"svelte": "^5.56.1",
+		"tailwind-merge": "^3.6.0",
+		"tailwind-variants": "^3.3.1",
+		"vaul-svelte": "^1.0.0-next.7"
+	}
 }

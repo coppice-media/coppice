@@ -1,4 +1,5 @@
-use async_graphql::{Context, ID, Object, Result};
+use async_graphql::{Context, Object, Result, ID};
+use stump_auth::AuthContext;
 
 use crate::{
 	data::CoreContext,
@@ -11,11 +12,11 @@ pub struct AnnotationQuery;
 #[Object]
 impl AnnotationQuery {
 	/// The compiled-in annotation export sinks and their setting schemas.
-	async fn annotation_sinks(&self) -> Result<Vec<AnnotationSink>> {
-		Ok(stump_annotation_sync::registry::catalog()
+	async fn annotation_sinks(&self) -> Vec<AnnotationSink> {
+		stump_annotation_sync::registry::catalog()
 			.into_iter()
 			.map(AnnotationSink::from)
-			.collect())
+			.collect()
 	}
 
 	/// The annotation sync state for a user: configured sinks, last runs,
@@ -26,20 +27,31 @@ impl AnnotationQuery {
 		ctx: &Context<'_>,
 		user_id: Option<ID>,
 	) -> Result<AnnotationSyncStatus> {
-		let auth = ctx.data::<stump_auth::AuthContext>()?;
+		let auth = ctx.data::<AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
+		let user_id = resolve_target_user(auth, user_id)?;
+		build_status(core, &user_id).await
+	}
+}
 
-		let user_id = match user_id {
-			Some(id) => {
-				if id.as_str() != auth.user.id && !auth.user.is_server_owner {
-					return Err("You may only view your own annotation sync status".into());
-				}
-				id.to_string()
-			},
-			None => auth.user.id.clone(),
-		};
-
-		Ok(build_status(core, &user_id).await?)
+/// The user an annotation sync operation targets: the caller unless a server
+/// owner names someone else.
+pub(crate) fn resolve_target_user(
+	auth: &AuthContext,
+	user_id: Option<ID>,
+) -> Result<String> {
+	match user_id {
+		Some(id) if id.as_str() != auth.user.id => {
+			if auth.user.is_server_owner {
+				Ok(id.to_string())
+			} else {
+				Err(
+					"Only the server owner may target another user's annotation sync"
+						.into(),
+				)
+			}
+		},
+		_ => Ok(auth.user.id.clone()),
 	}
 }
 

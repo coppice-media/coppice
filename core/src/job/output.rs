@@ -20,7 +20,7 @@ pub enum CoreJobOutput {
 	MetadataFetch(MetadataFetchJobOutput),
 	AnalyzeMedia(AnalyzeMediaOutput),
 	NotificationDispatch(NotificationDispatchOutput),
-	AnnotationSync(crate::annotation_sync::AnnotationSyncOutput),
+	AnnotationSync(crate::job::annotation_sync::AnnotationSyncOutput),
 }
 
 #[cfg(not(feature = "graphql"))]
@@ -66,8 +66,8 @@ impl From<AnalyzeMediaOutput> for CoreJobOutput {
 }
 
 #[cfg(not(feature = "graphql"))]
-impl From<crate::annotation_sync::AnnotationSyncOutput> for CoreJobOutput {
-	fn from(output: crate::annotation_sync::AnnotationSyncOutput) -> Self {
+impl From<crate::job::annotation_sync::AnnotationSyncOutput> for CoreJobOutput {
+	fn from(output: crate::job::annotation_sync::AnnotationSyncOutput) -> Self {
 		Self::AnnotationSync(output)
 	}
 }

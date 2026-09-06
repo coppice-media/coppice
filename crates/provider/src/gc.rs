@@ -74,7 +74,10 @@ pub async fn gc_materialised_series(
 
 	let dead_series_rows = series::Entity::find()
 		.filter(series::Column::SourceProvider.is_not_null())
-		.filter(series::Column::CreatedAt.lt(cutoff.into()))
+		.filter(
+			series::Column::CreatedAt
+				.lt(sea_orm::prelude::DateTimeWithTimeZone::from(cutoff)),
+		)
 		.filter(series::Column::Id.not_in_subquery(head_series_ids))
 		.all(conn)
 		.await?;
@@ -159,7 +162,9 @@ pub async fn gc_materialised_series(
 
 #[cfg(test)]
 mod tests {
+	use ::tests::db;
 	use models::{
+		domain::reading_state::SourceProtocol,
 		entity::{library, library_config, reading_head, series_metadata},
 		shared::enums::{
 			LibraryPattern, LibraryType, LibraryViewMode, ReadingDirection,
@@ -167,7 +172,6 @@ mod tests {
 		},
 	};
 	use sea_orm::{sea_query::Expr, ActiveValue::Set, EntityTrait, QueryFilter};
-	use tests::db;
 
 	use super::*;
 
@@ -212,14 +216,20 @@ mod tests {
 		db: &DatabaseConnection,
 		id: &str,
 		library_id: &str,
+		provider: Option<&str>,
 		age_days: i64,
 	) {
 		// `before_save` stamps created_at on insert, so age is applied after.
 		series::ActiveModel {
 			id: Set(id.to_string()),
 			name: Set(id.to_string()),
-			path: Set(format!("/tmp/{id}.cbz")),
+			path: Set(match provider {
+				Some(provider) => format!("provider://{provider}/{id}"),
+				None => format!("/tmp/{id}"),
+			}),
 			library_id: Set(Some(library_id.to_string())),
+			source_provider: Set(provider.map(str::to_string)),
+			remote_id: Set(provider.map(|_| id.to_string())),
 			..Default::default()
 		}
 		.insert(db)
@@ -234,6 +244,10 @@ mod tests {
 			.expect("age update");
 		series_metadata::ActiveModel {
 			series_id: Set(id.to_string()),
+			title_sort_lock: Set(false),
+			reading_direction_lock: Set(false),
+			language_lock: Set(false),
+			alternate_titles_lock: Set(false),
 			..Default::default()
 		}
 		.insert(db)
@@ -244,14 +258,15 @@ mod tests {
 	#[tokio::test]
 	async fn gc_deletes_unread_provider_series_and_keeps_read_ones() {
 		let db = db::test_database().await;
-		db::create_database_tables(&db).await.expect("tables");
 
 		seed_library(&db, "prov-lib", Some("mock-en")).await;
 		seed_library(&db, "local-lib", None).await;
-		seed_series(&db, "old-unread", "prov-lib", 60).await;
-		seed_series(&db, "old-read", "prov-lib", 60).await;
-		seed_series(&db, "young", "prov-lib", 1).await;
-		seed_series(&db, "old-local", "local-lib", 400).await;
+		seed_series(&db, "old-unread", "prov-lib", Some("mock-en"), 60).await;
+		seed_series(&db, "old-read", "prov-lib", Some("mock-en"), 60).await;
+		let reader = ::tests::fake_data::User::new("reader").insert(&db).await;
+		seed_read_chapter(&db, &reader.id, "old-read").await;
+		seed_series(&db, "young", "prov-lib", Some("mock-en"), 1).await;
+		seed_series(&db, "old-local", "local-lib", None, 400).await;
 
 		let report =
 			gc_materialised_series(&db, None, Utc::now() - chrono::Duration::days(30))
@@ -287,42 +302,51 @@ mod tests {
 		);
 	}
 
-	#[tokio::test]
-	async fn gc_keeps_series_with_reading_head_on_any_book() {
-		let db = db::test_database().await;
-		db::create_database_tables(&db).await.expect("tables");
-
-		seed_library(&db, "prov-lib", Some("mock-en")).await;
-		seed_series(&db, "old-with-head", "prov-lib", 90).await;
-
+	/// One materialised chapter under `series_id` with a reading head for
+	/// `user_id` on it.
+	async fn seed_read_chapter(db: &DatabaseConnection, user_id: &str, series_id: &str) {
+		let media_id = format!("{series_id}-ch1");
 		media::ActiveModel {
-			id: Set("old-with-head-media".to_string()),
+			id: Set(media_id.clone()),
 			name: Set("ch1".to_string()),
-			path: Set("provider://mock-en/alpha/alpha-ch1".to_string()),
+			path: Set(format!("provider://mock-en/{series_id}/ch1")),
 			extension: Set("cbz".to_string()),
 			size: Set(0),
 			pages: Set(0),
-			library_id: Set(Some("prov-lib".to_string())),
-			series_id: Set(Some("old-with-head".to_string())),
+			series_id: Set(Some(series_id.to_string())),
 			..Default::default()
 		}
-		.insert(&db)
+		.insert(db)
 		.await
 		.expect("media insert");
 
 		let now = Utc::now().fixed_offset();
 		reading_head::ActiveModel {
-			user_id: Set("user-1".to_string()),
-			media_id: Set("old-with-head-media".to_string()),
+			user_id: Set(user_id.to_string()),
+			media_id: Set(media_id),
 			progression: Set(0.5),
 			completed: Set(false),
 			created_at: Set(now),
 			updated_at: Set(now),
+			changed_at: Set(now),
+			source_protocol: Set(SourceProtocol::Komga),
+			revision: Set(1),
+			event_id: Set(1),
 			..Default::default()
 		}
-		.insert(&db)
+		.insert(db)
 		.await
 		.expect("head insert");
+	}
+
+	#[tokio::test]
+	async fn gc_keeps_series_with_reading_head_on_any_book() {
+		let db = db::test_database().await;
+
+		seed_library(&db, "prov-lib", Some("mock-en")).await;
+		seed_series(&db, "old-with-head", "prov-lib", Some("mock-en"), 90).await;
+		let reader = ::tests::fake_data::User::new("reader").insert(&db).await;
+		seed_read_chapter(&db, &reader.id, "old-with-head").await;
 
 		let report =
 			gc_materialised_series(&db, None, Utc::now() - chrono::Duration::days(30))
@@ -330,12 +354,10 @@ mod tests {
 				.expect("gc pass");
 
 		assert!(report.series.is_empty(), "head keeps the series alive");
-		assert!(
-			series::Entity::find_by_id("old-with-head")
-				.one(&db)
-				.await
-				.expect("lookup")
-				.is_some()
-		);
+		assert!(series::Entity::find_by_id("old-with-head")
+			.one(&db)
+			.await
+			.expect("lookup")
+			.is_some());
 	}
 }

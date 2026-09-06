@@ -3,7 +3,6 @@ use axum::Router;
 use crate::config::state::AppState;
 
 mod api;
-mod static_apps;
 #[cfg(feature = "kavita")]
 mod kavita;
 #[cfg(feature = "kobo")]
@@ -12,14 +11,15 @@ mod kobo_backend;
 mod komga;
 #[cfg(feature = "komga")]
 mod komga_backend;
-#[cfg(feature = "providers")]
-pub(crate) mod provider_virtual;
 #[cfg(feature = "koreader")]
 mod koreader_backend;
 #[cfg(feature = "liseur-sync")]
 mod liseur_sync;
 #[cfg(feature = "opds")]
 mod opds_backend;
+#[cfg(feature = "providers")]
+pub(crate) mod provider_virtual;
+mod static_apps;
 pub(crate) use api::v2::auth::enforce_max_sessions;
 
 #[cfg(feature = "webui")]

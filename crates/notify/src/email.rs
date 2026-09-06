@@ -8,11 +8,11 @@
 //! `sendAttachmentEmail` flow can reuse the exact same delivery path through
 //! [`EmailChannel::deliver`].
 
-use email::{AttachmentPayload, EmailerClient, EmailerClientConfig};
 use email::EmailError;
-use stump_api_types::settings::{SettingDefinition, SettingKind};
-use std::sync::LazyLock;
+use email::{AttachmentPayload, EmailerClient, EmailerClientConfig};
 use serde_json::json;
+use std::sync::LazyLock;
+use stump_api_types::settings::{SettingDefinition, SettingKind};
 
 use crate::{Attachment, Channel, ChannelError, Notification, Recipient};
 
@@ -43,25 +43,22 @@ impl EmailChannel {
 		}
 	}
 
-	/// The shared delivery path: every email Stump sends through this channel
-	/// funnels through here, including GraphQL `sendAttachmentEmail`.
+	/// Attachment delivery with the standard Stump attachment notice as the
+	/// body; GraphQL `sendAttachmentEmail` funnels through here so both paths
+	/// share one SMTP client and error mapping.
 	pub async fn deliver(
 		&self,
 		recipient: &str,
 		subject: &str,
 		payloads: Vec<AttachmentPayload>,
 	) -> Result<(), ChannelError> {
-		let body = format!(
-			"You have a new attachment from Stump!\n\n\
-			 This email contains {} attachment(s).",
-			payloads.len()
-		);
-		self.deliver_with_body(recipient, subject, body, payloads)
+		self.client
+			.send_attachments(subject, recipient, payloads)
 			.await
+			.map_err(map_email_error)
 	}
 
-	/// The shared delivery path: every email Stump sends through this channel
-	/// funnels through here, including GraphQL `sendAttachmentEmail`.
+	/// Delivery with an explicit plain-text body; used by [`Channel::send`].
 	pub async fn deliver_with_body(
 		&self,
 		recipient: &str,
@@ -80,16 +77,12 @@ fn map_email_error(error: EmailError) -> ChannelError {
 	match error {
 		// Config/address problems are permanent; retrying cannot fix them.
 		EmailError::InvalidEmail(message) => ChannelError::Rejected(message),
-		EmailError::EmailBuildFailed(error) => {
-			ChannelError::Rejected(error.to_string())
+		EmailError::EmailBuildFailed(error) => ChannelError::Rejected(error.to_string()),
+		EmailError::NoPassword => {
+			ChannelError::Rejected("the emailer config is missing a password".to_string())
 		},
-		EmailError::NoPassword => ChannelError::Rejected(
-			"the emailer config is missing a password".to_string(),
-		),
 		// SMTP failures can be transient (connection, 4xx).
-		EmailError::SendFailed(error) => {
-			ChannelError::Transport(error.to_string())
-		},
+		EmailError::SendFailed(error) => ChannelError::Transport(error.to_string()),
 	}
 }
 
@@ -168,10 +161,7 @@ mod tests {
 
 	fn recipient() -> Recipient {
 		let mut settings = SettingValues::new();
-		settings.insert(
-			"recipient_email".to_string(),
-			json!("reader@example.com"),
-		);
+		settings.insert("recipient_email".to_string(), json!("reader@example.com"));
 		Recipient::new("user-1", "reader", settings)
 	}
 
@@ -208,9 +198,8 @@ mod tests {
 
 	#[test]
 	fn body_appends_link() {
-		let notification =
-			Notification::new(NotificationKind::Test, "Test", "Check it")
-				.with_link("https://stump.example/ingest");
+		let notification = Notification::new(NotificationKind::Test, "Test", "Check it")
+			.with_link("https://stump.example/ingest");
 		assert_eq!(
 			body(&notification),
 			"Check it\n\nhttps://stump.example/ingest"

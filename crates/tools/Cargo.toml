@@ -1,0 +1,25 @@
+[package]
+name = "stump_tools"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+stump_media = { path = "../media", default-features = false }
+stump_scanner = { path = "../scanner" }
+
+alphanumeric-sort.workspace = true
+epub.workspace = true
+quick-xml.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Atomic output: tools stage into a temp file next to the target, then rename.
+tempfile.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+urlencoding.workspace = true
+uuid.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

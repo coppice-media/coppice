@@ -64,10 +64,7 @@ impl MigrationTrait for Migration {
 				Table::alter()
 					.table(Tags::Table)
 					.add_column(
-						ColumnDef::new(Tags::Kind)
-							.text()
-							.not_null()
-							.default("tag"),
+						ColumnDef::new(Tags::Kind).text().not_null().default("tag"),
 					)
 					.to_owned(),
 			)

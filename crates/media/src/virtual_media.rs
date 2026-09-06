@@ -17,6 +17,16 @@ use async_trait::async_trait;
 
 use crate::{content_type::ContentType, error::FileError};
 
+/// URI scheme of provider-backed (virtual) media and series paths.
+pub const PROVIDER_SCHEME: &str = "provider://";
+
+/// Whether `path` is a provider URI rather than a filesystem path. This is a
+/// pure string check so the scanner can skip virtual rows even when no
+/// resolver is registered (providers compiled out or disabled).
+pub fn is_virtual_path(path: &str) -> bool {
+	path.starts_with(PROVIDER_SCHEME)
+}
+
 #[async_trait]
 pub trait VirtualMediaResolver: Send + Sync {
 	/// Whether this resolver serves `path`.

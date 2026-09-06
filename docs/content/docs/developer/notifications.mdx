@@ -62,7 +62,8 @@ messages will land.
 
 `stump_core::notification::spawn_listener` (started by `StumpCore::new`)
 resolves each routed event and enqueues `StumpJob::NotificationDispatch`.
-The `NotificationDispatchJob` delivers every (user, channel) target and:
+The `NotificationDispatchJob` (`core/src/job/notification.rs`) delivers
+every (user, channel) target and:
 
 - loads the channel registry (ntfy + webhook always; email when a primary
   emailer is configured, its password decrypted with the server key),
@@ -77,14 +78,18 @@ other targets.
 
 ## GraphQL
 
-- `notificationChannels` — available channels + settings schema.
+- `notificationChannels` — available channels + settings schema
+  (`IngestSettingDefinition`, the schema type shared with ingest providers
+  and annotation sinks).
 - `notificationChannelSettings` — the caller's effective values (secrets
   redacted).
-- `setNotificationChannelSettings(channelId, settings)` — upsert; unknown
-  keys rejected, secret values stored encrypted.
-- `notificationRules` / `setNotificationRule(eventKind, channelId, enabled)`.
+- `setNotificationChannelSettings(input: { channelId, settings })` — upsert;
+  unknown keys rejected, secret values stored encrypted, omitted secrets keep
+  their stored value.
+- `notificationRules` / `setNotificationRule(eventKind, channelId, enabled)`
+  — upsert on `(user, eventKind, channelId)`; `enabled: false` mutes.
 - `testNotificationChannel(channelId)` — sends a test message; `true` on
-  success.
+  success, an error otherwise.
 
 ## Verifying
 

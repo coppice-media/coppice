@@ -1,3 +1,6 @@
+// The merged GraphQL schema nests deeply enough that layout computation
+// overflows rustc's default query depth.
+#![recursion_limit = "256"]
 use cli::{handle_command, Cli, Parser};
 use errors::EntryError;
 use stump_core::{

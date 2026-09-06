@@ -9,4 +9,5 @@ models = { path = "../models" }
 uuid.workspace = true
 rand.workspace = true
 rust_decimal.workspace = true
+serde_json.workspace = true
 chrono.workspace = true

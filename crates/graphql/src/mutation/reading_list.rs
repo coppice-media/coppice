@@ -62,6 +62,10 @@ impl ReadingListMutation {
 
 	/// Deletes a reading list by ID.
 	///
+	/// Goes through the canonical container service so a list projected to
+	/// Kobo devices leaves a shelf tombstone (the device's next incremental
+	/// sync emits `DeletedTag`) and Komga clients receive `ReadListDeleted`.
+	///
 	/// # Returns
 	///
 	/// A result containing the deleted reading list, or an error if deletion failed.
@@ -70,13 +74,11 @@ impl ReadingListMutation {
 		ctx: &Context<'_>,
 		id: String,
 	) -> Result<ReadingList> {
-		let user_id = ctx.data::<stump_auth::AuthContext>()?.id();
-		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+		let auth = ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
 
-		let reading_list = get_for_owner(&id, conn, user_id).await?;
-
-		// Delete reading list
-		let _ = reading_list.clone().delete(conn).await?;
+		let reading_list = get_for_owner(&id, core.conn.as_ref(), auth.id()).await?;
+		stump_core::collections::delete_read_list(core, &auth.user(), &id).await?;
 
 		Ok(ReadingList {
 			model: reading_list,
@@ -150,6 +152,8 @@ mod tests {
 			description: None,
 			updated_at: "2021-08-01T00:00:00Z".parse().unwrap(),
 			ordering: "MANUAL".to_string(),
+			kobo_shelf: true,
+			source_device: None,
 		}
 	}
 

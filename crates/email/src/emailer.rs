@@ -138,21 +138,11 @@ impl EmailerClient {
 		self.send_attachments(subject, recipient, vec![payload])
 			.await
 	}
+
 	/// Send an email with a plain text body and attachments to the given
 	/// recipient. [`Self::send_attachments`] is this with the standard Stump
 	/// attachment notice as the body.
 	pub async fn send_message(
-		&self,
-		subject: &str,
-		recipient: &str,
-		body: String,
-		payloads: Vec<AttachmentPayload>,
-	) -> EmailResult<()> {
-		self.send_message_inner(subject, recipient, body, payloads)
-			.await
-	}
-
-	async fn send_message_inner(
 		&self,
 		subject: &str,
 		recipient: &str,
@@ -241,7 +231,6 @@ impl EmailerClient {
 		}
 	}
 
-
 	/// Send an email with the given subject and attachments to the given recipient.
 	/// The attachments are sent as a multipart email, with the first attachment being the email body.
 	///
@@ -298,7 +287,7 @@ impl EmailerClient {
 			 This email contains {} attachment(s).",
 			payloads.len()
 		);
-		self.send_message_inner(subject, recipient, plain_text, payloads)
+		self.send_message(subject, recipient, plain_text, payloads)
 			.await
 	}
 }

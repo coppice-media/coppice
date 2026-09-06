@@ -306,10 +306,12 @@ mod tests {
 			tag::Model {
 				id: 123,
 				name: "hello".to_string(),
+				kind: "tag".to_string(),
 			},
 			tag::Model {
 				id: 321,
 				name: "world".to_string(),
+				kind: "tag".to_string(),
 			},
 		];
 		let conn = MockDatabase::new(sea_orm::DatabaseBackend::Sqlite)
@@ -355,10 +357,12 @@ mod tests {
 			tag::Model {
 				id: 123,
 				name: "hello".to_string(),
+				kind: "tag".to_string(),
 			},
 			tag::Model {
 				id: 321,
 				name: "world".to_string(),
+				kind: "tag".to_string(),
 			},
 		];
 
@@ -394,10 +398,12 @@ mod tests {
 		let original = tag::Model {
 			id: 1,
 			name: "old_name".to_string(),
+			kind: "tag".to_string(),
 		};
 		let renamed = tag::Model {
 			id: 1,
 			name: "new_name".to_string(),
+			kind: "tag".to_string(),
 		};
 
 		// Query 1: find by name (no conflict) -> empty
@@ -432,6 +438,7 @@ mod tests {
 		let conflicting = tag::Model {
 			id: 2,
 			name: "taken".to_string(),
+			kind: "tag".to_string(),
 		};
 
 		// Query 1: find by name -> found with different id
@@ -450,6 +457,7 @@ mod tests {
 		let existing = tag::Model {
 			id: 1,
 			name: "same".to_string(),
+			kind: "tag".to_string(),
 		};
 
 		// Query 1: find by name -> found with same id (no-op)
@@ -481,10 +489,12 @@ mod tests {
 			tag::Model {
 				id: 1,
 				name: "a".to_string(),
+				kind: "tag".to_string(),
 			},
 			tag::Model {
 				id: 2,
 				name: "b".to_string(),
+				kind: "tag".to_string(),
 			},
 		];
 
@@ -517,10 +527,12 @@ mod tests {
 		let existing_linked = vec![tag::Model {
 			id: 1,
 			name: "keep".to_string(),
+			kind: "tag".to_string(),
 		}];
 		let existing_in_db = vec![tag::Model {
 			id: 2,
 			name: "add".to_string(),
+			kind: "tag".to_string(),
 		}];
 
 		// Query 1: find tags by name not linked -> "add" exists in DB
@@ -545,10 +557,12 @@ mod tests {
 			tag::Model {
 				id: 1,
 				name: "keep".to_string(),
+				kind: "tag".to_string(),
 			},
 			tag::Model {
 				id: 2,
 				name: "remove".to_string(),
+				kind: "tag".to_string(),
 			},
 		];
 
@@ -572,10 +586,12 @@ mod tests {
 			tag::Model {
 				id: 1,
 				name: "a".to_string(),
+				kind: "tag".to_string(),
 			},
 			tag::Model {
 				id: 2,
 				name: "b".to_string(),
+				kind: "tag".to_string(),
 			},
 		];
 

@@ -1,0 +1,165 @@
+---
+title: Feature comparison
+description: This fork against BookOrbit, Grimmory, Kavita, Komga, Calibre-Web Automated, and Audiobookshelf — every cell cited
+---
+
+Where this fork stands against six comparable self-hosted library servers. The
+point of the page is the **missing** and **partial** cells: they are the honest
+gap list, and they feed [Roadmap › Gaps vs peers](/docs/developer/roadmap#gaps-vs-peers).
+
+## How to read this
+
+- **This fork.** Every cell cites a path in this working tree. `dev/x.mdx:N`
+  means `docs/content/docs/developer/x.mdx` at that line; other paths are
+  repo-relative. `missing` and `partial: …` are used literally.
+- **Competitors.** Every cell links the page it was read from — the project's
+  own docs, README, or feature page. `n/e` means *no evidence on the cited
+  page*: the feature is absent from that project's own feature list, which is
+  weaker than a documented "no".
+- **BookOrbit is AGPL-3.0** ([LICENSE][bo-repo]). Its code cannot be reused in
+  this MIT tree. Only its **behaviour and public specs** — what a feature does,
+  what the wire looks like — inform us; no BookOrbit source is read, copied, or
+  adapted. Grimmory is AGPL-3.0 too and is treated the same way, except that we
+  impersonate its published `/komga` alias as a compatibility target
+  (`dev/komga-compat.mdx`).
+- Snapshot date 2026-09-06. Competitor docs move; the links are the evidence.
+
+## Formats and readers
+
+| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| EPUB | yes `crates/README.md:29` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-intro] | [yes][cwa-readme] | [yes][abs-intro] |
+| CBZ / CBR | yes `dev/comics-transform.mdx:11` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-intro] | [partial: ingest/convert list][cwa-readme] | [yes][abs-intro] |
+| PDF | yes `dev/state.mdx:49` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-intro] | [yes][cwa-readme] | [yes][abs-intro] |
+| Audiobooks (M4B/MP3) | **missing** — no audio processor `crates/README.md:29` | [yes][bo-what] | [yes][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [yes][abs-readme] |
+| Web ebook reader | yes (`full` build) `docs/content/docs/apps/web/readers.mdx:7-11` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [yes][cwa-readme] | [yes][abs-intro] |
+| Web comic reader | yes `docs/content/docs/apps/web/readers.mdx:13-28` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
+| Web PDF reader | yes `docs/content/docs/apps/web/readers.mdx:35` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
+| Web audio player | **missing** — no audio surface `docs/content/docs/apps/web/readers.mdx:5-38` | [yes][bo-what] | [yes][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [yes][abs-readme] |
+
+## Protocols, sync, delivery
+
+| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| OPDS 1.2 (+PSE) | yes `dev/provider-status.mdx:132-133` | [yes][bo-opds] | [yes][gr-readme] | [yes][kav-opds] | [yes][komga-readme] | [yes][cwa-readme] | [n/e][abs-intro] |
+| OPDS 2.0 | yes `dev/provider-status.mdx:134-135` | [no — XML catalog only][bo-opds] | [n/e — version unstated][gr-readme] | [no — OPDS + OPDS-PS][kav-opds] | [yes][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Komga API served | yes (Komelia/Mihon profile subset) `dev/provider-status.mdx:110-118` | [n/e][bo-what] | [partial: in development][gr-komga] | [n/e][kav-readme] | native [yes][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Kavita API served | partial: wave-1 client profile `dev/kavita-compat.mdx:6,16` | [n/e][bo-what] | [n/e][gr-readme] | native [yes][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Kobo sync | yes `dev/provider-status.mdx:153-159` | [yes][bo-kobo] | [yes][gr-readme] | [n/e][kav-readme] | [yes][komga-readme] | [yes][cwa-readme] | [n/e][abs-intro] |
+| KOReader sync server | yes `dev/provider-status.mdx:174-180` | [yes][bo-kor] | [yes][gr-readme] | [yes][kav-kor] | [yes][komga-readme] | [yes][cwa-readme] | [n/e][abs-intro] |
+| First-party KOReader plugin | **missing** — sync API only `dev/provider-status.mdx:174` | [yes][bo-korp] | [n/e][gr-readme] | [no — third-party Kamare][kav-kor] | [n/e][komga-readme] | [yes — served at `/kosync`][cwa-readme] | [n/e][abs-intro] |
+| Kindle / email send | yes `crates/graphql/schema.graphql:2792,2795` | [yes][bo-email] | [yes][gr-readme] | [yes][kav-email] | [n/e][komga-readme] | [yes][cwa-readme] | [yes][abs-readme] |
+| Device pairing + QR | yes `dev/device-pairing.mdx:6-17`, `dev/home-app.mdx:50` | [partial: token pairing, no QR][bo-kobo] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Comics transform for e-ink | yes `dev/comics-transform.mdx:8-12,27-36` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [no — CBR→CBZ only][komga-lib] | [n/e][cwa-readme] | [n/e][abs-intro] |
+
+## Metadata and ingest
+
+| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Metadata providers | 11 catalogued — embedded, Comic Vine, Hardcover, AniList, MAL, MangaDex, MangaUpdates, Open Library, Google Books, Metron, LLM `dev/provider-status.mdx:23-35` | [9 — Google Books, Amazon, Goodreads, Hardcover, Open Library, iTunes, Audible, AudNexus, ComicVine][bo-meta] | [3 — Google Books, Open Library, Amazon][gr-readme] | [partial: paid Kavita+ only][kav-plus] | [no — external Komf][komga-readme] | [yes — Calibre plugins + ISBNdb, Hardcover, Kobo, LitRes][cwa-readme] | [yes — "several providers", count unstated][abs-intro] |
+| Per-field provider rules + merge | **partial**: score-ordered candidates and a per-field pick recipe; provider priority, title-language and cover policy are future `dev/provider-status.mdx:65-70` | [yes — priority list + 3 merge strategies][bo-meta] | [n/e][gr-readme] | [n/e][kav-plus] | [n/e][komga-readme] | [partial: provider hierarchy + overwrite/fill-missing][cwa-readme] | [n/e][abs-intro] |
+| Bulk metadata edit | **partial**: `bulkApplyIngestMetadata` over staged items only `dev/state.mdx:37` | [partial: per-book editor + field locks][bo-meta] | [n/e][gr-readme] | [n/e][kav-readme] | [partial: metadata editing][komga-readme] | [yes — batch edit & delete][cwa-readme] | [n/e][abs-intro] |
+| Ingest / staging dock | yes — drop folder, quality report, review, approve `dev/state.mdx:36` | [yes — Book Dock][bo-dock] | [yes — BookDrop][gr-readme] | [n/e][kav-readme] | [partial: manual import][komga-readme] | [yes — automatic ingest][cwa-readme] | [partial: bulk upload][abs-readme] |
+| Duplicate detection | yes — source digest + 8×8 dHash page groups `dev/modular-ingest.mdx:95,97,101-112` | [n/e][bo-dock] | [n/e][gr-readme] | [n/e][kav-readme] | [yes — files and pages][komga-readme] | [yes — SQL + fuzzy][cwa-readme] | [n/e][abs-intro] |
+
+## Annotations and reading data
+
+| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Annotations model | **partial**: native `media_annotations`/`bookmarks` plus liseur CAS rows, not reconciled into one head `dev/provider-status.mdx:245`, `dev/state.mdx:115-117` | [yes — CFI + KOReader XPointer + Kobo span, repair states][bo-ann] | [yes][gr-readme] | [partial: EPUB only][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Annotations UI | **partial**: reader-level in the `full` web UI, no cross-book workspace `docs/content/docs/apps/web/readers.mdx:11`, `dev/home-app.mdx:47-52` | [yes — annotations page with search/filter/bulk][bo-ann] | [yes][gr-readme] | [yes][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Annotation export (Markdown/Obsidian/git) | yes — markdown + git sinks, Obsidian block ids `dev/annotation-sync.mdx:11-13,61-104` | [yes — Markdown, CSV, JSON][bo-ann] | [n/e][gr-readme] | [partial: third-party Obsidian importer][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Reading sessions + stats | yes — `readingStats`, streaks, per-device split `dev/devices.mdx:88-93` | [yes][bo-home] | [n/e][gr-readme] | [yes][kav-readme] | [partial: read progress only][komga-readme] | [yes — deep stats][cwa-readme] | [yes — listening sessions][abs-sess] |
+| Dashboards / analytics | **partial**: one reading screen, no configurable dashboard `dev/home-app.mdx:51` | [yes — widgets + shelves][bo-dash] | [n/e][gr-readme] | [yes — customizable dashboard][kav-readme] | [n/e][komga-readme] | [yes — analytics centre + CSV][cwa-readme] | [partial: sessions view][abs-sess] |
+| Achievements | **missing** `dev/home-app.mdx:47-52` | [yes][bo-home] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+
+## Library, users, operations
+
+| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Series and authors browsing | yes `dev/state.mdx:18`, `dev/provider-status.mdx:111` | [yes][bo-korp] | [n/e][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: search and filtering][cwa-readme] | [yes — series management][abs-libs] |
+| Collections / reading lists / shelves | yes — two canonical containers projected to Komga, Kobo, native `dev/shelves-and-collections.mdx:6-11,53-58` | [yes — collections + smart scopes][bo-dock] | [yes — smart shelves][gr-readme] | [yes][kav-lists] | [yes][komga-readme] | [yes — magic shelves][cwa-readme] | [yes — playlists][abs-libs] |
+| Library watcher | yes — `stump_watcher`, debounced `crates/README.md:38`, `dev/state.mdx:59-62` | [partial: watched dock folder][bo-dock] | [partial: watched BookDrop folder][gr-readme] | [yes — folder watching][kav-watch] | [n/e — interval scan only][komga-lib] | [partial: ingest folder inotify][cwa-readme] | [yes — auto-detects updates][abs-readme] |
+| Scheduled scans | yes — cron scheduler on enabled job rows `crates/README.md:20`, `dev/state.mdx:53-58` | [n/e][bo-dock] | [n/e][gr-readme] | [yes — cron tasks][kav-tasks] | [yes — scan interval][komga-lib] | [partial: incremental duplicate scans][cwa-readme] | [n/e][abs-intro] |
+| Notifications (ntfy / email / webhook) | yes — all three built in, per-user routing rules `dev/notifications.mdx:25-29` | [n/e][bo-home] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [partial: in-app update notices][cwa-readme] | [partial: external Apprise API][abs-notif] |
+| Virtual libraries / remote sources | yes — MangaDex source, virtual libraries, page cache, GC `dev/provider-host.mdx:8-16,20-23` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [partial: podcast search/download][abs-readme] |
+| Multi-user + permissions | yes — enumerated permissions, age and tag restrictions `docs/content/docs/guides/access-control/permissions.mdx:9-14`, `age-restrictions.mdx:10-16` | [yes][bo-home] | [yes][gr-readme] | [yes — roles + age restrictions][kav-readme] | [yes — per-library, age, labels][komga-readme] | [yes][cwa-readme] | [yes][abs-readme] |
+| OIDC / SSO | yes `docs/content/docs/guides/access-control/oidc.mdx:7`, `dev/home-app.mdx:49` | [yes — multi-provider][bo-oidc] | [yes][gr-readme] | [yes][kav-oidc] | [yes — OAuth2/OIDC][komga-oauth] | [yes — auto-discovery][cwa-readme] | [yes][abs-oidc] |
+
+## Distribution
+
+| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Docker | yes — `full` and `headless` targets `dev/server-architecture.mdx:43-54` | [yes][bo-inst] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-intro] | [yes][cwa-readme] | [yes][abs-intro] |
+| Single binary | yes `docs/content/docs/getting-started/installation/binaries.mdx:45,80` | [no — Compose only][bo-inst] | [no — Compose + MariaDB][gr-readme] | [yes — native install][kav-readme] | [yes — Java or Docker][komga-intro] | [n/e — Docker][cwa-readme] | [n/e][abs-intro] |
+| Idle memory (measured) | 29,924 KiB RSS / 5 threads, optimized headless, SQLite; 40,776 KiB / 21 threads for pristine upstream `dev/server-architecture.mdx:290-296` | [n/e][bo-inst] | [n/e — JVM + MariaDB][gr-readme] | [n/e][kav-readme] | [n/e — JVM][komga-intro] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| License | MIT `LICENSE:1` | [AGPL-3.0][bo-repo] | [AGPL-3.0][gr-lic] | [GPL-3.0][kav-lic] | [MIT][komga-lic] | [GPL-3.0][cwa-lic] | [GPL-3.0][abs-lic] |
+
+## Where this fork is behind
+
+Four rows are outright **missing**:
+
+1. **Audiobook formats** — no audio processor in `stump_media` (`crates/README.md:29`).
+   BookOrbit, Grimmory, and Audiobookshelf all serve M4B/MP3.
+2. **Web audio player** — the reader set is ebook, image, PDF only
+   (`docs/content/docs/apps/web/readers.mdx:5-38`).
+3. **First-party KOReader plugin** — we ship the sync API
+   (`dev/provider-status.mdx:174`) and a Kobo Nickel plugin
+   (`dev/platforms.mdx:52`), but nothing that runs inside KOReader. BookOrbit
+   and CWA both ship one, and a plugin is what buys highlights and per-book
+   sweeps over plain kosync.
+4. **Achievements** — the home app has devices, reading, account
+   (`dev/home-app.mdx:47-52`); nothing gamified.
+
+Six rows are **partial**, i.e. something real exists but a peer does more:
+the Kavita API (wave 1 only), per-field provider rules and merge, bulk metadata
+edit, the annotations model, the annotations UI, and dashboards/analytics. Each
+is carried as a candidate item in
+[Roadmap › Gaps vs peers](/docs/developer/roadmap#gaps-vs-peers).
+
+Rows where nothing in this list matches us: OPDS 2.0 plus Komga *and* Kavita
+profiles on one server, the provider host (remote sources as libraries), the
+e-ink comics transform, device pairing with QR, built-in ntfy/webhook
+notifications, and a measured idle RSS number.
+
+[bo-home]: https://bookorbit.app/
+[bo-what]: https://bookorbit.app/what-is-bookorbit/
+[bo-meta]: https://bookorbit.app/metadata/
+[bo-opds]: https://bookorbit.app/opds/
+[bo-kobo]: https://bookorbit.app/kobo/
+[bo-kor]: https://bookorbit.app/koreader/
+[bo-korp]: https://bookorbit.app/koreader-plugin/
+[bo-ann]: https://bookorbit.app/annotations/
+[bo-dock]: https://bookorbit.app/book-dock/
+[bo-dash]: https://bookorbit.app/dashboard/
+[bo-oidc]: https://bookorbit.app/oidc/
+[bo-email]: https://bookorbit.app/email/
+[bo-inst]: https://bookorbit.app/installation/
+[bo-repo]: https://github.com/bookorbit/bookorbit
+[gr-readme]: https://github.com/grimmory-tools/grimmory#features
+[gr-komga]: https://github.com/orgs/grimmory-tools/discussions/1554
+[gr-lic]: https://github.com/grimmory-tools/grimmory/blob/main/LICENSE
+[kav-readme]: https://github.com/Kareadita/Kavita#what-kavita-provides
+[kav-opds]: https://wiki.kavitareader.com/guides/features/opds
+[kav-kor]: https://wiki.kavitareader.com/guides/3rdparty/koreader
+[kav-email]: https://wiki.kavitareader.com/guides/admin-settings/email
+[kav-watch]: https://wiki.kavitareader.com/guides/admin-settings/general
+[kav-tasks]: https://wiki.kavitareader.com/guides/admin-settings/tasks
+[kav-plus]: https://wiki.kavitareader.com/kavita+/metadata
+[kav-oidc]: https://wiki.kavitareader.com/guides/admin-settings/open-id-connect
+[kav-lists]: https://wiki.kavitareader.com/guides/features/readinglists
+[kav-lic]: https://github.com/Kareadita/Kavita/blob/develop/LICENSE
+[komga-readme]: https://github.com/gotson/komga#features
+[komga-intro]: https://komga.org/docs/introduction
+[komga-lib]: https://komga.org/docs/guides/libraries
+[komga-oauth]: https://komga.org/docs/installation/oauth2/
+[komga-lic]: https://github.com/gotson/komga/blob/master/LICENSE
+[cwa-readme]: https://github.com/crocodilestick/Calibre-Web-Automated#features
+[cwa-lic]: https://github.com/crocodilestick/Calibre-Web-Automated/blob/main/LICENSE
+[abs-readme]: https://github.com/advplyr/audiobookshelf#features
+[abs-intro]: https://audiobookshelf.org/docs/documentation/introduction
+[abs-notif]: https://audiobookshelf.org/docs/documentation/server-management/notifications
+[abs-oidc]: https://audiobookshelf.org/docs/documentation/server-management/oidc-authentication
+[abs-sess]: https://audiobookshelf.org/docs/documentation/server-management/listening-sessions
+[abs-libs]: https://audiobookshelf.org/docs/category/book-library
+[abs-lic]: https://github.com/advplyr/audiobookshelf/blob/master/LICENSE

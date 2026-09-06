@@ -23,7 +23,12 @@ impl MigrationTrait for Migration {
 							.not_null(),
 					)
 					.col(ColumnDef::new(AnnotationSinkConfigs::Settings).json_binary())
-					.col(ColumnDef::new(AnnotationSinkConfigs::Enabled).boolean().not_null().default(true))
+					.col(
+						ColumnDef::new(AnnotationSinkConfigs::Enabled)
+							.boolean()
+							.not_null()
+							.default(true),
+					)
 					.col(
 						ColumnDef::new(AnnotationSinkConfigs::LastRunAt)
 							.timestamp_with_time_zone(),
@@ -42,7 +47,10 @@ impl MigrationTrait for Migration {
 					)
 					.foreign_key(
 						ForeignKey::create()
-							.from(AnnotationSinkConfigs::Table, AnnotationSinkConfigs::UserId)
+							.from(
+								AnnotationSinkConfigs::Table,
+								AnnotationSinkConfigs::UserId,
+							)
 							.to(Users::Table, Users::Id)
 							.on_update(ForeignKeyAction::Cascade)
 							.on_delete(ForeignKeyAction::Cascade),

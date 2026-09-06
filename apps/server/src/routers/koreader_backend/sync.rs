@@ -217,6 +217,7 @@ pub(crate) async fn put_progress(
 		name: Set(device.clone()),
 		kind: Set(DeviceKind::Koreader),
 		last_seen_at: Set(Some(Utc::now().into())),
+		created_at: Set(Utc::now().into()),
 		..Default::default()
 	})
 	.on_conflict(on_conflict)

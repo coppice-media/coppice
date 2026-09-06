@@ -33,6 +33,7 @@ server graph does not enable.
 | Every migration must run on PostgreSQL too | Server keeps PostgreSQL URL selection; smoke test behind `postgres-tests` uses testcontainers. | `tests/postgres.rs`; `Cargo.toml` `postgres-tests` feature |
 | `cli` feature (default) pulls `sea-orm-migration/cli`; server depends with `default-features = false` | Narrowed server dependency graph (no clap-based migration CLI linked). | `Cargo.toml:8-14`; `docs/.../server-architecture.mdx:20` |
 | Schema tests inspect `sqlite_master`/`PRAGMA` directly rather than entity queries | Proves the DDL, not the ORM mapping; catches missing indexes/FKs. | `tests/reading_lists_collections.rs:4-104` |
+| A data backfill projects rows with raw SQL plus Rust, never through `models` entities, and its `down` is a no-op | An append-only migration must keep working when the entities it mirrors change; and once a head exists a protocol write may have advanced it, so deleting backfilled rows would discard newer progress. | `src/m20260923_000000_backfill_reading_heads.rs`; `tests/backfill_reading_heads.rs` |
 
 ## Layout
 
@@ -42,6 +43,7 @@ server graph does not enable.
 | `src/m<timestamp>_<name>.rs` | One migration each; `up`/`down` via `SchemaManager` |
 | `bin/migrate.rs` | `cargo run -p migrations --bin migrate` CLI (`cli` feature; defaults `DATABASE_URL` to `sqlite://./core/dev.db?mode=rwc`) |
 | `tests/reading_lists_collections.rs` | SQLite DDL assertions for the fork's list/collection migration |
+| `tests/backfill_reading_heads.rs` | Seeds a v2-era database (sessions only) and asserts the reading-head backfill's mapping, ordering and idempotency |
 | `tests/postgres.rs` | PostgreSQL run-through (feature `postgres-tests`, needs Docker) |
 
 ## How to verify

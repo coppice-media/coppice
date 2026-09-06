@@ -11,8 +11,8 @@ mod pdf;
 mod protocols;
 mod providers;
 mod server;
-mod transform;
 mod stump_config;
+mod transform;
 
 use std::env;
 
@@ -27,8 +27,8 @@ pub use pdf::PdfConfig;
 pub use protocols::ProtocolsConfig;
 pub use providers::ProvidersConfig;
 pub use server::ServerConfig;
-pub use transform::TransformConfig;
 pub use stump_config::StumpConfig;
+pub use transform::TransformConfig;
 
 /// Gets the default config directory located at `~/.stump` where `~` is the
 /// user's home directory.

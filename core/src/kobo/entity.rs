@@ -839,6 +839,16 @@ impl ReadingState {
 
 impl BookEntitlementContainer {
 	pub fn from_media(m: MediaWithMetadataAndReadingSessions, book_url: String) -> Self {
+		Self::from_media_with_format(m, book_url, Format::EPUB3)
+	}
+
+	/// Build the entitlement advertising `format` as the download format
+	/// (`KEPUB` when the host serves a converted file at the book URL).
+	pub fn from_media_with_format(
+		m: MediaWithMetadataAndReadingSessions,
+		book_url: String,
+		format: Format,
+	) -> Self {
 		let media_id = &m.media.id;
 
 		let reading_state = match (
@@ -902,7 +912,7 @@ impl BookEntitlementContainer {
 				revision_id: media_id.clone(),
 				status: "Active".to_string(),
 			},
-			book_metadata: BookMetadata::from_media(&m, book_url),
+			book_metadata: BookMetadata::from_media_with_format(&m, book_url, format),
 			reading_state: Some(reading_state),
 		}
 	}

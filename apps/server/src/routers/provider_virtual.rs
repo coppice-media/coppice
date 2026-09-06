@@ -11,12 +11,12 @@
 
 use std::sync::Arc;
 
-use models::entity::{library, series};
-use sea_orm::EntityTrait;
+use models::entity::{library, series, user::AuthUser};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use stump_core::Ctx;
 use stump_komga::{
-	KomgaAuthor, KomgaLibraryId, KomgaSeries, KomgaSeriesBookMetadata,
-	KomgaSeriesId, KomgaSeriesMetadata, KomgaSeriesStatus,
+	KomgaAuthor, KomgaLibraryId, KomgaSeries, KomgaSeriesBookMetadata, KomgaSeriesId,
+	KomgaSeriesMetadata, KomgaSeriesStatus,
 };
 use stump_media::ContentType;
 use stump_provider::virtual_path;
@@ -73,9 +73,8 @@ pub async fn browse_page(
 	kind: &BrowseKind,
 	page: u32,
 ) -> Result<Arc<stump_provider::SourcePage<RemoteSeries>>, String> {
-	let host = provider_host(ctx).ok_or_else(|| {
-		"Provider host is not enabled".to_string()
-	})?;
+	let host =
+		provider_host(ctx).ok_or_else(|| "Provider host is not enabled".to_string())?;
 	host.browse(source_id, library_id, kind, page)
 		.await
 		.map_err(|error| error.to_string())
@@ -126,7 +125,7 @@ pub fn map_remote_series(
 			title_lock: false,
 			title_sort: title.clone(),
 			title_sort_lock: false,
-			summary,
+			summary: summary.clone(),
 			summary_lock: false,
 			reading_direction: None,
 			reading_direction_lock: false,
@@ -173,12 +172,26 @@ fn map_series_status(status: SeriesStatus) -> KomgaSeriesStatus {
 	}
 }
 
+/// Whether `user` may see `library_id`; live results never bypass the
+/// per-user library filter stored rows go through.
+async fn user_can_access_library(ctx: &Ctx, user: &AuthUser, library_id: &str) -> bool {
+	library::Entity::find_for_user(user)
+		.filter(library::Column::Id.eq(library_id))
+		.one(ctx.conn.as_ref())
+		.await
+		.ok()
+		.flatten()
+		.is_some()
+}
+
 /// Live details for a series id that is not materialised.
 ///
 /// Returns `None` when the id belongs to a stored (or non-provider) series
-/// and the ordinary database path should serve it.
+/// and the ordinary database path should serve it, or when the user cannot
+/// see the virtual library the id was browsed from.
 pub async fn virtual_series_by_id(
 	ctx: &Ctx,
+	user: &AuthUser,
 	series_id: &str,
 ) -> Option<KomgaSeries> {
 	if series_exists(ctx, series_id).await {
@@ -186,6 +199,9 @@ pub async fn virtual_series_by_id(
 	}
 	let host = provider_host(ctx)?;
 	let origin = host.virtual_series_origin(series_id)?;
+	if !user_can_access_library(ctx, user, &origin.library_id).await {
+		return None;
+	}
 	let details = host
 		.remote_series_details(&origin.source_id, &origin.remote_id)
 		.await
@@ -197,51 +213,32 @@ pub async fn virtual_series_by_id(
 	))
 }
 
-/// Materialise a virtual series on first books/pages access.
+/// Materialise a live-only virtual series on first books/pages access.
 ///
-/// * `None` — not a provider series; the caller falls through to the
-///   ordinary database path.
+/// * `None` — a row already exists (materialised or ordinary; the caller's
+///   per-user database path decides visibility), the id was never served
+///   by a live browse, or the user cannot see the virtual library.
 /// * `Some(Ok(row))` — the series row now exists under the deterministic id.
 /// * `Some(Err(_))` — the source fetch failed.
 pub async fn materialise_virtual_series(
 	ctx: &Ctx,
+	user: &AuthUser,
 	series_id: &str,
 ) -> Option<Result<series::Model, String>> {
-	if let Ok(Some(row)) = series::Entity::find_by_id(series_id)
-		.one(ctx.conn.as_ref())
-		.await
-	{
-		return if row.source_provider.is_some() {
-			// Already materialised; an idempotent refresh keeps it current.
-			let host = provider_host(ctx)?;
-			let (Some(source_id), Some(remote_id)) =
-				(row.source_provider.clone(), row.remote_id.clone())
-			else {
-				return None;
-			};
-			let library_id = row.library_id.clone().unwrap_or_default();
-			Some(
-				host.materialise_series(&library_id, &source_id, &remote_id)
-					.await
-					.map(|materialized| materialized.series)
-					.map_err(|error| error.to_string()),
-			)
-		} else {
-			None
-		};
+	if series_exists(ctx, series_id).await {
+		return None;
 	}
 
 	let host = provider_host(ctx)?;
 	let origin = host.virtual_series_origin(series_id)?;
+	if !user_can_access_library(ctx, user, &origin.library_id).await {
+		return None;
+	}
 	Some(
-		host.materialise_series(
-			&origin.library_id,
-			&origin.source_id,
-			&origin.remote_id,
-		)
-		.await
-		.map(|materialized| materialized.series)
-		.map_err(|error| error.to_string()),
+		host.materialise_series(&origin.library_id, &origin.source_id, &origin.remote_id)
+			.await
+			.map(|materialized| materialized.series)
+			.map_err(|error| error.to_string()),
 	)
 }
 
@@ -249,9 +246,11 @@ pub async fn materialise_virtual_series(
 /// live-only. `None` for non-provider series.
 pub async fn virtual_series_cover(
 	ctx: &Ctx,
+	user: &AuthUser,
 	series_id: &str,
 ) -> Option<Result<(ContentType, Vec<u8>), String>> {
-	let stored = series::Entity::find_by_id(series_id)
+	let stored = series::Entity::find_for_user(user)
+		.filter(series::Column::Id.eq(series_id))
 		.one(ctx.conn.as_ref())
 		.await
 		.ok()
@@ -270,6 +269,9 @@ pub async fn virtual_series_cover(
 		);
 	}
 	let origin = host.virtual_series_origin(series_id)?;
+	if !user_can_access_library(ctx, user, &origin.library_id).await {
+		return None;
+	}
 	Some(
 		host.cover_bytes(&origin.source_id, &origin.remote_id)
 			.await

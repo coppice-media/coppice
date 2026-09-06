@@ -106,32 +106,19 @@ pub struct ProviderSearchPage {
 	pub has_next: bool,
 }
 
-impl From<&RemoteSeries> for ProviderSeriesSummary {
-	fn from(remote: &RemoteSeries) -> Self {
-		// The source id is filled in by the caller (it is not part of the
-		// remote description); it is patched in `from_parts` below.
-		let stump_id = stump_provider::virtual_path::series_id("", &remote.remote_id);
-		Self {
-			stump_id,
-			source_id: String::new(),
-			remote_id: remote.remote_id.clone(),
-			title: remote.title.clone(),
-			cover_url: remote.thumbnail_url.clone(),
-			description: remote.description.clone(),
-			authors: remote.authors.clone(),
-			artists: remote.artists.clone(),
-			genres: remote.genres.clone(),
-			status: remote.status.as_metadata_status().to_string(),
-			nsfw: remote.nsfw,
-		}
-	}
-}
-
 /// GraphQL-facing summary of a remote series for one source instance.
 pub fn series_summary(source_id: &str, remote: &RemoteSeries) -> ProviderSeriesSummary {
-	let mut summary = ProviderSeriesSummary::from(remote);
-	summary.source_id = source_id.to_string();
-	summary.stump_id =
-		stump_provider::virtual_path::series_id(source_id, &remote.remote_id);
-	summary
+	ProviderSeriesSummary {
+		stump_id: stump_provider::virtual_path::series_id(source_id, &remote.remote_id),
+		source_id: source_id.to_string(),
+		remote_id: remote.remote_id.clone(),
+		title: remote.title.clone(),
+		cover_url: remote.thumbnail_url.clone(),
+		description: remote.description.clone(),
+		authors: remote.authors.clone(),
+		artists: remote.artists.clone(),
+		genres: remote.genres.clone(),
+		status: remote.status.as_metadata_status().to_string(),
+		nsfw: remote.nsfw,
+	}
 }

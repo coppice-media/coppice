@@ -14,7 +14,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::{
 	body::Bytes,
-	extract::{Path, Json},
+	extract::{Json, Path},
 	http::{HeaderMap, Method, StatusCode},
 	response::{IntoResponse, Response},
 	routing::{get, post, put},
@@ -133,7 +133,11 @@ pub trait KoboBackend: Send + Sync + 'static {
 		name: String,
 	) -> Result<(), Self::Error>;
 	/// Delete a shelf.
-	async fn delete_tag(&self, auth: AuthContext, tag_id: String) -> Result<(), Self::Error>;
+	async fn delete_tag(
+		&self,
+		auth: AuthContext,
+		tag_id: String,
+	) -> Result<(), Self::Error>;
 	/// Add book revision ids to a shelf (unknown books silently ignored).
 	async fn add_tag_items(
 		&self,
@@ -149,7 +153,6 @@ pub trait KoboBackend: Send + Sync + 'static {
 		revision_ids: Vec<String>,
 	) -> Result<(), Self::Error>;
 }
-
 
 #[derive(Debug, serde::Deserialize)]
 struct APIKeyPath {
@@ -385,6 +388,13 @@ pub struct TagCreateRequest {
 	pub items: Vec<TagItemPayload>,
 }
 
+impl TagCreateRequest {
+	/// Book revision ids of the initial shelf items; see [`known_revision_ids`].
+	pub fn revision_ids(&self) -> Vec<String> {
+		known_revision_ids(&self.items)
+	}
+}
+
 /// Wire body for the add/remove item routes:
 /// `{"Items": [{"RevisionId": ..., "Type": "ProductRevisionTagItem"}]}`.
 #[derive(Debug, serde::Deserialize)]
@@ -413,7 +423,9 @@ pub(crate) fn known_revision_ids(items: &[TagItemPayload]) -> Vec<String> {
 				.r#type
 				.as_deref()
 				.is_some_and(|kind| kind == "ProductRevisionTagItem");
-			known_type.then_some(()).and_then(|_| item.revision_id.clone())
+			known_type
+				.then_some(())
+				.and_then(|_| item.revision_id.clone())
 		})
 		.collect()
 }
@@ -483,7 +495,7 @@ pub fn no_content() -> Response {
 
 pub mod routes {
 	pub use super::{
-		kobo_router, no_content, router, session_router, TagCreateRequest, TagItemsRequest,
-		KoboBackend, ProviderHost,
+		kobo_router, no_content, router, session_router, KoboBackend, ProviderHost,
+		TagCreateRequest, TagItemsRequest,
 	};
 }

@@ -13,12 +13,21 @@ event channel, or database connection (`src/lib.rs:3-4`, `src/source.rs:92-95`);
 the SeaORM adapter, job orchestration, media building, watcher wiring, and all
 writes stay in `core/src/filesystem/scanner/`.
 
+The crate also owns `sequence`, the one chapter/volume filename sequence
+parser in the workspace (identifiers, omnibus ranges, decimal chapters,
+release-metadata stripping, changing-token fallback, gap detection). It lives
+here because both a write-side consumer (`stump_tools`' `missing-sequence`
+tool) and a read-side one (`stump_core`'s `missing_chapters_in_series` quality
+check) need it, and `stump_core` must not depend on `stump_tools`
+(`src/sequence.rs:1-20`).
+
 ## Reference / upstream
 
 | Reference | Pin | Notes |
 | --- | --- | --- |
 | Upstream Stump `core/src/filesystem/scanner/{walk.rs,options.rs,tag_cache.rs}` | `stumpapp/stump` nightly merge `37fdb7d7` (PR #1361) | Behavioural baseline; walkers there took the `Ctx`/`db` directly (`walk.rs:158,421@37fdb7d7`) |
 | Extraction | `27764cf5` (crate created), `3cebf0b8` (core files deleted, `store.rs` adapter added) | `git log --oneline -- crates/scanner core/src/filesystem/scanner` |
+| `CBZ-Missing-Sequence-Checker` behaviour (identifiers, omnibus ranges, decimals, metadata stripping, fallback, report modes) | <https://wiki.kavitareader.com/guides/external-tools/cbz-missing-sequence-checker/> (docs only) | Rules re-implemented in `src/sequence.rs` from the documented behaviour; no upstream source consulted |
 
 `ScanOptions`/`ScanConfig` JSON is a public contract consumed by the GraphQL
 library mutations and the scan-record object
@@ -40,6 +49,9 @@ pinned by `src/options.rs:127-235`.
 | `max_depth == Some(1)` selects collection-based discovery (`dir_has_media_deep`) | Collection libraries are one level of series directories with nested media | `src/walk.rs:82-89,110-118`; `crates/media/src/common.rs:136-139,241-280` |
 | `TagCache` is a plain `HashMap<String, i32>`; loading/insertion stays in core | Per-file orchestration is not extracted yet | `src/tag_cache.rs:5-18`; `core/src/filesystem/scanner/utils.rs:36-83` |
 | Depends on `stump_media` with `default-features = false` | Only `PathUtils` and the processed-result structs are needed; avoids compiling PDFium/RAR into the walker | `Cargo.toml:12`; `src/walk.rs:10`; `src/options.rs:2`; `crates/media/Cargo.toml:6-9` |
+| `sequence` lives in the scanner, not in `stump_tools` | The parser has consumers on both sides of the dependency edge; putting it in `stump_tools` would force `stump_core` (quality check) to depend on the tools crate and its archive-writing surface | `src/sequence.rs:14-16`; `crates/tools/src/missing_sequence.rs:13-15`; `core/src/ingest/quality/missing_chapters_in_series.rs:7` |
+| Sequence numbers are `i64` thousandths, not floats | Gap math and equality must be exact for decimal chapters (`112.1`), and `f64` keys cannot be used in a `BTreeSet` | `src/sequence.rs:44-79`; test `numbers_format_without_trailing_zeroes` |
+| A decimal number covers its integer chapter (`112.1` → `112`) and a folder-wide span over 10000 refuses to enumerate gaps | Interstitial chapters must not open gaps, and a stray date/ISBN token would otherwise report millions of missing numbers | `src/sequence.rs:66-72,25-27`; tests `decimal_chapters_do_not_open_gaps`, `wide_spans_refuse_to_enumerate_gaps` |
 
 ## Layout
 
@@ -50,6 +62,7 @@ pinned by `src/options.rs:127-235`.
 | `src/source.rs` | `ScanSource` trait, `ScanError`/`ScanResult`, `ScanStatus`, `SeriesIdentity`, `MediaIdentity` |
 | `src/tag_cache.rs` | Scan-wide tag name → id lookup |
 | `src/walk.rs` | `WalkerCtx`, `walk_library` → `WalkedLibrary`, `walk_series` → `WalkedSeries`, mtime helpers; 7 tests with an in-memory `ScanSource` |
+| `src/sequence.rs` | `SequenceKind`/`SequenceNumber`/`SequenceRange`, `parse_identifier`, `parse_identifier_of`, `clean_name`, `to_ranges`, `analyze_sequence` → `SequenceAnalysis`; 13 tests |
 
 Consumers: `core/Cargo.toml:45`, `apps/server/Cargo.toml:82`,
 `crates/graphql/Cargo.toml:40`; core call sites
@@ -57,10 +70,13 @@ Consumers: `core/Cargo.toml:45`, `apps/server/Cargo.toml:82`,
 `core/src/filesystem/media/builder.rs:19`, `core/src/job/stump_job.rs:2`,
 `apps/server/src/routers/komga_backend.rs:212`.
 
+`sequence` consumers: `crates/tools/src/missing_sequence.rs`,
+`core/src/ingest/quality/missing_chapters_in_series.rs`.
+
 ## How to verify
 
 ```text
-cargo test -p stump_scanner            # 12 contract tests (5 options, 7 walker)
+cargo test -p stump_scanner            # 25 contract tests (5 options, 7 walker, 13 sequence)
 cargo check -p stump_scanner           # feature-off stump_media builds without pdf/rar
 cargo test -p stump_core --lib --tests # SeaORM adapter and scan jobs (gate line in .omp/PROJECT_STATE.md)
 ```

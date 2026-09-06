@@ -12,6 +12,20 @@ bun run dev
 
 The Vite development server proxies `/api` (including `/api/graphql/ws`) to `http://127.0.0.1:25600`. Run the Stump fixture/server on that address, or change `server.proxy` in `vite.config.ts` for another backend. The editor uses the server's cookie session from `POST /api/v2/auth/login` and sends GraphQL requests to `/api/graphql`.
 
+## Shared UI package
+
+`src/lib/stump-ui` is a symlink to `../packages/stump-ui/src`, the UI
+foundation shared with the Home app (`home/`): the GraphQL client and
+subscription helper, the shared `Me` operation, the shadcn-svelte components,
+and `cn`/`uuid`. It is imported as `@stump/ui/...` (a `kit.alias` in
+`svelte.config.js`); `preserveSymlinks` in `tsconfig.json` and
+`vite.config.ts` keeps the linked files inside this project so they typecheck
+as first-class sources and resolve `bits-ui`, `svelte`, `graphql`, … from this
+app's `node_modules`. The package therefore has no install step of its own;
+its runtime dependencies are declared as peers and installed here. Add
+components with `bunx shadcn-svelte@latest add <name>` from this directory —
+`components.json` targets the package through the alias.
+
 ## Typed GraphQL documents
 
 The editor uses the ingest SDL fallback in `src/lib/graphql/ingest.graphql` until the server schema includes the additive ingest types. Regenerate documents with:
@@ -20,7 +34,9 @@ The editor uses the ingest SDL fallback in `src/lib/graphql/ingest.graphql` unti
 bun run codegen
 ```
 
-`codegen.ts` automatically switches to `../crates/graphql/schema.graphql` once that file contains `IngestDropItem`.
+Shared operations (`packages/stump-ui/src/graphql/operations.graphql`) are
+generated separately with `cd packages/stump-ui && bun run codegen`, which
+uses this app's toolchain. `codegen.ts` automatically switches to `../crates/graphql/schema.graphql` once that file contains `IngestDropItem`.
 
 ## Production build
 

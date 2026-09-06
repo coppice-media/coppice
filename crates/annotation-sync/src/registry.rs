@@ -10,16 +10,18 @@ use std::sync::Arc;
 use stump_api_types::settings::SettingValues;
 
 use crate::error::AnnotationSyncError;
-use crate::markdown::{MarkdownSink, MARKDOWN_SINK_ID};
-use crate::sink::{Sink, SinkDescriptor};
 #[cfg(feature = "git")]
 use crate::git::{GitSink, GIT_SINK_ID};
+use crate::markdown::{MarkdownSink, MARKDOWN_SINK_ID};
+use crate::sink::{Sink, SinkDescriptor};
 
 /// Static catalog of every compiled-in sink, for GraphQL and editors.
 pub fn catalog() -> Vec<SinkDescriptor> {
-	let mut sinks = vec![markdown_descriptor()];
+	let values = SettingValues::default();
+	let mut sinks = Vec::with_capacity(2);
+	sinks.push(MarkdownSink::new(Path::new(""), &values).descriptor());
 	#[cfg(feature = "git")]
-	sinks.push(GitSink::new(Path::new(""), Default::default()).descriptor());
+	sinks.push(GitSink::new(Path::new(""), &values).descriptor());
 	sinks
 }
 
@@ -30,15 +32,11 @@ pub fn sink(
 	values: &SettingValues,
 ) -> Result<Arc<dyn Sink>, AnnotationSyncError> {
 	match id {
-		MARKDOWN_SINK_ID => Ok(Arc::new(MarkdownSink::new(root))),
+		MARKDOWN_SINK_ID => Ok(Arc::new(MarkdownSink::new(root, values))),
 		#[cfg(feature = "git")]
-		GIT_SINK_ID => Ok(Arc::new(GitSink::new(root, values.clone()))),
+		GIT_SINK_ID => Ok(Arc::new(GitSink::new(root, values))),
 		_ => Err(AnnotationSyncError::sink(format!(
 			"unknown annotation sink: {id}"
 		))),
 	}
-}
-
-fn markdown_descriptor() -> SinkDescriptor {
-	MarkdownSink::new(Path::new("")).descriptor()
 }

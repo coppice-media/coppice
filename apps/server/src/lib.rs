@@ -1,4 +1,7 @@
 #![warn(clippy::dbg_macro)]
+// The merged GraphQL schema nests deeply enough that layout computation
+// overflows rustc's default query depth.
+#![recursion_limit = "256"]
 
 pub mod config;
 pub mod errors;

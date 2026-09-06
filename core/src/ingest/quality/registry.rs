@@ -10,9 +10,10 @@ use crate::ingest::contract::{
 };
 
 use super::{
-	CoverNotPageTwoCheck, CoverPresentCheck, DuplicateExistingCheck,
+	CoverNotPageTwoCheck, CoverPresentCheck, DrmProtectedCheck, DuplicateExistingCheck,
 	DuplicatePagesAcrossBooksCheck, EpubTocChaptersCheck, FilenameSeriesParseCheck,
-	ImageDimensionsConsistentCheck, PageCountMatchesArchiveEntriesCheck,
+	ImageDimensionsConsistentCheck, MissingChaptersInSeriesCheck,
+	PageCountMatchesArchiveEntriesCheck,
 };
 
 /// Discovery information for one registered quality check.
@@ -35,6 +36,9 @@ impl QualityRegistry {
 	pub fn builtin(conn: Arc<DatabaseConnection>) -> Self {
 		Self {
 			checks: vec![
+				// Blocking gate first: an unreadable file makes every other
+				// finding moot.
+				Arc::new(DrmProtectedCheck::new()),
 				Arc::new(CoverPresentCheck::new()),
 				Arc::new(CoverNotPageTwoCheck::new()),
 				Arc::new(PageCountMatchesArchiveEntriesCheck::new()),
@@ -43,6 +47,7 @@ impl QualityRegistry {
 				Arc::new(DuplicateExistingCheck::new(conn.clone())),
 				Arc::new(DuplicatePagesAcrossBooksCheck::new(conn.clone())),
 				Arc::new(FilenameSeriesParseCheck::new()),
+				Arc::new(MissingChaptersInSeriesCheck::new(conn)),
 			],
 		}
 	}

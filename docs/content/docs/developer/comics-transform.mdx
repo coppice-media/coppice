@@ -1,0 +1,113 @@
+---
+title: Comics transform
+description: Device-tuned comic delivery — resize, tone, re-encode, and package CBZ/CBR/PDF pages as a fixed-layout KEPUB for Kobo.
+---
+
+# Comics transform
+
+`stump_media::transform` prepares comic pages for a specific device and
+packages them as a stored CBZ or a fixed-layout KEPUB. The server uses it for
+Kobo devices: with `STUMP_TRANSFORM_ENABLED=true`, the Kobo sync covers
+CBZ/ZIP/CBR/RAR/PDF books and the `file/epub` route serves a transformed KEPUB
+instead of the original container.
+
+```
+ComicPages (zip | rar | pdf)  ──▶  transform_pages_blocking  ──▶  build_kepub | build_cbz
+        page bytes, in order          decode → split → resize        stored ZIP, mimetype first
+                                      → tone → encode (N workers)     pages streamed, OPF last
+```
+
+## Profiles and presets
+
+A `TransformProfile` is `max_width`/`max_height` (never upscales), `grayscale`,
+`black_level`, `gamma`, `format` (JPEG quality + chroma subsampling, PNG, or
+WebP), `split_tall_pages` (pages taller than 3× their width become panels), and
+`container` (`cbz` or `kepubfixedlayout`). Presets, by name:
+
+| Preset | Box | Output | Container |
+| --- | --- | --- | --- |
+| `clara` | 1072×1448 | grayscale JPEG q85 | KEPUB |
+| `libra` | 1264×1680 | grayscale JPEG q85 | KEPUB |
+| `sage` | 1440×1920 | grayscale JPEG q85 | KEPUB |
+| `elipsa` | 1404×1872 | grayscale JPEG q85 | KEPUB |
+| `nia` | 758×1024 | grayscale JPEG q85 | KEPUB |
+| `clara-colour`, `libra-colour`, `sage-colour` | as above | colour JPEG q90 | KEPUB |
+| `koreader` | 1920×2560 | colour WebP q85 | CBZ |
+| `phone` | no cap | colour WebP q80, tall pages split | CBZ |
+
+A device's stored `transform_profile` JSON may be a preset name (`"libra"`),
+`{"preset": "clara"}`, or a full/partial profile object (unset fields take the
+defaults). `TransformProfile::digest()` (SHA-256 of the JSON, 16 hex chars)
+keys the cache, so any change to a profile produces a new cache entry.
+
+## Stages
+
+| Stage | Default build | `--no-default-features` |
+| --- | --- | --- |
+| Resize | `fast_image_resize` Lanczos3 (`fast-resize`) | `image` CatmullRom |
+| Tone | grayscale, then one 256-entry LUT for black level + gamma | same |
+| JPEG encode | libjpeg-turbo (`turbojpeg`); grayscale pages use JPEG grayscale, colour 4:2:0 | `image` encoder |
+| WebP encode | `webp` crate | same |
+| KEPUB container | `stump_kepub::transform_content` on every page (`kepub`) | `TransformError::FeatureDisabled("KEPUB")` |
+| PDF / RAR sources | `pdf` / `rar` processors | `FeatureDisabled("PDF"/"RAR")` |
+
+Pages are transformed by `concurrency` worker threads
+(`MediaConfig::cpu_concurrency_limit`) and re-ordered so output follows input
+order; a page that fails to read or decode surfaces as that page's error without
+stopping the others. `transform_pages` wraps the same driver in a stream on
+`spawn_blocking`.
+
+## Containers and cache
+
+- **CBZ**: stored entries, `ComicInfo.xml` first when the source had one, pages
+  as `pages/NNNN.<ext>`.
+- **KEPUB**: `mimetype` first (stored), `META-INF/container.xml`, one
+  `OEBPS/text/pNNNN.xhtml` per page with a `viewport` meta sized to the image and
+  Kobo's `book-columns`/`book-inner` wrapper from `stump_kepub`, images under
+  `OEBPS/images/`, and `content.opf` (`rendition:layout pre-paginated`,
+  `rendition:viewport` from the first page) written last so pages stream.
+- **Cache** (`<config>/cache/transform/<media-id>-<mtime ns>-<profile digest>.kepub.epub`):
+  entries are written to a UUID `.tmp` and renamed into place; hits refresh the
+  mtime; after each new entry an LRU sweep removes the oldest files until the
+  directory fits `STUMP_TRANSFORM_CACHE_MAX_BYTES` (`.tmp` files are never swept).
+
+## Configuration
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `STUMP_TRANSFORM_ENABLED` | `false` | Kobo sync includes comics and serves them transformed |
+| `STUMP_TRANSFORM_KOBO_PROFILE` | `clara` | Preset for Kobo devices without a `transform_profile` (validated against the preset list) |
+| `STUMP_TRANSFORM_CACHE_MAX_BYTES` | 2 GiB | Byte budget for the transform cache |
+
+## Kobo delivery
+
+1. `library/sync` scopes the session to `epub` plus the comic extensions when
+   transform is enabled (EPUB-only otherwise, byte-identical to before). Comic
+   entitlements advertise `Format: KEPUB`; their `Size` is the cached
+   transformed file's size once it exists for the device's profile, and the
+   source size until then (the EPUB→KEPUB path already behaves this way).
+   `library/{id}/metadata` follows the same rule.
+2. `books/{id}/file/epub` resolves the profile — the device's stored
+   `transform_profile` (via `DeviceService::device_for_credential`), else the
+   configured preset — and coerces it to the KEPUB container with JPEG in place
+   of WebP (Kobo firmware renders JPEG/PNG/GIF/BMP/TIFF only). Cache hit →
+   `ServeFile` with `Range` support; miss → build on the blocking pool, publish,
+   sweep, serve. Any transform failure serves the original file.
+3. EPUBs are unaffected: `KOBO_KEPUB_CONVERSION` alone decides their handling.
+
+## Measured (release build, Ryzen 7 5800X)
+
+`cargo test -p stump_media --release transform_bench -- --ignored --nocapture`
+transforms the first 20 pages of `science_comics_001.cbz` at the Libra preset;
+the numbers are printed by the test and quoted in the crate README. The
+fixture's pages are 480 px wide, so they never reach the resize stage;
+`TRANSFORM_BENCH_CBZ=/path/to/comic.cbz` measures a real-sized comic.
+
+## Verify
+
+```text
+cargo test -p stump_media transform
+cargo test -p stump_media --no-default-features transform
+cargo test -p stump_kobo --lib                      # sync scope + KEPUB advertisement
+cargo test -p stump_server --test api_tests kobo
+```

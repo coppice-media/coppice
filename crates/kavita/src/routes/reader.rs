@@ -11,7 +11,7 @@ use axum::{
 };
 use models::{
 	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
-	entity::{reading_session, user::AuthUser},
+	entity::{media_analysis, reading_session, user::AuthUser},
 	services::{reading_progress::upsert_reading_session, reading_state},
 };
 use sea_orm::{prelude::*, TransactionTrait};
@@ -19,9 +19,12 @@ use serde::Deserialize;
 use stump_auth::AuthContext;
 
 use crate::{
-	dto::{ChapterDto, KavitaDateTime, MarkReadDto, MarkVolumeReadDto, ProgressDto},
+	dto::{
+		ChapterDto, ChapterInfoDto, FileDimensionDto, KavitaDateTime, MarkChapterReadDto,
+		MarkReadDto, MarkVolumeReadDto, MarkVolumesReadDto, ProgressDto,
+	},
 	errors::{APIError, APIResult},
-	mapper::{map_chapter, MediaInput, SeriesInput},
+	mapper::{map_chapter, map_chapter_info, page_file_name, MediaInput, SeriesInput},
 	progress::{
 		finished_progression, last_progress_at, progression_for_page, KavitaProgress,
 	},
@@ -29,9 +32,25 @@ use crate::{
 
 use super::{
 	image::image_response,
-	query::{find_media, find_series_by_kavita_id, load_series_input},
-	route_ci, series::clear_on_deck_removal, KavitaBackend,
+	query::{find_media, find_series_input},
+	route_ci,
+	series::clear_on_deck_removal,
+	KavitaBackend,
 };
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChapterInfoQuery {
+	#[serde(default)]
+	chapter_id: Option<i32>,
+	#[serde(default)]
+	include_dimensions: bool,
+	/// Kavita pre-extracts a PDF into images when set; Stump renders PDF
+	/// pages on demand, so the flag changes nothing here.
+	#[serde(default)]
+	#[allow(dead_code)]
+	extract_pdf: bool,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,10 +93,26 @@ where
 		"/api/Reader/mark-volume-read",
 		post(mark_volume_read),
 	);
-	route_ci(
+	let router = route_ci(
 		router,
 		"/api/Reader/mark-volume-unread",
 		post(mark_volume_unread),
+	);
+	let router = route_ci(router, "/api/Reader/chapter-info", get(chapter_info));
+	let router = route_ci(
+		router,
+		"/api/Reader/mark-chapter-read",
+		post(mark_chapter_read),
+	);
+	let router = route_ci(
+		router,
+		"/api/Reader/mark-multiple-read",
+		post(mark_multiple_read),
+	);
+	route_ci(
+		router,
+		"/api/Reader/mark-multiple-unread",
+		post(mark_multiple_unread),
 	)
 }
 
@@ -167,14 +202,10 @@ async fn continue_point(
 	Query(query): Query<SeriesQuery>,
 ) -> APIResult<Json<ChapterDto>> {
 	let user = auth.user();
-	let row = find_series_by_kavita_id(
-		ctx.as_ref(),
-		&user,
-		query.series_id.unwrap_or_default(),
-	)
-	.await?
-	.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
-	let input = load_series_input(ctx.as_ref(), &user, row).await?;
+	let input =
+		find_series_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default())
+			.await?
+			.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
 	let media = continue_point_for(&input)
 		.ok_or_else(|| APIError::NotFound("Series has no chapters".to_owned()))?;
 	Ok(Json(map_chapter(media)))
@@ -223,7 +254,18 @@ async fn save_progress(
 	Json(progress): Json<ProgressDto>,
 ) -> APIResult<StatusCode> {
 	let user = auth.user();
-	let (input, index) = find_media(ctx.as_ref(), &user, progress.chapter_id)
+	save_progress_for(ctx.as_ref(), &user, &progress).await
+}
+
+/// The write behind `POST /api/Reader/progress`: the chapter's media gets the
+/// user's reading session (shared with every other protocol), the Kavita
+/// `bookScrollId` and a unified reading-head update.
+pub(crate) async fn save_progress_for(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	progress: &ProgressDto,
+) -> APIResult<StatusCode> {
+	let (input, index) = find_media(ctx, user, progress.chapter_id)
 		.await?
 		.ok_or_else(|| APIError::BadRequest("Could not save progress".to_owned()))?;
 	let media = &input.media[index];
@@ -249,7 +291,7 @@ async fn save_progress(
 	let txn = ctx.conn().begin().await?;
 	upsert_reading_session(
 		&txn,
-		&user,
+		user,
 		&media.media.id,
 		progression_for_page(page_num, pages),
 	)
@@ -270,14 +312,14 @@ async fn save_progress(
 			},
 			progression: None,
 			completed: (pages > 0 && page_num >= pages).then_some(true),
-			raw_payload: serde_json::to_value(&progress)?,
+			raw_payload: serde_json::to_value(progress)?,
 		},
 	)
 	.await?;
 	txn.commit().await?;
 	// `ReaderService.SaveReadingProgress`: a read event puts the series back
 	// on deck.
-	clear_on_deck_removal(ctx.as_ref(), &user.id, &input.series.id).await?;
+	clear_on_deck_removal(ctx, &user.id, &input.key()).await?;
 	Ok(StatusCode::OK)
 }
 
@@ -287,16 +329,12 @@ async fn has_progress(
 	Query(query): Query<SeriesQuery>,
 ) -> APIResult<Json<bool>> {
 	let user = auth.user();
-	let Some(row) = find_series_by_kavita_id(
-		ctx.as_ref(),
-		&user,
-		query.series_id.unwrap_or_default(),
-	)
-	.await?
+	let Some(input) =
+		find_series_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default())
+			.await?
 	else {
 		return Ok(Json(false));
 	};
-	let input = load_series_input(ctx.as_ref(), &user, row).await?;
 	Ok(Json(input.media.iter().any(|media| media.pages_read() > 0)))
 }
 
@@ -367,10 +405,9 @@ async fn series_input_or_bad_request(
 	user: &AuthUser,
 	series_id: i32,
 ) -> APIResult<SeriesInput> {
-	let row = find_series_by_kavita_id(ctx, user, series_id)
+	find_series_input(ctx, user, series_id)
 		.await?
-		.ok_or_else(|| APIError::BadRequest("Series does not exist".to_owned()))?;
-	load_series_input(ctx, user, row).await
+		.ok_or_else(|| APIError::BadRequest("Series does not exist".to_owned()))
 }
 
 async fn mark_read(
@@ -382,7 +419,7 @@ async fn mark_read(
 	let input = series_input_or_bad_request(ctx.as_ref(), &user, body.series_id).await?;
 	let media = input.media.iter().collect::<Vec<_>>();
 	mark_media_read_for(ctx.as_ref(), &user, &media).await?;
-	clear_on_deck_removal(ctx.as_ref(), &user.id, &input.series.id).await?;
+	clear_on_deck_removal(ctx.as_ref(), &user.id, &input.key()).await?;
 	Ok(StatusCode::OK)
 }
 async fn mark_unread(
@@ -414,7 +451,7 @@ async fn mark_volume_read(
 	let input = series_input_or_bad_request(ctx.as_ref(), &user, body.series_id).await?;
 	let media = volume_media(&input, body.volume_id).await;
 	mark_media_read_for(ctx.as_ref(), &user, &media).await?;
-	clear_on_deck_removal(ctx.as_ref(), &user.id, &input.series.id).await?;
+	clear_on_deck_removal(ctx.as_ref(), &user.id, &input.key()).await?;
 	Ok(StatusCode::OK)
 }
 
@@ -428,4 +465,512 @@ async fn mark_volume_unread(
 	let media = volume_media(&input, body.volume_id).await;
 	mark_media_unread(ctx.as_ref(), &user, &media).await?;
 	Ok(StatusCode::OK)
+}
+
+/// `ReaderController.GetChapterInfo`. `includeDimensions` adds the page
+/// dimensions Stump's page analysis recorded, plus the double-page pairing
+/// derived from them; without recorded dimensions the arrays are empty
+/// (Kavita answers `[]`/`{}` for an EPUB too) and without the flag they are
+/// `null`.
+pub(crate) async fn chapter_info_for(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	chapter_id: i32,
+	include_dimensions: bool,
+) -> APIResult<ChapterInfoDto> {
+	let (input, index) = find_media(ctx, user, chapter_id)
+		.await?
+		.ok_or_else(|| APIError::NotFound("Chapter does not exist".to_owned()))?;
+	let media = &input.media[index];
+	let dimensions = if include_dimensions {
+		Some(page_dimensions(ctx, &media.media.id, &media.media.name).await?)
+	} else {
+		None
+	};
+	Ok(map_chapter_info(&input, media, dimensions))
+}
+
+/// The recorded page dimensions of a media item, in page order.
+async fn page_dimensions(
+	ctx: &dyn KavitaBackend,
+	media_id: &str,
+	media_name: &str,
+) -> APIResult<Vec<FileDimensionDto>> {
+	let Some(analysis) = media_analysis::Entity::find()
+		.filter(media_analysis::Column::MediaId.eq(media_id.to_owned()))
+		.one(ctx.conn())
+		.await?
+	else {
+		return Ok(Vec::new());
+	};
+	Ok(analysis
+		.data
+		.dimensions
+		.iter()
+		.enumerate()
+		.map(|(index, dimension)| {
+			let page_number = i32::try_from(index).unwrap_or(i32::MAX);
+			FileDimensionDto {
+				width: i32::try_from(dimension.width).unwrap_or(i32::MAX),
+				height: i32::try_from(dimension.height).unwrap_or(i32::MAX),
+				page_number,
+				file_name: page_file_name(media_name, page_number),
+				is_wide: dimension.width > dimension.height,
+			}
+		})
+		.collect())
+}
+
+async fn chapter_info(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Query(query): Query<ChapterInfoQuery>,
+) -> APIResult<Json<ChapterInfoDto>> {
+	let user = auth.user();
+	Ok(Json(
+		chapter_info_for(
+			ctx.as_ref(),
+			&user,
+			query.chapter_id.unwrap_or_default(),
+			query.include_dimensions,
+		)
+		.await?,
+	))
+}
+
+/// The media a `MarkVolumesReadDto` names. A Stump media item is both the
+/// Kavita volume and its chapter, so `volumeIds` and `chapterIds` select from
+/// the same set; ids outside the series are ignored, as Kavita's
+/// "all volumes must belong to the same Series" contract implies.
+fn marked_media<'a>(
+	input: &'a SeriesInput,
+	body: &MarkVolumesReadDto,
+) -> Vec<&'a MediaInput> {
+	input
+		.media
+		.iter()
+		.filter(|media| {
+			body.volume_ids.contains(&media.id) || body.chapter_ids.contains(&media.id)
+		})
+		.collect()
+}
+
+/// `ReaderController.MarkMultipleAsRead`.
+pub(crate) async fn mark_multiple_read_for(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	body: &MarkVolumesReadDto,
+) -> APIResult<()> {
+	let input = series_input_or_bad_request(ctx, user, body.series_id).await?;
+	let media = marked_media(&input, body);
+	mark_media_read_for(ctx, user, &media).await?;
+	clear_on_deck_removal(ctx, &user.id, &input.key()).await
+}
+
+async fn mark_multiple_read(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(body): Json<MarkVolumesReadDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	mark_multiple_read_for(ctx.as_ref(), &user, &body).await?;
+	Ok(StatusCode::OK)
+}
+
+/// `ReaderController.MarkMultipleAsUnread`: the reset Kamigura's reader fires
+/// when a chapter is re-read from the start
+/// (`reader/ReaderScreen.kt:391-396`).
+pub(crate) async fn mark_multiple_unread_for(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	body: &MarkVolumesReadDto,
+) -> APIResult<()> {
+	let input = series_input_or_bad_request(ctx, user, body.series_id).await?;
+	let media = marked_media(&input, body);
+	mark_media_unread(ctx, user, &media).await
+}
+
+async fn mark_multiple_unread(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(body): Json<MarkVolumesReadDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	mark_multiple_unread_for(ctx.as_ref(), &user, &body).await?;
+	Ok(StatusCode::OK)
+}
+
+/// `ReaderController.MarkChapterAsRead`: one chapter of one series.
+async fn mark_chapter_read(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(body): Json<MarkChapterReadDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	mark_multiple_read_for(
+		ctx.as_ref(),
+		&user,
+		&MarkVolumesReadDto {
+			series_id: body.series_id,
+			volume_ids: Vec::new(),
+			chapter_ids: vec![body.chapter_id],
+			generate_reading_session: body.generate_reading_session,
+		},
+	)
+	.await?;
+	Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod chapter_info_tests {
+	use super::*;
+	use crate::dto::{LibraryType, MangaFormat};
+	use crate::ids::{IdKind, KavitaIds};
+	use crate::routes::series::list_volumes;
+	use crate::test_support::{
+		auth_user, db, library_of_type, series_with_files, TestBackend,
+	};
+	use ::tests::fake_data;
+	use models::shared::analysis::{MediaAnalysisData, PageDimension};
+	use models::shared::enums::LibraryType as StumpLibraryType;
+	use sea_orm::ActiveValue::Set;
+
+	async fn record_dimensions(
+		conn: &sea_orm::DatabaseConnection,
+		media_id: &str,
+		dimensions: Vec<PageDimension>,
+	) {
+		media_analysis::ActiveModel {
+			data: Set(MediaAnalysisData {
+				dimensions,
+				content_types: Vec::new(),
+			}),
+			media_id: Set(media_id.to_owned()),
+			..Default::default()
+		}
+		.insert(conn)
+		.await
+		.unwrap();
+	}
+
+	/// A manga chapter: `kavita-ref`
+	/// `chapter-info?chapterId=1&includeDimensions=true` for `science comics`.
+	/// Stump groups the file into a numbered volume rather than Kavita's
+	/// loose-leaf special, so `volumeNumber`/`isSpecial`/`subtitle` follow
+	/// `GetChapterInfo`'s numbered-volume branch; every other field matches.
+	#[tokio::test]
+	async fn manga_chapter_info_carries_the_reference_field_set() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("reader").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let backend = TestBackend::new(conn);
+		let library = library_of_type(&backend.conn, StumpLibraryType::Comic).await;
+		let (series, files) = series_with_files(
+			&backend.conn,
+			&library.id,
+			"science comics",
+			&[("science_comics_001", "cbz", 3)],
+		)
+		.await;
+		// Two portrait pages then a landscape one: the wide page breaks the
+		// double-page pairing, as `ReaderService.GetPairs` does.
+		record_dimensions(
+			&backend.conn,
+			&files[0].id,
+			vec![
+				PageDimension::new(726, 480),
+				PageDimension::new(725, 480),
+				PageDimension::new(480, 960),
+			],
+		)
+		.await;
+		let series_id = KavitaIds::resolve(&backend.conn, IdKind::Series, &series.id)
+			.await
+			.unwrap();
+		let chapter_id =
+			list_volumes(&backend, &user, series_id).await.unwrap()[0].chapters[0].id;
+
+		let info = chapter_info_for(&backend, &user, chapter_id, true)
+			.await
+			.unwrap();
+		assert_eq!(info.chapter_number, "-100000");
+		assert_eq!(info.volume_number, "1");
+		assert_eq!(info.volume_id, chapter_id);
+		assert_eq!(info.series_name, "science comics");
+		assert_eq!(info.series_format, MangaFormat::Archive);
+		assert_eq!(info.series_id, series_id);
+		assert_eq!(info.chapter_title, "");
+		assert_eq!(info.pages, 3);
+		assert_eq!(info.file_name, "science_comics_001.cbz");
+		assert!(!info.is_special);
+		assert_eq!(info.subtitle, "Volume 1");
+		assert_eq!(info.title, "science comics");
+		assert_eq!(
+			(info.series_total_pages, info.series_total_pages_read),
+			(3, 0)
+		);
+		// Kavita never assigns `LibraryType` here, so `kavita-ref` reports `0`
+		// for a Comic-library chapter too.
+		assert_eq!(info.library_type, LibraryType::Manga);
+
+		let dimensions = info.page_dimensions.expect("dimensions were requested");
+		assert_eq!(
+			dimensions
+				.iter()
+				.map(|d| (d.page_number, d.width, d.height, d.is_wide))
+				.collect::<Vec<_>>(),
+			[
+				(0, 480, 726, false),
+				(1, 480, 725, false),
+				(2, 960, 480, true)
+			]
+		);
+		assert_eq!(dimensions[0].file_name, "science_comics_001-0.img");
+		assert_eq!(
+			info.double_pairs.expect("pairs accompany dimensions"),
+			[("0", 0), ("1", 1), ("2", 2)]
+				.into_iter()
+				.map(|(page, pair)| (page.to_owned(), pair))
+				.collect::<std::collections::BTreeMap<_, _>>()
+		);
+
+		// Without the flag both are absent, exactly as `kavita-ref` answers
+		// `includeDimensions=false`.
+		let plain = chapter_info_for(&backend, &user, chapter_id, false)
+			.await
+			.unwrap();
+		assert!(plain.page_dimensions.is_none() && plain.double_pairs.is_none());
+
+		assert!(chapter_info_for(&backend, &user, 999_999, true)
+			.await
+			.is_err());
+	}
+
+	/// A Book-library EPUB: `kavita-ref` `chapter-info?chapterId=4`, whose
+	/// chapter is a special of a loose-leaf volume, titled
+	/// `"<series> - <chapter title>"` and subtitled with the file stem. With
+	/// no recorded page dimensions the arrays are empty rather than absent —
+	/// what `kavita-ref` returns for an EPUB.
+	#[tokio::test]
+	async fn book_chapter_info_uses_the_special_shape() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("bookish").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let backend = TestBackend::new(conn);
+		let library = library_of_type(&backend.conn, StumpLibraryType::Book).await;
+		let (_, files) = series_with_files(
+			&backend.conn,
+			&library.id,
+			"Collection",
+			&[("alice", "epub", 15)],
+		)
+		.await;
+		let book_id = KavitaIds::resolve(&backend.conn, IdKind::BookSeries, &files[0].id)
+			.await
+			.unwrap();
+		let chapter_id = crate::routes::series::list_volumes(&backend, &user, book_id)
+			.await
+			.unwrap()[0]
+			.chapters[0]
+			.id;
+
+		let info = chapter_info_for(&backend, &user, chapter_id, true)
+			.await
+			.unwrap();
+		assert_eq!(info.chapter_number, "-100000");
+		assert_eq!(info.volume_number, "-100000");
+		assert_eq!(info.series_id, book_id);
+		assert_eq!(info.series_format, MangaFormat::Epub);
+		assert_eq!(info.file_name, "alice.epub");
+		assert!(info.is_special);
+		assert_eq!(info.subtitle, "alice");
+		assert_eq!(info.series_name, "alice");
+		assert_eq!(info.title, "alice");
+		assert_eq!(info.pages, 15);
+		assert_eq!(info.page_dimensions.as_deref(), Some(&[][..]));
+		assert_eq!(info.double_pairs, Some(std::collections::BTreeMap::new()));
+	}
+
+	/// `mark-multiple-read` then `mark-multiple-unread` on the same chapter
+	/// ids: the first finishes the chapter, the second clears the session the
+	/// way Kamigura's "restart chapter" does.
+	#[tokio::test]
+	async fn mark_multiple_read_and_unread_round_trip() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("marker").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let backend = TestBackend::new(conn);
+		let library = library_of_type(&backend.conn, StumpLibraryType::Comic).await;
+		let (series, _) = series_with_files(
+			&backend.conn,
+			&library.id,
+			"science comics",
+			&[("one", "cbz", 10), ("two", "cbz", 20)],
+		)
+		.await;
+		let series_id = KavitaIds::resolve(&backend.conn, IdKind::Series, &series.id)
+			.await
+			.unwrap();
+		let volumes = list_volumes(&backend, &user, series_id).await.unwrap();
+		let (first, second) = (volumes[0].id, volumes[1].id);
+
+		// `volumeIds` and `chapterIds` address the same Stump media item.
+		let body = MarkVolumesReadDto {
+			series_id,
+			volume_ids: vec![first],
+			chapter_ids: vec![second],
+			generate_reading_session: false,
+		};
+		mark_multiple_read_for(&backend, &user, &body)
+			.await
+			.unwrap();
+		let read = list_volumes(&backend, &user, series_id).await.unwrap();
+		assert_eq!(
+			read.iter().map(|v| v.pages_read).collect::<Vec<_>>(),
+			[10, 20]
+		);
+
+		mark_multiple_unread_for(
+			&backend,
+			&user,
+			&MarkVolumesReadDto {
+				series_id,
+				volume_ids: Vec::new(),
+				chapter_ids: vec![second],
+				generate_reading_session: false,
+			},
+		)
+		.await
+		.unwrap();
+		let after = list_volumes(&backend, &user, series_id).await.unwrap();
+		assert_eq!(
+			after.iter().map(|v| v.pages_read).collect::<Vec<_>>(),
+			[10, 0],
+			"only the named chapter is reset"
+		);
+
+		// An id outside the series is ignored, not an error.
+		mark_multiple_unread_for(
+			&backend,
+			&user,
+			&MarkVolumesReadDto {
+				series_id,
+				volume_ids: Vec::new(),
+				chapter_ids: vec![999_999],
+				generate_reading_session: false,
+			},
+		)
+		.await
+		.unwrap();
+		assert!(mark_multiple_unread_for(
+			&backend,
+			&user,
+			&MarkVolumesReadDto {
+				series_id: 999_999,
+				..Default::default()
+			},
+		)
+		.await
+		.is_err());
+	}
+}
+
+#[cfg(test)]
+mod book_progress {
+	use super::*;
+	use crate::ids::{IdKind, KavitaIds};
+	use crate::mapper::SeriesKind;
+	use crate::routes::query::{on_deck_removals, SeriesKey};
+	use crate::routes::series::{list_volumes, remove_from_on_deck};
+	use crate::test_support::{
+		auth_user, db, library_of_type, series_with_files, TestBackend,
+	};
+	use ::tests::fake_data;
+	use models::shared::enums::LibraryType as StumpLibraryType;
+
+	/// Progress saved through a book's chapter lands on the media's
+	/// `reading_sessions` row (the one OPDS, Komga and the native API share),
+	/// reads back through the book series and clears its on-deck removal.
+	#[tokio::test]
+	async fn progress_through_a_book_chapter_lands_on_the_media_session() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("bookworm").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let backend = TestBackend::new(conn);
+		let library = library_of_type(&backend.conn, StumpLibraryType::Book).await;
+		let (_, files) = series_with_files(
+			&backend.conn,
+			&library.id,
+			"Collection",
+			&[("alice", "epub", 15), ("leaves", "epub", 383)],
+		)
+		.await;
+		let alice = &files[0];
+		let book_id = KavitaIds::resolve(&backend.conn, IdKind::BookSeries, &alice.id)
+			.await
+			.unwrap();
+		let volumes = list_volumes(&backend, &user, book_id).await.unwrap();
+		let chapter = &volumes[0].chapters[0];
+		remove_from_on_deck(&backend, &user_row.id, &SeriesKey::Book(alice.id.clone()))
+			.await
+			.unwrap();
+
+		let status = save_progress_for(
+			&backend,
+			&user,
+			&ProgressDto {
+				volume_id: volumes[0].id,
+				chapter_id: chapter.id,
+				page_num: 3,
+				series_id: book_id,
+				library_id: 0,
+				book_scroll_id: None,
+				last_modified_utc: KavitaDateTime::default(),
+			},
+		)
+		.await
+		.unwrap();
+		assert_eq!(status, StatusCode::OK);
+
+		// Exactly one session, on the media row, holding Stump's one-based page.
+		let sessions = reading_session::Entity::find()
+			.filter(reading_session::Column::UserId.eq(user_row.id.clone()))
+			.all(&backend.conn)
+			.await
+			.unwrap();
+		assert_eq!(sessions.len(), 1);
+		assert_eq!(sessions[0].media_id, alice.id);
+		assert_eq!(sessions[0].end_page, Some(4));
+		assert!(!sessions[0].is_complete());
+
+		// The same progress reads back as the book series' single chapter.
+		let (input, index) = find_media(&backend, &user, chapter.id)
+			.await
+			.unwrap()
+			.expect("chapter resolves");
+		assert_eq!(
+			(input.kind, input.id, index),
+			(SeriesKind::Book, book_id, 0)
+		);
+		assert_eq!(input.media[0].pages_read(), 3);
+		assert_eq!(map_chapter(&input.media[0]).pages_read, 3);
+		let on_deck = crate::routes::series::list_on_deck(
+			&backend,
+			&user,
+			0,
+			crate::routes::series::UserParams::parse(""),
+		)
+		.await
+		.unwrap()
+		.0;
+		assert_eq!(
+			on_deck.iter().map(|dto| dto.id).collect::<Vec<_>>(),
+			[book_id],
+			"the read event put the book back on deck"
+		);
+		assert!(on_deck_removals(&backend, &user_row.id)
+			.await
+			.unwrap()
+			.is_empty());
+	}
 }

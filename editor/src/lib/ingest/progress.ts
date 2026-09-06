@@ -1,6 +1,4 @@
-import { browser } from '$app/environment';
-import { createClient, type Client } from 'graphql-ws';
-import { print } from 'graphql';
+import { subscribe } from '@stump/ui/graphql/client';
 import {
 	IngestProgressDocument,
 	type IngestProgressSubscription,
@@ -78,48 +76,23 @@ export interface ProgressSubscriptionOptions {
 	onError?: (message: string) => void;
 }
 
-function websocketUrl(): string {
-	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-	return `${protocol}//${window.location.host}/api/graphql/ws`;
-}
-
 function isCursorExpired(value: unknown): boolean {
 	return JSON.stringify(value).toUpperCase().includes('CURSOR_EXPIRED');
 }
 
 export function startIngestProgressSubscription(options: ProgressSubscriptionOptions): () => void {
-	if (!browser) return () => undefined;
-
-	const client: Client = createClient({
-		url: websocketUrl(),
-		connectionParams: {},
-		retryAttempts: 3,
-		lazy: true,
-		keepAlive: 12_000
-	});
-	const dispose = client.subscribe<IngestProgressSubscription>(
-		{
-			query: print(IngestProgressDocument),
-			variables: options.variables
+	return subscribe(IngestProgressDocument, options.variables, {
+		next: (result) => {
+			if (result.errors?.some(isCursorExpired)) {
+				options.onCursorExpired();
+				return;
+			}
+			if (result.data?.ingestProgress) options.onEvent(result.data.ingestProgress);
 		},
-		{
-			next: (result) => {
-				if (result.errors?.some(isCursorExpired)) {
-					options.onCursorExpired();
-					return;
-				}
-				if (result.data?.ingestProgress) options.onEvent(result.data.ingestProgress);
-			},
-			error: (error) => {
-				if (isCursorExpired(error)) options.onCursorExpired();
-				else options.onError?.('The live progress connection is unavailable.');
-			},
-			complete: () => undefined
-		}
-	);
-
-	return () => {
-		dispose();
-		client.dispose();
-	};
+		error: (error) => {
+			if (isCursorExpired(error)) options.onCursorExpired();
+			else options.onError?.('The live progress connection is unavailable.');
+		},
+		complete: () => undefined
+	});
 }

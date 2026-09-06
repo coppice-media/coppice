@@ -48,7 +48,7 @@ pub(crate) fn extract_issue_id(issues: &[IssueSlim], number: f32) -> Option<Stri
 pub(crate) fn parse_date_parts(
 	date_str: &str,
 ) -> (Option<i32>, Option<i32>, Option<i32>) {
-	let Some(dt) = dateparser::parse(date_str).ok() else {
+	let Some(dt) = dateparser::parse_with_timezone(date_str, &chrono::Utc).ok() else {
 		return (None, None, None);
 	};
 	(

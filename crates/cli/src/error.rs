@@ -9,6 +9,8 @@ pub enum CliError {
 	#[error("{0}")]
 	DbError(#[from] sea_orm::error::DbErr),
 	#[error("{0}")]
+	Tool(#[from] stump_tools::ToolError),
+	#[error("{0}")]
 	Unknown(String),
 }
 

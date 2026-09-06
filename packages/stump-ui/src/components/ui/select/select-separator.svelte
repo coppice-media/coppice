@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Separator } from "../separator/index.js";
-	import { cn } from "../../utils.js";
+	import { cn } from "@stump/ui/utils.js";
 	import type { Separator as SeparatorPrimitive } from "bits-ui";
 
 	let {

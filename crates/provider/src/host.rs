@@ -144,7 +144,7 @@ pub struct VirtualArchive {
 }
 
 pub struct ProviderHost {
-	conn: DatabaseConnection,
+	conn: Arc<DatabaseConnection>,
 	factories: Vec<SourceFactory>,
 	sources: RwLock<HashMap<String, Arc<dyn Source>>>,
 	cache: PageCache,
@@ -169,7 +169,7 @@ impl ProviderHost {
 	/// Open the page cache, prepare the catalog, and instantiate every enabled
 	/// `provider_sources` row that has a compiled implementation.
 	pub async fn open(
-		conn: DatabaseConnection,
+		conn: Arc<DatabaseConnection>,
 		factories: Vec<SourceFactory>,
 		config: ProviderHostConfig,
 	) -> Result<Arc<Self>, ProviderError> {
@@ -274,7 +274,7 @@ impl ProviderHost {
 	pub async fn reload_sources(&self) -> Result<(), ProviderError> {
 		let rows = provider_source::Entity::find()
 			.filter(provider_source::Column::Enabled.eq(true))
-			.all(&self.conn)
+			.all(self.conn.as_ref())
 			.await?;
 		let mut built: Vec<(String, Arc<dyn Source>)> = Vec::with_capacity(rows.len());
 		for row in rows {
@@ -361,7 +361,7 @@ impl ProviderHost {
 	) -> Result<provider_source::Model, ProviderError> {
 		let id = factory.instance_id(lang);
 		let existing = provider_source::Entity::find_by_id(&id)
-			.one(&self.conn)
+			.one(self.conn.as_ref())
 			.await?;
 		let row = match existing {
 			Some(existing) => {
@@ -370,7 +370,7 @@ impl ProviderHost {
 				active.catalog_id = Set(catalog_id.map(str::to_string));
 				active.name = Set(name.to_string());
 				active.base_url = Set(base_url.to_string());
-				active.update(&self.conn).await?
+				active.update(self.conn.as_ref()).await?
 			},
 			None => {
 				provider_source::ActiveModel {
@@ -388,7 +388,7 @@ impl ProviderHost {
 					created_by: Set(created_by.map(str::to_string)),
 					..Default::default()
 				}
-				.insert(&self.conn)
+				.insert(self.conn.as_ref())
 				.await?
 			},
 		};
@@ -400,14 +400,14 @@ impl ProviderHost {
 	/// Disable an instance; materialised rows stay but pages stop resolving.
 	pub async fn disable_source(&self, id: &str) -> Result<bool, ProviderError> {
 		let Some(existing) = provider_source::Entity::find_by_id(id)
-			.one(&self.conn)
+			.one(self.conn.as_ref())
 			.await?
 		else {
 			return Ok(false);
 		};
 		let mut active: provider_source::ActiveModel = existing.into();
 		active.enabled = Set(false);
-		active.update(&self.conn).await?;
+		active.update(self.conn.as_ref()).await?;
 		self.sources
 			.write()
 			.expect("source registry poisoned")
@@ -435,7 +435,7 @@ impl ProviderHost {
 			.map(|source| source.info().base_url.clone())
 			.collect();
 		Ok(health::check_catalog(
-			&self.conn,
+			self.conn.as_ref(),
 			&self.checker,
 			&snapshot,
 			&priority,
@@ -485,7 +485,7 @@ impl ProviderHost {
 			.filter(media::Column::SourceProvider.eq(source_id))
 			.filter(media::Column::RemoteChapterId.eq(chapter_id))
 			.filter(media::Column::Pages.ne(count))
-			.exec(&self.conn)
+			.exec(self.conn.as_ref())
 			.await;
 		if let Err(error) = result {
 			tracing::warn!(
@@ -566,7 +566,7 @@ impl ProviderHost {
 			.inner_join(models::entity::series::Entity)
 			.filter(models::entity::series::Column::SourceProvider.eq(source_id))
 			.filter(models::entity::series::Column::RemoteId.eq(remote_id))
-			.one(&self.conn)
+			.one(self.conn.as_ref())
 			.await?
 			.and_then(|metadata| metadata.comic_image);
 		if stored.is_some() {
@@ -638,7 +638,8 @@ impl ProviderHost {
 			},
 		};
 		let result = Arc::new(result);
-		self.browse.insert(source_id, library_id, kind, page, result.clone());
+		self.browse
+			.insert(source_id, library_id, kind, page, result.clone());
 		Ok(result)
 	}
 
@@ -653,8 +654,7 @@ impl ProviderHost {
 	}
 
 	/// Where a deterministic series id served by a recent browse came from.
-	pub fn virtual_series_origin(&self, stump_series_id: &str) -> Option<RemoteOrigin>
-	{
+	pub fn virtual_series_origin(&self, stump_series_id: &str) -> Option<RemoteOrigin> {
 		self.browse.origin(stump_series_id)
 	}
 

@@ -137,11 +137,19 @@ query ReadingStats($span: ReadingStatsSpan!) {
 			minutes
 			pages
 		}
+		devices {
+			deviceId
+			name
+			kind
+			sessions
+			minutes
+			pages
+		}
 	}
 }
 
-query LoginActivity {
-	loginActivity {
+query MyLoginActivity($userId: ID!) {
+	loginActivityById(id: $userId) {
 		id
 		ipAddress
 		userAgent

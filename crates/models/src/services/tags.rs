@@ -1,4 +1,6 @@
-use sea_orm::{prelude::*, ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+	prelude::*, ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, Set,
+};
 
 use crate::entity::tag;
 

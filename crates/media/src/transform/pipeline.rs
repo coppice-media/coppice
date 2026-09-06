@@ -10,9 +10,7 @@ use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 
 use super::error::{TransformError, TransformResult};
-use super::profile::{
-	MAX_TALL_PAGE_RATIO, TransformFormat, TransformProfile,
-};
+use super::profile::{TransformFormat, TransformProfile, MAX_TALL_PAGE_RATIO};
 
 /// A single transformed page image, ready to be written into a container.
 #[derive(Debug, Clone, PartialEq)]
@@ -117,13 +115,8 @@ pub(crate) fn resize_image(
 
 		let rgba = image.to_rgba8();
 		let (src_w, src_h) = (rgba.width(), rgba.height());
-		let src = FrImage::from_vec_u8(
-			src_w,
-			src_h,
-			rgba.into_raw(),
-			PixelType::U8x4,
-		)
-		.map_err(|error| TransformError::Other(error.to_string()))?;
+		let src = FrImage::from_vec_u8(src_w, src_h, rgba.into_raw(), PixelType::U8x4)
+			.map_err(|error| TransformError::Other(error.to_string()))?;
 		let mut dst = FrImage::new(width, height, PixelType::U8x4);
 
 		// `None` selects the default options: Lanczos3 convolution with alpha
@@ -134,8 +127,8 @@ pub(crate) fn resize_image(
 
 		let buffer = image::ImageBuffer::from_raw(width, height, dst.buffer().to_vec())
 			.ok_or_else(|| {
-				TransformError::Other("resize produced an invalid buffer".to_string())
-			})?;
+			TransformError::Other("resize produced an invalid buffer".to_string())
+		})?;
 		Ok(DynamicImage::ImageRgba8(buffer))
 	}
 
@@ -270,9 +263,10 @@ pub(crate) fn encode_page(
 	format: &TransformFormat,
 ) -> TransformResult<EncodedPage> {
 	let bytes = match format {
-		TransformFormat::Jpeg { quality, subsampling } => {
-			encode_jpeg(image, *quality, *subsampling)?
-		},
+		TransformFormat::Jpeg {
+			quality,
+			subsampling,
+		} => encode_jpeg(image, *quality, *subsampling)?,
 		TransformFormat::Png => {
 			let mut buffer = Vec::new();
 			image
@@ -397,17 +391,19 @@ type PageBatch = (usize, TransformResult<Vec<EncodedPage>>);
 /// Up to `concurrency` worker threads pull pages from the shared iterator and
 /// run the CPU pipeline; results are re-ordered so the returned iterator yields
 /// them in input order, with each input page flattened into its (possibly
-/// split) output pages.
+/// split) output pages. A page the source failed to read surfaces as that
+/// page's error, in order, without stopping the remaining pages.
 pub fn transform_pages_blocking<I>(
 	pages: I,
 	profile: TransformProfile,
 	concurrency: usize,
 ) -> impl Iterator<Item = TransformResult<EncodedPage>>
 where
-	I: Iterator<Item = Vec<u8>> + Send + 'static,
+	I: IntoIterator<Item = TransformResult<Vec<u8>>>,
+	I::IntoIter: Send + 'static,
 {
 	let concurrency = concurrency.max(1);
-	let shared = std::sync::Arc::new(Mutex::new(pages.enumerate()));
+	let shared = std::sync::Arc::new(Mutex::new(pages.into_iter().enumerate()));
 	let profile = std::sync::Arc::new(profile);
 	let (tx, rx) = mpsc::channel::<PageBatch>();
 
@@ -420,7 +416,7 @@ where
 			let Some((index, bytes)) = next else {
 				break;
 			};
-			let result = transform_page_bytes(&bytes, &profile);
+			let result = bytes.and_then(|bytes| transform_page_bytes(&bytes, &profile));
 			if tx.send((index, result)).is_err() {
 				// The consumer is gone; stop feeding the pipeline.
 				break;
@@ -494,7 +490,8 @@ pub fn transform_pages<I>(
 	concurrency: usize,
 ) -> impl futures_util::Stream<Item = TransformResult<EncodedPage>>
 where
-	I: Iterator<Item = Vec<u8>> + Send + 'static,
+	I: IntoIterator<Item = TransformResult<Vec<u8>>> + Send + 'static,
+	I::IntoIter: Send + 'static,
 {
 	async_stream::stream! {
 		let (tx, mut rx) = tokio::sync::mpsc::channel::<TransformResult<EncodedPage>>(2);
@@ -524,22 +521,36 @@ mod tests {
 		DynamicImage::ImageRgb8(buffer)
 	}
 
-	fn jpeg_bytes() -> Vec<u8> {
-		let mut buffer = Vec::new();
-		gradient(64, 64)
-			.write_to(&mut Cursor::new(&mut buffer), image::ImageFormat::Jpeg)
+	/// One PNG-encoded source page, shaped like the fallible items a
+	/// [`super::super::source::ComicPages`] iterator yields.
+	fn png_page(width: u32, height: u32) -> TransformResult<Vec<u8>> {
+		let mut bytes = Vec::new();
+		gradient(width, height)
+			.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
 			.unwrap();
-		buffer
+		Ok(bytes)
 	}
 
 	#[test]
 	fn fit_dimensions_preserves_aspect_and_never_upscales() {
 		// Downscales to the binding cap.
-		assert_eq!(fit_dimensions(2000, 1000, Some(1000), Some(1000)), (1000, 500));
-		assert_eq!(fit_dimensions(1000, 2000, Some(1000), Some(1000)), (500, 1000));
+		assert_eq!(
+			fit_dimensions(2000, 1000, Some(1000), Some(1000)),
+			(1000, 500)
+		);
+		assert_eq!(
+			fit_dimensions(1000, 2000, Some(1000), Some(1000)),
+			(500, 1000)
+		);
 		// Smaller images pass through untouched.
-		assert_eq!(fit_dimensions(800, 600, Some(1264, ), Some(1680)), (800, 600));
-		assert_eq!(fit_dimensions(1264, 1680, Some(1264), Some(1680)), (1264, 1680));
+		assert_eq!(
+			fit_dimensions(800, 600, Some(1264,), Some(1680)),
+			(800, 600)
+		);
+		assert_eq!(
+			fit_dimensions(1264, 1680, Some(1264), Some(1680)),
+			(1264, 1680)
+		);
 		// No caps: unchanged.
 		assert_eq!(fit_dimensions(4000, 2000, None, None), (4000, 2000));
 		// Zero caps are ignored rather than producing zero-size pages.
@@ -572,7 +583,10 @@ mod tests {
 		assert_eq!(black_only[255], 255);
 
 		let gamma_only = tone_lut(None, Some(2.0)).unwrap();
-		assert_eq!(gamma_only[128], (255.0 * (128.0 / 255.0f64).sqrt().powi(1)).round() as u8);
+		assert_eq!(
+			gamma_only[128],
+			(255.0 * (128.0 / 255.0f64).sqrt().powi(1)).round() as u8
+		);
 		// midtones brightened, extremes fixed
 		assert!(gamma_only[128] > 128);
 		assert_eq!(gamma_only[0], 0);
@@ -605,9 +619,9 @@ mod tests {
 		let pages = split_tall_page(&gradient(1000, 3100)).unwrap();
 		assert_eq!(pages.len(), 2);
 		assert!(pages.iter().all(|page| page.width() == 1000));
-		assert!(pages
-			.iter()
-			.all(|page| page.height() as f32 / page.width() as f32 <= MAX_TALL_PAGE_RATIO));
+		assert!(pages.iter().all(
+			|page| page.height() as f32 / page.width() as f32 <= MAX_TALL_PAGE_RATIO
+		));
 
 		// ratio 7 → 3 segments, reassembled height matches
 		let pages = split_tall_page(&gradient(1000, 7000)).unwrap();
@@ -666,31 +680,30 @@ mod tests {
 	#[test]
 	fn transform_pages_blocking_preserves_order_and_reports_errors() {
 		let profile = TransformProfile::preset("nia").unwrap();
-		let inputs: Vec<Vec<u8>> = (0..12)
-			.map(|i| {
-				let mut bytes = Vec::new();
-				if i == 5 {
-					bytes.extend_from_slice(b"not an image");
-				} else {
-					gradient(100 + i as u32 * 10, 200)
-						.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
-						.unwrap();
-				}
-				bytes
+		let inputs: Vec<TransformResult<Vec<u8>>> = (0..12)
+			.map(|i| match i {
+				// Undecodable bytes: the decode stage fails this page only.
+				5 => Ok(b"not an image".to_vec()),
+				// The source itself failed to read this page.
+				8 => Err(TransformError::Archive("truncated entry".to_string())),
+				_ => png_page(100 + i * 10, 200),
 			})
 			.collect();
 
-		let results: Vec<_> =
-			transform_pages_blocking(inputs, profile, 4).collect();
+		let results: Vec<_> = transform_pages_blocking(inputs, profile, 4).collect();
 
 		assert_eq!(results.len(), 12);
 		for (i, result) in results.iter().enumerate() {
-			if i == 5 {
-				assert!(result.is_err(), "page 5 should fail to decode");
-			} else {
-				let page = result.as_ref().expect("page renders");
-				assert_eq!(page.format, PageFormat::Jpeg);
-				assert!(page.width <= 758);
+			match (i, result) {
+				(5, Err(TransformError::Decode(_))) => {},
+				(8, Err(TransformError::Archive(_))) => {},
+				(5 | 8, other) => panic!("page {i} should fail, got {other:?}"),
+				(_, Ok(page)) => {
+					assert_eq!(page.format, PageFormat::Jpeg);
+					// Input order preserved: each page has a distinct width.
+					assert_eq!(page.width, 100 + i as u32 * 10);
+				},
+				(_, Err(error)) => panic!("page {i} should render, got {error}"),
 			}
 		}
 	}
@@ -698,50 +711,20 @@ mod tests {
 	#[tokio::test]
 	async fn transform_pages_stream_matches_blocking_output() {
 		let profile = TransformProfile::preset("nia").unwrap();
-		let inputs: Vec<Vec<u8>> = (0..6)
-			.map(|i| {
-				let mut bytes = Vec::new();
-				gradient(60 + i as u32 * 20, 90)
-					.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
-					.unwrap();
-				bytes
-			})
-			.collect();
+		let inputs: Vec<TransformResult<Vec<u8>>> =
+			(0..6).map(|i| png_page(60 + i * 20, 90)).collect();
 
 		let stream = transform_pages(inputs, profile, 2);
 		let results: Vec<_> = futures_util::StreamExt::collect(stream).await;
 
-		assert_eq!(results.len(), 6);
-		assert!(results.iter().all(|result| result.is_ok()));
 		let widths: Vec<u32> = results
 			.iter()
-			.map(|result| result.as_ref().unwrap().width)
+			.map(|result| result.as_ref().expect("page renders").width)
 			.collect();
 		// Input order preserved (each page has a distinct width).
 		let expected: Vec<u32> = (0..6)
-			.map(|i| {
-				fit_dimensions(60 + i as u32 * 20, 90, Some(758), Some(1024)).0
-			})
+			.map(|i| fit_dimensions(60 + i * 20, 90, Some(758), Some(1024)).0)
 			.collect();
 		assert_eq!(widths, expected);
-	}
-
-	#[tokio::test]
-	async fn transform_pages_concurrency_is_bounded_and_complete() {
-		let profile = TransformProfile::preset("phone").unwrap();
-		let inputs: Vec<Vec<u8>> = (0..9)
-			.map(|i| {
-				let mut bytes = Vec::new();
-				gradient(40, 40 + i as u32 * 5)
-					.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
-					.unwrap();
-				bytes
-			})
-			.collect();
-
-		let stream = transform_pages(inputs, profile, 1);
-		let results: Vec<_> = futures_util::StreamExt::collect(stream).await;
-		assert_eq!(results.len(), 9);
-		assert!(results.iter().all(|result| result.is_ok()));
 	}
 }

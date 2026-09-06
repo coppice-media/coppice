@@ -105,10 +105,16 @@ async fn compute_visible_counts(
 	ctx: &AppState,
 	books: &[OPDSPublicationEntity],
 ) -> std::collections::HashMap<String, i32> {
+	// Collected first: handing a borrowing `map` iterator to the generic
+	// async fn trips the higher-ranked `FnOnce` lifetime check.
+	let pages: Vec<(String, i32)> = books
+		.iter()
+		.map(|book| (book.media.id.clone(), book.media.pages))
+		.collect();
 	stump_core::filesystem::media::visible_pages::visible_page_counts(
 		ctx.conn.as_ref(),
 		&ctx.visible_pages_cache(),
-		books.iter().map(|book| (book.media.id.clone(), book.media.pages)),
+		pages,
 	)
 	.await
 	.unwrap_or_else(|error| {
@@ -361,14 +367,9 @@ pub(crate) async fn get_library_by_id(
 
 	// Mode B: a virtual library browses its provider source live; there are
 	// no series rows to fall back to.
-	if let Some(feed) = virtual_library_feed_or_none(
-		&ctx,
-		&req,
-		&library,
-		&pagination,
-		search.as_deref(),
-	)
-	.await?
+	if let Some(feed) =
+		virtual_library_feed_or_none(&ctx, &req, &library, &pagination, search.as_deref())
+			.await?
 	{
 		return Ok(feed);
 	}
@@ -407,7 +408,6 @@ pub(crate) async fn get_library_by_id(
 	Ok(Xml(feed.build()?))
 }
 
-
 /// Mode B: the live-browse feed for a virtual library, or `None` when the
 /// library is not provider-backed (or the providers feature is compiled
 /// out).
@@ -422,25 +422,28 @@ async fn virtual_library_feed_or_none(
 	use stump_provider::virtual_path;
 
 	let Some(source_id) =
-		crate::routers::provider_virtual::virtual_library_source(ctx, &library.id)
-			.await
+		crate::routers::provider_virtual::virtual_library_source(ctx, &library.id).await
 	else {
 		return Ok(None);
 	};
 	let kind = crate::routers::provider_virtual::browse_kind(search, &[]);
 	let size = pagination.limit().max(1);
 	let page_index = (pagination.offset() / size) as u32;
-	let result =
-		crate::routers::provider_virtual::browse_page(ctx, &source_id, &library.id, &kind, page_index)
-			.await
-			.map_err(APIError::InternalServerError)?;
+	let result = crate::routers::provider_virtual::browse_page(
+		ctx,
+		&source_id,
+		&library.id,
+		&kind,
+		page_index,
+	)
+	.await
+	.map_err(APIError::InternalServerError)?;
 
 	let entries = result
 		.items
 		.iter()
 		.map(|remote| {
-			let stump_id =
-				virtual_path::series_id(&source_id, &remote.remote_id);
+			let stump_id = virtual_path::series_id(&source_id, &remote.remote_id);
 			OpdsEntry::new(
 				stump_id.clone(),
 				Utc::now().fixed_offset(),
@@ -490,8 +493,8 @@ async fn virtual_library_feed_or_none(
 }
 
 /// Mode B: materialise a live-only virtual series before its books are
-/// served. `None` when the series does not exist (or is not a provider
-/// series).
+/// served. `None` when the id is not a live virtual series the user may
+/// see (a stored row the caller could not find is simply inaccessible).
 #[cfg(feature = "providers")]
 async fn materialise_series_for_opds(
 	ctx: &AppState,
@@ -501,17 +504,16 @@ async fn materialise_series_for_opds(
 	if series::Entity::find_by_id(id)
 		.one(ctx.conn.as_ref())
 		.await?
-		.is_none()
+		.is_some()
 	{
-		match crate::routers::provider_virtual::materialise_virtual_series(ctx, id)
-			.await
-		{
-			None => return Ok(None),
-			Some(Err(error)) => {
-				return Err(APIError::InternalServerError(error));
-			},
-			Some(Ok(_)) => {},
-		}
+		return Ok(None);
+	}
+	match crate::routers::provider_virtual::materialise_virtual_series(ctx, user, id)
+		.await
+	{
+		None => return Ok(None),
+		Some(Err(error)) => return Err(APIError::InternalServerError(error)),
+		Some(Ok(_)) => {},
 	}
 	series::ModelWithMetadata::find_for_user(user)
 		.filter(series::Column::Id.eq(id.to_string()))
@@ -641,14 +643,16 @@ pub(crate) async fn get_series_by_id(
 	let user = req.user();
 	// Mode B: a live-only virtual series is materialised on first access,
 	// then served through the ordinary database path below.
-	let Some(series::ModelWithMetadata { series, metadata }) =
-		series::ModelWithMetadata::find_for_user(&user)
-			.filter(series::Column::Id.eq(id.clone()))
-			.into_model::<series::ModelWithMetadata>()
-			.one(ctx.conn.as_ref())
-			.await?
-			.or(materialise_series_for_opds(&ctx, &user, &id).await?)
-	else {
+	let stored = series::ModelWithMetadata::find_for_user(&user)
+		.filter(series::Column::Id.eq(id.clone()))
+		.into_model::<series::ModelWithMetadata>()
+		.one(ctx.conn.as_ref())
+		.await?;
+	let stored = match stored {
+		Some(stored) => Some(stored),
+		None => materialise_series_for_opds(&ctx, &user, &id).await?,
+	};
+	let Some(series::ModelWithMetadata { series, metadata }) = stored else {
 		return Err(APIError::NotFound(format!("Series {id} not found")));
 	};
 
@@ -986,12 +990,11 @@ pub(crate) async fn get_book_page(
 		book.pages,
 	)
 	.await?;
-	let physical_page =
-		stump_core::filesystem::media::visible_pages::physical_page(
-			&visible,
-			correct_page as i32,
-		)
-		.ok_or(APIError::NotFound("Page not found".to_string()))?;
+	let physical_page = stump_core::filesystem::media::visible_pages::physical_page(
+		&visible,
+		correct_page as i32,
+	)
+	.ok_or(APIError::NotFound("Page not found".to_string()))?;
 	let visible_count = visible.len() as i32;
 
 	if ctx.config.protocols.enable_opds_progression {

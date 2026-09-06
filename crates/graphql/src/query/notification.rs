@@ -1,6 +1,7 @@
 //! GraphQL queries for notification channels and rules.
 
-use async_graphql::{Context, Object, Result};
+use async_graphql::{Context, Json, Object, Result};
+use sea_orm::prelude::*;
 
 use crate::{
 	data::CoreContext,
@@ -46,10 +47,14 @@ impl NotificationQuery {
 			.collect())
 	}
 
-	/// The current user's routing rules. The wildcard kind (`*`) matches every
-	/// routable kind; see [`NotificationKind`].
-	async fn notification_rules(&self, ctx: &Context<'_>) -> Result<Vec<NotificationRule>> {
-		let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
+	/// The current user's routing rules. `eventKind` is a `NotificationKind`
+	/// name or `*`, which matches every routable kind.
+	async fn notification_rules(
+		&self,
+		ctx: &Context<'_>,
+	) -> Result<Vec<NotificationRule>> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let rules = models::entity::notification_rule::Entity::find()
@@ -66,7 +71,8 @@ impl NotificationQuery {
 		&self,
 		ctx: &Context<'_>,
 	) -> Result<Vec<NotificationChannelSettingsValue>> {
-		let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let registry = stump_core::notification::channel_registry(&core.conn).await?;
 
@@ -80,7 +86,7 @@ impl NotificationQuery {
 			}
 			result.push(NotificationChannelSettingsValue {
 				channel_id: channel.id().to_string(),
-				values,
+				values: Json(values),
 			});
 		}
 		Ok(result)

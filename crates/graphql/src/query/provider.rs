@@ -2,17 +2,20 @@
 //! catalog, source health, and live provider search.
 
 use crate::{
-	data::CoreContext, guard::PermissionGuard, object::provider::{
-		ProviderCatalogEntry, ProviderSearchPage, ProviderSource,
-		ProviderSourceHealth, series_summary,
-	}
+	data::CoreContext,
+	guard::PermissionGuard,
+	object::provider::{
+		series_summary, ProviderCatalogEntry, ProviderSearchPage, ProviderSource,
+		ProviderSourceHealth,
+	},
 };
 use async_graphql::{Context, Object, Result};
 use models::{
 	entity::{provider_source, source_health},
 	shared::enums::UserPermission,
 };
-use stump_provider::{BrowseKind, Source};
+use sea_orm::EntityTrait;
+use stump_provider::Source;
 
 #[derive(Default)]
 pub struct ProviderQuery;
@@ -39,9 +42,7 @@ impl ProviderQuery {
 		query: Option<String>,
 	) -> Result<Vec<ProviderCatalogEntry>> {
 		let core = ctx.data::<CoreContext>()?;
-		let host = core
-			.provider_host()
-			.ok_or("Provider host is not enabled")?;
+		let host = core.provider_host().ok_or("Provider host is not enabled")?;
 		let snapshot = host
 			.catalog_snapshot()
 			.await
@@ -74,8 +75,7 @@ impl ProviderQuery {
 					base_url: source.base_url.clone(),
 					pkg: entry.pkg.clone(),
 					has_implementation: factory.is_some(),
-					instance_id: factory
-						.map(|factory| factory.instance_id(&source.lang)),
+					instance_id: factory.map(|factory| factory.instance_id(&source.lang)),
 				});
 			}
 		}
@@ -107,16 +107,8 @@ impl ProviderQuery {
 		page: Option<i32>,
 	) -> Result<ProviderSearchPage> {
 		let core = ctx.data::<CoreContext>()?;
-		let host = core
-			.provider_host()
-			.ok_or("Provider host is not enabled")?;
-		let source = host
-			.source(&source_id)
-			.map_err(|error| error.to_string())?;
-		let kind = BrowseKind::Search {
-			query: query.clone(),
-			filters: Vec::new(),
-		};
+		let host = core.provider_host().ok_or("Provider host is not enabled")?;
+		let source = host.source(&source_id).map_err(|error| error.to_string())?;
 		// Search goes straight to the source: results are not cached under
 		// a virtual library (there is none to attribute them to).
 		let result = source

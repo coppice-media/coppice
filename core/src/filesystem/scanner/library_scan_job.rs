@@ -178,6 +178,17 @@ impl JobLifecycle for LibraryScanJob {
 			library_id: self.id.clone(),
 			..Default::default()
 		};
+		// A virtual (provider-backed) library has no filesystem root: its
+		// contents arrive through live browse and materialisation, so a scan
+		// is a no-op rather than a "library missing on disk" verdict.
+		if stump_media::virtual_media::is_virtual_path(&self.path) {
+			ctx.report_progress(JobProgress::msg("Virtual library has nothing to scan"));
+			return Ok(WorkingState {
+				output: Some(output),
+				tasks: VecDeque::new(),
+				logs: vec![],
+			});
+		}
 		// Note: We ignore the potential self.config here in the event that it was
 		// updated since being queued. This is perhaps a bit overly cautious, but it's
 		// just one additional query.

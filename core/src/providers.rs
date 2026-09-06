@@ -55,13 +55,10 @@ pub async fn init(
 		virtual_series_ttl: Duration::from_secs(ctx.config.providers.virtual_series_ttl),
 	};
 
-	let host = stump_provider::ProviderHost::open(
-		ctx.conn.as_ref().clone(),
-		factories,
-		host_config,
-	)
-	.await
-	.map_err(|error| crate::error::CoreError::InternalError(error.to_string()))?;
+	let host =
+		stump_provider::ProviderHost::open(ctx.conn.clone(), factories, host_config)
+			.await
+			.map_err(|error| crate::error::CoreError::InternalError(error.to_string()))?;
 	host.install();
 
 	if ctx.set_provider_host(host.clone()).is_err() {

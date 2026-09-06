@@ -211,7 +211,7 @@ pub(crate) async fn user_dto(
 		&roles,
 		api_key.as_deref(),
 	)
-		.map_err(|error| APIError::InternalServerError(error.to_string()))?;
+	.map_err(|error| APIError::InternalServerError(error.to_string()))?;
 	Ok(UserDto {
 		id: kavita_user_id,
 		oidc_id: None,
@@ -238,8 +238,8 @@ pub(crate) async fn user_dto(
 mod tests {
 	use super::*;
 	use crate::test_support::{auth_user, db, TestBackend};
-	use models::entity::user;
 	use ::tests::fake_data;
+	use models::entity::user;
 
 	/// The `UserDto` wire shape must match Kavita's field set: Kamigura decodes
 	/// `username`/`roles`/`token` and Inkita reads the login record as-is.
@@ -247,7 +247,7 @@ mod tests {
 	async fn user_dto_carries_the_kavita_field_set() {
 		let conn = db().await;
 		let user_row = fake_data::User::new("kate").insert(&conn).await;
-		let backend = TestBackend { conn };
+		let backend = TestBackend::new(conn);
 		let dto = user_dto(
 			&backend,
 			auth_user(&user_row),

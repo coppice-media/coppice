@@ -158,9 +158,14 @@ pub async fn walk_library<S: ScanSource + ?Sized>(
 				.map(|series| (series.path.clone(), series.clone()))
 				.collect::<HashMap<_, _>>();
 
+			// Provider-backed (virtual) series never exist on disk and are
+			// never missing; they are managed by the provider host.
 			let missing_series = existing_series_map
 				.iter()
-				.filter(|(series_path, _)| !Path::new(series_path).exists())
+				.filter(|(series_path, _)| {
+					!stump_media::virtual_media::is_virtual_path(series_path)
+						&& !Path::new(series_path).exists()
+				})
 				.map(|(series_path, _)| PathBuf::from(series_path))
 				.collect::<Vec<_>>();
 

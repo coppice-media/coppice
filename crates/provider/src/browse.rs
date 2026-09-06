@@ -18,7 +18,7 @@
 
 use std::{
 	collections::HashMap,
-	sync::Mutex,
+	sync::{Arc, Mutex},
 	time::{Duration, Instant},
 };
 
@@ -59,8 +59,10 @@ impl BrowseKind {
 			BrowseKind::Latest => "latest".to_string(),
 			BrowseKind::Search { query, filters } => {
 				let mut normalized = query.trim().to_ascii_lowercase();
-				let mut parts: Vec<String> =
-					filters.iter().map(|f| format!("{}={}", f.key, f.value)).collect();
+				let mut parts: Vec<String> = filters
+					.iter()
+					.map(|f| format!("{}={}", f.key, f.value))
+					.collect();
 				parts.sort();
 				normalized.push_str(&parts.join(","));
 				// Hash instead of storing raw queries to bound key size.
@@ -80,11 +82,13 @@ pub struct RemoteOrigin {
 	pub library_id: String,
 }
 
+#[derive(Debug)]
 struct BrowseEntry {
 	resolved_at: Instant,
 	page: Arc<SourcePage<RemoteSeries>>,
 }
 
+#[derive(Debug)]
 struct ReverseEntry {
 	origin: RemoteOrigin,
 	resolved_at: Instant,
@@ -117,18 +121,16 @@ impl VirtualBrowseCache {
 
 	/// The full cache key for one browse page.
 	pub fn key(source_id: &str, kind: &BrowseKind, page: u32) -> String {
-		format!(
-			"{source_id}{KEY_SEP}{}{KEY_SEP}{page}",
-			kind.cache_key()
-		)
+		format!("{source_id}{KEY_SEP}{}{KEY_SEP}{page}", kind.cache_key())
 	}
 
 	/// A fresh cached page for `key`, if one exists.
 	pub fn get(&self, key: &str) -> Option<Arc<SourcePage<RemoteSeries>>> {
 		let entries = self.entries.lock().expect("browse cache poisoned");
-		entries.get(key).filter(|entry| !self.expired(entry.resolved_at)).map(
-			|entry| entry.page.clone(),
-		)
+		entries
+			.get(key)
+			.filter(|entry| !self.expired(entry.resolved_at))
+			.map(|entry| entry.page.clone())
 	}
 
 	/// Store a browse page and index every result's deterministic id.
@@ -143,7 +145,13 @@ impl VirtualBrowseCache {
 		let now = Instant::now();
 		let key = Self::key(source_id, kind, page);
 		let mut entries = self.entries.lock().expect("browse cache poisoned");
-		entries.insert(key, BrowseEntry { resolved_at: now, page: result });
+		entries.insert(
+			key,
+			BrowseEntry {
+				resolved_at: now,
+				page: Arc::clone(&result),
+			},
+		);
 		if entries.len() > PRUNE_THRESHOLD {
 			entries.retain(|_, entry| !self.expired(entry.resolved_at));
 		}
@@ -266,7 +274,13 @@ mod tests {
 	#[test]
 	fn reverse_index_resolves_deterministic_ids_until_expiry() {
 		let cache = VirtualBrowseCache::new(Duration::from_secs(300));
-		cache.insert("mock-en", "lib-1", &BrowseKind::Popular, 0, page(&["alpha"]));
+		cache.insert(
+			"mock-en",
+			"lib-1",
+			&BrowseKind::Popular,
+			0,
+			page(&["alpha"]),
+		);
 
 		let stump_id = virtual_path::series_id("mock-en", "alpha");
 		let origin = cache.origin(&stump_id).expect("browsed id must resolve");
@@ -275,11 +289,23 @@ mod tests {
 		assert_eq!(origin.library_id, "lib-1");
 
 		// Deterministic ids are stable: browsing again maps to the same key.
-		cache.insert("mock-en", "lib-1", &BrowseKind::Popular, 0, page(&["alpha"]));
+		cache.insert(
+			"mock-en",
+			"lib-1",
+			&BrowseKind::Popular,
+			0,
+			page(&["alpha"]),
+		);
 		assert!(cache.origin(&stump_id).is_some());
 
 		let expired = VirtualBrowseCache::new(Duration::ZERO);
-		expired.insert("mock-en", "lib-1", &BrowseKind::Popular, 0, page(&["alpha"]));
+		expired.insert(
+			"mock-en",
+			"lib-1",
+			&BrowseKind::Popular,
+			0,
+			page(&["alpha"]),
+		);
 		assert!(
 			expired.origin(&stump_id).is_none(),
 			"expired reverse entries must not resolve"

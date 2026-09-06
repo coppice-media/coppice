@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | **Package** | `stump_notify` (`crates/notify`) |
-| **Purpose** | Delivery channels (`ntfy`, `email`, `webhook`), per-user routing rules resolution, and the neutral `Notification`/`Attachment` types. DB access, the dispatch job, and the `CoreEvent` listener live in `stump_core::notification`, not here — this crate is transport-only. |
+| **Purpose** | Delivery channels (`ntfy`, `email`, `webhook`), per-user routing rules resolution, and the neutral `Notification`/`Attachment` types. DB access and the `CoreEvent` listener live in `stump_core::notification`, the dispatch job in `stump_core::job::notification` — this crate is transport-only. |
 | **Reference / upstream** | ntfy publish API <https://docs.ntfy.sh/publish/> (`X-` headers, `X-Filename` attachment mode); email crate (lettre) for SMTP; ring HMAC-SHA256 for webhook signing. |
 
 ## Decisions
@@ -39,5 +39,6 @@ cargo check -p stump_notify --no-default-features --features ntfy
 ```
 
 End-to-end delivery, retry, and the `CoreEvent` mapping live in
-`stump_core::notification` (`cargo test -p stump_core -- notification`).
+`stump_core::notification` / `stump_core::job::notification`
+(`cargo test -p stump_core -- notification`).
 Feature docs: `docs/content/docs/developer/notifications.mdx`.

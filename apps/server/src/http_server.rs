@@ -91,7 +91,7 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	// `providers.enable_providers` is on; it registers the `provider://`
 	// media resolver for every protocol.
 	#[cfg(feature = "providers")]
-	stump_core::providers::init(server_ctx)
+	stump_core::providers::init(&server_ctx)
 		.await
 		.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
 	let cors_layer = cors::get_cors_layer(config.clone());

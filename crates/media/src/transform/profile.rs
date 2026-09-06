@@ -114,7 +114,7 @@ impl TransformProfile {
 			"clara-colour" => (1072, 1448),
 			"libra-colour" => (1264, 1680),
 			"sage-colour" => (1440, 1920),
-			"koreader" => (1920, 2560),
+			"koreader" => return Some(Self::koreader()),
 			"phone" => return Some(Self::phone()),
 			_ => return None,
 		};
@@ -203,25 +203,21 @@ impl TransformProfile {
 	) -> Option<TransformResult<Self>> {
 		match value {
 			serde_json::Value::Null => None,
-			serde_json::Value::String(name) => Some(
-				Self::preset(name).ok_or_else(|| {
+			serde_json::Value::String(name) => {
+				Some(Self::preset(name).ok_or_else(|| {
 					TransformError::Other(format!("unknown transform preset {name:?}"))
-				}),
-			),
+				}))
+			},
 			serde_json::Value::Object(map) => {
 				if let Some(serde_json::Value::String(name)) = map.get("preset") {
-					return Some(
-						Self::preset(name).ok_or_else(|| {
-							TransformError::Other(format!(
-								"unknown transform preset {name:?}"
-							))
-						}),
-					);
+					return Some(Self::preset(name).ok_or_else(|| {
+						TransformError::Other(format!(
+							"unknown transform preset {name:?}"
+						))
+					}));
 				}
 				Some(serde_json::from_value(value.clone()).map_err(|error| {
-					TransformError::Other(format!(
-						"invalid transform profile: {error}"
-					))
+					TransformError::Other(format!("invalid transform profile: {error}"))
 				}))
 			},
 			_ => Some(Err(TransformError::Other(
@@ -238,8 +234,8 @@ impl TransformProfile {
 	pub fn digest(&self) -> String {
 		use ring::digest::{digest, SHA256};
 
-		let encoded = serde_json::to_vec(self)
-			.expect("TransformProfile serializes to JSON");
+		let encoded =
+			serde_json::to_vec(self).expect("TransformProfile serializes to JSON");
 		let hex = hex_lower(digest(&SHA256, &encoded).as_ref());
 		hex[..16].to_string()
 	}
@@ -270,8 +266,7 @@ mod tests {
 			("nia", 758, 1024),
 		];
 		for (name, width, height) in expected {
-			let profile =
-				TransformProfile::preset(name).expect("preset should resolve");
+			let profile = TransformProfile::preset(name).expect("preset should resolve");
 			assert_eq!(profile.max_width, Some(width), "width of {name}");
 			assert_eq!(profile.max_height, Some(height), "height of {name}");
 			assert!(
@@ -285,8 +280,7 @@ mod tests {
 	#[test]
 	fn colour_presets_keep_rgb() {
 		for name in ["clara-colour", "libra-colour", "sage-colour"] {
-			let profile =
-				TransformProfile::preset(name).expect("colour preset resolves");
+			let profile = TransformProfile::preset(name).expect("colour preset resolves");
 			assert!(!profile.grayscale, "{name} must keep colour");
 		}
 	}
@@ -326,8 +320,9 @@ mod tests {
 	#[test]
 	fn device_profile_json_shapes() {
 		// null: no profile at all
-		assert!(TransformProfile::from_device_profile(&serde_json::json!(null))
-			.is_none());
+		assert!(
+			TransformProfile::from_device_profile(&serde_json::json!(null)).is_none()
+		);
 
 		// string: preset name
 		let resolved = TransformProfile::from_device_profile(&serde_json::json!("libra"))
@@ -355,18 +350,22 @@ mod tests {
 		assert_eq!(resolved.container, ComicContainer::KepubFixedLayout);
 
 		// invalid values surface as errors, never panic
-		assert!(TransformProfile::from_device_profile(&serde_json::json!(42))
-			.is_some_and(|result| result.is_err()));
-		assert!(TransformProfile::from_device_profile(&serde_json::json!("nope"))
-			.is_some_and(|result| result.is_err()));
 		assert!(
-			TransformProfile::from_device_profile(&serde_json::json!({ "preset": "x" }))
+			TransformProfile::from_device_profile(&serde_json::json!(42))
 				.is_some_and(|result| result.is_err())
 		);
 		assert!(
-			TransformProfile::from_device_profile(&serde_json::json!({ "max_width": "wide" }))
+			TransformProfile::from_device_profile(&serde_json::json!("nope"))
 				.is_some_and(|result| result.is_err())
 		);
+		assert!(TransformProfile::from_device_profile(
+			&serde_json::json!({ "preset": "x" })
+		)
+		.is_some_and(|result| result.is_err()));
+		assert!(TransformProfile::from_device_profile(
+			&serde_json::json!({ "max_width": "wide" })
+		)
+		.is_some_and(|result| result.is_err()));
 	}
 
 	#[test]
@@ -381,7 +380,10 @@ mod tests {
 	fn digest_is_stable_and_input_sensitive() {
 		let base = TransformProfile::preset("libra").unwrap();
 		assert_eq!(base.digest(), base.digest());
-		assert_ne!(base.digest(), TransformProfile::preset("clara").unwrap().digest());
+		assert_ne!(
+			base.digest(),
+			TransformProfile::preset("clara").unwrap().digest()
+		);
 
 		let mut different_container = base.clone();
 		different_container.container = ComicContainer::Cbz;

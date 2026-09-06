@@ -8,6 +8,9 @@ name = "graphql-gen"
 path = "bin/main.rs"
 
 [features]
+# Default so `cargo dump-schema` emits the provider ops; the server picks
+# the set explicitly through its own `providers` feature.
+default = ["providers"]
 providers = ["dep:stump_provider", "stump_core/providers"]
 
 [dependencies]
@@ -36,6 +39,7 @@ serde_json.workspace = true
 serde_with.workspace = true
 slugify.workspace = true
 strum.workspace = true
+stump_annotation_sync = { path = "../annotation-sync" }
 stump_auth = { path = "../auth" }
 stump_api_types = { path = "../api-types" }
 stump_core = { path = "../../core", default-features = false, features = ["graphql"] }
@@ -46,6 +50,7 @@ stump_scanner = { path = "../scanner" }
 subtle.workspace = true
 stump_provider = { path = "../provider", optional = true }
 tower-sessions.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
 tracing.workspace = true
 zip.workspace = true
 bcrypt.workspace = true

@@ -1,0 +1,138 @@
+---
+title: Annotation sync
+description: Export highlights, notes, bookmarks, and reading summaries to a markdown vault or a git repository.
+---
+
+# Annotation sync
+
+Annotation sync projects everything a user annotated — Stump's native
+`media_annotations` and `bookmarks`, the liseur-sync CAS annotations, and
+the unified reading heads/sessions — into one canonical model per book and
+hands it to per-user export **sinks**. Two sinks ship: `markdown` (one
+Obsidian-friendly file per book) and `git` (the same files on a git work
+tree, committed and pushed).
+
+```
+annotation / bookmark / reading-head change
+   ──▶ Ctx::note_annotation_activity(user)      (re)arms a per-user deadline
+   ──▶ debounce loop (1 s tick)                 deadline passed → enqueue
+   ──▶ StumpJob::AnnotationSync { user_id }     one task per enabled sink
+        init:        load enabled annotation_sink_configs rows,
+                     build_export_batch from the oldest liseur cursor
+        task (sink): decrypt settings → registry::sink → Sink::export
+                     persist state + last_run_at + last_error on the row
+        finalize:    fail the job when any sink failed (others still ran)
+```
+
+## Config keys
+
+| Key | Env | Default | Meaning |
+| --- | --- | --- | --- |
+| `annotation_sync_root` | `STUMP_ANNOTATION_SYNC_ROOT` | `<config_dir>/annotations` | Root directory; each user exports into `<root>/<user_id>/` |
+| `annotation_sync_debounce_secs` | `STUMP_ANNOTATION_SYNC_DEBOUNCE_SECS` | `30` | Quiet period after the last change before a user's export runs |
+
+Both live in the `annotation_sync` group of `StumpConfig`
+(`core/src/config/annotation_sync.rs`) and are not exposed through GraphQL.
+Exports only run when background jobs are enabled.
+
+## Sinks and settings
+
+Sink settings are per user, stored as JSON in `annotation_sink_configs`
+(migration `m20260920`). Values flagged `secret` in the sink's
+`SettingDefinition` list are encrypted with the server encryption key before
+storage (`{"__stump_encrypted": "<base64>"}`) and decrypted only inside the
+job.
+
+| Sink | Setting | Required | Default | Purpose |
+| --- | --- | --- | --- | --- |
+| `markdown` | `base_url` | no | — | Public server URL; when set, native highlight positions link to `<base_url>/books/<media_id>/epub-reader` |
+| `git` | `remote_url` | no | — | Remote to push to (https URL or local path); empty = commit locally only |
+| `git` | `branch` | no | `main` | Branch committed and pushed |
+| `git` | `token` (secret) | no | — | Sent as `x-access-token` user/pass on fetch and push |
+| `git` | `author_name` / `author_email` | no | `Stump` / `annotations@stump.local` | Commit signature |
+| `git` | `base_url` | no | — | As for `markdown` |
+
+The git sink retries a rejected push once: it fetches the remote branch,
+rebases the local commits onto it, and pushes again. A rebase conflict
+aborts the rebase, leaves the local branch untouched, and records
+`git conflict while publishing …` as the row's `last_error`; the user resolves
+it in the work tree (`<root>/<user_id>/`) and the next run pushes.
+
+## Markdown format
+
+One file per book, named after the stable book key
+(`native-<media_id>.md`, `liseur-<work_id>.md`). Unchanged data renders the
+same bytes, and unchanged files are not rewritten.
+
+```markdown
+---
+title: "Dune"
+authors:
+  - "Frank Herbert"
+source: "native"
+media_id: "m1"
+identifiers:
+  isbn: "9780441172696"
+progression: 0.7512
+page: 300
+completed: false
+last_read: "2023-11-14T22:14:30Z"
+last_read_via: "liseur"
+sessions: 2
+reading_time_seconds: 5400
+---
+
+# Dune
+
+## Highlights
+
+- > The spice must flow.
+
+  Opening line
+
+  ↗ [ch1.xhtml](https://stump.example.com/books/m1/epub-reader) · 25.00% · 2023-11-14T22:13:30Z ^a1
+
+- Re-read chapter two
+
+  ↗ 2023-11-14T22:13:50Z ^l2
+
+## Bookmarks
+
+- > A beginning is the time
+
+  ↗ [ch3.xhtml · page 42](https://stump.example.com/books/m1/epub-reader) · 2023-11-14T22:14:20Z ^b1
+```
+
+- Frontmatter scalars are JSON-quoted strings (valid YAML double-quote
+  style); `finished: true` appears only when a session completed the book.
+- Each highlight/note/bookmark is one list item: blockquoted excerpt, note
+  paragraph, then a `↗` meta line — position (`href`/`cfi`/`position N`,
+  bookmarks add `page N`), progression `%`, liseur colour, created time —
+  ending in an Obsidian block id `^<row id>` so `[[file#^id]]` links work.
+- Liseur tombstones are kept in the model but never rendered.
+
+## GraphQL
+
+| Operation | Auth | Purpose |
+| --- | --- | --- |
+| `annotationSinks: [AnnotationSink!]!` | any user | Compiled-in sinks with their `settings` schema (`IngestSettingDefinition` shape) |
+| `annotationSyncStatus(userId: ID): AnnotationSyncStatus!` | self; server owner for others | `pending` (debounced export scheduled) plus per-sink `enabled`, `lastRunAt`, `lastError` |
+| `setAnnotationSinkSettings(sinkId: String!, settings: JSON, enabled: Boolean): AnnotationSyncStatus!` | self | Replace a sink's settings (secrets encrypted at rest) and toggle it (default enabled) |
+| `runAnnotationSync(userId: ID): AnnotationSyncStatus!` | self; server owner for others | Enqueue an export now, bypassing the debounce |
+
+## Incremental model
+
+`build_export_batch(conn, user, BuildOptions { liseur_from_seq })` rebuilds
+every native book in full (native rows are hard-deleted, so deltas would miss
+removals) and folds all liseur works linked to that media into it. Only
+standalone liseur works are incremental: those with annotation `seq` above
+the cursor are rebuilt. The job builds one batch from the oldest sink cursor
+and advances every successful sink to the batch's high-water mark; a failed
+sink keeps its cursor and receives the delta again next run.
+
+## Verify
+
+```bash
+cargo test -p stump_annotation_sync            # model, markdown golden + byte stability, git bare-repo publish/rebase/conflict
+cargo test -p stump_core --lib annotation      # debounce, secret round-trip
+```

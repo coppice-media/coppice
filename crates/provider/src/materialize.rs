@@ -257,7 +257,9 @@ mod tests {
 	use models::entity::{
 		library, library_config, media, media_metadata, series_metadata,
 	};
-	use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection};
+	use sea_orm::{
+		ActiveModelTrait, ActiveValue::Set, DatabaseConnection, PaginatorTrait,
+	};
 	use stump_media::{virtual_media::VirtualMediaResolver, ContentType};
 
 	use super::*;
@@ -292,12 +294,13 @@ mod tests {
 		let conn = ::tests::db::test_database().await;
 		let dir = tempfile::tempdir().unwrap();
 		let host = ProviderHost::open(
-			conn,
+			Arc::new(conn),
 			Vec::new(),
 			ProviderHostConfig {
 				cache_dir: dir.path().to_path_buf(),
 				cache_max_bytes,
 				catalog_url: Some("http://127.0.0.1:9/".to_string()),
+				virtual_series_ttl: std::time::Duration::from_secs(300),
 			},
 		)
 		.await
@@ -386,6 +389,67 @@ mod tests {
 			add_series(&host, &library.id, "missing-source", SERIES_ALPHA).await,
 			Err(ProviderError::UnknownSource(_))
 		));
+	}
+
+	/// Mode B end to end at the host level: a live browse hands out
+	/// deterministic ids without writing rows, the ids are stable across
+	/// calls (served from the TTL cache, then re-fetched), materialising one
+	/// of them creates the `series`/`media` rows under the same id, and the
+	/// first page of its first chapter resolves to image bytes.
+	#[tokio::test]
+	async fn browse_ids_are_stable_and_materialise_under_the_same_id() {
+		let (host, source, _dir) = host(u64::MAX).await;
+		let library = library(host.conn()).await;
+		let kind = crate::BrowseKind::Latest;
+
+		let first = host
+			.browse(MOCK_SOURCE_ID, &library.id, &kind, 0)
+			.await
+			.unwrap();
+		let second = host
+			.browse(MOCK_SOURCE_ID, &library.id, &kind, 0)
+			.await
+			.unwrap();
+		assert!(Arc::ptr_eq(&first, &second), "second browse is a cache hit");
+		assert_eq!(first.items.len(), 2);
+		assert_eq!(
+			series::Entity::find().count(host.conn()).await.unwrap(),
+			0,
+			"browse must not write series rows"
+		);
+
+		let alpha = &first.items[0];
+		let stump_id = crate::virtual_path::series_id(MOCK_SOURCE_ID, &alpha.remote_id);
+		let origin = host
+			.virtual_series_origin(&stump_id)
+			.expect("browse indexed id");
+		assert_eq!(origin.source_id, MOCK_SOURCE_ID);
+		assert_eq!(origin.library_id, library.id);
+		assert_eq!(origin.remote_id, SERIES_ALPHA);
+
+		let materialized = host
+			.materialise_series(&origin.library_id, &origin.source_id, &origin.remote_id)
+			.await
+			.unwrap();
+		assert_eq!(materialized.series.id, stump_id);
+		assert_eq!(materialized.created.len(), ALPHA_CHAPTERS.len());
+
+		let first_chapter = materialized
+			.created
+			.iter()
+			.find(|media| media.remote_chapter_id.as_deref() == Some("alpha-ch1"))
+			.expect("chapter 1 materialised");
+		assert_eq!(
+			first_chapter.id,
+			crate::virtual_path::media_id(MOCK_SOURCE_ID, "alpha-ch1")
+		);
+		let (content_type, bytes) = host
+			.page_bytes(MOCK_SOURCE_ID, "alpha-ch1", 0)
+			.await
+			.unwrap();
+		assert!(content_type.is_image());
+		assert_eq!(bytes, MockSource::page_bytes("alpha-ch1", 0));
+		assert_eq!(source.page_fetches(), 1);
 	}
 
 	#[tokio::test]
@@ -516,12 +580,13 @@ mod tests {
 			build,
 		};
 		let host = ProviderHost::open(
-			conn,
+			Arc::new(conn),
 			vec![factory],
 			ProviderHostConfig {
 				cache_dir: dir.path().to_path_buf(),
 				cache_max_bytes: 1024,
 				catalog_url: Some("http://127.0.0.1:9/".to_string()),
+				virtual_series_ttl: std::time::Duration::from_secs(300),
 			},
 		)
 		.await

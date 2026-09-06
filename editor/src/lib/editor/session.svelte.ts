@@ -1,6 +1,6 @@
 import { createContext } from 'svelte';
 import type { LibrariesQuery } from '$lib/graphql/generated/graphql';
-import type { MeQuery } from '@stump/ui/graphql/generated';
+import type { MeQuery } from '@stump/ui/graphql/generated/graphql';
 import { initialProgressState, type ProgressState } from '$lib/ingest/progress';
 
 export type EditorUser = MeQuery['me'];

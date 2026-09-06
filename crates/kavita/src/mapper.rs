@@ -6,23 +6,32 @@
 //! `Parser.DefaultChapterNumber`). Volume and chapter share the media's
 //! Kavita id. Numbers come from the media metadata volume, then an integral
 //! metadata number, then the media's ordinal in the series.
+//!
+//! Book and LightNovel libraries are different: Kavita makes every file its
+//! own series, so a Stump media item in such a library is a Kavita series
+//! ([`SeriesKind::Book`]) whose single volume is the loose-leaf volume
+//! (`-100000`, `Parser.LooseLeafVolumeNumber`) holding one special chapter, and
+//! `series-detail` lists that chapter under `specials`. Field values follow
+//! `kavita-ref` 0.9.1.4 (`komga-compat/kavita/capture/book-library.json`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use models::{
 	entity::{
-		library, library_config, media, media_metadata, reading_session, series,
-		series_metadata,
+		library, library_config, media, media_metadata, reading_list, reading_session,
+		series, series_metadata,
 	},
 	shared::enums::LibraryType as StumpLibraryType,
 };
 
 use crate::{
 	dto::{
-		AgeRating, ChapterDto, FileTypeGroup, GenreTagDto, KavitaDateTime, KavitaFloat,
-		LibraryDto, LibraryType, MangaFileDto, MangaFormat, MetadataLocksDto, PeopleDto,
-		PersonDto, PersonRole, PublicationStatus, SeriesDetailDto, SeriesDto,
+		AgeRating, BookInfoDto, ChapterDto, ChapterInfoDto, FileDimensionDto,
+		FileTypeGroup, GenreTagDto, KavitaDateTime, KavitaFloat, LibraryDto, LibraryType,
+		MangaFileDto, MangaFormat, MetadataLocksDto, PeopleDto, PersonDto, PersonRole,
+		PublicationStatus, ReadingListDto, ReadingListItemChapterDto, ReadingListItemDto,
+		ReadingListItemVolumeDto, ReadingListProvider, SeriesDetailDto, SeriesDto,
 		SeriesMetadataDto, TagDto, VolumeDto,
 	},
 	progress::{last_progress_at, pages_read},
@@ -31,6 +40,9 @@ use crate::{
 /// `Parser.DefaultChapterNumber`: the chapter number of a single-file volume.
 pub const DEFAULT_CHAPTER_NUMBER: f32 = -100_000.0;
 pub const DEFAULT_CHAPTER: &str = "-100000";
+/// `Parser.LooseLeafVolumeNumber`: the volume number Kavita gives a file that
+/// carries no volume, which is every book of a Book/LightNovel library.
+pub const LOOSE_LEAF_VOLUME: i32 = -100_000;
 
 /// Deterministic, restart-stable ids for names Kavita models as entities
 /// (genres, people) while Stump stores them as text. FNV-1a folded into the
@@ -99,6 +111,14 @@ pub fn library_type(config: Option<&library_config::Model>) -> LibraryType {
 	}
 }
 
+/// The Stump library types whose media Kavita presents as their own series
+/// (Kavita `Book` and `LightNovel` libraries): the `book_series` libraries.
+pub const BOOK_LIBRARY_TYPES: [StumpLibraryType; 3] = [
+	StumpLibraryType::Book,
+	StumpLibraryType::WebNovel,
+	StumpLibraryType::LightNovel,
+];
+
 pub fn map_library(
 	id: i32,
 	library: &library::Model,
@@ -147,6 +167,10 @@ pub struct MediaInput {
 	pub session: Option<reading_session::Model>,
 	/// Position of the media in the series (1-based, name order).
 	pub ordinal: i32,
+	/// Whether the media is a book of a Book/LightNovel library, i.e. the
+	/// single file of its own Kavita series: its volume is the loose-leaf
+	/// volume and its chapter a special.
+	pub book: bool,
 }
 
 impl MediaInput {
@@ -172,6 +196,9 @@ impl MediaInput {
 
 	/// The Kavita volume number for this media.
 	pub fn number(&self) -> i32 {
+		if self.book {
+			return LOOSE_LEAF_VOLUME;
+		}
 		let metadata = self.metadata.as_ref();
 		if let Some(volume) = metadata
 			.and_then(|metadata| metadata.volume)
@@ -188,6 +215,28 @@ impl MediaInput {
 			return number as i32;
 		}
 		self.ordinal
+	}
+
+	/// The metadata title, when it carries one.
+	fn title(&self) -> Option<String> {
+		self.metadata
+			.as_ref()
+			.and_then(|metadata| metadata.title.clone())
+			.filter(|title| !title.trim().is_empty())
+	}
+
+	/// The name Kavita gives the chapter and, for a book, the series: the
+	/// metadata title, else the file name without its extension.
+	pub fn display_name(&self) -> String {
+		self.title().unwrap_or_else(|| self.media.name.clone())
+	}
+
+	/// The folder holding the file; Kavita's `folderPath` for a book.
+	fn folder(&self) -> Option<String> {
+		std::path::Path::new(&self.media.path)
+			.parent()
+			.map(|parent| parent.to_string_lossy().into_owned())
+			.filter(|parent| !parent.is_empty())
 	}
 
 	fn created(&self) -> KavitaDateTime {
@@ -233,25 +282,76 @@ pub fn map_file(input: &MediaInput) -> MangaFileDto {
 	}
 }
 
+/// The people Kavita lists on a chapter, from the media metadata; a book's
+/// series metadata carries the same set.
+fn media_people(metadata: Option<&media_metadata::Model>) -> PeopleDto {
+	PeopleDto {
+		writers: people(
+			metadata.and_then(|m| m.writers.as_deref()),
+			PersonRole::Writer,
+		),
+		cover_artists: people(
+			metadata.and_then(|m| m.cover_artists.as_deref()),
+			PersonRole::CoverArtist,
+		),
+		publishers: people(
+			metadata.and_then(|m| m.publisher.as_deref()),
+			PersonRole::Publisher,
+		),
+		characters: people(
+			metadata.and_then(|m| m.characters.as_deref()),
+			PersonRole::Character,
+		),
+		pencillers: people(
+			metadata.and_then(|m| m.pencillers.as_deref()),
+			PersonRole::Penciller,
+		),
+		inkers: people(
+			metadata.and_then(|m| m.inkers.as_deref()),
+			PersonRole::Inker,
+		),
+		imprints: Vec::new(),
+		colorists: people(
+			metadata.and_then(|m| m.colorists.as_deref()),
+			PersonRole::Colorist,
+		),
+		letterers: people(
+			metadata.and_then(|m| m.letterers.as_deref()),
+			PersonRole::Letterer,
+		),
+		editors: people(
+			metadata.and_then(|m| m.editors.as_deref()),
+			PersonRole::Editor,
+		),
+		translators: Vec::new(),
+		teams: people(metadata.and_then(|m| m.teams.as_deref()), PersonRole::Team),
+		locations: Vec::new(),
+	}
+}
+
+/// Book chapters (`input.book`) take the shape `kavita-ref` gives a file
+/// without a volume: `range` is the title, `isSpecial` and `totalCount: 1`.
 pub fn map_chapter(input: &MediaInput) -> ChapterDto {
 	let metadata = input.metadata.as_ref();
 	let pages = input.pages();
 	let pages_read = input.pages_read();
 	let last_progress: KavitaDateTime = last_progress_at(input.session.as_ref()).into();
-	let title = metadata
-		.and_then(|metadata| metadata.title.clone())
-		.filter(|title| !title.trim().is_empty());
+	let title = input.title();
 	let number = input.number();
 	ChapterDto {
 		id: input.id,
-		range: input.media.name.clone(),
+		range: if input.book {
+			input.display_name()
+		} else {
+			input.media.name.clone()
+		},
 		number: DEFAULT_CHAPTER.to_owned(),
 		min_number: KavitaFloat(DEFAULT_CHAPTER_NUMBER),
 		max_number: KavitaFloat(DEFAULT_CHAPTER_NUMBER),
 		sort_order: KavitaFloat(number as f32),
 		pages,
-		is_special: false,
-		title: title.clone().unwrap_or_else(|| input.media.name.clone()),
+		is_special: input.book,
+		title: input.display_name(),
 		files: vec![map_file(input)],
 		pages_read,
 		total_reads: input
@@ -283,54 +383,13 @@ pub fn map_chapter(input: &MediaInput) -> ChapterDto {
 		isbn: metadata
 			.and_then(|metadata| metadata.identifier_isbn.clone())
 			.unwrap_or_default(),
-		people: PeopleDto {
-			writers: people(
-				metadata.and_then(|m| m.writers.as_deref()),
-				PersonRole::Writer,
-			),
-			cover_artists: people(
-				metadata.and_then(|m| m.cover_artists.as_deref()),
-				PersonRole::CoverArtist,
-			),
-			publishers: people(
-				metadata.and_then(|m| m.publisher.as_deref()),
-				PersonRole::Publisher,
-			),
-			characters: people(
-				metadata.and_then(|m| m.characters.as_deref()),
-				PersonRole::Character,
-			),
-			pencillers: people(
-				metadata.and_then(|m| m.pencillers.as_deref()),
-				PersonRole::Penciller,
-			),
-			inkers: people(
-				metadata.and_then(|m| m.inkers.as_deref()),
-				PersonRole::Inker,
-			),
-			imprints: Vec::new(),
-			colorists: people(
-				metadata.and_then(|m| m.colorists.as_deref()),
-				PersonRole::Colorist,
-			),
-			letterers: people(
-				metadata.and_then(|m| m.letterers.as_deref()),
-				PersonRole::Letterer,
-			),
-			editors: people(
-				metadata.and_then(|m| m.editors.as_deref()),
-				PersonRole::Editor,
-			),
-			translators: Vec::new(),
-			teams: people(metadata.and_then(|m| m.teams.as_deref()), PersonRole::Team),
-			locations: Vec::new(),
-		},
+		people: media_people(metadata),
 		genres: genres(metadata.and_then(|metadata| metadata.genres.as_deref())),
 		tags: Vec::new(),
 		publication_status: PublicationStatus::OnGoing,
 		language: metadata.and_then(|metadata| metadata.language.clone()),
 		count: 0,
-		total_count: 0,
+		total_count: i32::from(input.book),
 		locks: MetadataLocksDto::default(),
 		release_date_locked: false,
 		title_name_locked: false,
@@ -391,6 +450,16 @@ pub fn sort_media(media: &mut [MediaInput]) {
 	});
 }
 
+/// What backs a Kavita series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeriesKind {
+	/// A Stump series whose media are the volumes (Manga/Comic libraries).
+	Grouped,
+	/// One media item of a Book/LightNovel library; `media` holds exactly that
+	/// item and `series` is the Stump series it is filed under.
+	Book,
+}
+
 /// A series together with the media that back its volumes.
 #[derive(Debug, Clone)]
 pub struct SeriesInput {
@@ -400,10 +469,22 @@ pub struct SeriesInput {
 	pub library_id: i32,
 	pub library_name: String,
 	pub media: Vec<MediaInput>,
+	pub kind: SeriesKind,
 }
 
 impl SeriesInput {
+	/// The media item this series is, when it is a book.
+	pub fn book(&self) -> Option<&MediaInput> {
+		match self.kind {
+			SeriesKind::Book => self.media.first(),
+			SeriesKind::Grouped => None,
+		}
+	}
+
 	pub fn name(&self) -> String {
+		if let Some(book) = self.book() {
+			return book.display_name();
+		}
 		self.metadata
 			.as_ref()
 			.and_then(|metadata| metadata.title.clone())
@@ -412,11 +493,27 @@ impl SeriesInput {
 	}
 
 	pub fn sort_name(&self) -> String {
-		self.metadata
-			.as_ref()
-			.and_then(|metadata| metadata.title_sort.clone())
+		let title_sort = match self.book() {
+			Some(book) => book
+				.metadata
+				.as_ref()
+				.and_then(|metadata| metadata.title_sort.clone()),
+			None => self
+				.metadata
+				.as_ref()
+				.and_then(|metadata| metadata.title_sort.clone()),
+		};
+		title_sort
 			.filter(|title| !title.trim().is_empty())
 			.unwrap_or_else(|| self.name())
+	}
+
+	/// Kavita's `folderPath`: the series folder, or for a book the folder
+	/// holding the file.
+	fn folder_path(&self) -> String {
+		self.book()
+			.and_then(MediaInput::folder)
+			.unwrap_or_else(|| self.series.path.clone())
 	}
 
 	pub fn pages(&self) -> i32 {
@@ -478,14 +575,31 @@ impl SeriesInput {
 pub fn map_series(input: &SeriesInput) -> SeriesDto {
 	let name = input.name();
 	let cover_id = input.first_media_id();
+	let book = input.book();
+	// A book series is created and scanned with its file; a grouped series
+	// carries its own timestamps.
+	let created = book
+		.map(|book| book.media.created_at)
+		.unwrap_or(input.series.created_at);
+	let last_scanned = match book {
+		Some(book) => book.media.updated_at.unwrap_or(book.media.created_at),
+		None => input.series.updated_at.unwrap_or(input.series.created_at),
+	};
+	let folder_path = input.folder_path();
 	SeriesDto {
 		id: input.id,
 		name: name.clone(),
-		original_name: input.series.name.clone(),
+		original_name: match book {
+			Some(_) => name,
+			None => input.series.name.clone(),
+		},
 		localized_name: String::new(),
 		sort_name: input.sort_name(),
 		pages: input.pages(),
-		cover_image_locked: input.series.thumbnail_path.is_some(),
+		cover_image_locked: match book {
+			Some(book) => book.media.thumbnail_path.is_some(),
+			None => input.series.thumbnail_path.is_some(),
+		},
 		last_chapter_added: input.last_chapter_added(),
 		last_chapter_added_utc: input.last_chapter_added(),
 		user_rating: KavitaFloat(0.0),
@@ -494,11 +608,12 @@ pub fn map_series(input: &SeriesInput) -> SeriesDto {
 		pages_read: input.pages_read(),
 		latest_read_date: input.latest_read(),
 		format: input.format(),
-		created: input.series.created_at.into(),
-		sort_name_locked: input
-			.metadata
-			.as_ref()
-			.is_some_and(|metadata| metadata.title_sort_lock),
+		created: created.into(),
+		sort_name_locked: book.is_none()
+			&& input
+				.metadata
+				.as_ref()
+				.is_some_and(|metadata| metadata.title_sort_lock),
 		localized_name_locked: false,
 		name_locked: false,
 		word_count: 0,
@@ -507,13 +622,9 @@ pub fn map_series(input: &SeriesInput) -> SeriesDto {
 		min_hours_to_read: 0,
 		max_hours_to_read: 0,
 		avg_hours_to_read: KavitaFloat(0.0),
-		folder_path: input.series.path.clone(),
-		lowest_folder_path: input.series.path.clone(),
-		last_folder_scanned: input
-			.series
-			.updated_at
-			.or(Some(input.series.created_at))
-			.into(),
+		folder_path: folder_path.clone(),
+		lowest_folder_path: folder_path,
+		last_folder_scanned: Some(last_scanned).into(),
 		dont_match: false,
 		is_blacklisted: false,
 		is_stand_alone: false,
@@ -532,7 +643,38 @@ pub fn map_series(input: &SeriesInput) -> SeriesDto {
 	}
 }
 
+/// Book series (`input.book()`) aggregate their single file the way Kavita's
+/// scanner does: metadata from the file, `maxCount == totalCount == 1` and
+/// therefore `Completed`; they carry no tags.
 pub fn map_series_metadata(input: &SeriesInput, tags: Vec<TagDto>) -> SeriesMetadataDto {
+	if let Some(book) = input.book() {
+		let metadata = book.metadata.as_ref();
+		return SeriesMetadataDto {
+			id: input.id,
+			summary: metadata
+				.and_then(|metadata| metadata.summary.clone())
+				.unwrap_or_default(),
+			genres: genres(metadata.and_then(|metadata| metadata.genres.as_deref())),
+			tags: Vec::new(),
+			people: media_people(metadata),
+			age_rating: AgeRating::from_min_age(
+				metadata.and_then(|metadata| metadata.age_rating),
+			),
+			release_year: metadata.and_then(|metadata| metadata.year).unwrap_or(0),
+			language: metadata
+				.and_then(|metadata| metadata.language.clone())
+				.unwrap_or_default(),
+			max_count: 1,
+			total_count: 1,
+			publication_status: PublicationStatus::Completed,
+			web_links: metadata
+				.and_then(|metadata| metadata.links.clone())
+				.unwrap_or_default(),
+			locks: MetadataLocksDto::default(),
+			release_year_locked: false,
+			series_id: input.id,
+		};
+	}
 	let metadata = input.metadata.as_ref();
 	let first_media = input
 		.media
@@ -603,10 +745,30 @@ pub fn map_series_metadata(input: &SeriesInput, tags: Vec<TagDto>) -> SeriesMeta
 	}
 }
 
+/// Whether a volume or chapter still counts as unread.
+fn is_unread(pages_read: i32, pages: i32) -> bool {
+	pages_read < pages || pages == 0
+}
+
+/// `SeriesService.GetSeriesDetail`: grouped series list their volumes; a book
+/// is one special chapter, listed under `specials` with no volumes.
 pub fn map_series_detail(
 	input: &SeriesInput,
 	library_type: LibraryType,
 ) -> SeriesDetailDto {
+	if let Some(book) = input.book() {
+		let chapter = map_chapter(book);
+		let unread_count = i32::from(is_unread(chapter.pages_read, chapter.pages));
+		return SeriesDetailDto {
+			specials: vec![chapter],
+			chapters: Vec::new(),
+			volumes: Vec::new(),
+			storyline_chapters: Vec::new(),
+			library_type,
+			unread_count,
+			total_count: 1,
+		};
+	}
 	let volumes = input
 		.media
 		.iter()
@@ -615,7 +777,7 @@ pub fn map_series_detail(
 	let total_count = i32::try_from(volumes.len()).unwrap_or(i32::MAX);
 	let unread_count = volumes
 		.iter()
-		.filter(|volume| volume.pages_read < volume.pages || volume.pages == 0)
+		.filter(|volume| is_unread(volume.pages_read, volume.pages))
 		.count();
 	SeriesDetailDto {
 		specials: Vec::new(),
@@ -625,6 +787,333 @@ pub fn map_series_detail(
 		library_type,
 		unread_count: i32::try_from(unread_count).unwrap_or(i32::MAX),
 		total_count,
+	}
+}
+
+/// `Parser.SpecialVolume`: the volume number Kavita gives a file it parsed as
+/// a special of a numbered series.
+pub const SPECIAL_VOLUME: &str = "100000";
+
+/// `Parser.CleanSpecialTitle`: underscores become spaces and `SP<digits>`
+/// tokens are dropped; a title that cleans to nothing keeps its original.
+pub fn clean_special_title(name: &str) -> String {
+	let spaced = name.replace('_', " ");
+	let mut cleaned = String::with_capacity(spaced.len());
+	let mut chars = spaced.char_indices();
+	while let Some((index, ch)) = chars.next() {
+		let tail = &spaced[index..];
+		// `SP\d+`, case-insensitively: skip the token and its digit run.
+		if ch.eq_ignore_ascii_case(&'s')
+			&& tail.len() >= 3
+			&& tail[1..2].eq_ignore_ascii_case("p")
+			&& tail[2..].starts_with(|c: char| c.is_ascii_digit())
+		{
+			let digits = tail[2..]
+				.find(|c: char| !c.is_ascii_digit())
+				.unwrap_or(tail.len() - 2);
+			// The `p` plus every digit; all ASCII, so one `char` each.
+			for _ in 0..=digits {
+				chars.next();
+			}
+			continue;
+		}
+		cleaned.push(ch);
+	}
+	let trimmed = cleaned.trim();
+	if trimmed.is_empty() {
+		name.to_owned()
+	} else {
+		trimmed.to_owned()
+	}
+}
+
+/// The file name `GET /api/Reader/image` serves a page under, reused as
+/// `FileDimensionDto.fileName`: Stump has no per-page archive entry name in
+/// the database, so the page is named exactly as the page route names it.
+pub fn page_file_name(media_name: &str, page: i32) -> String {
+	format!("{}-{page}.img", media_name.replace(['/', '\\', '"'], "_"))
+}
+
+/// `ReaderService.GetPairs`: page 0 stands alone, then pages pair up
+/// left-to-right, and a wide page (or the page after one) breaks the pairing.
+pub fn double_pairs(dimensions: &[FileDimensionDto]) -> BTreeMap<String, i32> {
+	let mut pairs = BTreeMap::new();
+	let Some(first) = dimensions.first() else {
+		return pairs;
+	};
+	pairs.insert(first.page_number.to_string(), first.page_number);
+	let mut pair_start = true;
+	let mut previous = first;
+	for dimension in dimensions.iter().skip(1) {
+		let page = dimension.page_number;
+		if dimension.is_wide || previous.is_wide || previous.page_number == 0 {
+			pairs.insert(page.to_string(), page);
+			pair_start = true;
+		} else {
+			pairs.insert(page.to_string(), if pair_start { page - 1 } else { page });
+			pair_start = !pair_start;
+		}
+		previous = dimension;
+	}
+	pairs
+}
+
+/// `ReaderController.GetChapterInfo`. `libraryType` is `Manga` for every
+/// chapter: Kavita never assigns the field, so its `ChapterInfoDto` always
+/// carries `default(LibraryType)` — `kavita-ref` reports `0` for a chapter of
+/// a Comic library and of a Book library alike.
+pub fn map_chapter_info(
+	input: &SeriesInput,
+	media: &MediaInput,
+	page_dimensions: Option<Vec<FileDimensionDto>>,
+) -> ChapterInfoDto {
+	let chapter = map_chapter(media);
+	let volume_number = if media.book {
+		DEFAULT_CHAPTER.to_owned()
+	} else {
+		media.number().to_string()
+	};
+	let file_name = std::path::Path::new(&media.media.path)
+		.file_name()
+		.map(|name| name.to_string_lossy().into_owned())
+		.unwrap_or_else(|| media.media.name.clone());
+	let series_name = input.name();
+	let title = if chapter.title_name.is_empty() {
+		series_name.clone()
+	} else {
+		format!("{series_name} - {}", chapter.title_name)
+	};
+	// `GetChapterInfo`'s subtitle rules, with `LibraryType.Manga`'s
+	// "Chapter " label: a special is named by its file, a loose-leaf volume by
+	// its chapter and a numbered volume by its volume.
+	let subtitle = if chapter.is_special {
+		std::path::Path::new(&file_name)
+			.file_stem()
+			.map(|stem| stem.to_string_lossy().into_owned())
+			.unwrap_or_else(|| file_name.clone())
+	} else if volume_number == DEFAULT_CHAPTER {
+		format!("Chapter {}", chapter.number)
+	} else if chapter.number == DEFAULT_CHAPTER {
+		format!("Volume {volume_number}")
+	} else {
+		format!("Volume {volume_number} Chapter {}", chapter.number)
+	};
+	let double_pairs = page_dimensions
+		.as_deref()
+		.map(|dimensions| double_pairs(dimensions));
+	ChapterInfoDto {
+		chapter_number: chapter.number,
+		volume_number,
+		volume_id: media.id,
+		series_name,
+		series_format: input.format(),
+		series_id: input.id,
+		library_id: input.library_id,
+		library_type: LibraryType::Manga,
+		chapter_title: chapter.title_name,
+		pages: chapter.pages,
+		file_name,
+		is_special: chapter.is_special,
+		subtitle,
+		title,
+		series_total_pages: input.pages(),
+		series_total_pages_read: input.pages_read(),
+		page_dimensions,
+		double_pairs,
+	}
+}
+
+/// `BookController.GetBookInfo`: the same identity block as `chapter-info`
+/// without the page dimensions. `chapterTitle` is `null` when the file has no
+/// metadata title, exactly as `kavita-ref` reports for a bare EPUB.
+pub fn map_book_info(input: &SeriesInput, media: &MediaInput) -> BookInfoDto {
+	let chapter = map_chapter(media);
+	BookInfoDto {
+		book_title: chapter.title_name.clone(),
+		series_id: input.id,
+		volume_id: media.id,
+		series_format: input.format(),
+		series_name: input.name(),
+		chapter_number: chapter.number,
+		volume_number: if media.book {
+			DEFAULT_CHAPTER.to_owned()
+		} else {
+			media.number().to_string()
+		},
+		library_id: input.library_id,
+		pages: chapter.pages,
+		is_special: chapter.is_special,
+		chapter_title: Some(chapter.title_name).filter(|title| !title.is_empty()),
+	}
+}
+
+/// `EntityNamingService.FormatReadingListItemTitle`: EPUBs are named by their
+/// chapter (a book's title) under the volume label, a default-numbered
+/// chapter of a numbered volume by that volume, a special by its title or
+/// cleaned chapter and everything else by the library's chapter label.
+fn reading_list_item_title(
+	library_type: LibraryType,
+	format: MangaFormat,
+	chapter_number: &str,
+	volume_number: &str,
+	chapter_title_name: &str,
+	is_special: bool,
+) -> String {
+	if format == MangaFormat::Epub {
+		let cleaned = clean_special_title(chapter_number);
+		if cleaned == DEFAULT_CHAPTER {
+			if !chapter_title_name.is_empty() {
+				return chapter_title_name.to_owned();
+			}
+			return format!("Volume {}", clean_special_title(volume_number));
+		}
+		if volume_number == SPECIAL_VOLUME {
+			return cleaned;
+		}
+		return format!("Volume {cleaned}");
+	}
+	if chapter_number == DEFAULT_CHAPTER && volume_number != DEFAULT_CHAPTER {
+		return format!("Volume {volume_number}");
+	}
+	let display = if chapter_number
+		.chars()
+		.all(|c| c.is_ascii_digit() || c == '.')
+		&& !chapter_number.is_empty()
+	{
+		chapter_number.to_owned()
+	} else {
+		clean_special_title(chapter_number)
+	};
+	if chapter_number == DEFAULT_CHAPTER && !chapter_title_name.is_empty() {
+		return chapter_title_name.to_owned();
+	}
+	if is_special {
+		return if chapter_title_name.is_empty() {
+			display
+		} else {
+			chapter_title_name.to_owned()
+		};
+	}
+	match library_type {
+		LibraryType::Comic | LibraryType::ComicVine => format!("Issue #{display}"),
+		LibraryType::Book | LibraryType::LightNovel => format!("Book {display}"),
+		_ => format!("Chapter {display}"),
+	}
+}
+
+/// `ReadingListService.GetReadingListItems` item: the media as a reading-list
+/// entry, carrying the series, volume and chapter identity blocks Kavita
+/// projects alongside it.
+pub fn map_reading_list_item(
+	reading_list_id: i32,
+	item_id: i32,
+	order: i32,
+	input: &SeriesInput,
+	media: &MediaInput,
+	library_type: LibraryType,
+) -> ReadingListItemDto {
+	let chapter = map_chapter(media);
+	let volume_name = if media.book {
+		DEFAULT_CHAPTER.to_owned()
+	} else {
+		media.number().to_string()
+	};
+	let writer = chapter.people.writers.first();
+	let penciller = chapter.people.pencillers.first();
+	let title = reading_list_item_title(
+		library_type,
+		input.format(),
+		&chapter.range,
+		&volume_name,
+		&chapter.title_name,
+		chapter.is_special,
+	);
+	ReadingListItemDto {
+		id: item_id,
+		order,
+		chapter_id: media.id,
+		series_id: input.id,
+		series_name: input.name(),
+		series_sort_name: input.sort_name(),
+		series_format: input.format(),
+		pages_read: chapter.pages_read,
+		pages_total: chapter.pages,
+		chapter_number: chapter.range.clone(),
+		volume_number: volume_name.clone(),
+		chapter_title_name: chapter.title_name.clone(),
+		volume_id: media.id,
+		library_id: input.library_id,
+		title,
+		library_type,
+		library_name: input.library_name.clone(),
+		release_date: chapter.release_date,
+		reading_list_id,
+		last_reading_progress_utc: chapter.last_reading_progress_utc,
+		file_size: media.media.size,
+		summary: chapter.summary.clone().unwrap_or_default(),
+		is_special: chapter.is_special,
+		chapter: ReadingListItemChapterDto {
+			id: media.id,
+			range: chapter.range,
+			title_name: chapter.title_name,
+			min_number: chapter.min_number,
+			max_number: chapter.max_number,
+			sort_order: chapter.sort_order,
+			pages: chapter.pages,
+			is_special: chapter.is_special,
+			release_date: chapter.release_date,
+			summary: chapter.summary.unwrap_or_default(),
+			writer_name: writer.map(|person| person.name.clone()),
+			writer_id: writer.map(|person| person.id),
+			penciller_name: penciller.map(|person| person.name.clone()),
+			penciller_id: penciller.map(|person| person.id),
+		},
+		volume: ReadingListItemVolumeDto {
+			id: media.id,
+			name: volume_name,
+			min_number: KavitaFloat(media.number() as f32),
+			max_number: KavitaFloat(media.number() as f32),
+			series_id: input.id,
+		},
+	}
+}
+
+/// `ReadingListDto`: a Stump reading list as Kavita reports one. Stump has no
+/// promotion, CBL provenance or age rating on a list, so those keep the
+/// values `kavita-ref` shows for a freshly created list; `summary` is the
+/// list's description and `startingYear`/`endingYear` stay `0` because Stump
+/// does not compute a list's date range.
+pub fn map_reading_list(
+	id: i32,
+	list: &reading_list::Model,
+	item_count: i32,
+	owner_user_name: String,
+) -> ReadingListDto {
+	ReadingListDto {
+		id,
+		title: list.name.clone(),
+		summary: list.description.clone().unwrap_or_default(),
+		promoted: false,
+		cover_image_locked: false,
+		cover_image: None,
+		primary_color: None,
+		secondary_color: None,
+		item_count,
+		starting_year: 0,
+		starting_month: 0,
+		ending_year: 0,
+		ending_month: 0,
+		age_rating: AgeRating::Unknown,
+		owner_user_name,
+		source_path: None,
+		download_url: None,
+		sha_hash: None,
+		provider: ReadingListProvider::None,
+		last_sync_check_utc: None,
+		last_synced_utc: None,
+		total_items_at_import: 0,
+		tags: Vec::new(),
+		can_sync: false,
 	}
 }
 
@@ -666,7 +1155,134 @@ mod tests {
 			metadata: None,
 			session: None,
 			ordinal,
+			book: false,
 		}
+	}
+
+	fn series_model(name: &str) -> series::Model {
+		series::Model {
+			id: "series-1".to_owned(),
+			name: name.to_owned(),
+			description: None,
+			created_at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap().into(),
+			updated_at: None,
+			deleted_at: None,
+			path: "/library/Collection".to_owned(),
+			status: FileStatus::Ready,
+			thumbnail_meta: None,
+			thumbnail_path: None,
+			library_id: Some("lib".to_owned()),
+			source_provider: None,
+			remote_id: None,
+		}
+	}
+
+	/// The shape `kavita-ref` 0.9.1.4 gives a Book-library EPUB
+	/// (`komga-compat/kavita/capture/book-library.json`, `book_volumes_4`,
+	/// `book_series_detail_4`, `book_metadata_4`).
+	#[test]
+	fn book_series_is_one_loose_leaf_volume_with_a_special_chapter() {
+		let mut book = input("alice", "epub", 15, 1);
+		book.book = true;
+		book.metadata = Some(media_metadata::Model {
+			title: Some("Alice's Adventures in Wonderland".to_owned()),
+			writers: Some("Lewis Carroll".to_owned()),
+			genres: Some("Fantasy fiction, Children's stories".to_owned()),
+			language: Some("en".to_owned()),
+			year: Some(2008),
+			month: Some(6),
+			day: Some(27),
+			..default_media_metadata()
+		});
+		let series = SeriesInput {
+			id: 40,
+			series: series_model("Collection"),
+			metadata: None,
+			library_id: 2,
+			library_name: "Book Library".to_owned(),
+			media: vec![book],
+			kind: SeriesKind::Book,
+		};
+
+		let dto = map_series(&series);
+		assert_eq!(dto.name, "Alice's Adventures in Wonderland");
+		assert_eq!(dto.original_name, "Alice's Adventures in Wonderland");
+		assert_eq!(dto.sort_name, "Alice's Adventures in Wonderland");
+		assert_eq!(dto.pages, 15);
+		assert_eq!(dto.format, MangaFormat::Epub);
+		assert_eq!(dto.folder_path, "/library/Series");
+		assert_eq!(dto.lowest_folder_path, "/library/Series");
+		assert_eq!(dto.cover_image, "v11_c11.png");
+		assert_eq!(
+			serde_json::to_value(&dto).unwrap()["created"],
+			serde_json::json!("2026-09-05T00:30:44.0000000"),
+			"a book is created with its file, not with the folder series"
+		);
+
+		let volume = map_volume(series.id, &series.media[0]);
+		assert_eq!(volume.series_id, 40);
+		assert_eq!(volume.number, -100000);
+		assert_eq!(volume.min_number, KavitaFloat(-100000.0));
+		assert_eq!(volume.max_number, KavitaFloat(-100000.0));
+		assert_eq!(volume.name, "-100000");
+		assert_eq!(volume.chapters.len(), 1);
+		let chapter = &volume.chapters[0];
+		assert!(chapter.is_special);
+		assert_eq!(chapter.range, "Alice's Adventures in Wonderland");
+		assert_eq!(chapter.title, "Alice's Adventures in Wonderland");
+		assert_eq!(chapter.title_name, "Alice's Adventures in Wonderland");
+		assert_eq!(chapter.number, "-100000");
+		assert_eq!(chapter.sort_order, KavitaFloat(-100000.0));
+		assert_eq!((chapter.count, chapter.total_count), (0, 1));
+		assert_eq!(chapter.volume_title, "");
+		assert_eq!(chapter.word_count, 0);
+		assert_eq!(chapter.publication_status, PublicationStatus::OnGoing);
+		assert_eq!(chapter.files[0].file_path, "/library/Series/alice.epub");
+		assert_eq!(
+			serde_json::to_value(chapter).unwrap()["releaseDate"],
+			serde_json::json!("2008-06-27T00:00:00.0000000")
+		);
+
+		let detail = map_series_detail(&series, LibraryType::Book);
+		assert_eq!(detail.specials.len(), 1);
+		assert!(detail.volumes.is_empty());
+		assert!(detail.chapters.is_empty());
+		assert!(detail.storyline_chapters.is_empty());
+		assert_eq!(detail.library_type, LibraryType::Book);
+		assert_eq!((detail.unread_count, detail.total_count), (1, 1));
+
+		let metadata = map_series_metadata(&series, Vec::new());
+		assert_eq!(metadata.series_id, 40);
+		assert_eq!(metadata.publication_status, PublicationStatus::Completed);
+		assert_eq!((metadata.max_count, metadata.total_count), (1, 1));
+		assert_eq!(metadata.release_year, 2008);
+		assert_eq!(metadata.language, "en");
+		assert_eq!(metadata.people.writers[0].name, "Lewis Carroll");
+		assert_eq!(metadata.genres.len(), 2);
+		assert!(metadata.tags.is_empty());
+	}
+
+	#[test]
+	fn book_without_metadata_is_named_after_its_file() {
+		let mut book = input("rust_book", "pdf", 671, 1);
+		book.book = true;
+		let series = SeriesInput {
+			id: 41,
+			series: series_model("Collection"),
+			metadata: None,
+			library_id: 2,
+			library_name: "Book Library".to_owned(),
+			media: vec![book],
+			kind: SeriesKind::Book,
+		};
+		assert_eq!(map_series(&series).name, "rust_book");
+		let chapter = map_chapter(&series.media[0]);
+		// kavita-ref `comic_pdf_volumes_2`: `range`/`title` fall back to the
+		// file name and `titleName` stays empty.
+		assert_eq!(chapter.range, "rust_book");
+		assert_eq!(chapter.title, "rust_book");
+		assert_eq!(chapter.title_name, "");
+		assert!(chapter.is_special);
 	}
 
 	#[test]
@@ -729,24 +1345,14 @@ mod tests {
 		let series = SeriesInput {
 			id: 1,
 			series: series::Model {
-				id: "series-1".to_owned(),
-				name: "Alpha".to_owned(),
-				description: None,
-				created_at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap().into(),
-				updated_at: None,
-				deleted_at: None,
 				path: "/library/Alpha".to_owned(),
-				status: FileStatus::Ready,
-				thumbnail_meta: None,
-				thumbnail_path: None,
-				library_id: Some("lib".to_owned()),
-				source_provider: None,
-				remote_id: None,
+				..series_model("Alpha")
 			},
 			metadata: None,
 			library_id: 5,
 			library_name: "Lib".to_owned(),
 			media: vec![input("v1", "epub", 15, 1), input("v2", "epub", 20, 2)],
+			kind: SeriesKind::Grouped,
 		};
 		let dto = map_series(&series);
 		assert_eq!(dto.pages, 35);

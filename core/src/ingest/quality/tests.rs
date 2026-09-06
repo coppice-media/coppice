@@ -1,7 +1,7 @@
 use chrono::Utc;
 use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
 use models::{
-	entity::{library, media, media_metadata, page_hash, series},
+	entity::{media, media_metadata, page_hash, series},
 	shared::enums::FileStatus,
 };
 use sea_orm::{ActiveModelTrait, DatabaseBackend, MockDatabase, Set};
@@ -24,11 +24,13 @@ use crate::ingest::contract::{
 use super::{
 	cover_not_page_two::CoverNotPageTwoCheck,
 	cover_present::CoverPresentCheck,
+	drm_protected::DrmProtectedCheck,
 	duplicate_existing::DuplicateExistingCheck,
 	duplicate_pages_across_books::DuplicatePagesAcrossBooksCheck,
 	epub_toc_chapters::EpubTocChaptersCheck,
 	filename::{parse_filename, FilenameParseStatus},
 	image_dimensions_consistent::ImageDimensionsConsistentCheck,
+	missing_chapters_in_series::MissingChaptersInSeriesCheck,
 	page_count_matches_archive_entries::PageCountMatchesArchiveEntriesCheck,
 	QualityRegistry,
 };
@@ -414,6 +416,14 @@ async fn duplicate_existing_covers_pass_warn_and_fail() {
 	assert_eq!(evidence["matching_media_ids"][0], "existing-hash");
 }
 
+async fn seed_library(conn: &sea_orm::DatabaseConnection, library_id: &str) {
+	::tests::fake_data::Library {
+		id: Some(library_id.to_string()),
+		..Default::default()
+	}
+	.insert(conn)
+	.await;
+}
 
 async fn seed_library_book(
 	conn: &sea_orm::DatabaseConnection,
@@ -421,18 +431,6 @@ async fn seed_library_book(
 	series_id: &str,
 	media_id: &str,
 ) {
-	library::ActiveModel {
-		id: Set(library_id.to_string()),
-		name: Set(library_id.to_string()),
-		path: Set(format!("/{library_id}")),
-		status: Set(FileStatus::Ready),
-		config_id: Set(1),
-		created_at: Set(Utc::now().into()),
-		..Default::default()
-	}
-	.insert(conn)
-	.await
-	.expect("insert library fixture");
 	series::ActiveModel {
 		id: Set(series_id.to_string()),
 		name: Set(series_id.to_string()),
@@ -506,6 +504,7 @@ async fn duplicate_pages_across_books_covers_statuses_and_threshold() {
 	// the third book only matches within the Hamming tolerance and the book
 	// under rework never counts as its own duplicate.
 	let conn = ::tests::db::test_database().await;
+	seed_library(&conn, "lib").await;
 	seed_library_book(&conn, "lib", "series-a", "book-a").await;
 	seed_library_book(&conn, "lib", "series-b", "book-b").await;
 	seed_library_book(&conn, "lib", "series-c", "book-c").await;
@@ -523,11 +522,15 @@ async fn duplicate_pages_across_books_covers_statuses_and_threshold() {
 	assert_eq!(score, 0.5);
 	let books = evidence["duplicate_groups"][0]["books"].as_array().unwrap();
 	assert_eq!(books.len(), 3);
-	assert_eq!(evidence["duplicate_groups"][0]["dhash"], json!(format!("{own_dhash:016x}")));
+	assert_eq!(
+		evidence["duplicate_groups"][0]["dhash"],
+		json!(format!("{own_dhash:016x}"))
+	);
 	assert_eq!(evidence["matched_books"].as_array().unwrap().len(), 3);
 
 	// Raising the threshold above the matched book count silences the check.
 	let conn = ::tests::db::test_database().await;
+	seed_library(&conn, "lib").await;
 	seed_library_book(&conn, "lib", "series-a", "book-a").await;
 	seed_library_book(&conn, "lib", "series-b", "book-b").await;
 	seed_page_hash(&conn, "book-a", 1, own_dhash).await;
@@ -539,6 +542,141 @@ async fn duplicate_pages_across_books_covers_statuses_and_threshold() {
 	settings.insert("minBooks".to_string(), json!(4));
 	let result = check.run(&book, &settings).await.expect("check succeeds");
 	assert_eq!(result.status, QualityStatus::Pass);
+}
+
+async fn seed_series(conn: &sea_orm::DatabaseConnection, library_id: &str, name: &str) {
+	series::ActiveModel {
+		id: Set(name.to_string()),
+		name: Set(name.to_string()),
+		path: Set(format!("/{library_id}/{name}")),
+		status: Set(FileStatus::Ready),
+		library_id: Set(Some(library_id.to_string())),
+		created_at: Set(Utc::now().into()),
+		..Default::default()
+	}
+	.insert(conn)
+	.await
+	.expect("insert series fixture");
+}
+
+async fn seed_series_media(
+	conn: &sea_orm::DatabaseConnection,
+	series_id: &str,
+	file_name: &str,
+) {
+	media::ActiveModel {
+		id: Set(format!("media-{file_name}")),
+		name: Set(file_name.to_string()),
+		path: Set(format!("/lib/{series_id}/{file_name}")),
+		extension: Set("cbz".to_string()),
+		series_id: Set(Some(series_id.to_string())),
+		pages: Set(1),
+		size: Set(1),
+		status: Set(FileStatus::Ready),
+		created_at: Set(Utc::now().into()),
+		..Default::default()
+	}
+	.insert(conn)
+	.await
+	.expect("insert media fixture");
+}
+
+/// Chapters 48-92 minus 81, the wiki example the shared parser is built
+/// against, seeded as the visible media of one series.
+async fn seed_reference_series(conn: &sea_orm::DatabaseConnection) {
+	seed_library(conn, "lib").await;
+	seed_series(conn, "lib", "XYZ Series").await;
+	for chapter in (48..=92).filter(|chapter| *chapter != 81) {
+		seed_series_media(
+			conn,
+			"XYZ Series",
+			&format!("XYZ Series Chapter {chapter:03}.cbz"),
+		)
+		.await;
+	}
+}
+
+fn series_snapshot(path: &Path, relative_path: &str) -> BookSnapshot {
+	let mut book = snapshot(path, IngestMediaKind::ComicArchive, 1);
+	book.library_id = "lib".to_string();
+	book.relative_path = relative_path.to_string();
+	book.source_filename = relative_path
+		.rsplit('/')
+		.next()
+		.unwrap_or(relative_path)
+		.to_string();
+	book
+}
+
+#[tokio::test]
+async fn missing_chapters_in_series_covers_statuses() {
+	let file = cbz(&[("001.png", png(4, 4, [0, 0, 0, 255]))]);
+
+	// Warn: the staged chapter joins a series that skips 81. The staged name
+	// itself extends the found range, proving it takes part in the analysis.
+	let conn = ::tests::db::test_database().await;
+	seed_reference_series(&conn).await;
+	let check = MissingChaptersInSeriesCheck::new(Arc::new(conn));
+	let book = series_snapshot(file.path(), "XYZ Series/XYZ Series Chapter 093.cbz");
+	let (status, score, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::Warn);
+	assert_eq!(score, 0.5);
+	assert_eq!(evidence["missing"], json!([81]));
+	assert_eq!(evidence["found_ranges"], json!(["48-80", "82-93"]));
+	assert_eq!(evidence["series_id"], json!("XYZ Series"));
+	assert_eq!(evidence["kind"], json!("chapter"));
+	assert_eq!(evidence["file_count"], json!(45));
+	assert_eq!(evidence["unidentified"], json!([]));
+
+	// Pass: the staged file fills the only gap.
+	let conn = ::tests::db::test_database().await;
+	seed_reference_series(&conn).await;
+	let check = MissingChaptersInSeriesCheck::new(Arc::new(conn));
+	let book = series_snapshot(file.path(), "XYZ Series/XYZ Series Chapter 081.cbz");
+	let (status, score, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::Pass);
+	assert_eq!(score, 1.0);
+	assert_eq!(evidence["missing"], json!([]));
+	assert_eq!(evidence["found_ranges"], json!(["48-92"]));
+
+	// An omnibus range fills the numbers it covers, and an unidentified
+	// sibling is evidence, never a gap.
+	let conn = ::tests::db::test_database().await;
+	seed_library(&conn, "lib").await;
+	seed_series(&conn, "lib", "Series").await;
+	seed_series_media(&conn, "Series", "Series Chapter 01-03.cbz").await;
+	seed_series_media(&conn, "Series", "Prologue.cbz").await;
+	let check = MissingChaptersInSeriesCheck::new(Arc::new(conn));
+	let book = series_snapshot(file.path(), "Series/Series Chapter 04.cbz");
+	let (status, _, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::Pass);
+	assert_eq!(evidence["found_ranges"], json!(["1-4"]));
+	assert_eq!(evidence["unidentified"], json!(["Prologue.cbz"]));
+
+	// Not applicable without a series to compare against.
+	let conn = ::tests::db::test_database().await;
+	seed_reference_series(&conn).await;
+	let check = MissingChaptersInSeriesCheck::new(Arc::new(conn));
+	let book = series_snapshot(file.path(), "");
+	let (status, _, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::NotApplicable);
+	assert_eq!(evidence["reason"], json!("no_series_context"));
+
+	// Not applicable when one numbered file cannot prove a gap.
+	let conn = ::tests::db::test_database().await;
+	seed_library(&conn, "lib").await;
+	seed_series(&conn, "lib", "Solo").await;
+	let check = MissingChaptersInSeriesCheck::new(Arc::new(conn));
+	let book = series_snapshot(file.path(), "Solo/Solo Chapter 01.cbz");
+	let (status, _, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::NotApplicable);
+	assert_eq!(evidence["reason"], json!("insufficient_sequence"));
+
+	let conn = ::tests::db::test_database().await;
+	seed_reference_series(&conn).await;
+	let check = MissingChaptersInSeriesCheck::new(Arc::new(conn));
+	let evidence = run_disabled(&check, &book).await;
+	assert_eq!(evidence, json!({"disabled": true}));
 }
 
 #[tokio::test]
@@ -622,11 +760,129 @@ async fn filename_parser_covers_fixed_grammar() {
 	assert_eq!(normalized.number, Some(1.0));
 }
 
+/// A DRM-protected file must be a `FAIL` with a named scheme and a reason,
+/// and it must not move the score: the gate carries weight 0 and surfaces
+/// through the report's failed-check list instead.
+#[tokio::test]
+async fn drm_protected_gates_encrypted_files_without_scoring_them() {
+	let check = DrmProtectedCheck::new();
+	assert_eq!(check.weight(), 0);
+
+	// EPUB with content encryption (Adobe ADEPT rights.xml + AES EncryptedData).
+	let adept = cbz(&[
+		("mimetype", b"application/epub+zip".to_vec()),
+		(
+			"META-INF/encryption.xml",
+			br#"<encryption xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/></enc:EncryptedData></encryption>"#
+				.to_vec(),
+		),
+		(
+			"META-INF/rights.xml",
+			format!(
+				r#"<rights xmlns="http://ns.adobe.com/adept"><encryptedKey>{}</encryptedKey></rights>"#,
+				"A".repeat(172)
+			)
+			.into_bytes(),
+		),
+	]);
+	let book = snapshot(adept.path(), IngestMediaKind::Epub, 0);
+	let (status, score, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::Fail);
+	assert_eq!(score, 0.0);
+	assert_eq!(evidence["protected"], json!(true));
+	assert_eq!(evidence["blocking"], json!(true));
+	assert_eq!(evidence["container"], json!("epub"));
+	assert_eq!(evidence["scheme"], json!("ADOBE_ADEPT"));
+	assert!(
+		evidence["reason"].as_str().is_some_and(|r| !r.is_empty()),
+		"{evidence}"
+	);
+
+	// A DRM-free EPUB whose only encryption.xml algorithm is font
+	// obfuscation must pass.
+	let obfuscated = cbz(&[
+		("mimetype", b"application/epub+zip".to_vec()),
+		(
+			"META-INF/encryption.xml",
+			br#"<encryption xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/></enc:EncryptedData></encryption>"#
+				.to_vec(),
+		),
+	]);
+	let book = snapshot(obfuscated.path(), IngestMediaKind::Epub, 0);
+	let (status, score, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::Pass);
+	assert_eq!(score, 1.0);
+	assert_eq!(evidence, json!({ "protected": false }));
+
+	// MOBI PalmDOC header with encryption type 2, staged as `Unknown`: the
+	// detector sniffs the container, so no media-kind gate hides it.
+	let mobi = staged_bytes(&mobi_bytes(2));
+	let book = snapshot(mobi.path(), IngestMediaKind::Unknown, 0);
+	let (status, _, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::Fail);
+	assert_eq!(evidence["container"], json!("mobipocket"));
+	assert_eq!(evidence["scheme"], json!("MOBIPOCKET"));
+
+	// The same header with encryption type 0 is plaintext and ingestible.
+	let clean = staged_bytes(&mobi_bytes(0));
+	let book = snapshot(clean.path(), IngestMediaKind::Unknown, 0);
+	assert_eq!(run(&check, &book).await.0, QualityStatus::Pass);
+
+	// PDF declaring /Encrypt in its trailer.
+	let pdf = staged_bytes(
+		b"%PDF-1.7\ntrailer\n<< /Size 4 /Encrypt 3 0 R >>\n3 0 obj\n<< /Filter /Standard >>\n%%EOF\n",
+	);
+	let book = snapshot(pdf.path(), IngestMediaKind::Pdf, 0);
+	let (status, _, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::Fail);
+	assert_eq!(evidence["container"], json!("pdf"));
+	assert_eq!(evidence["scheme"], json!("PDF_STANDARD_SECURITY"));
+
+	let plain = staged_bytes(b"%PDF-1.7\ntrailer\n<< /Size 4 /Root 1 0 R >>\n%%EOF\n");
+	let book = snapshot(plain.path(), IngestMediaKind::Pdf, 0);
+	assert_eq!(run(&check, &book).await.0, QualityStatus::Pass);
+
+	// Disabling the gate must never fail a file.
+	let book = snapshot(adept.path(), IngestMediaKind::Epub, 0);
+	run_disabled(&check, &book).await;
+}
+
+fn staged_bytes(bytes: &[u8]) -> NamedTempFile {
+	let mut file = NamedTempFile::new().expect("temp file");
+	file.write_all(bytes).expect("write staged bytes");
+	file.flush().expect("flush staged bytes");
+	file
+}
+
+/// A one-record Palm database with a `MOBI` header and no DRM key block, so
+/// only the PalmDOC encryption type at record-0 offset 12 decides.
+fn mobi_bytes(encryption_type: u16) -> Vec<u8> {
+	const MOBI_HEADER_LEN: u32 = 232;
+
+	let mut record0 = vec![0u8; 16 + MOBI_HEADER_LEN as usize];
+	record0[0..2].copy_from_slice(&1u16.to_be_bytes());
+	record0[12..14].copy_from_slice(&encryption_type.to_be_bytes());
+	record0[16..20].copy_from_slice(b"MOBI");
+	record0[20..24].copy_from_slice(&MOBI_HEADER_LEN.to_be_bytes());
+	record0[168..172].copy_from_slice(&u32::MAX.to_be_bytes());
+	record0[172..176].copy_from_slice(&u32::MAX.to_be_bytes());
+
+	let record0_offset = 88u32;
+	let mut file = vec![0u8; record0_offset as usize];
+	file[0..5].copy_from_slice(b"Title");
+	file[60..64].copy_from_slice(b"BOOK");
+	file[64..68].copy_from_slice(b"MOBI");
+	file[76..78].copy_from_slice(&1u16.to_be_bytes());
+	file[78..82].copy_from_slice(&record0_offset.to_be_bytes());
+	file.extend_from_slice(&record0);
+	file
+}
+
 #[tokio::test]
 async fn registry_and_score_preserve_contract_identities() {
 	let conn = MockDatabase::new(DatabaseBackend::Sqlite).into_connection();
 	let registry = QualityRegistry::builtin(Arc::new(conn));
-	assert_eq!(registry.checks().len(), 8);
+	assert_eq!(registry.checks().len(), 10);
 	assert_eq!(registry.total_weight(), 100);
 	assert_eq!(
 		registry
@@ -635,6 +891,8 @@ async fn registry_and_score_preserve_contract_identities() {
 			.map(|descriptor| descriptor.id.as_str())
 			.collect::<Vec<_>>(),
 		vec![
+			// The blocking DRM gate runs first and carries weight 0.
+			"drm_protected",
 			"cover_present",
 			"cover_not_page_two",
 			"page_count_matches_archive_entries",
@@ -643,6 +901,7 @@ async fn registry_and_score_preserve_contract_identities() {
 			"duplicate_existing",
 			"duplicate_pages_across_books",
 			"filename_series_parse",
+			"missing_chapters_in_series",
 		]
 	);
 
@@ -671,12 +930,12 @@ async fn registry_and_score_preserve_contract_identities() {
 		.await
 		.expect("disabled report");
 	assert_eq!(report.score, 0);
-	assert_eq!(report.checks.len(), 7);
+	assert_eq!(report.checks.len(), 10);
 	assert!(report
 		.checks
 		.iter()
 		.all(|check| check.outcome.status == QualityStatus::NotApplicable));
-	assert_eq!(report.settings_snapshot.len(), 7);
+	assert_eq!(report.settings_snapshot.len(), 10);
 
 	let outcomes = vec![
 		(

@@ -1470,27 +1470,33 @@ async fn virtual_series_page(
 	pagination: &Pagination,
 	sorts: &[SortSpec],
 ) -> Option<APIResult<Page<KomgaSeries>>> {
-	let _ = user;
 	let library_id = virtual_library_id_from_search(ctx, search).await?;
-	let sort_fields: Vec<String> =
-		sorts.iter().map(|sort| sort.field.clone()).collect();
-	Some(
-		ctx.virtual_series_list(
-			library_id,
-			search,
-			&sort_fields,
-			pagination.page,
-			pagination.size,
-			pagination.unpaged,
-		)
-		.await,
+	// The user must be allowed to see the library, exactly as for stored rows.
+	match library::Entity::find_for_user(user)
+		.filter(library::Column::Id.eq(library_id.clone()))
+		.one(ctx.conn())
+		.await
+	{
+		Ok(Some(_)) => {},
+		Ok(None) => return None,
+		Err(error) => return Some(Err(error.into())),
+	}
+	let sort_fields: Vec<String> = sorts.iter().map(|sort| sort.field.clone()).collect();
+	ctx.virtual_series_list(
+		library_id,
+		search,
+		&sort_fields,
+		pagination.page,
+		pagination.size,
+		pagination.unpaged,
 	)
+	.await
 }
 
-/// The virtual library a search is pinned to, if any. Only a lone library
-/// condition (at any nesting depth) routes to live browse; combined
-/// conditions are answered from the database, which simply has no virtual
-/// rows.
+/// The virtual library a search is pinned to, if any. Only a lone
+/// `libraryId is` condition (at any nesting depth) routes to live browse;
+/// other conditions are answered from the database, which simply has no
+/// virtual rows.
 async fn virtual_library_id_from_search(
 	ctx: &dyn KomgaBackend,
 	search: &KomgaSeriesSearch,
@@ -1498,17 +1504,18 @@ async fn virtual_library_id_from_search(
 	let condition = search.condition.as_ref()?;
 	let mut library_ids = Vec::new();
 	collect_library_ids(condition, &mut library_ids);
-	let library_id = library_ids.into_iter().next()?;
-	ctx.virtual_library_source(&library_id).await
+	let [library_id] = library_ids.as_slice() else {
+		return None;
+	};
+	ctx.virtual_library_source(library_id).await?;
+	Some(library_id.clone())
 }
 
 fn collect_library_ids(condition: &SeriesCondition, out: &mut Vec<String>) {
 	match condition {
-		SeriesCondition::LibraryId { operator } => match operator {
-			crate::Equality::Is { value } | crate::Equality::IsNot { value } => {
-				out.push(value.0.clone());
-			},
-		},
+		SeriesCondition::LibraryId {
+			operator: crate::Equality::Is { value },
+		} => out.push(value.0.clone()),
 		SeriesCondition::AnyOfSeries { conditions }
 		| SeriesCondition::AllOfSeries { conditions } => {
 			for condition in conditions {
@@ -1625,7 +1632,7 @@ async fn get_series_books(
 	if series_query.one(ctx.conn()).await?.is_none() {
 		// Mode B: the series may be live-only; materialise it, then fall
 		// through to the ordinary database path.
-		if !ctx.virtual_materialise_series(&id).await? {
+		if !ctx.virtual_materialise_series(&user, &id).await? {
 			return Err(APIError::NotFound("Series not found".to_owned()));
 		}
 	}
@@ -2105,7 +2112,7 @@ async fn get_series_by_id(
 	let user = auth.user();
 	// Mode B: a live-only virtual series is served straight from the source
 	// under its deterministic id; materialised series use the database path.
-	if let Some(live) = ctx.virtual_series_by_id(&id).await {
+	if let Some(live) = ctx.virtual_series_by_id(&user, &id).await {
 		return cached_json(&headers, &live?);
 	}
 	let Some(model) = series::ModelWithMetadata::find_by_id_for_user(id, &user)

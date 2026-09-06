@@ -59,17 +59,12 @@ pub trait Sink: Send + Sync {
 ///
 /// `root` is the configured `annotation_sync_root` (or its default); sinks
 /// derive their own per-user directory from the batch's user id.
-pub type SinkFactory =
-	dyn Fn(&std::path::Path, &SettingValues) -> Result<Box<dyn Sink>, AnnotationSyncError>
-		+ Send
-		+ Sync;
+pub type SinkFactory = dyn Fn(&std::path::Path, &SettingValues) -> Result<Box<dyn Sink>, AnnotationSyncError>
+	+ Send
+	+ Sync;
 
 /// Reads a string setting with a default fallback.
-pub fn string_setting(
-	values: &SettingValues,
-	key: &str,
-	default: &str,
-) -> String {
+pub fn string_setting(values: &SettingValues, key: &str, default: &str) -> String {
 	values
 		.get(key)
 		.and_then(Value::as_str)

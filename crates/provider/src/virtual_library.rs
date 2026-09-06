@@ -7,18 +7,16 @@
 //! source is idempotent. The filesystem scanner skips these rows; the
 //! Komga/OPDS branches route them to live browse instead.
 
-use sea_orm::{prelude::*, ActiveValue::Set, EntityTrait};
-use stump_media::FileStatus;
-
 use models::{
 	entity::{library, library_config},
 	shared::enums::{
-		LibraryPattern, LibraryType, LibraryViewMode, ReadingDirection,
+		FileStatus, LibraryPattern, LibraryType, LibraryViewMode, ReadingDirection,
 		ReadingImageScaleFit, ReadingMode,
 	},
 };
+use sea_orm::{prelude::*, ActiveValue::Set, EntityTrait};
 
-use crate::{materialize::ProviderError, virtual_path};
+use crate::{host::ProviderError, virtual_path};
 
 /// Create (or fetch) the virtual library backing `source_id`.
 ///
@@ -60,10 +58,9 @@ pub async fn create_virtual_library<C: ConnectionTrait>(
 
 	let row = library::ActiveModel {
 		id: Set(id),
-		name: Set(
-			name.filter(|name| !name.trim().is_empty())
-				.unwrap_or_else(|| source_id.to_string()),
-		),
+		name: Set(name
+			.filter(|name| !name.trim().is_empty())
+			.unwrap_or_else(|| source_id.to_string())),
 		path: Set(format!("{}{}", virtual_path::SCHEME, source_id)),
 		status: Set(FileStatus::Ready),
 		config_id: Set(config.id),
@@ -73,22 +70,25 @@ pub async fn create_virtual_library<C: ConnectionTrait>(
 	.insert(conn)
 	.await?;
 
-	tracing::info!(library = row.id, source = source_id, "Created virtual library");
+	tracing::info!(
+		library = row.id,
+		source = source_id,
+		"Created virtual library"
+	);
 	Ok(row)
 }
 
 #[cfg(test)]
 mod tests {
+	use ::tests::db;
 	use models::entity::library;
 	use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-	use tests::db;
 
 	use super::*;
 
 	#[tokio::test]
 	async fn create_is_idempotent_and_marks_source_provider() {
 		let db = db::test_database().await;
-		db::create_database_tables(&db).await.expect("tables");
 
 		let first =
 			create_virtual_library(&db, "mock-en", Some("Manga Mocks".to_string()))

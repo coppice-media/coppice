@@ -1,5 +1,5 @@
 use async_graphql::SimpleObject;
-
+use stump_annotation_sync::SinkDescriptor;
 use stump_core::annotation_sync::SinkStatusRow;
 
 use crate::object::ingest::IngestSettingDefinition;
@@ -13,8 +13,8 @@ pub struct AnnotationSink {
 	pub settings: Vec<IngestSettingDefinition>,
 }
 
-impl From<stump_annotation_sync::sink::SinkDescriptor> for AnnotationSink {
-	fn from(descriptor: stump_annotation_sync::sink::SinkDescriptor) -> Self {
+impl From<SinkDescriptor> for AnnotationSink {
+	fn from(descriptor: SinkDescriptor) -> Self {
 		Self {
 			id: descriptor.id.to_owned(),
 			name: descriptor.name.to_owned(),

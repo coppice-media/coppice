@@ -18,7 +18,10 @@ use crate::{
 	mapper::cover_name,
 };
 
-use super::{route_ci, KavitaBackend, KavitaImage};
+use super::{
+	query::{resolve_series_key, SeriesKey},
+	route_ci, KavitaBackend, KavitaImage,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,15 +76,23 @@ pub(crate) fn image_response(image: KavitaImage, file_name: &str) -> Response {
 	response
 }
 
+/// A grouped series is covered by Stump's series thumbnail; a book by its
+/// file's, like every other Kavita series whose cover is its first chapter.
 async fn series_cover(
 	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
 	Extension(auth): Extension<AuthContext>,
 	Query(query): Query<SeriesCoverQuery>,
 ) -> APIResult<Response> {
 	let series_id = query.series_id.unwrap_or_default();
-	let stump_id =
-		KavitaIds::require(ctx.conn(), IdKind::Series, series_id, "Series").await?;
-	let image = ctx.series_thumbnail(&auth.user(), &stump_id).await?;
+	let image = match resolve_series_key(ctx.as_ref(), series_id).await? {
+		Some(SeriesKey::Series(stump_id)) => {
+			ctx.series_thumbnail(&auth.user(), &stump_id).await?
+		},
+		Some(SeriesKey::Book(media_id)) => {
+			ctx.media_thumbnail(&auth.user(), &media_id).await?
+		},
+		None => return Err(APIError::NotFound("Series does not exist".to_owned())),
+	};
 	Ok(image_response(image, &cover_name(series_id, series_id)))
 }
 

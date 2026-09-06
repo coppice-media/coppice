@@ -58,7 +58,9 @@ tarpaulin-report.html
 # Local personal library used for ingest testing; never commit
 /input/
 
-# The ingest editor is a SvelteKit app; upstream's lib/ and static patterns must not swallow its sources
+# The companion apps are SvelteKit apps; upstream's lib/ and static patterns must not swallow their sources
 !/editor/src/lib/
 !/editor/static/
+!/home/src/lib/
+!/home/static/
 /target-full/

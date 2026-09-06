@@ -21,12 +21,14 @@
 
 pub mod service;
 pub mod shelf;
+#[cfg(test)]
+mod tests;
 
 pub use service::{
 	add_shelf_items, create_collection, create_device_shelf, create_read_list,
 	delete_collection, delete_read_list, delete_shelf, remove_shelf_items, rename_shelf,
-	update_collection, update_read_list, CollectionCreate, CollectionUpdate, ContainerMembers,
-	ReadListCreate, ReadListUpdate,
+	update_collection, update_read_list, CollectionCreate, CollectionUpdate,
+	ContainerMembers, ReadListCreate, ReadListUpdate,
 };
 pub use shelf::{
 	shelf_sync_delta, shelves_for_user, ContainerKind, ShelfProjection, ShelfSyncDelta,

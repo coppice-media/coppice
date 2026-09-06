@@ -22,6 +22,50 @@ use epub::doc::EpubDoc;
 /// A file processor for EPUB files.
 pub struct EpubProcessor;
 
+/// One EPUB navigation entry, resolved against the spine: `fragment` is the
+/// anchor inside the document and `spine_index` the spine item holding it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpubNavEntry {
+	pub title: String,
+	pub fragment: String,
+	pub spine_index: usize,
+	pub children: Vec<EpubNavEntry>,
+}
+
+/// The reading structure of an EPUB: the synthetic page budget of every spine
+/// item (see [`EpubProcessor::spine_page_budget`]) and its navigation tree.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EpubStructure {
+	pub spine_pages: Vec<i32>,
+	pub navigation: Vec<EpubNavEntry>,
+}
+
+fn map_nav_entries(
+	points: &[epub::doc::NavPoint],
+	spine_paths: &[String],
+) -> Vec<EpubNavEntry> {
+	points
+		.iter()
+		.map(|point| {
+			let content = point.content.to_string_lossy().into_owned();
+			let (resource, fragment) = match content.split_once('#') {
+				Some((resource, fragment)) => (resource, fragment.to_owned()),
+				None => (content.as_str(), String::new()),
+			};
+			let spine_index = spine_paths
+				.iter()
+				.position(|path| path == resource)
+				.unwrap_or(0);
+			EpubNavEntry {
+				title: point.label.clone(),
+				fragment,
+				spine_index,
+				children: map_nav_entries(&point.children, spine_paths),
+			}
+		})
+		.collect()
+}
+
 impl FileProcessor for EpubProcessor {
 	fn get_sample_size(file: &str) -> Result<u64, FileError> {
 		let mut epub_file = Self::open(file)?;
@@ -243,25 +287,63 @@ impl EpubProcessor {
 		EpubDoc::new(path).map_err(|e| FileError::EpubOpenError(e.to_string()))
 	}
 
-	/// Compute the synthetic page count for Readium https://wiki.mobileread.com/wiki/Adobe_Digital_Editions#Page_numbers
+	/// The synthetic Readium page budget of every spine item, in spine order:
+	/// `ceil(compressed_size / 1KiB)`, at least one page. A non-linear item
+	/// (some EPUBs mark the cover that way) is worth `0` pages, because
+	/// Readium does not show it, and so is an item with no resource.
+	///
+	/// See <https://wiki.mobileread.com/wiki/Adobe_Digital_Editions#Page_numbers>.
+	pub fn spine_page_budget(epub_file: &mut EpubDoc<BufReader<File>>) -> Vec<i32> {
+		epub_file
+			.spine
+			.clone()
+			.iter()
+			.map(|spine_item| {
+				if !spine_item.linear {
+					return 0;
+				}
+				let Some(compressed_size) =
+					epub_file.get_resource_compressed_size(&spine_item.idref)
+				else {
+					return 0;
+				};
+				let pages = (compressed_size as f64 / 1024.0).ceil() as i32;
+				pages.max(1)
+			})
+			.collect()
+	}
+
+	/// Compute the synthetic page count for Readium: the sum of the per-item
+	/// budget in [`EpubProcessor::spine_page_budget`].
 	fn compute_synthetic_page_count(
 		epub_file: &mut EpubDoc<BufReader<File>>,
 	) -> Result<i32, FileError> {
-		let mut total_pages: i32 = 0;
+		Ok(Self::spine_page_budget(epub_file).into_iter().sum())
+	}
 
-		for spine_item in epub_file.spine.clone() {
-			// Skip non-linear items (e.g. some epubs skip the cover by marking them as such, and Readium does not show these)
-			if spine_item.linear {
-				if let Some(compressed_size) =
-					epub_file.get_resource_compressed_size(&spine_item.idref)
-				{
-					let pages = (compressed_size as f64 / 1024.0).ceil() as i32;
-					total_pages += if pages == 0 { 1 } else { pages };
-				}
-			}
-		}
-
-		Ok(total_pages)
+	/// The EPUB reading structure: the per-spine-item synthetic page budget
+	/// and the navigation tree resolved onto spine indices.
+	pub fn structure(path: &str) -> Result<EpubStructure, FileError> {
+		let mut epub_file = Self::open(path)?;
+		let spine_pages = Self::spine_page_budget(&mut epub_file);
+		// Spine documents by package-relative path, so a navigation entry's
+		// resource resolves to the spine item that holds it.
+		let spine_paths = epub_file
+			.spine
+			.iter()
+			.map(|item| {
+				epub_file
+					.resources
+					.get(&item.idref)
+					.map(|resource| resource.path.to_string_lossy().into_owned())
+					.unwrap_or_default()
+			})
+			.collect::<Vec<_>>();
+		let navigation = map_nav_entries(&epub_file.toc, &spine_paths);
+		Ok(EpubStructure {
+			spine_pages,
+			navigation,
+		})
 	}
 
 	fn metadata_to_map(

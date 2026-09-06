@@ -139,7 +139,9 @@ impl Channel for WebhookChannel {
 		} else if status.is_client_error() {
 			Err(ChannelError::Rejected(format!("webhook returned {status}")))
 		} else {
-			Err(ChannelError::Transport(format!("webhook returned {status}")))
+			Err(ChannelError::Transport(format!(
+				"webhook returned {status}"
+			)))
 		}
 	}
 }
@@ -154,7 +156,9 @@ mod tests {
 		// Reference: printf 'hello' | openssl dgst -sha256 -hmac 'topsecret'
 		assert_eq!(
 			WebhookChannel::signature("topsecret", b"hello").as_deref(),
-			Some("ed76fd36523b8becda5a3b36d0e3737e8ae5111f55e26c7c3a455a3ce29636d2")
+			Some(
+				"sha256=ed76fd36523b8becda5a3b36d0e3737e8ae5111f55e26c7c3a455a3ce29636d2"
+			)
 		);
 	}
 
@@ -165,8 +169,9 @@ mod tests {
 
 	#[test]
 	fn render_includes_kind_title_and_attachment_metadata() {
-		let notification = Notification::new(NotificationKind::ScanFinished, "Scan", "done")
-			.with_attachment(Attachment::bytes("a.cbz", "application/zip", vec![]));
+		let notification =
+			Notification::new(NotificationKind::ScanFinished, "Scan", "done")
+				.with_attachment(Attachment::bytes("a.cbz", "application/zip", vec![]));
 		let rendered = WebhookChannel::render(&notification);
 		assert_eq!(rendered["kind"], "SCAN_FINISHED");
 		assert_eq!(rendered["title"], "Scan");

@@ -5,7 +5,9 @@
 //! union ([`CoreJobOutput`]), and the [`JobServices`] host that persists job records,
 //! forwards events, and dispatches queued payloads.
 
+pub mod annotation_sync;
 mod error;
+pub mod notification;
 mod output;
 mod services;
 pub mod stump_job;

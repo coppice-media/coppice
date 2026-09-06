@@ -177,7 +177,7 @@ pub struct DownloadUrl {
 	pub url: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Format {
 	EPUB3FL,
 	EPUB,

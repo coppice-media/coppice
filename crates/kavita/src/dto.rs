@@ -301,6 +301,125 @@ int_enum! {
 	}
 }
 
+int_enum! {
+	/// `ReadingProfileKind`; `Default` is the server-wide profile every user
+	/// falls back to.
+	ReadingProfileKind {
+		Default = 0,
+		User = 1,
+		Implicit = 2,
+	}
+}
+
+int_enum! {
+	/// `ReadingDirection`.
+	ReadingDirection {
+		LeftToRight = 0,
+		RightToLeft = 1,
+	}
+}
+
+int_enum! {
+	/// `ScalingOption`.
+	ScalingOption {
+		FitToHeight = 0,
+		FitToWidth = 1,
+		Original = 2,
+		Automatic = 3,
+	}
+}
+
+int_enum! {
+	/// `PageSplitOption`.
+	PageSplitOption {
+		SplitLeftToRight = 0,
+		SplitRightToLeft = 1,
+		NoSplit = 2,
+		FitSplit = 3,
+	}
+}
+
+int_enum! {
+	/// `ReaderMode`.
+	ReaderMode {
+		LeftRight = 0,
+		UpDown = 1,
+		Webtoon = 2,
+	}
+}
+
+int_enum! {
+	/// `LayoutMode`.
+	LayoutMode {
+		Single = 1,
+		Double = 2,
+		DoubleReversed = 3,
+	}
+}
+
+int_enum! {
+	/// `BreakPoint`: the viewport width below which a width override stops
+	/// applying; the discriminant is the width in pixels.
+	BreakPoint {
+		Never = 0,
+		Mobile = 768,
+		Tablet = 1280,
+		Desktop = 1440,
+	}
+}
+
+int_enum! {
+	/// `WritingStyle`.
+	WritingStyle {
+		Horizontal = 0,
+		Vertical = 1,
+	}
+}
+
+int_enum! {
+	/// `BookPageLayoutMode`.
+	BookPageLayoutMode {
+		Default = 0,
+		Column1 = 1,
+		Column2 = 2,
+	}
+}
+
+int_enum! {
+	/// `PdfTheme`.
+	PdfTheme {
+		Dark = 0,
+		Light = 1,
+	}
+}
+
+int_enum! {
+	/// `PdfScrollMode` (`2` is unused by Kavita).
+	PdfScrollMode {
+		Vertical = 0,
+		Horizontal = 1,
+		Page = 3,
+	}
+}
+
+int_enum! {
+	/// `PdfSpreadMode`.
+	PdfSpreadMode {
+		None = 0,
+		Odd = 1,
+		Even = 2,
+	}
+}
+
+int_enum! {
+	/// `ReadingListProvider`; Stump reading lists are always server-local.
+	ReadingListProvider {
+		None = 0,
+		File = 1,
+		Url = 2,
+	}
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginDto {
@@ -816,6 +935,334 @@ pub struct MarkVolumeReadDto {
 	pub volume_id: i32,
 	#[serde(default)]
 	pub generate_reading_session: bool,
+}
+
+/// `MarkVolumesReadDto`, the body of `POST /api/Reader/mark-multiple-read`
+/// and `mark-multiple-unread`: volumes and chapters of one series.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkVolumesReadDto {
+	pub series_id: i32,
+	#[serde(default)]
+	pub volume_ids: Vec<i32>,
+	#[serde(default)]
+	pub chapter_ids: Vec<i32>,
+	#[serde(default)]
+	pub generate_reading_session: bool,
+}
+
+/// `MarkChapterReadDto`, the body of `POST /api/Reader/mark-chapter-read`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkChapterReadDto {
+	pub series_id: i32,
+	pub chapter_id: i32,
+	#[serde(default)]
+	pub generate_reading_session: bool,
+}
+
+/// `FileDimensionDto`, one entry of `ChapterInfoDto.pageDimensions`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDimensionDto {
+	pub width: i32,
+	pub height: i32,
+	/// 0-based page number, matching `GET /api/Reader/image?page=`.
+	pub page_number: i32,
+	pub file_name: String,
+	/// Kavita's `IsWide`: a landscape page, which the double reader pairs
+	/// with itself rather than a neighbour.
+	pub is_wide: bool,
+}
+
+/// `ChapterInfoDto` from `GET /api/Reader/chapter-info`; the reader's first
+/// call. `pageDimensions`/`doublePairs` are `null` unless
+/// `includeDimensions=true`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterInfoDto {
+	pub chapter_number: String,
+	pub volume_number: String,
+	pub volume_id: i32,
+	pub series_name: String,
+	pub series_format: MangaFormat,
+	pub series_id: i32,
+	pub library_id: i32,
+	pub library_type: LibraryType,
+	pub chapter_title: String,
+	pub pages: i32,
+	pub file_name: String,
+	pub is_special: bool,
+	pub subtitle: String,
+	pub title: String,
+	pub series_total_pages: i32,
+	pub series_total_pages_read: i32,
+	pub page_dimensions: Option<Vec<FileDimensionDto>>,
+	/// Page → the page it is displayed next to in the double reader, keyed by
+	/// the page number rendered as a string (a .NET `Dictionary<int, int>`).
+	pub double_pairs: Option<std::collections::BTreeMap<String, i32>>,
+}
+
+/// `BookInfoDto` from `GET /api/Book/{chapterId}/book-info`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookInfoDto {
+	pub book_title: String,
+	pub series_id: i32,
+	pub volume_id: i32,
+	pub series_format: MangaFormat,
+	pub series_name: String,
+	pub chapter_number: String,
+	pub volume_number: String,
+	pub library_id: i32,
+	pub pages: i32,
+	pub is_special: bool,
+	pub chapter_title: Option<String>,
+}
+
+/// `BookChapterItem` from `GET /api/Book/{chapterId}/chapters`: one EPUB
+/// navigation entry. `part` is the anchor within the page, `page` the
+/// `book-page` index the entry lives on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookChapterItemDto {
+	pub title: String,
+	pub part: String,
+	pub page: i32,
+	pub children: Vec<BookChapterItemDto>,
+}
+
+/// `UserReadingProfileDto` from `GET /api/reading-profile/{libraryId}/{seriesId}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserReadingProfileDto {
+	pub id: i32,
+	pub user_id: i32,
+	pub name: String,
+	pub kind: ReadingProfileKind,
+	pub device_ids: Vec<i32>,
+	pub series_ids: Vec<i32>,
+	pub library_ids: Vec<i32>,
+	pub reading_direction: ReadingDirection,
+	pub scaling_option: ScalingOption,
+	pub page_split_option: PageSplitOption,
+	pub reader_mode: ReaderMode,
+	pub auto_close_menu: bool,
+	pub show_screen_hints: bool,
+	pub emulate_book: bool,
+	pub layout_mode: LayoutMode,
+	pub background_color: String,
+	pub swipe_to_paginate: bool,
+	pub allow_automatic_webtoon_reader_detection: bool,
+	pub width_override: Option<i32>,
+	pub disable_width_override: BreakPoint,
+	pub book_reader_margin: i32,
+	pub book_reader_line_spacing: i32,
+	pub book_reader_font_size: i32,
+	pub book_reader_font_family: String,
+	pub book_reader_tap_to_paginate: bool,
+	pub book_reader_reading_direction: ReadingDirection,
+	pub book_reader_writing_style: WritingStyle,
+	pub book_reader_theme_name: String,
+	pub book_reader_layout_mode: BookPageLayoutMode,
+	pub book_reader_immersive_mode: bool,
+	pub book_reader_disable_bookmark_icon: bool,
+	pub pdf_theme: PdfTheme,
+	pub pdf_scroll_mode: PdfScrollMode,
+	pub pdf_spread_mode: PdfSpreadMode,
+}
+
+impl UserReadingProfileDto {
+	/// Kavita's `Default Profile`, the one a fresh install serves for every
+	/// library and series, copied field-for-field from `kavita-ref`
+	/// (`GET /api/reading-profile/2/4?skipImplicit=false`). Stump stores no
+	/// per-series reader settings, so this is the only profile it serves.
+	pub fn default_profile() -> Self {
+		Self {
+			id: 1,
+			user_id: 0,
+			name: "Default Profile".to_owned(),
+			kind: ReadingProfileKind::Default,
+			device_ids: Vec::new(),
+			series_ids: Vec::new(),
+			library_ids: Vec::new(),
+			reading_direction: ReadingDirection::LeftToRight,
+			scaling_option: ScalingOption::Automatic,
+			page_split_option: PageSplitOption::FitSplit,
+			reader_mode: ReaderMode::LeftRight,
+			auto_close_menu: true,
+			show_screen_hints: true,
+			emulate_book: false,
+			layout_mode: LayoutMode::Single,
+			background_color: "#000000".to_owned(),
+			swipe_to_paginate: false,
+			allow_automatic_webtoon_reader_detection: false,
+			width_override: None,
+			disable_width_override: BreakPoint::Never,
+			book_reader_margin: 15,
+			book_reader_line_spacing: 100,
+			book_reader_font_size: 100,
+			book_reader_font_family: "Default".to_owned(),
+			book_reader_tap_to_paginate: false,
+			book_reader_reading_direction: ReadingDirection::LeftToRight,
+			book_reader_writing_style: WritingStyle::Horizontal,
+			book_reader_theme_name: "Dark".to_owned(),
+			book_reader_layout_mode: BookPageLayoutMode::Default,
+			book_reader_immersive_mode: false,
+			book_reader_disable_bookmark_icon: false,
+			pdf_theme: PdfTheme::Dark,
+			pdf_scroll_mode: PdfScrollMode::Vertical,
+			pdf_spread_mode: PdfSpreadMode::None,
+		}
+	}
+}
+
+/// `UpdateWantToReadDto`, the body of `POST /api/want-to-read/add-series`
+/// and `remove-series`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateWantToReadDto {
+	#[serde(default)]
+	pub series_ids: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingListTagDto {
+	pub id: i32,
+	pub title: String,
+	pub normalized_title: String,
+}
+
+/// `ReadingListDto`; Kavita's reading-list metadata block. Stump has no CBL
+/// import, promotion, age rating or colour scape, so those stay at the values
+/// `kavita-ref` reports for a freshly created list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingListDto {
+	pub id: i32,
+	pub title: String,
+	pub summary: String,
+	pub promoted: bool,
+	pub cover_image_locked: bool,
+	pub cover_image: Option<String>,
+	pub primary_color: Option<String>,
+	pub secondary_color: Option<String>,
+	pub item_count: i32,
+	pub starting_year: i32,
+	pub starting_month: i32,
+	pub ending_year: i32,
+	pub ending_month: i32,
+	pub age_rating: AgeRating,
+	pub owner_user_name: String,
+	pub source_path: Option<String>,
+	pub download_url: Option<String>,
+	pub sha_hash: Option<String>,
+	pub provider: ReadingListProvider,
+	pub last_sync_check_utc: Option<KavitaDateTime>,
+	pub last_synced_utc: Option<KavitaDateTime>,
+	pub total_items_at_import: i32,
+	pub tags: Vec<ReadingListTagDto>,
+	pub can_sync: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingListItemChapterDto {
+	pub id: i32,
+	pub range: String,
+	pub title_name: String,
+	pub min_number: KavitaFloat,
+	pub max_number: KavitaFloat,
+	pub sort_order: KavitaFloat,
+	pub pages: i32,
+	pub is_special: bool,
+	pub release_date: KavitaDateTime,
+	pub summary: String,
+	pub writer_name: Option<String>,
+	pub writer_id: Option<i32>,
+	pub penciller_name: Option<String>,
+	pub penciller_id: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingListItemVolumeDto {
+	pub id: i32,
+	pub name: String,
+	pub min_number: KavitaFloat,
+	pub max_number: KavitaFloat,
+	pub series_id: i32,
+}
+
+/// `ReadingListItemDto` from `GET /api/ReadingList/items`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingListItemDto {
+	pub id: i32,
+	pub order: i32,
+	pub chapter_id: i32,
+	pub series_id: i32,
+	pub series_name: String,
+	pub series_sort_name: String,
+	pub series_format: MangaFormat,
+	pub pages_read: i32,
+	pub pages_total: i32,
+	pub chapter_number: String,
+	pub volume_number: String,
+	pub chapter_title_name: String,
+	pub volume_id: i32,
+	pub library_id: i32,
+	pub title: String,
+	pub library_type: LibraryType,
+	pub library_name: String,
+	pub release_date: KavitaDateTime,
+	pub reading_list_id: i32,
+	pub last_reading_progress_utc: KavitaDateTime,
+	pub file_size: i64,
+	pub summary: String,
+	pub is_special: bool,
+	pub chapter: ReadingListItemChapterDto,
+	pub volume: ReadingListItemVolumeDto,
+}
+
+/// `CreateReadingListDto`, the body of `POST /api/ReadingList/create`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateReadingListDto {
+	#[serde(default)]
+	pub title: String,
+}
+
+/// `UpdateReadingListBySeriesDto`, the body of
+/// `POST /api/ReadingList/update-by-series`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateReadingListBySeriesDto {
+	pub series_id: i32,
+	pub reading_list_id: i32,
+}
+
+/// `UpdateReadingListByChapterDto`/`UpdateReadingListByVolumeDto`: the same
+/// shape, with the member id under `chapterId` or `volumeId`. A Stump media
+/// item is both the Kavita volume and its chapter, so one type serves both
+/// routes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateReadingListByItemDto {
+	pub series_id: i32,
+	pub reading_list_id: i32,
+	#[serde(default)]
+	pub chapter_id: Option<i32>,
+	#[serde(default)]
+	pub volume_id: Option<i32>,
+}
+
+impl UpdateReadingListByItemDto {
+	/// The Kavita volume/chapter id the body names, whichever field carries it.
+	pub fn item_id(&self) -> Option<i32> {
+		self.chapter_id.or(self.volume_id)
+	}
 }
 
 /// `TachiyomiChapterDto`: a `ChapterDto` whose `number` may carry the encoded

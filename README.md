@@ -73,6 +73,7 @@ Any compiled profile can be tuned without rebuilding (from [Server configuration
 | `INGEST_STAGING_DIR` | `<config dir>/ingest/staging` | Immutable staged ingest files (`<sha256>-<filename>`); rejects go to `rejected/`. |
 | `INGEST_PROGRESS_RETENTION` | — | Typed ingest progress events retained for `ingestProgress` and `/api/v2/ingest/events` SSE replay. |
 | `INGEST_EDITOR_DIR` | — | Serves a built ingest editor under `/editor` when it contains `index.html`. |
+| `STUMP_HOME_APP_DIR` | — | Serves the built Home app (devices, reading, account) under `/app` when it contains `index.html`. |
 
 ## Quick start
 

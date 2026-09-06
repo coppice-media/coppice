@@ -19,12 +19,12 @@ use std::collections::HashSet;
 
 use chrono::Utc;
 use models::entity::{
-	collection, collection_series, kobo_shelf_tombstone, media, reading_list, reading_list_item,
-	series, user::AuthUser,
+	collection, collection_series, kobo_shelf_tombstone, media, reading_list,
+	reading_list_item, series, user::AuthUser,
 };
 use sea_orm::{
-	ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait,
-	IntoActiveModel, QueryFilter, QuerySelect, Set, TransactionTrait,
+	ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr,
+	EntityTrait, IntoActiveModel, QueryFilter, QuerySelect, Set, TransactionTrait,
 };
 use uuid::Uuid;
 
@@ -112,7 +112,7 @@ pub async fn create_collection(
 ) -> CoreResult<collection::Model> {
 	let name = validate_name(&input.name)?;
 	reject_duplicates(&input.series_ids, "seriesIds")?;
-	ensure_series_visible(&ctx.conn, user, &input.series_ids).await?;
+	ensure_series_visible(ctx.conn.as_ref(), user, &input.series_ids).await?;
 
 	let txn = ctx.conn.begin().await?;
 	let result = async {
@@ -129,7 +129,7 @@ pub async fn create_collection(
 		.await?;
 
 		replace_collection_members(&txn, &model.id, &input.series_ids).await?;
-		Ok::<_, DbErr>(model)
+		Ok::<_, CoreError>(model)
 	}
 	.await;
 	let model = commit(txn, result).await?;
@@ -201,7 +201,7 @@ async fn apply_collection_update(
 		replace_collection_members(txn, id, series_ids).await?;
 	}
 
-	container_member_ids(txn, ContainerKind::Collection, id).await
+	Ok(container_member_ids(txn, ContainerKind::Collection, id).await?)
 }
 
 /// Deletes a collection (and, when it was projected to Kobo, records a
@@ -210,7 +210,7 @@ pub async fn delete_collection(ctx: &Ctx, user: &AuthUser, id: &str) -> CoreResu
 	let txn = ctx.conn.begin().await?;
 	let result = async {
 		let model = collection::Entity::find_by_id(id.to_owned())
-			.one(txn)
+			.one(&txn)
 			.await?
 			.ok_or_else(|| CoreError::NotFound(format!("Collection {id} not found")))?;
 		if model.creating_user_id != user.id {
@@ -219,12 +219,13 @@ pub async fn delete_collection(ctx: &Ctx, user: &AuthUser, id: &str) -> CoreResu
 			));
 		}
 
-		let member_ids = container_member_ids(txn, ContainerKind::Collection, id).await?;
+		let member_ids =
+			container_member_ids(&txn, ContainerKind::Collection, id).await?;
 		if model.kobo_shelf {
-			record_shelf_tombstone(txn, &model.creating_user_id, id).await?;
+			record_shelf_tombstone(&txn, &model.creating_user_id, id).await?;
 		}
 		collection::Entity::delete_by_id(id.to_owned())
-			.exec(txn)
+			.exec(&txn)
 			.await?;
 		Ok::<_, CoreError>(member_ids)
 	}
@@ -247,7 +248,7 @@ pub async fn create_read_list(
 ) -> CoreResult<reading_list::Model> {
 	let name = validate_name(&input.name)?;
 	reject_duplicates(&input.book_ids, "bookIds")?;
-	ensure_books_visible(&ctx.conn, user, &input.book_ids).await?;
+	ensure_books_visible(ctx.conn.as_ref(), user, &input.book_ids).await?;
 
 	let txn = ctx.conn.begin().await?;
 	let result = async {
@@ -270,7 +271,7 @@ pub async fn create_read_list(
 		.await?;
 
 		replace_reading_list_members(&txn, &model.id, &input.book_ids).await?;
-		Ok::<_, DbErr>(model)
+		Ok::<_, CoreError>(model)
 	}
 	.await;
 	let model = commit(txn, result).await?;
@@ -349,7 +350,7 @@ async fn apply_read_list_update(
 		replace_reading_list_members(txn, id, book_ids).await?;
 	}
 
-	container_member_ids(txn, ContainerKind::ReadingList, id).await
+	Ok(container_member_ids(txn, ContainerKind::ReadingList, id).await?)
 }
 
 /// Deletes a reading list (with a Kobo tombstone when projected) and emits
@@ -358,7 +359,7 @@ pub async fn delete_read_list(ctx: &Ctx, user: &AuthUser, id: &str) -> CoreResul
 	let txn = ctx.conn.begin().await?;
 	let result = async {
 		let model = reading_list::Entity::find_by_id(id.to_owned())
-			.one(txn)
+			.one(&txn)
 			.await?
 			.ok_or_else(|| CoreError::NotFound(format!("Reading list {id} not found")))?;
 		if model.creating_user_id != user.id {
@@ -367,12 +368,13 @@ pub async fn delete_read_list(ctx: &Ctx, user: &AuthUser, id: &str) -> CoreResul
 			));
 		}
 
-		let member_ids = container_member_ids(txn, ContainerKind::ReadingList, id).await?;
+		let member_ids =
+			container_member_ids(&txn, ContainerKind::ReadingList, id).await?;
 		if model.kobo_shelf {
-			record_shelf_tombstone(txn, &model.creating_user_id, id).await?;
+			record_shelf_tombstone(&txn, &model.creating_user_id, id).await?;
 		}
 		reading_list::Entity::delete_by_id(id.to_owned())
-			.exec(txn)
+			.exec(&txn)
 			.await?;
 		Ok::<_, CoreError>(member_ids)
 	}
@@ -391,9 +393,9 @@ pub async fn delete_read_list(ctx: &Ctx, user: &AuthUser, id: &str) -> CoreResul
 /// Kobo shelves are book sets; Stump's shelf contract projects them onto
 /// collections, whose members are series. The device-supplied shelf id is
 /// honored when it parses as a UUID so the shelf id is stable from the first
-/// write; otherwise a fresh UUID is minted and echoed. Repeated creation
-/// with the same id by the same user is idempotent and returns the existing
-/// collection.
+/// write; otherwise a fresh UUID is minted and echoed. Creation is
+/// idempotent the way Calibre-Web's `HandleTagCreate` is: an existing shelf
+/// of this user with the same id, or the same name, is returned as-is.
 pub async fn create_device_shelf(
 	ctx: &Ctx,
 	user: &AuthUser,
@@ -408,7 +410,7 @@ pub async fn create_device_shelf(
 	};
 
 	if let Some(existing) = collection::Entity::find_by_id(shelf_id.clone())
-		.one(&ctx.conn)
+		.one(ctx.conn.as_ref())
 		.await?
 	{
 		if existing.creating_user_id == user.id {
@@ -419,24 +421,28 @@ pub async fn create_device_shelf(
 		));
 	}
 
-	let txn = ctx.conn.begin().await?;
-	let result = async {
-		let model = collection::ActiveModel {
-			id: Set(shelf_id),
-			name: Set(name),
-			ordered: Set(false),
-			updated_at: Set(Utc::now().into()),
-			kobo_shelf: Set(true),
-			source_device: Set(device),
-			creating_user_id: Set(user.id.clone()),
-			..Default::default()
-		}
-		.insert(&txn)
-		.await?;
-		Ok::<_, DbErr>(model)
+	if let Some(existing) = collection::Entity::find()
+		.filter(collection::Column::CreatingUserId.eq(user.id.clone()))
+		.filter(collection::Column::KoboShelf.eq(true))
+		.filter(collection::Column::Name.eq(name.clone()))
+		.one(ctx.conn.as_ref())
+		.await?
+	{
+		return Ok(existing);
 	}
-	.await;
-	let model = commit(txn, result).await?;
+
+	let model = collection::ActiveModel {
+		id: Set(shelf_id),
+		name: Set(name),
+		ordered: Set(false),
+		updated_at: Set(Utc::now().into()),
+		kobo_shelf: Set(true),
+		source_device: Set(device),
+		creating_user_id: Set(user.id.clone()),
+		..Default::default()
+	}
+	.insert(ctx.conn.as_ref())
+	.await?;
 
 	ctx.emit_event(CoreEvent::CollectionAdded(CollectionAdded {
 		id: model.id.clone(),
@@ -458,21 +464,28 @@ pub async fn rename_shelf(
 ) -> CoreResult<()> {
 	let name = validate_name(&name)?;
 	let txn = ctx.conn.begin().await?;
-	let result = async {
-		let kind = resolve_shelf(txn, shelf_id).await?;
-		let owner = shelf_owner_id(txn, kind, shelf_id).await?;
-		assert_shelf_owner(user, &owner)?;
-		match kind {
-			ContainerKind::Collection => touch_collection(txn, shelf_id, Some(name), device).await?,
-			ContainerKind::ReadingList => {
-				touch_reading_list(txn, shelf_id, Some(name), device).await?
-			},
-		}
-		Ok::<_, CoreError>(())
+	let result = rename_shelf_txn(&txn, user, shelf_id, name, device).await;
+	commit(txn, result).await
+}
+
+async fn rename_shelf_txn(
+	txn: &DatabaseTransaction,
+	user: &AuthUser,
+	shelf_id: &str,
+	name: String,
+	device: Option<String>,
+) -> CoreResult<()> {
+	let kind = resolve_shelf(txn, shelf_id).await?;
+	let owner = shelf_owner_id(txn, kind, shelf_id).await?;
+	assert_shelf_owner(user, &owner)?;
+	match kind {
+		ContainerKind::Collection => {
+			touch_collection(txn, shelf_id, Some(name), device).await
+		},
+		ContainerKind::ReadingList => {
+			touch_reading_list(txn, shelf_id, Some(name), device).await
+		},
 	}
-	.await;
-	commit(txn, result).await?;
-	Ok(())
 }
 
 /// Adds books to a shelf. For a collection-backed shelf each book maps to its
@@ -487,73 +500,79 @@ pub async fn add_shelf_items(
 	device: Option<String>,
 ) -> CoreResult<()> {
 	reject_duplicates(&book_ids, "bookIds")?;
-	ensure_books_visible(&ctx.conn, user, &book_ids).await?;
+	ensure_books_visible(ctx.conn.as_ref(), user, &book_ids).await?;
 
 	let txn = ctx.conn.begin().await?;
-	let result = async {
-		let kind = resolve_shelf(txn, shelf_id).await?;
-		let owner = shelf_owner_id(txn, kind, shelf_id).await?;
-		assert_shelf_owner(user, &owner)?;
+	let result = add_shelf_items_txn(&txn, user, shelf_id, &book_ids, device).await;
+	commit(txn, result).await
+}
 
-		match kind {
-			ContainerKind::Collection => {
-				let series_ids = series_of_books(txn, &book_ids).await?;
-				if series_ids.len() != book_ids.len() {
-					return Err(CoreError::BadRequest(
-						"Every book on a collection shelf must belong to a series".to_owned(),
-					));
-				}
-				let existing = container_member_ids(txn, kind, shelf_id).await?;
-				let existing: HashSet<String> = existing.into_iter().collect();
-				let mut order = existing.len() as i32;
-				let members: Vec<collection_series::ActiveModel> = series_ids
-					.iter()
-					.filter(|series_id| !existing.contains(series_id))
-					.map(|series_id| {
-						order += 1;
-						collection_series::ActiveModel {
-							collection_id: Set(shelf_id.to_owned()),
-							series_id: Set(series_id.clone()),
-							display_order: Set(order),
-							..Default::default()
-						}
-					})
-					.collect();
-				if !members.is_empty() {
-					collection_series::Entity::insert_many(members)
-						.exec(txn)
-						.await?;
-				}
-				touch_collection(txn, shelf_id, None, device).await?;
-			},
-			ContainerKind::ReadingList => {
-				let existing = container_member_ids(txn, kind, shelf_id).await?;
-				let existing: HashSet<String> = existing.into_iter().collect();
-				let mut order = existing.len() as i32;
-				let items: Vec<reading_list_item::ActiveModel> = book_ids
-					.iter()
-					.filter(|book_id| !existing.contains(book_id))
-					.map(|book_id| {
-						order += 1;
-						reading_list_item::ActiveModel {
-							reading_list_id: Set(shelf_id.to_owned()),
-							media_id: Set(book_id.clone()),
-							display_order: Set(order),
-							..Default::default()
-						}
-					})
-					.collect();
-				if !items.is_empty() {
-					reading_list_item::Entity::insert_many(items).exec(txn).await?;
-				}
-				touch_reading_list(txn, shelf_id, None, device).await?;
-			},
-		}
-		Ok::<_, CoreError>(())
+async fn add_shelf_items_txn(
+	txn: &DatabaseTransaction,
+	user: &AuthUser,
+	shelf_id: &str,
+	book_ids: &[String],
+	device: Option<String>,
+) -> CoreResult<()> {
+	let kind = resolve_shelf(txn, shelf_id).await?;
+	let owner = shelf_owner_id(txn, kind, shelf_id).await?;
+	assert_shelf_owner(user, &owner)?;
+
+	let existing: HashSet<String> = container_member_ids(txn, kind, shelf_id)
+		.await?
+		.into_iter()
+		.collect();
+	let mut order = existing.len() as i32;
+	let mut next_order = || {
+		let current = order;
+		order += 1;
+		current
+	};
+
+	match kind {
+		ContainerKind::Collection => {
+			let series_ids = series_of_books(txn, book_ids).await?;
+			if series_ids.len() != book_ids.len() {
+				return Err(CoreError::BadRequest(
+					"Every book on a collection shelf must belong to a series".to_owned(),
+				));
+			}
+			let members: Vec<collection_series::ActiveModel> = series_ids
+				.into_iter()
+				.filter(|series_id| !existing.contains(series_id))
+				.map(|series_id| collection_series::ActiveModel {
+					collection_id: Set(shelf_id.to_owned()),
+					series_id: Set(series_id),
+					display_order: Set(next_order()),
+					..Default::default()
+				})
+				.collect();
+			if !members.is_empty() {
+				collection_series::Entity::insert_many(members)
+					.exec(txn)
+					.await?;
+			}
+			touch_collection(txn, shelf_id, None, device).await
+		},
+		ContainerKind::ReadingList => {
+			let items: Vec<reading_list_item::ActiveModel> = book_ids
+				.iter()
+				.filter(|book_id| !existing.contains(*book_id))
+				.map(|book_id| reading_list_item::ActiveModel {
+					reading_list_id: Set(shelf_id.to_owned()),
+					media_id: Set(book_id.clone()),
+					display_order: Set(next_order()),
+					..Default::default()
+				})
+				.collect();
+			if !items.is_empty() {
+				reading_list_item::Entity::insert_many(items)
+					.exec(txn)
+					.await?;
+			}
+			touch_reading_list(txn, shelf_id, None, device).await
+		},
 	}
-	.await;
-	commit(txn, result).await?;
-	Ok(())
 }
 
 /// Removes books from a shelf. Removing a book from a collection-backed shelf
@@ -568,48 +587,55 @@ pub async fn remove_shelf_items(
 	device: Option<String>,
 ) -> CoreResult<()> {
 	let txn = ctx.conn.begin().await?;
-	let result = async {
-		let kind = resolve_shelf(txn, shelf_id).await?;
-		let owner = shelf_owner_id(txn, kind, shelf_id).await?;
-		assert_shelf_owner(user, &owner)?;
+	let result = remove_shelf_items_txn(&txn, user, shelf_id, book_ids, device).await;
+	commit(txn, result).await
+}
 
-		match kind {
-			ContainerKind::Collection => {
-				let series_ids = series_of_books(txn, &book_ids).await?;
-				if !series_ids.is_empty() {
-					collection_series::Entity::delete_many()
-						.filter(collection_series::Column::CollectionId.eq(shelf_id.to_owned()))
-						.filter(collection_series::Column::SeriesId.is_in(series_ids))
-						.exec(txn)
-						.await?;
-				}
-				touch_collection(txn, shelf_id, None, device).await?;
-			},
-			ContainerKind::ReadingList => {
-				if !book_ids.is_empty() {
-					reading_list_item::Entity::delete_many()
-						.filter(
-							reading_list_item::Column::ReadingListId.eq(shelf_id.to_owned()),
-						)
-						.filter(reading_list_item::Column::MediaId.is_in(book_ids))
-						.exec(txn)
-						.await?;
-				}
-				touch_reading_list(txn, shelf_id, None, device).await?;
-			},
-		}
-		Ok::<_, CoreError>(())
+async fn remove_shelf_items_txn(
+	txn: &DatabaseTransaction,
+	user: &AuthUser,
+	shelf_id: &str,
+	book_ids: Vec<String>,
+	device: Option<String>,
+) -> CoreResult<()> {
+	let kind = resolve_shelf(txn, shelf_id).await?;
+	let owner = shelf_owner_id(txn, kind, shelf_id).await?;
+	assert_shelf_owner(user, &owner)?;
+
+	match kind {
+		ContainerKind::Collection => {
+			let series_ids = series_of_books(txn, &book_ids).await?;
+			if !series_ids.is_empty() {
+				collection_series::Entity::delete_many()
+					.filter(
+						collection_series::Column::CollectionId.eq(shelf_id.to_owned()),
+					)
+					.filter(collection_series::Column::SeriesId.is_in(series_ids))
+					.exec(txn)
+					.await?;
+			}
+			touch_collection(txn, shelf_id, None, device).await
+		},
+		ContainerKind::ReadingList => {
+			if !book_ids.is_empty() {
+				reading_list_item::Entity::delete_many()
+					.filter(
+						reading_list_item::Column::ReadingListId.eq(shelf_id.to_owned()),
+					)
+					.filter(reading_list_item::Column::MediaId.is_in(book_ids))
+					.exec(txn)
+					.await?;
+			}
+			touch_reading_list(txn, shelf_id, None, device).await
+		},
 	}
-	.await;
-	commit(txn, result).await?;
-	Ok(())
 }
 
 /// Deletes a shelf (collection or reading list) on behalf of a device,
 /// recording the tombstone and emitting the corresponding deleted event.
 pub async fn delete_shelf(ctx: &Ctx, user: &AuthUser, shelf_id: &str) -> CoreResult<()> {
 	let txn = ctx.conn.begin().await?;
-	let result = delete_shelf_txn(txn, user, shelf_id).await;
+	let result = delete_shelf_txn(&txn, user, shelf_id).await;
 	let (kind, member_ids) = commit(txn, result).await?;
 
 	match kind {
@@ -655,24 +681,44 @@ async fn delete_shelf_txn(
 	Ok((kind, member_ids))
 }
 
+/// Resolves a shelf id to its backing table, surfacing an unknown id as a
+/// [`CoreError::NotFound`] rather than a database error.
+async fn resolve_shelf(
+	txn: &DatabaseTransaction,
+	shelf_id: &str,
+) -> CoreResult<ContainerKind> {
+	ContainerKind::resolve(txn, shelf_id)
+		.await
+		.map_err(|error| match error {
+			DbErr::RecordNotFound(message) => CoreError::NotFound(message),
+			other => CoreError::DBError(other),
+		})
+}
+
 async fn shelf_owner_id(
 	txn: &DatabaseTransaction,
 	kind: ContainerKind,
 	shelf_id: &str,
 ) -> CoreResult<String> {
 	match kind {
-		ContainerKind::Collection => Ok(collection::Entity::find_by_id(shelf_id.to_owned())
-			.one(txn)
-			.await?
-			.ok_or_else(|| CoreError::NotFound(format!("Shelf {shelf_id} not found")))?
-			.creating_user_id),
-		ContainerKind::ReadingList => Ok(
-			reading_list::Entity::find_by_id(shelf_id.to_owned())
+		ContainerKind::Collection => {
+			Ok(collection::Entity::find_by_id(shelf_id.to_owned())
 				.one(txn)
 				.await?
-				.ok_or_else(|| CoreError::NotFound(format!("Shelf {shelf_id} not found")))?
-				.creating_user_id,
-		),
+				.ok_or_else(|| {
+					CoreError::NotFound(format!("Shelf {shelf_id} not found"))
+				})?
+				.creating_user_id)
+		},
+		ContainerKind::ReadingList => {
+			Ok(reading_list::Entity::find_by_id(shelf_id.to_owned())
+				.one(txn)
+				.await?
+				.ok_or_else(|| {
+					CoreError::NotFound(format!("Shelf {shelf_id} not found"))
+				})?
+				.creating_user_id)
+		},
 	}
 }
 
@@ -802,14 +848,18 @@ async fn replace_collection_members(
 		let members: Vec<collection_series::ActiveModel> = series_ids
 			.iter()
 			.enumerate()
-			.map(|(display_order, series_id)| collection_series::ActiveModel {
-				collection_id: Set(collection_id.to_owned()),
-				series_id: Set(series_id.clone()),
-				display_order: Set(display_order as i32),
-				..Default::default()
-			})
+			.map(
+				|(display_order, series_id)| collection_series::ActiveModel {
+					collection_id: Set(collection_id.to_owned()),
+					series_id: Set(series_id.clone()),
+					display_order: Set(display_order as i32),
+					..Default::default()
+				},
+			)
 			.collect();
-		collection_series::Entity::insert_many(members).exec(txn).await?;
+		collection_series::Entity::insert_many(members)
+			.exec(txn)
+			.await?;
 	}
 	Ok(())
 }
@@ -834,7 +884,9 @@ async fn replace_reading_list_members(
 				..Default::default()
 			})
 			.collect();
-		reading_list_item::Entity::insert_many(items).exec(txn).await?;
+		reading_list_item::Entity::insert_many(items)
+			.exec(txn)
+			.await?;
 	}
 	Ok(())
 }
@@ -849,7 +901,10 @@ async fn commit<T>(txn: DatabaseTransaction, result: CoreResult<T>) -> CoreResul
 		},
 		Err(error) => {
 			if let Err(rollback_error) = txn.rollback().await {
-				tracing::error!(?rollback_error, "Failed to roll back container mutation");
+				tracing::error!(
+					?rollback_error,
+					"Failed to roll back container mutation"
+				);
 			}
 			Err(error)
 		},

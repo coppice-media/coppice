@@ -20,7 +20,7 @@ use crate::{
 };
 
 use super::{
-	query::{find_series_by_kavita_id, load_series_input},
+	query::find_series_input,
 	reader::{continue_point_for, mark_media_read_for},
 	route_ci, KavitaBackend,
 };
@@ -79,13 +79,20 @@ fn format_r(value: f32) -> String {
 
 /// `TachiyomiService.GetLatestChapter` for a series made of single-file
 /// volumes: the volume with the most recent progress, encoded; `None` when
-/// the user has read nothing (Kavita answers `204`).
+/// the user has read nothing (Kavita answers `204`). A book is a loose-leaf
+/// volume, which Kavita returns as its chapter unencoded (`number`
+/// `"-100000"`, files included; `kavita-ref` `book_latest_chapter_4`).
 pub(crate) fn latest_chapter_for(input: &SeriesInput) -> Option<TachiyomiChapterDto> {
 	let pages = input.pages();
 	let pages_read = input.pages_read();
 	let user_has_progress = pages_read != 0 && pages_read <= pages;
 	if !user_has_progress {
 		return None;
+	}
+	if let Some(book) = input.book() {
+		return Some(TachiyomiChapterDto {
+			chapter: map_chapter(book),
+		});
 	}
 	// The continue point is the next unread volume; the one before it (in
 	// volume order) is what the user last finished or is reading.
@@ -110,14 +117,10 @@ async fn latest_chapter(
 	Query(query): Query<SeriesQuery>,
 ) -> APIResult<Response> {
 	let user = auth.user();
-	let row = find_series_by_kavita_id(
-		ctx.as_ref(),
-		&user,
-		query.series_id.unwrap_or_default(),
-	)
-	.await?
-	.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
-	let input = load_series_input(ctx.as_ref(), &user, row).await?;
+	let input =
+		find_series_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default())
+			.await?
+			.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
 	match latest_chapter_for(&input) {
 		Some(chapter) => Ok(Json(chapter).into_response()),
 		None => Ok(StatusCode::NO_CONTENT.into_response()),
@@ -135,14 +138,10 @@ async fn mark_chapter_until_as_read(
 	let user = auth.user();
 	let chapter_number = query.chapter_number.unwrap_or_default();
 	let _ = query.generate_reading_sessions;
-	let row = find_series_by_kavita_id(
-		ctx.as_ref(),
-		&user,
-		query.series_id.unwrap_or_default(),
-	)
-	.await?
-	.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
-	let input = load_series_input(ctx.as_ref(), &user, row).await?;
+	let input =
+		find_series_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default())
+			.await?
+			.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
 	let targets: Vec<&MediaInput> = if chapter_number == 0.0 {
 		Vec::new()
 	} else if chapter_number < 1.0 && chapter_number > 0.0 {

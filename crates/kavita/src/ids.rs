@@ -2,23 +2,30 @@
 //!
 //! Kavita identifies libraries, series, volumes, chapters and users by `int`.
 //! Stump uses text uuids, so the `kavita_ids` table (migration
-//! `m20260911_000000_add_kavita_compat`) allocates one monotonically
+//! `m20260912_000000_add_kavita_compat`) allocates one monotonically
 //! increasing id per `(kind, stump_id)` pair; ids are never reused and survive
-//! restarts. A media item is both the Kavita volume and its single chapter, so
-//! `volumeId == chapterId` for the same file.
+//! restarts. Every kind draws from the same sequence, so an id names exactly
+//! one entity and [`KavitaIds::lookup_any`] can tell which. A media item is
+//! both the Kavita volume and its single chapter, so `volumeId == chapterId`
+//! for the same file. In Book/LightNovel libraries every media item is also
+//! its own Kavita series: that series id is the `book_series` kind keyed by
+//! the media id, distinct from the media's volume/chapter id.
 
 use std::collections::HashMap;
 
 use sea_orm::{ConnectionTrait, DbErr, Statement, Value};
 
-use crate::errors::APIError;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IdKind {
 	Library,
 	Series,
+	/// A media item of a Book/LightNovel library presented as a Kavita series;
+	/// the Stump id is the media id.
+	BookSeries,
 	Media,
 	User,
+	/// A Stump reading list presented as a Kavita reading list.
+	ReadingList,
 }
 
 impl IdKind {
@@ -26,14 +33,28 @@ impl IdKind {
 		match self {
 			Self::Library => "library",
 			Self::Series => "series",
+			Self::BookSeries => "book_series",
 			Self::Media => "media",
 			Self::User => "user",
+			Self::ReadingList => "reading_list",
+		}
+	}
+
+	fn parse(kind: &str) -> Option<Self> {
+		match kind {
+			"library" => Some(Self::Library),
+			"series" => Some(Self::Series),
+			"book_series" => Some(Self::BookSeries),
+			"media" => Some(Self::Media),
+			"user" => Some(Self::User),
+			"reading_list" => Some(Self::ReadingList),
+			_ => None,
 		}
 	}
 }
 
 /// SQLite's default `SQLITE_MAX_VARIABLE_NUMBER` on older builds is 999.
-const LOOKUP_CHUNK: usize = 500;
+pub(crate) const LOOKUP_CHUNK: usize = 500;
 
 fn statement(conn: &impl ConnectionTrait, sql: &str, values: Vec<Value>) -> Statement {
 	Statement::from_sql_and_values(conn.get_database_backend(), sql, values)
@@ -166,16 +187,28 @@ impl KavitaIds {
 			.transpose()
 	}
 
-	/// Like [`Self::lookup`] but maps an unknown id to a Kavita-style not found.
-	pub async fn require(
+	/// Return the kind and Stump id behind a Kavita id, whatever entity it
+	/// names. Callers that accept several kinds for one parameter (a
+	/// `seriesId` is a `series` or a `book_series`) resolve with one query.
+	pub async fn lookup_any(
 		conn: &impl ConnectionTrait,
-		kind: IdKind,
 		id: i32,
-		what: &str,
-	) -> Result<String, APIError> {
-		Self::lookup(conn, kind, id)
-			.await?
-			.ok_or_else(|| APIError::NotFound(format!("{what} does not exist")))
+	) -> Result<Option<(IdKind, String)>, DbErr> {
+		let row = conn
+			.query_one(statement(
+				conn,
+				"SELECT kind, stump_id FROM kavita_ids WHERE id = $1",
+				vec![id.into()],
+			))
+			.await?;
+		row.map(|row| {
+			let kind = row.try_get::<String>("", "kind")?;
+			let stump_id = row.try_get::<String>("", "stump_id")?;
+			IdKind::parse(&kind)
+				.map(|kind| (kind, stump_id))
+				.ok_or_else(|| DbErr::Custom(format!("unknown kavita_ids kind {kind}")))
+		})
+		.transpose()
 	}
 }
 
@@ -236,6 +269,46 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn book_series_ids_are_distinct_from_the_media_id_and_reverse_resolve() {
+		let conn = db().await;
+		let series = KavitaIds::resolve(&conn, IdKind::Series, "s1")
+			.await
+			.unwrap();
+		let media = KavitaIds::resolve(&conn, IdKind::Media, "m1")
+			.await
+			.unwrap();
+		let book = KavitaIds::resolve(&conn, IdKind::BookSeries, "m1")
+			.await
+			.unwrap();
+		assert_ne!(
+			book, media,
+			"a book's series id is not its volume/chapter id"
+		);
+		assert_ne!(book, series);
+		assert_eq!(
+			KavitaIds::resolve(&conn, IdKind::BookSeries, "m1")
+				.await
+				.unwrap(),
+			book
+		);
+		// One query tells the kind behind any id, so a `seriesId` parameter
+		// resolves to a series or a book without probing each kind.
+		assert_eq!(
+			KavitaIds::lookup_any(&conn, book).await.unwrap(),
+			Some((IdKind::BookSeries, "m1".to_owned()))
+		);
+		assert_eq!(
+			KavitaIds::lookup_any(&conn, series).await.unwrap(),
+			Some((IdKind::Series, "s1".to_owned()))
+		);
+		assert_eq!(
+			KavitaIds::lookup_any(&conn, media).await.unwrap(),
+			Some((IdKind::Media, "m1".to_owned()))
+		);
+		assert_eq!(KavitaIds::lookup_any(&conn, 99).await.unwrap(), None);
+	}
+
+	#[tokio::test]
 	async fn resolve_many_allocates_missing_and_keeps_existing() {
 		let conn = db().await;
 		let existing = KavitaIds::resolve(&conn, IdKind::Media, "m1")
@@ -259,16 +332,5 @@ mod tests {
 			.await
 			.unwrap()
 			.is_empty());
-	}
-
-	#[tokio::test]
-	async fn require_maps_unknown_ids_to_not_found() {
-		let conn = db().await;
-		let error = KavitaIds::require(&conn, IdKind::Series, 42, "Series")
-			.await
-			.unwrap_err();
-		assert!(
-			matches!(error, APIError::NotFound(message) if message == "Series does not exist")
-		);
 	}
 }

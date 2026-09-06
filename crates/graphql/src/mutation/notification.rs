@@ -1,6 +1,6 @@
 //! GraphQL mutations for notification channels and rules.
 
-use async_graphql::{Context, Object, Result};
+use async_graphql::{Context, Json, Object, Result};
 use sea_orm::prelude::*;
 use sea_orm::ActiveValue::Set;
 use stump_notify::{ChannelRegistry, NotificationKind};
@@ -8,9 +8,7 @@ use stump_notify::{ChannelRegistry, NotificationKind};
 use crate::{
 	data::CoreContext,
 	error_message,
-	object::notification::{
-		NotificationChannelSettingsValue, NotificationRule,
-	},
+	object::notification::{NotificationChannelSettingsValue, NotificationRule},
 };
 
 /// Load the recipient (defaults + stored + decrypted) for a user/channel.
@@ -55,17 +53,16 @@ impl NotificationMutation {
 		ctx: &Context<'_>,
 		input: SetNotificationChannelSettingsInput,
 	) -> Result<NotificationChannelSettingsValue> {
-		let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let channels = registry(core).await?;
-		let channel = channels
-			.get(&input.channel_id)
-			.ok_or_else(|| {
-				async_graphql::Error::new(format!(
-					"Unknown notification channel `{}`",
-					input.channel_id
-				))
-			})?;
+		let channel = channels.get(&input.channel_id).ok_or_else(|| {
+			async_graphql::Error::new(format!(
+				"Unknown notification channel `{}`",
+				input.channel_id
+			))
+		})?;
 
 		let serde_json::Value::Object(incoming) = input.settings else {
 			return Err(async_graphql::Error::new(
@@ -73,7 +70,11 @@ impl NotificationMutation {
 			));
 		};
 		for key in incoming.keys() {
-			if !channel.settings().iter().any(|definition| definition.key == key) {
+			if !channel
+				.settings()
+				.iter()
+				.any(|definition| definition.key == key)
+			{
 				return Err(async_graphql::Error::new(format!(
 					"Unknown setting `{key}` for channel `{}`",
 					input.channel_id
@@ -82,18 +83,19 @@ impl NotificationMutation {
 		}
 
 		// Start from previously stored values so omitted secrets survive.
-		let mut stored = models::entity::notification_channel_setting::Entity::find_by_id((
-			user.id.clone(),
-			input.channel_id.clone(),
-		))
-		.one(core.conn.as_ref())
-		.await?
-		.map(|model| model.settings)
-		.unwrap_or_else(|| {
-			serde_json::Value::Object(
-				channel.default_settings(&user.id).into_iter().collect(),
-			)
-		});
+		let mut stored =
+			models::entity::notification_channel_setting::Entity::find_by_id((
+				user.id.clone(),
+				input.channel_id.clone(),
+			))
+			.one(core.conn.as_ref())
+			.await?
+			.map(|model| model.settings)
+			.unwrap_or_else(|| {
+				serde_json::Value::Object(
+					channel.default_settings(&user.id).into_iter().collect(),
+				)
+			});
 		let serde_json::Value::Object(stored) = &mut stored else {
 			return Err(async_graphql::Error::new(
 				"Stored channel settings are corrupted",
@@ -121,7 +123,9 @@ impl NotificationMutation {
 					models::entity::notification_channel_setting::Column::UserId,
 					models::entity::notification_channel_setting::Column::ChannelId,
 				])
-				.update_column(models::entity::notification_channel_setting::Column::Settings)
+				.update_column(
+					models::entity::notification_channel_setting::Column::Settings,
+				)
 				.to_owned(),
 			)
 			.exec(core.conn.as_ref())
@@ -136,7 +140,7 @@ impl NotificationMutation {
 		}
 		Ok(NotificationChannelSettingsValue {
 			channel_id: input.channel_id,
-			values,
+			values: Json(values),
 		})
 	}
 
@@ -150,7 +154,8 @@ impl NotificationMutation {
 		channel_id: String,
 		enabled: bool,
 	) -> Result<NotificationRule> {
-		let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		if event_kind.is_administrative() && !user.is_server_owner {
@@ -189,13 +194,15 @@ impl NotificationMutation {
 	}
 
 	/// Deliver a test notification through one of the current user's channels.
-	/// Returns `false` when the channel is not configured; errors on failure.
+	/// Resolves to `true` once the channel accepted the message; a missing
+	/// setting or a delivery failure is returned as an error.
 	async fn test_notification_channel(
 		&self,
 		ctx: &Context<'_>,
 		channel_id: String,
 	) -> Result<bool> {
-		let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let channels = registry(core).await?;

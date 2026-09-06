@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use models::shared::enums::JobStatus;
-use tokio::sync::{Semaphore, broadcast};
+use tokio::sync::{broadcast, Semaphore};
 
 use super::{
 	contract::{
@@ -415,7 +415,7 @@ impl IngestCoordinator {
 				candidate_count: saved_candidates.len(),
 			}));
 		}
-		if updated.status == DropItemStatus::AwaitingReview {
+		if updated.status == DropItemStatus::AwaitingReview.as_str() {
 			self.notify(CoreEvent::IngestAwaitingReview(IngestAwaitingReview {
 				library_id: item.library_id.clone(),
 				drop_item_id: item.id.clone(),

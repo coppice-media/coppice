@@ -173,6 +173,7 @@ impl Default for KomgaLibraryCreateRequest {
 			hash_koreader: false,
 			hash_pages: false,
 			analyze_dimensions: true,
+			series_cover: default_series_cover(),
 			oneshots_directory: None,
 		}
 	}
@@ -217,6 +218,8 @@ pub struct KomgaLibraryUpdateRequest {
 	pub series_cover: Option<SeriesCover>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub hash_files: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub hash_koreader: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub hash_pages: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]

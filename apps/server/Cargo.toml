@@ -31,7 +31,7 @@ koreader = ["dep:stump_koreader"]
 komga = ["readium", "dep:stump_komga"]
 kavita = ["dep:stump_kavita"]
 liseur-sync = ["dep:stump_liseur_sync"]
-providers = ["dep:stump_provider", "dep:stump_provider_mangadex", "stump_core/providers"]
+providers = ["dep:stump_provider", "dep:stump_provider_mangadex", "stump_core/providers", "graphql?/providers"]
 # Server-rendered PNG for the device-pairing QR payload (links `qrcode` + `image`
 # PNG encoding); omitted from `minimal`.
 qr = ["dep:qrcode", "dep:image"]
@@ -59,7 +59,7 @@ chrono.workspace = true
 data-encoding.workspace = true
 models = { path = "../../crates/models", default-features = false }
 futures-util.workspace = true
-graphql = { path = "../../crates/graphql", optional = true }
+graphql = { path = "../../crates/graphql", optional = true, default-features = false }
 governor = "0.6"
 hyper = "0.14.27"
 http-body = "1"

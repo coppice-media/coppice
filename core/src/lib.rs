@@ -15,14 +15,15 @@ pub mod database;
 pub mod error;
 mod event;
 pub mod filesystem;
-pub mod job;
 pub mod ingest;
+pub mod job;
 pub mod kobo;
-pub mod opds;
-pub mod reading_state;
+pub mod library;
 pub mod notification;
+pub mod opds;
 #[cfg(feature = "providers")]
 pub mod providers;
+pub mod reading_state;
 pub mod utils;
 
 use config::logging::STUMP_SHADOW_TEXT;
@@ -83,7 +84,6 @@ pub struct StumpCore {
 impl StumpCore {
 	/// Creates a [StumpCore] from an existing [Ctx]
 	pub fn from_ctx(ctx: Ctx) -> StumpCore {
-		annotation_sync::spawn_debounce_loop(ctx.clone());
 		StumpCore { ctx }
 	}
 

@@ -9,8 +9,7 @@ use axum::{
 };
 use models::entity::{
 	collection as collection_entity, library as library_entity, media as media_entity,
-	reading_list as reading_list_entity,
-	user::AuthUser,
+	reading_list as reading_list_entity, user::AuthUser,
 };
 use sea_orm::DatabaseConnection;
 use stump_auth::AuthContext;
@@ -24,6 +23,7 @@ mod book;
 mod catalog;
 mod grimmory;
 mod library;
+mod lists;
 mod mapper;
 mod media;
 mod progress;
@@ -96,17 +96,11 @@ pub enum KomgaCoreEvent {
 		deleted: bool,
 	},
 	/// A library was created (any protocol; see `stump_core::library`).
-	LibraryCreated {
-		id: String,
-	},
+	LibraryCreated { id: String },
 	/// A library's name, root, or configuration changed.
-	LibraryUpdated {
-		id: String,
-	},
+	LibraryUpdated { id: String },
 	/// A library was deleted.
-	LibraryDeleted {
-		id: String,
-	},
+	LibraryDeleted { id: String },
 	/// A collection was created (any protocol, incl. Kobo shelf write-back).
 	CollectionAdded {
 		#[serde(rename = "collectionId")]
@@ -306,12 +300,12 @@ pub trait KomgaBackend: Send + Sync {
 		None
 	}
 
-
 	/// Live details for a series id that is not materialised. Returns
 	/// `None` when the id belongs to a stored (or unknown) series and the
 	/// ordinary database path should serve it. Default: `None`.
 	async fn virtual_series_by_id(
 		&self,
+		_user: &AuthUser,
 		_series_id: &str,
 	) -> Option<APIResult<crate::KomgaSeries>> {
 		None
@@ -319,9 +313,14 @@ pub trait KomgaBackend: Send + Sync {
 
 	/// Materialise a virtual series before its books are listed. Returns
 	/// `Ok(false)` when the id is not a provider series. Default: no-op.
-	async fn virtual_materialise_series(&self, _series_id: &str) -> APIResult<bool> {
+	async fn virtual_materialise_series(
+		&self,
+		_user: &AuthUser,
+		_series_id: &str,
+	) -> APIResult<bool> {
 		Ok(false)
 	}
+
 	/// Create a library from a Komga `LibraryCreationDto`. Returns the
 	/// created library row for DTO rendering by the route. Validation failures
 	/// (missing root, nesting conflicts, duplicate name) surface as `400`.
@@ -400,7 +399,6 @@ pub trait KomgaBackend: Send + Sync {
 	/// Delete a reading list owned by `user`.
 	async fn delete_read_list(&self, user: &AuthUser, id: &str) -> APIResult<()>;
 }
-
 
 #[derive(Clone)]
 pub struct KomgaEvents {

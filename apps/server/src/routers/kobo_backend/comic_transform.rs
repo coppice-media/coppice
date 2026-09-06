@@ -1,14 +1,19 @@
-//! Comic (CBZ/ZIP/CBR/RAR/PDF) delivery for Kobo devices: the book file route
-//! serves a fixed-layout KEPUB whose pages were transformed for the requesting
-//! device instead of the original container.
+//! Comic (CBZ/ZIP/CBR/RAR/PDF) delivery for Kobo devices: with
+//! `transform_enabled`, the sync covers comic containers and the book file
+//! route serves a fixed-layout KEPUB whose pages were transformed for the
+//! requesting device instead of the original container.
 //!
 //! Profile resolution: the device's stored `transform_profile` (resolved via
 //! `DeviceService::device_for_credential`) wins; otherwise the configured
-//! `transform.transform_kobo_profile` preset applies. Every failure falls back
-//! to the original file — transform delivery is best-effort and must never
-//! break a download.
+//! `transform_kobo_profile` preset applies. A failed transform falls back to
+//! the original file — delivery is best-effort and must never break a
+//! download.
+//!
+//! The sync advertises each comic as `KEPUB`; its `Size` is the cached
+//! transformed file's size once one exists for the device's profile, and the
+//! source size until then (as the EPUB→KEPUB path already does).
 
-use std::path::Path;
+use std::{path::Path, sync::LazyLock};
 
 use axum::{
 	body::Body,
@@ -17,10 +22,19 @@ use axum::{
 	response::{IntoResponse, Response},
 };
 use models::entity::{device, media};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use stump_auth::AuthContext;
+use stump_core::{
+	config::StumpConfig,
+	kobo::sync_types::{BookMetadata, Format, SyncItem},
+};
 use stump_devices::{CredentialRef, DeviceResult};
-use stump_media::transform::container::{build_cbz, build_kepub};
-use stump_media::transform::{is_comic_source, TransformCache, TransformProfile};
+use stump_media::transform::{
+	comic_info_xml,
+	container::{build_cbz, build_kepub},
+	transform_pages_blocking, ComicContainer, ComicPages, JpegSubsampling,
+	TransformCache, TransformError, TransformFormat, TransformProfile, COMIC_EXTENSIONS,
+};
 use tower_http::services::ServeFile;
 
 use crate::{
@@ -28,12 +42,30 @@ use crate::{
 	errors::{APIError, APIResult},
 };
 
+/// Cache file extension for transformed comics.
+const KEPUB_EXTENSION: &str = "kepub.epub";
+
+/// Media extensions a Kobo sync session covers: EPUBs always, and the comic
+/// containers too when transform delivery is enabled (they are then served
+/// as KEPUB, so the sync advertises them that way).
+pub(crate) fn sync_extensions(config: &StumpConfig) -> &'static [&'static str] {
+	static WITH_COMICS: LazyLock<Vec<&'static str>> =
+		LazyLock::new(|| std::iter::once("epub").chain(COMIC_EXTENSIONS).collect());
+
+	if config.transform.transform_enabled {
+		&WITH_COMICS
+	} else {
+		&["epub"]
+	}
+}
+
 /// Resolve the effective transform profile for this request, or `None` when
 /// no profile applies (unknown config preset, broken device profile, …).
 ///
-/// The Kobo route always forces the fixed-layout KEPUB container: Kobo
-/// firmware can only open EPUB-family files at this route.
-async fn resolve_profile(
+/// The result is coerced to what Kobo firmware can open at this route: the
+/// fixed-layout KEPUB container, and JPEG in place of WebP pages (Kobo
+/// renders JPEG/PNG/GIF/BMP/TIFF only).
+pub(crate) async fn resolve_profile(
 	ctx: &AppState,
 	auth: &AuthContext,
 ) -> Option<TransformProfile> {
@@ -54,7 +86,14 @@ async fn resolve_profile(
 	}
 
 	requested.map(|profile| TransformProfile {
-		container: stump_media::transform::ComicContainer::KepubFixedLayout,
+		container: ComicContainer::KepubFixedLayout,
+		format: match profile.format {
+			TransformFormat::Webp { quality } => TransformFormat::Jpeg {
+				quality,
+				subsampling: JpegSubsampling::Auto,
+			},
+			format => format,
+		},
 		..profile
 	})
 }
@@ -94,26 +133,114 @@ async fn resolve_device_profile(
 	}
 }
 
+fn cache(ctx: &AppState) -> TransformCache {
+	TransformCache::new(
+		ctx.config.get_transform_cache_dir(),
+		ctx.config.transform.transform_cache_max_bytes,
+	)
+}
+
+/// The size of the cached transformed KEPUB for `book` under `profile`, when
+/// one exists; this is the `Content-Length` the download route will send.
+async fn cached_kepub_size(
+	ctx: &AppState,
+	profile: &TransformProfile,
+	book: &media::MediaIdentSelect,
+) -> Option<u64> {
+	let source_mtime_ns = source_mtime_nanos(&book.path).await.ok()?;
+	let cache_path =
+		cache(ctx).path_for(&book.id, source_mtime_ns, profile, KEPUB_EXTENSION);
+	tokio::fs::metadata(cache_path)
+		.await
+		.ok()
+		.map(|metadata| metadata.len())
+}
+
+/// The download descriptor the metadata route advertises for a comic: the
+/// KEPUB format and, once transformed for this device, its exact size.
+pub(crate) async fn advertised_download(
+	ctx: &AppState,
+	auth: &AuthContext,
+	book: &media::MediaIdentSelect,
+) -> (Format, Option<u64>) {
+	let Some(profile) = resolve_profile(ctx, auth).await else {
+		return (Format::KEPUB, None);
+	};
+	(Format::KEPUB, cached_kepub_size(ctx, &profile, book).await)
+}
+
+/// Replace the advertised `Size` of every comic in a sync page with the cached
+/// transformed KEPUB's size when one exists for this device's profile.
+///
+/// Comics are the entitlements the sync marked `KEPUB`; EPUBs keep their
+/// source size exactly as before.
+pub(crate) async fn advertise_cached_sizes(
+	ctx: &AppState,
+	auth: &AuthContext,
+	items: &mut [SyncItem],
+) {
+	let mut comics: Vec<&mut BookMetadata> = items
+		.iter_mut()
+		.filter_map(|item| match item {
+			SyncItem::NewEntitlement(entitlement)
+			| SyncItem::ChangedEntitlement(entitlement) => Some(&mut entitlement.book_metadata),
+			SyncItem::ChangedProductMetadata(metadata) => Some(metadata),
+			_ => None,
+		})
+		.filter(|metadata| {
+			metadata
+				.download_urls
+				.iter()
+				.any(|url| url.format == Format::KEPUB)
+		})
+		.collect();
+	if comics.is_empty() {
+		return;
+	}
+	let Some(profile) = resolve_profile(ctx, auth).await else {
+		return;
+	};
+
+	let ids: Vec<&str> = comics
+		.iter()
+		.map(|metadata| metadata.entitlement_id.as_str())
+		.collect();
+	let books = match media::Entity::find()
+		.filter(media::Column::Id.is_in(ids))
+		.into_model::<media::MediaIdentSelect>()
+		.all(ctx.conn.as_ref())
+		.await
+	{
+		Ok(books) => books,
+		Err(error) => {
+			tracing::warn!(?error, "Failed to load comics for Kobo size advertisement");
+			return;
+		},
+	};
+
+	for book in books {
+		let Some(size) = cached_kepub_size(ctx, &profile, &book).await else {
+			continue;
+		};
+		for metadata in comics
+			.iter_mut()
+			.filter(|metadata| metadata.entitlement_id == book.id)
+		{
+			for url in &mut metadata.download_urls {
+				url.size = size;
+			}
+		}
+	}
+}
+
 /// Serve the comic `book` as a transformed KEPUB, falling back to the original
-/// file when the feature is off, no profile resolves, or the transform fails.
+/// file when no profile resolves or the transform fails.
 pub(crate) async fn serve_comic(
 	ctx: AppState,
 	auth: AuthContext,
 	book: media::MediaIdentSelect,
 	headers: HeaderMap,
 ) -> APIResult<Response> {
-	if !ctx.config.transform.transform_enabled {
-		return super::kepub::serve_original(ctx, auth, book.id, headers).await;
-	}
-
-	if auth
-		.user_and_enforce_permissions(&[models::shared::enums::UserPermission::DownloadFile])
-		.is_err()
-	{
-		tracing::error!("User does not have permission to download file");
-		return Err(APIError::forbidden_discreet());
-	}
-
 	let Some(profile) = resolve_profile(&ctx, &auth).await else {
 		return super::kepub::serve_original(ctx, auth, book.id, headers).await;
 	};
@@ -128,11 +255,8 @@ pub(crate) async fn serve_comic(
 		},
 	};
 
-	let cache = TransformCache::new(
-		ctx.config.get_transform_cache_dir(),
-		ctx.config.transform.transform_cache_max_bytes,
-	);
-	let cache_path = cache.path_for(&book.id, source_mtime_ns, &profile, "kepub.epub");
+	let cache = cache(&ctx);
+	let cache_path = cache.path_for(&book.id, source_mtime_ns, &profile, KEPUB_EXTENSION);
 
 	if cache.hit(&cache_path) {
 		return comic_kepub_response(&book.path, &cache_path, headers).await;
@@ -163,24 +287,18 @@ pub(crate) async fn serve_comic(
 				path = %book.path,
 				"Comic transform failed; serving original file"
 			);
-			let _ = tokio::fs::remove_file(&cache_path).await;
 			return super::kepub::serve_original(ctx, auth, book.id, headers).await;
 		},
 		Err(error) => {
 			tracing::error!(?error, "Comic transform task panicked");
-			let _ = tokio::fs::remove_file(&cache_path).await;
 			return super::kepub::serve_original(ctx, auth, book.id, headers).await;
 		},
 	}
 
 	// Best-effort LRU sweep after publishing a new entry.
-	let _ = tokio::task::spawn_blocking({
-		let cache = cache.clone();
-		move || {
-			if let Ok(sweep) = cache.sweep() {
-				tracing::trace!(?sweep, "Transform cache sweep complete");
-			}
-		}
+	let _ = tokio::task::spawn_blocking(move || match cache.sweep() {
+		Ok(sweep) => tracing::trace!(?sweep, "Transform cache sweep complete"),
+		Err(error) => tracing::debug!(?error, "Transform cache sweep failed"),
 	})
 	.await;
 
@@ -194,7 +312,7 @@ fn build_transformed(
 	cache_path: &Path,
 	profile: &TransformProfile,
 	media_config: &stump_media::MediaConfig,
-) -> Result<(), stump_media::transform::TransformError> {
+) -> Result<(), TransformError> {
 	std::fs::create_dir_all(cache_dir)?;
 
 	let temp_path = cache_dir.join(format!(
@@ -206,8 +324,10 @@ fn build_transformed(
 		uuid::Uuid::new_v4()
 	));
 
-	let result = build_to_temp(source_path, &temp_path, profile, media_config)
-		.and_then(|()| TransformCache::publish(&temp_path, cache_path));
+	let result =
+		build_to_temp(source_path, &temp_path, profile, media_config).and_then(|()| {
+			TransformCache::publish(&temp_path, cache_path).map_err(TransformError::from)
+		});
 
 	if result.is_err() {
 		let _ = std::fs::remove_file(&temp_path);
@@ -220,52 +340,32 @@ fn build_to_temp(
 	temp_path: &Path,
 	profile: &TransformProfile,
 	media_config: &stump_media::MediaConfig,
-) -> Result<(), stump_media::transform::TransformError> {
-	let source = stump_media::transform::ComicPages::open(source_path, media_config)?;
+) -> Result<(), TransformError> {
+	let source = ComicPages::open(source_path, media_config)?;
 	let title = source_path
 		.file_stem()
 		.and_then(|stem| stem.to_str())
-		.unwrap_or("comic")
-		.to_string();
+		.unwrap_or("comic");
 
 	let file = std::fs::File::create(temp_path)?;
 	let sink = std::io::BufWriter::with_capacity(1 << 16, file);
-	let pages = source.into_iter(media_config);
-	let concurrency = media_config.cpu_concurrency_limit().max(1);
+	let pages = transform_pages_blocking(
+		source.into_iter(media_config),
+		profile.clone(),
+		media_config.cpu_concurrency_limit().max(1),
+	);
 
-	match profile.container {
-		stump_media::transform::ComicContainer::KepubFixedLayout => {
-			build_kepub(
-				stump_media::transform::transform_pages_blocking(
-					pages,
-					profile.clone(),
-					concurrency,
-				),
-				&title,
-				sink,
-			)?
-			.into_inner()
-			.map_err(|error| error.into_error())?
-			.sync_all()?;
-			Ok(())
+	let sink = match profile.container {
+		ComicContainer::KepubFixedLayout => build_kepub(pages, title, sink)?,
+		ComicContainer::Cbz => {
+			let comic_info = comic_info_xml(source_path);
+			build_cbz(pages, comic_info.as_deref(), sink)?
 		},
-		stump_media::transform::ComicContainer::Cbz => {
-			let comic_info = stump_media::transform::comic_info_xml(source_path);
-			build_cbz(
-				stump_media::transform::transform_pages_blocking(
-					pages,
-					profile.clone(),
-					concurrency,
-				),
-				comic_info.as_deref(),
-				sink,
-			)?
-			.into_inner()
-			.map_err(|error| error.into_error())?
-			.sync_all()?;
-			Ok(())
-		},
-	}
+	};
+	sink.into_inner()
+		.map_err(|error| error.into_error())?
+		.sync_all()?;
+	Ok(())
 }
 
 async fn source_mtime_nanos(path: &str) -> std::io::Result<u128> {
@@ -294,9 +394,7 @@ async fn comic_kepub_response(
 				path = ?cache_path,
 				"Failed to serve transformed comic"
 			);
-			APIError::InternalServerError(
-				"Failed to serve transformed comic".to_string(),
-			)
+			APIError::InternalServerError("Failed to serve transformed comic".to_string())
 		})?
 		.into_response();
 
@@ -322,15 +420,18 @@ fn comic_kepub_filename(source_path: &str) -> String {
 		.unwrap_or("book")
 		.replace('"', "_");
 
-	for extension in [".cbz", ".zip", ".cbr", ".rar", ".pdf"] {
-		if let Some(stem) = source_name
-			.strip_suffix(extension)
-			.or_else(|| source_name.strip_suffix(&extension.to_ascii_uppercase()))
-		{
-			return format!("{stem}.kepub.epub");
-		}
-	}
-	format!("{source_name}.kepub.epub")
+	let stem = Path::new(&source_name)
+		.extension()
+		.and_then(|extension| extension.to_str())
+		.filter(|extension| {
+			COMIC_EXTENSIONS
+				.iter()
+				.any(|comic| comic.eq_ignore_ascii_case(extension))
+		})
+		.map_or(source_name.as_str(), |extension| {
+			&source_name[..source_name.len() - extension.len() - 1]
+		});
+	format!("{stem}.{KEPUB_EXTENSION}")
 }
 
 #[cfg(test)]
@@ -343,21 +444,17 @@ mod tests {
 		assert_eq!(comic_kepub_filename("/books/comic.CBZ"), "comic.kepub.epub");
 		assert_eq!(comic_kepub_filename("/books/comic.zip"), "comic.kepub.epub");
 		assert_eq!(comic_kepub_filename("/books/comic.cbr"), "comic.kepub.epub");
+		assert_eq!(comic_kepub_filename("/books/comic.rar"), "comic.kepub.epub");
 		assert_eq!(comic_kepub_filename("/books/comic.pdf"), "comic.kepub.epub");
 		assert_eq!(
 			comic_kepub_filename("/books/weird.name"),
 			"weird.name.kepub.epub"
 		);
+		assert_eq!(comic_kepub_filename("/books/pdf"), "pdf.kepub.epub");
 	}
 
 	#[test]
 	fn filenames_never_allow_quote_injection() {
 		assert_eq!(comic_kepub_filename("book\".cbz"), "book_.kepub.epub");
-	}
-
-	#[test]
-	fn comic_source_detection_matches_the_media_crate() {
-		assert!(is_comic_source("/books/a.cbz"));
-		assert!(!is_comic_source("/books/a.epub"));
 	}
 }

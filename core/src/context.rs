@@ -55,7 +55,7 @@ pub struct Ctx {
 	visible_pages: Arc<VisiblePagesCache>,
 	/// Debounce deadlines for per-user annotation export runs; see
 	/// [`crate::annotation_sync::AnnotationSyncDebouncer`].
-	annotation_debounce: Arc<crate::annotation_sync::AnnotationSyncDebouncer>,
+	pub(crate) annotation_debounce: Arc<crate::annotation_sync::AnnotationSyncDebouncer>,
 	/// The remote provider host (`stump_provider`), created by
 	/// [`crate::providers::init`] when `STUMP_ENABLE_PROVIDERS` is on.
 	#[cfg(feature = "providers")]
@@ -90,6 +90,10 @@ impl Ctx {
 	}
 
 	fn from_parts(config: Arc<StumpConfig>, conn: Arc<DatabaseConnection>) -> Ctx {
+		let annotation_debounce =
+			Arc::new(crate::annotation_sync::AnnotationSyncDebouncer::new(
+				config.annotation_sync.annotation_sync_debounce_secs,
+			));
 		Ctx {
 			config,
 			conn,
@@ -100,9 +104,7 @@ impl Ctx {
 			scheduler: Arc::new(Mutex::new(None)),
 			ingest_services: Arc::new(OnceLock::new()),
 			devices: Arc::new(OnceLock::new()),
-			annotation_debounce: Arc::new(crate::annotation_sync::AnnotationSyncDebouncer::new(
-				config.annotation_sync.annotation_sync_debounce_secs,
-			)),
+			annotation_debounce,
 			reading_state_events: Arc::new(channel::<ReadingHeadChanged>(256).0),
 			visible_pages: Arc::new(VisiblePagesCache::default()),
 			#[cfg(feature = "providers")]

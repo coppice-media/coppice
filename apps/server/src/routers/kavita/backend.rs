@@ -1,21 +1,26 @@
 //! Server-side implementation of the Kavita backend contract.
 
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use axum::{
 	body::Body,
 	http::{HeaderMap, Response},
 	response::IntoResponse,
 };
-use models::entity::{library_config, media, series, user, user::AuthUser};
+use models::entity::{library_config, media, reading_list, series, user, user::AuthUser};
 use prefixed_api_key::PrefixedApiKey;
 use sea_orm::{prelude::*, DatabaseConnection, QueryOrder};
 use stump_auth::AuthContext;
 use stump_kavita::{
 	errors::{APIError as KavitaError, APIResult as KavitaResult},
-	routes::{KavitaBackend, KavitaImage, ServerFacts},
+	routes::{
+		KavitaBackend, KavitaBookResource, KavitaBookStructure, KavitaImage,
+		KavitaNavPoint, KavitaSpineItem, ServerFacts,
+	},
 	KavitaClaims,
 };
-use stump_media::media::get_page_async;
+use stump_media::{media::get_page_async, EpubNavEntry, EpubProcessor};
 
 use crate::{
 	config::{jwt::access_token_secret, state::AppState},
@@ -32,6 +37,26 @@ pub(crate) struct KavitaBackendAdapter {
 impl KavitaBackendAdapter {
 	pub(crate) fn new(ctx: AppState) -> Self {
 		Self { ctx }
+	}
+
+	/// The on-disk path of a media item the user may see.
+	async fn media_path(&self, user: &AuthUser, media_id: &str) -> KavitaResult<String> {
+		media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(media_id.to_owned()))
+			.one(self.conn())
+			.await?
+			.map(|book| book.path)
+			.ok_or_else(|| KavitaError::NotFound("Chapter does not exist".to_owned()))
+	}
+}
+
+/// A canonical container-service failure, mapped onto its Kavita status.
+fn map_core_error(error: stump_core::CoreError) -> KavitaError {
+	match error {
+		stump_core::CoreError::NotFound(message) => KavitaError::NotFound(message),
+		stump_core::CoreError::BadRequest(message) => KavitaError::BadRequest(message),
+		stump_core::CoreError::Forbidden(message) => KavitaError::Forbidden(message),
+		other => KavitaError::InternalServerError(other.to_string()),
 	}
 }
 
@@ -201,4 +226,121 @@ impl KavitaBackend for KavitaBackendAdapter {
 			.map(IntoResponse::into_response)
 			.map_err(map_server_error)
 	}
+	async fn book_structure(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+	) -> KavitaResult<KavitaBookStructure> {
+		let path = self.media_path(user, media_id).await?;
+		tokio::task::spawn_blocking(move || book_structure(&path))
+			.await
+			.map_err(|error| KavitaError::InternalServerError(error.to_string()))?
+	}
+
+	async fn book_page(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+		spine_index: usize,
+	) -> KavitaResult<KavitaBookResource> {
+		let path = self.media_path(user, media_id).await?;
+		let (content_type, data) = tokio::task::spawn_blocking(move || {
+			EpubProcessor::get_chapter(&path, spine_index)
+		})
+		.await
+		.map_err(|error| KavitaError::InternalServerError(error.to_string()))?
+		.map_err(|error| map_server_error(APIError::from(error)))?;
+		Ok(KavitaBookResource {
+			content_type: content_type.to_string(),
+			data,
+		})
+	}
+
+	async fn book_resource(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+		file: &str,
+	) -> KavitaResult<KavitaBookResource> {
+		let path = self.media_path(user, media_id).await?;
+		let file = PathBuf::from(file);
+		let (content_type, data) = tokio::task::spawn_blocking(move || {
+			EpubProcessor::get_resource_by_path(&path, "", file)
+		})
+		.await
+		.map_err(|error| KavitaError::InternalServerError(error.to_string()))?
+		.map_err(|error| map_server_error(APIError::from(error)))?;
+		Ok(KavitaBookResource {
+			content_type: content_type.to_string(),
+			data,
+		})
+	}
+
+	async fn create_read_list(
+		&self,
+		user: &AuthUser,
+		name: String,
+	) -> KavitaResult<reading_list::Model> {
+		stump_core::collections::create_read_list(
+			&self.ctx,
+			user,
+			stump_core::collections::ReadListCreate {
+				name,
+				summary: None,
+				ordered: true,
+				book_ids: Vec::new(),
+			},
+		)
+		.await
+		.map_err(map_core_error)
+	}
+
+	async fn set_read_list_items(
+		&self,
+		user: &AuthUser,
+		id: &str,
+		book_ids: Vec<String>,
+	) -> KavitaResult<()> {
+		stump_core::collections::update_read_list(
+			&self.ctx,
+			user,
+			id,
+			stump_core::collections::ReadListUpdate {
+				name: None,
+				summary: None,
+				ordered: None,
+				book_ids: Some(book_ids),
+			},
+		)
+		.await
+		.map(|_| ())
+		.map_err(map_core_error)
+	}
+}
+
+/// The EPUB spine page budget and navigation tree behind `BookController`.
+/// Runs on a blocking thread: it opens and reads the archive.
+fn book_structure(path: &str) -> KavitaResult<KavitaBookStructure> {
+	let structure = EpubProcessor::structure(path)
+		.map_err(|error| map_server_error(APIError::from(error)))?;
+	Ok(KavitaBookStructure {
+		spine: structure
+			.spine_pages
+			.into_iter()
+			.map(|pages| KavitaSpineItem { pages })
+			.collect(),
+		navigation: map_nav_entries(&structure.navigation),
+	})
+}
+
+fn map_nav_entries(entries: &[EpubNavEntry]) -> Vec<KavitaNavPoint> {
+	entries
+		.iter()
+		.map(|entry| KavitaNavPoint {
+			title: entry.title.clone(),
+			fragment: entry.fragment.clone(),
+			spine_index: entry.spine_index,
+			children: map_nav_entries(&entry.children),
+		})
+		.collect()
 }

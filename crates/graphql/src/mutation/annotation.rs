@@ -1,12 +1,14 @@
-use async_graphql::{Context, ID, Json, Object, Result};
-use stump_api_types::settings::{SettingDefinition, SettingValues};
-use stump_core::annotation_sync::{encrypt_sink_values, upsert_sink_config};
-use stump_jobs::JobPayload;
+use async_graphql::{Context, Json, Object, Result, ID};
+use stump_api_types::settings::SettingValues;
+use stump_core::{
+	annotation_sync::{encrypt_sink_values, upsert_sink_config},
+	job::stump_job::StumpJob,
+};
 
 use crate::{
 	data::CoreContext,
 	object::annotation::AnnotationSyncStatus,
-	query::annotation::build_status,
+	query::annotation::{build_status, resolve_target_user},
 };
 
 #[derive(Default)]
@@ -15,8 +17,8 @@ pub struct AnnotationMutation;
 #[Object]
 impl AnnotationMutation {
 	/// Configures one annotation export sink for the current user: replaces
-	/// the settings map (secret values are encrypted at rest) and optionally
-	/// toggles the sink.
+	/// the settings map (secret values are encrypted at rest) and sets
+	/// whether the sink runs (enabled by default).
 	async fn set_annotation_sink_settings(
 		&self,
 		ctx: &Context<'_>,
@@ -32,22 +34,33 @@ impl AnnotationMutation {
 			.find(|sink| sink.id == sink_id)
 			.ok_or_else(|| async_graphql::Error::new("Annotation sink not found"))?;
 
-		let values: SettingValues = match &settings {
-			Some(Json(value)) => value
-				.as_object()
-				.map(|map| map.iter().map(|(key, value)| (key.clone(), value.clone())).collect())
-				.unwrap_or_default(),
+		let values: SettingValues = match settings {
+			Some(Json(serde_json::Value::Object(map))) => map.into_iter().collect(),
+			Some(_) => {
+				return Err("Sink settings must be a JSON object".into());
+			},
 			None => SettingValues::default(),
 		};
+
+		for definition in descriptor.settings.iter().filter(|d| d.required) {
+			let present = values
+				.get(definition.key)
+				.is_some_and(|value| !value.is_null() && value.as_str() != Some(""));
+			if !present {
+				return Err(
+					format!("Missing required setting `{}`", definition.key).into()
+				);
+			}
+		}
 
 		// Secrets are only encrypted (and only require the key) when actually
 		// present in the submitted values.
 		let has_secret = values.iter().any(|(key, value)| {
-			value.as_str().is_some()
+			value.is_string()
 				&& descriptor
 					.settings
 					.iter()
-					.any(|definition| definition.key == key.as_str() && definition.secret)
+					.any(|definition| definition.key == key && definition.secret)
 		});
 		let stored = if has_secret {
 			let encryption_key = core
@@ -57,16 +70,14 @@ impl AnnotationMutation {
 			encrypt_sink_values(&descriptor.settings, &values, &encryption_key)
 				.map_err(|error| async_graphql::Error::new(error.to_string()))?
 		} else {
-			values.clone()
+			values
 		};
 
 		upsert_sink_config(
 			core.conn.as_ref(),
 			&auth.user.id,
 			&sink_id,
-			Some(serde_json::to_value(stored).map_err(|error| {
-				async_graphql::Error::new(format!("Failed to serialize sink settings: {error}"))
-			})?),
+			Some(serde_json::to_value(stored)?),
 			enabled.unwrap_or(true),
 		)
 		.await
@@ -84,18 +95,9 @@ impl AnnotationMutation {
 	) -> Result<AnnotationSyncStatus> {
 		let auth = ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
+		let user_id = resolve_target_user(auth, user_id)?;
 
-		let user_id = match user_id {
-			Some(id) => {
-				if id.as_str() != auth.user.id && !auth.user.is_server_owner {
-					return Err("You may only run your own annotation sync".into());
-				}
-				id.to_string()
-			},
-			None => auth.user.id.clone(),
-		};
-
-		core.enqueue(stump_core::job::stump_job::StumpJob::AnnotationSync {
+		core.enqueue(StumpJob::AnnotationSync {
 			user_id: user_id.clone(),
 		})
 		.await
@@ -103,13 +105,4 @@ impl AnnotationMutation {
 
 		build_status(core, &user_id).await
 	}
-}
-
-/// Re-exported for tests: validates a sink id against the catalog.
-#[allow(dead_code)]
-fn sink_definitions(sink_id: &str) -> Option<Vec<SettingDefinition>> {
-	stump_annotation_sync::registry::catalog()
-		.into_iter()
-		.find(|sink| sink.id == sink_id)
-		.map(|descriptor| descriptor.settings)
 }

@@ -14,6 +14,10 @@ pub struct ProvidersConfig {
 	#[env_key(ENABLE_PROVIDERS_KEY)]
 	pub enable_providers: bool,
 
+	/// Upper bound, in bytes, of the on-disk provider cache.
+	#[default_value(DEFAULT_PROVIDER_CACHE_MAX_BYTES)]
+	#[env_key(PROVIDER_CACHE_MAX_BYTES_KEY)]
+	pub provider_cache_max_bytes: u64,
 
 	/// How long a virtual library's live browse page stays cached before the
 	/// source is hit again, in seconds.

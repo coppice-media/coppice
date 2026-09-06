@@ -35,6 +35,7 @@ mod tests {
 			.append_query_results(vec![vec![tag::Model {
 				id: 123,
 				name: "hello".to_string(),
+				kind: "tag".to_string(),
 			}]])
 			.into_connection();
 

@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-pub const SCHEME: &str = "provider://";
+pub use stump_media::virtual_media::PROVIDER_SCHEME as SCHEME;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VirtualPath {
@@ -40,7 +40,7 @@ impl VirtualPath {
 
 	/// Whether a stored path is a provider URI.
 	pub fn is_virtual(path: &str) -> bool {
-		path.starts_with(SCHEME)
+		stump_media::virtual_media::is_virtual_path(path)
 	}
 
 	pub fn parse(path: &str) -> Option<Self> {

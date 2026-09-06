@@ -19,12 +19,12 @@ Internally the server keeps these settings in `StumpConfig`, split into flattene
 
 | Group (`StumpConfig` field) | Source file                  | TOML keys                                                                                                                                                                                                                                                                                                             |
 | --------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `server`                    | `core/src/config/server.rs`    | `profile`, `ip`, `port`, `verbosity`, `pretty_logs`, `log_dir`, `colorful_logs`, `allowed_origins`, `trust_proxy_headers`                                                                                                                                                                                             |
+| `server`                    | `core/src/config/server.rs`    | `profile`, `ip`, `port`, `verbosity`, `pretty_logs`, `log_dir`, `colorful_logs`, `allowed_origins`, `trust_proxy_headers`, `home_app_dir`                                                                                                                                                                                             |
 | `database`                  | `core/src/config/database.rs`  | `db_path`, `db_timeout_secs`, `db_max_connections`, `db_min_connections`, `sqlite_statement_cache_capacity`                                                                                                                                                                                                           |
 | `jobs`                      | `core/src/config/jobs.rs`      | `enable_background_jobs`, `parallelism_multiplier`                                                                                                                                                                                                                                                                    |
 | `protocols`                 | `core/src/config/protocols.rs` | `enable_koreader_sync`, `enable_kobo_sync`, `kobo_kepub_preconvert`, `kobo_kepub_cache_max_age_days`, `kobo_kepub_deflate_level`, `kobo_kepub_conversion`, `enable_komga`, `enable_kavita`, `enable_opds_progression`, `enable_upload`, `max_file_upload_size`, `max_image_upload_size`, `enable_webui`, `enable_playground`, `client_dir` |
 | `ingest`                    | `core/src/config/ingest.rs`    | `ingest_drop_dir`, `ingest_staging_dir`, `ingest_editor_dir`, `ingest_progress_retention`                                                                                                                                                                                                                             |
-| `providers`                 | `core/src/config/providers.rs` | `enable_providers`, `provider_cache_max_bytes`                                                                                                                                                                                                                                                                        |
+| `providers`                 | `core/src/config/providers.rs` | `enable_providers`, `provider_cache_max_bytes`, `virtual_series_ttl`, `provider_gc_days`                                                                                                                                                                                                                                                                     |
 | `auth`                      | `core/src/config/auth.rs`      | `password_hash_cost`, `session_ttl`, `access_token_ttl`, `refresh_token_ttl`, `expired_session_cleanup_interval`                                                                                                                                                                                                      |
 | `pdf`                       | `core/src/config/pdf.rs`       | `pdfium_path`, `pdf_render_dpi`, `pdf_max_dimension`, `pdf_render_format`, `pdf_cache_pages`, `pdf_prerender_range`, `pdf_high_quality`                                                                                                                                                                               |
 | _(top level)_               | `core/src/config/stump_config.rs` | `config_dir`, `[oidc]` table; `media` is a derived, non-serialized snapshot computed by `StumpConfig::finalize()`                                                                                                                                                                                                  |
@@ -110,6 +110,16 @@ Without this config enabled, Stump will ignore these headers entirely and rely o
 | Type    | Default Value | TOML Key              |
 | ------- | ------------- | --------------------- |
 | Boolean | `false`       | `trust_proxy_headers` |
+
+### STUMP_LIBRARY_ROOTS
+
+An optional **comma-delineated** allowlist of filesystem directories under which libraries may be created. When set, every library root submitted through the GraphQL API or the Komga-compatible API (`POST`/`PATCH /api/v1/libraries`) must live inside one of these directories, and the Komga filesystem picker (`POST /api/v1/filesystem`) lists only these roots and their descendants. When empty (the default), no constraint is applied and the picker starts at `/`.
+
+| Type   | Default Value | TOML Key        |
+| ------ | ------------- | --------------- |
+| String | `[]`          | `library_roots` |
+
+Stored as a valid array in the configuration file.
 
 ## Database
 
@@ -460,6 +470,17 @@ then not served.
 | Type   | Default Value | TOML Key            |
 | ------ | ------------- | ------------------- |
 | String | (unset)       | `ingest_editor_dir` |
+
+### STUMP_HOME_APP_DIR
+
+Directory containing the built Home app (`home/build`). When set and it
+contains `index.html`, the app is served by this server under `/app` with the
+same caching rules as the editor. Unset by default; the app is then not
+served. See the [Home app](/docs/developer/home-app) developer page.
+
+| Type   | Default Value | TOML Key       |
+| ------ | ------------- | -------------- |
+| String | (unset)       | `home_app_dir` |
 
 ### ENABLE_KOREADER_SYNC
 

@@ -1,3 +1,5 @@
+use std::env;
+
 use serde::{Deserialize, Serialize};
 use stump_config_gen::StumpConfigGenerator;
 

@@ -13,6 +13,10 @@
 //! bounded on-disk [`cache::PageCache`] and are resolved by the
 //! [`host::ProviderHost`], which implements
 //! [`stump_media::virtual_media::VirtualMediaResolver`].
+//!
+//! Virtual libraries ("Mode B", [`browse`], [`virtual_library`], [`gc`])
+//! browse a source live under deterministic ids and materialise lazily.
+//! Design decisions and verification steps: `crates/provider/README.md`.
 
 pub mod browse;
 pub mod cache;
@@ -48,4 +52,3 @@ pub use source::{
 };
 pub use virtual_library::create_virtual_library;
 pub use virtual_path::VirtualPath;
-

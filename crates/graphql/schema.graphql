@@ -32,11 +32,55 @@ type AggregatedReaction {
 	reactedByMe: Boolean!
 }
 
+"A staged analysis job failed."
+type AnalysisJobFailed {
+	analysisJobId: String!
+	error: String!
+}
+
 type AnalyzeMediaOutput {
 	"The number of pages in total that were analyzed to some extent"
 	pagesAnalyzed: Int!
 	"The number of media item updates performed"
 	mediaUpdated: Int!
+}
+
+"A compiled-in annotation export sink and its setting schema."
+type AnnotationSink {
+	id: String!
+	name: String!
+	description: String!
+	settings: [IngestSettingDefinition!]!
+}
+
+type AnnotationSinkRun {
+	sinkId: String!
+	"The sink's error message when it failed; the row's `last_error`."
+	error: String
+}
+
+"Per-sink configuration state for one user."
+type AnnotationSinkStatus {
+	sinkId: String!
+	enabled: Boolean!
+	lastRunAt: DateTime
+	lastError: String
+}
+
+"Output persisted with the job record when the run completes."
+type AnnotationSyncOutput {
+	userId: String!
+	"Books in the batch handed to every sink."
+	books: Int!
+	sinks: [AnnotationSinkRun!]!
+}
+
+"The annotation sync state for one user."
+type AnnotationSyncStatus {
+	userId: String!
+	"A debounced export is scheduled for this user."
+	pending: Boolean!
+	sinks: [AnnotationSinkStatus!]!
 }
 
 type Apikey {
@@ -400,6 +444,26 @@ input CollectedItemInput {
 	issues: String
 }
 
+"""
+Container events share one payload shape per container kind: the id plus
+the visible member ids, so protocol adapters can gate visibility and echo
+the Komga wire events without re-querying.
+"""
+type CollectionAdded {
+	id: String!
+	seriesIds: [String!]!
+}
+
+type CollectionChanged {
+	id: String!
+	seriesIds: [String!]!
+}
+
+type CollectionDeleted {
+	id: String!
+	seriesIds: [String!]!
+}
+
 input ComputedFilterLibraryType @oneOf {
 	is: LibraryType
 	isNot: LibraryType
@@ -425,9 +489,9 @@ type ConfidenceFactor {
 }
 
 "An event that is emitted by the core and consumed by a client"
-union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | DiscoveredMissingLibrary | CreatedMedia | MediaDeleted | SeriesDeleted | CreatedManySeries | CreatedOrUpdatedManyMedia | DeviceSeen | DevicePairingRequested
+union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | DiscoveredMissingLibrary | CreatedMedia | MediaDeleted | SeriesDeleted | CreatedManySeries | CreatedOrUpdatedManyMedia | DeviceSeen | DevicePairingRequested | DevicePaired | IngestAwaitingReview | QualityFailed | AnalysisJobFailed | ProviderMatchDone | CollectionAdded | CollectionChanged | CollectionDeleted | ReadListAdded | ReadListChanged | ReadListDeleted | LibraryCreated | LibraryUpdated | LibraryDeleted
 
-union CoreJobOutput = LibraryScanOutput | SeriesScanOutput | ThumbnailGenerationOutput | PlaceholderGenerationOutput | MetadataFetchJobOutput | AnalyzeMediaOutput
+union CoreJobOutput = LibraryScanOutput | SeriesScanOutput | ThumbnailGenerationOutput | PlaceholderGenerationOutput | MetadataFetchJobOutput | AnalyzeMediaOutput | NotificationDispatchOutput | AnnotationSyncOutput
 
 input CreateAnnotationInput {
 	mediaId: String!
@@ -672,6 +736,13 @@ enum DeviceKind {
 	WEB
 }
 
+"A device pairing completed and its credential was minted for `user_id`."
+type DevicePaired {
+	deviceId: String!
+	userId: String!
+	deviceName: String!
+}
+
 """
 A device-pairing request as seen by a signed-in user. The code hash and the
 device's poll nonce are deliberately not exposed: knowing either would let a
@@ -742,6 +813,11 @@ type DeviceSeen {
 	the credential was minted for (one key works on every path).
 	"""
 	protocol: DeviceProtocol!
+	"""
+	`true` for the first request the device ever authenticated: its
+	`last_seen_at` was unset before this sighting was written.
+	"""
+	firstSeen: Boolean!
 }
 
 """
@@ -788,6 +864,47 @@ input DiscordConfigInput {
 
 type DiscoveredMissingLibrary {
 	id: String!
+}
+
+"A librarian decision about a recurring page hash inside a library"
+enum DuplicatePageAction {
+	"Hide pages with this hash from every page-serving route"
+	SKIP
+	"The page was reviewed and stays visible; stop reporting it"
+	KEEP
+}
+
+"""
+A page hash that recurs across several books of one library and has not
+been reviewed yet.
+"""
+type DuplicatePageCandidate {
+	"Representative hash of the group (the most frequent member)."
+	dhash: String!
+	"Distinct books containing a page from this group."
+	bookCount: Int!
+	"Total pages across those books."
+	pageCount: Int!
+	occurrences: [DuplicatePageOccurrence!]!
+}
+
+"One physical page carrying a candidate duplicate hash."
+type DuplicatePageOccurrence {
+	mediaId: ID!
+	mediaName: String!
+	"Physical 1-based page inside the file."
+	page: Int!
+	"""
+	The 1-based page number clients currently see for this physical page
+	once duplicate-page skipping is applied, or `null` when the page is
+	hidden.
+	"""
+	visiblePage: Int
+	"""
+	The exact hash of this page; near-duplicates inside a candidate group
+	may differ from the group's representative hash by a few bits.
+	"""
+	dhash: String!
 }
 
 input EditMessageInput {
@@ -1177,6 +1294,14 @@ type IngestApplyPayload {
 	media: Media
 }
 
+"A staged ingest item finished analysis and is waiting for a decision."
+type IngestAwaitingReview {
+	libraryId: String!
+	dropItemId: String!
+	sourceFilename: String!
+	createdBy: String
+}
+
 type IngestBulkApplyFailure {
 	dropItemId: ID!
 	message: String!
@@ -1526,6 +1651,16 @@ type JobUpdate {
 	totalSubtasks: Int
 }
 
+"A librarian decision about one recurring page hash inside a library."
+type KnownDuplicatePage {
+	libraryId: ID!
+	"The 64-bit dHash as 16 lowercase hexadecimal digits."
+	dhash: String!
+	action: DuplicatePageAction!
+	createdBy: String
+	createdAt: DateTime!
+}
+
 type Library {
 	id: String!
 	name: String!
@@ -1612,6 +1747,23 @@ input LibraryConfigInput {
 	ignoreRules: [String!]
 }
 
+"""
+Library lifecycle events carry the identity triple the Komga SSE surface
+needs to announce changes (payload keeps the root path so protocol adapters
+can log or resolve the library without re-querying).
+"""
+type LibraryCreated {
+	id: String!
+	name: String!
+	path: String!
+}
+
+type LibraryDeleted {
+	id: String!
+	name: String!
+	path: String!
+}
+
 input LibraryFilterInput {
 	id: FieldFilterString = null
 	name: FieldFilterString = null
@@ -1619,6 +1771,27 @@ input LibraryFilterInput {
 	_and: [LibraryFilterInput!] = null
 	_not: [LibraryFilterInput!] = null
 	_or: [LibraryFilterInput!] = null
+}
+
+type LibraryModel {
+	id: String!
+	name: String!
+	description: String
+	path: String!
+	status: FileStatus!
+	thumbnailMeta: ImageMetadata
+	thumbnailPath: String
+	createdAt: DateTime!
+	updatedAt: DateTime
+	emoji: String
+	configId: Int!
+	lastScannedAt: DateTime
+	"""
+	The provider source instance (`provider_sources.id`) backing a virtual
+	library. Set only for provider libraries, whose `path` is a `provider://`
+	URI and which the filesystem scanner skips.
+	"""
+	sourceProvider: String
 }
 
 input LibraryModelOrderBy {
@@ -1707,6 +1880,12 @@ enum LibraryType {
 	MIXED
 	WEB_NOVEL
 	WEBTOON
+}
+
+type LibraryUpdated {
+	id: String!
+	name: String!
+	path: String!
 }
 
 enum LibraryViewMode {
@@ -2297,6 +2476,12 @@ enum MetadataProvider {
 	MANGA_DEX
 	"MangaUpdates (https://api.mangaupdates.com/v1)"
 	MANGA_UPDATES
+	"Open Library (https://openlibrary.org)"
+	OPEN_LIBRARY
+	"Google Books (https://www.googleapis.com/books/v1)"
+	GOOGLE_BOOKS
+	"Metron (https://metron.cloud/api/)"
+	METRON
 }
 
 type MetadataProviderConfigModel {
@@ -2565,6 +2750,22 @@ type Mutation {
 	implement multipart uploads for
 	"""
 	uploadMediaThumbnailBase64(id: ID!, image: String!): Media!
+	"""
+	Record a decision about a recurring page hash. `SKIP` hides every page
+	within the duplicate tolerance of `dhash` from all page-serving routes
+	of the library's books (files are never modified); `KEEP` marks it as
+	reviewed so it stops appearing as a candidate. Marking again replaces
+	the previous decision.
+	"""
+	markDuplicatePage(		libraryId: ID!,
+		"16 hexadecimal digits, as reported by candidates and quality evidence"
+		dhash: String!,		action: DuplicatePageAction!
+	): KnownDuplicatePage!
+	"""
+	Forget a decision so the hash is reported as a candidate again and, for
+	a former `SKIP`, its pages become visible again.
+	"""
+	unmarkDuplicatePage(libraryId: ID!, dhash: String!): Boolean!
 	deleteLoginActivity: Int!
 	"""
 	Upload an avatar image for either the authenticated viewer or for any user if
@@ -2595,6 +2796,23 @@ type Mutation {
 	updateEmailDevice(id: Int!, input: EmailDeviceInput!): RegisteredEmailDevice!
 	patchEmailDevice(id: Int!, input: PatchEmailDeviceInput!): RegisteredEmailDevice!
 	deleteEmailDevice(id: Int!): RegisteredEmailDevice!
+	"""
+	Upsert the current user's settings for one channel. Unknown keys are
+	rejected; secret values are stored encrypted and never returned.
+	"""
+	setNotificationChannelSettings(input: SetNotificationChannelSettingsInput!): NotificationChannelSettingsValue!
+	"""
+	Create or update the current user's routing rule for one
+	(event kind, channel) pair. Only the server owner may subscribe to
+	administrative kinds (scans, ingest, metadata, analysis).
+	"""
+	setNotificationRule(eventKind: NotificationKind!, channelId: String!, enabled: Boolean!): NotificationRuleModel!
+	"""
+	Deliver a test notification through one of the current user's channels.
+	Resolves to `true` once the channel accepted the message; a missing
+	setting or a delivery failure is returned as an error.
+	"""
+	testNotificationChannel(channelId: String!): Boolean!
 	createApiKey(input: ApikeyInput!): CreatedAPIKey!
 	updateApiKey(id: Int!, input: ApikeyInput!): Apikey!
 	deleteApiKey(id: Int!): Apikey!
@@ -2620,6 +2838,31 @@ type Mutation {
 	acceptAllPendingMatches(strategy: MergeStrategy, excludeFields: [MetadataField!]): Int!
 	"Reject all pending metadata matches, setting their status to NoMatch"
 	rejectAllPendingMatches: Int!
+	"""
+	Create (or fetch) the virtual library backing a provider source.
+	Browsing it goes to the source live; nothing is materialised until a
+	series' books are opened.
+	"""
+	createVirtualLibrary(sourceId: String!, name: String): LibraryModel!
+	"""
+	Enable a catalog source by Keiyoushi id (`providerCatalog` result),
+	or directly by implementation + language for embedded sources.
+	"""
+	enableProviderSource(catalogId: String, implementation: String, lang: String): ProviderSource!
+	"""
+	Disable a source instance. Materialised rows remain, but pages stop
+	resolving and live browse is rejected.
+	"""
+	disableProviderSource(id: String!): Boolean!
+	"Fetch (or refresh) the Keiyoushi catalog snapshot."
+	refreshProviderCatalog: Boolean!
+	"""
+	Add (materialise) a remote series into a virtual library under its
+	deterministic id.
+	"""
+	addProviderSeries(libraryId: String!, sourceId: String!, remoteId: String!): SeriesModel!
+	"Re-fetch details and chapters for a materialised provider series."
+	refreshProviderSeries(seriesId: String!): SeriesModel!
 	stageIngestUploads(input: StageIngestUploadsInput!): StageIngestUploadsPayload!
 	scanIngestDropFolder(libraryId: ID!): IngestDropFolder!
 	enqueueIngestAnalysis(input: EnqueueIngestAnalysisInput!): [IngestAnalysisJob!]!
@@ -2686,6 +2929,10 @@ type Mutation {
 	"""
 	Deletes a reading list by ID.
 	
+	Goes through the canonical container service so a list projected to
+	Kobo devices leaves a shelf tombstone (the device's next incremental
+	sync emits `DeletedTag`) and Komga clients receive `ReadListDeleted`.
+	
 	# Returns
 	
 	A result containing the deleted reading list, or an error if deletion failed.
@@ -2741,6 +2988,17 @@ type Mutation {
 	revokeDevice(id: String!): Device!
 	"Replaces the device's transform profile (`null` clears it)."
 	setDeviceTransformProfile(id: String!, profile: JSON): Device!
+	"""
+	Configures one annotation export sink for the current user: replaces
+	the settings map (secret values are encrypted at rest) and sets
+	whether the sink runs (enabled by default).
+	"""
+	setAnnotationSinkSettings(sinkId: String!, settings: JSON, enabled: Boolean): AnnotationSyncStatus!
+	"""
+	Enqueues an immediate annotation export for a user (self by default;
+	other users require the server owner), bypassing the debounce.
+	"""
+	runAnnotationSync(userId: ID): AnnotationSyncStatus!
 }
 
 """
@@ -2756,6 +3014,70 @@ scalar NaiveDate
 
 input NavigationArrangementInput {
 	sections: [ArrangementSectionInput!]!
+}
+
+"""
+A channel the current user can route notifications to, with its settings
+schema.
+"""
+type NotificationChannel {
+	id: String!
+	label: String!
+	settings: [IngestSettingDefinition!]!
+}
+
+"""
+The current user's effective settings for one channel, with secret values
+redacted.
+"""
+type NotificationChannelSettingsValue {
+	channelId: String!
+	"""
+	Merged defaults and stored values keyed by setting key; secrets are
+	omitted entirely.
+	"""
+	values: JSON!
+}
+
+"Summary of one notification dispatch job's deliveries."
+type NotificationDispatchOutput {
+	"Deliveries that succeeded (possibly after retries)."
+	sent: Int!
+	"Deliveries that exhausted their attempts and were dropped."
+	failed: Int!
+}
+
+"""
+The events a user can route to a channel. Persisted by name in
+`notification_rules.event_kind` and in queued dispatch jobs, so variants are
+append-only.
+"""
+enum NotificationKind {
+	"A pairing was approved and the device received its credential"
+	DEVICE_PAIRED
+	"A registered device authenticated for the first time"
+	DEVICE_FIRST_SEEN
+	"A staged ingest item finished analysis and needs a human decision"
+	INGEST_AWAITING_REVIEW
+	"A quality report contains at least one failed check"
+	QUALITY_FAILED
+	"A library scan completed"
+	SCAN_FINISHED
+	"A staged analysis job failed"
+	ANALYSIS_JOB_FAILED
+	"Provider lookup finished for a staged item"
+	PROVIDER_MATCH_DONE
+	"Sent by `testNotificationChannel`; never routed by rules"
+	TEST
+}
+
+"One routing rule: which channel receives which notification kind."
+type NotificationRuleModel {
+	id: Int!
+	"A `NotificationKind` name, or `*` for every routable kind."
+	eventKind: String!
+	channelId: String!
+	enabled: Boolean!
 }
 
 type Notifier {
@@ -3013,10 +3335,88 @@ type PlaceholderGenerationOutput {
 	generatedMetadata: Int!
 }
 
+"""
+A Keiyoushi catalog entry flattened to one source, annotated with
+whether this server can actually run it.
+"""
+type ProviderCatalogEntry {
+	"The catalog source id to pass to `enableProviderSource`."
+	id: String!
+	name: String!
+	lang: String!
+	baseUrl: String!
+	"The Keiyoushi extension package backing the source."
+	pkg: String!
+	"""
+	Whether a compiled implementation exists for this entry on this
+	server; entries without one cannot be enabled.
+	"""
+	hasImplementation: Boolean!
+	"""
+	The instance id that will be created on enable
+	(`<implementation>-<lang>`).
+	"""
+	instanceId: String
+}
+
 type ProviderCredentialVerification {
 	responseStatus: Int!
 	isValid: Boolean!
 	error: String
+}
+
+"""
+Provider identify/lookup finished for a staged item and candidates were
+stored.
+"""
+type ProviderMatchDone {
+	libraryId: String!
+	dropItemId: String!
+	createdBy: String
+	candidateCount: Int!
+}
+
+"One page of a live provider search."
+type ProviderSearchPage {
+	items: [ProviderSeriesSummary!]!
+	hasNext: Boolean!
+}
+
+"""
+A remote series surfaced by a live provider search, identified by its
+deterministic Stump id.
+"""
+type ProviderSeriesSummary {
+	"The deterministic Stump series id (`uuid5(source, remote_id)`)."
+	stumpId: String!
+	sourceId: String!
+	remoteId: String!
+	title: String!
+	coverUrl: String
+	description: String
+	authors: [String!]!
+	artists: [String!]!
+	genres: [String!]!
+	status: String!
+	nsfw: Boolean!
+}
+
+type ProviderSource {
+	id: String!
+	"The compiled implementation backing this instance, e.g. `mangadex`."
+	implementation: String!
+	catalogId: String
+	name: String!
+	lang: String!
+	baseUrl: String!
+	enabled: Boolean!
+}
+
+type ProviderSourceHealth {
+	sourceId: String!
+	status: String!
+	latencyMs: Int
+	checkedAt: DateTime
 }
 
 enum PublicationStatus {
@@ -3025,6 +3425,18 @@ enum PublicationStatus {
 	HIATUS
 	CANCELLED
 	UPCOMING
+}
+
+"A quality report contains at least one failed check."
+type QualityFailed {
+	libraryId: String!
+	"Set for staged items; media-rework reports carry `media_id` instead."
+	dropItemId: String
+	mediaId: String
+	createdBy: String
+	score: Int!
+	"The check ids that returned [`QualityStatus::Fail`](crate::ingest::contract::QualityStatus)."
+	failedChecks: [String!]!
 }
 
 type Query {
@@ -3104,6 +3516,25 @@ type Query {
 	"Returns a list of all tags."
 	tags: [Tag!]!
 	mediaMetadataOverview(seriesId: ID): MediaMetadataOverview!
+	"Every reviewed page hash (`SKIP`/`KEEP`) of a library, newest first."
+	knownDuplicatePages(libraryId: ID!): [KnownDuplicatePage!]!
+	"""
+	Page hashes that recur in at least `minBooks` distinct books of the
+	library and have not been reviewed yet, most widespread first.
+	Hashes within the duplicate tolerance of each other are grouped.
+	"""
+	duplicatePageCandidates(		libraryId: ID!,
+		"Minimum distinct books; defaults to the quality check default"
+		minBooks: Int,
+		"Maximum groups returned; defaults to 50, capped at 500"
+		limit: Int
+	): [DuplicatePageCandidate!]!
+	"""
+	The physical 1-based pages of a book that remain visible once the
+	library's `SKIP` marks are applied; index `n - 1` is the physical page
+	served for visible page `n`.
+	"""
+	mediaVisiblePages(id: ID!): [Int!]!
 	me: User!
 	userCount: Int!
 	topReaders(take: Int): [User!]!
@@ -3117,6 +3548,21 @@ type Query {
 	emailDeviceById(id: Int!): RegisteredEmailDevice
 	getNotifiers: [Notifier!]!
 	getNotifierById(id: Int!): Notifier!
+	"""
+	The notification channels this server offers, with the settings schema
+	each user can configure.
+	"""
+	notificationChannels: [NotificationChannel!]!
+	"""
+	The current user's routing rules. `eventKind` is a `NotificationKind`
+	name or `*`, which matches every routable kind.
+	"""
+	notificationRules: [NotificationRuleModel!]!
+	"""
+	The current user's effective settings for every channel, with secret
+	values redacted.
+	"""
+	notificationChannelSettings: [NotificationChannelSettingsValue!]!
 	apiKeys: [Apikey!]!
 	apiKeyById(id: Int!): Apikey!
 	jobs(pagination: Pagination! = {offset: {page: 1, pageSize: 20, zeroBased: false}}): PaginatedJobResponse!
@@ -3166,6 +3612,21 @@ type Query {
 	them; approving binds the pairing to the approver.
 	"""
 	pendingDevicePairings: [DevicePairing!]!
+	"All registered provider source instances."
+	providerSources: [ProviderSource!]!
+	"""
+	The Keiyoushi extension catalog, filtered by language and name.
+	`has_implementation` marks entries this server can actually run.
+	"""
+	providerCatalog(lang: String, query: String): [ProviderCatalogEntry!]!
+	"The latest health observations for catalog sources."
+	providerSourceHealth: [ProviderSourceHealth!]!
+	"""
+	Live search on one provider source, without materialising anything.
+	Results carry deterministic Stump ids and can be added to a virtual
+	library with `addProviderSeries`.
+	"""
+	providerSearch(sourceId: String!, query: String!, page: Int): ProviderSearchPage!
 	smartLists(input: SmartListsInput! = {all: null, mine: true, search: null}): [SmartList!]!
 	smartListById(id: ID!): SmartList
 	smartListMeta(id: ID!): SmartListMeta
@@ -3203,6 +3664,29 @@ type Query {
 	the device's owner (the server owner may name any device).
 	"""
 	readingStats(span: ReadingStatsSpan!, deviceId: String): ReadingStats!
+	"The compiled-in annotation export sinks and their setting schemas."
+	annotationSinks: [AnnotationSink!]!
+	"""
+	The annotation sync state for a user: configured sinks, last runs,
+	errors, and whether a debounced export is pending. Defaults to the
+	calling user; other users require the server owner.
+	"""
+	annotationSyncStatus(userId: ID): AnnotationSyncStatus!
+}
+
+type ReadListAdded {
+	id: String!
+	bookIds: [String!]!
+}
+
+type ReadListChanged {
+	id: String!
+	bookIds: [String!]!
+}
+
+type ReadListDeleted {
+	id: String!
+	bookIds: [String!]!
 }
 
 "The different reading directions supported by any Stump reader"
@@ -3226,6 +3710,13 @@ type ReadingList {
 	updatedAt: DateTime!
 	visibility: String!
 	ordering: String!
+	"Whether this reading list is projected to Kobo devices as a shelf `Tag`."
+	koboShelf: Boolean!
+	"""
+	Device that last wrote this reading list through the Kobo `tags`
+	write-back endpoints; `None` for native/Komga writes.
+	"""
+	sourceDevice: String
 	creatingUserId: String!
 }
 
@@ -3791,6 +4282,27 @@ input SeriesMetadataOrderByField {
 	direction: OrderDirection!
 }
 
+type SeriesModel {
+	id: String!
+	name: String!
+	description: String
+	createdAt: DateTime!
+	updatedAt: DateTime
+	deletedAt: DateTime
+	path: String!
+	status: FileStatus!
+	thumbnailMeta: ImageMetadata
+	thumbnailPath: String
+	libraryId: String
+	"""
+	The provider source instance (`provider_sources.id`) this series was materialised
+	from. Set only for remote series, whose `path` is a `provider://` URI.
+	"""
+	sourceProvider: String
+	"The remote series identifier on the provider source"
+	remoteId: String
+}
+
 enum SeriesModelOrdering {
 	ID
 	NAME
@@ -3858,6 +4370,17 @@ input SetIngestQualityCheckSettingsInput {
 	checkId: String!
 	enabled: Boolean
 	settings: JSON
+}
+
+input SetNotificationChannelSettingsInput {
+	"The channel whose per-user settings are written."
+	channelId: String!
+	"""
+	Values keyed by the channel's settings definition keys. Stored values
+	are merged over the channel defaults; omitted secret keys keep their
+	previously stored (encrypted) value.
+	"""
+	settings: JSON!
 }
 
 """
@@ -4053,6 +4576,17 @@ type StumpConfig {
 	allowedOrigins: [String!]!
 	"Whether to trust proxy headers for determining client IP and scheme (e.g., X-Forwarded-For)"
 	trustProxyHeaders: Boolean!
+	"""
+	Directory holding the built Home app (`home/build`). When set and it
+	contains `index.html`, the app is served under `/app`.
+	"""
+	homeAppDir: String
+	"""
+	Optional allowlist of filesystem roots for library creation and the
+	filesystem browser (comma-separated, e.g. `/data/books,/data/comics`).
+	When empty, no root constraint is applied.
+	"""
+	libraryRoots: [String!]!
 	"An optional custom path for the database."
 	dbPath: String
 	dbTimeoutSecs: Int!
@@ -4113,6 +4647,18 @@ type StumpConfig {
 	pdfPrerenderRange: Int!
 	"Whether to enable high-quality rendering with smoothing (slower but better quality)."
 	pdfHighQuality: Boolean!
+	"Enable comic transform delivery for Kobo devices (CBZ/CBR/PDF → KEPUB)."
+	transformEnabled: Boolean!
+	"""
+	Named `stump_media::transform::TransformProfile` preset used for Kobo
+	devices that have no `transform_profile` of their own.
+	"""
+	transformKoboProfile: String!
+	"""
+	Byte budget for the transform cache; least-recently-used entries are
+	removed until the directory fits.
+	"""
+	transformCacheMaxBytes: Int!
 	"The configuration root for the Stump application, contains thumbnails, cache, and logs."
 	configDir: String!
 }
@@ -4176,6 +4722,8 @@ input SystemArrangementConfigInput {
 type Tag {
 	id: Int!
 	name: String!
+	"Distinguishes Komga `genres` from `tags` so round trips preserve both."
+	kind: String!
 }
 
 type TelegramConfig {

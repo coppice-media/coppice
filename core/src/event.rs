@@ -136,7 +136,6 @@ pub struct ProviderMatchDone {
 	pub candidate_count: usize,
 }
 
-
 /// An event that is emitted by the core and consumed by a client
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::Union))]

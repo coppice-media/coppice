@@ -1,0 +1,142 @@
+---
+title: Provider host
+description: Remote content sources (MangaDex today) as libraries — Mode A materialisation, Mode B virtual libraries, cache, quotas, GC.
+---
+
+# Provider host
+
+The provider host (`crates/provider`, `stump_provider`) lets Stump serve
+content from remote sources the way Mihon does: a `Source` can list popular
+and latest series, search, describe a series, list chapters, list a chapter's
+pages, and fetch page bytes. Remote series become ordinary `series`/`media`
+rows whose `path` is a `provider://<source>/<remote_id>[/<chapter>]` URI, so
+every existing reader route (native, Komga, OPDS, Kobo) serves them without
+knowing about providers. This page covers the design; the metadata
+providers that enrich local files are a different subsystem
+(see [Provider status](/docs/developer/provider-status)).
+
+## Enabling
+
+| Layer | Switch | Default | Effect |
+| --- | --- | --- | --- |
+| Cargo | feature `providers` (server, `stump_core`, `graphql`) | on in `headless`/`full`, off in `minimal` | Links `stump_provider` + `stump_provider_mangadex`, the GraphQL ops, and the Komga/OPDS branches |
+| Runtime | `STUMP_ENABLE_PROVIDERS` / `providers.enable_providers` | `false` | Creates the `ProviderHost` at boot (`core/src/providers.rs::init`), installs the `provider://` media resolver, starts the GC scheduler. Off: GraphQL ops answer `Provider host is not enabled`, virtual branches fall through |
+
+Other keys (`core/src/config/providers.rs`):
+
+| Key | Env | Default | Meaning |
+| --- | --- | --- | --- |
+| `provider_cache_max_bytes` | `STUMP_PROVIDER_CACHE_MAX_BYTES` | 2 GiB | Bound of the on-disk page/cover cache under `<config>/cache/providers` |
+| `virtual_series_ttl` | `STUMP_VIRTUAL_SERIES_TTL` | `300` s | How long one live browse page `(source, kind, page)` is cached |
+| `provider_gc_days` | `STUMP_PROVIDER_GC_DAYS` | `30` | Materialised series with no reading head older than this are reclaimed |
+
+## Sources and the catalog
+
+- **Compiled implementations.** Only MangaDex ships (`crates/provider-mangadex`).
+  A `SourceFactory` describes an implementation and builds an instance per
+  language; instance ids are `<implementation>-<lang>` (`mangadex-en`).
+- **Catalog.** The Keiyoushi extension index is fetched daily into
+  `<cache>/providers/keiyoushi-index.json`. `providerCatalog(lang, query)`
+  flattens it to one row per source with `hasImplementation` telling the
+  operator whether Stump can actually run it. `providerSourceHealth` exposes
+  the probe results (`source_health` rows; 10 s timeout, `dead` after 3
+  consecutive failures).
+- **Enabling a source.** `enableProviderSource(catalogId)` (or
+  `implementation` + `lang`) upserts a `provider_sources` row and registers
+  the instance; `disableProviderSource(id)` keeps materialised rows but stops
+  page resolution and live browse.
+- **Quotas.** Each source owns a `RateLimiter` (MangaDex: 5 requests/second,
+  shared by API and image calls; MangaDex@Home fetches are reported to the
+  network as its rules require). Manifests (page URL lists) are re-resolved
+  after 10 minutes because at-home URLs expire.
+
+## Mode A: materialised series in any library
+
+`addProviderSeries(libraryId, sourceId, remoteId)` fetches details and
+chapters and writes `series`, `series_metadata`, `media`, `media_metadata`
+rows under deterministic ids (`uuid5("series:<source>:<remote>")`,
+`uuid5("media:<source>:<chapter>")`). `refreshProviderSeries(seriesId)`
+re-runs the same idempotent path. Pages are fetched on demand through the
+`VirtualMediaResolver` and cached on disk; `pages` is learned on first
+resolution. Series covers come from the source's thumbnail URL, cached under
+`cover:<remote_id>`.
+
+## Mode B: virtual libraries
+
+`createVirtualLibrary(sourceId, name)` creates a `libraries` row with
+`path = provider://<source>`, `source_provider = <source>`, a deterministic id
+(`uuid5("library:<source>")`), and `watch` off. Nothing else is written.
+
+```
+client ──▶ Komga series/list {libraryId is V}          ──▶ host.browse(source, kind, page)
+                 │  (or OPDS /libraries/V)                    │  TTL cache, reverse index id→origin
+                 ▼                                             ▼
+        KomgaSeries cards with uuid5 ids, booksCount 0   no rows written
+                 │
+client ──▶ Komga series/{id}      ──▶ live details (id resolved from the reverse index)
+client ──▶ Komga series/{id}/books ─▶ materialise (same ids) ──▶ ordinary DB path
+client ──▶ books/{id}/pages/{n}    ─▶ provider:// resolver ──▶ page cache / source
+```
+
+Request mapping (`apps/server/src/routers/provider_virtual.rs::browse_kind`):
+
+| Client request | `BrowseKind` |
+| --- | --- |
+| Komga `fullTextSearch` / OPDS `?search=` | `Search { query }` |
+| Komga sort on `readCount`, `booksCount`, `readProgress` | `Popular` |
+| Anything else (including the unsorted default) | `Latest` |
+
+Rules:
+
+- Only a lone `libraryId is <virtual>` condition (at any nesting depth) routes
+  live; combined conditions are answered from the database, which has no
+  virtual rows.
+- Live results pass the same per-user library filter as stored rows
+  (`library::Entity::find_for_user`); ids the user could not have browsed are
+  treated as unknown.
+- Live cards report `booksCount = 0`; the chapter count becomes real after
+  materialisation. Live pages have no total: the Komga `Page` and OPDS feed
+  report one phantom element past the current window while `has_next` is true.
+- Materialisation happens on the first `series/{id}/books` (Komga) or
+  `series/{id}` (OPDS 1.2) call for an id served by a live browse; a stored id
+  never re-materialises on read (use `refreshProviderSeries`).
+- The filesystem scanner treats a virtual library as a no-op and never marks
+  `provider://` series missing (`library_scan_job.rs::init`, `walk.rs`).
+
+Routes that answer from a virtual library today:
+
+| Protocol | Route | Live / materialised |
+| --- | --- | --- |
+| Komga | `POST /api/v1/series/list` | live |
+| Komga | `GET /api/v1/series/{id}` | live until materialised |
+| Komga | `GET /api/v1/series/{id}/thumbnail` | live (source cover) or stored |
+| Komga | `GET /api/v1/series/{id}/books` | materialises, then DB |
+| Komga | `GET /api/v1/books/{id}`, `/pages/{n}`, `/thumbnail` | materialised rows via resolver |
+| OPDS 1.2 | `GET /libraries/{id}` | live |
+| OPDS 1.2 | `GET /series/{id}` | materialises, then DB (PSE pages as usual) |
+| Kobo, Kavita, OPDS 2.0, native GraphQL | — | materialised rows only (they read the database) |
+
+## Garbage collection
+
+`StumpJob::ProviderGc` runs two minutes after boot and then daily
+(`core/src/providers.rs`). It deletes provider-backed series that have no
+reading head for any user on any of their books and whose `created_at` is
+older than `provider_gc_days`, removing reading-list/collection memberships
+in the same transaction and sweeping thumbnails afterwards. Non-provider
+series are never touched. The next browse simply serves the series live again
+under the same id.
+
+## Verification
+
+```text
+cargo test -p stump_provider            # browse TTL + reverse index, browse→materialise→page, GC, cache, catalog, health
+cargo test -p stump_provider_mangadex   # MangaDex mapping and rate limiting (no network)
+cargo test -p stump_komga               # condition-DSL routing and DTO shapes
+```
+
+Live smoke on a fixture server (`STUMP_ENABLE_PROVIDERS=true`):
+`enableProviderSource(implementation: "mangadex", lang: "en")` →
+`createVirtualLibrary(sourceId: "mangadex-en")` → Komga
+`POST /api/v1/series/list {"condition":{"libraryId":{"operator":"is","value":"<id>"}}}`
+→ `GET /api/v1/series/{id}/books` → `GET /api/v1/books/{bookId}/pages/1`
+returns an image.

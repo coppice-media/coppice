@@ -282,11 +282,7 @@ impl LibraryMutation {
 				path: input.path,
 				description: input.description,
 				emoji: input.emoji,
-				config: input
-					.config
-					.take()
-					.unwrap_or_default()
-					.into_active_model(),
+				config: input.config.take().unwrap_or_default().into_active_model(),
 				tags: input.tags.take().unwrap_or_default(),
 				scan_after_persist: input.scan_after_persist,
 			},
@@ -404,13 +400,7 @@ impl LibraryMutation {
 				path: input.path,
 				description: input.description,
 				emoji: input.emoji,
-				config: Some(
-					input
-						.config
-						.take()
-						.unwrap_or_default()
-						.into_active_model(),
-				),
+				config: Some(input.config.take().unwrap_or_default().into_active_model()),
 				tags: input.tags.take(),
 				scan_after_persist: input.scan_after_persist,
 				watch,
@@ -993,4 +983,3 @@ impl LibraryMutation {
 		Ok(Library::from(library))
 	}
 }
-

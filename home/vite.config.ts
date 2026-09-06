@@ -3,8 +3,8 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-	// The shared `@stump/ui` package is a `file:` dependency; resolving from
-	// the link position keeps one copy of the graphql stack per app.
+	// `src/lib/stump-ui` is a symlink to packages/stump-ui/src; resolving from
+	// the link position keeps one copy of svelte/graphql per app.
 	resolve: { preserveSymlinks: true },
 	plugins: [tailwindcss(), sveltekit()],
 	server: {

@@ -1,0 +1,340 @@
+---
+title: Calibre and external e-book tooling
+description: What calibre's command line does that Stump cannot, how the GPL-3 licence constrains the integration to shelling out, and how ingest detects DRM-protected files without ever removing DRM.
+---
+
+# Calibre and external e-book tooling
+
+Stump converts and inspects a narrow set of formats natively:
+`stump_media` reads ZIP/RAR/EPUB/PDF containers, `stump_kepub` converts EPUB to
+KEPUB in-process, and `stump_tools` owns the Kavita-style maintenance tools
+(`cbzit`, `epub2cbz`, `cbz-covers`, `epub-check`, `missing-sequence`).
+Everything outside that set — MOBI, AZW3, KFX, DOCX, FB2, LIT, PDB, and writing
+metadata back into a book — is calibre's territory.
+
+This page records exactly what calibre offers, why the integration is a
+subprocess and never a library, and what the ingest pipeline does when a file
+turns out to be DRM-protected.
+
+<Callout type="info">
+	Version and flag claims on this page are taken from the calibre manual for
+	**calibre 9.14.0** (documentation last updated 28 August 2026), the version
+	the [CLI index](https://manual.calibre-ebook.com/generated/en/cli-index.html)
+	is generated for. `stump_tools` requires **7.0 or newer**
+	(`crates/tools/src/calibre.rs`, `MIN_VERSION`).
+</Callout>
+
+## Licence: shell out, never link
+
+calibre is **GPL-3**
+([`LICENSE`](https://github.com/kovidgoyal/calibre/blob/master/LICENSE)). Stump
+is not, and linking or vendoring GPL-3 code into this workspace would relicense
+the server. The consequences are absolute:
+
+| Rule | Reason |
+| --- | --- |
+| No calibre source is copied, translated, or adapted into this repository | Any derivative of GPL-3 source is itself GPL-3 |
+| No calibre Python module is imported, embedded, or bundled | Same, at distribution time |
+| calibre is invoked as a separate process over `argv` and files only | Running an independent program and exchanging data through a documented CLI is use, not derivation |
+| calibre is never a dependency of a build or a container image | An operator installs it themselves; Stump degrades to "tool unavailable" without it |
+| Behaviour learned from calibre's docs is reimplemented from scratch, with the source URL cited at the rule | Facts and interfaces are not the licensed expression |
+
+The same rule governs every other GPL/AGPL project in this space
+(MangaManager, cbzit, Sigil, DeDRM_tools): read the documented behaviour,
+implement it independently in Rust, cite the source.
+
+## The calibre command line
+
+The [CLI index](https://manual.calibre-ebook.com/generated/en/cli-index.html)
+documents `calibre`, `calibre-customize`, `calibre-debug`, `calibre-server`,
+`calibre-smtp`, `calibredb`, `ebook-convert`, `ebook-edit`, `ebook-meta`,
+`ebook-polish`, `ebook-viewer`, `fetch-ebook-metadata`, `lrf2lrs`, `lrfviewer`,
+`lrs2lrf`, and `web2disk`. On macOS these live inside the bundle, e.g.
+`/Applications/calibre.app/Contents/MacOS/ebook-convert` (same page).
+
+The six that matter here:
+
+| Tool | What it does | What Stump cannot do without it |
+| --- | --- | --- |
+| [`ebook-convert`](https://manual.calibre-ebook.com/generated/en/ebook-convert.html) | `ebook-convert input output [options]`; the output plugin is guessed from the output file's extension | Every conversion outside EPUB→KEPUB |
+| [`ebook-meta`](https://manual.calibre-ebook.com/generated/en/ebook-meta.html) | Read and write embedded metadata; `--to-opf` dumps it as OPF | Reading metadata from MOBI/AZW3/LIT/FB2/DOCX; writing metadata into any format |
+| [`ebook-polish`](https://manual.calibre-ebook.com/generated/en/ebook-polish.html) | Minimal-diff repairs on AZW3/EPUB/KEPUB only | Font subsetting, jackets, soft hyphens, unused-CSS removal, EPUB 2→3 upgrade |
+| [`fetch-ebook-metadata`](https://manual.calibre-ebook.com/generated/en/fetch-ebook-metadata.html) | Metadata lookup by title/author/ISBN/identifier; `--opf` for machine output | Nothing — Stump has its own providers (Comic Vine, Hardcover, AniList, MAL, MangaDex, MangaUpdates, Google Books, Open Library, Metron) |
+| [`calibredb`](https://manual.calibre-ebook.com/generated/en/calibredb.html) | "The command line interface to the calibre database": `list`, `add`, `remove`, `add_format`, `show_metadata --as-opf`, `set_metadata`, `export`, against a library path or a Content server URL | Nothing — Stump owns its own library model |
+| [`ebook-edit`](https://manual.calibre-ebook.com/generated/en/ebook-edit.html) | Launches calibre's interactive "Edit book" GUI | Nothing — a GUI has no place in a server pipeline |
+
+`ebook-edit`, `calibredb`, and `fetch-ebook-metadata` are documented here for
+completeness and are deliberately **not** wired up: the first is interactive,
+and the other two duplicate capabilities Stump already owns.
+
+### Conversion matrix
+
+calibre converts every input format in this list to every output format
+([FAQ: what formats does calibre support conversion to/from?](https://manual.calibre-ebook.com/faq.html#what-formats-does-calibre-support-conversion-to-from)):
+
+- **Input:** AZW, AZW3, AZW4, CBZ, CBR, CB7, CBC, CHM, DJVU, DOCX, EPUB, FB2,
+  FBZ, HTML, HTMLZ, KEPUB, LIT, LRF, MOBI, ODT, PDF, PRC, PDB, PML, RB, RTF,
+  SNB, TCR, TXT, TXTZ
+- **Output:** AZW3, EPUB, DOCX, FB2, HTMLZ, KEPUB, OEB, LIT, LRF, MOBI, PDB,
+  PMLZ, RB, PDF, RTF, SNB, TCR, TXT, TXTZ, ZIP
+
+So the two directions Stump actually wants are both covered: MOBI, AZW3, KFX
+(via calibre's KFX Input plugin), DOCX, FB2, LIT, PDB → EPUB, and EPUB → MOBI,
+AZW3, KEPUB, PDF. The same FAQ ranks source formats by conversion quality, best
+first: LIT, MOBI, AZW, EPUB, KEPUB, AZW3, FB2, FBZ, DOCX, HTML, PRC, ODT, RTF,
+PDB, TXT, PDF — and states plainly that PDF is a terrible format to convert
+from.
+
+Caveats from the same section, worth surfacing to operators: PRC is supported
+only with TextRead and MOBIBook headers; PDB only for eReader, Plucker (input
+only), PML, and zTxt; DJVU only when it carries embedded text; DOCX only from
+Word 2007 and newer.
+
+<Callout type="warn">
+	KFX is not in calibre's built-in input list. Reading KFX needs the
+	third-party **KFX Input** plugin installed in the operator's calibre; that is
+	outside Stump's control and outside this integration's promises.
+</Callout>
+
+### Metadata support per format
+
+`ebook-meta` documents two different lists, and the asymmetry matters
+([`ebook-meta`](https://manual.calibre-ebook.com/generated/en/ebook-meta.html)):
+
+| Direction | Formats |
+| --- | --- |
+| Read | azw, azw1, azw3, azw4, cb7, cbc, cbr, cbz, chm, docx, epub, fb2, fbz, html, htmlz, imp, kepub, lit, lrf, lrx, mobi, odt, oebzip, opf, pdb, pdf, pml, pmlz, pobi, prc, rar, rb, rtf, snb, tpz, txt, txtz, updb, zip |
+| Write | azw, azw1, azw3, azw4, docx, epub, fb2, fbz, htmlz, kepub, lrf, mobi, odt, pdb, pdf, prc, rtf, tpz, txtz |
+
+Reading is broader than writing, and the manual warns that setting metadata a
+format does not support is *silently ignored*. Useful flags: `--to-opf` (dump
+to an OPF file), `--get-cover` (extract the cover), `--from-opf` (apply an OPF,
+overridden by any values given on the command line), and `--identifier` (repeatable,
+`--identifier isbn:12345`; an empty value removes one, except a package
+identifier in an EPUB).
+
+### Polish
+
+`ebook-polish [options] input_file [output_file]` performs the *minimum* set of
+changes for each effect — no CSS flattening, no renaming, no font rescaling —
+and works only on AZW3, EPUB, and KEPUB
+([`ebook-polish`](https://manual.calibre-ebook.com/generated/en/ebook-polish.html)):
+
+| Flag | Effect |
+| --- | --- |
+| `--subset-fonts`, `-f` | Reduce each embedded font to the glyphs the book uses (often halves font file size) |
+| `--embed-fonts`, `-e` | Embed referenced fonts found on the machine |
+| `--jacket`, `-j` / `--remove-jacket` | Insert or remove a metadata "book jacket" page |
+| `--smarten-punctuation`, `-p` | Convert plain quotes/dashes/ellipses to typographic ones |
+| `--remove-unused-css`, `-u` | Drop CSS rules that match no content |
+| `--compress-images`, `-i` | Lossless image recompression |
+| `--add-soft-hyphens`, `-H` / `--remove-soft-hyphens` | Add or strip soft hyphens for justification |
+| `--upgrade-book`, `-U` | Upgrade internal structures, e.g. EPUB 2 → EPUB 3 |
+| `--cover`, `-c` | Replace or insert the cover |
+| `--opf`, `-o` | Update metadata from an OPF file |
+| `--download-external-resources`, `-d` | Inline remote images/stylesheets |
+
+Table-of-contents control lives on `ebook-convert`, not `ebook-polish`:
+`--level1-toc` / `--level2-toc` / `--level3-toc` (XPath), `--toc-threshold`
+(default 6), `--max-toc-links` (default 50, 0 disables), `--toc-filter`,
+`--use-auto-toc`, `--duplicate-links-in-toc`, and `--no-chapters-in-toc`
+([`ebook-convert`](https://manual.calibre-ebook.com/generated/en/ebook-convert.html)).
+`--smarten-punctuation` and `--subset-embedded-fonts` also exist on
+`ebook-convert`, in its *Look and Feel* group.
+
+## What Stump wires up
+
+Two tools in `crates/tools/src/calibre.rs`, both following the crate's
+plan/apply contract: `plan` only reads, `apply` performs exactly the planned
+actions, and originals are never modified.
+
+`calibre::Calibre::locate` resolves the binaries once. `stump_tools` stays
+`stump_core`-free, so there is deliberately **no** `STUMP_CALIBRE_BIN_DIR`
+config key: the location comes from the tool's own `bin_dir` option, else
+`PATH`, else the macOS bundle path. The version comes from
+`ebook-convert --version`, which calibre renders as `%prog (calibre <version>)`
+([`OptionParser`](https://github.com/kovidgoyal/calibre/blob/master/src/calibre/utils/config.py)),
+and anything below 7.0 — or a missing, non-executable, or unparseable binary —
+raises `ToolError::ExternalToolMissing` carrying an install hint.
+
+### `calibre-convert`
+
+Runs `ebook-convert <source> <target> [extra_args...]` once per file, with a
+finite timeout, and captures stderr into the report. The target extension is
+what selects calibre's output plugin, so the `to` option maps 1:1 onto it:
+`epub`, `kepub`, `azw3`, `mobi`, `pdf`.
+
+<Callout type="info">
+	`to: "kepub"` writes `Book.kepub`, because that is the extension
+	`ebook-convert` dispatches the KEPUB output plugin from. Kobo sideloading
+	wants the file renamed to `Book.kepub.epub`. For EPUB sources prefer the
+	in-process `stump_kepub` converter (see
+	[Comics transform](/developer/comics-transform)); `calibre-convert` exists for
+	sources `stump_kepub` cannot read at all.
+</Callout>
+
+Failure handling is deliberate: a non-zero exit, a timeout, or a "success" that
+produced no file is a `skipped` entry whose reason carries the exit status and
+the captured stderr tail; any partial output file is deleted, because a
+truncated book in a library folder is worse than no book. A pre-existing target
+is refused at plan time unless `overwrite` is set, and refused again at apply
+time (a plan can be minutes stale).
+
+### `calibre-meta`
+
+Runs `ebook-meta <source> --to-opf <tmp>` per file and parses the OPF into a
+JSON object shaped like `ExternalMediaMetadata`
+(`crates/integrations/metadata/src/types/metadata.rs`), so a consumer can merge
+it with provider candidates without a translation layer. Mapping: `dc:title` →
+`title`, `dc:creator` → `writers`, `dc:description` → `summary`, `dc:subject` →
+`tags`, `dc:date` → `year`/`month`/`day`, `dc:identifier[scheme=ISBN]` → `isbn`
+or `isbn_13` by digit count, plus `publisher` and `language` as documented
+extensions. Series comes from calibre's own OPF 2.0 extension,
+`<meta name="calibre:series">` and `calibre:series_index`
+([`opf2.py`](https://github.com/kovidgoyal/calibre/blob/master/src/calibre/ebooks/metadata/opf2.py)).
+
+This pass is **read-only**. Writing metadata back (`ebook-meta --from-opf`,
+`--title`, `--authors`, …) is not implemented: it mutates the original file, so
+it needs the same explicit-apply and backup story as the other mutating tools
+and is left for a later change.
+
+Per-option tables for both tools live in `crates/tools/README.md`.
+
+## DRM
+
+**Stump does not ship, bundle, invoke, or implement DRM removal.** There is no
+code path in this repository that decrypts a protected book, and none will be
+added. `ebook-convert` refuses DRM-protected input, and that refusal is
+correct behaviour, not a bug to work around.
+
+What Stump does instead is *detect* protection early and explain it, so an
+operator never ends up with an unreadable book in a library.
+
+### DeDRM_tools is a user-side prerequisite
+
+Operators who want to convert or ingest their own purchased files generally use
+the [DeDRM_tools](https://github.com/noDRM/DeDRM_tools) calibre plugin. It is a
+**third-party, GPL-3, user-installed** plugin that runs **inside the operator's
+own calibre**, on their own machine, under their own legal responsibility,
+*before* a file is ever placed in a Stump ingest folder.
+
+| Fact | Value |
+| --- | --- |
+| Current stable release | **v10.0.3**, published 13 July 2022 ([release](https://github.com/noDRM/DeDRM_tools/releases/tag/v10.0.3)) |
+| Current beta | **v10.0.9**, a release candidate for v10.1.0, published 2 August 2023 ([README](https://github.com/noDRM/DeDRM_tools/blob/master/README.md)) |
+| Declared calibre support | `minimum_calibre_version = (2, 0, 0)` in `DeDRM_plugin/__init__.py`; the Obok (Kobo) plugin declares `(1, 0, 0)` |
+| Tested calibre range | The README states the plugin works on calibre 5.x/6.x (Python 3) and 4.x and older (Python 2); the v10.0.3 notes add "Support for Qt 6 / Calibre 6 and newer" |
+| Practical caveat | The newest stable predates calibre 7-9. Operators on current calibre are effectively on the beta or alpha builds, and Amazon changes KFX DRM frequently |
+| Schemes handled | Amazon, Adobe ADEPT (including the hardened variant), Barnes & Noble, Readium LCP, PDF passwords; Kobo via the separate Obok plugin |
+
+Nothing on this list is a Stump dependency, and none of it is redistributed
+here. It is documented so the failure mode — "calibre refused my file" — has an
+answer that does not involve this project.
+
+### Ingest detection: the `drm_protected` quality check
+
+The detector is `stump_media::drm` (`crates/media/src/drm.rs`); the ingest
+check that consumes it is `core/src/ingest/quality/drm_protected.rs`, with its
+weight row in [Modular ingest](/developer/modular-ingest). The check has
+**weight 0** and is a blocking gate: a protected file is not a low-quality
+book, it is a file the server cannot decode, so it fails with a named scheme,
+the exact markers that matched, and a plain-language reason instead of moving a
+score.
+
+Containers are identified by magic bytes, never by extension, so a MOBI named
+`.epub` is still classified correctly.
+
+**EPUB / OCF ZIP.** `META-INF/encryption.xml` is *not* by itself evidence of
+DRM: EPUB font obfuscation uses the same file. Only two algorithms mean
+obfuscation — `http://www.idpf.org/2008/embedding`
+([EPUB 3.3 §4.4.5](https://www.w3.org/TR/epub-33/#sec-font-obfuscation)) and
+Adobe's older `http://ns.adobe.com/pdf/enc#RC`; epubcheck classifies both as
+font mangling and everything else as encryption it cannot decrypt
+([`OCFEncryptionFileHandler.java`](https://github.com/w3c/epubcheck/blob/main/src/main/java/com/adobe/epubcheck/ocf/OCFEncryptionFileHandler.java)).
+The detector therefore allowlists those two and flags any other `EncryptedData`
+algorithm. Vendor markers, checked first, follow the rules documented in the
+public-domain [`epubtest.py`](https://github.com/noDRM/DeDRM_tools/blob/v10.0.3/DeDRM_plugin/epubtest.py)
+(released under the Unlicense) and reimplemented in Rust:
+
+| Scheme | Marker |
+| --- | --- |
+| Readium LCP | `META-INF/license.lcpl` plus `EncryptedContentKey` in `encryption.xml` |
+| Apple FairPlay | `META-INF/sinf.xml` containing `fairplay` |
+| Kobo | `<kdrm>` in `META-INF/rights.xml` |
+| Adobe ADEPT | `{http://ns.adobe.com/adept}encryptedKey` with base64 length ≥ 172; a `keyType` above 2 marks Adobe's hardened DRM (RMSDK ≥ 10) |
+| Adobe PassHash (legacy Barnes & Noble) | the same element with base64 length exactly 64 |
+| Adobe ADEPT, no `rights.xml` | an `EncryptedData` algorithm of `http://ns.adobe.com/adept/xmlenc#aes128-cbc-uncompressed` |
+| Amazon KFX package | a `.kfx` member starting with `EA 44 52 4D 49 4F 4E EE` (`\xeaDRMION\xee`) |
+
+**MOBI / AZW / PRC.** The authoritative signal is the PalmDOC header's
+encryption type, a big-endian `u16` at record-0 offset 12: `0` none, `1` old
+single-PID Mobipocket encryption, `2` current Mobipocket/Kindle encryption
+([MobileRead MOBI](https://wiki.mobileread.com/wiki/MOBI)). Record 0 is located
+through the PDB record-info list at file offset 78, after confirming
+`type`+`creator` at offset 60 is `BOOKMOBI` or `TEXtREAd`
+([MobileRead PDB](https://wiki.mobileread.com/wiki/PDB#Palm_Database_Format)).
+A declared DRM key block — `DRM Offset` at `0xA8` and `DRM Count` at `0xAC`,
+both `0xFFFFFFFF` when absent — is a second positive signal, read only when a
+`MOBI` header is present at offset `0x10` and its length reaches offset `0xB8`.
+
+EXTH records `209` (tamper-proof keys) and `1`/`2`/`3` (`drm_server_id`,
+`drm_commerce_id`, `drm_ebookbase_book_id`) are recorded as evidence but
+deliberately **do not** flip the verdict on their own: those records survive in
+DRM-free Amazon files, while encryption type `0` proves the text records are
+plaintext. This is a considered deviation from a naive "EXTH 209 means DRM"
+rule, which would fail perfectly readable books.
+
+**PDF.** `/Encrypt` is required in the trailer dictionary of every encrypted
+PDF ([ISO 32000-1 §7.5.5, table 15](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf)),
+so its presence in a trailer or cross-reference stream is the rule. The token
+is only accepted when followed by an indirect reference or an inline
+dictionary, so the literal text `/Encrypt` in a content stream cannot fail a
+good file. The handler is named from the encryption dictionary's `/Filter`:
+`/Standard` is the built-in security handler (§7.6.3), while `/EBX_HANDLER`
+(with its `/ADEPT_LICENSE` blob) and `/Adobe.APS` are Adobe DRM handlers
+([`ineptpdf.py`](https://github.com/noDRM/DeDRM_tools/blob/v10.0.3/DeDRM_plugin/ineptpdf.py)).
+Permissions-only encryption with an empty user password also fails the check:
+the pipeline has no password to supply and cannot prove the pages decode.
+
+**Amazon Topaz and bare KFX.** A file whose first bytes are `TPZ` is a Topaz
+container, a store-only format; one starting with `\xeaDRMION\xee` is an
+encrypted KFX blob whose voucher lives in a sibling file, so it can never be
+read alone
+([`k4mobidedrm.py`](https://github.com/noDRM/DeDRM_tools/blob/v10.0.3/DeDRM_plugin/k4mobidedrm.py),
+[`kfxdedrm.py`](https://github.com/noDRM/DeDRM_tools/blob/v10.0.3/DeDRM_plugin/kfxdedrm.py)).
+
+### Known limits of detection
+
+- **Kobo store kepubs carry no in-file marker.** Their per-file content keys
+  live outside the book, in `KoboReader.sqlite`'s `content_keys` table, and the
+  file itself is a bare UUID under `.kobo/kepub/`. Absence of markers is
+  therefore not proof a Kobo-sourced kepub is unprotected. A filename heuristic
+  is deliberately not implemented: in a drop folder it would fail legitimate
+  files.
+- **A licensed identity is not recorded.** `rights.xml` also carries
+  `{adept}user` as `urn:uuid:<uuid>`, which identifies the purchaser's account.
+  Quality reports are persisted evidence, so the detector stores the scheme and
+  the matched marker path and never that value.
+- **An unparseable `encryption.xml` fails.** If the file exists but cannot be
+  parsed, the container cannot be shown to be readable, so it is reported as
+  unidentified encryption rather than silently passed.
+- **Password-protected ZIP/CBZ is out of scope.** It is an archive-level
+  concern, not a DRM scheme, and is not detected.
+
+## How to verify
+
+```sh
+# DRM detector, synthetic fixtures only (encryption.xml, MOBI/PDB header
+# bytes, PDF /Encrypt, DRMION and TPZ magics)
+cargo test -p stump_media --no-default-features --lib drm
+
+# The blocking ingest gate and the registry identities it joins
+cargo test -p stump_core --lib quality
+
+# calibre adapters against a fake `ebook-convert`/`ebook-meta` in a temp dir;
+# no real calibre is installed or required
+cargo test -p stump_tools calibre
+```
+
+None of these tests invoke a real calibre, and none of them require a
+DRM-protected file to exist.

@@ -131,6 +131,7 @@ impl OpdsBackend for OpdsBackendImpl {
 		auth: AuthContext,
 		id: String,
 		pagination: stump_api_types::OffsetPagination,
+		search: Option<String>,
 	) -> Result<Response, Self::Error> {
 		Ok(v1_2::get_library_by_id(
 			State(self.0.clone()),
@@ -139,6 +140,7 @@ impl OpdsBackend for OpdsBackendImpl {
 				api_key: auth.api_key(),
 			}),
 			Query(pagination),
+			Query(v1_2::OPDSSearchQuery { search }),
 			Extension(auth),
 		)
 		.await?

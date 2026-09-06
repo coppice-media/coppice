@@ -23,11 +23,15 @@
 //! exclusively in the server's liseur-sync storage module.
 
 pub mod error;
+#[cfg(feature = "git")]
+pub mod git;
 pub mod markdown;
 pub mod model;
 pub mod registry;
 pub mod sink;
-#[cfg(feature = "git")]
-pub mod git;
+#[cfg(test)]
+mod test_support;
 
 pub use error::AnnotationSyncError;
+pub use model::{build_export_batch, BuildOptions, ExportBatch, ExportBook};
+pub use sink::{Sink, SinkDescriptor, SinkState};

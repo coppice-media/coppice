@@ -243,11 +243,15 @@ pub(crate) async fn library_sync(
 		serde_json::Value::Object(device_metadata),
 		client_sync_token.as_ref(),
 		ITEMS_PER_PAGE,
+		super::comic_transform::sync_extensions(&ctx.config),
 	)
 	.await?;
 
 	let kobo_api_base_url = format!("{}/kobo/{}", host.url(), api_key);
-	let sync_items = sync_page.sync_items(kobo_api_base_url.as_str()).await?;
+	let mut sync_items = sync_page.sync_items(kobo_api_base_url.as_str()).await?;
+	if ctx.config.transform.transform_enabled {
+		super::comic_transform::advertise_cached_sizes(&ctx, &req, &mut sync_items).await;
+	}
 	if ctx.config.protocols.kobo_kepub_conversion {
 		for item in &sync_items {
 			if let SyncItem::NewEntitlement(entitlement) = item {
@@ -570,14 +574,27 @@ pub(crate) async fn book_metadata(
 		m.media.id
 	);
 
-	let format = if ctx.config.protocols.kobo_kepub_conversion
+	let is_comic = ctx.config.transform.transform_enabled
+		&& stump_media::transform::is_comic_source(&m.media.path);
+	let (format, size) = if is_comic {
+		let book = media::MediaIdentSelect {
+			id: m.media.id.clone(),
+			path: m.media.path.clone(),
+		};
+		super::comic_transform::advertised_download(&ctx, &req, &book).await
+	} else if ctx.config.protocols.kobo_kepub_conversion
 		&& m.media.extension.eq_ignore_ascii_case("epub")
 	{
-		Format::KEPUB
+		(Format::KEPUB, None)
 	} else {
-		Format::EPUB3
+		(Format::EPUB3, None)
 	};
-	let result = BookMetadata::from_media_with_format(&m, book_url, format);
+	let mut result = BookMetadata::from_media_with_format(&m, book_url, format);
+	if let Some(size) = size {
+		for url in &mut result.download_urls {
+			url.size = size;
+		}
+	}
 	Ok(Json(vec![result]))
 }
 

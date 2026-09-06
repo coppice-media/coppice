@@ -8,7 +8,7 @@
 	import { Separator } from '@stump/ui/components/ui/separator';
 	import { createEditorSession, setEditorSession } from '$lib/editor/session.svelte';
 	import { LibrariesDocument } from '$lib/graphql/generated/graphql';
-	import { MeDocument } from '@stump/ui/graphql/generated';
+	import { MeDocument } from '@stump/ui/graphql/generated/graphql';
 	import { request } from '@stump/ui/graphql/client';
 	import {
 		initialProgressState,

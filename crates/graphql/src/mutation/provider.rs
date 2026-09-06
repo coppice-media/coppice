@@ -2,9 +2,7 @@
 //! enablement, and materialised series management.
 
 use crate::{
-	data::CoreContext,
-	guard::PermissionGuard,
-	object::provider::ProviderSource,
+	data::CoreContext, guard::PermissionGuard, object::provider::ProviderSource,
 };
 use async_graphql::{Context, Object, Result};
 use models::{
@@ -28,22 +26,15 @@ impl ProviderMutation {
 		name: Option<String>,
 	) -> Result<library::Model> {
 		let core = ctx.data::<CoreContext>()?;
-		let host = core
-			.provider_host()
-			.ok_or("Provider host is not enabled")?;
+		let host = core.provider_host().ok_or("Provider host is not enabled")?;
 		// The source must exist and be enabled so the library cannot point
 		// at a dead instance.
-		let source = host
-			.source(&source_id)
-			.map_err(|error| error.to_string())?;
+		let source = host.source(&source_id).map_err(|error| error.to_string())?;
 		let name = name.or_else(|| Some(source.info().name.clone()));
-		let row = stump_provider::create_virtual_library(
-			core.conn.as_ref(),
-			&source_id,
-			name,
-		)
-		.await
-		.map_err(|error| error.to_string())?;
+		let row =
+			stump_provider::create_virtual_library(core.conn.as_ref(), &source_id, name)
+				.await
+				.map_err(|error| error.to_string())?;
 		Ok(row)
 	}
 
@@ -58,9 +49,7 @@ impl ProviderMutation {
 		lang: Option<String>,
 	) -> Result<ProviderSource> {
 		let core = ctx.data::<CoreContext>()?;
-		let host = core
-			.provider_host()
-			.ok_or("Provider host is not enabled")?;
+		let host = core.provider_host().ok_or("Provider host is not enabled")?;
 		let user = ctx.data::<stump_auth::AuthContext>()?;
 		let created_by = Some(user.id());
 		let row = match (catalog_id, implementation) {
@@ -77,7 +66,7 @@ impl ProviderMutation {
 				.await
 				.map_err(|error| error.to_string())?,
 			_ => {
-				return Err("Provide either catalogId or implementation".to_string());
+				return Err("Provide either catalogId or implementation".into());
 			},
 		};
 		Ok(ProviderSource(row))
@@ -92,21 +81,18 @@ impl ProviderMutation {
 		id: String,
 	) -> Result<bool> {
 		let core = ctx.data::<CoreContext>()?;
-		let host = core
-			.provider_host()
-			.ok_or("Provider host is not enabled")?;
-		host.disable_source(&id)
+		let host = core.provider_host().ok_or("Provider host is not enabled")?;
+		Ok(host
+			.disable_source(&id)
 			.await
-			.map_err(|error| error.to_string())
+			.map_err(|error| error.to_string())?)
 	}
 
 	/// Fetch (or refresh) the Keiyoushi catalog snapshot.
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
 	async fn refresh_provider_catalog(&self, ctx: &Context<'_>) -> Result<bool> {
 		let core = ctx.data::<CoreContext>()?;
-		let host = core
-			.provider_host()
-			.ok_or("Provider host is not enabled")?;
+		let host = core.provider_host().ok_or("Provider host is not enabled")?;
 		host.refresh_catalog()
 			.await
 			.map_err(|error| error.to_string())?;
@@ -124,9 +110,7 @@ impl ProviderMutation {
 		remote_id: String,
 	) -> Result<series::Model> {
 		let core = ctx.data::<CoreContext>()?;
-		let host = core
-			.provider_host()
-			.ok_or("Provider host is not enabled")?;
+		let host = core.provider_host().ok_or("Provider host is not enabled")?;
 		let materialized = host
 			.materialise_series(&library_id, &source_id, &remote_id)
 			.await
@@ -142,9 +126,7 @@ impl ProviderMutation {
 		series_id: String,
 	) -> Result<series::Model> {
 		let core = ctx.data::<CoreContext>()?;
-		let host = core
-			.provider_host()
-			.ok_or("Provider host is not enabled")?;
+		let host = core.provider_host().ok_or("Provider host is not enabled")?;
 		let materialized = stump_provider::refresh_series(&host, &series_id)
 			.await
 			.map_err(|error| error.to_string())?;

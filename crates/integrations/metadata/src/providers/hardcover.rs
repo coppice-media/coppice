@@ -419,15 +419,17 @@ impl MetadataProvider for HardcoverClient {
 				.collect()
 		});
 
-		let (year, month, day) =
-			match book.release_date.and_then(|d| dateparser::parse(&d).ok()) {
-				Some(date) => (
-					Some(date.year()),
-					Some(date.month() as i32),
-					Some(date.day() as i32),
-				),
-				None => (book.release_year, None, None),
-			};
+		let (year, month, day) = match book
+			.release_date
+			.and_then(|d| dateparser::parse_with_timezone(&d, &chrono::Utc).ok())
+		{
+			Some(date) => (
+				Some(date.year()),
+				Some(date.month() as i32),
+				Some(date.day() as i32),
+			),
+			None => (book.release_year, None, None),
+		};
 
 		let series_name = book
 			.featured_book_series

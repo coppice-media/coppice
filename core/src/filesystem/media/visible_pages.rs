@@ -188,22 +188,16 @@ pub fn physical_page(visible: &[i32], page: i32) -> Option<i32> {
 mod tests {
 	use super::*;
 	use chrono::Utc;
-	use models::{entity::library, shared::enums::FileStatus};
+	use models::shared::enums::FileStatus;
 	use sea_orm::{ActiveModelTrait, Set};
 
 	async fn seed(conn: &DatabaseConnection) {
-		library::ActiveModel {
-			id: Set("lib".to_string()),
-			name: Set("Library".to_string()),
-			path: Set("/lib".to_string()),
-			status: Set(FileStatus::Ready),
-			config_id: Set(1),
-			created_at: Set(Utc::now().into()),
+		::tests::fake_data::Library {
+			id: Some("lib".to_string()),
 			..Default::default()
 		}
 		.insert(conn)
-		.await
-		.unwrap();
+		.await;
 		series::ActiveModel {
 			id: Set("series".to_string()),
 			name: Set("Series".to_string()),

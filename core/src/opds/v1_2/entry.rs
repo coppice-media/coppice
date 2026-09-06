@@ -280,6 +280,7 @@ impl IntoOPDSEntry for OPDSEntryBuilder<OPDSPublicationEntity> {
 		let stream_link = OpdsStreamLink::new(
 			self.data.media.id.clone(),
 			page_count.to_string(),
+			current_page_link_type.to_string(),
 			current_page.map(|page| page.to_string()),
 			last_read_at.map(|date| date.to_string()),
 		);

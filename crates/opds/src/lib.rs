@@ -91,11 +91,14 @@ pub trait OpdsBackend: Send + Sync + 'static {
 		auth: AuthContext,
 		search: Option<String>,
 	) -> Result<axum::response::Response, Self::Error>;
+	/// `search` narrows the library's series; for a provider-backed virtual
+	/// library it is forwarded to the source as a live search.
 	async fn v1_get_library_by_id(
 		&self,
 		auth: AuthContext,
 		id: String,
 		pagination: OffsetPagination,
+		search: Option<String>,
 	) -> Result<axum::response::Response, Self::Error>;
 	async fn v1_get_series(
 		&self,
@@ -439,9 +442,12 @@ async fn v1_get_library_by_id<B: OpdsBackend>(
 	Extension(backend): Extension<Arc<B>>,
 	Path(V1IdParams { id }): Path<V1IdParams>,
 	Query(pagination): Query<OffsetPagination>,
+	Query(V1SearchQuery { search }): Query<V1SearchQuery>,
 	Extension(auth): Extension<AuthContext>,
 ) -> Result<axum::response::Response, B::Error> {
-	backend.v1_get_library_by_id(auth, id, pagination).await
+	backend
+		.v1_get_library_by_id(auth, id, pagination, search)
+		.await
 }
 
 async fn v1_get_series<B: OpdsBackend>(

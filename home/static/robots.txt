@@ -1,0 +1,3 @@
+# The Home app is a private companion dashboard; keep it out of search indexes.
+User-agent: *
+Disallow: /

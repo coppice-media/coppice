@@ -2146,6 +2146,9 @@ pub(crate) async fn append_annotations(
 		});
 	}
 	txn.commit().await.map_err(internal)?;
+	if results.iter().any(|result| result.status == "applied") {
+		ctx.note_annotation_activity(user_id);
+	}
 	Ok(results)
 }
 
@@ -2280,6 +2283,7 @@ pub(crate) async fn delete_annotation(
 	.await
 	.map_err(internal)?;
 	txn.commit().await.map_err(internal)?;
+	ctx.note_annotation_activity(user_id);
 	Ok(DeleteAnnotationResult {
 		id: id.into(),
 		status: "applied".into(),

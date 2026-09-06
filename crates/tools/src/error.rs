@@ -1,0 +1,42 @@
+//! The single error type every tool returns. See `crates/tools/README.md`.
+
+/// Every failure surfaced by a [`crate::Tool`].
+///
+/// Tools report *recoverable* per-file problems as [`crate::Warning`]s (plan
+/// stage) or [`crate::Report::skipped`] entries (apply stage); a `ToolError` is
+/// reserved for failures that abort the whole plan or apply run.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolError {
+	/// No tool in [`crate::registry`] has the requested id.
+	#[error("unknown tool: {0}")]
+	UnknownTool(String),
+	/// The caller passed paths that cannot be used (missing, wrong kind, empty).
+	#[error("invalid input: {0}")]
+	Invalid(String),
+	/// The `options` JSON blob is malformed for this tool.
+	#[error("invalid options: {0}")]
+	Options(String),
+	/// A [`crate::Plan`] built by one tool was handed to another.
+	#[error("plan was built by tool {plan:?}, cannot be applied by {tool:?}")]
+	PlanMismatch { tool: String, plan: String },
+	/// A required external binary is absent, not executable, or too old.
+	/// `hint` is operator-facing install/config advice.
+	#[error("{tool} is unavailable: {reason} ({hint})")]
+	ExternalToolMissing {
+		tool: String,
+		reason: String,
+		hint: String,
+	},
+	#[error("{0}")]
+	Io(#[from] std::io::Error),
+	#[error("{0}")]
+	Json(#[from] serde_json::Error),
+	#[error("{0}")]
+	Media(#[from] stump_media::error::FileError),
+	#[error("{0}")]
+	Archive(#[from] zip::result::ZipError),
+	#[error("{0}")]
+	Xml(#[from] quick_xml::Error),
+}
+
+pub type ToolResult<T> = Result<T, ToolError>;

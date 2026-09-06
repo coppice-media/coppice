@@ -12,9 +12,16 @@ async fn main() {
 		.expect("Failed to initialize stump configuration");
 
 	if let Some(command) = app.command {
-		handle_command(command, &app.config.merge_stump_config(stump_config))
-			.await
-			.expect("Failed to handle command");
+		// Operator errors (a missing external tool, a refused apply) are
+		// expected output, not crashes: render them and exit non-zero. The
+		// server entry point propagates the same error through `EntryError`
+		// (`apps/server/src/main.rs`).
+		if let Err(error) =
+			handle_command(command, &app.config.merge_stump_config(stump_config)).await
+		{
+			eprintln!("{error}");
+			std::process::exit(1);
+		}
 	} else {
 		println!("No command provided! This would start the server IRL");
 	}

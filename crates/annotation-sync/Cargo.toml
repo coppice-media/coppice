@@ -16,6 +16,7 @@ async-trait.workspace = true
 chrono.workspace = true
 models = { path = "../models", default-features = false }
 sea-orm.workspace = true
+rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 stump_api_types = { path = "../api-types" }
