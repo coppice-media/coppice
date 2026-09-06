@@ -49,3 +49,22 @@ export function minutesLabel(minutes: number): string {
 	const rest = minutes % 60;
 	return rest ? `${hours}h ${rest}m` : `${hours}h`;
 }
+
+/** `1.4 GB` style size, in the SI units the server reports bytes in. */
+export function bytesLabel(bytes: number): string {
+	if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+	const exponent = Math.min(units.length - 1, Math.floor(Math.log10(bytes) / 3));
+	const value = bytes / 1000 ** exponent;
+	return `${exponent === 0 ? value : value.toFixed(value < 10 ? 1 : 0)} ${units[exponent]}`;
+}
+
+/** `1,204` — thousands separated, for counts in tables and cards. */
+export function countLabel(count: number): string {
+	return count.toLocaleString();
+}
+
+/** `1 book` / `1,204 books` — a count with the noun that matches it. */
+export function countNoun(count: number, singular: string, plural = `${singular}s`): string {
+	return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
+}

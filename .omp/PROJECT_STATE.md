@@ -7,7 +7,7 @@ On-demand resume file. The evidence snapshot lives in
 
 ## Working tree
 
-- Branch `headless-modular` @ batch 4 (SQLite BEGIN IMMEDIATE via `models::txn::begin_write`, migration on a 1-connection pool, Kavita search/bookmarks/collections/scan/stats/annotation routes, provider source-health job + cross-source dedupe/merge), nothing pushed.
+- Branch `headless-modular` @ batch 5 (Console UI in home/: dashboard, library/series/entities, foliate reader, notifications settings; series reshape service core/src/series.rs; NickelStump pass 2 in ../nickelstump @ 0170361; batch 4: SQLite BEGIN IMMEDIATE via `models::txn::begin_write`, migration on a 1-connection pool, Kavita search/bookmarks/collections/scan/stats/annotation routes, provider source-health job + cross-source dedupe/merge), nothing pushed.
   Clean tree at that commit. `git config core.hooksPath /dev/null` is set on
   purpose: upstream's husky hook runs prettier/cargo-fmt on every commit and
   aborts on generated files; the gate replaces it.
@@ -83,6 +83,8 @@ the merged GraphQL schema overflows rustc's query depth.
 ## Next (see todo / roadmap)
 
 - Kavita device findings after retest on 25600 (Kamigura, Turnleaf, Inkita, Kover).
+- home/ `bun run build` is not concurrency-safe (wipes .svelte-kit/output): serialize builds; `rm -rf home/.svelte-kit/output` after an aborted one. GraphQL ops live per area in home/src/lib/graphql/{operations,dashboard,library,reader}.graphql; codegen unions them.
+- liseur-sync has no attachment lane: Kobo markup snapshots/notebooks are described (id, anchor, sha256) not transported; a blob route is a protocol change to design.
 - Write transactions go through `models::txn::begin_write` (SQLite `BEGIN IMMEDIATE`; plain `begin()` only for read-only work). Migrations run on a dedicated 1-connection pool (sea-orm-migration does not transact SQLite DDL).
 - Docs site build: `detect-libc` must be `^2` for lightningcss 1.33 (`familySync`).
 - DRM: detector only (`drm_protected`, weight 0, blocking); study at

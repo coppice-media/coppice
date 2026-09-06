@@ -1,0 +1,146 @@
+# Console dashboard and notification-settings operations. Kept in their own
+# document so the dashboard, library, and reader screens never edit the same
+# file; codegen unions every `src/lib/graphql/**/*.graphql`.
+
+# `permissions` is a self-guarded field, so this is the current user's own set.
+# The job-queue widget is only mounted when it contains READ_JOBS (or the user
+# owns the server, which bypasses every permission guard).
+query DashboardViewer {
+	me {
+		id
+		username
+		isServerOwner
+		permissions
+	}
+}
+
+fragment DashboardBookCard on Media {
+	id
+	resolvedName
+	extension
+	pages
+	createdAt
+	seriesId
+	thumbnail {
+		url
+	}
+	series {
+		id
+		resolvedName
+	}
+	readProgress {
+		page
+		percentageCompleted
+		elapsedSeconds
+		updatedAt
+	}
+}
+
+query DashboardKeepReading($pagination: Pagination!) {
+	keepReading(pagination: $pagination) {
+		nodes {
+			...DashboardBookCard
+		}
+	}
+}
+
+query DashboardRecentlyAdded($pagination: Pagination!) {
+	recentlyAddedMedia(pagination: $pagination) {
+		nodes {
+			...DashboardBookCard
+		}
+	}
+}
+
+query DashboardJobs($pagination: Pagination!) {
+	jobs(pagination: $pagination) {
+		nodes {
+			id
+			name
+			description
+			status
+			msElapsed
+			createdAt
+			completedAt
+		}
+	}
+}
+
+# The same stream the web UI's `useCoreEvent` hook reads, narrowed to what the
+# dashboard shows live. `JobQueueStatus` carries the queued+running count
+# bucketed by job kind, `JobUpdate` carries per-job progress while it runs, and
+# `DeviceSeen` lets the sync widget refresh without polling.
+subscription DashboardLiveEvents {
+	readEvents {
+		__typename
+		... on JobStarted {
+			id
+		}
+		... on JobUpdate {
+			id
+			status
+			message
+			subtitle
+			completedTasks
+			remainingTasks
+		}
+		... on JobOutput {
+			id
+		}
+		... on DeviceSeen {
+			deviceId
+			protocol
+		}
+		... on JobQueueStatus {
+			count
+			countByType
+		}
+	}
+}
+
+query NotificationSettings {
+	notificationChannels {
+		id
+		label
+		settings {
+			key
+			label
+			valueType
+			required
+			secret
+			defaultValue
+			description
+			helpUrl
+		}
+	}
+	notificationRules {
+		id
+		eventKind
+		channelId
+		enabled
+	}
+	notificationChannelSettings {
+		channelId
+		values
+	}
+}
+
+mutation SetNotificationRule($eventKind: NotificationKind!, $channelId: String!, $enabled: Boolean!) {
+	setNotificationRule(eventKind: $eventKind, channelId: $channelId, enabled: $enabled) {
+		id
+		eventKind
+		channelId
+		enabled
+	}
+}
+
+mutation SetNotificationChannelSettings($input: SetNotificationChannelSettingsInput!) {
+	setNotificationChannelSettings(input: $input) {
+		channelId
+		values
+	}
+}
+
+mutation TestNotificationChannel($channelId: String!) {
+	testNotificationChannel(channelId: $channelId)
+}

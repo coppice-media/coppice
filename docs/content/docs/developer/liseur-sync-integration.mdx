@@ -318,6 +318,17 @@ provider fully interoperable with the entire upstream server:
 - **Retention and remaining administration:** the current pass has no
   tombstone/session retention worker, compaction horizon, token listing or
   scope-update API, or insight route.
+- **No attachment or binary lane:** `AnnotationInput` carries only bounded
+  text (`locator` and `body` are 16 KiB each, `excerpt` 1 KiB) and the pinned
+  liseur-sync OpenAPI defines no attachment resource. NickelStump, the first
+  device-side producer on this route, therefore sends a Kobo handwritten
+  markup's identity, anchor, file names, sizes and SHA-256 digests, and the
+  SVG source inline only when it fits `body`; a page snapshot (hundreds of
+  KiB) and a Kobo notebook export (multi-MB DOCX/PDF) cannot travel at all
+  (`nickelstump/docs/PROTOCOL.md`, "Handwritten markups"). Adding an
+  attachment lane is an upstream protocol decision, not a field this adapter
+  may invent: no annotation contract change was needed or made for that
+  client.
 
 Until those deferred capabilities are deliberately specified, the safe
 behavior is to retain raw evidence, report unresolved/conflict states, and

@@ -1,0 +1,74 @@
+# Reader-screen GraphQL operations (`/reader/[mediaId]`).
+#
+# Names are prefixed `Reader*` because codegen merges every document in
+# `src/lib/graphql/**/*.graphql` into one set where operation and fragment
+# names must be unique.
+
+fragment ReaderLocatorFields on ReadiumLocator {
+	chapterTitle
+	href
+	title
+	type
+	locations {
+		fragments
+		progression
+		position
+		totalProgression
+		cssSelector
+		partialCfi
+	}
+	text {
+		before
+		highlight
+		after
+	}
+}
+
+query ReaderBook($id: ID!) {
+	mediaById(id: $id) {
+		id
+		resolvedName
+		extension
+		pages
+		seriesId
+		series {
+			id
+			name
+		}
+		readProgress {
+			page
+			percentageCompleted
+			elapsedSeconds
+			updatedAt
+			locator {
+				...ReaderLocatorFields
+			}
+		}
+	}
+}
+
+query ReaderVisiblePages($id: ID!) {
+	mediaVisiblePages(id: $id)
+}
+
+query ReaderAnnotations($id: ID!) {
+	annotationsByMediaId(id: $id) {
+		id
+		annotationText
+		createdAt
+		locator {
+			...ReaderLocatorFields
+		}
+	}
+}
+
+mutation ReaderUpdateProgress($id: ID!, $input: MediaProgressInput!) {
+	updateMediaProgress(id: $id, input: $input) {
+		id
+		endPage
+		endPercentage
+		endLocator {
+			...ReaderLocatorFields
+		}
+	}
+}

@@ -40,6 +40,7 @@ use crate::{
 	config::StumpConfig,
 	error::{CoreError, CoreResult},
 	filesystem::{media::MediaBuilder, series::SeriesBuilder},
+	utils::move_file,
 };
 use stump_media::{
 	media::{get_page_count, process_metadata, ReadiumManifestGenerator},
@@ -551,7 +552,7 @@ impl IngestStore {
 			fs::create_dir_all(&rejected_dir).await?;
 			let target =
 				rejected_dir.join(format!("{}-{}", item.id, item.source_filename));
-			move_file(&item.staging_path, &target).await?;
+			move_file(Path::new(&item.staging_path), &target).await?;
 		}
 		let revision = item.revision;
 		let mut active = item.into_active_model();
@@ -678,7 +679,7 @@ impl IngestStore {
 		// move happens inside the transaction window; any failure after this
 		// point rolls the database back (transaction drop) and moves the file
 		// back to staging so the item stays approvable.
-		move_file(&item.staging_path, &destination).await?;
+		move_file(Path::new(&item.staging_path), &destination).await?;
 		let staging_path = item.staging_path.clone();
 		let commit = async {
 			let media_config = config.clone();
@@ -728,8 +729,7 @@ impl IngestStore {
 			Ok(media_id) => media_id,
 			Err(error) => {
 				if let Err(restore_error) =
-					move_file(&destination.to_string_lossy(), Path::new(&staging_path))
-						.await
+					move_file(&destination, Path::new(&staging_path)).await
 				{
 					tracing::error!(
 						?restore_error,
@@ -1574,15 +1574,6 @@ fn merge_pending_fields(
 		});
 	}
 	picks
-}
-
-async fn move_file(source: &str, target: &Path) -> CoreResult<()> {
-	if fs::rename(source, target).await.is_ok() {
-		return Ok(());
-	}
-	fs::copy(source, target).await?;
-	fs::remove_file(source).await?;
-	Ok(())
 }
 
 #[cfg(test)]

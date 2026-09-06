@@ -19,7 +19,7 @@
 	let password = $state('');
 	let submitting = $state(false);
 	let errorMessage = $state<string | null>(null);
-	let returnTo = $derived(page.url.searchParams.get('returnTo') ?? resolve('/devices'));
+	let returnTo = $derived(page.url.searchParams.get('returnTo') ?? resolve('/dashboard'));
 
 	const oidcQuery = createQuery(() => ({
 		queryKey: ['oidcConfig'],
@@ -54,7 +54,7 @@
 				}
 				throw new Error(message);
 			}
-			window.location.href = returnTo.startsWith('/') ? returnTo : resolve('/devices');
+			window.location.href = returnTo.startsWith('/') ? returnTo : resolve('/dashboard');
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Unable to sign in.';
 			submitting = false;

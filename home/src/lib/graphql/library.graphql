@@ -1,0 +1,349 @@
+# Console operations for the library, series, and entity screens. Every
+# operation is prefixed `Console` because codegen merges every document of the
+# app into one namespace (see docs/content/docs/developer/home-app.mdx).
+
+fragment ConsolePageInfo on PaginationInfo {
+	... on OffsetPaginationInfo {
+		totalItems
+		totalPages
+		currentPage
+		pageSize
+	}
+}
+
+fragment ConsoleLibraryCard on Library {
+	id
+	name
+	description
+	path
+	emoji
+	status
+	lastScannedAt
+	sourceProvider
+	config {
+		libraryType
+		libraryPattern
+		watch
+	}
+	stats {
+		seriesCount
+		bookCount
+		completedBooks
+		inProgressBooks
+		totalBytes
+	}
+}
+
+fragment ConsoleSeriesCard on Series {
+	id
+	name
+	resolvedName
+	path
+	status
+	mediaCount
+	readCount
+	unreadCount
+	percentageCompleted
+	isComplete
+	sourceProvider
+	thumbnail {
+		url
+	}
+	metadata {
+		title
+		publisher
+	}
+	tags {
+		id
+		name
+	}
+}
+
+fragment ConsoleBookRow on Media {
+	id
+	name
+	resolvedName
+	extension
+	pages
+	size
+	status
+	seriesId
+	path
+	series {
+		id
+		resolvedName
+	}
+	thumbnail {
+		url
+	}
+	metadata {
+		title
+		publisher
+		writers
+	}
+	tags {
+		id
+		name
+	}
+	readProgress {
+		page
+		percentageCompleted
+		updatedAt
+	}
+	readHistory {
+		readthroughNumber
+		completedAt
+		dnf
+	}
+}
+
+query ConsoleLibraries($pagination: Pagination!) {
+	libraries(pagination: $pagination, orderBy: [{ field: NAME, direction: ASC }]) {
+		nodes {
+			...ConsoleLibraryCard
+		}
+		pageInfo {
+			...ConsolePageInfo
+		}
+	}
+}
+
+# Names only: the library picker of the create dialog and the entity screens.
+query ConsoleLibraryOptions {
+	libraries(pagination: { offset: { page: 1, pageSize: 100 } }) {
+		nodes {
+			id
+			name
+			emoji
+		}
+	}
+}
+
+query ConsoleLibraryDetail($id: ID!) {
+	libraryById(id: $id) {
+		...ConsoleLibraryCard
+		tags {
+			id
+			name
+		}
+	}
+}
+
+query ConsoleLibrarySeries(
+	$filter: SeriesFilterInput!
+	$orderBy: [SeriesOrderBy!]!
+	$pagination: Pagination!
+) {
+	series(filter: $filter, orderBy: $orderBy, pagination: $pagination) {
+		nodes {
+			...ConsoleSeriesCard
+		}
+		pageInfo {
+			...ConsolePageInfo
+		}
+	}
+}
+
+query ConsoleBooks(
+	$filter: MediaFilterInput!
+	$orderBy: [MediaOrderBy!]!
+	$pagination: Pagination!
+) {
+	media(filter: $filter, orderBy: $orderBy, pagination: $pagination) {
+		nodes {
+			...ConsoleBookRow
+		}
+		pageInfo {
+			...ConsolePageInfo
+		}
+	}
+}
+
+query ConsoleSeriesDetail($id: ID!) {
+	seriesById(id: $id) {
+		...ConsoleSeriesCard
+		description
+		resolvedDescription
+		libraryId
+		library {
+			id
+			name
+			config {
+				libraryType
+			}
+		}
+		stats {
+			bookCount
+			completedBooks
+			inProgressBooks
+			totalReadingTimeSeconds
+		}
+		metadata {
+			ageRating
+			booktype
+			characters
+			collects {
+				series
+				comicid
+				issueid
+				issues
+			}
+			comicImage
+			comicid
+			descriptionFormatted
+			genres
+			imprint
+			links
+			metaType
+			publicationRun
+			publisher
+			status
+			summary
+			title
+			totalIssues
+			volume
+			writers
+			year
+		}
+	}
+}
+
+# The move/merge target picker: enough to identify a series, nothing more.
+query ConsoleSeriesPicker($filter: SeriesFilterInput!) {
+	series(
+		filter: $filter
+		orderBy: [{ series: { field: NAME, direction: ASC } }]
+		pagination: { offset: { page: 1, pageSize: 200 } }
+	) {
+		nodes {
+			id
+			name
+			resolvedName
+			mediaCount
+			sourceProvider
+		}
+	}
+}
+
+query ConsoleAuthors($search: String, $libraryId: String, $pagination: Pagination!) {
+	authors(search: $search, libraryId: $libraryId, pagination: $pagination) {
+		nodes {
+			name
+			books {
+				id
+			}
+			series {
+				title
+			}
+		}
+		pageInfo {
+			...ConsolePageInfo
+		}
+	}
+}
+
+# The publishers of one library, straight from its books' metadata.
+query ConsoleLibraryPublishers($id: ID!) {
+	libraryById(id: $id) {
+		id
+		publishers(sort: ASC)
+	}
+}
+
+query ConsoleTags {
+	tags {
+		id
+		name
+		kind
+	}
+}
+
+# Book count behind one entity tile (publisher or tag): the server has no
+# aggregate for either, so the grid asks per visible tile.
+query ConsoleEntityBookCount($filter: MediaFilterInput!) {
+	media(filter: $filter, pagination: { offset: { page: 1, pageSize: 1 } }) {
+		pageInfo {
+			...ConsolePageInfo
+		}
+	}
+}
+
+mutation ConsoleCreateLibrary($input: CreateOrUpdateLibraryInput!) {
+	createLibrary(input: $input) {
+		...ConsoleLibraryCard
+	}
+}
+
+mutation ConsoleScanLibrary($id: ID!) {
+	scanLibrary(id: $id)
+}
+
+mutation ConsoleAnalyzeLibrary($id: ID!) {
+	analyzeLibrary(id: $id)
+}
+
+mutation ConsoleFinishMedia($id: ID!) {
+	finishMediaProgress(id: $id)
+}
+
+# "Unread" needs both: the active readthrough and the finished ones.
+mutation ConsoleResetMediaProgress($id: ID!) {
+	clearMediaProgress(id: $id)
+	deleteMediaReadingHistory(id: $id)
+}
+
+mutation ConsoleFinishSeries($id: ID!) {
+	finishSeriesProgress(id: $id)
+}
+
+mutation ConsoleClearSeriesHistory($id: ID!) {
+	clearSeriesReadingHistory(id: $id)
+}
+
+# Renaming a series writes its metadata title, which `resolvedName` prefers.
+# `updateSeriesMetadata` replaces every field of the input, so the caller sends
+# the metadata it read back with the new title.
+mutation ConsoleRenameSeries($id: ID!, $input: SeriesMetadataInput!) {
+	updateSeriesMetadata(id: $id, input: $input) {
+		id
+		name
+		resolvedName
+		metadata {
+			title
+		}
+	}
+}
+
+mutation ConsoleMoveMediaToSeries($mediaIds: [ID!]!, $seriesId: ID!) {
+	moveMediaToSeries(mediaIds: $mediaIds, seriesId: $seriesId) {
+		id
+		name
+		resolvedName
+		mediaCount
+	}
+}
+
+mutation ConsoleMergeSeries($keep: ID!, $drop: ID!) {
+	mergeSeries(keep: $keep, drop: $drop) {
+		droppedSeriesId
+		moved
+		missingFiles
+		droppedDirectory
+		kept {
+			id
+			name
+			resolvedName
+			mediaCount
+		}
+	}
+}
+
+mutation ConsoleSplitSeries($mediaIds: [ID!]!, $name: String!) {
+	splitSeries(mediaIds: $mediaIds, name: $name) {
+		id
+		name
+		resolvedName
+		mediaCount
+		libraryId
+	}
+}

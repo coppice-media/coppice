@@ -46,15 +46,110 @@ Routes are relative to the base.
 
 | Route      | What it does                                                                                                                                                                                                                                                                                                                                              |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/dashboard` | The landing screen. `readingStats` for a selectable span (today, week, month, year, all time) as four cards; a 53-week activity heatmap over `readingStats(span: YEAR).days` with a minutes/pages toggle and the streak; a *Continue reading* shelf (`keepReading`) and a *Recently added* shelf (`recentlyAddedMedia`); a condensed per-device sync list (`devices`); and the job queue (`jobs`, gated on `READ_JOBS`) with live progress. Links to `/settings/notifications`. |
 | `/login`   | Cookie session via `POST /api/v2/auth/login`. Reads `GET /api/v2/auth/oidc/config`: when `enabled`, shows a *Sign in with single sign-on* button that opens `/api/v2/auth/oidc/authorize`; when `disableLocalAuth`, hides the password form. The OIDC callback creates the session and redirects to `/` (the server's choice), so the user re-opens `/app` afterwards. |
 | `/devices` | Cards for every device from the `devices` query (kind, credential hint and protocol, last seen, last sync + summary, registered). *Add client* runs `createDevice` and reveals the one-time secret with an endpoint card per `DeviceEndpoint` (URL, username, secret, copy buttons, QR code of the URL). Rename (`renameDevice`), rotate (`rotateDeviceCredential`, same reveal), revoke (`revokeDevice`). Kobo and KOReader cards get a comic transform preset selector (`setDeviceTransformProfile`). Pending pairings (`pendingDevicePairings`, polled every 10 s) are approved with the device's code (`approveDevicePairing`) or denied. |
 | `/reading` | `readingStats` for a selectable span (7/30/90 days, year, all time): totals, streak, a per-day bar strip, and a per-device table.                                                                                                                                                                                                                          |
+| `/library` | Every library from `libraries` as a card with its `stats` (series, books, finished, bytes on disk), the last scan, and *Scan* / *Analyze* (`scanLibrary`, `analyzeLibrary`). *New library* posts `createLibrary` with the three choices the dialog exposes (type, layout, watch) on top of the defaults the web UI's form starts from — `LibraryConfigInput` has no optional flags. |
+| `/library/[id]` | The browser for one library (`prerender = false`). A *Series* tab (`series`, grid or table) and a *Books* tab (`media`, table with progress and mark read/unread), a grid/table toggle, and filters for read status, format, tag, publisher, author, and title. Every filter, the tab, the view, and the page live in the query string, so the entity grids can link straight into a filtered view and the back button works. `SeriesFilterInput` carries no book-level fields, so setting format, tag, publisher, or author switches to the *Books* tab instead of silently dropping the filter. |
+| `/series/[id]` | One series (`prerender = false`): cover, progress, tags, metadata, and its books with per-book *Mark read* / *Mark unread* (`finishMediaProgress`; `clearMediaProgress` + `deleteMediaReadingHistory`), plus `finishSeriesProgress` and `clearSeriesReadingHistory` for the whole series. *Reshape* opens the sheet described in [Series reshape](#series-reshape). |
+| `/entities/{authors,publishers,tags}` | Grids of the metadata behind the books, each tile linking into `/library/[id]` pre-filtered. Authors come from `authors(search, libraryId)` and count the books the query already carries; publishers from `libraryById.publishers`; tags from `tags`. Neither publishers nor tags have an aggregate on the server, so those tiles count their own books with one small `media` query each (bounded by the page size of 24). A library selector scopes the grid and the links. |
+| `/reader/[mediaId]` | The reader. EPUBs render with [foliate-js](https://github.com/johnfactotum/foliate-js) over the server's Readium routes; comics and PDFs render as paged images. Position is persisted through `updateMediaProgress`; stored annotations (`annotationsByMediaId`) are drawn as read-only highlights. See [Reader](#reader). |
+| `/settings/notifications` | The routing matrix (`notificationRules` × `notificationChannels`, one `setNotificationRule` per switch) and a settings form per channel built from the channel's `IngestSettingDefinition` schema (`notificationChannelSettings`, `setNotificationChannelSettings`, `testNotificationChannel`). Administrative kinds are owner-only, mirroring `NotificationKind::is_administrative`; a `*` rule is reported, not edited. |
 | `/account` | Profile from `me` (username, owner badge, OIDC email, last login, active sessions) and the user's own sign-in history from `loginActivityById(id: me.id)`.                                                                                                                                                                                                  |
 
-`/` redirects to `/devices`. The `(app)` layout loads `me`, exposes it through
+`/` redirects to `/dashboard`, which is also where `/login` lands. The nav is
+Dashboard, Library, Reading, Devices, Account. The `(app)` layout loads `me`, exposes it through
 a Svelte context (`src/lib/session.svelte.ts`), and logs out through
 `POST /api/v2/auth/logout`. A `401` from any GraphQL request redirects to
 `/login?returnTo=…` (shared client).
+
+### Series reshape
+
+The *Reshape* sheet on `/series/[id]` regroups books, and it does so on disk:
+the scanner recognises the books it already knows by `series_id` **and**
+`path`, so a database-only regrouping would be undone by the next scan (the
+file left behind is re-created as a second book, and the row that changed
+series is reported missing). `stump_core::series` therefore moves the file into
+the target series' directory and writes the new path with the new `series_id`
+inside one write transaction, renaming the files back if anything fails — the
+same window `stump_core::ingest` uses when it commits a staged file.
+
+| Action | Mutation | What happens on disk |
+| ------ | -------- | -------------------- |
+| Rename | `updateSeriesMetadata` | Nothing. The metadata title is written and `resolvedName` prefers it; the folder keeps its name. The mutation replaces every field of its input, so the sheet sends back the metadata it read with only the title changed. |
+| Move selected books | `moveMediaToSeries(mediaIds, seriesId)` | Each file is renamed into the target series' folder. Refused across libraries, for provider series, and when a file of that name is already there. |
+| Split selected books out | `splitSeries(mediaIds, name)` | A folder of that name is created in the library root, the series row is inserted, and the files move into it. A name with a path separator is refused. |
+| Merge this series away | `mergeSeries(keep, drop)` | Every book of `drop` moves into `keep`'s folder, then the emptied row and (if empty) its directory are removed. Books whose file is missing follow the merge anyway — `media.series_id` is `ON DELETE CASCADE`, so a book left behind would be deleted with the series — and are reported as `missingFiles`. |
+
+All three mutations need `ManageLibrary` and are covered by
+`cargo test -p stump_core --lib series`.
+
+### Reader
+
+`/reader/[mediaId]` (`prerender = false`; the id only exists at runtime) picks
+its lane from `Media.extension`: anything matching `epub` opens the EPUB
+reader, everything else the paged image reader. Both drive the one unified
+reading-state mutation, `updateMediaProgress`, whose `oneOf` input selects the
+EPUB (Readium locator) or paged (page number) lane, and both coalesce writes
+with a 1.2 s debounce that also carries an `elapsedSecondsDelta` so the
+reading-activity screen counts the session.
+
+| Surface | Route | Used for |
+| ------- | ----- | -------- |
+| RWPM | `GET /api/v2/epub/{id}/manifest.json` | metadata, `readingOrder`, `toc` |
+| Positions | `GET /api/v2/epub/{id}/positions.json` | per-resource `position` and `totalProgression` |
+| Resource | `GET /api/v2/epub/{id}/resource/{*path}` | spine XHTML and every subresource |
+| Page | `GET /api/v2/media/{id}/page/{n}` | one **visible** comic/PDF page |
+
+[foliate-js](https://github.com/johnfactotum/foliate-js) (MIT) is a bun
+dependency of `home/`, not a copy in the tree. It renders any object
+implementing its book interface, so `src/lib/components/reader/readiumBook.ts`
+adapts the manifest directly and the archive is never downloaded. The
+manifest's hrefs are absolute (built from the request `Host`), so each one is
+reduced to its package-relative path and re-issued same-origin — behind the
+dev proxy the manifest host is the Vite origin, not the origin holding the
+session cookie.
+
+Sections are handed to the renderer as sanitized `blob:` documents. foliate's
+iframe must keep `allow-scripts` (WebKit bug 218086) and is same-origin with
+the console, so an EPUB's own `<script>`, inline handlers and `javascript:`
+URLs are stripped before the document is live; an injected `<base href>`
+pointing back at the resource route keeps relative CSS, images and fonts
+streaming from the server with the cookie attached. Section weights come from
+`positions.json`, so foliate's whole-publication fraction matches the
+percentage the server computes for the same resource.
+
+The persisted locator is the **start** of the visible page, taken from the
+renderer's own `relocate` (the `<foliate-view>` event only exposes a
+publication-wide fraction measured at the page's *end*, which drifts forward
+one page per restore). `href` is the package-relative path, never the
+server-generated URL, per the converter contract in
+[unified reading state](./unified-reading-state); reads accept either form:
+
+```json
+{
+  "chapterTitle": "The Lottery",
+  "href": "OEBPS/Text/Section0002.xhtml",
+  "type": "application/xhtml+xml",
+  "locations": { "progression": 0, "position": 3, "totalProgression": 0.064668 }
+}
+```
+
+`isComplete` is derived from the page's *end*, because the last page of a book
+starts before 100 %. The paged reader takes its page count from
+`mediaVisiblePages` — the streaming route numbers *visible* pages, so a book
+with duplicate-page `SKIP` marks never offers a page that 404s — and pages
+with the arrow keys, `Home`/`End`, a swipe, or the toolbar, with fit
+height/width/actual modes.
+
+Highlights are read-only in this pass. A `MediaAnnotation` locator anchors to a
+resource plus a quote (or a CSS selector or fragment id), so it is re-anchored
+against the live section document: the quote is matched whitespace-insensitively
+and disambiguated with the stored `text.before`. Annotations that no longer
+match are counted as *unanchored* instead of being placed by guesswork. On a
+paged book an annotation is placed by `locations.position` (the page) and shown
+as a marker over the image.
 
 ### Live device activity
 
@@ -64,6 +159,17 @@ updates within a round-trip after a Kobo, KOReader, Komga-profile, OPDS, or
 API credential authenticates. If the socket cannot be opened the page shows a
 *Live updates paused* notice and falls back to reload-time freshness. A
 one-minute ticker keeps the relative timestamps honest in between.
+
+The Dashboard opens one socket instead of two: it subscribes to `readEvents`,
+the same union the web UI's `useCoreEvent` hook reads, and handles four
+variants — `JobQueueStatus` (queued+running count, bucketed by kind),
+`JobUpdate` (current task, message, subtitle, task counters of a running job),
+`JobStarted`/`JobOutput` (refetch the `jobs` page), and `DeviceSeen` (refetch
+`devices`, sharing the `['devices']` query key with the Devices screen). The
+queue panel shows a *Live* badge, or *Live updates paused* once the socket
+errors. `readEvents` is not permission-guarded, but `jobs` needs `READ_JOBS`,
+so the panel is mounted only when `me.permissions` contains it (or the user
+owns the server, which bypasses every guard).
 
 ### Transform presets
 

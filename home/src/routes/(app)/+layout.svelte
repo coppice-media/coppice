@@ -25,8 +25,10 @@
 	});
 
 	const links = [
-		{ href: resolve('/devices'), label: 'Devices' },
+		{ href: resolve('/dashboard'), label: 'Dashboard' },
+		{ href: resolve('/library'), label: 'Library' },
 		{ href: resolve('/reading'), label: 'Reading' },
+		{ href: resolve('/devices'), label: 'Devices' },
 		{ href: resolve('/account'), label: 'Account' }
 	];
 
@@ -44,7 +46,7 @@
 <div class="min-h-screen bg-muted/30">
 	<header class="border-b bg-background">
 		<div class="mx-auto flex max-w-5xl flex-wrap items-center gap-4 px-4 py-4 lg:px-8">
-			<a href={resolve('/devices')} class="mr-auto text-lg font-semibold tracking-tight">Stump</a>
+			<a href={resolve('/dashboard')} class="mr-auto text-lg font-semibold tracking-tight">Stump</a>
 			<nav aria-label="Primary navigation" class="flex flex-wrap items-center gap-1 text-sm">
 				{#each links as link (link.href)}
 					<a

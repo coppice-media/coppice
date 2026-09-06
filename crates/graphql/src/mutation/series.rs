@@ -1,4 +1,4 @@
-use async_graphql::{Context, Object, Result, ID};
+use async_graphql::{Context, Object, Result, SimpleObject, ID};
 use chrono::Utc;
 use models::{
 	entity::{favorite_series, library, library_config, media, series},
@@ -194,4 +194,126 @@ impl SeriesMutation {
 
 		Ok(true)
 	}
+
+	/// Move books into another series of the same library.
+	///
+	/// The files move with them, into the target series' directory, so the next
+	/// scan sees the new grouping instead of undoing it. Provider-backed series
+	/// have no files and are rejected.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
+	async fn move_media_to_series(
+		&self,
+		ctx: &Context<'_>,
+		media_ids: Vec<ID>,
+		series_id: ID,
+	) -> Result<Series> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+
+		let reshaped = stump_core::series::move_media_to_series(
+			core,
+			user,
+			&id_strings(&media_ids),
+			&series_id.to_string(),
+		)
+		.await
+		.map_err(crate::error::map_core_error)?;
+
+		reshaped_series(ctx, &reshaped.series.id).await
+	}
+
+	/// Merge `drop` into `keep`: every book of `drop` moves into the kept
+	/// series' directory, then the emptied series (and its directory) is
+	/// removed. Reading progress follows the books.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
+	async fn merge_series(
+		&self,
+		ctx: &Context<'_>,
+		keep: ID,
+		drop: ID,
+	) -> Result<SeriesMergeResult> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+
+		let merged = stump_core::series::merge_series(
+			core,
+			user,
+			&keep.to_string(),
+			&drop.to_string(),
+		)
+		.await
+		.map_err(crate::error::map_core_error)?;
+
+		let missing_files = merged
+			.moved
+			.iter()
+			.filter(|media| media.file_missing)
+			.count();
+		Ok(SeriesMergeResult {
+			kept: reshaped_series(ctx, &merged.kept.id).await?,
+			dropped_series_id: merged.dropped_series_id,
+			moved: (merged.moved.len() - missing_files) as i32,
+			missing_files: missing_files as i32,
+			dropped_directory: merged.dropped_directory,
+		})
+	}
+
+	/// Split books out into a new series, created as a directory of their
+	/// library so the next scan finds it where it is.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
+	async fn split_series(
+		&self,
+		ctx: &Context<'_>,
+		media_ids: Vec<ID>,
+		name: String,
+	) -> Result<Series> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+
+		let reshaped =
+			stump_core::series::split_series(core, user, &id_strings(&media_ids), &name)
+				.await
+				.map_err(crate::error::map_core_error)?;
+
+		reshaped_series(ctx, &reshaped.series.id).await
+	}
+}
+
+/// What one `mergeSeries` call did.
+#[derive(SimpleObject)]
+pub struct SeriesMergeResult {
+	/// The series the books belong to now.
+	pub kept: Series,
+	pub dropped_series_id: String,
+	/// Books whose file moved into the kept series' directory.
+	pub moved: i32,
+	/// Books that were regrouped without moving a file, because the file is
+	/// not on disk. They keep the status the scanner gave them.
+	pub missing_files: i32,
+	/// The emptied series directory was removed from disk. It is left in place
+	/// when it still holds files the scanner ignored.
+	pub dropped_directory: bool,
+}
+
+fn id_strings(ids: &[ID]) -> Vec<String> {
+	ids.iter().map(|id| id.to_string()).collect()
+}
+
+/// Re-reads a reshaped series with its metadata, so the client sees the same
+/// shape it gets from a query.
+async fn reshaped_series(ctx: &Context<'_>, id: &str) -> Result<Series> {
+	let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
+	let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+
+	let model = series::ModelWithMetadata::find_for_user(user)
+		.filter(series::Column::Id.eq(id.to_owned()))
+		.into_model::<series::ModelWithMetadata>()
+		.one(conn)
+		.await?
+		.ok_or("Series not found")?;
+
+	Ok(model.into())
 }

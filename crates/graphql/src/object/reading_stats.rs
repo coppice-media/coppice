@@ -9,6 +9,8 @@ use crate::utils::db_statement;
 /// ending today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum ReadingStatsSpan {
+	/// Today only
+	Day,
 	/// The last 7 days
 	Week,
 	/// The last 30 days
@@ -23,6 +25,7 @@ pub enum ReadingStatsSpan {
 impl ReadingStatsSpan {
 	fn days(self) -> Option<i64> {
 		match self {
+			Self::Day => Some(1),
 			Self::Week => Some(7),
 			Self::Month => Some(30),
 			Self::Quarter => Some(90),
@@ -325,6 +328,7 @@ mod tests {
 	#[test]
 	fn spans_start_on_the_right_day() {
 		let today = day("2026-09-05");
+		assert_eq!(ReadingStatsSpan::Day.starts_on(today), Some(today));
 		assert_eq!(
 			ReadingStatsSpan::Week.starts_on(today),
 			Some(day("2026-08-30"))

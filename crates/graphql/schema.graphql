@@ -2694,6 +2694,25 @@ type Mutation {
 	"""
 	updateSeriesThumbnail(id: ID!, input: UpdateThumbnailInput!): Series!
 	scanSeries(id: ID!): Boolean!
+	"""
+	Move books into another series of the same library.
+	
+	The files move with them, into the target series' directory, so the next
+	scan sees the new grouping instead of undoing it. Provider-backed series
+	have no files and are rejected.
+	"""
+	moveMediaToSeries(mediaIds: [ID!]!, seriesId: ID!): Series!
+	"""
+	Merge `drop` into `keep`: every book of `drop` moves into the kept
+	series' directory, then the emptied series (and its directory) is
+	removed. Reading progress follows the books.
+	"""
+	mergeSeries(keep: ID!, drop: ID!): SeriesMergeResult!
+	"""
+	Split books out into a new series, created as a directory of their
+	library so the next scan finds it where it is.
+	"""
+	splitSeries(mediaIds: [ID!]!, name: String!): Series!
 	"Create a bookmark for a user"
 	createBookmark(input: BookmarkInput!): Bookmark!
 	"Delete a bookmark by ID, only if the user created it"
@@ -3937,6 +3956,8 @@ How far back reading statistics reach, counted in logical reading days
 ending today.
 """
 enum ReadingStatsSpan {
+	"Today only"
+	DAY
 	"The last 7 days"
 	WEEK
 	"The last 30 days"
@@ -4233,6 +4254,25 @@ input SeriesFilterInput {
 	_and: [SeriesFilterInput!] = null
 	_not: [SeriesFilterInput!] = null
 	_or: [SeriesFilterInput!] = null
+}
+
+"What one `mergeSeries` call did."
+type SeriesMergeResult {
+	"The series the books belong to now."
+	kept: Series!
+	droppedSeriesId: String!
+	"Books whose file moved into the kept series' directory."
+	moved: Int!
+	"""
+	Books that were regrouped without moving a file, because the file is
+	not on disk. They keep the status the scanner gave them.
+	"""
+	missingFiles: Int!
+	"""
+	The emptied series directory was removed from disk. It is left in place
+	when it still holds files the scanner ignored.
+	"""
+	droppedDirectory: Boolean!
 }
 
 type SeriesMetadata {

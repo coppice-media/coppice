@@ -24,6 +24,7 @@ pub mod opds;
 #[cfg(feature = "providers")]
 pub mod providers;
 pub mod reading_state;
+pub mod series;
 pub mod utils;
 
 use config::logging::STUMP_SHADOW_TEXT;

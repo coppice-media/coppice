@@ -2,8 +2,9 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 
-	// The app has no landing page of its own; Devices is the home screen.
+	// `/app` and `/app/` both land here; the Dashboard is the console's home
+	// screen, so neither is a page of its own.
 	$effect(() => {
-		void goto(resolve('/devices'), { replaceState: true });
+		void goto(resolve('/dashboard'), { replaceState: true });
 	});
 </script>
