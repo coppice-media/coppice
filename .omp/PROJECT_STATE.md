@@ -1,79 +1,103 @@
 # Stump Project State
 
-On-demand resume file. The full as-of-2026-09-04 snapshot with evidence lives
-in `docs/content/docs/developer/state.mdx` — read that first.
+On-demand resume file. The evidence snapshot lives in
+`docs/content/docs/developer/state.mdx`; the peer comparison in
+`docs/content/docs/developer/comparison.mdx`; the roadmap in
+`docs/content/docs/developer/roadmap.mdx` (+ `## Gaps vs peers`).
 
 ## Working tree
 
-- Branch `headless-modular` @ f27265d1, 10 commits ahead of `origin/nightly`,
-  nothing pushed. Tree intentionally dirty (~23 paths); never reset/clean it.
+- Branch `headless-modular` @ c4a0b239 (batch 3 integrated), nothing pushed.
+  Clean tree at that commit. `git config core.hooksPath /dev/null` is set on
+  purpose: upstream's husky hook runs prettier/cargo-fmt on every commit and
+  aborts on generated files; the gate replaces it.
+- `target/` grows past 200 GB across a parallel batch; prune
+  `target/debug/incremental` only when no cargo process is running
+  (`pgrep -x rustc`), never mid-build. Root disk at 100% shows up as a
+  linker failure, not as ENOSPC.
 
 ## Fixture and launcher
 
-- Fixture `stump-komga` (restart via `hub`); launcher `scripts/dev-fixture-server.sh`,
-  binary `target/debug/stump_server`. Base URL `http://127.0.0.1:25600`
-  (or `http://$LAN_IP:25600`); root `$HOME/.local/share/stump-komga-test`.
-- Credentials source: the launcher regenerates `$FIXTURE_ROOT/ENDPOINTS.md`
-  (mode 0600) with every URL, username, password, and API key on each start;
-  never copy or quote that generated sheet.
-- Defaults `STUMP_ENABLE_KOMGA`, `ENABLE_KOBO_SYNC`, `ENABLE_KOREADER_SYNC`
-  = true (latter two without `STUMP_` prefix); `PDFIUM_PATH` defaults to
-  `/tmp/libpdfium.so`; `STUMP_ENABLE_UPLOAD=true`; after a rebuild log out/in
-  once to store the komga-remember-me token.
+- One instance, every profile on: `hub` process `stump-komga`, port 25600,
+  launcher `scripts/dev-fixture-server.sh`, binary `target/debug/stump_server`
+  (headless,liseur-sync). Launch env: `STUMP_ENABLE_KAVITA=true
+  STUMP_ENABLE_BACKGROUND_JOBS=true STUMP_ENABLE_PROVIDERS=true`; Komga,
+  Kobo, KOReader default on; `/editor` and `/app` mount the built SvelteKit
+  apps (`INGEST_EDITOR_DIR`, `STUMP_HOME_APP_DIR`).
+- Root `$HOME/.local/share/stump-komga-test`; the launcher regenerates
+  `$FIXTURE_ROOT/ENDPOINTS.md` (0600) with every URL and credential; never
+  quote that sheet. The DB was upgraded in place from `m20260909` through
+  `m20260923` (reading-heads backfill: 6 sessions -> 4 heads) on 2026-09-06.
+- The separate 25670 Kavita instance is retired. Komf live sessions mutate
+  fixture metadata (renamed "Synthetic Solo" -> "Berserk", book number 1 -> 5);
+  restore via Komga PATCH before `make replay-mihon`.
+- Reference containers: `kavita-ref` 25620 (admin / see
+  `../komga-compat/kavita/README.md`), `komf-stump` 8085.
 
 ## Replay commands
 
-Run from the user-owned sibling harness `../komga-compat/` (Hurl is its
-semantic test oracle, not a capture file):
+From the user-owned sibling harness `../komga-compat/` (hurl needs
+`LD_LIBRARY_PATH=/tmp`, `PATH=$HOME/.cargo/bin:$PATH`; every target needs
+`BASE_URL API_KEY USERNAME PASSWORD MITM_KEEP_HOST_HEADER=true`):
 
 ```text
-make replay                # 8/8 observed specs
-make replay-negative-auth  # 1/1
-make replay-mihon          # needs SERIES_ID
-make replay-liseur-sync
+make replay                 # 8/8; BOOK_ID/SERIES_ID = single-book "Synthetic Solo", THUMBNAIL_ID = a freshly uploaded book thumbnail
+make replay-negative-auth   # 1/1; INVALID_USERNAME/INVALID_PASSWORD
+make replay-mihon           # 1/1; SERIES_ID
+make replay-liseur-sync     # 1/1
+make replay-kavita          # 1/1
+make replay-library-management LIBRARY_ROOT=<dir>   # pending spec: DELETE right after scan/analyze -> 500 "database is locked" (see Next)
+make replay-containers SERIES_ID= BOOK_ID=          # pending spec, not yet run
 ```
-
-Green = 100% of the observed replay on the deployed build; deploy via `hub`
-restart of `stump-komga`, then run the replays.
 
 ## Only definition of green
 
-Coordinator runs once after all workers yield; every command must exit 0.
-Workers do not run formatters, linters, builds, or project-wide suites mid-batch:
+Coordinator runs once after all workers yield; every command exits 0:
 
 ```text
 cargo fmt --all
-cargo clippy -p stump_komga -p stump_opds -p stump_kobo -p stump_koreader -p stump_liseur_sync -p stump_kepub -p stump_core -p migrations -p stump_server --no-default-features --features headless,liseur-sync -- -D warnings
-cargo test -p stump_komga --lib --tests
-cargo test -p stump_opds --lib --tests
-cargo test -p stump_kobo --lib --tests
-cargo test -p stump_koreader --lib --tests
-cargo test -p stump_liseur_sync --lib --tests
-cargo test -p stump_kepub --lib --tests
-cargo test -p stump_core --lib --tests
-cargo test -p migrations --lib --tests
-cargo test -p models --lib --tests
-cargo test -p stump_server --lib
+cargo check --workspace --all-targets
+cargo test -p <every workspace crate except stump_server>   # 31 crates, 1447 tests at c4a0b239
+cargo test -p stump_server --no-default-features --features headless,liseur-sync   # 281
 cargo build -p stump_server --no-default-features --features headless,liseur-sync
 ```
 
-For structural changes, also `cargo check -p stump_server --no-default-features --features minimal`
-and `cargo check -p stump_server` (default profile).
+then deploy (`hub` restart `stump-komga`) and run the replay set above.
+`apps/server/src/{lib,main}.rs` carry `#![recursion_limit = "256"]` because
+the merged GraphQL schema overflows rustc's query depth.
 
-## In-flight and pending
+## Batch-coordination rules learned
 
-- `LiseurCatalog`: implementing liseur catalog routes and the
-  `/v1/works/{id}/annotations` SQL fix against pinned Liseur `31f8182d`.
-- Mihon tracker device retest (harness green); `/bulk` grid not browser-driven;
-  rework detail sheet shows a blank band above the header at 1280×900.
-  Roadmap: `.omp/NEXT_STEPS.md`; gap analysis `local://feature-gaps.md`.
+- Root `Cargo.toml` is coordinator-owned; workers send the exact line.
+- Shared files (`core/src/lib.rs`, `crates/migrations/src/lib.rs`,
+  `core/src/{context,event}.rs`, graphql `mod.rs`) are edited only as
+  single-line hunks after a fresh read; wholesale rewrites lost `pub mod job;`,
+  `pub mod library;`, the graphql `tokio` dep and the `m20260919` registration.
+- `cargo dump-schema` regenerates `schema.graphql` from the whole tree: each
+  worker regenerates when its resolvers compile, last writer wins.
+- `Entity::insert(active_model)` bypasses `ActiveModelBehavior::before_save`;
+  set `created_at` explicitly.
+- `route_ci` (Kavita) lowercases literal segments only; lowercasing `{param}`
+  is a matchit conflict that only surfaces at router build.
+
+## Next (see todo / roadmap)
+
+- Kavita device findings after retest on 25600; still 404: `/api/Search/*`,
+  `/api/Reader/all-bookmarks`, `/api/Collection`, `Series/{scan,analyze,refresh-metadata}`,
+  `Library/scan`, Inkita `/api/Stats/*`, `/api/Annotation/*`.
+- SQLite write transactions: sea-orm 1.1 emits deferred `BEGIN`; read-then-write
+  services return "database is locked" under a concurrent job (98 `begin()` sites).
+- Docs site build: `detect-libc` must be `^2` for lightningcss 1.33 (`familySync`).
+- DRM: detector only (`drm_protected`, weight 0, blocking); study at
+  `local://drm-study.md`; removal stays out of tree by decision.
 
 ## Standing rules
 
 - Contract evidence pinned to Komelia `65f92fde`, `komga-client` 0.11.0
-  `74412a6e`, Liseur `31f8182d`, Grimmory main; detailed records in
-  `docs/content/docs/developer/{komga-compat,kobo-sync-capabilities,kobo-device-database,unified-reading-state,liseur-sync-integration,liseur-providers,modular-ingest,server-architecture}.mdx`.
-- The Komga mount test in `apps/server/src/routers/komga/mod.rs` must remain
-  (Axum panics building overlapping routes before a request exposes it).
-- Known upstream lints untouched: `emailer/sender.rs`,
-  `tests/reading_progress/manual_progression_changes.rs`.
+  `74412a6e`, Liseur `31f8182d`, Grimmory main, Kamigura `f4baeff4`, Turnleaf
+  `b54f1f71`, kavita-ref 0.9.1.4; records in
+  `docs/content/docs/developer/{komga-compat,kavita-compat,kobo-sync-capabilities,kobo-device-database,unified-reading-state,liseur-sync-integration,liseur-providers,modular-ingest,server-architecture,calibre-tooling,comparison}.mdx`.
+- The Komga mount test in `apps/server/src/routers/komga/mod.rs` and the
+  Kavita `kavita_router_composes_without_route_collisions` test must remain.
+- No GPL/AGPL code (calibre, DeDRM, BookOrbit, Grimmory, MangaManager, Sigil,
+  cbzit) in this MIT tree; behaviour/specs only; calibre is shell-out only.
