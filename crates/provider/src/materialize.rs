@@ -29,6 +29,9 @@ pub struct Materialized {
 	pub created: Vec<media::Model>,
 	/// Chapters already present before this run.
 	pub existing: usize,
+	/// The cross-source duplicate this series was linked to, when the same
+	/// work already existed from another source; see [`crate::identity`].
+	pub duplicate_of: Option<String>,
 }
 
 /// Materialise (or extend) `remote_id` from `source_id` into `library_id`.
@@ -53,12 +56,19 @@ pub async fn add_series(
 		None => insert_series(conn, library_id, source_id, &details).await?,
 	};
 	upsert_series_metadata(conn, &series_row, source_id, &details).await?;
+	// Dedupe is recorded, never enforced: a link only tells an operator the
+	// same work exists twice.
+	let duplicate_of =
+		crate::identity::record_identity(conn, &series_row, source_id, &details)
+			.await?
+			.map(|link| link.canonical_series_id);
 	let (created, existing) =
 		insert_chapters(conn, &series_row, source_id, remote_id, &chapters).await?;
 	Ok(Materialized {
 		series: series_row,
 		created,
 		existing,
+		duplicate_of,
 	})
 }
 
@@ -389,6 +399,41 @@ mod tests {
 			add_series(&host, &library.id, "missing-source", SERIES_ALPHA).await,
 			Err(ProviderError::UnknownSource(_))
 		));
+	}
+
+	/// Cross-source dedupe: the same work materialised from a second source
+	/// gets its own rows plus a link back to the first series.
+	#[tokio::test]
+	async fn materialising_the_same_work_twice_links_the_duplicate() {
+		let (host, _source, _dir) = host(u64::MAX).await;
+		let mirror = crate::mock::MockSource::with_id("mock-de");
+		host.register_source(mirror);
+		let library = library(host.conn()).await;
+
+		let first = add_series(&host, &library.id, MOCK_SOURCE_ID, SERIES_ALPHA)
+			.await
+			.unwrap();
+		assert!(first.duplicate_of.is_none());
+
+		let second = add_series(&host, &library.id, "mock-de", SERIES_ALPHA)
+			.await
+			.unwrap();
+		assert_ne!(second.series.id, first.series.id, "one series per source");
+		assert_eq!(
+			second.duplicate_of.as_deref(),
+			Some(first.series.id.as_str())
+		);
+		assert_eq!(second.created.len(), ALPHA_CHAPTERS.len());
+
+		let duplicates = crate::identity::duplicates(host.conn()).await.unwrap();
+		assert_eq!(duplicates.len(), 1);
+		assert_eq!(duplicates[0].link.series_id, second.series.id);
+		assert_eq!(duplicates[0].canonical.id, first.series.id);
+		// Both series carry the same AniList id, so that is the reason.
+		assert_eq!(
+			duplicates[0].link.reason,
+			crate::identity::REASON_EXTERNAL_KEY
+		);
 	}
 
 	/// Mode B end to end at the host level: a live browse hands out

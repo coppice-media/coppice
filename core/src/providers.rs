@@ -24,6 +24,13 @@ pub const GC_SWEEP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// Delay before the first GC sweep after boot, so startup is never delayed.
 pub const GC_INITIAL_DELAY: Duration = Duration::from_secs(2 * 60);
 
+/// Delay before the first health run after boot. Longer than the GC delay so
+/// a cold start never fires two provider sweeps at once.
+pub const HEALTH_INITIAL_DELAY: Duration = Duration::from_secs(5 * 60);
+
+/// Parallel base URLs probed by one health run.
+pub const HEALTH_CONCURRENCY: usize = stump_provider::health::DEFAULT_CONCURRENCY;
+
 /// Whether the provider host should run for this configuration.
 pub fn is_enabled(config: &StumpConfig) -> bool {
 	config.providers.enable_providers
@@ -66,6 +73,7 @@ pub async fn init(
 	}
 
 	spawn_gc_scheduler(Arc::new(ctx.clone()));
+	spawn_health_scheduler(Arc::new(ctx.clone()));
 
 	tracing::info!("Provider host initialized");
 	Ok(Some(host))
@@ -80,6 +88,19 @@ pub fn default_factories() -> Vec<stump_provider::SourceFactory> {
 /// The GC retention cutoff for a configuration.
 pub fn gc_cutoff(config: &StumpConfig) -> DateTime<Utc> {
 	Utc::now() - chrono::Duration::days(config.providers.provider_gc_days as i64)
+}
+
+/// How often the health job runs (`provider_health_interval_secs`). A zero
+/// or absurdly small value is floored at a minute so a misconfiguration
+/// cannot hammer every source in the catalog.
+pub fn health_interval(config: &StumpConfig) -> Duration {
+	Duration::from_secs(config.providers.provider_health_interval_secs.max(60))
+}
+
+/// The consecutive-failure count after which a source is marked dead
+/// (`provider_health_dead_after`).
+pub fn health_dead_after(config: &StumpConfig) -> i32 {
+	config.providers.provider_health_dead_after.max(1) as i32
 }
 
 /// Spawn the periodic GC sweep that enqueues
@@ -104,6 +125,33 @@ fn spawn_gc_scheduler(ctx: Arc<Ctx>) {
 	});
 }
 
+/// Spawn the periodic source-health sweep that enqueues
+/// [`StumpJob::ProviderSourceHealth`](crate::job::stump_job::StumpJob::ProviderSourceHealth)
+/// every `provider_health_interval_secs`. The task ends when the context is
+/// dropped.
+fn spawn_health_scheduler(ctx: Arc<Ctx>) {
+	let interval = health_interval(&ctx.config);
+	tokio::spawn(async move {
+		tokio::time::sleep(HEALTH_INITIAL_DELAY).await;
+		loop {
+			if is_enabled(&ctx.config) {
+				if let Err(error) = ctx
+					.enqueue(crate::job::stump_job::StumpJob::ProviderSourceHealth)
+					.await
+				{
+					tracing::warn!(
+						?error,
+						"Failed to enqueue provider source health job"
+					);
+				}
+			} else {
+				tracing::debug!("Provider health skipped: providers disabled");
+			}
+			tokio::time::sleep(interval).await;
+		}
+	});
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -124,5 +172,28 @@ mod tests {
 	fn debug_config_has_providers_disabled() {
 		let config = StumpConfig::debug();
 		assert!(!is_enabled(&config), "debug config has providers off");
+	}
+
+	#[test]
+	fn health_schedule_follows_config_with_sane_floors() {
+		let mut config = StumpConfig::debug();
+		assert_eq!(
+			health_interval(&config),
+			Duration::from_secs(6 * 60 * 60),
+			"the default sweep is every six hours"
+		);
+		assert_eq!(health_dead_after(&config), 3);
+
+		config.providers.provider_health_interval_secs = 900;
+		config.providers.provider_health_dead_after = 5;
+		assert_eq!(health_interval(&config), Duration::from_secs(900));
+		assert_eq!(health_dead_after(&config), 5);
+
+		// A zero interval or threshold would probe every source in a tight
+		// loop, or mark everything dead before it was ever probed.
+		config.providers.provider_health_interval_secs = 0;
+		config.providers.provider_health_dead_after = 0;
+		assert_eq!(health_interval(&config), Duration::from_secs(60));
+		assert_eq!(health_dead_after(&config), 1);
 	}
 }

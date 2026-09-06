@@ -32,10 +32,11 @@ use models::entity::{
 	collection, collection_series, media, reading_list, reading_list_item, series,
 	user::AuthUser,
 };
+use models::txn::begin_write;
 use sea_orm::{
 	prelude::*,
 	sea_query::{Condition, SelectStatement},
-	QueryOrder, QuerySelect, QueryTrait, TransactionTrait,
+	QueryOrder, QuerySelect, QueryTrait,
 };
 use serde::Deserialize;
 use stump_auth::AuthContext;
@@ -688,7 +689,7 @@ async fn update_tachiyomi_readlist_progress(
 		.into_iter()
 		.map(|series| (series.id, series.library_id.unwrap_or_default()))
 		.collect::<HashMap<_, _>>();
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	for book in &to_mark {
 		mark_book_read(&txn, &user, &book.id, book.pages).await?;
 	}

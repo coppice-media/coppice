@@ -57,6 +57,10 @@ pub struct ProviderCatalogEntry {
 	/// The instance id that will be created on enable
 	/// (`<implementation>-<lang>`).
 	pub instance_id: Option<String>,
+	/// The latest health observation for this source, when it has been
+	/// probed: the badge a client shows next to the entry. `dead` entries
+	/// are only listed when `includeDead` was set.
+	pub health: Option<ProviderSourceHealth>,
 }
 
 /// Latest health observation for one catalog source.
@@ -68,6 +72,15 @@ impl ProviderSourceHealth {
 		&self.0.source_id
 	}
 
+	async fn name(&self) -> &str {
+		&self.0.name
+	}
+
+	async fn base_url(&self) -> &str {
+		&self.0.base_url
+	}
+
+	/// `UNKNOWN`, `OK`, `DEGRADED` or `DEAD`.
 	async fn status(&self) -> &str {
 		&self.0.status
 	}
@@ -76,8 +89,72 @@ impl ProviderSourceHealth {
 		self.0.latency_ms
 	}
 
-	async fn checked_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+	/// HTTP status of the last probe of the source's base URL.
+	async fn http_status(&self) -> Option<i32> {
+		self.0.http_status
+	}
+
+	/// Where the base URL redirected to, when it moved.
+	async fn redirect_url(&self) -> Option<&String> {
+		self.0.redirect_url.as_ref()
+	}
+
+	/// Whether the theme's latest-updates path answered.
+	async fn latest_path_ok(&self) -> Option<bool> {
+		self.0.latest_path_ok
+	}
+
+	async fn error(&self) -> Option<&String> {
+		self.0.error.as_ref()
+	}
+
+	/// Failed runs in a row; reset by one reachable run.
+	async fn consecutive_failures(&self) -> i32 {
+		self.0.consecutive_failures
+	}
+
+	/// Whether the source reached `provider_health_dead_after` failures and
+	/// is hidden from the catalog by default.
+	async fn dead(&self) -> bool {
+		stump_provider::HealthStatus::parse(&self.0.status)
+			== stump_provider::HealthStatus::Dead
+	}
+
+	/// When the source was last probed.
+	async fn last_checked_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
 		self.0.checked_at.map(|ts| ts.into())
+	}
+}
+
+/// One recorded cross-source duplicate: `series` is the same work as
+/// `canonical`, which materialised first from another source.
+#[derive(async_graphql::SimpleObject)]
+pub struct ProviderSeriesDuplicate {
+	pub series_id: String,
+	pub series_name: String,
+	/// The source instance `series` was materialised from.
+	pub source_id: Option<String>,
+	pub canonical_series_id: String,
+	pub canonical_series_name: String,
+	pub canonical_source_id: Option<String>,
+	/// `EXTERNAL_KEY` when a cross-source id matched, `TITLE` when only the
+	/// normalised titles did.
+	pub reason: String,
+	pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<stump_provider::SeriesDuplicate> for ProviderSeriesDuplicate {
+	fn from(duplicate: stump_provider::SeriesDuplicate) -> Self {
+		Self {
+			series_id: duplicate.series.id,
+			series_name: duplicate.series.name,
+			source_id: duplicate.series.source_provider,
+			canonical_series_id: duplicate.canonical.id,
+			canonical_series_name: duplicate.canonical.name,
+			canonical_source_id: duplicate.canonical.source_provider,
+			reason: duplicate.link.reason,
+			created_at: duplicate.link.created_at.into(),
+		}
 	}
 }
 

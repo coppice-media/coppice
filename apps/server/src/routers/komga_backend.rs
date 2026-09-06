@@ -175,6 +175,9 @@ fn map_core_error(error: impl std::fmt::Display) -> stump_komga::errors::APIErro
 }
 
 fn map_server_error(error: APIError) -> stump_komga::errors::APIError {
+	if let APIError::DatabaseBusy = error {
+		return stump_komga::errors::APIError::DatabaseBusy;
+	}
 	match error.status_code() {
 		axum::http::StatusCode::BAD_REQUEST => {
 			stump_komga::errors::APIError::BadRequest(error.to_string())
@@ -194,7 +197,8 @@ fn map_server_error(error: APIError) -> stump_komga::errors::APIError {
 
 /// Maps core-service errors onto the Komga error surface with their precise
 /// status codes (`404` for missing rows, `400` for validation, `403` for
-/// visibility/permission failures, `503` for disabled background jobs).
+/// visibility/permission failures, `503` for disabled background jobs and for
+/// SQLite write-lock contention).
 fn map_core_error_status(error: stump_core::CoreError) -> stump_komga::errors::APIError {
 	match error {
 		stump_core::CoreError::NotFound(message) => {
@@ -207,7 +211,7 @@ fn map_core_error_status(error: stump_core::CoreError) -> stump_komga::errors::A
 			stump_komga::errors::APIError::Forbidden(message)
 		},
 		stump_core::CoreError::DBError(error) => {
-			stump_komga::errors::APIError::DbError(error)
+			stump_komga::errors::APIError::from(error)
 		},
 		stump_core::CoreError::FeatureDisabled(feature) => {
 			stump_komga::errors::APIError::ServiceUnavailable(format!(

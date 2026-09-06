@@ -194,6 +194,14 @@ impl JobExecutionContext for JobServices {
 			},
 			#[cfg(feature = "providers")]
 			StumpJob::ProviderGc => run_provider_gc(self).await,
+			#[cfg(feature = "providers")]
+			StumpJob::ProviderSourceHealth => {
+				run_job(
+					ctx,
+					&mut crate::job::provider_health::ProviderSourceHealthJob::new(),
+				)
+				.await
+			},
 		}
 	}
 }

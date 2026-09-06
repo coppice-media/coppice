@@ -22,9 +22,10 @@ use models::entity::{
 	collection, collection_series, kobo_shelf_tombstone, media, reading_list,
 	reading_list_item, series, user::AuthUser,
 };
+use models::txn::begin_write;
 use sea_orm::{
 	ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr,
-	EntityTrait, IntoActiveModel, QueryFilter, QuerySelect, Set, TransactionTrait,
+	EntityTrait, IntoActiveModel, QueryFilter, QuerySelect, Set,
 };
 use uuid::Uuid;
 
@@ -114,7 +115,7 @@ pub async fn create_collection(
 	reject_duplicates(&input.series_ids, "seriesIds")?;
 	ensure_series_visible(ctx.conn.as_ref(), user, &input.series_ids).await?;
 
-	let txn = ctx.conn.begin().await?;
+	let txn = begin_write(&ctx.conn).await?;
 	let result = async {
 		let model = collection::ActiveModel {
 			id: Set(Uuid::new_v4().to_string()),
@@ -150,7 +151,7 @@ pub async fn update_collection(
 	id: &str,
 	input: CollectionUpdate,
 ) -> CoreResult<ContainerMembers> {
-	let txn = ctx.conn.begin().await?;
+	let txn = begin_write(&ctx.conn).await?;
 	let result = apply_collection_update(&txn, user, id, &input).await;
 	let member_ids = commit(txn, result).await?;
 
@@ -207,7 +208,7 @@ async fn apply_collection_update(
 /// Deletes a collection (and, when it was projected to Kobo, records a
 /// tombstone so devices emit `DeletedTag`) and emits [`CollectionDeleted`].
 pub async fn delete_collection(ctx: &Ctx, user: &AuthUser, id: &str) -> CoreResult<()> {
-	let txn = ctx.conn.begin().await?;
+	let txn = begin_write(&ctx.conn).await?;
 	let result = async {
 		let model = collection::Entity::find_by_id(id.to_owned())
 			.one(&txn)
@@ -250,7 +251,7 @@ pub async fn create_read_list(
 	reject_duplicates(&input.book_ids, "bookIds")?;
 	ensure_books_visible(ctx.conn.as_ref(), user, &input.book_ids).await?;
 
-	let txn = ctx.conn.begin().await?;
+	let txn = begin_write(&ctx.conn).await?;
 	let result = async {
 		let model = reading_list::ActiveModel {
 			id: Set(Uuid::new_v4().to_string()),
@@ -292,7 +293,7 @@ pub async fn update_read_list(
 	id: &str,
 	input: ReadListUpdate,
 ) -> CoreResult<ContainerMembers> {
-	let txn = ctx.conn.begin().await?;
+	let txn = begin_write(&ctx.conn).await?;
 	let result = apply_read_list_update(&txn, user, id, &input).await;
 	let member_ids = commit(txn, result).await?;
 
@@ -356,7 +357,7 @@ async fn apply_read_list_update(
 /// Deletes a reading list (with a Kobo tombstone when projected) and emits
 /// [`ReadListDeleted`].
 pub async fn delete_read_list(ctx: &Ctx, user: &AuthUser, id: &str) -> CoreResult<()> {
-	let txn = ctx.conn.begin().await?;
+	let txn = begin_write(&ctx.conn).await?;
 	let result = async {
 		let model = reading_list::Entity::find_by_id(id.to_owned())
 			.one(&txn)
@@ -463,7 +464,7 @@ pub async fn rename_shelf(
 	device: Option<String>,
 ) -> CoreResult<()> {
 	let name = validate_name(&name)?;
-	let txn = ctx.conn.begin().await?;
+	let txn = begin_write(&ctx.conn).await?;
 	let result = rename_shelf_txn(&txn, user, shelf_id, name, device).await;
 	commit(txn, result).await
 }
@@ -502,7 +503,7 @@ pub async fn add_shelf_items(
 	reject_duplicates(&book_ids, "bookIds")?;
 	ensure_books_visible(ctx.conn.as_ref(), user, &book_ids).await?;
 
-	let txn = ctx.conn.begin().await?;
+	let txn = begin_write(&ctx.conn).await?;
 	let result = add_shelf_items_txn(&txn, user, shelf_id, &book_ids, device).await;
 	commit(txn, result).await
 }
@@ -586,7 +587,7 @@ pub async fn remove_shelf_items(
 	book_ids: Vec<String>,
 	device: Option<String>,
 ) -> CoreResult<()> {
-	let txn = ctx.conn.begin().await?;
+	let txn = begin_write(&ctx.conn).await?;
 	let result = remove_shelf_items_txn(&txn, user, shelf_id, book_ids, device).await;
 	commit(txn, result).await
 }
@@ -634,7 +635,7 @@ async fn remove_shelf_items_txn(
 /// Deletes a shelf (collection or reading list) on behalf of a device,
 /// recording the tombstone and emitting the corresponding deleted event.
 pub async fn delete_shelf(ctx: &Ctx, user: &AuthUser, shelf_id: &str) -> CoreResult<()> {
-	let txn = ctx.conn.begin().await?;
+	let txn = begin_write(&ctx.conn).await?;
 	let result = delete_shelf_txn(&txn, user, shelf_id).await;
 	let (kind, member_ids) = commit(txn, result).await?;
 

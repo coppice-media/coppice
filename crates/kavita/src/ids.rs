@@ -26,6 +26,12 @@ pub enum IdKind {
 	User,
 	/// A Stump reading list presented as a Kavita reading list.
 	ReadingList,
+	/// A Stump collection presented as a Kavita `AppUserCollection`.
+	Collection,
+	/// A Stump media annotation presented as a Kavita annotation.
+	Annotation,
+	/// A Stump bookmark presented as a Kavita bookmark.
+	Bookmark,
 }
 
 impl IdKind {
@@ -37,6 +43,9 @@ impl IdKind {
 			Self::Media => "media",
 			Self::User => "user",
 			Self::ReadingList => "reading_list",
+			Self::Collection => "collection",
+			Self::Annotation => "annotation",
+			Self::Bookmark => "bookmark",
 		}
 	}
 
@@ -48,6 +57,9 @@ impl IdKind {
 			"media" => Some(Self::Media),
 			"user" => Some(Self::User),
 			"reading_list" => Some(Self::ReadingList),
+			"collection" => Some(Self::Collection),
+			"annotation" => Some(Self::Annotation),
+			"bookmark" => Some(Self::Bookmark),
 			_ => None,
 		}
 	}

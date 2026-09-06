@@ -7,6 +7,7 @@ use axum::{
 	Extension,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
+use models::txn::begin_write;
 use models::{
 	domain::reading_state::{Publication, SourceProtocol},
 	entity::{media, reading_head, reading_head_event},
@@ -18,7 +19,7 @@ use models::{
 		},
 	},
 };
-use sea_orm::{ColumnTrait, QueryFilter, TransactionTrait};
+use sea_orm::{ColumnTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map};
 use stump_auth::AuthContext;
@@ -502,7 +503,7 @@ pub(crate) async fn update_book_state(
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
 
-	let transaction = conn.begin().await?;
+	let transaction = begin_write(conn).await?;
 	persist_kobo_reading_state(
 		&transaction,
 		&user,

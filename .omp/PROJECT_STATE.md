@@ -7,7 +7,7 @@ On-demand resume file. The evidence snapshot lives in
 
 ## Working tree
 
-- Branch `headless-modular` @ c4a0b239 (batch 3 integrated), nothing pushed.
+- Branch `headless-modular` @ batch 4 (SQLite BEGIN IMMEDIATE via `models::txn::begin_write`, migration on a 1-connection pool, Kavita search/bookmarks/collections/scan/stats/annotation routes, provider source-health job + cross-source dedupe/merge), nothing pushed.
   Clean tree at that commit. `git config core.hooksPath /dev/null` is set on
   purpose: upstream's husky hook runs prettier/cargo-fmt on every commit and
   aborts on generated files; the gate replaces it.
@@ -43,10 +43,10 @@ From the user-owned sibling harness `../komga-compat/` (hurl needs
 ```text
 make replay                 # 8/8; BOOK_ID/SERIES_ID = single-book "Synthetic Solo", THUMBNAIL_ID = a freshly uploaded book thumbnail
 make replay-negative-auth   # 1/1; INVALID_USERNAME/INVALID_PASSWORD
-make replay-mihon           # 1/1; SERIES_ID
+make replay-mihon           # 1/1; SERIES_ID (spec pins the Synthetic Capture Library by name; libraries[0] is now "Books")
 make replay-liseur-sync     # 1/1
 make replay-kavita          # 1/1
-make replay-library-management LIBRARY_ROOT=<dir>   # pending spec: DELETE right after scan/analyze -> 500 "database is locked" (see Next)
+make replay-library-management LIBRARY_ROOT=<dir>   # 1/1 since batch 4
 make replay-containers SERIES_ID= BOOK_ID=          # pending spec, not yet run
 ```
 
@@ -82,11 +82,8 @@ the merged GraphQL schema overflows rustc's query depth.
 
 ## Next (see todo / roadmap)
 
-- Kavita device findings after retest on 25600; still 404: `/api/Search/*`,
-  `/api/Reader/all-bookmarks`, `/api/Collection`, `Series/{scan,analyze,refresh-metadata}`,
-  `Library/scan`, Inkita `/api/Stats/*`, `/api/Annotation/*`.
-- SQLite write transactions: sea-orm 1.1 emits deferred `BEGIN`; read-then-write
-  services return "database is locked" under a concurrent job (98 `begin()` sites).
+- Kavita device findings after retest on 25600 (Kamigura, Turnleaf, Inkita, Kover).
+- Write transactions go through `models::txn::begin_write` (SQLite `BEGIN IMMEDIATE`; plain `begin()` only for read-only work). Migrations run on a dedicated 1-connection pool (sea-orm-migration does not transact SQLite DDL).
 - Docs site build: `detect-libc` must be `^2` for lightningcss 1.33 (`familySync`).
 - DRM: detector only (`drm_protected`, weight 0, blocking); study at
   `local://drm-study.md`; removal stays out of tree by decision.

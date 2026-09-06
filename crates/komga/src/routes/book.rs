@@ -15,9 +15,8 @@ use axum::{
 };
 use chrono::Datelike;
 use models::entity::{media, media_metadata, media_tag, series, tag, user::AuthUser};
-use sea_orm::{
-	prelude::*, ActiveValue::Set, DatabaseTransaction, IntoActiveModel, TransactionTrait,
-};
+use models::txn::begin_write;
+use sea_orm::{prelude::*, ActiveValue::Set, DatabaseTransaction, IntoActiveModel};
 use stump_auth::AuthContext;
 
 use super::{KomgaBackend, KomgaEvents};
@@ -392,7 +391,7 @@ async fn patch_book_metadata(
 	let event_library_id = parent_series
 		.and_then(|series| series.library_id)
 		.unwrap_or_default();
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	let existing_metadata = media_metadata::Entity::find()
 		.filter(media_metadata::Column::MediaId.eq(book.id.clone()))
 		.one(&txn)

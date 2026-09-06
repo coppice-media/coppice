@@ -1,10 +1,7 @@
 use async_graphql::{Context, Object, Result};
 use models::entity::{reading_list, reading_list_item};
-use sea_orm::{
-	ActiveValue::Set,
-	TransactionTrait,
-	{prelude::*, DatabaseTransaction},
-};
+use models::txn::begin_write;
+use sea_orm::{prelude::*, ActiveValue::Set, DatabaseTransaction};
 
 use crate::{
 	data::CoreContext, input::reading_list::ReadingListInput,
@@ -29,7 +26,7 @@ impl ReadingListMutation {
 		let user_id = ctx.data::<stump_auth::AuthContext>()?.id();
 
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 		let media_ids = input.media_ids.clone();
 		let reading_list = create_reading_list_for_user_id(&user_id, input, &txn).await?;
 
@@ -141,7 +138,7 @@ async fn get_for_owner(
 mod tests {
 	use super::*;
 	use models::shared::enums::EntityVisibility;
-	use sea_orm::MockDatabase;
+	use sea_orm::{MockDatabase, TransactionTrait};
 
 	fn get_reading_list_test_object() -> reading_list::Model {
 		reading_list::Model {

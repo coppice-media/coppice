@@ -30,6 +30,9 @@ without `async-graphql`.
 | Decision | Why | Evidence |
 | --- | --- | --- |
 | `graphql` feature gates every `async_graphql` derive (`#[cfg_attr(feature = "graphql", …)]`, 222 sites in 49 files) | `minimal`/protocol-only server profiles must not compile `async-graphql`; `graphql`/`stump_core` enable it explicitly. | `Cargo.toml` features; `src/shared/enums.rs:9,30,86,…`; `apps/server/Cargo.toml:16-22` |
+| Every write transaction is opened with `txn::begin_write` (SQLite `BEGIN IMMEDIATE`), never `TransactionTrait::begin` | sea-orm 1.1 emits a deferred `BEGIN`, so a transaction that reads before it writes has to promote its read snapshot to the write lock — SQLite refuses to run the busy handler for a promotion and returns `SQLITE_BUSY` immediately, which is how `DELETE /api/v1/libraries/{id}` during a scan became `500 database is locked`. `begin_write` takes the lock up front, where `busy_timeout` applies. | `src/txn.rs`; `sea-orm-1.1.16/src/database/transaction.rs:69-76`; `core/src/library.rs` `delete_library` |
+| `txn::begin_write` takes `&DatabaseConnection`, not `impl TransactionTrait` | `begin()` on an existing transaction opens a `SAVEPOINT`; the `ROLLBACK` + `BEGIN IMMEDIATE` swap would discard the enclosing transaction, so nesting must be a compile error. Read-only transactions and `crates/migrations` (which runs inside the migrator's transaction) keep `begin()`. | `src/txn.rs`; `crates/graphql/src/{query,object}/smart_lists.rs`; `crates/migrations/src/m20260923_000000_backfill_reading_heads.rs:155` |
+| `txn::is_write_lock_contention` matches the error message, not a native code | sea-orm does not re-export `sqlx::sqlite::SqliteError`, so the code is unreachable without downcasting through an unnameable type. Both surfaces map a match to `503` + `Retry-After: 1`. | `src/txn.rs`; `crates/komga/src/errors.rs`; `apps/server/src/errors.rs` |
 | `UserPermission` and other stored enums serialise `SCREAMING_SNAKE_CASE` via strum + serde and are stored as `String` columns | Stable on-disk representation independent of Rust variant order; matches upstream. | `src/shared/enums.rs:728-735` |
 | `AuthUser` is a projection (id, flags, permissions, age restriction, preferences), not the `user::Model` | Auth context must not carry password hash; `stump_auth` depends on this type only. | `src/entity/user.rs:58-68` |
 | Reading-progress domain rules (`should_extend_session`, logical date) are pure functions in `src/domain/`; DB writes in `src/services/reading_progress.rs` | OPDS, Kobo, KOReader, Komga and GraphQL all write progress; one implementation of grace-period/extension semantics. | `src/domain/reading_progress.rs`, `src/services/reading_progress.rs` |
@@ -38,6 +41,7 @@ without `async-graphql`.
 | `Prefixer` aliases columns as `<table><column>` for nested `FromQueryResult` joins | SeaORM has no built-in nested-struct hydration for joins. | `src/prefixer.rs` (from SeaQL/sea-orm discussion #1502) |
 | `filter-gen` proc macro generates ordering/filter enums for entities | Keeps filter contracts in sync with entity columns without hand-written enums. | `src/entity/media.rs:5`; `crates/macros/filter-gen` |
 | `EntityError` wraps `DbErr`, glob (`ignore_rules`) and serde errors | One error type for all entity helpers. | `src/error.rs` |
+| Provider dedupe lives in two provider-only entities (`provider_series_identity`, `provider_series_link`) keyed by `series_id` with `ON DELETE CASCADE` | A locally scanned series never gets a row, and deleting a series (GC, merge, library clean) takes its dedupe state with it. | `src/entity/provider_series_identity.rs`, `src/entity/provider_series_link.rs`; `crates/provider/src/identity.rs` |
 
 ## Layout
 
@@ -48,13 +52,14 @@ without `async-graphql`.
 | `src/domain/reading_progress.rs` | Pure reading-session rules (grace period, logical date) |
 | `src/services/` | `reading_progress.rs` (normalised progression upsert), `lists.rs` (membership cleanup) |
 | `src/prefixer.rs` | Join column prefixing helper |
+| `src/txn.rs` | `begin_write` (SQLite `BEGIN IMMEDIATE` write transactions) and `is_write_lock_contention` |
 | `src/error.rs` | `EntityError` |
 | `src/tests/common.rs` | SQL-to-string helpers used by unit tests |
 
 ## How to verify
 
 ```text
-cargo test -p models --lib --tests             # 78 unit tests (permission sets, ignore rules, progress rules, filters)
+cargo test -p models --lib --tests             # 82 unit tests (permission sets, ignore rules, progress rules, filters, write-lock contention)
 cargo test -p models --features graphql        # derives compile
 cargo check -p stump_server --no-default-features --features minimal   # async-graphql must be absent from the graph
 cargo test -p migrations --lib --tests         # schema/entity agreement (reading_lists_collections.rs)

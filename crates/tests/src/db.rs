@@ -1,8 +1,9 @@
 use models::entity::{
 	age_restriction, api_key, collection, collection_series, device, device_credential,
 	device_pairing, kobo_sync_session, library, library_config, library_exclusion,
-	liseur_sync_token, media, media_analysis, media_metadata, media_tag, provider_source,
-	reading_head, reading_head_event, reading_list, reading_list_item, reading_list_rule,
+	liseur_sync_token, media, media_analysis, media_metadata, media_tag,
+	provider_series_identity, provider_series_link, provider_source, reading_head,
+	reading_head_event, reading_list, reading_list_item, reading_list_rule,
 	reading_session, refresh_token, series, series_metadata, server_config, session,
 	source_health, tag, user, user_preferences,
 };
@@ -54,6 +55,8 @@ pub async fn create_database_tables(db: &DbConn) -> Result<(), DbErr> {
 		schema.create_table_from_entity(device_pairing::Entity),
 		schema.create_table_from_entity(provider_source::Entity),
 		schema.create_table_from_entity(source_health::Entity),
+		schema.create_table_from_entity(provider_series_identity::Entity),
+		schema.create_table_from_entity(provider_series_link::Entity),
 		schema.create_table_from_entity(reading_head::Entity),
 		schema.create_table_from_entity(reading_head_event::Entity),
 		schema.create_table_from_entity(page_hash::Entity),

@@ -88,7 +88,8 @@ base64.workspace = true
 reqwest.workspace = true
 
 [dev-dependencies]
-temp-env = "0.3.6"
+# `async_closure` is needed to scope env vars around `database::connect`
+temp-env = { version = "0.3.6", features = ["async_closure"] }
 tempfile.workspace = true
 criterion = { version = "0.5.1", features = ["html_reports", "async_tokio"] }
 tests = { path = "../crates/tests" }

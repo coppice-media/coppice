@@ -29,6 +29,8 @@ Other keys (`core/src/config/providers.rs`):
 | `provider_cache_max_bytes` | `STUMP_PROVIDER_CACHE_MAX_BYTES` | 2 GiB | Bound of the on-disk page/cover cache under `<config>/cache/providers` |
 | `virtual_series_ttl` | `STUMP_VIRTUAL_SERIES_TTL` | `300` s | How long one live browse page `(source, kind, page)` is cached |
 | `provider_gc_days` | `STUMP_PROVIDER_GC_DAYS` | `30` | Materialised series with no reading head older than this are reclaimed |
+| `provider_health_interval_secs` | `STUMP_PROVIDER_HEALTH_INTERVAL_SECS` | `21600` s (6 h) | How often the source-health job probes every catalog source (floored at 60 s) |
+| `provider_health_dead_after` | `STUMP_PROVIDER_HEALTH_DEAD_AFTER` | `3` | Consecutive failed runs after which a source is `DEAD` and hidden from the catalog (floored at 1) |
 
 ## Sources and the catalog
 
@@ -36,11 +38,11 @@ Other keys (`core/src/config/providers.rs`):
   A `SourceFactory` describes an implementation and builds an instance per
   language; instance ids are `<implementation>-<lang>` (`mangadex-en`).
 - **Catalog.** The Keiyoushi extension index is fetched daily into
-  `<cache>/providers/keiyoushi-index.json`. `providerCatalog(lang, query)`
-  flattens it to one row per source with `hasImplementation` telling the
-  operator whether Stump can actually run it. `providerSourceHealth` exposes
-  the probe results (`source_health` rows; 10 s timeout, `dead` after 3
-  consecutive failures).
+  `<cache>/providers/keiyoushi-index.json`. `providerCatalog(lang, query,
+  includeDead)` flattens it to one row per source with `hasImplementation`
+  telling the operator whether Stump can actually run it and `health` the
+  entry's badge (the `source_health` row). Dead sources are omitted unless
+  `includeDead: true`.
 - **Enabling a source.** `enableProviderSource(catalogId)` (or
   `implementation` + `lang`) upserts a `provider_sources` row and registers
   the instance; `disableProviderSource(id)` keeps materialised rows but stops
@@ -126,11 +128,73 @@ in the same transaction and sweeping thumbnails afterwards. Non-provider
 series are never touched. The next browse simply serves the series live again
 under the same id.
 
+## Source health
+
+`StumpJob::ProviderSourceHealth` (`core/src/job/provider_health.rs`) runs
+five minutes after boot and then every `provider_health_interval_secs`
+(`core/src/providers.rs::spawn_health_scheduler`), and on demand through the
+`runProviderHealth` mutation, which enqueues the same job. One task is one
+base URL: catalog sources sharing a host are probed once per run, enabled
+instances first.
+
+Per target (`crates/provider/src/health.rs`):
+
+1. `HEAD` the base URL, falling back to `GET` when the host answers 403,
+   405 or 501. 10 s timeout (`PROBE_TIMEOUT`).
+2. Record `http_status`, `latency_ms` and `redirect_url` (set when the
+   request landed on a different URL, ignoring a trailing slash).
+3. Detect the site's theme from its landing markup once, then `GET` that
+   theme's latest-updates path (`SourceTheme::latest_path`) and record
+   `latest_path_ok`. A known theme skips the markup sniff.
+4. Fold the result into the previous state: an unreachable base URL
+   increments `consecutive_failures` and marks the source `DEGRADED`, or
+   `DEAD` at `provider_health_dead_after`; a reachable one resets the count
+   to zero and marks `OK`, or `DEGRADED` when only the latest path failed.
+
+The result is one upserted `source_health` row per catalog source
+(`status`, `http_status`, `latency_ms`, `redirect_url`, `latest_path_ok`,
+`consecutive_failures`, `error`, `checked_at`). `providerSourceHealth`
+exposes it with `dead`, `consecutiveFailures` and `lastCheckedAt`; dead rows
+are omitted unless `includeDead: true`, matching `providerCatalog`.
+
+## Cross-source dedupe
+
+The same work is usually carried by several sources. Every materialisation
+writes a `provider_series_identity` row (migration `m20260924`): the
+normalised title (`identity::normalise_title` — lowercased, every
+non-alphanumeric character a separator) and `external_key`, the strongest
+cross-source id the source reported (`al:<id>` > `mal:<id>` > `mu:<id>`;
+MangaDex fills these from `attributes.links`, dropping per-site URLs).
+
+When a series materialises and an identity from a **different** source
+matches — external key first, normalised title second — a
+`provider_series_links (series_id, canonical_series_id, reason, created_at)`
+row records the duplicate, where `canonical_series_id` is the oldest series
+in the chain, so every duplicate of a work points at the same series.
+Locally scanned series have no identity row and are never candidates.
+
+The link is advisory: nothing is merged automatically, so a false positive is
+a row an operator can inspect through `providerSeriesDuplicates` rather than
+lost progress. `mergeProviderSeries(keep, drop)` performs the merge:
+
+- Both ids must be provider-backed (`source_provider` set) and different;
+  a local series is rejected with `NotVirtual`.
+- Every reading head of `drop` is replayed onto the matching chapter of
+  `keep` through `models::services::reading_state::apply`, so the normal
+  conflict rule decides and the merge never un-reads a chapter (completion is
+  sticky). Chapters match on `media_metadata.number`, falling back to the
+  normalised chapter title; a head with no counterpart is reported as
+  `headsUnmatched`.
+- Links pointing at `drop` are repointed to `keep`, then `drop`'s identity,
+  link, media (with their list/collection memberships) and `series` row are
+  deleted in one transaction.
+
 ## Verification
 
 ```text
-cargo test -p stump_provider            # browse TTL + reverse index, browse→materialise→page, GC, cache, catalog, health
-cargo test -p stump_provider_mangadex   # MangaDex mapping and rate limiting (no network)
+cargo test -p stump_provider            # browse TTL + reverse index, browse→materialise→page, GC, cache, catalog, health (dead/recovery), dedupe + merge
+cargo test -p stump_provider_mangadex   # MangaDex mapping (incl. external ids) and rate limiting (no network)
+cargo test -p stump_core --lib providers # health schedule/threshold plumbing and GC cutoff
 cargo test -p stump_komga               # condition-DSL routing and DTO shapes
 ```
 

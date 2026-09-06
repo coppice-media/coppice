@@ -1290,6 +1290,218 @@ pub struct DecodeFilterDto {
 	pub encoded_filter: Option<String>,
 }
 
+/// `SearchResultDto`: the series rows of `GET /api/Search/search`. A trimmed
+/// series projection — Kavita's search does not build full `SeriesDto`s.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResultDto {
+	pub series_id: i32,
+	pub name: String,
+	pub original_name: String,
+	pub sort_name: String,
+	pub localized_name: String,
+	pub format: MangaFormat,
+	pub library_name: String,
+	pub library_id: i32,
+	pub release_year: i32,
+	pub volume_count: i32,
+	pub chapter_count: i32,
+}
+
+/// `BookmarkSearchResultDto`: the `bookmarks` group of a search response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkSearchResultDto {
+	pub library_id: i32,
+	pub volume_id: i32,
+	pub series_id: i32,
+	pub chapter_id: i32,
+	pub series_name: String,
+	pub localized_series_name: String,
+}
+
+/// `SearchResultGroupDto`: the grouped answer of `GET /api/Search/search`.
+/// Every group is present even when empty, as `kavita-ref` renders it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResultGroupDto {
+	pub libraries: Vec<LibraryDto>,
+	pub series: Vec<SearchResultDto>,
+	pub collections: Vec<AppUserCollectionDto>,
+	pub reading_lists: Vec<ReadingListDto>,
+	pub persons: Vec<PersonDto>,
+	pub genres: Vec<GenreTagDto>,
+	pub tags: Vec<TagDto>,
+	pub files: Vec<MangaFileDto>,
+	pub chapters: Vec<ChapterDto>,
+	pub bookmarks: Vec<BookmarkSearchResultDto>,
+	pub annotations: Vec<AnnotationDto>,
+}
+
+/// `BookmarkDto`: one saved page. Serves as both the response shape of the
+/// bookmark reads and the request body of `POST /api/Reader/bookmark` and
+/// `unbookmark`, which is the single type Kavita uses for both directions.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkDto {
+	#[serde(default)]
+	pub id: i32,
+	#[serde(default)]
+	pub page: i32,
+	#[serde(default)]
+	pub volume_id: i32,
+	#[serde(default)]
+	pub series_id: i32,
+	#[serde(default)]
+	pub chapter_id: i32,
+	#[serde(default)]
+	pub image_offset: i32,
+	#[serde(default)]
+	pub x_path: Option<String>,
+	#[serde(default)]
+	pub series: Option<SeriesDto>,
+	#[serde(default)]
+	pub chapter_title: Option<String>,
+}
+
+/// `AppUserCollectionDto`: a Kavita collection. Stump collections carry no
+/// promotion, colours, cover lock or external source, so those fields are the
+/// constants `kavita-ref` reports for a locally created collection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUserCollectionDto {
+	pub id: i32,
+	pub title: String,
+	pub summary: String,
+	pub promoted: bool,
+	pub age_rating: AgeRating,
+	pub cover_image: Option<String>,
+	pub primary_color: Option<String>,
+	pub secondary_color: Option<String>,
+	pub cover_image_locked: bool,
+	pub item_count: i32,
+	pub owner: String,
+	pub last_sync_utc: KavitaDateTime,
+	/// `ScrobbleProvider`; `0` is Kavita itself, the only source Stump has.
+	pub source: i32,
+	pub source_url: Option<String>,
+	pub total_source_count: i32,
+	pub missing_series_from_source: Option<String>,
+}
+
+/// `CollectionTagBulkAddDto`: the body of `POST /api/Collection/update-for-series`.
+/// `collectionTagId == 0` means "create a collection named `collectionTagTitle`".
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionTagBulkAddDto {
+	#[serde(default)]
+	pub collection_tag_id: i32,
+	#[serde(default)]
+	pub collection_tag_title: Option<String>,
+	#[serde(default)]
+	pub series_ids: Vec<i32>,
+}
+
+/// The `tag` member of [`UpdateSeriesForTagDto`]. Kavita types it as a whole
+/// `AppUserCollectionDto` but only reads its `id`; the rest of the object is
+/// ignored, so this narrow view deserializes any client's payload.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionRefDto {
+	#[serde(default)]
+	pub id: i32,
+}
+
+/// `UpdateSeriesForTagDto`: the body of `POST /api/Collection/update-series`,
+/// which removes series from a collection.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSeriesForTagDto {
+	#[serde(default)]
+	pub tag: CollectionRefDto,
+	#[serde(default)]
+	pub series_ids_to_remove: Vec<i32>,
+}
+
+/// `RefreshSeriesDto`: the body of `POST /api/Series/{scan,analyze,refresh-metadata}`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshSeriesDto {
+	#[serde(default)]
+	pub library_id: i32,
+	#[serde(default)]
+	pub series_id: i32,
+	#[serde(default)]
+	pub force_update: bool,
+	#[serde(default)]
+	pub force_colorscape: bool,
+}
+
+/// `AnnotationDto`: a highlight and/or note. Stump stores the Readium locator
+/// and one note per annotation, so the social, spoiler and slot fields of
+/// Kavita's annotation model are the constants an unshared annotation has.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationDto {
+	pub id: i32,
+	pub x_path: String,
+	pub ending_x_path: Option<String>,
+	pub selected_text: Option<String>,
+	pub comment: Option<String>,
+	pub comment_html: Option<String>,
+	pub comment_plain_text: Option<String>,
+	pub chapter_title: Option<String>,
+	pub context: Option<String>,
+	pub highlight_count: i32,
+	pub contains_spoiler: bool,
+	pub page_number: i32,
+	pub selected_slot_index: i32,
+	pub likes: Vec<i32>,
+	pub series_name: String,
+	pub library_name: String,
+	pub chapter_id: i32,
+	pub volume_id: i32,
+	pub series_id: i32,
+	pub library_id: i32,
+	pub owner_user_id: i32,
+	pub owner_username: String,
+	pub age_rating: AgeRating,
+	pub created_utc: KavitaDateTime,
+	pub last_modified_utc: KavitaDateTime,
+}
+
+/// `UserReadStatistics`: the answer of `GET /api/Stats/user/{userId}/read`.
+///
+/// `chaptersRead` and `lastActive` are not in `kavita-ref` 0.9.1.4 (which
+/// renamed the route to `/api/Stats/user-read` and reports `lastActiveUtc`);
+/// Inkita reads both, so both are served alongside the reference field set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserReadStatisticsDto {
+	pub total_pages_read: i64,
+	pub total_words_read: i64,
+	pub time_spent_reading: i64,
+	pub chapters_read: i64,
+	pub last_active: KavitaDateTime,
+	pub last_active_utc: KavitaDateTime,
+	pub avg_hours_per_week_spent_reading: f64,
+}
+
+/// `ReadHistoryEvent`: one row of `GET /api/Stats/user/reading-history`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadHistoryEventDto {
+	pub user_id: i32,
+	pub user_name: String,
+	pub library_id: i32,
+	pub series_id: i32,
+	pub series_name: String,
+	pub read_date: KavitaDateTime,
+	pub read_date_utc: KavitaDateTime,
+	pub chapter_id: i32,
+	pub chapter_number: KavitaFloat,
+}
+
 /// The `Pagination` response header Kavita attaches to paged lists.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

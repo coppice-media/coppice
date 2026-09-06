@@ -4,6 +4,7 @@ use std::{
 	sync::{Arc, Mutex},
 };
 
+use models::txn::begin_write;
 use models::{
 	entity::{
 		library, library_config, library_scan_record, media, metadata_provider_config,
@@ -14,7 +15,7 @@ use models::{
 use sea_orm::{
 	prelude::*,
 	sea_query::{OnConflict, Query},
-	QuerySelect, Set, TransactionTrait,
+	QuerySelect, Set,
 };
 use serde::{Deserialize, Serialize};
 use stump_jobs::{
@@ -968,7 +969,7 @@ pub async fn handle_missing_library(
 	conn: &DatabaseConnection,
 	library_id: &str,
 ) -> Result<(), JobError> {
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 
 	let _affected_libraries = library::Entity::update_many()
 		.col_expr(

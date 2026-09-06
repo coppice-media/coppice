@@ -6,6 +6,7 @@ use std::{
 };
 
 use futures::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
+use models::txn::begin_write;
 use models::{
 	entity::{library_config, media, media_metadata, media_tag, series, tag},
 	shared::enums::FileStatus,
@@ -14,7 +15,7 @@ use sea_orm::{
 	prelude::*,
 	sea_query::{OnConflict, Query},
 	ActiveValue, Condition, DatabaseConnection, DatabaseTransaction, IntoActiveModel,
-	Iterable, Set, TransactionTrait,
+	Iterable, Set,
 };
 use tokio::task::spawn_blocking;
 
@@ -129,7 +130,7 @@ pub(crate) async fn update_media(
 		tags,
 	}: BuiltMedia,
 ) -> CoreResult<media::Model> {
-	let txn = db.begin().await?;
+	let txn = begin_write(db).await?;
 
 	let updated_media = media.update(&txn).await?;
 
@@ -237,7 +238,7 @@ pub(crate) async fn handle_book_visit_operation(
 			if let Some(mut meta) = custom.meta {
 				let tags = meta.tags.take().unwrap_or_default();
 
-				let txn = db.begin().await?;
+				let txn = begin_write(db).await?;
 				let active_model = media_metadata::ActiveModel {
 					media_id: Set(Some(custom.id.clone())),
 					..meta.into_active_model()
@@ -568,7 +569,7 @@ pub(crate) async fn safely_insert_series(
 ) -> Result<Vec<series::Model>, JobError> {
 	let mut output = Vec::with_capacity(series.len());
 
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 
 	for BuiltSeries { series, metadata } in series {
 		let created_series = series.insert(&txn).await?;
@@ -807,7 +808,7 @@ pub(crate) async fn safely_build_and_insert_media(
 	let mut insert_cursor = 0i32;
 
 	while !books.is_empty() {
-		let txn = worker_ctx.conn().begin().await?;
+		let txn = begin_write(worker_ctx.conn()).await?;
 
 		let chunk_count = MAX_INSERT_CHUNK_SIZE.min(books.len());
 

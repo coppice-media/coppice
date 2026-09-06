@@ -5,6 +5,7 @@
 //! Komga profile) call into this module, so validation, persistence, watcher and
 //! scheduled-scan wiring, core-event emission, and post-commit side effects can
 //! never drift between surfaces.
+use models::txn::begin_write;
 use models::{
 	entity::{
 		library, library_config, library_tag, media, scheduled_job, series, tag,
@@ -19,7 +20,7 @@ use models::{
 use sea_orm::{
 	prelude::*, sea_query::Query, ActiveModelTrait, ColumnTrait, ConnectionTrait,
 	DatabaseTransaction, EntityTrait, IntoActiveModel, QueryFilter, QuerySelect, Set,
-	Statement, TransactionTrait, Value,
+	Statement, Value,
 };
 use stump_media::image::{remove_thumbnails, ImageProcessorOptionsExt};
 use uuid::Uuid;
@@ -97,7 +98,7 @@ pub async fn create_library(ctx: &Ctx, params: NewLibrary) -> CoreResult<library
 
 	let watch = matches!(&params.config.watch, Set(true));
 
-	let txn = ctx.conn.as_ref().begin().await?;
+	let txn = begin_write(ctx.conn.as_ref()).await?;
 
 	let id = Uuid::new_v4().to_string();
 	let created_config = library_config::ActiveModel {
@@ -206,7 +207,7 @@ pub async fn update_library(
 		validate_config(config)?;
 	}
 
-	let txn = ctx.conn.as_ref().begin().await?;
+	let txn = begin_write(ctx.conn.as_ref()).await?;
 
 	if let Some(config) = params.config {
 		library_config::ActiveModel {
@@ -310,7 +311,7 @@ pub async fn delete_library(
 		.await?
 		.ok_or_else(|| CoreError::NotFound("Library not found".into()))?;
 
-	let txn = ctx.conn.as_ref().begin().await?;
+	let txn = begin_write(ctx.conn.as_ref()).await?;
 	let library_series = Query::select()
 		.column(series::Column::Id)
 		.from(series::Entity)
@@ -585,4 +586,115 @@ fn db_statement(
 	values: impl IntoIterator<Item = Value>,
 ) -> Statement {
 	Statement::from_sql_and_values(conn.get_database_backend(), sql, values)
+}
+
+#[cfg(test)]
+mod tests {
+	use std::time::Duration;
+
+	use migrations::{Migrator, MigratorTrait};
+	use sea_orm::{ConnectOptions, Database, TransactionTrait};
+
+	use super::*;
+	use crate::context::Ctx;
+
+	/// A file-backed database with room for two live connections. `sqlite::memory:`
+	/// cannot be used here: every pooled connection would get its own private
+	/// database, and sea-orm caps an unconfigured SQLite pool at one connection
+	/// (`sea-orm-1.1.16/src/driver/sqlx_sqlite.rs:85-87`), so nothing could
+	/// contend for the write lock.
+	async fn contended_database(dir: &std::path::Path) -> DatabaseConnection {
+		let url = format!("sqlite://{}/stump.db?mode=rwc", dir.display());
+
+		// sea-orm-migration does not wrap SQLite migrations in a transaction
+		// (`sea-orm-migration-1.1.16/src/migrator.rs:268-271`): every DDL
+		// statement runs on whichever connection the pool hands out, so the
+		// drop-and-rename in `m20260909_000000_add_ingest_media_targets` can
+		// straddle two connections and hit a stale schema cache. Migrate on the
+		// capped-at-one pool `Database::connect(&str)` gives us, then open the
+		// pool this test contends on.
+		let migrator = Database::connect(&url).await.expect("connect migrator");
+		Migrator::up(&migrator, None).await.expect("migrate");
+		migrator.close().await.expect("close migrator");
+
+		let mut options = ConnectOptions::new(url);
+		options.max_connections(4).sqlx_logging(false);
+		let conn = Database::connect(options).await.expect("connect");
+		conn.execute_unprepared("PRAGMA journal_mode=WAL")
+			.await
+			.expect("wal");
+		conn
+	}
+
+	/// `DELETE /api/v1/libraries/{id}` right after a scan used to answer
+	/// `500 database is locked`: [`delete_library`] reads the library's media and
+	/// series inside its transaction before it writes, and SQLite will not run
+	/// the busy handler when a deferred transaction has to promote a read
+	/// snapshot to the write lock. It must now wait for the writer instead.
+	#[tokio::test]
+	async fn delete_library_waits_out_a_concurrent_writer() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let conn = contended_database(dir.path()).await;
+
+		let owner = ::tests::fake_data::User::new("owner").insert(&conn).await;
+		let library = ::tests::fake_data::Library::default().insert(&conn).await;
+		let series = ::tests::fake_data::Series {
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await;
+		::tests::fake_data::Media {
+			series_id: series.id.clone(),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await;
+
+		let ctx = Ctx::for_testing(conn);
+		let user = AuthUser {
+			id: owner.id,
+			..Default::default()
+		};
+
+		// Stand in for a running scan job: hold the write lock on another
+		// pooled connection with a write to an unrelated table, so only the
+		// lock itself is contended.
+		let holder = ctx.conn.begin().await.expect("begin holder");
+		tag::ActiveModel {
+			name: Set("scan-in-flight".to_owned()),
+			..Default::default()
+		}
+		.insert(&holder)
+		.await
+		.expect("holder write takes the lock");
+
+		let delete = {
+			let ctx = ctx.clone();
+			let id = library.id.clone();
+			tokio::spawn(async move { delete_library(&ctx, &user, &id).await })
+		};
+
+		tokio::time::sleep(Duration::from_millis(250)).await;
+		assert!(
+			!delete.is_finished(),
+			"the delete must wait for the write lock, not fail"
+		);
+
+		holder.commit().await.expect("release the write lock");
+		let deleted = delete
+			.await
+			.expect("join")
+			.expect("delete_library under contention");
+
+		assert_eq!(deleted.id, library.id);
+		assert!(
+			library::Entity::find_by_id(library.id)
+				.one(ctx.conn.as_ref())
+				.await
+				.expect("lookup")
+				.is_none(),
+			"the library row is gone"
+		);
+	}
 }

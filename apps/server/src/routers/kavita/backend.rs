@@ -8,10 +8,16 @@ use axum::{
 	http::{HeaderMap, Response},
 	response::IntoResponse,
 };
-use models::entity::{library_config, media, reading_list, series, user, user::AuthUser};
+use models::entity::{
+	collection, library_config, media, reading_list, series, user, user::AuthUser,
+};
 use prefixed_api_key::PrefixedApiKey;
 use sea_orm::{prelude::*, DatabaseConnection, QueryOrder};
 use stump_auth::AuthContext;
+use stump_core::{
+	filesystem::media::analysis::{AnalysisJobConfig, MediaAnalysisJobScope},
+	job::stump_job::StumpJob,
+};
 use stump_kavita::{
 	errors::{APIError as KavitaError, APIResult as KavitaResult},
 	routes::{
@@ -29,6 +35,17 @@ use crate::{
 	routers::api::v2::{media as api_media, series as api_series},
 	utils::{serve_media, verify_password},
 };
+
+/// A Kavita `force`/`forceUpdate` flag as Stump scan options: a forced scan
+/// rebuilds every book, an ordinary one only the changed ones. `None` keeps
+/// the scanner's default (`BuildChanged`).
+fn scan_options(force: bool) -> Option<stump_scanner::ScanOptions> {
+	force.then_some(stump_scanner::ScanOptions {
+		config: stump_scanner::ScanConfig::ForceRebuild {
+			force_rebuild: true,
+		},
+	})
+}
 
 pub(crate) struct KavitaBackendAdapter {
 	ctx: AppState,
@@ -315,6 +332,84 @@ impl KavitaBackend for KavitaBackendAdapter {
 		.await
 		.map(|_| ())
 		.map_err(map_core_error)
+	}
+
+	async fn create_collection(
+		&self,
+		user: &AuthUser,
+		name: String,
+		series_ids: Vec<String>,
+	) -> KavitaResult<collection::Model> {
+		stump_core::collections::create_collection(
+			&self.ctx,
+			user,
+			stump_core::collections::CollectionCreate {
+				name,
+				ordered: false,
+				series_ids,
+			},
+		)
+		.await
+		.map_err(map_core_error)
+	}
+
+	async fn set_collection_series(
+		&self,
+		user: &AuthUser,
+		id: &str,
+		series_ids: Vec<String>,
+	) -> KavitaResult<()> {
+		stump_core::collections::update_collection(
+			&self.ctx,
+			user,
+			id,
+			stump_core::collections::CollectionUpdate {
+				name: None,
+				ordered: None,
+				series_ids: Some(series_ids),
+			},
+		)
+		.await
+		.map(|_| ())
+		.map_err(map_core_error)
+	}
+
+	async fn enqueue_library_scan(
+		&self,
+		library_id: String,
+		path: String,
+		force: bool,
+	) -> KavitaResult<()> {
+		self.ctx
+			.enqueue(StumpJob::library_scan(
+				library_id,
+				path,
+				scan_options(force),
+			))
+			.await
+			.map_err(map_core_error)
+	}
+
+	async fn enqueue_series_scan(
+		&self,
+		series_id: String,
+		path: String,
+		force: bool,
+	) -> KavitaResult<()> {
+		self.ctx
+			.enqueue(StumpJob::series_scan(series_id, path, scan_options(force)))
+			.await
+			.map_err(map_core_error)
+	}
+
+	async fn enqueue_series_analysis(&self, series_id: String) -> KavitaResult<()> {
+		self.ctx
+			.enqueue(StumpJob::analyze_media(AnalysisJobConfig {
+				force_reanalysis: true,
+				scope: MediaAnalysisJobScope::Series(series_id),
+			}))
+			.await
+			.map_err(map_core_error)
 	}
 }
 

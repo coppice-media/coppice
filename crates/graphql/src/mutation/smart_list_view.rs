@@ -3,11 +3,12 @@ use crate::{
 	object::smart_list_view::SmartListView,
 };
 use async_graphql::{Context, Object, Result, ID};
+use models::txn::begin_write;
 use models::{
 	entity::{smart_list, smart_list_view},
 	shared::enums::UserPermission,
 };
-use sea_orm::{prelude::*, ActiveModelTrait, Set, TransactionTrait};
+use sea_orm::{prelude::*, ActiveModelTrait, Set};
 
 #[derive(Default)]
 pub struct SmartListViewMutation;
@@ -23,7 +24,7 @@ impl SmartListViewMutation {
 		let stump_auth::AuthContext { user, .. } =
 			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		// Ensure the user has access to the smart list
 		let _ = smart_list::Entity::find_by_id(user, input.list_id.clone())
@@ -51,7 +52,7 @@ impl SmartListViewMutation {
 		let stump_auth::AuthContext { user, .. } =
 			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		let smart_list_view = smart_list_view::Entity::find_by_user_list_id_name(
 			user,
@@ -82,7 +83,7 @@ impl SmartListViewMutation {
 		let stump_auth::AuthContext { user, .. } =
 			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		let smart_list_view =
 			smart_list_view::Entity::find_by_user_list_id_name(user, &id, &name)

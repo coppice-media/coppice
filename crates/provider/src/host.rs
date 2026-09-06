@@ -423,10 +423,13 @@ impl ProviderHost {
 		Ok(self.catalog.refresh().await?)
 	}
 
-	/// Probe every catalog source, enabled instances first.
+	/// Probe every catalog source, enabled instances first. `dead_after` is
+	/// the consecutive-failure count that marks a source dead
+	/// (`provider_health_dead_after`).
 	pub async fn run_health_checks(
 		&self,
 		concurrency: usize,
+		dead_after: i32,
 	) -> Result<HealthRunSummary, ProviderError> {
 		let snapshot = self.catalog.snapshot().await?;
 		let priority: Vec<String> = self
@@ -440,8 +443,15 @@ impl ProviderHost {
 			&snapshot,
 			&priority,
 			concurrency,
+			dead_after,
 		)
 		.await?)
+	}
+
+	/// The health checker this host probes with, shared by the core health
+	/// job so both paths use the same client and timeout.
+	pub fn health_checker(&self) -> &HealthChecker {
+		&self.checker
 	}
 
 	/// The page list for a chapter, re-resolved after [`MANIFEST_TTL`].

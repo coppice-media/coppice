@@ -8,9 +8,10 @@ use axum::{
 };
 use chrono::Utc;
 use models::entity::{server_config, user, user_preferences};
+use models::txn::begin_write;
 use sea_orm::{
 	entity::prelude::DateTimeWithTimeZone, ActiveModelTrait, ColumnTrait, EntityTrait,
-	IntoActiveModel, PaginatorTrait, QueryFilter, Set, TransactionTrait,
+	IntoActiveModel, PaginatorTrait, QueryFilter, Set,
 };
 use serde::{Deserialize, Serialize};
 use stump_media::generate_image_metadata_from_bytes;
@@ -269,7 +270,7 @@ async fn callback(
 
 		let username = ensure_unique_username(ctx.conn.as_ref(), &claims.email).await?;
 
-		let tx = ctx.conn.begin().await?;
+		let tx = begin_write(&ctx.conn).await?;
 
 		let active_model = user::ActiveModel {
 			username: Set(username),

@@ -21,6 +21,8 @@ pub enum CoreJobOutput {
 	AnalyzeMedia(AnalyzeMediaOutput),
 	NotificationDispatch(NotificationDispatchOutput),
 	AnnotationSync(crate::job::annotation_sync::AnnotationSyncOutput),
+	#[cfg(feature = "providers")]
+	ProviderSourceHealth(ProviderSourceHealthOutput),
 }
 
 #[cfg(not(feature = "graphql"))]
@@ -94,5 +96,39 @@ impl JobOutputExt for NotificationDispatchOutput {
 impl From<NotificationDispatchOutput> for CoreJobOutput {
 	fn from(output: NotificationDispatchOutput) -> Self {
 		Self::NotificationDispatch(output)
+	}
+}
+
+/// Summary of one provider source-health run.
+#[cfg(feature = "providers")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSourceHealthOutput {
+	/// Base URLs probed (one per host, not per source).
+	pub probed_urls: u32,
+	/// `source_health` rows written.
+	pub updated_sources: u32,
+	pub ok: u32,
+	pub degraded: u32,
+	/// Sources that reached `provider_health_dead_after` failures.
+	pub dead: u32,
+}
+
+#[cfg(feature = "providers")]
+impl JobOutputExt for ProviderSourceHealthOutput {
+	fn update(&mut self, updated: Self) {
+		self.probed_urls += updated.probed_urls;
+		self.updated_sources += updated.updated_sources;
+		self.ok += updated.ok;
+		self.degraded += updated.degraded;
+		self.dead += updated.dead;
+	}
+}
+
+#[cfg(all(feature = "providers", not(feature = "graphql")))]
+impl From<ProviderSourceHealthOutput> for CoreJobOutput {
+	fn from(output: ProviderSourceHealthOutput) -> Self {
+		Self::ProviderSourceHealth(output)
 	}
 }

@@ -6,6 +6,7 @@ use axum::{
 	response::IntoResponse,
 	Extension, Json,
 };
+use models::txn::begin_write;
 use models::{
 	domain::{
 		reading_progress::compute_page_based_percentage,
@@ -23,7 +24,7 @@ use models::{
 use rust_decimal::prelude::ToPrimitive;
 use sea_orm::{
 	prelude::*, sea_query::Expr, ActiveValue::Set, Condition, Order, QueryOrder,
-	QueryTrait, TransactionTrait,
+	QueryTrait,
 };
 use sea_orm::{PaginatorTrait, QuerySelect};
 use serde::{Deserialize, Serialize};
@@ -1359,7 +1360,7 @@ pub(crate) async fn update_book_progression(
 			.map_err(|error| APIError::InternalServerError(error.to_string()))?,
 	};
 
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 	upsert_reading_session(&txn, &user, &id, progression).await?;
 	let applied =
 		reading_state::apply(&txn, &user.id, Publication::from(&book), head_update)

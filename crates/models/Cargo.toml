@@ -27,3 +27,7 @@ filter-gen = { path = "../../crates/macros/filter-gen" }
 [dev-dependencies]
 tokio-test.workspace = true
 pretty_assertions.workspace = true
+# `txn::begin_write` is only observable with two live connections racing for the
+# SQLite write lock, which needs a file-backed database and a real runtime.
+tempfile.workspace = true
+tokio = { workspace = true, features = ["time"] }

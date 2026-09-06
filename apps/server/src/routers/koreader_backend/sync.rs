@@ -5,13 +5,14 @@ use axum::{
 	Extension,
 };
 use chrono::Utc;
+use models::txn::begin_write;
 use models::{
 	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
 	entity::{device, media, reading_session},
 	services::reading_progress::{upsert_reading_session, NormalizedProgression},
 	shared::enums::{DeviceKind, UserPermission},
 };
-use sea_orm::{prelude::*, sea_query::OnConflict, Set, TransactionTrait};
+use sea_orm::{prelude::*, sea_query::OnConflict, Set};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use stump_auth::AuthContext;
@@ -203,7 +204,7 @@ pub(crate) async fn put_progress(
 
 	let is_completed = percentage >= 1.0;
 
-	let tx = ctx.conn.as_ref().begin().await?;
+	let tx = begin_write(ctx.conn.as_ref()).await?;
 
 	// KOReader identifies itself by a device id + name on every push; register
 	// it as a device of the syncing user (name follows KOReader's setting).

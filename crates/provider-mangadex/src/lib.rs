@@ -11,12 +11,11 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use models::entity::provider_source;
 use serde::Deserialize;
 use stump_provider::{
 	FetchedPage, ProviderError, RateLimiter, RemoteChapter, RemotePage, RemoteSeries,
-	SearchFilter, SeriesStatus, Source, SourceCapabilities, SourceError, SourceFactory,
-	SourceHttp, SourceInfo, SourcePage, SourceResult,
+	SearchFilter, SeriesStatus, Source, SourceCapabilities, SourceFactory, SourceHttp,
+	SourceInfo, SourcePage, SourceResult,
 };
 
 pub const IMPLEMENTATION: &str = "mangadex";
@@ -340,6 +339,10 @@ struct MangaAttributes {
 	description: HashMap<String, String>,
 	#[serde(default)]
 	original_language: Option<String>,
+	/// Cross-registry ids MangaDex knows for the work (`al`, `mal`, `mu`,
+	/// ...); the values are ids or URLs depending on the registry.
+	#[serde(default)]
+	links: HashMap<String, String>,
 	#[serde(default)]
 	status: Option<String>,
 	#[serde(default)]
@@ -471,6 +474,20 @@ impl From<Manga> for RemoteSeries {
 				Some("erotica") | Some("pornographic")
 			),
 			original_language: attributes.original_language,
+			// Only bare ids from registries that name the same work across
+			// sources; MangaDex also stores per-site URLs under `links`.
+			external_ids: attributes
+				.links
+				.into_iter()
+				.filter_map(|(registry, value)| {
+					let value = value.trim().to_string();
+					let usable = stump_provider::identity::EXTERNAL_REGISTRIES
+						.contains(&registry.as_str())
+						&& !value.is_empty()
+						&& !value.contains('/');
+					usable.then_some((registry, value))
+				})
+				.collect(),
 			remote_id: manga.id,
 			title,
 		}
@@ -565,7 +582,11 @@ struct AtHomeChapter {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use stump_provider::mock_http::{CannedResponse, MockServer};
+	use models::entity::provider_source;
+	use stump_provider::{
+		mock_http::{CannedResponse, MockServer},
+		SourceError,
+	};
 
 	const MANGA_ID: &str = "32d76d19-8a05-4db0-9fc2-e0b0648fe9d0";
 	const CHAPTER_ID: &str = "0f1b5f6c-1c25-4a97-bd91-ca4a5b6f3e2d";
@@ -581,6 +602,12 @@ mod tests {
 				"originalLanguage": "ko",
 				"status": "completed",
 				"contentRating": "safe",
+				"links": {
+					"al": "105398",
+					"mal": " 121496 ",
+					"raw": "https://page.kakao.com/home?seriesId=47509605",
+					"engtl": "https://tapas.io/series/solo-leveling"
+				},
 				"year": 2018,
 				"tags": [
 					{"id": "t1", "type": "tag", "attributes": {"name": {"en": "Action"}, "group": "genre"}},
@@ -659,6 +686,19 @@ mod tests {
 		assert_eq!(series.status, SeriesStatus::Completed);
 		assert!(!series.nsfw);
 		assert_eq!(series.original_language.as_deref(), Some("ko"));
+		// Registry ids are kept (trimmed) for cross-source dedupe; per-site
+		// URLs under `links` are not ids and are dropped.
+		assert_eq!(
+			series.external_ids,
+			std::collections::BTreeMap::from([
+				("al".to_string(), "105398".to_string()),
+				("mal".to_string(), "121496".to_string()),
+			])
+		);
+		assert_eq!(
+			stump_provider::identity::external_key(&series.external_ids).as_deref(),
+			Some("al:105398")
+		);
 		assert_eq!(
 			series.thumbnail_url.as_deref(),
 			Some(&*format!("{COVER_URL}/{MANGA_ID}/cover.jpg.512.jpg"))

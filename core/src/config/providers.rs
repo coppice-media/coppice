@@ -30,4 +30,16 @@ pub struct ProvidersConfig {
 	#[default_value(DEFAULT_PROVIDER_GC_DAYS)]
 	#[env_key(PROVIDER_GC_DAYS_KEY)]
 	pub provider_gc_days: u64,
+
+	/// How often the source-health job probes every catalog source, in
+	/// seconds.
+	#[default_value(DEFAULT_PROVIDER_HEALTH_INTERVAL_SECS)]
+	#[env_key(PROVIDER_HEALTH_INTERVAL_SECS_KEY)]
+	pub provider_health_interval_secs: u64,
+
+	/// Consecutive failed health runs after which a source is marked dead
+	/// and hidden from the catalog. One reachable run resets the count.
+	#[default_value(DEFAULT_PROVIDER_HEALTH_DEAD_AFTER)]
+	#[env_key(PROVIDER_HEALTH_DEAD_AFTER_KEY)]
+	pub provider_health_dead_after: u32,
 }

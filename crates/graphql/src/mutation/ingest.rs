@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use async_graphql::{Context, Error, Object, Result, ID};
 use metadata_integrations::MergeStrategy;
+use models::txn::begin_write;
 use models::{
 	entity::{
 		ingest_drop_item, ingest_metadata_application, ingest_plugin_setting, media,
@@ -11,7 +12,6 @@ use models::{
 };
 use sea_orm::{
 	ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set,
-	TransactionTrait,
 };
 use serde_json::{json, Value};
 use stump_api_types::settings::SettingValues;
@@ -735,7 +735,7 @@ async fn persist_pending_fields(
 			object.remove(&name);
 		}
 	}
-	let transaction = core.conn.begin().await?;
+	let transaction = begin_write(&core.conn).await?;
 	let mut active: ingest_drop_item::ActiveModel = item.clone().into_active_model();
 	active.pending_fields = Set(Some(pending));
 	active.revision = Set(item.revision.saturating_add(1));

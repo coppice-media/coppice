@@ -9,22 +9,29 @@ use axum::{
 	routing::{get, post},
 	Extension, Json, Router,
 };
+use models::txn::begin_write;
 use models::{
 	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
-	entity::{media_analysis, reading_session, user::AuthUser},
+	entity::{bookmark, media_analysis, reading_session, user::AuthUser},
 	services::{reading_progress::upsert_reading_session, reading_state},
 };
-use sea_orm::{prelude::*, TransactionTrait};
+use sea_orm::{prelude::*, QueryOrder};
 use serde::Deserialize;
 use stump_auth::AuthContext;
 
 use crate::{
 	dto::{
-		ChapterDto, ChapterInfoDto, FileDimensionDto, KavitaDateTime, MarkChapterReadDto,
-		MarkReadDto, MarkVolumeReadDto, MarkVolumesReadDto, ProgressDto,
+		BookmarkDto, ChapterDto, ChapterInfoDto, FileDimensionDto, KavitaDateTime,
+		MarkChapterReadDto, MarkReadDto, MarkVolumeReadDto, MarkVolumesReadDto,
+		ProgressDto,
 	},
 	errors::{APIError, APIResult},
-	mapper::{map_chapter, map_chapter_info, page_file_name, MediaInput, SeriesInput},
+	filter::SeriesFilterV2Dto,
+	ids::{IdKind, KavitaIds, LOOKUP_CHUNK},
+	mapper::{
+		map_bookmark, map_chapter, map_chapter_info, page_file_name, MediaInput,
+		SeriesInput,
+	},
 	progress::{
 		finished_progression, last_progress_at, progression_for_page, KavitaProgress,
 	},
@@ -32,9 +39,9 @@ use crate::{
 
 use super::{
 	image::image_response,
-	query::{find_media, find_series_input},
+	query::{find_media, find_series_input, group_by_media},
 	route_ci,
-	series::clear_on_deck_removal,
+	series::{clear_on_deck_removal, list_series, UserParams},
 	KavitaBackend,
 };
 
@@ -75,6 +82,15 @@ struct SeriesQuery {
 	series_id: Option<i32>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BookmarkImageQuery {
+	#[serde(default)]
+	series_id: Option<i32>,
+	#[serde(default)]
+	page: Option<i32>,
+}
+
 pub(crate) fn routes<S>() -> Router<S>
 where
 	S: Clone + Send + Sync + 'static,
@@ -109,11 +125,38 @@ where
 		"/api/Reader/mark-multiple-read",
 		post(mark_multiple_read),
 	);
-	route_ci(
+	let router = route_ci(
 		router,
 		"/api/Reader/mark-multiple-unread",
 		post(mark_multiple_unread),
-	)
+	);
+	// `kavita-ref` answers `404` for `GET /api/Reader/all-bookmarks` — its
+	// attribute routing never matches the path for that verb — where axum
+	// would answer `405`; the fallback arm keeps the reference's status.
+	let router = route_ci(
+		router,
+		"/api/Reader/all-bookmarks",
+		post(all_bookmarks).get(unmatched_verb),
+	);
+	let router = route_ci(
+		router,
+		"/api/Reader/series-bookmarks",
+		get(series_bookmarks),
+	);
+	let router = route_ci(
+		router,
+		"/api/Reader/chapter-bookmarks",
+		get(chapter_bookmarks),
+	);
+	let router = route_ci(router, "/api/Reader/bookmark", post(add_bookmark));
+	let router = route_ci(router, "/api/Reader/unbookmark", post(remove_bookmark));
+	route_ci(router, "/api/Reader/bookmark-image", get(bookmark_image))
+}
+
+/// A verb `kavita-ref`'s attribute routing does not bind on an otherwise
+/// known path: `404`, not `405`.
+async fn unmatched_verb() -> StatusCode {
+	StatusCode::NOT_FOUND
 }
 
 async fn reader_image(
@@ -288,7 +331,7 @@ pub(crate) async fn save_progress_for(
 	{
 		return Ok(StatusCode::OK);
 	}
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	upsert_reading_session(
 		&txn,
 		user,
@@ -343,7 +386,7 @@ pub(crate) async fn mark_media_read_for(
 	user: &AuthUser,
 	media: &[&MediaInput],
 ) -> APIResult<()> {
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	for item in media {
 		upsert_reading_session(
 			&txn,
@@ -388,7 +431,7 @@ async fn mark_media_unread(
 	if ids.is_empty() {
 		return Ok(());
 	}
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	reading_session::Entity::delete_many()
 		.filter(reading_session::Column::UserId.eq(user.id.clone()))
 		.filter(reading_session::Column::MediaId.is_in(ids.clone()))
@@ -619,6 +662,269 @@ async fn mark_chapter_read(
 	)
 	.await?;
 	Ok(StatusCode::OK)
+}
+
+/// The user's bookmarks with the Kavita series and chapter they point into.
+pub(crate) struct LoadedBookmarks {
+	pub inputs: Vec<SeriesInput>,
+	/// `(bookmark, Kavita bookmark id, series index, media index)`.
+	pub rows: Vec<(bookmark::Model, i32, usize, usize)>,
+}
+
+/// Load the user's bookmarks, optionally restricted to `media_scope`, and
+/// resolve each one onto the Kavita series and chapter it belongs to.
+///
+/// Stump stores a bookmark against a media item, which is the Kavita volume
+/// and its single chapter at once, so `volumeId == chapterId`. Bookmarks
+/// whose media the user can no longer see are dropped rather than reported
+/// with a dangling series.
+pub(crate) async fn load_bookmarks(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	media_scope: Option<&[String]>,
+) -> APIResult<LoadedBookmarks> {
+	let mut rows = Vec::new();
+	match media_scope {
+		Some(media_ids) if media_ids.is_empty() => {
+			return Ok(LoadedBookmarks {
+				inputs: Vec::new(),
+				rows: Vec::new(),
+			})
+		},
+		Some(media_ids) => {
+			for chunk in media_ids.chunks(LOOKUP_CHUNK) {
+				rows.extend(
+					bookmark_query(user)
+						.filter(bookmark::Column::MediaId.is_in(chunk.to_vec()))
+						.all(ctx.conn())
+						.await?,
+				);
+			}
+			rows.sort_by(|left, right| {
+				left.created_at
+					.cmp(&right.created_at)
+					.then_with(|| left.id.cmp(&right.id))
+			});
+		},
+		None => rows.extend(bookmark_query(user).all(ctx.conn()).await?),
+	}
+	if rows.is_empty() {
+		return Ok(LoadedBookmarks {
+			inputs: Vec::new(),
+			rows: Vec::new(),
+		});
+	}
+	let ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+	let kavita_ids = KavitaIds::resolve_many(ctx.conn(), IdKind::Bookmark, &ids).await?;
+	let grouped = group_by_media(ctx, user, rows, |row| row.media_id.as_str()).await?;
+	Ok(LoadedBookmarks {
+		inputs: grouped.inputs,
+		rows: grouped
+			.rows
+			.into_iter()
+			.map(|(row, series_index, media_index)| {
+				let id = kavita_ids[&row.id];
+				(row, id, series_index, media_index)
+			})
+			.collect(),
+	})
+}
+
+fn bookmark_query(user: &AuthUser) -> Select<bookmark::Entity> {
+	bookmark::Entity::find_for_user(user)
+		.order_by_asc(bookmark::Column::CreatedAt)
+		.order_by_asc(bookmark::Column::Id)
+}
+
+fn bookmark_dtos(loaded: &LoadedBookmarks) -> Vec<BookmarkDto> {
+	loaded
+		.rows
+		.iter()
+		.map(|(row, id, series_index, media_index)| {
+			let input = &loaded.inputs[*series_index];
+			map_bookmark(*id, row, input, &input.media[*media_index], true)
+		})
+		.collect()
+}
+
+/// `POST /api/Reader/all-bookmarks`: every bookmark of the user. Kavita takes
+/// a `SeriesFilterV2Dto` body here and applies it to the bookmarks' series;
+/// Stump narrows to the series that filter selects, so a default (empty)
+/// filter returns everything, which is what Kamigura sends
+/// (`KavitaApi.kt:114`). This route is `POST` only, exactly as on
+/// `kavita-ref` — `GET` answers `404` there.
+async fn all_bookmarks(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(filter): Json<SeriesFilterV2Dto>,
+) -> APIResult<Json<Vec<BookmarkDto>>> {
+	let user = auth.user();
+	let loaded = load_bookmarks(ctx.as_ref(), &user, None).await?;
+	if filter.statements.is_empty() {
+		return Ok(Json(bookmark_dtos(&loaded)));
+	}
+	let (selected, _) = list_series(
+		ctx.as_ref(),
+		&user,
+		&filter,
+		UserParams::parse(""),
+		None,
+		Some(
+			&loaded
+				.inputs
+				.iter()
+				.map(SeriesInput::key)
+				.collect::<Vec<_>>(),
+		),
+	)
+	.await?;
+	let allowed = selected.iter().map(|dto| dto.id).collect::<Vec<_>>();
+	Ok(Json(
+		bookmark_dtos(&loaded)
+			.into_iter()
+			.filter(|dto| allowed.contains(&dto.series_id))
+			.collect(),
+	))
+}
+
+/// `GET /api/Reader/series-bookmarks?seriesId` (Inkita, `KavitaApi.kt:126`).
+/// An unknown series is an empty list.
+async fn series_bookmarks(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Query(query): Query<SeriesQuery>,
+) -> APIResult<Json<Vec<BookmarkDto>>> {
+	let user = auth.user();
+	let Some(input) =
+		find_series_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default())
+			.await?
+	else {
+		return Ok(Json(Vec::new()));
+	};
+	let media_ids = input
+		.media
+		.iter()
+		.map(|media| media.media.id.clone())
+		.collect::<Vec<_>>();
+	let loaded = load_bookmarks(ctx.as_ref(), &user, Some(&media_ids)).await?;
+	Ok(Json(bookmark_dtos(&loaded)))
+}
+
+/// `GET /api/Reader/chapter-bookmarks?chapterId`. An unknown chapter is an
+/// empty list.
+async fn chapter_bookmarks(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Query(query): Query<ChapterQuery>,
+) -> APIResult<Json<Vec<BookmarkDto>>> {
+	let user = auth.user();
+	let Some((input, index)) =
+		find_media(ctx.as_ref(), &user, query.chapter_id.unwrap_or_default()).await?
+	else {
+		return Ok(Json(Vec::new()));
+	};
+	let media_ids = vec![input.media[index].media.id.clone()];
+	let loaded = load_bookmarks(ctx.as_ref(), &user, Some(&media_ids)).await?;
+	Ok(Json(bookmark_dtos(&loaded)))
+}
+
+/// The media item a bookmark body names, by its `chapterId` (Kavita's
+/// `volumeId` is the same file, so `chapterId` alone identifies it).
+async fn bookmark_target(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	body: &BookmarkDto,
+) -> APIResult<String> {
+	let Some((input, index)) = find_media(ctx, user, body.chapter_id).await? else {
+		return Err(APIError::BadRequest("Chapter does not exist".to_owned()));
+	};
+	Ok(input.media[index].media.id.clone())
+}
+
+/// `POST /api/Reader/bookmark`: save a page. Kavita answers `200` with an
+/// empty body and is idempotent per `(chapter, page)`.
+async fn add_bookmark(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(body): Json<BookmarkDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	let media_id = bookmark_target(ctx.as_ref(), &user, &body).await?;
+	let existing = bookmark::Entity::find_for_user(&user)
+		.filter(bookmark::Column::MediaId.eq(media_id.clone()))
+		.filter(bookmark::Column::Page.eq(body.page))
+		.one(ctx.conn())
+		.await?;
+	if existing.is_none() {
+		bookmark::ActiveModel {
+			page: sea_orm::Set(Some(body.page)),
+			media_id: sea_orm::Set(media_id),
+			user_id: sea_orm::Set(user.id.clone()),
+			..Default::default()
+		}
+		.insert(ctx.conn())
+		.await?;
+	}
+	Ok(StatusCode::OK)
+}
+
+/// `POST /api/Reader/unbookmark`: drop a saved page. Kavita answers `200`
+/// whether or not the bookmark existed.
+async fn remove_bookmark(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(body): Json<BookmarkDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	let media_id = bookmark_target(ctx.as_ref(), &user, &body).await?;
+	bookmark::Entity::delete_many()
+		.filter(bookmark::Column::UserId.eq(user.id.clone()))
+		.filter(bookmark::Column::MediaId.eq(media_id))
+		.filter(bookmark::Column::Page.eq(body.page))
+		.exec(ctx.conn())
+		.await?;
+	Ok(StatusCode::OK)
+}
+
+/// `GET /api/Reader/bookmark-image?seriesId&apiKey&page`: the bookmarked page
+/// itself (Kamigura's bookmark grid, `BookmarksScreen.kt:194`).
+///
+/// Kavita keeps a copy of the bookmarked image on disk and serves that; Stump
+/// renders the page from the file it is bookmarked in, so the bookmark must
+/// still resolve to a readable chapter. `page` is Kavita's zero-based page
+/// number, the same space `Reader/image` uses.
+async fn bookmark_image(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Query(query): Query<BookmarkImageQuery>,
+) -> APIResult<Response> {
+	let user = auth.user();
+	let page = query.page.unwrap_or_default();
+	let Some(input) =
+		find_series_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default())
+			.await?
+	else {
+		return Err(APIError::BadRequest("Series does not exist".to_owned()));
+	};
+	let media_ids = input
+		.media
+		.iter()
+		.map(|media| media.media.id.clone())
+		.collect::<Vec<_>>();
+	let loaded = load_bookmarks(ctx.as_ref(), &user, Some(&media_ids)).await?;
+	let Some((_, _, _, media_index)) = loaded
+		.rows
+		.iter()
+		.find(|(row, _, _, _)| row.page == Some(page))
+	else {
+		return Err(APIError::NotFound("Bookmark does not exist".to_owned()));
+	};
+	let media = &input.media[*media_index];
+	let image = ctx.media_page(&user, &media.media.id, page + 1).await?;
+	Ok(image_response(
+		image,
+		&page_file_name(&media.media.name, page),
+	))
 }
 
 #[cfg(test)]
@@ -972,5 +1278,196 @@ mod book_progress {
 			.await
 			.unwrap()
 			.is_empty());
+	}
+}
+
+/// Bookmarks: the read projections Kamigura and Inkita list, and the write
+/// pair that fills them.
+#[cfg(test)]
+mod bookmarks {
+	use super::*;
+	use crate::test_support::{
+		auth_user, db, library_of_type, request, series_with_files, TestBackend,
+	};
+	use ::tests::fake_data;
+	use models::shared::enums::LibraryType as StumpLibraryType;
+
+	#[tokio::test]
+	async fn bookmarks_round_trip_through_stumps_bookmark_table() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("marker").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let library = library_of_type(&conn, StumpLibraryType::Comic).await;
+		let (series_row, files) = series_with_files(
+			&conn,
+			&library.id,
+			"science comics",
+			&[("v01", "cbz", 36), ("v02", "cbz", 20)],
+		)
+		.await;
+		let backend = std::sync::Arc::new(TestBackend::new(conn));
+		let series_id =
+			KavitaIds::resolve(backend.conn(), IdKind::Series, &series_row.id)
+				.await
+				.unwrap();
+		let first = KavitaIds::resolve(backend.conn(), IdKind::Media, &files[0].id)
+			.await
+			.unwrap();
+		let second = KavitaIds::resolve(backend.conn(), IdKind::Media, &files[1].id)
+			.await
+			.unwrap();
+
+		// Nothing bookmarked yet: every read is an empty list.
+		for uri in [
+			"/api/Reader/series-bookmarks?seriesId=",
+			"/api/Reader/chapter-bookmarks?chapterId=",
+		] {
+			let id = if uri.contains("series") {
+				series_id
+			} else {
+				first
+			};
+			let (status, body) =
+				request(backend.clone(), &user, "GET", &format!("{uri}{id}"), None).await;
+			assert_eq!(status, StatusCode::OK);
+			assert!(body.as_array().unwrap().is_empty(), "{uri}");
+		}
+
+		for (chapter, page) in [(first, 3), (first, 4), (second, 1)] {
+			let (status, _) = request(
+				backend.clone(),
+				&user,
+				"POST",
+				"/api/Reader/bookmark",
+				Some(serde_json::json!({
+					"chapterId": chapter,
+					"volumeId": chapter,
+					"seriesId": series_id,
+					"page": page,
+				})),
+			)
+			.await;
+			assert_eq!(status, StatusCode::OK);
+		}
+		// Bookmarking the same page twice is idempotent, like Kavita.
+		request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/reader/bookmark",
+			Some(serde_json::json!({
+				"chapterId": first, "volumeId": first, "seriesId": series_id, "page": 3
+			})),
+		)
+		.await;
+
+		// `all-bookmarks` is POST-only with a filter body, as Kamigura calls it.
+		let (status, body) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Reader/all-bookmarks",
+			Some(serde_json::json!({})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		let all = body.as_array().unwrap();
+		assert_eq!(all.len(), 3);
+		let dto = &all[0];
+		assert_eq!(dto["page"], 3);
+		assert_eq!(dto["chapterId"], first);
+		assert_eq!(dto["volumeId"], dto["chapterId"]);
+		assert_eq!(dto["seriesId"], series_id);
+		assert_eq!(dto["imageOffset"], 0);
+		assert!(dto["xPath"].is_null());
+		assert!(dto["chapterTitle"].is_null());
+		assert_eq!(dto["series"]["id"], series_id);
+		assert_eq!(dto["series"]["name"], "science comics");
+		assert!(dto["id"].as_i64().unwrap() > 0);
+		// `GET` is 404 on `kavita-ref`; the profile matches.
+		let (status, _) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			"/api/Reader/all-bookmarks",
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::NOT_FOUND);
+
+		// Per-series and per-chapter narrow the same projection.
+		let (_, body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Reader/series-bookmarks?seriesId={series_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(body.as_array().unwrap().len(), 3);
+		let (_, body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Reader/chapter-bookmarks?chapterId={second}"),
+			None,
+		)
+		.await;
+		let chapter_only = body.as_array().unwrap();
+		assert_eq!(chapter_only.len(), 1);
+		assert_eq!(chapter_only[0]["chapterId"], second);
+
+		// Unbookmarking drops exactly that page.
+		let (status, _) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Reader/unbookmark",
+			Some(serde_json::json!({
+				"chapterId": first, "volumeId": first, "seriesId": series_id, "page": 3
+			})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		let (_, body) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Reader/all-bookmarks",
+			Some(serde_json::json!({})),
+		)
+		.await;
+		let pages = body
+			.as_array()
+			.unwrap()
+			.iter()
+			.map(|dto| dto["page"].as_i64().unwrap())
+			.collect::<Vec<_>>();
+		assert_eq!(pages, vec![4, 1]);
+
+		// Another user's bookmarks are invisible.
+		let other = fake_data::User::new("stranger")
+			.insert(backend.conn())
+			.await;
+		let (_, body) = request(
+			backend.clone(),
+			&auth_user(&other),
+			"POST",
+			"/api/Reader/all-bookmarks",
+			Some(serde_json::json!({})),
+		)
+		.await;
+		assert!(body.as_array().unwrap().is_empty());
+
+		// A body naming no chapter is a bad request, like Kavita's.
+		let (status, _) = request(
+			backend,
+			&user,
+			"POST",
+			"/api/Reader/bookmark",
+			Some(serde_json::json!({"chapterId": 999999, "page": 1})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::BAD_REQUEST);
 	}
 }

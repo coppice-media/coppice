@@ -6,8 +6,8 @@ use axum::body::Body;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use models::entity::{
-	library, library_config, media, reading_list, reading_list_item, series,
-	user::AuthUser,
+	collection, collection_series, library, library_config, media, reading_list,
+	reading_list_item, series, user::AuthUser,
 };
 use models::shared::enums::LibraryType;
 use models::shared::image::ImageRef;
@@ -33,15 +33,26 @@ pub(crate) async fn db() -> sea_orm::DatabaseConnection {
 			.unwrap();
 	}
 
-	// `kavita_on_deck_removals` and the two favourite tables (the want-to-read
-	// shelf) are not part of the shared entity fixture.
+	// Tables the shared entity fixture does not create: the on-deck removals,
+	// the two favourite tables (the want-to-read shelf), and the
+	// bookmark/annotation/collection rows the Kavita bookmark, annotation and
+	// collection routes project.
 	let schema = Schema::new(DbBackend::Sqlite);
-	for statement in [
+	for mut statement in [
 		schema.create_table_from_entity(models::entity::kavita_on_deck_removal::Entity),
 		schema.create_table_from_entity(models::entity::favorite_series::Entity),
 		schema.create_table_from_entity(models::entity::favorite_media::Entity),
+		schema.create_table_from_entity(models::entity::bookmark::Entity),
+		schema.create_table_from_entity(models::entity::media_annotation::Entity),
+		schema.create_table_from_entity(models::entity::collection::Entity),
+		schema.create_table_from_entity(models::entity::collection_series::Entity),
+		schema.create_table_from_entity(models::entity::tag::Entity),
+		schema.create_table_from_entity(models::entity::series_tag::Entity),
 	] {
-		conn.execute(conn.get_database_backend().build(&statement))
+		// Some of these already ship in the shared entity fixture; creating
+		// the rest must not depend on which.
+		let statement = statement.if_not_exists();
+		conn.execute(conn.get_database_backend().build(statement))
 			.await
 			.unwrap();
 	}
@@ -117,12 +128,34 @@ pub(crate) async fn series_with_files(
 	(series_row, media_rows)
 }
 
+/// A job the routes asked the server to enqueue. The server owns the queue;
+/// the stub records the request so a route test can assert which Stump job a
+/// Kavita client's call maps onto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EnqueuedJob {
+	LibraryScan {
+		library_id: String,
+		path: String,
+		force: bool,
+	},
+	SeriesScan {
+		series_id: String,
+		path: String,
+		force: bool,
+	},
+	SeriesAnalysis {
+		series_id: String,
+	},
+}
+
 /// A [`KavitaBackend`] answering every persistence need from an in-memory
 /// database; the file-backed methods are never reached by the route tests.
 pub(crate) struct TestBackend {
 	pub conn: sea_orm::DatabaseConnection,
 	/// The EPUB structure the `Book` routes see; `None` means "not a book".
 	pub book_structure: Option<KavitaBookStructure>,
+	/// Jobs the routes enqueued, in order.
+	pub jobs: std::sync::Mutex<Vec<EnqueuedJob>>,
 }
 
 impl TestBackend {
@@ -130,8 +163,56 @@ impl TestBackend {
 		Self {
 			conn,
 			book_structure: None,
+			jobs: std::sync::Mutex::new(Vec::new()),
 		}
 	}
+
+	/// The jobs enqueued so far, in order.
+	pub fn enqueued(&self) -> Vec<EnqueuedJob> {
+		self.jobs.lock().expect("job log").clone()
+	}
+}
+
+/// Drive a request through the authenticated Kavita router with `user`
+/// already resolved, the way the server's Kavita middleware leaves it. Tests
+/// that go through here exercise route registration, casing, query parsing
+/// and the serialized DTOs, not just the handler body.
+pub(crate) async fn request(
+	backend: std::sync::Arc<TestBackend>,
+	user: &AuthUser,
+	method: &str,
+	uri: &str,
+	body: Option<serde_json::Value>,
+) -> (axum::http::StatusCode, serde_json::Value) {
+	use tower::ServiceExt;
+	let router = crate::routes::router::<()>(backend).layer(axum::Extension(
+		stump_auth::AuthContext {
+			user: user.clone(),
+			api_key: None,
+		},
+	));
+	let builder = axum::http::Request::builder().method(method).uri(uri);
+	let request = match body {
+		Some(json) => {
+			let builder =
+				builder.header(axum::http::header::CONTENT_TYPE, "application/json");
+			builder
+				.body(Body::from(serde_json::to_vec(&json).expect("json body")))
+				.expect("request")
+		},
+		None => builder.body(Body::empty()).expect("request"),
+	};
+	let response = router.oneshot(request).await.expect("router response");
+	let status = response.status();
+	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+		.await
+		.expect("response body");
+	let json = if bytes.is_empty() {
+		serde_json::Value::Null
+	} else {
+		serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+	};
+	(status, json)
 }
 
 #[async_trait::async_trait]
@@ -294,6 +375,96 @@ impl KavitaBackend for TestBackend {
 			.insert(&self.conn)
 			.await?;
 		}
+		Ok(())
+	}
+
+	async fn create_collection(
+		&self,
+		user: &AuthUser,
+		name: String,
+		series_ids: Vec<String>,
+	) -> APIResult<collection::Model> {
+		let model = collection::ActiveModel {
+			id: Set(uuid::Uuid::new_v4().to_string()),
+			name: Set(name),
+			description: Set(None),
+			updated_at: Set(chrono::Utc::now().into()),
+			ordered: Set(false),
+			kobo_shelf: Set(true),
+			source_device: Set(None),
+			creating_user_id: Set(user.id.clone()),
+		}
+		.insert(&self.conn)
+		.await?;
+		self.set_collection_series(user, &model.id, series_ids)
+			.await?;
+		Ok(model)
+	}
+
+	async fn set_collection_series(
+		&self,
+		_user: &AuthUser,
+		id: &str,
+		series_ids: Vec<String>,
+	) -> APIResult<()> {
+		collection_series::Entity::delete_many()
+			.filter(collection_series::Column::CollectionId.eq(id.to_owned()))
+			.exec(&self.conn)
+			.await?;
+		for (index, series_id) in series_ids.into_iter().enumerate() {
+			collection_series::ActiveModel {
+				collection_id: Set(id.to_owned()),
+				series_id: Set(series_id),
+				display_order: Set(i32::try_from(index).unwrap_or(i32::MAX)),
+				..Default::default()
+			}
+			.insert(&self.conn)
+			.await?;
+		}
+		Ok(())
+	}
+
+	/// The job queue lives in the server; the stub records what was enqueued
+	/// so the route tests can assert the job a client's request maps onto.
+	async fn enqueue_library_scan(
+		&self,
+		library_id: String,
+		path: String,
+		force: bool,
+	) -> APIResult<()> {
+		self.jobs
+			.lock()
+			.expect("job log")
+			.push(EnqueuedJob::LibraryScan {
+				library_id,
+				path,
+				force,
+			});
+		Ok(())
+	}
+
+	async fn enqueue_series_scan(
+		&self,
+		series_id: String,
+		path: String,
+		force: bool,
+	) -> APIResult<()> {
+		self.jobs
+			.lock()
+			.expect("job log")
+			.push(EnqueuedJob::SeriesScan {
+				series_id,
+				path,
+				force,
+			});
+		Ok(())
+	}
+
+	async fn enqueue_series_analysis(&self, series_id: String) -> APIResult<()> {
+		self.jobs
+			.lock()
+			.expect("job log")
+			.push(EnqueuedJob::SeriesAnalysis { series_id });
 		Ok(())
 	}
 }

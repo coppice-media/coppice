@@ -37,7 +37,12 @@ for operators but cannot be enabled.
 | Scanner skips virtual libraries and never marks `provider://` series missing | A virtual library has no filesystem root; a scheduled scan must not flag materialised rows | `core/src/filesystem/scanner/library_scan_job.rs::init`; `crates/scanner/src/walk.rs` missing-series filter |
 | GC: provider-backed series with no reading head on any book and `created_at` older than `provider_gc_days` (default 30) are deleted daily (`StumpJob::ProviderGc`) | Materialised rows are a cache of the source; unread ones are reclaimable | `src/gc.rs`; `core/src/providers.rs::spawn_gc_scheduler`; `core/src/job/services.rs::run_provider_gc` |
 | Page cache bounded by `provider_cache_max_bytes` (default 2 GiB), manifests re-resolved after 10 min | MangaDex@Home URLs expire after ~15 min; disk use must be capped | `src/cache.rs`; `src/host.rs::MANIFEST_TTL` |
-| Health: probe timeout 10 s, `dead` after 3 consecutive failures, 8 concurrent probes | Operators see which catalog sources are reachable before enabling one | `src/health.rs:19-24` |
+| Health: probe timeout 10 s, 8 concurrent probes, `DEAD` after `provider_health_dead_after` (default 3) consecutive failures, one reachable run resets the count | Operators see which catalog sources are reachable before enabling one, and a single blip must not bury a source | `src/health.rs:19-24`, `HealthProbe::next_state`; `core/src/config/providers.rs::provider_health_dead_after` |
+| Health runs as `StumpJob::ProviderSourceHealth`, one task per base URL, every `provider_health_interval_secs` (default 6 h) or on demand via `runProviderHealth`; the job builds its own catalog reader instead of borrowing the host | Sources sharing a host are probed once per run and enabled instances first; jobs only ever receive the database and the config, and the catalog index is a file both sides read | `src/health.rs::{plan,probe_target}`; `core/src/job/provider_health.rs`; `core/src/providers.rs::spawn_health_scheduler` |
+| `DEAD` sources are hidden from `providerCatalog`/`providerSourceHealth` unless `includeDead: true`, and every entry carries its health row as a badge | An operator should not be offered a source that has been unreachable for three runs, but must still be able to inspect it | `crates/graphql/src/query/provider.rs::provider_catalog`; `crates/graphql/src/object/provider.rs::ProviderSourceHealth` |
+| Dedupe is recorded, never enforced: materialisation writes `provider_series_identity` (normalised title + strongest external id) and links a match from another source in `provider_series_links` | Sources overlap heavily; a false positive must be a row an operator can inspect rather than silently merged (and lost) reading progress | `src/identity.rs::record_identity`; migration `m20260924_000000_add_provider_series_links`; test `same_title_from_another_source_is_linked_to_the_first` |
+| `mergeProviderSeries(keep, drop)` replays the dropped heads onto the kept chapters through `reading_state::apply` (chapter number, then normalised title) and refuses non-provider series | The conflict rule and provenance must stay the single writer of reading state; a locally scanned series is never deleted by a provider merge | `src/identity.rs::merge_series`; tests `merge_repoints_heads_and_deletes_the_dropped_series`, `merge_refuses_local_series_and_self_merges` |
+| GC and identity write transactions open with `models::txn::begin_write` (SQLite `BEGIN IMMEDIATE`) | The GC sweep and `merge_series` read the rows they are about to delete or repoint, and a deferred `BEGIN` cannot promote that read snapshot to the write lock while a scan or materialisation holds it | `src/gc.rs`, `src/identity.rs`; `crates/models/src/txn.rs` |
 
 Routes that answer from a virtual library (Mode B):
 
@@ -63,13 +68,14 @@ Routes that answer from a virtual library (Mode B):
 | `src/gc.rs` | `gc_materialised_series` + `GcReport` |
 | `src/virtual_path.rs` | `provider://` URI encode/parse, deterministic ids |
 | `src/cache.rs`, `src/http.rs`, `src/rate_limit.rs` | bounded disk cache, shared HTTP client, per-source limiter |
-| `src/catalog.rs`, `src/health.rs` | Keiyoushi index snapshot/refresh, health probes → `source_health` rows |
+| `src/catalog.rs`, `src/health.rs` | Keiyoushi index snapshot/refresh, health plan/probe → `source_health` rows |
+| `src/identity.rs` | cross-source dedupe keys, duplicate links, `merge_series` |
 | `src/mock.rs`, `src/mock_http.rs` | `MockSource` for tests (feature `mock`) |
 
 ## How to verify
 
 ```text
-cargo test -p stump_provider                       # 38 unit tests: browse TTL/ids, materialise, cache, GC, catalog, health
+cargo test -p stump_provider                       # 44 unit tests: browse TTL/ids, materialise, cache, GC, catalog, health, dedupe/merge
 cargo test -p stump_provider_mangadex              # MangaDex mapping + rate-limit tests (no network)
 cargo check -p stump_server --no-default-features --features minimal   # feature-off build
 STUMP_ENABLE_PROVIDERS=true ./scripts/dev-fixture-server.sh            # live: enableProviderSource → createVirtualLibrary → Komga series/list

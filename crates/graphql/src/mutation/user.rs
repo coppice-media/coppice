@@ -11,6 +11,7 @@ use crate::{
 };
 use async_graphql::{Context, Object, Result, Upload, ID};
 use chrono::Utc;
+use models::txn::begin_write;
 use models::{
 	entity::{
 		age_restriction, session,
@@ -23,7 +24,7 @@ use models::{
 };
 use sea_orm::{
 	prelude::*, ActiveValue::NotSet, ColumnTrait, DatabaseTransaction, IntoActiveModel,
-	Set, TransactionTrait, TryIntoModel,
+	Set, TryIntoModel,
 };
 use std::{io::Read, path::Path};
 use stump_core::config::StumpConfig;
@@ -220,7 +221,7 @@ impl UserMutation {
 			..Default::default()
 		};
 
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 		let user_model = user
 			.save(&txn)
 			.await
@@ -619,7 +620,7 @@ async fn update_user(
 		update_user.hashed_password = Set(hashed_password);
 	}
 
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 
 	let is_updating_server_owner = by_user.is_server_owner && by_user.id == for_user_id;
 	if !is_updating_server_owner {

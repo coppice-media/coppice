@@ -38,7 +38,12 @@ pub enum APIError {
 	#[error("{0}")]
 	Unknown(String),
 	#[error("{0}")]
-	DbError(#[from] DbErr),
+	DbError(DbErr),
+	/// SQLite write-lock contention. Transient by construction, so it is worth
+	/// telling the client to come back rather than reporting a 500 it can only
+	/// treat as a hard failure.
+	#[error("The database is busy, please retry")]
+	DatabaseBusy,
 }
 
 impl APIError {
@@ -56,8 +61,15 @@ impl APIError {
 			Self::BadGateway(_) => StatusCode::BAD_GATEWAY,
 			Self::DbError(DbErr::RecordNotFound(_)) => StatusCode::NOT_FOUND,
 			Self::DbError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+			Self::DatabaseBusy => StatusCode::SERVICE_UNAVAILABLE,
 			Self::NotSupported | Self::Unknown(_) => StatusCode::INTERNAL_SERVER_ERROR,
 		}
+	}
+
+	/// How long a client should wait before retrying, for the errors that are
+	/// transient by construction.
+	pub fn retry_after_seconds(&self) -> Option<u32> {
+		matches!(self, Self::DatabaseBusy).then_some(1)
 	}
 
 	pub fn forbidden_discreet() -> Self {
@@ -83,14 +95,39 @@ impl From<serde_json::Error> for APIError {
 	}
 }
 
+impl From<DbErr> for APIError {
+	/// Routes SQLite write-lock contention to [`APIError::DatabaseBusy`] so
+	/// every `?` on a database error in a Komga route answers `503` +
+	/// `Retry-After` instead of a `500` the client cannot act on. Write
+	/// transactions take `BEGIN IMMEDIATE` (`models::txn::begin_write`), so
+	/// this is the belt to that braces.
+	fn from(error: DbErr) -> Self {
+		if models::txn::is_write_lock_contention(&error) {
+			Self::DatabaseBusy
+		} else {
+			Self::DbError(error)
+		}
+	}
+}
+
 impl IntoResponse for APIError {
 	fn into_response(self) -> Response {
 		let status = self.status_code();
+		let retry_after = self.retry_after_seconds();
 		let body = Json(serde_json::json!({
 			"status": status.as_u16(),
 			"message": self.to_string(),
 		}));
 		let mut response = (status, body).into_response();
+		if let Some(seconds) = retry_after {
+			response.headers_mut().insert(
+				"Retry-After",
+				seconds
+					.to_string()
+					.parse()
+					.expect("an integer is a valid header value"),
+			);
+		}
 		if status == StatusCode::UNAUTHORIZED {
 			response.headers_mut().insert(
 				"Set-Cookie",

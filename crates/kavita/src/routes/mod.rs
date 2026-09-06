@@ -17,7 +17,9 @@ use stump_auth::AuthContext;
 use crate::errors::APIResult;
 
 mod account;
+mod annotation;
 mod book;
+mod collection;
 mod download;
 mod filter;
 mod image;
@@ -27,9 +29,11 @@ mod query;
 mod reader;
 mod reading_list;
 mod reading_profile;
+mod search;
 mod series;
 mod series_filter;
 mod server;
+mod stats;
 mod tachiyomi;
 mod users;
 mod want_to_read;
@@ -221,6 +225,48 @@ pub trait KavitaBackend: Send + Sync {
 		id: &str,
 		book_ids: Vec<String>,
 	) -> APIResult<()>;
+
+	/// Create a collection owned by `user` with the given members
+	/// (`POST /api/Collection/update-for-series` with `collectionTagId: 0`).
+	async fn create_collection(
+		&self,
+		user: &AuthUser,
+		name: String,
+		series_ids: Vec<String>,
+	) -> APIResult<models::entity::collection::Model>;
+
+	/// Replace a collection's membership; the Kavita `update-for-series` and
+	/// `update-series` routes add to and remove from what they read back
+	/// first.
+	async fn set_collection_series(
+		&self,
+		user: &AuthUser,
+		id: &str,
+		series_ids: Vec<String>,
+	) -> APIResult<()>;
+
+	/// Enqueue a library scan (`POST /api/Library/scan?libraryId&force`); the
+	/// same job Komga's `/api/v1/libraries/{id}/scan` enqueues. `force`
+	/// rebuilds every book instead of only the changed ones.
+	async fn enqueue_library_scan(
+		&self,
+		library_id: String,
+		path: String,
+		force: bool,
+	) -> APIResult<()>;
+
+	/// Enqueue a scan of one series' folder (`POST /api/Series/scan` and
+	/// `POST /api/Series/refresh-metadata`).
+	async fn enqueue_series_scan(
+		&self,
+		series_id: String,
+		path: String,
+		force: bool,
+	) -> APIResult<()>;
+
+	/// Enqueue media analysis for one series (`POST /api/Series/analyze`);
+	/// the same job Komga's `/api/v1/series/{id}/analyze` enqueues.
+	async fn enqueue_series_analysis(&self, series_id: String) -> APIResult<()>;
 }
 
 /// Kavita's ASP.NET routing is case-insensitive and the inventoried clients
@@ -289,7 +335,11 @@ where
 		.merge(tachiyomi::routes::<S>())
 		.merge(metadata::routes::<S>())
 		.merge(filter::routes::<S>())
-		.merge(users::routes::<S>());
+		.merge(users::routes::<S>())
+		.merge(search::routes::<S>())
+		.merge(collection::routes::<S>())
+		.merge(stats::routes::<S>())
+		.merge(annotation::routes::<S>());
 	// Unimplemented Kavita controllers answer 404 here rather than falling
 	// through to the web UI; each miss is logged so the next wave sees it.
 	// Controllers that already own a `/{param}` route at this depth (Series,

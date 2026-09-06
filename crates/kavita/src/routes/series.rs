@@ -20,8 +20,8 @@ use stump_auth::AuthContext;
 
 use crate::{
 	dto::{
-		ChapterDto, GroupedSeriesDto, PaginationHeader, SeriesDetailDto, SeriesDto,
-		SeriesMetadataDto, TagDto, VolumeDto,
+		ChapterDto, GroupedSeriesDto, PaginationHeader, RefreshSeriesDto,
+		SeriesDetailDto, SeriesDto, SeriesMetadataDto, TagDto, VolumeDto,
 	},
 	errors::{APIError, APIResult},
 	filter::SeriesFilterV2Dto,
@@ -148,6 +148,13 @@ where
 	let router = route_ci(router, "/api/Series/metadata", get(series_metadata));
 	let router = route_ci(router, "/api/Series/series-detail", get(series_detail));
 	let router = route_ci(router, "/api/Series/chapter", get(chapter_by_query));
+	let router = route_ci(router, "/api/Series/scan", post(series_scan));
+	let router = route_ci(router, "/api/Series/analyze", post(series_analyze));
+	let router = route_ci(
+		router,
+		"/api/Series/refresh-metadata",
+		post(series_refresh_metadata),
+	);
 	let router = route_ci(router, "/api/Series/{seriesId}", get(series_by_id));
 	let router = route_ci(router, "/api/Volume", get(volume_by_query));
 	let router = route_ci(router, "/api/Volume/{volumeId}", get(volume_by_path));
@@ -655,6 +662,69 @@ pub(crate) async fn list_recently_updated(
 		});
 	}
 	Ok(groups)
+}
+
+/// The Stump series a `RefreshSeriesDto` names, and its folder.
+///
+/// Kavita answers `200` for a series that does not exist (`ScanSeries` logs
+/// and returns), so an unresolvable body is a no-op here too rather than an
+/// error — that is what Kamigura's pull-to-refresh relies on.
+async fn refresh_target(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	body: &RefreshSeriesDto,
+) -> APIResult<Option<(String, String)>> {
+	let Some(input) = find_series_input(ctx, user, body.series_id).await? else {
+		return Ok(None);
+	};
+	// A Kavita series in a Book library is one file; rescanning it means
+	// rescanning the Stump series that holds it.
+	Ok(Some((input.series.id.clone(), input.series.path.clone())))
+}
+
+/// `SeriesController.ScanSeries`: rescan one series' folder. Stump's
+/// series-scan job is the same job the native API and Komga's library scan
+/// enqueue, scoped to this series.
+async fn series_scan(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(body): Json<RefreshSeriesDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	if let Some((id, path)) = refresh_target(ctx.as_ref(), &user, &body).await? {
+		ctx.enqueue_series_scan(id, path, body.force_update).await?;
+	}
+	Ok(StatusCode::OK)
+}
+
+/// `SeriesController.Analyze`: re-read every file of the series. Stump's
+/// media-analysis job scoped to the series, the same job Komga's
+/// `/api/v1/series/{id}/analyze` enqueues.
+async fn series_analyze(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(body): Json<RefreshSeriesDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	if let Some((id, _)) = refresh_target(ctx.as_ref(), &user, &body).await? {
+		ctx.enqueue_series_analysis(id).await?;
+	}
+	Ok(StatusCode::OK)
+}
+
+/// `SeriesController.RefreshSeriesMetadata`: re-read the series' metadata
+/// from disk. Stump reads metadata during a scan, so this is a forced
+/// series scan — the same mapping Komga's `refresh-metadata` uses.
+async fn series_refresh_metadata(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(body): Json<RefreshSeriesDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	if let Some((id, path)) = refresh_target(ctx.as_ref(), &user, &body).await? {
+		ctx.enqueue_series_scan(id, path, true).await?;
+	}
+	Ok(StatusCode::OK)
 }
 
 async fn series_by_id(
@@ -1409,5 +1479,105 @@ mod books {
 		.await
 		.unwrap();
 		assert_eq!(recent[0].name, "Beta");
+	}
+}
+
+/// The scan/analyze/refresh routes Kamigura triggers map onto Stump jobs.
+#[cfg(test)]
+mod maintenance {
+	use super::*;
+	use crate::test_support::{
+		auth_user, db, library_of_type, request, series_with_files, EnqueuedJob,
+		TestBackend,
+	};
+	use ::tests::fake_data;
+	use models::shared::enums::LibraryType as StumpLibraryType;
+
+	#[tokio::test]
+	async fn series_scan_analyze_and_refresh_enqueue_the_scoped_stump_jobs() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("maint").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let library = library_of_type(&conn, StumpLibraryType::Comic).await;
+		let (series_row, _) =
+			series_with_files(&conn, &library.id, "Zeta", &[("v01", "cbz", 10)]).await;
+		let backend = std::sync::Arc::new(TestBackend::new(conn));
+		let library_id = KavitaIds::resolve(backend.conn(), IdKind::Library, &library.id)
+			.await
+			.unwrap();
+		let series_id =
+			KavitaIds::resolve(backend.conn(), IdKind::Series, &series_row.id)
+				.await
+				.unwrap();
+		let body = serde_json::json!({
+			"libraryId": library_id,
+			"seriesId": series_id,
+			"forceUpdate": false,
+			"forceColorscape": false,
+		});
+
+		for route in ["scan", "analyze", "refresh-metadata"] {
+			let (status, _) = request(
+				backend.clone(),
+				&user,
+				"POST",
+				&format!("/api/Series/{route}"),
+				Some(body.clone()),
+			)
+			.await;
+			assert_eq!(status, StatusCode::OK, "{route}");
+		}
+		assert_eq!(
+			backend.enqueued(),
+			vec![
+				EnqueuedJob::SeriesScan {
+					series_id: series_row.id.clone(),
+					path: series_row.path.clone(),
+					force: false,
+				},
+				EnqueuedJob::SeriesAnalysis {
+					series_id: series_row.id.clone(),
+				},
+				// A metadata refresh re-reads the files, so it always forces.
+				EnqueuedJob::SeriesScan {
+					series_id: series_row.id.clone(),
+					path: series_row.path.clone(),
+					force: true,
+				},
+			]
+		);
+
+		// `forceUpdate` forces the scan.
+		request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/series/scan",
+			Some(serde_json::json!({
+				"libraryId": library_id, "seriesId": series_id, "forceUpdate": true
+			})),
+		)
+		.await;
+		assert_eq!(
+			backend.enqueued().last(),
+			Some(&EnqueuedJob::SeriesScan {
+				series_id: series_row.id.clone(),
+				path: series_row.path.clone(),
+				force: true,
+			})
+		);
+
+		// An unknown series is `200` with nothing enqueued, like Kavita.
+		let before = backend.enqueued().len();
+		let (status, _) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Series/scan",
+			Some(serde_json::json!({"libraryId": library_id, "seriesId": 999999})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(backend.enqueued().len(), before);
 	}
 }

@@ -85,6 +85,11 @@ pub struct RemoteSeries {
 	pub status: SeriesStatus,
 	pub nsfw: bool,
 	pub original_language: Option<String>,
+	/// Cross-source ids the source reports for this work, keyed by registry
+	/// (`al`, `mal`, `mu`, ...). Used to dedupe the same work across sources;
+	/// see [`crate::identity`].
+	#[serde(default)]
+	pub external_ids: std::collections::BTreeMap<String, String>,
 }
 
 /// A chapter as described by a remote source.

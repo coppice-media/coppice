@@ -34,6 +34,7 @@ rows, QR flow) lives in `apps/server/src/routers/api/v2/device_pairing.rs` and
 | Revocation deletes credential rows and keeps the device row | History stays visible; `touch` can no longer resolve the credential | `src/service.rs::revoke`, `discard_credentials`; test `revoke_deletes_credentials_and_blocks_rotation` |
 | Liseur device tokens are bound to the device id (`liseur_sync_tokens.device_id`) | The liseur ops push only knows the token's device id and must reach the registry device | `src/credential.rs::liseur::mint`; `apps/server/src/routers/liseur_sync/storage.rs::record_device_sync` |
 | Default names are `"<Username>'s <Kind>"`, numbered on collision; names are unique per user | Rename also renames the credential row so API key lists stay readable | `src/service.rs::create_device`, `rename`; test `default_names_are_numbered_on_collision` |
+| Every `DeviceService` write transaction opens with `models::txn::begin_write` (SQLite `BEGIN IMMEDIATE`) | `create_device` and `rename` read (`existing_names`, `find_credential`) before they write, and a deferred `BEGIN` cannot promote that read snapshot to the write lock while a scan job holds it | `src/service.rs`; `crates/models/src/txn.rs` |
 
 ## Layout
 

@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{sse::KomgaEvent, KomgaBookReadProgressUpdateRequest};
 use axum::{extract::Path, http::StatusCode, routing::patch, Extension, Json, Router};
+use models::txn::begin_write;
 use models::{
 	domain::{
 		reading_progress::compute_page_based_percentage,
@@ -17,7 +18,7 @@ use stump_auth::AuthContext;
 
 use super::{KomgaBackend, KomgaEvents};
 use crate::errors::{APIError, APIResult};
-use sea_orm::{prelude::*, ConnectionTrait, DatabaseConnection, TransactionTrait};
+use sea_orm::{prelude::*, ConnectionTrait, DatabaseConnection};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -338,7 +339,7 @@ async fn update_read_progress(
 		"page": updates.session.page,
 		"completed": updates.session.did_complete,
 	});
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 	upsert_reading_session(&txn, &user, &id, updates.session).await?;
 	reading_state::apply(&txn, &user.id, Publication::from(&book), updates.head).await?;
 	txn.commit().await?;
@@ -393,7 +394,7 @@ async fn delete_read_progress(
 		.and_then(|series| series.library_id)
 		.unwrap_or_default();
 
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 	clear_books_progress(&txn, &user, std::slice::from_ref(&id)).await?;
 	txn.commit().await?;
 	events.send(KomgaEvent::ReadProgressDeleted {

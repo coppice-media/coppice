@@ -8,9 +8,8 @@ use models::entity::{
 	reading_session, refresh_token, review, session, user, user_login_activity,
 	user_preferences,
 };
-use sea_orm::{
-	prelude::*, ActiveValue::Set, IntoActiveModel, QueryTrait, TransactionTrait,
-};
+use models::txn::begin_write;
+use sea_orm::{prelude::*, ActiveValue::Set, IntoActiveModel, QueryTrait};
 use stump_core::{config::StumpConfig, database::connect};
 
 use crate::{error::CliResult, CliError};
@@ -395,7 +394,7 @@ async fn do_migrate_oidc_account<F>(
 where
 	F: Fn(&str),
 {
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 
 	post_message("Transferring reviews...");
 	review::Entity::update_many()

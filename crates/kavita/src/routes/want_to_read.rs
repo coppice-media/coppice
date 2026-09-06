@@ -17,7 +17,8 @@ use axum::{
 	Extension, Json, Router,
 };
 use models::entity::{favorite_media, favorite_series, user::AuthUser};
-use sea_orm::{prelude::*, sea_query::OnConflict, ActiveValue::Set, TransactionTrait};
+use models::txn::begin_write;
+use sea_orm::{prelude::*, sea_query::OnConflict, ActiveValue::Set};
 use serde::Deserialize;
 use stump_auth::AuthContext;
 
@@ -148,7 +149,7 @@ pub(crate) async fn add_series_for(
 		}
 	}
 	let now = chrono::Utc::now().into();
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	for series_id in series {
 		favorite_series::Entity::insert(favorite_series::ActiveModel {
 			user_id: Set(user.id.clone()),
@@ -214,7 +215,7 @@ pub(crate) async fn remove_series_for(
 			None => {},
 		}
 	}
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	if !series.is_empty() {
 		favorite_series::Entity::delete_many()
 			.filter(favorite_series::Column::UserId.eq(user.id.clone()))

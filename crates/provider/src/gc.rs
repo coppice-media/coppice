@@ -17,13 +17,13 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
+use models::txn::begin_write;
 use models::{
 	entity::{media, reading_head, series},
 	services::lists,
 };
 use sea_orm::{
 	prelude::*, sea_query::Expr, sea_query::Query, ColumnTrait, EntityTrait, QueryFilter,
-	TransactionTrait,
 };
 
 use crate::ProviderError;
@@ -123,7 +123,7 @@ pub async fn gc_materialised_series(
 	let dead_media_ids: Vec<String> =
 		dead_media.iter().map(|media| media.id.clone()).collect();
 
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 	if !dead_media_ids.is_empty() {
 		lists::remove_memberships_for_media(&txn, &dead_media_ids).await?;
 		media::Entity::delete_many()

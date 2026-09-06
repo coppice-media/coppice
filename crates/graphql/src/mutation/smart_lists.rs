@@ -3,8 +3,9 @@ use crate::{
 	object::smart_lists::SmartList,
 };
 use async_graphql::{Context, Object, Result, ID};
+use models::txn::begin_write;
 use models::{entity::smart_list, shared::enums::UserPermission};
-use sea_orm::{prelude::*, Set, TransactionTrait};
+use sea_orm::{prelude::*, Set};
 
 #[derive(Default)]
 pub struct SmartListMutation;
@@ -38,7 +39,7 @@ impl SmartListMutation {
 		let stump_auth::AuthContext { user, .. } =
 			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		let _ = smart_list::Entity::find_by_id(user, id.clone())
 			.one(&txn)
@@ -58,7 +59,7 @@ impl SmartListMutation {
 		let stump_auth::AuthContext { user, .. } =
 			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		let smart_list = smart_list::Entity::find_by_id(user, id.clone())
 			.one(&txn)

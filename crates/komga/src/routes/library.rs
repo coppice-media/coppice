@@ -7,12 +7,13 @@ use axum::{
 	routing::{delete as delete_route, patch, post},
 	Extension, Json, Router,
 };
+use models::txn::begin_write;
 use models::{
 	entity::{library, library_config, media, series, user::AuthUser},
 	services::library::path_within_roots,
 	shared::enums::UserPermission,
 };
-use sea_orm::{prelude::*, sea_query::Query, QuerySelect, TransactionTrait};
+use sea_orm::{prelude::*, sea_query::Query, QuerySelect};
 use stump_auth::AuthContext;
 use tokio::fs;
 
@@ -180,7 +181,7 @@ async fn empty_library_trash(
 	let user = auth.user();
 	let library = find_library(ctx.conn(), &user, &id).await?;
 
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	let library_series = Query::select()
 		.column(series::Column::Id)
 		.from(series::Entity)

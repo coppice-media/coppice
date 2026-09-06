@@ -7,6 +7,7 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, SecondsFormat, Utc};
+use models::txn::begin_write;
 use models::{
 	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
 	entity::{
@@ -18,7 +19,7 @@ use models::{
 };
 use sea_orm::{
 	ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
-	QueryOrder, QueryResult, Statement, TransactionTrait, Value as DbValue,
+	QueryOrder, QueryResult, Statement, Value as DbValue,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -163,7 +164,7 @@ async fn mirror_heads(ctx: &AppState, user_id: &str) -> Result<(), LiseurSyncErr
 		.await
 		.map_err(internal)?;
 
-	let txn = conn.begin().await.map_err(internal)?;
+	let txn = begin_write(conn).await.map_err(internal)?;
 	ensure_counter(&txn, user_id).await?;
 	for (media_id, head) in heads {
 		if head.source_protocol == SourceProtocol::Liseur {
@@ -1162,7 +1163,7 @@ pub(crate) async fn resolve_work(
 		});
 	}
 
-	let txn = conn.begin().await.map_err(internal)?;
+	let txn = begin_write(conn).await.map_err(internal)?;
 	let existing = txn
 		.query_one(db_statement(
 			&txn,
@@ -1566,7 +1567,7 @@ pub(crate) async fn append_ops(
 	ops: Vec<OpInput>,
 ) -> Result<Vec<OpResult>, LiseurSyncError> {
 	let conn = ctx_conn(ctx);
-	let txn = conn.begin().await.map_err(internal)?;
+	let txn = begin_write(conn).await.map_err(internal)?;
 	ensure_counter(&txn, user_id).await?;
 	let mut results = Vec::with_capacity(ops.len());
 	for op in ops {
@@ -1807,7 +1808,7 @@ pub(crate) async fn append_sessions(
 	sessions: Vec<SessionInput>,
 ) -> Result<usize, LiseurSyncError> {
 	let conn = ctx_conn(ctx);
-	let txn = conn.begin().await.map_err(internal)?;
+	let txn = begin_write(conn).await.map_err(internal)?;
 	let mut accepted = 0;
 	for session in sessions {
 		if !work_exists(&txn, user_id, &session.work_id).await? {
@@ -2001,7 +2002,7 @@ pub(crate) async fn append_annotations(
 	annotations: Vec<AnnotationInput>,
 ) -> Result<Vec<AnnotationResult>, LiseurSyncError> {
 	let conn = ctx_conn(ctx);
-	let txn = conn.begin().await.map_err(internal)?;
+	let txn = begin_write(conn).await.map_err(internal)?;
 	ensure_counter(&txn, user_id).await?;
 	let mut results = Vec::with_capacity(annotations.len());
 
@@ -2240,7 +2241,7 @@ pub(crate) async fn delete_annotation(
 	rev: i64,
 ) -> Result<DeleteAnnotationResult, LiseurSyncError> {
 	let conn = ctx_conn(ctx);
-	let txn = conn.begin().await.map_err(internal)?;
+	let txn = begin_write(conn).await.map_err(internal)?;
 	ensure_counter(&txn, user_id).await?;
 	let Some(stored) = find_annotation(&txn, user_id, id).await? else {
 		return Err(LiseurSyncError::NotFound("annotation not found".into()));

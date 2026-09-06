@@ -16,6 +16,7 @@ use axum::{
 };
 use axum_extra::extract::Host;
 use chrono::Utc;
+use models::txn::begin_write;
 use models::{
 	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
 	entity::{device, media, series, user::AuthUser},
@@ -28,7 +29,7 @@ use models::{
 		readium::{ReadiumLocation, ReadiumLocator, ReadiumText},
 	},
 };
-use sea_orm::{prelude::*, ActiveValue::Set, TransactionTrait};
+use sea_orm::{prelude::*, ActiveValue::Set};
 use stump_auth::AuthContext;
 
 use super::response::{cached_bytes, cached_json};
@@ -451,7 +452,7 @@ async fn put_progression(
 		raw_payload,
 	};
 
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 	if reading_state::head(&txn, &user.id, &id)
 		.await?
 		.is_some_and(|head| head.updated_at > input.modified)

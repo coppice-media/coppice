@@ -5,10 +5,11 @@ use models::entity::{
 	ingest_metadata_application, ingest_metadata_candidate, media_metadata, media_tag,
 	tag,
 };
+use models::txn::begin_write;
 use rust_decimal::{prelude::FromPrimitive, Decimal};
 use sea_orm::{
 	prelude::*, ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait,
-	IntoActiveModel, QueryFilter, Set, TransactionTrait,
+	IntoActiveModel, QueryFilter, Set,
 };
 use serde_json::{json, Value};
 
@@ -388,7 +389,7 @@ pub async fn apply_to_media(
 	actor: &str,
 ) -> Result<(), ApplyError> {
 	validate_resolved_fields(&resolved)?;
-	let txn = conn.begin().await.map_err(db_error)?;
+	let txn = begin_write(conn).await.map_err(db_error)?;
 	apply_to_media_txn(&txn, media_id, resolved, actor).await?;
 	txn.commit().await.map_err(db_error)?;
 	Ok(())

@@ -43,9 +43,15 @@ pub struct MockSource {
 
 impl MockSource {
 	pub fn new() -> Arc<Self> {
+		Self::with_id(MOCK_SOURCE_ID)
+	}
+
+	/// A second instance of the same catalogue under another id, so tests can
+	/// exercise cross-source behaviour (dedupe, merges).
+	pub fn with_id(id: &str) -> Arc<Self> {
 		Arc::new(Self {
 			info: SourceInfo {
-				id: MOCK_SOURCE_ID.to_string(),
+				id: id.to_string(),
 				name: "Mock".to_string(),
 				lang: "en".to_string(),
 				base_url: "http://mock.invalid".to_string(),
@@ -84,6 +90,10 @@ impl MockSource {
 				status: SeriesStatus::Ongoing,
 				nsfw: false,
 				original_language: Some("ja".to_string()),
+				external_ids: std::collections::BTreeMap::from([(
+					"al".to_string(),
+					"30002".to_string(),
+				)]),
 			}),
 			SERIES_BETA => Some(RemoteSeries {
 				remote_id: SERIES_BETA.to_string(),
@@ -97,6 +107,7 @@ impl MockSource {
 				status: SeriesStatus::Completed,
 				nsfw: true,
 				original_language: None,
+				external_ids: Default::default(),
 			}),
 			_ => None,
 		}

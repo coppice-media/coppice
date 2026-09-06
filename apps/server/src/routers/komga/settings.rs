@@ -8,9 +8,10 @@ use axum::{
 };
 use axum_extra::extract::Query;
 use models::entity::{age_restriction, user, user_login_activity, user_preferences};
+use models::txn::begin_write;
 use sea_orm::{
 	prelude::*, ActiveValue::NotSet, DatabaseTransaction, IntoActiveModel, QueryOrder,
-	QuerySelect, Set, TransactionTrait,
+	QuerySelect, Set,
 };
 use serde::Deserialize;
 use stump_auth::AuthContext;
@@ -178,7 +179,7 @@ async fn create_user(
 	}
 
 	let hashed_password = hash_password(&request.password, &ctx.config)?;
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 	let created_user = user::ActiveModel {
 		username: Set(email.clone()),
 		hashed_password: Set(hashed_password),
@@ -298,7 +299,7 @@ async fn update_user(
 		return Err(APIError::NotFound("User not found".to_owned()));
 	}
 
-	let txn = ctx.conn.as_ref().begin().await?;
+	let txn = begin_write(ctx.conn.as_ref()).await?;
 	apply_age_restriction(&txn, &id, &patch.age_restriction).await?;
 	txn.commit().await?;
 	Ok(StatusCode::NO_CONTENT)

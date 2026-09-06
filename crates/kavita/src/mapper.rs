@@ -19,20 +19,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, NaiveDate, Utc};
 use models::{
 	entity::{
-		library, library_config, media, media_metadata, reading_list, reading_session,
-		series, series_metadata,
+		bookmark, collection, library, library_config, media, media_annotation,
+		media_metadata, reading_list, reading_session, series, series_metadata,
 	},
-	shared::enums::LibraryType as StumpLibraryType,
+	shared::{enums::LibraryType as StumpLibraryType, readium::ReadiumLocator},
 };
 
 use crate::{
 	dto::{
-		AgeRating, BookInfoDto, ChapterDto, ChapterInfoDto, FileDimensionDto,
+		AgeRating, AnnotationDto, AppUserCollectionDto, BookInfoDto, BookmarkDto,
+		BookmarkSearchResultDto, ChapterDto, ChapterInfoDto, FileDimensionDto,
 		FileTypeGroup, GenreTagDto, KavitaDateTime, KavitaFloat, LibraryDto, LibraryType,
 		MangaFileDto, MangaFormat, MetadataLocksDto, PeopleDto, PersonDto, PersonRole,
 		PublicationStatus, ReadingListDto, ReadingListItemChapterDto, ReadingListItemDto,
-		ReadingListItemVolumeDto, ReadingListProvider, SeriesDetailDto, SeriesDto,
-		SeriesMetadataDto, TagDto, VolumeDto,
+		ReadingListItemVolumeDto, ReadingListProvider, SearchResultDto, SeriesDetailDto,
+		SeriesDto, SeriesMetadataDto, TagDto, VolumeDto,
 	},
 	progress::{last_progress_at, pages_read},
 };
@@ -1114,6 +1115,178 @@ pub fn map_reading_list(
 		total_items_at_import: 0,
 		tags: Vec::new(),
 		can_sync: false,
+	}
+}
+
+/// `SearchResultDto`: the trimmed series projection Kavita's search returns.
+/// `volumeCount`/`chapterCount` are the series' media count (one volume with
+/// one chapter per file), so a book series reports `1`/`1`.
+pub fn map_search_result(input: &SeriesInput) -> SearchResultDto {
+	let name = input.name();
+	let count = i32::try_from(input.media.len()).unwrap_or(i32::MAX);
+	let release_year = match input.book() {
+		Some(book) => book.metadata.as_ref().and_then(|metadata| metadata.year),
+		None => input.metadata.as_ref().and_then(|metadata| metadata.year),
+	};
+	SearchResultDto {
+		series_id: input.id,
+		original_name: match input.book() {
+			Some(_) => name.clone(),
+			None => input.series.name.clone(),
+		},
+		name,
+		sort_name: input.sort_name(),
+		localized_name: String::new(),
+		format: input.format(),
+		library_name: input.library_name.clone(),
+		library_id: input.library_id,
+		release_year: release_year.unwrap_or(0),
+		volume_count: count,
+		chapter_count: count,
+	}
+}
+
+/// `BookmarkSearchResultDto`: the series a bookmark points into.
+pub fn map_bookmark_search_result(
+	input: &SeriesInput,
+	media: &MediaInput,
+) -> BookmarkSearchResultDto {
+	BookmarkSearchResultDto {
+		library_id: input.library_id,
+		volume_id: media.id,
+		series_id: input.id,
+		chapter_id: media.id,
+		series_name: input.name(),
+		localized_series_name: String::new(),
+	}
+}
+
+/// `BookmarkDto`: a Stump bookmark as Kavita reports one. Stump stores the
+/// bookmarked page against the media item, which is the Kavita volume and its
+/// single chapter at once, so `volumeId == chapterId`. `imageOffset` is `0`
+/// (Kavita's split-image offset, which Stump does not model) and `xPath`
+/// carries the Readium fragment of a locator-addressed bookmark.
+pub fn map_bookmark(
+	id: i32,
+	bookmark: &bookmark::Model,
+	input: &SeriesInput,
+	media: &MediaInput,
+	include_series: bool,
+) -> BookmarkDto {
+	BookmarkDto {
+		id,
+		page: bookmark.page.unwrap_or(0),
+		volume_id: media.id,
+		series_id: input.id,
+		chapter_id: media.id,
+		image_offset: 0,
+		x_path: bookmark.locator.as_ref().and_then(locator_fragment),
+		series: include_series.then(|| map_series(input)),
+		chapter_title: None,
+	}
+}
+
+/// The DOM anchor of a Readium locator: its first fragment, else its CSS
+/// selector, else its partial CFI — the three ways Stump records a position
+/// inside a document, and what Kavita's `xPath` names.
+fn locator_fragment(locator: &ReadiumLocator) -> Option<String> {
+	let locations = locator.locations.as_ref()?;
+	locations
+		.fragments
+		.as_ref()
+		.and_then(|fragments| fragments.first().cloned())
+		.or_else(|| locations.css_selector.clone())
+		.or_else(|| locations.partial_cfi.clone())
+}
+
+/// `AppUserCollectionDto`: a Stump collection as Kavita reports one.
+pub fn map_collection(
+	id: i32,
+	collection: &collection::Model,
+	item_count: i32,
+	owner: String,
+) -> AppUserCollectionDto {
+	AppUserCollectionDto {
+		id,
+		title: collection.name.clone(),
+		summary: collection.description.clone().unwrap_or_default(),
+		promoted: false,
+		age_rating: AgeRating::Unknown,
+		cover_image: None,
+		primary_color: None,
+		secondary_color: None,
+		cover_image_locked: false,
+		item_count,
+		owner,
+		last_sync_utc: KavitaDateTime::default(),
+		source: 0,
+		source_url: None,
+		total_source_count: 0,
+		missing_series_from_source: None,
+	}
+}
+
+/// `AnnotationDto`: a Stump media annotation as Kavita reports one.
+///
+/// Stump keeps the highlighted range in the Readium locator (`text.highlight`
+/// with its surrounding context) and the note in `annotation_text`; Kavita
+/// splits those into `selectedText` and `comment`. Annotations are private to
+/// their owner in Stump, so `likes` is empty, `containsSpoiler` is false and
+/// `highlightCount` counts the one highlight this row carries.
+pub fn map_annotation(
+	id: i32,
+	annotation: &media_annotation::Model,
+	input: &SeriesInput,
+	media: &MediaInput,
+	owner_user_id: i32,
+	owner_username: String,
+) -> AnnotationDto {
+	let text = annotation.locator.text.as_ref();
+	let highlight = text.and_then(|text| text.highlight.clone());
+	let context = text.map(|text| {
+		format!(
+			"{}{}{}",
+			text.before.clone().unwrap_or_default(),
+			highlight.clone().unwrap_or_default(),
+			text.after.clone().unwrap_or_default()
+		)
+	});
+	let comment = annotation
+		.annotation_text
+		.clone()
+		.filter(|note| !note.trim().is_empty());
+	AnnotationDto {
+		id,
+		x_path: locator_fragment(&annotation.locator).unwrap_or_default(),
+		ending_x_path: None,
+		selected_text: highlight.clone(),
+		comment: comment.clone(),
+		comment_html: comment.clone(),
+		comment_plain_text: comment,
+		chapter_title: Some(annotation.locator.chapter_title.clone())
+			.filter(|title| !title.is_empty()),
+		context: context.filter(|context| !context.is_empty()),
+		highlight_count: i32::from(highlight.is_some()),
+		contains_spoiler: false,
+		page_number: annotation
+			.locator
+			.locations
+			.as_ref()
+			.and_then(|locations| locations.position)
+			.unwrap_or(0),
+		selected_slot_index: 0,
+		likes: Vec::new(),
+		series_name: input.name(),
+		library_name: input.library_name.clone(),
+		chapter_id: media.id,
+		volume_id: media.id,
+		series_id: input.id,
+		library_id: input.library_id,
+		owner_user_id,
+		owner_username,
+		age_rating: AgeRating::Unknown,
+		created_utc: KavitaDateTime::new(annotation.created_at.with_timezone(&Utc)),
+		last_modified_utc: KavitaDateTime::new(annotation.updated_at.with_timezone(&Utc)),
 	}
 }
 

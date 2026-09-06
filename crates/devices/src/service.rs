@@ -5,6 +5,7 @@ use std::{
 };
 
 use chrono::Utc;
+use models::txn::begin_write;
 use models::{
 	entity::{
 		api_key, device, device_credential, session,
@@ -17,7 +18,6 @@ use models::{
 };
 use sea_orm::{
 	prelude::*, ActiveValue::Set, DatabaseConnection, QueryOrder, QuerySelect,
-	TransactionTrait,
 };
 use serde_json::Value as JsonValue;
 use stump_api_types::RequestOrigin;
@@ -120,7 +120,7 @@ impl DeviceService {
 	) -> DeviceResult<(device::Model, IssuedCredential)> {
 		authorize_creation(user, kind)?;
 
-		let txn = self.conn.begin().await?;
+		let txn = begin_write(&self.conn).await?;
 		let name = match name {
 			Some(name) => {
 				let name = validate_name(&name)?;
@@ -162,7 +162,7 @@ impl DeviceService {
 			return Err(DeviceError::Revoked);
 		}
 
-		let txn = self.conn.begin().await?;
+		let txn = begin_write(&self.conn).await?;
 		discard_credentials(&txn, &device).await?;
 		let issued = mint_credential(&txn, &device).await?;
 		txn.commit().await?;
@@ -182,7 +182,7 @@ impl DeviceService {
 			return Ok(device);
 		}
 
-		let txn = self.conn.begin().await?;
+		let txn = begin_write(&self.conn).await?;
 		discard_credentials(&txn, &device).await?;
 		let mut active: device::ActiveModel = device.into();
 		active.revoked_at = Set(Some(Utc::now().into()));
@@ -211,7 +211,7 @@ impl DeviceService {
 			)));
 		}
 
-		let txn = self.conn.begin().await?;
+		let txn = begin_write(&self.conn).await?;
 		if let Some(credential) = find_credential(&txn, &device.id).await? {
 			match credential.credential_kind {
 				DeviceCredentialKind::ApiKey => {

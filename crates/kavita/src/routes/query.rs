@@ -14,7 +14,7 @@ use models::entity::{
 use sea_orm::{
 	prelude::*,
 	sea_query::{Alias, Asterisk, Expr, Func, Query, SelectStatement, UnionType},
-	QueryOrder, QueryTrait,
+	QueryOrder, QuerySelect, QueryTrait,
 };
 
 use crate::{
@@ -125,6 +125,122 @@ pub(crate) async fn resolve_series_key(
 		Some((IdKind::Series, stump_id)) => Some(SeriesKey::Series(stump_id)),
 		Some((IdKind::BookSeries, media_id)) => Some(SeriesKey::Book(media_id)),
 		_ => None,
+	})
+}
+
+/// The Kavita series keys holding `media_ids`, first occurrence first and
+/// de-duplicated: a media item of a Book/LightNovel library is its own Kavita
+/// series, everything else belongs to its Stump series. Media that are
+/// deleted, hidden from the user or filed under no series are dropped, so the
+/// result is exactly the set [`load_by_keys`] can load.
+pub(crate) async fn keys_for_media(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	media_ids: &[String],
+) -> APIResult<Vec<SeriesKey>> {
+	if media_ids.is_empty() {
+		return Ok(Vec::new());
+	}
+	let mut series_of_media: HashMap<String, String> =
+		HashMap::with_capacity(media_ids.len());
+	for chunk in media_ids.chunks(LOOKUP_CHUNK) {
+		let rows = media::Entity::find_for_user(user)
+			.select_only()
+			.column(media::Column::Id)
+			.column(media::Column::SeriesId)
+			.filter(media::Column::Id.is_in(chunk.to_vec()))
+			.filter(media::Column::DeletedAt.is_null())
+			.into_tuple::<(String, Option<String>)>()
+			.all(ctx.conn())
+			.await?;
+		series_of_media.extend(
+			rows.into_iter()
+				.filter_map(|(id, series_id)| series_id.map(|series| (id, series))),
+		);
+	}
+	let mut series_ids = series_of_media.values().cloned().collect::<Vec<_>>();
+	series_ids.sort();
+	series_ids.dedup();
+	let mut library_of_series: HashMap<String, String> =
+		HashMap::with_capacity(series_ids.len());
+	for chunk in series_ids.chunks(LOOKUP_CHUNK) {
+		let rows = series::Entity::find()
+			.select_only()
+			.column(series::Column::Id)
+			.column(series::Column::LibraryId)
+			.filter(series::Column::Id.is_in(chunk.to_vec()))
+			.filter(series::Column::DeletedAt.is_null())
+			.into_tuple::<(String, Option<String>)>()
+			.all(ctx.conn())
+			.await?;
+		library_of_series.extend(
+			rows.into_iter()
+				.filter_map(|(id, library_id)| library_id.map(|library| (id, library))),
+		);
+	}
+	let book_libraries = book_library_ids(ctx).await?;
+	let mut keys = Vec::new();
+	let mut seen = HashSet::new();
+	for media_id in media_ids {
+		let Some(series_id) = series_of_media.get(media_id) else {
+			continue;
+		};
+		let is_book = library_of_series
+			.get(series_id)
+			.is_some_and(|library_id| book_libraries.contains(library_id));
+		let key = if is_book {
+			SeriesKey::Book(media_id.clone())
+		} else {
+			SeriesKey::Series(series_id.clone())
+		};
+		if seen.insert(key.clone()) {
+			keys.push(key);
+		}
+	}
+	Ok(keys)
+}
+
+/// Per-media rows resolved against the Kavita series that hold them.
+pub(crate) struct MediaRows<T> {
+	/// The Kavita series behind the rows, loaded once for the whole batch.
+	pub inputs: Vec<SeriesInput>,
+	/// `(row, series index, media index)` in row order; rows whose media is
+	/// deleted, hidden or seriesless are dropped.
+	pub rows: Vec<(T, usize, usize)>,
+}
+
+/// Resolve a batch of rows that each name a media item (bookmarks,
+/// annotations, search hits) onto the Kavita series and chapter they belong
+/// to, with a bounded number of queries for the whole batch.
+pub(crate) async fn group_by_media<T>(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	rows: Vec<T>,
+	media_id: impl Fn(&T) -> &str,
+) -> APIResult<MediaRows<T>> {
+	let media_ids = rows
+		.iter()
+		.map(|row| media_id(row).to_owned())
+		.collect::<Vec<_>>();
+	let keys = keys_for_media(ctx, user, &media_ids).await?;
+	let inputs = load_by_keys(ctx, user, &keys).await?;
+	let mut index: HashMap<&str, (usize, usize)> = HashMap::new();
+	for (series_index, input) in inputs.iter().enumerate() {
+		for (media_index, media) in input.media.iter().enumerate() {
+			index.insert(media.media.id.as_str(), (series_index, media_index));
+		}
+	}
+	let resolved = rows
+		.into_iter()
+		.filter_map(|row| {
+			index
+				.get(media_id(&row))
+				.map(|(series_index, media_index)| (row, *series_index, *media_index))
+		})
+		.collect::<Vec<_>>();
+	Ok(MediaRows {
+		inputs,
+		rows: resolved,
 	})
 }
 

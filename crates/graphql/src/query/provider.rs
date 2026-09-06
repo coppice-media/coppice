@@ -1,12 +1,14 @@
 //! GraphQL queries for the provider host: source instances, the Keiyoushi
 //! catalog, source health, and live provider search.
 
+use std::collections::HashMap;
+
 use crate::{
 	data::CoreContext,
 	guard::PermissionGuard,
 	object::provider::{
-		series_summary, ProviderCatalogEntry, ProviderSearchPage, ProviderSource,
-		ProviderSourceHealth,
+		series_summary, ProviderCatalogEntry, ProviderSearchPage,
+		ProviderSeriesDuplicate, ProviderSource, ProviderSourceHealth,
 	},
 };
 use async_graphql::{Context, Object, Result};
@@ -15,7 +17,7 @@ use models::{
 	shared::enums::UserPermission,
 };
 use sea_orm::EntityTrait;
-use stump_provider::Source;
+use stump_provider::HealthStatus;
 
 #[derive(Default)]
 pub struct ProviderQuery;
@@ -33,13 +35,16 @@ impl ProviderQuery {
 	}
 
 	/// The Keiyoushi extension catalog, filtered by language and name.
-	/// `has_implementation` marks entries this server can actually run.
+	/// `has_implementation` marks entries this server can actually run, and
+	/// `health` is the latest probe for the entry (its badge). Sources the
+	/// health job marked dead are hidden unless `include_dead` is set.
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
 	async fn provider_catalog(
 		&self,
 		ctx: &Context<'_>,
 		lang: Option<String>,
 		query: Option<String>,
+		include_dead: Option<bool>,
 	) -> Result<Vec<ProviderCatalogEntry>> {
 		let core = ctx.data::<CoreContext>()?;
 		let host = core.provider_host().ok_or("Provider host is not enabled")?;
@@ -53,6 +58,13 @@ impl ProviderQuery {
 			.map(str::trim)
 			.filter(|query| !query.is_empty())
 			.map(str::to_ascii_lowercase);
+		let include_dead = include_dead.unwrap_or(false);
+		let health: HashMap<String, source_health::Model> = source_health::Entity::find()
+			.all(core.conn.as_ref())
+			.await?
+			.into_iter()
+			.map(|row| (row.source_id.clone(), row))
+			.collect();
 
 		let mut entries = Vec::new();
 		for entry in &snapshot.entries {
@@ -67,6 +79,13 @@ impl ProviderQuery {
 						continue;
 					}
 				}
+				let row = health.get(&source.id);
+				let dead = row.is_some_and(|row| {
+					HealthStatus::parse(&row.status) == HealthStatus::Dead
+				});
+				if dead && !include_dead {
+					continue;
+				}
 				let factory = host.factory_for_pkg(&entry.pkg);
 				entries.push(ProviderCatalogEntry {
 					id: source.id.clone(),
@@ -76,23 +95,51 @@ impl ProviderQuery {
 					pkg: entry.pkg.clone(),
 					has_implementation: factory.is_some(),
 					instance_id: factory.map(|factory| factory.instance_id(&source.lang)),
+					health: row.cloned().map(ProviderSourceHealth),
 				});
 			}
 		}
 		Ok(entries)
 	}
 
-	/// The latest health observations for catalog sources.
+	/// The latest health observations for catalog sources. Dead sources are
+	/// included only when `include_dead` is set, matching `providerCatalog`.
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
 	async fn provider_source_health(
 		&self,
 		ctx: &Context<'_>,
+		include_dead: Option<bool>,
 	) -> Result<Vec<ProviderSourceHealth>> {
 		let core = ctx.data::<CoreContext>()?;
 		let rows = source_health::Entity::find()
 			.all(core.conn.as_ref())
 			.await?;
-		Ok(rows.into_iter().map(ProviderSourceHealth).collect())
+		let include_dead = include_dead.unwrap_or(false);
+		Ok(rows
+			.into_iter()
+			.filter(|row| {
+				include_dead || HealthStatus::parse(&row.status) != HealthStatus::Dead
+			})
+			.map(ProviderSourceHealth)
+			.collect())
+	}
+
+	/// Cross-source duplicates recorded when a series materialised from a
+	/// second source (`provider_series_links`). Advisory: nothing is merged
+	/// until `mergeProviderSeries` is called.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
+	async fn provider_series_duplicates(
+		&self,
+		ctx: &Context<'_>,
+	) -> Result<Vec<ProviderSeriesDuplicate>> {
+		let core = ctx.data::<CoreContext>()?;
+		let rows = stump_provider::identity::duplicates(core.conn.as_ref())
+			.await
+			.map_err(|error| error.to_string())?;
+		Ok(rows
+			.into_iter()
+			.map(ProviderSeriesDuplicate::from)
+			.collect())
 	}
 
 	/// Live search on one provider source, without materialising anything.

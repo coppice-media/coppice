@@ -437,6 +437,10 @@ mod tests {
 					provider_cache_max_bytes: Some(DEFAULT_PROVIDER_CACHE_MAX_BYTES),
 					virtual_series_ttl: Some(DEFAULT_VIRTUAL_SERIES_TTL_SECS),
 					provider_gc_days: Some(DEFAULT_PROVIDER_GC_DAYS),
+					provider_health_interval_secs: Some(
+						DEFAULT_PROVIDER_HEALTH_INTERVAL_SECS
+					),
+					provider_health_dead_after: Some(DEFAULT_PROVIDER_HEALTH_DEAD_AFTER),
 				},
 				annotation_sync: PartialAnnotationSyncConfig {
 					annotation_sync_root: None,
@@ -564,6 +568,10 @@ mod tests {
 							provider_cache_max_bytes: DEFAULT_PROVIDER_CACHE_MAX_BYTES,
 							virtual_series_ttl: DEFAULT_VIRTUAL_SERIES_TTL_SECS,
 							provider_gc_days: DEFAULT_PROVIDER_GC_DAYS,
+							provider_health_interval_secs:
+								DEFAULT_PROVIDER_HEALTH_INTERVAL_SECS,
+							provider_health_dead_after:
+								DEFAULT_PROVIDER_HEALTH_DEAD_AFTER,
 						},
 						annotation_sync: AnnotationSyncConfig {
 							annotation_sync_root: None,

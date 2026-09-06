@@ -105,25 +105,22 @@ fn sqlite_connect_options(
 		.busy_timeout(Duration::from_secs(config.database.db_timeout_secs)))
 }
 
-pub async fn connect(config: &StumpConfig) -> Result<DatabaseConnection, CoreError> {
-	validate_pool_config(config)?;
-	let connection_url = resolve_database_url(config);
+/// The number of connections the SQLite migration pool is allowed to open.
+///
+/// `sea-orm-migration` only wraps migrations in a transaction for PostgreSQL;
+/// MySQL and SQLite get a bare [`DatabaseConnection`]
+/// (`sea-orm-migration-1.1.16/src/migrator.rs:261-272`), so every DDL statement
+/// of every migration is executed on whichever connection the pool hands out.
+/// A migration that rebuilds a table — create the replacement, copy, drop the
+/// original, rename — then straddles connections, and the one doing the rename
+/// can still be holding the pre-drop schema: SQLite answers
+/// `(code: 1) there is already another table or index with this name`. Running
+/// the whole migration on a pool of exactly one connection removes the
+/// interleaving entirely.
+const SQLITE_MIGRATION_POOL_SIZE: u32 = 1;
 
-	let connection = if connection_url.starts_with("sqlite://") {
-		let options = sqlite_connect_options(&connection_url, config)?;
-		let pool = sqlite_pool_options(config)
-			.connect_with(options)
-			.await
-			.map_err(|e| {
-				CoreError::InternalError(format!("Failed to connect to SQLite: {e}"))
-			})?;
-		SqlxSqliteConnector::from_sqlx_sqlite_pool(pool)
-	} else {
-		let connect_options = postgres_connect_options(connection_url, config);
-		sea_orm::Database::connect(connect_options).await?
-	};
-
-	let force_reset = match env::var(FORCE_RESET_KEY) {
+fn force_reset_requested() -> bool {
+	match env::var(FORCE_RESET_KEY) {
 		Ok(value) => value == "true",
 		Err(error) => {
 			tracing::warn!(
@@ -132,12 +129,17 @@ pub async fn connect(config: &StumpConfig) -> Result<DatabaseConnection, CoreErr
 			);
 			false
 		},
-	};
+	}
+}
 
+async fn migrate(
+	connection: &DatabaseConnection,
+	force_reset: bool,
+) -> Result<(), CoreError> {
 	if force_reset && cfg!(debug_assertions) {
 		if connection.get_database_backend() == DatabaseBackend::Sqlite {
 			tracing::debug!("Forcing database reset");
-			Migrator::down(&connection, None).await?;
+			Migrator::down(connection, None).await?;
 		} else {
 			tracing::warn!("Force reset is only supported for SQLite");
 			return Err(CoreError::DatabaseResetNotAllowed);
@@ -147,9 +149,56 @@ pub async fn connect(config: &StumpConfig) -> Result<DatabaseConnection, CoreErr
 		return Err(CoreError::DatabaseResetNotAllowed);
 	}
 
-	Migrator::up(&connection, None).await?;
+	Migrator::up(connection, None).await?;
 
-	Ok(connection)
+	Ok(())
+}
+
+async fn sqlite_pool(
+	connection_url: &str,
+	config: &StumpConfig,
+	options: SqlitePoolOptions,
+) -> Result<DatabaseConnection, CoreError> {
+	let pool = options
+		.connect_with(sqlite_connect_options(connection_url, config)?)
+		.await
+		.map_err(|e| {
+			CoreError::InternalError(format!("Failed to connect to SQLite: {e}"))
+		})?;
+
+	Ok(SqlxSqliteConnector::from_sqlx_sqlite_pool(pool))
+}
+
+pub async fn connect(config: &StumpConfig) -> Result<DatabaseConnection, CoreError> {
+	validate_pool_config(config)?;
+	let connection_url = resolve_database_url(config);
+	let force_reset = force_reset_requested();
+
+	if !connection_url.starts_with("sqlite://") {
+		let connect_options = postgres_connect_options(connection_url, config);
+		let connection = sea_orm::Database::connect(connect_options).await?;
+		migrate(&connection, force_reset).await?;
+		return Ok(connection);
+	}
+
+	// Migrate first, on a pool that cannot interleave (see
+	// `SQLITE_MIGRATION_POOL_SIZE`), and hand the connection back before the
+	// serving pool opens so the database is never held open twice.
+	let migrator = sqlite_pool(
+		&connection_url,
+		config,
+		SqlitePoolOptions::new()
+			.max_connections(SQLITE_MIGRATION_POOL_SIZE)
+			.acquire_timeout(Duration::from_secs(config.database.db_timeout_secs)),
+	)
+	.await?;
+	let migrated = migrate(&migrator, force_reset).await;
+	if let Err(error) = migrator.close().await {
+		tracing::warn!(?error, "Failed to close the migration connection");
+	}
+	migrated?;
+
+	sqlite_pool(&connection_url, config, sqlite_pool_options(config)).await
 }
 
 pub async fn connect_at(path: &str) -> Result<DatabaseConnection, CoreError> {
@@ -296,5 +345,50 @@ mod tests {
 		let sqlite = sqlite_connect_options("sqlite::memory:", &config)
 			.expect("in-memory SQLite URL should parse");
 		assert!(format!("{sqlite:?}").contains("statement_cache_capacity: 32"));
+	}
+
+	/// `connect` used to run `Migrator::up` on the serving pool. Because
+	/// `sea-orm-migration` does not transact SQLite migrations, the DDL of a
+	/// single migration was spread over several pooled connections, and
+	/// `m20260909_000000_add_ingest_media_targets` (create replacement, copy,
+	/// drop original, rename) failed with
+	/// `(code: 1) there is already another table or index with this name:
+	/// ingest_analysis_jobs` on a fresh database. Migrating on a one-connection
+	/// pool has to keep a multi-connection serving pool working.
+	#[tokio::test]
+	async fn migrates_a_fresh_database_behind_a_multi_connection_pool() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut config = StumpConfig::debug();
+		config.database.db_path = Some(dir.path().display().to_string());
+		config.database.db_max_connections = 4;
+		config.database.db_min_connections = 0;
+
+		// `resolve_database_url` prefers `DATABASE_URL`/`DB_PASSWORD`, and
+		// `FORCE_DB_RESET` would turn this into a down-migration.
+		let connection = temp_env::async_with_vars(
+			[
+				(env_keys::DATABASE_URL_KEY, None::<&str>),
+				(env_keys::DB_PASSWORD_KEY, None),
+				(FORCE_RESET_KEY, None),
+			],
+			connect(&config),
+		)
+		.await
+		.expect("a fresh SQLite database must migrate");
+
+		let applied = migrations::Migrator::get_applied_migrations(&connection)
+			.await
+			.expect("migration status");
+		assert!(
+			applied.len() >= 2,
+			"the whole migration chain ran, not just the first"
+		);
+
+		// The rebuilt table survived the drop-and-rename and is queryable from
+		// a connection the migration never touched.
+		connection
+			.execute_unprepared("SELECT \"media_id\" FROM \"ingest_analysis_jobs\"")
+			.await
+			.expect("the rebuilt ingest_analysis_jobs table exists");
 	}
 }

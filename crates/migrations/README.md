@@ -34,6 +34,7 @@ server graph does not enable.
 | `cli` feature (default) pulls `sea-orm-migration/cli`; server depends with `default-features = false` | Narrowed server dependency graph (no clap-based migration CLI linked). | `Cargo.toml:8-14`; `docs/.../server-architecture.mdx:20` |
 | Schema tests inspect `sqlite_master`/`PRAGMA` directly rather than entity queries | Proves the DDL, not the ORM mapping; catches missing indexes/FKs. | `tests/reading_lists_collections.rs:4-104` |
 | A data backfill projects rows with raw SQL plus Rust, never through `models` entities, and its `down` is a no-op | An append-only migration must keep working when the entities it mirrors change; and once a head exists a protocol write may have advanced it, so deleting backfilled rows would discard newer progress. | `src/m20260923_000000_backfill_reading_heads.rs`; `tests/backfill_reading_heads.rs` |
+| `m20260924` adds `provider_series_identity` and `provider_series_links` as separate tables rather than columns on `series` | The dedupe key and its links are provider-only indexed lookups; putting them on the shared `series` table would need one `ADD COLUMN` per field and touch every non-provider row. | `src/m20260924_000000_add_provider_series_links.rs`; `crates/provider/src/identity.rs` |
 
 ## Layout
 

@@ -8,6 +8,7 @@ use axum::{
 };
 use axum_extra::{headers::UserAgent, TypedHeader};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use models::txn::begin_write;
 use models::{
 	entity::{
 		session,
@@ -17,7 +18,7 @@ use models::{
 	shared::image::ImageRef,
 };
 use reqwest::header;
-use sea_orm::{prelude::*, IntoActiveModel, TransactionTrait};
+use sea_orm::{prelude::*, IntoActiveModel};
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 use serde::{Deserialize, Serialize};
 use stump_api_types::RequestOrigin;
@@ -423,7 +424,7 @@ pub async fn register(
 
 	let hashed_password = hash_password(&input.password, &ctx.config)?;
 
-	let tx = conn.begin().await?;
+	let tx = begin_write(conn).await?;
 
 	let active_model = user::ActiveModel {
 		username: Set(input.username.clone()),

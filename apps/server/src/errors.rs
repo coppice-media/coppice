@@ -132,7 +132,12 @@ pub enum APIError {
 	#[error("{0}")]
 	SessionFetchError(#[from] SessionError),
 	#[error("{0}")]
-	DbError(#[from] sea_orm::error::DbErr),
+	DbError(sea_orm::error::DbErr),
+	/// SQLite write-lock contention. Transient by construction, so it is worth
+	/// telling the client to come back rather than reporting a 500 it can only
+	/// treat as a hard failure.
+	#[error("The database is busy, please retry")]
+	DatabaseBusy,
 	#[error("OIDC is not enabled")]
 	OIDCNotEnabled,
 	#[error("OIDC provider is not initialized")]
@@ -173,11 +178,18 @@ impl APIError {
 				StatusCode::NOT_FOUND
 			},
 			APIError::DbError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+			APIError::DatabaseBusy => StatusCode::SERVICE_UNAVAILABLE,
 			APIError::Redirect(_) => StatusCode::TEMPORARY_REDIRECT,
 			APIError::OIDCConfigurationInvalid => StatusCode::BAD_REQUEST,
 			APIError::OIDCNotEnabled => StatusCode::FORBIDDEN,
 			_ => StatusCode::INTERNAL_SERVER_ERROR,
 		}
+	}
+
+	/// How long a client should wait before retrying, for the errors that are
+	/// transient by construction.
+	pub fn retry_after_seconds(&self) -> Option<u32> {
+		matches!(self, APIError::DatabaseBusy).then_some(1)
 	}
 }
 
@@ -225,6 +237,21 @@ impl From<TryFromIntError> for APIError {
 	}
 }
 
+impl From<sea_orm::error::DbErr> for APIError {
+	/// Routes SQLite write-lock contention to [`APIError::DatabaseBusy`] so
+	/// every `?` on a database error answers `503` + `Retry-After` instead of a
+	/// `500` the client cannot act on. Write transactions take
+	/// `BEGIN IMMEDIATE` (`models::txn::begin_write`), so this is the belt to
+	/// that braces.
+	fn from(error: sea_orm::error::DbErr) -> Self {
+		if models::txn::is_write_lock_contention(&error) {
+			APIError::DatabaseBusy
+		} else {
+			APIError::DbError(error)
+		}
+	}
+}
+
 impl From<CoreError> for APIError {
 	fn from(err: CoreError) -> Self {
 		match err {
@@ -234,7 +261,7 @@ impl From<CoreError> for APIError {
 			CoreError::NotFound(message) => APIError::NotFound(message),
 			CoreError::BadRequest(message) => APIError::BadRequest(message),
 			CoreError::Forbidden(message) => APIError::Forbidden(message),
-			CoreError::DBError(db_error) => APIError::DbError(db_error),
+			CoreError::DBError(db_error) => APIError::from(db_error),
 			CoreError::InternalError(err) => APIError::InternalServerError(err),
 			CoreError::IoError(err) => APIError::InternalServerError(err.to_string()),
 			CoreError::MigrationError(err) => APIError::InternalServerError(err),
@@ -333,7 +360,7 @@ impl From<stump_devices::DeviceError> for APIError {
 			DeviceError::Credential(_) => {
 				APIError::InternalServerError(error.to_string())
 			},
-			DeviceError::Database(error) => APIError::DbError(error),
+			DeviceError::Database(error) => APIError::from(error),
 		}
 	}
 }
@@ -358,7 +385,8 @@ impl From<stump_komga::errors::APIError> for APIError {
 			Komga::ServiceUnavailable(message) => APIError::ServiceUnavailable(message),
 			Komga::BadGateway(message) => APIError::BadGateway(message),
 			Komga::Unknown(message) => APIError::Unknown(message),
-			Komga::DbError(error) => APIError::DbError(error),
+			Komga::DbError(error) => APIError::from(error),
+			Komga::DatabaseBusy => APIError::DatabaseBusy,
 		}
 	}
 }
@@ -369,6 +397,8 @@ impl From<stump_komga::errors::APIError> for APIError {
 pub struct APIErrorResponse {
 	status: StatusCode,
 	message: String,
+	/// Seconds a client should wait before retrying, for transient errors.
+	retry_after: Option<u32>,
 }
 
 impl From<APIError> for APIErrorResponse {
@@ -376,6 +406,7 @@ impl From<APIError> for APIErrorResponse {
 		APIErrorResponse {
 			status: error.status_code(),
 			message: error.to_string(),
+			retry_after: error.retry_after_seconds(),
 		}
 	}
 }
@@ -402,6 +433,12 @@ impl IntoResponse for APIErrorResponse {
 		if self.status == StatusCode::UNAUTHORIZED {
 			let (name, value) = delete_cookie_header();
 			builder = builder.header(name, value);
+		}
+
+		// transient failures (SQLite write-lock contention) tell the client
+		// exactly how long to back off for
+		if let Some(seconds) = self.retry_after {
+			builder = builder.header("Retry-After", seconds);
 		}
 
 		builder

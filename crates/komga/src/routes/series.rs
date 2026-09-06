@@ -17,13 +17,14 @@ use axum::{
 	routing::{get, patch, post},
 	Extension, Json, Router,
 };
+use models::txn::begin_write;
 use models::{
 	entity::{media, series, series_metadata, series_tag, tag, user::AuthUser},
 	shared::enums::UserPermission,
 };
 use sea_orm::{
 	prelude::*, ActiveValue, ActiveValue::Set, DatabaseTransaction, IntoActiveModel,
-	QueryOrder, TransactionTrait,
+	QueryOrder,
 };
 use stump_auth::AuthContext;
 
@@ -344,7 +345,7 @@ async fn patch_series_metadata(
 	validate_metadata_patch(&patch)?;
 	let user = auth.user();
 	let series = find_visible_series(ctx.conn(), &user, &id).await?;
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	let existing_metadata = series_metadata::Entity::find_by_id(series.id.clone())
 		.one(&txn)
 		.await?;
@@ -503,7 +504,7 @@ async fn update_tachiyomi_series_progress(
 	if to_mark.is_empty() {
 		return Ok(StatusCode::NO_CONTENT);
 	}
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	for book in &to_mark {
 		mark_book_read(&txn, &user, &book.id, book.pages).await?;
 	}
@@ -563,7 +564,7 @@ async fn mark_series_read(
 		return Ok(StatusCode::NO_CONTENT);
 	}
 
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	for book in &books {
 		mark_book_read(&txn, &user, &book.id, book.pages).await?;
 	}
@@ -600,7 +601,7 @@ async fn delete_series_read_progress(
 		return Ok(StatusCode::NO_CONTENT);
 	}
 
-	let txn = ctx.conn().begin().await?;
+	let txn = begin_write(ctx.conn()).await?;
 	clear_books_progress(&txn, &user, &book_ids).await?;
 	txn.commit().await?;
 	events.send(KomgaEvent::ReadProgressSeriesDeleted {

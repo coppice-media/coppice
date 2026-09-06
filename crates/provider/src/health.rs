@@ -12,7 +12,10 @@ use std::{
 use chrono::Utc;
 use futures::{stream, StreamExt};
 use models::entity::source_health;
-use sea_orm::{sea_query::OnConflict, ActiveValue::Set, ConnectionTrait, EntityTrait};
+use sea_orm::{
+	sea_query::OnConflict, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait,
+	QueryFilter,
+};
 
 use crate::catalog::{CatalogSnapshot, SourceTheme};
 
@@ -70,10 +73,16 @@ impl HealthProbe {
 	}
 
 	/// Fold this probe into the previous failure count: `(status, failures)`.
-	pub fn next_state(&self, previous_failures: i32) -> (HealthStatus, i32) {
+	/// `dead_after` is the number of consecutive failures that marks a source
+	/// dead (`provider_health_dead_after`).
+	pub fn next_state(
+		&self,
+		previous_failures: i32,
+		dead_after: i32,
+	) -> (HealthStatus, i32) {
 		if !self.reachable() {
 			let failures = previous_failures.saturating_add(1);
-			let status = if failures >= DEAD_AFTER_FAILURES {
+			let status = if failures >= dead_after.max(1) {
 				HealthStatus::Dead
 			} else {
 				HealthStatus::Degraded
@@ -175,6 +184,167 @@ pub struct HealthRunSummary {
 	pub dead: usize,
 }
 
+/// One base URL to probe, with every catalog source that shares it. This is
+/// the unit of work of a health run (and of the core health job's tasks).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthTarget {
+	/// Base URL without its trailing slash.
+	pub base_url: String,
+	/// Catalog sources served by `base_url`.
+	pub sources: Vec<crate::catalog::CatalogSource>,
+	/// Theme detected by an earlier run; skips the markup sniff.
+	pub known_theme: Option<SourceTheme>,
+}
+
+/// Group the catalog's sources by base URL, newest known theme attached, so
+/// each host is probed exactly once. Enabled instance base URLs listed in
+/// `priority` come first.
+pub async fn plan<C: ConnectionTrait>(
+	conn: &C,
+	snapshot: &CatalogSnapshot,
+	priority: &[String],
+) -> Result<Vec<HealthTarget>, sea_orm::DbErr> {
+	let themes: HashMap<String, SourceTheme> = source_health::Entity::find()
+		.all(conn)
+		.await?
+		.into_iter()
+		.filter_map(|row| {
+			let theme = row.theme.as_deref().and_then(SourceTheme::parse)?;
+			Some((row.source_id, theme))
+		})
+		.collect();
+
+	let mut by_url: HashMap<String, Vec<crate::catalog::CatalogSource>> = HashMap::new();
+	for entry in &snapshot.entries {
+		for source in &entry.sources {
+			if source.base_url.is_empty() {
+				continue;
+			}
+			by_url
+				.entry(source.base_url.trim_end_matches('/').to_string())
+				.or_default()
+				.push(source.clone());
+		}
+	}
+
+	let priority: Vec<&str> = priority
+		.iter()
+		.map(|url| url.trim_end_matches('/'))
+		.collect();
+	let mut targets: Vec<HealthTarget> = by_url
+		.into_iter()
+		.map(|(base_url, sources)| {
+			let known_theme = sources
+				.iter()
+				.find_map(|source| themes.get(&source.id).copied());
+			HealthTarget {
+				base_url,
+				sources,
+				known_theme,
+			}
+		})
+		.collect();
+	targets.sort_by(|a, b| a.base_url.cmp(&b.base_url));
+	targets.sort_by_key(|target| !priority.contains(&target.base_url.as_str()));
+	Ok(targets)
+}
+
+/// Probe one target and upsert a `source_health` row for every catalog
+/// source sharing its base URL. A source is marked dead once it has
+/// `dead_after` consecutive failed runs; one reachable run resets the count.
+pub async fn probe_target<C: ConnectionTrait>(
+	conn: &C,
+	checker: &HealthChecker,
+	target: &HealthTarget,
+	dead_after: i32,
+) -> Result<HealthRunSummary, sea_orm::DbErr> {
+	let probe = checker.probe(&target.base_url, target.known_theme).await;
+	let source_ids: Vec<String> = target
+		.sources
+		.iter()
+		.map(|source| source.id.clone())
+		.collect();
+	let existing: HashMap<String, source_health::Model> = source_health::Entity::find()
+		.filter(source_health::Column::SourceId.is_in(source_ids))
+		.all(conn)
+		.await?
+		.into_iter()
+		.map(|row| (row.source_id.clone(), row))
+		.collect();
+
+	let mut summary = HealthRunSummary {
+		probed_urls: 1,
+		..Default::default()
+	};
+	let checked_at = Utc::now();
+	for source in &target.sources {
+		let previous_failures = existing
+			.get(&source.id)
+			.map(|row| row.consecutive_failures)
+			.unwrap_or_default();
+		let (status, failures) = probe.next_state(previous_failures, dead_after);
+		match status {
+			HealthStatus::Ok => summary.ok += 1,
+			HealthStatus::Degraded => summary.degraded += 1,
+			HealthStatus::Dead => summary.dead += 1,
+			HealthStatus::Unknown => {},
+		}
+		let model = source_health::ActiveModel {
+			source_id: Set(source.id.clone()),
+			name: Set(source.name.clone()),
+			lang: Set(source.lang.clone()),
+			base_url: Set(source.base_url.clone()),
+			theme: Set(probe
+				.theme
+				.map(|theme| theme.as_str().to_string())
+				.or_else(|| existing.get(&source.id).and_then(|row| row.theme.clone()))),
+			status: Set(status.as_str().to_string()),
+			http_status: Set(probe.http_status.map(i32::from)),
+			latency_ms: Set(probe.latency_ms.map(|ms| ms.min(i32::MAX as u32) as i32)),
+			redirect_url: Set(probe.redirect_url.clone()),
+			latest_path_ok: Set(probe.latest_path_ok),
+			consecutive_failures: Set(failures),
+			error: Set(probe.error.clone()),
+			checked_at: Set(Some(checked_at.into())),
+		};
+		source_health::Entity::insert(model)
+			.on_conflict(
+				OnConflict::column(source_health::Column::SourceId)
+					.update_columns([
+						source_health::Column::Name,
+						source_health::Column::Lang,
+						source_health::Column::BaseUrl,
+						source_health::Column::Theme,
+						source_health::Column::Status,
+						source_health::Column::HttpStatus,
+						source_health::Column::LatencyMs,
+						source_health::Column::RedirectUrl,
+						source_health::Column::LatestPathOk,
+						source_health::Column::ConsecutiveFailures,
+						source_health::Column::Error,
+						source_health::Column::CheckedAt,
+					])
+					.to_owned(),
+			)
+			.exec(conn)
+			.await?;
+		summary.updated_sources += 1;
+	}
+	Ok(summary)
+}
+
+impl HealthRunSummary {
+	/// Fold another run's (or target's) counters into this one.
+	pub fn merge(&mut self, other: HealthRunSummary) {
+		self.probed_urls += other.probed_urls;
+		self.updated_sources += other.updated_sources;
+		self.ok += other.ok;
+		self.degraded += other.degraded;
+		self.dead += other.dead;
+	}
+}
+
 /// Probe every distinct base URL in the catalog and upsert one
 /// `source_health` row per catalog source. Enabled instance base URLs listed
 /// in `priority` are probed first.
@@ -184,132 +354,25 @@ pub async fn check_catalog<C: ConnectionTrait>(
 	snapshot: &CatalogSnapshot,
 	priority: &[String],
 	concurrency: usize,
+	dead_after: i32,
 ) -> Result<HealthRunSummary, sea_orm::DbErr> {
-	let existing: HashMap<String, source_health::Model> = source_health::Entity::find()
-		.all(conn)
-		.await?
-		.into_iter()
-		.map(|row| (row.source_id.clone(), row))
-		.collect();
-
-	// base_url -> catalog sources sharing it
-	let mut by_url: HashMap<
-		String,
-		Vec<(
-			&crate::catalog::CatalogEntry,
-			&crate::catalog::CatalogSource,
-		)>,
-	> = HashMap::new();
-	for entry in &snapshot.entries {
-		for source in &entry.sources {
-			if source.base_url.is_empty() {
-				continue;
-			}
-			by_url
-				.entry(source.base_url.trim_end_matches('/').to_string())
-				.or_default()
-				.push((entry, source));
-		}
-	}
-
-	let mut urls: Vec<String> = by_url.keys().cloned().collect();
-	urls.sort();
-	let priority: Vec<String> = priority
-		.iter()
-		.map(|url| url.trim_end_matches('/').to_string())
-		.collect();
-	urls.sort_by_key(|url| !priority.contains(url));
-
+	let targets = plan(conn, snapshot, priority).await?;
+	// Probes run concurrently; the upserts they hand back are applied on
+	// this task, so one SQLite writer is never contended by the fan-out.
 	let checker = Arc::new(checker.clone());
-	let known_themes: HashMap<String, SourceTheme> = by_url
-		.iter()
-		.filter_map(|(url, sources)| {
-			sources.iter().find_map(|(_, source)| {
-				existing
-					.get(&source.id)
-					.and_then(|row| row.theme.as_deref())
-					.and_then(SourceTheme::parse)
-					.map(|theme| (url.clone(), theme))
+	let results: Vec<Result<HealthRunSummary, sea_orm::DbErr>> =
+		stream::iter(targets.iter())
+			.map(|target| {
+				let checker = checker.clone();
+				async move { probe_target(conn, checker.as_ref(), target, dead_after).await }
 			})
-		})
-		.collect();
+			.buffer_unordered(concurrency.max(1))
+			.collect()
+			.await;
 
-	let probes: Vec<(String, HealthProbe)> = stream::iter(urls.into_iter())
-		.map(|url| {
-			let checker = checker.clone();
-			let theme = known_themes.get(&url).copied();
-			async move {
-				let probe = checker.probe(&url, theme).await;
-				(url, probe)
-			}
-		})
-		.buffer_unordered(concurrency.max(1))
-		.collect()
-		.await;
-
-	let mut summary = HealthRunSummary {
-		probed_urls: probes.len(),
-		..Default::default()
-	};
-	let checked_at = Utc::now();
-	for (url, probe) in probes {
-		let Some(sources) = by_url.get(&url) else {
-			continue;
-		};
-		for (_, source) in sources {
-			let previous_failures = existing
-				.get(&source.id)
-				.map(|row| row.consecutive_failures)
-				.unwrap_or_default();
-			let (status, failures) = probe.next_state(previous_failures);
-			match status {
-				HealthStatus::Ok => summary.ok += 1,
-				HealthStatus::Degraded => summary.degraded += 1,
-				HealthStatus::Dead => summary.dead += 1,
-				HealthStatus::Unknown => {},
-			}
-			let model = source_health::ActiveModel {
-				source_id: Set(source.id.clone()),
-				name: Set(source.name.clone()),
-				lang: Set(source.lang.clone()),
-				base_url: Set(source.base_url.clone()),
-				theme: Set(probe.theme.map(|theme| theme.as_str().to_string()).or_else(
-					|| existing.get(&source.id).and_then(|row| row.theme.clone()),
-				)),
-				status: Set(status.as_str().to_string()),
-				http_status: Set(probe.http_status.map(i32::from)),
-				latency_ms: Set(probe
-					.latency_ms
-					.map(|ms| ms.min(i32::MAX as u32) as i32)),
-				redirect_url: Set(probe.redirect_url.clone()),
-				latest_path_ok: Set(probe.latest_path_ok),
-				consecutive_failures: Set(failures),
-				error: Set(probe.error.clone()),
-				checked_at: Set(Some(checked_at.into())),
-			};
-			source_health::Entity::insert(model)
-				.on_conflict(
-					OnConflict::column(source_health::Column::SourceId)
-						.update_columns([
-							source_health::Column::Name,
-							source_health::Column::Lang,
-							source_health::Column::BaseUrl,
-							source_health::Column::Theme,
-							source_health::Column::Status,
-							source_health::Column::HttpStatus,
-							source_health::Column::LatencyMs,
-							source_health::Column::RedirectUrl,
-							source_health::Column::LatestPathOk,
-							source_health::Column::ConsecutiveFailures,
-							source_health::Column::Error,
-							source_health::Column::CheckedAt,
-						])
-						.to_owned(),
-				)
-				.exec(conn)
-				.await?;
-			summary.updated_sources += 1;
-		}
+	let mut summary = HealthRunSummary::default();
+	for result in results {
+		summary.merge(result?);
 	}
 	Ok(summary)
 }
@@ -342,29 +405,38 @@ mod tests {
 	}
 
 	#[test]
-	fn failures_escalate_to_dead_after_three_runs() {
+	fn failures_escalate_to_dead_after_the_configured_count() {
 		let failed = HealthProbe {
 			http_status: Some(503),
 			..Default::default()
 		};
-		assert_eq!(failed.next_state(0), (HealthStatus::Degraded, 1));
-		assert_eq!(failed.next_state(1), (HealthStatus::Degraded, 2));
-		assert_eq!(failed.next_state(2), (HealthStatus::Dead, 3));
+		let d = DEAD_AFTER_FAILURES;
+		assert_eq!(failed.next_state(0, d), (HealthStatus::Degraded, 1));
+		assert_eq!(failed.next_state(1, d), (HealthStatus::Degraded, 2));
+		assert_eq!(failed.next_state(2, d), (HealthStatus::Dead, 3));
 		let unreachable = HealthProbe::default();
-		assert_eq!(unreachable.next_state(5), (HealthStatus::Dead, 6));
+		assert_eq!(unreachable.next_state(5, d), (HealthStatus::Dead, 6));
+		// A configured threshold replaces the default in both directions.
+		assert_eq!(failed.next_state(0, 1), (HealthStatus::Dead, 1));
+		assert_eq!(failed.next_state(3, 5), (HealthStatus::Degraded, 4));
+		// A nonsensical threshold still marks the first failure dead rather
+		// than never escalating.
+		assert_eq!(failed.next_state(0, 0), (HealthStatus::Dead, 1));
 
 		let healthy = HealthProbe {
 			http_status: Some(200),
 			latest_path_ok: Some(true),
 			..Default::default()
 		};
-		assert_eq!(healthy.next_state(2), (HealthStatus::Ok, 0));
+		// Recovery resets the count, so a dead source needs `dead_after`
+		// fresh failures to die again.
+		assert_eq!(healthy.next_state(9, d), (HealthStatus::Ok, 0));
 		let latest_broken = HealthProbe {
 			http_status: Some(200),
 			latest_path_ok: Some(false),
 			..Default::default()
 		};
-		assert_eq!(latest_broken.next_state(0), (HealthStatus::Degraded, 0));
+		assert_eq!(latest_broken.next_state(0, d), (HealthStatus::Degraded, 0));
 	}
 
 	#[tokio::test]
@@ -452,9 +524,10 @@ mod tests {
 		let checker = HealthChecker::with_client(reqwest::Client::new());
 
 		for run in 1..=3 {
-			let summary = check_catalog(&conn, &checker, &snapshot, &[], 4)
-				.await
-				.unwrap();
+			let summary =
+				check_catalog(&conn, &checker, &snapshot, &[], 4, DEAD_AFTER_FAILURES)
+					.await
+					.unwrap();
 			assert_eq!(summary.probed_urls, 2, "run {run}");
 			assert_eq!(summary.updated_sources, 3, "run {run}");
 		}
@@ -468,14 +541,38 @@ mod tests {
 		assert_eq!(alpha.http_status, Some(200));
 		assert_eq!(alpha.consecutive_failures, 0);
 		assert!(alpha.checked_at.is_some());
-		let dead = source_health::Entity::find()
-			.filter(source_health::Column::SourceId.eq("3"))
-			.one(&conn)
-			.await
-			.unwrap()
-			.unwrap();
+		async fn dead_row(conn: &sea_orm::DatabaseConnection) -> source_health::Model {
+			source_health::Entity::find()
+				.filter(source_health::Column::SourceId.eq("3"))
+				.one(conn)
+				.await
+				.unwrap()
+				.unwrap()
+		}
+		let dead = dead_row(&conn).await;
 		assert_eq!(dead.consecutive_failures, 3);
 		assert_eq!(dead.status, "DEAD");
 		assert_eq!(dead.http_status, Some(500));
+
+		// Recovery: one reachable run clears the count and the DEAD mark.
+		broken.set_route("/", CannedResponse::html("<html/>"));
+		check_catalog(&conn, &checker, &snapshot, &[], 4, DEAD_AFTER_FAILURES)
+			.await
+			.unwrap();
+		let recovered = dead_row(&conn).await;
+		assert_eq!(recovered.status, "OK");
+		assert_eq!(recovered.consecutive_failures, 0);
+		assert_eq!(recovered.http_status, Some(200));
+		assert!(recovered.error.is_none());
+
+		// And a lower configured threshold kills it on the next failure.
+		broken.set_route("/", CannedResponse::status(500));
+		let summary = check_catalog(&conn, &checker, &snapshot, &[], 4, 1)
+			.await
+			.unwrap();
+		assert_eq!(summary.dead, 1);
+		let dead_again = dead_row(&conn).await;
+		assert_eq!(dead_again.status, "DEAD");
+		assert_eq!(dead_again.consecutive_failures, 1);
 	}
 }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use async_graphql::{Context, Object, Result, ID};
 use chrono::Utc;
+use models::txn::begin_write;
 use models::{
 	domain::{
 		reading_progress::{
@@ -18,7 +19,7 @@ use models::{
 };
 use sea_orm::{
 	prelude::Decimal, ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait,
-	IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, QueryTrait, TransactionTrait,
+	IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, QueryTrait,
 };
 use stump_core::reading_state;
 
@@ -103,7 +104,7 @@ impl ReadProgressMutation {
 			},
 		};
 
-		let upsert_txn = conn.begin().await?;
+		let upsert_txn = begin_write(conn).await?;
 
 		let session = upsert_reading_session(&upsert_txn, user, id.as_ref(), progression)
 			.await
@@ -168,7 +169,7 @@ impl ReadProgressMutation {
 		// i think if you manage to be a readthrough behind locally and opt to accept local, then yes??
 		// perhaps more messaging on frontend... ugh. delete for now ig
 
-		let txn = core.conn.begin().await?;
+		let txn = begin_write(&core.conn).await?;
 
 		let base_delete = reading_session::Entity::delete_many().filter(
 			reading_session::Column::UserId
@@ -242,7 +243,7 @@ impl ReadProgressMutation {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
-		let tx = core.conn.begin().await?;
+		let tx = begin_write(&core.conn).await?;
 
 		let current_session = reading_session::Entity::find()
 			.filter(
@@ -297,7 +298,7 @@ impl ReadProgressMutation {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
-		let tx = core.conn.begin().await?;
+		let tx = begin_write(&core.conn).await?;
 
 		let did_reset =
 			reset_cumulative_elapsed_seconds(&tx, &user.id, id.as_str()).await?;
@@ -321,7 +322,7 @@ impl ReadProgressMutation {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
-		let tx = core.conn.begin().await?;
+		let tx = begin_write(&core.conn).await?;
 
 		let current_session = reading_session::Entity::find()
 			.filter(
@@ -450,7 +451,7 @@ impl ReadProgressMutation {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
-		let tx = core.conn.begin().await?;
+		let tx = begin_write(&core.conn).await?;
 
 		let books = media::Entity::find_for_series_id(user, id.to_string())
 			.select_only()
@@ -552,7 +553,7 @@ impl ReadProgressMutation {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
-		let tx = core.conn.begin().await?;
+		let tx = begin_write(&core.conn).await?;
 
 		let books = media::Entity::find_for_series_id(user, id.to_string())
 			.select_only()

@@ -2,6 +2,7 @@ use async_graphql::{Context, Json, Object, Result, SimpleObject, ID};
 use chrono::Utc;
 use itertools::chain;
 use metadata_integrations::MetadataField;
+use models::txn::begin_write;
 use models::{
 	entity::{
 		last_library_visit,
@@ -15,7 +16,7 @@ use models::{
 use sea_orm::{
 	prelude::*,
 	sea_query::{OnConflict, Query},
-	Condition, IntoActiveModel, QuerySelect, Set, TransactionTrait,
+	Condition, IntoActiveModel, QuerySelect, Set,
 };
 use stump_core::{
 	filesystem::{
@@ -111,7 +112,7 @@ impl LibraryMutation {
 
 		let thumbnails_dir = core.config.get_thumbnails_dir();
 
-		let txn = core.conn.as_ref().begin().await?;
+		let txn = begin_write(core.conn.as_ref()).await?;
 
 		let deleted_media = media::Entity::find()
 			.filter(
@@ -311,7 +312,7 @@ impl LibraryMutation {
 			.await?
 			.ok_or("Library not found")?;
 
-		let tx = conn.begin().await?;
+		let tx = begin_write(conn).await?;
 
 		let series_ids: Vec<String> = series::Entity::find()
 			.select_only()
@@ -571,7 +572,7 @@ impl LibraryMutation {
 			return Ok(Library::from(library));
 		}
 
-		let txn = core.conn.as_ref().begin().await?;
+		let txn = begin_write(core.conn.as_ref()).await?;
 
 		if !to_add.is_empty() {
 			library_exclusion::Entity::insert_many(to_add)

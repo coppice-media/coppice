@@ -54,6 +54,8 @@ pub mod notification_channel_setting;
 pub mod notification_rule;
 pub mod notifier;
 pub mod page_hash;
+pub mod provider_series_identity;
+pub mod provider_series_link;
 pub mod provider_source;
 pub mod reading_head;
 pub mod reading_head_event;

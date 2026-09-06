@@ -85,7 +85,7 @@ fn scoped_series(user: &AuthUser, scope: Option<Vec<String>>) -> Select<series::
 
 /// Distinct values of a series-metadata column and a media-metadata column
 /// across the user's visible series, keyed case-insensitively.
-async fn distinct_values(
+pub(crate) async fn distinct_values(
 	ctx: &dyn KavitaBackend,
 	user: &AuthUser,
 	scope: Option<Vec<String>>,
@@ -159,14 +159,15 @@ async fn genres(
 	))
 }
 
-async fn tags(
-	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
-	Extension(auth): Extension<AuthContext>,
-	Query(query): Query<LibraryIdsQuery>,
-) -> APIResult<Json<Vec<TagDto>>> {
-	let user = auth.user();
-	let scope = library_scope(ctx.as_ref(), &query).await?;
-	let series_ids = scoped_series(&user, scope)
+/// The tags attached to the user's visible series, ordered by title. The
+/// search `tags` group narrows the same list, so a tag found by one is found
+/// by the other.
+pub(crate) async fn visible_tags(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	scope: Option<Vec<String>>,
+) -> APIResult<Vec<TagDto>> {
+	let series_ids = scoped_series(user, scope)
 		.select_only()
 		.column(series::Column::Id)
 		.into_tuple::<String>()
@@ -203,7 +204,17 @@ async fn tags(
 	result.sort_by(|left, right| {
 		left.title.to_lowercase().cmp(&right.title.to_lowercase())
 	});
-	Ok(Json(result))
+	Ok(result)
+}
+
+async fn tags(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Query(query): Query<LibraryIdsQuery>,
+) -> APIResult<Json<Vec<TagDto>>> {
+	let user = auth.user();
+	let scope = library_scope(ctx.as_ref(), &query).await?;
+	Ok(Json(visible_tags(ctx.as_ref(), &user, scope).await?))
 }
 
 /// Kavita lists every rating except `NotApplicable`, in enum order.
@@ -294,18 +305,15 @@ async fn languages(
 	))
 }
 
-async fn people(
-	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
-	Extension(auth): Extension<AuthContext>,
-	Query(query): Query<LibraryIdsQuery>,
-) -> APIResult<Json<Vec<PersonDto>>> {
-	let user = auth.user();
-	let scope = library_scope(ctx.as_ref(), &query).await?;
-	let sources: [(
-		Option<series_metadata::Column>,
-		Option<media_metadata::Column>,
-		PersonRole,
-	); 11] = [
+/// Every people role Stump records, with the metadata columns that carry it.
+/// `GET /api/Metadata/people` and the search `persons` group walk the same
+/// list, so a name found by one is found by the other.
+pub(crate) fn people_sources() -> [(
+	Option<series_metadata::Column>,
+	Option<media_metadata::Column>,
+	PersonRole,
+); 11] {
+	[
 		(
 			Some(series_metadata::Column::Writers),
 			Some(media_metadata::Column::Writers),
@@ -357,9 +365,18 @@ async fn people(
 			PersonRole::Editor,
 		),
 		(None, Some(media_metadata::Column::Teams), PersonRole::Team),
-	];
+	]
+}
+
+async fn people(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Query(query): Query<LibraryIdsQuery>,
+) -> APIResult<Json<Vec<PersonDto>>> {
+	let user = auth.user();
+	let scope = library_scope(ctx.as_ref(), &query).await?;
 	let mut people: BTreeMap<String, PersonDto> = BTreeMap::new();
-	for (series_column, media_column, role) in sources {
+	for (series_column, media_column, role) in people_sources() {
 		let values = distinct_values(
 			ctx.as_ref(),
 			&user,

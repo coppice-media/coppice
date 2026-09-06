@@ -2,11 +2,12 @@ use async_graphql::{Context, Object, Result, ID};
 use metadata_integrations::{
 	MatchCandidate, MergeStrategy, MetadataField, MetadataFieldOverride,
 };
+use models::txn::begin_write;
 use models::{
 	entity::{media, media_metadata, metadata_fetch_record, series, series_metadata},
 	shared::enums::{MetadataFetchStatus, MetadataResetImpact, UserPermission},
 };
-use sea_orm::{prelude::*, sea_query::Query, IntoActiveModel, Set, TransactionTrait};
+use sea_orm::{prelude::*, sea_query::Query, IntoActiveModel, Set};
 use stump_core::filesystem::metadata::ProviderClientCache;
 
 use crate::{
@@ -75,7 +76,7 @@ impl SeriesMetadataMutation {
 			.await?
 			.ok_or("Series not found")?;
 
-		let tx = conn.begin().await?;
+		let tx = begin_write(conn).await?;
 
 		if matches!(
 			impact,

@@ -55,6 +55,7 @@ mod m20260919_000000_add_notification_rules;
 mod m20260920_000000_add_annotation_sink_configs;
 mod m20260922_kavita_on_deck_removals;
 mod m20260923_000000_backfill_reading_heads;
+mod m20260924_000000_add_provider_series_links;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -115,6 +116,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260920_000000_add_annotation_sink_configs::Migration),
 			Box::new(m20260922_kavita_on_deck_removals::Migration),
 			Box::new(m20260923_000000_backfill_reading_heads::Migration),
+			Box::new(m20260924_000000_add_provider_series_links::Migration),
 		]
 	}
 }

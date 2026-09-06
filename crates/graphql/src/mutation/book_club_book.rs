@@ -1,10 +1,11 @@
 use async_graphql::{Context, Object, Result, ID};
 use chrono::Utc;
+use models::txn::begin_write;
 use models::{
 	entity::{book_club_book, book_club_discussion},
 	shared::book_club::{BookClubExternalBook, BookClubInternalBook},
 };
-use sea_orm::{prelude::*, Set, TransactionTrait};
+use sea_orm::{prelude::*, Set};
 
 use crate::{
 	data::CoreContext,
@@ -33,7 +34,7 @@ impl BookClubBookMutation {
 			.await?
 			.ok_or("Book club not found or you lack permission to add books")?;
 
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		let next_position = book_club_book::Entity::get_max_position_for_club(
 			book_club_id.as_ref(),
@@ -99,7 +100,7 @@ impl BookClubBookMutation {
 				.await?
 				.ok_or("Book club not found or you lack permission")?;
 
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		let mut active_model: book_club_book::ActiveModel = book.into();
 		active_model.completed_at = Set(Some(DateTimeWithTimeZone::from(Utc::now())));
@@ -134,7 +135,7 @@ impl BookClubBookMutation {
 			.await?
 			.ok_or("Book club not found or you lack permission")?;
 
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		let completed_count = book_club_book::Entity::find()
 			.filter(book_club_book::Column::Id.is_in(&book_ids))

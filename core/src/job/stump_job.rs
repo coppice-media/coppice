@@ -45,6 +45,10 @@ pub enum StumpJob {
 	/// `provider_gc_days`. Scheduled internally; see `core/src/providers.rs`.
 	#[cfg(feature = "providers")]
 	ProviderGc,
+	/// Probes every catalog source's base URL and records `source_health`
+	/// rows; see `core/src/job/provider_health.rs`.
+	#[cfg(feature = "providers")]
+	ProviderSourceHealth,
 	/// Delivers queued notification targets; see `core/src/job/notification.rs`.
 	NotificationDispatch {
 		deliveries: Vec<crate::job::notification::QueuedDelivery>,
@@ -68,6 +72,8 @@ impl JobPayload for StumpJob {
 			StumpJob::AnalyzeMedia { .. } => "analyze_media",
 			#[cfg(feature = "providers")]
 			StumpJob::ProviderGc => "provider_gc",
+			#[cfg(feature = "providers")]
+			StumpJob::ProviderSourceHealth => "provider_source_health",
 			StumpJob::NotificationDispatch { .. } => "notification_dispatch",
 			StumpJob::AnnotationSync { .. } => "annotation_sync",
 		}
@@ -93,6 +99,8 @@ impl JobPayload for StumpJob {
 			},
 			#[cfg(feature = "providers")]
 			StumpJob::ProviderGc => Some("Reclaim stale materialised provider series".to_string()),
+			#[cfg(feature = "providers")]
+			StumpJob::ProviderSourceHealth => Some("Probe remote provider sources".to_string()),
 			StumpJob::NotificationDispatch { deliveries } => {
 				Some(format!("Deliver {} notification(s)", deliveries.len()))
 			},
@@ -109,6 +117,8 @@ impl JobPayload for StumpJob {
 			StumpJob::AnalyzeMedia { .. } => "ANALYZE",
 			#[cfg(feature = "providers")]
 			StumpJob::ProviderGc => "GC",
+			#[cfg(feature = "providers")]
+			StumpJob::ProviderSourceHealth => "MAINTENANCE",
 			StumpJob::NotificationDispatch { .. } => "NOTIFY",
 			StumpJob::AnnotationSync { .. } => "ANNOTATIONS",
 			StumpJob::MetadataFetch { .. } => "METADATA",

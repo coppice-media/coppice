@@ -25,6 +25,7 @@ pub mod gc;
 pub mod health;
 pub mod host;
 pub mod http;
+pub mod identity;
 pub mod materialize;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
@@ -39,11 +40,12 @@ pub use browse::{BrowseKind, RemoteOrigin, VirtualBrowseCache};
 pub use cache::{CacheKey, PageCache};
 pub use catalog::{CatalogEntry, CatalogSource, SourceCatalog, SourceTheme};
 pub use gc::{gc_materialised_series, GcReport};
-pub use health::{HealthProbe, HealthStatus};
+pub use health::{HealthProbe, HealthStatus, HealthTarget};
 pub use host::{
 	ProviderError, ProviderHost, ProviderHostConfig, SourceFactory, VirtualArchive,
 };
 pub use http::{SourceHttp, USER_AGENT};
+pub use identity::{merge_series, normalise_title, MergeReport, SeriesDuplicate};
 pub use materialize::{add_series, refresh_series, Materialized};
 pub use rate_limit::RateLimiter;
 pub use source::{

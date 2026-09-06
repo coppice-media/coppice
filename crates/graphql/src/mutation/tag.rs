@@ -4,6 +4,7 @@ use crate::{
 	object::{media::Media, series::Series, tag::Tag},
 };
 use async_graphql::{Context, Object, Result, ID};
+use models::txn::begin_write;
 use models::{
 	entity::{media, media_tag, series, series_tag, tag},
 	services::tags::sync_tags,
@@ -11,7 +12,7 @@ use models::{
 };
 use sea_orm::{
 	prelude::*, sea_query::Query, ActiveValue::Set, DatabaseConnection,
-	DatabaseTransaction, IntoActiveModel, QuerySelect, TransactionTrait,
+	DatabaseTransaction, IntoActiveModel, QuerySelect,
 };
 use std::collections::HashSet;
 
@@ -76,7 +77,7 @@ impl TagMutation {
 			.all(conn)
 			.await?;
 
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		let (to_connect, to_disconnect) = sync_tags(&txn, &tags, &existing_tags).await?;
 
@@ -148,7 +149,7 @@ impl TagMutation {
 			.all(conn)
 			.await?;
 
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		let (to_connect, to_disconnect) = sync_tags(&txn, &tags, &existing_tags).await?;
 
@@ -256,7 +257,7 @@ async fn insert_tags(
 }
 
 async fn create_tags(conn: &DatabaseConnection, tags: Vec<String>) -> Result<Vec<Tag>> {
-	let txn = conn.begin().await?;
+	let txn = begin_write(conn).await?;
 	let unique_tags = get_unique_tags(&txn, tags).await?;
 	let inserted_tags = insert_tags(&txn, unique_tags).await?;
 
@@ -298,7 +299,7 @@ async fn rename_tag(conn: &DatabaseConnection, id: i32, name: String) -> Result<
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use sea_orm::{MockDatabase, MockExecResult};
+	use sea_orm::{MockDatabase, MockExecResult, TransactionTrait};
 
 	#[tokio::test]
 	async fn test_insert() {

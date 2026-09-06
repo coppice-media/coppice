@@ -24,3 +24,4 @@ urlencoding.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 tests = { path = "../tests" }
+tower = { version = "0.5", features = ["util"] }

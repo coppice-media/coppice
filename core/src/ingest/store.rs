@@ -5,6 +5,7 @@ use std::{
 
 use chrono::Utc;
 use metadata_integrations::MergeStrategy;
+use models::txn::begin_write;
 use models::{
 	entity::{
 		ingest_analysis_job, ingest_drop_item, ingest_metadata_application,
@@ -18,7 +19,6 @@ use sea_orm::{
 	ActiveModelTrait,
 	ActiveValue::{NotSet, Set},
 	ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect,
-	TransactionTrait,
 };
 use serde_json::{json, Value};
 use tokio::{fs, io::AsyncRead};
@@ -644,7 +644,7 @@ impl IngestStore {
 			.to_path_buf();
 		fs::create_dir_all(&series_path).await?;
 
-		let txn = self.conn.begin().await?;
+		let txn = begin_write(&self.conn).await?;
 		let config = library_config::Entity::find_by_id(library.config_id)
 			.one(&txn)
 			.await?

@@ -491,7 +491,7 @@ type ConfidenceFactor {
 "An event that is emitted by the core and consumed by a client"
 union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | DiscoveredMissingLibrary | CreatedMedia | MediaDeleted | SeriesDeleted | CreatedManySeries | CreatedOrUpdatedManyMedia | DeviceSeen | DevicePairingRequested | DevicePaired | IngestAwaitingReview | QualityFailed | AnalysisJobFailed | ProviderMatchDone | CollectionAdded | CollectionChanged | CollectionDeleted | ReadListAdded | ReadListChanged | ReadListDeleted | LibraryCreated | LibraryUpdated | LibraryDeleted
 
-union CoreJobOutput = LibraryScanOutput | SeriesScanOutput | ThumbnailGenerationOutput | PlaceholderGenerationOutput | MetadataFetchJobOutput | AnalyzeMediaOutput | NotificationDispatchOutput | AnnotationSyncOutput
+union CoreJobOutput = LibraryScanOutput | SeriesScanOutput | ThumbnailGenerationOutput | PlaceholderGenerationOutput | MetadataFetchJobOutput | AnalyzeMediaOutput | NotificationDispatchOutput | AnnotationSyncOutput | ProviderSourceHealthOutput
 
 input CreateAnnotationInput {
 	mediaId: String!
@@ -2863,6 +2863,20 @@ type Mutation {
 	addProviderSeries(libraryId: String!, sourceId: String!, remoteId: String!): SeriesModel!
 	"Re-fetch details and chapters for a materialised provider series."
 	refreshProviderSeries(seriesId: String!): SeriesModel!
+	"""
+	Probe every catalog source now. The work runs as
+	`StumpJob::ProviderSourceHealth`, the same job the scheduler enqueues
+	every `provider_health_interval_secs`; the mutation returns once it is
+	queued.
+	"""
+	runProviderHealth: Boolean!
+	"""
+	Merge two materialised provider series: reading progress on `drop` is
+	repointed onto the matching chapters of `keep`, then `drop` and its
+	media rows are deleted. Both must be provider-backed; a locally
+	scanned series is never touched.
+	"""
+	mergeProviderSeries(keep: String!, drop: String!): ProviderMergeResult!
 	stageIngestUploads(input: StageIngestUploadsInput!): StageIngestUploadsPayload!
 	scanIngestDropFolder(libraryId: ID!): IngestDropFolder!
 	enqueueIngestAnalysis(input: EnqueueIngestAnalysisInput!): [IngestAnalysisJob!]!
@@ -3357,6 +3371,12 @@ type ProviderCatalogEntry {
 	(`<implementation>-<lang>`).
 	"""
 	instanceId: String
+	"""
+	The latest health observation for this source, when it has been
+	probed: the badge a client shows next to the entry. `dead` entries
+	are only listed when `includeDead` was set.
+	"""
+	health: ProviderSourceHealth
 }
 
 type ProviderCredentialVerification {
@@ -3376,10 +3396,44 @@ type ProviderMatchDone {
 	candidateCount: Int!
 }
 
+"What one `mergeProviderSeries` call did."
+type ProviderMergeResult {
+	keptSeriesId: String!
+	droppedSeriesId: String!
+	"Reading heads moved onto a chapter of the kept series."
+	headsRepointed: Int!
+	"""
+	Heads whose chapter has no counterpart in the kept series; those are
+	deleted with their media row.
+	"""
+	headsUnmatched: Int!
+	mediaDeleted: Int!
+}
+
 "One page of a live provider search."
 type ProviderSearchPage {
 	items: [ProviderSeriesSummary!]!
 	hasNext: Boolean!
+}
+
+"""
+One recorded cross-source duplicate: `series` is the same work as
+`canonical`, which materialised first from another source.
+"""
+type ProviderSeriesDuplicate {
+	seriesId: String!
+	seriesName: String!
+	"The source instance `series` was materialised from."
+	sourceId: String
+	canonicalSeriesId: String!
+	canonicalSeriesName: String!
+	canonicalSourceId: String
+	"""
+	`EXTERNAL_KEY` when a cross-source id matched, `TITLE` when only the
+	normalised titles did.
+	"""
+	reason: String!
+	createdAt: DateTime!
 }
 
 """
@@ -3414,9 +3468,39 @@ type ProviderSource {
 
 type ProviderSourceHealth {
 	sourceId: String!
+	name: String!
+	baseUrl: String!
+	"`UNKNOWN`, `OK`, `DEGRADED` or `DEAD`."
 	status: String!
 	latencyMs: Int
-	checkedAt: DateTime
+	"HTTP status of the last probe of the source's base URL."
+	httpStatus: Int
+	"Where the base URL redirected to, when it moved."
+	redirectUrl: String
+	"Whether the theme's latest-updates path answered."
+	latestPathOk: Boolean
+	error: String
+	"Failed runs in a row; reset by one reachable run."
+	consecutiveFailures: Int!
+	"""
+	Whether the source reached `provider_health_dead_after` failures and
+	is hidden from the catalog by default.
+	"""
+	dead: Boolean!
+	"When the source was last probed."
+	lastCheckedAt: DateTime
+}
+
+"Summary of one provider source-health run."
+type ProviderSourceHealthOutput {
+	"Base URLs probed (one per host, not per source)."
+	probedUrls: Int!
+	"`source_health` rows written."
+	updatedSources: Int!
+	ok: Int!
+	degraded: Int!
+	"Sources that reached `provider_health_dead_after` failures."
+	dead: Int!
 }
 
 enum PublicationStatus {
@@ -3616,11 +3700,22 @@ type Query {
 	providerSources: [ProviderSource!]!
 	"""
 	The Keiyoushi extension catalog, filtered by language and name.
-	`has_implementation` marks entries this server can actually run.
+	`has_implementation` marks entries this server can actually run, and
+	`health` is the latest probe for the entry (its badge). Sources the
+	health job marked dead are hidden unless `include_dead` is set.
 	"""
-	providerCatalog(lang: String, query: String): [ProviderCatalogEntry!]!
-	"The latest health observations for catalog sources."
-	providerSourceHealth: [ProviderSourceHealth!]!
+	providerCatalog(lang: String, query: String, includeDead: Boolean): [ProviderCatalogEntry!]!
+	"""
+	The latest health observations for catalog sources. Dead sources are
+	included only when `include_dead` is set, matching `providerCatalog`.
+	"""
+	providerSourceHealth(includeDead: Boolean): [ProviderSourceHealth!]!
+	"""
+	Cross-source duplicates recorded when a series materialised from a
+	second source (`provider_series_links`). Advisory: nothing is merged
+	until `mergeProviderSeries` is called.
+	"""
+	providerSeriesDuplicates: [ProviderSeriesDuplicate!]!
 	"""
 	Live search on one provider source, without materialising anything.
 	Results carry deterministic Stump ids and can be added to a virtual
@@ -4534,8 +4629,9 @@ The settings are grouped into sub-structs (`server`, `database`, `jobs`, `protoc
 `ingest`, `providers`, `auth`, `pdf`) that are flattened for serialization, so `Stump.toml` and the
 environment keep their flat key set.
 
-Example:
-```
+Example (boots a real core against the configured directory, so it is
+not executed as a doctest):
+```no_run
 use stump_core::{config::{self, StumpConfig}, StumpCore};
 
 #[tokio::main]

@@ -11,11 +11,12 @@ use metadata_integrations::{
 	create_provider, MatchCandidate, MergeStrategy, MetadataField,
 	ProviderCredentialVerification,
 };
+use models::txn::begin_write;
 use models::{
 	entity::{metadata_fetch_record, metadata_provider_config},
 	shared::enums::{MetadataFetchStatus, UserPermission},
 };
-use sea_orm::{prelude::*, IntoActiveModel, Set, TransactionTrait, TryIntoModel};
+use sea_orm::{prelude::*, IntoActiveModel, Set, TryIntoModel};
 
 #[derive(Default)]
 pub struct MetadataProviderMutation;
@@ -114,7 +115,7 @@ impl MetadataProviderMutation {
 			.all(conn)
 			.await?;
 
-		let tx = conn.begin().await?;
+		let tx = begin_write(conn).await?;
 		let mut accepted = 0u32;
 
 		for record in pending {
@@ -183,7 +184,7 @@ impl MetadataProviderMutation {
 			.await?;
 
 		let count = pending.len() as u32;
-		let tx = conn.begin().await?;
+		let tx = begin_write(conn).await?;
 
 		for record in pending {
 			let mut active = record.into_active_model();

@@ -1,9 +1,10 @@
 use async_graphql::{Context, Object, Result, ID};
+use models::txn::begin_write;
 use models::{
 	entity::{book_club, user::AuthUser},
 	shared::{book_club::BookClubMemberRole, enums::UserPermission},
 };
-use sea_orm::{prelude::*, IntoActiveModel, TransactionTrait};
+use sea_orm::{prelude::*, IntoActiveModel};
 
 use crate::{
 	data::CoreContext,
@@ -30,7 +31,7 @@ impl BookClubMutation {
 
 		// input.validate()?;
 
-		let txn = conn.begin().await?;
+		let txn = begin_write(conn).await?;
 
 		let (club, member) = input.into_active_model(user);
 

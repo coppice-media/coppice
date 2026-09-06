@@ -9,6 +9,8 @@ pub mod annotation_sync;
 mod error;
 pub mod notification;
 mod output;
+#[cfg(feature = "providers")]
+pub mod provider_health;
 mod services;
 pub mod stump_job;
 
