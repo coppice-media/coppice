@@ -63,6 +63,7 @@ const MANGAUPDATES_MEDIA_TYPES: &[MediaType] =
 const OPEN_LIBRARY_MEDIA_TYPES: &[MediaType] = &[MediaType::Book];
 const GOOGLE_BOOKS_MEDIA_TYPES: &[MediaType] = &[MediaType::Book];
 const METRON_MEDIA_TYPES: &[MediaType] = &[MediaType::Comic];
+const AUDIBLE_MEDIA_TYPES: &[MediaType] = &[MediaType::Book];
 const INTEGRATIONS: &[IntegrationSpec] = &[
 	IntegrationSpec {
 		id: "comic_vine",
@@ -125,6 +126,14 @@ const INTEGRATIONS: &[IntegrationSpec] = &[
 		name: "Google Books",
 		provider_type: MetadataProvider::GoogleBooks,
 		media_types: GOOGLE_BOOKS_MEDIA_TYPES,
+		requires_api_token: false,
+		enabled_default: true,
+	},
+	IntegrationSpec {
+		id: "audible",
+		name: "Audible",
+		provider_type: MetadataProvider::Audible,
+		media_types: AUDIBLE_MEDIA_TYPES,
 		requires_api_token: false,
 		enabled_default: true,
 	},
@@ -688,6 +697,7 @@ fn provider_id(provider: MetadataProvider) -> &'static str {
 		MetadataProvider::MangaUpdates => "mangaupdates",
 		MetadataProvider::OpenLibrary => "openlibrary",
 		MetadataProvider::GoogleBooks => "googlebooks",
+		MetadataProvider::Audible => "audible",
 		MetadataProvider::Metron => "metron",
 	}
 }

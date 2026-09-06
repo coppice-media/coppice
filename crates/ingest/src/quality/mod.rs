@@ -22,6 +22,14 @@ use crate::{
 };
 use stump_media::{media::get_page, EpubProcessor, FileError, PathUtils};
 
+mod audio;
+pub mod audio_bitrate_sane;
+pub mod audio_chapters_present;
+pub mod audio_cover_embedded;
+pub mod audio_duration_consistent;
+pub mod audio_faststart;
+pub mod audio_single_file;
+pub mod audio_tags_complete;
 pub mod cover_not_page_two;
 pub mod cover_present;
 pub mod drm_protected;
@@ -34,6 +42,13 @@ pub mod missing_chapters_in_series;
 pub mod page_count_matches_archive_entries;
 pub mod registry;
 
+pub use audio_bitrate_sane::BitrateSaneCheck;
+pub use audio_chapters_present::ChaptersPresentCheck;
+pub use audio_cover_embedded::CoverEmbeddedCheck;
+pub use audio_duration_consistent::DurationConsistentCheck;
+pub use audio_faststart::FaststartCheck;
+pub use audio_single_file::{SingleFileCheck, DEFAULT_SINGLE_FILE_WEIGHT};
+pub use audio_tags_complete::TagsCompleteCheck;
 pub use cover_not_page_two::CoverNotPageTwoCheck;
 pub use cover_present::CoverPresentCheck;
 pub use drm_protected::DrmProtectedCheck;
@@ -47,7 +62,7 @@ pub use filename::{
 pub use image_dimensions_consistent::ImageDimensionsConsistentCheck;
 pub use missing_chapters_in_series::MissingChaptersInSeriesCheck;
 pub use page_count_matches_archive_entries::PageCountMatchesArchiveEntriesCheck;
-pub use registry::{CheckDescriptor, QualityRegistry};
+pub use registry::{CheckDescriptor, CheckFamily, QualityRegistry};
 
 /// Version of the built-in check implementations.  Reports use the contract's
 /// algorithm version; this implementation version is exposed in the catalog.
@@ -251,7 +266,10 @@ pub(crate) fn first_decodable_page(
 			}
 			Ok(None)
 		},
-		IngestMediaKind::Unknown => Ok(None),
+		// An audiobook has no pages: its cover is a `covr`/`APIC` tag the
+		// audio processor serves as page 1, not something a page helper can
+		// select. `cover_embedded` is the check that looks at it.
+		IngestMediaKind::Audio | IngestMediaKind::Unknown => Ok(None),
 	}
 }
 
@@ -276,7 +294,7 @@ pub(crate) fn canonical_page(
 				Err(_) => Ok(None),
 			}
 		},
-		IngestMediaKind::Unknown => Ok(None),
+		IngestMediaKind::Audio | IngestMediaKind::Unknown => Ok(None),
 	}
 }
 
@@ -372,5 +390,7 @@ pub(crate) fn dimensions_from_analysis(book: &BookSnapshot) -> AnalysisDimension
 	Some((image_count, dimensions))
 }
 
+#[cfg(test)]
+mod audio_tests;
 #[cfg(test)]
 mod tests;

@@ -379,6 +379,36 @@ async fn transform_profile_round_trips() {
 }
 
 #[tokio::test]
+async fn audio_transform_preset_round_trips_verbatim() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn);
+	let (device, _) = service
+		.create_device(&user, DeviceKind::Abs, None)
+		.await
+		.expect("device");
+
+	// The registry stores the document, it does not interpret it: the
+	// delivery lane reads `audio.output` back out of exactly these bytes, so
+	// a JSON column that reshaped or dropped the section would silently
+	// serve every device the stored encoding.
+	for profile in [
+		json!({ "preset": "phone-opus" }),
+		json!("phone-opus"),
+		json!({ "audio": { "output": { "type": "opus", "bitrate": "96k" } } }),
+		json!({
+			"max_width": 1264,
+			"audio": { "output": { "type": "passthrough" } }
+		}),
+	] {
+		let updated = service
+			.set_transform_profile(&user, &device.id, Some(profile.clone()))
+			.await
+			.expect("updated");
+		assert_eq!(updated.transform_profile, Some(profile));
+	}
+}
+
+#[tokio::test]
 async fn touch_records_sighting_and_sync_summary() {
 	let (conn, user) = setup().await;
 	let seen: Arc<Mutex<Vec<DeviceSeen>>> = Arc::default();

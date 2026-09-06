@@ -288,6 +288,13 @@ fragment MetadataPolicyFields on MetadataPolicy {
 		overridden
 		storable
 	}
+	audio {
+		singleFileWeight
+		autoAssemble
+		autoChapters
+		keepOriginal
+		overridden
+	}
 }
 
 query MetadataPolicy($libraryId: ID!) {

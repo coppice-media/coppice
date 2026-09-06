@@ -11,6 +11,11 @@ pub struct ResumeReadingCursor {
 	pub session_id: i32,
 	pub page: Option<i32>,
 	pub locator: Option<ReadiumLocator>,
+	/// Milliseconds from the start of the publication for a time-addressed
+	/// book: the twin of `page`/`locator` for an audiobook, which has neither
+	/// a page nor a resource to anchor in. `None` for every paged or
+	/// reflowable book, so the three addressing modes stay mutually exclusive.
+	pub position_ms: Option<i64>,
 	pub percentage_completed: Option<Decimal>,
 	/// total reading time across all sessions in the current readthrough
 	pub elapsed_seconds: i64,

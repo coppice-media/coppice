@@ -1290,6 +1290,38 @@ type ExternalMediaMetadata {
 	coverArtists: [String!]
 	coverUrl: String
 	providerUrl: String
+	"""
+	The edition's secondary title, as an audiobook's "A Novel" or
+	"Special Edition" line. Kept out of `title` because a subtitle is not
+	part of the name anyone searches for: folding it in would drag the
+	title score of every later match down with it.
+	"""
+	subtitle: String
+	"""
+	The readers of an audiobook edition. Deliberately *not* folded into
+	`writers` or `artists`: a narrator is not an author, and merging the
+	two would file a performer in the author column of every audiobook,
+	where no later edit could tell them apart again.
+	"""
+	narrators: [String!]
+	"""
+	The publisher of *this edition*. [`ExternalSeriesMetadata`] has one
+	because a series has a publisher; a media item never did. An
+	audiobook's publisher is a per-edition fact -- the same book is
+	issued by a different studio in every market, often years apart -- so
+	it cannot be inherited from the series it sits in.
+	"""
+	publisher: String
+	"""
+	The runtime the provider advertises, in whole minutes.
+	
+	This is *candidate evidence for the operator*, not a value to store:
+	it is what tells an abridged edition from an unabridged one at a
+	glance while picking a match. The authoritative duration is the one
+	measured from the file itself (`media_audio.duration_ms`), which this
+	never overwrites.
+	"""
+	runtimeMinutes: Int
 }
 
 union ExternalMetadata = ExternalMediaMetadata | ExternalSeriesMetadata
@@ -1616,6 +1648,8 @@ enum IngestMediaKind {
 	COMIC_RAR_ARCHIVE
 	EPUB
 	PDF
+	"An audiobook: one container, or one folder of parts."
+	AUDIO
 	UNKNOWN
 }
 
@@ -1713,6 +1747,12 @@ type IngestQualityCheckDescriptor {
 	enabled: Boolean!
 	supportedMediaTypes: [String!]!
 	settings: [IngestSettingDefinition!]!
+	"""
+	The tool that repairs a failing outcome, when one exists in this
+	build. `null` for a finding whose decision is the librarian's, such as
+	a duplicate or an unparseable filename.
+	"""
+	fix: IngestQualityFixAction
 }
 
 type IngestQualityCheckResult {
@@ -1730,6 +1770,21 @@ type IngestQualityCheckSettings {
 	enabled: Boolean!
 	settings: [IngestProviderSetting!]!
 	updatedAt: DateTime
+}
+
+"""
+One repair a failing quality check points at.
+
+A finding a librarian cannot act on is a complaint, not a check: the id is
+a `stump_tools` tool and `options` is the option blob that addresses this
+finding, so a client can offer "fix it" beside the row.
+"""
+type IngestQualityFixAction {
+	"A `stump_tools` tool id, e.g. `audio-assemble`."
+	tool: String!
+	summary: String!
+	"The tool's JSON options, or `null` for its defaults."
+	options: JSON
 }
 
 type IngestQualityReport {
@@ -2508,6 +2563,11 @@ type MediaMetadata {
 	inkers: [String!]!
 	letterers: [String!]!
 	links: [String!]!
+	"""
+	The audiobook's readers. Empty for every other kind of book, so a
+	client can show the credit unconditionally.
+	"""
+	narrators: [String!]!
 	pencillers: [String!]!
 	teams: [String!]!
 	lockedFields: [MetadataField!]!
@@ -2561,6 +2621,11 @@ input MediaMetadataInput {
 	letterers: [String!]
 	coverArtists: [String!]
 	editors: [String!]
+	"""
+	The audiobook's readers. A separate credit from `writers`: an
+	audiobook's author wrote it and its narrator did not.
+	"""
+	narrators: [String!]
 	publisher: String
 	links: [String!]
 	characters: [String!]
@@ -2598,6 +2663,7 @@ enum MediaMetadataModelOrdering {
 	LETTERERS
 	LINKS
 	MONTH
+	NARRATORS
 	NOTES
 	NUMBER
 	PAGE_COUNT
@@ -2714,6 +2780,54 @@ enum MergeStrategy {
 	FILL_AND_MERGE_LISTS
 }
 
+"""
+The audio half of a library's effective policy: the one configurable
+quality-check weight and the auto-fix toggles.
+
+A section, not per-field rows: unlike a metadata field, these four values
+only make sense together — `keepOriginal` is meaningless without
+`autoAssemble` — so a library stores or inherits the whole section, and
+`overridden` is therefore one flag rather than four.
+"""
+type MetadataAudioPolicy {
+	"""
+	Weight of the `single_file` quality check on the 0..=100 scale every
+	check's weight uses. `0` keeps the finding advisory without moving
+	the score.
+	"""
+	singleFileWeight: Int!
+	"""
+	Assemble a split audiobook into the canonical single file during
+	ingest.
+	"""
+	autoAssemble: Boolean!
+	"Derive and write chapter marks for an audiobook that has none."
+	autoChapters: Boolean!
+	"Keep the source files after an assemble."
+	keepOriginal: Boolean!
+	"""
+	`true` when the section comes from the library's override rather than
+	the server default.
+	"""
+	overridden: Boolean!
+}
+
+"""
+The audio section of an override. Every key has the server default as its
+GraphQL default, so a client that wants to change one toggle sends one
+key rather than restating the section.
+"""
+input MetadataAudioPolicyInput {
+	singleFileWeight: Int! = 30
+	autoAssemble: Boolean! = false
+	autoChapters: Boolean! = false
+	"""
+	Turning this off is refused unless `autoAssemble` is on: there would
+	be nothing to replace the source files with.
+	"""
+	keepOriginal: Boolean! = true
+}
+
 type MetadataFetchJobOutput {
 	"Total number of entities processed"
 	totalProcessed: Int!
@@ -2822,6 +2936,17 @@ enum MetadataField {
 	META_TYPE
 	COMIC_IMAGE
 	DESCRIPTION_FORMATTED
+	"""
+	The readers of an audiobook edition, carried by
+	[`crate::types::ExternalMediaMetadata::narrators`]. Distinct from
+	[`Self::Writers`] on purpose -- a narrator is not an author.
+	"""
+	NARRATORS
+	"""
+	An edition's secondary title, carried by
+	[`crate::types::ExternalMediaMetadata::subtitle`].
+	"""
+	SUBTITLE
 }
 
 "A user-provided override value for a specific metadata field"
@@ -2873,13 +2998,15 @@ input MetadataFieldPolicyInput {
 
 """
 The effective policy of one library: the server default with the library's
-override applied, one row per field the policy vocabulary has.
+override applied, one row per field the policy vocabulary has, plus the
+audio section.
 """
 type MetadataPolicy {
 	libraryId: ID!
 	"`true` when the library stores its own override document."
 	hasLibraryOverride: Boolean!
 	fields: [MetadataFieldPolicy!]!
+	audio: MetadataAudioPolicy!
 }
 
 "One field's resolution during an \"apply best\" run."
@@ -2894,8 +3021,16 @@ type MetadataPolicyDecision {
 }
 
 input MetadataPolicyInput {
-	"The complete override. Empty clears the library override."
+	"""
+	The complete override. Empty, with no `audio`, clears the library
+	override.
+	"""
 	fields: [MetadataFieldPolicyInput!]!
+	"""
+	The audio section. Omitted leaves the library inheriting the server
+	default audio rules, exactly as an unmentioned field does.
+	"""
+	audio: MetadataAudioPolicyInput
 }
 
 "What the policy decided for one field of one book."
@@ -2936,6 +3071,11 @@ enum MetadataProvider {
 	GOOGLE_BOOKS
 	"Metron (https://metron.cloud/api/)"
 	METRON
+	"""
+	Audible, through the community Audnexus enrichment API
+	(https://api.audnex.us) plus the unauthenticated Audible catalogue.
+	"""
+	AUDIBLE
 }
 
 type MetadataProviderConfigModel {
@@ -3505,7 +3645,15 @@ type Mutation {
 	rotateDeviceCredential(id: String!): DeviceWithCredential!
 	"Invalidates the device's credential; the device stays listed as revoked."
 	revokeDevice(id: String!): Device!
-	"Replaces the device's transform profile (`null` clears it)."
+	"""
+	Replaces the device's transform profile (`null` clears it).
+	
+	The document is interpreted before it is stored — a preset name, a
+	`{"preset": …}` selector, or a full/partial profile object including
+	the `audio` section — so an unknown preset or an unusable Opus
+	bitrate is a mutation error here rather than a warning logged once
+	per delivery request for the rest of the device's life.
+	"""
 	setDeviceTransformProfile(id: String!, profile: JSON): Device!
 	"""
 	Restricts the device to `library_ids`, or clears the restriction when
@@ -4707,6 +4855,13 @@ type ResumeReadingCursor {
 	sessionId: Int!
 	page: Int
 	locator: ReadiumLocator
+	"""
+	Milliseconds from the start of the publication for a time-addressed
+	book: the twin of `page`/`locator` for an audiobook, which has neither
+	a page nor a resource to anchor in. `None` for every paged or
+	reflowable book, so the three addressing modes stay mutually exclusive.
+	"""
+	positionMs: Int
 	percentageCompleted: Decimal
 	"total reading time across all sessions in the current readthrough"
 	elapsedSeconds: Int!
@@ -5428,6 +5583,35 @@ type StumpConfig {
 	removed until the directory fits.
 	"""
 	transformCacheMaxBytes: Int!
+	"""
+	Container an assembled audiobook is written as. `m4b` is the only
+	accepted value: it is the one container that carries a `chpl` atom, a
+	chapter track, iTunes tags and a cover in a single file, which is what
+	every audiobook player expects to find.
+	
+	Opus is deliberately *not* accepted here. It is a first-class input and
+	an opt-in per-device delivery preset
+	(`stump_media::transform::AudioOutput::Opus`), never a stored form, so
+	that turning it on for one phone cannot change what the library holds.
+	"""
+	audioCanonical: String!
+	"""
+	AAC bitrate used when an assemble has to re-encode, as an `ffmpeg`
+	`-b:a` argument. Only lossy inputs that are not already AAC are
+	re-encoded; an AAC input is stream-copied, so this value does not
+	degrade a book that was already in the canonical codec.
+	"""
+	audioAacBitrate: String!
+	"""
+	Absolute path to the `ffmpeg` binary. Empty searches `PATH`, which is
+	the normal case; a path is for an operator whose `ffmpeg` is not on the
+	server's `PATH` (a container sidecar mount, a Nix store path).
+	
+	`ffmpeg` is the one external tool the audio lane needs, and only for
+	encoding: probing, tagging and chapter writing are pure Rust. It is
+	never a build dependency.
+	"""
+	audioFfmpeg: String!
 	"The configuration root for the Stump application, contains thumbnails, cache, and logs."
 	configDir: String!
 }

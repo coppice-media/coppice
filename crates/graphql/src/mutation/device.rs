@@ -1,4 +1,4 @@
-use async_graphql::{Context, Object, Result, ID};
+use async_graphql::{Context, Error, Object, Result, ID};
 use models::shared::enums::DeviceKind;
 use stump_devices::{Device as DeviceModel, IssuedCredential, LibraryScope};
 
@@ -70,6 +70,12 @@ impl DeviceMutation {
 	}
 
 	/// Replaces the device's transform profile (`null` clears it).
+	///
+	/// The document is interpreted before it is stored — a preset name, a
+	/// `{"preset": …}` selector, or a full/partial profile object including
+	/// the `audio` section — so an unknown preset or an unusable Opus
+	/// bitrate is a mutation error here rather than a warning logged once
+	/// per delivery request for the rest of the device's life.
 	async fn set_device_transform_profile(
 		&self,
 		ctx: &Context<'_>,
@@ -79,6 +85,14 @@ impl DeviceMutation {
 		let stump_auth::AuthContext { user, .. } =
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
+
+		if let Some(profile) = profile.as_ref() {
+			if let Some(result) =
+				stump_media::transform::TransformProfile::from_device_profile(profile)
+			{
+				result.map_err(|error| Error::new(error.to_string()))?;
+			}
+		}
 
 		Ok(Device::from(
 			core.devices()

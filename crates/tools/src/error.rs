@@ -40,6 +40,11 @@ pub enum ToolError {
 	/// An MP4/M4B container `audio-chapters` could not read or rewrite.
 	#[error("{0}")]
 	Mp4(#[from] mp4ameta::Error),
+	/// An MP4 sample table `audio-assemble` could not demux or mux. Distinct
+	/// from [`Self::Mp4`]: that is the tagger failing on a container's
+	/// metadata, this is the muxer failing on its media.
+	#[error("{0}")]
+	Mux(#[from] mp4::Error),
 	/// An ID3v2 tag `audio-chapters` could not read or rewrite.
 	#[error("{0}")]
 	Id3(#[from] id3::Error),

@@ -37,11 +37,37 @@ query ReaderBook($id: ID!) {
 		}
 		readProgress {
 			page
+			# The audiobook head: milliseconds from the start of the
+			# publication, null for a book that has never been listened to.
+			positionMs
 			percentageCompleted
 			elapsedSeconds
 			updatedAt
 			locator {
 				...ReaderLocatorFields
+			}
+		}
+		# Null for everything that is not an audiobook, so this doubles as the
+		# discriminator the reader branches on. Every time value here is
+		# milliseconds from the start of the publication, never from the start
+		# of a file.
+		audio {
+			durationMs
+			codec
+			chapterSource
+			tracks {
+				index
+				mime
+				durationMs
+				startOffsetMs
+				byteSize
+				url
+			}
+			chapters {
+				index
+				title
+				startMs
+				endMs
 			}
 		}
 	}

@@ -35,6 +35,7 @@ pub const STORABLE_FIELDS: &[MetadataField] = &[
 	MetadataField::Series,
 	MetadataField::SeriesIndex,
 	MetadataField::Authors,
+	MetadataField::Narrators,
 	MetadataField::Publisher,
 	MetadataField::PublishedDate,
 	MetadataField::Language,
@@ -305,7 +306,10 @@ fn merge_candidate_value(
 pub(crate) fn is_list_field(field: MetadataField) -> bool {
 	matches!(
 		field,
-		MetadataField::Authors | MetadataField::Tags | MetadataField::Genres
+		MetadataField::Authors
+			| MetadataField::Narrators
+			| MetadataField::Tags
+			| MetadataField::Genres
 	)
 }
 
@@ -315,6 +319,7 @@ pub(crate) fn existing_list(
 ) -> Option<Vec<String>> {
 	let value = match field {
 		MetadataField::Authors => model.writers.as_deref(),
+		MetadataField::Narrators => model.narrators.as_deref(),
 		MetadataField::Tags => None,
 		MetadataField::Genres => model.genres.as_deref(),
 		_ => None,
@@ -338,6 +343,7 @@ pub(crate) fn field_is_present(
 		MetadataField::Series => model.series.as_deref().is_some_and(non_empty),
 		MetadataField::SeriesIndex => model.number.is_some(),
 		MetadataField::Authors => model.writers.as_deref().is_some_and(non_empty),
+		MetadataField::Narrators => model.narrators.as_deref().is_some_and(non_empty),
 		MetadataField::Publisher => model.publisher.as_deref().is_some_and(non_empty),
 		MetadataField::PublishedDate => {
 			model.year.is_some() || model.month.is_some() || model.day.is_some()
@@ -373,7 +379,10 @@ fn validate_value(field: MetadataField, value: &Value) -> Result<(), ApplyError>
 		| MetadataField::PublishedDate => value.is_string(),
 		MetadataField::SeriesIndex => value.as_f64().is_some_and(f64::is_finite),
 		MetadataField::AgeRating | MetadataField::PageCount => value.as_i64().is_some(),
-		MetadataField::Authors | MetadataField::Tags | MetadataField::Genres => value
+		MetadataField::Authors
+		| MetadataField::Narrators
+		| MetadataField::Tags
+		| MetadataField::Genres => value
 			.as_array()
 			.is_some_and(|values| values.iter().all(Value::is_string)),
 		MetadataField::Identifiers => value.is_object(),
@@ -590,6 +599,9 @@ fn apply_value(
 			active.number = Set(value.as_f64().and_then(Decimal::from_f64));
 		},
 		MetadataField::Authors => active.writers = Set(Some(join_strings(value, field)?)),
+		MetadataField::Narrators => {
+			active.narrators = Set(Some(join_strings(value, field)?))
+		},
 		MetadataField::Publisher => {
 			active.publisher = Set(value.as_str().map(str::to_string))
 		},
@@ -627,6 +639,7 @@ fn clear_value(active: &mut media_metadata::ActiveModel, field: MetadataField) {
 		MetadataField::Series => active.series = Set(None),
 		MetadataField::SeriesIndex => active.number = Set(None),
 		MetadataField::Authors => active.writers = Set(None),
+		MetadataField::Narrators => active.narrators = Set(None),
 		MetadataField::Publisher => active.publisher = Set(None),
 		MetadataField::PublishedDate => {
 			active.year = Set(None);

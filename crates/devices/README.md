@@ -26,6 +26,7 @@ rows, QR flow) lives in `apps/server/src/routers/api/v2/device_pairing.rs` and
 
 | Decision | Why | Evidence |
 | --- | --- | --- |
+| `set_transform_profile` still stores the document verbatim and this crate takes no `stump_media` dependency to interpret it | The readers (`TransformProfile::from_device_profile` at delivery, the GraphQL mutation at write time) own the vocabulary; a registry that reshaped the JSON would silently drop the `audio` section every audio delivery reads back out of it | `src/service.rs::set_transform_profile`; tests `transform_profile_round_trips`, `audio_transform_preset_round_trips_verbatim` |
 | `touch` coalesces plain sightings in memory: one `last_seen_at` write per credential per `TOUCH_INTERVAL` (60 s); a coalesced call reads nothing | Page streams and cover bursts must not hammer SQLite; the map is shared by every clone of the service, so the debounce is process-wide | `src/service.rs::touch`, `seen_within_interval`; test `touch_coalesces_sightings_per_credential_for_an_interval` |
 | A sync summary always writes (`last_sync_at` + `last_sync_summary`) | Sync events are rare and are what the UI shows | `src/service.rs::touch`; test `touch_records_sighting_and_sync_summary` |
 | `DeviceSeen.first_seen` is `true` when the row had no `last_seen_at` before the write | Notification rules key on "device first seen" without a second lookup | `src/event.rs`, `src/service.rs::touch` |

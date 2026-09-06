@@ -46,3 +46,12 @@ pub const DEFAULT_ANNOTATION_SYNC_DEBOUNCE_SECS: u64 = 30;
 pub const DEFAULT_TRANSFORM_ENABLED: bool = false;
 pub const DEFAULT_TRANSFORM_KOBO_PROFILE: &str = "clara";
 pub const DEFAULT_TRANSFORM_CACHE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+/// The one container that carries chapters, tags and a cover in a single
+/// file, so an assembled audiobook is one artifact rather than a folder plus
+/// a sidecar.
+pub const DEFAULT_AUDIO_CANONICAL: &str = "m4b";
+/// 64 kbit/s AAC is transparent for speech, which is what an audiobook is.
+pub const DEFAULT_AUDIO_AAC_BITRATE: &str = "64k";
+/// Empty searches `PATH`: `ffmpeg` is an operator-installed tool, never a
+/// build dependency, and the audio lane only needs it to encode.
+pub const DEFAULT_AUDIO_FFMPEG: &str = "";

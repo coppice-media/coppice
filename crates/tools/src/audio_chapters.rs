@@ -42,7 +42,7 @@
 use std::{
 	fs::File,
 	io::{Seek, SeekFrom},
-	path::{Path, PathBuf},
+	path::Path,
 	time::Duration,
 };
 
@@ -524,7 +524,7 @@ fn milliseconds(value: i64) -> u32 {
 mod tests {
 	use super::*;
 	use crate::NoopProgress;
-	use std::fs;
+	use std::{fs, path::PathBuf};
 	use tempfile::TempDir;
 
 	fn fixture(name: &str) -> PathBuf {

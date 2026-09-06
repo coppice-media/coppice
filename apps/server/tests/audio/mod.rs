@@ -26,6 +26,14 @@ struct Fixture {
 	_dir: TempDir,
 }
 
+impl Fixture {
+	/// The on-disk path of one fixture track, for a test that needs to
+	/// replace its bytes.
+	fn track_path(&self, index: usize) -> std::path::PathBuf {
+		self._dir.path().join(format!("{index:02}.mp3"))
+	}
+}
+
 /// A two-track audiobook whose track files really exist on disk, because the
 /// track route serves real bytes through `ServeFile`.
 async fn audiobook() -> Fixture {
@@ -181,6 +189,147 @@ async fn audio_track_is_not_found_for_an_unknown_index() {
 		.get(&format!("/api/v2/media/{}/audio/track/9", fixture.book_id))
 		.await;
 	assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
+}
+
+/// The `ffmpeg` the Opus lane shells out to, when the host has one.
+///
+/// Delivery degrades to the stored bytes without it, so its absence changes
+/// what this test can assert but never whether it runs.
+fn ffmpeg_path() -> Option<std::path::PathBuf> {
+	let path = std::env::var_os("PATH")?;
+	std::env::split_paths(&path)
+		.map(|dir| dir.join("ffmpeg"))
+		.find(|candidate| candidate.is_file())
+}
+
+/// Register a device carrying the `phone-opus` preset and return the secret
+/// its credential authenticates with, so a request bearing that key resolves
+/// to it.
+///
+/// The registry mints the credential rather than the test inserting one: the
+/// key format, the hash and the credential row are what the auth middleware
+/// looks the device up by, and a hand-built row would authenticate a device
+/// the real registry would not.
+async fn opus_device(app: &TestApp) -> String {
+	use models::{entity::user::AuthUser, shared::enums::DeviceKind};
+	use sea_orm::EntityTrait;
+
+	let owner = models::entity::user::Entity::find()
+		.one(app.conn())
+		.await
+		.expect("user query")
+		.expect("the default user exists");
+	let owner = AuthUser {
+		id: owner.id.clone(),
+		username: owner.username.clone(),
+		is_server_owner: true,
+		..Default::default()
+	};
+
+	let devices = app.ctx.devices();
+	let (device, issued) = devices
+		.create_device(&owner, DeviceKind::Api, Some("Opus phone".to_string()))
+		.await
+		.expect("device");
+	devices
+		.set_transform_profile(
+			&owner,
+			&device.id,
+			Some(serde_json::json!({ "preset": "phone-opus" })),
+		)
+		.await
+		.expect("preset");
+
+	issued.secret
+}
+
+/// The per-device audio preset is negotiated on the track route: a plain
+/// request gets the stored encoding, and a request authenticated by a device
+/// carrying an Opus preset gets Opus.
+///
+/// Both halves matter. The stored-MIME half is the default every existing
+/// client depends on — a regression there would silently re-encode every
+/// download — and the Opus half is the whole point of the preset. Without
+/// `ffmpeg` the transcode cannot run, and the documented behaviour is exactly
+/// the fallback the plain request gets, so the assertion follows the host.
+#[tokio::test]
+async fn audio_track_negotiates_the_requesting_devices_preset() {
+	let fixture = audiobook().await;
+	let url = format!("/api/v2/media/{}/audio/track/1", fixture.book_id);
+
+	// A session/token request carries no device, so nothing is negotiated.
+	let plain = fixture.app.get(&url).await;
+	plain.assert_status_ok();
+	assert_eq!(
+		plain.headers().get(header::CONTENT_TYPE).unwrap(),
+		"audio/mpeg",
+		"a request with no device must get the stored encoding"
+	);
+
+	let api_key = opus_device(&fixture.app).await;
+	let ffmpeg = ffmpeg_path();
+	if let Some(ffmpeg) = &ffmpeg {
+		// The fixture's placeholder bytes are not decodable audio; the
+		// transcode needs a real stream to produce one.
+		let track = fixture.track_path(1);
+		let built = std::process::Command::new(ffmpeg)
+			.args([
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-f",
+				"lavfi",
+				"-i",
+				"sine=frequency=440:duration=1",
+				"-c:a",
+				"libmp3lame",
+			])
+			.arg(&track)
+			.status()
+			.expect("ffmpeg run");
+		assert!(built.success(), "failed to build the MP3 fixture");
+	}
+
+	let negotiated = fixture
+		.app
+		.server
+		.get(&url)
+		.add_header("Authorization", format!("Bearer {api_key}"))
+		.await;
+	negotiated.assert_status_ok();
+	let content_type = negotiated
+		.headers()
+		.get(header::CONTENT_TYPE)
+		.expect("content type")
+		.to_str()
+		.expect("ascii content type")
+		.to_string();
+
+	if ffmpeg.is_some() {
+		assert_eq!(
+			content_type, "audio/ogg",
+			"a device with an Opus preset must be served Opus, not the stored MP3"
+		);
+		assert!(
+			!negotiated.as_bytes().is_empty(),
+			"the transcode must have a body"
+		);
+		// `Range` still works on the transcode: a player seeks in it too.
+		let ranged = fixture
+			.app
+			.server
+			.get(&url)
+			.add_header("Authorization", format!("Bearer {api_key}"))
+			.add_header("Range", "bytes=0-9")
+			.await;
+		assert_eq!(ranged.status_code(), StatusCode::PARTIAL_CONTENT);
+	} else {
+		assert_eq!(
+			content_type, "audio/mpeg",
+			"without ffmpeg the Opus preset must degrade to the stored bytes"
+		);
+	}
 }
 
 /// Both routes are user-scoped like every other media route: a book the user

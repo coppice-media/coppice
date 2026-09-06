@@ -51,6 +51,15 @@ pub enum MetadataField {
 	MetaType,
 	ComicImage,
 	DescriptionFormatted,
+	// Appended, never inserted: a client that stores an ordinal (and every
+	// generated GraphQL enum) would shift under an insertion.
+	/// The readers of an audiobook edition, carried by
+	/// [`crate::types::ExternalMediaMetadata::narrators`]. Distinct from
+	/// [`Self::Writers`] on purpose -- a narrator is not an author.
+	Narrators,
+	/// An edition's secondary title, carried by
+	/// [`crate::types::ExternalMediaMetadata::subtitle`].
+	Subtitle,
 }
 
 /// Types of media that can be handled by metadata providers

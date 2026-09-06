@@ -20,10 +20,17 @@ id3.workspace = true
 # library `stump_media::audio` reads the two MP4 chapter mechanisms with, so a
 # mark this tool writes is a mark the probe reports.
 mp4ameta.workspace = true
+# `audio-assemble` muxes: it writes one `moov` describing every copied sample
+# ahead of the `mdat`, which a tagger cannot do.
+mp4.workspace = true
 quick-xml.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# `audio-assemble` demuxes the parts it remuxes: symphonia reads the audio
+# stream of an MP4 and ignores a cover-art or chapter track, which the `mp4`
+# crate refuses the whole file over.
+symphonia.workspace = true
 # Atomic output: tools stage into a temp file next to the target, then rename.
 tempfile.workspace = true
 thiserror.workspace = true

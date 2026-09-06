@@ -90,6 +90,16 @@ impl MediaMetadata {
 			.unwrap_or_default()
 	}
 
+	/// The audiobook's readers. Empty for every other kind of book, so a
+	/// client can show the credit unconditionally.
+	async fn narrators(&self) -> Vec<String> {
+		self.model
+			.narrators
+			.clone()
+			.map(comma_separated_list_to_vec)
+			.unwrap_or_default()
+	}
+
 	async fn pencillers(&self) -> Vec<String> {
 		self.model
 			.pencillers

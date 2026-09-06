@@ -655,9 +655,10 @@ pub fn book_metadata(input: &ItemInput<'_>, shape: ItemShape) -> BookMetadataDto
 		.and_then(|m| m.title.clone())
 		.unwrap_or_else(|| input.media.name.clone());
 	let authors = csv(metadata.and_then(|m| m.writers.as_deref()));
-	// Always empty: no Stump column holds a narrator (see
-	// [`crate::model::AbsAudio`]).
-	let narrators: Vec<String> = Vec::new();
+	// `media_metadata.narrators` (m20260942), the comma-joined credit column
+	// the probe fills from the container's `composer`/`©wrt` tag — which is
+	// exactly where Audiobookshelf itself reads a narrator.
+	let narrators = csv(metadata.and_then(|m| m.narrators.as_deref()));
 	let sequence = sequence(metadata);
 	let description = metadata.and_then(|m| m.summary.clone());
 

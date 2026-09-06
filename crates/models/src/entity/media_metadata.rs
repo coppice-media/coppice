@@ -62,6 +62,13 @@ pub struct Model {
 	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub links: Option<String>,
 	pub month: Option<i32>,
+	/// Who reads the book aloud, comma-joined like every other credit column.
+	/// An audiobook's one universal credit: the probe reads it off the
+	/// container's `composer`/`©wrt` tag, which is where every publisher and
+	/// both Audiobookshelf and Plex put it.
+	#[sea_orm(column_type = "Text", nullable)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub narrators: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub notes: Option<String>,
 	// Note: this is also used as series_index

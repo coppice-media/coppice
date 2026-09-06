@@ -8,8 +8,8 @@ use metadata_integrations::MetadataField;
 use stump_ingest::{
 	contract::MetadataField as IngestField,
 	policy::{
-		EffectivePolicy, FieldDecision, FieldOutcome, FieldPolicy, PolicyPlan,
-		PolicyStrategy,
+		AudioPolicy, EffectivePolicy, FieldDecision, FieldOutcome, FieldPolicy,
+		PolicyPlan, PolicyStrategy,
 	},
 	providers::apply::STORABLE_FIELDS,
 };
@@ -89,14 +89,53 @@ pub struct MetadataFieldPolicy {
 	pub storable: bool,
 }
 
+/// The audio half of a library's effective policy: the one configurable
+/// quality-check weight and the auto-fix toggles.
+///
+/// A section, not per-field rows: unlike a metadata field, these four values
+/// only make sense together — `keepOriginal` is meaningless without
+/// `autoAssemble` — so a library stores or inherits the whole section, and
+/// `overridden` is therefore one flag rather than four.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct MetadataAudioPolicy {
+	/// Weight of the `single_file` quality check on the 0..=100 scale every
+	/// check's weight uses. `0` keeps the finding advisory without moving
+	/// the score.
+	pub single_file_weight: u16,
+	/// Assemble a split audiobook into the canonical single file during
+	/// ingest.
+	pub auto_assemble: bool,
+	/// Derive and write chapter marks for an audiobook that has none.
+	pub auto_chapters: bool,
+	/// Keep the source files after an assemble.
+	pub keep_original: bool,
+	/// `true` when the section comes from the library's override rather than
+	/// the server default.
+	pub overridden: bool,
+}
+
+impl MetadataAudioPolicy {
+	fn new(audio: &AudioPolicy, overridden: bool) -> Self {
+		Self {
+			single_file_weight: audio.single_file_weight,
+			auto_assemble: audio.auto_assemble,
+			auto_chapters: audio.auto_chapters,
+			keep_original: audio.keep_original,
+			overridden,
+		}
+	}
+}
+
 /// The effective policy of one library: the server default with the library's
-/// override applied, one row per field the policy vocabulary has.
+/// override applied, one row per field the policy vocabulary has, plus the
+/// audio section.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct MetadataPolicy {
 	pub library_id: ID,
 	/// `true` when the library stores its own override document.
 	pub has_library_override: bool,
 	pub fields: Vec<MetadataFieldPolicy>,
+	pub audio: MetadataAudioPolicy,
 }
 
 impl From<EffectivePolicy> for MetadataPolicy {
@@ -118,10 +157,15 @@ impl From<EffectivePolicy> for MetadataPolicy {
 				}
 			})
 			.collect();
+		let audio = MetadataAudioPolicy::new(
+			effective.policy.audio(),
+			effective.audio_overridden(),
+		);
 		Self {
 			library_id: effective.library_id.into(),
 			has_library_override: effective.library_override.is_some(),
 			fields,
+			audio,
 		}
 	}
 }

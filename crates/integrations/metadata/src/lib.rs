@@ -29,8 +29,8 @@ pub use types::{
 };
 
 use providers::{
-	AniListClient, ComicVineClient, GoogleBooksClient, HardcoverClient, MalClient,
-	MangaDexClient, MetronClient, OpenLibraryClient,
+	AniListClient, AudibleClient, ComicVineClient, GoogleBooksClient, HardcoverClient,
+	MalClient, MangaDexClient, MetronClient, OpenLibraryClient,
 };
 
 pub fn create_provider(
@@ -54,6 +54,9 @@ pub fn create_provider(
 			api_token.filter_token(),
 			None,
 		))),
+		// Audnexus and the Audible catalogue are both unauthenticated; the
+		// token argument is ignored.
+		"AUDIBLE" => Ok(Box::new(AudibleClient::new())),
 		// Metron stores the Basic credential `username:password` (or a
 		// pre-encoded Basic token) as the provider's API token.
 		"METRON" => Ok(Box::new(MetronClient::new(api_token, None))),
@@ -69,7 +72,12 @@ pub fn create_provider(
 pub fn requires_api_token(provider_type: &str) -> bool {
 	!matches!(
 		provider_type,
-		"ANILIST" | "MANGADEX" | "MANGA_UPDATES" | "OPEN_LIBRARY" | "GOOGLE_BOOKS"
+		"ANILIST"
+			| "MANGADEX"
+			| "MANGA_UPDATES"
+			| "OPEN_LIBRARY"
+			| "GOOGLE_BOOKS"
+			| "AUDIBLE"
 	)
 }
 

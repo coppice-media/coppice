@@ -50,7 +50,11 @@ export const TRANSFORM_PRESETS: { name: string; label: string }[] = [
 	{ name: 'libra-colour', label: 'Kobo Libra Colour (1264×1680, colour)' },
 	{ name: 'sage-colour', label: 'Kobo Sage Colour (1440×1920, colour)' },
 	{ name: 'koreader', label: 'KOReader (≤1920×2560, colour WebP CBZ)' },
-	{ name: 'phone', label: 'Phone (no resize, colour WebP, split tall pages)' }
+	{ name: 'phone', label: 'Phone (no resize, colour WebP, split tall pages)' },
+	{
+		name: 'phone-opus',
+		label: 'Phone + Opus audio (as Phone, audiobooks transcoded to Opus 64k)'
+	}
 ];
 
 /** Kinds whose comics the server transforms per device. */
@@ -69,6 +73,47 @@ export function presetOf(profile: unknown): string {
 		return profile.preset;
 	}
 	return NO_PRESET;
+}
+
+/**
+ * Opus delivery bitrate of each preset that asks for one
+ * (`stump_media::transform::TransformProfile::preset`). Every other preset
+ * passes audiobook bytes through as stored, so absence is the default rather
+ * than a missing entry.
+ */
+const PRESET_AUDIO_BITRATE: Record<string, string> = { 'phone-opus': '64k' };
+
+/** How a device's audiobook bytes are delivered, for the device card. */
+export const PASSTHROUGH_AUDIO = 'Stored file (no transcode)';
+
+/**
+ * The audio delivery a device's `transformProfile` asks for, read the way the
+ * server reads it: a preset name (bare or `{"preset": …}`) resolves through
+ * the preset table, and a hand-written full profile carries its own
+ * `audio.output`.
+ */
+export function audioDeliveryOf(profile: unknown): string {
+	const preset = presetOf(profile);
+	if (preset !== NO_PRESET) {
+		const bitrate = PRESET_AUDIO_BITRATE[preset];
+		return bitrate ? `Opus ${bitrate}` : PASSTHROUGH_AUDIO;
+	}
+	if (!profile || typeof profile !== 'object' || !('audio' in profile)) {
+		return PASSTHROUGH_AUDIO;
+	}
+	const audio = profile.audio;
+	if (!audio || typeof audio !== 'object' || !('output' in audio)) {
+		return PASSTHROUGH_AUDIO;
+	}
+	const output = audio.output;
+	if (!output || typeof output !== 'object' || !('type' in output)) {
+		return PASSTHROUGH_AUDIO;
+	}
+	if (output.type !== 'opus') return PASSTHROUGH_AUDIO;
+	if ('bitrate' in output && typeof output.bitrate === 'string') {
+		return `Opus ${output.bitrate}`;
+	}
+	return 'Opus';
 }
 
 /** The value shown in the library selector for a device with no scope. */

@@ -96,6 +96,7 @@ impl Loader<ResumeReadingCursorLoaderKey> for ReadingSessionLoader {
 							session_id: s.id,
 							page: s.end_page,
 							locator: s.end_locator.clone(),
+							position_ms: s.end_position_ms,
 							percentage_completed: s.end_percentage,
 							elapsed_seconds: total_elapsed,
 							started_at,

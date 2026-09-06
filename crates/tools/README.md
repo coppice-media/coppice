@@ -27,6 +27,10 @@ takes paths plus a JSON options blob and returns data; `crates/cli`
 | SmartyPants | <https://daringfireball.net/projects/smartypants/> | The published punctuation rules `smarten_punctuation` implements, including the "old school" dashes (`--` en dash, `---` em dash) and the opening/closing quote heuristic |
 | CLDR delimiters (LDML) | <https://www.unicode.org/reports/tr35/tr35-general.html#Delimiter_Elements>, `common/main/{en,de,fr}.xml` | The `quotationStart`/`quotationEnd`/`alternateQuotation*` glyphs per language: `en` `“”`/`‘’`, `de` `„“`/`‚‘`, `fr` `«»` |
 | MOBI / KF8 | MobileRead <https://wiki.mobileread.com/wiki/MOBI>, <https://wiki.mobileread.com/wiki/KF8> | Read only as the *format* behind `mobi2epub`; the parsing itself lives in `stump_media::MobiBook` and the citations are on its structures. Neither calibre's, KindleUnpack's nor boko's source is used |
+| ISO/IEC 14496-1 object descriptors | <https://www.iso.org/standard/55688.html> | The `esds` descriptor chain `audio-assemble` repairs: the expandable length encoding, and the `SLConfigDescriptor` that must carry `predefined` (`2` = MP4 default) |
+| ISO/IEC 14496-12 base media file format | <https://www.iso.org/standard/83102.html> | Top-level box order and the `stco`/`co64` chunk-offset tables the `faststart` pass relocates and patches; the version-0 `AudioSampleEntry` layout its `esds` walk descends through |
+| ffmpeg metadata (`ffmetadata`) | <https://ffmpeg.org/ffmpeg-formats.html#Metadata-1> | The `;FFMETADATA1` document `ffmpeg::write_ffmetadata` writes: `TIMEBASE=1/1000` chapter blocks and the four characters that must be escaped in a value |
+| Audible chapter metadata (`audible-cli`) | <https://github.com/mkb79/audible-cli> | The `content_metadata.chapter_info.chapters[]` shape (`title`, `start_offset_ms`, `start_offset_sec`, nested part chapters) `sidecar::parse_audible_json` reads |
 | ID3v2 chapter frames 1.0 | <https://id3.org/id3v2-chapters-1.0> | The `CHAP`/`CTOC` frames `audio-chapters` writes: `TIT2` inside a `CHAP` as the chapter name, the all-`0xFF` start/end byte offsets that mean "address me by time", and the one top-level ordered `CTOC` that lists the chapters |
 | QuickTime chapter lists | <https://developer.apple.com/documentation/quicktime-file-format/chapter_lists> | Why `audio-chapters` writes a Nero `chpl` list and never a chapter track — a chapter track is a media *track*, and a player uses the first chapter list it finds, which is also the precedence `stump_media::audio` probes with |
 
@@ -78,6 +82,14 @@ takes paths plus a JSON options blob and returns data; `crates/cli`
 | Only data is derived: no upstream Kotlin is copied into this crate, every definition records `upstream.{repo,commit,path}`, and the output directory gets a `NOTICE` | keiyoushi/extensions-source is Apache-2.0, so a derived data set has to carry attribution and has to be re-derivable from the exact commit it came from — which is also what makes two runs diffable | `src/sources_import.rs` `NOTICE_TEMPLATE`/`Upstream`, `provenance_is_read_from_the_checkout_without_running_git`, `apply_writes_the_definitions_index_unsupported_and_notice` |
 | A definition's `version` is the extension's own `versionCode`; the theme's `baseVersionCode` is deliberately not folded in | Upstream adds the two to version an *APK* built from a Kotlin theme, but here the theme is Rust and ships with Stump — folding it in would bump every definition whenever the upstream counterpart of our own engine changed | `src/sources_import.rs` `Definition::version`, `docs/content/docs/developer/source-definitions.mdx` schema table |
 | Provenance is read out of `.git/HEAD`, `refs/` and `packed-refs` directly instead of shelling out to `git` | This crate has exactly one process-spawning path (`src/external.rs`, for operator-installed converters) and reading a commit id is not a conversion; it also keeps the tool working on an exported tree with no `git` on `PATH` | `src/sources_import.rs` `resolve_commit`/`resolve_repo`, `provenance_is_read_from_the_checkout_without_running_git` |
+| `audio-assemble` demuxes with symphonia and muxes with the `mp4` crate, rather than using one library for both | Every M4B ffmpeg has ever written with a cover carries the artwork as an `attached_pic` video track, and the `mp4` crate refuses the whole file because it cannot parse a PNG sample entry — which would send a book that is *already* AAC down the lossy transcode path. symphonia reads the audio stream and ignores the rest, which is exactly the question being asked | `src/audio_assemble/mux.rs` `aac_shape`/`remux`; `remux_produces_a_single_track_faststart_m4b` uses `plain.m4b`, which has exactly that cover track |
+| The three finishing passes run in the order mux -> tags/chapters -> faststart | Each pass either moves media data or grows `moov`, never both: with `moov` still last the tagger can add `chpl`, the chapter track and the cover without rewriting one chunk offset, and only then does `faststart` move the finished `moov` and correct every offset by the delta of the box it points into | `src/audio_assemble/mux.rs` `remux`/`write_tags_and_chapters`/`faststart`; `offsets_gain_the_delta_of_the_box_they_point_into`, `moov_precedes_mdat` in `remux_produces_a_single_track_faststart_m4b` |
+| `audio-assemble` repairs the `SLConfigDescriptor` the muxer writes, in place, three bytes over three bytes | `mp4` 0.14 emits `06 00 00` — tag 6, declared length **0**, then one unaccounted payload byte of `predefined = 0`. ffmpeg shrugs; symphonia scopes to zero bytes and fails, and symphonia *is* `stump_media::audio::probe` — so without the repair the tool would write books Stump itself could not read. The correct bytes are `06 01 02`, the same length, so no box, descriptor or chunk offset changes size | `src/audio_assemble/mux.rs` `repair_sl_config`/`sl_config_at`; every remux test probes its own output through `stump_media::audio::probe_file` |
+| `audio-assemble` writes **both** MP4 chapter mechanisms, where `audio-chapters` writes only `chpl` | The distinction is authorship, not preference: `audio-chapters` edits a container a publisher shipped and must not perform structural surgery on it, while `audio-assemble` is *building* the container. Players split between the two mechanisms, so a freshly built book that carries one has no chapters for half its audience | `src/audio_assemble/mux.rs` `write_tags_and_chapters`; `remux_writes_both_chapter_mechanisms` |
+| The cover is written by the tagger as `covr` and is never handed to ffmpeg | ffmpeg can only attach a still to an MP4 as an `attached_pic` video track: a second copy of the artwork, in a form a strict MP4 reader rejects. The printed plan-only command therefore produces audio, tags and chapters, and says so | `src/audio_assemble.rs` `transcode_parts`, `printed_argv` |
+| A sidecar chapter list gets one parser per format, chosen by filename, never one permissive parser | The three formats disagree about the *unit* of the number they write — milliseconds, decimal seconds, and CD frames of 1/75 s — and two use indistinguishable `MM:SS:xx` shapes. Guessing the unit from the value is how a chapter list ends up 22% out | `src/audio_assemble/sidecar.rs` `parse_chapters_txt`/`parse_cue`/`parse_audible_json`; `cue_converts_frames_not_hundredths` |
+| Every assembled output is probed and rejected if it is not the book the plan described | The three ways an assemble goes wrong silently — a dropped part, a lost chapter list, a non-streamable container — all produce a file that opens and plays. A wrong output in a library is worse than none, so a failed verification deletes it | `src/audio_assemble.rs` `verify`, `DURATION_TOLERANCE`; `apply` removes the target on error |
+| `ffmpeg` is the crate's one *encoding* shell-out, and `ffmpeg::argv` is pure and public | MP3/Opus cannot be remuxed into AAC and there is no maintained pure-Rust AAC encoder; vendoring one would mean an LGPL C dependency in an MIT tree. The flags are the contract, so they are asserted in a test on a machine with no ffmpeg at all | `src/ffmpeg.rs` `argv`, `encode`, `write_ffmetadata`; `single_input_reads_the_file_directly`, `metadata_and_cover_are_mapped_by_index`, `missing_ffmpeg_names_the_tool_and_the_fix` |
 | `audio-report` and `audio-chapters` resolve their targets through one function, `audio_report::publications` | "Audio publication" has to mean the same thing in the report and in the writer, or the mutating tool could name a file the report never listed; the walk is one level deep because `PathUtils::dir_is_audio_book` already refuses a directory holding subdirectories, so a deeper walk could only find folders that are not books | `src/audio_report.rs` `publications`, `a_library_folder_is_walked_one_level_into_its_publications`; `src/audio_chapters.rs` `apply_never_touches_a_file_the_plan_did_not_name` |
 | `audio-report` keeps the action row of a broken publication and attaches an `Error` warning instead of dropping the action | A report tool's action *is* its finding, so honouring `Severity::Error`'s "the related action was dropped" would hide exactly the books a librarian has to fix | `src/audio_report.rs` `warn_about`; `src/plan.rs` `Severity` |
 | `audio-chapters` writes only the MP4 `chpl` list, never the chapter track, and refuses Ogg/Opus/FLAC outright | A chapter track is a media track: rewriting or removing one is structural surgery, while the marks written are the ones just read from it, so the two mechanisms cannot disagree. Vorbis-comment marks live in the container's comment header, and rewriting that means rewriting every following page's granule bookkeeping — a metadata tool that gets it wrong produces a file no player opens | `src/audio_chapters.rs` `write_chpl`/`container_of`, `a_chapter_track_becomes_a_portable_chpl_list`, `an_unsupported_container_is_refused_with_an_error` |
@@ -95,6 +107,36 @@ section is the one part of the crate README that is exempt from the 120-line
 template budget: the tool contract requires one table row per option, so the
 file grows with the tool count. Keep each subsection to
 8-14 lines.
+
+### `audio-assemble`
+
+Assembles an audiobook into one canonical M4B: MP4/AAC, a Nero `chpl` list
+**and** a QuickTime chapter track, iTunes tags (`©nam ©ART ©wrt ©alb ©gen ©day
+©des`), a `covr` cover, and `moov` ahead of `mdat` so playback starts without
+downloading the file.
+
+Two paths. **Remux** when every part is already AAC-in-MP4 and they agree on
+sample rate, channel layout and object type: the coded samples are copied
+verbatim, so there is no decode, no quality loss and no external binary.
+**Transcode** otherwise, through an operator-installed `ffmpeg`; when ffmpeg is
+absent the publication is planned as `plan-transcode`, the detail carries the
+exact command plus the marks and tags it would have used, and `apply` writes
+nothing. Chapters come from container marks, then a `chapters.txt`/`.cue`/
+Audible `metadata.json` sidecar, then one per file. Source files are never
+deleted or rewritten.
+
+| Option | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `output_dir` | string | beside the publication | Where the M4B is written |
+| `bitrate` | string | `64k` | `-b:a` for the transcode path; ignored by the remux path |
+| `bin_dir` | string | search `PATH` | Directory holding `ffmpeg` |
+| `force` | bool | `false` | Replace an existing output file |
+| `allow_transcode` | bool | `true` | Off makes the tool lossless-or-nothing |
+| `titles_from_filename` | bool | `false` | Name a per-file mark after the file stem even when the file carries a title tag |
+
+Actions: `assemble-remux`, `assemble-transcode`, `plan-transcode`. Warnings:
+`already-assembled`, `output-exists`, `transcode-refused`, `ffmpeg-missing`,
+`no-chapters`, `no-tracks`, `probe-failed`, `no-audio`.
 
 ### `audio-chapters`
 
@@ -512,6 +554,10 @@ Actions: `convert-pages`. Warnings: `no-archives`, `missing-path`,
 | `src/epub_polish.rs` | `epub-polish`; imports `epub_check`'s package/zip helpers (`parse_opf`, `parse_container`, `resolve_href`, `set_attribute`, `read_entry_text`, `collect_epubs`, …) instead of re-deriving them, so both tools read one OPF model |
 | `src/mobi2epub.rs` | `mobi2epub`; the parsing is `stump_media::MobiBook`'s, this module only builds the OCF container (package document, nav, NCX) to `epub_check`'s rules |
 | `src/sources_import.rs` | `sources-import`; the crate's one tool that reads a source *repository* instead of books — no `ToolInput` paths beyond the checkout root, and the only writer of the definition schema |
+| `src/audio_assemble.rs` | `audio-assemble`: the plan/apply contract, the chapter-source precedence, the tag and cover resolution, and the output verification |
+| `src/audio_assemble/mux.rs` | The pure-Rust half: `aac_shape` (symphonia demux + `AudioSpecificConfig` unpack), `remux`, `write_tags_and_chapters`, the `faststart` box relocation, and `repair_sl_config` |
+| `src/audio_assemble/sidecar.rs` | `chapters.txt`, `.cue` and Audible `metadata.json` chapter lists — one parser per format, one unit each |
+| `src/ffmpeg.rs` | The crate's `ffmpeg` adapter: `FFMPEG`, `locate`, the pure `argv`, `encode`, `timeout_for`, and `write_ffmetadata`. Shared with the server's per-device Opus delivery lane |
 | `src/audio_report.rs` | `audio-report`, plus `publications()`: the one "what is an audio publication" walk both audio tools resolve their targets through |
 | `src/audio_chapters.rs` | `audio-chapters`; the crate's only in-place *container* edit — `edit_atomic` stages a copy of the original in `util::write_atomic`'s temp file, because a tagger rewrites a container in place |
 | `src/test_support.rs` | `cfg(test)` only: the crate-wide `fake_binary_lock` every subprocess test takes |

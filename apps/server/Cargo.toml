@@ -104,6 +104,10 @@ stump_ingest = { path = "../../crates/ingest", optional = true }
 stump_library = { path = "../../crates/library", optional = true }
 stump_media = { path = "../../crates/media", default-features = false }
 stump_scanner = { path = "../../crates/scanner" }
+# The one external binary the audio lane shells out to: `ffmpeg`, for the
+# per-device Opus delivery preset. Already in every profile through
+# `stump_kindle`, so this is a name, not a new dependency.
+stump_tools = { path = "../../crates/tools" }
 stump_auth = { path = "../../crates/auth" }
 stump_api_types = { path = "../../crates/api-types" }
 stump_devices = { path = "../../crates/devices" }

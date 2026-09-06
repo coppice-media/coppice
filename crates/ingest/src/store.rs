@@ -1506,6 +1506,11 @@ fn media_kind_for_filename(filename: &str) -> IngestMediaKind {
 		"cbr" | "rar" => IngestMediaKind::ComicRarArchive,
 		"epub" => IngestMediaKind::Epub,
 		"pdf" => IngestMediaKind::Pdf,
+		// The extensions `media::AUDIO_EXTENSIONS` defines, so a book the
+		// scanner treats as audio is a book ingest treats as audio.
+		extension if models::entity::media::AUDIO_EXTENSIONS.contains(&extension) => {
+			IngestMediaKind::Audio
+		},
 		_ => IngestMediaKind::Unknown,
 	}
 }
@@ -1585,7 +1590,8 @@ fn snapshot_from_source(
 				})
 				.collect()
 		},
-		IngestMediaKind::Unknown => Vec::new(),
+		// A recording is addressed in time, not in pages.
+		IngestMediaKind::Audio | IngestMediaKind::Unknown => Vec::new(),
 	};
 	Ok(BookSnapshot {
 		drop_item_id: source.id,

@@ -711,6 +711,8 @@ pub enum IngestMediaKind {
 	ComicRarArchive,
 	Epub,
 	Pdf,
+	/// An audiobook: one container, or one folder of parts.
+	Audio,
 	Unknown,
 }
 
@@ -722,6 +724,7 @@ impl From<stump_ingest::contract::IngestMediaKind> for IngestMediaKind {
 			Core::ComicRarArchive => Self::ComicRarArchive,
 			Core::Epub => Self::Epub,
 			Core::Pdf => Self::Pdf,
+			Core::Audio => Self::Audio,
 			Core::Unknown => Self::Unknown,
 		}
 	}
@@ -735,6 +738,7 @@ impl From<IngestMediaKind> for stump_ingest::contract::IngestMediaKind {
 			IngestMediaKind::ComicRarArchive => Core::ComicRarArchive,
 			IngestMediaKind::Epub => Core::Epub,
 			IngestMediaKind::Pdf => Core::Pdf,
+			IngestMediaKind::Audio => Core::Audio,
 			IngestMediaKind::Unknown => Core::Unknown,
 		}
 	}
@@ -900,6 +904,30 @@ impl IngestProviderSettings {
 	}
 }
 
+/// One repair a failing quality check points at.
+///
+/// A finding a librarian cannot act on is a complaint, not a check: the id is
+/// a `stump_tools` tool and `options` is the option blob that addresses this
+/// finding, so a client can offer "fix it" beside the row.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct IngestQualityFixAction {
+	/// A `stump_tools` tool id, e.g. `audio-assemble`.
+	pub tool: String,
+	pub summary: String,
+	/// The tool's JSON options, or `null` for its defaults.
+	pub options: Option<serde_json::Value>,
+}
+
+impl From<stump_ingest::contract::FixAction> for IngestQualityFixAction {
+	fn from(fix: stump_ingest::contract::FixAction) -> Self {
+		Self {
+			tool: fix.tool,
+			summary: fix.summary,
+			options: (!fix.options.is_null()).then_some(fix.options),
+		}
+	}
+}
+
 #[derive(Debug, Clone, SimpleObject)]
 pub struct IngestQualityCheckDescriptor {
 	pub id: String,
@@ -910,6 +938,10 @@ pub struct IngestQualityCheckDescriptor {
 	pub enabled: bool,
 	pub supported_media_types: Vec<String>,
 	pub settings: Vec<IngestSettingDefinition>,
+	/// The tool that repairs a failing outcome, when one exists in this
+	/// build. `null` for a finding whose decision is the librarian's, such as
+	/// a duplicate or an unparseable filename.
+	pub fix: Option<IngestQualityFixAction>,
 }
 
 impl From<stump_ingest::quality::CheckDescriptor> for IngestQualityCheckDescriptor {
@@ -927,6 +959,7 @@ impl From<stump_ingest::quality::CheckDescriptor> for IngestQualityCheckDescript
 				.into_iter()
 				.map(IngestSettingDefinition::from)
 				.collect(),
+			fix: descriptor.fix.map(IngestQualityFixAction::from),
 		}
 	}
 }

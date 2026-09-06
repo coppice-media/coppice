@@ -31,7 +31,8 @@ pub use pipeline::{
 	PageFormat,
 };
 pub use profile::{
-	ComicContainer, JpegSubsampling, TransformFormat, TransformProfile,
+	parse_bitrate, AudioOutput, AudioProfile, ComicContainer, JpegSubsampling,
+	TransformFormat, TransformProfile, AUDIO_OGG, DEFAULT_OPUS_BITRATE,
 	MAX_TALL_PAGE_RATIO,
 };
 pub use source::{is_comic_source, ComicPages, COMIC_EXTENSIONS};

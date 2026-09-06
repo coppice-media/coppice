@@ -34,14 +34,25 @@ pub enum IngestMediaKind {
 	ComicRarArchive,
 	Epub,
 	Pdf,
+	/// An audiobook: one MP4/MP3/Opus/FLAC container, or one folder of parts.
+	/// The only kind whose target can be a directory, because a folder
+	/// audiobook is one publication rather than one file per book.
+	Audio,
 	Unknown,
 }
 
 impl IngestMediaKind {
 	/// Whether the format is page/image oriented (comics, PDF) rather than
-	/// reflowable text (EPUB).
+	/// reflowable text (EPUB) or time-addressed (audio).
 	pub fn is_paged(self) -> bool {
 		matches!(self, Self::ComicArchive | Self::ComicRarArchive | Self::Pdf)
+	}
+
+	/// Whether the publication is addressed in time rather than in pages or
+	/// resources. Every page-oriented check reports `NOT_APPLICABLE` for one
+	/// of these, and every audio check reports `NOT_APPLICABLE` for the rest.
+	pub fn is_audio(self) -> bool {
+		matches!(self, Self::Audio)
 	}
 }
 
@@ -121,6 +132,44 @@ pub enum QualityCheckError {
 	Io(#[from] std::io::Error),
 }
 
+/// The tool that repairs what a check found.
+///
+/// A finding a librarian cannot act on is a complaint, not a check. Every
+/// audio check names the tool that fixes it, so a failing report is one step
+/// away from a plan: the ids are [`crate::quality`]'s side of the
+/// `stump_tools` registry (`audio-assemble`, `audio-chapters`, `meta-edit`),
+/// and `options` is the tool option blob that addresses *this* finding.
+///
+/// Deliberately not a command line: the tool is invoked through the tool
+/// registry with these options, so a fix cannot drift from what the tool
+/// actually accepts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FixAction {
+	/// A `stump_tools` tool id.
+	pub tool: String,
+	/// Human-readable statement of what running it would do.
+	pub summary: String,
+	/// The tool's JSON options, or `null` for its defaults.
+	#[serde(default, skip_serializing_if = "Value::is_null")]
+	pub options: Value,
+}
+
+impl FixAction {
+	pub fn new(tool: &str, summary: &str) -> Self {
+		Self {
+			tool: tool.to_string(),
+			summary: summary.to_string(),
+			options: Value::Null,
+		}
+	}
+
+	#[must_use]
+	pub fn with_options(mut self, options: Value) -> Self {
+		self.options = options;
+		self
+	}
+}
+
 /// A deterministic quality check.  Implementations must be pure functions of
 /// the snapshot plus their persisted settings: no network, no clock, no
 /// randomness, no provider output.
@@ -133,6 +182,14 @@ pub trait QualityCheck: Send + Sync {
 	/// Fixed weight; the built-in weights sum to 100.
 	fn weight(&self) -> u16;
 	fn settings(&self) -> &[SettingDefinition];
+	/// The tool that repairs a failing outcome of this check, when one exists.
+	///
+	/// `None` means "no tool in this build can fix it" — which is the honest
+	/// answer for a duplicate-detection or filename-parsing finding, where the
+	/// decision is the librarian's.
+	fn fix(&self) -> Option<FixAction> {
+		None
+	}
 	async fn run(
 		&self,
 		book: &BookSnapshot,
@@ -207,6 +264,10 @@ pub enum MetadataField {
 	Series,
 	SeriesIndex,
 	Authors,
+	/// The audiobook's readers. A separate credit from `Authors`: an
+	/// audiobook's author wrote it and its narrator did not, and folding the
+	/// two would put a reader in the writers column.
+	Narrators,
 	Publisher,
 	PublishedDate,
 	Language,
@@ -253,6 +314,7 @@ impl MetadataField {
 			| PublicMetadataField::CoverArtists
 			| PublicMetadataField::Pencillers
 			| PublicMetadataField::Teams => Self::Authors,
+			PublicMetadataField::Narrators => Self::Narrators,
 			PublicMetadataField::Publisher | PublicMetadataField::Imprint => {
 				Self::Publisher
 			},
@@ -289,6 +351,7 @@ impl MetadataField {
 			Self::Series => PublicMetadataField::Series,
 			Self::SeriesIndex => PublicMetadataField::Number,
 			Self::Authors => PublicMetadataField::Writers,
+			Self::Narrators => PublicMetadataField::Narrators,
 			Self::Publisher => PublicMetadataField::Publisher,
 			Self::PublishedDate => PublicMetadataField::ReleaseDate,
 			Self::Language => PublicMetadataField::Language,

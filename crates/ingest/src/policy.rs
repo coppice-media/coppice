@@ -125,13 +125,101 @@ impl FieldPolicy {
 	}
 }
 
-/// A whole policy document: the rules for the fields it mentions. A field with
-/// no rule is never touched by a policy run.
+/// The audio half of a library's ingest policy: the one quality-check weight
+/// that is worth arguing about, plus the auto-fix toggles.
+///
+/// Six of the seven audio checks (`chapters_present`, `faststart`,
+/// `tags_complete`, `cover_embedded`, `duration_consistent`, `bitrate_sane`)
+/// measure a fact about the file that is either true or false, and their
+/// weights are compile-time constants like every comic check's. `single_file`
+/// is different: whether a book split across 40 MP3s is a *defect* or simply
+/// how that library stores audiobooks is a library-level opinion, so its
+/// weight is the one number an operator can move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioPolicy {
+	/// Weight of the `single_file` quality check, on the same 0..=100 scale
+	/// as every other check's [`crate::contract::QualityCheck::weight`]. `0`
+	/// keeps the finding as advisory prose without moving the score, which is
+	/// how a library that deliberately stores per-chapter MP3s turns the
+	/// penalty off without losing the report row.
+	#[serde(default = "default_single_file_weight")]
+	pub single_file_weight: u16,
+	/// Assemble a split audiobook into the canonical single file
+	/// (`STUMP_AUDIO_CANONICAL`) as part of ingest.
+	#[serde(default)]
+	pub auto_assemble: bool,
+	/// Write chapter marks into an audiobook that has none, derived from its
+	/// per-file boundaries.
+	#[serde(default)]
+	pub auto_chapters: bool,
+	/// Keep the source files after an assemble. Turning this off is the only
+	/// way ingest ever deletes an operator's audio, so it defaults on and is
+	/// meaningless — and refused — without `auto_assemble`.
+	#[serde(default = "keep_original_default")]
+	pub keep_original: bool,
+}
+
+/// The weight `single_file` carries unless a library says otherwise. Heavy on
+/// purpose: with the other six audio checks at 10..=15 the audio family sums
+/// to 100, so a split book cannot score above ~70 however clean its tags are.
+fn default_single_file_weight() -> u16 {
+	30
+}
+
+fn keep_original_default() -> bool {
+	true
+}
+
+impl Default for AudioPolicy {
+	fn default() -> Self {
+		*Self::server_default()
+	}
+}
+
+impl AudioPolicy {
+	/// The server-wide default. Both auto-fixes are off and the sources are
+	/// kept: an ingest run analyses and reports, and only rewrites or removes
+	/// an operator's audio files once they have asked for it per library.
+	pub fn server_default() -> &'static Self {
+		static DEFAULT: AudioPolicy = AudioPolicy {
+			single_file_weight: 30,
+			auto_assemble: false,
+			auto_chapters: false,
+			keep_original: true,
+		};
+		&DEFAULT
+	}
+
+	/// Refuse a document that could not do what it says.
+	pub fn validate(&self) -> Result<(), PolicyError> {
+		if self.single_file_weight > MAX_CHECK_WEIGHT {
+			return Err(PolicyError::AudioWeightOutOfRange(self.single_file_weight));
+		}
+		if !self.keep_original && !self.auto_assemble {
+			return Err(PolicyError::AudioKeepOriginalWithoutAssemble);
+		}
+		Ok(())
+	}
+}
+
+/// The sum of the built-in quality-check weights, and therefore the largest
+/// weight one check may carry: above it, a single check outvotes every other
+/// check in the registry combined and the score stops meaning anything.
+pub const MAX_CHECK_WEIGHT: u16 = 100;
+
+/// A whole policy document: the rules for the fields it mentions, plus the
+/// audio section. A field with no rule is never touched by a policy run.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataPolicy {
 	#[serde(default)]
 	pub fields: BTreeMap<MetadataField, FieldPolicy>,
+	/// The audio rules, when this document has an opinion about them.
+	/// `None` inherits [`AudioPolicy::server_default`], which is why a
+	/// document written before the audio lane existed still deserializes.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub audio: Option<AudioPolicy>,
 }
 
 /// Provider ids in Komf's default priority order, restricted to the providers
@@ -152,6 +240,7 @@ const KOMF_PRIORITY: &[&str] = &[
 	"metron",
 	"openlibrary",
 	"googlebooks",
+	"audible",
 	"hardcover",
 ];
 
@@ -227,6 +316,10 @@ impl MetadataPolicy {
 					FieldPolicy::new(remote_then_embedded(), PolicyStrategy::First),
 				),
 				(
+					MetadataField::Narrators,
+					FieldPolicy::new(remote_then_embedded(), PolicyStrategy::First),
+				),
+				(
 					MetadataField::Publisher,
 					FieldPolicy::new(remote_then_embedded(), PolicyStrategy::First),
 				),
@@ -289,6 +382,7 @@ impl MetadataPolicy {
 			];
 			MetadataPolicy {
 				fields: rules.into_iter().collect(),
+				audio: Some(*AudioPolicy::server_default()),
 			}
 		});
 		&DEFAULT
@@ -298,12 +392,27 @@ impl MetadataPolicy {
 	/// base rule wholesale, everything else is inherited. Komf's
 	/// `libraryProviders` works the same way — a library that names one
 	/// provider set keeps the defaults for everything it does not mention.
+	///
+	/// The audio section follows the same rule at section granularity: an
+	/// override that mentions `audio` replaces the whole section, one that
+	/// does not keeps the base's.
 	pub fn overlay(&self, over: &Self) -> Self {
 		let mut fields = self.fields.clone();
 		for (field, rule) in &over.fields {
 			fields.insert(*field, rule.clone());
 		}
-		Self { fields }
+		Self {
+			fields,
+			audio: over.audio.or(self.audio),
+		}
+	}
+
+	/// This document's audio rules, falling back to the server default for a
+	/// document that has no `audio` section.
+	pub fn audio(&self) -> &AudioPolicy {
+		self.audio
+			.as_ref()
+			.unwrap_or_else(|| AudioPolicy::server_default())
 	}
 
 	/// Reject a document before it is stored: an unknown provider id, a
@@ -332,6 +441,9 @@ impl MetadataPolicy {
 					});
 				}
 			}
+		}
+		if let Some(audio) = &self.audio {
+			audio.validate()?;
 		}
 		Ok(())
 	}
@@ -775,6 +887,15 @@ impl EffectivePolicy {
 			.as_ref()
 			.is_some_and(|policy| policy.fields.contains_key(&field))
 	}
+
+	/// Whether the audio section comes from the library override. Section
+	/// granularity, not per key: the override stores or omits the whole
+	/// `audio` object.
+	pub fn audio_overridden(&self) -> bool {
+		self.library_override
+			.as_ref()
+			.is_some_and(|policy| policy.audio.is_some())
+	}
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -800,6 +921,16 @@ pub enum PolicyError {
 		field: MetadataField,
 		strategy: PolicyStrategy,
 	},
+	#[error(
+		"audio singleFileWeight {0} exceeds {MAX_CHECK_WEIGHT}, the sum of the \
+		 built-in quality-check weights"
+	)]
+	AudioWeightOutOfRange(u16),
+	#[error(
+		"audio keepOriginal can only be turned off when autoAssemble is on: \
+		 there would be nothing to replace the source files with"
+	)]
+	AudioKeepOriginalWithoutAssemble,
 	#[error("database operation failed: {0}")]
 	Database(String),
 }
@@ -917,6 +1048,7 @@ mod tests {
 					)
 				})
 				.collect(),
+			audio: None,
 		}
 	}
 
@@ -1694,5 +1826,185 @@ mod tests {
 			effective_policy(&conn, "library").await.unwrap_err(),
 			PolicyError::Invalid { .. }
 		));
+	}
+
+	#[test]
+	fn audio_server_default_never_rewrites_or_deletes() {
+		let audio = AudioPolicy::server_default();
+		assert_eq!(audio.single_file_weight, 30);
+		assert!(!audio.auto_assemble);
+		assert!(!audio.auto_chapters);
+		assert!(audio.keep_original);
+		assert_eq!(&AudioPolicy::default(), audio);
+		// The server default document carries the section, so a caller that
+		// reads `.audio()` on it never falls through to the static.
+		assert_eq!(MetadataPolicy::server_default().audio(), audio);
+		assert!(audio.validate().is_ok());
+	}
+
+	#[test]
+	fn a_document_without_an_audio_section_inherits_the_default() {
+		// A `library_configs.metadata_policy` written before the audio lane
+		// existed has no `audio` key; it must still deserialize and resolve.
+		let stored: MetadataPolicy =
+			serde_json::from_str(r#"{"fields":{"TITLE":{"providers":["anilist"]}}}"#)
+				.unwrap();
+		assert_eq!(stored.audio, None);
+		assert_eq!(stored.audio(), AudioPolicy::server_default());
+
+		// A section that names only one key fills the rest from the default.
+		let partial: MetadataPolicy =
+			serde_json::from_str(r#"{"audio":{"autoAssemble":true}}"#).unwrap();
+		let audio = partial.audio.expect("section present");
+		assert!(audio.auto_assemble);
+		assert_eq!(audio.single_file_weight, 30);
+		assert!(audio.keep_original);
+
+		// And an absent section is omitted on the way out rather than
+		// written as an explicit null.
+		assert_eq!(
+			serde_json::to_string(&MetadataPolicy::default()).unwrap(),
+			r#"{"fields":{}}"#
+		);
+	}
+
+	#[test]
+	fn audio_validation_refuses_a_meaningless_document() {
+		let known = known_provider_ids();
+		let with_audio = |audio: AudioPolicy| MetadataPolicy {
+			audio: Some(audio),
+			..MetadataPolicy::default()
+		};
+
+		assert_eq!(
+			with_audio(AudioPolicy {
+				single_file_weight: 101,
+				..AudioPolicy::default()
+			})
+			.validate(&known),
+			Err(PolicyError::AudioWeightOutOfRange(101))
+		);
+		// Exactly the sum of the built-in weights is still legal.
+		assert!(with_audio(AudioPolicy {
+			single_file_weight: MAX_CHECK_WEIGHT,
+			..AudioPolicy::default()
+		})
+		.validate(&known)
+		.is_ok());
+		// Zero is legal: an advisory finding that does not move the score.
+		assert!(with_audio(AudioPolicy {
+			single_file_weight: 0,
+			..AudioPolicy::default()
+		})
+		.validate(&known)
+		.is_ok());
+
+		assert_eq!(
+			with_audio(AudioPolicy {
+				keep_original: false,
+				..AudioPolicy::default()
+			})
+			.validate(&known),
+			Err(PolicyError::AudioKeepOriginalWithoutAssemble)
+		);
+		assert!(with_audio(AudioPolicy {
+			auto_assemble: true,
+			keep_original: false,
+			..AudioPolicy::default()
+		})
+		.validate(&known)
+		.is_ok());
+	}
+
+	#[test]
+	fn overlay_replaces_the_audio_section_wholesale() {
+		let base = MetadataPolicy {
+			audio: Some(AudioPolicy {
+				single_file_weight: 30,
+				auto_assemble: false,
+				auto_chapters: true,
+				keep_original: true,
+			}),
+			..MetadataPolicy::default()
+		};
+		let over = MetadataPolicy {
+			audio: Some(AudioPolicy {
+				single_file_weight: 5,
+				auto_assemble: true,
+				auto_chapters: false,
+				keep_original: true,
+			}),
+			..MetadataPolicy::default()
+		};
+
+		// Every key of the section moves together, including the ones whose
+		// value happens to equal the base's.
+		assert_eq!(base.overlay(&over).audio, over.audio);
+		// An override silent about audio keeps the base's section.
+		assert_eq!(base.overlay(&MetadataPolicy::default()).audio, base.audio);
+	}
+
+	#[tokio::test]
+	async fn a_library_overrides_only_the_audio_section() {
+		let conn = library_fixture().await;
+
+		let effective = effective_policy(&conn, "library").await.unwrap();
+		assert_eq!(effective.policy.audio(), AudioPolicy::server_default());
+		assert!(!effective.audio_overridden());
+
+		let over = MetadataPolicy {
+			audio: Some(AudioPolicy {
+				single_file_weight: 0,
+				auto_assemble: true,
+				auto_chapters: true,
+				keep_original: false,
+			}),
+			..MetadataPolicy::default()
+		};
+		let effective =
+			set_library_override(&conn, "library", Some(&over), &known_provider_ids())
+				.await
+				.unwrap();
+
+		let audio = effective.policy.audio();
+		assert_eq!(audio.single_file_weight, 0);
+		assert!(audio.auto_assemble && audio.auto_chapters && !audio.keep_original);
+		assert!(effective.audio_overridden());
+		// An audio-only override leaves every field rule inherited.
+		assert_eq!(
+			effective.policy.fields,
+			MetadataPolicy::server_default().fields
+		);
+		assert!(!effective.is_overridden(MetadataField::Title));
+
+		// It survives a reload, and clearing it restores the default.
+		let reloaded = effective_policy(&conn, "library").await.unwrap();
+		assert_eq!(reloaded.policy.audio(), audio);
+
+		let cleared = set_library_override(&conn, "library", None, &known_provider_ids())
+			.await
+			.unwrap();
+		assert_eq!(cleared.policy.audio(), AudioPolicy::server_default());
+		assert!(!cleared.audio_overridden());
+	}
+
+	#[tokio::test]
+	async fn a_rejected_audio_section_is_not_stored() {
+		let conn = library_fixture().await;
+		let invalid = MetadataPolicy {
+			audio: Some(AudioPolicy {
+				single_file_weight: 4_000,
+				..AudioPolicy::default()
+			}),
+			..MetadataPolicy::default()
+		};
+
+		let error =
+			set_library_override(&conn, "library", Some(&invalid), &known_provider_ids())
+				.await
+				.unwrap_err();
+
+		assert_eq!(error, PolicyError::AudioWeightOutOfRange(4_000));
+		assert_eq!(library_override(&conn, "library").await.unwrap(), None);
 	}
 }

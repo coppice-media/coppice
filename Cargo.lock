@@ -5205,6 +5205,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mp4"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9ef834d5ed55e494a2ae350220314dc4aacd1c43a9498b00e320e0ea352a5c3"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "num-rational",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.63",
+]
+
+[[package]]
 name = "mp4ameta"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5524,6 +5538,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -9472,6 +9487,7 @@ dependencies = [
  "stump_provider_mangadex",
  "stump_provider_themes",
  "stump_scanner",
+ "stump_tools",
  "subtle",
  "tempfile",
  "tests",
@@ -9498,6 +9514,7 @@ dependencies = [
  "globset",
  "id3",
  "image",
+ "mp4",
  "mp4ameta",
  "pretty_assertions",
  "quick-xml",
@@ -9506,6 +9523,7 @@ dependencies = [
  "serde_json",
  "stump_media",
  "stump_scanner",
+ "symphonia",
  "tempfile",
  "thiserror 2.0.17",
  "tracing",

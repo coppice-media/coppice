@@ -158,11 +158,17 @@ pub trait AbsBackend: Send + Sync {
 	async fn cover(&self, user: &AuthUser, media_id: &str) -> AbsResult<AbsImage>;
 
 	/// Stream one audio track, honouring `Range` from `headers`.
+	///
+	/// `device_id` is the device whose credential authenticated the request,
+	/// when one did. The audio transform preset that decides whether the
+	/// bytes are transcoded lives on that device, so a backend that ignored
+	/// it would serve every client the stored encoding.
 	async fn serve_track(
 		&self,
 		headers: HeaderMap,
 		media_id: &str,
 		track_index: i32,
+		device_id: Option<&str>,
 	) -> AbsResult<Response<Body>>;
 
 	/// Persist a new play session.

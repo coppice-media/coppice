@@ -483,6 +483,9 @@ pub enum MetadataProvider {
 	GoogleBooks,
 	/// Metron (https://metron.cloud/api/)
 	Metron,
+	/// Audible, through the community Audnexus enrichment API
+	/// (https://api.audnex.us) plus the unauthenticated Audible catalogue.
+	Audible,
 }
 
 impl MetadataProvider {
@@ -510,7 +513,10 @@ impl MetadataProvider {
 				LibraryType::Manhwa,
 				LibraryType::Webtoon,
 			],
-			Self::OpenLibrary | Self::GoogleBooks => &[LibraryType::Book],
+			// Audible only catalogues audiobooks, but Stump has no audio
+			// library type: an audiobook lives in a `Book` library beside its
+			// text editions, which is also where its ASIN and narrator belong.
+			Self::OpenLibrary | Self::GoogleBooks | Self::Audible => &[LibraryType::Book],
 			Self::Metron => &[LibraryType::Comic],
 		}
 	}

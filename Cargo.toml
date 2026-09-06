@@ -68,6 +68,10 @@ lettre = { version = "0.11.18", default-features = false, features = [
 ] }
 md5 = "0.8.0"
 mp4ameta = "0.13.0"
+# `audio-assemble` remuxes AAC-in-MP4 tracks into one faststart M4B: reads the
+# sample tables of every input and writes one `moov` (incl. the QuickTime
+# chapter track) before `mdat`. `mp4ameta` is a tagger and cannot mux.
+mp4 = "0.14.0"
 natord = "1.0.9"
 num-traits = "0.2.19"
 prefixed-api-key = { version = "0.3.0", features = ["sha2"] }

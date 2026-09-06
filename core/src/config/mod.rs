@@ -1,4 +1,5 @@
 mod annotation_sync;
+mod audio;
 mod auth;
 mod database;
 pub mod defaults;
@@ -17,6 +18,7 @@ mod transform;
 use std::env;
 
 pub use annotation_sync::AnnotationSyncConfig;
+pub use audio::{AudioConfig, AUDIO_CANONICAL_VALUES};
 pub use auth::AuthConfig;
 pub use database::DatabaseConfig;
 use env_keys::{CONFIG_DIR_KEY, IN_DOCKER_KEY};

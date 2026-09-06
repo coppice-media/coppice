@@ -32,7 +32,7 @@ The old `reading_devices` rows (KOReader and OPDS progression clients registerin
 
 A key never grants what its owner does not hold, and an API key only authenticates for users allowed to use API keys (`validate_api_key` in `apps/server/src/middleware/auth.rs`), so creating an API-key device requires `ACCESS_API_KEYS` plus the minted permissions; the server owner bypasses the check. The plaintext secret is returned exactly once (`IssuedCredential`), afterwards only a hint such as `stump_abcdefgh_…` is available.
 
-`rotate_credential` deletes the API key row (or revokes the liseur token) and mints a replacement. `revoke` does the same without a replacement, drops the credential rows, and stamps `revoked_at`; the device row stays so its history remains visible. `rename` also renames the API key / liseur token; `set_transform_profile` stores a free-form JSON profile for the protocol adapters.
+`rotate_credential` deletes the API key row (or revokes the liseur token) and mints a replacement. `revoke` does the same without a replacement, drops the credential rows, and stamps `revoked_at`; the device row stays so its history remains visible. `rename` also renames the API key / liseur token; `set_transform_profile` stores the [transform profile](#transform-profile) JSON for the protocol adapters.
 
 The liseur-sync storage shares the secret format, hash, and default expiry with the registry through `stump_devices::liseur_token::{new_secret, hash_secret, DEVICE_TOKEN_TTL_SECS}`, so tokens minted either way authenticate through the same bearer middleware.
 
@@ -51,6 +51,19 @@ The liseur-sync storage shares the secret format, hash, and default expiry with 
 | `api`, `web` | `{origin}/api` (Bearer) |
 
 `deviceEndpoints(id)` returns these with the secret redacted; `createDevice` and `rotateDeviceCredential` return them with the full secret.
+
+## Transform profile
+
+`devices.transform_profile` is the per-device delivery description, interpreted by `stump_media::transform::TransformProfile::from_device_profile`: a bare preset name (`"libra"`), a `{"preset": "clara"}` selector, or a full/partial profile object whose unset fields take the defaults. `setDeviceTransformProfile(id: String!, profile: JSON): Device!` writes it (`null` clears it) and validates it first, so an unknown preset or an unusable Opus bitrate is a mutation error rather than a warning logged once per delivery request.
+
+The document has two halves, and a device may use either or both:
+
+| Half | Keys | Honoured by |
+| --- | --- | --- |
+| Comic pages | `max_width`, `max_height`, `grayscale`, `black_level`, `gamma`, `format`, `split_tall_pages`, `container` | The Kobo book-file route, with `STUMP_TRANSFORM_ENABLED` — see [comic transform](/docs/developer/comics-transform) |
+| Audio delivery | `audio.output`: `{"type": "passthrough"}` (default) or `{"type": "opus", "bitrate": "64k"}` | `GET /api/v2/media/{id}/audio/track/{index}` and the Audiobookshelf `GET /api/items/{id}/file/{ino}` lane |
+
+Preset names are `clara`, `libra`, `sage`, `elipsa`, `nia`, `clara-colour`, `libra-colour`, `sage-colour`, `koreader`, `phone`, `phone-opus` (`TransformProfile::preset_names()`). Every one of them delivers audio as stored except `phone-opus`, which is `phone` plus `audio.output = opus @ 64k` — so switching a device to an Opus preset changes only what that device is *sent*, never what the library stores. The transcode runs through the operator's `ffmpeg` (`STUMP_AUDIO_FFMPEG`), is cached in the transform cache directory under the audio section's own digest, and falls back to the stored bytes on any failure. See [audiobooks](/docs/guides/fundamentals/audiobooks#settings).
 
 ## Sightings
 

@@ -214,8 +214,12 @@ pub(crate) struct TestBackend {
 	/// asserts the reading state would have received.
 	pub applied: Mutex<Vec<(String, AbsPositionUpdate)>>,
 	pub covers: Mutex<HashMap<String, AbsImage>>,
-	/// Range headers the track route was called with.
-	pub served: Mutex<Vec<(String, i32, Option<String>)>>,
+	/// `(media_id, track_index, Range, device_id)` per track-route call: what
+	/// a test asserts the delivery layer would have received.
+	pub served: Mutex<Vec<(String, i32, Option<String>, Option<String>)>>,
+	/// The device the request's credential resolves to, as the server's auth
+	/// middleware would have put on the [`AuthContext`].
+	pub device_id: Mutex<Option<String>>,
 }
 
 impl TestBackend {
@@ -228,11 +232,18 @@ impl TestBackend {
 			applied: Mutex::new(Vec::new()),
 			covers: Mutex::new(HashMap::new()),
 			served: Mutex::new(Vec::new()),
+			device_id: Mutex::new(None),
 		})
 	}
 
 	pub(crate) fn set_audio(&self, media_id: &str, audio: AbsAudio) {
 		self.audio.lock().insert(media_id.to_owned(), audio);
+	}
+
+	/// Authenticate every later request as this device, so the per-device
+	/// audio transform preset is in play.
+	pub(crate) fn set_device(&self, device_id: &str) {
+		*self.device_id.lock() = Some(device_id.to_owned());
 	}
 
 	pub(crate) fn set_cover(&self, media_id: &str, image: AbsImage) {
@@ -490,6 +501,7 @@ impl AbsBackend for TestBackend {
 		headers: HeaderMap,
 		media_id: &str,
 		track_index: i32,
+		device_id: Option<&str>,
 	) -> AbsResult<Response<Body>> {
 		let audio = self
 			.audio
@@ -505,9 +517,12 @@ impl AbsBackend for TestBackend {
 			.get(axum::http::header::RANGE)
 			.and_then(|value| value.to_str().ok())
 			.map(str::to_owned);
-		self.served
-			.lock()
-			.push((media_id.to_owned(), track_index, range.clone()));
+		self.served.lock().push((
+			media_id.to_owned(),
+			track_index,
+			range.clone(),
+			device_id.map(str::to_owned),
+		));
 
 		let status = if range.is_some() {
 			StatusCode::PARTIAL_CONTENT
@@ -581,9 +596,15 @@ impl AbsBackend for TestBackend {
 /// routes at the root and the authenticated ones under `/api`, with the user
 /// already resolved.
 fn router(backend: Arc<TestBackend>, user: &AuthUser) -> Router {
+	let auth = stump_auth::AuthContext {
+		user: user.clone(),
+		api_key: None,
+		device_id: backend.device_id.lock().clone(),
+	};
 	crate::routes::public_router::<()>()
 		.merge(Router::new().nest("/api", crate::routes::authenticated_router::<()>()))
 		.layer(Extension(user.clone()))
+		.layer(Extension(auth))
 		.layer(Extension(backend as Arc<dyn AbsBackend>))
 }
 

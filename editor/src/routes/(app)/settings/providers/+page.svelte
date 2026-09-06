@@ -50,6 +50,11 @@
 	let policyRows = $state<PolicyRow[]>([]);
 	let policyDirty = $state<string[]>([]);
 	let policyLoadedFor = $state<string | null>(null);
+	// The audio section is stored and overridden as a whole, so one dirty
+	// flag covers it rather than one per key.
+	type AudioPolicy = MetadataPolicyFieldsFragment['audio'];
+	let audioPolicy = $state<AudioPolicy | null>(null);
+	let audioDirty = $state(false);
 	const session = getEditorSession();
 
 	const providerCatalogQuery = createQuery(() => ({
@@ -106,8 +111,10 @@
 		queryFn: () => request(MetadataPolicyDocument, { libraryId: selectedLibraryId }),
 		enabled: browser && Boolean(selectedLibraryId)
 	}));
+	// `null` audio clears the section back to the server default, exactly as
+	// an empty field list clears the whole override.
 	const savePolicyMutation = createMutation(() => ({
-		mutationFn: (fields: PolicyRow[]) =>
+		mutationFn: ({ fields, audio }: { fields: PolicyRow[]; audio: AudioPolicy | null }) =>
 			request(SetMetadataPolicyDocument, {
 				libraryId: selectedLibraryId,
 				input: {
@@ -116,12 +123,21 @@
 						providers: row.providers,
 						strategy: row.strategy,
 						lockRespected: row.lockRespected
-					}))
+					})),
+					audio: audio
+						? {
+								singleFileWeight: audio.singleFileWeight,
+								autoAssemble: audio.autoAssemble,
+								autoChapters: audio.autoChapters,
+								keepOriginal: audio.keepOriginal
+							}
+						: null
 				}
 			}),
 		onSuccess: (result) => {
 			policyLoadedFor = null;
 			policyDirty = [];
+			audioDirty = false;
 			// The mutation answers with the same shape the query reads, but
 			// under its own field: unwrap it or the cache write silently
 			// blanks the tab.
@@ -144,7 +160,7 @@
 	let libraries = $derived(session.libraries);
 	let policy = $derived(policyQuery.data?.metadataPolicy);
 	let policyProviderIds = $derived(providers.map((provider) => provider.id));
-	let policyChanged = $derived(policyDirty.length > 0);
+	let policyChanged = $derived(policyDirty.length > 0 || audioDirty);
 
 	$effect(() => {
 		if (!selectedProviderId && providers.length) selectedProviderId = providers[0].id;
@@ -169,7 +185,9 @@
 		if (!loaded || loaded.libraryId === policyLoadedFor) return;
 		policyLoadedFor = loaded.libraryId;
 		policyDirty = [];
+		audioDirty = false;
 		policyRows = loaded.fields.map((row) => ({ ...row, providers: [...row.providers] }));
+		audioPolicy = { ...loaded.audio };
 	});
 
 	function stringifyValue(value: unknown): string {
@@ -291,6 +309,37 @@
 
 	function availableProviders(row: PolicyRow): string[] {
 		return policyProviderIds.filter((id) => !row.providers.includes(id));
+	}
+
+	// The audio section of the override: sent when the library already
+	// overrides it or it was edited here, `null` otherwise so the server
+	// default keeps flowing through.
+	function overrideAudio(): AudioPolicy | null {
+		if (!audioPolicy) return null;
+		return audioPolicy.overridden || audioDirty ? audioPolicy : null;
+	}
+
+	function updateAudio(change: Partial<AudioPolicy>): void {
+		if (!audioPolicy) return;
+		audioPolicy = { ...audioPolicy, ...change };
+		audioDirty = true;
+	}
+
+	function inheritAudio(): void {
+		if (!audioPolicy) return;
+		audioPolicy = { ...audioPolicy, overridden: false };
+		audioDirty = false;
+	}
+
+	// `keepOriginal: false` is only meaningful with `autoAssemble` on — the
+	// server refuses the pair — so turning assemble off restores it rather
+	// than sending a document that would be rejected.
+	function setAutoAssemble(autoAssemble: boolean): void {
+		updateAudio(autoAssemble ? { autoAssemble } : { autoAssemble, keepOriginal: true });
+	}
+
+	function switchChecked(event: Event): boolean {
+		return (event.currentTarget as HTMLButtonElement).getAttribute('data-state') === 'checked';
 	}
 </script>
 
@@ -507,11 +556,86 @@
 								</div>
 							{/each}
 						</div>
+						{#if audioPolicy}
+							{@const audio = audioPolicy}
+							<div class="flex flex-col gap-4 border-t pt-4">
+								<div class="flex flex-wrap items-center gap-2">
+									<span class="font-medium">Audio</span>
+									{#if audio.overridden || audioDirty}
+										<Badge variant="secondary" class="text-xs">Override</Badge>
+									{:else}
+										<Badge variant="outline" class="text-xs">Inherited</Badge>
+									{/if}
+									{#if audio.overridden || audioDirty}
+										<Button type="button" variant="ghost" size="sm" onclick={inheritAudio}>Inherit</Button>
+									{/if}
+								</div>
+								<p class="text-sm text-muted-foreground">
+									Audiobook ingest for this library: how heavily a book split across several files
+									counts against its quality score, and whether ingest may rewrite it.
+								</p>
+								<div class="grid gap-4 lg:grid-cols-[20rem_1fr]">
+									<div class="flex flex-col gap-1">
+										<label class="text-sm font-medium" for="audio-single-file-weight">Split-book penalty</label>
+										<Input
+											id="audio-single-file-weight"
+											type="number"
+											min="0"
+											max="100"
+											value={audio.singleFileWeight}
+											oninput={(event) =>
+												updateAudio({
+													singleFileWeight: Math.max(
+														0,
+														Math.min(100, Number.parseInt((event.currentTarget as HTMLInputElement).value, 10) || 0)
+													)
+												})}
+										/>
+										<p class="text-xs text-muted-foreground">
+											Weight of the <code>single_file</code> check, on the same 0–100 scale as every
+											other check. 0 keeps the finding advisory without moving the score.
+										</p>
+									</div>
+									<div class="flex flex-col gap-3">
+										<label class="flex items-center justify-between gap-2 text-sm" for="audio-auto-assemble">
+											<span>
+												Assemble split books
+												<span class="block text-xs text-muted-foreground">Merge a multi-file audiobook into one canonical M4B during ingest.</span>
+											</span>
+											<Switch id="audio-auto-assemble" checked={audio.autoAssemble} onchange={(event) => setAutoAssemble(switchChecked(event))} />
+										</label>
+										<label class="flex items-center justify-between gap-2 text-sm" for="audio-auto-chapters">
+											<span>
+												Write missing chapters
+												<span class="block text-xs text-muted-foreground">Derive chapter marks from file boundaries when a book has none.</span>
+											</span>
+											<Switch id="audio-auto-chapters" checked={audio.autoChapters} onchange={(event) => updateAudio({ autoChapters: switchChecked(event) })} />
+										</label>
+										<label class="flex items-center justify-between gap-2 text-sm" for="audio-keep-original">
+											<span>
+												Keep source files
+												<span class="block text-xs text-muted-foreground">
+													{audio.autoAssemble
+														? 'Turn off to delete the source files once an assemble succeeds.'
+														: 'Only applies when “Assemble split books” is on.'}
+												</span>
+											</span>
+											<Switch
+												id="audio-keep-original"
+												checked={audio.keepOriginal}
+												disabled={!audio.autoAssemble}
+												onchange={(event) => updateAudio({ keepOriginal: switchChecked(event) })}
+											/>
+										</label>
+									</div>
+								</div>
+							</div>
+						{/if}
 						<div class="flex flex-wrap items-center justify-end gap-2">
-							<Button type="button" variant="outline" disabled={savePolicyMutation.isPending || !policy?.hasLibraryOverride} onclick={() => savePolicyMutation.mutate([])}>
+							<Button type="button" variant="outline" disabled={savePolicyMutation.isPending || !policy?.hasLibraryOverride} onclick={() => savePolicyMutation.mutate({ fields: [], audio: null })}>
 								Reset to server default
 							</Button>
-							<Button type="button" disabled={savePolicyMutation.isPending || !policyChanged} onclick={() => savePolicyMutation.mutate(overrideRows())}>
+							<Button type="button" disabled={savePolicyMutation.isPending || !policyChanged} onclick={() => savePolicyMutation.mutate({ fields: overrideRows(), audio: overrideAudio() })}>
 								{savePolicyMutation.isPending ? 'Saving…' : 'Save policy'}
 							</Button>
 						</div>

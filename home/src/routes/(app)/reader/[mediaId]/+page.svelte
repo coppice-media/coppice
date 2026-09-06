@@ -5,9 +5,11 @@
 	 * EPUBs render with foliate-js over the server's Readium surfaces
 	 * (`/api/v2/epub/{id}/manifest.json`, `positions.json`, `resource/{*path}`);
 	 * comics and PDFs render as paged images over
-	 * `/api/v2/media/{id}/page/{n}`. Both persist through the one unified
-	 * reading-state mutation, `updateMediaProgress`, whose `oneOf` input picks
-	 * the EPUB (Readium locator) or paged (page number) lane.
+	 * `/api/v2/media/{id}/page/{n}`; audiobooks stream their tracks from
+	 * `/api/v2/media/{id}/audio/track/{n}`. All three persist through the one
+	 * unified reading-state mutation, `updateMediaProgress`, whose `oneOf`
+	 * input picks the EPUB (Readium locator), paged (page number), or audio
+	 * (publication milliseconds) lane.
 	 */
 	import { browser } from '$app/environment';
 	import { page as pageState } from '$app/state';
@@ -26,6 +28,7 @@
 		ReaderVisiblePagesDocument,
 		type MediaProgressInput
 	} from '$lib/graphql/generated/graphql';
+	import AudioReader from '$lib/components/reader/AudioReader.svelte';
 	import EpubReader from '$lib/components/reader/EpubReader.svelte';
 	import PagedReader from '$lib/components/reader/PagedReader.svelte';
 	import { decimal, type ReaderLocator } from '$lib/components/reader/locator';
@@ -84,6 +87,9 @@
 	}));
 	const book = $derived(bookQuery.data?.mediaById);
 	const isEpub = $derived(/epub/i.test(book?.extension ?? ''));
+	// `Media.audio` is non-null exactly for audiobooks, so it is both the
+	// discriminator and the whole shape the player needs.
+	const isAudiobook = $derived(book?.audio != null);
 
 	const annotationsQuery = createQuery(() => ({
 		queryKey: ['readerAnnotations', mediaId],
@@ -93,11 +99,12 @@
 	const annotations = $derived(annotationsQuery.data?.annotationsByMediaId ?? []);
 
 	// Duplicate-page marks renumber a book's pages; the visible list's length
-	// is the page count the streaming route accepts.
+	// is the page count the streaming route accepts. Neither an EPUB nor a
+	// recording has pages at all, so neither asks.
 	const visiblePagesQuery = createQuery(() => ({
 		queryKey: ['readerVisiblePages', mediaId],
 		queryFn: () => request(ReaderVisiblePagesDocument, { id: mediaId }),
-		enabled: browser && mediaId.length > 0 && book !== undefined && !isEpub
+		enabled: browser && mediaId.length > 0 && book !== undefined && !isEpub && !isAudiobook
 	}));
 	const pageCount = $derived(visiblePagesQuery.data?.mediaVisiblePages.length ?? 0);
 
@@ -243,6 +250,18 @@
 				</EmptyDescription>
 			</EmptyHeader>
 		</Empty>
+	{:else if book.audio}
+		<!-- Keyed on the book rather than `anchorKey`: a recording has no
+		deep-link anchor, and remounting a playing element because some
+		unrelated query parameter changed would stop the audio. -->
+		{#key mediaId}
+			<AudioReader
+				audio={book.audio}
+				startPositionMs={book.readProgress?.positionMs ?? 0}
+				onPosition={({ positionMs, trackIndex, isComplete }) =>
+					schedule({ audio: { positionMs, trackIndex, isComplete } })}
+			/>
+		{/key}
 	{:else if isEpub}
 		{#key anchorKey}
 			<EpubReader

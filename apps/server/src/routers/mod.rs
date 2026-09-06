@@ -5,6 +5,7 @@ use crate::config::state::AppState;
 #[cfg(feature = "abs")]
 mod abs_backend;
 mod api;
+mod audio_transform;
 #[cfg(feature = "kavita")]
 mod kavita;
 #[cfg(feature = "kobo")]

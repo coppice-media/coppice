@@ -2188,6 +2188,7 @@ mod tests {
 		media_metadata::Model {
 			id: 1,
 			media_id: Some("media".to_owned()),
+			narrators: None,
 			age_rating: None,
 			characters: None,
 			colorists: None,

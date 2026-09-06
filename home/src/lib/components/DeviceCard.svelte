@@ -27,6 +27,7 @@
 		NO_PRESET,
 		TRANSFORMABLE_KINDS,
 		TRANSFORM_PRESETS,
+		audioDeliveryOf,
 		libraryScopeSummary,
 		nextLibraryScope,
 		presetOf,
@@ -50,6 +51,7 @@
 		TRANSFORM_PRESETS.find((candidate) => candidate.name === preset)?.label ??
 			(preset === NO_PRESET ? 'Server default' : `Custom (${preset})`)
 	);
+	const audioDelivery = $derived(audioDeliveryOf(device.transformProfile));
 	const syncSummary = $derived(summarizeSync(device.lastSyncSummary));
 
 	// Shares the `libraryOptions` cache entry with the entity screens, so the
@@ -339,6 +341,16 @@
 						</Select.Group>
 					</Select.Content>
 				</Select.Root>
+			</div>
+		{/if}
+		{#if !revoked}
+			<div class="mt-2 flex flex-col gap-1 sm:col-span-2">
+				<span class="text-muted-foreground">Audiobook delivery</span>
+				<span
+					title="Set by the device's transform preset. Every preset but “Phone + Opus audio” serves the stored file; Opus is transcoded on demand and cached."
+				>
+					{audioDelivery}
+				</span>
 			</div>
 		{/if}
 		{#if !revoked}

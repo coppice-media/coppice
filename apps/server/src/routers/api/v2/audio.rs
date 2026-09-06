@@ -13,9 +13,8 @@
 //! plan its range requests without a `HEAD` per track.
 
 use axum::{
-	body::Body,
-	extract::{Path, Request, State},
-	http::{header, HeaderMap},
+	extract::{Path, State},
+	http::HeaderMap,
 	response::IntoResponse,
 	Extension, Json,
 };
@@ -26,11 +25,11 @@ use models::{
 use sea_orm::prelude::*;
 use serde::{Deserialize, Serialize};
 use stump_auth::AuthContext;
-use tower_http::services::ServeFile;
 
 use crate::{
 	config::state::AppState,
 	errors::{APIError, APIResult},
+	routers::audio_transform,
 };
 
 /// The shape of one audio publication.
@@ -175,11 +174,16 @@ pub(crate) async fn get_audio_manifest(
 
 /// `GET /api/v2/media/{id}/audio/track/{index}`
 ///
-/// Serves the file's bytes through `ServeFile`, which answers a `Range`
-/// request with `206` and always sets `Accept-Ranges: bytes` — a player seeks
-/// by byte range, so a route that ignored `Range` would force a full download
-/// per seek. The content type comes from the stored `mime` rather than from
-/// sniffing the file again, so it always matches what the manifest advertised.
+/// The bytes are served through `ServeFile`, which answers a `Range` request
+/// with `206` and always sets `Accept-Ranges: bytes` — a player seeks by byte
+/// range, so a route that ignored `Range` would force a full download per
+/// seek.
+///
+/// The content type comes from the stored `mime` rather than from sniffing
+/// the file again, so it always matches what the manifest advertised — unless
+/// the requesting device's transform profile asks for a transcode, in which
+/// case the delivered format is the truth (see
+/// `crate::routers::audio_transform`).
 pub(crate) async fn get_audio_track(
 	Path((id, index)): Path<(String, i32)>,
 	State(ctx): State<AppState>,
@@ -192,38 +196,6 @@ pub(crate) async fn get_audio_track(
 		.await?
 		.ok_or_else(|| APIError::NotFound("Track not found".to_string()))?;
 
-	// Reuse the incoming headers so `Range`, `If-Range` and the conditional
-	// headers all reach `ServeFile` untouched.
-	let mut serve_req = Request::new(Body::empty());
-	*serve_req.headers_mut() = headers;
-
-	// `ServeFile` guesses a type from the extension, and `.m4b` is missing
-	// from most mime tables; the manifest already told the client what this
-	// track is, so the stored `mime` overwrites the guess and the two can
-	// never disagree.
-	match ServeFile::new(&track.path).try_call(serve_req).await {
-		Ok(mut response) => {
-			if let Ok(mime) = track.mime.parse::<header::HeaderValue>() {
-				response.headers_mut().insert(header::CONTENT_TYPE, mime);
-			}
-			if let Some(filename) = std::path::Path::new(&track.path)
-				.file_name()
-				.and_then(|name| name.to_str())
-			{
-				// `inline`, not `attachment`: this is a playback route, and a
-				// browser that downloads every track cannot play the book.
-				response.headers_mut().insert(
-					header::CONTENT_DISPOSITION,
-					format!("inline; filename=\"{filename}\"")
-						.parse()
-						.unwrap_or_else(|_| header::HeaderValue::from_static("inline")),
-				);
-			}
-			Ok(response)
-		},
-		Err(error) => {
-			tracing::error!(?error, path = %track.path, "Failed to serve audio track");
-			Err(APIError::NotFound("Track file is missing".to_string()))
-		},
-	}
+	let profile = audio_transform::resolve_audio_profile(&ctx, req.device_id()).await;
+	audio_transform::serve_track(&ctx, headers, &track, &profile).await
 }

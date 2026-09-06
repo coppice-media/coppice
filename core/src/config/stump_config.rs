@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
 	annotation_sync::{AnnotationSyncConfig, PartialAnnotationSyncConfig},
+	audio::{AudioConfig, PartialAudioConfig},
 	auth::{AuthConfig, PartialAuthConfig},
 	database::{DatabaseConfig, PartialDatabaseConfig},
 	env_keys::*,
@@ -123,6 +124,12 @@ pub struct StumpConfig {
 	#[serde(flatten)]
 	#[cfg_attr(feature = "graphql", graphql(flatten))]
 	pub transform: TransformConfig,
+
+	/// Audiobook converter defaults.
+	#[nested]
+	#[serde(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(flatten))]
+	pub audio: AudioConfig,
 
 	/// The configuration root for the Stump application, contains thumbnails, cache, and logs.
 	#[debug_value(super::get_default_config_dir())]
@@ -489,6 +496,11 @@ mod tests {
 					),
 					transform_cache_max_bytes: Some(DEFAULT_TRANSFORM_CACHE_MAX_BYTES),
 				},
+				audio: PartialAudioConfig {
+					audio_canonical: Some(DEFAULT_AUDIO_CANONICAL.to_string()),
+					audio_aac_bitrate: Some(DEFAULT_AUDIO_AAC_BITRATE.to_string()),
+					audio_ffmpeg: Some(DEFAULT_AUDIO_FFMPEG.to_string()),
+				},
 				config_dir: Some(config_dir),
 				media: None,
 				oidc: None,
@@ -624,6 +636,11 @@ mod tests {
 							transform_kobo_profile: DEFAULT_TRANSFORM_KOBO_PROFILE
 								.to_string(),
 							transform_cache_max_bytes: DEFAULT_TRANSFORM_CACHE_MAX_BYTES,
+						},
+						audio: AudioConfig {
+							audio_canonical: DEFAULT_AUDIO_CANONICAL.to_string(),
+							audio_aac_bitrate: DEFAULT_AUDIO_AAC_BITRATE.to_string(),
+							audio_ffmpeg: DEFAULT_AUDIO_FFMPEG.to_string(),
 						},
 						config_dir,
 						media: MediaConfig::default(),

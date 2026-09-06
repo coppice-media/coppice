@@ -32,7 +32,7 @@ use super::{
 	image_dimensions_consistent::ImageDimensionsConsistentCheck,
 	missing_chapters_in_series::MissingChaptersInSeriesCheck,
 	page_count_matches_archive_entries::PageCountMatchesArchiveEntriesCheck,
-	QualityRegistry,
+	CheckFamily, QualityRegistry,
 };
 
 fn snapshot(path: &Path, kind: IngestMediaKind, page_count: usize) -> BookSnapshot {
@@ -882,8 +882,9 @@ fn mobi_bytes(encryption_type: u16) -> Vec<u8> {
 async fn registry_and_score_preserve_contract_identities() {
 	let conn = MockDatabase::new(DatabaseBackend::Sqlite).into_connection();
 	let registry = QualityRegistry::builtin(Arc::new(conn));
-	assert_eq!(registry.checks().len(), 10);
-	assert_eq!(registry.total_weight(), 100);
+	assert_eq!(registry.checks().len(), 17);
+	assert_eq!(registry.family_weight(CheckFamily::Paged), 100);
+	assert_eq!(registry.family_weight(CheckFamily::Audio), 100);
 	assert_eq!(
 		registry
 			.catalog()
@@ -902,6 +903,16 @@ async fn registry_and_score_preserve_contract_identities() {
 			"duplicate_pages_across_books",
 			"filename_series_parse",
 			"missing_chapters_in_series",
+			// The audio family, in the order a librarian triages it: the
+			// shape of the publication, then its structure, then its metadata,
+			// then its encoding.
+			"single_file",
+			"chapters_present",
+			"tags_complete",
+			"cover_embedded",
+			"faststart",
+			"duration_consistent",
+			"bitrate_sane",
 		]
 	);
 
@@ -930,12 +941,12 @@ async fn registry_and_score_preserve_contract_identities() {
 		.await
 		.expect("disabled report");
 	assert_eq!(report.score, 0);
-	assert_eq!(report.checks.len(), 10);
+	assert_eq!(report.checks.len(), 17);
 	assert!(report
 		.checks
 		.iter()
 		.all(|check| check.outcome.status == QualityStatus::NotApplicable));
-	assert_eq!(report.settings_snapshot.len(), 10);
+	assert_eq!(report.settings_snapshot.len(), 17);
 
 	let outcomes = vec![
 		(

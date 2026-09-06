@@ -55,7 +55,6 @@ use stump_abs::{
 use stump_api_types::RequestOrigin;
 use stump_auth::AuthContext;
 use stump_devices::{CredentialRef, Protocol};
-use tower_http::services::ServeFile;
 
 use crate::{
 	config::{jwt::access_token_secret, state::AppState},
@@ -64,7 +63,7 @@ use crate::{
 		auth::{bind_device, handle_bearer_auth, inject_avatar_url, validate_api_key},
 		host::HostExtractor,
 	},
-	routers::api::v2::media as api_media,
+	routers::{api::v2::media as api_media, audio_transform},
 	utils::verify_password,
 };
 
@@ -735,6 +734,7 @@ impl AbsBackend for AbsBackendAdapter {
 		headers: HeaderMap,
 		media_id: &str,
 		track_index: i32,
+		device_id: Option<&str>,
 	) -> AbsResult<Response<Body>> {
 		let track = media_audio_track::Entity::find()
 			.filter(media_audio_track::Column::MediaId.eq(media_id))
@@ -745,27 +745,18 @@ impl AbsBackend for AbsBackendAdapter {
 				AbsError::NotFound(format!("No file {track_index} for {media_id}"))
 			})?;
 
-		// The original headers are reused so `Range` reaches `ServeFile`:
-		// seeking in an audiobook is a range request per seek.
-		let mut serve_req = Request::new(Body::empty());
-		*serve_req.headers_mut() = headers;
-		let mut response = ServeFile::new(&track.path)
-			.try_call(serve_req)
+		// The same delivery lane the native audio route uses, so a device's
+		// transform preset applies whichever protocol its player speaks.
+		let profile = audio_transform::resolve_audio_profile(&self.ctx, device_id).await;
+		audio_transform::serve_track(&self.ctx, headers, &track, &profile)
 			.await
+			.map(|response| response.map(Body::new))
 			.map_err(|error| {
 				AbsError::InternalServerError(format!(
 					"Failed to serve {}: {error}",
 					track.path
 				))
-			})?;
-		response.headers_mut().insert(
-			header::CONTENT_TYPE,
-			track
-				.mime
-				.parse()
-				.unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
-		);
-		Ok(response.map(Body::new))
+			})
 	}
 
 	async fn create_session(&self, session: AbsSession) -> AbsResult<()> {

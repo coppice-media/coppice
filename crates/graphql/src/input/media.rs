@@ -107,6 +107,9 @@ pub struct MediaMetadataInput {
 	pub letterers: Option<Vec<String>>,
 	pub cover_artists: Option<Vec<String>>,
 	pub editors: Option<Vec<String>>,
+	/// The audiobook's readers. A separate credit from `writers`: an
+	/// audiobook's author wrote it and its narrator did not.
+	pub narrators: Option<Vec<String>>,
 	pub publisher: Option<String>,
 	pub links: Option<Vec<String>>,
 	pub characters: Option<Vec<String>>,
@@ -147,6 +150,7 @@ impl IntoActiveModel<media_metadata::ActiveModel> for MediaMetadataInput {
 			letterers: Set(into_array_string(self.letterers)),
 			cover_artists: Set(into_array_string(self.cover_artists)),
 			editors: Set(into_array_string(self.editors)),
+			narrators: Set(into_array_string(self.narrators)),
 			publisher: Set(self.publisher),
 			links: Set(into_array_string(self.links)),
 			characters: Set(into_array_string(self.characters)),

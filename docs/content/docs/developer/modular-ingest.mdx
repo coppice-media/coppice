@@ -294,7 +294,7 @@ fan-out inside a resolver.
 `MetadataPolicy::server_default()` mirrors Komf's priority numbers for the
 providers this build has (`mangaUpdates: 10`, `mal: 20`, `aniList: 40`,
 `mangaDex: 90`, `comicVine: 110`), then the providers Komf has no equivalent
-for (`metron`, `openlibrary`, `googlebooks`, `hardcover`). One total order over
+for (`metron`, `openlibrary`, `googlebooks`, `audible`, `hardcover`). One total order over
 every provider is enough: a provider that does not support a book's media kind
 never produces a candidate, so the manga providers are simply silent on an
 EPUB novel.

@@ -342,7 +342,7 @@ fn detail(probed: &ProbedAudio, options: &AudioReportOptions) -> AudioDetail {
 
 /// `h:mm:ss`. Hours are never zero-padded: a book is 9 or 27 hours long, and
 /// the field is read, not sorted.
-fn human_duration(duration_ms: i64) -> String {
+pub(crate) fn human_duration(duration_ms: i64) -> String {
 	let seconds = duration_ms.max(0) / 1_000;
 	format!(
 		"{}:{:02}:{:02}",

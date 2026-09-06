@@ -122,6 +122,10 @@ impl StumpCore {
 
 		config.finalize();
 		database::validate_pool_config(&config)?;
+		config
+			.audio
+			.validate()
+			.map_err(CoreError::InitializationError)?;
 		#[cfg(feature = "ingest")]
 		ingest_host::validate_ingest_config(&config)?;
 

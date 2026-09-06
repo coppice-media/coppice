@@ -105,6 +105,53 @@ This is what makes resume work:
 
 A per-file position would need the track index to mean anything, and would silently point somewhere else the moment the track order changed.
 
+## Settings
+
+Audiobook behaviour is configured in three layers, each answering a different question. They do not overlap: a change in one never silently changes another.
+
+| Layer | Answers | Where it lives |
+| ----- | ------- | -------------- |
+| Library policy | Should ingest *fix* this book, and how much does a defect cost its score? | The `audio` section of `library_configs.metadata_policy` — server default in code, overridden per library |
+| Server converter | What does a fix *produce*? | `STUMP_AUDIO_*` in `Stump.toml` / the environment |
+| Device preset | How are a device's *requests* answered? | The `audio` section of that device's `transform_profile` |
+
+### Library policy
+
+Read and written with `metadataPolicy(libraryId)` / `setMetadataPolicy(libraryId, input)`, and edited in the ingest editor's **Policy** tab under **Audio**. The section is stored and inherited as a whole: a library either overrides all four keys or inherits all four.
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `singleFileWeight` | `30` | Weight of the `single_file` quality check, on the same 0–100 scale as every other check. `0` keeps the finding as advisory prose without moving the score — which is what a library that deliberately stores per-chapter MP3s wants. |
+| `autoAssemble` | `false` | Assemble a split audiobook into the canonical single file during ingest. |
+| `autoChapters` | `false` | Derive and write chapter marks for a book that has none. |
+| `keepOriginal` | `true` | Keep the source files after an assemble. Turning it off is refused unless `autoAssemble` is on: there would be nothing to replace them with. |
+
+Both auto-fixes default off and the sources are kept, so an ingest run analyses and reports but never rewrites or deletes an operator's audio until they ask for it, per library.
+
+`singleFileWeight` is the only configurable weight. The other six audio checks — `chapters_present`, `faststart`, `tags_complete`, `cover_embedded`, `duration_consistent`, `bitrate_sane` — measure a fact that is either true or false, so their weights are compile-time constants. Whether a book split across forty MP3s is a *defect* or simply how that library stores audiobooks is a library-level opinion, which is why that one is a setting.
+
+### Server converter
+
+See [server config](/docs/guides/configuration/server-config#audiobooks) for the full rows.
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `STUMP_AUDIO_CANONICAL` | `m4b` | Container an assemble writes. `m4b` is the only accepted value. |
+| `STUMP_AUDIO_AAC_BITRATE` | `64k` | AAC bitrate when an assemble has to re-encode. AAC input is stream-copied. |
+| `STUMP_AUDIO_FFMPEG` | (empty) | Path to `ffmpeg`; empty searches `PATH`. A non-empty value that is not executable fails startup. |
+
+### Device preset
+
+A device's `transform_profile` carries an `audio` section beside the comic page settings:
+
+```json
+{ "audio": { "output": { "type": "opus", "bitrate": "64k" } } }
+```
+
+`output` is `{"type": "passthrough"}` (the default) or `{"type": "opus", "bitrate": "<ffmpeg bitrate>"}`, bounded to 500–512000 bits per second and rejected at write time rather than at delivery. The named preset `phone-opus` is the `phone` page rules plus Opus at 64 kbit/s; every other preset passes audio through as stored. The console's device card shows the resolved delivery per device. See [devices](/docs/developer/devices#transform-profile).
+
+An Opus preset changes only what that device is *sent*. The transcode is cached in the transform cache directory under the audio section's own digest — so two devices whose page settings differ but whose audio delivery matches share one transcode — swept by the same `STUMP_TRANSFORM_CACHE_MAX_BYTES` budget, and any failure (including a missing `ffmpeg`) falls back to the stored bytes: a broken transcode degrades quality, never playback.
+
 ## API
 
 Two routes serve an audiobook, and both are user-scoped like every other media route.
@@ -162,12 +209,15 @@ GET /api/v2/media/{id}/audio/track/{index}
 
 The audio bytes of one track, where `index` is the track's index in the manifest. The response advertises `Accept-Ranges: bytes`, and a `Range` request is answered with `206 Partial Content`, so a player can seek without downloading the whole part.
 
+`Content-Type` is the track's stored MIME, unless the requesting device's [transform preset](#device-preset) asks for a transcode — then it is the delivered format (`audio/ogg` for Opus), because the stored MIME would be a lie on transcoded bytes. Range support is identical either way. The Audiobookshelf lane (`GET /api/items/{id}/file/{ino}`) resolves the same preset for the same device, so a client's encoding does not depend on which protocol it speaks.
+
 ## Tools
 
-Two library tools operate on audiobooks, run through the [CLI](/docs/developer/cli)'s `tools` subcommand. Like every other Stump tool they plan first and apply second, so a run always shows what it would do before anything is written:
+Three library tools operate on audiobooks, run through the [CLI](/docs/developer/cli)'s `tools` subcommand. Like every other Stump tool they plan first and apply second, so a run always shows what it would do before anything is written:
 
 ```bash copy
 ./stump tools plan audio-report "/books/Audiobooks"
+./stump tools plan audio-assemble "/books/Audiobooks/A Book In Parts"
 ./stump tools apply audio-chapters "/books/Audiobooks/A Book In Parts" --yes
 ```
 
@@ -200,8 +250,104 @@ Any other container is refused rather than half-supported: `unsupported-containe
 
 Publisher marks are never overwritten by default. A file that already carries them plans a `keep-chapters` action and is skipped with the reason _the file already carries publisher chapter marks_; pass `force` to rewrite them anyway. The other option, `titles_from_filename` (default `false`), decides how a per-file mark is named: by default the file's own title tag with the file stem as fallback, and with the option set always the file stem.
 
+### `audio-assemble`
+
+Turns a publication into one canonical M4B. See [Assembling](#assembling) for what it produces and when it needs `ffmpeg`.
+
+## Assembling
+
+A folder audiobook works in Stump, and works badly everywhere else. Stump stitches the parts into one publication and synthesizes a chapter per file, but that book only exists in Stump's database: copy the folder to a phone and it is 43 songs, open it in another client and the chapter list is gone, lose the database and the reading position means nothing.
+
+`audio-assemble` produces the shape that carries its own structure:
+
+| Property | Why it is the canonical one |
+| --- | --- |
+| MP4/AAC, one audio track | one decoder, one seek space, one duration |
+| a Nero `chpl` list **and** a QuickTime chapter track | players split between the two mechanisms, so a book with one has no chapters for half its audience |
+| iTunes tags `©nam ©ART ©wrt ©alb ©gen ©day ©des` | `©wrt` is where every publisher, Audiobookshelf and Plex read the narrator |
+| a `covr` cover | the grid shows the book, not a placeholder |
+| `moov` before `mdat` | playback starts without downloading the whole file |
+
+### Two paths
+
+**Remux** — every part is already an AAC stream in an MP4 and they agree on sample rate, channel layout and object type. The coded samples are copied verbatim into one container and only the sample tables are rebuilt: no decode, no quality loss, no external binary, and a thirty-hour book assembles at disk speed.
+
+**Transcode** — anything else (MP3, Opus, FLAC, or MP4 parts that disagree) has to be decoded and re-encoded as AAC, which is delegated to an operator-installed `ffmpeg`. There is no pure-Rust AAC encoder worth trusting with a library, and vendoring a C one is not an option in an MIT tree.
+
+When `ffmpeg` is missing the tool does not guess, half-assemble, or fall back to a container nothing else reads. The publication is planned as `plan-transcode`, the plan detail carries the exact command line plus every chapter mark and tag it would have used, and `apply` writes nothing:
+
+```bash copy
+./stump tools plan audio-assemble "/books/Audiobooks/A Book In Parts" --json
+```
+
+A plan-only result is a truthful answer; a broken M4B is not. Run the printed command on a machine that has `ffmpeg`, or install it and re-run. The hand-run command produces the audio, the tags and the chapters; the cover is added by the tool itself, because `ffmpeg` can only attach artwork as a video track.
+
+### Where the chapters come from
+
+Strictly in this order, because each source is more authoritative than the next about what the *publisher* meant:
+
+1. **Marks already in the containers** — a `chpl`, a chapter track, ID3v2 `CHAP`, or Vorbis `CHAPTERxxx`. Somebody authored these.
+2. **A sidecar** beside the book — `chapters.txt` (mp4chaps lines), a `.cue` sheet, or Audible's `metadata.json`. Somebody wrote these down. Audible's millisecond offsets outrank a hand-typed `chapters.txt`, which outranks a cue sheet quantised to 1/75 s.
+3. **One chapter per file**, named from the file's title tag or its stem. Nobody authored these — they are file boundaries wearing chapter names — but a book with a list is better than a book with a scrubber.
+
+### What it never does
+
+It never deletes or rewrites a source file. The output is a new file beside the publication (or in `output_dir`), so an assemble is always undoable by deleting one file, and an existing output is never replaced without `force`. Replacing the original publication is a library policy decision (`audio.keepOriginal`, see [Library policy](#library-policy)), not something a tool decides about somebody's library.
+
+Every output is probed before the run is reported as applied. A dropped part, a lost chapter list and a non-streamable container all produce a file that opens and plays, so all three are checked; a file that fails is deleted rather than left in the library.
+
+## Quality checks
+
+Seven [ingest quality checks](/docs/developer/modular-ingest) grade an audiobook. They are a family: each reports `NOT_APPLICABLE` for anything that is not an audiobook, and the comic checks report `NOT_APPLICABLE` for a recording — the scorer excludes those from both sums, so the two families never dilute each other and each sums to 100 on its own kind of book.
+
+| Check | Weight | Fails when | Fix |
+| --- | --- | --- | --- |
+| `single_file` | 30 | the publication is a folder of parts | `audio-assemble` |
+| `chapters_present` | 15 | no marks at all; warns at 0.5 when Stump synthesized them per file | `audio-chapters` |
+| `tags_complete` | 15 | any of title, author, narrator, series, year is missing (scored fractionally) | `meta-edit` |
+| `cover_embedded` | 10 | the container carries no artwork | `meta-edit` |
+| `faststart` | 10 | `moov` follows `mdat`; not applicable to MP3/Ogg | `audio-assemble` |
+| `duration_consistent` | 10 | the duration is zero, a part has none, or a mark starts past the end | `audio-assemble` |
+| `bitrate_sane` | 10 | the parts do not share a codec; warns outside 24-192 kbit/s | `audio-assemble` |
+
+`single_file` is the only weight an operator can change, because it is the only one that is a judgement rather than a measurement — see [Library policy](#library-policy). Every check names the tool that repairs it, so a failing report is one step away from a plan: a finding a librarian cannot act on is a complaint, not a check.
+
+A file that claims to be an audiobook and cannot be demuxed fails every check with the same evidence rather than aborting the report. A librarian still gets a row.
+
+## Audible metadata
+
+The `audible` metadata provider identifies audiobooks against the community [Audnexus](https://api.audnex.us) enrichment API plus the unauthenticated Audible catalogue. It needs no API key.
+
+| Field | Source |
+| --- | --- |
+| title, subtitle, description, genres | Audnexus `GET /books/{asin}` |
+| authors, narrators | the same record; an author with an ASIN but no name is expanded through `GET /authors/{asin}` |
+| series and position, publisher, release date | the same record |
+| ASIN | the record's own id, which is also the provider's `externalId` |
+| cover URL, runtime | the largest advertised image, and `runtimeLengthMin` |
+| search without an ASIN | `GET https://api.audible.com/1.0/catalog/products?title=…` |
+
+Narrators are a first-class field with their own `media_metadata.narrators` column rather than being folded into the writers list: an audiobook's author wrote it and its narrator did not. The runtime is candidate *evidence* — it is what distinguishes an abridged edition from an unabridged one at a glance — and never overwrites the duration measured from the file.
+
+The provider is registered in the [Komf-style metadata policy](/docs/developer/modular-ingest) after Open Library and Google Books; because it only catalogues audiobooks it is simply silent on everything else.
+
+## Console player
+
+`/reader/{mediaId}` in the [console](/docs/developer/home-app) branches on whether the book has an audio shape and renders a player instead of a page or resource reader. It plays one track at a time over `/api/v2/media/{id}/audio/track/{i}` and advances automatically at a track boundary, so a folder audiobook plays through as one publication.
+
+Everything the player shows and writes is publication-relative: `positionMs = track.startOffsetMs + currentTime * 1000`, and a seek picks the track whose `startOffsetMs` is the greatest one at or below the target.
+
+- **Chapter list** — every mark, titled or `Chapter N`, with its start as `h:mm:ss`; clicking one seeks to it and the mark containing the playhead is marked current. A `PER_TRACK` list is labelled as synthesized, and a book with no marks shows no list.
+- **Transport** — play/pause, back 15 s, forward 30 s, previous/next chapter, a seek bar over the whole publication, and a `h:mm:ss / h:mm:ss` readout. Space toggles playback and the arrow keys are the two skips, unless focus is in a control.
+- **Speed** — 0.75x to 2x, re-applied after every track change.
+- **Sleep timer** — off, 5/15/30/45/60 minutes, or end of chapter, counting down; on expiry it pauses and flushes the position.
+- **Resume** — the player opens at the persisted head (`readProgress.positionMs`) and does not autoplay.
+
+Positions are written through the one unified reading-state mutation, `updateMediaProgress`, on its `audio` branch: debounced while playing, and on pause, on every chapter change and on unmount. Nothing is written for buffering, a `src` swap, or a scrub that does not move the position.
+
 ## Limitations
 
-- **No transcoding.** Stump serves the bytes it stores. A client that cannot decode Opus will not play an Opus book, and there is no server-side conversion or HLS lane to fall back on.
-- **Ogg, Opus and FLAC chapter marks are read but not written.** `CHAPTERxxx` Vorbis comments are honoured on the way in; `audio-chapters` writes only `.m4b`, `.m4a` and `.mp3`.
+- **Transcoding is opt-in and never silent.** Stump stores AAC-in-MP4 and serves the bytes it stores. Two lanes may re-encode, both through an operator-installed `ffmpeg` that is never a build dependency: `audio-assemble` converts non-AAC parts while building a canonical M4B, and a device [transform preset](#device-preset) may deliver Opus. Neither replaces the stored copy, and there is no HLS lane.
+- **Ogg, Opus and FLAC chapter marks are read but not written.** `CHAPTERxxx` Vorbis comments are honoured on the way in; `audio-chapters` writes only `.m4b`, `.m4a` and `.mp3`. `audio-assemble` reads all of them and writes the canonical M4B instead.
+- **A book that would need 64-bit chunk offsets cannot be remuxed.** The pure-Rust path refuses rather than wrapping an offset, and says so; the `ffmpeg` path handles it. It takes roughly 4 GB of AAC — around 140 hours at 64 kbit/s — to reach.
 - **A BMP embedded cover is ignored.** The thumbnail pipeline cannot decode BMP, so such a cover is treated as if the book had none — extract it and drop a `cover.jpg` beside the book instead. See [thumbnails](/docs/guides/fundamentals/thumbnails).

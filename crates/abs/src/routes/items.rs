@@ -12,6 +12,7 @@ use chrono::Utc;
 use models::entity::{media, media_metadata, series, user::AuthUser};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
+use stump_auth::AuthContext;
 use uuid::Uuid;
 
 use crate::{
@@ -126,9 +127,14 @@ pub(crate) async fn cover(
 /// (`playback/service/LissenDataSourceFactory.kt:37`,
 /// `channel/common/OkHttpClient.kt:47-59`), so range support is what makes
 /// seeking work.
+///
+/// The authenticating device is passed through because an audio transform
+/// preset is per device: the same book served to a phone with an Opus preset
+/// and to a desktop player is the same route answering with two encodings.
 pub(crate) async fn file(
 	backend: Backend,
 	Extension(user): User,
+	Extension(auth): Extension<AuthContext>,
 	Path((item_id, ino)): Path<(String, String)>,
 	headers: HeaderMap,
 ) -> AbsResult<Response<Body>> {
@@ -136,7 +142,9 @@ pub(crate) async fn file(
 	let index = ino
 		.parse::<i32>()
 		.map_err(|_| AbsError::NotFound(format!("No file {ino}")))?;
-	backend.serve_track(headers, &item_id, index).await
+	backend
+		.serve_track(headers, &item_id, index, auth.device_id())
+		.await
 }
 
 /// `POST /api/items/{id}/play`.

@@ -63,6 +63,34 @@ pub struct ExternalMediaMetadata {
 	pub cover_url: Option<String>,
 
 	pub provider_url: Option<String>,
+
+	/// The edition's secondary title, as an audiobook's "A Novel" or
+	/// "Special Edition" line. Kept out of `title` because a subtitle is not
+	/// part of the name anyone searches for: folding it in would drag the
+	/// title score of every later match down with it.
+	pub subtitle: Option<String>,
+
+	/// The readers of an audiobook edition. Deliberately *not* folded into
+	/// `writers` or `artists`: a narrator is not an author, and merging the
+	/// two would file a performer in the author column of every audiobook,
+	/// where no later edit could tell them apart again.
+	pub narrators: Option<Vec<String>>,
+
+	/// The publisher of *this edition*. [`ExternalSeriesMetadata`] has one
+	/// because a series has a publisher; a media item never did. An
+	/// audiobook's publisher is a per-edition fact -- the same book is
+	/// issued by a different studio in every market, often years apart -- so
+	/// it cannot be inherited from the series it sits in.
+	pub publisher: Option<String>,
+
+	/// The runtime the provider advertises, in whole minutes.
+	///
+	/// This is *candidate evidence for the operator*, not a value to store:
+	/// it is what tells an abridged edition from an unabridged one at a
+	/// glance while picking a match. The authoritative duration is the one
+	/// measured from the file itself (`media_audio.duration_ms`), which this
+	/// never overwrites.
+	pub runtime_minutes: Option<i32>,
 }
 
 /// Metadata about a series from an external metadata provider

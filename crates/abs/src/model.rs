@@ -17,12 +17,12 @@ use chrono::{DateTime, Utc};
 /// durations, and every track's `start_offset_ms` is measured from the start
 /// of the publication rather than of its file.
 ///
-/// There is deliberately no narrator here: the probe reads one off the
-/// container (`stump_media::audio::ProbedAudio::narrator`) but no Stump column
-/// holds it, and smuggling it into an unrelated `media_metadata` field would
-/// be a lie the whole tree would then have to keep. Audiobookshelf's
-/// `narrators`/`narratorName` are therefore always empty on this surface,
-/// which `abs-compat.mdx` records as a deviation.
+/// There is deliberately no narrator *here*: it is not an audio fact but a
+/// metadata one, and since `m20260942` it has its own column,
+/// `media_metadata.narrators`, alongside every other credit. The probe fills
+/// it from the container's `composer`/`©wrt` tag, and the mapper reads
+/// Audiobookshelf's `narrators`/`narratorName` straight out of it — so this
+/// struct stays exactly what it is, the shape of the recording.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AbsAudio {
 	pub duration_ms: i64,

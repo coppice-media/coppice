@@ -27,6 +27,9 @@ Internally the server keeps these settings in `StumpConfig`, split into flattene
 | `providers`                 | `core/src/config/providers.rs` | `enable_providers`, `provider_cache_max_bytes`, `virtual_series_ttl`, `provider_gc_days`, `provider_health_interval_secs`, `provider_health_dead_after`                                                                                                                                                                                                       |
 | `auth`                      | `core/src/config/auth.rs`      | `password_hash_cost`, `session_ttl`, `access_token_ttl`, `refresh_token_ttl`, `expired_session_cleanup_interval`                                                                                                                                                                                                      |
 | `pdf`                       | `core/src/config/pdf.rs`       | `pdfium_path`, `pdf_render_dpi`, `pdf_max_dimension`, `pdf_render_format`, `pdf_cache_pages`, `pdf_prerender_range`, `pdf_high_quality`                                                                                                                                                                               |
+| `transform`                 | `core/src/config/transform.rs` | `transform_enabled`, `transform_kobo_profile`, `transform_cache_max_bytes`                                                                                                                                                                                                                                            |
+| `audio`                     | `core/src/config/audio.rs`     | `audio_canonical`, `audio_aac_bitrate`, `audio_ffmpeg`                                                                                                                                                                                                                                                               |
+| `annotation_sync`           | `core/src/config/annotation_sync.rs` | `annotation_sync_root`, `annotation_sync_debounce_secs`                                                                                                                                                                                                                                                        |
 | _(top level)_               | `core/src/config/stump_config.rs` | `config_dir`, `[oidc]` table; `media` is a derived, non-serialized snapshot computed by `StumpConfig::finalize()`                                                                                                                                                                                                  |
 
 The PostgreSQL connection variables (`STUMP_DATABASE_URL`, `STUMP_DB_HOST`, `STUMP_DB_PORT`, `STUMP_DB_USER`, `STUMP_DB_PASSWORD`, `STUMP_DB_NAME`) are environment-only and are read by `core/src/database.rs` rather than stored in any group.
@@ -589,6 +592,36 @@ Specifies the images format used when rendering PDF pages.
 | Type   | Default Value | TOML Key            |
 | ------ | ------------- | ------------------- |
 | String | `webp`        | `pdf_render_format` |
+
+## Audiobooks
+
+These are the *server* layer of the three audiobook settings layers; the other two are the per-library ingest policy and the per-device transform preset. See [audiobooks](/docs/guides/fundamentals/audiobooks#settings).
+
+### STUMP_AUDIO_CANONICAL
+
+The container an assembled audiobook is written as. `m4b` is the only accepted value — it is the one container that carries a `chpl` chapter list, a chapter track, iTunes tags and a cover in a single file — and anything else fails startup. Opus is a first-class *input* and an opt-in per-device *delivery* preset, never a stored container.
+
+| Type   | Default Value | TOML Key          |
+| ------ | ------------- | ----------------- |
+| String | `m4b`         | `audio_canonical` |
+
+### STUMP_AUDIO_AAC_BITRATE
+
+The AAC bitrate used when an assemble has to re-encode, as an `ffmpeg` `-b:a` argument (`64k`, `128000`). AAC input is stream-copied rather than re-encoded, so this only applies to lossy input in another codec. Validated at startup: it must parse and fall within 8000–320000 bits per second.
+
+| Type   | Default Value | TOML Key            |
+| ------ | ------------- | ------------------- |
+| String | `64k`         | `audio_aac_bitrate` |
+
+### STUMP_AUDIO_FFMPEG
+
+Absolute path to the `ffmpeg` binary. Empty (the default) searches `PATH`. A non-empty value that is not an executable file fails startup, exactly as an unresolvable `STUMP_INGEST_PREPROCESS` does — a path typo must stop the server, not fail one conversion per audiobook for the rest of its uptime.
+
+`ffmpeg` is an operator-installed tool and never a build dependency; the audio lane needs it only to *encode*, since probing, tagging and chapter writing are pure Rust. This key is the **server's** lane: the per-device Opus delivery preset and any ingest auto-fix that re-encodes. A manual `audio-assemble` run through the CLI locates `ffmpeg` from its own `bin_dir` tool option instead, so the two are configured independently.
+
+| Type   | Default Value | TOML Key       |
+| ------ | ------------- | -------------- |
+| String | (empty)       | `audio_ffmpeg` |
 
 ## File Uploads
 

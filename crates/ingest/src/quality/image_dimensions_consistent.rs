@@ -100,7 +100,8 @@ impl QualityCheck for ImageDimensionsConsistentCheck {
 					}
 				}
 			},
-			IngestMediaKind::Unknown => {},
+			// Neither has image pages to measure.
+			IngestMediaKind::Audio | IngestMediaKind::Unknown => {},
 		}
 
 		if image_count < 2 {

@@ -8,7 +8,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::profile::TransformProfile;
+use super::profile::{AudioProfile, TransformProfile};
 
 /// Default in-memory view of one cache entry.
 #[derive(Debug, Clone)]
@@ -70,6 +70,27 @@ impl TransformCache {
 		self.dir.join(format!(
 			"{}.{extension}",
 			Self::cache_file_name(media_id, source_mtime_ns, profile)
+		))
+	}
+
+	/// Deterministic cache path for one transcoded audio track.
+	///
+	/// Keyed on the *track*, not the book: an audiobook may still be several
+	/// files, and each one is transcoded and served independently. The
+	/// track's own mtime is the invalidation input for the same reason the
+	/// comic path uses the source's — a re-tagged or replaced file must not
+	/// serve the previous transcode.
+	pub fn audio_path_for(
+		&self,
+		media_id: &str,
+		track_index: i32,
+		source_mtime_ns: u128,
+		audio: &AudioProfile,
+		extension: &str,
+	) -> PathBuf {
+		self.dir.join(format!(
+			"{media_id}-t{track_index}-{source_mtime_ns}-{}.{extension}",
+			audio.digest()
 		))
 	}
 
