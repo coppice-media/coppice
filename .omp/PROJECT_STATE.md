@@ -7,7 +7,7 @@ On-demand resume file. The evidence snapshot lives in
 
 ## Working tree
 
-- Branch `headless-modular` @ batch 7 (audiobooks: probe/schema/routes/OPDS/tools + ABS/Lissen profile crate `stump_abs` behind `STUMP_ENABLE_ABS`; Kavita metadata map + Download routes + middle-page chapter-info probe; provider host: unavailable-chapter skip/404, covers from lists, age rating, `stump_provider=trace` log directive; Komf per-field policy layer; graphql `web` gate proven (62 root fields/74 types headless-only); theme engines Madara/MangaThemesia/MMRCMS live + `sources-import` generator (420 definitions in /tmp/stump-sources); SQLite migrations now one transaction each), gate 1660+302 tests, replays 6/6 on 25600 (full-profile binary; Komga replay uses the Solo series ids and `POST /api/graphql` for the non-Komga cookie probe).
+- Branch `headless-modular` @ batch 7b (ABS/Lissen live on 25600: `STUMP_ENABLE_ABS=true` in the launcher, fixture library **Audiobooks** at `~/.local/share/stump-komga-test/audiobooks` (chaptered M4B + 2-track MP3 folder, `processMetadata` on — the capture library has it off), audio cover = page 1, per-file chapters, album tag, session tracks keep tags, deviceInfo echo; `make replay-abs` 43/43, `make replay-abs-diff` 7/9 vs abs-ref 13450 — only `tagEncoder` differs), gate 1666+302 tests, replays 7/7.
   Clean tree at that commit. `git config core.hooksPath /dev/null` is set on
   purpose: upstream's husky hook runs prettier/cargo-fmt on every commit and
   aborts on generated files; the gate replaces it.
@@ -37,6 +37,8 @@ On-demand resume file. The evidence snapshot lives in
   `../komga-compat/kavita/README.md`), `komf-stump` 8085.
 
 ## Replay commands
+
+- ABS: `make replay-abs BASE_URL=$B USERNAME=synthetic-owner PASSWORD=synthetic-pass-1 MITM_KEEP_HOST_HEADER=true`; key-diff: `make replay-abs-diff … ABS_REF_BASE_URL=http://127.0.0.1:13450 ABS_REF_USERNAME=root ABS_REF_PASSWORD=absrefpass` (container `abs-ref`). Komga replay: use the Solo series ids; `GET /api/graphql` is a 303 on a webui build, the cookie-scope spec uses POST.
 
 From the user-owned sibling harness `../komga-compat/` (hurl needs
 `LD_LIBRARY_PATH=/tmp`, `PATH=$HOME/.cargo/bin:$PATH`; every target needs

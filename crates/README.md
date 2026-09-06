@@ -11,6 +11,7 @@ editing it.
 | `annotation-sync` | `stump_annotation_sync` | Canonical annotation export model, `Sink` trait, markdown (Obsidian) and git sinks | always linked via `stump_core`; crate feature `git` (default) links libgit2 | README done |
 | `api-types` | `stump_api_types` | Transport-neutral `RequestOrigin` URL building and `OffsetPagination` | always linked | README done |
 | `auth` | `stump_auth` | `AuthContext` + `AuthorizationError`, permission/owner enforcement | always linked | README done |
+| `abs` | `stump_abs` | Client-derived Audiobookshelf API profile (Lissen-first): root-mounted routes, DTOs, mapper, `abs_ids`/`abs_sessions`, HS256 tokens | linked by server `abs` (inside `headless`), `STUMP_ENABLE_ABS` | README done |
 | `collections` | `stump_collections` | Canonical shelf containers (collections, reading lists) and their Kobo `Tag` projection; one mutation path for GraphQL, Komga CRUD and Kobo write-back | linked by server `kobo`/`komga`/`kavita` and by `graphql` (absent from `minimal`) | README done |
 | `cli` | `cli` | Server CLI subcommands (account, config, `tools list`/`plan`/`apply`) embedded in `stump_server` | always linked | README pending (dirty: `commands/account.rs`, `config.rs`, `commands/tools.rs`, `bin/main.rs`) |
 | `devices` | `stump_devices` | Unified device registry: per-device credentials, endpoints, last-seen/last-sync tracking | always linked via `stump_core`; `graphql` derives opt-in | README done |

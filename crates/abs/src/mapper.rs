@@ -20,7 +20,7 @@ use models::shared::enums::UserPermission;
 
 use crate::{
 	dto::*,
-	model::{AbsAudio, AbsBookmark, AbsProgress, ItemShape},
+	model::{AbsAudio, AbsAudioTrack, AbsBookmark, AbsProgress, ItemShape},
 	ABS_BUILD_NUMBER, ABS_VERSION,
 };
 
@@ -473,7 +473,10 @@ fn meta_tags(
 		metadata.and_then(get).cloned()
 	};
 	MetaTagsDto {
-		tag_album: metadata_field(|m| m.series.as_ref()),
+		// The album tag of an audiobook file names the book, not a comic
+		// series: that is where the probe read the title from in the first place.
+		tag_album: metadata_field(|m| m.title.as_ref())
+			.or_else(|| metadata_field(|m| m.series.as_ref())),
 		tag_artist: metadata_field(|m| m.writers.as_ref()),
 		tag_album_artist: metadata_field(|m| m.writers.as_ref()),
 		tag_title: title.map(str::to_owned),
@@ -502,6 +505,32 @@ pub fn chapters(audio: &AbsAudio) -> Vec<BookChapterDto> {
 		.map(|chapter| BookChapterDto {
 			start: ms_to_secs(chapter.start_ms),
 			end: ms_to_secs(chapter.end_ms.unwrap_or(audio.duration_ms)),
+			title: chapter.title.clone().unwrap_or_else(|| {
+				format!("Chapter {}", chapter.index.saturating_add(1))
+			}),
+			id: i64::from(chapter.index),
+		})
+		.collect()
+}
+
+/// `media.audioFiles[].chapters[]`: the book's chapters that fall inside one
+/// file, in that file's own timeline — abs-ref reads them off each file's
+/// embedded marks, so they are file-relative, unlike `media.chapters[]`.
+fn file_chapters(audio: &AbsAudio, track: &AbsAudioTrack) -> Vec<BookChapterDto> {
+	let file_start = track.start_offset_ms;
+	let file_end = file_start + track.duration_ms;
+	audio
+		.chapters
+		.iter()
+		.filter(|chapter| {
+			let end = chapter.end_ms.unwrap_or(audio.duration_ms);
+			chapter.start_ms < file_end && end > file_start
+		})
+		.map(|chapter| BookChapterDto {
+			start: ms_to_secs(chapter.start_ms.max(file_start) - file_start),
+			end: ms_to_secs(
+				chapter.end_ms.unwrap_or(audio.duration_ms).min(file_end) - file_start,
+			),
 			title: chapter.title.clone().unwrap_or_else(|| {
 				format!("Chapter {}", chapter.index.saturating_add(1))
 			}),
@@ -559,7 +588,7 @@ pub fn audio_files(
 				time_base: None,
 				channels: audio.channels.map(i64::from),
 				channel_layout: None,
-				chapters: Vec::new(),
+				chapters: file_chapters(audio, track),
 				embedded_cover_art: None,
 				meta_tags: meta_tags(metadata, Some(&filename)),
 				mime_type: track.mime.clone(),
@@ -580,7 +609,19 @@ pub fn audio_tracks(
 	added_at: i64,
 	updated_at: i64,
 ) -> Vec<AudioTrackDto> {
-	audio_files(audio, metadata, added_at, updated_at)
+	tracks_of(
+		item_id,
+		audio,
+		audio_files(audio, metadata, added_at, updated_at),
+	)
+}
+
+fn tracks_of(
+	item_id: &str,
+	audio: &AbsAudio,
+	files: Vec<AudioFileDto>,
+) -> Vec<AudioTrackDto> {
+	files
 		.into_iter()
 		.zip(audio.tracks.iter())
 		.map(|(file, track)| AudioTrackDto {
@@ -828,9 +869,7 @@ pub struct SessionInput<'a> {
 	pub user_id: &'a str,
 	pub item: LibraryItemDto,
 	pub audio: &'a AbsAudio,
-	pub device_id: Option<String>,
-	pub client_name: Option<String>,
-	pub client_version: Option<String>,
+	pub device: DeviceInfoRequestDto,
 	pub media_player: Option<String>,
 	pub current_time_ms: i64,
 	pub time_listening_ms: i64,
@@ -858,8 +897,12 @@ pub fn session_dto(input: SessionInput<'_>) -> PlaybackSessionDto {
 			})
 		})
 		.filter(|name| !name.is_empty());
-	let tracks =
-		audio_tracks(&item.id, input.audio, None, item.added_at, item.updated_at);
+	// The item was mapped with its metadata; the session's tracks are the
+	// same files, so the tags must not be dropped on the way.
+	let tracks = match item.media.audio_files.clone() {
+		Some(files) => tracks_of(&item.id, input.audio, files),
+		None => audio_tracks(&item.id, input.audio, None, item.added_at, item.updated_at),
+	};
 	PlaybackSessionDto {
 		id: input.session_id.to_owned(),
 		user_id: input.user_id.to_owned(),
@@ -879,10 +922,14 @@ pub fn session_dto(input: SessionInput<'_>) -> PlaybackSessionDto {
 		device_info: DeviceInfoDto {
 			id: input.session_id.to_owned(),
 			user_id: input.user_id.to_owned(),
-			device_id: input.device_id,
+			device_id: input.device.device_id,
 			ip_address: None,
-			client_version: input.client_version,
-			client_name: input.client_name,
+			client_version: input.device.client_version,
+			client_name: input.device.client_name,
+			device_name: input.device.device_name,
+			manufacturer: input.device.manufacturer,
+			model: input.device.model,
+			sdk_version: input.device.sdk_version,
 		},
 		server_version: ABS_VERSION.to_owned(),
 		date: input.started_at.format("%Y-%m-%d").to_string(),
@@ -900,6 +947,7 @@ pub fn session_dto(input: SessionInput<'_>) -> PlaybackSessionDto {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::model::AbsAudioChapter;
 
 	#[test]
 	fn seconds_round_trip_without_losing_a_half_second() {
@@ -918,6 +966,58 @@ mod tests {
 		);
 		assert!(csv(None).is_empty());
 		assert!(csv(Some("  ,  ")).is_empty());
+	}
+
+	/// `audioFiles[].chapters` are in each file's own timeline: a book-level
+	/// chapter that straddles two parts shows up in both, clipped to the part,
+	/// and an open-ended last chapter closes at the publication's end.
+	#[test]
+	fn file_chapters_are_clipped_and_rebased_per_track() {
+		let track = |index: i32, start_offset_ms: i64| AbsAudioTrack {
+			index,
+			path: format!("/books/part{index}.mp3"),
+			duration_ms: 10_000,
+			start_offset_ms,
+			byte_size: 1,
+			mime: "audio/mpeg".to_owned(),
+		};
+		let chapter = |index: i32, start_ms: i64, end_ms: Option<i64>| AbsAudioChapter {
+			index,
+			title: None,
+			start_ms,
+			end_ms,
+		};
+		let audio = AbsAudio {
+			duration_ms: 20_000,
+			codec: "mp3".to_owned(),
+			sample_rate: None,
+			channels: None,
+			bitrate: None,
+			tracks: vec![track(0, 0), track(1, 10_000)],
+			chapters: vec![
+				chapter(0, 0, Some(4_000)),
+				chapter(1, 4_000, Some(14_000)),
+				chapter(2, 14_000, None),
+			],
+		};
+
+		let first = file_chapters(&audio, &audio.tracks[0]);
+		assert_eq!(
+			first
+				.iter()
+				.map(|c| (c.id, c.start, c.end))
+				.collect::<Vec<_>>(),
+			[(0, 0.0, 4.0), (1, 4.0, 10.0)]
+		);
+		let second = file_chapters(&audio, &audio.tracks[1]);
+		assert_eq!(
+			second
+				.iter()
+				.map(|c| (c.id, c.start, c.end))
+				.collect::<Vec<_>>(),
+			[(1, 0.0, 4.0), (2, 4.0, 10.0)]
+		);
+		assert_eq!(second[1].title, "Chapter 3");
 	}
 
 	#[test]

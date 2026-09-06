@@ -104,6 +104,31 @@ fn no_pages(path: &str) -> FileError {
 	))
 }
 
+/// The image every profile uses as the book's thumbnail: the embedded cover
+/// art, or — for a folder book — a `cover.*`/`folder.*` sidecar, which is how
+/// Audiobookshelf-managed libraries carry it.
+fn cover(path: &Path) -> Result<(ContentType, Vec<u8>), FileError> {
+	if let Some(cover) = audio::probe(path)?.cover {
+		return Ok(cover);
+	}
+
+	if path.is_dir() {
+		for name in ["cover", "folder"] {
+			for ext in ["jpg", "jpeg", "png", "webp"] {
+				let sidecar = path.join(format!("{name}.{ext}"));
+				if sidecar.is_file() {
+					return Ok((
+						ContentType::from_extension(ext),
+						std::fs::read(sidecar)?,
+					));
+				}
+			}
+		}
+	}
+
+	Err(FileError::NoImageError)
+}
+
 impl FileProcessor for AudioProcessor {
 	fn get_sample_size(path: &str) -> Result<u64, FileError> {
 		Ok(Self::hashed_file(Path::new(path))?.metadata()?.len())
@@ -178,12 +203,19 @@ impl FileProcessor for AudioProcessor {
 		Ok(Some(Self::metadata_of(&probed)))
 	}
 
+	/// Page 1 is the cover, exactly as it is for an EPUB: the thumbnail
+	/// generator and every profile's cover route ask for page 1 of a book
+	/// that has no stored thumbnail.
 	fn get_page(
 		path: &str,
-		_page: i32,
+		page: i32,
 		_: &MediaConfig,
 	) -> Result<(ContentType, Vec<u8>), FileError> {
-		Err(no_pages(path))
+		if page == 1 {
+			cover(Path::new(path))
+		} else {
+			Err(no_pages(path))
+		}
 	}
 
 	fn get_page_count(_path: &str, _: &MediaConfig) -> Result<i32, FileError> {
@@ -192,9 +224,14 @@ impl FileProcessor for AudioProcessor {
 
 	fn get_page_content_types(
 		path: &str,
-		_pages: Vec<i32>,
+		pages: Vec<i32>,
 	) -> Result<HashMap<i32, ContentType>, FileError> {
-		Err(no_pages(path))
+		if pages.iter().all(|page| *page == 1) {
+			let (content_type, _) = cover(Path::new(path))?;
+			Ok(pages.into_iter().map(|page| (page, content_type)).collect())
+		} else {
+			Err(no_pages(path))
+		}
 	}
 
 	fn analyze_page(
@@ -286,19 +323,29 @@ mod tests {
 		assert_eq!(container.writers, Some(vec!["Test Narrator".to_string()]));
 	}
 
-	/// The page routes are unreachable for audio, and a silent wrong answer
-	/// would surface as a broken reader instead of a routing bug.
+	/// Page 1 is what the thumbnail generator and every profile's cover route
+	/// ask for when a book has no stored thumbnail; for an audiobook that is
+	/// the embedded art. Every other page is unreachable, and a silent wrong
+	/// answer would surface as a broken reader instead of a routing bug.
 	#[test]
-	fn audio_processor_refuses_every_page_operation() {
+	fn audio_processor_serves_the_cover_as_page_one_and_nothing_else() {
 		let path = fixture("plain.m4b");
 		let config = MediaConfig::default();
 
+		let (content_type, bytes) = AudioProcessor::get_page(&path, 1, &config).unwrap();
+		assert_eq!(content_type, ContentType::PNG);
+		assert!(bytes.starts_with(b"\x89PNG"));
+		assert_eq!(
+			AudioProcessor::get_page_content_types(&path, vec![1]).unwrap()[&1],
+			ContentType::PNG
+		);
+
 		assert!(matches!(
-			AudioProcessor::get_page(&path, 1, &config),
+			AudioProcessor::get_page(&path, 2, &config),
 			Err(FileError::UnsupportedFileType(_))
 		));
 		assert!(matches!(
-			AudioProcessor::get_page_content_types(&path, vec![1]),
+			AudioProcessor::get_page_content_types(&path, vec![1, 2]),
 			Err(FileError::UnsupportedFileType(_))
 		));
 		assert!(matches!(
@@ -309,5 +356,30 @@ mod tests {
 			AudioProcessor::get_page_count(&path, &config).unwrap(),
 			AUDIO_PAGES
 		);
+	}
+
+	/// A folder book with untagged parts carries its cover as a sidecar
+	/// (`cover.jpg`, the Audiobookshelf convention); without one there is no
+	/// image, not a fabricated page.
+	#[test]
+	fn audio_processor_reads_a_folder_cover_sidecar() {
+		let dir = tempfile::tempdir().unwrap();
+		let source = PathBuf::from(fixture("folder-filename"));
+		for entry in std::fs::read_dir(&source).unwrap() {
+			let entry = entry.unwrap();
+			std::fs::copy(entry.path(), dir.path().join(entry.file_name())).unwrap();
+		}
+		let path = dir.path().to_string_lossy().to_string();
+		let config = MediaConfig::default();
+
+		assert!(matches!(
+			AudioProcessor::get_page(&path, 1, &config),
+			Err(FileError::NoImageError)
+		));
+
+		std::fs::write(dir.path().join("cover.jpg"), b"\xFF\xD8\xFFsidecar").unwrap();
+		let (content_type, bytes) = AudioProcessor::get_page(&path, 1, &config).unwrap();
+		assert_eq!(content_type, ContentType::JPEG);
+		assert_eq!(bytes, b"\xFF\xD8\xFFsidecar");
 	}
 }

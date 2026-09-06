@@ -733,7 +733,8 @@ pub struct DeviceInfoRequestDto {
 	pub device_name: Option<String>,
 	pub manufacturer: Option<String>,
 	pub model: Option<String>,
-	pub sdk_version: Option<String>,
+	/// A number from the official app, a string from others; echoed as sent.
+	pub sdk_version: Option<serde_json::Value>,
 }
 
 /// The `PlaybackSession` a play request answers with. Lissen keeps only
@@ -782,6 +783,12 @@ pub struct DeviceInfoDto {
 	pub ip_address: Option<String>,
 	pub client_version: Option<String>,
 	pub client_name: Option<String>,
+	/// The four device descriptors abs-ref echoes from the play request, and
+	/// emits as `null` when the client did not send them.
+	pub device_name: Option<String>,
+	pub manufacturer: Option<String>,
+	pub model: Option<String>,
+	pub sdk_version: Option<serde_json::Value>,
 }
 
 /// `POST /api/session/{id}/sync` and `.../close`. Lissen sends

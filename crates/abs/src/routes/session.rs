@@ -16,7 +16,7 @@ use axum::{
 };
 
 use crate::{
-	dto::{PlaybackSessionDto, ProgressSyncRequestDto},
+	dto::{DeviceInfoRequestDto, PlaybackSessionDto, ProgressSyncRequestDto},
 	errors::{AbsError, AbsResult},
 	mapper,
 	model::{AbsPositionUpdate, ItemShape},
@@ -56,9 +56,12 @@ pub(crate) async fn detail(
 		user_id: &user.id,
 		item,
 		audio: &audio,
-		device_id: session.device_id.clone(),
-		client_name: session.client_name.clone(),
-		client_version: session.client_version.clone(),
+		device: DeviceInfoRequestDto {
+			device_id: session.device_id.clone(),
+			client_name: session.client_name.clone(),
+			client_version: session.client_version.clone(),
+			..Default::default()
+		},
 		media_player: session.media_player.clone(),
 		current_time_ms: session.current_time_ms,
 		time_listening_ms: session.time_listening_ms,

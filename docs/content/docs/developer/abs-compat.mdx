@@ -187,6 +187,9 @@ Ids are allocated on first use, never reused, and survive restarts; the table is
 | `media` (book) | The same media row's audio metadata, under an allocated `book` id |
 | `media.audioFiles[]`, `media.tracks[]` | `media_audio_tracks` rows, ordered by `index`. On the wire `index` is 1-based (`item.json`), while `ino` is the 0-based Stump track index |
 | `media.chapters[]` | `media_audio_chapters` rows: `{start, end, title, id}` with `id` the 0-based chapter index |
+| `media.audioFiles[].chapters[]` | The book's chapters that fall inside that file, clipped to it and rebased to the file's own timeline — abs-ref reads them from each file's embedded marks, so they are file-relative while `media.chapters[]` is publication-relative (`mapper::file_chapters`) |
+| `audioFiles[].metaTags` | Only tags Stump read are emitted, as abs-ref does. `tagAlbum` is the book title (`media_metadata.title`, falling back to `series`): the probe reads a folder book's title from the shared `album` tag in the first place. `tagEncoder` is never emitted — the probe does not keep it |
+| `deviceInfo` | `{deviceId, clientName, clientVersion}` are stored with the session; `deviceName`, `manufacturer`, `model`, `sdkVersion` are echoed from the `play` request and `null` when read back through `GET /api/session/{id}` |
 | Series | Stump series, exposed as the `series`/`collapsedSeries` shape |
 | Author | A `media_metadata.writers` name under an allocated `author` id; `numBooks` counts the media carrying that name |
 | `MediaProgress` | The unified reading state (below) |

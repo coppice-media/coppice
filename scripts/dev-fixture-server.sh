@@ -41,7 +41,7 @@ Server base: $BASE
 Loopback:    http://127.0.0.1:$PORT
 Binary:      $BIN
 Fixture:     $FIXTURE_ROOT
-Enabled:     STUMP_ENABLE_KOMGA=true ENABLE_KOBO_SYNC=true ENABLE_KOREADER_SYNC=true KOBO_KEPUB_CONVERSION=true STUMP_ENABLE_UPLOAD=true (+ liseur-sync compiled in)
+Enabled:     STUMP_ENABLE_KOMGA=true ENABLE_KOBO_SYNC=true ENABLE_KOREADER_SYNC=true STUMP_ENABLE_ABS=true KOBO_KEPUB_CONVERSION=true STUMP_ENABLE_UPLOAD=true (+ liseur-sync compiled in)
 
 ## Accounts
 
@@ -115,6 +115,7 @@ export STUMP_ENABLE_UPLOAD="${STUMP_ENABLE_UPLOAD:-true}"
 export INGEST_EDITOR_DIR="${INGEST_EDITOR_DIR:-/home/al/Code/stump/editor/build}"
 export STUMP_HOME_APP_DIR="${STUMP_HOME_APP_DIR:-/home/al/Code/stump/home/build}"
 export ENABLE_KOREADER_SYNC="${ENABLE_KOREADER_SYNC:-true}"
+export STUMP_ENABLE_ABS="${STUMP_ENABLE_ABS:-true}"
 
 cd "$FIXTURE_ROOT"
 exec "$BIN"
