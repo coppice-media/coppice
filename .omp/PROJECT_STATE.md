@@ -11,9 +11,11 @@ On-demand resume file. The evidence snapshot lives in
   Clean tree at that commit. `git config core.hooksPath /dev/null` is set on
   purpose: upstream's husky hook runs prettier/cargo-fmt on every commit and
   aborts on generated files; the gate replaces it.
-- `target/` grows past 200 GB across a parallel batch; prune
-  `target/debug/incremental` only when no cargo process is running
-  (`pgrep -x rustc`), never mid-build. Root disk at 100% shows up as a
+- Dev profile: `incremental = false` + line-tables debuginfo (root Cargo.toml)
+  after a 261 GB `target/` killed the session twice. Workers never override
+  CARGO_INCREMENTAL; check `df -h /` before big builds and stop under 20 GB.
+  Prune `target/debug/{incremental,deps,build,.fingerprint}` only when no
+  cargo process runs (`pgrep -x rustc`). Root disk at 100% shows up as a
   linker failure, not as ENOSPC.
 
 ## Fixture and launcher
