@@ -13,7 +13,8 @@
 //!   `[attr!=v]`, with `\` escapes inside values
 //! * `:not(...)`, `:has(...)`, `:contains(...)`, `:containsOwn(...)`,
 //!   `:containsData(...)`, `:matches(...)`, `:first-child`, `:last-child`,
-//!   `:only-child`, `:nth-child(n|odd|even)`, `:empty`, `:root`, `:eq(n)`,
+//!   `:only-child`, `:nth-child(n|odd|even)`, `:first-of-type`,
+//!   `:last-of-type`, `:nth-of-type(n|odd|even)`, `:empty`, `:root`, `:eq(n)`,
 //!   `:gt(n)`, `:lt(n)`
 //!
 //! Anything else is a parse error rather than a silent mismatch, so a
@@ -65,6 +66,10 @@ enum Simple {
 	LastChild,
 	OnlyChild,
 	NthChild(Nth),
+	/// The `-of-type` family counts only siblings with the same tag name.
+	FirstOfType,
+	LastOfType,
+	NthOfType(Nth),
 	Empty,
 	Root,
 	/// jsoup's positional `:eq`/`:gt`/`:lt` over the sibling index.
@@ -283,6 +288,19 @@ fn match_simple(document: &Document, node: NodeId, simple: &Simple) -> bool {
 			Nth::Exact(value) => element.sibling_index == *value,
 			Nth::Odd => element.sibling_index % 2 == 1,
 			Nth::Even => element.sibling_index % 2 == 0,
+		},
+		Simple::FirstOfType => document.type_position(node).0 == 1,
+		Simple::LastOfType => {
+			let (position, total) = document.type_position(node);
+			position == total
+		},
+		Simple::NthOfType(nth) => {
+			let position = document.type_position(node).0;
+			match nth {
+				Nth::Exact(value) => position == *value,
+				Nth::Odd => position % 2 == 1,
+				Nth::Even => position % 2 == 0,
+			}
 		},
 		Simple::Empty => {
 			document.element_children(node).next().is_none()
@@ -640,7 +658,8 @@ impl<'a> Parser<'a> {
 					| "has" | "contains"
 					| "containsown" | "containsdata"
 					| "matches" | "nth-child"
-					| "eq" | "gt" | "lt"
+					| "nth-of-type" | "eq"
+					| "gt" | "lt"
 			);
 		let argument = if takes_argument {
 			self.expect(b'(')?;
@@ -664,16 +683,10 @@ impl<'a> Parser<'a> {
 				.map(Simple::Matches)
 				.map_err(|error| self.error(error.to_string())),
 			("nth-child", Some(argument)) => {
-				match argument.trim().to_ascii_lowercase().as_str() {
-					"odd" => Ok(Simple::NthChild(Nth::Odd)),
-					"even" => Ok(Simple::NthChild(Nth::Even)),
-					value => value
-						.parse()
-						.map(|value| Simple::NthChild(Nth::Exact(value)))
-						.map_err(|_| {
-							self.error(format!("unsupported :nth-child({value})"))
-						}),
-				}
+				self.nth_pseudo("nth-child", &argument, Simple::NthChild)
+			},
+			("nth-of-type", Some(argument)) => {
+				self.nth_pseudo("nth-of-type", &argument, Simple::NthOfType)
 			},
 			("eq", Some(argument)) => self.index_pseudo(&argument, Simple::IndexEquals),
 			("gt", Some(argument)) => self.index_pseudo(&argument, Simple::IndexGreater),
@@ -683,7 +696,27 @@ impl<'a> Parser<'a> {
 			("only-child", None) => Ok(Simple::OnlyChild),
 			("empty", None) => Ok(Simple::Empty),
 			("root", None) => Ok(Simple::Root),
+			("first-of-type", None) => Ok(Simple::FirstOfType),
+			("last-of-type", None) => Ok(Simple::LastOfType),
 			(other, _) => Err(self.error(format!("unsupported pseudo-class `:{other}`"))),
+		}
+	}
+
+	/// `:nth-child`/`:nth-of-type` share jsoup's `n | odd | even` argument.
+	/// The `an+b` forms no theme uses stay a parse error.
+	fn nth_pseudo(
+		&self,
+		name: &str,
+		argument: &str,
+		build: fn(Nth) -> Simple,
+	) -> Result<Simple, SelectorError> {
+		match argument.trim().to_ascii_lowercase().as_str() {
+			"odd" => Ok(build(Nth::Odd)),
+			"even" => Ok(build(Nth::Even)),
+			value => value
+				.parse()
+				.map(|value| build(Nth::Exact(value)))
+				.map_err(|_| self.error(format!("unsupported :{name}({value})"))),
 		}
 	}
 
@@ -918,9 +951,34 @@ mod tests {
 		}
 	}
 
+	/// `all.allporncomicsco` selects its archive link with
+	/// `h3 > a:not([target=_self]):last-of-type`, so the family has to count
+	/// siblings by tag name rather than by position among all elements.
+	#[test]
+	fn of_type_counts_only_siblings_with_the_same_tag() {
+		let html = r#"<div>
+			<h3><span>x</span><a target="_self">self</a><a href="/1">mid</a><a href="/2">last</a></h3>
+			<h3><a href="/3">only</a></h3>
+		</div>"#;
+		assert_eq!(
+			texts("h3 > a:not([target=_self]):last-of-type", html),
+			["last", "only"]
+		);
+		// The leading `span` does not shift the count, and `:first-of-type`
+		// is not "the first link that is not `_self`".
+		assert_eq!(texts("h3 > a:first-of-type", html), ["self", "only"]);
+		assert_eq!(texts("h3 > span:last-of-type", html), ["x"]);
+		assert_eq!(texts("h3 a:nth-of-type(2)", html), ["mid"]);
+		assert_eq!(
+			texts("h3 a:nth-of-type(odd)", html),
+			["self", "last", "only"]
+		);
+	}
+
 	#[test]
 	fn unsupported_syntax_is_rejected_loudly() {
-		assert!(Selector::parse(":nth-of-type(2)").is_err());
+		assert!(Selector::parse(":nth-last-of-type(2)").is_err());
+		assert!(Selector::parse("li:nth-child(2n+1)").is_err());
 		assert!(Selector::parse("div:has(").is_err());
 		assert!(Selector::parse("").is_err());
 		assert!(Selector::parse("a[href").is_err());

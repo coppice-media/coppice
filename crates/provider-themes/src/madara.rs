@@ -1555,7 +1555,7 @@ mod tests {
 		let error = MadaraSource::new(
 			&definition(&[(
 				"chapter_list_selector",
-				KnobValue::Text("li:nth-of-type(2)".into()),
+				KnobValue::Text("li:nth-last-of-type(2)".into()),
 			)]),
 			"en.example",
 			None,

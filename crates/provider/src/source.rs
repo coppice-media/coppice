@@ -295,6 +295,19 @@ impl SourceError {
 	pub fn decode(error: impl std::fmt::Display) -> Self {
 		SourceError::Decode(error.to_string())
 	}
+
+	/// Whether the failure is an outage rather than a verdict about the
+	/// source: the host was unreachable, rejected the request, or throttled
+	/// it, so the same call may well succeed later.
+	pub fn is_transient(&self) -> bool {
+		matches!(
+			self,
+			SourceError::Http(_)
+				| SourceError::Status { .. }
+				| SourceError::Challenged { .. }
+				| SourceError::RateLimited { .. }
+		)
+	}
 }
 
 pub type SourceResult<T> = Result<T, SourceError>;

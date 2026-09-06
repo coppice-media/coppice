@@ -119,6 +119,28 @@ pub enum ProviderError {
 	Other(String),
 }
 
+impl ProviderError {
+	/// Whether the failure is an outage rather than a verdict about the
+	/// source: retrying it later may well succeed, so nothing durable should
+	/// be decided from it.
+	///
+	/// Network, filesystem, database and catalog failures are outages; a
+	/// selector no engine implements, an unknown theme, a schema from the
+	/// future or a definition that is simply not in the index are verdicts.
+	pub fn is_transient(&self) -> bool {
+		match self {
+			ProviderError::Http(_)
+			| ProviderError::Io(_)
+			| ProviderError::Db(_)
+			| ProviderError::Catalog(_)
+			| ProviderError::Challenged { .. } => true,
+			ProviderError::Source(error) => error.is_transient(),
+			ProviderError::Definition(error) => error.is_transient(),
+			_ => false,
+		}
+	}
+}
+
 /// A challenge is lifted out of `Source` so the host, the resolver, and the
 /// API all see one error for it instead of a status buried in a source error.
 impl From<SourceError> for ProviderError {
@@ -214,6 +236,9 @@ impl std::fmt::Debug for ProviderHost {
 impl ProviderHost {
 	/// Open the page cache, prepare the catalog, and instantiate every enabled
 	/// `provider_sources` row that has a compiled implementation.
+	///
+	/// A row that cannot be built is flipped back to `enabled = false`, so the
+	/// enabled set the API reports is the set that actually runs.
 	pub async fn open(
 		conn: Arc<DatabaseConnection>,
 		factories: Vec<SourceFactory>,
@@ -243,7 +268,8 @@ impl ProviderHost {
 			browse,
 			events: OnceLock::new(),
 		});
-		host.reload_sources().await?;
+		let unbuildable = host.reload_sources().await?;
+		host.disable_unbuildable(&unbuildable).await?;
 		Ok(host)
 	}
 
@@ -357,28 +383,79 @@ impl ProviderHost {
 	/// A row whose `implementation` is not a compiled factory is looked up in
 	/// the definition index instead, so definition-backed sources survive a
 	/// restart without any per-site code.
-	pub async fn reload_sources(&self) -> Result<(), ProviderError> {
+	///
+	/// Answers the rows that could not be built, so the caller can decide
+	/// what a skipped row means; a reload during operation only logs them,
+	/// while [`ProviderHost::open`] repairs them.
+	pub async fn reload_sources(
+		&self,
+	) -> Result<Vec<(String, ProviderError)>, ProviderError> {
 		let rows = provider_source::Entity::find()
 			.filter(provider_source::Column::Enabled.eq(true))
 			.all(self.conn.as_ref())
 			.await?;
 		let mut built: Vec<(String, Arc<dyn Source>)> = Vec::with_capacity(rows.len());
+		let mut failed: Vec<(String, ProviderError)> = Vec::new();
 		for row in rows {
 			match self.build_row(&row).await {
 				Ok(source) => built.push((row.id.clone(), source)),
-				Err(error) => tracing::error!(
-					?error,
-					source = row.id,
-					implementation = row.implementation,
-					"Failed to build enabled provider source; skipping"
-				),
+				Err(error) => {
+					tracing::error!(
+						?error,
+						source = row.id,
+						implementation = row.implementation,
+						"Failed to build enabled provider source; skipping"
+					);
+					failed.push((row.id, error));
+				},
 			}
 		}
 		let mut registry = self.sources.write().expect("source registry poisoned");
 		for (id, source) in built {
 			registry.insert(id, source);
 		}
-		Ok(())
+		Ok(failed)
+	}
+
+	/// Flip rows this build cannot construct back to `enabled = false`.
+	///
+	/// Rows that claim to be enabled but cannot be built are invisible work:
+	/// the API lists them as enabled, nothing resolves from them, and every
+	/// boot logs the same failure. They exist because enabling used to
+	/// persist the row before it built the instance, so a catalog-wide sweep
+	/// left one behind for every source this build has no engine or no
+	/// working selector for.
+	///
+	/// Only a verdict about the source disables it: a transient failure
+	/// ([`ProviderError::is_transient`]) is an outage — an unreachable
+	/// definition index would otherwise disable every definition-backed
+	/// source on the first boot without network.
+	async fn disable_unbuildable(
+		&self,
+		failures: &[(String, ProviderError)],
+	) -> Result<Vec<String>, ProviderError> {
+		let ids: Vec<&str> = failures
+			.iter()
+			.filter(|(_, error)| !error.is_transient())
+			.map(|(id, _)| id.as_str())
+			.collect();
+		if ids.is_empty() {
+			return Ok(Vec::new());
+		}
+		provider_source::Entity::update_many()
+			.col_expr(provider_source::Column::Enabled, Expr::value(false))
+			.col_expr(
+				provider_source::Column::UpdatedAt,
+				Expr::value(chrono::Utc::now().fixed_offset()),
+			)
+			.filter(provider_source::Column::Id.is_in(ids.iter().copied()))
+			.exec(self.conn.as_ref())
+			.await?;
+		tracing::warn!(
+			sources = ?ids,
+			"Disabled provider sources this build cannot construct; the failure of each is logged above"
+		);
+		Ok(ids.into_iter().map(str::to_string).collect())
 	}
 
 	/// Instantiate one `provider_sources` row: a compiled factory when the
@@ -444,7 +521,7 @@ impl ProviderHost {
 		drop(snapshot);
 		let definition = self
 			.definitions
-			.definition_for_pkg(&pkg)
+			.definition_for_pkg(&pkg, Some(&lang))
 			.await?
 			.ok_or(ProviderError::NotImplemented(pkg))?;
 		self.enable_definition(&definition, &lang, Some(catalog_id), created_by)
@@ -513,6 +590,16 @@ impl ProviderHost {
 		.await
 	}
 
+	/// Persist the row and register the instance it describes, or neither.
+	///
+	/// The build is the only thing that can tell whether this server can run
+	/// the source at all — a selector the engine does not implement, a theme
+	/// no engine claims, a schema from the future — and it needs the row to
+	/// build from (the base URL override and the operator's request headers
+	/// live there). So the row is written inside a transaction the failing
+	/// build rolls back: a source that cannot be built leaves no enabled row
+	/// (new) and does not touch the previous one (re-enable), instead of
+	/// leaving behind an enabled row the host skips on every boot.
 	#[allow(clippy::too_many_arguments)]
 	async fn enable_instance(
 		&self,
@@ -527,9 +614,8 @@ impl ProviderHost {
 		      + Send
 		      + Sync),
 	) -> Result<provider_source::Model, ProviderError> {
-		let existing = provider_source::Entity::find_by_id(id)
-			.one(self.conn.as_ref())
-			.await?;
+		let txn = models::txn::begin_write(self.conn.as_ref()).await?;
+		let existing = provider_source::Entity::find_by_id(id).one(&txn).await?;
 		let row = match existing {
 			Some(existing) => {
 				let mut active: provider_source::ActiveModel = existing.into();
@@ -537,7 +623,7 @@ impl ProviderHost {
 				active.catalog_id = Set(catalog_id.map(str::to_string));
 				active.name = Set(name.to_string());
 				active.base_url = Set(base_url.to_string());
-				active.update(self.conn.as_ref()).await?
+				active.update(&txn).await?
 			},
 			None => {
 				provider_source::ActiveModel {
@@ -555,11 +641,19 @@ impl ProviderHost {
 					created_by: Set(created_by.map(str::to_string)),
 					..Default::default()
 				}
-				.insert(self.conn.as_ref())
+				.insert(&txn)
 				.await?
 			},
 		};
-		self.register_source(build(&row)?);
+		let source = match build(&row) {
+			Ok(source) => source,
+			Err(error) => {
+				txn.rollback().await?;
+				return Err(error);
+			},
+		};
+		txn.commit().await?;
+		self.register_source(source);
 		Ok(row)
 	}
 
@@ -1114,6 +1208,19 @@ impl VirtualMediaResolver for ProviderHost {
 mod tests {
 	use super::*;
 
+	/// A host that reaches nothing: port 9 refuses every connection, so the
+	/// catalog and the definition index are unavailable the way they are on a
+	/// server without network.
+	fn offline_config(dir: &tempfile::TempDir) -> ProviderHostConfig {
+		ProviderHostConfig {
+			cache_dir: dir.path().to_path_buf(),
+			cache_max_bytes: u64::MAX,
+			catalog_url: Some("http://127.0.0.1:9/".to_string()),
+			definitions_url: Some("http://127.0.0.1:9/".to_string()),
+			virtual_series_ttl: Duration::from_secs(300),
+		}
+	}
+
 	#[test]
 	fn content_type_prefers_header_then_url_then_bytes() {
 		assert_eq!(
@@ -1177,13 +1284,7 @@ mod tests {
 			Arc::new(conn),
 			vec![factory],
 			Vec::new(),
-			ProviderHostConfig {
-				cache_dir: dir.path().to_path_buf(),
-				cache_max_bytes: u64::MAX,
-				catalog_url: Some("http://127.0.0.1:9/".to_string()),
-				definitions_url: Some("http://127.0.0.1:9/".to_string()),
-				virtual_series_ttl: Duration::from_secs(300),
-			},
+			offline_config(&dir),
 		)
 		.await
 		.unwrap();
@@ -1238,5 +1339,129 @@ mod tests {
 		};
 		assert_eq!(factory.instance_id("EN"), "mock-en");
 		assert_eq!(factory.instance_id(""), "mock-all");
+	}
+
+	/// Enabling a source this build cannot construct must persist nothing: an
+	/// enabled row the host cannot build resolves no page, yet the API lists
+	/// it as enabled and every boot logs the same failure.
+	#[tokio::test]
+	async fn a_failed_build_persists_nothing() {
+		use std::sync::atomic::{AtomicBool, Ordering};
+
+		/// Whether the factory refuses to build, standing in for a selector
+		/// no engine implements.
+		static FAILING: AtomicBool = AtomicBool::new(false);
+
+		let conn = Arc::new(::tests::db::test_database().await);
+		let dir = tempfile::tempdir().unwrap();
+		let factory = SourceFactory {
+			implementation: "mock",
+			name: "Mock",
+			catalog_pkg: "eu.kanade.tachiyomi.extension.all.mock",
+			base_url: "https://mock.test",
+			build: |row| {
+				if FAILING.load(Ordering::SeqCst) {
+					return Err(ProviderError::Other("unsupported selector".into()));
+				}
+				Ok(crate::mock::MockSource::with_id(&row.id))
+			},
+		};
+		let host = ProviderHost::open(
+			conn.clone(),
+			vec![factory],
+			Vec::new(),
+			offline_config(&dir),
+		)
+		.await
+		.unwrap();
+
+		// A source that never built leaves no row behind at all.
+		FAILING.store(true, Ordering::SeqCst);
+		let error = host
+			.enable_implementation("mock", "en", None)
+			.await
+			.expect_err("a source that cannot be built cannot be enabled");
+		assert!(matches!(error, ProviderError::Other(_)), "{error}");
+		assert!(provider_source::Entity::find_by_id("mock-en")
+			.one(conn.as_ref())
+			.await
+			.unwrap()
+			.is_none());
+		assert!(host.source("mock-en").is_err());
+
+		// A re-enable that cannot build leaves the previous row untouched.
+		FAILING.store(false, Ordering::SeqCst);
+		host.enable_implementation("mock", "en", None)
+			.await
+			.unwrap();
+		assert!(host.disable_source("mock-en").await.unwrap());
+		FAILING.store(true, Ordering::SeqCst);
+		host.enable_implementation("mock", "en", None)
+			.await
+			.expect_err("the build still fails");
+		let row = provider_source::Entity::find_by_id("mock-en")
+			.one(conn.as_ref())
+			.await
+			.unwrap()
+			.expect("the row a previous enable created survives");
+		assert!(!row.enabled, "a failed re-enable must not enable the row");
+		assert!(host.source("mock-en").is_err());
+	}
+
+	/// The rows an earlier build left enabled-but-unbuildable heal on the
+	/// next boot — but only when the failure is a verdict about the source.
+	#[tokio::test]
+	async fn boot_disables_unbuildable_rows_but_never_on_an_outage() {
+		let conn = Arc::new(::tests::db::test_database().await);
+		let dir = tempfile::tempdir().unwrap();
+		for id in ["broken-en", "en.nosuch"] {
+			provider_source::ActiveModel {
+				id: Set(id.to_string()),
+				implementation: Set(id.trim_end_matches("-en").to_string()),
+				name: Set(id.to_string()),
+				lang: Set("en".to_string()),
+				base_url: Set("https://mock.test".to_string()),
+				enabled: Set(true),
+				..Default::default()
+			}
+			.insert(conn.as_ref())
+			.await
+			.unwrap();
+		}
+		let broken = SourceFactory {
+			implementation: "broken",
+			name: "Broken",
+			catalog_pkg: "eu.kanade.tachiyomi.extension.all.broken",
+			base_url: "https://mock.test",
+			build: |_| Err(ProviderError::Other("unsupported selector".into())),
+		};
+		let host = ProviderHost::open(
+			conn.clone(),
+			vec![broken],
+			Vec::new(),
+			offline_config(&dir),
+		)
+		.await
+		.unwrap();
+		assert!(host.sources().is_empty());
+
+		let broken_row = provider_source::Entity::find_by_id("broken-en")
+			.one(conn.as_ref())
+			.await
+			.unwrap()
+			.expect("row survives");
+		assert!(!broken_row.enabled, "a row no engine can build is disabled");
+		// The definition index is unreachable, so nothing is known about the
+		// definition-backed row: disabling it would take out every such row
+		// on the first boot without network.
+		let definition_row = provider_source::Entity::find_by_id("en.nosuch")
+			.one(conn.as_ref())
+			.await
+			.unwrap()
+			.expect("row survives");
+		assert!(
+			definition_row.enabled,
+			"an unreachable definition index must not disable anything"
+		);
 	}
 }

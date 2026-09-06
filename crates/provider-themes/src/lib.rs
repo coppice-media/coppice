@@ -175,7 +175,7 @@ mod tests {
 		let broken = SourceDefinition {
 			knobs: [(
 				"chapter_list_selector".to_string(),
-				stump_provider::KnobValue::Text("li:nth-of-type(1)".into()),
+				stump_provider::KnobValue::Text("li:nth-last-of-type(1)".into()),
 			)]
 			.into_iter()
 			.collect(),

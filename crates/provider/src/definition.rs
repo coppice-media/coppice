@@ -131,11 +131,7 @@ impl SourceDefinition {
 	/// The Keiyoushi package this definition stands in for, so a catalog entry
 	/// can be matched to it.
 	pub fn pkg(&self) -> String {
-		if self.id.starts_with(PKG_PREFIX) {
-			self.id.clone()
-		} else {
-			format!("{PKG_PREFIX}{}", self.id)
-		}
+		pkg_of(&self.id)
 	}
 
 	/// Normalised base URL without a trailing slash.
@@ -212,11 +208,34 @@ pub struct DefinitionIndexEntry {
 
 impl DefinitionIndexEntry {
 	pub fn pkg(&self) -> String {
-		if self.id.starts_with(PKG_PREFIX) {
-			self.id.clone()
-		} else {
-			format!("{PKG_PREFIX}{}", self.id)
-		}
+		pkg_of(&self.id)
+	}
+
+	/// The package of the *extension* this definition is one source of, when
+	/// the id carries a trailing `.<lang>` disambiguator.
+	///
+	/// A multi-language extension declares several `source {}` blocks that
+	/// differ only in language, so the generator appends the language to keep
+	/// the ids unique (`all.seraphicdeviltry.en`, `all.seraphicdeviltry.es`).
+	/// The APK is still the one package `…extension.all.seraphicdeviltry`, so
+	/// without this the catalog entry has no definition and the source shows
+	/// as unimplemented.
+	pub fn pkg_without_lang(&self) -> Option<String> {
+		let stem = self
+			.id
+			.strip_suffix(self.lang.trim())
+			.filter(|_| !self.lang.trim().is_empty())?
+			.strip_suffix('.')
+			.filter(|stem| !stem.is_empty())?;
+		Some(pkg_of(stem))
+	}
+}
+
+fn pkg_of(id: &str) -> String {
+	if id.starts_with(PKG_PREFIX) {
+		id.to_string()
+	} else {
+		format!("{PKG_PREFIX}{id}")
 	}
 }
 
@@ -232,7 +251,39 @@ impl DefinitionIndex {
 	}
 
 	pub fn find_by_pkg(&self, pkg: &str) -> Option<&DefinitionIndexEntry> {
-		self.entries.iter().find(|entry| entry.pkg() == pkg)
+		self.find_by_pkg_lang(pkg, None)
+	}
+
+	/// The definition standing in for an extension package.
+	///
+	/// An id that *is* the package wins over one that only shares it after a
+	/// trailing `.<lang>` is stripped, so a single-source extension is never
+	/// shadowed by a multi-language sibling. `lang` picks the block of a
+	/// multi-language extension the caller means; without it, or when no
+	/// block carries it, the first match in index order is used.
+	pub fn find_by_pkg_lang(
+		&self,
+		pkg: &str,
+		lang: Option<&str>,
+	) -> Option<&DefinitionIndexEntry> {
+		let lang = lang.map(str::trim).filter(|lang| !lang.is_empty());
+		let pick = |exact: bool| {
+			let mut first = None;
+			for entry in self.entries.iter().filter(|entry| {
+				if exact {
+					entry.pkg() == pkg
+				} else {
+					entry.pkg_without_lang().as_deref() == Some(pkg)
+				}
+			}) {
+				if lang.is_some_and(|lang| entry.lang.eq_ignore_ascii_case(lang)) {
+					return Some(entry);
+				}
+				first = first.or(Some(entry));
+			}
+			first
+		};
+		pick(true).or_else(|| pick(false))
 	}
 
 	pub fn is_stale(&self, max_age: Duration) -> bool {
@@ -257,6 +308,26 @@ pub enum DefinitionError {
 	UnsupportedSchema { id: String, schema: u32 },
 	#[error("No theme engine implements `{theme}` (source `{id}`)")]
 	UnknownTheme { id: String, theme: String },
+}
+
+impl DefinitionError {
+	/// Whether the failure says nothing about the definition itself: the
+	/// index or the file could not be read (offline, no cache yet, a wiped
+	/// local directory), so the answer may differ on the next attempt.
+	///
+	/// [`DefinitionError::NotFound`] is counted here on purpose: it is
+	/// raised both for an id the index does not list *and* for a missing
+	/// `index.json` or definition file, and the two are indistinguishable
+	/// from the outside.
+	pub fn is_transient(&self) -> bool {
+		matches!(
+			self,
+			DefinitionError::Http(_)
+				| DefinitionError::Status { .. }
+				| DefinitionError::Io(_)
+				| DefinitionError::NotFound(_)
+		)
+	}
 }
 
 /// Builds a [`Source`] from a definition. One engine per `lib-multisrc` theme;
@@ -472,6 +543,10 @@ impl DefinitionLoader {
 
 	/// The definition standing in for a Keiyoushi package, if any.
 	///
+	/// `lang` is the language of the catalog source being resolved: a
+	/// multi-language extension has one definition per language, all sharing
+	/// the package ([`DefinitionIndex::find_by_pkg_lang`]).
+	///
 	/// An unreachable or missing index answers `Ok(None)`: the caller asked
 	/// "can anything drive this package", and "no definition repository" is the
 	/// same answer as "no definition for it". Naming an id explicitly
@@ -479,6 +554,7 @@ impl DefinitionLoader {
 	pub async fn definition_for_pkg(
 		&self,
 		pkg: &str,
+		lang: Option<&str>,
 	) -> Result<Option<Arc<SourceDefinition>>, DefinitionError> {
 		let index = match self.index().await {
 			Ok(index) => index,
@@ -491,7 +567,7 @@ impl DefinitionLoader {
 				return Ok(None);
 			},
 		};
-		let Some(entry) = index.find_by_pkg(pkg) else {
+		let Some(entry) = index.find_by_pkg_lang(pkg, lang) else {
 			return Ok(None);
 		};
 		let id = entry.id.clone();
@@ -657,6 +733,78 @@ mod tests {
 		assert_eq!(full.pkg(), "eu.kanade.tachiyomi.extension.en.example");
 	}
 
+	fn entry(id: &str, lang: &str) -> DefinitionIndexEntry {
+		DefinitionIndexEntry {
+			id: id.into(),
+			name: id.into(),
+			lang: lang.into(),
+			theme: "madara".into(),
+			nsfw: false,
+			version: 0,
+			file: format!("{lang}/{id}.json"),
+		}
+	}
+
+	/// A multi-language extension has one definition per language, all
+	/// standing in for the one APK package the catalog knows.
+	#[test]
+	fn a_package_matches_its_language_disambiguated_definitions() {
+		let index = DefinitionIndex {
+			fetched_at: Utc::now(),
+			entries: vec![
+				entry("all.seraphicdeviltry.en", "en"),
+				entry("all.seraphicdeviltry.es", "es"),
+				entry("all.allporncomicsco", "all"),
+			],
+		};
+		let pkg = "eu.kanade.tachiyomi.extension.all.seraphicdeviltry";
+
+		assert_eq!(
+			index
+				.find_by_pkg_lang(pkg, Some("es"))
+				.map(|e| e.id.as_str()),
+			Some("all.seraphicdeviltry.es")
+		);
+		// No language asked, or a language no block carries: the first block.
+		assert_eq!(
+			index.find_by_pkg(pkg).map(|e| e.id.as_str()),
+			Some("all.seraphicdeviltry.en")
+		);
+		assert_eq!(
+			index
+				.find_by_pkg_lang(pkg, Some("fr"))
+				.map(|e| e.id.as_str()),
+			Some("all.seraphicdeviltry.en")
+		);
+		// A single-source extension still matches exactly, and an id that is
+		// not a package of this repository matches nothing.
+		assert_eq!(
+			index
+				.find_by_pkg("eu.kanade.tachiyomi.extension.all.allporncomicsco")
+				.map(|e| e.id.as_str()),
+			Some("all.allporncomicsco")
+		);
+		assert!(index
+			.find_by_pkg("eu.kanade.tachiyomi.extension.all.seraphic")
+			.is_none());
+	}
+
+	/// An exact package match wins over a stripped one, so a single-source
+	/// extension is never shadowed by a multi-language sibling.
+	#[test]
+	fn an_exact_package_beats_a_stripped_one() {
+		let index = DefinitionIndex {
+			fetched_at: Utc::now(),
+			entries: vec![entry("all.site.en", "en"), entry("all.site", "all")],
+		};
+		assert_eq!(
+			index
+				.find_by_pkg_lang("eu.kanade.tachiyomi.extension.all.site", Some("en"))
+				.map(|e| e.id.as_str()),
+			Some("all.site")
+		);
+	}
+
 	#[test]
 	fn knob_lookup_falls_through_aliases_and_coerces() {
 		let mut definition = definition("madara");
@@ -800,7 +948,7 @@ mod tests {
 		assert_eq!(index.entries.len(), 1);
 
 		let definition = loader
-			.definition_for_pkg("eu.kanade.tachiyomi.extension.en.example")
+			.definition_for_pkg("eu.kanade.tachiyomi.extension.en.example", Some("en"))
 			.await
 			.unwrap()
 			.expect("definition for pkg");
@@ -808,7 +956,7 @@ mod tests {
 		assert_eq!(definition.base_url(), "https://example.com");
 
 		assert!(loader
-			.definition_for_pkg("eu.kanade.tachiyomi.extension.en.missing")
+			.definition_for_pkg("eu.kanade.tachiyomi.extension.en.missing", None)
 			.await
 			.unwrap()
 			.is_none());

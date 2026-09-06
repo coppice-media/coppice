@@ -633,7 +633,7 @@ mod tests {
 
 		definition.knobs.insert(
 			"chapter_list_selector".into(),
-			KnobValue::Text(":nth-of-type(2)".into()),
+			KnobValue::Text(":nth-last-of-type(2)".into()),
 		);
 		let error =
 			selector(&definition, "chapter_list_selector", &[], "li").unwrap_err();

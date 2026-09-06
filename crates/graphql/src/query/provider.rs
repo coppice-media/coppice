@@ -92,9 +92,9 @@ impl ProviderQuery {
 					continue;
 				}
 				let factory = host.factory_for_pkg(&entry.pkg);
-				let definition = definitions
-					.as_ref()
-					.and_then(|index| index.find_by_pkg(&entry.pkg));
+				let definition = definitions.as_ref().and_then(|index| {
+					index.find_by_pkg_lang(&entry.pkg, Some(&source.lang))
+				});
 				entries.push(ProviderCatalogEntry {
 					id: source.id.clone(),
 					name: source.name.clone(),

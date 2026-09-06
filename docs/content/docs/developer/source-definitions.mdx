@@ -141,6 +141,14 @@ one name and differs only there (`all.seraphicdeviltry.en`,
 `all.seraphicdeviltry.es`) — else the 1-based block index (`zh.foo.2`). A
 single-source extension keeps the bare `<pkg suffix>`.
 
+The Keiyoushi catalog knows only the extension's package, so the server matches
+a definition to it by package first and then, for the language-discriminated
+form, with the trailing `.<lang>` stripped; the catalog source's own language
+picks the block (`DefinitionIndex::find_by_pkg_lang`). The name-slug and
+block-index forms are not stripped — the substring before them is not
+necessarily a package — so those sources are enabled by id
+(`enableProviderSource(implementation:)`) rather than from a catalog entry.
+
 ## Output layout
 
 ```

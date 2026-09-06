@@ -219,6 +219,33 @@ impl Document {
 			.unwrap_or(1)
 	}
 
+	/// 1-based position of `id` among the element siblings that share its tag
+	/// name, and how many of them there are — the `:*-of-type` family.
+	///
+	/// A node with no parent, and any non-element node, is `(1, 1)`: it is
+	/// the only one of its type, which is what jsoup's `:first-of-type` and
+	/// `:last-of-type` answer for a root element.
+	pub fn type_position(&self, id: NodeId) -> (u32, u32) {
+		let Some(name) = self.node(id).element().map(|element| &element.name) else {
+			return (1, 1);
+		};
+		let Some(parent) = self.parent(id) else {
+			return (1, 1);
+		};
+		let mut position = 0;
+		let mut total = 0;
+		for sibling in self.element_children(parent) {
+			if self.node(sibling).element().map(|element| &element.name) != Some(name) {
+				continue;
+			}
+			total += 1;
+			if sibling == id {
+				position = total;
+			}
+		}
+		(position, total)
+	}
+
 	pub fn ancestors(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
 		Ancestors {
 			document: self,
