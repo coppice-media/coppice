@@ -6,6 +6,22 @@
 //! expire after roughly fifteen minutes. Image fetches from MangaDex@Home
 //! nodes are reported to `https://api.mangadex.network/report` as the network
 //! rules require. API calls share one limiter at MangaDex's 5 requests/second.
+//!
+//! Three `ChapterAttributes` fields decide whether a feed entry can be read
+//! at all (<https://api.mangadex.org/docs/static/api.yaml>):
+//!
+//! | Field | Spec text | Meaning here |
+//! | --- | --- | --- |
+//! | `externalUrl` | "Denotes a chapter that links to an external source." | licensed away; `/at-home/server` has nothing to serve |
+//! | `pages` | "Count of readable images for this chapter" | `0` means there is no image to fetch |
+//! | `isUnavailable` | `boolean` | the chapter is listed but withheld |
+//!
+//! Any of them makes [`RemoteChapter::readable`] `false`, because
+//! `/at-home/server/{chapterId}` answers `404 Not Found` for such chapters
+//! and a materialised row would only produce pages that 404.
+//!
+//! Decisions, upstream pins, and verification steps:
+//! `crates/provider-mangadex/README.md`.
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
@@ -13,9 +29,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use stump_provider::{
-	FetchedPage, ProviderError, RateLimiter, RemoteChapter, RemotePage, RemoteSeries,
-	SearchFilter, SeriesStatus, Source, SourceCapabilities, SourceFactory, SourceHttp,
-	SourceInfo, SourcePage, SourceResult,
+	ContentRating, FetchedPage, ProviderError, RateLimiter, RemoteChapter, RemotePage,
+	RemoteSeries, SearchFilter, SeriesStatus, Source, SourceCapabilities, SourceFactory,
+	SourceHttp, SourceInfo, SourcePage, SourceResult,
 };
 
 pub const IMPLEMENTATION: &str = "mangadex";
@@ -254,12 +270,13 @@ impl Source for MangaDexSource {
 			}
 			let response: ChapterListResponse = self.http.get_json(&url, &query).await?;
 			let received = response.data.len() as u32;
+			// Unreadable chapters are flagged, not dropped: the host reports
+			// how many of a title's chapters this source cannot serve, and
+			// `externalUrl` is where a reader could go instead.
 			chapters.extend(
 				response
 					.data
 					.into_iter()
-					// Externally hosted chapters cannot be read through the API.
-					.filter(|chapter| chapter.attributes.external_url.is_none())
 					.map(|chapter| chapter.into_remote(SITE_URL)),
 			);
 			offset += received;
@@ -454,6 +471,13 @@ impl From<Manga> for RemoteSeries {
 			.filter(|tag| matches!(tag.attributes.group.as_str(), "genre" | "theme" | ""))
 			.filter_map(|tag| preferred(&tag.attributes.name, "en"))
 			.collect();
+		let content_rating = match attributes.content_rating.as_deref() {
+			Some("safe") => Some(ContentRating::Safe),
+			Some("suggestive") => Some(ContentRating::Suggestive),
+			Some("erotica") => Some(ContentRating::Erotica),
+			Some("pornographic") => Some(ContentRating::Pornographic),
+			_ => None,
+		};
 		RemoteSeries {
 			url: Some(format!("{SITE_URL}/title/{}", manga.id)),
 			thumbnail_url: cover
@@ -469,10 +493,11 @@ impl From<Manga> for RemoteSeries {
 				Some("cancelled") => SeriesStatus::Cancelled,
 				_ => SeriesStatus::Unknown,
 			},
-			nsfw: matches!(
-				attributes.content_rating.as_deref(),
-				Some("erotica") | Some("pornographic")
-			),
+			// `MangaAttributes.contentRating`: safe | suggestive | erotica |
+			// pornographic. `nsfw` stays the adult-only projection Mihon
+			// exposes; the full rating drives `series_metadata.age_rating`.
+			content_rating,
+			nsfw: content_rating.is_some_and(ContentRating::is_adult),
 			original_language: attributes.original_language,
 			// Only bare ids from registries that name the same work across
 			// sources; MangaDex also stores per-site URLs under `links`.
@@ -526,11 +551,23 @@ struct ChapterAttributes {
 	pages: Option<u32>,
 	#[serde(default)]
 	publish_at: Option<DateTime<Utc>>,
+	/// "Denotes a chapter that links to an external source."
 	#[serde(default)]
 	external_url: Option<String>,
+	/// Set when MangaDex lists the chapter but withholds it.
+	#[serde(default)]
+	is_unavailable: bool,
 }
 
 impl Chapter {
+	/// Whether `/at-home/server/{id}` can be expected to answer with a page
+	/// manifest for this chapter.
+	fn readable(attributes: &ChapterAttributes) -> bool {
+		attributes.external_url.is_none()
+			&& !attributes.is_unavailable
+			&& attributes.pages.is_some_and(|pages| pages > 0)
+	}
+
 	fn into_remote(self, site_url: &str) -> RemoteChapter {
 		let scanlator =
 			self.relationships
@@ -543,6 +580,8 @@ impl Chapter {
 				});
 		RemoteChapter {
 			url: Some(format!("{site_url}/chapter/{}", self.id)),
+			readable: Self::readable(&self.attributes),
+			external_url: self.attributes.external_url,
 			title: self
 				.attributes
 				.title
@@ -714,21 +753,114 @@ mod tests {
 		assert_eq!(server.request_count(&query), 1);
 	}
 
+	/// The defect behind "Series does not have a thumbnail": the cover has to
+	/// survive the *list* path, not just `/manga/{id}`, because Mode B
+	/// materialises a series straight out of a browse response.
 	#[tokio::test]
-	async fn chapters_follow_feed_pagination_and_skip_external() {
-		let chapter = |id: &str, number: &str, external: Option<&str>| {
+	async fn list_search_and_detail_queries_all_carry_the_cover() {
+		let cover = "17fe4455-0f9a-4bf6-a2fa-b60ac0d4dc09.jpg";
+		let mut manga = manga_json(MANGA_ID);
+		manga["attributes"]["contentRating"] = serde_json::json!("suggestive");
+		manga["relationships"] = serde_json::json!([
+			{"id": "c1", "type": "cover_art", "attributes": {"fileName": cover}}
+		]);
+		let list = serde_json::json!({
+			"result": "ok",
+			"data": [manga.clone()],
+			"limit": 20,
+			"offset": 0,
+			"total": 1
+		});
+		let detail = serde_json::json!({"result": "ok", "data": manga});
+		let includes =
+			"includes%5B%5D=cover_art&includes%5B%5D=author&includes%5B%5D=artist";
+		let ratings = "contentRating%5B%5D=safe&contentRating%5B%5D=suggestive&contentRating%5B%5D=erotica&contentRating%5B%5D=pornographic";
+		let popular = format!("/manga?limit=20&offset=0&{includes}&availableTranslatedLanguage%5B%5D=en&{ratings}&order%5BfollowedCount%5D=desc");
+		let server = MockServer::spawn(vec![]).await;
+		server.set_route(&popular, CannedResponse::json(list.to_string()));
+		server.set_route(
+			&format!("/manga/{MANGA_ID}?{includes}"),
+			CannedResponse::json(detail.to_string()),
+		);
+		let source = server_source(&server);
+
+		let expected = format!("{COVER_URL}/{MANGA_ID}/{cover}.512.jpg");
+		let browsed = source.popular(1).await.unwrap();
+		assert_eq!(
+			browsed.items[0].thumbnail_url.as_deref(),
+			Some(expected.as_str()),
+			"the browse response carries the cover"
+		);
+		let detailed = source.details(MANGA_ID).await.unwrap();
+		assert_eq!(detailed.thumbnail_url.as_deref(), Some(expected.as_str()));
+
+		// `includes[]=cover_art` is what makes the relationship present at
+		// all; without it MangaDex returns a bare `cover_art` reference.
+		for query in [
+			source.manga_query(1, ("followedCount", "desc")),
+			source.manga_query(1, ("relevance", "desc")),
+		] {
+			assert!(query
+				.iter()
+				.any(|(key, value)| *key == "includes[]" && value == "cover_art"));
+		}
+	}
+
+	/// `contentRating` reaches `RemoteSeries::content_rating`, which is what
+	/// materialisation projects onto `series_metadata.age_rating`.
+	#[test]
+	fn content_rating_maps_every_documented_value() {
+		let rating_of = |value: serde_json::Value| {
+			let mut manga = manga_json(MANGA_ID);
+			manga["attributes"]["contentRating"] = value;
+			let series: RemoteSeries =
+				serde_json::from_value::<Manga>(manga).unwrap().into();
+			(series.content_rating, series.nsfw)
+		};
+		assert_eq!(
+			rating_of(serde_json::json!("safe")),
+			(Some(ContentRating::Safe), false)
+		);
+		assert_eq!(
+			rating_of(serde_json::json!("suggestive")),
+			(Some(ContentRating::Suggestive), false)
+		);
+		assert_eq!(
+			rating_of(serde_json::json!("erotica")),
+			(Some(ContentRating::Erotica), true)
+		);
+		assert_eq!(
+			rating_of(serde_json::json!("pornographic")),
+			(Some(ContentRating::Pornographic), true)
+		);
+		// An absent or unknown rating is no rating, never a guess.
+		assert_eq!(rating_of(serde_json::Value::Null), (None, false));
+		assert_eq!(rating_of(serde_json::json!("brand-new")), (None, false));
+	}
+
+	/// The feed is paged in full and every entry is returned; the three
+	/// `ChapterAttributes` fields that make a chapter unreadable are
+	/// projected onto `readable`/`external_url` instead of being dropped, so
+	/// the host can report what it skipped.
+	#[tokio::test]
+	async fn chapters_follow_feed_pagination_and_flag_unreadable() {
+		let chapter = |id: &str, number: &str, attributes: serde_json::Value| {
+			let mut base = serde_json::json!({
+				"volume": "1",
+				"chapter": number,
+				"title": format!("Chapter {number}"),
+				"translatedLanguage": "en",
+				"pages": 12,
+				"publishAt": "2024-01-02T03:04:05+00:00"
+			});
+			let object = base.as_object_mut().expect("attributes object");
+			for (key, value) in attributes.as_object().expect("overrides") {
+				object.insert(key.clone(), value.clone());
+			}
 			serde_json::json!({
 				"id": id,
 				"type": "chapter",
-				"attributes": {
-					"volume": "1",
-					"chapter": number,
-					"title": format!("Chapter {number}"),
-					"translatedLanguage": "en",
-					"pages": 12,
-					"publishAt": "2024-01-02T03:04:05+00:00",
-					"externalUrl": external
-				},
+				"attributes": base,
 				"relationships": [
 					{"id": "g1", "type": "scanlation_group", "attributes": {"name": "Asura"}}
 				]
@@ -739,17 +871,25 @@ mod tests {
 		);
 		let first = serde_json::json!({
 			"result": "ok",
-			"data": [chapter("c2", "2", None), chapter("cx", "1.5", Some("https://external"))],
+			"data": [
+				chapter("c2", "2", serde_json::json!({})),
+				chapter("cx", "1.8", serde_json::json!({
+					"externalUrl": "https://kmanga.kodansha.com/title/1/episode/2",
+					"pages": 0
+				})),
+				chapter("cz", "1.6", serde_json::json!({"pages": 0})),
+				chapter("cu", "1.4", serde_json::json!({"isUnavailable": true})),
+			],
 			"limit": 500,
 			"offset": 0,
-			"total": 3
+			"total": 5
 		});
 		let second = serde_json::json!({
 			"result": "ok",
-			"data": [chapter("c1", "1", None)],
+			"data": [chapter("c1", "1", serde_json::json!({}))],
 			"limit": 500,
-			"offset": 2,
-			"total": 3
+			"offset": 4,
+			"total": 5
 		});
 		let server = MockServer::spawn(vec![]).await;
 		server.set_route(
@@ -757,25 +897,50 @@ mod tests {
 			CannedResponse::json(first.to_string()),
 		);
 		server.set_route(
-			&base.replace("{offset}", "2"),
+			&base.replace("{offset}", "4"),
 			CannedResponse::json(second.to_string()),
 		);
 		let source = server_source(&server);
 
 		let chapters = source.chapters(MANGA_ID).await.unwrap();
-		assert_eq!(chapters.len(), 2);
-		assert_eq!(chapters[0].remote_id, "c2");
-		assert_eq!(chapters[0].number, Some(2.0));
-		assert_eq!(chapters[0].volume.as_deref(), Some("1"));
-		assert_eq!(chapters[0].scanlator.as_deref(), Some("Asura"));
-		assert_eq!(chapters[0].page_count, Some(12));
-		assert_eq!(chapters[0].lang.as_deref(), Some("en"));
 		assert_eq!(
-			chapters[0].uploaded_at.map(|at| at.to_rfc3339()),
+			chapters
+				.iter()
+				.map(|chapter| (chapter.remote_id.as_str(), chapter.readable))
+				.collect::<Vec<_>>(),
+			vec![
+				("c2", true),
+				("cx", false),
+				("cz", false),
+				("cu", false),
+				("c1", true),
+			],
+			"every feed entry is returned, unreadable ones flagged"
+		);
+		assert_eq!(
+			chapters[1].external_url.as_deref(),
+			Some("https://kmanga.kodansha.com/title/1/episode/2"),
+			"an externally hosted chapter names where it lives"
+		);
+		assert_eq!(chapters[1].page_count, None);
+		assert_eq!(chapters[2].external_url, None, "zero pages is not external");
+		assert_eq!(
+			chapters[3].page_count,
+			Some(12),
+			"`isUnavailable` withholds a chapter that claims pages"
+		);
+
+		let readable = &chapters[0];
+		assert_eq!(readable.number, Some(2.0));
+		assert_eq!(readable.volume.as_deref(), Some("1"));
+		assert_eq!(readable.scanlator.as_deref(), Some("Asura"));
+		assert_eq!(readable.page_count, Some(12));
+		assert_eq!(readable.lang.as_deref(), Some("en"));
+		assert_eq!(
+			readable.uploaded_at.map(|at| at.to_rfc3339()),
 			Some("2024-01-02T03:04:05+00:00".to_string())
 		);
-		assert_eq!(chapters[0].display_name(), "Vol. 1 Ch. 2 - Chapter 2");
-		assert_eq!(chapters[1].remote_id, "c1");
+		assert_eq!(readable.display_name(), "Vol. 1 Ch. 2 - Chapter 2");
 	}
 
 	#[tokio::test]

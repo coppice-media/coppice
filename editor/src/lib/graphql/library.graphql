@@ -87,3 +87,18 @@ mutation MatchLibraryMedia($mediaIds: [ID!]!, $providers: [String!]) {
 		phase
 	}
 }
+
+mutation ApplyBestIngestMetadata($mediaId: ID!) {
+	applyBestIngestMetadata(mediaId: $mediaId) {
+		media {
+			id
+		}
+		decisions {
+			field
+			strategy
+			outcome
+			providers
+			applied
+		}
+	}
+}

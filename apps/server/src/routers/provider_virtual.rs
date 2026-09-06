@@ -27,6 +27,41 @@ pub fn provider_host(ctx: &Ctx) -> Option<Arc<ProviderHost>> {
 	ctx.provider_host()
 }
 
+/// Whether `user`'s age restriction admits a row rated `age_rating`.
+///
+/// Stored rows are filtered in SQL by
+/// [`series::Entity::find_for_user`](models::entity::series::Entity), which
+/// compares `series_metadata.age_rating` against the user's
+/// `age_restrictions` row. A live-browse row has no `series_metadata` to
+/// join, so the identical rule is applied to the remote rating here —
+/// before the title can be listed, opened, or materialised.
+pub fn age_restriction_allows(user: &AuthUser, age_rating: Option<i32>) -> bool {
+	let Some(restriction) = user.age_restriction.as_ref() else {
+		return true;
+	};
+	match age_rating {
+		Some(rating) => rating <= restriction.age,
+		// `restrict_on_unset` is the "unrated means hidden" switch stored
+		// rows already honour.
+		None => !restriction.restrict_on_unset,
+	}
+}
+
+/// The age rating a remote series would materialise with, so live rows carry
+/// the same value the stored row will.
+pub fn remote_age_rating(remote: &RemoteSeries, adult_source: bool) -> Option<i32> {
+	stump_provider::materialize::age_rating(remote, adult_source)
+}
+
+/// Whether the catalog marks the source instance as adult. Stump has no
+/// library-level age rating, so this is applied per series.
+pub async fn source_is_adult(ctx: &Ctx, source_id: &str) -> bool {
+	match provider_host(ctx) {
+		Some(host) => host.source_is_adult(source_id).await,
+		None => false,
+	}
+}
+
 /// The enabled source instance backing a virtual library, if the host can
 /// serve it. `None` for ordinary libraries or disabled sources.
 pub async fn virtual_library_source(ctx: &Ctx, library_id: &str) -> Option<String> {
@@ -84,10 +119,15 @@ pub async fn browse_page(
 /// (`uuid5(source, remote_id)`); no rows are written for it. The book count
 /// is unknown until the series is materialised, so live cards report zero
 /// books.
+///
+/// `adult_source` is the catalog's NSFW flag for the source, so the card's
+/// `ageRating` matches what materialisation will store and per-user age
+/// restriction filters the same way on both.
 pub fn map_remote_series(
 	source_id: &str,
 	library_id: &str,
 	remote: &RemoteSeries,
+	adult_source: bool,
 ) -> KomgaSeries {
 	let stump_id = virtual_path::series_id(source_id, &remote.remote_id);
 	let now = chrono::Utc::now();
@@ -131,7 +171,7 @@ pub fn map_remote_series(
 			reading_direction_lock: false,
 			publisher: String::new(),
 			publisher_lock: false,
-			age_rating: remote.nsfw.then_some(18),
+			age_rating: remote_age_rating(remote, adult_source),
 			age_rating_lock: false,
 			language: remote.original_language.clone(),
 			language_lock: false,
@@ -187,8 +227,9 @@ async fn user_can_access_library(ctx: &Ctx, user: &AuthUser, library_id: &str) -
 /// Live details for a series id that is not materialised.
 ///
 /// Returns `None` when the id belongs to a stored (or non-provider) series
-/// and the ordinary database path should serve it, or when the user cannot
-/// see the virtual library the id was browsed from.
+/// and the ordinary database path should serve it, when the user cannot see
+/// the virtual library the id was browsed from, or when the user's age
+/// restriction hides the remote rating.
 pub async fn virtual_series_by_id(
 	ctx: &Ctx,
 	user: &AuthUser,
@@ -206,10 +247,15 @@ pub async fn virtual_series_by_id(
 		.remote_series_details(&origin.source_id, &origin.remote_id)
 		.await
 		.ok()?;
+	let adult_source = host.source_is_adult(&origin.source_id).await;
+	if !age_restriction_allows(user, remote_age_rating(&details, adult_source)) {
+		return None;
+	}
 	Some(map_remote_series(
 		&origin.source_id,
 		&origin.library_id,
 		&details,
+		adult_source,
 	))
 }
 
@@ -217,7 +263,8 @@ pub async fn virtual_series_by_id(
 ///
 /// * `None` — a row already exists (materialised or ordinary; the caller's
 ///   per-user database path decides visibility), the id was never served
-///   by a live browse, or the user cannot see the virtual library.
+///   by a live browse, the user cannot see the virtual library, or the
+///   user's age restriction hides the remote rating.
 /// * `Some(Ok(row))` — the series row now exists under the deterministic id.
 /// * `Some(Err(_))` — the source fetch failed.
 pub async fn materialise_virtual_series(
@@ -234,6 +281,16 @@ pub async fn materialise_virtual_series(
 	if !user_can_access_library(ctx, user, &origin.library_id).await {
 		return None;
 	}
+	// A restricted title must not be materialised either: writing the rows
+	// is how a user would otherwise reach its books.
+	let details = host
+		.remote_series_details(&origin.source_id, &origin.remote_id)
+		.await
+		.ok()?;
+	let adult_source = host.source_is_adult(&origin.source_id).await;
+	if !age_restriction_allows(user, remote_age_rating(&details, adult_source)) {
+		return None;
+	}
 	Some(
 		host.materialise_series(&origin.library_id, &origin.source_id, &origin.remote_id)
 			.await
@@ -243,20 +300,23 @@ pub async fn materialise_virtual_series(
 }
 
 /// Cover bytes for a provider-backed series, whether materialised or
-/// live-only. `None` for non-provider series.
+/// live-only. `None` for non-provider series, and for any series the user's
+/// library filter or age restriction hides.
 pub async fn virtual_series_cover(
 	ctx: &Ctx,
 	user: &AuthUser,
 	series_id: &str,
 ) -> Option<Result<(ContentType, Vec<u8>), String>> {
-	let stored = series::Entity::find_for_user(user)
-		.filter(series::Column::Id.eq(series_id))
-		.one(ctx.conn.as_ref())
-		.await
-		.ok()
-		.flatten();
 	let host = provider_host(ctx)?;
-	if let Some(row) = stored {
+	// A stored row that `find_for_user` filtered out must not fall through to
+	// the live path: the browse cache would happily serve its cover.
+	if series_exists(ctx, series_id).await {
+		let row = series::Entity::find_for_user(user)
+			.filter(series::Column::Id.eq(series_id))
+			.one(ctx.conn.as_ref())
+			.await
+			.ok()
+			.flatten()?;
 		let (Some(source_id), Some(remote_id)) =
 			(row.source_provider.clone(), row.remote_id.clone())
 		else {
@@ -270,6 +330,14 @@ pub async fn virtual_series_cover(
 	}
 	let origin = host.virtual_series_origin(series_id)?;
 	if !user_can_access_library(ctx, user, &origin.library_id).await {
+		return None;
+	}
+	let details = host
+		.remote_series_details(&origin.source_id, &origin.remote_id)
+		.await
+		.ok()?;
+	let adult_source = host.source_is_adult(&origin.source_id).await;
+	if !age_restriction_allows(user, remote_age_rating(&details, adult_source)) {
 		return None;
 	}
 	Some(

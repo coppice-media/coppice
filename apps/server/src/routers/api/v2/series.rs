@@ -84,6 +84,25 @@ async fn get_series_thumbnail_handler(
 		}
 	}
 
+	// A provider-backed series has no local file to render a thumbnail from,
+	// so its source cover is the thumbnail. An uploaded one still wins, which
+	// is why this sits after the saved-thumbnail attempt above.
+	#[cfg(feature = "providers")]
+	if let Some(cover) =
+		crate::routers::provider_virtual::virtual_series_cover(&ctx, &user, &id).await
+	{
+		match cover {
+			Ok((content_type, bytes)) => {
+				return Ok(ImageResponse::new(content_type, bytes))
+			},
+			Err(error) => tracing::warn!(
+				error,
+				series = id,
+				"Provider series cover failed; falling back to the first book"
+			),
+		}
+	}
+
 	let first_book = media::Entity::find_for_user(&user)
 		.filter(media::Column::SeriesId.eq(series.id.clone()))
 		.order_by_asc(media::Column::Name)

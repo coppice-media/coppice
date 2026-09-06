@@ -1454,6 +1454,16 @@ enum IngestAnalysisPhase {
 }
 
 """
+Result of applying a library's policy to one target: the same payload the
+hand-picked apply returns, plus the per-field explanation.
+"""
+type IngestApplyBestPayload {
+	dropItem: IngestDropItem
+	media: Media
+	decisions: [MetadataPolicyDecision!]!
+}
+
+"""
 Result of `applyIngestMetadata`: exactly one side is set, depending on
 whether the input targeted a drop item or a library media row.
 """
@@ -2653,6 +2663,90 @@ input MetadataFieldOverride {
 	value: JSON!
 }
 
+"One field's effective rule."
+type MetadataFieldPolicy {
+	field: MetadataField!
+	"""
+	Provider ids in priority order. Empty means no provider may fill this
+	field.
+	"""
+	providers: [String!]!
+	strategy: MetadataPolicyStrategy!
+	"Whether a field the user locked is left alone."
+	lockRespected: Boolean!
+	"""
+	`true` when this rule comes from the library's override rather than
+	the server default.
+	"""
+	overridden: Boolean!
+	"""
+	`false` for the candidate-only fields the staged apply path has no
+	column for (`COVER`, `LINKS`, `STATUS`): the policy still resolves
+	them, and the editor shows the winner, but applying writes nothing.
+	"""
+	storable: Boolean!
+}
+
+input MetadataFieldPolicyInput {
+	field: MetadataField!
+	"""
+	Provider ids in priority order. An empty list means no provider may
+	fill this field.
+	"""
+	providers: [String!]!
+	strategy: MetadataPolicyStrategy!
+	"""
+	Leave a user-locked field alone. Defaults to `true`; turning it off is
+	how a library says "the policy outranks my locks for this field".
+	"""
+	lockRespected: Boolean! = true
+}
+
+"""
+The effective policy of one library: the server default with the library's
+override applied, one row per field the policy vocabulary has.
+"""
+type MetadataPolicy {
+	libraryId: ID!
+	"`true` when the library stores its own override document."
+	hasLibraryOverride: Boolean!
+	fields: [MetadataFieldPolicy!]!
+}
+
+"One field's resolution during an \"apply best\" run."
+type MetadataPolicyDecision {
+	field: MetadataField!
+	strategy: MetadataPolicyStrategy!
+	outcome: MetadataPolicyOutcome!
+	"Providers that contributed, in the order they were used."
+	providers: [String!]!
+	"Whether this decision wrote anything."
+	applied: Boolean!
+}
+
+input MetadataPolicyInput {
+	"The complete override. Empty clears the library override."
+	fields: [MetadataFieldPolicyInput!]!
+}
+
+"What the policy decided for one field of one book."
+enum MetadataPolicyOutcome {
+	CANDIDATE
+	MERGED
+	KEPT
+	LOCKED
+	UNMATCHED
+}
+
+"How the offers of the allowed providers for one field combine."
+enum MetadataPolicyStrategy {
+	FIRST
+	MERGE_UNION
+	LONGEST
+	PREFER_EXISTING
+	HIGHEST_RESOLUTION
+}
+
 "The supported external metadata providers"
 enum MetadataProvider {
 	"Hardcover (https://hardcover.app)"
@@ -3125,6 +3219,18 @@ type Mutation {
 	verifyIngestProvider(providerId: String!, settings: JSON): ProviderCredentialVerification!
 	lookupIngestCandidate(dropItemId: ID!, providerId: String!, externalId: String!): IngestMetadataCandidate!
 	setIngestQualityCheckSettings(input: SetIngestQualityCheckSettingsInput!): IngestQualityCheckSettings!
+	"""
+	Replace (or, with an empty field list, clear) a library's per-field
+	metadata policy override and return the resulting effective policy.
+	"""
+	setMetadataPolicy(libraryId: ID!, input: MetadataPolicyInput!): MetadataPolicy!
+	"""
+	Apply the library's metadata policy to one target: the same resolver
+	auto-apply uses, exposed for the editor's "apply best" action. Every
+	field the user locked is left alone, and the per-field explanation
+	comes back with the payload.
+	"""
+	applyBestIngestMetadata(dropItemId: ID, mediaId: ID): IngestApplyBestPayload!
 	"""
 	Approve a pending pairing and bind it to the calling user. Proof of
 	possession is either the 6-digit `code` shown on the device or the `nonce`
@@ -3925,6 +4031,12 @@ type Query {
 	`matchLibraryMedia` run.
 	"""
 	ingestMediaMetadataCandidates(mediaId: ID!): [IngestMetadataCandidate!]!
+	"""
+	The effective per-field metadata policy for one library: the server
+	default with the library's stored override applied, one row per field
+	the policy vocabulary covers.
+	"""
+	metadataPolicy(libraryId: ID!): MetadataPolicy!
 	"""
 	Pairings waiting for approval, oldest first. Pending pairings are not yet
 	owned by anyone, so every user allowed to create device credentials sees

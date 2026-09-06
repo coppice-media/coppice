@@ -50,12 +50,107 @@ Every route that takes a `seriesId` (`/api/Series/{id}`, `volumes`, `series-deta
 | Volume | One per media item, in Kavita's single-file-volume shape: `minNumber == maxNumber == number`, one chapter. Grouped: the number is the media metadata volume, else an integral metadata number, else the media's 1-based position in name order. Book: the loose-leaf volume `-100000` (`Parser.LooseLeafVolumeNumber`; `name: "-100000"`), as Kavita builds for a file that carries no volume. |
 | Chapter | The media item again with the same id as its volume (`volumeId == chapterId`), `number: "-100000"` / `minNumber: -100000` (`Parser.DefaultChapterNumber`), one `MangaFileDto` (`extension` with the leading dot, `koreaderHash`). Grouped: `isSpecial: false`, `range` the file name, `sortOrder` the volume number, `totalCount: 0`. Book: `isSpecial: true`, `range` and `title` the title (file name when the file has none, `titleName` then empty), `sortOrder: -100000`, `count: 0`, `totalCount: 1`, `volumeTitle: ""`, `publicationStatus: 0` (`book_volumes_4`). |
 | Series detail | Grouped: `volumes` in volume order, `specials`/`chapters`/`storylineChapters` empty. Book: the chapter under `specials`, `volumes` empty, `totalCount: 1`, `unreadCount` `1` while unread, `libraryType` `2`/`4` (`book_series_detail_4`, `lightnovel_series_detail_6`). |
-| Series metadata | Grouped: from the series metadata (summary, genres, people, age rating, release year, language, `totalIssues` as `maxCount`/`totalCount`, free-text status). Book: from the media metadata (summary, genres, every people role, age rating, `releaseYear` = year, language), `maxCount: 1`, `totalCount: 1`, `publicationStatus: 2` (Completed — Kavita's scanner marks a series whose count matches its max complete), no tags (`book_metadata_4`). |
-| People, genres | Kavita entities with ids; Stump stores comma-separated text. Ids are a stable FNV-1a hash of the lower-cased name (`mapper::name_id`) and round-trip through `Metadata/genres`, `Metadata/people` and the series filters. Tags use Stump's real tag ids; books carry none. |
+| Series metadata | Grouped: the union of the series metadata row and the metadata of **every** media item under it, the way `SeriesMetadataService` recomputes a series from its chapters. Book: from that one media's metadata, `maxCount: 1`, `totalCount: 1`, `publicationStatus: 2` (Completed — Kavita's scanner marks a series whose count matches its max complete) (`book_metadata_4`). See [Metadata mapping](#metadata-mapping). |
+| People, genres | Kavita entities with ids; Stump stores comma-separated text. Ids are a stable FNV-1a hash of the lower-cased name (`mapper::name_id`) and round-trip through `Metadata/genres`, `Metadata/people` and the series filters. Tags use Stump's real tag ids (`tags.id`), so a tag chip a client taps filters correctly whether the tag sits on the series row or on a file. |
 | Age rating | Stump's minimum age mapped onto the closest `AgeRating` (`AgeRating::from_min_age`). |
 | Publication status | Grouped: Stump's free-text status folded onto `PublicationStatus` (`ongoing`/`continuing` `0`, `hiatus` `1`, `completed` `2`, `cancelled` `3`, `ended` `4`). Book: always `2`. |
 
 Timestamps render as .NET `DateTime` strings without an offset and with seven fractional digits (`2026-09-05T00:30:44.5870451`); unset values are `0001-01-01T00:00:00`. Local and UTC pairs (`created`/`createdUtc`) both carry the UTC instant. Whole floats render without a fractional part (`100000`, not `100000.0`).
+
+## Metadata mapping
+
+Kavita's `SeriesMetadataService` recomputes a series' metadata from **every chapter under it**, so `GET /api/Series/metadata` here is the union of the Stump `series_metadata` row and the `media_metadata` of every media item backing the series: values are ordered by first appearance (series row first, then the files in volume order) and de-duplicated case-insensitively. Scalars prefer the series row and fall back to the files. A book series is one file presented as its own series, so it takes that file's metadata alone.
+
+This is what the clients render. Kamigura's series detail shows `summary`, the eight credit roles it merges into one "Credits" chip row (`writers`, `coverArtists`, `pencillers`, `inkers`, `colorists`, `letterers`, `editors`, `translators` — `series/internal/SeriesDetailSummary.kt:265-284`), `publishers` and `imprints` under "Publisher" (`:104-105,182-193`), `genres` (`:106-110,248-253`) and `tags` (`:111-115,254-259`), plus `releaseYear` and `publicationStatus` in its meta lines (`series/internal/SeriesMetadataText.kt:24-28,133-142`). Its issue sheet shows the chapter's `volumeTitle`/`titleName`/`title` (`series/IssueDetailSideSheet.kt:381-397`), `releaseDate` (`series/internal/ChapterText.kt:31-37`), `pages` and `summary` (`series/IssueDetailSideSheet.kt:173-174,199`).
+
+### Series metadata (`GET /api/Series/metadata`)
+
+Stump columns are `crates/models/src/entity/series_metadata.rs` and `crates/models/src/entity/media_metadata.rs`; every list column is comma-separated text.
+
+| Kavita field | Stump source | Notes |
+| --- | --- | --- |
+| `id`, `seriesId` | the Kavita series id | Kavita reports the same id twice |
+| `summary` | `series_metadata.summary`, else `series.description` | Book: `media_metadata.summary` |
+| `genres[]` | `series_metadata.genres` ∪ every `media_metadata.genres` | ids are `mapper::name_id` |
+| `tags[]` | `series_tags` ∪ every media's `media_tags` | ids are the real `tags.id` |
+| `writers[]` | `series_metadata.writers` ∪ `media_metadata.writers` | |
+| `publishers[]` | `series_metadata.publisher` ∪ `media_metadata.publisher` | |
+| `characters[]` | `series_metadata.characters` ∪ `media_metadata.characters` | |
+| `imprints[]` | `series_metadata.imprint` | no media column; a book's imprints are therefore empty |
+| `coverArtists[]` | `media_metadata.cover_artists` | no series column |
+| `pencillers[]` | `media_metadata.pencillers` | no series column |
+| `inkers[]` | `media_metadata.inkers` | no series column |
+| `colorists[]` | `media_metadata.colorists` | no series column |
+| `letterers[]` | `media_metadata.letterers` | no series column |
+| `editors[]` | `media_metadata.editors` | no series column |
+| `teams[]` | `media_metadata.teams` | no series column |
+| `translators[]` | — | **always empty**: Stump records no translator |
+| `locations[]` | — | **always empty**: Stump records no location |
+| `ageRating` | `series_metadata.age_rating`, else the **largest** `media_metadata.age_rating` | Stump stores minimum ages, so the largest is Kavita's strictest chapter |
+| `releaseYear` | `series_metadata.year`, else the **smallest** positive `media_metadata.year` | the series started with its earliest-dated file; `0` when nothing carries a year |
+| `language` | `series_metadata.language`, else the first file that names one | |
+| `maxCount`, `totalCount` | `series_metadata.total_issues` (both) | Stump stores ComicInfo `Count` once per series |
+| `publicationStatus` | `series_metadata.status`, folded onto the enum | Book: always `2` (Completed) |
+| `webLinks` | `series_metadata.links` verbatim | Kavita's own field is one comma-separated string |
+| `*Locked`, `releaseYearLocked` | `series_metadata.locked_fields` | see [Lock mapping](#lock-mapping) |
+
+### Chapter metadata (`GET /api/Series/chapter`, `series-detail`, `Series/volumes`)
+
+A chapter is one media item, so every field comes from that file's `media_metadata` — never from the series row.
+
+| Kavita field | Stump source | Notes |
+| --- | --- | --- |
+| `title` | `media_metadata.title`, else the file name | |
+| `titleName` | `media_metadata.title` | `""` when the file has no metadata title, as `kavita-ref` reports for a bare CBZ |
+| `range` | the file name; book: the title | |
+| `summary` | `media_metadata.summary` | `null` when unset |
+| `genres[]` | `media_metadata.genres` | |
+| `tags[]` | that media's `media_tags` | |
+| `writers[]` … `teams[]` | the same `media_metadata` columns as above | `imprints`, `translators` and `locations` are always empty here (no media column) |
+| `ageRating` | `media_metadata.age_rating` | |
+| `releaseDate` | `media_metadata.year`/`month`/`day` | month and day default to `1`; no year renders `0001-01-01T00:00:00` |
+| `language` | `media_metadata.language` | |
+| `isbn` | `media_metadata.identifier_isbn` | `""` when unset |
+| `webLinks` | `media_metadata.links` | |
+| `count` | — | `0`: Stump has no per-file issue index |
+| `totalCount` | — | `1` for a book (`kavita-ref` `book_volumes_4`), otherwise `0` — Stump keeps ComicInfo `Count` only on the series (`series_metadata.total_issues`), and `kavita-ref` reports `0` for an archive that carries none |
+| `wordCount`, `min`/`max`/`avgHoursToRead` | — | `0`: Stump computes no word counts |
+| `publicationStatus` | — | `0` (Ongoing), the value Kavita's chapter default carries |
+| `volumeTitle` | — | `""`: Stump volumes have no name of their own |
+| `coverImageLocked` | — | `false` |
+| `*Locked` | `media_metadata.locked_fields` | plus `releaseDateLocked` ← `RELEASE_DATE`, `titleNameLocked` ← `TITLE`, `sortOrderLocked` ← `NUMBER` |
+
+### Lock mapping
+
+Stump's `locked_fields` is a JSON array of `MetadataField` names (`crates/integrations/metadata/src/types/enums.rs`); Kavita flattens one `*Locked` boolean per field into both DTOs. A malformed or absent array locks nothing.
+
+| Kavita flag | Stump `MetadataField` |
+| --- | --- |
+| `summaryLocked` | `SUMMARY` |
+| `genresLocked` | `GENRES` |
+| `tagsLocked` | `TAGS` |
+| `ageRatingLocked` | `AGE_RATING` |
+| `publicationStatusLocked` | `STATUS` |
+| `releaseYearLocked` | `YEAR` |
+| `writerLocked` | `WRITERS` |
+| `characterLocked` | `CHARACTERS` |
+| `coloristLocked` | `COLORISTS` |
+| `editorLocked` | `EDITORS` |
+| `inkerLocked` | `INKERS` |
+| `imprintLocked` | `IMPRINT` |
+| `lettererLocked` | `LETTERERS` |
+| `pencillerLocked` | `PENCILLERS` |
+| `publisherLocked` | `PUBLISHER` |
+| `teamLocked` | `TEAMS` |
+| `coverArtistLocked` | `COVER_ARTISTS` |
+| `languageLocked` | `series_metadata.language_lock` **or** `LANGUAGE` |
+| `releaseDateLocked` (chapter) | `RELEASE_DATE` |
+| `titleNameLocked` (chapter) | `TITLE` |
+| `sortOrderLocked` (chapter) | `NUMBER` |
+| `translatorLocked`, `locationLocked` | — (always `false`: Stump has neither field) |
+
+Because a Kavita series' `tags` list is the union of the series row and its files, `Series.Tags` filters match either side and `GET /api/Metadata/tags` lists both — a tag chip a client renders always selects the series it was rendered on.
+
 
 ## Reading progress
 

@@ -1,7 +1,13 @@
-use models::entity::user::AuthUser;
 use sea_orm::{ConnectionTrait, DatabaseConnection, Statement, Value};
+
+#[cfg(feature = "web")]
+use models::entity::user::AuthUser;
+#[cfg(feature = "web")]
 use tower_sessions::Session;
 
+/// Persist the viewer back into the session cookie after `updateViewerPreferences`
+/// rewrites the cached preferences.
+#[cfg(feature = "web")]
 pub async fn save_user_session(session: &Session, user: AuthUser) {
 	if let Err(error) = session.insert("user", user).await {
 		tracing::error!(?error, "Failed to save user session");

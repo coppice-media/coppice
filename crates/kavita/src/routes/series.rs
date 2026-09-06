@@ -11,8 +11,7 @@ use axum::{
 	Extension, Json, Router,
 };
 use models::entity::{
-	kavita_on_deck_removal, library_config, media, series, series_tag, tag,
-	user::AuthUser,
+	kavita_on_deck_removal, library_config, media, series, user::AuthUser,
 };
 use sea_orm::{prelude::*, Order, QueryOrder, QuerySelect};
 use serde::Deserialize;
@@ -21,7 +20,7 @@ use stump_auth::AuthContext;
 use crate::{
 	dto::{
 		ChapterDto, GroupedSeriesDto, PaginationHeader, RefreshSeriesDto, SeriesByIdsDto,
-		SeriesDetailDto, SeriesDto, SeriesMetadataDto, TagDto, VolumeDto,
+		SeriesDetailDto, SeriesDto, SeriesMetadataDto, VolumeDto,
 	},
 	errors::{APIError, APIResult},
 	filter::SeriesFilterV2Dto,
@@ -818,29 +817,6 @@ pub(crate) async fn list_volumes(
 		.collect())
 }
 
-async fn series_tags(ctx: &dyn KavitaBackend, series_id: &str) -> APIResult<Vec<TagDto>> {
-	let rows = tag::Entity::find()
-		.filter(
-			tag::Column::Id.in_subquery(
-				sea_orm::sea_query::Query::select()
-					.column(series_tag::Column::TagId)
-					.from(series_tag::Entity)
-					.and_where(series_tag::Column::SeriesId.eq(series_id))
-					.to_owned(),
-			),
-		)
-		.order_by_asc(tag::Column::Name)
-		.all(ctx.conn())
-		.await?;
-	Ok(rows
-		.into_iter()
-		.map(|tag| TagDto {
-			id: tag.id,
-			title: tag.name,
-		})
-		.collect())
-}
-
 /// Kavita answers `204 No Content` for an unknown series here.
 async fn series_metadata(
 	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
@@ -854,12 +830,7 @@ async fn series_metadata(
 	else {
 		return Ok(StatusCode::NO_CONTENT.into_response());
 	};
-	// Tags are a Stump series feature; a book carries none.
-	let tags = match input.book() {
-		Some(_) => Vec::new(),
-		None => series_tags(ctx.as_ref(), &input.series.id).await?,
-	};
-	let dto: SeriesMetadataDto = map_series_metadata(&input, tags);
+	let dto: SeriesMetadataDto = map_series_metadata(&input);
 	Ok(Json(dto).into_response())
 }
 
@@ -1718,5 +1689,269 @@ mod maintenance {
 		.await;
 		assert_eq!(status, StatusCode::OK);
 		assert_eq!(backend.enqueued().len(), before);
+	}
+}
+
+/// The metadata every Kavita client renders. Kamigura's series detail shows
+/// `summary`, the eight credit roles it merges into "Credits"
+/// (`series/internal/SeriesDetailSummary.kt:265-284`), `publishers` and
+/// `imprints` (`:104-105`), `genres` (`:106-110`) and `tags` (`:111-115`),
+/// plus `releaseYear`/`publicationStatus`
+/// (`series/internal/SeriesMetadataText.kt:24-28`), so all of them have to be
+/// filled from whichever Stump row carries the value.
+#[cfg(test)]
+mod metadata_mapping {
+	use super::*;
+	use crate::dto::{AgeRating, PublicationStatus};
+	use crate::filter::{FilterComparison, SeriesFilterField, SeriesFilterStatementDto};
+	use crate::test_support::{
+		auth_user, db, library_of_type, request, series_with_files, TestBackend,
+	};
+	use ::tests::fake_data;
+	use models::entity::{media_metadata, media_tag, series_metadata, series_tag, tag};
+	use models::shared::enums::LibraryType as StumpLibraryType;
+	use sea_orm::ActiveValue::Set;
+
+	async fn tag_id(conn: &sea_orm::DatabaseConnection, name: &str) -> i32 {
+		tag::ActiveModel {
+			name: Set(name.to_owned()),
+			kind: Set("tag".to_owned()),
+			..Default::default()
+		}
+		.insert(conn)
+		.await
+		.unwrap()
+		.id
+	}
+
+	fn names(value: &serde_json::Value, field: &str) -> Vec<String> {
+		value[field]
+			.as_array()
+			.unwrap_or_else(|| panic!("{field} is an array"))
+			.iter()
+			.map(|person| person["name"].as_str().unwrap().to_owned())
+			.collect()
+	}
+
+	fn titles(value: &serde_json::Value, field: &str) -> Vec<String> {
+		value[field]
+			.as_array()
+			.unwrap_or_else(|| panic!("{field} is an array"))
+			.iter()
+			.map(|row| row["title"].as_str().unwrap().to_owned())
+			.collect()
+	}
+
+	#[tokio::test]
+	async fn series_metadata_aggregates_the_series_row_and_every_file() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("reader").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let library = library_of_type(&conn, StumpLibraryType::Manga).await;
+		let (series, files) = series_with_files(
+			&conn,
+			&library.id,
+			"Berserk",
+			&[("Berserk v01", "cbz", 200), ("Berserk v02", "cbz", 210)],
+		)
+		.await;
+
+		series_metadata::ActiveModel {
+			series_id: Set(series.id.clone()),
+			genres: Set(Some("Fantasy".to_owned())),
+			writers: Set(Some("Kentaro Miura".to_owned())),
+			imprint: Set(Some("Jets Comics".to_owned())),
+			status: Set(Some("Ended".to_owned())),
+			total_issues: Set(Some(41)),
+			links: Set(Some("https://example.test/berserk".to_owned())),
+			locked_fields: Set(Some(serde_json::json!(["GENRES", "YEAR"]))),
+			language_lock: Set(true),
+			title_sort_lock: Set(false),
+			reading_direction_lock: Set(false),
+			alternate_titles_lock: Set(false),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+
+		// The credits a Komf session writes into each file's ComicInfo.
+		media_metadata::ActiveModel {
+			media_id: Set(Some(files[0].id.clone())),
+			volume: Set(Some(1)),
+			genres: Set(Some("Dark Fantasy, Horror".to_owned())),
+			writers: Set(Some("Kentaro Miura".to_owned())),
+			pencillers: Set(Some("Kentaro Miura".to_owned())),
+			inkers: Set(Some("Studio Gaga".to_owned())),
+			colorists: Set(Some("Studio Gaga".to_owned())),
+			letterers: Set(Some("Duncan Fredoo".to_owned())),
+			editors: Set(Some("Dark Horse".to_owned())),
+			cover_artists: Set(Some("Kentaro Miura".to_owned())),
+			characters: Set(Some("Guts, Griffith".to_owned())),
+			teams: Set(Some("Band of the Hawk".to_owned())),
+			publisher: Set(Some("Hakusensha".to_owned())),
+			language: Set(Some("ja".to_owned())),
+			age_rating: Set(Some(18)),
+			year: Set(Some(1990)),
+			identifier_isbn: Set(Some("9781593070205".to_owned())),
+			summary: Set(Some("The Black Swordsman.".to_owned())),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+		media_metadata::ActiveModel {
+			media_id: Set(Some(files[1].id.clone())),
+			volume: Set(Some(2)),
+			// `horror` repeats the first file's genre in another case.
+			genres: Set(Some("horror".to_owned())),
+			writers: Set(Some("Ghost Writer".to_owned())),
+			year: Set(Some(1991)),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+
+		let classic = tag_id(&conn, "Classic").await;
+		let tagged_by_komf = tag_id(&conn, "Komf Tagged").await;
+		series_tag::ActiveModel {
+			series_id: Set(series.id.clone()),
+			tag_id: Set(classic),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+		media_tag::ActiveModel {
+			media_id: Set(files[0].id.clone()),
+			tag_id: Set(tagged_by_komf),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+
+		let backend = std::sync::Arc::new(TestBackend::new(conn));
+		let series_kavita_id =
+			KavitaIds::resolve_many(&backend.conn, IdKind::Series, &[series.id.clone()])
+				.await
+				.unwrap()[&series.id];
+		let chapter_id =
+			KavitaIds::resolve_many(&backend.conn, IdKind::Media, &[files[0].id.clone()])
+				.await
+				.unwrap()[&files[0].id];
+
+		let (status, body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/metadata?seriesId={series_kavita_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(
+			titles(&body, "genres"),
+			["Fantasy", "Dark Fantasy", "Horror"],
+			"series row first, then each file, one entry per value"
+		);
+		assert_eq!(names(&body, "writers"), ["Kentaro Miura", "Ghost Writer"]);
+		assert_eq!(names(&body, "pencillers"), ["Kentaro Miura"]);
+		assert_eq!(names(&body, "inkers"), ["Studio Gaga"]);
+		assert_eq!(names(&body, "colorists"), ["Studio Gaga"]);
+		assert_eq!(names(&body, "letterers"), ["Duncan Fredoo"]);
+		assert_eq!(names(&body, "editors"), ["Dark Horse"]);
+		assert_eq!(names(&body, "coverArtists"), ["Kentaro Miura"]);
+		assert_eq!(names(&body, "characters"), ["Guts", "Griffith"]);
+		assert_eq!(names(&body, "teams"), ["Band of the Hawk"]);
+		assert_eq!(names(&body, "publishers"), ["Hakusensha"]);
+		assert_eq!(names(&body, "imprints"), ["Jets Comics"]);
+		assert!(names(&body, "translators").is_empty());
+		assert!(names(&body, "locations").is_empty());
+		assert_eq!(titles(&body, "tags"), ["Classic", "Komf Tagged"]);
+		assert_eq!(
+			body["ageRating"],
+			serde_json::to_value(AgeRating::R18Plus).unwrap()
+		);
+		assert_eq!(body["releaseYear"], serde_json::json!(1990));
+		assert_eq!(body["language"], serde_json::json!("ja"));
+		assert_eq!(body["maxCount"], serde_json::json!(41));
+		assert_eq!(body["totalCount"], serde_json::json!(41));
+		assert_eq!(
+			body["publicationStatus"],
+			serde_json::to_value(PublicationStatus::Ended).unwrap()
+		);
+		assert_eq!(
+			body["webLinks"],
+			serde_json::json!("https://example.test/berserk")
+		);
+		assert_eq!(body["genresLocked"], serde_json::json!(true));
+		assert_eq!(body["releaseYearLocked"], serde_json::json!(true));
+		assert_eq!(body["languageLocked"], serde_json::json!(true));
+		assert_eq!(body["tagsLocked"], serde_json::json!(false));
+
+		// The chapter carries its own file's metadata, tags included.
+		let (status, chapter) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/chapter?chapterId={chapter_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(names(&chapter, "writers"), ["Kentaro Miura"]);
+		assert_eq!(titles(&chapter, "genres"), ["Dark Fantasy", "Horror"]);
+		assert_eq!(titles(&chapter, "tags"), ["Komf Tagged"]);
+		assert_eq!(chapter["isbn"], serde_json::json!("9781593070205"));
+		assert_eq!(chapter["summary"], serde_json::json!("The Black Swordsman."));
+		assert_eq!(chapter["language"], serde_json::json!("ja"));
+		assert_eq!(
+			chapter["releaseDate"],
+			serde_json::json!("1990-01-01T00:00:00.0000000")
+		);
+
+		// A tag chip a client taps filters by its id, so a tag that reached
+		// the series through a file has to match the series too.
+		for id in [classic, tagged_by_komf] {
+			let filter = SeriesFilterV2Dto {
+				statements: vec![SeriesFilterStatementDto::new(
+					FilterComparison::Contains,
+					SeriesFilterField::Tags,
+					id.to_string(),
+				)],
+				..Default::default()
+			};
+			let found = list_series(
+				backend.as_ref(),
+				&user,
+				&filter,
+				UserParams::parse(""),
+				None,
+				None,
+			)
+			.await
+			.unwrap()
+			.0;
+			assert_eq!(
+				found.iter().map(|dto| dto.id).collect::<Vec<_>>(),
+				[series_kavita_id],
+				"tag {id} must select the series it is rendered on"
+			);
+		}
+
+		// `GET /api/Metadata/tags` backs the filter sheet, so it lists both.
+		let (status, tags) =
+			request(backend.clone(), &user, "GET", "/api/Metadata/tags", None).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(
+			tags.as_array()
+				.unwrap()
+				.iter()
+				.map(|tag| tag["title"].as_str().unwrap())
+				.collect::<Vec<_>>(),
+			["Classic", "Komf Tagged"]
+		);
 	}
 }

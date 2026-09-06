@@ -9,7 +9,8 @@
 use std::collections::{HashMap, HashSet};
 
 use models::entity::{
-	kavita_on_deck_removal, library, library_config, media, series, user::AuthUser,
+	kavita_on_deck_removal, library, library_config, media, media_tag, series,
+	series_tag, tag, user::AuthUser,
 };
 use sea_orm::{
 	prelude::*,
@@ -18,6 +19,7 @@ use sea_orm::{
 };
 
 use crate::{
+	dto::TagDto,
 	errors::APIResult,
 	ids::{IdKind, KavitaIds, LOOKUP_CHUNK},
 	mapper::{sort_media, MediaInput, SeriesInput, SeriesKind, BOOK_LIBRARY_TYPES},
@@ -377,6 +379,8 @@ pub(crate) async fn load_series_inputs(
 	let media_kavita_ids =
 		KavitaIds::resolve_many(conn, IdKind::Media, &media_ids).await?;
 	let mut sessions = latest_sessions(conn, user, &media_ids).await?;
+	let mut media_tags = load_media_tags(ctx, &media_ids).await?;
+	let mut series_tags = load_series_tags(ctx, &series_ids).await?;
 
 	let mut media_by_series: HashMap<String, Vec<MediaInput>> = HashMap::new();
 	for row in media_rows {
@@ -388,6 +392,7 @@ pub(crate) async fn load_series_inputs(
 		entry.push(MediaInput {
 			id: media_kavita_ids[&row.media.id],
 			session: sessions.remove(&row.media.id),
+			tags: media_tags.remove(&row.media.id).unwrap_or_default(),
 			media: row.media,
 			metadata: row.metadata,
 			ordinal,
@@ -407,6 +412,7 @@ pub(crate) async fn load_series_inputs(
 					.get(library_id)
 					.map(|library| library.name.clone())
 					.unwrap_or_default(),
+				tags: series_tags.remove(&row.series.id).unwrap_or_default(),
 				series: row.series,
 				metadata: row.metadata,
 				media,
@@ -473,6 +479,7 @@ pub(crate) async fn load_book_inputs(
 	let media_kavita_ids =
 		KavitaIds::resolve_many(conn, IdKind::Media, &media_ids).await?;
 	let mut sessions = latest_sessions(conn, user, &media_ids).await?;
+	let mut media_tags = load_media_tags(ctx, &media_ids).await?;
 
 	Ok(rows
 		.into_iter()
@@ -487,11 +494,15 @@ pub(crate) async fn load_book_inputs(
 					.get(library_id)
 					.map(|library| library.name.clone())
 					.unwrap_or_default(),
+				// A book series is the file, not the Stump series row it is
+				// filed under, so its tags come from the file.
+				tags: Vec::new(),
 				series,
 				metadata: None,
 				media: vec![MediaInput {
 					id: media_kavita_ids[&row.media.id],
 					session: sessions.remove(&row.media.id),
+					tags: media_tags.remove(&row.media.id).unwrap_or_default(),
 					media: row.media,
 					metadata: row.metadata,
 					ordinal: 1,
@@ -520,6 +531,84 @@ async fn load_libraries(
 	let kavita_ids =
 		KavitaIds::resolve_many(ctx.conn(), IdKind::Library, &library_ids).await?;
 	Ok((libraries, kavita_ids))
+}
+
+/// The tags attached to each series, keyed by Stump series id and ordered by
+/// tag name. Ids stay the Stump `tags.id` the `Series.Tags` filter and
+/// `GET /api/Metadata/tags` round-trip.
+async fn load_series_tags(
+	ctx: &dyn KavitaBackend,
+	series_ids: &[String],
+) -> APIResult<HashMap<String, Vec<TagDto>>> {
+	let mut links = Vec::new();
+	for chunk in series_ids.chunks(LOOKUP_CHUNK) {
+		links.extend(
+			series_tag::Entity::find()
+				.filter(series_tag::Column::SeriesId.is_in(chunk.to_vec()))
+				.all(ctx.conn())
+				.await?
+				.into_iter()
+				.map(|link| (link.series_id, link.tag_id)),
+		);
+	}
+	group_tags(ctx, links).await
+}
+
+/// The tags attached to each media item, keyed by Stump media id and ordered
+/// by tag name.
+async fn load_media_tags(
+	ctx: &dyn KavitaBackend,
+	media_ids: &[String],
+) -> APIResult<HashMap<String, Vec<TagDto>>> {
+	let mut links = Vec::new();
+	for chunk in media_ids.chunks(LOOKUP_CHUNK) {
+		links.extend(
+			media_tag::Entity::find()
+				.filter(media_tag::Column::MediaId.is_in(chunk.to_vec()))
+				.all(ctx.conn())
+				.await?
+				.into_iter()
+				.map(|link| (link.media_id, link.tag_id)),
+		);
+	}
+	group_tags(ctx, links).await
+}
+
+/// Resolve `(entity id, tag id)` links to per-entity `TagDto` lists.
+async fn group_tags(
+	ctx: &dyn KavitaBackend,
+	links: Vec<(String, i32)>,
+) -> APIResult<HashMap<String, Vec<TagDto>>> {
+	if links.is_empty() {
+		return Ok(HashMap::new());
+	}
+	let mut tag_ids = links.iter().map(|(_, tag_id)| *tag_id).collect::<Vec<_>>();
+	tag_ids.sort_unstable();
+	tag_ids.dedup();
+	let mut names: HashMap<i32, String> = HashMap::with_capacity(tag_ids.len());
+	for chunk in tag_ids.chunks(LOOKUP_CHUNK) {
+		names.extend(
+			tag::Entity::find()
+				.filter(tag::Column::Id.is_in(chunk.to_vec()))
+				.all(ctx.conn())
+				.await?
+				.into_iter()
+				.map(|row| (row.id, row.name)),
+		);
+	}
+	let mut tags: HashMap<String, Vec<TagDto>> = HashMap::new();
+	for (entity_id, tag_id) in links {
+		if let Some(name) = names.get(&tag_id) {
+			tags.entry(entity_id).or_default().push(TagDto {
+				id: tag_id,
+				title: name.clone(),
+			});
+		}
+	}
+	for entity_tags in tags.values_mut() {
+		entity_tags.sort_by(|left, right| left.title.cmp(&right.title));
+	}
+	Ok(tags)
 }
 
 /// Load the Kavita series holding the media behind a Kavita volume/chapter

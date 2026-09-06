@@ -123,7 +123,7 @@ pub use drm::{detect_drm, DrmContainer, DrmReport, DrmScheme};
 pub use error::FileError;
 pub use hash::{
 	dhash_image, generate, generate_koreader_hash, hamming, page_dhash,
-	HASH_SAMPLE_COUNT, HASH_SAMPLE_SIZE,
+	DUPLICATE_PAGE_TOLERANCE, HASH_SAMPLE_COUNT, HASH_SAMPLE_SIZE,
 };
 pub use image::{
 	generate_image_metadata, generate_image_metadata_from_bytes, into_image_format,

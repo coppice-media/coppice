@@ -2,12 +2,8 @@ use crate::{
 	data::CoreContext,
 	error_message::FORBIDDEN_ACTION,
 	guard::{OptionalFeature, OptionalFeatureGuard, PermissionGuard, ServerOwnerGuard},
-	input::user::{
-		AgeRestrictionInput, CreateUserInput, NavigationArrangementInput,
-		UpdateUserInput, UpdateUserPreferencesInput,
-	},
-	object::{user::User, user_preferences::UserPreferences},
-	utils::save_user_session,
+	input::user::{AgeRestrictionInput, CreateUserInput, UpdateUserInput},
+	object::user::User,
 };
 use async_graphql::{Context, Object, Result, Upload, ID};
 use chrono::Utc;
@@ -16,11 +12,9 @@ use models::{
 	entity::{
 		age_restriction, session,
 		user::{self, AuthUser},
-		user_login_activity, user_preferences,
+		user_login_activity,
 	},
-	shared::{
-		arrangement::Arrangement, enums::UserPermission, permission_set::PermissionSet,
-	},
+	shared::{enums::UserPermission, permission_set::PermissionSet},
 };
 use sea_orm::{
 	prelude::*, ActiveValue::NotSet, ColumnTrait, DatabaseTransaction, IntoActiveModel,
@@ -29,6 +23,16 @@ use sea_orm::{
 use std::{io::Read, path::Path};
 use stump_core::config::StumpConfig;
 use stump_media::generate_image_metadata_from_bytes;
+
+#[cfg(feature = "web")]
+use crate::{
+	input::user::{NavigationArrangementInput, UpdateUserPreferencesInput},
+	object::user_preferences::UserPreferences,
+	utils::save_user_session,
+};
+#[cfg(feature = "web")]
+use models::{entity::user_preferences, shared::arrangement::Arrangement};
+#[cfg(feature = "web")]
 use tower_sessions::Session;
 
 #[derive(Default)]
@@ -289,6 +293,7 @@ impl UserMutation {
 		Ok(updated_user)
 	}
 
+	#[cfg(feature = "web")]
 	async fn update_viewer_preferences(
 		&self,
 		ctx: &Context<'_>,
@@ -448,6 +453,7 @@ impl UserMutation {
 		Ok(User::from(updated_user))
 	}
 
+	#[cfg(feature = "web")]
 	async fn update_navigation_arrangement_lock(
 		&self,
 		ctx: &Context<'_>,
@@ -481,6 +487,7 @@ impl UserMutation {
 		Ok(updated_arrangement)
 	}
 
+	#[cfg(feature = "web")]
 	async fn update_navigation_arrangement(
 		&self,
 		ctx: &Context<'_>,
@@ -532,6 +539,7 @@ async fn remove_all_session_for_user(
 	Ok(removed_sessions)
 }
 
+#[cfg(feature = "web")]
 async fn update_user_preferences_by_id(
 	id: i32,
 	user_id: String,

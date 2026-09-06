@@ -48,6 +48,7 @@ pub(crate) async fn db() -> sea_orm::DatabaseConnection {
 		schema.create_table_from_entity(models::entity::collection_series::Entity),
 		schema.create_table_from_entity(models::entity::tag::Entity),
 		schema.create_table_from_entity(models::entity::series_tag::Entity),
+		schema.create_table_from_entity(models::entity::media_tag::Entity),
 	] {
 		// Some of these already ship in the shared entity fixture; creating
 		// the rest must not depend on which.
@@ -150,13 +151,19 @@ pub(crate) enum EnqueuedJob {
 }
 
 /// A [`KavitaBackend`] answering every persistence need from an in-memory
-/// database; the file-backed methods are never reached by the route tests.
+/// database. The file-backed methods answer for the media items a test
+/// registered with [`TestBackend::store_file`] and are "unreachable" for
+/// every other row, which is how the routes that never serve files see them.
 pub(crate) struct TestBackend {
 	pub conn: sea_orm::DatabaseConnection,
 	/// The EPUB structure the `Book` routes see; `None` means "not a book".
 	pub book_structure: Option<KavitaBookStructure>,
 	/// Jobs the routes enqueued, in order.
 	pub jobs: std::sync::Mutex<Vec<EnqueuedJob>>,
+	/// Real files behind media ids, for the download and reader routes.
+	files: std::sync::Mutex<std::collections::HashMap<String, std::path::PathBuf>>,
+	/// Keeps the temporary directory holding those files alive.
+	file_root: tempfile::TempDir,
 }
 
 impl TestBackend {
@@ -165,12 +172,32 @@ impl TestBackend {
 			conn,
 			book_structure: None,
 			jobs: std::sync::Mutex::new(Vec::new()),
+			files: std::sync::Mutex::new(std::collections::HashMap::new()),
+			file_root: tempfile::tempdir().expect("temp dir"),
 		}
 	}
 
 	/// The jobs enqueued so far, in order.
 	pub fn enqueued(&self) -> Vec<EnqueuedJob> {
 		self.jobs.lock().expect("job log").clone()
+	}
+
+	/// Write `contents` to a real file and bind it to `media_id`; returns the
+	/// path to store on the media row.
+	pub fn store_file(&self, media_id: &str, file_name: &str, contents: &[u8]) -> String {
+		let path = self.file_root.path().join(media_id);
+		std::fs::create_dir_all(&path).expect("media dir");
+		let path = path.join(file_name);
+		std::fs::write(&path, contents).expect("media file");
+		self.files
+			.lock()
+			.expect("file map")
+			.insert(media_id.to_owned(), path.clone());
+		path.to_string_lossy().into_owned()
+	}
+
+	fn file_for(&self, media_id: &str) -> Option<std::path::PathBuf> {
+		self.files.lock().expect("file map").get(media_id).cloned()
 	}
 }
 
@@ -282,15 +309,37 @@ impl KavitaBackend for TestBackend {
 		)))
 	}
 
+	/// Serves a registered file through the very service the server uses
+	/// (`tower_http::services::ServeFile`), so a route test sees the real
+	/// `Range`/`Content-Length` behaviour of a download.
 	async fn serve_media_file(
 		&self,
 		_auth: stump_auth::AuthContext,
-		_headers: HeaderMap,
+		headers: HeaderMap,
 		media_id: &str,
 	) -> APIResult<Response<Body>> {
-		Err(APIError::NotFound(format!(
-			"unreachable in tests: {media_id}"
-		)))
+		let path = self.file_for(media_id).ok_or_else(|| {
+			APIError::NotFound(format!("unreachable in tests: {media_id}"))
+		})?;
+		let mut request = axum::http::Request::new(Body::empty());
+		*request.headers_mut() = headers;
+		tower_http::services::ServeFile::new(path)
+			.try_call(request)
+			.await
+			.map(|response| response.map(Body::new))
+			.map_err(|error| APIError::InternalServerError(error.to_string()))
+	}
+
+	/// The registered file's bytes; a media item without one (a
+	/// provider-backed row) gets deterministic stand-in bytes, so a route
+	/// test can tell "the generated archive was served" from "the archive
+	/// was refused".
+	async fn media_bytes(&self, _user: &AuthUser, media_id: &str) -> APIResult<Vec<u8>> {
+		match self.file_for(media_id) {
+			Some(path) => std::fs::read(path)
+				.map_err(|error| APIError::InternalServerError(error.to_string())),
+			None => Ok(format!("archive:{media_id}").into_bytes()),
+		}
 	}
 
 	async fn book_structure(

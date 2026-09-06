@@ -12,7 +12,7 @@ use futures_util::{stream, StreamExt};
 use sea_orm::prelude::DateTimeWithTimeZone;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use stump_core::ingest::contract::AnalysisPhase;
+use stump_ingest::contract::AnalysisPhase;
 
 use crate::{config::state::AppState, middleware::auth::auth_middleware};
 
@@ -44,7 +44,7 @@ struct IngestSsePayload {
 }
 
 impl IngestSsePayload {
-	fn from_stored(event: stump_core::ingest::progress::StoredProgressEvent) -> Self {
+	fn from_stored(event: stump_ingest::progress::StoredProgressEvent) -> Self {
 		let status = event.event.status.as_str();
 		let phase = match event.event.phase {
 			AnalysisPhase::Staging => "STAGING",

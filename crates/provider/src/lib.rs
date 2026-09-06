@@ -21,6 +21,7 @@
 pub mod browse;
 pub mod cache;
 pub mod catalog;
+pub mod definition;
 pub mod gc;
 pub mod health;
 pub mod host;
@@ -39,6 +40,10 @@ pub mod virtual_path;
 pub use browse::{BrowseKind, RemoteOrigin, VirtualBrowseCache};
 pub use cache::{CacheKey, PageCache};
 pub use catalog::{CatalogEntry, CatalogSource, SourceCatalog, SourceTheme};
+pub use definition::{
+	DefinitionEngine, DefinitionError, DefinitionIndex, DefinitionIndexEntry,
+	DefinitionLoader, KnobValue, SourceDefinition,
+};
 pub use gc::{gc_materialised_series, GcReport};
 pub use health::{HealthProbe, HealthStatus, HealthTarget};
 pub use host::{
@@ -46,11 +51,12 @@ pub use host::{
 };
 pub use http::{SourceHttp, USER_AGENT};
 pub use identity::{merge_series, normalise_title, MergeReport, SeriesDuplicate};
-pub use materialize::{add_series, refresh_series, Materialized};
+pub use materialize::{add_series, refresh_series, Materialized, SkippedChapter};
 pub use rate_limit::RateLimiter;
 pub use source::{
-	FetchedPage, RemoteChapter, RemotePage, RemoteSeries, SearchFilter, SeriesStatus,
-	Source, SourceCapabilities, SourceError, SourceInfo, SourcePage, SourceResult,
+	ContentRating, FetchedPage, HtmlDocument, RemoteChapter, RemotePage, RemoteSeries,
+	SearchFilter, SeriesStatus, Source, SourceCapabilities, SourceError, SourceInfo,
+	SourcePage, SourceResult,
 };
 pub use virtual_library::create_virtual_library;
 pub use virtual_path::VirtualPath;

@@ -65,6 +65,44 @@ impl KavitaBackendAdapter {
 			.map(|book| book.path)
 			.ok_or_else(|| KavitaError::NotFound("Chapter does not exist".to_owned()))
 	}
+
+	/// The CBZ a provider-backed chapter downloads as: the pages come through
+	/// the provider host's cache and are packed into a stored zip, the same
+	/// archive every protocol serves for a virtual row. The chapter's own
+	/// name is the archive's file stem.
+	#[cfg(feature = "providers")]
+	async fn provider_archive(&self, book: &media::Model) -> KavitaResult<Vec<u8>> {
+		let host = crate::routers::provider_virtual::provider_host(&self.ctx)
+			.ok_or_else(|| {
+				KavitaError::NotFound("Provider libraries are disabled".to_owned())
+			})?;
+		let path = stump_provider::virtual_path::VirtualPath::parse(&book.path)
+			.filter(|path| path.remote_chapter_id.is_some())
+			.ok_or_else(|| {
+				KavitaError::InternalServerError(format!(
+					"{} is not a provider chapter path",
+					book.path
+				))
+			})?;
+		host.build_archive(
+			&path.source_id,
+			path.remote_chapter_id.as_deref().unwrap_or_default(),
+			&book.name,
+		)
+		.await
+		.map(|archive| archive.bytes)
+		.map_err(|error| KavitaError::InternalServerError(error.to_string()))
+	}
+
+	/// Provider libraries are compiled out: a `provider://` row cannot exist,
+	/// and a row that somehow carries the scheme has no file to serve.
+	#[cfg(not(feature = "providers"))]
+	async fn provider_archive(&self, book: &media::Model) -> KavitaResult<Vec<u8>> {
+		Err(KavitaError::NotFound(format!(
+			"{} has no file to download",
+			book.path
+		)))
+	}
 }
 
 /// A canonical container-service failure, mapped onto its Kavita status.
@@ -243,6 +281,25 @@ impl KavitaBackend for KavitaBackendAdapter {
 			.map(IntoResponse::into_response)
 			.map_err(map_server_error)
 	}
+
+	async fn media_bytes(&self, user: &AuthUser, media_id: &str) -> KavitaResult<Vec<u8>> {
+		let book = media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(media_id.to_owned()))
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| {
+				KavitaError::NotFound("Chapter does not exist".to_owned())
+			})?;
+		if stump_media::virtual_media::is_virtual_path(&book.path) {
+			return self.provider_archive(&book).await;
+		}
+		tokio::fs::read(&book.path).await.map_err(|error| {
+			KavitaError::InternalServerError(format!(
+				"Failed to read {}: {error}",
+				book.path
+			))
+		})
+	}
 	async fn book_structure(
 		&self,
 		user: &AuthUser,
@@ -298,10 +355,10 @@ impl KavitaBackend for KavitaBackendAdapter {
 		user: &AuthUser,
 		name: String,
 	) -> KavitaResult<reading_list::Model> {
-		stump_core::collections::create_read_list(
+		stump_collections::create_read_list(
 			&self.ctx,
 			user,
-			stump_core::collections::ReadListCreate {
+			stump_collections::ReadListCreate {
 				name,
 				summary: None,
 				ordered: true,
@@ -318,11 +375,11 @@ impl KavitaBackend for KavitaBackendAdapter {
 		id: &str,
 		book_ids: Vec<String>,
 	) -> KavitaResult<()> {
-		stump_core::collections::update_read_list(
+		stump_collections::update_read_list(
 			&self.ctx,
 			user,
 			id,
-			stump_core::collections::ReadListUpdate {
+			stump_collections::ReadListUpdate {
 				name: None,
 				summary: None,
 				ordered: None,
@@ -335,7 +392,7 @@ impl KavitaBackend for KavitaBackendAdapter {
 	}
 
 	async fn delete_read_list(&self, user: &AuthUser, id: &str) -> KavitaResult<()> {
-		stump_core::collections::delete_read_list(&self.ctx, user, id)
+		stump_collections::delete_read_list(&self.ctx, user, id)
 			.await
 			.map_err(map_core_error)
 	}
@@ -346,10 +403,10 @@ impl KavitaBackend for KavitaBackendAdapter {
 		name: String,
 		series_ids: Vec<String>,
 	) -> KavitaResult<collection::Model> {
-		stump_core::collections::create_collection(
+		stump_collections::create_collection(
 			&self.ctx,
 			user,
-			stump_core::collections::CollectionCreate {
+			stump_collections::CollectionCreate {
 				name,
 				ordered: false,
 				series_ids,
@@ -365,11 +422,11 @@ impl KavitaBackend for KavitaBackendAdapter {
 		id: &str,
 		series_ids: Vec<String>,
 	) -> KavitaResult<()> {
-		stump_core::collections::update_collection(
+		stump_collections::update_collection(
 			&self.ctx,
 			user,
 			id,
-			stump_core::collections::CollectionUpdate {
+			stump_collections::CollectionUpdate {
 				name: None,
 				ordered: None,
 				series_ids: Some(series_ids),

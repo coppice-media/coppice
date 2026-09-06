@@ -29,6 +29,12 @@ pub enum ContentType {
 	WEBP,
 	GIF,
 	TXT,
+	M4B,
+	M4A,
+	MP3,
+	OPUS,
+	OGG,
+	FLAC,
 	#[default]
 	UNKNOWN,
 }
@@ -94,6 +100,12 @@ impl ContentType {
 			"webp" => ContentType::WEBP,
 			"gif" => ContentType::GIF,
 			"txt" => ContentType::TXT,
+			"m4b" => ContentType::M4B,
+			"m4a" => ContentType::M4A,
+			"mp3" => ContentType::MP3,
+			"opus" => ContentType::OPUS,
+			"ogg" | "oga" => ContentType::OGG,
+			"flac" => ContentType::FLAC,
 			_ => temporary_content_workarounds(extension),
 		}
 	}
@@ -196,6 +208,10 @@ impl ContentType {
 	pub fn from_path(path: &Path) -> ContentType {
 		infer_mime(path)
 			.map(|mime| ContentType::from(mime.as_str()))
+			// A sniffed type Stump does not model is no better than no sniff at
+			// all: `infer` reports an `isom`-branded `.m4b` as `video/mp4`, and
+			// dropping to the extension is what keeps the file supported.
+			.filter(|content_type| *content_type != ContentType::UNKNOWN)
 			.unwrap_or_else(|| {
 				ContentType::from_extension(
 					path.extension()
@@ -279,6 +295,29 @@ impl ContentType {
 		self == &ContentType::ZIP || self == &ContentType::COMIC_ZIP
 	}
 
+	/// Returns true if the content type is an audio format Stump can probe and
+	/// serve as an audiobook.
+	///
+	/// ## Example
+	///
+	/// ```no_run
+	/// use stump_media::ContentType;
+	///
+	/// assert!(ContentType::M4B.is_audio());
+	/// assert!(!ContentType::EPUB_ZIP.is_audio());
+	/// ```
+	pub fn is_audio(&self) -> bool {
+		matches!(
+			self,
+			ContentType::M4B
+				| ContentType::M4A
+				| ContentType::MP3
+				| ContentType::OPUS
+				| ContentType::OGG
+				| ContentType::FLAC
+		)
+	}
+
 	/// Returns true if `self` is a more specific variant of the given `parent` type,
 	/// e.g. an EPUB or CBZ file are both ZIP files
 	pub fn is_subtype_of(self, parent: ContentType) -> bool {
@@ -359,6 +398,12 @@ impl ContentType {
 			ContentType::AVIF => "avif",
 			ContentType::GIF => "gif",
 			ContentType::TXT => "txt",
+			ContentType::M4B => "m4b",
+			ContentType::M4A => "m4a",
+			ContentType::MP3 => "mp3",
+			ContentType::OPUS => "opus",
+			ContentType::OGG => "ogg",
+			ContentType::FLAC => "flac",
 			ContentType::UNKNOWN => "",
 		}
 	}
@@ -394,6 +439,14 @@ impl From<&str> for ContentType {
 			"image/webp" => ContentType::WEBP,
 			"image/avif" => ContentType::AVIF,
 			"image/gif" => ContentType::GIF,
+			"audio/mpeg" | "audio/mp3" => ContentType::MP3,
+			// `audio/mp4` cannot say whether the container holds an audiobook
+			// or a music track, so the generic variant wins here and
+			// [`ContentType::from_extension`] recovers `.m4b`.
+			"audio/mp4" | "audio/m4a" | "audio/x-m4a" => ContentType::M4A,
+			"audio/opus" => ContentType::OPUS,
+			"audio/ogg" | "application/ogg" => ContentType::OGG,
+			"audio/flac" | "audio/x-flac" => ContentType::FLAC,
 			_ => ContentType::UNKNOWN,
 		}
 	}
@@ -421,6 +474,16 @@ impl std::fmt::Display for ContentType {
 			ContentType::WEBP => write!(f, "image/webp"),
 			ContentType::GIF => write!(f, "image/gif"),
 			ContentType::TXT => write!(f, "text/plain"),
+			// RFC 4337 registers `audio/mp4` for an audio-only MP4; `.m4b` is
+			// Apple's audiobook extension for that same container and has no
+			// registered type of its own, so both variants render as
+			// `audio/mp4` and only the extension distinguishes them.
+			ContentType::M4B => write!(f, "audio/mp4"),
+			ContentType::M4A => write!(f, "audio/mp4"),
+			ContentType::MP3 => write!(f, "audio/mpeg"),
+			ContentType::OPUS => write!(f, "audio/opus"),
+			ContentType::OGG => write!(f, "audio/ogg"),
+			ContentType::FLAC => write!(f, "audio/flac"),
 			ContentType::UNKNOWN => write!(f, "unknown"),
 		}
 	}
@@ -472,6 +535,12 @@ impl TryFrom<ContentType> for image::ImageFormat {
 			ContentType::RAR => Err(unsupported_error("ContentType::RAR")),
 			ContentType::COMIC_RAR => Err(unsupported_error("ContentType::COMIC_RAR")),
 			ContentType::TXT => Err(unsupported_error("ContentType::TXT")),
+			ContentType::M4B => Err(unsupported_error("ContentType::M4B")),
+			ContentType::M4A => Err(unsupported_error("ContentType::M4A")),
+			ContentType::MP3 => Err(unsupported_error("ContentType::MP3")),
+			ContentType::OPUS => Err(unsupported_error("ContentType::OPUS")),
+			ContentType::OGG => Err(unsupported_error("ContentType::OGG")),
+			ContentType::FLAC => Err(unsupported_error("ContentType::FLAC")),
 			ContentType::UNKNOWN => Err(unsupported_error("ContentType::UNKNOWN")),
 		}
 	}
@@ -502,6 +571,46 @@ mod tests {
 		assert_eq!(ContentType::from_extension("opf"), ContentType::XML);
 		assert_eq!(ContentType::from_extension("ncx"), ContentType::XML);
 		assert_eq!(ContentType::from_extension("unknown"), ContentType::UNKNOWN);
+	}
+
+	#[test]
+	fn test_audio_content_type_from_extension() {
+		assert_eq!(ContentType::from_extension("m4b"), ContentType::M4B);
+		assert_eq!(ContentType::from_extension("M4B"), ContentType::M4B);
+		assert_eq!(ContentType::from_extension("m4a"), ContentType::M4A);
+		assert_eq!(ContentType::from_extension("mp3"), ContentType::MP3);
+		assert_eq!(ContentType::from_extension("opus"), ContentType::OPUS);
+		assert_eq!(ContentType::from_extension("ogg"), ContentType::OGG);
+		assert_eq!(ContentType::from_extension("oga"), ContentType::OGG);
+		assert_eq!(ContentType::from_extension("flac"), ContentType::FLAC);
+	}
+
+	/// Every audio type must round-trip extension -> variant -> extension, and
+	/// must report itself as audio (the scanner and OPDS both branch on it).
+	#[test]
+	fn test_audio_content_types_are_audio() {
+		for extension in ["m4b", "m4a", "mp3", "opus", "ogg", "flac"] {
+			let content_type = ContentType::from_extension(extension);
+			assert!(content_type.is_audio(), "{extension} is not audio");
+			assert!(!content_type.is_image(), "{extension} is an image");
+			assert_eq!(content_type.extension(), extension);
+			assert!(content_type.mime_type().starts_with("audio/"));
+		}
+	}
+
+	/// `infer` reports an ffmpeg-written `.m4b` with the `isom` major brand as
+	/// `video/mp4`, which Stump does not model. The extension has to win, or
+	/// the scanner silently ignores the file.
+	#[test]
+	fn test_unmodelled_sniff_falls_back_to_extension() {
+		let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("integration-tests/data/audio/chapters-chpl.m4b");
+		assert_eq!(
+			infer::get_from_path(&path).ok().flatten().map(|t| t.mime_type()),
+			Some("video/mp4"),
+			"fixture no longer sniffs as an unmodelled type"
+		);
+		assert_eq!(ContentType::from_path(&path), ContentType::M4B);
 	}
 
 	#[test]

@@ -47,9 +47,9 @@ pub async fn init(
 		tracing::info!("Provider host disabled (providers.enable_providers=false)");
 		return Ok(None);
 	}
-
 	let factories = default_factories();
-	if factories.is_empty() {
+	let engines = default_engines();
+	if factories.is_empty() && engines.is_empty() {
 		tracing::warn!(
 			"Provider host enabled but no source implementations are compiled"
 		);
@@ -59,13 +59,18 @@ pub async fn init(
 		cache_dir: ctx.config.get_cache_dir().join("providers"),
 		cache_max_bytes: ctx.config.providers.provider_cache_max_bytes,
 		catalog_url: None,
+		definitions_url: Some(ctx.config.providers.source_definitions_url.clone()),
 		virtual_series_ttl: Duration::from_secs(ctx.config.providers.virtual_series_ttl),
 	};
 
-	let host =
-		stump_provider::ProviderHost::open(ctx.conn.clone(), factories, host_config)
-			.await
-			.map_err(|error| crate::error::CoreError::InternalError(error.to_string()))?;
+	let host = stump_provider::ProviderHost::open(
+		ctx.conn.clone(),
+		factories,
+		engines,
+		host_config,
+	)
+	.await
+	.map_err(|error| crate::error::CoreError::InternalError(error.to_string()))?;
 	host.install();
 
 	if ctx.set_provider_host(host.clone()).is_err() {
@@ -83,6 +88,12 @@ pub async fn init(
 /// build, in stable order.
 pub fn default_factories() -> Vec<stump_provider::SourceFactory> {
 	vec![stump_provider_mangadex::factory()]
+}
+
+/// The compiled theme engines: one per `lib-multisrc` theme Stump can execute
+/// from a data-only [`stump_provider::SourceDefinition`], in stable order.
+pub fn default_engines() -> Vec<stump_provider::DefinitionEngine> {
+	stump_provider_themes::engines()
 }
 
 /// The GC retention cutoff for a configuration.
@@ -195,5 +206,36 @@ mod tests {
 		config.providers.provider_health_dead_after = 0;
 		assert_eq!(health_interval(&config), Duration::from_secs(60));
 		assert_eq!(health_dead_after(&config), 1);
+	}
+
+	/// `defaults` cannot reference `stump_provider` (it is compiled without
+	/// the `providers` feature), so the literal is pinned here instead.
+	#[test]
+	fn default_definitions_url_matches_the_host_default() {
+		assert_eq!(
+			crate::config::defaults::DEFAULT_SOURCE_DEFINITIONS_URL,
+			stump_provider::definition::DEFAULT_DEFINITIONS_URL
+		);
+		assert_eq!(
+			StumpConfig::debug().providers.source_definitions_url,
+			stump_provider::definition::DEFAULT_DEFINITIONS_URL
+		);
+	}
+
+	/// Every theme a definition may name must resolve to exactly one engine,
+	/// or `enableProviderSource` would silently pick the first match.
+	#[test]
+	fn theme_engines_are_registered_once_each() {
+		let engines = default_engines();
+		assert!(!engines.is_empty(), "theme engines are compiled in");
+		let mut themes: Vec<&str> = engines.iter().map(|engine| engine.theme).collect();
+		let total = themes.len();
+		themes.sort_unstable();
+		themes.dedup();
+		assert_eq!(
+			themes.len(),
+			total,
+			"duplicate theme registration: {themes:?}"
+		);
 	}
 }

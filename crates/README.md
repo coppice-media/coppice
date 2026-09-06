@@ -11,10 +11,12 @@ editing it.
 | `annotation-sync` | `stump_annotation_sync` | Canonical annotation export model, `Sink` trait, markdown (Obsidian) and git sinks | always linked via `stump_core`; crate feature `git` (default) links libgit2 | README done |
 | `api-types` | `stump_api_types` | Transport-neutral `RequestOrigin` URL building and `OffsetPagination` | always linked | README done |
 | `auth` | `stump_auth` | `AuthContext` + `AuthorizationError`, permission/owner enforcement | always linked | README done |
+| `collections` | `stump_collections` | Canonical shelf containers (collections, reading lists) and their Kobo `Tag` projection; one mutation path for GraphQL, Komga CRUD and Kobo write-back | linked by server `kobo`/`komga`/`kavita` and by `graphql` (absent from `minimal`) | README done |
 | `cli` | `cli` | Server CLI subcommands (account, config, `tools list`/`plan`/`apply`) embedded in `stump_server` | always linked | README pending (dirty: `commands/account.rs`, `config.rs`, `commands/tools.rs`, `bin/main.rs`) |
 | `devices` | `stump_devices` | Unified device registry: per-device credentials, endpoints, last-seen/last-sync tracking | always linked via `stump_core`; `graphql` derives opt-in | README done |
 | `email` | `email` | SMTP sender via `lettre`, emailer config | always linked; `graphql` derives opt-in (`stump_core/graphql`) | README pending |
 | `graphql` | `graphql` | async-graphql schema, guards, loaders, `graphql-gen` | server `graphql` (in `headless`/`full`, not `minimal`) | README done |
+| `ingest` | `stump_ingest` | Staged ingest pipeline: drop folder, staging, preprocess hook, analysis queue + progress stream, quality checks, metadata providers/candidates, field-level apply, per-field policy | server `ingest` (in `headless`, not `minimal`) + core `ingest` (default on) | README done |
 | `integrations/metadata` | `metadata_integrations` | Metadata provider clients (Comic Vine, Hardcover, AniList, MAL, MangaDex, MangaUpdates), scoring, merge | always linked via `stump_core`; `graphql` derives opt-in | README done |
 | `integrations/notification` | `integrations` | Discord/Telegram notifier clients | always linked via `stump_core` | README exists (legacy short form; needs template) |
 | `jobs` | `stump_jobs` | Job-type-agnostic background job runtime, lifecycle contracts, cron scheduler | being wired into `stump_core` | in flight (untracked; `JobsCrate`) |
@@ -23,6 +25,7 @@ editing it.
 | `kobo` | `stump_kobo` | Kobo sync protocol routes and `KoboBackend` trait | server `kobo` | README by `ReadmeProtocols` |
 | `komga` | `stump_komga` | Komga-compatible API surface and `KomgaBackend` trait | server `komga` (implies `readium`) | README by `ReadmeProtocols` |
 | `koreader` | `stump_koreader` | KOReader sync API and `KoreaderBackend` trait | server `koreader` | README by `ReadmeProtocols` |
+| `library` | `stump_library` | Library create/update/delete and series reshape (move/merge/split) with the filesystem moves that keep the next scan a no-op | linked by server `komga` and by `graphql` (absent from `minimal`) | README done |
 | `liseur-sync` | `stump_liseur_sync` | Native liseur-sync wire contract, annotation attachment lane, and `LiseurSyncBackend` trait | server `liseur-sync` | README by `ReadmeProtocols` |
 | `macros/filter-gen` | `filter-gen` | Proc macro generating filter/ordering enums for entities | always linked (`models`, `graphql`) | README pending |
 | `macros/stump-config-gen` | `stump-config-gen` | Proc macro generating `StumpConfig` env/partial-config impls | always linked (`stump_core`) | in flight (dirty `lib.rs`; `ConfigSplit`) — skipped |
@@ -32,7 +35,8 @@ editing it.
 | `opds` | `stump_opds` | OPDS 1.2/2.0 catalog routes and `OpdsBackend` trait | server `opds` | README by `ReadmeProtocols` |
 | `notify` | `stump_notify` | Notification channels (ntfy, email, webhook), routing-rule resolution, retry policy | always linked via `stump_core`; `graphql` derives opt-in (`stump_core/graphql`) | README done |
 | `provider` | `stump_provider` | Remote source host: `Source` trait, page cache, Keiyoushi catalog/health, materialisation, virtual-library browse, GC | server/core/graphql `providers` (in `headless`, not `minimal`) + runtime `STUMP_ENABLE_PROVIDERS` | README done |
-| `provider-mangadex` | `stump_provider_mangadex` | MangaDex `Source` implementation (API + MangaDex@Home pages) | via `providers` | covered by `provider/README.md` |
+| `provider-mangadex` | `stump_provider_mangadex` | MangaDex `Source` implementation (API + MangaDex@Home pages, chapter readability, content rating) | via `providers` | README done |
+| `provider-themes` | `stump_provider_themes` | Data-driven `lib-multisrc` theme engines (Madara/`madaralegacy`, MangaThemesia, MMRCMS) plus the jsoup-subset selector engine they run on; every site is a runtime `SourceDefinition`, no per-site code | via `providers` | README done |
 | `scanner` | `stump_scanner` | Filesystem scan planning primitives | always linked via `stump_core` | README pending |
 | `tests` | `tests` | Shared test DB/fake-data helpers for integration tests | dev only | README pending (dirty: `src/db.rs`) |
 | `tools` | `stump_tools` | Library maintenance tools (Kavita/MangaManager "external tools" parity): the `Tool` plan/apply contract plus `calibre-convert`, `calibre-meta`, `calibre-polish`, `cbz-covers`, `cbzit`, `epub-check`, `epub2cbz`, `meta-edit`, `missing-sequence`, `webp-convert`, driven by `stump tools list`/`plan`/`apply` | always linked via `cli`; not in the server route graph | in flight (untracked; `ToolsCore` + per-tool workers) |

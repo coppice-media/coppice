@@ -10,14 +10,13 @@ use sea_orm::{
 	sea_query::{ExprTrait, Func, SimpleExpr},
 	DatabaseConnection, FromQueryResult, JoinType, QueryOrder, QuerySelect,
 };
-use stump_core::{
-	filesystem::media::visible_pages::{
-		matches_any, visible_pages, VisiblePages, DUPLICATE_PAGE_TOLERANCE,
-	},
-	ingest::quality::duplicate_pages_across_books::{
-		dhash_hex, MIN_DUPLICATE_BOOKS_DEFAULT,
-	},
+use stump_core::filesystem::media::visible_pages::{
+	matches_any, visible_pages, VisiblePages,
 };
+use stump_ingest::quality::duplicate_pages_across_books::{
+	dhash_hex, MIN_DUPLICATE_BOOKS_DEFAULT,
+};
+use stump_media::DUPLICATE_PAGE_TOLERANCE;
 
 use crate::{
 	data::CoreContext,

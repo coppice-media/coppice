@@ -33,6 +33,15 @@ pub const DEFAULT_VIRTUAL_SERIES_TTL_SECS: u64 = 5 * 60; // 5 minutes
 pub const DEFAULT_PROVIDER_GC_DAYS: u64 = 30;
 pub const DEFAULT_PROVIDER_HEALTH_INTERVAL_SECS: u64 = 6 * 60 * 60; // 6 hours
 pub const DEFAULT_PROVIDER_HEALTH_DEAD_AFTER: u32 = 3;
+/// Definition repository the provider host reads theme-engine source
+/// definitions from. Accepts an `index.json` URL, a repository root URL, a
+/// `file://` URL, or a local directory.
+///
+/// Kept as a literal because `defaults` is compiled without the `providers`
+/// feature; `providers::default_definitions_url_matches_the_host_default`
+/// pins it to `stump_provider::definition::DEFAULT_DEFINITIONS_URL`.
+pub const DEFAULT_SOURCE_DEFINITIONS_URL: &str =
+	"https://raw.githubusercontent.com/stumpapp/stump-sources/main/index.json";
 pub const DEFAULT_ANNOTATION_SYNC_DEBOUNCE_SECS: u64 = 30;
 pub const DEFAULT_TRANSFORM_ENABLED: bool = false;
 pub const DEFAULT_TRANSFORM_KOBO_PROFILE: &str = "clara";

@@ -453,6 +453,9 @@ mod tests {
 						DEFAULT_PROVIDER_HEALTH_INTERVAL_SECS
 					),
 					provider_health_dead_after: Some(DEFAULT_PROVIDER_HEALTH_DEAD_AFTER),
+					source_definitions_url: Some(
+						DEFAULT_SOURCE_DEFINITIONS_URL.to_string()
+					),
 				},
 				annotation_sync: PartialAnnotationSyncConfig {
 					annotation_sync_root: None,
@@ -588,6 +591,8 @@ mod tests {
 								DEFAULT_PROVIDER_HEALTH_INTERVAL_SECS,
 							provider_health_dead_after:
 								DEFAULT_PROVIDER_HEALTH_DEAD_AFTER,
+							source_definitions_url: DEFAULT_SOURCE_DEFINITIONS_URL
+								.to_string(),
 						},
 						annotation_sync: AnnotationSyncConfig {
 							annotation_sync_root: None,

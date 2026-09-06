@@ -211,7 +211,7 @@ impl SeriesMutation {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
-		let reshaped = stump_core::series::move_media_to_series(
+		let reshaped = stump_library::series::move_media_to_series(
 			core,
 			user,
 			&id_strings(&media_ids),
@@ -237,7 +237,7 @@ impl SeriesMutation {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
-		let merged = stump_core::series::merge_series(
+		let merged = stump_library::series::merge_series(
 			core,
 			user,
 			&keep.to_string(),
@@ -274,7 +274,7 @@ impl SeriesMutation {
 		let core = ctx.data::<CoreContext>()?;
 
 		let reshaped =
-			stump_core::series::split_series(core, user, &id_strings(&media_ids), &name)
+			stump_library::series::split_series(core, user, &id_strings(&media_ids), &name)
 				.await
 				.map_err(crate::error::map_core_error)?;
 

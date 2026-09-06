@@ -16,8 +16,11 @@ use crate::{
 use async_graphql::{Context, Object, Result, ID};
 use models::shared::enums::{JobStatus, UserPermission};
 use sea_orm::EntityTrait;
-use stump_core::ingest::contract::SearchQuery;
-use stump_core::ingest::store::Pagination as StorePagination;
+use stump_ingest::contract::SearchQuery;
+use stump_ingest::store::Pagination as StorePagination;
+use stump_ingest::policy;
+
+use crate::object::metadata_policy::MetadataPolicy;
 
 #[derive(Default)]
 pub struct IngestQuery;
@@ -115,8 +118,8 @@ async fn rework_reasons(
 		.filter(|check| {
 			!matches!(
 				check.outcome.status,
-				stump_core::ingest::contract::QualityStatus::Pass
-					| stump_core::ingest::contract::QualityStatus::NotApplicable
+				stump_ingest::contract::QualityStatus::Pass
+					| stump_ingest::contract::QualityStatus::NotApplicable
 			)
 		})
 		.map(|check| IngestReworkReason {
@@ -458,6 +461,22 @@ impl IngestQuery {
 			})
 			.map_err(map_store_error)
 	}
+
+	/// The effective per-field metadata policy for one library: the server
+	/// default with the library's stored override applied, one row per field
+	/// the policy vocabulary covers.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::MetadataProviderRead)")]
+	async fn metadata_policy(
+		&self,
+		ctx: &Context<'_>,
+		library_id: ID,
+	) -> Result<MetadataPolicy> {
+		let core = ctx.data::<CoreContext>()?;
+		policy::effective_policy(core.conn.as_ref(), library_id.as_ref())
+			.await
+			.map(MetadataPolicy::from)
+			.map_err(map_store_error)
+	}
 }
 
 #[cfg(test)]
@@ -487,5 +506,24 @@ mod tests {
 			),
 			"lookupIngestCandidate signature drifted:\n{sdl}"
 		);
+	}
+
+	/// The editor's Policy tab generates its client from these three
+	/// signatures.
+	#[test]
+	fn metadata_policy_sdl_is_stable() {
+		let sdl = crate::schema::build_schema_bare().sdl();
+		for signature in [
+			"metadataPolicy(libraryId: ID!): MetadataPolicy!",
+			"setMetadataPolicy(libraryId: ID!, input: MetadataPolicyInput!): \
+			 MetadataPolicy!",
+			"applyBestIngestMetadata(dropItemId: ID, mediaId: ID): \
+			 IngestApplyBestPayload!",
+		] {
+			assert!(
+				sdl.contains(signature),
+				"{signature} drifted:\n{sdl}"
+			);
+		}
 	}
 }

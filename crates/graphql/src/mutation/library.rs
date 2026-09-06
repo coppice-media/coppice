@@ -276,9 +276,9 @@ impl LibraryMutation {
 	) -> Result<Library> {
 		let core = ctx.data::<CoreContext>()?;
 
-		let created_library = stump_core::library::create_library(
+		let created_library = stump_library::library::create_library(
 			core,
-			stump_core::library::NewLibrary {
+			stump_library::library::NewLibrary {
 				name: input.name,
 				path: input.path,
 				description: input.description,
@@ -387,16 +387,16 @@ impl LibraryMutation {
 		let core = ctx.data::<CoreContext>()?;
 
 		let watch = if input.config.as_ref().is_some_and(|config| config.watch) {
-			stump_core::library::WatchUpdate::Add
+			stump_library::library::WatchUpdate::Add
 		} else {
-			stump_core::library::WatchUpdate::Remove
+			stump_library::library::WatchUpdate::Remove
 		};
 
-		let updated_library = stump_core::library::update_library(
+		let updated_library = stump_library::library::update_library(
 			core,
 			user,
 			&id.to_string(),
-			stump_core::library::UpdatedLibrary {
+			stump_library::library::UpdatedLibrary {
 				name: input.name,
 				path: input.path,
 				description: input.description,
@@ -627,7 +627,7 @@ impl LibraryMutation {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
-		let library = stump_core::library::delete_library(core, user, &id.to_string())
+		let library = stump_library::library::delete_library(core, user, &id.to_string())
 			.await
 			.map_err(crate::error::map_core_error)?;
 

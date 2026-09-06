@@ -1,6 +1,6 @@
 //! Kobo `tags` write-back: device shelves onto canonical containers.
 //!
-//! Every operation goes through `stump_core::collections` so a shelf created
+//! Every operation goes through `stump_collections` so a shelf created
 //! on the device and a collection created natively are the same row. The
 //! device's name is recorded as `source_device` provenance (last writer
 //! wins on `name`), mirroring how `library_sync` records sightings.
@@ -15,7 +15,6 @@ use models::entity::{device, device_credential, media, user::AuthUser};
 use models::shared::enums::DeviceCredentialKind;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 use stump_auth::AuthContext;
-use stump_core::collections;
 use stump_kobo::routes::TagCreateRequest;
 
 use crate::{config::state::AppState, errors::APIResult};
@@ -28,7 +27,7 @@ pub(crate) async fn create_tag(
 	let user = auth.user();
 	let device = device_name(&ctx, auth.api_key.as_deref()).await;
 	let revision_ids = request.revision_ids();
-	let model = collections::create_device_shelf(
+	let model = stump_collections::create_device_shelf(
 		&ctx,
 		&user,
 		request.id,
@@ -40,7 +39,7 @@ pub(crate) async fn create_tag(
 	// the books this user can actually see before touching the container.
 	let visible = visible_books(&ctx, &user, &revision_ids).await?;
 	if !visible.is_empty() {
-		collections::add_shelf_items(&ctx, &user, &model.id, visible, device).await?;
+		stump_collections::add_shelf_items(&ctx, &user, &model.id, visible, device).await?;
 	}
 	Ok(model.id)
 }
@@ -53,7 +52,7 @@ pub(crate) async fn rename_tag(
 ) -> APIResult<()> {
 	let user = auth.user();
 	let device = device_name(&ctx, auth.api_key.as_deref()).await;
-	collections::rename_shelf(&ctx, &user, &tag_id, name, device).await?;
+	stump_collections::rename_shelf(&ctx, &user, &tag_id, name, device).await?;
 	Ok(())
 }
 
@@ -62,7 +61,7 @@ pub(crate) async fn delete_tag(
 	auth: AuthContext,
 	tag_id: String,
 ) -> APIResult<()> {
-	collections::delete_shelf(&ctx, &auth.user(), &tag_id).await?;
+	stump_collections::delete_shelf(&ctx, &auth.user(), &tag_id).await?;
 	Ok(())
 }
 
@@ -77,7 +76,7 @@ pub(crate) async fn add_tag_items(
 	// Unknown books are silently ignored (Calibre-Web behavior), so filter to
 	// the books this user can actually see before touching the container.
 	let visible = visible_books(&ctx, &user, &revision_ids).await?;
-	collections::add_shelf_items(&ctx, &user, &tag_id, visible, device).await?;
+	stump_collections::add_shelf_items(&ctx, &user, &tag_id, visible, device).await?;
 	Ok(())
 }
 
@@ -89,7 +88,7 @@ pub(crate) async fn remove_tag_items(
 ) -> APIResult<()> {
 	let user = auth.user();
 	let device = device_name(&ctx, auth.api_key.as_deref()).await;
-	collections::remove_shelf_items(&ctx, &user, &tag_id, revision_ids, device).await?;
+	stump_collections::remove_shelf_items(&ctx, &user, &tag_id, revision_ids, device).await?;
 	Ok(())
 }
 

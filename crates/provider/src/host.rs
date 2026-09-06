@@ -26,6 +26,9 @@ use crate::{
 	browse::{BrowseKind, RemoteOrigin, VirtualBrowseCache},
 	cache::{CacheKey, PageCache},
 	catalog::{CatalogError, CatalogSnapshot, SourceCatalog},
+	definition::{
+		DefinitionEngine, DefinitionError, DefinitionLoader, SourceDefinition,
+	},
 	health::{self, HealthChecker, HealthRunSummary},
 	source::{RemotePage, RemoteSeries, Source, SourceError},
 	virtual_path::VirtualPath,
@@ -78,8 +81,10 @@ impl SourceFactory {
 pub enum ProviderError {
 	#[error("Provider source `{0}` is not enabled")]
 	UnknownSource(String),
-	#[error("No compiled source implements catalog entry `{0}`")]
+	#[error("No compiled source or theme engine implements catalog entry `{0}`")]
 	NotImplemented(String),
+	#[error(transparent)]
+	Definition(#[from] DefinitionError),
 	#[error("Catalog source `{0}` was not found in the Keiyoushi index")]
 	CatalogSourceNotFound(String),
 	#[error("`{0}` is not a provider-backed media path")]
@@ -98,6 +103,12 @@ pub enum ProviderError {
 	Io(#[from] std::io::Error),
 	#[error("Failed to build archive: {0}")]
 	Archive(String),
+	/// The source has the chapter listed but cannot serve its pages: the page
+	/// manifest lookup answered 404 (a licensed, taken-down, or externally
+	/// hosted chapter). Distinct from a missing file, because there is
+	/// nothing on disk to be missing.
+	#[error("Chapter is not available from {source_id}")]
+	Unavailable { source_id: String },
 	#[error("{0}")]
 	Other(String),
 }
@@ -112,6 +123,9 @@ impl From<ProviderError> for FileError {
 				}
 			},
 			ProviderError::Source(SourceError::NotFound(_)) => FileError::NotFound,
+			ProviderError::Unavailable { .. } => {
+				FileError::Unavailable(error.to_string())
+			},
 			ProviderError::NotVirtual(path) => FileError::UnsupportedFileType(path),
 			other => FileError::UnknownError(other.to_string()),
 		}
@@ -125,6 +139,10 @@ pub struct ProviderHostConfig {
 	pub cache_dir: PathBuf,
 	pub cache_max_bytes: u64,
 	pub catalog_url: Option<String>,
+	/// Definition repository index URL, `file://` URL, or local directory
+	/// (`STUMP_SOURCE_DEFINITIONS_URL`). `None` uses
+	/// [`crate::definition::DEFAULT_DEFINITIONS_URL`].
+	pub definitions_url: Option<String>,
 	/// How long virtual-library browse pages stay cached before the source is
 	/// hit again (`virtual_series_ttl`, five minutes by default).
 	pub virtual_series_ttl: Duration,
@@ -146,9 +164,11 @@ pub struct VirtualArchive {
 pub struct ProviderHost {
 	conn: Arc<DatabaseConnection>,
 	factories: Vec<SourceFactory>,
+	engines: Vec<DefinitionEngine>,
 	sources: RwLock<HashMap<String, Arc<dyn Source>>>,
 	cache: PageCache,
 	catalog: SourceCatalog,
+	definitions: DefinitionLoader,
 	checker: HealthChecker,
 	manifests: Mutex<HashMap<String, Manifest>>,
 	browse: VirtualBrowseCache,
@@ -160,6 +180,7 @@ impl std::fmt::Debug for ProviderHost {
 			.field("factories", &self.factories)
 			.field("cache", &self.cache)
 			.field("catalog", &self.catalog)
+			.field("definitions", &self.definitions)
 			.field("browse", &self.browse)
 			.finish()
 	}
@@ -171,6 +192,7 @@ impl ProviderHost {
 	pub async fn open(
 		conn: Arc<DatabaseConnection>,
 		factories: Vec<SourceFactory>,
+		engines: Vec<DefinitionEngine>,
 		config: ProviderHostConfig,
 	) -> Result<Arc<Self>, ProviderError> {
 		let browse = VirtualBrowseCache::new(config.virtual_series_ttl);
@@ -178,14 +200,19 @@ impl ProviderHost {
 			PageCache::open(config.cache_dir.join("pages"), config.cache_max_bytes)
 				.await?;
 		let client = crate::http::build_client(None, crate::http::DEFAULT_TIMEOUT)?;
-		let catalog = SourceCatalog::new(client, &config.cache_dir, config.catalog_url);
+		let catalog =
+			SourceCatalog::new(client.clone(), &config.cache_dir, config.catalog_url);
+		let definitions =
+			DefinitionLoader::new(client, &config.cache_dir, config.definitions_url);
 		let checker = HealthChecker::new()?;
 		let host = Arc::new(Self {
 			conn,
 			factories,
+			engines,
 			sources: RwLock::new(HashMap::new()),
 			cache,
 			catalog,
+			definitions,
 			checker,
 			manifests: Mutex::new(HashMap::new()),
 			browse,
@@ -210,6 +237,20 @@ impl ProviderHost {
 
 	pub fn catalog(&self) -> &SourceCatalog {
 		&self.catalog
+	}
+
+	/// The runtime definition repository: `index.json` plus the definitions
+	/// already loaded from it.
+	pub fn definitions(&self) -> &DefinitionLoader {
+		&self.definitions
+	}
+
+	pub fn engines(&self) -> &[DefinitionEngine] {
+		&self.engines
+	}
+
+	pub fn engine_for_theme(&self, theme: &str) -> Option<&DefinitionEngine> {
+		self.engines.iter().find(|engine| engine.theme == theme)
 	}
 
 	pub fn factories(&self) -> &[SourceFactory] {
@@ -271,6 +312,10 @@ impl ProviderHost {
 
 	/// Rebuild the registry from enabled `provider_sources` rows, keeping
 	/// sources registered by [`ProviderHost::register_source`] that have no row.
+	///
+	/// A row whose `implementation` is not a compiled factory is looked up in
+	/// the definition index instead, so definition-backed sources survive a
+	/// restart without any per-site code.
 	pub async fn reload_sources(&self) -> Result<(), ProviderError> {
 		let rows = provider_source::Entity::find()
 			.filter(provider_source::Column::Enabled.eq(true))
@@ -278,20 +323,14 @@ impl ProviderHost {
 			.await?;
 		let mut built: Vec<(String, Arc<dyn Source>)> = Vec::with_capacity(rows.len());
 		for row in rows {
-			let Some(factory) = self.factory_for_implementation(&row.implementation)
-			else {
-				tracing::warn!(
+			match self.build_row(&row).await {
+				Ok(source) => built.push((row.id.clone(), source)),
+				Err(error) => tracing::error!(
+					?error,
 					source = row.id,
 					implementation = row.implementation,
-					"Enabled provider source has no compiled implementation; skipping"
-				);
-				continue;
-			};
-			match (factory.build)(&row) {
-				Ok(source) => built.push((row.id.clone(), source)),
-				Err(error) => {
-					tracing::error!(?error, source = row.id, "Failed to build source")
-				},
+					"Failed to build enabled provider source; skipping"
+				),
 			}
 		}
 		let mut registry = self.sources.write().expect("source registry poisoned");
@@ -301,8 +340,40 @@ impl ProviderHost {
 		Ok(())
 	}
 
-	/// Enable a catalog source. Only entries with a compiled implementation
-	/// can be enabled; the instance id is `<implementation>-<lang>`.
+	/// Instantiate one `provider_sources` row: a compiled factory when the
+	/// implementation is one, otherwise the theme engine named by the
+	/// definition whose id it is.
+	async fn build_row(
+		&self,
+		row: &provider_source::Model,
+	) -> Result<Arc<dyn Source>, ProviderError> {
+		if let Some(factory) = self.factory_for_implementation(&row.implementation) {
+			return (factory.build)(row);
+		}
+		let definition = self.definitions.definition(&row.implementation).await?;
+		self.build_definition_source(&definition, row)
+	}
+
+	/// Hand a definition to its theme engine.
+	pub fn build_definition_source(
+		&self,
+		definition: &SourceDefinition,
+		row: &provider_source::Model,
+	) -> Result<Arc<dyn Source>, ProviderError> {
+		definition.validate()?;
+		let engine = self.engine_for_theme(&definition.theme).ok_or_else(|| {
+			DefinitionError::UnknownTheme {
+				id: definition.id.clone(),
+				theme: definition.theme.clone(),
+			}
+		})?;
+		(engine.build)(definition, row)
+	}
+
+	/// Enable a catalog source. The entry must be backed either by a compiled
+	/// implementation or by a definition for the same package; the instance id
+	/// is `<implementation>-<lang>` for the former and the definition id for
+	/// the latter.
 	pub async fn enable_catalog_source(
 		&self,
 		catalog_id: &str,
@@ -313,54 +384,109 @@ impl ProviderHost {
 			snapshot.find_source(catalog_id).ok_or_else(|| {
 				ProviderError::CatalogSourceNotFound(catalog_id.to_string())
 			})?;
-		let factory = self
-			.factory_for_pkg(&entry.pkg)
-			.ok_or_else(|| ProviderError::NotImplemented(entry.pkg.clone()))?;
-		let row = self
-			.enable_instance(
-				factory,
-				&catalog_source.lang,
-				Some(catalog_id),
-				&catalog_source.name,
-				&catalog_source.base_url,
-				created_by,
-			)
-			.await?;
-		Ok(row)
+		if let Some(factory) = self.factory_for_pkg(&entry.pkg) {
+			return self
+				.enable_instance(
+					&factory.instance_id(&catalog_source.lang),
+					factory.implementation,
+					&catalog_source.lang,
+					Some(catalog_id),
+					&catalog_source.name,
+					&catalog_source.base_url,
+					created_by,
+					&|row| (factory.build)(row),
+				)
+				.await;
+		}
+		let pkg = entry.pkg.clone();
+		let lang = catalog_source.lang.clone();
+		drop(snapshot);
+		let definition = self
+			.definitions
+			.definition_for_pkg(&pkg)
+			.await?
+			.ok_or(ProviderError::NotImplemented(pkg))?;
+		self.enable_definition(&definition, &lang, Some(catalog_id), created_by)
+			.await
 	}
 
-	/// Enable an implementation for a language without a catalog entry.
+	/// Enable an implementation for a language without a catalog entry. A
+	/// definition id is accepted here too, so a source can be brought up from
+	/// `/tmp/stump-sources` before the Keiyoushi catalog knows about it.
 	pub async fn enable_implementation(
 		&self,
 		implementation: &str,
 		lang: &str,
 		created_by: Option<&str>,
 	) -> Result<provider_source::Model, ProviderError> {
-		let factory = self
-			.factory_for_implementation(implementation)
-			.ok_or_else(|| ProviderError::NotImplemented(implementation.to_string()))?;
+		if let Some(factory) = self.factory_for_implementation(implementation) {
+			return self
+				.enable_instance(
+					&factory.instance_id(lang),
+					factory.implementation,
+					lang,
+					None,
+					factory.name,
+					factory.base_url,
+					created_by,
+					&|row| (factory.build)(row),
+				)
+				.await;
+		}
+		let definition = self.definitions.definition(implementation).await?;
+		let lang = if lang.trim().is_empty() {
+			definition.lang().to_string()
+		} else {
+			lang.to_string()
+		};
+		self.enable_definition(&definition, &lang, None, created_by)
+			.await
+	}
+
+	/// Enable a definition-backed source. The instance id is the definition id,
+	/// which already carries the language (`en.somesite`), so re-enabling is
+	/// idempotent and survives a catalog id change.
+	pub async fn enable_definition(
+		&self,
+		definition: &SourceDefinition,
+		lang: &str,
+		catalog_id: Option<&str>,
+		created_by: Option<&str>,
+	) -> Result<provider_source::Model, ProviderError> {
+		definition.validate()?;
+		let lang = if lang.trim().is_empty() {
+			definition.lang()
+		} else {
+			lang
+		};
 		self.enable_instance(
-			factory,
+			&definition.id,
+			&definition.id,
 			lang,
-			None,
-			factory.name,
-			factory.base_url,
+			catalog_id,
+			&definition.name,
+			definition.base_url(),
 			created_by,
+			&|row| self.build_definition_source(definition, row),
 		)
 		.await
 	}
 
+	#[allow(clippy::too_many_arguments)]
 	async fn enable_instance(
 		&self,
-		factory: &SourceFactory,
+		id: &str,
+		implementation: &str,
 		lang: &str,
 		catalog_id: Option<&str>,
 		name: &str,
 		base_url: &str,
 		created_by: Option<&str>,
+		build: &(dyn Fn(&provider_source::Model) -> Result<Arc<dyn Source>, ProviderError>
+		      + Send
+		      + Sync),
 	) -> Result<provider_source::Model, ProviderError> {
-		let id = factory.instance_id(lang);
-		let existing = provider_source::Entity::find_by_id(&id)
+		let existing = provider_source::Entity::find_by_id(id)
 			.one(self.conn.as_ref())
 			.await?;
 		let row = match existing {
@@ -374,8 +500,8 @@ impl ProviderHost {
 			},
 			None => {
 				provider_source::ActiveModel {
-					id: Set(id.clone()),
-					implementation: Set(factory.implementation.to_string()),
+					id: Set(id.to_string()),
+					implementation: Set(implementation.to_string()),
 					catalog_id: Set(catalog_id.map(str::to_string)),
 					name: Set(name.to_string()),
 					lang: Set(if lang.trim().is_empty() {
@@ -392,8 +518,7 @@ impl ProviderHost {
 				.await?
 			},
 		};
-		let source = (factory.build)(&row)?;
-		self.register_source(source);
+		self.register_source(build(&row)?);
 		Ok(row)
 	}
 
@@ -465,7 +590,18 @@ impl ProviderHost {
 			return Ok(pages);
 		}
 		let source = self.source(source_id)?;
-		let pages = Arc::new(source.pages(chapter_id).await?);
+		// A 404 from the page-manifest lookup is the source saying it cannot
+		// serve this chapter (MangaDex answers `/at-home/server/{id}` with
+		// 404 for licensed or taken-down chapters). That is a permanent
+		// per-chapter verdict, not a missing file.
+		let pages = Arc::new(source.pages(chapter_id).await.map_err(|error| {
+			match error {
+				SourceError::NotFound(_) => ProviderError::Unavailable {
+					source_id: source_id.to_string(),
+				},
+				other => ProviderError::Source(other),
+			}
+		})?);
 		self.manifests.lock().expect("manifests poisoned").insert(
 			key,
 			Manifest {
@@ -567,6 +703,11 @@ impl ProviderHost {
 
 	/// The stored cover URL (`series_metadata.comic_image`), falling back to
 	/// a details fetch.
+	///
+	/// A row can lack `comic_image` when the browse response the series was
+	/// materialised from carried no cover relationship, so the fallback is
+	/// what makes `series/{id}/thumbnail` work at all for those. The fetched
+	/// URL is written back so the next thumbnail request is one query again.
 	async fn cover_url(
 		&self,
 		source_id: &str,
@@ -583,7 +724,51 @@ impl ProviderHost {
 			return Ok(stored);
 		}
 		let details: RemoteSeries = self.source(source_id)?.details(remote_id).await?;
+		if let Some(url) = details.thumbnail_url.as_deref() {
+			self.store_cover_url(source_id, remote_id, url).await;
+		}
 		Ok(details.thumbnail_url)
+	}
+
+	/// Write a freshly discovered cover URL onto the materialised series'
+	/// metadata row, if there is one. Live-only series have nothing to write.
+	async fn store_cover_url(&self, source_id: &str, remote_id: &str, url: &str) {
+		let series_id = crate::virtual_path::series_id(source_id, remote_id);
+		let result = series_metadata::Entity::update_many()
+			.col_expr(series_metadata::Column::ComicImage, Expr::value(url))
+			.filter(series_metadata::Column::SeriesId.eq(series_id))
+			.filter(series_metadata::Column::ComicImage.is_null())
+			.exec(self.conn.as_ref())
+			.await;
+		if let Err(error) = result {
+			tracing::warn!(?error, source_id, remote_id, "Failed to store cover URL");
+		}
+	}
+
+	/// Whether the catalog marks the source instance's extension as adult.
+	///
+	/// Stump has no library-level age rating (`age_restrictions` is per user
+	/// and compares against `series_metadata.age_rating`), so an adult
+	/// source is applied per materialised series instead; see
+	/// [`crate::materialize::add_series`].
+	pub async fn source_is_adult(&self, source_id: &str) -> bool {
+		let Ok(Some(row)) = provider_source::Entity::find_by_id(source_id)
+			.one(self.conn.as_ref())
+			.await
+		else {
+			return false;
+		};
+		let Some(catalog_id) = row.catalog_id else {
+			return false;
+		};
+		self.catalog
+			.current()
+			.and_then(|snapshot| {
+				snapshot
+					.find_source(&catalog_id)
+					.map(|(entry, _)| entry.nsfw)
+			})
+			.unwrap_or(false)
 	}
 
 	/// Fetch every page (through the cache) and pack them into a Stored ZIP so

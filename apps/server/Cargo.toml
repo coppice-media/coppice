@@ -7,7 +7,7 @@ default-run = "stump_server"
 [features]
 default = ["full"]
 full = ["headless", "webui"]
-headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "komga", "kavita", "liseur-sync", "providers", "watcher", "qr", "apalis"]
+headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "komga", "kavita", "liseur-sync", "providers", "watcher", "qr", "ingest", "apalis"]
 # Apalis-backed job executor (links `apalis`); `minimal` runs jobs on the inline executor.
 apalis = ["stump_core/apalis"]
 # Media format backends that link native code; every profile keeps them on.
@@ -23,21 +23,33 @@ graphql = [
   "models/graphql",
   "stump_core/graphql",
 ]
+# The staged ingest pipeline (`stump_ingest` + `Ctx::ingest`): drop folder,
+# analysis queue, quality reports, metadata candidates, and the ingest SSE
+# route. `minimal` omits it, so neither the crate nor the route is compiled.
+ingest = ["dep:stump_ingest", "stump_core/ingest"]
 minimal = ["formats"]
 opds = ["dep:stump_opds"]
 readium = []
-kobo = ["dep:stump_kobo", "dep:stump_kepub"]
+kobo = ["dep:stump_kobo", "dep:stump_kepub", "dep:stump_collections"]
 koreader = ["dep:stump_koreader"]
-komga = ["readium", "dep:stump_komga"]
-kavita = ["dep:stump_kavita"]
+komga = ["readium", "dep:stump_komga", "dep:stump_collections", "dep:stump_library"]
+kavita = ["dep:stump_kavita", "dep:stump_collections"]
 liseur-sync = ["dep:stump_liseur_sync"]
-providers = ["dep:stump_provider", "dep:stump_provider_mangadex", "stump_core/providers", "graphql?/providers"]
+providers = [
+	"dep:stump_provider",
+	"dep:stump_provider_mangadex",
+	"dep:stump_provider_themes",
+	"stump_core/providers",
+	"graphql?/providers",
+]
 # Server-rendered PNG for the device-pairing QR payload (links `qrcode` + `image`
 # PNG encoding); omitted from `minimal`.
 qr = ["dep:qrcode", "dep:image"]
 # Filesystem library watcher (links `notify`); omitted from `minimal`.
 watcher = ["stump_core/watcher"]
-webui = []
+# Serves the bundled React SPA and forwards the GraphQL resolvers only that SPA
+# (and the Expo app) reaches; `headless` deliberately omits it, `full` has it.
+webui = ["graphql?/web"]
 
 [dependencies]
 alphanumeric-sort.workspace = true
@@ -84,6 +96,9 @@ serde-untagged = "0.1.2"
 serde_with.workspace = true
 sha2 = "0.10"
 stump_core = { path = "../../core", default-features = false }
+stump_collections = { path = "../../crates/collections", optional = true }
+stump_ingest = { path = "../../crates/ingest", optional = true }
+stump_library = { path = "../../crates/library", optional = true }
 stump_media = { path = "../../crates/media", default-features = false }
 stump_scanner = { path = "../../crates/scanner" }
 stump_auth = { path = "../../crates/auth" }
@@ -99,6 +114,7 @@ stump_liseur_sync = { path = "../../crates/liseur-sync", optional = true }
 stump_opds = { path = "../../crates/opds", optional = true }
 stump_provider = { path = "../../crates/provider", optional = true }
 stump_provider_mangadex = { path = "../../crates/provider-mangadex", optional = true }
+stump_provider_themes = { path = "../../crates/provider-themes", optional = true }
 subtle.workspace = true
 tempfile = "3.13.0"
 tower-http = { version = "0.5.2", features = [

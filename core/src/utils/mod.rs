@@ -1,9 +1,3 @@
-use std::path::Path;
-
-use tokio::fs;
-
-use crate::error::CoreResult;
-
 pub mod encryption;
 
 pub fn chain_optional_iter<T>(
@@ -16,17 +10,6 @@ pub fn chain_optional_iter<T>(
 		.chain(optional)
 		.flatten()
 		.collect()
-}
-
-/// Moves a file, falling back to copy + remove when `rename` cannot be used
-/// because source and target sit on different filesystems.
-pub async fn move_file(source: &Path, target: &Path) -> CoreResult<()> {
-	if fs::rename(source, target).await.is_ok() {
-		return Ok(());
-	}
-	fs::copy(source, target).await?;
-	fs::remove_file(source).await?;
-	Ok(())
 }
 
 #[cfg(test)]

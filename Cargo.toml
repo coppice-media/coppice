@@ -57,6 +57,7 @@ infer = "0.19.0"
 itertools = "0.14.0"
 heck = "0.5.0"
 http-cache-reqwest = { version = "1.0.0-alpha.6", default-features = false, features = ["manager-moka", "url-standard"] }
+id3 = "1.17.1"
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 lettre = { version = "0.11.18", default-features = false, features = [
   "builder",
@@ -66,6 +67,7 @@ lettre = { version = "0.11.18", default-features = false, features = [
   "tokio1-rustls-tls",
 ] }
 md5 = "0.8.0"
+mp4ameta = "0.13.0"
 natord = "1.0.9"
 num-traits = "0.2.19"
 prefixed-api-key = { version = "0.3.0", features = ["sha2"] }
@@ -96,6 +98,7 @@ serde_with = "3.15.0"
 simple_crypt = "0.2.3"
 strum = { version = "0.27.2", features = ["derive"] }
 subtle = "2.5.0"
+symphonia = { version = "0.6.1", default-features = false, features = ["flac", "id3v2", "isomp4", "mp3", "ogg"] }
 tempfile = "3.23.0"
 thiserror = "2.0.17"
 tokio = { version = "1.47.1", features = [
@@ -133,6 +136,16 @@ pretty_assertions = "1.4.1"
 
 # Only used to test with sea-orm
 maplit = { version = "1.0.2" }
+
+[profile.dev]
+# Workspace crates: line tables are enough for backtraces and keep every
+# rlib/binary a fraction of full DWARF (the dev target tree hit 260 GB with
+# nine parallel workers and full debuginfo).
+debug = "line-tables-only"
+# Incremental caches are per crate x feature set; parallel feature-gated
+# builds multiply them. Workers may re-enable per invocation with
+# CARGO_INCREMENTAL=1 when iterating on a single crate.
+incremental = false
 
 [profile.dev.package."*"]
 # Compile all dependencies with opt-level=3 to help speed up tests and

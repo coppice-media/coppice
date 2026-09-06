@@ -19,10 +19,15 @@
 		IngestProviderCatalogDocument,
 		IngestProviderSettingsDocument,
 		IngestQualityCheckCatalogDocument,
+		MetadataPolicyDocument,
 		SetIngestProviderSettingsDocument,
 		SetIngestQualityCheckSettingsDocument,
+		SetMetadataPolicyDocument,
 		VerifyIngestProviderDocument,
-		type IngestSettingValueType
+		type IngestSettingValueType,
+		type MetadataField,
+		type MetadataPolicyFieldsFragment,
+		type MetadataPolicyStrategy
 	} from '$lib/graphql/generated/graphql';
 	const queryClient = useQueryClient();
 	let tab = $state('providers');
@@ -32,6 +37,20 @@
 	let providerOptedIn = $state(false);
 	let providerValues = $state<Record<string, string>>({});
 	let providerStateLoadedFor = $state<string | null>(null);
+
+	type PolicyRow = MetadataPolicyFieldsFragment['fields'][number];
+	const STRATEGIES: { value: MetadataPolicyStrategy; label: string; hint: string }[] = [
+		{ value: 'FIRST', label: 'First match', hint: 'The first provider in the list that has a value wins.' },
+		{ value: 'MERGE_UNION', label: 'Merge (union)', hint: 'Union of the stored value and every provider, deduped case-insensitively. List fields only.' },
+		{ value: 'LONGEST', label: 'Longest', hint: 'The longest value wins; ties keep the higher-priority provider.' },
+		{ value: 'PREFER_EXISTING', label: 'Prefer existing', hint: 'Only fill the field when it is currently empty.' },
+		{ value: 'HIGHEST_RESOLUTION', label: 'Highest resolution', hint: 'The largest advertised cover wins. Cover only.' }
+	];
+	let selectedLibraryId = $state('');
+	let policyRows = $state<PolicyRow[]>([]);
+	let policyDirty = $state<string[]>([]);
+	let policyLoadedFor = $state<string | null>(null);
+	const session = getEditorSession();
 
 	const providerCatalogQuery = createQuery(() => ({
 		queryKey: ['provider-catalog'],
@@ -82,11 +101,50 @@
 			},
 		onError: (error) => toast.error(error instanceof Error ? error.message : 'Unable to save quality-check setting.')
 	}));
+	const policyQuery = createQuery(() => ({
+		queryKey: ['metadata-policy', selectedLibraryId],
+		queryFn: () => request(MetadataPolicyDocument, { libraryId: selectedLibraryId }),
+		enabled: browser && Boolean(selectedLibraryId)
+	}));
+	const savePolicyMutation = createMutation(() => ({
+		mutationFn: (fields: PolicyRow[]) =>
+			request(SetMetadataPolicyDocument, {
+				libraryId: selectedLibraryId,
+				input: {
+					fields: fields.map((row) => ({
+						field: row.field,
+						providers: row.providers,
+						strategy: row.strategy,
+						lockRespected: row.lockRespected
+					}))
+				}
+			}),
+		onSuccess: (result) => {
+			policyLoadedFor = null;
+			policyDirty = [];
+			// The mutation answers with the same shape the query reads, but
+			// under its own field: unwrap it or the cache write silently
+			// blanks the tab.
+			queryClient.setQueryData(['metadata-policy', selectedLibraryId], {
+				metadataPolicy: result.setMetadataPolicy
+			});
+			toast.success(
+				result.setMetadataPolicy.hasLibraryOverride
+					? 'Library policy saved.'
+					: 'Library policy cleared; the server default applies.'
+			);
+		},
+		onError: (error) => toast.error(error instanceof Error ? error.message : 'Unable to save the metadata policy.')
+	}));
 
 	let providers = $derived(providerCatalogQuery.data?.ingestProviderCatalog ?? []);
 	let checks = $derived(qualityCatalogQuery.data?.ingestQualityCheckCatalog ?? []);
 	let selectedProvider = $derived(providers.find((provider) => provider.id === selectedProviderId));
 	let providerSettings = $derived(providerSettingsQuery.data?.ingestProviderSettings);
+	let libraries = $derived(session.libraries);
+	let policy = $derived(policyQuery.data?.metadataPolicy);
+	let policyProviderIds = $derived(providers.map((provider) => provider.id));
+	let policyChanged = $derived(policyDirty.length > 0);
 
 	$effect(() => {
 		if (!selectedProviderId && providers.length) selectedProviderId = providers[0].id;
@@ -100,6 +158,18 @@
 		providerValues = Object.fromEntries(
 			state.settings.filter((setting) => !setting.secret && setting.value !== null).map((setting) => [setting.key, stringifyValue(setting.value)])
 		);
+	});
+	$effect(() => {
+		if (!selectedLibraryId && libraries.length) {
+			selectedLibraryId = session.selectedLibraryId || libraries[0].id;
+		}
+	});
+	$effect(() => {
+		const loaded = policy;
+		if (!loaded || loaded.libraryId === policyLoadedFor) return;
+		policyLoadedFor = loaded.libraryId;
+		policyDirty = [];
+		policyRows = loaded.fields.map((row) => ({ ...row, providers: [...row.providers] }));
 	});
 
 	function stringifyValue(value: unknown): string {
@@ -140,6 +210,88 @@
 	function settingValue(setting: ProviderSetting | undefined): string {
 		return setting?.secret ? '' : stringifyValue(setting?.value);
 	}
+
+	function selectLibrary(libraryId: string | undefined): void {
+		if (!libraryId) return;
+		selectedLibraryId = libraryId;
+		policyLoadedFor = null;
+		policyDirty = [];
+	}
+
+	function fieldLabel(field: MetadataField): string {
+		return field
+			.toLowerCase()
+			.split('_')
+			.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+			.join(' ');
+	}
+
+	function strategyLabel(strategy: MetadataPolicyStrategy): string {
+		return STRATEGIES.find((entry) => entry.value === strategy)?.label ?? strategy;
+	}
+
+	// Mark a field as locally edited and hand back a fresh row array so the
+	// rune tracks the change.
+	function updateRow(field: MetadataField, change: (row: PolicyRow) => PolicyRow): void {
+		policyRows = policyRows.map((row) => (row.field === field ? change(row) : row));
+		if (!policyDirty.includes(field)) policyDirty = [...policyDirty, field];
+	}
+
+	function moveProvider(field: MetadataField, index: number, direction: -1 | 1): void {
+		updateRow(field, (row) => {
+			const providers = [...row.providers];
+			const target = index + direction;
+			if (target < 0 || target >= providers.length) return row;
+			[providers[index], providers[target]] = [providers[target], providers[index]];
+			return { ...row, providers };
+		});
+	}
+
+	function removeProvider(field: MetadataField, providerId: string): void {
+		updateRow(field, (row) => ({
+			...row,
+			providers: row.providers.filter((id) => id !== providerId)
+		}));
+	}
+
+	function addProvider(field: MetadataField, providerId: string | undefined): void {
+		if (!providerId) return;
+		updateRow(field, (row) =>
+			row.providers.includes(providerId)
+				? row
+				: { ...row, providers: [...row.providers, providerId] }
+		);
+	}
+
+	function setStrategy(field: MetadataField, strategy: string | undefined): void {
+		if (!strategy) return;
+		updateRow(field, (row) => ({ ...row, strategy: strategy as MetadataPolicyStrategy }));
+	}
+
+	function setLockRespected(field: MetadataField, lockRespected: boolean): void {
+		updateRow(field, (row) => ({ ...row, lockRespected }));
+	}
+
+	// Drop a field from the override so it inherits the server default again.
+	// The row is only removed from the saved payload; the server answers with
+	// the inherited rule.
+	function inheritField(field: MetadataField): void {
+		policyRows = policyRows.map((row) =>
+			row.field === field ? { ...row, overridden: false } : row
+		);
+		policyDirty = policyDirty.filter((dirty) => dirty !== field);
+	}
+
+	// The override document: every field the library already overrides plus
+	// every field edited in this session. Fields left inherited stay out of
+	// it, so the server default keeps flowing through.
+	function overrideRows(): PolicyRow[] {
+		return policyRows.filter((row) => row.overridden || policyDirty.includes(row.field));
+	}
+
+	function availableProviders(row: PolicyRow): string[] {
+		return policyProviderIds.filter((id) => !row.providers.includes(id));
+	}
 </script>
 
 <svelte:head><title>Settings · Stump ingest</title></svelte:head>
@@ -148,10 +300,10 @@
 	<div>
 		<p class="text-sm font-medium text-primary">Registry and policy</p>
 		<h1 class="text-3xl font-semibold tracking-tight">Ingest settings</h1>
-		<p class="mt-1 max-w-3xl text-muted-foreground">Configure metadata providers and deterministic quality checks. Secret values are write-only and never rendered back from the server.</p>
+		<p class="mt-1 max-w-3xl text-muted-foreground">Configure metadata providers, the per-field metadata policy, and deterministic quality checks. Secret values are write-only and never rendered back from the server.</p>
 	</div>
 	<Tabs.Root bind:value={tab}>
-		<Tabs.List class="h-auto w-fit"><Tabs.Trigger value="providers">Metadata providers</Tabs.Trigger><Tabs.Trigger value="quality">Quality checks</Tabs.Trigger></Tabs.List>
+		<Tabs.List class="h-auto w-fit"><Tabs.Trigger value="providers">Metadata providers</Tabs.Trigger><Tabs.Trigger value="policy">Policy</Tabs.Trigger><Tabs.Trigger value="quality">Quality checks</Tabs.Trigger></Tabs.List>
 		<Tabs.Content value="providers" class="flex flex-col gap-6">
 			<Card>
 				<CardHeader>
@@ -231,6 +383,141 @@
 					</CardContent>
 				</Card>
 			{/if}
+		</Tabs.Content>
+		<Tabs.Content value="policy" class="flex flex-col gap-6">
+			<Card>
+				<CardHeader>
+					<div class="flex flex-wrap items-start justify-between gap-4">
+						<div>
+							<CardTitle>Per-field metadata policy</CardTitle>
+							<CardDescription>
+								For every field: which providers may fill it, in what order, and how their values combine. A field left inherited follows the server default; the library override only carries the fields you change.
+							</CardDescription>
+						</div>
+						<Badge variant={policy?.hasLibraryOverride ? 'secondary' : 'outline'}>
+							{policy?.hasLibraryOverride ? 'Library override' : 'Server default'}
+						</Badge>
+					</div>
+				</CardHeader>
+				<CardContent class="flex flex-col gap-4">
+					<div class="grid max-w-xl gap-2 text-sm font-medium">
+						<span>Library</span>
+						<Select.Root type="single" name="policy-library" bind:value={selectedLibraryId} onValueChange={selectLibrary}>
+							<Select.Trigger class="w-full">
+								{libraries.find((library) => library.id === selectedLibraryId)?.name ?? 'Select a library'}
+							</Select.Trigger>
+							<Select.Content>
+								<Select.Group>
+									<Select.Label>Libraries</Select.Label>
+									{#each libraries as library (library.id)}
+										<Select.Item value={library.id} label={library.name}>{library.name}</Select.Item>
+									{/each}
+								</Select.Group>
+							</Select.Content>
+						</Select.Root>
+					</div>
+					{#if policyQuery.isPending}
+						<div class="flex flex-col gap-3"><Skeleton class="h-12 w-full" /><Skeleton class="h-12 w-full" /><Skeleton class="h-12 w-full" /></div>
+					{:else if policyQuery.isError}
+						<Alert variant="destructive">
+							<AlertTitle>Unable to load the metadata policy</AlertTitle>
+							<AlertDescription>{policyQuery.error instanceof Error ? policyQuery.error.message : 'The server did not return a policy.'}</AlertDescription>
+						</Alert>
+					{:else if !policyRows.length}
+						<Empty>
+							<EmptyHeader>
+								<EmptyTitle>No policy fields</EmptyTitle>
+								<EmptyDescription>Select a library to load its effective metadata policy.</EmptyDescription>
+							</EmptyHeader>
+						</Empty>
+					{:else}
+						<div class="flex flex-col divide-y">
+							{#each policyRows as row (row.field)}
+								<div class="grid gap-4 py-4 lg:grid-cols-[14rem_1fr_15rem]">
+									<div class="flex flex-col gap-1">
+										<span class="font-medium">{fieldLabel(row.field)}</span>
+										<span class="text-xs text-muted-foreground">{row.field}</span>
+										<div class="flex flex-wrap gap-1">
+											{#if row.overridden || policyDirty.includes(row.field)}
+												<Badge variant="secondary" class="text-xs">Override</Badge>
+											{:else}
+												<Badge variant="outline" class="text-xs">Inherited</Badge>
+											{/if}
+											{#if !row.storable}
+												<Badge variant="outline" class="text-xs" title="The staged apply path has no column for this field: the winner is shown as evidence, nothing is written.">Evidence only</Badge>
+											{/if}
+										</div>
+									</div>
+									<div class="flex flex-col gap-2">
+										{#if row.providers.length}
+											<ol class="flex flex-col gap-1">
+												{#each row.providers as providerId, index (providerId)}
+													<li class="flex items-center gap-2 text-sm">
+														<span class="w-5 tabular-nums text-muted-foreground">{index + 1}.</span>
+														<span class="min-w-0 flex-1 truncate">{providers.find((provider) => provider.id === providerId)?.name ?? providerId}</span>
+														<span class="truncate text-xs text-muted-foreground">{providerId}</span>
+														<Button type="button" variant="ghost" size="sm" aria-label={`Move ${providerId} up`} disabled={index === 0} onclick={() => moveProvider(row.field, index, -1)}>↑</Button>
+														<Button type="button" variant="ghost" size="sm" aria-label={`Move ${providerId} down`} disabled={index === row.providers.length - 1} onclick={() => moveProvider(row.field, index, 1)}>↓</Button>
+														<Button type="button" variant="ghost" size="sm" aria-label={`Remove ${providerId}`} onclick={() => removeProvider(row.field, providerId)}>✕</Button>
+													</li>
+												{/each}
+											</ol>
+										{:else}
+											<p class="text-sm text-muted-foreground">No provider may fill this field.</p>
+										{/if}
+										{#if availableProviders(row).length}
+											<Select.Root type="single" name={`add-provider-${row.field}`} value="" onValueChange={(providerId) => addProvider(row.field, providerId)}>
+												<Select.Trigger class="w-full max-w-sm">Add provider</Select.Trigger>
+												<Select.Content>
+													<Select.Group>
+														<Select.Label>Registered providers</Select.Label>
+														{#each availableProviders(row) as providerId (providerId)}
+															<Select.Item value={providerId} label={providerId}>
+																{providers.find((provider) => provider.id === providerId)?.name ?? providerId} · {providerId}
+															</Select.Item>
+														{/each}
+													</Select.Group>
+												</Select.Content>
+											</Select.Root>
+										{/if}
+									</div>
+									<div class="flex flex-col gap-2">
+										<Select.Root type="single" name={`strategy-${row.field}`} value={row.strategy} onValueChange={(strategy) => setStrategy(row.field, strategy)}>
+											<Select.Trigger class="w-full">{strategyLabel(row.strategy)}</Select.Trigger>
+											<Select.Content>
+												<Select.Group>
+													<Select.Label>Merge strategy</Select.Label>
+													{#each STRATEGIES as strategy (strategy.value)}
+														<Select.Item value={strategy.value} label={strategy.label}>{strategy.label}</Select.Item>
+													{/each}
+												</Select.Group>
+											</Select.Content>
+										</Select.Root>
+										<p class="text-xs text-muted-foreground">{STRATEGIES.find((entry) => entry.value === row.strategy)?.hint}</p>
+										<div class="flex items-center justify-between gap-2">
+											<label class="flex items-center gap-2 text-sm" for={`lock-${row.field}`}>
+												Respect locks
+												<Switch id={`lock-${row.field}`} checked={row.lockRespected} onchange={(event) => setLockRespected(row.field, (event.currentTarget as HTMLButtonElement).getAttribute('data-state') === 'checked')} />
+											</label>
+											{#if row.overridden || policyDirty.includes(row.field)}
+												<Button type="button" variant="ghost" size="sm" onclick={() => inheritField(row.field)}>Inherit</Button>
+											{/if}
+										</div>
+									</div>
+								</div>
+							{/each}
+						</div>
+						<div class="flex flex-wrap items-center justify-end gap-2">
+							<Button type="button" variant="outline" disabled={savePolicyMutation.isPending || !policy?.hasLibraryOverride} onclick={() => savePolicyMutation.mutate([])}>
+								Reset to server default
+							</Button>
+							<Button type="button" disabled={savePolicyMutation.isPending || !policyChanged} onclick={() => savePolicyMutation.mutate(overrideRows())}>
+								{savePolicyMutation.isPending ? 'Saving…' : 'Save policy'}
+							</Button>
+						</div>
+					{/if}
+				</CardContent>
+			</Card>
 		</Tabs.Content>
 		<Tabs.Content value="quality" class="flex flex-col gap-4">
 			{#if qualityCatalogQuery.isPending}{#each Array(5) as _, index (index)}<Skeleton class="h-24 w-full" />{/each}{:else if qualityCatalogQuery.isError}<Alert variant="destructive"><AlertTitle>Unable to load quality checks</AlertTitle><AlertDescription>{qualityCatalogQuery.error instanceof Error ? qualityCatalogQuery.error.message : 'The server did not return quality descriptors.'}</AlertDescription></Alert>{:else if !checks.length}<Empty><EmptyHeader><EmptyTitle>No quality checks registered</EmptyTitle><EmptyDescription>The server build has no ingest quality checks available.</EmptyDescription></EmptyHeader></Empty>{:else}{#each checks as check (check.id)}<Card><CardContent class="flex flex-wrap items-start justify-between gap-4 p-5"><div><div class="flex items-center gap-2"><h2 class="font-medium">{check.name}</h2><span class="rounded bg-muted px-2 py-0.5 text-xs tabular-nums">weight {check.weight}</span></div><p class="mt-1 text-sm text-muted-foreground">{check.id} · version {check.version} · {check.supportedMediaTypes.join(', ') || 'all formats'}</p>{#if check.settings.length}<p class="mt-2 text-xs text-muted-foreground">Settings: {check.settings.map((setting) => setting.label).join(', ')}</p>{/if}</div><label class="flex items-center gap-2 text-sm">Enabled<Switch checked={check.enabled} onchange={(event) => saveQualityMutation.mutate({ checkId: check.id, enabled: (event.currentTarget as HTMLButtonElement).getAttribute('data-state') === 'checked' })} /></label></CardContent></Card>{/each}{/if}

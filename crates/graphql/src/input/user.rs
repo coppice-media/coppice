@@ -1,9 +1,11 @@
 use async_graphql::InputObject;
+use models::shared::enums::UserPermission;
+
+#[cfg(feature = "web")]
 use models::shared::{
 	arrangement::ArrangementSection,
 	enums::{
 		InterfaceLayout, InterfaceRoundness, SupportedFont, ThumbnailPlaceholderStyle,
-		UserPermission,
 	},
 };
 
@@ -33,6 +35,7 @@ pub struct UpdateUserInput {
 	pub max_sessions_allowed: Option<i32>,
 }
 
+#[cfg(feature = "web")]
 #[derive(InputObject, Debug)]
 pub struct UpdateUserPreferencesInput {
 	pub locale: String,
@@ -62,6 +65,7 @@ pub struct UpdateUserPreferencesInput {
 	pub reading_session_grace_period_secs: i64,
 }
 
+#[cfg(feature = "web")]
 #[derive(InputObject, Debug)]
 pub struct NavigationArrangementInput {
 	pub sections: Vec<ArrangementSection>,

@@ -1,0 +1,16 @@
+[package]
+name = "stump_collections"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+chrono.workspace = true
+models = { path = "../models", default-features = false }
+sea-orm.workspace = true
+stump_core = { path = "../../core", default-features = false }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tests = { path = "../tests" }
+tokio = { workspace = true }

@@ -13,16 +13,20 @@ use crate::{
 	http::SourceHttp,
 	rate_limit::RateLimiter,
 	source::{
-		FetchedPage, RemoteChapter, RemotePage, RemoteSeries, SearchFilter, SeriesStatus,
-		Source, SourceCapabilities, SourceError, SourceInfo, SourcePage, SourceResult,
+		ContentRating, FetchedPage, RemoteChapter, RemotePage, RemoteSeries,
+		SearchFilter, SeriesStatus, Source, SourceCapabilities, SourceError, SourceInfo,
+		SourcePage, SourceResult,
 	},
 };
 
 pub const MOCK_SOURCE_ID: &str = "mock-en";
 pub const SERIES_ALPHA: &str = "alpha";
 pub const SERIES_BETA: &str = "beta";
-/// Chapters of `alpha`, in remote (newest-first) order.
+/// Chapters of `alpha`, in remote (newest-first) order. All readable.
 pub const ALPHA_CHAPTERS: [&str; 3] = ["alpha-ch3", "alpha-ch2", "alpha-ch1"];
+/// Chapters of `beta`, none of which the source can serve: one is hosted
+/// externally, one reports zero pages, one is flagged unavailable.
+pub const BETA_CHAPTERS: [&str; 3] = ["beta-external", "beta-empty", "beta-gone"];
 pub const PAGES_PER_CHAPTER: u32 = 3;
 
 /// A 1x1 PNG so page bytes decode as a real image.
@@ -89,6 +93,7 @@ impl MockSource {
 				genres: vec!["Action".to_string(), "Comedy".to_string()],
 				status: SeriesStatus::Ongoing,
 				nsfw: false,
+				content_rating: Some(ContentRating::Safe),
 				original_language: Some("ja".to_string()),
 				external_ids: std::collections::BTreeMap::from([(
 					"al".to_string(),
@@ -106,6 +111,7 @@ impl MockSource {
 				genres: vec![],
 				status: SeriesStatus::Completed,
 				nsfw: true,
+				content_rating: Some(ContentRating::Pornographic),
 				original_language: None,
 				external_ids: Default::default(),
 			}),
@@ -193,10 +199,36 @@ impl Source for MockSource {
 						),
 						url: Some(format!("http://mock.invalid/chapter/{id}")),
 						page_count: (number as u32 != 2).then_some(PAGES_PER_CHAPTER),
+						..Default::default()
 					}
 				})
 				.collect()),
-			SERIES_BETA => Ok(Vec::new()),
+			// One chapter per unreadable reason, so materialisation has
+			// something to skip and report.
+			SERIES_BETA => Ok(vec![
+				RemoteChapter {
+					remote_id: BETA_CHAPTERS[0].to_string(),
+					number: Some(3.0),
+					readable: false,
+					external_url: Some("https://elsewhere.invalid/beta/3".to_string()),
+					page_count: None,
+					..Default::default()
+				},
+				RemoteChapter {
+					remote_id: BETA_CHAPTERS[1].to_string(),
+					number: Some(2.0),
+					readable: false,
+					page_count: Some(0),
+					..Default::default()
+				},
+				RemoteChapter {
+					remote_id: BETA_CHAPTERS[2].to_string(),
+					number: Some(1.0),
+					readable: false,
+					page_count: Some(PAGES_PER_CHAPTER),
+					..Default::default()
+				},
+			]),
 			_ => Err(SourceError::NotFound(remote_id.to_string())),
 		}
 	}

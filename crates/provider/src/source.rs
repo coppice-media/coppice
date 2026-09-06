@@ -71,6 +71,49 @@ impl SeriesStatus {
 	}
 }
 
+/// How a source rates a series' content.
+///
+/// The variants are MangaDex's `contentRating` vocabulary
+/// (`MangaAttributes.contentRating`, enum `safe | suggestive | erotica |
+/// pornographic` in <https://api.mangadex.org/docs/static/api.yaml>), which
+/// every Mihon-shaped source can be projected onto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ContentRating {
+	Safe,
+	Suggestive,
+	Erotica,
+	Pornographic,
+}
+
+impl ContentRating {
+	/// The `series_metadata.age_rating` projection Stump's per-user age
+	/// restriction compares against. `Safe` deliberately stores no rating so
+	/// an unrestricted title stays visible to users whose restriction does
+	/// not `restrict_on_unset`.
+	///
+	/// | `contentRating` | `age_rating` |
+	/// | --- | --- |
+	/// | `safe` | `None` |
+	/// | `suggestive` | `13` |
+	/// | `erotica` | `16` |
+	/// | `pornographic` | `18` |
+	pub fn age_rating(self) -> Option<i32> {
+		match self {
+			ContentRating::Safe => None,
+			ContentRating::Suggestive => Some(13),
+			ContentRating::Erotica => Some(16),
+			ContentRating::Pornographic => Some(18),
+		}
+	}
+
+	/// Whether the rating alone marks the series adult, i.e. what the legacy
+	/// [`RemoteSeries::nsfw`] flag reports.
+	pub fn is_adult(self) -> bool {
+		matches!(self, ContentRating::Erotica | ContentRating::Pornographic)
+	}
+}
+
 /// A series as described by a remote source.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct RemoteSeries {
@@ -85,6 +128,11 @@ pub struct RemoteSeries {
 	pub status: SeriesStatus,
 	pub nsfw: bool,
 	pub original_language: Option<String>,
+	/// The source's own content rating, when it reports one. Materialisation
+	/// projects it onto `series_metadata.age_rating`; see
+	/// [`ContentRating::age_rating`].
+	#[serde(default)]
+	pub content_rating: Option<ContentRating>,
 	/// Cross-source ids the source reports for this work, keyed by registry
 	/// (`al`, `mal`, `mu`, ...). Used to dedupe the same work across sources;
 	/// see [`crate::identity`].
@@ -93,6 +141,11 @@ pub struct RemoteSeries {
 }
 
 /// A chapter as described by a remote source.
+///
+/// `readable` is the source's verdict on whether the chapter's pages can be
+/// fetched at all. Materialisation skips unreadable chapters instead of
+/// writing rows whose pages can only ever 404
+/// ([`crate::materialize::add_series`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemoteChapter {
 	pub remote_id: String,
@@ -105,6 +158,39 @@ pub struct RemoteChapter {
 	pub url: Option<String>,
 	/// Known page count, when the source reports it without a page fetch.
 	pub page_count: Option<u32>,
+	/// Whether the source can serve this chapter's pages. `false` for
+	/// chapters hosted elsewhere, chapters with no readable images, and
+	/// chapters the source marks unavailable.
+	#[serde(default = "readable_default")]
+	pub readable: bool,
+	/// Where the chapter actually lives when it is not hosted by the source
+	/// (MangaDex `ChapterAttributes.externalUrl`).
+	#[serde(default)]
+	pub external_url: Option<String>,
+}
+
+fn readable_default() -> bool {
+	true
+}
+
+/// A chapter is readable unless a source says otherwise, so that sources
+/// which cannot tell are not silently skipped by materialisation.
+impl Default for RemoteChapter {
+	fn default() -> Self {
+		Self {
+			remote_id: String::new(),
+			title: None,
+			number: None,
+			volume: None,
+			lang: None,
+			scanlator: None,
+			uploaded_at: None,
+			url: None,
+			page_count: None,
+			readable: true,
+			external_url: None,
+		}
+	}
 }
 
 impl RemoteChapter {
@@ -162,6 +248,14 @@ impl RemotePage {
 pub struct FetchedPage {
 	pub bytes: Vec<u8>,
 	pub content_type: Option<String>,
+}
+
+/// A fetched HTML document: the decoded body plus the URL it came from after
+/// redirects, so relative links and `Referer` headers resolve correctly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HtmlDocument {
+	pub body: String,
+	pub url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,6 +399,65 @@ impl SourceHttp {
 		let body = response.bytes().await?;
 		serde_json::from_slice(&body).map_err(SourceError::decode)
 	}
+
+	/// Rate-limited GET of an HTML document. Returns the decoded body and the
+	/// URL the response actually came from, which HTML sources need both as the
+	/// base for relative links and as the `Referer` for image requests (jsoup's
+	/// `Document.location()`).
+	pub async fn get_text(
+		&self,
+		url: &str,
+		headers: &[(&str, &str)],
+	) -> SourceResult<HtmlDocument> {
+		self.limiter().until_ready().await;
+		let mut request = self.client().get(url);
+		for (name, value) in headers {
+			request = request.header(*name, *value);
+		}
+		Self::into_document(request.send().await?, url).await
+	}
+
+	/// Rate-limited `application/x-www-form-urlencoded` POST of an HTML
+	/// document. Themes that page through `admin-ajax.php` need this.
+	pub async fn post_form(
+		&self,
+		url: &str,
+		headers: &[(&str, &str)],
+		form: &[(String, String)],
+	) -> SourceResult<HtmlDocument> {
+		self.limiter().until_ready().await;
+		let mut request = self.client().post(url).form(form);
+		for (name, value) in headers {
+			request = request.header(*name, *value);
+		}
+		Self::into_document(request.send().await?, url).await
+	}
+
+	async fn into_document(
+		response: reqwest::Response,
+		requested: &str,
+	) -> SourceResult<HtmlDocument> {
+		let status = response.status();
+		if status.as_u16() == 429 {
+			return Err(SourceError::RateLimited {
+				retry_after: retry_after(response.headers()),
+			});
+		}
+		if status.as_u16() == 404 {
+			return Err(SourceError::NotFound(requested.to_string()));
+		}
+		let url = response.url().to_string();
+		if !status.is_success() {
+			return Err(SourceError::Status {
+				status: status.as_u16(),
+				url,
+			});
+		}
+		Ok(HtmlDocument {
+			body: response.text().await?,
+			url,
+		})
+	}
 }
 
 fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
@@ -326,11 +479,7 @@ mod tests {
 			title: Some("The Beginning".into()),
 			number: Some(12.0),
 			volume: Some("2".into()),
-			lang: None,
-			scanlator: None,
-			uploaded_at: None,
-			url: None,
-			page_count: None,
+			..Default::default()
 		};
 		assert_eq!(chapter.display_name(), "Vol. 2 Ch. 12 - The Beginning");
 
@@ -355,5 +504,32 @@ mod tests {
 	fn series_status_projects_to_metadata_status() {
 		assert_eq!(SeriesStatus::Ongoing.as_metadata_status(), "Continuing");
 		assert_eq!(SeriesStatus::Completed.as_metadata_status(), "Ended");
+	}
+
+	/// The documented `contentRating` → `age_rating` table. `Safe` stores no
+	/// rating so unrestricted titles stay visible to users whose restriction
+	/// does not restrict on unset.
+	#[test]
+	fn content_rating_projects_to_age_rating() {
+		assert_eq!(ContentRating::Safe.age_rating(), None);
+		assert_eq!(ContentRating::Suggestive.age_rating(), Some(13));
+		assert_eq!(ContentRating::Erotica.age_rating(), Some(16));
+		assert_eq!(ContentRating::Pornographic.age_rating(), Some(18));
+		assert!(!ContentRating::Safe.is_adult());
+		assert!(!ContentRating::Suggestive.is_adult());
+		assert!(ContentRating::Erotica.is_adult());
+		assert!(ContentRating::Pornographic.is_adult());
+	}
+
+	/// A source that cannot tell must not have its chapters skipped, so the
+	/// default — and the value a payload without the field decodes to — is
+	/// readable.
+	#[test]
+	fn chapters_default_to_readable() {
+		assert!(RemoteChapter::default().readable);
+		let decoded: RemoteChapter =
+			serde_json::from_str(r#"{"remote_id":"c1"}"#).expect("decode");
+		assert!(decoded.readable);
+		assert_eq!(decoded.external_url, None);
 	}
 }

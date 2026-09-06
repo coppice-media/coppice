@@ -13,7 +13,7 @@ use sea_orm::prelude::*;
 use sea_orm::query::*;
 
 use crate::SyncToken;
-use stump_core::collections::{shelf_sync_delta, ShelfProjection};
+use stump_collections::{shelf_sync_delta, ShelfProjection};
 use stump_core::kobo::{entity::MediaWithMetadataAndReadingSessions, sync_types::*};
 
 pub struct KoboSync {
@@ -447,7 +447,7 @@ impl<'a> SyncPage<'a> {
 	/// full sync, `ChangedTag` for shelves written inside the incremental
 	/// window, and `DeletedTag` for tombstones in that window. Shelf items
 	/// are scoped to the session's media extensions. See
-	/// `stump_core::collections`.
+	/// `stump_collections`.
 	async fn append_shelf_items(
 		&self,
 		sync_items: &mut Vec<SyncItem>,
@@ -1154,7 +1154,7 @@ mod tests {
 	/// `DeletedTag`.
 	#[tokio::test]
 	async fn test_shelf_round_trip_tags_follow_device_writes() {
-		use stump_core::collections::{
+		use stump_collections::{
 			add_shelf_items, create_device_shelf, delete_shelf, remove_shelf_items,
 			rename_shelf,
 		};

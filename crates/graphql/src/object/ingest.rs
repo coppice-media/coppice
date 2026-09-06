@@ -11,7 +11,7 @@ use models::{
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{json, Value};
 use stump_api_types::settings::{SettingDefinition, SettingKind};
-use stump_core::ingest::contract::{
+use stump_ingest::contract::{
 	AnalysisPhase, DropItemStatus, IngestProgressEvent as CoreIngestProgressEvent,
 	QualityReportCheck, QualityStatus,
 };
@@ -309,14 +309,14 @@ impl IngestAnalysisJob {
 	/// Media targets of a library rework job; empty for staged drop-item
 	/// jobs.
 	async fn media_ids(&self) -> Vec<ID> {
-		stump_core::ingest::store::analysis_targets_from_plan(
+		stump_ingest::store::analysis_targets_from_plan(
 			&self.model.plan,
 			self.model.drop_item_id.as_deref(),
 		)
 		.into_iter()
 		.filter_map(|target| match target {
-			stump_core::ingest::store::AnalysisTarget::Media(id) => Some(ID::from(id)),
-			stump_core::ingest::store::AnalysisTarget::DropItem(_) => None,
+			stump_ingest::store::AnalysisTarget::Media(id) => Some(ID::from(id)),
+			stump_ingest::store::AnalysisTarget::DropItem(_) => None,
 		})
 		.collect()
 	}
@@ -636,10 +636,10 @@ pub struct IngestProviderDescriptor {
 	pub help_url: Option<String>,
 }
 
-impl From<stump_core::ingest::providers::ProviderDescriptor>
+impl From<stump_ingest::providers::ProviderDescriptor>
 	for IngestProviderDescriptor
 {
-	fn from(descriptor: stump_core::ingest::providers::ProviderDescriptor) -> Self {
+	fn from(descriptor: stump_ingest::providers::ProviderDescriptor) -> Self {
 		let help_url = provider_help_url(&descriptor.id);
 		Self {
 			id: descriptor.id,
@@ -694,9 +694,9 @@ pub enum IngestProviderCapability {
 	AiEnrichment,
 }
 
-impl From<stump_core::ingest::contract::ProviderCapability> for IngestProviderCapability {
-	fn from(capability: stump_core::ingest::contract::ProviderCapability) -> Self {
-		use stump_core::ingest::contract::ProviderCapability as Core;
+impl From<stump_ingest::contract::ProviderCapability> for IngestProviderCapability {
+	fn from(capability: stump_ingest::contract::ProviderCapability) -> Self {
+		use stump_ingest::contract::ProviderCapability as Core;
 		match capability {
 			Core::Identify => Self::Identify,
 			Core::Lookup => Self::Lookup,
@@ -716,9 +716,9 @@ pub enum IngestMediaKind {
 	Unknown,
 }
 
-impl From<stump_core::ingest::contract::IngestMediaKind> for IngestMediaKind {
-	fn from(kind: stump_core::ingest::contract::IngestMediaKind) -> Self {
-		use stump_core::ingest::contract::IngestMediaKind as Core;
+impl From<stump_ingest::contract::IngestMediaKind> for IngestMediaKind {
+	fn from(kind: stump_ingest::contract::IngestMediaKind) -> Self {
+		use stump_ingest::contract::IngestMediaKind as Core;
 		match kind {
 			Core::ComicArchive => Self::ComicArchive,
 			Core::ComicRarArchive => Self::ComicRarArchive,
@@ -729,9 +729,9 @@ impl From<stump_core::ingest::contract::IngestMediaKind> for IngestMediaKind {
 	}
 }
 
-impl From<IngestMediaKind> for stump_core::ingest::contract::IngestMediaKind {
+impl From<IngestMediaKind> for stump_ingest::contract::IngestMediaKind {
 	fn from(kind: IngestMediaKind) -> Self {
-		use stump_core::ingest::contract::IngestMediaKind as Core;
+		use stump_ingest::contract::IngestMediaKind as Core;
 		match kind {
 			IngestMediaKind::ComicArchive => Core::ComicArchive,
 			IngestMediaKind::ComicRarArchive => Core::ComicRarArchive,
@@ -755,8 +755,8 @@ pub struct IngestSearchHit {
 	pub score: f64,
 }
 
-impl From<stump_core::ingest::contract::SearchHit> for IngestSearchHit {
-	fn from(hit: stump_core::ingest::contract::SearchHit) -> Self {
+impl From<stump_ingest::contract::SearchHit> for IngestSearchHit {
+	fn from(hit: stump_ingest::contract::SearchHit) -> Self {
 		Self {
 			provider_id: hit.provider_id,
 			external_id: hit.external_id,
@@ -914,8 +914,8 @@ pub struct IngestQualityCheckDescriptor {
 	pub settings: Vec<IngestSettingDefinition>,
 }
 
-impl From<stump_core::ingest::quality::CheckDescriptor> for IngestQualityCheckDescriptor {
-	fn from(descriptor: stump_core::ingest::quality::CheckDescriptor) -> Self {
+impl From<stump_ingest::quality::CheckDescriptor> for IngestQualityCheckDescriptor {
+	fn from(descriptor: stump_ingest::quality::CheckDescriptor) -> Self {
 		Self {
 			id: descriptor.id,
 			name: descriptor.name,

@@ -1,8 +1,7 @@
 use async_graphql::{Context, Guard, Result};
-use models::{
-	entity::book_club_member,
-	shared::{book_club::BookClubMemberRole, enums::UserPermission},
-};
+use models::shared::enums::UserPermission;
+#[cfg(feature = "web")]
+use models::{entity::book_club_member, shared::book_club::BookClubMemberRole};
 
 use crate::{data::CoreContext, error_message};
 
@@ -129,11 +128,13 @@ impl Guard for OptionalFeatureGuard {
 	}
 }
 
+#[cfg(feature = "web")]
 pub struct BookClubRoleGuard {
 	club_id: String,
 	role: BookClubMemberRole,
 }
 
+#[cfg(feature = "web")]
 impl BookClubRoleGuard {
 	pub fn new(club_id: &str, role: BookClubMemberRole) -> Self {
 		Self {
@@ -143,6 +144,7 @@ impl BookClubRoleGuard {
 	}
 }
 
+#[cfg(feature = "web")]
 impl Guard for BookClubRoleGuard {
 	async fn check(&self, ctx: &Context<'_>) -> Result<()> {
 		let stump_auth::AuthContext { user, .. } =

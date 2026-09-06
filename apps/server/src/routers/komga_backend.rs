@@ -739,22 +739,43 @@ impl KomgaBackend for KomgaBackendAdapter {
 			.one(self.conn())
 			.await?;
 		// Mode B: a live-only virtual series has no row; its cover comes
-		// straight from the source (cached by the provider host).
+		// straight from the source (cached by the provider host). A
+		// materialised one has a row but no thumbnail on disk and no local
+		// file to render, so the source cover is its thumbnail too — unless
+		// an operator uploaded one, which always wins.
 		#[cfg(feature = "providers")]
 		let series = match stored {
-			Some(series) => series,
-			None => {
-				let Some(cover) = super::provider_virtual::virtual_series_cover(
+			Some(series) if series.thumbnail_path.is_some() => series,
+			other => {
+				let cover = super::provider_virtual::virtual_series_cover(
 					&self.ctx, user, series_id,
 				)
-				.await
-				else {
-					return Err(stump_komga::errors::APIError::NotFound(
-						"Series not found".to_owned(),
-					));
-				};
-				let (content_type, data) = cover.map_err(map_core_error)?;
-				return image_response(ImageResponse::new(content_type, data)).await;
+				.await;
+				match (cover, other) {
+					(Some(Ok((content_type, data))), _) => {
+						return image_response(ImageResponse::new(content_type, data))
+							.await;
+					},
+					// A provider cover that failed to load still has the
+					// page-1 fallback below when the series is materialised.
+					(Some(Err(error)), Some(series)) => {
+						tracing::warn!(
+							error,
+							series_id,
+							"Provider series cover failed; falling back to the first book"
+						);
+						series
+					},
+					(Some(Err(error)), None) => {
+						return Err(map_core_error(error));
+					},
+					(None, Some(series)) => series,
+					(None, None) => {
+						return Err(stump_komga::errors::APIError::NotFound(
+							"Series not found".to_owned(),
+						));
+					},
+				}
 			},
 		};
 		#[cfg(not(feature = "providers"))]
@@ -1038,10 +1059,13 @@ impl KomgaBackend for KomgaBackendAdapter {
 
 	/// Mode B live browse for one virtual library page, as a Komga page
 	/// envelope. Live cards report zero books; the count is learned when the
-	/// series is materialised.
+	/// series is materialised. Rows the user's age restriction hides are
+	/// dropped here, since there is no `series_metadata` row to filter on in
+	/// SQL yet.
 	#[cfg(feature = "providers")]
 	async fn virtual_series_list(
 		&self,
+		user: &AuthUser,
 		library_id: String,
 		search: &stump_komga::KomgaSeriesSearch,
 		sorts: &[String],
@@ -1071,6 +1095,8 @@ impl KomgaBackend for KomgaBackendAdapter {
 				return Some(Err(map_core_error(error)));
 			},
 		};
+		let adult_source =
+			super::provider_virtual::source_is_adult(&self.ctx, &source_id).await;
 		let content: Vec<stump_komga::KomgaSeries> = result
 			.items
 			.iter()
@@ -1079,6 +1105,13 @@ impl KomgaBackend for KomgaBackendAdapter {
 					&source_id,
 					&library_id,
 					remote,
+					adult_source,
+				)
+			})
+			.filter(|series| {
+				super::provider_virtual::age_restriction_allows(
+					user,
+					series.metadata.age_rating,
 				)
 			})
 			.collect();
@@ -1109,9 +1142,9 @@ impl KomgaBackend for KomgaBackendAdapter {
 				)?,
 			)
 		};
-		let created = stump_core::library::create_library(
+		let created = stump_library::library::create_library(
 			&self.ctx,
-			stump_core::library::NewLibrary {
+			stump_library::library::NewLibrary {
 				name: request.name,
 				path: request.root,
 				description: None,
@@ -1141,7 +1174,7 @@ impl KomgaBackend for KomgaBackendAdapter {
 		.map_err(map_core_error_status)?;
 
 		if let Some(cron) = scan_interval_cron(request.scan_interval) {
-			stump_core::library::sync_library_scan_schedule(
+			stump_library::library::sync_library_scan_schedule(
 				&self.ctx,
 				&created.id,
 				&created.name,
@@ -1226,11 +1259,11 @@ impl KomgaBackend for KomgaBackendAdapter {
 		// concept, so watcher state is left untouched.
 		let scan_after_persist = path != existing_library.path;
 
-		let updated = stump_core::library::update_library(
+		let updated = stump_library::library::update_library(
 			&self.ctx,
 			user,
 			id,
-			stump_core::library::UpdatedLibrary {
+			stump_library::library::UpdatedLibrary {
 				name,
 				path,
 				description: existing_library.description.clone(),
@@ -1238,14 +1271,14 @@ impl KomgaBackend for KomgaBackendAdapter {
 				config: Some(config),
 				tags: None,
 				scan_after_persist,
-				watch: stump_core::library::WatchUpdate::Keep,
+				watch: stump_library::library::WatchUpdate::Keep,
 			},
 		)
 		.await
 		.map_err(map_core_error_status)?;
 
 		if let Some(interval) = request.scan_interval {
-			stump_core::library::sync_library_scan_schedule(
+			stump_library::library::sync_library_scan_schedule(
 				&self.ctx,
 				&updated.id,
 				&updated.name,
@@ -1263,7 +1296,7 @@ impl KomgaBackend for KomgaBackendAdapter {
 		user: &AuthUser,
 		id: &str,
 	) -> stump_komga::errors::APIResult<()> {
-		stump_core::library::delete_library(&self.ctx, user, id)
+		stump_library::library::delete_library(&self.ctx, user, id)
 			.await
 			.map_err(map_core_error_status)?;
 		Ok(())
@@ -1328,10 +1361,10 @@ impl KomgaBackend for KomgaBackendAdapter {
 		ordered: bool,
 		series_ids: Vec<String>,
 	) -> stump_komga::errors::APIResult<models::entity::collection::Model> {
-		stump_core::collections::create_collection(
+		stump_collections::create_collection(
 			&self.ctx,
 			user,
-			stump_core::collections::CollectionCreate {
+			stump_collections::CollectionCreate {
 				name,
 				ordered,
 				series_ids,
@@ -1349,11 +1382,11 @@ impl KomgaBackend for KomgaBackendAdapter {
 		ordered: Option<bool>,
 		series_ids: Option<Vec<String>>,
 	) -> stump_komga::errors::APIResult<()> {
-		stump_core::collections::update_collection(
+		stump_collections::update_collection(
 			&self.ctx,
 			user,
 			id,
-			stump_core::collections::CollectionUpdate {
+			stump_collections::CollectionUpdate {
 				name,
 				ordered,
 				series_ids,
@@ -1369,7 +1402,7 @@ impl KomgaBackend for KomgaBackendAdapter {
 		user: &AuthUser,
 		id: &str,
 	) -> stump_komga::errors::APIResult<()> {
-		stump_core::collections::delete_collection(&self.ctx, user, id)
+		stump_collections::delete_collection(&self.ctx, user, id)
 			.await
 			.map_err(map_core_error_status)
 	}
@@ -1382,10 +1415,10 @@ impl KomgaBackend for KomgaBackendAdapter {
 		ordered: bool,
 		book_ids: Vec<String>,
 	) -> stump_komga::errors::APIResult<models::entity::reading_list::Model> {
-		stump_core::collections::create_read_list(
+		stump_collections::create_read_list(
 			&self.ctx,
 			user,
-			stump_core::collections::ReadListCreate {
+			stump_collections::ReadListCreate {
 				name,
 				summary,
 				ordered,
@@ -1405,11 +1438,11 @@ impl KomgaBackend for KomgaBackendAdapter {
 		ordered: Option<bool>,
 		book_ids: Option<Vec<String>>,
 	) -> stump_komga::errors::APIResult<()> {
-		stump_core::collections::update_read_list(
+		stump_collections::update_read_list(
 			&self.ctx,
 			user,
 			id,
-			stump_core::collections::ReadListUpdate {
+			stump_collections::ReadListUpdate {
 				name,
 				summary,
 				ordered,
@@ -1426,7 +1459,7 @@ impl KomgaBackend for KomgaBackendAdapter {
 		user: &AuthUser,
 		id: &str,
 	) -> stump_komga::errors::APIResult<()> {
-		stump_core::collections::delete_read_list(&self.ctx, user, id)
+		stump_collections::delete_read_list(&self.ctx, user, id)
 			.await
 			.map_err(map_core_error_status)
 	}

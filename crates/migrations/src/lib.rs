@@ -60,6 +60,12 @@ mod m20260925_000000_add_device_library_scope;
 mod m20260926_000000_add_annotation_attachments;
 mod m20260927_000000_add_ingest_preprocess;
 mod m20260928_000000_add_device_kindle_email;
+mod m20260929_000000_add_library_metadata_policy;
+mod m20260930_000000_add_media_audio;
+mod m20260931_000000_add_media_audio_tracks;
+mod m20260932_000000_add_media_audio_chapters;
+mod m20260933_000000_add_time_positions;
+mod m20260934_000000_add_bookmark_position_ms;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -125,6 +131,12 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260926_000000_add_annotation_attachments::Migration),
 			Box::new(m20260927_000000_add_ingest_preprocess::Migration),
 			Box::new(m20260928_000000_add_device_kindle_email::Migration),
+			Box::new(m20260929_000000_add_library_metadata_policy::Migration),
+			Box::new(m20260930_000000_add_media_audio::Migration),
+			Box::new(m20260931_000000_add_media_audio_tracks::Migration),
+			Box::new(m20260932_000000_add_media_audio_chapters::Migration),
+			Box::new(m20260933_000000_add_time_positions::Migration),
+			Box::new(m20260934_000000_add_bookmark_position_ms::Migration),
 		]
 	}
 }

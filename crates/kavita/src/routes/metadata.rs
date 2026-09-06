@@ -6,7 +6,8 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{extract::Query, routing::get, Extension, Json, Router};
 use models::entity::{
-	media, media_metadata, series, series_metadata, tag, user::AuthUser,
+	media, media_metadata, media_tag, series, series_metadata, series_tag, tag,
+	user::AuthUser,
 };
 use sea_orm::{prelude::*, QueryOrder, QuerySelect};
 use serde::Deserialize;
@@ -159,7 +160,9 @@ async fn genres(
 	))
 }
 
-/// The tags attached to the user's visible series, ordered by title. The
+/// The tags attached to the user's visible series and to their media,
+/// ordered by title: a Kavita series' `tags` list is the union of both
+/// (`map_series_metadata`), and a book series carries only its file's. The
 /// search `tags` group narrows the same list, so a tag found by one is found
 /// by the other.
 pub(crate) async fn visible_tags(
@@ -176,18 +179,30 @@ pub(crate) async fn visible_tags(
 	let mut seen = std::collections::BTreeSet::new();
 	let mut result = Vec::new();
 	for chunk in series_ids.chunks(500) {
-		let rows = tag::Entity::find()
-			.filter(
-				tag::Column::Id.in_subquery(
+		let tagged_series = sea_orm::sea_query::Query::select()
+			.column(series_tag::Column::TagId)
+			.from(series_tag::Entity)
+			.and_where(series_tag::Column::SeriesId.is_in(chunk.to_vec()))
+			.to_owned();
+		let tagged_media = sea_orm::sea_query::Query::select()
+			.column(media_tag::Column::TagId)
+			.from(media_tag::Entity)
+			.and_where(
+				media_tag::Column::MediaId.in_subquery(
 					sea_orm::sea_query::Query::select()
-						.column(models::entity::series_tag::Column::TagId)
-						.from(models::entity::series_tag::Entity)
-						.and_where(
-							models::entity::series_tag::Column::SeriesId
-								.is_in(chunk.to_vec()),
-						)
+						.column(media::Column::Id)
+						.from(media::Entity)
+						.and_where(media::Column::DeletedAt.is_null())
+						.and_where(media::Column::SeriesId.is_in(chunk.to_vec()))
 						.to_owned(),
 				),
+			)
+			.to_owned();
+		let rows = tag::Entity::find()
+			.filter(
+				tag::Column::Id
+					.in_subquery(tagged_series)
+					.or(tag::Column::Id.in_subquery(tagged_media)),
 			)
 			.order_by_asc(tag::Column::Name)
 			.all(ctx.conn())

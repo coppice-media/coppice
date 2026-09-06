@@ -1,11 +1,18 @@
 mod annotation;
 mod api_key;
+#[cfg(feature = "web")]
 mod book_club;
+#[cfg(feature = "web")]
 mod book_club_book;
+#[cfg(feature = "web")]
 mod book_club_discussion;
+#[cfg(feature = "web")]
 mod book_club_invitation;
+#[cfg(feature = "web")]
 mod book_club_member;
+#[cfg(feature = "web")]
 mod book_club_suggestion;
+#[cfg(feature = "web")]
 mod custom_emoji;
 mod device;
 mod device_pairing;
@@ -31,9 +38,12 @@ mod scheduled_job_config;
 mod series;
 mod series_metadata;
 mod server_config;
+#[cfg(feature = "web")]
 mod smart_list_view;
+#[cfg(feature = "web")]
 mod smart_lists;
 mod tag;
+#[cfg(feature = "web")]
 mod upload;
 mod user;
 
@@ -41,12 +51,19 @@ use ingest::IngestMutation;
 
 use annotation::AnnotationMutation;
 use api_key::APIKeyMutation;
+#[cfg(feature = "web")]
 use book_club::BookClubMutation;
+#[cfg(feature = "web")]
 use book_club_book::BookClubBookMutation;
+#[cfg(feature = "web")]
 use book_club_discussion::BookClubDiscussionMutation;
+#[cfg(feature = "web")]
 use book_club_invitation::BookClubInvitationMutation;
+#[cfg(feature = "web")]
 use book_club_member::BookClubMemberMutation;
+#[cfg(feature = "web")]
 use book_club_suggestion::BookClubSuggestionMutation;
+#[cfg(feature = "web")]
 use custom_emoji::CustomEmojiMutation;
 use device::DeviceMutation;
 use device_pairing::DevicePairingMutation;
@@ -71,12 +88,16 @@ use scheduled_job_config::ScheduledJobConfigMutation;
 use series::SeriesMutation;
 use series_metadata::SeriesMetadataMutation;
 use server_config::ServerConfigMutation;
+#[cfg(feature = "web")]
 use smart_list_view::SmartListViewMutation;
+#[cfg(feature = "web")]
 use smart_lists::SmartListMutation;
 use tag::TagMutation;
+#[cfg(feature = "web")]
 use upload::UploadMutation;
 use user::UserMutation;
 
+#[cfg(feature = "web")]
 #[derive(async_graphql::MergedObject, Default)]
 struct BookClubMutations(
 	BookClubMutation,
@@ -96,7 +117,7 @@ struct ContentMutations(
 	SeriesMutation,
 	EpubMutation,
 	TagMutation,
-	UploadMutation,
+	#[cfg(feature = "web")] UploadMutation,
 	DuplicatePageMutation,
 );
 
@@ -125,15 +146,15 @@ struct SystemMutations(
 
 #[derive(async_graphql::MergedObject, Default)]
 struct ListMutations(
-	SmartListMutation,
-	SmartListViewMutation,
+	#[cfg(feature = "web")] SmartListMutation,
+	#[cfg(feature = "web")] SmartListViewMutation,
 	ReadingListMutation,
-	CustomEmojiMutation,
+	#[cfg(feature = "web")] CustomEmojiMutation,
 );
 
 #[derive(async_graphql::MergedObject, Default)]
 pub struct Mutation(
-	BookClubMutations,
+	#[cfg(feature = "web")] BookClubMutations,
 	ContentMutations,
 	UserAndNotifsMutations,
 	SystemMutations,

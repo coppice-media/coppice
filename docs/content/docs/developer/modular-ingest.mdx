@@ -244,6 +244,131 @@ Input validation rejects duplicate fields, requires `candidateId` only for `CAND
 
 `bulkApplyIngestMetadata` applies the same field-pick recipe to many selected drop items. It is deterministic and idempotent per item revision: each item succeeds or returns a bounded failure with no partial field write for that item. The response includes both updated items and failures. A bulk operation does not implicitly approve/reject source files. For already committed records, the existing `updateMediaMetadata`, `setMediaTags`, `setSeriesTags`, and provider match mutations remain available ([observed — `crates/graphql/schema.graphql:1883-1898,2000-2016`]).
 
+## Policy
+
+`bulkApplyIngestMetadata` still needs a human to choose the fields. The
+per-field **metadata policy** is the standing answer to "who wins this field",
+so auto-apply and the editor's *Apply best* need no recipe at all. It is
+**implemented** in `crates/ingest/src/policy.rs`.
+
+Komf keys the same information per provider: a `priority` number plus a
+`seriesMetadata`/`bookMetadata` map of per-field booleans, overridable per
+library through `libraryProviders`
+([`application.yml` reference](https://github.com/Snd-R/komf/blob/master/README.md#example-applicationyml-config),
+[aggregation rules](https://github.com/Snd-R/komf/blob/master/README.md#metadata-aggregation)).
+A per-field ordered provider list is the transpose of that table: same facts,
+but "who wrote this field" is one lookup instead of a scan across every
+provider's toggle map.
+
+### The rule
+
+One rule per field: `providers` (ids in priority order; empty means the field
+is never filled), `strategy`, and `lock_respected`.
+
+| Strategy | Behaviour |
+| --- | --- |
+| `FIRST` | The first provider in the list that offers a value wins. This is Komf's documented default: "all metadata will be fetched from the first positive match in configured providers by order of priority". |
+| `MERGE_UNION` | Case-insensitive union of the stored value and every allowed provider's values, in first-seen order, so the stored spelling survives and nothing the user has is dropped. List fields only (`AUTHORS`, `TAGS`, `GENRES`); anything else falls back to `FIRST`. |
+| `LONGEST` | The longest offer wins — characters for text, items for a list. A tie keeps the higher-priority provider. |
+| `PREFER_EXISTING` | Only fill the field when the row does not already hold a value. |
+| `HIGHEST_RESOLUTION` | The largest *advertised* cover wins. `COVER` only; falls back to `FIRST` elsewhere. |
+
+Within one provider, several candidates are ordered by descending candidate
+confidence, with the candidate id breaking remaining ties, so a plan is
+reproducible. A blank string, empty list, or empty object is absence, not
+evidence, and never wins a field.
+
+A provider hands out a cover *URL*, not an image, so `HIGHEST_RESOLUTION`
+ranks what the value advertises: an explicit `{"url":…,"width":W}`, a
+`<width>x<height>` token, a size component before the extension (MangaDex's
+`….jpg.512.jpg`), or a `width=`/`w=` query parameter. A value that advertises
+nothing ranks last, so a field where nobody advertises a size resolves in
+priority order. Guessing from a provider's own size keyword (`super_url`,
+`extraLarge`, `-L`) is deliberately not attempted: each is already that
+provider's largest variant, so they carry no comparable pixel count, and the
+alternative — downloading every candidate cover to measure it — is a network
+fan-out inside a resolver.
+
+### Defaults
+
+`MetadataPolicy::server_default()` mirrors Komf's priority numbers for the
+providers this build has (`mangaUpdates: 10`, `mal: 20`, `aniList: 40`,
+`mangaDex: 90`, `comicVine: 110`), then the providers Komf has no equivalent
+for (`metron`, `openlibrary`, `googlebooks`, `hardcover`). One total order over
+every provider is enough: a provider that does not support a book's media kind
+never produces a candidate, so the manga providers are simply silent on an
+EPUB novel.
+
+Four documented divergences from Komf:
+
+| Field | Default | Why |
+| --- | --- | --- |
+| `SERIES` | `PREFER_EXISTING` | Komf's `postProcessing.seriesTitle` is `false`: it leaves the series title alone unless asked. |
+| `TAGS`, `GENRES` | `MERGE_UNION` | Komf gates the same behaviour behind `mergeTags`/`mergeGenres`, off by default *because Komf's aggregation itself is off by default*. A per-field policy aggregates by construction, and the union dedupes case-insensitively. |
+| `COVER` | `HIGHEST_RESOLUTION` | Stump keeps one cover per book, so a larger source image is strictly better input for thumbnail generation. |
+| `PAGE_COUNT` (only), `NUMBER`, `ISBN` (first) | `builtin:embedded` | These are measured from the file. Komf's own docs warn that a catalog provider "can mismatch issue numbers". |
+
+`llm` is last, and only on `SUMMARY`, `TAGS`, and `GENRES`: AI enrichment is a
+fallback for prose and free-form lists, never a source for identity fields.
+
+### Storage and override
+
+The server default lives in code. A library overrides it per field in
+`library_configs.metadata_policy` (nullable JSON-in-TEXT,
+`m20260929_000000_add_library_metadata_policy`): every field the override
+names replaces the default rule wholesale, everything else is inherited —
+exactly how Komf's `libraryProviders` relates to `defaultProviders`. `NULL`
+means "inherit everything", which is what every existing library gets, so the
+migration cannot change behaviour for an existing install.
+
+A document is validated before it is stored: an unknown provider id, a
+repeated provider, or a strategy that cannot apply to its field are all
+refused, because each would silently disable or degrade a field later. The
+allow-list is the provider registry catalog of the running build.
+
+```graphql
+metadataPolicy(libraryId: ID!): MetadataPolicy!
+setMetadataPolicy(libraryId: ID!, input: MetadataPolicyInput!): MetadataPolicy!
+applyBestIngestMetadata(dropItemId: ID, mediaId: ID): IngestApplyBestPayload!
+```
+
+`metadataPolicy` answers with one row per field — the effective rule plus
+`overridden` (library override versus inherited default) and `storable`. An
+empty `fields` list in `setMetadataPolicy` clears the override. The editor's
+**Policy** tab (`editor/src/routes/(app)/settings/providers`) renders one row
+per field: the ordered provider list with reorder/remove/add, the strategy,
+the lock switch, and a per-row *Inherit* action that drops the field from the
+override.
+
+### One resolver for auto-apply and "apply best"
+
+`MetadataPolicy::plan` turns candidates + the stored row + the user's locks
+into the same `FieldPick` recipe the editor submits by hand: `CANDIDATE` when
+one candidate wins (so the audit row keeps the provenance) and `MANUAL` when
+values were merged. Both entry points go through it and then through the
+existing `applyIngestMetadata` path, so there is one validation, one merge, and
+one audit shape:
+
+- `applyBestIngestMetadata` is the editor's *Apply best* action, on a staged
+  item or a library media row.
+- `approveIngestItem` stages the plan as the item's pending fields before
+  committing, which is the auto-apply payload. Fields the user already picked
+  by hand live in the same projection and outrank the policy.
+
+A field the user locked (`media_metadata.locked_fields`) is never written while
+its rule has `lock_respected`, whatever the strategy says, and the plan reports
+the locks it enforced so the apply path enforces the same set. Turning
+`lock_respected` off for a field is the one way a policy outranks a lock.
+
+Every field is resolved, including the three the staged apply path has no
+column for (`COVER`, `LINKS`, `STATUS`): their decision comes back with
+`applied: false`, so the editor can show who would win without anything being
+written. `STATUS` exists as a candidate field because provider series records
+carry a publication status; `series_fields` in the façade emits it with the
+same spelling the legacy series apply path writes into
+`series_metadata.status`, alongside the publisher, genres, and tags it was
+already discarding.
+
 ## Progress transport
 
 ### Existing compatibility stream

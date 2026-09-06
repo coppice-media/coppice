@@ -18,6 +18,7 @@ use crate::{
 	subscription::Subscription,
 };
 use async_graphql::{dataloader::DataLoader, ObjectType, Schema, SchemaBuilder};
+#[cfg(feature = "web")]
 use models::shared::enums::AccessRole;
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
@@ -31,12 +32,26 @@ pub async fn build_schema(ctx: CoreContext) -> AppSchema {
 		Mutation::default(),
 		Subscription::default(),
 	)
-	// AccessRole is used in a serialized json for SmartList so we need to register it manually
-	.register_output_type::<AccessRole>()
 	.limit_depth(15)
 	.data(ctx);
+	let schema_builder = register_web_only_types(schema_builder);
 
 	add_data_loaders(schema_builder, conn).finish()
+}
+
+/// `AccessRole` only ever appears inside serialised SmartList JSON, so
+/// async-graphql cannot discover it by walking the resolver graph. It is
+/// registered by hand, and only when the smart-list resolvers exist.
+fn register_web_only_types<
+	QueryType: ObjectType + 'static,
+	MutationType: ObjectType + 'static,
+	SubscriptionType: 'static,
+>(
+	schema: SchemaBuilder<QueryType, MutationType, SubscriptionType>,
+) -> SchemaBuilder<QueryType, MutationType, SubscriptionType> {
+	#[cfg(feature = "web")]
+	let schema = schema.register_output_type::<AccessRole>();
+	schema
 }
 
 pub fn add_data_loaders<
@@ -99,12 +114,10 @@ pub fn add_data_loaders<
 }
 
 pub fn build_schema_bare() -> AppSchema {
-	Schema::build(
+	register_web_only_types(Schema::build(
 		Query::default(),
 		Mutation::default(),
 		Subscription::default(),
-	)
-	// AccessRole is used in a serialized json for SmartList so we need to register it manually
-	.register_output_type::<AccessRole>()
+	))
 	.finish()
 }

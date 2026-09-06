@@ -1,0 +1,23 @@
+[package]
+name = "stump_provider_themes"
+version.workspace = true
+edition = "2021"
+description = "Data-driven Madara, MangaThemesia and MMRCMS theme engines for the Stump provider host"
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+html5ever = "0.26"
+markup5ever_rcdom = "0.2"
+models = { path = "../models", default-features = false }
+regex.workspace = true
+reqwest = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+stump_provider = { path = "../provider" }
+thiserror.workspace = true
+tracing.workspace = true
+url = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

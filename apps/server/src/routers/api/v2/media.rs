@@ -167,12 +167,13 @@ pub(crate) async fn get_media_page(
 
 	let content = match get_page_async(&book.path, physical, &ctx.config.media).await {
 		Ok(result) => result,
-		Err(e) => {
-			if matches!(e, FileError::NoImageError) {
-				return Err(APIError::NotFound("Page not found".to_string()));
-			}
-			return Err(APIError::InternalServerError(e.to_string()));
+		Err(FileError::NoImageError) => {
+			return Err(APIError::NotFound("Page not found".to_string()))
 		},
+		// Everything else is classified centrally, so a provider chapter the
+		// source no longer serves reads as 404 here exactly as it does on the
+		// Komga, OPDS, and Kavita lanes.
+		Err(error) => return Err(APIError::from(error)),
 	};
 
 	Ok(ImageResponse::from(content))

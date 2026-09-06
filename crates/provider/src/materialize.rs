@@ -1,9 +1,13 @@
 //! Turn a remote series into ordinary `series`/`media` rows.
 //!
-//! Every chapter becomes one `media` row with `extension = "cbz"`, a
+//! Every readable chapter becomes one `media` row with `extension = "cbz"`, a
 //! `provider://` path, and the chapter's known page count (0 until the page
 //! list is first resolved). Re-running for the same series only adds chapters
 //! that are not stored yet, which is also how a refresh works.
+//!
+//! Chapters the source cannot serve ([`RemoteChapter::readable`] `== false`)
+//! are skipped and reported instead: writing a row for one only produces a
+//! book whose every page 404s.
 
 use models::{
 	entity::{media, media_metadata, series, series_metadata},
@@ -17,9 +21,58 @@ use sea_orm::{
 
 use crate::{
 	host::{ProviderError, ProviderHost},
-	source::{RemoteChapter, RemoteSeries},
+	source::{ContentRating, RemoteChapter, RemoteSeries},
 	virtual_path::{self, VirtualPath},
 };
+
+/// Why a chapter was not materialised. Reported per series so an operator
+/// can tell "this title has no readable chapters here" from "the fetch
+/// failed".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+	/// The source hosts the chapter somewhere else
+	/// (MangaDex `ChapterAttributes.externalUrl`).
+	ExternallyHosted,
+	/// The source reports no readable images
+	/// (MangaDex `ChapterAttributes.pages == 0`).
+	NoPages,
+	/// The source marks the chapter unavailable
+	/// (MangaDex `ChapterAttributes.isUnavailable`).
+	Unavailable,
+}
+
+impl SkipReason {
+	/// The reason a source reports for `chapter`, or `None` when it is
+	/// readable. `external_url` is checked first because it is the only
+	/// reason that names somewhere the reader could go instead.
+	pub fn of(chapter: &RemoteChapter) -> Option<Self> {
+		if chapter.readable {
+			return None;
+		}
+		if chapter.external_url.is_some() {
+			return Some(SkipReason::ExternallyHosted);
+		}
+		if chapter.page_count.is_none_or(|pages| pages == 0) {
+			return Some(SkipReason::NoPages);
+		}
+		Some(SkipReason::Unavailable)
+	}
+
+	pub fn as_str(self) -> &'static str {
+		match self {
+			SkipReason::ExternallyHosted => "externally hosted",
+			SkipReason::NoPages => "no readable pages",
+			SkipReason::Unavailable => "marked unavailable by the source",
+		}
+	}
+}
+
+/// One chapter materialisation refused to write a row for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedChapter {
+	pub remote_id: String,
+	pub reason: SkipReason,
+}
 
 /// The rows touched by [`add_series`] / [`refresh_series`].
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +82,10 @@ pub struct Materialized {
 	pub created: Vec<media::Model>,
 	/// Chapters already present before this run.
 	pub existing: usize,
+	/// Chapters the source cannot serve, in remote order. Never written as
+	/// rows; a series whose whole feed is unreadable materialises with no
+	/// books and every skip listed here.
+	pub skipped: Vec<SkippedChapter>,
 	/// The cross-source duplicate this series was linked to, when the same
 	/// work already existed from another source; see [`crate::identity`].
 	pub duplicate_of: Option<String>,
@@ -55,19 +112,37 @@ pub async fn add_series(
 		Some(existing) => update_series(conn, existing, &details).await?,
 		None => insert_series(conn, library_id, source_id, &details).await?,
 	};
-	upsert_series_metadata(conn, &series_row, source_id, &details).await?;
+	// Stump stores age restrictions per user and compares them against
+	// `series_metadata.age_rating`; there is no library-level rating to set,
+	// so an adult source is applied to each of its series.
+	let adult_source = host.source_is_adult(source_id).await;
+	upsert_series_metadata(conn, &series_row, source_id, &details, adult_source).await?;
 	// Dedupe is recorded, never enforced: a link only tells an operator the
 	// same work exists twice.
 	let duplicate_of =
 		crate::identity::record_identity(conn, &series_row, source_id, &details)
 			.await?
 			.map(|link| link.canonical_series_id);
-	let (created, existing) =
+	let (created, existing, skipped) =
 		insert_chapters(conn, &series_row, source_id, remote_id, &chapters).await?;
+	if !skipped.is_empty() {
+		tracing::info!(
+			series = series_row.id,
+			source = source_id,
+			skipped = skipped.len(),
+			readable = chapters.len() - skipped.len(),
+			reasons = ?skipped
+				.iter()
+				.map(|skip| skip.reason.as_str())
+				.collect::<std::collections::BTreeSet<_>>(),
+			"Skipped chapters the source cannot serve"
+		);
+	}
 	Ok(Materialized {
 		series: series_row,
 		created,
 		existing,
+		skipped,
 		duplicate_of,
 	})
 }
@@ -131,11 +206,18 @@ async fn update_series<C: ConnectionTrait>(
 	Ok(active.update(conn).await?)
 }
 
+/// Project the remote description onto `series_metadata`, including the age
+/// rating Stump's per-user age restriction filters on.
+///
+/// `adult_source` is the catalog's `nsfw` flag for the source instance. Stump
+/// has no library-level age rating, so an adult source raises every series it
+/// materialises to 18 regardless of the per-title rating.
 async fn upsert_series_metadata<C: ConnectionTrait>(
 	conn: &C,
 	series_row: &series::Model,
 	source_id: &str,
 	details: &RemoteSeries,
+	adult_source: bool,
 ) -> Result<(), ProviderError> {
 	let joined = |values: &[String]| {
 		if values.is_empty() {
@@ -156,7 +238,7 @@ async fn upsert_series_metadata<C: ConnectionTrait>(
 		links: Set(details.url.clone()),
 		metadata_source: Set(Some(source_id.to_string())),
 		metadata_external_id: Set(Some(details.remote_id.clone())),
-		age_rating: Set(details.nsfw.then_some(18)),
+		age_rating: Set(age_rating(details, adult_source)),
 		..Default::default()
 	};
 	let exists = series_metadata::Entity::find_by_id(&series_row.id)
@@ -176,13 +258,23 @@ async fn upsert_series_metadata<C: ConnectionTrait>(
 	Ok(())
 }
 
+/// The `series_metadata.age_rating` for a remote series: the source's own
+/// content rating ([`ContentRating::age_rating`]), raised to 18 when the
+/// series is adult or comes from an adult source.
+pub fn age_rating(details: &RemoteSeries, adult_source: bool) -> Option<i32> {
+	if adult_source || details.nsfw {
+		return Some(18);
+	}
+	details.content_rating.and_then(ContentRating::age_rating)
+}
+
 async fn insert_chapters<C: ConnectionTrait>(
 	conn: &C,
 	series_row: &series::Model,
 	source_id: &str,
 	remote_id: &str,
 	chapters: &[RemoteChapter],
-) -> Result<(Vec<media::Model>, usize), ProviderError> {
+) -> Result<(Vec<media::Model>, usize, Vec<SkippedChapter>), ProviderError> {
 	let known: Vec<String> = media::Entity::find()
 		.select_only()
 		.column(media::Column::RemoteChapterId)
@@ -196,7 +288,15 @@ async fn insert_chapters<C: ConnectionTrait>(
 		.collect();
 	let mut created = Vec::new();
 	let mut existing = 0usize;
+	let mut skipped = Vec::new();
 	for chapter in chapters {
+		if let Some(reason) = SkipReason::of(chapter) {
+			skipped.push(SkippedChapter {
+				remote_id: chapter.remote_id.clone(),
+				reason,
+			});
+			continue;
+		}
 		if known.iter().any(|id| id == &chapter.remote_id) {
 			existing += 1;
 			continue;
@@ -257,7 +357,7 @@ async fn insert_chapters<C: ConnectionTrait>(
 		.await?;
 		created.push(row);
 	}
-	Ok((created, existing))
+	Ok((created, existing, skipped))
 }
 
 #[cfg(test)]
@@ -276,8 +376,10 @@ mod tests {
 	use crate::{
 		host::{ProviderHostConfig, VirtualArchive},
 		mock::{
-			MockSource, ALPHA_CHAPTERS, MOCK_SOURCE_ID, PAGES_PER_CHAPTER, SERIES_ALPHA,
+			MockSource, ALPHA_CHAPTERS, BETA_CHAPTERS, MOCK_SOURCE_ID,
+			PAGES_PER_CHAPTER, SERIES_ALPHA, SERIES_BETA,
 		},
+		source::ContentRating,
 	};
 
 	async fn library(conn: &DatabaseConnection) -> library::Model {
@@ -306,10 +408,12 @@ mod tests {
 		let host = ProviderHost::open(
 			Arc::new(conn),
 			Vec::new(),
+			Vec::new(),
 			ProviderHostConfig {
 				cache_dir: dir.path().to_path_buf(),
 				cache_max_bytes,
 				catalog_url: Some("http://127.0.0.1:9/".to_string()),
+				definitions_url: Some("http://127.0.0.1:9/".to_string()),
 				virtual_series_ttl: std::time::Duration::from_secs(300),
 			},
 		)
@@ -318,6 +422,271 @@ mod tests {
 		let source = MockSource::new();
 		host.register_source(source.clone());
 		(host, source, dir)
+	}
+
+	/// A source instance enabled from an NSFW catalog entry, so
+	/// `source_is_adult` has something to read.
+	async fn adult_host() -> (Arc<ProviderHost>, tempfile::TempDir) {
+		let conn = ::tests::db::test_database().await;
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(
+			dir.path().join(crate::catalog::INDEX_FILE_NAME),
+			include_bytes!("../tests/fixtures/keiyoushi-index.json"),
+		)
+		.unwrap();
+		let factory = crate::host::SourceFactory {
+			implementation: "mock",
+			name: "Mock",
+			// The fixture's only `CONTENT_WARNING_NSFW` extension.
+			catalog_pkg: "eu.kanade.tachiyomi.extension.all.beauty3600000",
+			base_url: "https://3600000.xyz",
+			build: |row| Ok(MockSource::with_id(&row.id)),
+		};
+		let host = ProviderHost::open(
+			Arc::new(conn),
+			vec![factory],
+			Vec::new(),
+			ProviderHostConfig {
+				cache_dir: dir.path().to_path_buf(),
+				cache_max_bytes: u64::MAX,
+				catalog_url: Some("http://127.0.0.1:9/".to_string()),
+				definitions_url: Some("http://127.0.0.1:9/".to_string()),
+				virtual_series_ttl: std::time::Duration::from_secs(300),
+			},
+		)
+		.await
+		.unwrap();
+		host.enable_catalog_source("5498091984644576825", None)
+			.await
+			.unwrap();
+		(host, dir)
+	}
+
+	/// The One Piece / "The Witch and the Beast" defect: a chapter the source
+	/// cannot serve must not become a book whose every page 404s. It is
+	/// skipped, counted, and the reason is reported.
+	#[tokio::test]
+	async fn unreadable_chapters_are_skipped_and_counted_with_a_reason() {
+		let (host, _source, _dir) = host(u64::MAX).await;
+		let library = library(host.conn()).await;
+
+		let materialized = add_series(&host, &library.id, MOCK_SOURCE_ID, SERIES_BETA)
+			.await
+			.unwrap();
+
+		assert!(
+			materialized.created.is_empty(),
+			"no rows for chapters the source cannot serve"
+		);
+		assert_eq!(materialized.existing, 0);
+		assert_eq!(
+			materialized
+				.skipped
+				.iter()
+				.map(|skip| (skip.remote_id.as_str(), skip.reason))
+				.collect::<Vec<_>>(),
+			vec![
+				(BETA_CHAPTERS[0], SkipReason::ExternallyHosted),
+				(BETA_CHAPTERS[1], SkipReason::NoPages),
+				(BETA_CHAPTERS[2], SkipReason::Unavailable),
+			]
+		);
+		assert_eq!(
+			media::Entity::find()
+				.filter(media::Column::SeriesId.eq(materialized.series.id.clone()))
+				.count(host.conn())
+				.await
+				.unwrap(),
+			0,
+			"the series materialises with zero books"
+		);
+
+		// A re-run reports the same skips rather than accumulating rows.
+		let again = refresh_series(&host, &materialized.series.id).await.unwrap();
+		assert!(again.created.is_empty());
+		assert_eq!(again.skipped.len(), BETA_CHAPTERS.len());
+
+		// A readable feed is unaffected.
+		let alpha = add_series(&host, &library.id, MOCK_SOURCE_ID, SERIES_ALPHA)
+			.await
+			.unwrap();
+		assert_eq!(alpha.created.len(), ALPHA_CHAPTERS.len());
+		assert!(alpha.skipped.is_empty());
+	}
+
+	/// A materialised chapter whose page manifest 404s later is unavailable,
+	/// not a missing file: every lane must answer 404 with the source named,
+	/// which is what `FileError::Unavailable` gets mapped to.
+	#[tokio::test]
+	async fn a_chapter_whose_manifest_404s_is_unavailable_not_missing() {
+		let (host, _source, _dir) = host(u64::MAX).await;
+		let library = library(host.conn()).await;
+		let materialized = add_series(&host, &library.id, MOCK_SOURCE_ID, SERIES_ALPHA)
+			.await
+			.unwrap();
+
+		// The mock only resolves pages for the three alpha chapters; any
+		// other id answers 404 exactly as MangaDex does for a licensed one.
+		let error = host
+			.pages(MOCK_SOURCE_ID, "alpha-ch9")
+			.await
+			.expect_err("manifest 404");
+		assert!(
+			matches!(&error, ProviderError::Unavailable { source_id } if source_id == MOCK_SOURCE_ID),
+			"expected Unavailable, got {error:?}"
+		);
+		assert_eq!(error.to_string(), "Chapter is not available from mock-en");
+
+		let file_error = stump_media::FileError::from(error);
+		assert!(
+			matches!(&file_error, stump_media::FileError::Unavailable(message)
+				if message == "Chapter is not available from mock-en"),
+			"expected FileError::Unavailable, got {file_error:?}"
+		);
+
+		// Through the resolver a stored row pointing at a vanished chapter
+		// takes the same path.
+		let path = VirtualPath::chapter(MOCK_SOURCE_ID, SERIES_ALPHA, "alpha-ch9")
+			.to_string();
+		let resolver: &dyn VirtualMediaResolver = host.as_ref();
+		assert!(matches!(
+			resolver.get_page(&path, 1).await,
+			Err(stump_media::FileError::Unavailable(_))
+		));
+		// A readable chapter is untouched.
+		assert!(resolver
+			.get_page(&materialized.created[0].path, 1)
+			.await
+			.is_ok());
+	}
+
+	/// `series/{id}/thumbnail` must serve a cover even when the row it was
+	/// materialised from carried none: the host falls back to a detail fetch
+	/// and writes the URL back.
+	#[tokio::test]
+	async fn cover_falls_back_to_a_detail_fetch_and_is_written_back() {
+		let (host, source, _dir) = host(u64::MAX).await;
+		let library = library(host.conn()).await;
+		let materialized = add_series(&host, &library.id, MOCK_SOURCE_ID, SERIES_ALPHA)
+			.await
+			.unwrap();
+		let series_id = materialized.series.id.clone();
+
+		// The browse/detail response carried the cover into the row.
+		let stored = series_metadata::Entity::find_by_id(&series_id)
+			.one(host.conn())
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			stored.comic_image.as_deref(),
+			Some("http://mock.invalid/covers/alpha.png")
+		);
+		let (content_type, bytes) = host
+			.cover_bytes(MOCK_SOURCE_ID, SERIES_ALPHA)
+			.await
+			.unwrap();
+		assert!(content_type.is_image());
+		assert_eq!(bytes, crate::mock::PNG_PIXEL);
+		let detail_fetches = source.detail_fetches();
+
+		// A row whose cover never arrived (an older materialisation) must
+		// still serve one.
+		let mut blank: series_metadata::ActiveModel = stored.into();
+		blank.comic_image = Set(None);
+		blank.update(host.conn()).await.unwrap();
+		host.cache()
+			.invalidate_item(MOCK_SOURCE_ID, &format!("cover:{SERIES_ALPHA}"))
+			.await;
+
+		let (content_type, bytes) = host
+			.cover_bytes(MOCK_SOURCE_ID, SERIES_ALPHA)
+			.await
+			.unwrap();
+		assert!(content_type.is_image());
+		assert_eq!(bytes, crate::mock::PNG_PIXEL);
+		assert_eq!(
+			source.detail_fetches(),
+			detail_fetches + 1,
+			"the missing cover triggered exactly one detail fetch"
+		);
+		assert_eq!(
+			series_metadata::Entity::find_by_id(&series_id)
+				.one(host.conn())
+				.await
+				.unwrap()
+				.unwrap()
+				.comic_image
+				.as_deref(),
+			Some("http://mock.invalid/covers/alpha.png"),
+			"the fetched URL is written back"
+		);
+	}
+
+	/// `contentRating` reaches `series_metadata.age_rating`, and an NSFW
+	/// catalog source raises every series it materialises to 18 because
+	/// Stump has no library-level age rating.
+	#[tokio::test]
+	async fn content_rating_and_nsfw_sources_set_the_age_rating() {
+		let (host, _source, _dir) = host(u64::MAX).await;
+		let safe_library = library(host.conn()).await;
+
+		let safe = add_series(&host, &safe_library.id, MOCK_SOURCE_ID, SERIES_ALPHA)
+			.await
+			.unwrap();
+		assert_eq!(
+			age_rating_of(&host, &safe.series.id).await,
+			None,
+			"a safe title stores no rating"
+		);
+
+		let adult = add_series(&host, &safe_library.id, MOCK_SOURCE_ID, SERIES_BETA)
+			.await
+			.unwrap();
+		assert_eq!(age_rating_of(&host, &adult.series.id).await, Some(18));
+
+		// The per-rating table, independent of any source.
+		let mut details = RemoteSeries {
+			remote_id: "x".to_string(),
+			content_rating: Some(ContentRating::Suggestive),
+			..Default::default()
+		};
+		assert_eq!(age_rating(&details, false), Some(13));
+		details.content_rating = Some(ContentRating::Erotica);
+		assert_eq!(age_rating(&details, false), Some(16));
+		details.content_rating = Some(ContentRating::Safe);
+		assert_eq!(age_rating(&details, false), None);
+		assert_eq!(
+			age_rating(&details, true),
+			Some(18),
+			"an adult source overrides a safe title"
+		);
+		details.content_rating = None;
+		assert_eq!(age_rating(&details, false), None);
+
+		// End to end: the same safe title from an NSFW catalog source.
+		let (adult_host, _adult_dir) = adult_host().await;
+		let adult_library = library(adult_host.conn()).await;
+		assert!(adult_host.source_is_adult("mock-all").await);
+		assert!(!host.source_is_adult(MOCK_SOURCE_ID).await);
+		let from_adult_source =
+			add_series(&adult_host, &adult_library.id, "mock-all", SERIES_ALPHA)
+				.await
+				.unwrap();
+		assert_eq!(
+			age_rating_of(&adult_host, &from_adult_source.series.id).await,
+			Some(18),
+			"every series of an NSFW source is rated 18"
+		);
+	}
+
+	async fn age_rating_of(host: &ProviderHost, series_id: &str) -> Option<i32> {
+		series_metadata::Entity::find_by_id(series_id)
+			.one(host.conn())
+			.await
+			.unwrap()
+			.unwrap()
+			.age_rating
 	}
 
 	#[tokio::test]
@@ -627,10 +996,12 @@ mod tests {
 		let host = ProviderHost::open(
 			Arc::new(conn),
 			vec![factory],
+			Vec::new(),
 			ProviderHostConfig {
 				cache_dir: dir.path().to_path_buf(),
 				cache_max_bytes: 1024,
 				catalog_url: Some("http://127.0.0.1:9/".to_string()),
+				definitions_url: Some("http://127.0.0.1:9/".to_string()),
 				virtual_series_ttl: std::time::Duration::from_secs(300),
 			},
 		)

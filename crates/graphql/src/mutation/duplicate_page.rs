@@ -5,7 +5,7 @@ use models::{
 	shared::enums::{DuplicatePageAction, UserPermission},
 };
 use sea_orm::{prelude::*, sea_query::OnConflict, Set};
-use stump_core::ingest::quality::duplicate_pages_across_books::parse_dhash;
+use stump_ingest::quality::duplicate_pages_across_books::parse_dhash;
 
 use crate::{
 	data::CoreContext, guard::PermissionGuard,

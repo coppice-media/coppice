@@ -3,7 +3,7 @@ name = "stump_core"
 version.workspace = true
 edition = "2021"
 [features]
-default = ["pdf", "rar", "watcher", "apalis"]
+default = ["pdf", "rar", "watcher", "apalis", "ingest"]
 # Apalis-backed job executor; without it stump_jobs runs queued jobs inline.
 apalis = ["stump_jobs/apalis"]
 graphql = [
@@ -15,8 +15,16 @@ graphql = [
 	"stump_jobs/graphql",
 	"stump_notify/graphql",
 ]
+# The staged ingest pipeline (`stump_ingest`): drop folder, analysis queue,
+# quality reports, metadata candidates. Off in the `minimal` server profile,
+# which links neither the crate nor `Ctx::ingest`.
+ingest = ["dep:stump_ingest"]
 pdf = ["stump_media/pdf"]
-providers = ["dep:stump_provider", "dep:stump_provider_mangadex"]
+providers = [
+	"dep:stump_provider",
+	"dep:stump_provider_mangadex",
+	"dep:stump_provider_themes",
+]
 rar = ["stump_media/rar"]
 watcher = ["dep:stump_watcher"]
 
@@ -46,12 +54,14 @@ stump_annotation_sync = { path = "../crates/annotation-sync" }
 stump_api_types = { path = "../crates/api-types" }
 stump_devices = { path = "../crates/devices", default-features = false }
 stump_jobs = { path = "../crates/jobs", default-features = false }
+stump_ingest = { path = "../crates/ingest", optional = true }
 stump_media = { path = "../crates/media", default-features = false }
 stump_scanner = { path = "../crates/scanner" }
 stump_notify = { path = "../crates/notify" }
 stump_watcher = { path = "../crates/watcher", optional = true }
 stump_provider = { path = "../crates/provider", optional = true }
 stump_provider_mangadex = { path = "../crates/provider-mangadex", optional = true }
+stump_provider_themes = { path = "../crates/provider-themes", optional = true }
 md5.workspace = true
 natord.workspace = true
 rand.workspace = true

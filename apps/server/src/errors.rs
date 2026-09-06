@@ -310,9 +310,12 @@ impl From<mpsc::error::SendError<CoreEvent>> for APIError {
 impl From<FileError> for APIError {
 	fn from(error: FileError) -> APIError {
 		match error {
-			FileError::PageNotFound { .. } | FileError::ResourceNotFound(_) => {
-				APIError::NotFound(error.to_string())
-			},
+			// `Unavailable` is a permanent "the source will not serve this"
+			// verdict, not a server fault: a provider chapter the remote no
+			// longer hosts must read as 404 on every protocol lane.
+			FileError::PageNotFound { .. }
+			| FileError::ResourceNotFound(_)
+			| FileError::Unavailable(_) => APIError::NotFound(error.to_string()),
 			_ => APIError::InternalServerError(error.to_string()),
 		}
 	}

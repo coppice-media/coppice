@@ -70,6 +70,12 @@ pub enum FileError {
 	IncorrectProcessorError,
 	#[error("File not found on disk")]
 	NotFound,
+	/// The content exists but its bytes cannot be served, and never will be
+	/// through this path: a provider chapter the remote source has stopped
+	/// serving. The string is the user-facing reason, so callers map this to
+	/// `404 Not Found` rather than an internal error.
+	#[error("{0}")]
+	Unavailable(String),
 	#[error("An unknown error occurred: {0}")]
 	UnknownError(String),
 }

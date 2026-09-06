@@ -95,7 +95,7 @@ pub enum KomgaCoreEvent {
 		#[serde(default)]
 		deleted: bool,
 	},
-	/// A library was created (any protocol; see `stump_core::library`).
+	/// A library was created (any protocol; see `stump_library::library`).
 	LibraryCreated { id: String },
 	/// A library's name, root, or configuration changed.
 	LibraryUpdated { id: String },
@@ -288,8 +288,13 @@ pub trait KomgaBackend: Send + Sync {
 	/// One live page of series for a virtual library. Returns `None` when
 	/// this backend does not implement provider browsing; `Some(Err(...))`
 	/// surfaces source failures to the client. Default: `None`.
+	///
+	/// `user` is passed because live rows have no `series_metadata` row for
+	/// the per-user age restriction to filter on: the backend applies the
+	/// same rule to the remote rating instead.
 	async fn virtual_series_list(
 		&self,
+		_user: &AuthUser,
 		_library_id: String,
 		_search: &crate::KomgaSeriesSearch,
 		_sorts: &[String],

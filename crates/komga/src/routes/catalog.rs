@@ -1483,6 +1483,7 @@ async fn virtual_series_page(
 	}
 	let sort_fields: Vec<String> = sorts.iter().map(|sort| sort.field.clone()).collect();
 	ctx.virtual_series_list(
+		user,
 		library_id,
 		search,
 		&sort_fields,

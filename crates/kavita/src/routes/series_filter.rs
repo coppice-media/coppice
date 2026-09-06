@@ -12,7 +12,8 @@
 use std::collections::HashSet;
 
 use models::entity::{
-	media, media_metadata, series, series_metadata, series_tag, user::AuthUser,
+	media, media_metadata, media_tag, series, series_metadata, series_tag,
+	user::AuthUser,
 };
 use sea_orm::{
 	prelude::*,
@@ -815,45 +816,56 @@ pub(crate) async fn plan(
 					) {
 					continue;
 				}
-				let tagged = |ids: Vec<i32>| {
-					series_col(series::Column::Id).in_subquery(
-						Query::select()
-							.column(series_tag::Column::SeriesId)
-							.from(series_tag::Entity)
-							.and_where(series_tag::Column::TagId.is_in(ids))
-							.to_owned(),
+				// Stump attaches tags to a series row and to a media item, and
+				// a Kavita series' tag list is the union of both
+				// (`map_series_metadata`), so either side matches. A book is
+				// its file, so only the media side applies.
+				let media_tagged = |target: Target, ids: Option<Vec<i32>>| {
+					through_media(
+						target,
+						media_col(media::Column::Id).in_subquery(
+							Query::select()
+								.column(media_tag::Column::MediaId)
+								.from(media_tag::Entity)
+								.and_where_option(
+									ids.map(|ids| media_tag::Column::TagId.is_in(ids)),
+								)
+								.to_owned(),
+						),
 					)
 				};
-				let any_tag = series_col(series::Column::Id).in_subquery(
-					Query::select()
-						.column(series_tag::Column::SeriesId)
-						.from(series_tag::Entity)
-						.to_owned(),
-				);
-				groups.add(|target| match target {
-					Target::Series => match comparison {
-						FilterComparison::Equal | FilterComparison::Contains => {
-							tagged(tag_ids.clone())
-						},
-						FilterComparison::NotEqual | FilterComparison::NotContains => {
-							tagged(tag_ids.clone()).not()
-						},
-						FilterComparison::MustContains => tag_ids
-							.iter()
-							.map(|id| tagged(vec![*id]))
-							.reduce(|acc, next| acc.and(next))
-							.unwrap_or_else(|| Expr::value(true)),
-						FilterComparison::IsEmpty => any_tag.clone().not(),
-						FilterComparison::IsNotEmpty => any_tag.clone(),
-						_ => Expr::value(true),
+				let tagged = |target: Target, ids: Option<Vec<i32>>| {
+					let via_media = media_tagged(target, ids.clone());
+					match target {
+						Target::Series => series_col(series::Column::Id)
+							.in_subquery(
+								Query::select()
+									.column(series_tag::Column::SeriesId)
+									.from(series_tag::Entity)
+									.and_where_option(ids.map(|ids| {
+										series_tag::Column::TagId.is_in(ids)
+									}))
+									.to_owned(),
+							)
+							.or(via_media),
+						Target::Book => via_media,
+					}
+				};
+				groups.add(|target| match comparison {
+					FilterComparison::Equal | FilterComparison::Contains => {
+						tagged(target, Some(tag_ids.clone()))
 					},
-					// Tags are a Stump series feature; a book carries none.
-					Target::Book => Expr::value(matches!(
-						comparison,
-						FilterComparison::IsEmpty
-							| FilterComparison::NotEqual
-							| FilterComparison::NotContains
-					)),
+					FilterComparison::NotEqual | FilterComparison::NotContains => {
+						tagged(target, Some(tag_ids.clone())).not()
+					},
+					FilterComparison::MustContains => tag_ids
+						.iter()
+						.map(|id| tagged(target, Some(vec![*id])))
+						.reduce(|acc, next| acc.and(next))
+						.unwrap_or_else(|| Expr::value(true)),
+					FilterComparison::IsEmpty => tagged(target, None).not(),
+					FilterComparison::IsNotEmpty => tagged(target, None),
+					_ => Expr::value(true),
 				});
 			},
 			SeriesFilterField::Genres => {

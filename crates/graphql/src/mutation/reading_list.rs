@@ -75,7 +75,7 @@ impl ReadingListMutation {
 		let core = ctx.data::<CoreContext>()?;
 
 		let reading_list = get_for_owner(&id, core.conn.as_ref(), auth.id()).await?;
-		stump_core::collections::delete_read_list(core, &auth.user(), &id).await?;
+		stump_collections::delete_read_list(core, &auth.user(), &id).await?;
 
 		Ok(ReadingList {
 			model: reading_list,

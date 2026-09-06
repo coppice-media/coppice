@@ -1,7 +1,7 @@
 use async_graphql::{SimpleObject, ID};
 use chrono::{DateTime, FixedOffset};
 use models::{entity::known_duplicate_page, shared::enums::DuplicatePageAction};
-use stump_core::ingest::quality::duplicate_pages_across_books::dhash_hex;
+use stump_ingest::quality::duplicate_pages_across_books::dhash_hex;
 
 /// A librarian decision about one recurring page hash inside a library.
 #[derive(Debug, Clone, SimpleObject)]

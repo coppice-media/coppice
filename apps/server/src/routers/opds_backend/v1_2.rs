@@ -439,8 +439,23 @@ async fn virtual_library_feed_or_none(
 	.await
 	.map_err(APIError::InternalServerError)?;
 
-	let entries = result
+	// Live rows have no `series_metadata` row for the per-user age
+	// restriction to filter on, so the remote rating is checked here.
+	let user = req.user();
+	let adult_source =
+		crate::routers::provider_virtual::source_is_adult(ctx, &source_id).await;
+	let visible = result
 		.items
+		.iter()
+		.filter(|remote| {
+			crate::routers::provider_virtual::age_restriction_allows(
+				&user,
+				crate::routers::provider_virtual::remote_age_rating(remote, adult_source),
+			)
+		})
+		.collect::<Vec<_>>();
+
+	let entries = visible
 		.iter()
 		.map(|remote| {
 			let stump_id = virtual_path::series_id(&source_id, &remote.remote_id);
@@ -463,8 +478,7 @@ async fn virtual_library_feed_or_none(
 
 	// Live browse has no total count; one phantom element past the current
 	// window marks a next page for OPDS clients when the source has one.
-	let count =
-		pagination.offset() + result.items.len() as u64 + u64::from(result.has_next);
+	let count = pagination.offset() + visible.len() as u64 + u64::from(result.has_next);
 
 	let feed = OPDSFeedBuilder::new(req.api_key()).paginated(OPDSFeedBuilderParams {
 		id: library.id.clone(),

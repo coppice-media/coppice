@@ -49,6 +49,14 @@ pub struct Model {
 	#[sea_orm(column_type = "Json", nullable)]
 	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub ignore_rules: Option<IgnoreRules>,
+	/// Per-library override of the per-field metadata policy, serialized
+	/// `stump_ingest::policy::MetadataPolicy` JSON. `None` inherits the server
+	/// default. Exposed through `metadataPolicy`/`setMetadataPolicy`, which
+	/// return the *effective* policy, so the raw document is not a GraphQL
+	/// field.
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	#[sea_orm(column_type = "Text", nullable)]
+	pub metadata_policy: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub library_id: Option<String>,
 }

@@ -16,7 +16,7 @@ futures.workspace = true
 governor = "0.6"
 md5.workspace = true
 models = { path = "../models", default-features = false }
-reqwest = { workspace = true, features = ["query"] }
+reqwest = { workspace = true, features = ["charset", "form", "query"] }
 rust_decimal.workspace = true
 sea-orm.workspace = true
 serde.workspace = true

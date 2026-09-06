@@ -159,6 +159,12 @@ pub fn hamming(left: u64, right: u64) -> u32 {
 	(left ^ right).count_ones()
 }
 
+/// Maximum [`hamming`] distance between two page dHashes for the pages to
+/// count as the same page. Shared by the ingest quality check, the duplicate
+/// candidate aggregation, and the serve-time skip, so the three can never
+/// disagree about what "the same page" means.
+pub const DUPLICATE_PAGE_TOLERANCE: u32 = 4;
+
 #[cfg(test)]
 mod dhash_tests {
 	use super::{dhash_image, hamming, page_dhash};

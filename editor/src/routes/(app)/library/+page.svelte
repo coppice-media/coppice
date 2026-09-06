@@ -16,6 +16,7 @@
 	import { getEditorSession } from '$lib/editor/session.svelte';
 	import { request } from '@stump/ui/graphql/client';
 	import {
+		ApplyBestIngestMetadataDocument,
 		IngestMediaQualityScoreDocument,
 		IngestProviderCatalogDocument,
 		LibraryAnalysisJobDocument,
@@ -133,6 +134,27 @@
 		},
 		onError: (error) => toast.error(error instanceof Error ? error.message : 'Unable to queue provider matching.')
 	}));
+	const applyBestMutation = createMutation(() => ({
+		// One request per book: the policy resolves per target, and a partial
+		// failure must not hide the books that did apply.
+		mutationFn: async (mediaIds: string[]) => {
+			const results = await Promise.all(
+				mediaIds.map((mediaId) => request(ApplyBestIngestMetadataDocument, { mediaId }))
+			);
+			return results.flatMap((result) => result.applyBestIngestMetadata.decisions);
+		},
+		onSuccess: (decisions) => {
+			const applied = decisions.filter((decision) => decision.applied).length;
+			void queryClient.invalidateQueries({ queryKey: ['library-media'] });
+			toast.success(
+				applied
+					? `Policy applied: ${applied} field${applied === 1 ? '' : 's'} written.`
+					: 'Policy applied: nothing to write for the selected books.'
+			);
+			selected = [];
+		},
+		onError: (error) => toast.error(error instanceof Error ? error.message : 'Unable to apply the metadata policy.')
+	}));
 
 	function toggleAll(): void {
 		selected = allSelected ? [] : nodes.map((book) => book.id);
@@ -185,6 +207,9 @@
 						</Button>
 						<Button size="sm" disabled={!selected.length || matchMutation.isPending} onclick={() => matchMutation.mutate({ mediaIds: selected, providers: matchProviders.length ? matchProviders : null })}>
 							Match providers{selected.length ? ` (${selected.length})` : ''}
+						</Button>
+						<Button size="sm" variant="secondary" disabled={!selected.length || applyBestMutation.isPending} title="Apply the library's per-field metadata policy to the stored candidates. Locked fields are left alone." onclick={() => applyBestMutation.mutate(selected)}>
+							{applyBestMutation.isPending ? 'Applying…' : `Apply best${selected.length ? ` (${selected.length})` : ''}`}
 						</Button>
 						{#if activeJobs.length}
 							<Badge variant="secondary">{activeJobs.length} analysis job{activeJobs.length === 1 ? '' : 's'} running</Badge>

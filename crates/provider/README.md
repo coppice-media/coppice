@@ -43,16 +43,21 @@ for operators but cannot be enabled.
 | Dedupe is recorded, never enforced: materialisation writes `provider_series_identity` (normalised title + strongest external id) and links a match from another source in `provider_series_links` | Sources overlap heavily; a false positive must be a row an operator can inspect rather than silently merged (and lost) reading progress | `src/identity.rs::record_identity`; migration `m20260924_000000_add_provider_series_links`; test `same_title_from_another_source_is_linked_to_the_first` |
 | `mergeProviderSeries(keep, drop)` replays the dropped heads onto the kept chapters through `reading_state::apply` (chapter number, then normalised title) and refuses non-provider series | The conflict rule and provenance must stay the single writer of reading state; a locally scanned series is never deleted by a provider merge | `src/identity.rs::merge_series`; tests `merge_repoints_heads_and_deletes_the_dropped_series`, `merge_refuses_local_series_and_self_merges` |
 | GC and identity write transactions open with `models::txn::begin_write` (SQLite `BEGIN IMMEDIATE`) | The GC sweep and `merge_series` read the rows they are about to delete or repoint, and a deferred `BEGIN` cannot promote that read snapshot to the write lock while a scan or materialisation holds it | `src/gc.rs`, `src/identity.rs`; `crates/models/src/txn.rs` |
+| Chapters the source cannot serve (`RemoteChapter::readable == false`) are never materialised; `Materialized.skipped` reports each `{remote_id, reason}` and `add_series` logs the count | A row for an unreadable chapter is a book whose every page 404s; an operator needs to see "0 readable chapters here", not broken books | `src/source.rs::RemoteChapter`, `src/materialize.rs::{SkipReason,insert_chapters}`; test `unreadable_chapters_are_skipped_and_counted_with_a_reason` |
+| A 404 from the page-manifest lookup becomes `ProviderError::Unavailable { source_id }` → `FileError::Unavailable` → `404 Chapter is not available from <source>`, not `FileError::NotFound` | A chapter the remote stopped serving is not a missing file, and every lane (native, Komga, OPDS, Kavita) must agree on 404 instead of the old `500 File not found on disk` | `src/host.rs::pages`, `impl From<ProviderError> for FileError`; `apps/server/src/errors.rs::From<FileError>`; test `a_chapter_whose_manifest_404s_is_unavailable_not_missing` |
+| `cover_url` falls back to a `details()` fetch when the stored row has no `comic_image`, and writes the URL back | A series materialised from a browse response whose cover relationship was absent otherwise reports "Series does not have a thumbnail" forever | `src/host.rs::{cover_url,store_cover_url}`; test `cover_falls_back_to_a_detail_fetch_and_is_written_back` |
+| `series_metadata.age_rating` comes from `RemoteSeries::content_rating` (`safe`→none, `suggestive`→13, `erotica`→16, `pornographic`→18), raised to 18 for every series of a catalog-NSFW source | Stump has no library-level age rating — `age_restrictions` is per user and compares against `series_metadata.age_rating` — so a source-wide rule can only be expressed per series | `src/source.rs::ContentRating`, `src/materialize.rs::age_rating`, `src/host.rs::source_is_adult`; test `content_rating_and_nsfw_sources_set_the_age_rating` |
+| Mode B live rows carry the same `ageRating` and are filtered by the requesting user's restriction before listing, details, cover, or materialisation | A live row has no `series_metadata` for `find_for_user` to join, so the rule has to be re-applied in the adapter or age restriction is bypassed by browsing | `apps/server/src/routers/provider_virtual.rs::{age_restriction_allows,remote_age_rating}`; `komga_backend.rs::virtual_series_list`; `opds_backend/v1_2.rs::virtual_library_feed_or_none` |
 
 Routes that answer from a virtual library (Mode B):
 
 | Route | Behaviour |
 | --- | --- |
-| Komga `POST /api/v1/series/list` with `libraryId is <virtual>` | live browse page, deterministic ids, no rows (`crates/komga/src/routes/catalog.rs::virtual_series_page`) |
+| Komga `POST /api/v1/series/list` with `libraryId is <virtual>` | live browse page, deterministic ids, no rows; rows above the user's age restriction dropped (`crates/komga/src/routes/catalog.rs::virtual_series_page`) |
 | Komga `GET /api/v1/series/{id}` | live details while unmaterialised (`get_series_by_id` → `virtual_series_by_id`) |
-| Komga `GET /api/v1/series/{id}/thumbnail` | source cover via host cache for live or stored provider series |
-| Komga `GET /api/v1/series/{id}/books` | materialises on first call, then the ordinary database path (`get_series_books`) |
-| Komga `GET /api/v1/books/{id}/pages/{n}` | `provider://` media resolved by the host (unchanged route) |
+| Komga / native `GET /series/{id}/thumbnail` | source cover via host cache for live **and** materialised provider series; uploaded thumbnail still wins |
+| Komga `GET /api/v1/series/{id}/books` | materialises readable chapters on first call, then the ordinary database path (`get_series_books`) |
+| Komga `GET /api/v1/books/{id}/pages/{n}` | `provider://` media resolved by the host; `404 Chapter is not available from <source>` once the source stops serving it |
 | OPDS 1.2 `GET /opds/v1.2/libraries/{id}` | live browse feed with phantom next-page count (`v1_2.rs::virtual_library_feed_or_none`) |
 | OPDS 1.2 `GET /opds/v1.2/series/{id}` | materialises on first call, then books/PSE pages as usual |
 
@@ -60,7 +65,7 @@ Routes that answer from a virtual library (Mode B):
 
 | File | Responsibility |
 | --- | --- |
-| `src/source.rs` | `Source` trait, `RemoteSeries`/`RemoteChapter`/`RemotePage`, `SourceError` |
+| `src/source.rs` | `Source` trait, `RemoteSeries`/`RemoteChapter`/`RemotePage`, `ContentRating`, `SourceError` |
 | `src/host.rs` | `ProviderHost`, `SourceFactory`, page/cover/archive resolution, `VirtualMediaResolver` impl |
 | `src/browse.rs` | `BrowseKind`, `VirtualBrowseCache` (TTL + reverse index), `RemoteOrigin` |
 | `src/virtual_library.rs` | idempotent `create_virtual_library` (deterministic library id, `watch` off) |

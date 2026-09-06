@@ -184,6 +184,18 @@ pub trait KavitaBackend: Send + Sync {
 		media_id: &str,
 	) -> APIResult<Response<Body>>;
 
+	/// The whole download payload of one media item, in memory: the file on
+	/// disk for a stored row, and a CBZ packed from its pages for a
+	/// provider-backed (`provider://`) row, which has no file to stream.
+	///
+	/// `GET /api/Download/chapter` streams a stored file with
+	/// [`KavitaBackend::serve_media_file`] instead, so this is only reached
+	/// where the payload has to be buffered: a provider-backed chapter, and
+	/// every member of the zip a multi-file `GET /api/Download/series`
+	/// returns.
+	async fn media_bytes(&self, user: &AuthUser, media_id: &str)
+		-> APIResult<Vec<u8>>;
+
 	/// The spine page budget and navigation tree of an EPUB, for
 	/// `GET /api/Book/{chapterId}/book-info` and `chapters`.
 	async fn book_structure(

@@ -3,6 +3,7 @@ pub(crate) mod device_pairing;
 pub(crate) mod emoji;
 #[cfg(feature = "readium")]
 pub(crate) mod epub;
+#[cfg(feature = "ingest")]
 pub(crate) mod ingest_events;
 pub(crate) mod library;
 pub(crate) mod media;
@@ -37,8 +38,10 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 		.merge(device_pairing::mount(app_state.clone()))
 		.merge(oidc::mount())
 		.merge(emoji::mount(app_state.clone()))
-		.merge(ingest_events::mount(app_state.clone()))
 		.merge(media::mount(app_state.clone()));
+
+	#[cfg(feature = "ingest")]
+	let router = router.merge(ingest_events::mount(app_state.clone()));
 
 	#[cfg(feature = "readium")]
 	let router = router.merge(epub::mount(app_state.clone()));

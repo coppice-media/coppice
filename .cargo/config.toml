@@ -3,7 +3,9 @@ integration-tests = "test --package integration-tests -- --test-threads 1"
 doc-tests = "cargo test --doc -- --show-output"
 build-server = "build --package stump_server --bin stump_server --release --"
 codegen = "run --package codegen --bin codegen"
-dump-schema = "run --package graphql --bin graphql-gen"
+# `--all-features`: `schema.graphql` is the *full* schema (providers + web), so
+# it stays a superset for every client's codegen no matter how a build is cut.
+dump-schema = "run --package graphql --bin graphql-gen --all-features"
 migrate = "run --manifest-path ./crates/migrations/Cargo.toml --bin migrate --"
 rollback = "run --manifest-path ./crates/migrations/Cargo.toml --bin migrate -- down -n 1"
 

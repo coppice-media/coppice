@@ -1,5 +1,6 @@
 pub mod annotation;
 pub mod api_key;
+#[cfg(feature = "web")]
 pub mod book_club;
 pub mod email_device;
 pub mod emailer;
@@ -7,12 +8,15 @@ pub mod filesystem;
 pub mod ingest;
 pub mod library;
 pub mod media;
+pub mod metadata_policy;
 pub mod metadata_provider;
 pub mod notifier;
 pub mod reading_list;
 pub mod scheduled_job_config;
 pub mod series;
+#[cfg(feature = "web")]
 pub mod smart_list_view;
+#[cfg(feature = "web")]
 pub mod smart_lists;
 pub mod thumbnail;
 pub mod user;

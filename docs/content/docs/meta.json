@@ -29,6 +29,7 @@
 		"developer/comparison",
 		"developer/provider-status",
 		"developer/provider-host",
+		"developer/source-definitions",
 		"developer/modular-ingest",
 		"developer/calibre-tooling",
 		"developer/home-app",

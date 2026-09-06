@@ -1,7 +1,7 @@
 use async_graphql::{Enum, InputObject, Json, Upload};
 use metadata_integrations::{MergeStrategy, MetadataField as ExistingMetadataField};
 use serde_json::Value;
-use stump_core::ingest::contract::{FieldPick, MetadataField};
+use stump_ingest::contract::{FieldPick, MetadataField};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Enum)]
 pub enum IngestMetadataFieldMode {
@@ -73,50 +73,13 @@ impl IngestMetadataFieldSelectionInput {
 	}
 }
 
-/// Convert the existing metadata enum (which is also used by legacy metadata
-/// mutations) to the canonical ingest field enum. Unsupported legacy-only
-/// fields are rejected rather than silently writing the wrong field.
+/// Convert the public metadata enum (which the legacy metadata mutations and
+/// the per-row lock lists also use) to the canonical ingest field enum. The
+/// table itself lives with the enum in `stump_ingest::contract`; unsupported
+/// public-only fields are rejected rather than folded onto the wrong field.
 pub fn map_metadata_field(field: ExistingMetadataField) -> Result<MetadataField, String> {
-	Ok(match field {
-		ExistingMetadataField::Title => MetadataField::Title,
-		ExistingMetadataField::TitleSort => MetadataField::SortTitle,
-		ExistingMetadataField::Summary => MetadataField::Summary,
-		ExistingMetadataField::Series => MetadataField::Series,
-		ExistingMetadataField::Number => MetadataField::SeriesIndex,
-		ExistingMetadataField::Artists
-		| ExistingMetadataField::Writers
-		| ExistingMetadataField::Editors
-		| ExistingMetadataField::Inkers
-		| ExistingMetadataField::Letterers
-		| ExistingMetadataField::Colorists
-		| ExistingMetadataField::CoverArtists
-		| ExistingMetadataField::Pencillers
-		| ExistingMetadataField::Teams => MetadataField::Authors,
-		ExistingMetadataField::Publisher | ExistingMetadataField::Imprint => {
-			MetadataField::Publisher
-		},
-		ExistingMetadataField::Year | ExistingMetadataField::ReleaseDate => {
-			MetadataField::PublishedDate
-		},
-		ExistingMetadataField::Language => MetadataField::Language,
-		ExistingMetadataField::Tags => MetadataField::Tags,
-		ExistingMetadataField::Genres => MetadataField::Genres,
-		ExistingMetadataField::Isbn => MetadataField::Isbn,
-		ExistingMetadataField::AgeRating => MetadataField::AgeRating,
-		ExistingMetadataField::PageCount => MetadataField::PageCount,
-		ExistingMetadataField::Cover => MetadataField::CoverUrl,
-		ExistingMetadataField::Links => MetadataField::Identifiers,
-		ExistingMetadataField::ComicId
-		| ExistingMetadataField::IdentifierAmazon
-		| ExistingMetadataField::IdentifierCalibre
-		| ExistingMetadataField::IdentifierGoogle
-		| ExistingMetadataField::IdentifierMobiAsin
-		| ExistingMetadataField::IdentifierUuid => MetadataField::Identifiers,
-		_ => {
-			return Err(format!(
-				"metadata field {field:?} is not supported by staged ingest"
-			))
-		},
+	MetadataField::from_public(field).ok_or_else(|| {
+		format!("metadata field {field:?} is not supported by staged ingest")
 	})
 }
 

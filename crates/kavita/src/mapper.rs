@@ -80,21 +80,197 @@ pub fn split_csv(raw: Option<&str>) -> Vec<String> {
 	values
 }
 
-pub fn people(raw: Option<&str>, role: PersonRole) -> Vec<PersonDto> {
-	split_csv(raw)
-		.into_iter()
-		.map(|name| PersonDto::new(name_id(&name), name, vec![role]))
-		.collect()
+/// Kavita's `SeriesMetadataService` aggregation, which unions the values of
+/// every row that contributes to a series. Stump keeps these as
+/// comma-separated text, so the union is by trimmed value, ordered by first
+/// appearance and de-duplicated case-insensitively.
+#[derive(Default)]
+struct NameUnion {
+	seen: BTreeSet<String>,
+	names: Vec<String>,
 }
 
-pub fn genres(raw: Option<&str>) -> Vec<GenreTagDto> {
-	split_csv(raw)
-		.into_iter()
-		.map(|title| GenreTagDto {
-			id: name_id(&title),
-			title,
+impl NameUnion {
+	fn push(&mut self, name: &str) {
+		let name = name.trim();
+		if !name.is_empty() && self.seen.insert(name.to_lowercase()) {
+			self.names.push(name.to_owned());
+		}
+	}
+
+	/// Add one comma-separated Stump metadata column.
+	fn push_csv(&mut self, raw: Option<&str>) {
+		for value in raw.unwrap_or_default().split(',') {
+			self.push(value);
+		}
+	}
+
+	fn into_people(self, role: PersonRole) -> Vec<PersonDto> {
+		self.names
+			.into_iter()
+			.map(|name| PersonDto::new(name_id(&name), name, vec![role]))
+			.collect()
+	}
+
+	fn into_genres(self) -> Vec<GenreTagDto> {
+		self.names
+			.into_iter()
+			.map(|title| GenreTagDto {
+				id: name_id(&title),
+				title,
+			})
+			.collect()
+	}
+}
+
+/// A `media_metadata` text column, as the aggregation reads it.
+type MediaColumn = fn(&media_metadata::Model) -> Option<&String>;
+
+/// Union one series-metadata column with the same column of every media row
+/// backing the series.
+fn union_column(
+	series_value: Option<&str>,
+	media: &[MediaInput],
+	column: Option<MediaColumn>,
+) -> NameUnion {
+	let mut union = NameUnion::default();
+	union.push_csv(series_value);
+	if let Some(column) = column {
+		for item in media {
+			union
+				.push_csv(item.metadata.as_ref().and_then(column).map(String::as_str));
+		}
+	}
+	union
+}
+
+/// The people Kavita lists on a series or chapter. The role/column pairs are
+/// the in-memory twin of [`crate::routes::metadata::people_sources`], which
+/// walks the same columns in SQL for `GET /api/Metadata/people`: Stump has no
+/// column for Kavita's `translators` or `locations`, and carries an imprint
+/// only on a series.
+fn aggregate_people(
+	series: Option<&series_metadata::Model>,
+	media: &[MediaInput],
+) -> PeopleDto {
+	let role = |series_value: Option<&str>, column: Option<MediaColumn>, role| {
+		union_column(series_value, media, column).into_people(role)
+	};
+	PeopleDto {
+		writers: role(
+			series.and_then(|m| m.writers.as_deref()),
+			Some(|m| m.writers.as_ref()),
+			PersonRole::Writer,
+		),
+		cover_artists: role(
+			None,
+			Some(|m| m.cover_artists.as_ref()),
+			PersonRole::CoverArtist,
+		),
+		publishers: role(
+			series.and_then(|m| m.publisher.as_deref()),
+			Some(|m| m.publisher.as_ref()),
+			PersonRole::Publisher,
+		),
+		characters: role(
+			series.and_then(|m| m.characters.as_deref()),
+			Some(|m| m.characters.as_ref()),
+			PersonRole::Character,
+		),
+		pencillers: role(None, Some(|m| m.pencillers.as_ref()), PersonRole::Penciller),
+		inkers: role(None, Some(|m| m.inkers.as_ref()), PersonRole::Inker),
+		imprints: role(
+			series.and_then(|m| m.imprint.as_deref()),
+			None,
+			PersonRole::Imprint,
+		),
+		colorists: role(None, Some(|m| m.colorists.as_ref()), PersonRole::Colorist),
+		letterers: role(None, Some(|m| m.letterers.as_ref()), PersonRole::Letterer),
+		editors: role(None, Some(|m| m.editors.as_ref()), PersonRole::Editor),
+		translators: Vec::new(),
+		teams: role(None, Some(|m| m.teams.as_ref()), PersonRole::Team),
+		locations: Vec::new(),
+	}
+}
+
+fn aggregate_genres(
+	series: Option<&series_metadata::Model>,
+	media: &[MediaInput],
+) -> Vec<GenreTagDto> {
+	union_column(
+		series.and_then(|m| m.genres.as_deref()),
+		media,
+		Some(|m| m.genres.as_ref()),
+	)
+	.into_genres()
+}
+
+/// The series tags followed by every media tag, de-duplicated by title. Tag
+/// ids stay the Stump `tags.id` the filter and `GET /api/Metadata/tags`
+/// round-trip, so the first row carrying a title wins.
+fn aggregate_tags(series_tags: &[TagDto], media: &[MediaInput]) -> Vec<TagDto> {
+	let mut seen = BTreeSet::new();
+	let mut tags = Vec::new();
+	let rows = series_tags
+		.iter()
+		.chain(media.iter().flat_map(|item| item.tags.iter()));
+	for tag in rows {
+		let title = tag.title.trim();
+		if !title.is_empty() && seen.insert(title.to_lowercase()) {
+			tags.push(TagDto {
+				id: tag.id,
+				title: title.to_owned(),
+			});
+		}
+	}
+	tags
+}
+
+/// Stump's `locked_fields` (a JSON array of `MetadataField` names) as the
+/// `*Locked` flags Kavita flattens into `SeriesMetadataDto` and `ChapterDto`.
+/// Kavita also locks `translator` and `location`, which Stump does not model,
+/// so those stay false; `language_lock` is the dedicated series column.
+fn metadata_locks(
+	locked_fields: Option<&serde_json::Value>,
+	language_lock: bool,
+) -> MetadataLocksDto {
+	let fields = locked_field_names(locked_fields);
+	let locked = |field: &str| fields.contains(field);
+	MetadataLocksDto {
+		language_locked: language_lock || locked("LANGUAGE"),
+		summary_locked: locked("SUMMARY"),
+		age_rating_locked: locked("AGE_RATING"),
+		publication_status_locked: locked("STATUS"),
+		genres_locked: locked("GENRES"),
+		tags_locked: locked("TAGS"),
+		writer_locked: locked("WRITERS"),
+		character_locked: locked("CHARACTERS"),
+		colorist_locked: locked("COLORISTS"),
+		editor_locked: locked("EDITORS"),
+		inker_locked: locked("INKERS"),
+		imprint_locked: locked("IMPRINT"),
+		letterer_locked: locked("LETTERERS"),
+		penciller_locked: locked("PENCILLERS"),
+		publisher_locked: locked("PUBLISHER"),
+		translator_locked: false,
+		team_locked: locked("TEAMS"),
+		location_locked: false,
+		cover_artist_locked: locked("COVER_ARTISTS"),
+	}
+}
+
+/// The `MetadataField` names a `locked_fields` array holds; a malformed or
+/// absent value locks nothing.
+fn locked_field_names(locked_fields: Option<&serde_json::Value>) -> BTreeSet<&str> {
+	locked_fields
+		.and_then(|value| value.as_array())
+		.map(|values| {
+			values
+				.iter()
+				.filter_map(serde_json::Value::as_str)
+				.collect()
 		})
-		.collect()
+		.unwrap_or_default()
 }
 
 pub fn library_type(config: Option<&library_config::Model>) -> LibraryType {
@@ -166,6 +342,9 @@ pub struct MediaInput {
 	pub media: media::Model,
 	pub metadata: Option<media_metadata::Model>,
 	pub session: Option<reading_session::Model>,
+	/// The Stump tags attached to the media item, in name order; Kavita has
+	/// no per-chapter tag list of its own.
+	pub tags: Vec<TagDto>,
 	/// Position of the media in the series (1-based, name order).
 	pub ordinal: i32,
 	/// Whether the media is a book of a Book/LightNovel library, i.e. the
@@ -283,56 +462,18 @@ pub fn map_file(input: &MediaInput) -> MangaFileDto {
 	}
 }
 
-/// The people Kavita lists on a chapter, from the media metadata; a book's
-/// series metadata carries the same set.
-fn media_people(metadata: Option<&media_metadata::Model>) -> PeopleDto {
-	PeopleDto {
-		writers: people(
-			metadata.and_then(|m| m.writers.as_deref()),
-			PersonRole::Writer,
-		),
-		cover_artists: people(
-			metadata.and_then(|m| m.cover_artists.as_deref()),
-			PersonRole::CoverArtist,
-		),
-		publishers: people(
-			metadata.and_then(|m| m.publisher.as_deref()),
-			PersonRole::Publisher,
-		),
-		characters: people(
-			metadata.and_then(|m| m.characters.as_deref()),
-			PersonRole::Character,
-		),
-		pencillers: people(
-			metadata.and_then(|m| m.pencillers.as_deref()),
-			PersonRole::Penciller,
-		),
-		inkers: people(
-			metadata.and_then(|m| m.inkers.as_deref()),
-			PersonRole::Inker,
-		),
-		imprints: Vec::new(),
-		colorists: people(
-			metadata.and_then(|m| m.colorists.as_deref()),
-			PersonRole::Colorist,
-		),
-		letterers: people(
-			metadata.and_then(|m| m.letterers.as_deref()),
-			PersonRole::Letterer,
-		),
-		editors: people(
-			metadata.and_then(|m| m.editors.as_deref()),
-			PersonRole::Editor,
-		),
-		translators: Vec::new(),
-		teams: people(metadata.and_then(|m| m.teams.as_deref()), PersonRole::Team),
-		locations: Vec::new(),
-	}
-}
-
 /// Book chapters (`input.book`) take the shape `kavita-ref` gives a file
-/// without a volume: `range` is the title, `isSpecial` and `totalCount: 1`.
+/// without a volume: `range` is the title, `isSpecial` and `totalCount: 1`
+/// (`komga-compat/kavita/capture/book-library.json`; the same instance
+/// reports `totalCount: 0` for an archive without a ComicInfo `Count`, which
+/// is every Stump file, since Stump stores that number once per series in
+/// `series_metadata.total_issues` and never per file).
 pub fn map_chapter(input: &MediaInput) -> ChapterDto {
+	let locked = input
+		.metadata
+		.as_ref()
+		.and_then(|metadata| metadata.locked_fields.as_ref());
+	let lock_names = locked_field_names(locked);
 	let metadata = input.metadata.as_ref();
 	let pages = input.pages();
 	let pages_read = input.pages_read();
@@ -384,17 +525,17 @@ pub fn map_chapter(input: &MediaInput) -> ChapterDto {
 		isbn: metadata
 			.and_then(|metadata| metadata.identifier_isbn.clone())
 			.unwrap_or_default(),
-		people: media_people(metadata),
-		genres: genres(metadata.and_then(|metadata| metadata.genres.as_deref())),
-		tags: Vec::new(),
+		people: aggregate_people(None, std::slice::from_ref(input)),
+		genres: aggregate_genres(None, std::slice::from_ref(input)),
+		tags: aggregate_tags(&[], std::slice::from_ref(input)),
 		publication_status: PublicationStatus::OnGoing,
 		language: metadata.and_then(|metadata| metadata.language.clone()),
 		count: 0,
 		total_count: i32::from(input.book),
-		locks: MetadataLocksDto::default(),
-		release_date_locked: false,
-		title_name_locked: false,
-		sort_order_locked: false,
+		locks: metadata_locks(locked, false),
+		release_date_locked: lock_names.contains("RELEASE_DATE"),
+		title_name_locked: lock_names.contains("TITLE"),
+		sort_order_locked: lock_names.contains("NUMBER"),
 		cover_image: cover_name(input.id, input.id),
 		primary_color: None,
 		secondary_color: None,
@@ -467,6 +608,10 @@ pub struct SeriesInput {
 	pub id: i32,
 	pub series: series::Model,
 	pub metadata: Option<series_metadata::Model>,
+	/// The Stump tags attached to the series row, in name order. A book
+	/// series is one file, not a Stump series, so it carries none of its own
+	/// and aggregates its media's tags instead.
+	pub tags: Vec<TagDto>,
 	pub library_id: i32,
 	pub library_name: String,
 	pub media: Vec<MediaInput>,
@@ -644,20 +789,29 @@ pub fn map_series(input: &SeriesInput) -> SeriesDto {
 	}
 }
 
-/// Book series (`input.book()`) aggregate their single file the way Kavita's
-/// scanner does: metadata from the file, `maxCount == totalCount == 1` and
-/// therefore `Completed`; they carry no tags.
-pub fn map_series_metadata(input: &SeriesInput, tags: Vec<TagDto>) -> SeriesMetadataDto {
+/// `SeriesMetadataService.UpdateSeriesMetadata`: Kavita recomputes a series'
+/// metadata from every chapter under it, so each list here is the union of
+/// the Stump series row and the metadata of every media item backing it
+/// (first appearance wins, de-duplicated case-insensitively) and each scalar
+/// prefers the series row before falling back to the media.
+///
+/// Book series (`input.book()`) are one file that Kavita presents as its own
+/// series, so they take the file's metadata alone, with
+/// `maxCount == totalCount == 1` and therefore `Completed`
+/// (`komga-compat/kavita/capture/book-library.json`).
+pub fn map_series_metadata(input: &SeriesInput) -> SeriesMetadataDto {
 	if let Some(book) = input.book() {
+		let file = std::slice::from_ref(book);
 		let metadata = book.metadata.as_ref();
+		let locked = metadata.and_then(|metadata| metadata.locked_fields.as_ref());
 		return SeriesMetadataDto {
 			id: input.id,
 			summary: metadata
 				.and_then(|metadata| metadata.summary.clone())
 				.unwrap_or_default(),
-			genres: genres(metadata.and_then(|metadata| metadata.genres.as_deref())),
-			tags: Vec::new(),
-			people: media_people(metadata),
+			genres: aggregate_genres(None, file),
+			tags: aggregate_tags(&[], file),
+			people: aggregate_people(None, file),
 			age_rating: AgeRating::from_min_age(
 				metadata.and_then(|metadata| metadata.age_rating),
 			),
@@ -671,77 +825,69 @@ pub fn map_series_metadata(input: &SeriesInput, tags: Vec<TagDto>) -> SeriesMeta
 			web_links: metadata
 				.and_then(|metadata| metadata.links.clone())
 				.unwrap_or_default(),
-			locks: MetadataLocksDto::default(),
-			release_year_locked: false,
+			locks: metadata_locks(locked, false),
+			release_year_locked: locked_field_names(locked).contains("YEAR"),
 			series_id: input.id,
 		};
 	}
 	let metadata = input.metadata.as_ref();
-	let first_media = input
-		.media
-		.first()
-		.and_then(|media| media.metadata.as_ref());
-	let language = metadata
-		.and_then(|metadata| metadata.language.clone())
-		.or_else(|| first_media.and_then(|metadata| metadata.language.clone()))
-		.unwrap_or_default();
+	let media_metadata = || {
+		input
+			.media
+			.iter()
+			.filter_map(|media| media.metadata.as_ref())
+	};
+	let locked = metadata.and_then(|metadata| metadata.locked_fields.as_ref());
+	let total_issues = metadata
+		.and_then(|metadata| metadata.total_issues)
+		.unwrap_or(0);
 	SeriesMetadataDto {
 		id: input.id,
 		summary: metadata
 			.and_then(|metadata| metadata.summary.clone())
 			.or_else(|| input.series.description.clone())
 			.unwrap_or_default(),
-		genres: genres(metadata.and_then(|metadata| metadata.genres.as_deref())),
-		tags,
-		people: PeopleDto {
-			writers: people(
-				metadata.and_then(|m| m.writers.as_deref()),
-				PersonRole::Writer,
-			),
-			cover_artists: Vec::new(),
-			publishers: people(
-				metadata.and_then(|m| m.publisher.as_deref()),
-				PersonRole::Publisher,
-			),
-			characters: people(
-				metadata.and_then(|m| m.characters.as_deref()),
-				PersonRole::Character,
-			),
-			pencillers: Vec::new(),
-			inkers: Vec::new(),
-			imprints: people(
-				metadata.and_then(|m| m.imprint.as_deref()),
-				PersonRole::Imprint,
-			),
-			colorists: Vec::new(),
-			letterers: Vec::new(),
-			editors: Vec::new(),
-			translators: Vec::new(),
-			teams: Vec::new(),
-			locations: Vec::new(),
-		},
+		genres: aggregate_genres(metadata, &input.media),
+		tags: aggregate_tags(&input.tags, &input.media),
+		people: aggregate_people(metadata, &input.media),
+		// Kavita keeps the strictest rating of any chapter; Stump's ratings
+		// are minimum ages, so that is the largest one.
 		age_rating: AgeRating::from_min_age(
-			metadata.and_then(|metadata| metadata.age_rating),
+			metadata
+				.and_then(|metadata| metadata.age_rating)
+				.or_else(|| media_metadata().filter_map(|m| m.age_rating).max()),
 		),
-		release_year: metadata.and_then(|metadata| metadata.year).unwrap_or(0),
-		language,
-		max_count: metadata
-			.and_then(|metadata| metadata.total_issues)
+		// The series started with its earliest-dated file.
+		release_year: metadata
+			.and_then(|metadata| metadata.year)
+			.or_else(|| {
+				media_metadata()
+					.filter_map(|m| m.year)
+					.filter(|year| *year > 0)
+					.min()
+			})
 			.unwrap_or(0),
-		total_count: metadata
-			.and_then(|metadata| metadata.total_issues)
-			.unwrap_or(0),
+		language: metadata
+			.and_then(|metadata| metadata.language.clone())
+			.or_else(|| {
+				media_metadata()
+					.filter_map(|m| m.language.clone())
+					.find(|language| !language.trim().is_empty())
+			})
+			.unwrap_or_default(),
+		max_count: total_issues,
+		total_count: total_issues,
 		publication_status: PublicationStatus::from_status_text(
 			metadata.and_then(|metadata| metadata.status.as_deref()),
 		),
 		web_links: metadata
 			.and_then(|metadata| metadata.links.clone())
 			.unwrap_or_default(),
-		locks: MetadataLocksDto {
-			language_locked: metadata.is_some_and(|metadata| metadata.language_lock),
-			..MetadataLocksDto::default()
-		},
-		release_year_locked: false,
+		locks: metadata_locks(
+			locked,
+			metadata.is_some_and(|metadata| metadata.language_lock),
+		),
+		release_year_locked: locked_field_names(locked).contains("YEAR"),
 		series_id: input.id,
 	}
 }
@@ -1326,6 +1472,7 @@ mod tests {
 			id: 10 + ordinal,
 			media: media(name, extension, pages),
 			metadata: None,
+			tags: Vec::new(),
 			session: None,
 			ordinal,
 			book: false,
@@ -1371,6 +1518,7 @@ mod tests {
 			id: 40,
 			series: series_model("Collection"),
 			metadata: None,
+			tags: Vec::new(),
 			library_id: 2,
 			library_name: "Book Library".to_owned(),
 			media: vec![book],
@@ -1424,7 +1572,7 @@ mod tests {
 		assert_eq!(detail.library_type, LibraryType::Book);
 		assert_eq!((detail.unread_count, detail.total_count), (1, 1));
 
-		let metadata = map_series_metadata(&series, Vec::new());
+		let metadata = map_series_metadata(&series);
 		assert_eq!(metadata.series_id, 40);
 		assert_eq!(metadata.publication_status, PublicationStatus::Completed);
 		assert_eq!((metadata.max_count, metadata.total_count), (1, 1));
@@ -1443,6 +1591,7 @@ mod tests {
 			id: 41,
 			series: series_model("Collection"),
 			metadata: None,
+			tags: Vec::new(),
 			library_id: 2,
 			library_name: "Book Library".to_owned(),
 			media: vec![book],
@@ -1522,6 +1671,7 @@ mod tests {
 				..series_model("Alpha")
 			},
 			metadata: None,
+			tags: Vec::new(),
 			library_id: 5,
 			library_name: "Lib".to_owned(),
 			media: vec![input("v1", "epub", 15, 1), input("v2", "epub", 20, 2)],
@@ -1545,7 +1695,7 @@ mod tests {
 		assert_eq!(detail.total_count, 2);
 		assert_eq!(detail.unread_count, 2);
 		assert!(detail.specials.is_empty() && detail.chapters.is_empty());
-		let metadata = map_series_metadata(&series, Vec::new());
+		let metadata = map_series_metadata(&series);
 		assert_eq!(metadata.publication_status, PublicationStatus::OnGoing);
 		assert_eq!(metadata.series_id, 1);
 	}
@@ -1556,7 +1706,7 @@ mod tests {
 		assert!(name_id("Fantasy") > 0);
 		assert_ne!(name_id("Fantasy"), name_id("Horror"));
 		assert_eq!(
-			genres(Some("Fantasy, Horror, fantasy,")).len(),
+			split_csv(Some("Fantasy, Horror, fantasy,")).len(),
 			2,
 			"csv splitting de-duplicates case-insensitively"
 		);
@@ -1575,6 +1725,460 @@ mod tests {
 			..config
 		};
 		assert_eq!(library_type(Some(&config)), LibraryType::Comic);
+	}
+
+	fn grouped_series(media: Vec<MediaInput>) -> SeriesInput {
+		SeriesInput {
+			id: 1,
+			series: series_model("Berserk"),
+			metadata: None,
+			tags: Vec::new(),
+			library_id: 5,
+			library_name: "Comics".to_owned(),
+			media,
+			kind: SeriesKind::Grouped,
+		}
+	}
+
+	fn names(people: &[PersonDto]) -> Vec<&str> {
+		people.iter().map(|person| person.name.as_str()).collect()
+	}
+
+	fn titles<'a, T: 'a>(
+		rows: &'a [T],
+		title: fn(&'a T) -> &'a str,
+	) -> Vec<&'a str> {
+		rows.iter().map(title).collect()
+	}
+
+	/// `SeriesMetadataService.UpdateSeriesMetadata` recomputes a series from
+	/// every chapter under it: each list is the union of the Stump series row
+	/// and every file, first appearance first and de-duplicated
+	/// case-insensitively.
+	#[test]
+	fn series_metadata_unions_the_series_row_and_every_file() {
+		let mut first = input("v1", "cbz", 10, 1);
+		first.metadata = Some(media_metadata::Model {
+			genres: Some("Horror, Action".to_owned()),
+			writers: Some("Kentaro Miura, Studio Gaga".to_owned()),
+			pencillers: Some("Kentaro Miura".to_owned()),
+			inkers: Some("Studio Gaga".to_owned()),
+			colorists: Some("Studio Gaga".to_owned()),
+			letterers: Some("Duncan Fredoo".to_owned()),
+			editors: Some("Dark Horse".to_owned()),
+			cover_artists: Some("Kentaro Miura".to_owned()),
+			characters: Some("Guts, Griffith".to_owned()),
+			teams: Some("Band of the Hawk".to_owned()),
+			publisher: Some("Hakusensha".to_owned()),
+			age_rating: Some(16),
+			year: Some(1990),
+			language: Some("ja".to_owned()),
+			..default_media_metadata()
+		});
+		first.tags = vec![TagDto {
+			id: 7,
+			title: "Seinen".to_owned(),
+		}];
+		let mut second = input("v2", "cbz", 10, 2);
+		second.metadata = Some(media_metadata::Model {
+			// `action` repeats the first file's genre in another case.
+			genres: Some("action, Dark Fantasy".to_owned()),
+			writers: Some("kentaro miura, Ghost Writer".to_owned()),
+			age_rating: Some(18),
+			year: Some(1989),
+			language: Some("en".to_owned()),
+			..default_media_metadata()
+		});
+		second.tags = vec![
+			TagDto {
+				id: 7,
+				title: "seinen".to_owned(),
+			},
+			TagDto {
+				id: 9,
+				title: "Long Running".to_owned(),
+			},
+		];
+		let mut series = grouped_series(vec![first, second]);
+		series.metadata = Some(series_metadata::Model {
+			genres: Some("Fantasy".to_owned()),
+			writers: Some("Kentaro Miura".to_owned()),
+			characters: Some("Casca".to_owned()),
+			imprint: Some("Jets Comics".to_owned()),
+			total_issues: Some(41),
+			status: Some("Ended".to_owned()),
+			links: Some("https://example.test/berserk".to_owned()),
+			..default_series_metadata()
+		});
+		series.tags = vec![TagDto {
+			id: 3,
+			title: "Classic".to_owned(),
+		}];
+
+		let dto = map_series_metadata(&series);
+		assert_eq!(
+			titles(&dto.genres, |genre| genre.title.as_str()),
+			["Fantasy", "Horror", "Action", "Dark Fantasy"],
+			"series row first, then each file in order, one entry per value"
+		);
+		assert_eq!(
+			names(&dto.people.writers),
+			["Kentaro Miura", "Studio Gaga", "Ghost Writer"]
+		);
+		assert_eq!(
+			titles(&dto.tags, |tag| tag.title.as_str()),
+			["Classic", "Seinen", "Long Running"]
+		);
+		assert_eq!(
+			dto.tags.iter().map(|tag| tag.id).collect::<Vec<_>>(),
+			[3, 7, 9],
+			"tag ids stay the Stump row ids the filter round-trips"
+		);
+		assert_eq!(names(&dto.people.characters), ["Casca", "Guts", "Griffith"]);
+		assert_eq!(names(&dto.people.imprints), ["Jets Comics"]);
+		assert_eq!(names(&dto.people.publishers), ["Hakusensha"]);
+		assert_eq!(names(&dto.people.pencillers), ["Kentaro Miura"]);
+		assert_eq!(names(&dto.people.inkers), ["Studio Gaga"]);
+		assert_eq!(names(&dto.people.colorists), ["Studio Gaga"]);
+		assert_eq!(names(&dto.people.letterers), ["Duncan Fredoo"]);
+		assert_eq!(names(&dto.people.editors), ["Dark Horse"]);
+		assert_eq!(names(&dto.people.cover_artists), ["Kentaro Miura"]);
+		assert_eq!(names(&dto.people.teams), ["Band of the Hawk"]);
+		assert!(
+			dto.people.translators.is_empty() && dto.people.locations.is_empty(),
+			"Stump records neither role"
+		);
+		assert_eq!(dto.people.writers[0].roles, vec![PersonRole::Writer]);
+		// The series row carries none of these, so the files decide.
+		assert_eq!(dto.age_rating, AgeRating::R18Plus, "the strictest file wins");
+		assert_eq!(dto.release_year, 1989, "the earliest file starts the series");
+		assert_eq!(dto.language, "ja", "the first file that names one");
+		assert_eq!((dto.max_count, dto.total_count), (41, 41));
+		assert_eq!(dto.publication_status, PublicationStatus::Ended);
+		assert_eq!(dto.web_links, "https://example.test/berserk");
+	}
+
+	/// A book series is one file presented as its own series, so its tags are
+	/// that file's tags.
+	#[test]
+	fn book_series_metadata_carries_its_files_tags() {
+		let mut book = input("alice", "epub", 15, 1);
+		book.book = true;
+		book.tags = vec![
+			TagDto {
+				id: 4,
+				title: "Public Domain".to_owned(),
+			},
+			TagDto {
+				id: 4,
+				title: "public domain".to_owned(),
+			},
+		];
+		book.metadata = Some(media_metadata::Model {
+			genres: Some("Fantasy fiction".to_owned()),
+			..default_media_metadata()
+		});
+		let mut series = grouped_series(vec![book]);
+		series.kind = SeriesKind::Book;
+		// The Stump series row is only the folder the file sits in.
+		series.tags = vec![TagDto {
+			id: 8,
+			title: "Folder Tag".to_owned(),
+		}];
+
+		let dto = map_series_metadata(&series);
+		assert_eq!(
+			titles(&dto.tags, |tag| tag.title.as_str()),
+			["Public Domain"]
+		);
+		let chapter = map_chapter(&series.media[0]);
+		assert_eq!(
+			titles(&chapter.tags, |tag| tag.title.as_str()),
+			["Public Domain"]
+		);
+	}
+
+	/// Stump's `locked_fields` are `MetadataField` names; Kavita flattens one
+	/// `*Locked` flag per field into the metadata DTOs.
+	#[test]
+	fn locked_fields_map_onto_kavita_locks() {
+		let locked = serde_json::json!([
+			"SUMMARY",
+			"GENRES",
+			"TAGS",
+			"AGE_RATING",
+			"STATUS",
+			"YEAR",
+			"WRITERS",
+			"CHARACTERS",
+			"COLORISTS",
+			"EDITORS",
+			"INKERS",
+			"IMPRINT",
+			"LETTERERS",
+			"PENCILLERS",
+			"PUBLISHER",
+			"TEAMS",
+			"COVER_ARTISTS",
+		]);
+		let mut series = grouped_series(vec![input("v1", "cbz", 10, 1)]);
+		series.metadata = Some(series_metadata::Model {
+			locked_fields: Some(locked.clone()),
+			language_lock: true,
+			..default_series_metadata()
+		});
+
+		let dto = map_series_metadata(&series);
+		assert_eq!(
+			dto.locks,
+			MetadataLocksDto {
+				language_locked: true,
+				summary_locked: true,
+				age_rating_locked: true,
+				publication_status_locked: true,
+				genres_locked: true,
+				tags_locked: true,
+				writer_locked: true,
+				character_locked: true,
+				colorist_locked: true,
+				editor_locked: true,
+				inker_locked: true,
+				imprint_locked: true,
+				letterer_locked: true,
+				penciller_locked: true,
+				publisher_locked: true,
+				// Stump has no translator or location metadata to lock.
+				translator_locked: false,
+				team_locked: true,
+				location_locked: false,
+				cover_artist_locked: true,
+			}
+		);
+		assert!(dto.release_year_locked);
+
+		// The series' `language_lock` column is the only lock that does not
+		// come from `locked_fields`.
+		let mut unlocked = grouped_series(vec![input("v1", "cbz", 10, 1)]);
+		unlocked.metadata = Some(series_metadata::Model {
+			locked_fields: Some(serde_json::json!("not an array")),
+			..default_series_metadata()
+		});
+		let dto = map_series_metadata(&unlocked);
+		assert_eq!(dto.locks, MetadataLocksDto::default());
+		assert!(!dto.release_year_locked);
+
+		// A chapter locks the same fields from its own file's row, plus the
+		// three flags Kavita keeps only on a chapter.
+		let mut media = input("v1", "cbz", 10, 1);
+		media.metadata = Some(media_metadata::Model {
+			locked_fields: Some(serde_json::json!([
+				"GENRES",
+				"TITLE",
+				"RELEASE_DATE",
+				"NUMBER"
+			])),
+			..default_media_metadata()
+		});
+		let chapter = map_chapter(&media);
+		assert!(chapter.locks.genres_locked);
+		assert!(!chapter.locks.tags_locked);
+		assert!(chapter.title_name_locked);
+		assert!(chapter.release_date_locked);
+		assert!(chapter.sort_order_locked);
+	}
+
+	/// The serialized key sets `kavita-ref` 0.9.1.4 answers
+	/// `GET /api/Series/chapter?chapterId=` and `GET /api/Series/metadata?seriesId=`
+	/// with: clients deserialize these into required fields, so a missing key
+	/// is a client failure and an extra key is not Kavita.
+	#[test]
+	fn metadata_dto_field_sets_match_kavita_ref() {
+		const CHAPTER_KEYS: [&str; 82] = [
+			"ageRating",
+			"ageRatingLocked",
+			"aniListId",
+			"avgHoursToRead",
+			"cbrId",
+			"characterLocked",
+			"characters",
+			"coloristLocked",
+			"colorists",
+			"comicVineId",
+			"count",
+			"coverArtistLocked",
+			"coverArtists",
+			"coverImage",
+			"coverImageLocked",
+			"created",
+			"createdUtc",
+			"editorLocked",
+			"editors",
+			"files",
+			"format",
+			"genres",
+			"genresLocked",
+			"hardcoverId",
+			"id",
+			"imprintLocked",
+			"imprints",
+			"inkerLocked",
+			"inkers",
+			"isSpecial",
+			"isbn",
+			"language",
+			"languageLocked",
+			"lastModifiedUtc",
+			"lastReadingProgress",
+			"lastReadingProgressUtc",
+			"lettererLocked",
+			"letterers",
+			"locationLocked",
+			"locations",
+			"malId",
+			"mangaBakaId",
+			"maxHoursToRead",
+			"maxNumber",
+			"metronId",
+			"minHoursToRead",
+			"minNumber",
+			"number",
+			"pages",
+			"pagesRead",
+			"pencillerLocked",
+			"pencillers",
+			"primaryColor",
+			"publicationStatus",
+			"publicationStatusLocked",
+			"publisherLocked",
+			"publishers",
+			"range",
+			"releaseDate",
+			"releaseDateLocked",
+			"secondaryColor",
+			"sortOrder",
+			"sortOrderLocked",
+			"summary",
+			"summaryLocked",
+			"tags",
+			"tagsLocked",
+			"teamLocked",
+			"teams",
+			"title",
+			"titleName",
+			"titleNameLocked",
+			"totalCount",
+			"totalReads",
+			"translatorLocked",
+			"translators",
+			"volumeId",
+			"volumeTitle",
+			"webLinks",
+			"wordCount",
+			"writerLocked",
+			"writers",
+		];
+		const SERIES_METADATA_KEYS: [&str; 45] = [
+			"ageRating",
+			"ageRatingLocked",
+			"characterLocked",
+			"characters",
+			"coloristLocked",
+			"colorists",
+			"coverArtistLocked",
+			"coverArtists",
+			"editorLocked",
+			"editors",
+			"genres",
+			"genresLocked",
+			"id",
+			"imprintLocked",
+			"imprints",
+			"inkerLocked",
+			"inkers",
+			"language",
+			"languageLocked",
+			"lettererLocked",
+			"letterers",
+			"locationLocked",
+			"locations",
+			"maxCount",
+			"pencillerLocked",
+			"pencillers",
+			"publicationStatus",
+			"publicationStatusLocked",
+			"publisherLocked",
+			"publishers",
+			"releaseYear",
+			"releaseYearLocked",
+			"seriesId",
+			"summary",
+			"summaryLocked",
+			"tags",
+			"tagsLocked",
+			"teamLocked",
+			"teams",
+			"totalCount",
+			"translatorLocked",
+			"translators",
+			"webLinks",
+			"writerLocked",
+			"writers",
+		];
+
+		let keys = |value: serde_json::Value| {
+			value
+				.as_object()
+				.expect("DTO serializes as an object")
+				.keys()
+				.cloned()
+				.collect::<Vec<_>>()
+		};
+		let series = grouped_series(vec![input("v1", "cbz", 10, 1)]);
+		assert_eq!(
+			keys(serde_json::to_value(map_chapter(&series.media[0])).unwrap()),
+			CHAPTER_KEYS
+		);
+		assert_eq!(
+			keys(serde_json::to_value(map_series_metadata(&series)).unwrap()),
+			SERIES_METADATA_KEYS
+		);
+	}
+
+	fn default_series_metadata() -> series_metadata::Model {
+		series_metadata::Model {
+			series_id: "series-1".to_owned(),
+			age_rating: None,
+			characters: None,
+			booktype: None,
+			collects: None,
+			comicid: None,
+			comic_image: None,
+			description_formatted: None,
+			genres: None,
+			imprint: None,
+			links: None,
+			meta_type: None,
+			publication_run: None,
+			publisher: None,
+			status: None,
+			summary: None,
+			title: None,
+			title_sort: None,
+			reading_direction: None,
+			language: None,
+			alternate_titles: None,
+			title_sort_lock: false,
+			reading_direction_lock: false,
+			language_lock: false,
+			alternate_titles_lock: false,
+			total_issues: None,
+			volume: None,
+			writers: None,
+			year: None,
+			metadata_source: None,
+			metadata_external_id: None,
+			locked_fields: None,
+		}
 	}
 
 	fn default_media_metadata() -> media_metadata::Model {
@@ -1643,6 +2247,7 @@ mod tests {
 			process_thumbnail_colors_even_without_config: false,
 			ignore_rules: None,
 			library_id: Some("lib".to_owned()),
+			metadata_policy: None,
 		}
 	}
 }

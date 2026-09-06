@@ -11,6 +11,17 @@ use walkdir::WalkDir;
 
 use crate::{content_type::ContentType, media::is_accepted_cover_name};
 
+/// Moves a file, falling back to copy + remove when `rename` cannot be used
+/// because source and target sit on different filesystems.
+pub async fn move_file(source: &Path, target: &Path) -> io::Result<()> {
+	if fs::rename(source, target).await.is_ok() {
+		return Ok(());
+	}
+	fs::copy(source, target).await?;
+	fs::remove_file(source).await?;
+	Ok(())
+}
+
 pub const ACCEPTED_IMAGE_EXTENSIONS: [&str; 8] =
 	["jpg", "png", "jpeg", "jxl", "webp", "gif", "avif", "heif"];
 
@@ -122,6 +133,9 @@ pub trait PathUtils {
 	fn is_supported(&self) -> bool;
 	/// Returns true if the file is an image.
 	fn is_img(&self) -> bool;
+	/// Returns true if the file is an audio file. This is a naive check based
+	/// on the extension.
+	fn is_audio(&self) -> bool;
 	/// Returns true if the file is a thumbnail image. This calls the `is_img` function
 	/// from the same trait, and then checks if the file name is one of the following:
 	/// - cover
@@ -134,6 +148,12 @@ pub trait PathUtils {
 	/// Returns true if the directory has any media files in it. This is a shallow
 	/// check, and will not check subdirectories.
 	fn dir_has_media(&self, ignore_rules: &GlobSet) -> bool;
+	/// Returns true if the directory is a single audiobook spread over one
+	/// audio file per chapter/part: it holds at least one audio file, every
+	/// file the scanner would otherwise persist is audio, and it has no
+	/// subdirectories. Cover images and sidecars are ignored because
+	/// [`PathUtils::is_default_ignored`] already excludes them.
+	fn dir_is_audio_book(&self, ignore_rules: &GlobSet) -> bool;
 	/// Returns true if the directory has any media files in it. This is a deep
 	/// check, and will check *all* subdirectories.
 	fn dir_has_media_deep(&self, ignore_rules: &GlobSet) -> bool;
@@ -228,6 +248,11 @@ impl PathUtils for Path {
 		self.naive_content_type().is_image()
 	}
 
+	/// Returns true if the file is an audio file. This is a naive check based on the extension.
+	fn is_audio(&self) -> bool {
+		self.naive_content_type().is_audio()
+	}
+
 	fn is_thumbnail_img(&self) -> bool {
 		if !self.is_img() {
 			return false;
@@ -262,6 +287,46 @@ impl PathUtils for Path {
 				false
 			},
 		}
+	}
+
+	fn dir_is_audio_book(&self, ignore_rules: &GlobSet) -> bool {
+		if !self.is_dir() {
+			return false;
+		}
+
+		let entries = match std::fs::read_dir(self) {
+			Ok(entries) => entries,
+			Err(e) => {
+				error!(
+					error = ?e,
+					path = ?self,
+					"IOError: failed to read directory"
+				);
+				return false;
+			},
+		};
+
+		let mut audio_files = 0usize;
+		for entry in entries.filter_map(Result::ok) {
+			let path = entry.path();
+			if ignore_rules.is_match(&path) || path.is_hidden_file() {
+				continue;
+			}
+			// A book folder is flat. A nested directory means this is a
+			// container of books, not one book.
+			if path.is_dir() {
+				return false;
+			}
+			if path.is_audio() {
+				audio_files += 1;
+			} else if !path.is_default_ignored() {
+				// A file the scanner would persist on its own: this folder
+				// holds more than one publication.
+				return false;
+			}
+		}
+
+		audio_files > 0
 	}
 
 	fn dir_has_media_deep(&self, ignore_rules: &GlobSet) -> bool {

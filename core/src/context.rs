@@ -16,12 +16,18 @@ use tokio::sync::{
 use crate::filesystem::scanner::watcher_adapters::{
 	watched_libraries_query, EnqueueLibraryScan, WatchedLibraryRoots,
 };
+#[cfg(feature = "ingest")]
+use stump_ingest::IngestServices;
+
+#[cfg(feature = "ingest")]
+use crate::ingest_host::{
+	ingest_settings, CoreEventSink, CoreProviderClients, CoreRowFactory,
+};
 use crate::{
 	config::StumpConfig,
 	database,
 	event::CoreEvent,
 	filesystem::media::visible_pages::VisiblePagesCache,
-	ingest::services::IngestServices,
 	job::{stump_job::StumpJob, JobServices},
 	reading_state::ReadingHeadChanged,
 	utils::encryption::fetch_encryption_key,
@@ -45,6 +51,7 @@ pub struct Ctx {
 	#[cfg(feature = "watcher")]
 	library_watcher: Arc<OnceLock<Arc<Watcher>>>,
 	scheduler: Arc<Mutex<Option<JobScheduler>>>,
+	#[cfg(feature = "ingest")]
 	ingest_services: Arc<OnceLock<Arc<IngestServices>>>,
 	devices: Arc<OnceLock<Arc<DeviceService>>>,
 	/// Accepted head changes from every protocol, for adapters that fan them
@@ -102,6 +109,7 @@ impl Ctx {
 			#[cfg(feature = "watcher")]
 			library_watcher: Arc::new(OnceLock::new()),
 			scheduler: Arc::new(Mutex::new(None)),
+			#[cfg(feature = "ingest")]
 			ingest_services: Arc::new(OnceLock::new()),
 			devices: Arc::new(OnceLock::new()),
 			annotation_debounce,
@@ -378,13 +386,22 @@ impl Ctx {
 		}
 	}
 
-	/// Returns the staged-ingest services, constructing them lazily on first use.
+	/// Returns the staged-ingest services, constructing them lazily on first
+	/// use. The pipeline lives in `stump_ingest` and takes its settings, its
+	/// library-row builders, its provider clients, and its event sink from
+	/// here — see [`crate::ingest_host`].
+	#[cfg(feature = "ingest")]
 	pub fn ingest(&self) -> Arc<IngestServices> {
 		self.ingest_services
 			.get_or_init(|| {
 				Arc::new(
-					IngestServices::new(self.config.clone(), self.conn.clone())
-						.with_event_tx(self.get_event_tx()),
+					IngestServices::new(
+						Arc::new(ingest_settings(&self.config)),
+						self.conn.clone(),
+						Arc::new(CoreRowFactory::new(self.config.clone())),
+						Arc::new(CoreProviderClients::new(self.conn.clone())),
+					)
+					.with_event_sink(Arc::new(CoreEventSink::new(self.get_event_tx()))),
 				)
 			})
 			.clone()

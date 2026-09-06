@@ -1,0 +1,41 @@
+[package]
+name = "stump_ingest"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+alphanumeric-sort.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+data-encoding = "2.5.0"
+epub.workspace = true
+futures.workspace = true
+image = { version = "0.25.2", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+imagesize = "0.14.0"
+metadata_integrations = { path = "../integrations/metadata", default-features = false }
+models = { path = "../models", default-features = false }
+quick-xml = { version = "0.38.3", features = ["serialize"] }
+regex.workspace = true
+reqwest.workspace = true
+ring = "0.17.8"
+rust_decimal.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+stump_api_types = { path = "../api-types" }
+stump_media = { path = "../media", default-features = false }
+stump_scanner = { path = "../scanner" }
+thiserror.workspace = true
+# `fs`/`io-util`: staging streams and hashes files; `process`/`time`: the
+# preprocess hook spawns a child under a timeout; `sync`: progress broadcast
+# and the analysis semaphore.
+tokio = { workspace = true, features = ["fs", "io-util", "process", "time"] }
+tracing.workspace = true
+unicode-normalization.workspace = true
+uuid.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+migrations = { path = "../migrations", default-features = false }
+tempfile.workspace = true
+tests = { path = "../tests" }

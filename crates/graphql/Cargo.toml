@@ -8,10 +8,16 @@ name = "graphql-gen"
 path = "bin/main.rs"
 
 [features]
-# Default so `cargo dump-schema` emits the provider ops; the server picks
-# the set explicitly through its own `providers` feature.
-default = ["providers"]
+# Default so `cargo dump-schema` emits the provider and web ops; the server
+# picks the set explicitly through its own `providers`/`webui` features.
+default = ["providers", "web"]
 providers = ["dep:stump_provider", "stump_core/providers"]
+# Resolvers no client other than the upstream React SPA (`packages/browser`)
+# and the Expo app reaches: book clubs, smart lists + smart-list views, custom
+# emoji, viewer preferences + navigation arrangement, and the multipart upload
+# lane. The SvelteKit editor/home apps and every protocol adapter (OPDS,
+# Komga, Kobo, KOReader, liseur-sync) are unaffected.
+web = []
 
 [dependencies]
 alphanumeric-sort.workspace = true
@@ -42,7 +48,12 @@ strum.workspace = true
 stump_annotation_sync = { path = "../annotation-sync" }
 stump_auth = { path = "../auth" }
 stump_api_types = { path = "../api-types" }
-stump_core = { path = "../../core", default-features = false, features = ["graphql"] }
+stump_collections = { path = "../collections" }
+# `ingest`: the ingest resolvers call `Ctx::ingest` unconditionally (the server
+# profile that drops the ingest pipeline drops this whole crate with it).
+stump_core = { path = "../../core", default-features = false, features = ["graphql", "ingest"] }
+stump_ingest = { path = "../ingest" }
+stump_library = { path = "../library" }
 stump_devices = { path = "../devices", features = ["graphql"] }
 stump_notify = { path = "../notify" }
 stump_media = { path = "../media", default-features = false }

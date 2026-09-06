@@ -15,28 +15,35 @@ use sea_orm::{
 };
 use serde_json::{json, Value};
 use stump_api_types::settings::SettingValues;
-use stump_core::ingest::{
+use stump_ingest::{
 	contract::{FieldPick, ProviderIdentity},
 	providers::apply::{
 		apply_to_media, resolve_picks_for_context, validate_picks, ResolvedFields,
 	},
 };
+use stump_ingest::policy::{self, PolicyCandidate, PolicyPlan};
 
 use crate::{
 	data::CoreContext,
 	guard::{OptionalFeature, OptionalFeatureGuard, PermissionGuard},
-	input::ingest::{
-		ApplyIngestMetadataInput, BulkApplyIngestMetadataInput,
-		EnqueueIngestAnalysisInput, IngestMetadataFieldSelectionInput,
-		SetIngestProviderSettingsInput, SetIngestQualityCheckSettingsInput,
-		StageIngestUploadsInput,
+	input::{
+		ingest::{
+			ApplyIngestMetadataInput, BulkApplyIngestMetadataInput,
+			EnqueueIngestAnalysisInput, IngestMetadataFieldMode,
+			IngestMetadataFieldSelectionInput, SetIngestProviderSettingsInput,
+			SetIngestQualityCheckSettingsInput, StageIngestUploadsInput,
+		},
+		metadata_policy::MetadataPolicyInput,
 	},
-	object::ingest::{
-		IngestAnalysisJob, IngestApplyPayload, IngestBulkApplyFailure,
-		IngestBulkApplyPayload, IngestDropFolder, IngestDropItem,
-		IngestMetadataCandidate, IngestProviderDescriptor, IngestProviderSettings,
-		IngestQualityCheckDescriptor, IngestQualityCheckSettings,
-		StageIngestUploadsPayload,
+	object::{
+		ingest::{
+			IngestAnalysisJob, IngestApplyPayload, IngestBulkApplyFailure,
+			IngestBulkApplyPayload, IngestDropFolder, IngestDropItem,
+			IngestMetadataCandidate, IngestProviderDescriptor,
+			IngestProviderSettings, IngestQualityCheckDescriptor,
+			IngestQualityCheckSettings, StageIngestUploadsPayload,
+		},
+		metadata_policy::{policy_decisions, IngestApplyBestPayload, MetadataPolicy},
 	},
 };
 
@@ -53,6 +60,92 @@ fn convert_selections(
 	}
 	validate_picks(&picks).map_err(core_error)?;
 	Ok(picks)
+}
+
+/// The reverse of [`convert_selections`]: a policy plan expressed in the
+/// editor's own recipe vocabulary. Auto-apply and "apply best" therefore run
+/// through exactly the same validation, merge, and audit path as a hand-made
+/// selection, instead of growing a second apply implementation.
+fn selections_from_picks(picks: Vec<FieldPick>) -> Vec<IngestMetadataFieldSelectionInput> {
+	picks
+		.into_iter()
+		.map(|pick| {
+			let field = pick.field().to_public();
+			match pick {
+				FieldPick::Candidate { candidate_id, .. } => {
+					IngestMetadataFieldSelectionInput {
+						field,
+						mode: IngestMetadataFieldMode::Candidate,
+						candidate_id: Some(candidate_id.into()),
+						value: None,
+					}
+				},
+				FieldPick::Manual { value, .. } => IngestMetadataFieldSelectionInput {
+					field,
+					mode: IngestMetadataFieldMode::Manual,
+					candidate_id: None,
+					value: Some(async_graphql::Json(value)),
+				},
+				FieldPick::KeepExisting { .. } => IngestMetadataFieldSelectionInput {
+					field,
+					mode: IngestMetadataFieldMode::KeepExisting,
+					candidate_id: None,
+					value: None,
+				},
+				FieldPick::Clear { .. } => IngestMetadataFieldSelectionInput {
+					field,
+					mode: IngestMetadataFieldMode::Clear,
+					candidate_id: None,
+					value: None,
+				},
+			}
+		})
+		.collect()
+}
+
+/// The library a media row belongs to. Media has no direct library key, so
+/// the series is the only route (see `core::filesystem::metadata::fetch`).
+async fn library_id_for_media(core: &CoreContext, media_id: &str) -> Result<String> {
+	use models::entity::series;
+
+	let series_id = media::Entity::find_by_id(media_id)
+		.one(core.conn.as_ref())
+		.await?
+		.ok_or_else(|| Error::new("Media not found"))?
+		.series_id
+		.ok_or_else(|| Error::new("Media is not linked to a series"))?;
+	series::Entity::find_by_id(&series_id)
+		.one(core.conn.as_ref())
+		.await?
+		.and_then(|series| series.library_id)
+		.ok_or_else(|| Error::new("Series is not linked to a library"))
+}
+
+/// Resolve the library's policy against the candidates stored for one target.
+/// `existing` is the metadata row the target already has, if any: locks and
+/// `PREFER_EXISTING` both read it.
+async fn plan_for_target(
+	core: &CoreContext,
+	library_id: &str,
+	candidates: &[models::entity::ingest_metadata_candidate::Model],
+	existing: Option<&media_metadata::Model>,
+) -> Result<PolicyPlan> {
+	let effective = policy::effective_policy(core.conn.as_ref(), library_id)
+		.await
+		.map_err(core_error)?;
+	let candidates = PolicyCandidate::from_models(candidates);
+	let locked = policy::locked_fields(existing);
+	Ok(effective.policy.plan(&candidates, existing, &locked))
+}
+
+async fn metadata_for_media(
+	core: &CoreContext,
+	media_id: &str,
+) -> Result<Option<media_metadata::Model>> {
+	Ok(media_metadata::Entity::find()
+		.filter(media_metadata::Column::MediaId.eq(media_id))
+		.one(core.conn.as_ref())
+		.await?)
 }
 
 fn settings_from_json(value: Option<async_graphql::Json<Value>>) -> Option<Value> {
@@ -558,9 +651,12 @@ impl IngestMutation {
 			.await
 			.map_err(core_error)?
 			.ok_or_else(|| Error::new("Ingest item not found"))?;
+		// Auto-apply payload: the library's policy resolves every field the
+		// user did not already pick by hand. Those hand-picked values live in
+		// `pending_fields`, which `approve` merges in on its own.
+		let item = auto_apply_policy(core, item, "auto_apply").await?;
 		let (_, committed) = core
 			.ingest()
-			.store
 			.approve(&id, Vec::new(), item.revision)
 			.await
 			.map_err(core_error)?;
@@ -713,6 +809,232 @@ impl IngestMutation {
 			Some(model),
 		))
 	}
+
+	/// Replace (or, with an empty field list, clear) a library's per-field
+	/// metadata policy override and return the resulting effective policy.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::MetadataProviderManage)")]
+	async fn set_metadata_policy(
+		&self,
+		ctx: &Context<'_>,
+		library_id: ID,
+		input: MetadataPolicyInput,
+	) -> Result<MetadataPolicy> {
+		let core = ctx.data::<CoreContext>()?;
+		let policy = input.into_policy().map_err(Error::new)?;
+		// A rule naming a provider this build cannot register would silently
+		// disable its field, so the registry catalog is the allow-list.
+		let known_providers = core
+			.ingest()
+			.providers
+			.catalog()
+			.await
+			.into_iter()
+			.map(|descriptor| descriptor.id)
+			.collect::<Vec<_>>();
+		policy::set_library_override(
+			core.conn.as_ref(),
+			library_id.as_ref(),
+			policy.as_ref(),
+			&known_providers,
+		)
+		.await
+		.map(MetadataPolicy::from)
+		.map_err(core_error)
+	}
+
+	/// Apply the library's metadata policy to one target: the same resolver
+	/// auto-apply uses, exposed for the editor's "apply best" action. Every
+	/// field the user locked is left alone, and the per-field explanation
+	/// comes back with the payload.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::EditMetadata)")]
+	async fn apply_best_ingest_metadata(
+		&self,
+		ctx: &Context<'_>,
+		drop_item_id: Option<ID>,
+		media_id: Option<ID>,
+	) -> Result<IngestApplyBestPayload> {
+		let core = ctx.data::<CoreContext>()?;
+		let plan = match (&drop_item_id, &media_id) {
+			(Some(item_id), None) => {
+				let item = core
+					.ingest()
+					.store
+					.item(item_id.as_ref())
+					.await
+					.map_err(core_error)?
+					.ok_or_else(|| Error::new("Ingest item not found"))?;
+				let candidates = core
+					.ingest()
+					.store
+					.candidates(&item.id)
+					.await
+					.map_err(core_error)?;
+				let existing = match &item.media_id {
+					Some(media_id) => metadata_for_media(core, media_id).await?,
+					None => None,
+				};
+				let plan = plan_for_target(
+					core,
+					&item.library_id,
+					&candidates,
+					existing.as_ref(),
+				)
+				.await?;
+				plan
+			},
+			(None, Some(media_id)) => {
+				let media_id = media_id.to_string();
+				let library_id = library_id_for_media(core, &media_id).await?;
+				let candidates = core
+					.ingest()
+					.store
+					.candidates_for_media(&media_id)
+					.await
+					.map_err(core_error)?;
+				let existing = metadata_for_media(core, &media_id).await?;
+				let plan =
+					plan_for_target(core, &library_id, &candidates, existing.as_ref())
+						.await?;
+				plan
+			},
+			(Some(_), Some(_)) => {
+				return Err(Error::new(
+					"applyBestIngestMetadata accepts exactly one of dropItemId or mediaId",
+				))
+			},
+			(None, None) => {
+				return Err(Error::new(
+					"applyBestIngestMetadata requires dropItemId or mediaId",
+				))
+			},
+		};
+		let decisions = policy_decisions(&plan);
+		if plan.picks.is_empty() {
+			// Nothing to write: never bump the item revision (an editor
+			// holding the current one would start failing) and never record an
+			// audit row for an apply that applied nothing.
+			return Ok(IngestApplyBestPayload {
+				drop_item: match &drop_item_id {
+					Some(item_id) => core
+						.ingest()
+						.store
+						.item(item_id.as_ref())
+						.await
+						.map_err(core_error)?
+						.map(IngestDropItem::from),
+					None => None,
+				},
+				media: match &media_id {
+					Some(media_id) => {
+						let media_id = media_id.to_string();
+						let model = media::Entity::find_by_id(&media_id)
+							.one(core.conn.as_ref())
+							.await?
+							.ok_or_else(|| Error::new("Media not found"))?;
+						Some(crate::object::media::Media {
+							model,
+							metadata: metadata_for_media(core, &media_id)
+								.await?
+								.map(crate::object::media_metadata::MediaMetadata::from),
+						})
+					},
+					None => None,
+				},
+				decisions,
+			});
+		}
+		let payload = self
+			.apply_ingest_metadata(
+				ctx,
+				ApplyIngestMetadataInput {
+					drop_item_id,
+					media_id,
+					selections: selections_from_picks(plan.picks),
+					// The policy already decided per field, including which
+					// fields keep their stored value, so the merge strategy
+					// must not filter its picks a second time.
+					strategy: Some(MergeStrategy::PreferExternal),
+				},
+			)
+			.await?;
+		Ok(IngestApplyBestPayload {
+			drop_item: payload.drop_item,
+			media: payload.media,
+			decisions,
+		})
+	}
+}
+
+/// Resolve the library's policy for a staged item and stage the result as
+/// pending fields, so `approve` commits it through its normal merge. Returns
+/// the item at its current revision, which the caller needs for the approve
+/// revision check.
+///
+/// Fields the user already picked by hand are excluded: `pending_fields` is
+/// the user's own recipe and outranks the policy.
+async fn auto_apply_policy(
+	core: &CoreContext,
+	item: ingest_drop_item::Model,
+	actor: &str,
+) -> Result<ingest_drop_item::Model> {
+	let candidates = core
+		.ingest()
+		.store
+		.candidates(&item.id)
+		.await
+		.map_err(core_error)?;
+	if candidates.is_empty() {
+		return Ok(item);
+	}
+	let existing = match &item.media_id {
+		Some(media_id) => metadata_for_media(core, media_id).await?,
+		None => None,
+	};
+	let plan =
+		plan_for_target(core, &item.library_id, &candidates, existing.as_ref()).await?;
+	let picks = without_pending_fields(plan.picks, item.pending_fields.as_ref());
+	if picks.is_empty() {
+		return Ok(item);
+	}
+	let resolved = resolve_picks_for_context(
+		&picks,
+		&candidates,
+		existing.as_ref(),
+		&plan.enforced_locks,
+		MergeStrategy::PreferExternal,
+		Some(&item.id),
+		Some(&item.source_sha256),
+	)
+	.map_err(core_error)?;
+	persist_pending_fields(
+		core,
+		&item,
+		&picks,
+		resolved,
+		MergeStrategy::PreferExternal,
+		actor,
+	)
+	.await?;
+	core.ingest()
+		.store
+		.item(&item.id)
+		.await
+		.map_err(core_error)?
+		.ok_or_else(|| Error::new("Ingest item disappeared during auto-apply"))
+}
+
+/// Drop the picks whose field the user already staged by hand.
+fn without_pending_fields(picks: Vec<FieldPick>, pending: Option<&Value>) -> Vec<FieldPick> {
+	let Some(Value::Object(pending)) = pending else {
+		return picks;
+	};
+	picks
+		.into_iter()
+		.filter(|pick| match serde_json::to_value(pick.field()) {
+			Ok(Value::String(name)) => !pending.contains_key(&name),
+			_ => true,
+		})
+		.collect()
 }
 
 async fn persist_pending_fields(

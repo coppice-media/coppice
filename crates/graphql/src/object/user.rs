@@ -2,17 +2,14 @@ use async_graphql::{ComplexObject, Context, Result, SimpleObject};
 
 use chrono::{DateTime, FixedOffset, Utc};
 use models::{
-	entity::{
-		age_restriction, reading_session, session, user, user_login_activity,
-		user_preferences,
-	},
+	entity::{age_restriction, reading_session, session, user, user_login_activity},
 	shared::{
 		enums::{ReadingStatus, UserPermission},
 		image::ImageRef,
 		permission_set::PermissionSet,
 	},
 };
-use sea_orm::{prelude::*, ActiveValue, QueryOrder};
+use sea_orm::{prelude::*, QueryOrder};
 
 use crate::{
 	data::CoreContext,
@@ -21,7 +18,15 @@ use crate::{
 	query::media::MediaQuery,
 };
 
-use super::{media::Media, user_preferences::UserPreferences};
+use super::media::Media;
+
+#[cfg(feature = "web")]
+use models::entity::user_preferences;
+#[cfg(feature = "web")]
+use sea_orm::ActiveValue;
+
+#[cfg(feature = "web")]
+use super::user_preferences::UserPreferences;
 
 #[derive(Debug, SimpleObject)]
 #[graphql(complex)]
@@ -113,6 +118,7 @@ impl User {
 			.resolve_into_vec()
 	}
 
+	#[cfg(feature = "web")]
 	#[graphql(guard = "SelfGuard::new(&self.model.id).or(ServerOwnerGuard)")]
 	async fn preferences(&self, ctx: &Context<'_>) -> Result<UserPreferences> {
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();

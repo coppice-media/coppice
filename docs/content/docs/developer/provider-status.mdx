@@ -56,18 +56,26 @@ The mapper (`facade.rs:403-482`) produces `MetadataField` values: Title, Summary
 
 Candidates are persisted per drop item or per media row (`core/src/ingest/store.rs:812-905`) by the coordinator's Identify/Lookup phases (`core/src/ingest/coordinator.rs:342-359,433-447`). A user recipe of `FieldPick`s (`contract.rs:367-396`) is validated (`core/src/ingest/providers/apply.rs:71-110`), resolved against the candidate rows with the same drop item and source digest, the locked-field list, and the existing `MergeStrategy` (`apply.rs:144-221`; strategies in `crates/integrations/metadata/src/merge/config.rs:11-21`), then written with an audit row in one transaction (`apply.rs:420-509`). Only `STORABLE_FIELDS` reach `media_metadata`/tags; `CoverUrl` and `Identifiers` stay candidate-only (`apply.rs:28-46`). `approve` merges pending picks and commits together with the source move (`store.rs:566-603`).
 
-### What the policy layer still lacks
+### What the policy layer covers
 
-The ported Komf providers deliver raw fields; Komf's post-processing policy is not implemented. Roadmap owner: [Phase 5 — native metadata engine](/docs/developer/roadmap#phase-5--native-rust-metadata-engine); the ingest design is in [modular ingest](/docs/developer/modular-ingest#metadata-providers-taggers-and-ai-enrichment).
+**[observed]** The per-field metadata policy is implemented in
+`crates/ingest/src/policy.rs`: per field an ordered provider list, a merge
+strategy (`FIRST`/`MERGE_UNION`/`LONGEST`/`PREFER_EXISTING`/`HIGHEST_RESOLUTION`),
+and `lock_respected`, with the server default in code and a per-library
+override in `library_configs.metadata_policy`. Design and Komf mapping: [modular
+ingest — Policy](/docs/developer/modular-ingest#policy). Komf's remaining
+*post-processing* (title language selection, book ordering, score tags,
+publisher tag names) is still unimplemented; roadmap owner: [Phase 5 — native
+metadata engine](/docs/developer/roadmap#phase-5--native-rust-metadata-engine).
 
 | Komf policy item | Status | Evidence |
 | --- | --- | --- |
-| Field/provider priority (which provider wins per field) | **[future]** | Candidates are stored side by side; the only ordering is score desc (`facade.rs:319-328`) and the user's `FieldPick` recipe (`apply.rs:144-221`). |
-| Merge tags/genres across providers | partial | Merge is per pick against the *existing* row via `FillAndMergeLists`/`PreferExternalAndMergeLists` (`apply.rs:272-328`); no cross-candidate union. |
+| Field/provider priority (which provider wins per field) | **[observed]** | `FieldPolicy { providers, strategy, lock_respected }` per field; offers are collected in list order, then by candidate confidence (`policy.rs`, test `priority_order_decides_the_winner`). |
+| Merge tags/genres across providers | **[observed]** | `MERGE_UNION` unions the stored value and every allowed provider case-insensitively, first spelling kept; the default for `TAGS`/`GENRES` (test `union_dedupes_case_insensitively_and_keeps_stored_values`). |
 | Title language preference | **[future]** | Fixed per client: AniList english→romaji→native (`anilist.rs:3-8`), MangaDex `en`→`ja-ro` (`mangadex.rs:272-293`); no user setting. |
-| Cover pick / thumbnail replacement | **[future]** | `CoverUrl` is excluded from `STORABLE_FIELDS` (`apply.rs:28-46`). |
-| Per-library provider rules | **[future]** | `library_id`/`user_id` are accepted and discarded (`registry.rs:310`); plugin settings are written with `library_id: None` (`mutation/ingest.rs:93-101`). |
-| Auto-match | partial | Legacy `AutoApplyConfig` defaults `enabled=false`, threshold `0.95`, `FillGaps` (`merge/config.rs:39-48`) applies to the pre-ingest fetch path only; the staged path always needs an explicit `approve`/apply (`store.rs:566-603`). |
+| Cover pick / thumbnail replacement | partial | `HIGHEST_RESOLUTION` ranks candidates by advertised width and is the `COVER` default, but `CoverUrl` is still outside `STORABLE_FIELDS`, so the decision comes back with `applied: false` and nothing is written (`policy.rs`, `providers/apply.rs`). |
+| Per-library provider rules | **[observed]** | `library_configs.metadata_policy` overrides the server default per field; `metadataPolicy`/`setMetadataPolicy` read and write it, and the editor's Policy tab edits it (test `per_library_override_beats_the_server_default`). |
+| Auto-match | **[observed]** | `approveIngestItem` stages the policy plan as pending fields before committing, and `applyBestIngestMetadata` runs the same resolver on demand; the legacy `AutoApplyConfig` (`merge/config.rs:39-48`) still governs the pre-ingest fetch path only. |
 
 ### Remaining planned providers
 

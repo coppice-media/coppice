@@ -42,4 +42,12 @@ pub struct ProvidersConfig {
 	#[default_value(DEFAULT_PROVIDER_HEALTH_DEAD_AFTER)]
 	#[env_key(PROVIDER_HEALTH_DEAD_AFTER_KEY)]
 	pub provider_health_dead_after: u32,
+
+	/// Definition repository the theme engines are driven from. Accepts an
+	/// `index.json` URL, a repository root URL, a `file://` URL, or a local
+	/// directory, so an operator can point a server at a checkout while a
+	/// definition is being written.
+	#[default_value(DEFAULT_SOURCE_DEFINITIONS_URL.to_string())]
+	#[env_key(SOURCE_DEFINITIONS_URL_KEY)]
+	pub source_definitions_url: String,
 }

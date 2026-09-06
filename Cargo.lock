@@ -3384,8 +3384,11 @@ dependencies = [
  "stump_annotation_sync",
  "stump_api_types",
  "stump_auth",
+ "stump_collections",
  "stump_core",
  "stump_devices",
+ "stump_ingest",
+ "stump_library",
  "stump_media",
  "stump_notify",
  "stump_provider",
@@ -7237,6 +7240,7 @@ checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "encoding_rs",
  "futures-core",
  "futures-util",
  "http 1.4.0",
@@ -7247,6 +7251,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -8797,6 +8802,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "stump_abs"
+version = "0.1.6"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-extra",
+ "base64 0.22.1",
+ "chrono",
+ "jsonwebtoken",
+ "models",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "stump_auth",
+ "tests",
+ "thiserror 2.0.17",
+ "tokio",
+ "tower 0.5.2",
+ "tracing",
+ "uuid 1.18.1",
+]
+
+[[package]]
 name = "stump_annotation_sync"
 version = "0.1.6"
 dependencies = [
@@ -8832,6 +8860,20 @@ dependencies = [
  "models",
  "thiserror 2.0.17",
  "tracing",
+]
+
+[[package]]
+name = "stump_collections"
+version = "0.1.6"
+dependencies = [
+ "chrono",
+ "models",
+ "sea-orm",
+ "stump_core",
+ "tests",
+ "tokio",
+ "tracing",
+ "uuid 1.18.1",
 ]
 
 [[package]]
@@ -8883,11 +8925,13 @@ dependencies = [
  "stump_annotation_sync",
  "stump_api_types",
  "stump_devices",
+ "stump_ingest",
  "stump_jobs",
  "stump_media",
  "stump_notify",
  "stump_provider",
  "stump_provider_mangadex",
+ "stump_provider_themes",
  "stump_scanner",
  "stump_watcher",
  "temp-env",
@@ -8954,6 +8998,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "stump_ingest"
+version = "0.1.6"
+dependencies = [
+ "alphanumeric-sort",
+ "async-trait",
+ "chrono",
+ "data-encoding",
+ "epub",
+ "futures",
+ "image",
+ "imagesize",
+ "metadata_integrations",
+ "migrations",
+ "models",
+ "quick-xml",
+ "regex",
+ "reqwest 0.13.4",
+ "ring",
+ "rust_decimal",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "stump_api_types",
+ "stump_media",
+ "stump_scanner",
+ "tempfile",
+ "tests",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
+ "uuid 1.18.1",
+ "zip 1.1.3",
+]
+
+[[package]]
 name = "stump_jobs"
 version = "0.1.6"
 dependencies = [
@@ -8991,13 +9071,16 @@ dependencies = [
  "serde",
  "serde_json",
  "stump_auth",
+ "tempfile",
  "tests",
  "thiserror 2.0.17",
  "tokio",
  "tower 0.5.2",
+ "tower-http 0.5.2",
  "tracing",
  "urlencoding",
  "uuid 1.18.1",
+ "zip 1.1.3",
 ]
 
 [[package]]
@@ -9030,6 +9113,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stump_auth",
+ "stump_collections",
  "stump_core",
  "tests",
  "thiserror 2.0.17",
@@ -9066,6 +9150,23 @@ dependencies = [
  "axum",
  "serde",
  "stump_auth",
+]
+
+[[package]]
+name = "stump_library"
+version = "0.1.6"
+dependencies = [
+ "migrations",
+ "models",
+ "sea-orm",
+ "serde_json",
+ "stump_core",
+ "stump_media",
+ "tempfile",
+ "tests",
+ "tokio",
+ "tracing",
+ "uuid 1.18.1",
 ]
 
 [[package]]
@@ -9212,6 +9313,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "stump_provider_themes"
+version = "0.1.6"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "html5ever",
+ "markup5ever_rcdom",
+ "models",
+ "regex",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "stump_provider",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "stump_scanner"
 version = "0.1.6"
 dependencies = [
@@ -9280,13 +9401,16 @@ dependencies = [
  "sha2",
  "stump_api_types",
  "stump_auth",
+ "stump_collections",
  "stump_core",
  "stump_devices",
+ "stump_ingest",
  "stump_kavita",
  "stump_kepub",
  "stump_kobo",
  "stump_komga",
  "stump_koreader",
+ "stump_library",
  "stump_liseur_sync",
  "stump_media",
  "stump_opds",

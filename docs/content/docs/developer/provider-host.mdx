@@ -19,7 +19,7 @@ providers that enrich local files are a different subsystem
 
 | Layer | Switch | Default | Effect |
 | --- | --- | --- | --- |
-| Cargo | feature `providers` (server, `stump_core`, `graphql`) | on in `headless`/`full`, off in `minimal` | Links `stump_provider` + `stump_provider_mangadex`, the GraphQL ops, and the Komga/OPDS branches |
+| Cargo | feature `providers` (server, `stump_core`, `graphql`) | on in `headless`/`full`, off in `minimal` | Links `stump_provider` + `stump_provider_mangadex` + `stump_provider_themes`, the GraphQL ops, and the Komga/OPDS branches |
 | Runtime | `STUMP_ENABLE_PROVIDERS` / `providers.enable_providers` | `false` | Creates the `ProviderHost` at boot (`core/src/providers.rs::init`), installs the `provider://` media resolver, starts the GC scheduler. Off: GraphQL ops answer `Provider host is not enabled`, virtual branches fall through |
 
 Other keys (`core/src/config/providers.rs`):
@@ -31,12 +31,17 @@ Other keys (`core/src/config/providers.rs`):
 | `provider_gc_days` | `STUMP_PROVIDER_GC_DAYS` | `30` | Materialised series with no reading head older than this are reclaimed |
 | `provider_health_interval_secs` | `STUMP_PROVIDER_HEALTH_INTERVAL_SECS` | `21600` s (6 h) | How often the source-health job probes every catalog source (floored at 60 s) |
 | `provider_health_dead_after` | `STUMP_PROVIDER_HEALTH_DEAD_AFTER` | `3` | Consecutive failed runs after which a source is `DEAD` and hidden from the catalog (floored at 1) |
+| `source_definitions_url` | `STUMP_SOURCE_DEFINITIONS_URL` | `https://raw.githubusercontent.com/stumpapp/stump-sources/main/index.json` | Definition repository the theme engines are driven from; see [Theme engines and definitions](#theme-engines-and-definitions) |
 
 ## Sources and the catalog
 
-- **Compiled implementations.** Only MangaDex ships (`crates/provider-mangadex`).
+- **Compiled implementations.** MangaDex ships as code
+  (`crates/provider-mangadex`) because it is an API, not a themed site.
   A `SourceFactory` describes an implementation and builds an instance per
   language; instance ids are `<implementation>-<lang>` (`mangadex-en`).
+- **Theme engines.** Everything else is data: `crates/provider-themes` runs
+  four `lib-multisrc` themes against a `SourceDefinition` fetched at runtime.
+  See [Theme engines and definitions](#theme-engines-and-definitions).
 - **Catalog.** The Keiyoushi extension index is fetched daily into
   `<cache>/providers/keiyoushi-index.json`. `providerCatalog(lang, query,
   includeDead)` flattens it to one row per source with `hasImplementation`
@@ -60,8 +65,7 @@ rows under deterministic ids (`uuid5("series:<source>:<remote>")`,
 `uuid5("media:<source>:<chapter>")`). `refreshProviderSeries(seriesId)`
 re-runs the same idempotent path. Pages are fetched on demand through the
 `VirtualMediaResolver` and cached on disk; `pages` is learned on first
-resolution. Series covers come from the source's thumbnail URL, cached under
-`cover:<remote_id>`.
+resolution.
 
 ## Mode B: virtual libraries
 
@@ -117,6 +121,93 @@ Routes that answer from a virtual library today:
 | OPDS 1.2 | `GET /libraries/{id}` | live |
 | OPDS 1.2 | `GET /series/{id}` | materialises, then DB (PSE pages as usual) |
 | Kobo, Kavita, OPDS 2.0, native GraphQL | — | materialised rows only (they read the database) |
+
+## Unavailable chapters
+
+A source's chapter feed lists more than a source can serve. Every
+`RemoteChapter` therefore carries `readable: bool` and
+`external_url: Option<String>`, and materialisation writes rows only for
+readable chapters — a row for an unreadable one is a book whose every page
+404s.
+
+MangaDex sets `readable = false` from three documented `ChapterAttributes`
+fields ([API spec](https://api.mangadex.org/docs/static/api.yaml)):
+
+| Field | Spec | Skip reason |
+| --- | --- | --- |
+| `externalUrl` | "Denotes a chapter that links to an external source." | `ExternallyHosted` (the URL is kept, so a client can be told where the chapter lives) |
+| `pages` | "Count of readable images for this chapter" — `0` means none | `NoPages` |
+| `isUnavailable` | `boolean`; the chapter is listed but withheld | `Unavailable` |
+
+`Materialized.skipped` reports every skip as `{ remote_id, reason }`, and
+`add_series` logs one `INFO` line per series with the skip count, the readable
+count, and the distinct reasons. A licensed title such as *The Witch and the
+Beast* on `mangadex-en` therefore materialises with zero books and a full
+skip list, instead of books that cannot be opened.
+
+A chapter can also stop being available *after* it was materialised. The page
+manifest lookup (`/at-home/server/{chapterId}`, documented to answer
+`404 Not Found`) is the moment that shows: `ProviderHost::pages` maps that
+404 to `ProviderError::Unavailable { source_id }`, which converts to
+`FileError::Unavailable` and then to `404 Not Found` with the message
+`Chapter is not available from <source>` on every lane — native, Komga, OPDS
+1.2/2.0, and Kavita all classify it through the single
+`From<FileError> for APIError` mapper. Before this, that chain produced
+`500 {"message":"File not found on disk"}`.
+
+## Covers
+
+A provider series has no file to render a thumbnail from, so its cover *is*
+the source cover, cached under `cover:<remote_id>`:
+
+- The MangaDex list, search, and detail queries all send
+  `includes[]=cover_art`, so a series materialised straight out of a browse
+  response carries `thumbnail_url` into `series_metadata.comic_image`.
+- `ProviderHost::cover_url` falls back to a `details()` fetch when the stored
+  row has no `comic_image` (an older row, or a source whose list response
+  omitted the relationship) and writes the URL back, so the next request is
+  one query again.
+- `series/{id}/thumbnail` — native and Komga — serves that cover for both
+  live-only and materialised provider series. An operator-uploaded thumbnail
+  still wins; if the source cover cannot be fetched, the lane falls back to
+  the first book as before.
+- Book thumbnails are unchanged: page 1 of the chapter, through the page
+  cache.
+
+## Age rating
+
+Stump stores age restrictions **per user** (`age_restrictions.age` +
+`restrict_on_unset`) and filters content by `series_metadata.age_rating`.
+There is no library-level age rating to set, so a source's rating is applied
+to each series it materialises.
+
+`RemoteSeries::content_rating` is MangaDex's `MangaAttributes.contentRating`
+vocabulary, projected onto `age_rating`:
+
+| `contentRating` | `age_rating` |
+| --- | --- |
+| `safe` | *(none)* |
+| `suggestive` | 13 |
+| `erotica` | 16 |
+| `pornographic` | 18 |
+
+`safe` deliberately stores no rating: a user whose restriction does not
+`restrict_on_unset` must still see unrestricted titles, which is how locally
+scanned books without metadata behave.
+
+On top of that, a source whose Keiyoushi catalog entry is
+`CONTENT_WARNING_NSFW` (`CatalogEntry::nsfw`) raises **every** series it
+materialises to 18, regardless of the per-title rating
+(`ProviderHost::source_is_adult` → `materialize::age_rating`). That is the
+library-level rule expressed the only way the schema allows.
+
+Mode B live rows carry the same value: `map_remote_series` fills
+`metadata.ageRating` from `remote_age_rating(remote, adult_source)`, and the
+Komga and OPDS 1.2 browse lanes drop rows the requesting user's restriction
+hides (`provider_virtual::age_restriction_allows`, the same rule
+`series::get_age_restriction_filter` applies in SQL). `series/{id}`,
+`series/{id}/thumbnail`, and materialisation apply it too, so a restricted
+title can be neither read nor written into the database.
 
 ## Garbage collection
 

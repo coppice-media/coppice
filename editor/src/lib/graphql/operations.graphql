@@ -277,6 +277,31 @@ query IngestQualityCheckSettings($checkId: String!) {
 	}
 }
 
+fragment MetadataPolicyFields on MetadataPolicy {
+	libraryId
+	hasLibraryOverride
+	fields {
+		field
+		providers
+		strategy
+		lockRespected
+		overridden
+		storable
+	}
+}
+
+query MetadataPolicy($libraryId: ID!) {
+	metadataPolicy(libraryId: $libraryId) {
+		...MetadataPolicyFields
+	}
+}
+
+mutation SetMetadataPolicy($libraryId: ID!, $input: MetadataPolicyInput!) {
+	setMetadataPolicy(libraryId: $libraryId, input: $input) {
+		...MetadataPolicyFields
+	}
+}
+
 mutation StageIngestUploads($input: StageIngestUploadsInput!) {
 	stageIngestUploads(input: $input) {
 		items {

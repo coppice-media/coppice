@@ -8,23 +8,21 @@ use std::{str::FromStr, sync::Arc};
 
 pub mod annotation_sync;
 pub mod api_key;
-pub mod collections;
 pub mod config;
 mod context;
 pub mod database;
 pub mod error;
-mod event;
+pub mod event;
 pub mod filesystem;
-pub mod ingest;
+#[cfg(feature = "ingest")]
+mod ingest_host;
 pub mod job;
 pub mod kobo;
-pub mod library;
 pub mod notification;
 pub mod opds;
 #[cfg(feature = "providers")]
 pub mod providers;
 pub mod reading_state;
-pub mod series;
 pub mod utils;
 
 use config::logging::STUMP_SHADOW_TEXT;
@@ -124,7 +122,8 @@ impl StumpCore {
 
 		config.finalize();
 		database::validate_pool_config(&config)?;
-		ingest::preprocess::validate_config(&config)?;
+		#[cfg(feature = "ingest")]
+		ingest_host::validate_ingest_config(&config)?;
 
 		// Write ensure that config directory exists and write Stump.toml
 		config.write_config_dir()?;

@@ -26,7 +26,7 @@ use crate::{
 
 /// Komga library management: `POST`/`PATCH`/`DELETE /api/v1/libraries`, the
 /// library task actions, and the owner-only filesystem browser. Persistence is
-/// routed through the shared `stump_core::library` service (one path with the
+/// routed through the shared `stump_library::library` service (one path with the
 /// GraphQL mutations); authentication is applied by the parent Komga router.
 pub(crate) fn routes<S>() -> Router<S>
 where

@@ -30,6 +30,7 @@ pub mod epub_polish;
 pub mod meta_edit;
 pub mod missing_sequence;
 pub mod mobi2epub;
+pub mod sources_import;
 pub mod webp_convert;
 
 pub use error::{ToolError, ToolResult};
@@ -119,6 +120,7 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
 		Box::new(meta_edit::MetaEdit),
 		Box::new(missing_sequence::MissingSequence),
 		Box::new(mobi2epub::Mobi2Epub),
+		Box::new(sources_import::SourcesImport),
 		Box::new(webp_convert::WebpConvert),
 	]
 }

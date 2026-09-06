@@ -19,14 +19,9 @@ use models::{
 use sea_orm::{
 	ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
-use stump_media::hamming;
+use stump_media::{hamming, DUPLICATE_PAGE_TOLERANCE};
 
 use crate::CoreResult;
-
-/// Maximum Hamming distance between two dHashes for pages to count as the
-/// same page. Shared by the quality check, the candidate aggregation, and the
-/// serve-time skip.
-pub const DUPLICATE_PAGE_TOLERANCE: u32 = 4;
 
 /// Ordered physical page numbers (1-based) that remain visible for a media.
 pub type VisiblePages = Arc<[i32]>;
