@@ -202,6 +202,8 @@ Per-option tables for both tools live in `crates/tools/README.md`.
 
 ## DRM
 
+A cited technical study of every scheme (ADEPT EPUB/PDF, Kobo obok, Kindle MOBI/KF8/KFX, FairPlay, B&N), how DeDRM_tools handles each, and the legal position lives at [`docs/drm-study.md`](https://github.com/stumpapp/stump/blob/headless-modular/docs/drm-study.md) in the repository (plain Markdown, outside the site build). Its verdict table is why the rules below exist.
+
 **Stump does not ship, bundle, invoke, or implement DRM removal.** There is no
 code path in this repository that decrypts a protected book, and none will be
 added. `ebook-convert` refuses DRM-protected input, and that refusal is
