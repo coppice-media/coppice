@@ -1,5 +1,7 @@
 //! Email module for sending emails using SMTP. This module uses the `lettre` crate to send emails
 //! with plain text bodies until I have a need for HTML
+//!
+//! See `crates/email/README.md` for the crate contract and decisions.
 
 #![warn(clippy::dbg_macro)]
 

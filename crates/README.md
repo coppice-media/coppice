@@ -1,48 +1,53 @@
 # Workspace crates
 
 Every crate ships a `README.md` in the template below and a `//!` crate doc in
-its `lib.rs` pointing at it. Status reflects the working tree on 2026-09-05
-(branch `headless-modular`); "in flight" means the directory is untracked or
-its `lib.rs` has uncommitted changes and its README is owned by the worker
-editing it.
+its `lib.rs` (`bin/main.rs` for `cli`) pointing at it. Status reflects the
+working tree on 2026-09-07 (branch `headless-modular`, `7de64602`). The
+"Linkage" column is derived from `apps/server/Cargo.toml`, `core/Cargo.toml`
+and the crate's own `[features]`. `crates/integrations/` and `crates/macros/`
+are directories of sub-crates, not crates: they carry no `Cargo.toml`, their
+members come from the root globs `crates/macros/*` and `crates/integrations/*`
+(root `Cargo.toml:12-13`), and each directory carries an index README.
 
-| Crate dir | Package | Purpose | Feature flag (server / core) | Status |
+| Crate dir | Package | Purpose | Linkage (server / core) | Status |
 | --- | --- | --- | --- | --- |
-| `annotation-sync` | `stump_annotation_sync` | Canonical annotation export model, `Sink` trait, markdown (Obsidian) and git sinks | always linked via `stump_core`; crate feature `git` (default) links libgit2 | README done |
-| `api-types` | `stump_api_types` | Transport-neutral `RequestOrigin` URL building and `OffsetPagination` | always linked | README done |
-| `auth` | `stump_auth` | `AuthContext` + `AuthorizationError`, permission/owner enforcement | always linked | README done |
-| `abs` | `stump_abs` | Client-derived Audiobookshelf API profile (Lissen-first): root-mounted routes, DTOs, mapper, `abs_ids`/`abs_sessions`, HS256 tokens | linked by server `abs` (inside `headless`), `STUMP_ENABLE_ABS` | README done |
-| `collections` | `stump_collections` | Canonical shelf containers (collections, reading lists) and their Kobo `Tag` projection; one mutation path for GraphQL, Komga CRUD and Kobo write-back | linked by server `kobo`/`komga`/`kavita` and by `graphql` (absent from `minimal`) | README done |
-| `cli` | `cli` | Server CLI subcommands (account, config, `tools list`/`plan`/`apply`) embedded in `stump_server` | always linked | README pending (dirty: `commands/account.rs`, `config.rs`, `commands/tools.rs`, `bin/main.rs`) |
-| `devices` | `stump_devices` | Unified device registry: per-device credentials, endpoints, last-seen/last-sync tracking | always linked via `stump_core`; `graphql` derives opt-in | README done |
-| `email` | `email` | SMTP sender via `lettre`, emailer config | always linked; `graphql` derives opt-in (`stump_core/graphql`) | README pending |
-| `graphql` | `graphql` | async-graphql schema, guards, loaders, `graphql-gen` | server `graphql` (in `headless`/`full`, not `minimal`) | README done |
-| `ingest` | `stump_ingest` | Staged ingest pipeline: drop folder, staging, preprocess hook, analysis queue + progress stream, quality checks, metadata providers/candidates, field-level apply, per-field policy | server `ingest` (in `headless`, not `minimal`) + core `ingest` (default on) | README done |
-| `integrations/metadata` | `metadata_integrations` | Metadata provider clients (Comic Vine, Hardcover, AniList, MAL, MangaDex, MangaUpdates), scoring, merge | always linked via `stump_core`; `graphql` derives opt-in | README done |
-| `integrations/notification` | `integrations` | Discord/Telegram notifier clients | always linked via `stump_core` | README exists (legacy short form; needs template) |
-| `jobs` | `stump_jobs` | Job-type-agnostic background job runtime, lifecycle contracts, cron scheduler | being wired into `stump_core` | in flight (untracked; `JobsCrate`) |
-| `kavita` | `stump_kavita` | Serde contract types and routes for the client-derived Kavita compatibility API | planned server `kavita` feature | in flight (untracked; `KavitaWave1`) |
-| `kepub` | `stump_kepub` | Pure-Rust EPUB → KEPUB conversion (kepubify parity) | server `kobo` (`dep:stump_kepub`) | README done (`ReadmeMediaKepub`) |
-| `kobo` | `stump_kobo` | Kobo sync protocol routes and `KoboBackend` trait | server `kobo` | README by `ReadmeProtocols` |
-| `kindle` | `stump_kindle` | Send-to-Kindle delivery lane: Amazon format policy, boko EPUB->AZW3 conversion, attachment build with Amazon's 50 MB cap, the USB sideload file, and the `kindle_deliveries` history | linked by server `headless`, GraphQL `sendToKindle` | README done |
-| `komga` | `stump_komga` | Komga-compatible API surface and `KomgaBackend` trait | server `komga` (implies `readium`) | README by `ReadmeProtocols` |
-| `koreader` | `stump_koreader` | KOReader sync API and `KoreaderBackend` trait | server `koreader` | README by `ReadmeProtocols` |
-| `library` | `stump_library` | Library create/update/delete and series reshape (move/merge/split) with the filesystem moves that keep the next scan a no-op | linked by server `komga` and by `graphql` (absent from `minimal`) | README done |
-| `liseur-sync` | `stump_liseur_sync` | Native liseur-sync wire contract, annotation attachment lane, and `LiseurSyncBackend` trait | server `liseur-sync` | README by `ReadmeProtocols` |
-| `macros/filter-gen` | `filter-gen` | Proc macro generating filter/ordering enums for entities | always linked (`models`, `graphql`) | README pending |
-| `macros/stump-config-gen` | `stump-config-gen` | Proc macro generating `StumpConfig` env/partial-config impls | always linked (`stump_core`) | in flight (dirty `lib.rs`; `ConfigSplit`) — skipped |
-| `media` | `stump_media` | File/image processing, archive formats, thumbnails, DRM/encryption detection (`drm`) | `pdf` (PDFium), `rar` (unrar) via server `formats` | README by `ReadmeMediaKepub` (Decisions/Layout rows for `src/drm.rs` by `CalibreAdapter`) |
-| `migrations` | `migrations` | Append-only SeaORM schema migrations, `migrate` CLI | always linked; `cli` feature off in server graph | README done |
-| `models` | `models` | SeaORM entities, stored value types, shared DB services (reading progress, annotation attachments) | always linked; `graphql` derives opt-in | README done |
-| `opds` | `stump_opds` | OPDS 1.2/2.0 catalog routes and `OpdsBackend` trait | server `opds` | README by `ReadmeProtocols` |
-| `notify` | `stump_notify` | Notification channels (ntfy, email, webhook), routing-rule resolution, retry policy | always linked via `stump_core`; `graphql` derives opt-in (`stump_core/graphql`) | README done |
-| `provider` | `stump_provider` | Remote source host: `Source` trait, page cache, Keiyoushi catalog/health, materialisation, virtual-library browse, GC | server/core/graphql `providers` (in `headless`, not `minimal`) + runtime `STUMP_ENABLE_PROVIDERS` | README done |
+| `abs` | `stump_abs` | Client-derived Audiobookshelf API profile (Lissen-first): root-mounted routes, DTOs, mapper, `abs_ids`/`abs_sessions`, HS256 tokens | server `abs` (in `headless`, not `minimal`); runtime `STUMP_ENABLE_ABS` | README done |
+| `annotation-sync` | `stump_annotation_sync` | Canonical annotation export model, `Sink` trait, markdown (Obsidian) and git sinks | always linked via `stump_core` (`core/Cargo.toml:53`); crate feature `git` (default) links libgit2 | README done |
+| `api-types` | `stump_api_types` | Transport-neutral `RequestOrigin` URL building and `OffsetPagination` | always linked (`core/Cargo.toml:54`, `apps/server/Cargo.toml:112`) | README done |
+| `auth` | `stump_auth` | `AuthContext` + `AuthorizationError`, permission/owner enforcement | always linked (`apps/server/Cargo.toml:111`) | README done |
+| `cli` | `cli` | Server CLI subcommands (account, config, `tools list`/`plan`/`apply`) embedded in `stump_server`, plus the standalone `cli-bin` | always linked (`apps/server/Cargo.toml:72`) | README done |
+| `collections` | `stump_collections` | Canonical shelf containers (collections, reading lists) and their Kobo `Tag` projection; one mutation path for GraphQL, Komga CRUD and Kobo write-back | server `kobo`/`komga`/`kavita` (`apps/server/Cargo.toml:33,35,36`) and `graphql` (`crates/graphql/Cargo.toml:51`); absent from `minimal` | README done |
+| `devices` | `stump_devices` | Unified device registry: per-device credentials, endpoints, last-seen/last-sync tracking | always linked via `stump_core` (`core/Cargo.toml:55`); `graphql` derives opt-in (`core/Cargo.toml:14`) | README done |
+| `email` | `email` | SMTP sender via `lettre`, emailer config | always linked via `stump_core` (`core/Cargo.toml:42`); `graphql` derives opt-in (`core/Cargo.toml:12`) | README done |
+| `graphql` | `graphql` | async-graphql schema, guards, loaders, `graphql-gen` | server `graphql` (in `headless`/`full`, not `minimal`); crate features `providers` and `web` (server `webui = ["graphql?/web"]`) | README done |
+| `ingest` | `stump_ingest` | Staged ingest pipeline: drop folder, staging, preprocess hook, analysis queue + progress stream, quality checks, metadata providers/candidates, field-level apply, per-field policy | server `ingest` (in `headless`, not `minimal`) + core `ingest` (default on, `core/Cargo.toml:6,21`) | README done |
+| `integrations` | — (directory) | Index for the third-party integration client sub-crates below | not a crate; workspace members come from root `Cargo.toml:13` | README done |
+| `integrations/metadata` | `metadata_integrations` | Metadata provider clients (AniList, Audible via Audnexus, Comic Vine, Google Books, Hardcover, MAL, MangaDex, MangaUpdates, Metron, Open Library), scoring, merge | always linked via `stump_core` (`core/Cargo.toml:50`), `graphql` (`crates/graphql/Cargo.toml:38`) and `ingest` (`crates/ingest/Cargo.toml:15`); `graphql` derives opt-in | README done |
+| `integrations/notification` | `integrations` | Upstream Discord/Telegram notifier clients, dormant | orphan workspace member (root `Cargo.toml:13`) — no crate depends on it; `crates/notify` owns the live lane (ntfy/email/webhook, no Discord/Telegram) | README done |
+| `jobs` | `stump_jobs` | Job-type-agnostic background job runtime, lifecycle contracts, cron scheduler | always linked via `stump_core` (`core/Cargo.toml:56`, `default-features = false`); server/core `apalis` selects the queued executor (`apps/server/Cargo.toml:12`, `core/Cargo.toml:8`), `minimal` runs the inline one; `graphql` derives opt-in | README done |
+| `kavita` | `stump_kavita` | Serde contract types and routes for the client-derived Kavita compatibility API | server `kavita` (`apps/server/Cargo.toml:36`, in `headless`, not `minimal`) | README done |
+| `kepub` | `stump_kepub` | Pure-Rust EPUB → KEPUB conversion (kepubify parity) | server `kobo` (`dep:stump_kepub`) and server `transform` via `stump_media/kepub` (`apps/server/Cargo.toml:18,33`) | README done |
+| `kindle` | `stump_kindle` | Send-to-Kindle delivery lane: Amazon format policy, boko EPUB->AZW3 conversion, attachment build with Amazon's 50 MB cap, the USB sideload file, and the `kindle_deliveries` history | always linked (`apps/server/Cargo.toml:116`, `crates/graphql/Cargo.toml:64`); GraphQL `sendToKindle` | README done |
+| `kobo` | `stump_kobo` | Kobo sync protocol routes and `KoboBackend` trait | server `kobo` | README done |
+| `komga` | `stump_komga` | Komga-compatible API surface and `KomgaBackend` trait | server `komga` (implies `readium`) | README done |
+| `koreader` | `stump_koreader` | KOReader sync API and `KoreaderBackend` trait | server `koreader` | README done |
+| `library` | `stump_library` | Library create/update/delete and series reshape (move/merge/split) with the filesystem moves that keep the next scan a no-op | server `komga` (`apps/server/Cargo.toml:35`) and `graphql` (`crates/graphql/Cargo.toml:56`); absent from `minimal` | README done |
+| `liseur-sync` | `stump_liseur_sync` | Native liseur-sync wire contract, annotation attachment lane, and `LiseurSyncBackend` trait | server `liseur-sync` | README done |
+| `macros` | — (directory) | Index for the workspace proc-macro sub-crates below | not a crate; workspace members come from root `Cargo.toml:12` | README done |
+| `macros/filter-gen` | `filter-gen` | Proc macro generating filter/ordering enums for entities | always linked (`crates/models/Cargo.toml:25`, `crates/graphql/Cargo.toml:33`) | README done |
+| `macros/stump-config-gen` | `stump-config-gen` | Proc macro generating `StumpConfig` env/partial-config impls | always linked (`core/Cargo.toml:74`) | README done |
+| `media` | `stump_media` | File/image processing, archive formats, thumbnails, audio probing, DRM/encryption detection (`drm`) | always linked with `default-features = false` (`core/Cargo.toml:58`, `apps/server/Cargo.toml:105`); `pdf` (PDFium), `rar` (unrar), `turbojpeg`, `fast-resize`, `kepub` via server `formats` | README done |
+| `migrations` | `migrations` | Append-only SeaORM schema migrations, `migrate` CLI | always linked via `stump_core` (`core/Cargo.toml:51`) with `default-features = false`, so the `cli` feature is off in the server graph | README done |
+| `models` | `models` | SeaORM entities, stored value types, shared DB services (reading progress, annotation attachments) | always linked; `graphql` derives opt-in (`core/Cargo.toml:11`) | README done |
+| `notify` | `stump_notify` | Notification channels (ntfy, email, webhook), routing-rule resolution, retry policy | always linked via `stump_core` (`core/Cargo.toml:60`); `graphql` derives opt-in (`core/Cargo.toml:16`) | README done |
+| `opds` | `stump_opds` | OPDS 1.2/2.0 catalog routes and `OpdsBackend` trait | server `opds` | README done |
+| `provider` | `stump_provider` | Remote source host: `Source` trait, page cache, Keiyoushi catalog/health, materialisation, virtual-library browse, GC | server/core/graphql `providers` (in `headless`, not `minimal`) + runtime `STUMP_ENABLE_PROVIDERS` (`core/src/config/env_keys.rs:79`) | README done |
 | `provider-mangadex` | `stump_provider_mangadex` | MangaDex `Source` implementation (API + MangaDex@Home pages, chapter readability, content rating) | via `providers` | README done |
 | `provider-themes` | `stump_provider_themes` | Data-driven `lib-multisrc` theme engines (Madara/`madaralegacy`, MangaThemesia, MMRCMS) plus the jsoup-subset selector engine they run on; every site is a runtime `SourceDefinition`, no per-site code | via `providers` | README done |
-| `scanner` | `stump_scanner` | Filesystem scan planning primitives | always linked via `stump_core` | README pending |
-| `tests` | `tests` | Shared test DB/fake-data helpers for integration tests | dev only | README pending (dirty: `src/db.rs`) |
-| `tools` | `stump_tools` | Library maintenance tools (Kavita/MangaManager "external tools" parity): the `Tool` plan/apply contract plus `calibre-convert`, `calibre-meta`, `calibre-polish`, `cbz-covers`, `cbzit`, `epub-check`, `epub2cbz`, `meta-edit`, `missing-sequence`, `webp-convert`, driven by `stump tools list`/`plan`/`apply` | always linked via `cli`; not in the server route graph | in flight (untracked; `ToolsCore` + per-tool workers) |
-| `watcher` | `stump_watcher` | Library filesystem watching, debounced scan requests | core/server `watcher` (in `headless`, not `minimal`) | in flight (untracked; `WatcherCrate`) |
+| `scanner` | `stump_scanner` | Filesystem scan planning primitives | always linked (`core/Cargo.toml:59`, `apps/server/Cargo.toml:106`, `crates/graphql/Cargo.toml:60`, `crates/tools/Cargo.toml:8`) | README done |
+| `tests` | `tests` | Shared test DB/fake-data helpers for integration tests | dev only — `[dev-dependencies]` of `core`, `apps/server` and 12 crates | README done |
+| `tools` | `stump_tools` | Library maintenance tools (Kavita/MangaManager "external tools" parity): the `Tool` plan/apply contract plus `calibre-convert`, `calibre-meta`, `calibre-polish`, `cbz-covers`, `cbzit`, `epub-check`, `epub2cbz`, `meta-edit`, `missing-sequence`, `webp-convert`, driven by `stump tools list`/`plan`/`apply` | always linked (`apps/server/Cargo.toml:110`, `crates/cli/Cargo.toml:14`, `crates/kindle/Cargo.toml:19`); not in the server route graph | README done |
+| `watcher` | `stump_watcher` | Library filesystem watching, debounced scan requests | core `watcher` (default on, `core/Cargo.toml:29`) / server `watcher` (in `headless`, not `minimal`) | README done |
 
 ## README template
 

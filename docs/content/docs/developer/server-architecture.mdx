@@ -19,6 +19,48 @@ The branch includes measured runtime and allocation work:
 - The GraphQL route installs a concurrency-safe schema cell; schema types and DataLoaders are built once, on the first authenticated GraphQL HTTP or WebSocket request rather than at server startup.
 - The dependency graph no longer enables unused image formats, `kmeans_colors` CLI defaults, `http-cache-reqwest`'s unused CACache manager, or the SeaORM migration CLI in the server graph.
 
+## Architecture map
+
+One table for the whole shape: which crate owns a surface, the server Cargo
+feature that compiles it, the profiles that carry that feature, and who talks to
+it. Feature definitions are `apps/server/Cargo.toml:7-51`; the crate inventory
+with per-crate READMEs is `crates/README.md`.
+
+| Crate | Owns | Server feature | Profiles | Clients served |
+| --- | --- | --- | --- | --- |
+| `crates/komga` | Komga API surface + `KomgaBackend`, `/komga` Grimmory alias | `komga` (implies `readium`) | headless, full | Komelia, Mihon, Liseur, Komf |
+| `crates/kavita` | Kavita client profile + identity allocation | `kavita` | headless, full | Turnleaf, Kamigura, Kover, Inkita, Kamare |
+| `crates/abs` | Audiobookshelf profile, tokens, sessions | `abs` + `STUMP_ENABLE_ABS` | headless, full | Lissen |
+| `crates/kobo`, `crates/kepub` | Kobo sync + `KoboBackend`, EPUB→KEPUB | `kobo` | headless, full | Kobo Nickel, NickelStump |
+| `crates/koreader` | kosync API + `KoreaderBackend` | `koreader` | headless, full | KOReader, `stump.koplugin`, Liseur |
+| `crates/opds` | OPDS 1.2/PSE and 2.0 + `OpdsBackend` | `opds` | headless, full | Liseur, `stump.koplugin`, OPDS readers |
+| `crates/liseur-sync` | Native sync wire + `LiseurSyncBackend` | `liseur-sync` | headless, full | Liseur, NickelStump |
+| `crates/kindle` | Send-to-Kindle policy, conversion, delivery history | always linked | all | Kindle (e-mail, USB) |
+| `crates/provider`, `-mangadex`, `-themes` | Remote source host, MangaDex, theme engines | `providers` + `STUMP_ENABLE_PROVIDERS` | headless, full | every reader — remote series look local |
+| `crates/ingest` | Staged ingest pipeline and per-field policy | `ingest` | headless, full | ingest editor |
+| `crates/graphql` | Schema, guards, loaders, subscriptions | `graphql`; SPA-only resolvers behind `webui` → `graphql/web` | headless (no `web`), full | console, editor, Expo, web SPA |
+| `crates/media` | Format processors, hashing, images, transforms | `formats` = `pdf` + `rar` + `transform` | all | every reader |
+| `crates/watcher` | `notify` setup, debounce, listener lifecycle | `watcher` | headless, full | — |
+| `crates/jobs` | Job runtime, lifecycle, cron scheduler | `apalis` selects the executor | headless, full | — |
+| `crates/tools` | `Tool` plan/apply contract and the 17 tools | always linked, via `cli` | all | operators (`stump tools`) |
+| `crates/models`, `migrations`, `auth`, `api-types`, `devices`, `notify`, `collections`, `library`, `annotation-sync`, `scanner` | Persistence, schema, auth context, device registry, notification channels, shelves, library service, annotation export, scan planning | always linked | all | — |
+
+`minimal` is the complement: it keeps `formats` and drops every route feature
+above, so it links neither `async-graphql`, `notify` nor `apalis`. See
+[Profiles](#profiles) for what each aggregate compiles and
+[Three independent modularity layers](#three-independent-modularity-layers) for
+why a runtime switch, a Cargo feature and a container target are not
+interchangeable.
+
+Three concepts cut across every row above, which is why they have their own
+pages rather than living inside a protocol:
+
+| Concept | Rule | Where |
+| --- | --- | --- |
+| Unified reading state | One head per (user, book) with append-only provenance; every protocol writes through it and reads its own projection, and a page ordinal is never interchangeable with a millisecond offset | [Unified reading state](/docs/developer/unified-reading-state) |
+| Event bus | One `CoreEvent` broadcast on `Ctx`; producers emit at the durable state transition, sinks subscribe and translate, and adding a variant never edits an existing sink | [Event bus and sinks](#event-bus-and-sinks) |
+| Devices | Every credential belongs to a device row; `library_scope` and `transform_profile` make two devices of the same user see different libraries and receive different bytes | [Devices](/docs/developer/devices), [Device pairing](/docs/developer/device-pairing) |
+
 ## Current execution
 
 ### Development and source builds

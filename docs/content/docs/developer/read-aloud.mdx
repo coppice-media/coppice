@@ -1,0 +1,234 @@
+---
+title: Read-aloud, remote workers, and requests
+description: Design for ebook↔audiobook synchronisation (EPUB 3 Media Overlays, Storyteller-compatible), the remote worker protocol that runs GPU work off the server, and the request model that lets users ask for what the library lacks. Status - design accepted, not implemented.
+---
+
+**Status: design, not implemented.** Nothing on this page exists in the tree yet
+except the pieces marked *exists*. Every other section names the crate it will
+land in so the work can be split without re-deciding it.
+
+## 1. The problem in one table
+
+| Have | Want | Cost tier |
+| --- | --- | --- |
+| an audiobook (`media_audio`, chapters) and the same book as an EPUB | "you were at 41 % of chapter 7 on the phone" → open the EPUB there, and back | **free** - chapter + percentage |
+| both, plus a worker | sentence-level sync: tap a sentence, hear it; playback highlights text | **cheap** - forced alignment of *known* text |
+| only the audiobook | a transcript / search | **expensive** - full ASR; out of scope until someone wants it |
+
+The canonical portable output for tier 2 is **EPUB 3 Media Overlays** (SMIL) -
+the format Storyteller produces and Readest/Thorium consume. Stump does not
+invent a format; it stores a small internal map and *renders* the standard.
+
+## 2. Pairing: which audiobook is which ebook
+
+Neither ISBN nor ASIN is a safe key on its own: print, ebook and audio editions
+carry different ISBNs, and audiobooks usually carry an Audible ASIN and no ISBN.
+The key is the **work**, and the tree already has one.
+
+| Piece | Status | Where |
+| --- | --- | --- |
+| `works` / `editions` / `aliases` / `media_links` (a work has editions; a media row links to an edition by identifier) | *exists* (liseur-sync model, `POST /v1/works/resolve`) | `crates/migrations/src/m20260904_000000_add_liseur_sync.rs`, `apps/server/src/routers/liseur_sync/` |
+| identifiers on media metadata: `identifier_isbn`, `identifier_amazon`, `identifier_google`, `identifier_mobi_asin`, `identifier_calibre`, `identifier_uuid` | *exists* | `crates/models/src/entity/media_metadata.rs` |
+| Audible ASIN from the `audible` provider | *exists* (batch 9) | `crates/integrations/metadata/src/providers/audible.rs` |
+| **Pairing rule**: two media rows are the same work when (a) they link to the same work id, or (b) an identifier matches through a provider's edition list (Audnexus and OpenLibrary both expose "other editions"), or (c) normalised `title + first author` match and the user confirms | to build | `crates/library` (`pair_editions`), surfaced as `Media.editions: [Media]` in GraphQL and an "Also available as" row in the console |
+
+Pairing is a suggestion until confirmed; a confirmed pair is a `media_links`
+row. The ebook is always the **canonical text**; the audiobook is the canonical
+**time**.
+
+## 3. Tier 1 - chapter + percentage (free)
+
+No compute, no worker, no storage beyond a chapter map. Both sides already have
+chapters: the EPUB's nav/TOC (spine items, character counts per item are
+computed by the Readium positions generator - *exists*, `crates/media/src/media/readium.rs`)
+and the audiobook's `media_audio_chapters`.
+
+1. **Chapter map** - match chapter lists by normalised title, then by ordinal
+   when titles are unhelpful ("Chapter 12" ↔ "12"); front/back matter without a
+   counterpart (dedication, credits) is skipped, not forced. Stored once per pair
+   as `media_chapter_map` `(pair_id, ebook_spine_index, audio_chapter_index, confidence)`.
+2. **Position conversion** - audio → ebook: `f = (t − chapter.start_ms) / chapter.duration_ms`,
+   then a Readium locator at `f` of the mapped spine item's character count.
+   Ebook → audio: the inverse from `locations.progression` inside the spine item.
+3. **Accuracy** - narrators are not metronomes, so this is ±1-3 min on a 30-min
+   chapter; good enough for "resume near here", never for highlighting.
+   The console shows the converted position as *approximate* and the unified
+   head records `source_kind: mapped` so nothing overwrites a real position with
+   a derived one.
+
+Where it plugs in: `models::domain::reading_state::Projection` already carries
+both `page/locator` and `position_ms`; conversion happens at **read time** in
+`reading_state::resolve` when the requested media is the pair's other edition.
+The head stays one row per (user, media) - a mapped position is shown, not
+written, until the user actually reads/listens there.
+
+## 4. Tier 2 - forced alignment (cheap, needs a worker)
+
+Because the text is known, this is **alignment**, not transcription: a CTC
+forced aligner (torchaudio `MMS_FA` / `ctc-forced-aligner`) runs a single
+emission pass and Viterbi - roughly 100-300× realtime on a consumer GPU,
+5-10× on CPU, versus Whisper transcription at 30-50× on the same GPU plus a
+fuzzy-match step to reconcile ASR errors. Storyteller's `stalign` takes the
+Whisper route; it is the reference implementation, not the target.
+
+Pipeline (worker side, Python packaged as a container - there is no Rust CTC
+aligner; the server side stays Rust):
+
+```text
+epub ──► sentence segmentation (per spine item, stable ids injected: <span id="s0412">)
+m4b  ──► decode 16 kHz mono (symphonia) ──► VAD chunks
+              └──► per chapter: forced-align sentences of the mapped spine item
+                       (chapter map from tier 1 bounds the search - a 10-hour book
+                        becomes twenty 30-minute problems)
+       ──► SyncMap { chapters: [{ spine_index, audio_chapter_index,
+                                   cues: [{ element_id, begin_ms, end_ms }] }] }
+```
+
+Stored as `media_sync_maps (pair_id, granularity: sentence|word, generator,
+version, blob)` - a few hundred KB per book. The original EPUB and M4B are never
+modified; the sentence-id-injected XHTML is regenerated deterministically from
+the original on export (tests pin the injection so ids are stable across runs).
+
+Fallback when a sentence cannot be aligned: interpolate between neighbours and
+mark `confidence`; the console does not highlight low-confidence cues.
+
+### A Rust aligner: how hard, and whether it is worth it
+
+The aligner is four parts; three are easy in Rust today, one is the decision.
+
+| Part | Rust today | Effort |
+| --- | --- | --- |
+| Decode + resample to 16 kHz mono | `symphonia` (*exists* in `stump_media`) + `rubato` | hours |
+| Text → model vocabulary (lower-case, strip punctuation; multilingual needs a `uroman` port) | trivial for English; `uroman` is a ~1k-line rule table, port when a non-Latin book shows up | days for the port |
+| Trellis + Viterbi forced alignment over CTC emissions, per chapter (memory `T × N`, bounded by the chapter map) | ~200 lines, no dependency | a day |
+| **CTC acoustic model inference** | `ort` (ONNX Runtime bindings, CUDA/ROCm/CoreML through the runtime's shared library - not a build dependency) with an ONNX export of the model; `candle` has no wav2vec2 and its GPU path is less mature | the real work: export, `ort` feature wiring, parity tests against the Python aligner |
+
+Verdict: **worth it, but second.** Phase A: `stump_worker` spawns the Python
+aligner container (`ctc-forced-aligner`/torchaudio) and ships in days, proving
+the job protocol, the SyncMap and the EPUB render. Phase B: the same job kind
+served by an in-binary `ort` aligner, swapped in only when its SyncMap matches
+phase A on the fixture corpus within a tolerance (median cue delta < 50 ms).
+Phase B buys a one-binary worker with no Python on the GPU box and roughly
+1-2 weeks; nothing above it changes.
+
+Model licences decide what phase B may ship: `facebook/wav2vec2-base-960h`
+(English, Apache-2.0) is fine; `MMS_FA` (1,100+ languages) is **CC-BY-NC 4.0**
+and cannot be the default; NVIDIA NeMo CTC models are CC-BY-4.0 and are the
+multilingual candidate. The worker advertises which model it carries in its
+capabilities, and the job records `generator` + model id in `media_sync_maps`.
+
+## 4b. Readiness scoring
+
+"Can this book be read aloud, and how well?" is a quality-check family in the
+existing ingest registry (`crates/ingest/src/quality/`, same shape as the comic
+and audio families: id, weight, positive/negative fixture, fix action). It is
+what the console's book page and the Requests page read to say *what is
+missing*, and every check names the action that fixes it.
+
+| Check id | Passes when | Fix action |
+| --- | --- | --- |
+| `has_ebook_edition` | the work has a confirmed EPUB edition (`media_links`) | `request: ebook` |
+| `has_audio_edition` | the work has a confirmed audio edition | `request: audiobook` |
+| `single_file_audio` | the audio edition is one container (reuses the audio family's `single_file`) | `audio-assemble` |
+| `chapters_present` | the audio edition has authored chapter marks (reuses `chapters_present`) | `audio-chapters` |
+| `chapter_map_confidence` | ≥ 90 % of ebook spine items map to an audio chapter with `confidence ≥ 0.8` | manual chapter map in the console |
+| `epub_alignable` | every spine item parses and segments into sentences; no DRM | `epub-polish` / `epub-check` |
+| `sync_map_present` | a `media_sync_maps` row exists at sentence granularity | `align` job (or `request: alignment` when no worker) |
+| `sync_map_coverage` | ≥ 95 % of sentences have a cue with `confidence ≥ 0.6` | re-run `align` with the larger model |
+
+Weights sum to 100 with `has_*_edition` and `sync_map_present` heaviest; the
+aggregate is the book's **read-aloud readiness** badge (none / approximate =
+tier 1 only / aligned). The family is `NOT_APPLICABLE` for a work with neither
+an ebook nor an audiobook, so comics never carry it.
+
+## 5. Output: Storyteller-compatible EPUB, rendered on demand
+
+A read-aloud EPUB is a zip of: the XHTML with sentence ids, one SMIL per spine
+item, `package.opf` with `media-overlay` attributes and `media:duration`
+metadata, and the audio. Two facts make **on-demand rendering** reasonable:
+
+- EPUB Media Overlays allow **one audio file for the whole book** with
+  `clipBegin`/`clipEnd` per `<par>`; the M4B is AAC-in-MP4, an EPUB core media
+  type (`audio/mp4`). So the audio entry is the original M4B **stored verbatim**
+  (zip method `store`, no deflate, no transcode) under `Audio/book.m4a`.
+- Every other entry is tiny and derived from the SyncMap.
+
+So `GET /api/v2/media/{id}/read-aloud.epub` streams a zip: local headers →
+stored entries → central directory. All sizes are known up front (the small
+entries are rendered into memory first, the M4B size is on disk), so the
+response has a `Content-Length`, supports `Range` (offset arithmetic over a
+precomputed entry table, zip64 when the M4B exceeds 4 GB), and costs one
+sequential read of the M4B. Nothing is written to disk; the same bytes are
+served to OPDS (`application/epub+zip` acquisition link with
+`properties/…/media-overlay`), the console, and any EPUB reader. A folder book
+(multi-track) is first assembled with `audio-assemble` (*exists*); the read-aloud
+render requires a single-file audio edition.
+
+The console's own reader does not need the EPUB at all: it reads the SyncMap
+through GraphQL (`Media.syncMap(granularity)`), plays the track route it already
+uses, and highlights `element_id`s in the rendered XHTML.
+
+**Storyteller app support** is a *maybe*, not a plan: the Storyteller mobile app is the only consumer that needs it, and it is the Storyteller mobile
+app only talks to a Storyteller server API (AGPL-3.0 - same evidence boundary as
+the ABS profile: observed behaviour and captures, no code). Thorium Reader (Media Overlays
+support since 1.x; "read aloud" with highlighting) and Readest open the EPUB directly, and Storyteller's own OPDS 1.2 consumers do too, so the
+render above is the first deliverable and the app profile is the second.
+
+## 6. Remote workers - the modular server
+
+The server stays one Rust process; heavy or hardware-bound work is a **job**
+that a worker somewhere else can claim. Workers dial *out* to the server (the
+VPS never needs to reach the PC), so NAT and dynamic IPs are not a concern.
+
+| Concept | Design |
+| --- | --- |
+| Worker identity | a device of kind `Worker` (*devices crate exists*): paired with a QR/API key like every other device, scoped to the `worker` permission, revocable in the console |
+| Transport | one WebSocket `/api/v2/workers/socket` (the server already runs axum `ws`); worker sends `hello { capabilities }`, then `claim` / `progress` / `result` / `fail`; server sends `job` and `cancel`. Reconnect resumes claimed jobs by id |
+| Capabilities | `{ align: { device: cuda\|rocm\|metal\|cpu, models: [...] }, transcode: { ffmpeg, hwaccel: [nvenc,...] }, asr: {...} }` - free-form JSON validated per job kind; the console's Workers page lists who advertises what |
+| Job table | `worker_jobs (id, kind, input JSON, requires JSON, status: queued\|claimed\|running\|done\|failed\|needs_worker, worker_id, priority, progress, result JSON, error)`; `needs_worker` is shown, not hidden - "no worker advertises `align` right now" |
+| Routing | a job kind declares `local: Option<fn>`; if a capable worker is connected it is offered first, else the local implementation runs (transcode has one: the `ffmpeg` ExternalTool), else the job waits. Priority is low by default: alignment never competes with a scan |
+| Data path | input by authenticated download (`/api/v2/media/{id}/file`, `/audio/track/{i}`), output by the existing ingest upload lane (`stageIngestUploads`) tagged with the job id, so results go through the same quality checks as any dropped file |
+| Events | job transitions are `CoreEvent::WorkerJobChanged` on the bus (*exists* as a pattern) → console live status, ntfy on completion |
+| Worker binary | `crates/worker` (`stump_worker`): the protocol client, capability probing, the align runner (spawns the aligner container or a local Python env), the transcode runner. Small; the ML lives in the container it launches, never in the Rust build |
+
+Job kinds at launch: `align` (tier 2), `transcode` (the Opus preset and
+`audio-assemble`'s AAC path, so a VPS without ffmpeg can still serve them),
+later `asr`.
+
+## 7. Requests - asking for what is missing
+
+A request is a row, not a workflow engine:
+
+`requests (id, kind: ebook|audiobook|alignment|metadata|comic, work_id?,
+identifiers JSON {isbn, asin, title, author, series, volume}, requested_by,
+status: open|in_progress|fulfilled|rejected, fulfilled_by_media_id?, note)`.
+
+| Path | How a request gets fulfilled |
+| --- | --- |
+| **Provider host** (*exists*) | a `comic`/manga request whose title matches a catalogued source series is fulfilled automatically by materialising it into a virtual library - the request is the search the user already did |
+| **Alignment** | `alignment` requests create a `worker_jobs` row when the pair exists; when it does not, the request stays open with "needs the ebook / needs the audiobook" |
+| **Ebook / audiobook** | shown on the console Requests page; fulfilled by an ingest drop (the drop item's `identifier_*` or a manual "fulfils request #" link), or by an admin marking it rejected. No downloading of copyrighted files is implied or built |
+| **Metadata** | routed to the provider policy layer (*exists*): re-run `applyBestIngestMetadata` with the requested identifiers |
+
+Search is the existing unified search (`/api/v2/search` + provider search);
+a "Request this" action on an empty result creates the row with the query's
+identifiers. Users see their own requests; admins see all; ntfy/e-mail on
+status change through the notify crate (*exists*).
+
+## 8. What is deliberately not here
+
+- No DRM handling (a DRM'd source is refused, as everywhere in Stump).
+- No transcript store: tier 2 keeps cues, not text; the EPUB is the text.
+- No automatic library-wide alignment: jobs are created by a request or a
+  per-library policy flag (`AudioPolicy.auto_align`, default `false`).
+- No GPU code in the Rust build: `whisper-rs`/`ct2rs` are worker-container
+  concerns if they are ever wanted.
+
+## 9. Implementation order
+
+1. `pair_editions` + `media_chapter_map` + read-time position conversion (tier 1) + the readiness check family (4b) - `crates/library`, `models::domain::reading_state`, `crates/ingest/src/quality/`, console "Also available as" + readiness badge.
+2. Worker protocol + `crates/worker` + `worker_jobs` + console Workers page, with `transcode` as the first job kind (it has a local fallback, so it is testable without a GPU).
+3. `align` job kind + the aligner container + `media_sync_maps` + `Media.syncMap`.
+4. On-demand read-aloud EPUB route + OPDS link + console highlighting.
+5. Requests table + Requests page + provider-host auto-fulfilment.
+6. Storyteller app profile (`crates/storyteller`), evidence-first like ABS.

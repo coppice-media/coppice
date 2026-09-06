@@ -7,7 +7,7 @@ This page specifies the proposed modular ingest contract for a first-party Svelt
 
 The server remains authoritative: a source file is immutable while it is being analyzed, all derived evidence is content-addressed to that source, and metadata providers produce reviewable candidates rather than silently changing a library. A pending item may be discarded or reworked without deleting an already committed `Media` row.
 
-This page extends the uploader-prepared boundary and metadata/book-lab proposal already recorded in `docs/content/docs/developer/server-architecture.mdx:180-226`; it also follows the optional-provider and candidate provenance rules in `docs/content/docs/developer/hardcover-integration.mdx:1-20,167-220`. Those pages remain the broader architecture and integration notes; this page adds the queue, deterministic quality report, and editor-facing GraphQL contract.
+This page extends the uploader-prepared boundary and metadata/book-lab proposal already recorded in `docs/content/docs/developer/server-architecture.mdx:317-367`; it also follows the optional-provider and candidate provenance rules in `docs/content/docs/developer/hardcover-integration.mdx:1-20,167-220`. Those pages remain the broader architecture and integration notes; this page adds the queue, deterministic quality report, and editor-facing GraphQL contract.
 
 ## What exists today and what this design adds
 

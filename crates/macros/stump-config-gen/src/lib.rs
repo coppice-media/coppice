@@ -1,3 +1,7 @@
+//! Derive macro generating the Stump configuration loaders (`StumpConfigGenerator`).
+//!
+//! See `crates/macros/stump-config-gen/README.md` for the crate contract and decisions.
+
 mod config_vars;
 mod gen_config_impls;
 mod gen_partial_config;

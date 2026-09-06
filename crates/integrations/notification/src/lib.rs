@@ -1,3 +1,8 @@
+//! Discord/Telegram notification clients (dormant: no dependant in this tree).
+//!
+//! See `crates/integrations/notification/README.md` for the crate contract and
+//! decisions.
+
 mod discord_client;
 mod error;
 mod event;

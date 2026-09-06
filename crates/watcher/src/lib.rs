@@ -4,6 +4,8 @@
 //! lifecycle. It deliberately contains no database, job queue, application context, or event
 //! type: the owning crate implements [`WatchedLibraries`] to say which roots are watched and
 //! [`ScanSubmitter`] to turn a debounced change into a scan.
+//!
+//! See `crates/watcher/README.md` for the crate contract and decisions.
 
 mod watcher;
 

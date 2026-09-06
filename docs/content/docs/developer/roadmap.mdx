@@ -1,197 +1,177 @@
 ---
 title: Roadmap
-description: Ordered implementation phases for the Stump fork, with rationale, dependencies, and source evidence
+description: What the fork has finished, the five open items and what each is blocked on, and the unscheduled future list.
 ---
 
-This is the fork's implementation roadmap. Every phase names the doc or study
-it is derived from; it states intent, not shipped status.
+# Roadmap
 
-## Phase 1 — Komf compatibility
+Snapshot 2026-09-07 at `7de64602`. Two sections carry weight: **[Open](#open)**
+— five items, each blocked on something nameable — and **[Future](#future)**,
+candidates that are neither scheduled nor promised. Everything above them is
+history, kept because each phase names the document it came from and because
+"done" here means evidence exists, not that a plan said so; the evidence itself
+is in [Current state](/docs/developer/state).
 
-Derived from `local://komf-compat-study.md` (Komf pinned at
-`428dac6028cc22db47b41ff9f979d253d2095715`) and
-`docs/content/docs/developer/provider-status.mdx`.
+## Done
 
-1. **API-mode manual identification.** Implement the remaining Komf client
-   operations against our Komga profile: series/book metadata PATCH coverage,
-   thumbnail upload/delete (`crates/komga/src/routes/media.rs` currently
-   GET-only), and Komf's manual identify/search/match routes
-   (`komf-app/src/main/kotlin/snd/komf/app/api/MetadataRoutes.kt`).
-2. **Thumbnails.** Match Komf's `MetadataUpdater`: thumbnails are replaced
-   after either API or COMIC_INFO mode, unconditionally on refresh.
-3. **Automatic mode.** Komf's `KomgaEventHandler` buffers `BookAdded` /
-   `BookDeleted` / `SeriesDeleted` and flushes only on a `TaskQueueStatus`
-   with count 0. Stump cannot flush a Komf automatic pass without emitting
-   that event, so SSE `TaskQueueStatus` emission (`crates/komga/src/routes/sse.rs`)
-   is the gate for automatic mode.
+| Phase | Derived from | Outcome | Evidence |
+| --- | --- | --- | --- |
+| 1 — Komf compatibility | `local://komf-compat-study.md`, [Provider status](/docs/developer/provider-status) | **done.** Series/book metadata PATCH coverage, thumbnail upload and delete (`crates/komga/src/routes/media.rs:60,64,72,76`), and SSE `TaskQueueStatus` so Komf's buffered automatic pass flushes | Live Komf `428dac6` container 2026-09-04: identify → series PATCH 204, book PATCH 204, cover upload + previous-cover DELETE, `TaskQueueStatus` observed; `replay-komf` 16/16 |
+| 2 — Remaining crate split | `local://scanner-split-plan.md` | **partial.** `stump_scanner`, `stump_watcher` and `stump_jobs` are extracted and see no `JobContext`, `StumpJob`, `CoreEvent` or `MemoryStorage`; `watcher` and `apalis` are real Cargo features that drop `notify` and `apalis` from `minimal`. Metadata and email are still linked unconditionally, and there are no processor-sized features | `core/Cargo.toml` features `pdf, rar, watcher, apalis, ingest, graphql, providers`; [package seams](/docs/developer/server-architecture#package-seams) |
+| 3 — Provider host | [Server architecture](/docs/developer/server-architecture), `local://feature-gaps.md` | **done for the trait and the catalog.** `Source` trait, MangaDex as code, four data-driven theme engines, frozen definition schema v1 with the `sources-import` generator, Mode A materialisation, Mode B virtual libraries, page cache, GC, source health, cross-source dedupe. The Komga/Kavita federation provider and the wasmtime sandbox were never started | [Provider host](/docs/developer/provider-host), [Source definitions](/docs/developer/source-definitions) |
+| 4 — Comics-for-Kobo transform | [Kobo capabilities](/docs/developer/kobo-sync-capabilities), [Kobo device DB](/docs/developer/kobo-device-database) | **done.** Per-device transform profiles (grayscale, resolution, re-encode) applied on delivery, cached under a byte budget, selectable per device in the console | [Comics transform](/docs/developer/comics-transform), [Home app › transform presets](/docs/developer/home-app#transform-presets) |
+| 5 — Native metadata engine | `local://komf-compat-study.md`, [Modular ingest](/docs/developer/modular-ingest) | **done except post-processing.** Twelve catalogued providers, scoring, merge, and a per-field policy document (ordered providers, five strategies, `lock_respected`) with a per-library override. Komf's post-processing — title-language selection, book ordering, score tags, publisher tag names — and writing a chosen cover are not implemented | [policy table](/docs/developer/provider-status#what-the-policy-layer-covers) |
+| 6 — Kavita client profile | `local://kavita-profile-study.md` | **done through the inventoried clients.** API-key and `Plugin/authenticate` auth, browse, reader, progress, download, metadata, chapter-info, search, bookmarks, collections, scan, stats, annotations, on-deck, the `Book/*` EPUB lane, and `/api/Tachiyomi` | Device runs 2026-09-06 (Turnleaf, Kamigura), `replay-kavita` 1/1, DTO key-diff vs `kavita-ref` 0.9.1.4 |
+| 7 — First-party Mihon extension | [Client verification](/docs/developer/client-verification) | **out of tree, in progress.** The extension lives in its own repository, pairs with `POST /api/v2/devices/pair/start {kind:"mihon"}`, and reads native GraphQL + REST. No APK has been built or run | `docs/content/docs/developer/platforms.mdx:109` |
+| 9 — Deferred operations | `local://feature-gaps.md` | **rate limiting done**, the rest carried into [Future](#future). Three classes (`auth`, `write`, `stream`) keyed on a credential fingerprint, `429` + `Retry-After`, counters on `/api/v2/health` | [inbound rate limiting](/docs/developer/server-architecture#inbound-rate-limiting) |
 
-Rationale: Komf is the most common metadata sidecar for Komga users;
-completing it makes our device-verified Komga profile
-(`docs/content/docs/developer/client-verification.mdx`) a full drop-in.
-Dependencies: none.
+Phase 8 (federation via peer tokens) was never started and is carried in
+[Future](#future). Two protocol lanes landed that no phase had asked for: the
+[Audiobookshelf profile](/docs/developer/abs-compat) with the whole
+[audiobook lane](/docs/developer/state#audiobooks), and the first-party
+[KOReader plugin](/docs/developer/koreader-plugin).
 
-## Phase 2 — Remaining crate split
+## Open
 
-Derived from `local://scanner-split-plan.md` (facts with source-line evidence)
-and `.omp/PROJECT_STATE.md`.
+Five items. Nothing else is in flight, and each of these names what it is
+waiting on — none of them is waiting on a design decision.
 
-- Per-file orchestration moves behind the `ScanStore` / `ScanReporter`
-  traits; `stump_watcher` owns notify/debounce/lifecycle behind
-  `WatchedLibraries` and `ScanSubmitter` — neither crate sees `JobContext`,
-  `StumpJob`, `CoreEvent`, or `MemoryStorage`.
-- Jobs, watcher, metadata, and email become Cargo features on `core`
-  (`jobs`, `watcher`, `metadata`, `email`), cutting apalis, notify, and the
-  email/metadata dependency trees from builds that do not need them.
+### 1. Device runs that need hardware or an account we do not have
 
-Rationale: this makes kobo-only and comics-only builds real — `core/Cargo.toml`
-still links PDFium, unrar, apalis, and notify unconditionally — and is a
-precondition for phase 3; PR order/tests: scanner split plan section 4.
+Blocked on physical access, not on code. The **official Audiobookshelf app**
+phone test is the one that matters most, because it is the only way to find out
+what the profile still gets wrong for a non-Lissen client, and it needs the
+socket.io lane (item 4) before bookmarks can work at all
+(`crates/abs/README.md:12`, `docs/audiobook-study.md` §2).
 
-## Phase 3 — Provider host
+The same blocker covers three smaller gaps, all recorded honestly in
+[Current state › verification](/docs/developer/state#verification-per-client): no
+physical Kobo has ever run against `/kobo/{api_key}`; `stump.koplugin` has never
+been loaded by KOReader on a device; and no Kindle mail has ever been delivered
+to a real `@kindle.com` address.
 
-Derived from `docs/content/docs/developer/server-architecture.mdx` and
-`local://feature-gaps.md` (comparator capability table). The provider host is
-a `stump_provider` trait on the Mihon `Source` shape (browse, search, latest,
-details, chapters, page fetch) — not a compat profile.
+### 2. API keys for Hardcover, Metron, Open Library, Google Books
 
-- **Keiyoushi catalog at runtime.** The extension catalog is fetched at
-  runtime and never bundled; sources run on demand. Bundling third-party
-  scraper sources is a hard non-goal.
-- **MangaDex first.** A first provider against the MangaDex API gives the
-  trait a real, non-scraper reference implementation.
-- **Komga/Kavita federation provider.** Existing Komga-compat work is reused
-  as a client-side provider so remote Stump/Komga/Kavita hosts appear as
-  sources.
-- **Page cache / virtual CBZ.** Fetched chapter pages persist as a virtual
-  CBZ so existing archive readers, OPDS, and Kobo delivery work unchanged.
-- **wasmtime sandbox later.** WASM source execution is deferred until the
-  trait and catalog flow are stable.
+The four clients are implemented and unit-tested against recorded payloads, and
+the editor's API-keys page already stores their tokens, but no live request has
+ever been made with a real credential. Until a key exists, their field mappers,
+rate-limit handling and error paths are source-level only
+([Provider status](/docs/developer/provider-status#metadata-providers),
+[Hardcover integration](/docs/developer/hardcover-integration)). User-gated.
 
-Rationale: the fork's differentiating capability (Suwayomi-style source execution inside Stump); depends on phase 2 (feature-gated core).
+### 3. Coppice rename and the upstream split
 
-## Phase 4 — Comics-for-Kobo transform pipeline
+Rename the fork to **Coppice** (product and repository name; binary and package
+names follow later) and split the fork-local additive work into separate
+upstreamable PRs against `stumpapp/stump` nightly — core lifecycle and
+feature-gate changes first, then the protocol profiles (`komga`, `kavita`,
+`kobo`, `koreader`, `liseur-sync`, `abs`, `kindle`), then the provider host with
+its theme engines, then ingest and tools. **User-gated, not started**: the name
+appears nowhere in the tree, and `.github/CONTRIBUTING.md` still describes the
+unchanged upstream flow. Sequencing rationale:
+[incremental upstream PR sequence](/docs/developer/server-architecture#incremental-upstream-pr-sequence).
 
-Derived from `docs/content/docs/developer/kobo-sync-capabilities.mdx` and
-`docs/content/docs/developer/kobo-device-database.mdx`.
+### 4. ABS socket.io lane — in flight
 
-Kobo devices have no WebP decoding; comics are typically WebP. The pipeline
-transforms delivered files per device profile: grayscale JPEG re-encode,
-per-device resolution profiles, and fixed-layout KEPUB output (the current
-KEPUB path targets reflowable EPUB; full `kepubify` parity is a listed future
-item there). Rationale: makes comics readable on Kobo hardware. Dependencies:
-phase 2 (transform as a feature-gated job) and the Kobo delivery path in
-`apps/server/src/routers/kobo_backend/`.
+The Engine.IO v4 / Socket.IO v5 lane is **not** in `7de64602`. The protocol is
+pinned in `docs/audiobook-study.md` §2 (Socket.IO protocol revision 5,
+Engine.IO revision 4, path `/socket.io`, plus a second server under a
+router base path), and the official ABS app makes bookmarks unreachable without
+it, while Lissen needs none of it. Implementation is under way in this batch;
+the contract lives in [ABS compatibility](/docs/developer/abs-compat).
 
-## Phase 5 — Native Rust metadata engine
+### 5. Ebook ↔ audiobook sync — design accepted, not implemented
 
-Derived from `local://komf-compat-study.md` and
-`docs/content/docs/developer/modular-ingest.mdx` (staged ingest proposal).
+`reading_heads` can hold a locator *or* a millisecond offset (`m20260933`), so
+both position kinds already round-trip on their own protocols. What does not
+exist is a conversion between them: switching from reading to listening does not
+move the head. The design is settled and written up in
+[Read-aloud, remote workers, and requests](/docs/developer/read-aloud) — tier 1
+is chapter + percentage and free, tier 2 is forced alignment on a remote worker
+rendered as a Storyteller-compatible EPUB 3 Media Overlays publication on
+demand, and the remote-worker protocol (`crates/worker`, `worker_jobs`, workers
+dialling *out* over one WebSocket) plus the requests model come with it. Nothing
+in that page exists in the tree except the pieces it marks *exists*.
 
-After Komf compatibility works, replace reliance on the external Komf process
-with a native engine following Komf's provider model (per-provider search,
-match scoring, metadata apply in API or ComicInfo mode). The existing
-`crates/integrations/metadata/` provider cache and rate limiter are the
-starting point; books/comics engine separation is as proposed in the
-modular-ingest doc. Dependencies: phases 1 (wire contract proven) and 2
-(metadata feature gate).
+Implementation order, from
+[§9 of that page](/docs/developer/read-aloud#9-implementation-order):
 
-## Phase 6 — Kavita client profile
+1. `pair_editions` + `media_chapter_map` + read-time position conversion
+   (tier 1) — `crates/library`, `models::domain::reading_state`, console
+   "Also available as".
+2. Worker protocol + `crates/worker` + `worker_jobs` + console Workers page,
+   with `transcode` first because it has a local fallback and is testable
+   without a GPU.
+3. `align` job kind + the aligner container + `media_sync_maps` +
+   `Media.syncMap`.
+4. On-demand read-aloud EPUB route + OPDS link + console highlighting.
+5. `requests` table + Requests page + provider-host auto-fulfilment.
+6. Storyteller app profile (`crates/storyteller`), evidence-first like ABS.
 
-Derived from `local://kavita-profile-study.md` (Kavita pinned at
-`d77d956b9551227d8be2ee488b08f14aa3a341e5`). The `/api` contract with
-`x-api-key` auth covers browse, reader, progress, and download for all five
-inspected Kavita clients. The core S profile is practical; annotations are
-read-only in Inkita only and lossy to map, so annotation write parity is out
-of scope for this phase. Dependencies: none hard; benefits from phase 2
-identity/translation work.
+## Future
 
-## Phase 7 — First-party Mihon extension
+Unordered, unscheduled, and some of these will end up non-goals. Peer-shipped
+items name the peer, because that peer's *behaviour* is the specification to
+read — never its code: BookOrbit and Grimmory are AGPL-3.0 and this tree is MIT.
+Every cell behind them is cited in [Feature comparison](/docs/developer/comparison).
 
-Derived from `docs/content/docs/developer/client-verification.mdx` (Mihon is
-currently verified only as a Komga client) and the phase 3 provider host. A
-first-party Mihon extension talks to a Stump-specific endpoint, bypassing the
-Komga compat layer where it limits us (e.g. unified reading state projections
-from `docs/content/docs/developer/unified-reading-state.mdx`).
-Dependencies: phase 3.
+### Peers ship it, we do not
 
-## Phase 8 — Federation via peer tokens
-
-Derived from `docs/content/docs/developer/server-architecture.mdx` (remote
-worker / second-brain proposal) and `local://feature-gaps.md`. Stump instances
-grant each other scoped access with peer tokens: a remote host's provider
-(phase 3 federation provider) authenticates with a revocable token, not a user
-account. No ActivityPub — federation is token-scoped API access between
-willing peers. Dependencies: phases 3 and 6.
-
-## Phase 9 — Deferred operations work
-
-Derived from `.omp/NEXT_STEPS.md` and `local://feature-gaps.md` (robustness
-table); deliberately last, none block the phases above.
-
-- **Rate limiting** on inbound API routes (login, media, protocol endpoints —
-  provider-only throttling already exists in
-  `crates/integrations/metadata/src/rate_limit.rs`).
-- **CI matrix** for `minimal`, `headless+liseur-sync`, full/default, and
-  compatibility replay (`.github/workflows/ci.yaml` currently runs default
-  checks only).
-- **Backups/metrics**: backup/restore surface, `/metrics` or OpenTelemetry
-  export, and dependency-specific readiness checks.
-
-## Gaps vs peers
-
-Derived from [Feature comparison](/docs/developer/comparison), which cites a
-file:line for every claim about this fork and a URL for every competitor
-claim. These are candidate items, unordered and unprioritised: nothing here is
-scheduled, and some may end up as non-goals. Each names the peer that already
-ships it, because that peer's behaviour is the specification to read — never
-its code, since BookOrbit and Grimmory are AGPL-3.0 and this tree is MIT.
-
-Missing:
-
-- **Audiobook formats (M4B/MP3/OPUS).** No audio processor exists in
-  `stump_media` (`crates/README.md:29`). Peers: BookOrbit, Grimmory,
-  Audiobookshelf.
-- **Web audio player.** The reader set is ebook, image, PDF
-  (`docs/content/docs/apps/web/readers.mdx:5-38`). Depends on the format work
-  above. Peers: BookOrbit, Grimmory, Audiobookshelf.
-- **First-party KOReader plugin.** We serve the kosync API
-  (`docs/content/docs/developer/provider-status.mdx:174-180`) and ship a Kobo
-  Nickel plugin (`docs/content/docs/developer/platforms.mdx:52`), but nothing
-  runs inside KOReader — so no highlights, no device sweep, no in-reader
-  catalog. Peers: BookOrbit, Calibre-Web Automated.
-- **Achievements.** The home app has devices, reading, account
-  (`docs/content/docs/developer/home-app.mdx:47-52`). Peer: BookOrbit.
-
-Partial:
-
-- **Kavita profile beyond wave 1** (`docs/content/docs/developer/kavita-compat.mdx:6`)
-  — already tracked as phase 6.
-- **Per-field metadata provider rules and merge.** Provider priority per field,
-  title-language preference, and cover policy are unimplemented
-  (`docs/content/docs/developer/provider-status.mdx:65-70`) — the policy half of
-  phase 5. Peer: BookOrbit.
-- **Bulk metadata edit outside ingest.** `bulkApplyIngestMetadata` only touches
-  staged drop items (`docs/content/docs/developer/state.mdx:37`). Peer:
+- **Achievements.** The console nav is Dashboard, Library, Reading, Annotations,
+  Devices, Account (`docs/content/docs/developer/home-app.mdx:64`). Peer:
+  BookOrbit.
+- **Configurable dashboard.** `/dashboard` is a fixed composition — stat cards,
+  a 53-week heatmap, continue-reading and recently-added shelves, device sync,
+  job queue — with no user-arranged widgets
+  (`docs/content/docs/developer/home-app.mdx:49`). Peers: BookOrbit, Kavita,
   Calibre-Web Automated.
+- **Bulk metadata edit outside ingest.** `bulkApplyIngestMetadata` still only
+  touches staged drop items. Peer: Calibre-Web Automated.
 - **One annotation model.** Native rows and liseur CAS rows are stored side by
-  side and never reconciled
-  (`docs/content/docs/developer/provider-status.mdx:245`). Peer: BookOrbit,
-  which also records per-format positions and a repair state.
-- **Cross-book annotation workspace.** Annotations exist in the `full` web
-  reader (`docs/content/docs/apps/web/readers.mdx:11`); there is no search,
-  filter, or bulk surface over all books. Peers: BookOrbit, Kavita.
-- **Configurable dashboard.** One reading screen exists
-  (`docs/content/docs/developer/home-app.mdx:51`). Peers: BookOrbit, Kavita,
-  Calibre-Web Automated.
+  side and surfaced together in the annotation hub, but never reconciled into a
+  single head with a repair state. Peer: BookOrbit.
+- **Calibre-Web facade for Liseur.** No `/opds/...` web-form contract and no
+  Calibre-Web login/token/delete lane
+  ([Liseur providers](/docs/developer/liseur-providers)).
+
+### Engineering carried forward
+
+- **Metadata post-processing** (the tail of phase 5): title-language selection,
+  book ordering, score tags, publisher tag names, and actually writing the
+  chosen cover — `CoverUrl` is outside `STORABLE_FIELDS`, so today's decision
+  returns `applied: false`.
+- **Processor-sized Cargo features** (the tail of phase 2): `metadata`, `email`,
+  and a `pdf-render` split, so a kobo-only or comics-only build stops linking
+  PDFium, unrar and the metadata tree.
+- **Federation via peer tokens** (phase 8) and the **Komga/Kavita federation
+  provider** (the unstarted half of phase 3): a remote host authenticates with a
+  revocable scoped token, not a user account. No ActivityPub.
+- **wasmtime source sandbox**, deferred until the definition schema and catalog
+  flow stop moving.
+- **Operations**: a `/metrics` or OpenTelemetry export, a backup/restore
+  surface, dependency-specific readiness, and a CI profile matrix for `minimal`,
+  `headless,liseur-sync`, default, and a compatibility replay
+  (`.github/workflows/ci.yaml` still runs default checks only).
+- **CBZ KOReader hash**, still commented out in
+  `crates/media/src/media/format/zip.rs:61,68-75`.
+- **A liseur-sync attachment blob route**: Kobo markup snapshots and notebooks
+  are described (id, anchor, sha256) but not transported, which is a protocol
+  change to design rather than an omission to fix.
 
 ## Non-goals
 
-Explicitly out of scope for this fork; do not open tracks for them.
+Explicitly out of scope; do not open tracks for them.
 
-- **ActivityPub federation.** Peer-token API access (phase 8) is the whole
-  federation story.
-- **Full Komga API parity.** The Komelia/Mihon target profile
-  (`docs/content/docs/developer/komga-compat.mdx`) is the contract; persisted
-  settings, artwork CRUD, and event parity beyond Komf's needs are not goals.
-- **Upstream PRs for now.** Fork-local changes may diverge from upstream
-  Stump; contribution is deferred until phases 2–3 settle.
+- **ActivityPub federation.** Peer-token API access is the whole federation
+  story.
+- **Full Komga API parity.** The Komelia/Mihon target profile is the contract;
+  persisted settings, artwork CRUD, and event parity beyond Komf's needs are not
+  goals ([Komga compatibility](/docs/developer/komga-compat)).
+- **DRM removal.** Detection only (`drm_protected`, weight 0, non-blocking);
+  the study is `docs/drm-study.md` and the verdict stands.
+- **Bundling third-party scraper sources.** The catalog is fetched at runtime;
+  no extension code, Kotlin, or APK is ever executed
+  ([Source definitions](/docs/developer/source-definitions)).
+- **Any GPL/AGPL code in tree.** Calibre is shell-out only; peer behaviour and
+  published specs are the only thing read from BookOrbit, Grimmory, cbzit,
+  MangaManager, Sigil or DeDRM.

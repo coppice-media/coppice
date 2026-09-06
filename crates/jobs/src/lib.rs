@@ -8,6 +8,8 @@
 //!
 //! With the `apalis` feature (default) the executor is a single Apalis worker over an in-memory
 //! queue; without it an inline executor runs queued jobs serially on the Tokio blocking pool.
+//!
+//! See `crates/jobs/README.md` for the crate contract and decisions.
 
 #[cfg(feature = "apalis")]
 mod apalis_executor;

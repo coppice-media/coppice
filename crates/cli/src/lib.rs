@@ -1,3 +1,7 @@
+//! Stump's operator CLI: the `stump` clap root plus the `account`, `system`
+//! and `tools` subcommand trees. See `crates/cli/README.md` for the crate
+//! contract and decisions.
+
 #![warn(clippy::dbg_macro)]
 
 mod commands;

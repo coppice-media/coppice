@@ -22,7 +22,7 @@ stays in `core/src/filesystem/`, and the scanner walker lives in
 | Upstream Stump `core/src/filesystem/*` | `stumpapp/stump` nightly merge `37fdb7d7` (PR #1361) | Every `src/**/*.rs` here is an R100 move of `core/src/filesystem/<same relative path>` in `b068deb9` (`git log --follow --name-status -- crates/media/src/<file>`); `27764cf5` added `lib.rs`/`MediaConfig`, the features, and `integration-tests/data`; `859ac022` (Komf) touched it last |
 | KOReader partial MD5 | https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/frontend/util.lua#L1109-L1125; test vectors `spec/unit/util_spec.lua#L338-L345` at the same commit | `generate_koreader_hash` must keep producing KOReader's document identity (`src/hash.rs:62-99,117-130`) |
 | Readium Web Publication Manifest | `src/media/readium.rs` | Manifest, positions, `/resource/` URL encoding consumed by `apps/server` readium routes and the Komga/Kavita adapters |
-| PDFium | `pdfium-render 0.9.1` (`Cargo.toml:28`), library loaded from `MediaConfig.pdfium_path` (`PDFIUM_PATH`) | Only PDF backend; see `docs/content/docs/developer/server-architecture.mdx:239-243` |
+| PDFium | `pdfium-render 0.9.1` (`Cargo.toml:28`), library loaded from `MediaConfig.pdfium_path` (`PDFIUM_PATH`) | Only PDF backend; see `docs/content/docs/developer/server-architecture.mdx` (§ "Metadata and PDF caveats" → "PDF") |
 | DRM/encryption markers | EPUB 3.3 §4.2.6.3.2 / §4.4.5 <https://www.w3.org/TR/epub-33/>; epubcheck `OCFEncryptionFileHandler` <https://github.com/w3c/epubcheck>; MobileRead <https://wiki.mobileread.com/wiki/MOBI> and <https://wiki.mobileread.com/wiki/PDB>; ISO 32000-1 §7.5.5; DeDRM_tools `v10.0.3` (`epubtest.py` is Unlicense) | Documented byte/path markers only, reimplemented in `src/drm.rs`; no GPL code is copied and nothing here decrypts anything. Prose in `docs/content/docs/developer/calibre-tooling.mdx` |
 | MOBI / KF8 | MobileRead <https://wiki.mobileread.com/wiki/MOBI>, <https://wiki.mobileread.com/wiki/PDB>, <https://wiki.mobileread.com/wiki/PalmDOC>, <https://wiki.mobileread.com/wiki/KF8>; HUFF/CDIC and KF8 skeleton/fragment notes from Kindling's `README.md` (MIT, <https://github.com/ciscoriordan/kindling>, linked from the MobileRead MOBI page as further format documentation) | `src/media/format/mobi.rs` is clean-room from those descriptions plus the record bytes of the committed fixtures; nothing is derived from calibre, KindleUnpack, libmobi or boko, and every structure cites the page it comes from |
 
@@ -32,7 +32,7 @@ stays in `core/src/filesystem/`, and the scanner walker lives in
 | --- | --- | --- |
 | `TransformProfile` carries an `audio: AudioProfile` section whose `output` is `Passthrough` (default) or `Opus { bitrate }`, with its own `AudioProfile::digest()` | Audio delivery is per device like page delivery, so it belongs on the same profile; a separate digest lets two devices whose page settings differ but whose audio matches share one transcode. Adding the field changed `TransformProfile::digest()`, so existing comic cache entries miss once and rebuild | `src/transform/profile.rs`; `TransformCache::audio_path_for`; tests `audio_defaults_to_passthrough_everywhere`, `digest_separates_audio_outputs` |
 | Opus is a delivery preset only — never a value `STUMP_AUDIO_CANONICAL` accepts — and its bitrate is parsed and bounded to 500..=512000 bit/s in `from_device_profile` | An unparseable `-b:a` would otherwise surface as a failed `ffmpeg` child once per track request, long after the profile was stored; a stored-Opus option would make the archive copy depend on which device asked first | `AudioProfile::validate`, `parse_bitrate`; `core/src/config/audio.rs` `validate_audio_canonical`; test `device_profile_rejects_an_unusable_opus_bitrate` |
-| Processors take an immutable `MediaConfig` snapshot instead of `StumpConfig`/`Ctx` | Paths (`cache`, `thumbnails`, `cache/pdf_pages`) are resolved once in `from_values`; per-call code neither clones config nor rebuilds paths; crate compiles without core | `src/lib.rs:137-203`; `docs/content/docs/developer/server-architecture.mdx:133` |
+| Processors take an immutable `MediaConfig` snapshot instead of `StumpConfig`/`Ctx` | Paths (`cache`, `thumbnails`, `cache/pdf_pages`) are resolved once in `from_values`; per-call code neither clones config nor rebuilds paths; crate compiles without core | `src/lib.rs:137-203`; `docs/content/docs/developer/server-architecture.mdx` (§ "Package seams" → `stump_media`) |
 | `pdf` and `rar` are Cargo features (default on) rather than runtime switches | They remove `pdfium-render`/`unrar` from the build; core and server forward them (`stump_core/pdf`, `stump_media/pdf`, ...) | `Cargo.toml:5-9,28,43`; `core/Cargo.toml:13-14`; `apps/server/Cargo.toml:13-15` |
 | Feature-off dispatch returns typed errors, not panics | `Rar` → `FileError::UnsupportedFileType("RAR support is disabled")`, `Pdf` → `FileError::PdfConfigurationError`; verified by `feature_gate_tests` | `src/media/process.rs:190-220`; `src/media/process.rs` `feature_gate_tests`; `src/error.rs:24-56` |
 | `models` with `default-features = false` | `models` only has the optional `graphql` feature; a leaf crate must not pull `async-graphql` | `Cargo.toml:26`; `crates/models/Cargo.toml:5-10` |
@@ -91,8 +91,8 @@ Consumers (all `default-features = false`, forwarding `pdf`/`rar`):
 ## How to verify
 
 ```text
-cargo test -p stump_media                          # 134 tests with default features (state.mdx:44)
-cargo test -p stump_media --no-default-features    # 121 tests; feature_gate_tests assert the typed errors
+cargo test -p stump_media                          # default features: pdf, rar, turbojpeg, fast-resize, kepub
+cargo test -p stump_media --no-default-features    # feature_gate_tests assert the typed errors
 cargo test -p stump_media --no-default-features --features pdf
 cargo test -p stump_media --no-default-features --features rar
 cargo test -p stump_media --no-default-features --lib drm   # 23 DRM-detector tests, synthetic fixtures only
@@ -111,7 +111,7 @@ exercise page/thumbnail/manifest delivery through the Komga adapter.
 ## Deep docs
 
 - `docs/content/docs/developer/server-architecture.mdx` (crate boundary, PDFium notes).
-- `docs/content/docs/developer/state.mdx:44` (test counts), `sync-platforms.mdx:32-34,129` and `provider-status.mdx:140-146` (KOReader hash compatibility).
+- `docs/content/docs/developer/state.mdx` (§ "Gate at this commit" — workspace gate totals), `sync-platforms.mdx:32-34,129` and `provider-status.mdx:140-146` (KOReader hash compatibility).
 - `docs/content/docs/guides/fundamentals/thumbnails.mdx` (ThumbHash/colour placeholders).
 - `docs/content/docs/guides/fundamentals/audiobooks.mdx` (accepted extensions, folder-book detection, track order, the `chapter_source` provenance table, publication-relative milliseconds).
 - Upstream source at the pinned base: `https://github.com/stumpapp/stump/tree/37fdb7d7/core/src/filesystem`.

@@ -1,3 +1,7 @@
+//! Derive macros for the SeaORM/GraphQL query surface: `Ordering` and `IntoFilter`.
+//!
+//! See `crates/macros/filter-gen/README.md` for the crate contract and decisions.
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{parse_macro_input, DeriveInput};
