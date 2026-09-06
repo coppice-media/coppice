@@ -8,15 +8,27 @@
 //! Chapters the source cannot serve ([`RemoteChapter::readable`] `== false`)
 //! are skipped and reported instead: writing a row for one only produces a
 //! book whose every page 404s.
+//!
+//! A refresh also reconciles in the other direction: a stored chapter the
+//! source has since stopped serving is hidden (`media.deleted_at`, the
+//! tombstone every lane filters on), so a series materialised before this
+//! rule — or before the source retracted the chapter — stops advertising
+//! books that cannot be opened, without losing the progress recorded
+//! against them. Because a feed can lie about what it will serve, the
+//! refresh verifies a budget of rows against the page manifest as well; see
+//! [`verify_stored_chapters`].
 
+use std::collections::BTreeSet;
+
+use chrono::Utc;
 use models::{
 	entity::{media, media_metadata, series, series_metadata},
 	shared::enums::FileStatus,
 };
 use rust_decimal::Decimal;
 use sea_orm::{
-	ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait,
-	QueryFilter, QuerySelect,
+	prelude::DateTimeWithTimeZone, sea_query::Expr, ActiveModelTrait, ActiveValue::Set,
+	ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 
 use crate::{
@@ -82,10 +94,21 @@ pub struct Materialized {
 	pub created: Vec<media::Model>,
 	/// Chapters already present before this run.
 	pub existing: usize,
-	/// Chapters the source cannot serve, in remote order. Never written as
-	/// rows; a series whose whole feed is unreadable materialises with no
-	/// books and every skip listed here.
+	/// Chapters the source's own feed flags as unserveable, in remote order.
+	/// Never written as rows; a series whose whole feed is unreadable
+	/// materialises with no books and every skip listed here.
 	pub skipped: Vec<SkippedChapter>,
+	/// `media` ids hidden (`media.deleted_at`) because the source will not
+	/// serve the chapter: the feed flagged it, or the page manifest 404'd
+	/// under verification. Series materialised before this rule — or before
+	/// the source retracted a chapter — carry rows whose every page 404s;
+	/// a refresh takes them out of every listing while keeping the reading
+	/// progress recorded against them.
+	pub removed: Vec<String>,
+	/// `media` ids listed again because the source serves the chapter after
+	/// all. Only a resolved page manifest restores a row; the feed calling
+	/// a chapter readable is never enough.
+	pub restored: Vec<String>,
 	/// The cross-source duplicate this series was linked to, when the same
 	/// work already existed from another source; see [`crate::identity`].
 	pub duplicate_of: Option<String>,
@@ -123,19 +146,24 @@ pub async fn add_series(
 		crate::identity::record_identity(conn, &series_row, source_id, &details)
 			.await?
 			.map(|link| link.canonical_series_id);
-	let (created, existing, skipped) =
+	let (created, existing, skipped, declared) =
 		insert_chapters(conn, &series_row, source_id, remote_id, &chapters).await?;
-	if !skipped.is_empty() {
+	let (proven, restored) =
+		verify_stored_chapters(host, &series_row.id, source_id, &chapters).await?;
+	let removed = declared.into_iter().chain(proven).collect::<Vec<_>>();
+	if !skipped.is_empty() || !removed.is_empty() || !restored.is_empty() {
 		tracing::info!(
 			series = series_row.id,
 			source = source_id,
 			skipped = skipped.len(),
+			removed = removed.len(),
+			restored = restored.len(),
 			readable = chapters.len() - skipped.len(),
 			reasons = ?skipped
 				.iter()
 				.map(|skip| skip.reason.as_str())
-				.collect::<std::collections::BTreeSet<_>>(),
-			"Skipped chapters the source cannot serve"
+				.collect::<BTreeSet<_>>(),
+			"Reconciled chapters against what the source can serve"
 		);
 	}
 	Ok(Materialized {
@@ -143,6 +171,8 @@ pub async fn add_series(
 		created,
 		existing,
 		skipped,
+		removed,
+		restored,
 		duplicate_of,
 	})
 }
@@ -268,36 +298,71 @@ pub fn age_rating(details: &RemoteSeries, adult_source: bool) -> Option<i32> {
 	details.content_rating.and_then(ContentRating::age_rating)
 }
 
+/// A chapter of this series that already has a `media` row.
+struct KnownChapter {
+	id: String,
+	chapter: String,
+	/// The row is a tombstone (`media.deleted_at`): stored, keyed by the
+	/// same id, but listed by nothing.
+	hidden: bool,
+}
+
 async fn insert_chapters<C: ConnectionTrait>(
 	conn: &C,
 	series_row: &series::Model,
 	source_id: &str,
 	remote_id: &str,
 	chapters: &[RemoteChapter],
-) -> Result<(Vec<media::Model>, usize, Vec<SkippedChapter>), ProviderError> {
-	let known: Vec<String> = media::Entity::find()
+) -> Result<(Vec<media::Model>, usize, Vec<SkippedChapter>, Vec<String>), ProviderError> {
+	// Every chapter already stored, with its row id and whether that row is
+	// already hidden: a chapter the source has stopped serving has to be
+	// *found*, not merely recognised.
+	let known: Vec<KnownChapter> = media::Entity::find()
 		.select_only()
+		.column(media::Column::Id)
 		.column(media::Column::RemoteChapterId)
+		.column(media::Column::DeletedAt)
 		.filter(media::Column::SeriesId.eq(series_row.id.clone()))
 		.filter(media::Column::SourceProvider.eq(source_id))
-		.into_tuple::<Option<String>>()
+		.into_tuple::<(String, Option<String>, Option<DateTimeWithTimeZone>)>()
 		.all(conn)
 		.await?
 		.into_iter()
-		.flatten()
+		.filter_map(|(id, chapter, deleted_at)| {
+			chapter.map(|chapter| KnownChapter {
+				id,
+				chapter,
+				hidden: deleted_at.is_some(),
+			})
+		})
 		.collect();
 	let mut created = Vec::new();
 	let mut existing = 0usize;
 	let mut skipped = Vec::new();
+	let mut removed = Vec::new();
 	for chapter in chapters {
 		if let Some(reason) = SkipReason::of(chapter) {
 			skipped.push(SkippedChapter {
 				remote_id: chapter.remote_id.clone(),
 				reason,
 			});
+			// Rematerialise: a row written before the source retracted this
+			// chapter (or before unreadable chapters were skipped at all) is
+			// a book whose every page 404s and whose stale `pages` count
+			// still promises otherwise. Hide it.
+			if let Some(stored) = known
+				.iter()
+				.find(|stored| stored.chapter == chapter.remote_id)
+				.filter(|stored| !stored.hidden)
+			{
+				removed.push(stored.id.clone());
+			}
 			continue;
 		}
-		if known.iter().any(|id| id == &chapter.remote_id) {
+		if known
+			.iter()
+			.any(|stored| stored.chapter == chapter.remote_id)
+		{
 			existing += 1;
 			continue;
 		}
@@ -357,7 +422,142 @@ async fn insert_chapters<C: ConnectionTrait>(
 		.await?;
 		created.push(row);
 	}
-	Ok((created, existing, skipped))
+	hide(conn, &removed).await?;
+	Ok((created, existing, skipped, removed))
+}
+
+/// Hide the rows the source can no longer serve.
+///
+/// A tombstone (`media.deleted_at`), not a delete: every lane already
+/// filters `deleted_at IS NULL`, so the book stops being listed anywhere,
+/// while reading progress, bookmarks, and annotations keyed on the id
+/// survive — and the row stays known, so a feed that still advertises the
+/// chapter cannot resurrect it on the next refresh.
+async fn hide<C: ConnectionTrait>(conn: &C, ids: &[String]) -> Result<(), ProviderError> {
+	if ids.is_empty() {
+		return Ok(());
+	}
+	let now = Utc::now().fixed_offset();
+	media::Entity::update_many()
+		.col_expr(media::Column::DeletedAt, Expr::value(now))
+		.col_expr(media::Column::UpdatedAt, Expr::value(now))
+		.filter(media::Column::Id.is_in(ids.to_vec()))
+		.exec(conn)
+		.await?;
+	Ok(())
+}
+
+/// Undo [`hide`] for a chapter the source serves again.
+async fn unhide<C: ConnectionTrait>(conn: &C, id: &str) -> Result<(), ProviderError> {
+	media::Entity::update_many()
+		.col_expr(
+			media::Column::DeletedAt,
+			Expr::value(None::<DateTimeWithTimeZone>),
+		)
+		.col_expr(
+			media::Column::UpdatedAt,
+			Expr::value(Utc::now().fixed_offset()),
+		)
+		.filter(media::Column::Id.eq(id))
+		.exec(conn)
+		.await?;
+	Ok(())
+}
+
+/// Record that a row was re-checked and found unchanged. `updated_at` is the
+/// cursor [`verify_stored_chapters`] walks, so it has to move even when
+/// nothing else does.
+async fn touch<C: ConnectionTrait>(conn: &C, id: &str) -> Result<(), ProviderError> {
+	media::Entity::update_many()
+		.col_expr(
+			media::Column::UpdatedAt,
+			Expr::value(Utc::now().fixed_offset()),
+		)
+		.filter(media::Column::Id.eq(id))
+		.exec(conn)
+		.await?;
+	Ok(())
+}
+
+/// How many stored chapters one refresh re-checks against the source.
+const VERIFY_PER_REFRESH: usize = 16;
+
+/// Re-check stored chapters against the page manifest, the only authority on
+/// whether a chapter can actually be read.
+///
+/// A feed can list a chapter its own source will not serve: MangaDex reports
+/// `pages: 14, externalUrl: null, isUnavailable: false` for One Piece
+/// ch. 1191 while `/at-home/server/391c1555-…` answers
+/// `404 Chapter with ID … not found`. [`SkipReason`] cannot see that, so a
+/// refresh also asks for the manifest — one request per chapter, hence the
+/// [`VERIFY_PER_REFRESH`] budget, spent on the least recently checked rows
+/// (`updated_at`, bumped on every check) so successive refreshes walk the
+/// whole series.
+///
+/// Returns `(hidden, restored)`.
+async fn verify_stored_chapters(
+	host: &ProviderHost,
+	series_id: &str,
+	source_id: &str,
+	chapters: &[RemoteChapter],
+) -> Result<(Vec<String>, Vec<String>), ProviderError> {
+	let readable: BTreeSet<&str> = chapters
+		.iter()
+		.filter(|chapter| SkipReason::of(chapter).is_none())
+		.map(|chapter| chapter.remote_id.as_str())
+		.collect();
+	let stored: Vec<(String, Option<String>, Option<DateTimeWithTimeZone>)> =
+		media::Entity::find()
+			.select_only()
+			.column(media::Column::Id)
+			.column(media::Column::RemoteChapterId)
+			.column(media::Column::DeletedAt)
+			.filter(media::Column::SeriesId.eq(series_id))
+			.filter(media::Column::SourceProvider.eq(source_id))
+			.order_by_asc(media::Column::UpdatedAt)
+			.into_tuple()
+			.all(host.conn())
+			.await?;
+	let mut hidden = Vec::new();
+	let mut restored = Vec::new();
+	let mut checked = 0usize;
+	for (id, chapter, deleted_at) in stored {
+		if checked >= VERIFY_PER_REFRESH {
+			break;
+		}
+		// A chapter the feed itself calls unreadable was already answered
+		// for; spending a request on it would prove nothing.
+		let Some(chapter) = chapter.filter(|stored| readable.contains(stored.as_str()))
+		else {
+			continue;
+		};
+		checked += 1;
+		match host.verify_chapter(source_id, &chapter).await {
+			Ok(()) if deleted_at.is_some() => {
+				unhide(host.conn(), &id).await?;
+				restored.push(id);
+			},
+			Err(ProviderError::Unavailable { .. }) if deleted_at.is_none() => {
+				hide(host.conn(), std::slice::from_ref(&id)).await?;
+				hidden.push(id);
+			},
+			Ok(()) | Err(ProviderError::Unavailable { .. }) => {
+				touch(host.conn(), &id).await?;
+			},
+			// A transport failure says nothing about the chapter, and a
+			// source that is down will fail the next fifteen the same way.
+			Err(error) => {
+				tracing::warn!(
+					?error,
+					source = source_id,
+					chapter,
+					"Stopped verifying chapter availability"
+				);
+				break;
+			},
+		}
+	}
+	Ok((hidden, restored))
 }
 
 #[cfg(test)]
@@ -376,8 +576,8 @@ mod tests {
 	use crate::{
 		host::{ProviderHostConfig, VirtualArchive},
 		mock::{
-			MockSource, ALPHA_CHAPTERS, BETA_CHAPTERS, MOCK_SOURCE_ID,
-			PAGES_PER_CHAPTER, SERIES_ALPHA, SERIES_BETA,
+			MockSource, ALPHA_CHAPTERS, BETA_CHAPTERS, MOCK_SOURCE_ID, PAGES_PER_CHAPTER,
+			SERIES_ALPHA, SERIES_BETA,
 		},
 		source::ContentRating,
 	};
@@ -502,7 +702,9 @@ mod tests {
 		);
 
 		// A re-run reports the same skips rather than accumulating rows.
-		let again = refresh_series(&host, &materialized.series.id).await.unwrap();
+		let again = refresh_series(&host, &materialized.series.id)
+			.await
+			.unwrap();
 		assert!(again.created.is_empty());
 		assert_eq!(again.skipped.len(), BETA_CHAPTERS.len());
 
@@ -512,6 +714,138 @@ mod tests {
 			.unwrap();
 		assert_eq!(alpha.created.len(), ALPHA_CHAPTERS.len());
 		assert!(alpha.skipped.is_empty());
+	}
+
+	/// Skipping unreadable chapters only fixes new materialisations. A series
+	/// materialised before the rule — or before the source retracted a
+	/// chapter — keeps rows whose `pages` count promises images the page
+	/// manifest now 404s on, which is what "One Piece shows 14 pages on an
+	/// unavailable chapter" looked like. A refresh has to take them out of
+	/// every listing.
+	#[tokio::test]
+	async fn refresh_hides_rows_for_chapters_the_source_stopped_serving() {
+		let (host, source, _dir) = host(u64::MAX).await;
+		let library = library(host.conn()).await;
+
+		let materialized = add_series(&host, &library.id, MOCK_SOURCE_ID, SERIES_ALPHA)
+			.await
+			.unwrap();
+		assert_eq!(materialized.created.len(), ALPHA_CHAPTERS.len());
+		assert!(materialized.removed.is_empty());
+		let mut stale_ids = materialized
+			.created
+			.iter()
+			.map(|row| row.id.clone())
+			.collect::<Vec<_>>();
+		stale_ids.sort();
+
+		// An unchanged feed hides nothing: `removed` is a reconciliation
+		// result, not a refresh side effect.
+		let unchanged = refresh_series(&host, &materialized.series.id)
+			.await
+			.unwrap();
+		assert!(unchanged.removed.is_empty());
+		assert_eq!(unchanged.existing, ALPHA_CHAPTERS.len());
+
+		source.set_chapters_retracted(true);
+		let refreshed = refresh_series(&host, &materialized.series.id)
+			.await
+			.unwrap();
+
+		let mut removed = refreshed.removed.clone();
+		removed.sort();
+		assert_eq!(
+			removed, stale_ids,
+			"every stored row for a now-unreadable chapter is hidden"
+		);
+		assert_eq!(refreshed.skipped.len(), ALPHA_CHAPTERS.len());
+		assert!(refreshed.created.is_empty(), "nothing is re-inserted");
+		assert_eq!(
+			listed_books(&host, &materialized.series.id).await,
+			0,
+			"the series stops advertising books it cannot serve"
+		);
+		assert_eq!(
+			media::Entity::find()
+				.filter(media::Column::Id.is_in(stale_ids.clone()))
+				.count(host.conn())
+				.await
+				.unwrap(),
+			ALPHA_CHAPTERS.len() as u64,
+			"the rows survive as tombstones, so progress keyed on them does too"
+		);
+
+		// The feed alone cannot resurrect them; the manifest has to resolve.
+		source.set_chapters_retracted(false);
+		let recovered = refresh_series(&host, &materialized.series.id)
+			.await
+			.unwrap();
+		let mut restored = recovered.restored.clone();
+		restored.sort();
+		assert_eq!(restored, stale_ids);
+		assert!(
+			recovered.created.is_empty(),
+			"a restored chapter keeps its original id"
+		);
+		assert_eq!(
+			listed_books(&host, &materialized.series.id).await,
+			ALPHA_CHAPTERS.len() as u64
+		);
+	}
+
+	/// The One Piece case exactly: the feed still reports the chapter as
+	/// readable (`pages: 14`, no `externalUrl`, `isUnavailable: false`) while
+	/// the page manifest answers 404. Flags cannot see that, so a refresh
+	/// re-asks the source and hides what it will not serve.
+	#[tokio::test]
+	async fn refresh_hides_a_chapter_the_feed_still_calls_readable() {
+		let (host, source, _dir) = host(u64::MAX).await;
+		let library = library(host.conn()).await;
+		let materialized = add_series(&host, &library.id, MOCK_SOURCE_ID, SERIES_ALPHA)
+			.await
+			.unwrap();
+		let withheld = virtual_path::media_id(MOCK_SOURCE_ID, ALPHA_CHAPTERS[0]);
+
+		source.withhold_pages(ALPHA_CHAPTERS[0]);
+		let refreshed = refresh_series(&host, &materialized.series.id)
+			.await
+			.unwrap();
+
+		assert!(
+			refreshed.skipped.is_empty(),
+			"the feed never admits this one is unreadable"
+		);
+		assert_eq!(
+			refreshed.removed,
+			vec![withheld.clone()],
+			"the manifest 404 is what convicts it"
+		);
+		assert_eq!(
+			listed_books(&host, &materialized.series.id).await,
+			(ALPHA_CHAPTERS.len() - 1) as u64
+		);
+		// A cached manifest must not vouch for it: verification re-asks, so
+		// a second refresh reaches the same verdict without a second hide.
+		let again = refresh_series(&host, &materialized.series.id)
+			.await
+			.unwrap();
+		assert!(again.removed.is_empty());
+		assert!(again.restored.is_empty());
+		assert_eq!(
+			listed_books(&host, &materialized.series.id).await,
+			(ALPHA_CHAPTERS.len() - 1) as u64
+		);
+	}
+
+	/// Books a client would be offered: what every lane's
+	/// `deleted_at IS NULL` filter leaves.
+	async fn listed_books(host: &ProviderHost, series_id: &str) -> u64 {
+		media::Entity::find()
+			.filter(media::Column::SeriesId.eq(series_id))
+			.filter(media::Column::DeletedAt.is_null())
+			.count(host.conn())
+			.await
+			.unwrap()
 	}
 
 	/// A materialised chapter whose page manifest 404s later is unavailable,
@@ -546,8 +880,8 @@ mod tests {
 
 		// Through the resolver a stored row pointing at a vanished chapter
 		// takes the same path.
-		let path = VirtualPath::chapter(MOCK_SOURCE_ID, SERIES_ALPHA, "alpha-ch9")
-			.to_string();
+		let path =
+			VirtualPath::chapter(MOCK_SOURCE_ID, SERIES_ALPHA, "alpha-ch9").to_string();
 		let resolver: &dyn VirtualMediaResolver = host.as_ref();
 		assert!(matches!(
 			resolver.get_page(&path, 1).await,

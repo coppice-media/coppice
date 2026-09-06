@@ -194,6 +194,8 @@ pub(crate) async fn mark_book_read<C: ConnectionTrait>(
 		Publication {
 			media_id: book_id,
 			pages,
+			// Komga serves page-addressed publications only.
+			duration_ms: None,
 		},
 		ProtocolUpdate {
 			protocol: SourceProtocol::Komga,
@@ -542,6 +544,8 @@ mod tests {
 			source_device_id: None,
 			revision: 1,
 			event_id: 1,
+			position_ms: None,
+			track_index: None,
 		};
 		let books = ["a", "b", "c"]
 			.iter()

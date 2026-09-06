@@ -32,6 +32,11 @@ pub struct Model {
 	#[sea_orm(column_type = "Double", nullable)]
 	pub progression: Option<f64>,
 	pub page: Option<i32>,
+	/// The time-addressed position asserted by this update, in milliseconds
+	/// from the start of the publication.
+	pub position_ms: Option<i64>,
+	/// The 0-based track the update reported the position in.
+	pub track_index: Option<i32>,
 	/// The completion asserted by the update; `None` when it did not assert one.
 	pub completed: Option<bool>,
 	#[sea_orm(column_type = "Text")]

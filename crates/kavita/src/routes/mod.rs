@@ -39,6 +39,19 @@ mod users;
 mod want_to_read;
 pub use account::LoginOutcome;
 
+/// Media whose `path` is a provider URI rather than a file: the provider host
+/// owns the scheme (`crates/media/src/virtual_media.rs`,
+/// `stump_media::virtual_media::PROVIDER_SCHEME`), and the protocol crates
+/// stay free of `stump_media`, so the prefix is checked here.
+const PROVIDER_SCHEME: &str = "provider://";
+
+/// Whether this media item is provider-backed and therefore has no file on
+/// disk: its pages are fetched live, so it has neither bytes to stream
+/// ([`download`]) nor a page analysis to report ([`reader`]).
+pub(crate) fn is_provider_media(media: &models::entity::media::Model) -> bool {
+	media.path.starts_with(PROVIDER_SCHEME)
+}
+
 /// Image bytes with their MIME type, as served by cover and page routes.
 #[derive(Debug, Clone)]
 pub struct KavitaImage {
@@ -193,8 +206,7 @@ pub trait KavitaBackend: Send + Sync {
 	/// where the payload has to be buffered: a provider-backed chapter, and
 	/// every member of the zip a multi-file `GET /api/Download/series`
 	/// returns.
-	async fn media_bytes(&self, user: &AuthUser, media_id: &str)
-		-> APIResult<Vec<u8>>;
+	async fn media_bytes(&self, user: &AuthUser, media_id: &str) -> APIResult<Vec<u8>>;
 
 	/// The spine page budget and navigation tree of an EPUB, for
 	/// `GET /api/Book/{chapterId}/book-info` and `chapters`.

@@ -173,6 +173,7 @@ impl FileProcessor for ZipProcessor {
 			koreader_hash,
 			metadata,
 			pages,
+			audio: None,
 		})
 	}
 

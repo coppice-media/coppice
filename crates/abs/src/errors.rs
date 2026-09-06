@@ -54,6 +54,22 @@ impl From<std::num::TryFromIntError> for AbsError {
 	}
 }
 
+/// A token that fails to verify is a credential problem, not a server
+/// problem: abs-ref answers `401` for both an expired and a forged token
+/// (`capture/negatives.txt`). Failing to *mint* one is the server's fault.
+impl From<crate::auth::TokenError> for AbsError {
+	fn from(error: crate::auth::TokenError) -> Self {
+		match error {
+			crate::auth::TokenError::Encode(error) => {
+				Self::InternalServerError(error.to_string())
+			},
+			crate::auth::TokenError::Invalid(_) | crate::auth::TokenError::Expired => {
+				Self::Unauthorized
+			},
+		}
+	}
+}
+
 impl From<serde_json::Error> for AbsError {
 	fn from(error: serde_json::Error) -> Self {
 		Self::InternalServerError(error.to_string())
@@ -94,7 +110,11 @@ mod tests {
 				StatusCode::NOT_FOUND,
 				"Not Found",
 			),
-			(AbsError::Unauthorized, StatusCode::UNAUTHORIZED, "Unauthorized"),
+			(
+				AbsError::Unauthorized,
+				StatusCode::UNAUTHORIZED,
+				"Unauthorized",
+			),
 			(
 				AbsError::BadRequest("currentTime must be finite".to_owned()),
 				StatusCode::BAD_REQUEST,

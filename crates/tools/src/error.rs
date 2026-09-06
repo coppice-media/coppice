@@ -37,6 +37,12 @@ pub enum ToolError {
 	Transform(#[from] stump_media::transform::TransformError),
 	#[error("{0}")]
 	Archive(#[from] zip::result::ZipError),
+	/// An MP4/M4B container `audio-chapters` could not read or rewrite.
+	#[error("{0}")]
+	Mp4(#[from] mp4ameta::Error),
+	/// An ID3v2 tag `audio-chapters` could not read or rewrite.
+	#[error("{0}")]
+	Id3(#[from] id3::Error),
 	#[error("{0}")]
 	Xml(#[from] quick_xml::Error),
 }

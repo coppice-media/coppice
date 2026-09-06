@@ -38,11 +38,7 @@ impl MigrationTrait for Migration {
 							.primary_key(),
 					)
 					.col(ColumnDef::new(MediaAudioTracks::MediaId).text().not_null())
-					.col(
-						ColumnDef::new(MediaAudioTracks::Index)
-							.integer()
-							.not_null(),
-					)
+					.col(ColumnDef::new(MediaAudioTracks::Index).integer().not_null())
 					.col(ColumnDef::new(MediaAudioTracks::Path).text().not_null())
 					.col(
 						ColumnDef::new(MediaAudioTracks::DurationMs)

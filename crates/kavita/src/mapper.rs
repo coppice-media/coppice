@@ -137,8 +137,7 @@ fn union_column(
 	union.push_csv(series_value);
 	if let Some(column) = column {
 		for item in media {
-			union
-				.push_csv(item.metadata.as_ref().and_then(column).map(String::as_str));
+			union.push_csv(item.metadata.as_ref().and_then(column).map(String::as_str));
 		}
 	}
 	union
@@ -1744,10 +1743,7 @@ mod tests {
 		people.iter().map(|person| person.name.as_str()).collect()
 	}
 
-	fn titles<'a, T: 'a>(
-		rows: &'a [T],
-		title: fn(&'a T) -> &'a str,
-	) -> Vec<&'a str> {
+	fn titles<'a, T: 'a>(rows: &'a [T], title: fn(&'a T) -> &'a str) -> Vec<&'a str> {
 		rows.iter().map(title).collect()
 	}
 
@@ -1850,8 +1846,15 @@ mod tests {
 		);
 		assert_eq!(dto.people.writers[0].roles, vec![PersonRole::Writer]);
 		// The series row carries none of these, so the files decide.
-		assert_eq!(dto.age_rating, AgeRating::R18Plus, "the strictest file wins");
-		assert_eq!(dto.release_year, 1989, "the earliest file starts the series");
+		assert_eq!(
+			dto.age_rating,
+			AgeRating::R18Plus,
+			"the strictest file wins"
+		);
+		assert_eq!(
+			dto.release_year, 1989,
+			"the earliest file starts the series"
+		);
 		assert_eq!(dto.language, "ja", "the first file that names one");
 		assert_eq!((dto.max_count, dto.total_count), (41, 41));
 		assert_eq!(dto.publication_status, PublicationStatus::Ended);

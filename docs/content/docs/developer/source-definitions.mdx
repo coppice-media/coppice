@@ -85,6 +85,8 @@ site-specific code. These are the forms the recogniser accepts:
 | `override val pageSize = 24` | `page_size: 24` |
 | `override val apiUrl = "$baseUrl/api"` | `api_url: "https://site/api"` — only `$baseUrl`/`${baseUrl}` is substituted; any other template is unsupported |
 | `override fun chapterListSelector() = "#chapterlist li"` | `chapter_list_selector: "#chapterlist li"` |
+| `override fun popularMangaRequest(page: Int) = GET("$baseUrl/list?page=$page")` | `popular_manga_url: "https://site/list?page={page}"` — the `_request` suffix becomes `_url` and the function's own parameters render as `{name}` placeholders |
+| `override fun latestUpdatesSelector() = popularMangaSelector()` | `latest_updates_selector: <the value of popular_manga_selector>` — an alias is resolved to the knob it names, under the **aliasing** member's key, wherever in the class that knob is declared |
 | `override val chapterMode = ChapterMode.MangaAjaxPaginated` | `chapter_mode: "manga_ajax_paginated"` — any `Enum.Constant` becomes `snake_case` of the constant |
 | `override val dateFormat = SimpleDateFormat("MMM d, yyyy", Locale("tr"))` | `date_format: "MMM d, yyyy"` + `date_locale: "tr"` |
 | `override val chapterDateFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.ROOT)` | `chapter_date_format: "dd/MM/yyyy"` + `chapter_date_locale: ""` (root) |
@@ -106,6 +108,12 @@ Rules that follow from the table:
   dropped: ignoring it can only make an engine *more* polite. An engine **must
   not** exceed `rate_limit_permits` per `rate_limit_period_seconds`; a
   definition without those knobs uses the engine's own default.
+- **Request URLs** are the one non-selector extraction point a subclass states
+  as data. The whole body must be a single `GET(url)`; a second argument is
+  accepted only when it is upstream's own `headers`, since that is the theme's
+  default header builder and an engine rebuilds it anyway. Anything else — a
+  `POST`, a form body, a cache directive, a computed URL, or a call chained
+  onto `GET(…)` — is behaviour, and the source is unsupported.
 - **Universal knobs**, emitted for every definition regardless of theme:
 
 | Knob | Type | Meaning |
@@ -126,10 +134,12 @@ emits **one definition per `source {}` block**, all sharing the extension's
 theme, version, nsfw flag, and knobs, and differing in `id`, `name`, `lang`, and
 `base_url`.
 
-Ids stay unique and stable: `<pkg suffix>.<slug of the source name>`
-(`ja.dmm.dmm`, `ja.dmm.fanza`), falling back to the 1-based block index when a
-name has no ASCII alphanumerics (`zh.foo.2`). A single-source extension keeps
-the bare `<pkg suffix>`.
+Ids stay unique and stable, using the first discriminator that is distinct
+across every block: `<pkg suffix>.<slug of the source name>` (`ja.dmm.dmm`,
+`ja.dmm.fanza`), else the source `lang` — a multi-language extension repeats
+one name and differs only there (`all.seraphicdeviltry.en`,
+`all.seraphicdeviltry.es`) — else the 1-based block index (`zh.foo.2`). A
+single-source extension keeps the bare `<pkg suffix>`.
 
 ## Output layout
 
@@ -152,7 +162,11 @@ the bare `<pkg suffix>`.
 
 `unsupported.json` rows carry `id`, `name`, `lang`, `theme` (`null` when none was
 declared), `path` (upstream extension directory), `code`, and `reason` (prose,
-including the offending member name). Codes are stable:
+including the offending member name). A class is scanned to the end, so when
+several members block it the reason is the first blocker in file order followed
+by `(and N more: <member>, <member>, …)`, and the `code` is that first
+blocker's — a row is therefore the whole porting work item, not one member of
+it. Codes are stable:
 
 | Code | Meaning |
 | --- | --- |
@@ -183,12 +197,13 @@ git clone https://github.com/keiyoushi/extensions-source /tmp/keiyoushi-src
 mkdir -p /tmp/stump-sources
 
 # Dry run: counts, the per-theme stats table, and every file that would be written.
-cargo run -p cli --bin cli-bin -- tools plan sources-import \
-  --options '{"extensions_source":"/tmp/keiyoushi-src","output_dir":"/tmp/stump-sources"}' --json
+# The checkout is the positional path, so `extensions_source` can be left out.
+cargo run -p cli --bin cli-bin -- tools plan sources-import /tmp/keiyoushi-src \
+  --options '{"output_dir":"/tmp/stump-sources"}' --json
 
-# Write the data repo.
-cargo run -p cli --bin cli-bin -- tools apply sources-import \
-  --options '{"extensions_source":"/tmp/keiyoushi-src","output_dir":"/tmp/stump-sources","themes":["madara","mangathemesia","mmrcms"]}'
+# Write the data repo. `apply` refuses to run without --yes.
+cargo run -p cli --bin cli-bin -- tools apply sources-import /tmp/keiyoushi-src --yes \
+  --options '{"output_dir":"/tmp/stump-sources","themes":["madara","mangathemesia","mmrcms"]}'
 ```
 
 | Option | Type | Default | Effect |

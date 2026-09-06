@@ -4,7 +4,7 @@ use migrations::{Migrator, MigratorTrait};
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sea_orm::{
 	self, ConnectionTrait, DatabaseBackend, DatabaseConnection, FromQueryResult,
-	SqlxSqliteConnector,
+	SqlxSqliteConnector, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -149,7 +149,20 @@ async fn migrate(
 		return Err(CoreError::DatabaseResetNotAllowed);
 	}
 
-	Migrator::up(connection, None).await?;
+	if connection.get_database_backend() == DatabaseBackend::Sqlite {
+		// sea-orm-migration only wraps migrations in a transaction on Postgres.
+		// SQLite DDL is transactional too, so apply one migration per
+		// transaction: a crash or error mid-migration rolls back instead of
+		// leaving tables behind that make the migration unrepeatable.
+		let pending = Migrator::get_pending_migrations(connection).await?.len();
+		for _ in 0..pending {
+			let txn = connection.begin().await?;
+			Migrator::up(&txn, Some(1)).await?;
+			txn.commit().await?;
+		}
+	} else {
+		Migrator::up(connection, None).await?;
+	}
 
 	Ok(())
 }
@@ -203,7 +216,7 @@ pub async fn connect(config: &StumpConfig) -> Result<DatabaseConnection, CoreErr
 
 pub async fn connect_at(path: &str) -> Result<DatabaseConnection, CoreError> {
 	let connection = sea_orm::Database::connect(path).await?;
-	Migrator::up(&connection, None).await?;
+	migrate(&connection, false).await?;
 	Ok(connection)
 }
 
@@ -390,5 +403,70 @@ mod tests {
 			.execute_unprepared("SELECT \"media_id\" FROM \"ingest_analysis_jobs\"")
 			.await
 			.expect("the rebuilt ingest_analysis_jobs table exists");
+	}
+
+	/// `sea-orm-migration` runs SQLite migrations outside a transaction, so a
+	/// migration that failed halfway (crash, disk full, a broken precondition)
+	/// left its first DDL statements behind without being recorded; the next
+	/// boot then died with `table "..." already exists` and the database was
+	/// unrecoverable without hand surgery. Each migration must be atomic.
+	#[tokio::test]
+	async fn a_failing_sqlite_migration_leaves_nothing_behind() {
+		const TARGET: &str = "m20260909_000000_add_ingest_media_targets";
+		let dir = tempfile::tempdir().expect("tempdir");
+		let connection = sea_orm::Database::connect(format!(
+			"sqlite://{}/stump.db?mode=rwc",
+			dir.path().display()
+		))
+		.await
+		.expect("open");
+		let before = Migrator::migrations()
+			.iter()
+			.position(|m| m.name() == TARGET)
+			.expect("target migration is registered") as u32;
+		Migrator::up(&connection, Some(before))
+			.await
+			.expect("prefix");
+
+		// Break the migration after its first statement: it creates the
+		// replacement table, then copies from `ingest_analysis_jobs`.
+		connection
+			.execute_unprepared(
+				"ALTER TABLE \"ingest_analysis_jobs\" RENAME TO \"ingest_analysis_jobs_gone\"",
+			)
+			.await
+			.expect("rename");
+		migrate(&connection, false)
+			.await
+			.expect_err("the copy step must fail");
+
+		let leftover = connection
+			.execute_unprepared("SELECT 1 FROM \"ingest_analysis_jobs_media_targets\"")
+			.await;
+		assert!(
+			leftover.is_err(),
+			"the failed migration's table was rolled back"
+		);
+		let applied = Migrator::get_applied_migrations(&connection)
+			.await
+			.expect("status");
+		assert_eq!(
+			applied.len() as u32,
+			before,
+			"the failed migration is not recorded"
+		);
+
+		// Restoring the precondition makes the same database migrate to the end.
+		connection
+			.execute_unprepared(
+				"ALTER TABLE \"ingest_analysis_jobs_gone\" RENAME TO \"ingest_analysis_jobs\"",
+			)
+			.await
+			.expect("rename back");
+		migrate(&connection, false).await.expect("recovers");
+		assert!(Migrator::get_pending_migrations(&connection)
+			.await
+			.expect("status")
+			.is_empty());
 	}
 }

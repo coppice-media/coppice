@@ -59,3 +59,11 @@ pub enum AudioChapterSource {
 	/// The publication has no chapters.
 	None,
 }
+
+impl Default for AudioChapterSource {
+	/// A publication Stump has not found chapters in has none — never a
+	/// synthesized or container-specific provenance.
+	fn default() -> Self {
+		Self::None
+	}
+}

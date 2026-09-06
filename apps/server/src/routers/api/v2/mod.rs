@@ -1,3 +1,4 @@
+pub(crate) mod audio;
 pub(crate) mod auth;
 pub(crate) mod device_pairing;
 pub(crate) mod emoji;

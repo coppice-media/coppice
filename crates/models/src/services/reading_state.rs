@@ -76,6 +76,8 @@ pub async fn apply<C: ConnectionTrait>(
 		locator: Set(projection.locator.clone()),
 		progression: Set(projection.progression),
 		page: Set(projection.page),
+		position_ms: Set(projection.position_ms),
+		track_index: Set(projection.track_index),
 		completed: Set(projection.completed),
 		timestamp_kind: Set(timestamp_kind),
 		source_updated_at: Set(source_updated_at.into()),
@@ -100,6 +102,12 @@ pub async fn apply<C: ConnectionTrait>(
 				page: Set(projection
 					.page
 					.or_else(|| previous.and_then(|head| head.page))),
+				position_ms: Set(projection
+					.position_ms
+					.or_else(|| previous.and_then(|head| head.position_ms))),
+				track_index: Set(projection
+					.track_index
+					.or_else(|| previous.and_then(|head| head.track_index))),
 				completed: Set(resolved.completed),
 				updated_at: Set(source_updated_at.into()),
 				created_at: Set(previous.map_or(now.into(), |head| head.created_at)),
@@ -232,6 +240,8 @@ pub async fn clear<C: ConnectionTrait>(
 			locator: Set(None),
 			progression: Set(None),
 			page: Set(None),
+			position_ms: Set(None),
+			track_index: Set(None),
 			completed: Set(Some(false)),
 			timestamp_kind: Set(TimestampKind::Server),
 			source_updated_at: Set(now),

@@ -143,6 +143,31 @@ tach-extension `5f3c068`, Mihon tracker `5fadea6`. Wave 1 (API-key +
 `Plugin/authenticate` JWT, libraries, series, progress, images) is in progress;
 none of the seven has run against Stump. Per-client rows: [platforms](/docs/developer/platforms).
 
+## Lissen (Android)
+
+- **Protocol:** Audiobookshelf compatibility profile — 28 routes at the server
+  root (`/status`, `/login`, `/auth/refresh`, `/api/libraries/{id}/items`,
+  `/api/items/{id}` with `/play` and `/file/{ino}`, `/api/session/{id}/sync`,
+  `/api/me` with progress and bookmarks). Pinned client: Lissen
+  `1.11.22-release` (`f30bf9be`); wire shapes pinned by an `abs-ref`
+  Audiobookshelf 2.36.0 container in `../komga-compat/abs/`. Evidence:
+  [Audiobookshelf profile](/docs/developer/abs-compat).
+- **Setup:** server URL plus Stump username and password. The login mints the
+  Audiobookshelf token trio (legacy `token` with no expiry, 1 h `accessToken`,
+  30 d `refreshToken`) and registers a `devices` row of kind `ABS`, so
+  per-device library scope applies to the whole session; an API key, Basic, or
+  `?token=` are accepted as well. Requires the `abs` feature (`headless`,
+  `full`) and `STUMP_ENABLE_ABS=true`.
+- **What the profile serves (source, no run yet):** libraries and paged items
+  with Lissen's four sorts and its base64 `progress`/`series` filters, item
+  detail with audio files, tracks and chapters, covers, `Range`-capable track
+  bytes, play sessions with `playMethod: 0` (Stump never transcodes), progress
+  sync onto the unified reading state, and bookmarks.
+- **Known gaps:** podcast libraries are not served at all (Stump has no podcast
+  model), only audio-container media appear so a Stump ebook is invisible to
+  this client, and `GET /api/authors/{id}/image` is always `404`. Full list:
+  [deviations](/docs/developer/abs-compat#known-deviations).
+
 ## Generic OPDS readers (Panels, Moon+ Reader, Librera)
 
 Only what [the OPDS guide](/docs/guides/features/opds) claims; nothing here is
@@ -177,6 +202,7 @@ combination. Cells cite the row's section above.
 | Grimmory alias | 🧪 | n/a | 🧪 | ❌ (no shim route) | ❌ |
 | Komf (server-side) | 🧪 (libraries/series/books, live) | n/a | n/a | n/a | n/a — writes: metadata PATCH, cover upload/delete (live) |
 | Kavita clients (7 pinned) | not verified | not verified | not verified | not verified | not verified |
+| Lissen `1.11.22-release` (ABS profile) | not verified | not verified (listen) | not verified | not verified | not verified (bookmarks) |
 | Panels | ✅ (upstream guide) | ✅ | ✅ | ❌ | ❌ |
 | Moon+ Reader | ✅ (upstream guide) | ✅ | ✅ | ❌ | ❌ |
 | Librera | ⚠️ file names, not titles | ✅ | ✅ | ❌ | ❌ |

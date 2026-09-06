@@ -133,6 +133,16 @@ impl TestApp {
 		response
 	}
 
+	/// issue a GET request carrying a `Range` header, so a byte-range lane can
+	/// be asserted rather than assumed.
+	pub async fn get_with_range(&self, path: &str, range: &str) -> TestResponse {
+		self.server
+			.get(path)
+			.add_header("Authorization", self.auth_header().await)
+			.add_header("Range", range)
+			.await
+	}
+
 	/// issue a DELETE request to the specified path with auth headers, returning the response directly
 	pub async fn delete(&self, path: &str) -> TestResponse {
 		self.server

@@ -51,11 +51,16 @@ pub struct ProviderCatalogEntry {
 	pub base_url: String,
 	/// The Keiyoushi extension package backing the source.
 	pub pkg: String,
-	/// Whether a compiled implementation exists for this entry on this
-	/// server; entries without one cannot be enabled.
+	/// Whether `contentWarning` on the Keiyoushi extension is anything but
+	/// `SAFE`, i.e. the flag a client badges an adult source with and the
+	/// one the materialised series' age rating is derived from.
+	pub nsfw: bool,
+	/// Whether this server can actually run this entry — a compiled
+	/// implementation *or* a source definition for its package; entries
+	/// without either cannot be enabled.
 	pub has_implementation: bool,
-	/// The instance id that will be created on enable
-	/// (`<implementation>-<lang>`).
+	/// The instance id that will be created on enable: `<implementation>-<lang>`
+	/// for a compiled source, the definition id for a definition-backed one.
 	pub instance_id: Option<String>,
 	/// The latest health observation for this source, when it has been
 	/// probed: the badge a client shows next to the entry. `dead` entries

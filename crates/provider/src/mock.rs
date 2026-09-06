@@ -2,8 +2,8 @@
 //! crate's own tests and (behind the `mock` feature) by server router tests.
 
 use std::sync::{
-	atomic::{AtomicUsize, Ordering},
-	Arc,
+	atomic::{AtomicBool, AtomicUsize, Ordering},
+	Arc, Mutex,
 };
 
 use async_trait::async_trait;
@@ -43,6 +43,8 @@ pub struct MockSource {
 	http: SourceHttp,
 	page_fetches: AtomicUsize,
 	detail_fetches: AtomicUsize,
+	retracted: AtomicBool,
+	withheld: Mutex<Vec<String>>,
 }
 
 impl MockSource {
@@ -69,6 +71,8 @@ impl MockSource {
 				.expect("reqwest client for mock source"),
 			page_fetches: AtomicUsize::new(0),
 			detail_fetches: AtomicUsize::new(0),
+			retracted: AtomicBool::new(false),
+			withheld: Mutex::new(Vec::new()),
 		})
 	}
 
@@ -78,6 +82,25 @@ impl MockSource {
 
 	pub fn detail_fetches(&self) -> usize {
 		self.detail_fetches.load(Ordering::SeqCst)
+	}
+
+	/// Stop (or resume) serving the chapters of [`SERIES_ALPHA`]. While
+	/// retracted the feed still lists them, but every entry comes back
+	/// `readable == false` with `page_count: None` — what a source does when
+	/// a title is licensed or taken down after it was materialised.
+	pub fn set_chapters_retracted(&self, retracted: bool) {
+		self.retracted.store(retracted, Ordering::SeqCst);
+	}
+
+	/// Keep listing `chapter_id` in the feed as readable while refusing its
+	/// page manifest, the way MangaDex still reports `pages: 14` for a
+	/// chapter whose `/at-home/server/{id}` lookup answers `404`. Only a
+	/// manifest request can tell the difference.
+	pub fn withhold_pages(&self, chapter_id: &str) {
+		self.withheld
+			.lock()
+			.expect("withheld poisoned")
+			.push(chapter_id.to_string());
 	}
 
 	fn series(remote_id: &str) -> Option<RemoteSeries> {
@@ -181,28 +204,33 @@ impl Source for MockSource {
 
 	async fn chapters(&self, remote_id: &str) -> SourceResult<Vec<RemoteChapter>> {
 		match remote_id {
-			SERIES_ALPHA => Ok(ALPHA_CHAPTERS
-				.iter()
-				.enumerate()
-				.map(|(position, id)| {
-					let number = (ALPHA_CHAPTERS.len() - position) as f32;
-					RemoteChapter {
-						remote_id: (*id).to_string(),
-						title: Some(format!("Chapter {number}")),
-						number: Some(number),
-						volume: Some("1".to_string()),
-						lang: Some("en".to_string()),
-						scanlator: Some("Mock Scans".to_string()),
-						uploaded_at: Some(
-							Utc.with_ymd_and_hms(2026, 1, number as u32, 0, 0, 0)
-								.unwrap(),
-						),
-						url: Some(format!("http://mock.invalid/chapter/{id}")),
-						page_count: (number as u32 != 2).then_some(PAGES_PER_CHAPTER),
-						..Default::default()
-					}
-				})
-				.collect()),
+			SERIES_ALPHA => {
+				let retracted = self.retracted.load(Ordering::SeqCst);
+				Ok(ALPHA_CHAPTERS
+					.iter()
+					.enumerate()
+					.map(|(position, id)| {
+						let number = (ALPHA_CHAPTERS.len() - position) as f32;
+						RemoteChapter {
+							remote_id: (*id).to_string(),
+							title: Some(format!("Chapter {number}")),
+							number: Some(number),
+							volume: Some("1".to_string()),
+							lang: Some("en".to_string()),
+							scanlator: Some("Mock Scans".to_string()),
+							uploaded_at: Some(
+								Utc.with_ymd_and_hms(2026, 1, number as u32, 0, 0, 0)
+									.unwrap(),
+							),
+							url: Some(format!("http://mock.invalid/chapter/{id}")),
+							readable: !retracted,
+							page_count: (!retracted && number as u32 != 2)
+								.then_some(PAGES_PER_CHAPTER),
+							..Default::default()
+						}
+					})
+					.collect())
+			},
 			// One chapter per unreadable reason, so materialisation has
 			// something to skip and report.
 			SERIES_BETA => Ok(vec![
@@ -234,7 +262,13 @@ impl Source for MockSource {
 	}
 
 	async fn pages(&self, chapter_id: &str) -> SourceResult<Vec<RemotePage>> {
-		if !ALPHA_CHAPTERS.contains(&chapter_id) {
+		let withheld = self
+			.withheld
+			.lock()
+			.expect("withheld poisoned")
+			.iter()
+			.any(|id| id == chapter_id);
+		if withheld || !ALPHA_CHAPTERS.contains(&chapter_id) {
 			return Err(SourceError::NotFound(chapter_id.to_string()));
 		}
 		Ok((0..PAGES_PER_CHAPTER)

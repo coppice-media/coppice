@@ -712,6 +712,7 @@ fn kind_label(kind: DeviceKind) -> &'static str {
 		DeviceKind::Komelia => "Komelia",
 		DeviceKind::Liseur => "Liseur",
 		DeviceKind::Opds => "OPDS reader",
+		DeviceKind::Abs => "Audiobookshelf client",
 		DeviceKind::Api => "API client",
 		DeviceKind::Web => "Browser",
 	}

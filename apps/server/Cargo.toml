@@ -7,7 +7,7 @@ default-run = "stump_server"
 [features]
 default = ["full"]
 full = ["headless", "webui"]
-headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "komga", "kavita", "liseur-sync", "providers", "watcher", "qr", "ingest", "apalis"]
+headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "komga", "kavita", "abs", "liseur-sync", "providers", "watcher", "qr", "ingest", "apalis"]
 # Apalis-backed job executor (links `apalis`); `minimal` runs jobs on the inline executor.
 apalis = ["stump_core/apalis"]
 # Media format backends that link native code; every profile keeps them on.
@@ -34,6 +34,9 @@ kobo = ["dep:stump_kobo", "dep:stump_kepub", "dep:stump_collections"]
 koreader = ["dep:stump_koreader"]
 komga = ["readium", "dep:stump_komga", "dep:stump_collections", "dep:stump_library"]
 kavita = ["dep:stump_kavita", "dep:stump_collections"]
+# The Audiobookshelf compatibility profile (Lissen and other ABS clients);
+# gated at runtime by `STUMP_ENABLE_ABS`.
+abs = ["dep:stump_abs"]
 liseur-sync = ["dep:stump_liseur_sync"]
 providers = [
 	"dep:stump_provider",
@@ -106,6 +109,7 @@ stump_api_types = { path = "../../crates/api-types" }
 stump_devices = { path = "../../crates/devices" }
 stump_komga = { path = "../../crates/komga", optional = true }
 stump_kavita = { path = "../../crates/kavita", optional = true }
+stump_abs = { path = "../../crates/abs", optional = true }
 stump_kobo = { path = "../../crates/kobo", optional = true }
 stump_kepub = { path = "../../crates/kepub", optional = true }
 filetime = "0.2.25"

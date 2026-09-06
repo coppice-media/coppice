@@ -51,9 +51,7 @@ use crate::{
 	date::DateParser,
 	dom::{Document, NodeId},
 	selector::Selector,
-	theme::{
-		self, ImageAttrs, ThemeContext, ThemeError, DEFAULT_REQUESTS_PER_SECOND,
-	},
+	theme::{self, ImageAttrs, ThemeContext, ThemeError, DEFAULT_REQUESTS_PER_SECOND},
 };
 
 pub const THEMES: [&str; 2] = ["madara", "madaralegacy"];
@@ -162,6 +160,13 @@ pub struct MadaraSource {
 	chapter_mode: ChapterMode,
 	browse_mode: BrowseMode,
 	chapter_url_suffix: String,
+	/// `popularMangaRequest`/`latestUpdatesRequest`/`searchMangaRequest`
+	/// overridden with a complete URL. Present means the whole request is
+	/// replaced: no `admin-ajax.php`, no `page/N/` + `?m_orderby=`
+	/// construction, because upstream's override returns one fixed `GET`.
+	popular_url: Option<String>,
+	latest_url: Option<String>,
+	search_url: Option<String>,
 	nsfw: bool,
 }
 
@@ -356,6 +361,15 @@ impl MadaraSource {
 				.text_knob(&["chapter_url_suffix"])
 				.unwrap_or("?style=list")
 				.to_string(),
+			popular_url: definition
+				.text_knob(&["popular_manga_url", "popular_url"])
+				.map(str::to_string),
+			latest_url: definition
+				.text_knob(&["latest_updates_url", "latest_url"])
+				.map(str::to_string),
+			search_url: definition
+				.text_knob(&["search_manga_url", "search_url"])
+				.map(str::to_string),
 			nsfw: definition.nsfw,
 		})
 	}
@@ -447,7 +461,10 @@ impl MadaraSource {
 	) -> SourceResult<(SourcePage<RemoteSeries>, bool)> {
 		let mut url = self.context.url(path);
 		if page > 1 {
-			url = format!("{}page/{page}/", url.trim_end_matches('/').to_string() + "/");
+			url = format!(
+				"{}page/{page}/",
+				url.trim_end_matches('/').to_string() + "/"
+			);
 		}
 		let mut query_parts: Vec<String> = Vec::new();
 		if !order.is_empty() {
@@ -475,9 +492,40 @@ impl MadaraSource {
 		Ok((SourcePage { items, has_next }, load_more))
 	}
 
+	/// A definition that supplies a complete browse URL replaces the request
+	/// wholesale, so only `{page}`/`{query}` are substituted. A template with
+	/// no `{page}` is a single fixed page, exactly as upstream's override is.
+	async fn fixed_page(
+		&self,
+		template: &str,
+		page: u32,
+		query: &str,
+		list: &Selector,
+		url_selector: &Selector,
+	) -> SourceResult<SourcePage<RemoteSeries>> {
+		if page > 1 && !template.contains("{page}") {
+			return Ok(SourcePage::default());
+		}
+		let url = self.context.url(
+			&template
+				.replace("{page}", &page.to_string())
+				.replace("{query}", &urlencode(query)),
+		);
+		let document = self.context.get(&url).await?;
+		let items = self.parse_archive(&document, list, url_selector);
+		let has_next = self
+			.selectors
+			.next_page
+			.select_first(&document, document.root())
+			.is_some();
+		Ok(SourcePage { items, has_next })
+	}
+
 	/// Browse one list, honouring `browse_mode`. `AutoDetect` mirrors
 	/// `madaralegacy`'s `detectLoadMore`: fetch the archive page, and if the
 	/// site advertises the load-more nav, re-ask through `admin-ajax.php`.
+	/// An `override_url` short-circuits all of that.
+	#[allow(clippy::too_many_arguments)]
 	async fn browse(
 		&self,
 		page: u32,
@@ -486,7 +534,13 @@ impl MadaraSource {
 		query: &str,
 		list: &Selector,
 		url_selector: &Selector,
+		override_url: Option<&str>,
 	) -> SourceResult<SourcePage<RemoteSeries>> {
+		if let Some(template) = override_url {
+			return self
+				.fixed_page(template, page, query, list, url_selector)
+				.await;
+		}
 		let query = (!query.trim().is_empty()).then_some(query);
 		match self.browse_mode {
 			BrowseMode::Ajax => {
@@ -573,13 +627,7 @@ impl MadaraSource {
 				title
 			};
 			let thumbnail = first_image(document, item);
-			out.push(theme::series(
-				slug,
-				title,
-				Some(href),
-				thumbnail,
-				self.nsfw,
-			));
+			out.push(theme::series(slug, title, Some(href), thumbnail, self.nsfw));
 		}
 		out
 	}
@@ -673,9 +721,7 @@ impl MadaraSource {
 						.select_first(document, item)
 						.map(|node| document.text(node))
 				})
-				.or_else(|| {
-					first_attr(document, item, "time[datetime]", "datetime")
-				});
+				.or_else(|| first_attr(document, item, "time[datetime]", "datetime"));
 			let uploaded_at = raw_date
 				.as_deref()
 				.and_then(|value| self.dates.parse(value));
@@ -694,7 +740,12 @@ impl MadaraSource {
 	/// `MadaraBase.parsePages`.
 	pub fn parse_pages(&self, document: &Document) -> SourceResult<Vec<RemotePage>> {
 		let root = document.root();
-		if self.selectors.protector.select_first(document, root).is_some() {
+		if self
+			.selectors
+			.protector
+			.select_first(document, root)
+			.is_some()
+		{
 			return Err(SourceError::Unsupported {
 				source_id: self.context.info.id.clone(),
 				operation: "AES-protected chapter pages",
@@ -805,8 +856,7 @@ impl MadaraSource {
 						Err(SourceError::NotFound(_)) => break,
 						Err(error) => return Err(error),
 					};
-					let Some(tail) = chapters.last().map(|c| c.remote_id.clone())
-					else {
+					let Some(tail) = chapters.last().map(|c| c.remote_id.clone()) else {
 						break;
 					};
 					if last.as_deref() == Some(tail.as_str()) {
@@ -1000,6 +1050,7 @@ impl Source for MadaraSource {
 			"",
 			&self.selectors.popular,
 			&self.selectors.popular_url,
+			self.popular_url.as_deref(),
 		)
 		.await
 	}
@@ -1015,6 +1066,7 @@ impl Source for MadaraSource {
 			"",
 			&self.selectors.latest,
 			&self.selectors.popular_url,
+			self.latest_url.as_deref(),
 		)
 		.await
 	}
@@ -1027,6 +1079,17 @@ impl Source for MadaraSource {
 	) -> SourceResult<SourcePage<RemoteSeries>> {
 		if query.trim().is_empty() {
 			return self.popular(page).await;
+		}
+		if let Some(template) = self.search_url.as_deref() {
+			return self
+				.fixed_page(
+					template,
+					page,
+					query,
+					&self.selectors.search,
+					&self.selectors.search_url,
+				)
+				.await;
 		}
 		match self.browse_mode {
 			BrowseMode::NoAjax | BrowseMode::AutoDetect => {
@@ -1089,7 +1152,10 @@ impl Source for MadaraSource {
 			let separator = if url.contains('?') { "&" } else { "" };
 			let suffix = self.chapter_url_suffix.trim_start_matches('?');
 			self.context
-				.get(&format!("{url}{separator}{}{suffix}", if separator.is_empty() { "?" } else { "" }))
+				.get(&format!(
+					"{url}{separator}{}{suffix}",
+					if separator.is_empty() { "?" } else { "" }
+				))
 				.await?
 		} else {
 			document
@@ -1209,8 +1275,7 @@ mod tests {
 	#[test]
 	fn details_use_the_base_class_selectors() {
 		let source = engine(&[]);
-		let document =
-			document(DETAILS, "https://madara.test/manga/first-series/");
+		let document = document(DETAILS, "https://madara.test/manga/first-series/");
 		let series = source.parse_details(&document, "first-series");
 		assert_eq!(series.remote_id, "first-series");
 		assert_eq!(series.title, "First Series");
@@ -1218,10 +1283,7 @@ mod tests {
 		assert_eq!(series.authors, ["Author One"]);
 		assert_eq!(series.artists, ["Artist One"]);
 		assert_eq!(series.status, stump_provider::SeriesStatus::Completed);
-		assert_eq!(
-			series.description.as_deref(),
-			Some("Line one.\nLine two.")
-		);
+		assert_eq!(series.description.as_deref(), Some("Line one.\nLine two."));
 		assert_eq!(
 			series.thumbnail_url.as_deref(),
 			Some("https://madara.test/covers/first.jpg")
@@ -1266,8 +1328,7 @@ mod tests {
 	#[test]
 	fn chapters_key_on_series_and_chapter_slug_with_dates() {
 		let source = engine(&[]);
-		let document =
-			document(CHAPTERS, "https://madara.test/manga/first-series/");
+		let document = document(CHAPTERS, "https://madara.test/manga/first-series/");
 		let chapters = source.parse_chapter_list(&document, "first-series");
 		assert_eq!(chapters.len(), 3);
 		assert_eq!(chapters[0].remote_id, "first-series/chapter-2");
@@ -1304,10 +1365,10 @@ mod tests {
 		assert_eq!(pages[1].url, "https://madara.test/pages/2.jpg");
 		assert_eq!(pages[2].url, "https://madara.test/pages/3.jpg");
 		assert_eq!(pages[0].index, 0);
-		assert!(pages
+		assert!(pages.iter().all(|page| page
+			.headers
 			.iter()
-			.all(|page| page.headers.iter().any(|(name, value)| name == "Referer"
-				&& value == url)));
+			.any(|(name, value)| name == "Referer" && value == url)));
 	}
 
 	#[test]
@@ -1318,10 +1379,7 @@ mod tests {
 		let error = source
 			.parse_pages(&document(html, "https://madara.test/x/"))
 			.expect_err("protected chapters are refused");
-		assert!(
-			matches!(error, SourceError::Unsupported { .. }),
-			"{error}"
-		);
+		assert!(matches!(error, SourceError::Unsupported { .. }), "{error}");
 	}
 
 	#[test]
@@ -1362,13 +1420,11 @@ mod tests {
 			ChapterMode::MangaAjaxPaginated
 		);
 		assert_eq!(
-			engine(&[("use_new_chapter_endpoint", KnobValue::Bool(false))])
-				.chapter_mode,
+			engine(&[("use_new_chapter_endpoint", KnobValue::Bool(false))]).chapter_mode,
 			ChapterMode::AdminAjax
 		);
 		assert_eq!(
-			engine(&[("use_new_chapter_endpoint", KnobValue::Bool(true))])
-				.chapter_mode,
+			engine(&[("use_new_chapter_endpoint", KnobValue::Bool(true))]).chapter_mode,
 			ChapterMode::MangaAjax
 		);
 		// Unknown values must not silently disable chapters.
@@ -1376,6 +1432,40 @@ mod tests {
 			engine(&[("chapter_mode", KnobValue::Text("carrier_pigeon".into()))])
 				.chapter_mode,
 			ChapterMode::MangaAjax
+		);
+	}
+
+	/// `override fun popularMangaRequest` replaces the whole request, so the
+	/// generated `popular_manga_url`/`latest_updates_url` must bypass both
+	/// `admin-ajax.php` and the `/{manga_sub_string}/page/N/?m_orderby=`
+	/// construction (`id.pornhwa18` browses `/series/`, not `/manga/`).
+	#[test]
+	fn generated_request_urls_replace_the_constructed_browse_url() {
+		let bare = engine(&[]);
+		assert!(bare.popular_url.is_none());
+		assert!(bare.latest_url.is_none());
+		assert_eq!(bare.archive_path(), "/manga/");
+		let overridden = engine(&[
+			(
+				"popular_manga_url",
+				KnobValue::Text(
+					"https://pornhwa18.com/series/page/{page}/?m_orderby=views".into(),
+				),
+			),
+			(
+				"latest_updates_url",
+				KnobValue::Text(
+					"https://pornhwa18.com/series/page/{page}/?m_orderby=latest".into(),
+				),
+			),
+		]);
+		assert_eq!(
+			overridden.popular_url.as_deref(),
+			Some("https://pornhwa18.com/series/page/{page}/?m_orderby=views")
+		);
+		assert_eq!(
+			overridden.latest_url.as_deref(),
+			Some("https://pornhwa18.com/series/page/{page}/?m_orderby=latest")
 		);
 	}
 
@@ -1389,8 +1479,7 @@ mod tests {
 			BrowseMode::AutoDetect
 		);
 		assert_eq!(
-			engine(&[("browse_mode", KnobValue::Text("no_ajax".into()))])
-				.browse_mode,
+			engine(&[("browse_mode", KnobValue::Text("no_ajax".into()))]).browse_mode,
 			BrowseMode::NoAjax
 		);
 		assert_eq!(
@@ -1407,10 +1496,7 @@ mod tests {
 	#[test]
 	fn manga_sub_string_knob_rewrites_every_url() {
 		let source = engine(&[("manga_sub_string", KnobValue::Text("series".into()))]);
-		assert_eq!(
-			source.series_url("foo"),
-			"https://madara.test/series/foo/"
-		);
+		assert_eq!(source.series_url("foo"), "https://madara.test/series/foo/");
 		assert_eq!(
 			source.chapter_url("foo/chapter-1"),
 			"https://madara.test/series/foo/chapter-1/"
@@ -1434,10 +1520,12 @@ mod tests {
 		assert_eq!(get("vars[post_type]"), Some("wp-manga"));
 		assert_eq!(get("vars[posts_per_page]"), Some("25"));
 		assert_eq!(get("vars[meta_key]"), Some("_wp_manga_views"));
-		assert_eq!(get("vars[meta_query][0][key]"), Some("_wp_manga_chapter_type"));
+		assert_eq!(
+			get("vars[meta_query][0][key]"),
+			Some("_wp_manga_chapter_type")
+		);
 
-		let unfiltered =
-			engine(&[("filter_non_manga_items", KnobValue::Bool(false))]);
+		let unfiltered = engine(&[("filter_non_manga_items", KnobValue::Bool(false))]);
 		let form = unfiltered.load_more_form(1, Some("_latest_update"), Some("boku"));
 		assert!(form
 			.iter()

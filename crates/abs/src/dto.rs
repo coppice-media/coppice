@@ -100,12 +100,18 @@ pub struct UserDto {
 	pub item_tags_selected: Vec<String>,
 	#[serde(rename = "hasOpenIDLink")]
 	pub has_openid_link: bool,
-	/// Present on `/login`, `/auth/refresh` and `/api/authorize`; absent
-	/// from `GET /api/me`.
+	/// `true` only on `POST /login`, where abs-ref flags that `token` is the
+	/// old never-expiring credential (`capture/login.json` has the key,
+	/// `refresh.json` and `authorize.json` do not).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub is_old_token: Option<bool>,
+	/// Present on `POST /login` and `POST /auth/refresh` only:
+	/// `capture/authorize.json` and `capture/me.json` both carry `token`
+	/// alone.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub access_token: Option<String>,
-	/// Absent from `GET /api/me`; present but `null` on a login that did not
-	/// send `x-return-tokens: true`.
+	/// Same presence as `accessToken`, and `null` inside it when the client
+	/// did not send `x-return-tokens: true`.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub refresh_token: Option<Option<String>>,
 }
@@ -938,7 +944,10 @@ mod tests {
 		assert_eq!(object["startOffset"], 5.0);
 		assert_eq!(object["contentUrl"], "/api/items/item-1/file/2");
 		assert_eq!(object["mimeType"], "audio/mpeg");
-		assert_eq!(object["metaTags"], serde_json::json!({"tagTitle": "Part 2"}));
+		assert_eq!(
+			object["metaTags"],
+			serde_json::json!({"tagTitle": "Part 2"})
+		);
 		assert!(
 			object.get("file").is_none(),
 			"the file must be flattened, not nested"
@@ -951,8 +960,10 @@ mod tests {
 		);
 	}
 
-	/// `collapseseries` is the one lower-case key of the item page, and
-	/// `refreshToken`/`accessToken` are omit-vs-null distinct.
+	/// `collapseseries` is the one lower-case key of the item page, next to
+	/// ten camelCase neighbours; a `rename_all` that swept it up would ship
+	/// `collapseSeries` and Lissen's `LibraryItemsResponse` would stop
+	/// reading the grouping.
 	#[test]
 	fn envelope_keys_match_abs_refs_casing() {
 		let page = LibraryItemsPageDto {
@@ -969,26 +980,29 @@ mod tests {
 			offset: 0,
 		};
 		let json = serde_json::to_value(&page).expect("json");
-		let keys = json
+		let mut keys = json
 			.as_object()
 			.expect("object")
 			.keys()
 			.cloned()
 			.collect::<Vec<_>>();
+		keys.sort();
+		// The key *set* is the contract; JSON objects are unordered and
+		// `serde_json` sorts them.
 		assert_eq!(
 			keys,
 			vec![
-				"results",
-				"total",
-				"limit",
-				"page",
-				"sortBy",
-				"sortDesc",
-				"mediaType",
-				"minified",
 				"collapseseries",
 				"include",
-				"offset"
+				"limit",
+				"mediaType",
+				"minified",
+				"offset",
+				"page",
+				"results",
+				"sortBy",
+				"sortDesc",
+				"total",
 			]
 		);
 	}
@@ -1022,6 +1036,7 @@ mod tests {
 			libraries_accessible: Vec::new(),
 			item_tags_selected: Vec::new(),
 			has_openid_link: false,
+			is_old_token: None,
 			access_token: None,
 			refresh_token: None,
 		};
@@ -1041,7 +1056,10 @@ mod tests {
 		.expect("json");
 		assert_eq!(login["accessToken"], "access");
 		assert_eq!(login["refreshToken"], serde_json::Value::Null);
-		assert!(login.as_object().expect("object").contains_key("refreshToken"));
+		assert!(login
+			.as_object()
+			.expect("object")
+			.contains_key("refreshToken"));
 
 		// With the header: the token itself.
 		let with_tokens = serde_json::to_value(&UserDto {

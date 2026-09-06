@@ -250,6 +250,7 @@ impl FileProcessor for RarProcessor {
 			koreader_hash,
 			metadata,
 			pages,
+			audio: None,
 		})
 	}
 

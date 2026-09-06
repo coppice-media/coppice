@@ -220,6 +220,8 @@ mod tests {
 			end_page,
 			start_percentage: None,
 			end_percentage,
+			// Audio position; a Kavita chapter is always paged or located.
+			end_position_ms: None,
 			koreader_progress: None,
 			elapsed_seconds: None,
 			readthrough_number: 1,

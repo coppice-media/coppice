@@ -21,6 +21,7 @@ tracing = { workspace = true }
 uuid.workspace = true
 
 [dev-dependencies]
+parking_lot = "0.12"
 tokio = { workspace = true, features = ["full", "test-util"] }
 tests = { path = "../tests" }
 tower = { version = "0.5", features = ["util"] }

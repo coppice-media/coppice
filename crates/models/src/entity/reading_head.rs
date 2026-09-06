@@ -25,6 +25,12 @@ pub struct Model {
 	pub progression: f64,
 	/// The 1-based page when the position is page-addressed.
 	pub page: Option<i32>,
+	/// Milliseconds from the start of the publication when the position is
+	/// time-addressed (an audiobook). Never a page ordinal.
+	pub position_ms: Option<i64>,
+	/// The 0-based track the position fell in for a multi-file audiobook, as
+	/// the client reported it.
+	pub track_index: Option<i32>,
 	/// Sticky completion flag; only an explicit un-read clears it.
 	pub completed: bool,
 	/// The effective source time of the winning update (device time when the

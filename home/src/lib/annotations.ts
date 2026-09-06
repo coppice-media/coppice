@@ -19,9 +19,10 @@ export const KIND_OPTIONS = (Object.keys(KIND_LABELS) as AnnotationKind[]).map((
  * How a source is labelled in the hub. Only two lanes carry annotations
  * today: the native one (`WEB` — this console's reader and the GraphQL API)
  * and liseur-sync, whose CAS records report the kind of the device that
- * pushed them. Komga, OPDS and the Kavita profile carry position data but no
- * annotation resource, so they never appear as a source — their device kinds
- * are still labelled here because `source` is a `DeviceKind`.
+ * pushed them. Komga, OPDS and the Kavita and Audiobookshelf profiles carry
+ * position data but no annotation resource, so they never appear as a source
+ * — their device kinds are still labelled here because `source` is a
+ * `DeviceKind`.
  */
 export const SOURCE_LABELS: Record<DeviceKind, string> = {
 	WEB: 'Web',
@@ -30,6 +31,7 @@ export const SOURCE_LABELS: Record<DeviceKind, string> = {
 	LISEUR: 'Liseur',
 	API: 'API',
 	OPDS: 'OPDS',
+	ABS: 'Audiobookshelf',
 	MIHON: 'Mihon',
 	KOMELIA: 'Komelia'
 };

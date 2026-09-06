@@ -22,6 +22,7 @@ use crate::{
 	config::state::AppState,
 	errors::{APIError, APIResult},
 	middleware::auth::auth_middleware,
+	routers::api::v2::audio::{get_audio_manifest, get_audio_track},
 	utils::{http::ImageResponse, serve_media},
 };
 
@@ -32,6 +33,8 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 			Router::new()
 				.route("/thumbnail", get(get_media_thumbnail_handler))
 				.route("/page/{page}", get(get_media_page))
+				.route("/audio/manifest", get(get_audio_manifest))
+				.route("/audio/track/{index}", get(get_audio_track))
 				.route("/file", get(get_media_file)),
 		)
 		.layer(middleware::from_fn_with_state(app_state, auth_middleware))

@@ -203,6 +203,7 @@ impl FileProcessor for EpubProcessor {
 			koreader_hash,
 			metadata: Some(metadata),
 			pages,
+			audio: None,
 		})
 	}
 

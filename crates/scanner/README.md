@@ -52,6 +52,7 @@ pinned by `src/options.rs:127-235`.
 | `sequence` lives in the scanner, not in `stump_tools` | The parser has consumers on both sides of the dependency edge; putting it in `stump_tools` would force `stump_core` (quality check) to depend on the tools crate and its archive-writing surface | `src/sequence.rs:14-16`; `crates/tools/src/missing_sequence.rs:13-15`; `core/src/ingest/quality/missing_chapters_in_series.rs:7` |
 | Sequence numbers are `i64` thousandths, not floats | Gap math and equality must be exact for decimal chapters (`112.1`), and `f64` keys cannot be used in a `BTreeSet` | `src/sequence.rs:44-79`; test `numbers_format_without_trailing_zeroes` |
 | A decimal number covers its integer chapter (`112.1` → `112`) and a folder-wide span over 10000 refuses to enumerate gaps | Interstitial chapters must not open gaps, and a stray date/ISBN token would otherwise report millions of missing numbers | `src/sequence.rs:66-72,25-27`; tests `decimal_chapters_do_not_open_gaps`, `wide_spans_refuse_to_enumerate_gaps` |
+| `walk_series` yields an audiobook **folder** as one media path and `skip_current_dir()`s its files; the series root is checked the same way | `Library/Book Title/01.mp3 … 12.mp3` is the common layout, and walking into it shatters one publication into twelve books. The check runs *after* the unchanged-directory mtime skip, so an unchanged subtree costs no extra `readdir`, while a first scan (no stored mtime) and the always-visited root always reach it | `src/walk.rs:347-368`; tests `audiobook_folder_under_a_series_is_one_media_path`, `audiobook_series_root_is_one_media_path` (`src/walk.rs:790,841`); predicate `crates/media/src/common.rs::dir_is_audio_book` |
 
 ## Layout
 
@@ -76,7 +77,7 @@ Consumers: `core/Cargo.toml:45`, `apps/server/Cargo.toml:82`,
 ## How to verify
 
 ```text
-cargo test -p stump_scanner            # 25 contract tests (5 options, 7 walker, 13 sequence)
+cargo test -p stump_scanner            # 27 contract tests (5 options, 9 walker, 13 sequence)
 cargo check -p stump_scanner           # feature-off stump_media builds without pdf/rar
 cargo test -p stump_core --lib --tests # SeaORM adapter and scan jobs (gate line in .omp/PROJECT_STATE.md)
 ```

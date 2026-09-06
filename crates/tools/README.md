@@ -27,6 +27,8 @@ takes paths plus a JSON options blob and returns data; `crates/cli`
 | SmartyPants | <https://daringfireball.net/projects/smartypants/> | The published punctuation rules `smarten_punctuation` implements, including the "old school" dashes (`--` en dash, `---` em dash) and the opening/closing quote heuristic |
 | CLDR delimiters (LDML) | <https://www.unicode.org/reports/tr35/tr35-general.html#Delimiter_Elements>, `common/main/{en,de,fr}.xml` | The `quotationStart`/`quotationEnd`/`alternateQuotation*` glyphs per language: `en` `“”`/`‘’`, `de` `„“`/`‚‘`, `fr` `«»` |
 | MOBI / KF8 | MobileRead <https://wiki.mobileread.com/wiki/MOBI>, <https://wiki.mobileread.com/wiki/KF8> | Read only as the *format* behind `mobi2epub`; the parsing itself lives in `stump_media::MobiBook` and the citations are on its structures. Neither calibre's, KindleUnpack's nor boko's source is used |
+| ID3v2 chapter frames 1.0 | <https://id3.org/id3v2-chapters-1.0> | The `CHAP`/`CTOC` frames `audio-chapters` writes: `TIT2` inside a `CHAP` as the chapter name, the all-`0xFF` start/end byte offsets that mean "address me by time", and the one top-level ordered `CTOC` that lists the chapters |
+| QuickTime chapter lists | <https://developer.apple.com/documentation/quicktime-file-format/chapter_lists> | Why `audio-chapters` writes a Nero `chpl` list and never a chapter track — a chapter track is a media *track*, and a player uses the first chapter list it finds, which is also the precedence `stump_media::audio` probes with |
 
 ## Decisions
 
@@ -72,6 +74,15 @@ takes paths plus a JSON options blob and returns data; `crates/cli`
 | The generated navigation document is carried in the plan's `detail`, while the content-document transforms are carried as flags | The nav is *invented*, so the dry run has to show the exact document that will be written; the text transforms are pure functions of the archived bytes, so replaying flags cannot drift, and a plan does not have to carry a whole book's prose | `src/epub_polish.rs` `NavDocument`/`content_transforms`, `the_generated_nav_lists_every_ncx_entry`, `plan_writes_nothing` |
 | `mobi2epub` converts in process through `stump_media::MobiBook` rather than shelling out to `boko` or `ebook-convert` | The Kindle reader already exists in the tree for scanning, so a conversion needs no external binary, no temp copy of the whole book and no GPL process boundary; the external converters stay for the formats Stump cannot read (KFX) and for output formats it does not write | `src/mobi2epub.rs` `convert`, `the_produced_epub_passes_epub_check_with_no_findings`, `the_produced_epub_opens_with_the_epub_processor` |
 | `mobi2epub` writes the envelope with the same rules `epub-check` validates, and its own test asserts zero findings | Two modules that disagree about the OCF layout would mean `epub-check --fix` rewriting every file the converter just wrote | `src/mobi2epub.rs` `convert`/`Package`, `the_epub_envelope_follows_the_ocf_rules` |
+| `sources-import` reads the extension repository as text with a hand-rolled recogniser, and rejects a whole source the moment one member is not a literal instead of emitting a partial definition | A half-derived definition is a source that silently misbehaves at runtime; a rejected one is a row in `unsupported.json` naming the member, which is a work item. There is no Kotlin runtime here, so a "mostly parsed" class has nothing to fall back to | `src/sources_import.rs` `parse_class_body`/`Reject`, `behaviour_overrides_are_unsupported_with_the_member_named`, `a_source_without_a_theme_is_never_masked_by_its_overrides` |
+| Only data is derived: no upstream Kotlin is copied into this crate, every definition records `upstream.{repo,commit,path}`, and the output directory gets a `NOTICE` | keiyoushi/extensions-source is Apache-2.0, so a derived data set has to carry attribution and has to be re-derivable from the exact commit it came from — which is also what makes two runs diffable | `src/sources_import.rs` `NOTICE_TEMPLATE`/`Upstream`, `provenance_is_read_from_the_checkout_without_running_git`, `apply_writes_the_definitions_index_unsupported_and_notice` |
+| A definition's `version` is the extension's own `versionCode`; the theme's `baseVersionCode` is deliberately not folded in | Upstream adds the two to version an *APK* built from a Kotlin theme, but here the theme is Rust and ships with Stump — folding it in would bump every definition whenever the upstream counterpart of our own engine changed | `src/sources_import.rs` `Definition::version`, `docs/content/docs/developer/source-definitions.mdx` schema table |
+| Provenance is read out of `.git/HEAD`, `refs/` and `packed-refs` directly instead of shelling out to `git` | This crate has exactly one process-spawning path (`src/external.rs`, for operator-installed converters) and reading a commit id is not a conversion; it also keeps the tool working on an exported tree with no `git` on `PATH` | `src/sources_import.rs` `resolve_commit`/`resolve_repo`, `provenance_is_read_from_the_checkout_without_running_git` |
+| `audio-report` and `audio-chapters` resolve their targets through one function, `audio_report::publications` | "Audio publication" has to mean the same thing in the report and in the writer, or the mutating tool could name a file the report never listed; the walk is one level deep because `PathUtils::dir_is_audio_book` already refuses a directory holding subdirectories, so a deeper walk could only find folders that are not books | `src/audio_report.rs` `publications`, `a_library_folder_is_walked_one_level_into_its_publications`; `src/audio_chapters.rs` `apply_never_touches_a_file_the_plan_did_not_name` |
+| `audio-report` keeps the action row of a broken publication and attaches an `Error` warning instead of dropping the action | A report tool's action *is* its finding, so honouring `Severity::Error`'s "the related action was dropped" would hide exactly the books a librarian has to fix | `src/audio_report.rs` `warn_about`; `src/plan.rs` `Severity` |
+| `audio-chapters` writes only the MP4 `chpl` list, never the chapter track, and refuses Ogg/Opus/FLAC outright | A chapter track is a media track: rewriting or removing one is structural surgery, while the marks written are the ones just read from it, so the two mechanisms cannot disagree. Vorbis-comment marks live in the container's comment header, and rewriting that means rewriting every following page's granule bookkeeping — a metadata tool that gets it wrong produces a file no player opens | `src/audio_chapters.rs` `write_chpl`/`container_of`, `a_chapter_track_becomes_a_portable_chpl_list`, `an_unsupported_container_is_refused_with_an_error` |
+| A folder book's *per-file* provenance is derived from the publication's only for `per_track`, and re-probed per file otherwise | `probe_folder` records `per_track` only when no part carried a mark at all, so that one case is exact and free; any other aggregate names whichever part carried marks first and would license overwriting a part that has its own | `src/audio_chapters.rs` `existing_source` |
+| An in-place tag edit stages a *copy* of the original into `write_atomic`'s temp file and restores the file's mode afterwards | Both taggers rewrite a container in place — they need the media bytes they are not changing — so there is no "write a fresh file" path to use; and `write_atomic` stages through a 0600 temp file, which a library file must not inherit | `src/audio_chapters.rs` `edit_atomic`; `src/util.rs` `replace_archive_entry` |
 
 ## Tools
 
@@ -79,10 +90,55 @@ Each tool owns one `### <id>` subsection: what it does and refuses to do, its
 options (`Option | Type | Default | Effect`), then its action kinds and warning
 codes. Subsections are sorted by tool id as ASCII (`-` sorts before digits and
 letters, so `cbz-covers`, `cbzit`, `epub-check`, `epub-polish`, `epub2cbz`,
-`meta-edit`, `missing-sequence`, `webp-convert`). This section is the one part of the crate README that is
-exempt from the 120-line template budget: the tool contract requires one table
-row per option, so the file grows with the tool count. Keep each subsection to
+`meta-edit`, `missing-sequence`, `sources-import`, `webp-convert`). This
+section is the one part of the crate README that is exempt from the 120-line
+template budget: the tool contract requires one table row per option, so the
+file grows with the tool count. Keep each subsection to
 8-14 lines.
+
+### `audio-chapters`
+
+Embeds an audiobook's chapter marks into its own files, so a chapter list Stump
+only derived becomes a property of the book: a Nero `chpl` list for
+`.m4b`/`.m4a`, ID3v2 `CHAP` frames plus one top-level `CTOC` for `.mp3`. Every
+other container is refused, including Ogg/Opus/FLAC. On MP4 only the `chpl`
+list is written, never the chapter track.
+
+Marks a publisher authored (`mp4_chpl`, `mp4_chapter_track`, `id3_chap`,
+`vorbis_comment`) are reported as `keep-chapters` and left alone unless `force`
+is set. The unit is the *file*: a folder book is many containers, each carrying
+only the marks that fall inside it, rebased to file-relative milliseconds.
+
+| Option | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `force` | bool | `false` | Rewrite marks a publisher already authored |
+| `titles_from_filename` | bool | `false` | Name a per-file mark after the file stem even when the file carries a title tag; the default prefers the tag and falls back to the stem |
+
+Actions: `write-chapters`, `keep-chapters`. Warnings: `no-chapters`,
+`unsupported-container`, `probe-failed`, `not-audio`, `no-audio`,
+`missing-path`.
+
+### `audio-report`
+
+Reports one row per audio publication: duration (`h:mm:ss` and milliseconds),
+codec, sample rate, channels, bitrate, chapter provenance, chapter and track
+counts, cover presence, title, author and narrator. A single container, an
+audiobook folder, and a library folder holding both are all accepted.
+
+The warnings are the conditions that change what a client can do: no marks at
+all (`no-chapters`), marks Stump synthesized per file rather than a publisher
+authored (`synthesized-chapters`), parts that do not share one codec
+(`mixed-codec`), an undeterminable duration (`zero-duration`), and no embedded
+artwork (`no-cover`). Report-only: `apply` writes nothing and re-emits the
+findings, exactly like `missing-sequence`.
+
+| Option | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `detailed` | bool | `false` | Add the chapter marks (`0:00:00 Opening`) and the file list, in playback order, to every detail |
+
+Actions: `report-audio`. Warnings: `no-chapters`, `synthesized-chapters`,
+`mixed-codec`, `zero-duration`, `no-cover`, `probe-failed`, `not-audio`,
+`no-audio`, `missing-path`.
 
 ### `boko-convert`
 
@@ -385,6 +441,37 @@ Actions: `convert`. Warnings: `no-books`, `unreadable`, `no-sections`,
 `target-is-source`, `target-collision`, `target-exists`,
 `section-count-drift`.
 
+### `sources-import`
+
+Derives data-only source definitions from a checkout of
+[keiyoushi/extensions-source](https://github.com/keiyoushi/extensions-source):
+one JSON file per source carrying base URL, language, theme, version, NSFW flag
+and the per-site knobs that theme needs, plus `index.json`, `unsupported.json`
+and a `NOTICE`. Stump runs no Kotlin, so the repository is read as *text* by a
+hand-rolled recogniser — the Gradle `keiyoushi {}`/`source {}` DSL, base-class
+constructor arguments, and `override val`/`override fun` members whose body is
+a single literal expression — and the theme engines in `crates/provider-themes`
+execute the result. Behaviour is never guessed at: the whole source lands in
+`unsupported.json` naming every member that blocked it. Schema v1, the knob
+vocabulary and the reason codes are frozen in
+`docs/content/docs/developer/source-definitions.mdx`.
+
+| Option | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `extensions_source` | path | first input path | Checkout root; must contain `src/` |
+| `output_dir` | path | required | Existing directory the definitions are written into |
+| `themes` | string[] | all | Only derive these themes; everything else is counted as filtered |
+| `langs` | string[] | all | Only derive these source languages |
+
+Actions: `write-definition`, `write-index`, `write-unsupported`,
+`write-notice`, `report-stats` (the per-theme derived/unsupported table, which
+`apply` reports without writing a file). Warnings: `no-themes`,
+`unresolved-upstream-commit`, `duplicate-id`. Unsupported reason codes:
+`no-source-class`, `multiple-source-classes`, `no-theme`,
+`unknown-base-class`, `extra-supertype`, `no-base-url`, `unparsed-gradle`,
+`ctor-args`, `unparsed-knob`, `custom-override`, `custom-client`,
+`init-block`.
+
 ### `webp-convert`
 
 Re-encodes the pages of a CBZ as WebP through Stump's own page pipeline
@@ -424,14 +511,19 @@ Actions: `convert-pages`. Warnings: `no-archives`, `missing-path`,
 | `src/boko.rs` | `boko-convert` plus the `KindleExport` convenience; `BOKO_TOOL` is its whole `src/external.rs` description — one binary, clap's banner, the `cargo install` bin dir |
 | `src/epub_polish.rs` | `epub-polish`; imports `epub_check`'s package/zip helpers (`parse_opf`, `parse_container`, `resolve_href`, `set_attribute`, `read_entry_text`, `collect_epubs`, …) instead of re-deriving them, so both tools read one OPF model |
 | `src/mobi2epub.rs` | `mobi2epub`; the parsing is `stump_media::MobiBook`'s, this module only builds the OCF container (package document, nav, NCX) to `epub_check`'s rules |
+| `src/sources_import.rs` | `sources-import`; the crate's one tool that reads a source *repository* instead of books — no `ToolInput` paths beyond the checkout root, and the only writer of the definition schema |
+| `src/audio_report.rs` | `audio-report`, plus `publications()`: the one "what is an audio publication" walk both audio tools resolve their targets through |
+| `src/audio_chapters.rs` | `audio-chapters`; the crate's only in-place *container* edit — `edit_atomic` stages a copy of the original in `util::write_atomic`'s temp file, because a tagger rewrites a container in place |
 | `src/test_support.rs` | `cfg(test)` only: the crate-wide `fake_binary_lock` every subprocess test takes |
 
 ## How to verify
 
 ```sh
-cargo test -p stump_tools                     # unit + fixture tests; every fixture is built in code except `mobi2epub`'s
+cargo test -p stump_tools                     # unit + fixture tests; every fixture is built in code except `mobi2epub`'s and the audio tools'
+cargo test -p stump_tools audio               # both audio tools against the real ffmpeg-muxed fixtures
 cargo test -p stump_tools boko                # boko adapter against a fake `boko`
 cargo test -p stump_tools mobi2epub           # Kindle -> EPUB 3, checked with `epub-check` and re-opened with `EpubProcessor`
+cargo test -p stump_tools sources_import      # the Gradle/Kotlin recogniser, on synthetic checkouts built in code
 cargo run -p cli --bin cli-bin -- tools list  # every registered tool
 cargo run -p cli --bin cli-bin -- tools plan cbzit /books/Series --json
 ```
@@ -439,13 +531,19 @@ cargo run -p cli --bin cli-bin -- tools plan cbzit /books/Series --json
 `plan` writes nothing: the fixture tests assert the target does not exist after
 planning, and that a failed apply leaves the original bytes in place.
 
-`mobi2epub` is the one exception to "no binary fixtures": it reads
+Two tools are the exception to "no binary fixtures". `mobi2epub` reads
 `crates/media/integration-tests/data/kindle-formats.azw3`, because a real KF8
 skeleton/fragment table cannot be synthesised in a test and no converter that
-writes one is installable in this tree.
+writes one is installable in this tree. The `audio-*` tools read
+`crates/media/integration-tests/data/audio/`, because the whole point of an
+audio tool is that it reads and writes what real muxers write — including the
+two MP4 chapter mechanisms, which no synthetic blob distinguishes. Those
+fixtures are shared with `stump_media`'s own probe tests, so every mutating
+test copies one into a temp dir first.
 
 ## Deep docs
 
 - `crates/README.md` — crate index and README template
 - `crates/media/README.md` — archive/image processing this crate builds on
 - `crates/scanner/README.md` — the shared filename/sequence grammar
+- `docs/content/docs/developer/source-definitions.mdx` — the frozen schema v1 `sources-import` writes

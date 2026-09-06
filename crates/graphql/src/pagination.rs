@@ -1,10 +1,10 @@
-use crate::object::{
-	author::Author, directory_listing::DirectoryListing, job::Job, library::Library,
-	log::Log, media::Media, missing_entity::MissingEntity,
-	reading_list::ReadingList, series::Series, user::User,
-};
 #[cfg(feature = "web")]
 use crate::object::book_club_discussion_message::BookClubDiscussionMessage;
+use crate::object::{
+	author::Author, directory_listing::DirectoryListing, job::Job, library::Library,
+	log::Log, media::Media, missing_entity::MissingEntity, reading_list::ReadingList,
+	series::Series, user::User,
+};
 use async_graphql::{
 	CustomValidator, InputObject, InputValueError, OneofObject, OutputType, Result,
 	SimpleObject, Union,

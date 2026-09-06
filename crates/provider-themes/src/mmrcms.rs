@@ -16,13 +16,14 @@
 //! | `date_format` / `date_locale` | `MMRCMS.dateFormat` | `d MMM. yyyy`, `en-US` |
 //! | `chapter_string` | `MMRCMS.chapterString` | `Chapter`/`Capítulo`/`Chapitre` by `lang` |
 //! | `chapter_name_prefix` | `MMRCMS.chapterNamePrefix` | empty |
-//! | `popular_url` | `MMRCMS.popularMangaRequest` | `/filterList?page={page}&sortBy=views&asc=false` |
-//! | `latest_url` | `MMRCMS.latestUpdatesRequest` | `/latest-release?page={page}` |
-//! | `search_url` | `MMRCMS.searchMangaRequest` | `/search?query={query}` |
+//! | `popular_manga_url` (alias `popular_url`) | `MMRCMS.popularMangaRequest` | `/filterList?page={page}&sortBy=views&asc=false` |
+//! | `latest_updates_url` (alias `latest_url`) | `MMRCMS.latestUpdatesRequest` | `/latest-release?page={page}` |
+//! | `search_manga_url` (alias `search_url`) | `MMRCMS.searchMangaRequest` | `/search?query={query}` |
 //! | `popular_manga_selector` | `popularMangaSelector()` | `div.media` |
 //! | `latest_updates_selector` | `latestUpdatesSelector()` | `div.mangalist div.manga-item` |
 //! | `search_manga_selector` | `searchMangaSelector()` | `div.media` |
 //! | `popular_manga_next_page_selector` | `popularMangaNextPageSelector()` | `.pagination a[rel=next]` |
+//! | `search_manga_next_page_selector` | the search response's own control | `popular_manga_next_page_selector` |
 //! | `manga_url_selector` | the anchor inside a card | `.media-heading a, .manga-heading a` |
 //! | `details_title_selector` | `MMRCMS.detailsTitleSelector` | `.listmanga-header, .widget-title` |
 //! | `details_thumbnail_selector` | `.row img.img-responsive` | same |
@@ -32,6 +33,13 @@
 //! | `chapter_name_selector` | `.chapter-title-rtl` | same |
 //! | `chapter_date_selector` | `.date-chapter-title-rtl` | same |
 //! | `page_list_selector` | `pageListParse` | `#all > img.img-responsive` |
+//!
+//! An anchor knob (`manga_url_selector`, `search_manga_url_selector`,
+//! `chapter_url_selector`) set to `:self` means the matched card *is* the
+//! anchor, which is how a Tailwind rebuild wraps a whole cell in one `<a>`.
+//! `chapter_string` is the one knob where an explicitly empty string differs
+//! from an absent one: `""` strips the repeated series title, absent falls
+//! back to the per-language default below.
 //!
 //! `{page}` and `{query}` in the URL knobs are substituted; `{query}` is
 //! percent-encoded. A knob may be a path or a full URL.
@@ -58,8 +66,9 @@ use async_trait::async_trait;
 use models::entity::provider_source;
 use serde::Deserialize;
 use stump_provider::{
-	definition::SourceDefinition, RemoteChapter, RemotePage, RemoteSeries, SearchFilter,
-	Source, SourceCapabilities, SourceHttp, SourceInfo, SourcePage, SourceResult,
+	definition::{KnobValue, SourceDefinition},
+	RemoteChapter, RemotePage, RemoteSeries, SearchFilter, Source, SourceCapabilities,
+	SourceHttp, SourceInfo, SourcePage, SourceResult,
 };
 
 use crate::{
@@ -105,6 +114,7 @@ struct Selectors {
 	latest: Selector,
 	search: Selector,
 	next_page: Option<Selector>,
+	search_next_page: Option<Selector>,
 	item_url: Option<Selector>,
 	item_title: Option<Selector>,
 	search_item_url: Option<Selector>,
@@ -187,6 +197,12 @@ impl MmrcmsSource {
 				definition,
 				"popular_manga_next_page_selector",
 				&["search_manga_next_page_selector"],
+				Some(".pagination a[rel=next]"),
+			)?,
+			search_next_page: theme::optional_selector(
+				definition,
+				"search_manga_next_page_selector",
+				&["popular_manga_next_page_selector"],
 				Some(".pagination a[rel=next]"),
 			)?,
 			item_url: theme::optional_selector(
@@ -295,23 +311,33 @@ impl MmrcmsSource {
 			context,
 			selectors,
 			dates: DateParser::new(
-				definition.text_knob(&["date_format"]).unwrap_or("d MMM. yyyy"),
+				definition
+					.text_knob(&["date_format"])
+					.unwrap_or("d MMM. yyyy"),
 				definition.text_knob(&["date_locale"]).unwrap_or("en-US"),
 			),
+			// The generator names these after the Kotlin member
+			// (`popularMangaRequest` -> `popular_manga_url`); the shorter
+			// names are accepted as aliases.
 			popular_url: definition
-				.text_knob(&["popular_url"])
+				.text_knob(&["popular_manga_url", "popular_url"])
 				.unwrap_or("/filterList?page={page}&sortBy=views&asc=false")
 				.to_string(),
 			latest_url: definition
-				.text_knob(&["latest_url"])
+				.text_knob(&["latest_updates_url", "latest_url"])
 				.unwrap_or("/latest-release?page={page}")
 				.to_string(),
 			search_url: definition
-				.text_knob(&["search_url"])
+				.text_knob(&["search_manga_url", "search_url"])
 				.unwrap_or("/search?query={query}")
 				.to_string(),
+			// `override val chapterString = ""` (Read Comics Online) means
+			// "drop the repeated series title", not "fall back to `Chapter`",
+			// so an explicitly empty knob must survive: `text_knob` filters
+			// empty strings, the raw knob does not.
 			chapter_string: definition
-				.text_knob(&["chapter_string"])
+				.knob(&["chapter_string"])
+				.and_then(KnobValue::as_str)
 				.map(str::to_string)
 				.unwrap_or_else(|| default_chapter_string(definition.lang()).to_string()),
 			chapter_name_prefix: definition
@@ -330,12 +356,21 @@ impl MmrcmsSource {
 		self.context.url(&expanded)
 	}
 
+	/// A browse URL knob without a `{page}` placeholder is one fixed page
+	/// (`bg.utsukushii` overrides `popularMangaRequest` with a bare
+	/// `/manga-list`). Re-requesting it for page 2 would hand the
+	/// materialiser the same series forever, so the list ends after page 1.
+	fn exhausted(&self, template: &str, page: u32) -> bool {
+		page > 1 && !template.contains("{page}")
+	}
+
 	fn series_url(&self, slug: &str) -> String {
 		self.context.url(&format!("/{}/{slug}", self.item_path))
 	}
 
 	fn chapter_url(&self, chapter_id: &str) -> String {
-		self.context.url(&format!("/{}/{chapter_id}", self.item_path))
+		self.context
+			.url(&format!("/{}/{chapter_id}", self.item_path))
 	}
 
 	/// `MMRCMS.guessCover`: a missing or placeholder cover is served from the
@@ -350,13 +385,17 @@ impl MmrcmsSource {
 		}
 	}
 
-	/// `searchMangaFromElement` and its popular/latest aliases.
+	/// `searchMangaFromElement` and its popular/latest aliases. `next_page` is
+	/// passed in because a redesigned host paginates its search results with a
+	/// different control than its directory (Read Comics Online: `nav
+	/// a[rel=next]` browsing, `span a[rel=next]` searching).
 	pub fn parse_cards(
 		&self,
 		document: &Document,
 		list: &Selector,
 		item_url: Option<&Selector>,
 		item_title: Option<&Selector>,
+		next_page: Option<&Selector>,
 	) -> SourcePage<RemoteSeries> {
 		let root = document.root();
 		let mut items = Vec::new();
@@ -404,10 +443,7 @@ impl MmrcmsSource {
 				self.nsfw,
 			));
 		}
-		let has_next = self
-			.selectors
-			.next_page
-			.as_ref()
+		let has_next = next_page
 			.is_some_and(|selector| selector.select_first(document, root).is_some());
 		SourcePage { items, has_next }
 	}
@@ -528,11 +564,7 @@ impl MmrcmsSource {
 	}
 
 	/// `MMRCMS.chapterListParse` / `chapterFromElement`.
-	pub fn parse_chapters(
-		&self,
-		document: &Document,
-		slug: &str,
-	) -> Vec<RemoteChapter> {
+	pub fn parse_chapters(&self, document: &Document, slug: &str) -> Vec<RemoteChapter> {
 		let root = document.root();
 		let series_title = self
 			.selectors
@@ -686,7 +718,13 @@ const DETAIL_GENRE: [&str; 11] = [
 	"género",
 ];
 const DETAIL_STATUS: [&str; 7] = [
-	"status", "statut", "estado", "状態", "durum", "الحالة", "статус",
+	"status",
+	"statut",
+	"estado",
+	"状態",
+	"durum",
+	"الحالة",
+	"статус",
 ];
 
 fn description_text(document: &Document, node: NodeId) -> String {
@@ -763,6 +801,9 @@ impl Source for MmrcmsSource {
 	}
 
 	async fn popular(&self, page: u32) -> SourceResult<SourcePage<RemoteSeries>> {
+		if self.exhausted(&self.popular_url, page) {
+			return Ok(SourcePage::default());
+		}
 		let url = self.expand(&self.popular_url, page, "");
 		let document = self.context.get(&url).await?;
 		Ok(self.parse_cards(
@@ -770,12 +811,16 @@ impl Source for MmrcmsSource {
 			&self.selectors.popular,
 			self.selectors.item_url.as_ref(),
 			self.selectors.item_title.as_ref(),
+			self.selectors.next_page.as_ref(),
 		))
 	}
 
 	async fn latest(&self, page: u32) -> SourceResult<SourcePage<RemoteSeries>> {
 		if !self.context.info.capabilities.latest {
 			return Err(theme::unsupported(&self.context.info, "latest"));
+		}
+		if self.exhausted(&self.latest_url, page) {
+			return Ok(SourcePage::default());
 		}
 		let url = self.expand(&self.latest_url, page, "");
 		let document = self.context.get(&url).await?;
@@ -784,6 +829,7 @@ impl Source for MmrcmsSource {
 			&self.selectors.latest,
 			self.selectors.item_url.as_ref(),
 			self.selectors.item_title.as_ref(),
+			self.selectors.next_page.as_ref(),
 		))
 	}
 
@@ -805,12 +851,18 @@ impl Source for MmrcmsSource {
 				return Ok(self.directory_page(&result.suggestions, page));
 			}
 		}
+		// The JSON directory is unpaged and sliced locally above; an HTML
+		// endpoint without `{page}` cannot answer page 2.
+		if self.exhausted(&self.search_url, page) {
+			return Ok(SourcePage::default());
+		}
 		let document = Document::parse(&fetched.body, &fetched.url);
 		Ok(self.parse_cards(
 			&document,
 			&self.selectors.search,
 			self.selectors.search_item_url.as_ref(),
 			self.selectors.search_item_title.as_ref(),
+			self.selectors.search_next_page.as_ref(),
 		))
 	}
 
@@ -935,7 +987,10 @@ mod tests {
 				"chapter_date_selector",
 				KnobValue::Text(".text-slate-500".into()),
 			),
-			("page_list_selector", KnobValue::Text("#reader-all img".into())),
+			(
+				"page_list_selector",
+				KnobValue::Text("#reader-all img".into()),
+			),
 		])
 	}
 
@@ -977,6 +1032,35 @@ mod tests {
 		);
 	}
 
+	/// `sources-import` names a request override after its Kotlin member
+	/// (`popularMangaRequest` -> `popular_manga_url`) and emits an absolute
+	/// URL. Reading only the short alias silently ignored every generated
+	/// browse override, which is how `bg.utsukushii` browsed the wrong path.
+	#[test]
+	fn generated_request_knob_names_drive_browsing() {
+		let source = engine(&[(
+			"popular_manga_url",
+			KnobValue::Text("https://utsukushii-bg.com/manga-list".into()),
+		)]);
+		assert_eq!(
+			source.expand(&source.popular_url, 1, ""),
+			"https://utsukushii-bg.com/manga-list"
+		);
+		// No `{page}`: one fixed page, so page 2 is the end of the list
+		// rather than a second copy of page 1.
+		assert!(source.exhausted(&source.popular_url, 2));
+		assert!(!source.exhausted(&source.popular_url, 1));
+		let paged = engine(&[(
+			"latest_updates_url",
+			KnobValue::Text("/latest?p={page}".into()),
+		)]);
+		assert_eq!(
+			paged.expand(&paged.latest_url, 4, ""),
+			"https://readcomicsonline.test/latest?p=4"
+		);
+		assert!(!paged.exhausted(&paged.latest_url, 4));
+	}
+
 	#[test]
 	fn base_class_cards_read_the_media_heading() {
 		let source = engine(&[]);
@@ -996,6 +1080,7 @@ mod tests {
 			&source.selectors.popular,
 			source.selectors.item_url.as_ref(),
 			source.selectors.item_title.as_ref(),
+			source.selectors.next_page.as_ref(),
 		);
 		assert_eq!(page.items.len(), 2);
 		assert_eq!(page.items[0].remote_id, "alpha");
@@ -1027,6 +1112,7 @@ mod tests {
 			&source.selectors.popular,
 			source.selectors.item_url.as_ref(),
 			source.selectors.item_title.as_ref(),
+			source.selectors.next_page.as_ref(),
 		);
 		assert_eq!(page.items.len(), 2);
 		assert_eq!(page.items[0].remote_id, "iron-man");
@@ -1050,11 +1136,63 @@ mod tests {
 			&source.selectors.search,
 			source.selectors.search_item_url.as_ref(),
 			source.selectors.search_item_title.as_ref(),
+			source.selectors.search_next_page.as_ref(),
 		);
 		assert_eq!(page.items.len(), 2);
 		assert_eq!(page.items[0].remote_id, "hulk");
 		assert_eq!(page.items[0].title, "Hulk");
 		assert_eq!(page.items[1].title, "Vision");
+	}
+
+	/// Browsing and searching paginate with different controls on a
+	/// redesigned host, so one shared `next_page` selector is wrong: the
+	/// search page must not be declared exhausted because the directory's
+	/// `nav` control is absent, and vice versa.
+	#[test]
+	fn search_pagination_is_independent_of_directory_pagination() {
+		let source = read_comics_online();
+		let search_html = r#"<html><body>
+			<div><a href="/comic/hulk"><img src="/c/h.jpg"><p>Hulk</p></a></div>
+			<span><a rel="next" href="?name=h&page=2">next</a></span>
+		</body></html>"#;
+		let searched = source.parse_cards(
+			&Document::parse(
+				search_html,
+				"https://readcomicsonline.test/advanced-search",
+			),
+			&source.selectors.search,
+			source.selectors.search_item_url.as_ref(),
+			source.selectors.search_item_title.as_ref(),
+			source.selectors.search_next_page.as_ref(),
+		);
+		assert!(searched.has_next, "`span a[rel=next]` paginates search");
+		// The same body browsed: only `nav a[rel=next]` counts there.
+		let browsed = source.parse_cards(
+			&Document::parse(search_html, "https://readcomicsonline.test/comic-list"),
+			&source.selectors.search,
+			source.selectors.search_item_url.as_ref(),
+			source.selectors.search_item_title.as_ref(),
+			source.selectors.next_page.as_ref(),
+		);
+		assert!(!browsed.has_next, "`nav a[rel=next]` is absent");
+	}
+
+	/// `override val chapterString = ""` strips the repeated series title
+	/// outright. Treating the empty knob as "unset" would substitute the
+	/// `en` default `Chapter` and rename every chapter.
+	#[test]
+	fn empty_chapter_string_knob_strips_rather_than_substitutes() {
+		let source = read_comics_online();
+		assert_eq!(source.chapter_string, "");
+		assert_eq!(
+			source.clean_chapter_name("1776 (2025-)", "1776 (2025-) #4"),
+			"#4"
+		);
+		// Unset, the base-class default for `en` applies instead.
+		assert_eq!(
+			engine(&[]).clean_chapter_name("1776 (2025-)", "1776 (2025-) #4"),
+			"Chapter #4"
+		);
 	}
 
 	#[test]
@@ -1241,12 +1379,17 @@ mod tests {
 		let source = read_comics_online();
 		assert_eq!(
 			source
-				.chapter_id("https://readcomicsonline.test/comic/iron-man/12", "iron-man")
+				.chapter_id(
+					"https://readcomicsonline.test/comic/iron-man/12",
+					"iron-man"
+				)
 				.as_deref(),
 			Some("iron-man/12")
 		);
 		assert_eq!(
-			source.chapter_id("/comic/iron-man/2/3", "iron-man").as_deref(),
+			source
+				.chapter_id("/comic/iron-man/2/3", "iron-man")
+				.as_deref(),
 			Some("iron-man/2/3")
 		);
 		assert_eq!(source.chapter_id("/comic/", "iron-man"), None);

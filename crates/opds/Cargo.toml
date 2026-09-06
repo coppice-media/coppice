@@ -11,3 +11,11 @@ serde.workspace = true
 stump_api_types = { path = "../api-types" }
 stump_auth = { path = "../auth" }
 stump_core = { path = "../../core", default-features = false }
+
+[dev-dependencies]
+# The audio acquisition contract is decided in `stump_core::opds`, but this
+# crate is where it is reachable by a test: building an audiobook fixture
+# needs the `models` entities the feed reads.
+chrono.workspace = true
+models = { path = "../models", default-features = false }
+serde_json.workspace = true

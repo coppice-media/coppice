@@ -636,9 +636,7 @@ pub struct IngestProviderDescriptor {
 	pub help_url: Option<String>,
 }
 
-impl From<stump_ingest::providers::ProviderDescriptor>
-	for IngestProviderDescriptor
-{
+impl From<stump_ingest::providers::ProviderDescriptor> for IngestProviderDescriptor {
 	fn from(descriptor: stump_ingest::providers::ProviderDescriptor) -> Self {
 		let help_url = provider_help_url(&descriptor.id);
 		Self {

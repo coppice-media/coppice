@@ -268,7 +268,9 @@ impl MangaThemesiaSource {
 					.unwrap_or("en-US"),
 			),
 			manga_url_directory: normalise_directory(
-				definition.text_knob(&["manga_url_directory"]).unwrap_or("/manga"),
+				definition
+					.text_knob(&["manga_url_directory"])
+					.unwrap_or("/manga"),
 			),
 			project_page_string: normalise_directory(
 				definition
@@ -369,13 +371,7 @@ impl MangaThemesiaSource {
 				.into_iter()
 				.find(|node| is_image(document, *node))
 				.and_then(|image| IMAGE_ATTRS.resolve(document, image));
-			items.push(theme::series(
-				slug,
-				title,
-				Some(href),
-				thumbnail,
-				self.nsfw,
-			));
+			items.push(theme::series(slug, title, Some(href), thumbnail, self.nsfw));
 		}
 		let has_next = self
 			.selectors
@@ -544,9 +540,7 @@ impl MangaThemesiaSource {
 		if !from_markup.is_empty() {
 			return theme::pages_with_referer(from_markup, document.url());
 		}
-		let from_script = self
-			.script_images(document)
-			.unwrap_or_default();
+		let from_script = self.script_images(document).unwrap_or_default();
 		theme::pages_with_referer(from_script, document.url())
 	}
 
@@ -754,13 +748,15 @@ mod tests {
 			source.list_url(1, "solo leveling", "", false),
 			"https://themesia.test/manga/?title=solo+leveling&page=1"
 		);
-		let custom =
-			engine(&[("manga_url_directory", KnobValue::Text("series".into()))]);
+		let custom = engine(&[("manga_url_directory", KnobValue::Text("series".into()))]);
 		assert_eq!(
 			custom.list_url(1, "", "update", false),
 			"https://themesia.test/series/?title=&page=1&order=update"
 		);
-		assert_eq!(custom.series_url("abc"), "https://themesia.test/series/abc/");
+		assert_eq!(
+			custom.series_url("abc"),
+			"https://themesia.test/series/abc/"
+		);
 	}
 
 	#[test]
@@ -790,7 +786,8 @@ mod tests {
 			</div></div>
 			<div class="pagination"><a class="next" href="/manga/?page=2">Next</a></div>
 		</div></body></html>"#;
-		let page = source.parse_list(&Document::parse(html, "https://themesia.test/manga/"));
+		let page =
+			source.parse_list(&Document::parse(html, "https://themesia.test/manga/"));
 		assert_eq!(page.items.len(), 2);
 		assert_eq!(page.items[0].remote_id, "alpha");
 		assert_eq!(page.items[0].title, "Alpha Series");
@@ -944,7 +941,8 @@ mod tests {
 			<div id="readerarea"><img src="/wrong.jpg"></div>
 			<div id="custom"><img src="/right.jpg"></div>
 		</body></html>"#;
-		let pages = source.parse_pages(&Document::parse(html, "https://themesia.test/x/"));
+		let pages =
+			source.parse_pages(&Document::parse(html, "https://themesia.test/x/"));
 		assert_eq!(pages.len(), 1);
 		assert_eq!(pages[0].url, "https://themesia.test/right.jpg");
 	}
@@ -959,8 +957,8 @@ mod tests {
 			<li><a href="/x-chapter-1/">Chapter 1</a>
 				<span class="chapterdate">Maret 14, 2024</span></li>
 		</ul></div></body></html>"#;
-		let chapters =
-			source.parse_chapters(&Document::parse(html, "https://themesia.test/manga/x/"));
+		let chapters = source
+			.parse_chapters(&Document::parse(html, "https://themesia.test/manga/x/"));
 		assert_eq!(
 			chapters[0].uploaded_at.unwrap().date_naive(),
 			chrono::NaiveDate::from_ymd_opt(2024, 3, 14).unwrap()

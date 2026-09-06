@@ -8,12 +8,17 @@ use models::{
 		reading_progress::{
 			calculate_logical_date, compute_page_based_percentage, should_extend_session,
 		},
-		reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
+		reading_state::{
+			time_progression, Position, ProtocolUpdate, Publication, SourceProtocol,
+		},
 	},
 	entity::{media, reading_session},
-	services::reading_progress::{
-		derive_readthrough_number, get_book_pages, reset_cumulative_elapsed_seconds,
-		upsert_reading_session, NormalizedProgression,
+	services::{
+		audio,
+		reading_progress::{
+			derive_readthrough_number, get_book_pages, reset_cumulative_elapsed_seconds,
+			upsert_reading_session, NormalizedProgression,
+		},
 	},
 	shared::enums::ReadingStatus,
 };
@@ -47,6 +52,9 @@ impl ReadProgressMutation {
 		let reset_elapsed_seconds = input.reset_elapsed_seconds();
 		let raw_payload = serde_json::json!({ "input": format!("{input:?}") });
 		let book_pages = get_book_pages(id.to_string(), conn).await?;
+		// One primary-key lookup: a time-addressed update needs the duration
+		// to derive progression, and a paged book has no `media_audio` row.
+		let audio_duration_ms = audio::duration_ms(conn, id.as_ref()).await?;
 
 		let (progression, head_update) = match input {
 			MediaProgressInput::Epub(input) => {
@@ -102,6 +110,39 @@ impl ReadProgressMutation {
 					head_update,
 				)
 			},
+			MediaProgressInput::Audio(input) => {
+				let progression = audio_duration_ms
+					.and_then(|duration| time_progression(input.position_ms, duration));
+				let is_complete = input
+					.is_complete
+					.unwrap_or(progression.is_some_and(|progression| progression >= 1.0));
+				let head_update = ProtocolUpdate {
+					protocol: SourceProtocol::Stump,
+					device_id: input.device_id.clone(),
+					updated_at: None,
+					position: Position::Time {
+						position_ms: input.position_ms,
+						track_index: input.track_index,
+					},
+					progression: None,
+					completed: is_complete.then_some(true),
+					raw_payload,
+				};
+				(
+					NormalizedProgression {
+						page: None,
+						locator: None,
+						percentage: progression.and_then(|progression| {
+							Decimal::from_f64_retain(progression)
+						}),
+						elapsed_seconds_delta: input.elapsed_seconds_delta,
+						did_complete: is_complete,
+						device_id: input.device_id,
+						reset_elapsed_seconds,
+					},
+					head_update,
+				)
+			},
 		};
 
 		let upsert_txn = begin_write(conn).await?;
@@ -115,6 +156,7 @@ impl ReadProgressMutation {
 			Publication {
 				media_id: id.as_ref(),
 				pages: book_pages,
+				duration_ms: audio_duration_ms,
 			},
 			head_update,
 		)
@@ -219,6 +261,24 @@ impl ReadProgressMutation {
 					page: Some(input.page),
 					locator: None,
 					percentage: Some(percentage),
+					elapsed_seconds_delta: input.elapsed_seconds_delta,
+					did_complete: is_complete,
+					device_id: input.device_id,
+					reset_elapsed_seconds,
+				}
+			},
+			MediaProgressInput::Audio(input) => {
+				let progression = audio::duration_ms(&txn, id.as_ref())
+					.await?
+					.and_then(|duration| time_progression(input.position_ms, duration));
+				let is_complete = input
+					.is_complete
+					.unwrap_or(progression.is_some_and(|progression| progression >= 1.0));
+				NormalizedProgression {
+					page: None,
+					locator: None,
+					percentage: progression
+						.and_then(|progression| Decimal::from_f64_retain(progression)),
 					elapsed_seconds_delta: input.elapsed_seconds_delta,
 					did_complete: is_complete,
 					device_id: input.device_id,

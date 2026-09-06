@@ -347,6 +347,23 @@ pub async fn walk_series<S: ScanSource + ?Sized>(
 					if path_str != root_str && !did_change {
 						trace!(mtime = current_mtime, path = %path_str, "Skipping unchanged dir");
 						iterator.skip_current_dir();
+						continue;
+					}
+
+					// A flat folder of audio parts is ONE publication, so the
+					// directory itself is the media path and its files are
+					// never offered as books of their own. The series root is
+					// checked too: `Library/Book Title/01.mp3 .. 12.mp3` is
+					// the common audiobook layout, and there the root *is* the
+					// only book.
+					//
+					// This is only reached for a directory the walk was going
+					// to descend into anyway, so an unchanged subtree still
+					// costs no extra read.
+					if entry_path.dir_is_audio_book(&ignore_rules) {
+						trace!(path = %path_str, "Audiobook folder is one book");
+						valid.push(entry);
+						iterator.skip_current_dir();
 					}
 					continue;
 				}
@@ -765,6 +782,79 @@ mod tests {
 		.await
 		.unwrap();
 		assert_eq!(deep.media_to_create, vec![book]);
+	}
+
+	/// A flat folder of parts is ONE audiobook. If the walk offered each file,
+	/// a twelve-part book would land in the library as twelve books — and a
+	/// rescan must still resolve the folder to the same media row.
+	#[tokio::test]
+	async fn audiobook_folder_under_a_series_is_one_media_path() {
+		let temp = TempDir::new().unwrap();
+		let book = temp.path().join("Book Title");
+		std::fs::create_dir(&book).unwrap();
+		for part in ["01.mp3", "02.mp3", "03.mp3"] {
+			write_media(&book.join(part));
+		}
+		// A sibling comic in the same series is still its own book.
+		let comic = temp.path().join("comic.cbz");
+		write_media(&comic);
+		let source = FakeSource::default();
+
+		let walked = walk_series(
+			temp.path(),
+			&source,
+			ctx(temp.path(), rules(&[]), None, "series"),
+		)
+		.await
+		.unwrap();
+
+		let mut created = walked.media_to_create.clone();
+		created.sort();
+		let mut expected = vec![book.clone(), comic.clone()];
+		expected.sort();
+		assert_eq!(created, expected);
+
+		// The folder path is the media identity, so the next scan finds it in
+		// the existing map instead of creating a second book.
+		source.media.lock().push(MediaIdentity::new(
+			"media-id",
+			book.to_string_lossy(),
+			Some(modified_at(&book)),
+			ScanStatus::Ready,
+		));
+		let rescanned = walk_series(
+			temp.path(),
+			&source,
+			ctx(temp.path(), rules(&[]), None, "series"),
+		)
+		.await
+		.unwrap();
+
+		assert_eq!(rescanned.media_to_create, vec![comic]);
+		assert!(rescanned.media_to_visit.is_empty());
+		assert!(rescanned.missing_media.is_empty());
+	}
+
+	/// `Library/Book Title/01.mp3 .. 12.mp3` is the common audiobook layout,
+	/// which makes the series root itself the one book it holds. A first scan
+	/// must create it: nothing else ever will.
+	#[tokio::test]
+	async fn audiobook_series_root_is_one_media_path() {
+		let temp = TempDir::new().unwrap();
+		for part in ["01.mp3", "02.mp3"] {
+			write_media(&temp.path().join(part));
+		}
+		let source = FakeSource::default();
+
+		let walked = walk_series(
+			temp.path(),
+			&source,
+			ctx(temp.path(), rules(&[]), None, "series"),
+		)
+		.await
+		.unwrap();
+
+		assert_eq!(walked.media_to_create, vec![temp.path().to_path_buf()]);
 	}
 
 	#[test]

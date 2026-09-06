@@ -51,7 +51,10 @@ enum Simple {
 	Tag(String),
 	Id(String),
 	Class(String),
-	Attr { name: String, op: AttrOp },
+	Attr {
+		name: String,
+		op: AttrOp,
+	},
 	Not(Selector),
 	Has(Selector),
 	Contains(String),
@@ -272,9 +275,7 @@ fn match_simple(document: &Document, node: NodeId, simple: &Simple) -> bool {
 		},
 		Simple::Matches(regex) => regex.is_match(&document.text(node)),
 		Simple::FirstChild => element.sibling_index == 1,
-		Simple::LastChild => {
-			element.sibling_index == document.parent_element_count(node)
-		},
+		Simple::LastChild => element.sibling_index == document.parent_element_count(node),
 		Simple::OnlyChild => {
 			element.sibling_index == 1 && document.parent_element_count(node) == 1
 		},
@@ -283,8 +284,10 @@ fn match_simple(document: &Document, node: NodeId, simple: &Simple) -> bool {
 			Nth::Odd => element.sibling_index % 2 == 1,
 			Nth::Even => element.sibling_index % 2 == 0,
 		},
-		Simple::Empty => document.element_children(node).next().is_none()
-			&& document.text(node).is_empty(),
+		Simple::Empty => {
+			document.element_children(node).next().is_none()
+				&& document.text(node).is_empty()
+		},
 		Simple::Root => document.parent(node) == Some(document.root()),
 		Simple::IndexEquals(value) => element.sibling_index == value + 1,
 		Simple::IndexGreater(value) => element.sibling_index > value + 1,
@@ -630,18 +633,15 @@ impl<'a> Parser<'a> {
 
 	fn parse_pseudo(&mut self) -> Result<Simple, SelectorError> {
 		let name = self.parse_pseudo_name()?;
-		let takes_argument = matches!(
-			name.as_str(),
-			"not" | "has"
-				| "contains"
-				| "containsown"
-				| "containsdata"
-				| "matches"
-				| "nth-child"
-				| "eq"
-				| "gt"
-				| "lt"
-		);
+		let takes_argument =
+			matches!(
+				name.as_str(),
+				"not"
+					| "has" | "contains"
+					| "containsown" | "containsdata"
+					| "matches" | "nth-child"
+					| "eq" | "gt" | "lt"
+			);
 		let argument = if takes_argument {
 			self.expect(b'(')?;
 			Some(self.parse_balanced()?)

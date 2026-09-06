@@ -59,6 +59,10 @@ impl Endpoint {
 			],
 			DeviceKind::Komelia => vec![with_user("Komga server (X-API-Key)", base)],
 			DeviceKind::Liseur => vec![with_user("liseur-sync server", base)],
+			// An Audiobookshelf client is pointed at the server root and
+			// logs in with a username and password; the API key works as a
+			// bearer token for clients that skip the login.
+			DeviceKind::Abs => vec![with_user("Audiobookshelf server", base)],
 			DeviceKind::Api | DeviceKind::Web => {
 				vec![keyed("Stump API (Bearer)", format!("{base}/api"))]
 			},

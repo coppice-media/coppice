@@ -3,6 +3,7 @@ use std::{
 	path::{Path, PathBuf},
 };
 
+use globset::GlobSet;
 use models::{
 	entity::library_config, shared::image_processor_options::SupportedImageFormat,
 };
@@ -19,7 +20,8 @@ use super::format::pdf::PdfProcessor;
 use super::format::rar::RarProcessor;
 use super::metadata::ProcessedMediaMetadata;
 use super::{
-	format::epub::EpubProcessor, format::mobi::MobiProcessor, format::zip::ZipProcessor,
+	format::audio::AudioProcessor, format::epub::EpubProcessor,
+	format::mobi::MobiProcessor, format::zip::ZipProcessor,
 };
 
 /// A struct representing the options for processing a file. This is a subset of [`LibraryConfig`]
@@ -151,6 +153,10 @@ pub struct ProcessedFile {
 	pub koreader_hash: Option<String>,
 	pub metadata: Option<ProcessedMediaMetadata>,
 	pub pages: i32,
+	/// The probed facts of an audiobook, which the scanner persists into
+	/// `media_audio` and its track/chapter tables. `None` for every
+	/// paginated format.
+	pub audio: Option<models::services::audio::AudioFacts>,
 }
 
 #[derive(Debug)]
@@ -160,10 +166,25 @@ enum ProcessorType {
 	Epub,
 	Mobi,
 	Pdf,
+	Audio,
 }
 
 fn determine_processor(path: &Path) -> Result<ProcessorType, FileError> {
-	let mime = ContentType::from_path(path).mime_type();
+	let content_type = ContentType::from_path(path);
+	// Audio is decided before the mime match. A folder book has no mime of
+	// its own, and an audio container's mime (`audio/mpeg`, `audio/mp4`) is
+	// matched by none of the arms below.
+	//
+	// The directory rule reuses [`PathUtils::dir_is_audio_book`] with no
+	// ignore rules rather than threading the library's globset through every
+	// dispatch site: a user's ignore rule decides what the *walker* offers
+	// the processor, never what a folder already on the processing path
+	// physically is.
+	if content_type.is_audio() || path.dir_is_audio_book(&GlobSet::empty()) {
+		return Ok(ProcessorType::Audio);
+	}
+
+	let mime = content_type.mime_type();
 	let FileParts { extension, .. } = path.file_parts();
 
 	tracing::debug!(
@@ -172,7 +193,6 @@ fn determine_processor(path: &Path) -> Result<ProcessorType, FileError> {
 		?extension,
 		"Determining processor type for entry"
 	);
-
 	match (mime.as_str(), extension.to_lowercase().as_str()) {
 		("application/zip" | "application/vnd.comicbook+zip", ext) if ext != "epub" => {
 			Ok(ProcessorType::Zip)
@@ -218,6 +238,7 @@ macro_rules! dispatch_processor {
 			},
 			ProcessorType::Epub => EpubProcessor::$method($($arg),*),
 			ProcessorType::Mobi => MobiProcessor::$method($($arg),*),
+			ProcessorType::Audio => AudioProcessor::$method($($arg),*),
 			ProcessorType::Pdf => {
 				#[cfg(feature = "pdf")]
 				{

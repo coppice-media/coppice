@@ -19,6 +19,8 @@ mod test_support;
 pub mod util;
 
 // One module per tool; module name is the tool id with underscores.
+pub mod audio_chapters;
+pub mod audio_report;
 pub mod boko;
 pub mod calibre;
 pub mod calibre_polish;
@@ -108,6 +110,8 @@ pub trait Tool: Send + Sync {
 /// Every tool known to the build, in registration order.
 pub fn registry() -> Vec<Box<dyn Tool>> {
 	vec![
+		Box::new(audio_chapters::AudioChapters),
+		Box::new(audio_report::AudioReport),
 		Box::new(boko::BokoConvert),
 		Box::new(calibre::CalibreConvert),
 		Box::new(calibre::CalibreMeta),

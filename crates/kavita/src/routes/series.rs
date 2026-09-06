@@ -1905,7 +1905,10 @@ mod metadata_mapping {
 		assert_eq!(titles(&chapter, "genres"), ["Dark Fantasy", "Horror"]);
 		assert_eq!(titles(&chapter, "tags"), ["Komf Tagged"]);
 		assert_eq!(chapter["isbn"], serde_json::json!("9781593070205"));
-		assert_eq!(chapter["summary"], serde_json::json!("The Black Swordsman."));
+		assert_eq!(
+			chapter["summary"],
+			serde_json::json!("The Black Swordsman.")
+		);
 		assert_eq!(chapter["language"], serde_json::json!("ja"));
 		assert_eq!(
 			chapter["releaseDate"],

@@ -35,4 +35,11 @@ pub(crate) mod tests {
 	pub fn get_test_cbz_path() -> String {
 		fixture("science_comics_001.cbz")
 	}
+
+	/// A folder book: one publication spread over one file per part. The
+	/// dotted folder name is deliberate — a naive `file_parts()` reads `" 1"`
+	/// as its extension.
+	pub fn get_test_audiobook_folder_path() -> String {
+		fixture("audio/Book Vol. 1")
+	}
 }

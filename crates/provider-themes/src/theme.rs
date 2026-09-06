@@ -69,10 +69,11 @@ impl ThemeContext {
 		capabilities: SourceCapabilities,
 	) -> Result<Self, ThemeError> {
 		let limiter = rate_limiter(definition);
-		let http = SourceHttp::with_limiter(limiter).map_err(|source| ThemeError::Http {
-			id: definition.id.clone(),
-			source,
-		})?;
+		let http =
+			SourceHttp::with_limiter(limiter).map_err(|source| ThemeError::Http {
+				id: definition.id.clone(),
+				source,
+			})?;
 		let base_url = base_url_override
 			.map(|url| url.trim_end_matches('/').to_string())
 			.filter(|url| !url.is_empty())
@@ -149,8 +150,7 @@ fn parse(fetched: HtmlDocument) -> Document {
 /// `rateLimit(n)` defaults to one second per window.
 pub fn rate_limiter(definition: &SourceDefinition) -> RateLimiter {
 	const PERMIT_KEYS: [&str; 2] = ["rate_limit_permits", "rate_limit"];
-	const PERIOD_KEYS: [&str; 2] =
-		["rate_limit_period_seconds", "rate_limit_period"];
+	const PERIOD_KEYS: [&str; 2] = ["rate_limit_period_seconds", "rate_limit_period"];
 	let declared = definition.knob(&PERMIT_KEYS).is_some()
 		|| definition.knob(&PERIOD_KEYS).is_some();
 	if !declared {
@@ -281,9 +281,7 @@ fn largest_srcset_candidate(srcset: &str) -> Option<String> {
 			}
 		}
 	}
-	best.map(|(_, url)| url)
-		.or(fallback)
-		.map(str::to_string)
+	best.map(|(_, url)| url).or(fallback).map(str::to_string)
 }
 
 /// Map a status label to [`SeriesStatus`] using the multilingual vocabularies
@@ -469,11 +467,22 @@ pub fn pages_with_referer(urls: Vec<String>, referer: &str) -> Vec<RemotePage> {
 /// the label, ignoring a leading volume marker.
 pub fn chapter_number(name: &str) -> Option<f32> {
 	let lower = name.to_lowercase();
-	let after_marker = ["chapter", "chap", "ch.", "ch ", "capítulo", "capitulo",
-		"chapitre", "bölüm", "글", "화", "話"]
-		.iter()
-		.filter_map(|marker| lower.find(marker).map(|at| at + marker.len()))
-		.min();
+	let after_marker = [
+		"chapter",
+		"chap",
+		"ch.",
+		"ch ",
+		"capítulo",
+		"capitulo",
+		"chapitre",
+		"bölüm",
+		"글",
+		"화",
+		"話",
+	]
+	.iter()
+	.filter_map(|marker| lower.find(marker).map(|at| at + marker.len()))
+	.min();
 	let haystack = match after_marker {
 		Some(at) => &lower[at..],
 		None => lower.as_str(),
@@ -594,9 +603,14 @@ mod tests {
 	fn selector_knobs_override_the_base_class_default() {
 		let mut definition = definition();
 		assert_eq!(
-			selector(&definition, "chapter_list_selector", &[], "li.wp-manga-chapter")
-				.unwrap()
-				.source(),
+			selector(
+				&definition,
+				"chapter_list_selector",
+				&[],
+				"li.wp-manga-chapter"
+			)
+			.unwrap()
+			.source(),
 			"li.wp-manga-chapter"
 		);
 		definition.knobs.insert(
@@ -604,9 +618,14 @@ mod tests {
 			KnobValue::Text(".custom > a".into()),
 		);
 		assert_eq!(
-			selector(&definition, "chapter_list_selector", &[], "li.wp-manga-chapter")
-				.unwrap()
-				.source(),
+			selector(
+				&definition,
+				"chapter_list_selector",
+				&[],
+				"li.wp-manga-chapter"
+			)
+			.unwrap()
+			.source(),
 			".custom > a"
 		);
 
@@ -614,7 +633,8 @@ mod tests {
 			"chapter_list_selector".into(),
 			KnobValue::Text(":nth-of-type(2)".into()),
 		);
-		let error = selector(&definition, "chapter_list_selector", &[], "li").unwrap_err();
+		let error =
+			selector(&definition, "chapter_list_selector", &[], "li").unwrap_err();
 		assert!(
 			matches!(error, ThemeError::Selector { knob, .. } if knob == "chapter_list_selector"),
 			"{error}"
@@ -624,13 +644,14 @@ mod tests {
 	#[test]
 	fn self_selector_sentinel_means_the_item_itself() {
 		let mut definition = definition();
-		definition.knobs.insert(
-			"manga_url_selector".into(),
-			KnobValue::Text(":self".into()),
+		definition
+			.knobs
+			.insert("manga_url_selector".into(), KnobValue::Text(":self".into()));
+		assert!(
+			optional_selector(&definition, "manga_url_selector", &[], Some("a"))
+				.unwrap()
+				.is_none()
 		);
-		assert!(optional_selector(&definition, "manga_url_selector", &[], Some("a"))
-			.unwrap()
-			.is_none());
 		assert!(is_self_selector(&definition, &["manga_url_selector"]));
 	}
 
@@ -646,13 +667,8 @@ mod tests {
 			</div>"#,
 			"https://site.test/read/",
 		);
-		let attrs = ImageAttrs(&[
-			"data-src",
-			"data-lazy-src",
-			"data-cfsrc",
-			"srcset",
-			"src",
-		]);
+		let attrs =
+			ImageAttrs(&["data-src", "data-lazy-src", "data-cfsrc", "srcset", "src"]);
 		let by_id = |id: &str| {
 			document
 				.ids()

@@ -36,6 +36,7 @@
 		"developer/client-verification",
 		"developer/komga-compat",
 		"developer/kavita-compat",
+		"developer/abs-compat",
 		"developer/kobo-sync-capabilities",
 		"developer/sync-platforms",
 		"developer/kobo-device-database",

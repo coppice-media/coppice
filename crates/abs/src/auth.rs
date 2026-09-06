@@ -49,11 +49,7 @@ pub struct AbsClaims {
 	/// legacy token.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub jti: Option<String>,
-	#[serde(
-		rename = "type",
-		default,
-		skip_serializing_if = "Option::is_none"
-	)]
+	#[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
 	pub token_type: Option<TokenType>,
 	pub iat: i64,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -187,8 +183,8 @@ mod tests {
 
 	#[test]
 	fn minted_tokens_carry_the_abs_claim_shape() {
-		let minted = mint_tokens(SECRET, "user-1", "ada", Some("device-9"))
-			.expect("mint tokens");
+		let minted =
+			mint_tokens(SECRET, "user-1", "ada", Some("device-9")).expect("mint tokens");
 
 		let legacy = verify_token(SECRET, &minted.token).expect("legacy");
 		assert_eq!(legacy.user_id, "user-1");

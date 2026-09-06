@@ -39,7 +39,8 @@ pub(crate) async fn create_tag(
 	// the books this user can actually see before touching the container.
 	let visible = visible_books(&ctx, &user, &revision_ids).await?;
 	if !visible.is_empty() {
-		stump_collections::add_shelf_items(&ctx, &user, &model.id, visible, device).await?;
+		stump_collections::add_shelf_items(&ctx, &user, &model.id, visible, device)
+			.await?;
 	}
 	Ok(model.id)
 }
@@ -88,7 +89,8 @@ pub(crate) async fn remove_tag_items(
 ) -> APIResult<()> {
 	let user = auth.user();
 	let device = device_name(&ctx, auth.api_key.as_deref()).await;
-	stump_collections::remove_shelf_items(&ctx, &user, &tag_id, revision_ids, device).await?;
+	stump_collections::remove_shelf_items(&ctx, &user, &tag_id, revision_ids, device)
+		.await?;
 	Ok(())
 }
 

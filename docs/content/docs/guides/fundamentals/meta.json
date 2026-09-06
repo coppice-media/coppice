@@ -1,0 +1,13 @@
+{
+	"pages": [
+		"background-jobs",
+		"books",
+		"audiobooks",
+		"libraries",
+		"progress",
+		"scanner",
+		"series",
+		"tags",
+		"thumbnails"
+	]
+}

@@ -835,6 +835,7 @@ mod tests {
 			preview_content: Set(Some("A beginning is the time".to_owned())),
 			locator: Set(None),
 			page: Set(Some(42)),
+			position_ms: Set(None),
 			media_id: Set(books[1].clone()),
 			user_id: Set(user.id.clone()),
 			created_at: Set(ts(30)),

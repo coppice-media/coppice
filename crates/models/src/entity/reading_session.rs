@@ -38,6 +38,10 @@ pub struct Model {
 	pub start_page: Option<i32>,
 	pub end_page: Option<i32>,
 
+	/// Where a listening session stopped, in milliseconds from the start of
+	/// the publication. The time-addressed twin of `end_page`/`end_locator`.
+	pub end_position_ms: Option<i64>,
+
 	pub start_percentage: Option<Decimal>,
 	pub end_percentage: Option<Decimal>,
 

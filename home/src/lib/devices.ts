@@ -15,6 +15,7 @@ export const DEVICE_KIND_LABELS: Record<DeviceKind, string> = {
 	KOMELIA: 'Komelia',
 	LISEUR: 'Liseur',
 	OPDS: 'OPDS reader',
+	ABS: 'Audiobookshelf client',
 	API: 'API client',
 	WEB: 'Browser'
 };
@@ -27,6 +28,10 @@ export const ADDABLE_KINDS: { kind: DeviceKind; description: string }[] = [
 	{ kind: 'MIHON', description: 'Mihon (Tachiyomi) through the Komga-compatible API' },
 	{ kind: 'KOMELIA', description: 'Komelia through the Komga-compatible API' },
 	{ kind: 'OPDS', description: 'Any OPDS reader (Panels, Chunky, Librera, …)' },
+	{
+		kind: 'ABS',
+		description: 'Lissen or another Audiobookshelf client, for audiobooks'
+	},
 	{ kind: 'API', description: 'A script or integration using the native API' }
 ];
 

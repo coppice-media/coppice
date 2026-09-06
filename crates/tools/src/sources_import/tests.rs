@@ -65,9 +65,7 @@ impl Checkout {
 			.collect::<String>();
 		fs::write(
 			dir.join(format!("{module}.kt")),
-			format!(
-				"package eu.kanade.tachiyomi.multisrc.{module}\n\n{declarations}"
-			),
+			format!("package eu.kanade.tachiyomi.multisrc.{module}\n\n{declarations}"),
 		)
 		.expect("theme source");
 		self
@@ -76,9 +74,7 @@ impl Checkout {
 	/// One `src/<lang>/<name>` extension.
 	fn extension(&self, lang: &str, name: &str, gradle: &str, kotlin: &str) -> &Self {
 		let dir = self.root().join("src").join(lang).join(name);
-		let source = dir.join(format!(
-			"src/eu/kanade/tachiyomi/extension/{lang}/{name}"
-		));
+		let source = dir.join(format!("src/eu/kanade/tachiyomi/extension/{lang}/{name}"));
 		fs::create_dir_all(&source).expect("extension dir");
 		fs::write(dir.join("build.gradle.kts"), gradle).expect("gradle");
 		fs::write(source.join("Source.kt"), kotlin).expect("kotlin");
@@ -122,9 +118,7 @@ fn definitions(plan: &Plan) -> Vec<Definition> {
 	plan.actions
 		.iter()
 		.filter(|action| action.kind == KIND_DEFINITION)
-		.map(|action| {
-			serde_json::from_value(action.detail.clone()).expect("definition")
-		})
+		.map(|action| serde_json::from_value(action.detail.clone()).expect("definition"))
 		.collect()
 }
 
@@ -281,7 +275,10 @@ fn override_values_become_snake_case_knobs_of_the_declared_type() {
 	let definition = definition(&plan, "vi.knobs");
 
 	assert_eq!(knob(&definition, "manga_sub_string"), text("truyen"));
-	assert_eq!(knob(&definition, "filter_non_manga_items"), Knob::Bool(false));
+	assert_eq!(
+		knob(&definition, "filter_non_manga_items"),
+		Knob::Bool(false)
+	);
 	assert_eq!(knob(&definition, "page_size"), Knob::Int(24));
 	// A `$baseUrl` template is resolved against the source's own base URL.
 	assert_eq!(
@@ -553,7 +550,68 @@ fn several_source_blocks_expand_to_one_definition_each() {
 		.into_iter()
 		.map(|row| row.file)
 		.collect::<Vec<_>>();
-	assert_eq!(files, vec!["en/ja.twin.twinen.json", "ja/ja.twin.twinjp.json"]);
+	assert_eq!(
+		files,
+		vec!["en/ja.twin.twinen.json", "ja/ja.twin.twinjp.json"]
+	);
+}
+
+/// An id is the data set's primary key and names a file, so which
+/// discriminator wins is a contract, not an implementation detail.
+#[test]
+fn multi_source_ids_fall_back_from_name_to_lang_to_block_index() {
+	let checkout = Checkout::new();
+	let kotlin = |package: &str, class: &str| {
+		format!(
+			"package eu.kanade.tachiyomi.extension.all.{package}\n\n\
+			 import eu.kanade.tachiyomi.multisrc.madara.Madara\n\
+			 import keiyoushi.annotation.Source\n\n\
+			 @Source\n\
+			 abstract class {class} : Madara() {{\n}}\n"
+		)
+	};
+	checkout
+		.extension(
+			"all",
+			"bylang",
+			&gradle(
+				"ByLang",
+				1,
+				"SAFE",
+				"madara",
+				// One name, two languages: upstream's multi-language shape.
+				"    source {\n        lang = \"en\"\n        \
+				 baseUrl = \"https://en.bylang.test\"\n    }\n\n    \
+				 source {\n        lang = \"es\"\n        \
+				 baseUrl = \"https://es.bylang.test\"\n    }\n",
+			),
+			&kotlin("bylang", "ByLang"),
+		)
+		.extension(
+			"all",
+			"byindex",
+			&gradle(
+				"ByIndex",
+				1,
+				"SAFE",
+				"madara",
+				// Neither the name nor the lang tells the blocks apart.
+				"    source {\n        lang = \"all\"\n        \
+				 baseUrl = \"https://one.byindex.test\"\n    }\n\n    \
+				 source {\n        lang = \"all\"\n        \
+				 baseUrl = \"https://two.byindex.test\"\n    }\n",
+			),
+			&kotlin("byindex", "ByIndex"),
+		);
+
+	let output = TempDir::new().expect("out");
+	let plan = checkout.plan(output.path());
+
+	let url = |id: &str| definition(&plan, id).base_url;
+	assert_eq!(url("all.bylang.en"), "https://en.bylang.test");
+	assert_eq!(url("all.bylang.es"), "https://es.bylang.test");
+	assert_eq!(url("all.byindex.1"), "https://one.byindex.test");
+	assert_eq!(url("all.byindex.2"), "https://two.byindex.test");
 }
 
 #[test]
@@ -619,7 +677,10 @@ fn base_url_modes_and_comments_are_parsed() {
 	);
 
 	// The first mirror is the default, taken from the `label to url` pair.
-	assert_eq!(definition(&plan, "zh.mirrored").base_url, "https://first.test");
+	assert_eq!(
+		definition(&plan, "zh.mirrored").base_url,
+		"https://first.test"
+	);
 }
 
 #[test]
@@ -722,6 +783,53 @@ fn behaviour_overrides_are_unsupported_with_the_member_named() {
 		assert_eq!(row.theme.as_deref(), Some("madara"), "{row:?}");
 		assert_eq!(row.lang, "en");
 	}
+}
+
+/// `unsupported.json` is the porting work list for `crates/provider-themes`, so
+/// a class that needs four members ported must not read as if it needed one.
+#[test]
+fn every_blocking_member_is_named_not_just_the_first() {
+	let checkout = Checkout::new();
+	checkout.extension(
+		"en",
+		"heavy",
+		&gradle(
+			"Heavy",
+			1,
+			"SAFE",
+			"mmrcms",
+			&source_block("en", "https://heavy.test"),
+		),
+		"package eu.kanade.tachiyomi.extension.en.heavy\n\n\
+		 import eu.kanade.tachiyomi.multisrc.mmrcms.MMRCMS\n\
+		 import keiyoushi.annotation.Source\n\n\
+		 @Source\n\
+		 abstract class Heavy : MMRCMS() {\n    \
+		 override val itemPath = \"comic\"\n\n    \
+		 override fun popularMangaFromElement(element: Element): SManga = \
+		 SManga.create().apply {\n        title = element.text()\n    }\n\n    \
+		 override fun mangaDetailsParse(document: Document): SManga {\n        \
+		 return SManga.create()\n    }\n\n    \
+		 override fun chapterListSelector() = \".chapters > li\"\n\n    \
+		 override fun pageListParse(document: Document) = \
+		 document.select(\"img\").map { Page(0) }\n}\n",
+	);
+
+	let output = TempDir::new().expect("out");
+	let plan = checkout.plan(output.path());
+
+	// The first blocker in file order owns the code and leads the reason...
+	let (code, blocked) = reason(&plan, "en.heavy");
+	assert_eq!(code, "custom-override");
+	assert!(blocked.starts_with("popularMangaFromElement:"), "{blocked}");
+	// ...and every later one is named, so the row is countable work.
+	assert!(
+		blocked.ends_with("(and 2 more: mangaDetailsParse, pageListParse)"),
+		"{blocked}"
+	);
+	// Members that *are* data are never listed: both of these derived.
+	assert!(!blocked.contains("itemPath"), "{blocked}");
+	assert!(!blocked.contains("chapterListSelector"), "{blocked}");
 }
 
 #[test]
@@ -849,7 +957,8 @@ fn apply_writes_the_definitions_index_unsupported_and_notice() {
 	assert!(report.skipped.is_empty(), "{:?}", report.skipped);
 	assert_eq!(report.applied.len(), plan.actions.len());
 
-	let written = fs::read_to_string(output.path().join("en/en.good.json")).expect("definition");
+	let written =
+		fs::read_to_string(output.path().join("en/en.good.json")).expect("definition");
 	let definition: Definition = serde_json::from_str(&written).expect("json");
 	assert_eq!(definition.id, "en.good");
 	assert_eq!(knob(&definition, "has_project_page"), Knob::Bool(true));
@@ -857,9 +966,10 @@ fn apply_writes_the_definitions_index_unsupported_and_notice() {
 	assert_eq!(definition.upstream.repo, "keiyoushi/extensions-source");
 	assert!(written.ends_with("}\n"), "files end with a newline");
 
-	let index: Vec<IndexRow> =
-		serde_json::from_str(&fs::read_to_string(output.path().join("index.json")).unwrap())
-			.expect("index");
+	let index: Vec<IndexRow> = serde_json::from_str(
+		&fs::read_to_string(output.path().join("index.json")).unwrap(),
+	)
+	.expect("index");
 	assert_eq!(index.len(), 1);
 	assert_eq!(index[0].file, "en/en.good.json");
 	assert_eq!(index[0].theme, "mangathemesia");
@@ -1081,7 +1191,9 @@ fn provenance_is_read_from_the_checkout_without_running_git() {
 
 	// A symbolic HEAD resolved through `refs/heads`.
 	assert_eq!(
-		definition(&checkout.plan(output.path()), "en.good").upstream.commit,
+		definition(&checkout.plan(output.path()), "en.good")
+			.upstream
+			.commit,
 		COMMIT
 	);
 
@@ -1090,7 +1202,9 @@ fn provenance_is_read_from_the_checkout_without_running_git() {
 	fs::remove_file(git.join("refs/heads/main")).expect("unpack");
 	fs::write(
 		git.join("packed-refs"),
-		format!("# pack-refs with: peeled fully-peeled sorted \n{COMMIT} refs/heads/main\n"),
+		format!(
+			"# pack-refs with: peeled fully-peeled sorted \n{COMMIT} refs/heads/main\n"
+		),
 	)
 	.expect("packed-refs");
 	fs::write(
@@ -1105,7 +1219,9 @@ fn provenance_is_read_from_the_checkout_without_running_git() {
 	// A detached HEAD holds the id itself.
 	fs::write(git.join("HEAD"), format!("{COMMIT}\n")).expect("HEAD");
 	assert_eq!(
-		definition(&checkout.plan(output.path()), "en.good").upstream.commit,
+		definition(&checkout.plan(output.path()), "en.good")
+			.upstream
+			.commit,
 		COMMIT
 	);
 
@@ -1133,7 +1249,9 @@ fn a_checkout_or_output_that_cannot_be_used_is_refused_before_any_parsing() {
 	let output = TempDir::new().expect("out");
 
 	let error = SourcesImport
-		.plan(&ToolInput::new(vec![]).with_options(json!({ "output_dir": output.path() })))
+		.plan(
+			&ToolInput::new(vec![]).with_options(json!({ "output_dir": output.path() })),
+		)
 		.expect_err("no checkout");
 	assert!(matches!(error, ToolError::Invalid(_)), "{error}");
 
@@ -1235,14 +1353,23 @@ fn identifiers_and_locales_are_converted_by_one_rule() {
 	assert_eq!(snake_case("mangaSubString"), "manga_sub_string");
 	assert_eq!(snake_case("MangaAjaxPaginated"), "manga_ajax_paginated");
 	assert_eq!(snake_case("SEARCH_URL"), "search_url");
-	assert_eq!(snake_case("useNewChapterEndpoint"), "use_new_chapter_endpoint");
-	assert_eq!(snake_case("popularMangaUrlSelectorImg"), "popular_manga_url_selector_img");
+	assert_eq!(
+		snake_case("useNewChapterEndpoint"),
+		"use_new_chapter_endpoint"
+	);
+	assert_eq!(
+		snake_case("popularMangaUrlSelectorImg"),
+		"popular_manga_url_selector_img"
+	);
 
 	assert_eq!(locale("Locale.US").as_deref(), Some("en-US"));
 	assert_eq!(locale("Locale.ROOT").as_deref(), Some(""));
 	assert_eq!(locale("Locale(\"tr\")").as_deref(), Some("tr"));
 	assert_eq!(locale("Locale(\"pt\", \"BR\")").as_deref(), Some("pt-BR"));
-	assert_eq!(locale("Locale.forLanguageTag(\"vi\")").as_deref(), Some("vi"));
+	assert_eq!(
+		locale("Locale.forLanguageTag(\"vi\")").as_deref(),
+		Some("vi")
+	);
 	// A device-dependent locale is not data.
 	assert_eq!(locale("Locale.getDefault()"), None);
 }

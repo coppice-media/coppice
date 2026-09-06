@@ -26,9 +26,7 @@ use crate::{
 	browse::{BrowseKind, RemoteOrigin, VirtualBrowseCache},
 	cache::{CacheKey, PageCache},
 	catalog::{CatalogError, CatalogSnapshot, SourceCatalog},
-	definition::{
-		DefinitionEngine, DefinitionError, DefinitionLoader, SourceDefinition,
-	},
+	definition::{DefinitionEngine, DefinitionError, DefinitionLoader, SourceDefinition},
 	health::{self, HealthChecker, HealthRunSummary},
 	source::{RemotePage, RemoteSeries, Source, SourceError},
 	virtual_path::VirtualPath,
@@ -585,25 +583,50 @@ impl ProviderHost {
 		source_id: &str,
 		chapter_id: &str,
 	) -> Result<Arc<Vec<RemotePage>>, ProviderError> {
-		let key = format!("{source_id}/{chapter_id}");
-		if let Some(pages) = self.cached_manifest(&key) {
+		if let Some(pages) = self.cached_manifest(&format!("{source_id}/{chapter_id}")) {
 			return Ok(pages);
 		}
+		self.resolve_manifest(source_id, chapter_id).await
+	}
+
+	/// Ask the source whether it can serve `chapter_id` *now*, ignoring the
+	/// cached manifest.
+	///
+	/// A feed can list a chapter its own source refuses: MangaDex reports
+	/// `pages: 14, isUnavailable: false` for One Piece ch. 1191 while
+	/// `/at-home/server/391c1555-…` answers `404`. The manifest is the only
+	/// authority, and a cached one only proves what was true up to
+	/// [`MANIFEST_TTL`] ago, so a reconciliation pass
+	/// ([`crate::materialize`]) must re-ask.
+	pub async fn verify_chapter(
+		&self,
+		source_id: &str,
+		chapter_id: &str,
+	) -> Result<(), ProviderError> {
+		self.resolve_manifest(source_id, chapter_id).await.map(drop)
+	}
+
+	/// Fetch the page manifest from the source and cache it.
+	async fn resolve_manifest(
+		&self,
+		source_id: &str,
+		chapter_id: &str,
+	) -> Result<Arc<Vec<RemotePage>>, ProviderError> {
 		let source = self.source(source_id)?;
 		// A 404 from the page-manifest lookup is the source saying it cannot
 		// serve this chapter (MangaDex answers `/at-home/server/{id}` with
 		// 404 for licensed or taken-down chapters). That is a permanent
 		// per-chapter verdict, not a missing file.
-		let pages = Arc::new(source.pages(chapter_id).await.map_err(|error| {
-			match error {
+		let pages = Arc::new(source.pages(chapter_id).await.map_err(
+			|error| match error {
 				SourceError::NotFound(_) => ProviderError::Unavailable {
 					source_id: source_id.to_string(),
 				},
 				other => ProviderError::Source(other),
-			}
-		})?);
+			},
+		)?);
 		self.manifests.lock().expect("manifests poisoned").insert(
-			key,
+			format!("{source_id}/{chapter_id}"),
 			Manifest {
 				resolved_at: Instant::now(),
 				pages: pages.clone(),

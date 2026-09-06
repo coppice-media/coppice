@@ -7,16 +7,18 @@ use async_graphql::{
 	Context, Error, InputObject, Object, Result, Upload, UploadValue, ID,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use chrono::Utc;
 use models::{
-	entity::{library, library_config, media, series},
+	entity::{library, library_config, media, series, user},
 	shared::enums::UserPermission,
 };
-use sea_orm::{prelude::*, sea_query::Query};
+use sea_orm::{prelude::*, sea_query::Query, IntoActiveModel, Set};
 use stump_core::filesystem::image::{
 	PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope,
 };
 use stump_core::job::stump_job::StumpJob;
 use stump_media::{
+	generate_image_metadata_from_bytes,
 	image::{place_thumbnail, remove_thumbnails, replace_thumbnail},
 	ContentType,
 };
@@ -25,8 +27,9 @@ use zip::{read::ZipFile, ZipArchive};
 
 use crate::{
 	data::CoreContext,
+	error_message::FORBIDDEN_ACTION,
 	guard::{OptionalFeature, OptionalFeatureGuard, PermissionGuard},
-	object::{library::Library, media::Media, series::Series},
+	object::{library::Library, media::Media, series::Series, user::User},
 };
 
 #[derive(Default)]
@@ -657,6 +660,112 @@ impl UploadMutation {
 		}
 
 		Ok(book.into())
+	}
+
+	/// Upload an avatar image for either the authenticated viewer or for any user if
+	/// called by a server owner
+	#[graphql(
+		guard = "OptionalFeatureGuard::new(OptionalFeature::Upload).and(PermissionGuard::new(&[UserPermission::UploadFile, UserPermission::ChangeAvatar]))"
+	)]
+	async fn upload_user_avatar(
+		&self,
+		ctx: &Context<'_>,
+		id: Option<ID>,
+		upload: Upload,
+	) -> Result<User> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+		let conn = core.conn.as_ref();
+
+		let target_id = match &id {
+			Some(id) => {
+				if id.as_str() != user.id && !user.is_server_owner {
+					return Err(FORBIDDEN_ACTION.into());
+				}
+				id.to_string()
+			},
+			None => user.id.clone(),
+		};
+
+		let mut value = upload.value(ctx)?;
+
+		let content_type = value
+			.content_type
+			.clone()
+			.as_deref()
+			.map(stump_media::ContentType::from)
+			.ok_or("Could not verify content type of uploaded file")?;
+
+		if !content_type.is_image() {
+			return Err("Uploaded file is not an image".into());
+		}
+
+		match value.size() {
+			Ok(size) if size as usize > core.config.protocols.max_image_upload_size => {
+				return Err(format!(
+					"File size exceeds maximum upload size of {} bytes",
+					core.config.protocols.max_image_upload_size
+				)
+				.into());
+			},
+			Err(e) => return Err(format!("Failed to get file size: {e}").into()),
+			_ => {},
+		}
+
+		let extension = Path::new(&value.filename)
+			.extension()
+			.and_then(|e| e.to_str())
+			.map(str::to_ascii_lowercase)
+			.ok_or("Uploaded file must have a file extension")?;
+
+		let mut image_bytes = Vec::new();
+		value
+			.content
+			.read_to_end(&mut image_bytes)
+			.map_err(|e| format!("Failed to read upload: {e}"))?;
+
+		let avatars_dir = core.config.get_avatars_dir();
+		if let Ok(mut entries) = tokio::fs::read_dir(&avatars_dir).await {
+			let prefix = format!("{}.", target_id);
+			while let Ok(Some(entry)) = entries.next_entry().await {
+				let name = entry.file_name();
+				if name.to_string_lossy().starts_with(&prefix) {
+					let _ = tokio::fs::remove_file(entry.path()).await;
+				}
+			}
+		}
+
+		let avatar_meta =
+			match generate_image_metadata_from_bytes(image_bytes.clone()).await {
+				Ok(meta) => Some(meta),
+				Err(e) => {
+					tracing::error!(error = ?e, "Failed to generate image metadata");
+					None
+				},
+			};
+
+		let avatar_path = avatars_dir.join(format!("{}.{}", target_id, extension));
+		tokio::fs::write(&avatar_path, &image_bytes)
+			.await
+			.map_err(|e| format!("Failed to write avatar to disk: {e}"))?;
+
+		let avatar_path_str = avatar_path.to_string_lossy().to_string();
+
+		let updated_user = user::Entity::find()
+			.filter(user::Column::Id.eq(&target_id))
+			.one(conn)
+			.await?
+			.ok_or("User not found")?
+			.into_active_model();
+
+		let mut active = updated_user;
+		active.avatar_path = Set(Some(avatar_path_str));
+		active.avatar_meta = Set(avatar_meta);
+		active.avatar_updated_at = Set(Some(Utc::now().into()));
+		let result = active.update(conn).await?;
+
+		Ok(User::from(result))
 	}
 }
 

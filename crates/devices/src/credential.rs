@@ -57,6 +57,10 @@ pub fn protocol_for(kind: DeviceKind) -> DeviceProtocol {
 		DeviceKind::Koreader => DeviceProtocol::Koreader,
 		DeviceKind::Mihon | DeviceKind::Komelia => DeviceProtocol::Komga,
 		DeviceKind::Opds => DeviceProtocol::Opds,
+		// Audiobookshelf is a compatibility surface rather than a protocol
+		// the registry mints credentials for, so it buckets with the native
+		// API, as the Kavita surface does.
+		DeviceKind::Abs => DeviceProtocol::Api,
 		DeviceKind::Liseur => DeviceProtocol::Liseur,
 		DeviceKind::Api | DeviceKind::Web => DeviceProtocol::Api,
 	}
@@ -82,7 +86,7 @@ pub fn api_key_permissions_for(kind: DeviceKind) -> APIKeyPermissions {
 		DeviceKind::Koreader => {
 			APIKeyPermissions::Custom(vec![UserPermission::AccessKoreaderSync])
 		},
-		DeviceKind::Mihon | DeviceKind::Komelia | DeviceKind::Opds => {
+		DeviceKind::Mihon | DeviceKind::Komelia | DeviceKind::Opds | DeviceKind::Abs => {
 			APIKeyPermissions::Custom(vec![UserPermission::DownloadFile])
 		},
 		DeviceKind::Liseur | DeviceKind::Api | DeviceKind::Web => {

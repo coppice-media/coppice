@@ -877,6 +877,7 @@ mod tests {
 			media_id: Set(media_id.clone()),
 			user_id: Set(user_id.clone()),
 			created_at: Set(ts(30)),
+			position_ms: Set(None),
 		}
 		.insert(&conn)
 		.await
@@ -900,6 +901,8 @@ mod tests {
 			source_device_id: Set(None),
 			revision: Set(1),
 			event_id: Set(1),
+			position_ms: Set(None),
+			track_index: Set(None),
 		}
 		.update(&conn)
 		.await

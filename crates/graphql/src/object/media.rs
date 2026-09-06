@@ -4,6 +4,7 @@ use async_graphql::{
 
 use models::{
 	entity::{library, media, media_analysis, series, tag},
+	services::audio,
 	shared::{analysis::MediaAnalysisData, image::ImageRef},
 };
 use num_traits::cast::ToPrimitive;
@@ -27,9 +28,9 @@ use crate::{
 };
 
 use super::{
-	library::Library, library_config::LibraryConfig, media_metadata::MediaMetadata,
-	readthrough_record::ReadthroughRecord, resume_reading_cursor::ResumeReadingCursor,
-	series::Series, tag::Tag,
+	audio::MediaAudio, library::Library, library_config::LibraryConfig,
+	media_metadata::MediaMetadata, readthrough_record::ReadthroughRecord,
+	resume_reading_cursor::ResumeReadingCursor, series::Series, tag::Tag,
 };
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -181,6 +182,19 @@ impl Media {
 			.await?;
 
 		Ok(model.map(|m| m.data))
+	}
+
+	/// The audio shape of the book, or `null` when it is not an audiobook.
+	///
+	/// `null` and "an audiobook with no tracks" are different states, and only
+	/// one of them is a real publication, so this is `Option` rather than an
+	/// empty [`MediaAudio`].
+	async fn audio(&self, ctx: &Context<'_>) -> Result<Option<MediaAudio>> {
+		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+
+		Ok(audio::book(conn, &self.model.id)
+			.await?
+			.map(MediaAudio::from))
 	}
 
 	/// A reference to the thumbnail image for the media. This will be a fully

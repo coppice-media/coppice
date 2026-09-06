@@ -59,6 +59,15 @@ pub struct ProtocolsConfig {
 	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub enable_kavita: bool,
 
+	/// Indicates if the Audiobookshelf compatibility API (`/api/{libraries,items,session,...}`)
+	/// should be mounted. The routes are compiled in behind the `abs` Cargo
+	/// feature and are only mounted when this is true.
+	#[default_value(false)]
+	#[env_key(ENABLE_ABS_KEY)]
+	#[debug_value(true)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub enable_abs: bool,
+
 	/// Indicates if OPDS page access should automatically track reading progression.
 	/// When disabled, clients loading/preloading pages won't trigger progress updates.
 	#[default_value(false)]
@@ -141,8 +150,10 @@ mod tests {
 		let release = ProtocolsConfig::new();
 		assert!(!release.enable_komga);
 		assert!(!release.enable_kavita);
+		assert!(!release.enable_abs);
 		let debug = ProtocolsConfig::debug();
 		assert!(debug.enable_komga);
 		assert!(debug.enable_kavita);
+		assert!(debug.enable_abs);
 	}
 }

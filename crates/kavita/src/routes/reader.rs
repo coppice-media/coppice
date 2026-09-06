@@ -45,6 +45,13 @@ use super::{
 	KavitaBackend,
 };
 
+/// How long `chapter-info` will wait for the one page it measures to size a
+/// provider-backed chapter (see [`probed_page_dimensions`]). Deliberately far
+/// below the provider client's own 30 s per-request limit
+/// (`crates/provider/src/http.rs` `DEFAULT_TIMEOUT`), because a client that
+/// cannot get `chapter-info` cannot render a page at all.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChapterInfoQuery {
@@ -529,10 +536,8 @@ async fn mark_volume_unread(
 }
 
 /// `ReaderController.GetChapterInfo`. `includeDimensions` adds the page
-/// dimensions Stump's page analysis recorded, plus the double-page pairing
-/// derived from them; without recorded dimensions the arrays are empty
-/// (Kavita answers `[]`/`{}` for an EPUB too) and without the flag they are
-/// `null`.
+/// dimensions of the chapter plus the double-page pairing derived from them;
+/// without the flag both are `null`.
 pub(crate) async fn chapter_info_for(
 	ctx: &dyn KavitaBackend,
 	user: &AuthUser,
@@ -544,42 +549,165 @@ pub(crate) async fn chapter_info_for(
 		.ok_or_else(|| APIError::NotFound("Chapter does not exist".to_owned()))?;
 	let media = &input.media[index];
 	let dimensions = if include_dimensions {
-		Some(page_dimensions(ctx, &media.media.id, &media.media.name).await?)
+		Some(page_dimensions(ctx, user, media).await?)
 	} else {
 		None
 	};
 	Ok(map_chapter_info(&input, media, dimensions))
 }
 
-/// The recorded page dimensions of a media item, in page order.
+/// The page dimensions `chapter-info` reports, in page order.
+///
+/// A stored file has them recorded by Stump's page analysis, so they are
+/// exact and per page. A provider-backed chapter never does, and not because
+/// the analysis job skips it: the job runs, tries to read every page off the
+/// `provider://` path as a file, fails on all of them, and writes the row
+/// anyway with an **empty** dimension list
+/// (`core/src/filesystem/media/analysis/analyze.rs:219-257,308`). The
+/// fallback therefore keys on an empty list rather than on a missing row —
+/// keying on the row is what left `pageDimensions: []` on every MangaDex
+/// chapter in the fixture.
+///
+/// Those dimensions are probed instead: page 1 is fetched through the same
+/// virtual resolver `GET /api/Reader/image` uses and its header read for a
+/// size that is then assumed for every page of the chapter.
+///
+/// Kamigura needs the array to be non-empty: `reader/ReaderScreen.kt:575-578`
+/// turns it into the layout map every page decision reads
+/// (`reader/internal/ReaderLayout.kt:33-53` pairs a spread only when neither
+/// side is wide, `reader/internal/ReaderPrefetchPlan.kt:73-88` sizes the
+/// decode from the source pixels), and `mapper::double_pairs` cannot emit a
+/// single pairing without it — an empty array leaves the reader pairing a
+/// remote chapter's pages blind and re-decoding every page at viewport size.
+/// Assuming page 1's size is the honest approximation available in one fetch:
+/// a scanlation chapter is uniform by construction, and the only thing the
+/// value drives is spread pairing and decode budget.
 async fn page_dimensions(
 	ctx: &dyn KavitaBackend,
-	media_id: &str,
-	media_name: &str,
+	user: &AuthUser,
+	media: &MediaInput,
 ) -> APIResult<Vec<FileDimensionDto>> {
-	let Some(analysis) = media_analysis::Entity::find()
-		.filter(media_analysis::Column::MediaId.eq(media_id.to_owned()))
+	let recorded = media_analysis::Entity::find()
+		.filter(media_analysis::Column::MediaId.eq(media.media.id.clone()))
 		.one(ctx.conn())
 		.await?
-	else {
+		.map(|analysis| analysis.data.dimensions)
+		.unwrap_or_default();
+	if !recorded.is_empty() {
+		return Ok(recorded
+			.iter()
+			.enumerate()
+			.map(|(index, dimension)| {
+				let page_number = i32::try_from(index).unwrap_or(i32::MAX);
+				dimension_dto(
+					&media.media.name,
+					page_number,
+					dimension.width,
+					dimension.height,
+				)
+			})
+			.collect());
+	}
+	if !super::is_provider_media(&media.media) {
 		return Ok(Vec::new());
+	}
+	Ok(probed_page_dimensions(ctx, user, media).await)
+}
+
+/// One `pageDimensions` entry. `fileName` is the name
+/// `GET /api/Reader/image` serves the page under, because Stump records no
+/// per-page archive entry name, and `isWide` is Kavita's `width > height`.
+fn dimension_dto(
+	media_name: &str,
+	page_number: i32,
+	width: u32,
+	height: u32,
+) -> FileDimensionDto {
+	FileDimensionDto {
+		width: i32::try_from(width).unwrap_or(i32::MAX),
+		height: i32::try_from(height).unwrap_or(i32::MAX),
+		page_number,
+		file_name: page_file_name(media_name, page_number),
+		is_wide: width > height,
+	}
+}
+
+/// One measured page of a provider-backed chapter, repeated for every page
+/// the chapter reports.
+///
+/// One page fetch, `imagesize` reading only the header — no decode. Measured
+/// against the fixture's MangaDex source: a cold page costs 0.17–0.79 s
+/// (2 MB pages) and the very first touch of a chapter adds the source's own
+/// chapter resolution (3.2 s worst observed); the host then caches the page,
+/// so every later `chapter-info` of that chapter answers in 7–25 ms. It is
+/// the same fetch the reader makes for its first page immediately
+/// afterwards. Exact per-page dimensions are out of reach here: one remote
+/// fetch per page, which no client would wait for.
+///
+/// The fetch is capped by [`PROBE_TIMEOUT`]. `chapter-info` is the call the
+/// reader cannot render without, and the provider client's own limit is 30 s
+/// plus rate-limit waits — long enough to look exactly like the hang this
+/// probe exists to fix. Past the cap the chapter reports no dimensions,
+/// which is what it did before the probe existed.
+///
+/// The page measured is the **middle** one, not page 1. Kavita's page 0 of a
+/// scanlation chapter is usually the group's banner or a colour splash
+/// rather than a page of the story — 1268×634 for two of the three MangaDex
+/// chapters in the fixture, against a 1671×2400 interior — and measuring it
+/// would mark every page of the chapter `isWide`, costing the reader its
+/// spreads for the whole chapter. A genuine double-page spread mid-chapter
+/// is still reported at the interior size and so still pairs, which is the
+/// residual cost of one fetch; it is what an empty array does today for
+/// every page.
+async fn probed_page_dimensions(
+	ctx: &dyn KavitaBackend,
+	user: &AuthUser,
+	media: &MediaInput,
+) -> Vec<FileDimensionDto> {
+	let pages = media.pages();
+	if pages <= 0 {
+		return Vec::new();
+	}
+	let probe_page = pages / 2 + 1;
+	let fetch = ctx.media_page(user, &media.media.id, probe_page);
+	let page = match tokio::time::timeout(PROBE_TIMEOUT, fetch).await {
+		Ok(Ok(page)) => page,
+		Ok(Err(error)) => {
+			tracing::debug!(
+				media_id = %media.media.id,
+				probe_page,
+				?error,
+				"could not fetch a page to measure a provider-backed chapter",
+			);
+			return Vec::new();
+		},
+		Err(_) => {
+			tracing::warn!(
+				media_id = %media.media.id,
+				probe_page,
+				timeout = ?PROBE_TIMEOUT,
+				"timed out measuring a provider-backed chapter; reporting no \
+				 page dimensions",
+			);
+			return Vec::new();
+		},
 	};
-	Ok(analysis
-		.data
-		.dimensions
-		.iter()
-		.enumerate()
-		.map(|(index, dimension)| {
-			let page_number = i32::try_from(index).unwrap_or(i32::MAX);
-			FileDimensionDto {
-				width: i32::try_from(dimension.width).unwrap_or(i32::MAX),
-				height: i32::try_from(dimension.height).unwrap_or(i32::MAX),
-				page_number,
-				file_name: page_file_name(media_name, page_number),
-				is_wide: dimension.width > dimension.height,
-			}
-		})
-		.collect())
+	let Ok(size) = imagesize::blob_size(&page.data) else {
+		tracing::debug!(
+			media_id = %media.media.id,
+			probe_page,
+			content_type = %page.content_type,
+			"a provider-backed chapter's page carries no readable image header",
+		);
+		return Vec::new();
+	};
+	let (Ok(width), Ok(height)) = (u32::try_from(size.width), u32::try_from(size.height))
+	else {
+		return Vec::new();
+	};
+	(0..pages)
+		.map(|page_number| dimension_dto(&media.media.name, page_number, width, height))
+		.collect()
 }
 
 async fn chapter_info(
@@ -1115,6 +1243,138 @@ mod chapter_info_tests {
 		assert_eq!(info.pages, 15);
 		assert_eq!(info.page_dimensions.as_deref(), Some(&[][..]));
 		assert_eq!(info.double_pairs, Some(std::collections::BTreeMap::new()));
+	}
+
+	/// A real 8×12 PNG, produced once with `zlib`/`struct` and embedded so a
+	/// test can hand the reader bytes with a genuine image header:
+	/// `imagesize` reads the header, so a hand-cut prefix would prove
+	/// nothing about the real thing.
+	const PROBE_PNG: &[u8] = &[
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49,
+		0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x0c, 0x08, 0x02,
+		0x00, 0x00, 0x00, 0xd0, 0xfc, 0x6b, 0xca, 0x00, 0x00, 0x00, 0x10, 0x49, 0x44,
+		0x41, 0x54, 0x78, 0xda, 0x63, 0xf8, 0x8f, 0x03, 0x30, 0x8c, 0x4a, 0xa0, 0x03,
+		0x00, 0x22, 0x44, 0x1e, 0xf0, 0xbf, 0x61, 0x58, 0xdb, 0x00, 0x00, 0x00, 0x00,
+		0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+	];
+
+	/// A provider-backed chapter's analysis row is written empty (the job
+	/// cannot read its remote pages), so `chapter-info` measures one page and
+	/// reports that size for every page, instead of the empty array that
+	/// leaves Kamigura's reader with no layout information at all
+	/// (`reader/ReaderScreen.kt:575-578`).
+	///
+	/// The page it measures is the middle one: only that page carries a real
+	/// image here, so measuring page 1 (a scanlation banner in two of the
+	/// three MangaDex chapters in the fixture) would report nothing.
+	#[tokio::test]
+	async fn provider_backed_chapter_info_measures_its_pages() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("remote").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let backend = TestBackend::new(conn);
+		let library = library_of_type(&backend.conn, StumpLibraryType::Manga).await;
+		let (_, files) = series_with_files(
+			&backend.conn,
+			&library.id,
+			"Alpha Adventures",
+			&[("Vol. 1 Ch. 1", "cbz", 3)],
+		)
+		.await;
+		models::entity::media::ActiveModel {
+			path: Set("provider://mock-en/alpha/alpha-ch1".to_owned()),
+			source_provider: Set(Some("mock-en".to_owned())),
+			remote_chapter_id: Set(Some("alpha-ch1".to_owned())),
+			..files[0].clone().into()
+		}
+		.update(&backend.conn)
+		.await
+		.unwrap();
+		// The state the analysis job leaves behind for a provider-backed row:
+		// it ran, failed to read every page off the `provider://` path, and
+		// wrote the row with no dimensions at all. Keying the fallback on a
+		// *missing* row instead of an empty list is what left every MangaDex
+		// chapter reporting `pageDimensions: []`.
+		record_dimensions(&backend.conn, &files[0].id, Vec::new()).await;
+		// Only the middle page (3 pages -> Stump page 2) carries a real
+		// image, so this passes only if that is the page measured.
+		backend.store_page_image(&files[0].id, 2, PROBE_PNG);
+		let chapter_id = KavitaIds::resolve(&backend.conn, IdKind::Media, &files[0].id)
+			.await
+			.unwrap();
+
+		let info = chapter_info_for(&backend, &user, chapter_id, true)
+			.await
+			.unwrap();
+
+		assert_eq!(info.pages, 3);
+		let dimensions = info.page_dimensions.expect("dimensions were requested");
+		assert_eq!(
+			dimensions
+				.iter()
+				.map(|dimension| (
+					dimension.page_number,
+					dimension.width,
+					dimension.height,
+					dimension.is_wide,
+					dimension.file_name.as_str()
+				))
+				.collect::<Vec<_>>(),
+			vec![
+				(0, 8, 12, false, "Vol. 1 Ch. 1-0.img"),
+				(1, 8, 12, false, "Vol. 1 Ch. 1-1.img"),
+				(2, 8, 12, false, "Vol. 1 Ch. 1-2.img"),
+			],
+			"page 1's measured size stands in for every page of a remote chapter",
+		);
+		// Non-empty dimensions are what let `GetPairs` pair a spread at all:
+		// page 0 stands alone, then 1 and 2 pair.
+		assert_eq!(
+			info.double_pairs.expect("pairs follow the dimensions"),
+			[("0", 0), ("1", 1), ("2", 1)]
+				.into_iter()
+				.map(|(page, pair)| (page.to_owned(), pair))
+				.collect::<std::collections::BTreeMap<_, _>>(),
+		);
+	}
+
+	/// A provider that cannot serve page 1, or serves something with no
+	/// readable image header, must not take `chapter-info` down with it: the
+	/// reader needs `pages` to open the chapter, and opens fine without the
+	/// layout hints.
+	#[tokio::test]
+	async fn an_unmeasurable_provider_chapter_still_answers_chapter_info() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("offline").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let backend = TestBackend::new(conn);
+		let library = library_of_type(&backend.conn, StumpLibraryType::Manga).await;
+		let (_, files) = series_with_files(
+			&backend.conn,
+			&library.id,
+			"Beta Adventures",
+			&[("Vol. 1 Ch. 1", "cbz", 3)],
+		)
+		.await;
+		models::entity::media::ActiveModel {
+			path: Set("provider://mock-en/beta/beta-ch1".to_owned()),
+			..files[0].clone().into()
+		}
+		.update(&backend.conn)
+		.await
+		.unwrap();
+		// No `store_page_image`: the stand-in bytes carry no image header,
+		// which is what a provider error page looks like from here.
+		let chapter_id = KavitaIds::resolve(&backend.conn, IdKind::Media, &files[0].id)
+			.await
+			.unwrap();
+
+		let info = chapter_info_for(&backend, &user, chapter_id, true)
+			.await
+			.unwrap();
+
+		assert_eq!(info.pages, 3);
+		assert_eq!(info.page_dimensions.as_deref(), Some(&[][..]));
 	}
 
 	/// `mark-multiple-read` then `mark-multiple-unread` on the same chapter

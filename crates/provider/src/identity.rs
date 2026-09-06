@@ -679,6 +679,7 @@ mod tests {
 				Publication {
 					media_id,
 					pages: 10,
+					duration_ms: None,
 				},
 				ProtocolUpdate {
 					protocol: models::domain::reading_state::SourceProtocol::Komga,

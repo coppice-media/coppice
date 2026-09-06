@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod epub;
 pub mod mobi;
 #[cfg(feature = "pdf")]

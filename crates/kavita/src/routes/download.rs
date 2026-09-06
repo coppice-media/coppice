@@ -45,15 +45,10 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 use crate::errors::{APIError, APIResult};
 
 use super::{
+	is_provider_media,
 	query::{find_media, find_series_input},
 	route_ci, KavitaBackend,
 };
-
-/// Media whose `path` is a provider URI rather than a file: the provider host
-/// owns the scheme (`crates/media/src/virtual_media.rs`,
-/// `stump_media::virtual_media::PROVIDER_SCHEME`), and the protocol crates
-/// stay free of `stump_media`, so the prefix is checked here.
-const PROVIDER_SCHEME: &str = "provider://";
 
 const COMIC_ZIP: &str = "application/x-cbz";
 const OCTET_STREAM: &str = "application/octet-stream";
@@ -104,12 +99,6 @@ fn enforce_download(auth: &AuthContext) -> APIResult<AuthUser> {
 		})
 }
 
-/// Whether this media item is provider-backed and therefore has no file to
-/// stream: its pages are fetched live and packed into a CBZ.
-fn is_provider_media(media: &media::Model) -> bool {
-	media.path.starts_with(PROVIDER_SCHEME)
-}
-
 /// Kavita labels a download by file extension rather than by sniffing, and
 /// falls back to `application/octet-stream` — which is what `kavita-ref`
 /// answers for the zip it builds for a multi-file series, despite the `.zip`
@@ -133,8 +122,10 @@ fn download_content_type(extension: &str) -> &'static str {
 /// A single path component safe to put in a header and in a zip entry: no
 /// separators, no quoting characters, no control bytes.
 fn sanitize_file_name(name: &str) -> String {
-	let sanitized = name
-		.replace(|c: char| matches!(c, '/' | '\\' | '"' | ':') || c.is_control(), "_");
+	let sanitized = name.replace(
+		|c: char| matches!(c, '/' | '\\' | '"' | ':') || c.is_control(),
+		"_",
+	);
 	if sanitized.is_empty() {
 		"download".to_owned()
 	} else {
@@ -405,12 +396,11 @@ mod tests {
 		range: Option<&str>,
 	) -> (axum::http::StatusCode, HeaderMap, Vec<u8>) {
 		use tower::ServiceExt;
-		let router =
-			crate::routes::router::<()>(backend).layer(Extension(AuthContext {
-				user: user.clone(),
-				api_key: None,
-				device_id: None,
-			}));
+		let router = crate::routes::router::<()>(backend).layer(Extension(AuthContext {
+			user: user.clone(),
+			api_key: None,
+			device_id: None,
+		}));
 		let mut builder = axum::http::Request::builder().method("GET").uri(uri);
 		if let Some(range) = range {
 			builder = builder.header(header::RANGE, range);
@@ -614,8 +604,11 @@ mod tests {
 		let mut contents = Vec::new();
 		for (index, file) in files.iter().enumerate() {
 			let data = format!("cbz-{index}").repeat(32).into_bytes();
-			let path =
-				backend.store_file(&file.id, &format!("multi v0{}.cbz", index + 1), &data);
+			let path = backend.store_file(
+				&file.id,
+				&format!("multi v0{}.cbz", index + 1),
+				&data,
+			);
 			models::entity::media::ActiveModel {
 				path: Set(path),
 				..file.clone().into()
@@ -834,7 +827,10 @@ mod tests {
 	#[test]
 	fn zip_entry_names_are_unique_within_the_archive() {
 		let mut taken = HashSet::new();
-		assert_eq!(unique_entry_name(&mut taken, "v01.cbz".to_owned()), "v01.cbz");
+		assert_eq!(
+			unique_entry_name(&mut taken, "v01.cbz".to_owned()),
+			"v01.cbz"
+		);
 		assert_eq!(
 			unique_entry_name(&mut taken, "v01.cbz".to_owned()),
 			"v01-2.cbz"

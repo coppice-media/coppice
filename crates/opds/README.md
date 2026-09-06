@@ -10,7 +10,8 @@ dispatch only. The crate deliberately does **not** own the wire types (Atom/XML
 and JSON feed models stay in `core/src/opds/{v1_2,v2_0}`), authentication
 (mounted by `apps/server` with `auth_middleware` / `api_key_middleware`),
 database or media access, or reading-session writes. It carries no SeaORM
-dependency.
+dependency; its `dev-dependencies` do, because the audio acquisition tests
+build `models` entity fixtures (see *How to verify*).
 
 ## Reference / upstream
 
@@ -21,6 +22,10 @@ dependency.
 | OPDS 2.0 draft | <https://drafts.opds.io/opds-2.0> | JSON catalog, groups, auth document (`core/src/opds/v2_0/mod.rs:1-3`) |
 | Readium Web Publication / locator | `application/vnd.readium.progression+json` | v2 `progression` GET/PUT body (`core/src/opds/v2_0/progression.rs`) |
 | Liseur (OPDS 1.2 client) | [`31f8182d`](https://github.com/chmouel/liseur/commit/31f8182d524e3536cf9020594185e709a033094f) | Only pinned real client; its `OpdsHttp.kt:93` accepts Atom only, so OPDS 2.0 is unreachable from it |
+| Readium Web Publication (link) | <https://readium.org/webpub-manifest/schema/link.schema.json> | `duration` in seconds on an audio link (`core/src/opds/v2_0/link.rs` `OPDSAudioLink`) |
+| Readium Web Publication (metadata) | <https://readium.org/webpub-manifest/schema/metadata.schema.json> | publication `duration` in seconds (`core/src/opds/v2_0/metadata.rs`) |
+| W3C Media Fragments URI 1.0 | <https://www.w3.org/TR/media-frags/> | `#t=` chapter offsets on `toc` entries (`core/src/opds/v2_0/audio.rs`) |
+| Atom `link@length` | <https://datatracker.ietf.org/doc/html/rfc4287#section-4.2.7.5> | per-track byte size as v2 `properties.length` (`core/src/opds/v2_0/properties.rs`) |
 
 Client-verification status (`docs/content/docs/developer/client-verification.mdx:26-27`,
 `clients.mdx:120-134`):
@@ -47,6 +52,11 @@ the Komga profile only.
 | `GET /opds/v2.0/auth` is public and advertises Basic | OPDS 2 authentication-document flow | `core/src/opds/v2_0/authentication.rs:31-43` |
 | Facets, EPUB chapter/resource streaming, v1 strict mode not implemented | Open TODOs in core/adapter; not needed by any verified client | `core/src/opds/v2_0/mod.rs:20`; `apps/server/src/routers/opds_backend/v2_0.rs:1225-1227`; `v1_2.rs:731-736` |
 | Errors are the server's `APIError` (`{status,message}`, `no-store`); DB not-found → 404, other DB → 500 | Same shape as native routes | `apps/server/src/routers/opds_backend.rs:80`; `apps/server/src/errors.rs:140-183` |
+| An audio acquisition advertises the MIME `stump_media`'s `ContentType` gives it; no second extension table | v1.2 typed every audio container `application/zip`, because `OpdsLinkType::from_extension` did not know one; `ContentType` already maps all six containers and v2 already routed through it | `core/src/opds/v1_2/link.rs` (`OpdsLinkType::Audio(ContentType)`, `mime()`); `core/src/opds/v2_0/publication.rs` `links_for_book` |
+| A multi-track audiobook's v2 acquisition is one link per track at `/api/v2/media/{id}/audio/track/{index}`, replacing the single `/file` link; a single-container one keeps `/file` | A folder book's `media.path` is a directory, so `/file` can serve nothing; the native track route answers ranges. Order is `media_audio_tracks.index`, and MIME and byte size are the probe's verdict, used verbatim | `core/src/opds/v2_0/audio.rs`; `crates/opds/tests/audio_acquisition.rs` |
+| v2 states `duration` in seconds and publishes chapters as `toc` entries; no chapter-count key was invented | Readium states every duration in seconds and has no chapter-count field — the length of `toc` *is* the count, and `toc` is where a seekable mark belongs | `core/src/opds/v2_0/metadata.rs` (`with_duration_ms`), `audio.rs` (`toc`) |
+| v1.2 gets the acquisition MIME only: no per-track XML entries, no `toc` | OPDS 1.2 is page-oriented, its entry builder is synchronous with no database access, and the format carries no track list; a folder audiobook is therefore listed but not acquirable from 1.2 | `core/src/opds/v1_2/entry.rs` (`entry_file_acquisition_link_type`); `docs/content/docs/guides/features/opds.mdx` |
+| OPDS does not carry `readingOrder` for an audiobook | `GET /api/v2/media/{id}/audio/manifest` is the Readium manifest a player consumes; OPDS answers "how do I get the bytes" | `core/src/opds/v2_0/audio.rs` module docs |
 
 Route trees (`src/lib.rs:245-277`, `288-340`):
 
@@ -68,11 +78,12 @@ Route trees (`src/lib.rs:245-277`, `288-340`):
 | `apps/server/src/routers/opds_backend/v2_0.rs` | auth document, JSON catalog/groups/browse, pages, progression GET/PUT, acquisition |
 | `core/src/opds/v1_2/` | Atom feed/entry/link/author/OpenSearch serializers |
 | `core/src/opds/v2_0/` | authentication, feed, group, link, metadata, publication, progression, `OPDSV2Error` |
+| `core/src/opds/v2_0/audio.rs` | per-track acquisition links, chapter `toc`, batched `media_audio*` loads |
 
 ## How to verify
 
 ```text
-cargo test -p stump_opds --lib --tests                # no unit tests today; compile proof
+cargo test -p stump_opds --lib --tests                # 7 audio acquisition tests
 cargo test -p stump_server --test api_tests opds      # 2 progression + 3 keep-reading integration tests
 cargo check -p stump_server --no-default-features --features minimal   # feature-off build (both trees absent)
 ```

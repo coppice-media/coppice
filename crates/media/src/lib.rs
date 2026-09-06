@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod archive;
+pub mod audio;
 pub mod common;
 pub mod content_type;
 pub mod directory_listing;
@@ -136,6 +137,7 @@ pub use media::format::pdf::PdfProcessor;
 #[cfg(feature = "rar")]
 pub use media::format::rar::RarProcessor;
 pub use media::format::{
+	audio::{AudioProcessor, AUDIO_PAGES},
 	epub::{EpubNavEntry, EpubProcessor, EpubStructure},
 	mobi::{
 		MobiBook, MobiFlow, MobiNavEntry, MobiProcessor, MobiResource, MobiSection,

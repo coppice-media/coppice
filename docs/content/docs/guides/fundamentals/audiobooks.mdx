@@ -1,0 +1,207 @@
+---
+title: Audiobooks
+---
+
+import { File, Folder, Files } from 'fumadocs-ui/components/files';
+
+An audiobook is a book like any other in Stump: it lives in a [series](/docs/guides/fundamentals/series) inside a [library](/docs/guides/fundamentals/libraries), it gets a thumbnail, and it tracks [progress](/docs/guides/fundamentals/progress). What makes it different is that its content is time rather than pages, so Stump probes it for a duration, a track list and a chapter list instead of a page count.
+
+## Supported formats
+
+| Format | Extension(s) | Served as |
+| ------ | ------------ | --------- |
+| MPEG-4 audiobook | `.m4b` | `audio/mp4` |
+| MPEG-4 audio | `.m4a` | `audio/mp4` |
+| MP3 | `.mp3` | `audio/mpeg` |
+| Opus | `.opus` | `audio/opus` |
+| Ogg | `.ogg` | `audio/ogg` |
+| FLAC | `.flac` | `audio/flac` |
+
+Stump does not transcode, so the format you store is the format your client receives. See [limitations](#limitations).
+
+## The two layouts
+
+An audiobook reaches Stump in one of two shapes, and both become the same thing: one book with one duration, an ordered list of tracks, and a list of chapters.
+
+**One container.** A single `.m4b`, `.m4a`, `.mp3`, `.opus`, `.ogg` or `.flac` file. Its chapters, if it has any, are embedded in the file. This book has exactly one track.
+
+**One flat folder of parts.** One file per part, all in the same directory. The folder is the book; each file is a track.
+
+<Files>
+	<Folder name="Audiobooks" defaultOpen>
+		<Folder name="Some Author" defaultOpen>
+			<File name="A Book In One File.m4b" />
+			<Folder name="A Book In Parts" defaultOpen>
+				<File name="01 - Part 1.mp3" />
+				<File name="02 - Part 2.mp3" />
+				<File name="03 - Part 3.mp3" />
+				<File name="cover.jpg" />
+			</Folder>
+		</Folder>
+	</Folder>
+</Files>
+
+Scanning the tree above produces **two** books in the series _Some Author_: the single `.m4b`, and the folder _A Book In Parts_ as one book of three tracks.
+
+### How a folder becomes one book
+
+A directory is treated as a single audiobook when all of the following hold:
+
+1. It contains at least one audio file.
+2. It contains **no subdirectories**. A nested directory means the folder is a container of books, not one book.
+3. Every remaining file in it is either audio or something the scanner would not persist on its own. A second, non-audio publication in the same folder (an `.epub`, a `.cbz`, a `.pdf`) means the folder holds more than one book, so it is not collapsed.
+
+Hidden files (names starting with a dot) and files matching the library's [ignore rules](/docs/guides/fundamentals/scanner#ignore-rules) are skipped by this check, and cover images and sidecar files are ignored because the scanner never persists them as books anyway. That is why the `cover.jpg` above does not disqualify the folder.
+
+<Callout title="Why one book and not three">
+	A part is not a publication: it has no title of its own, no cover of its own, and no meaning
+	outside its neighbours. If the three files above were three books, you would get three entries in
+	your library, three thumbnails and three independent progress rows for one listen. Collapsing the
+	folder is what makes a single duration, a single resume point and a single chapter list possible.
+</Callout>
+
+### Track order
+
+Order decides everything downstream — the duration a part contributes, the offset of every chapter after it, and where a resume lands — so it is decided once, at probe time, by these two rules:
+
+1. **The `TRCK`/`trkn` tag wins** when *every* file in the folder carries one **and** all of them are distinct. A publisher who numbered the files meant that order, even when the filenames sort differently.
+2. **Otherwise, natural filename order.** This is the same natural sort the rest of the scanner uses, so `2` sorts before `10` rather than after it.
+
+A partial or duplicated numbering — three files where only two have a `TRCK`, or two files both claiming track 2 — is discarded entirely rather than trusted for part of the book, and the filename order is used instead.
+
+## Chapters
+
+Chapters are time marks on the publication, not files. A single `.m4b` can carry four chapters inside one file, and a folder book can have marks that do not line up with its file boundaries at all.
+
+Stump records **where the marks came from** alongside them, in a `chapter_source` value. This is provenance, not a preference:
+
+| `chapter_source` | What it means |
+| ---------------- | ------------- |
+| `mp4_chpl` | A Nero `chpl` chapter list in the MP4 `moov/udta` atom. The most widely written `.m4b` chapter mechanism. |
+| `mp4_chapter_track` | A QuickTime text chapter **track** inside the MP4, linked to the audio track. A different mechanism to `chpl`, and the one Apple Books reads. |
+| `id3_chap` | ID3v2 `CHAP` frames with a `CTOC` table of contents, in an `.mp3`. |
+| `vorbis_comment` | `CHAPTERxxx` / `CHAPTERxxxNAME` Vorbis comments, in an `.opus`, `.ogg` or `.flac`. |
+| `per_track` | **Stump synthesized these.** No file in the book carried a single mark, so the file list *is* the chapter list: one chapter per file, named after the file's title tag or its filename. |
+| `none` | The book has no chapters at all — a single container with no marks in it. |
+
+The distinction that matters is `per_track`. A `per_track` chapter list is Stump's arithmetic over file durations; the publisher shipped no chapter marks whatsoever. It must never be presented as if the publisher had authored those chapters, which is exactly why the source is stored rather than thrown away once the marks are read.
+
+Two details of the read:
+
+- An MP4 file may contain both a `chpl` atom and a chapter track. When it does, the `chpl` list wins, because that is what a player which reads only one of the two reads.
+- A container is free to write a mark past its own end. Such marks are trimmed to the publication duration, and the last chapter of a container that only carries start marks has no end.
+
+## Every time value is publication-relative
+
+Duration, chapter starts and ends, reading positions and bookmarks are **milliseconds from the start of the publication**, never from the start of a file.
+
+For a single-container book the distinction is invisible. For a folder book it is the whole design. If part 2 starts 2,000 ms into the book, then a chapter 500 ms into part 2 has `startMs: 2500`, and a listener paused there has a position of `2500`.
+
+This is what makes resume work:
+
+- **One number identifies a position.** A position does not have to be interpreted against a file, so it survives being written by one client and read by another.
+- **Progress is one division.** Percentage complete is the position over the publication duration — no walk over track offsets.
+- **The track lookup is a consequence, not a requirement.** Each track reports the `startOffsetMs` at which it begins, so a player converts a publication position into "this track, this many milliseconds in" whenever it needs to, and back again without ever storing the per-file form.
+
+A per-file position would need the track index to mean anything, and would silently point somewhere else the moment the track order changed.
+
+## API
+
+Two routes serve an audiobook, and both are user-scoped like every other media route.
+
+### Manifest
+
+```
+GET /api/v2/media/{id}/audio/manifest
+```
+
+Everything a player needs to start: the publication facts, the ordered tracks with their offsets and byte URLs, and the chapter list. Field names are camelCase.
+
+| Field | Notes |
+| ----- | ----- |
+| `mediaId` | The book's id. |
+| `durationMs` | The whole publication's duration. |
+| `codec` | `aac`, `mp3`, `opus`, `flac` or `vorbis`; `mixed` for a folder book whose parts disagree, `unknown` for a container Stump could not identify. |
+| `sampleRate`, `channels`, `bitrate` | May be absent when the container states none. |
+| `chapterSource` | The provenance value from the [table above](#chapters). |
+| `tracks[]` | `index`, `mime`, `durationMs`, `startOffsetMs`, `byteSize`, `url`. |
+| `chapters[]` | `index`, `title`, `startMs`, `endMs`. |
+
+```json
+{
+	"mediaId": "0192d1f6-3f34-7c2a-bd8f-5f2b0c0a41e7",
+	"durationMs": 6000,
+	"codec": "aac",
+	"sampleRate": 22050,
+	"channels": 1,
+	"bitrate": 64000,
+	"chapterSource": "mp4_chpl",
+	"tracks": [
+		{
+			"index": 0,
+			"mime": "audio/mp4",
+			"durationMs": 6000,
+			"startOffsetMs": 0,
+			"byteSize": 6842,
+			"url": "/api/v2/media/0192d1f6-3f34-7c2a-bd8f-5f2b0c0a41e7/audio/track/0"
+		}
+	],
+	"chapters": [
+		{ "index": 0, "title": "Opening", "startMs": 0, "endMs": 2000 },
+		{ "index": 1, "title": "Middle", "startMs": 2000, "endMs": 4000 },
+		{ "index": 2, "title": "Closing", "startMs": 4000, "endMs": 6000 }
+	]
+}
+```
+
+### Track bytes
+
+```
+GET /api/v2/media/{id}/audio/track/{index}
+```
+
+The audio bytes of one track, where `index` is the track's index in the manifest. The response advertises `Accept-Ranges: bytes`, and a `Range` request is answered with `206 Partial Content`, so a player can seek without downloading the whole part.
+
+## Tools
+
+Two library tools operate on audiobooks, run through the [CLI](/docs/developer/cli)'s `tools` subcommand. Like every other Stump tool they plan first and apply second, so a run always shows what it would do before anything is written:
+
+```bash copy
+./stump tools plan audio-report "/books/Audiobooks"
+./stump tools apply audio-chapters "/books/Audiobooks/A Book In Parts" --yes
+```
+
+### `audio-report`
+
+Read-only inspection: it probes each publication it finds and reports the duration, codec, chapter source and whether the book carries an embedded cover — one `report-audio` action per publication, and nothing is ever written. The `detailed` option (default `false`) adds the per-mark and per-file lists to the report detail.
+
+It also raises the warnings a listener would otherwise discover mid-book:
+
+| Code | Severity | Meaning |
+| ---- | -------- | ------- |
+| `no-chapters` | warn | The book has no chapter marks, so clients can only seek by time. |
+| `synthesized-chapters` | info | The chapters are synthesized one per file; the publisher shipped no marks (`chapter_source` is `per_track`). |
+| `mixed-codec` | warn | The parts of a folder book do not share one codec. The message lists the codecs actually found. |
+| `zero-duration` | error | The duration could not be determined. |
+| `no-cover` | info | There is no embedded cover art. |
+| `missing-path` | error | The path does not exist. |
+| `not-audio` | error | The path is not an audio file. |
+| `no-audio` | error | The directory holds no audio files and no audiobook folders. |
+| `probe-failed` | error | The probe itself failed; the message carries its error. |
+
+### `audio-chapters`
+
+Embeds portable chapter marks into a book that has none, or has them in a form other players cannot read:
+
+- Into an `.m4b` or `.m4a`, as a Nero `chpl` chapter list.
+- Into an `.mp3`, as ID3v2 `CHAP` frames with a `CTOC` table of contents.
+
+Any other container is refused rather than half-supported: `unsupported-container`, severity error, no action planned. A book with nothing to embed raises `no-chapters` instead.
+
+Publisher marks are never overwritten by default. A file that already carries them plans a `keep-chapters` action and is skipped with the reason _the file already carries publisher chapter marks_; pass `force` to rewrite them anyway. The other option, `titles_from_filename` (default `false`), decides how a per-file mark is named: by default the file's own title tag with the file stem as fallback, and with the option set always the file stem.
+
+## Limitations
+
+- **No transcoding.** Stump serves the bytes it stores. A client that cannot decode Opus will not play an Opus book, and there is no server-side conversion or HLS lane to fall back on.
+- **Ogg, Opus and FLAC chapter marks are read but not written.** `CHAPTERxxx` Vorbis comments are honoured on the way in; `audio-chapters` writes only `.m4b`, `.m4a` and `.mp3`.
+- **A BMP embedded cover is ignored.** The thumbnail pipeline cannot decode BMP, so such a cover is treated as if the book had none — extract it and drop a `cover.jpg` beside the book instead. See [thumbnails](/docs/guides/fundamentals/thumbnails).

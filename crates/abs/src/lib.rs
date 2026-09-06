@@ -14,12 +14,25 @@
 //! `crates/abs/README.md`.
 
 pub mod auth;
+pub mod dto;
 pub mod errors;
 pub mod ids;
+pub mod mapper;
+pub mod model;
+pub mod routes;
+pub mod sessions;
+#[cfg(test)]
+mod test_support;
 
 pub use auth::{mint_tokens, verify_token, AbsClaims, MintedTokens, TokenError};
 pub use errors::{AbsError, AbsResult};
 pub use ids::{AbsIds, IdKind, CREATE_ABS_IDS_SQL};
+pub use model::{
+	AbsAudio, AbsAudioChapter, AbsAudioTrack, AbsBookmark, AbsImage, AbsPositionUpdate,
+	AbsProgress, ItemShape,
+};
+pub use routes::{authenticated_router, public_router, AbsBackend, AbsSession};
+pub use sessions::{AbsSessions, CREATE_ABS_SESSIONS_SQL};
 
 /// The Audiobookshelf release whose reference responses this profile
 /// reproduces.

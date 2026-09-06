@@ -282,14 +282,16 @@ impl KavitaBackend for KavitaBackendAdapter {
 			.map_err(map_server_error)
 	}
 
-	async fn media_bytes(&self, user: &AuthUser, media_id: &str) -> KavitaResult<Vec<u8>> {
+	async fn media_bytes(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+	) -> KavitaResult<Vec<u8>> {
 		let book = media::Entity::find_for_user(user)
 			.filter(media::Column::Id.eq(media_id.to_owned()))
 			.one(self.conn())
 			.await?
-			.ok_or_else(|| {
-				KavitaError::NotFound("Chapter does not exist".to_owned())
-			})?;
+			.ok_or_else(|| KavitaError::NotFound("Chapter does not exist".to_owned()))?;
 		if stump_media::virtual_media::is_virtual_path(&book.path) {
 			return self.provider_archive(&book).await;
 		}

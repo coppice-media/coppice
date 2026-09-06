@@ -12,8 +12,7 @@
 use std::collections::HashSet;
 
 use models::entity::{
-	media, media_metadata, media_tag, series, series_metadata, series_tag,
-	user::AuthUser,
+	media, media_metadata, media_tag, series, series_metadata, series_tag, user::AuthUser,
 };
 use sea_orm::{
 	prelude::*,
@@ -834,23 +833,24 @@ pub(crate) async fn plan(
 						),
 					)
 				};
-				let tagged = |target: Target, ids: Option<Vec<i32>>| {
-					let via_media = media_tagged(target, ids.clone());
-					match target {
-						Target::Series => series_col(series::Column::Id)
-							.in_subquery(
-								Query::select()
-									.column(series_tag::Column::SeriesId)
-									.from(series_tag::Entity)
-									.and_where_option(ids.map(|ids| {
-										series_tag::Column::TagId.is_in(ids)
-									}))
-									.to_owned(),
-							)
-							.or(via_media),
-						Target::Book => via_media,
-					}
-				};
+				let tagged =
+					|target: Target, ids: Option<Vec<i32>>| {
+						let via_media = media_tagged(target, ids.clone());
+						match target {
+							Target::Series => series_col(series::Column::Id)
+								.in_subquery(
+									Query::select()
+										.column(series_tag::Column::SeriesId)
+										.from(series_tag::Entity)
+										.and_where_option(ids.map(|ids| {
+											series_tag::Column::TagId.is_in(ids)
+										}))
+										.to_owned(),
+								)
+								.or(via_media),
+							Target::Book => via_media,
+						}
+					};
 				groups.add(|target| match comparison {
 					FilterComparison::Equal | FilterComparison::Contains => {
 						tagged(target, Some(tag_ids.clone()))

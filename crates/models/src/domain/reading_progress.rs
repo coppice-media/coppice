@@ -117,6 +117,7 @@ mod tests {
 			end_locator: None,
 			start_page: None,
 			end_page: None,
+			end_position_ms: None,
 			start_percentage: None,
 			end_percentage: None,
 			koreader_progress: None,

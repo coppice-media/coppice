@@ -164,6 +164,9 @@ pub(crate) struct TestBackend {
 	files: std::sync::Mutex<std::collections::HashMap<String, std::path::PathBuf>>,
 	/// Keeps the temporary directory holding those files alive.
 	file_root: tempfile::TempDir,
+	/// Real page images behind `(media id, 1-based page)`, for the routes that
+	/// read a page's bytes rather than just pass them through.
+	page_images: std::sync::Mutex<std::collections::HashMap<(String, i32), Vec<u8>>>,
 }
 
 impl TestBackend {
@@ -174,6 +177,7 @@ impl TestBackend {
 			jobs: std::sync::Mutex::new(Vec::new()),
 			files: std::sync::Mutex::new(std::collections::HashMap::new()),
 			file_root: tempfile::tempdir().expect("temp dir"),
+			page_images: std::sync::Mutex::new(std::collections::HashMap::new()),
 		}
 	}
 
@@ -194,6 +198,17 @@ impl TestBackend {
 			.expect("file map")
 			.insert(media_id.to_owned(), path.clone());
 		path.to_string_lossy().into_owned()
+	}
+
+	/// Bind real image bytes to one page of `media_id` (1-based, Stump
+	/// numbering). A provider-backed row has no file to read a page from, and
+	/// the reader measures the bytes it is handed — so registering a single
+	/// page pins which page a probe is allowed to look at.
+	pub fn store_page_image(&self, media_id: &str, page: i32, image: &[u8]) {
+		self.page_images
+			.lock()
+			.expect("page image map")
+			.insert((media_id.to_owned(), page), image.to_vec());
 	}
 
 	fn file_for(&self, media_id: &str) -> Option<std::path::PathBuf> {
@@ -275,17 +290,24 @@ impl KavitaBackend for TestBackend {
 		}
 	}
 
-	/// A recognisable stand-in for the rendered page, so a route test can
-	/// tell "the page was served" from "the page was refused".
+	/// The image bytes registered with [`TestBackend::store_page_image`], and
+	/// otherwise a recognisable stand-in so a route test can tell "the page
+	/// was served" from "the page was refused".
 	async fn media_page(
 		&self,
 		_user: &AuthUser,
 		media_id: &str,
 		page: i32,
 	) -> APIResult<KavitaImage> {
+		let image = self
+			.page_images
+			.lock()
+			.expect("page image map")
+			.get(&(media_id.to_owned(), page))
+			.cloned();
 		Ok(KavitaImage::new(
 			"image/png".to_owned(),
-			format!("{media_id}:{page}").into_bytes(),
+			image.unwrap_or_else(|| format!("{media_id}:{page}").into_bytes()),
 		))
 	}
 

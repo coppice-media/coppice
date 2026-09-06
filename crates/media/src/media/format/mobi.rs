@@ -2229,6 +2229,7 @@ impl FileProcessor for MobiProcessor {
 			koreader_hash,
 			metadata: Some(metadata),
 			pages,
+			audio: None,
 		})
 	}
 

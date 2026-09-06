@@ -157,11 +157,16 @@
 		const elapsedSecondsDelta = Math.max(0, total - reportedSeconds);
 		reportedSeconds = total;
 
-		progress.mutate(
-			input.epub
-				? { epub: { ...input.epub, elapsedSecondsDelta } }
-				: { paged: { ...input.paged, elapsedSecondsDelta } }
-		);
+		// `MediaProgressInput` is an exclusive union of three branches, so each
+		// one is narrowed by its own key: spreading an optional branch would
+		// widen its required fields to `undefined`.
+		if (input.epub) {
+			progress.mutate({ epub: { ...input.epub, elapsedSecondsDelta } });
+		} else if (input.paged) {
+			progress.mutate({ paged: { ...input.paged, elapsedSecondsDelta } });
+		} else if (input.audio) {
+			progress.mutate({ audio: { ...input.audio, elapsedSecondsDelta } });
+		}
 	}
 
 	function schedule(input: MediaProgressInput): void {

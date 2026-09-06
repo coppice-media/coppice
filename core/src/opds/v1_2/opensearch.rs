@@ -5,10 +5,7 @@ use xml::{writer::XmlEvent, EventWriter};
 
 use crate::error::CoreResult;
 
-use super::{
-	link::OpdsLinkType,
-	util::{write_xml_element, OpdsEnumStr},
-};
+use super::{link::OpdsLinkType, util::write_xml_element};
 
 /// A struct for building an OpenSearch SearchDescription XML string as
 /// specified at https://developer.mozilla.org/en-US/docs/Web/OpenSearch
@@ -45,11 +42,12 @@ impl OpdsOpenSearch {
 		write_xml_element("OutputEncoding", "UTF-8", &mut writer)?;
 
 		let search_url = self.format_url("search/feed?search={searchTerms}");
+		let acquisition_type = OpdsLinkType::Acquisition.mime();
 
 		writer.write(
 			XmlEvent::start_element("Url")
 				.attr("template", &search_url)
-				.attr("type", OpdsLinkType::Acquisition.as_str()),
+				.attr("type", acquisition_type.as_ref()),
 		)?;
 		writer.write(XmlEvent::end_element())?;
 

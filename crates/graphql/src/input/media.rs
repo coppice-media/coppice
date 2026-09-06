@@ -23,10 +23,25 @@ pub struct PagedProgressInput {
 	pub reset_elapsed_seconds: Option<bool>,
 }
 
+/// A listening position: milliseconds from the start of the publication,
+/// plus the file the client was in for a multi-file audiobook. A recording
+/// has no pages, so this carries neither a page nor a locator.
+#[derive(Default, Debug, Clone, InputObject)]
+pub struct AudioProgressInput {
+	pub position_ms: i64,
+	/// The 0-based `mediaAudioTracks.index` the position fell in.
+	pub track_index: Option<i32>,
+	pub is_complete: Option<bool>,
+	pub elapsed_seconds_delta: Option<i64>,
+	pub device_id: Option<String>,
+	pub reset_elapsed_seconds: Option<bool>,
+}
+
 #[derive(Debug, Clone, OneofObject)]
 pub enum MediaProgressInput {
 	Epub(Box<EpubProgressInput>),
 	Paged(PagedProgressInput),
+	Audio(AudioProgressInput),
 }
 
 impl MediaProgressInput {
@@ -38,6 +53,9 @@ impl MediaProgressInput {
 			},
 			MediaProgressInput::Paged(paged_progress) => {
 				paged_progress.reset_elapsed_seconds
+			},
+			MediaProgressInput::Audio(audio_progress) => {
+				audio_progress.reset_elapsed_seconds
 			},
 		}
 		.unwrap_or(false)

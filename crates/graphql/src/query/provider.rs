@@ -65,6 +65,11 @@ impl ProviderQuery {
 			.into_iter()
 			.map(|row| (row.source_id.clone(), row))
 			.collect();
+		// The definition index is the second half of "can this server run
+		// it": 420 of the catalog's packages have no compiled factory and are
+		// driven by a `SourceDefinition` through a theme engine. Loaded once,
+		// outside the loop, and cached in the loader afterwards.
+		let definitions = host.definitions().index().await.ok();
 
 		let mut entries = Vec::new();
 		for entry in &snapshot.entries {
@@ -87,14 +92,20 @@ impl ProviderQuery {
 					continue;
 				}
 				let factory = host.factory_for_pkg(&entry.pkg);
+				let definition = definitions
+					.as_ref()
+					.and_then(|index| index.find_by_pkg(&entry.pkg));
 				entries.push(ProviderCatalogEntry {
 					id: source.id.clone(),
 					name: source.name.clone(),
 					lang: source.lang.clone(),
 					base_url: source.base_url.clone(),
 					pkg: entry.pkg.clone(),
-					has_implementation: factory.is_some(),
-					instance_id: factory.map(|factory| factory.instance_id(&source.lang)),
+					nsfw: entry.nsfw,
+					has_implementation: factory.is_some() || definition.is_some(),
+					instance_id: factory
+						.map(|factory| factory.instance_id(&source.lang))
+						.or_else(|| definition.map(|entry| entry.id.clone())),
 					health: row.cloned().map(ProviderSourceHealth),
 				});
 			}

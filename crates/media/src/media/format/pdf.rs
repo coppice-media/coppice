@@ -107,6 +107,7 @@ impl FileProcessor for PdfProcessor {
 			koreader_hash,
 			metadata,
 			pages,
+			audio: None,
 		})
 	}
 

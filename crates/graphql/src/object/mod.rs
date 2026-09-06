@@ -1,6 +1,7 @@
 pub mod annotation;
 pub mod annotation_attachment;
 pub mod api_key;
+pub mod audio;
 pub mod author;
 #[cfg(feature = "web")]
 pub mod book_club;

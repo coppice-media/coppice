@@ -606,7 +606,10 @@ mod tests {
 		let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 			.join("integration-tests/data/audio/chapters-chpl.m4b");
 		assert_eq!(
-			infer::get_from_path(&path).ok().flatten().map(|t| t.mime_type()),
+			infer::get_from_path(&path)
+				.ok()
+				.flatten()
+				.map(|t| t.mime_type()),
 			Some("video/mp4"),
 			"fixture no longer sniffs as an unmodelled type"
 		);

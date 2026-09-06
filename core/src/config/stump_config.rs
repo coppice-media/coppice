@@ -425,6 +425,7 @@ mod tests {
 					kobo_kepub_conversion: Some(false),
 					enable_komga: Some(false),
 					enable_kavita: Some(false),
+					enable_abs: Some(false),
 					enable_opds_progression: Some(false),
 					enable_upload: Some(DEFAULT_ENABLE_UPLOAD),
 					max_file_upload_size: Some(DEFAULT_MAX_FILE_UPLOAD_SIZE),
@@ -515,6 +516,7 @@ mod tests {
 				(HASH_COST_KEY, Some("1")),
 				(ENABLE_KOMGA_KEY, Some("true")),
 				(ENABLE_KAVITA_KEY, Some("true")),
+				(ENABLE_ABS_KEY, Some("true")),
 			],
 			|| {
 				let tempdir =
@@ -564,6 +566,7 @@ mod tests {
 							kobo_kepub_conversion: false,
 							enable_komga: true,
 							enable_kavita: true,
+							enable_abs: true,
 							enable_opds_progression: false,
 							enable_upload: DEFAULT_ENABLE_UPLOAD,
 							max_file_upload_size: DEFAULT_MAX_FILE_UPLOAD_SIZE,
@@ -746,6 +749,7 @@ client_secret = "secret"
 				kobo_kepub_conversion: true,
 				enable_komga: true,
 				enable_kavita: false,
+				enable_abs: false,
 				enable_opds_progression: true,
 				enable_upload: true,
 				max_file_upload_size: 2000,

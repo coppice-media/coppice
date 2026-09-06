@@ -15,13 +15,13 @@ use sea_orm::{
 };
 use serde_json::{json, Value};
 use stump_api_types::settings::SettingValues;
+use stump_ingest::policy::{self, PolicyCandidate, PolicyPlan};
 use stump_ingest::{
 	contract::{FieldPick, ProviderIdentity},
 	providers::apply::{
 		apply_to_media, resolve_picks_for_context, validate_picks, ResolvedFields,
 	},
 };
-use stump_ingest::policy::{self, PolicyCandidate, PolicyPlan};
 
 use crate::{
 	data::CoreContext,
@@ -39,9 +39,9 @@ use crate::{
 		ingest::{
 			IngestAnalysisJob, IngestApplyPayload, IngestBulkApplyFailure,
 			IngestBulkApplyPayload, IngestDropFolder, IngestDropItem,
-			IngestMetadataCandidate, IngestProviderDescriptor,
-			IngestProviderSettings, IngestQualityCheckDescriptor,
-			IngestQualityCheckSettings, StageIngestUploadsPayload,
+			IngestMetadataCandidate, IngestProviderDescriptor, IngestProviderSettings,
+			IngestQualityCheckDescriptor, IngestQualityCheckSettings,
+			StageIngestUploadsPayload,
 		},
 		metadata_policy::{policy_decisions, IngestApplyBestPayload, MetadataPolicy},
 	},
@@ -66,7 +66,9 @@ fn convert_selections(
 /// editor's own recipe vocabulary. Auto-apply and "apply best" therefore run
 /// through exactly the same validation, merge, and audit path as a hand-made
 /// selection, instead of growing a second apply implementation.
-fn selections_from_picks(picks: Vec<FieldPick>) -> Vec<IngestMetadataFieldSelectionInput> {
+fn selections_from_picks(
+	picks: Vec<FieldPick>,
+) -> Vec<IngestMetadataFieldSelectionInput> {
 	picks
 		.into_iter()
 		.map(|pick| {
@@ -873,14 +875,8 @@ impl IngestMutation {
 					Some(media_id) => metadata_for_media(core, media_id).await?,
 					None => None,
 				};
-				let plan = plan_for_target(
-					core,
-					&item.library_id,
-					&candidates,
-					existing.as_ref(),
-				)
-				.await?;
-				plan
+				plan_for_target(core, &item.library_id, &candidates, existing.as_ref())
+					.await?
 			},
 			(None, Some(media_id)) => {
 				let media_id = media_id.to_string();
@@ -892,16 +888,11 @@ impl IngestMutation {
 					.await
 					.map_err(core_error)?;
 				let existing = metadata_for_media(core, &media_id).await?;
-				let plan =
-					plan_for_target(core, &library_id, &candidates, existing.as_ref())
-						.await?;
-				plan
+				plan_for_target(core, &library_id, &candidates, existing.as_ref()).await?
 			},
-			(Some(_), Some(_)) => {
-				return Err(Error::new(
-					"applyBestIngestMetadata accepts exactly one of dropItemId or mediaId",
-				))
-			},
+			(Some(_), Some(_)) => return Err(Error::new(
+				"applyBestIngestMetadata accepts exactly one of dropItemId or mediaId",
+			)),
 			(None, None) => {
 				return Err(Error::new(
 					"applyBestIngestMetadata requires dropItemId or mediaId",
@@ -1024,7 +1015,10 @@ async fn auto_apply_policy(
 }
 
 /// Drop the picks whose field the user already staged by hand.
-fn without_pending_fields(picks: Vec<FieldPick>, pending: Option<&Value>) -> Vec<FieldPick> {
+fn without_pending_fields(
+	picks: Vec<FieldPick>,
+	pending: Option<&Value>,
+) -> Vec<FieldPick> {
 	let Some(Value::Object(pending)) = pending else {
 		return picks;
 	};

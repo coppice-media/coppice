@@ -2,6 +2,7 @@
 //! https://drafts.opds.io/opds-2.0. It should be noted that while the OPDS 2.0 spec is still in a
 //! draft state, it is largely stable and unlikely to change in any significant way.
 
+pub mod audio;
 pub mod authentication;
 pub mod entity;
 mod error;

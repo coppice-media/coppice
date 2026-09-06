@@ -96,6 +96,11 @@ pub struct OPDSWebPubMetadata {
 	pub teams: Option<Vec<OPDSContributor>>,
 	pub links: Option<Vec<String>>,
 	pub number_of_pages: Option<i32>,
+	/// The length of the publication in seconds, set for an audiobook. This
+	/// is the whole-publication duration, not a track's.
+	///
+	/// See https://readium.org/webpub-manifest/schema/metadata.schema.json
+	pub duration: Option<f64>,
 	pub publisher: Option<String>,
 	pub language: Option<String>,
 	pub number: Option<rust_decimal::Decimal>,
@@ -130,6 +135,9 @@ impl OPDSWebPubMetadata {
 			teams: csv_to_contributors(model.teams, "teams", finalizer),
 			links: csv_to_strings(model.links),
 			number_of_pages: model.page_count,
+			// Audio, and only audio, has a duration; it comes from
+			// `media_audio` rather than the shared metadata model.
+			duration: None,
 			publisher: model.publisher,
 			language: model.language,
 			number: model.number,
@@ -137,6 +145,16 @@ impl OPDSWebPubMetadata {
 			published: build_published_date(model.year, model.month, model.day),
 			volume: model.volume,
 		})
+	}
+
+	/// Attach the publication duration, stated in seconds as the Readium
+	/// metadata schema requires. Stump stores milliseconds because a reading
+	/// position is a millisecond offset.
+	pub fn with_duration_ms(self, duration_ms: i64) -> Self {
+		Self {
+			duration: Some(duration_ms as f64 / 1000.0),
+			..self
+		}
 	}
 }
 

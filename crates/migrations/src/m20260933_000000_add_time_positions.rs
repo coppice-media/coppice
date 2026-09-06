@@ -36,7 +36,9 @@ impl MigrationTrait for Migration {
 				Table::alter()
 					.table(ReadingHeads::Table)
 					.add_column(
-						ColumnDef::new(ReadingHeads::PositionMs).big_integer().null(),
+						ColumnDef::new(ReadingHeads::PositionMs)
+							.big_integer()
+							.null(),
 					)
 					.to_owned(),
 			)
@@ -46,9 +48,7 @@ impl MigrationTrait for Migration {
 			.alter_table(
 				Table::alter()
 					.table(ReadingHeads::Table)
-					.add_column(
-						ColumnDef::new(ReadingHeads::TrackIndex).integer().null(),
-					)
+					.add_column(ColumnDef::new(ReadingHeads::TrackIndex).integer().null())
 					.to_owned(),
 			)
 			.await?;
@@ -71,7 +71,9 @@ impl MigrationTrait for Migration {
 				Table::alter()
 					.table(ReadingHeadEvents::Table)
 					.add_column(
-						ColumnDef::new(ReadingHeadEvents::TrackIndex).integer().null(),
+						ColumnDef::new(ReadingHeadEvents::TrackIndex)
+							.integer()
+							.null(),
 					)
 					.to_owned(),
 			)

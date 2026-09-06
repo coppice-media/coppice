@@ -184,6 +184,25 @@ pub struct OPDSImageLink {
 	base_link: OPDSBaseLink,
 }
 
+/// A struct for representing a link to an audio resource, which carries the
+/// length of the audio in seconds.
+///
+/// This is [`OPDSImageLink`]'s counterpart: the Readium Link Object gives an
+/// image `height`/`width` and audio a `duration`, and neither belongs on
+/// every link in the feed.
+///
+/// See https://readium.org/webpub-manifest/schema/link.schema.json
+#[skip_serializing_none]
+#[derive(Debug, Clone, Default, Builder, Serialize, Deserialize)]
+#[builder(build_fn(error = "crate::CoreError"), default, setter(into))]
+pub struct OPDSAudioLink {
+	/// The length of the audio in seconds. Milliseconds are what Stump
+	/// stores; seconds are what the schema specifies.
+	duration: Option<f64>,
+	#[serde(flatten)]
+	base_link: OPDSBaseLink,
+}
+
 /// A struct for representing a navigation link, which is a special type of link that an end user can follow in order to
 /// browse a catalog. It must be a compact collection and contain a title.
 #[derive(Debug, Builder, Clone, Serialize, Deserialize)]
@@ -219,6 +238,7 @@ pub enum OPDSLink {
 	Link(OPDSBaseLink),
 	Navigation(OPDSNavigationLink),
 	Image(OPDSImageLink),
+	Audio(OPDSAudioLink),
 }
 
 impl OPDSLink {
@@ -298,6 +318,10 @@ impl OPDSLinkFinalizer {
 			OPDSLink::Image(mut image_link) => {
 				image_link.base_link = self.finalize_base_link(image_link.base_link);
 				OPDSLink::Image(image_link)
+			},
+			OPDSLink::Audio(mut audio_link) => {
+				audio_link.base_link = self.finalize_base_link(audio_link.base_link);
+				OPDSLink::Audio(audio_link)
 			},
 		}
 	}

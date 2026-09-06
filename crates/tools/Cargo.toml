@@ -11,6 +11,15 @@ alphanumeric-sort.workspace = true
 # `dcterms:modified` timestamps for the EPUB 3 upgrade (`epub-polish`).
 chrono.workspace = true
 epub.workspace = true
+# `audio-report` resolves an audiobook folder through
+# `PathUtils::dir_is_audio_book`, which takes the scanner's ignore rules.
+globset.workspace = true
+# `audio-chapters` writes ID3v2 `CHAP`/`CTOC` frames into an MP3.
+id3.workspace = true
+# `audio-chapters` writes a Nero `chpl` chapter list into an M4B/M4A. Same
+# library `stump_media::audio` reads the two MP4 chapter mechanisms with, so a
+# mark this tool writes is a mark the probe reports.
+mp4ameta.workspace = true
 quick-xml.workspace = true
 regex.workspace = true
 serde.workspace = true

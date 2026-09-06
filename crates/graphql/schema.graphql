@@ -311,6 +311,52 @@ type AttachmentMeta {
 	media: Media
 }
 
+"""
+How an audiobook's chapter marks were obtained.
+
+This is provenance, never a preference: a list synthesized one-chapter-
+per-file ([`Self::PerTrack`]) must not be presented as if the publisher
+shipped it, and a client that wants to hide synthetic chapters can only do
+that if the mechanism survives the probe. The variants name the concrete
+container mechanism rather than a quality tier so a new container format
+adds a variant instead of silently widening an existing one.
+"""
+enum AudioChapterSource {
+	"The Nero `chpl` atom in `moov/udta` of an MP4/M4B container."
+	MP_4_CHPL
+	"""
+	A QuickTime text chapter track, linked from the audio track by a
+	`tref`/`chap` reference.
+	"""
+	MP_4_CHAPTER_TRACK
+	"ID3v2 `CHAP`/`CTOC` frames."
+	ID_3_CHAP
+	"`CHAPTERxxx`/`CHAPTERxxxNAME` Vorbis comments (Ogg, Opus, FLAC)."
+	VORBIS_COMMENT
+	"""
+	Synthesized: one chapter per file of a folder audiobook. The publisher
+	shipped no chapter marks at all.
+	"""
+	PER_TRACK
+	"The publication has no chapters."
+	NONE
+}
+
+"""
+A listening position: milliseconds from the start of the publication,
+plus the file the client was in for a multi-file audiobook. A recording
+has no pages, so this carries neither a page nor a locator.
+"""
+input AudioProgressInput {
+	positionMs: Int!
+	"The 0-based `mediaAudioTracks.index` the position fell in."
+	trackIndex: Int
+	isComplete: Boolean
+	elapsedSecondsDelta: Int
+	deviceId: String
+	resetElapsedSeconds: Boolean
+}
+
 type Author {
 	name: String!
 	"""
@@ -546,6 +592,11 @@ type Bookmark {
 	previewContent: String
 	locator: ReadiumLocator
 	page: Int
+	"""
+	A bookmark in an audiobook: milliseconds from the start of the
+	publication, the same unit as `reading_heads.position_ms`.
+	"""
+	positionMs: Int
 	mediaId: String!
 	userId: String!
 	createdAt: DateTime!
@@ -898,6 +949,8 @@ enum DeviceKind {
 	LISEUR
 	"A generic OPDS reader"
 	OPDS
+	"An Audiobookshelf client using the ABS-compatible profile"
+	ABS
 	"A script or integration using the native API"
 	API
 	"A browser session"
@@ -2226,6 +2279,14 @@ type Media {
 	libraryConfig: LibraryConfig!
 	analysisData: MediaAnalysisData
 	"""
+	The audio shape of the book, or `null` when it is not an audiobook.
+	
+	`null` and "an audiobook with no tracks" are different states, and only
+	one of them is a real publication, so this is `Option` rather than an
+	empty [`MediaAudio`].
+	"""
+	audio: MediaAudio
+	"""
 	A reference to the thumbnail image for the media. This will be a fully
 	qualified URL to the image.
 	"""
@@ -2272,6 +2333,77 @@ type MediaAnnotationModel {
 	userId: String!
 	createdAt: DateTime!
 	updatedAt: DateTime!
+}
+
+type MediaAudio {
+	"The whole-publication duration; the sum of the track durations."
+	durationMs: Int!
+	"""
+	Short lowercase codec name (`aac`, `mp3`, `opus`, `flac`), or `mixed`
+	for a folder book whose files do not agree.
+	"""
+	codec: String!
+	sampleRate: Int
+	channels: Int
+	"""
+	Bits per second: the container's stated average where it has one, and
+	derived from size over duration otherwise.
+	"""
+	bitrate: Int
+	"""
+	How the chapter marks were obtained. This is provenance, never a
+	preference: `PER_TRACK` means Stump synthesized one chapter per file
+	and the publisher shipped no marks at all, so a client that only wants
+	to show real chapters can tell the difference.
+	"""
+	chapterSource: AudioChapterSource!
+	"The files, in playback order, contiguous from index 0."
+	tracks: [MediaAudioTrack!]!
+	"""
+	The chapter marks, ascending by `startMs`. Empty exactly when
+	`chapterSource` is `NONE`.
+	"""
+	chapters: [MediaAudioChapter!]!
+	"""
+	The playback manifest route, for a client that would rather fetch the
+	whole shape over HTTP than through GraphQL:
+	`/api/v2/media/{mediaId}/audio/manifest`.
+	"""
+	manifestUrl: String!
+}
+
+"One chapter mark of an audiobook."
+type MediaAudioChapter {
+	"0-based ordinal of the chapter."
+	index: Int!
+	title: String
+	startMs: Int!
+	"The last chapter ends at the publication duration."
+	endMs: Int
+}
+
+"One file of an audiobook."
+type MediaAudioTrack {
+	"0-based position in playback order."
+	index: Int!
+	"""
+	The MIME type the track is served with; exact per file, so a
+	mixed-codec folder book still plays.
+	"""
+	mime: String!
+	durationMs: Int!
+	"""
+	Milliseconds from the start of the publication to the start of this
+	file. A publication offset belongs to the last track whose
+	`startOffsetMs` is at or below it.
+	"""
+	startOffsetMs: Int!
+	byteSize: Int!
+	"""
+	Where to fetch the bytes:
+	`/api/v2/media/{mediaId}/audio/track/{index}`.
+	"""
+	url: String!
 }
 
 type MediaDeleted {
@@ -2531,6 +2663,7 @@ input MediaOrderByField {
 input MediaProgressInput @oneOf {
 	epub: EpubProgressInput
 	paged: PagedProgressInput
+	audio: AudioProgressInput
 }
 
 "How to merge external metadata values onto existing entity metadata"
@@ -3055,6 +3188,11 @@ type Mutation {
 	"""
 	uploadMediaThumbnailBase64(id: ID!, image: String!): Media!
 	"""
+	Upload an avatar image for either the authenticated viewer or for any user if
+	called by a server owner
+	"""
+	uploadUserAvatar(id: ID, upload: Upload!): User!
+	"""
 	Record a decision about a recurring page hash. `SKIP` hides every page
 	within the duplicate tolerance of `dhash` from all page-serving routes
 	of the library's books (files are never modified); `KEEP` marks it as
@@ -3071,11 +3209,6 @@ type Mutation {
 	"""
 	unmarkDuplicatePage(libraryId: ID!, dhash: String!): Boolean!
 	deleteLoginActivity: Int!
-	"""
-	Upload an avatar image for either the authenticated viewer or for any user if
-	called by a server owner
-	"""
-	uploadUserAvatar(id: ID, upload: Upload!): User!
 	"""
 	Delete the avatar for the authenticated viewer, or for any user if
 	called by a server owner (by passing `id`).
@@ -3703,13 +3836,20 @@ type ProviderCatalogEntry {
 	"The Keiyoushi extension package backing the source."
 	pkg: String!
 	"""
-	Whether a compiled implementation exists for this entry on this
-	server; entries without one cannot be enabled.
+	Whether `contentWarning` on the Keiyoushi extension is anything but
+	`SAFE`, i.e. the flag a client badges an adult source with and the
+	one the materialised series' age rating is derived from.
+	"""
+	nsfw: Boolean!
+	"""
+	Whether this server can actually run this entry — a compiled
+	implementation *or* a source definition for its package; entries
+	without either cannot be enabled.
 	"""
 	hasImplementation: Boolean!
 	"""
-	The instance id that will be created on enable
-	(`<implementation>-<lang>`).
+	The instance id that will be created on enable: `<implementation>-<lang>`
+	for a compiled source, the definition id for a definition-backed one.
 	"""
 	instanceId: String
 	"""
@@ -4201,6 +4341,11 @@ type ReadingSession {
 	endLocator: ReadiumLocator
 	startPage: Int
 	endPage: Int
+	"""
+	Where a listening session stopped, in milliseconds from the start of
+	the publication. The time-addressed twin of `end_page`/`end_locator`.
+	"""
+	endPositionMs: Int
 	startPercentage: Decimal
 	endPercentage: Decimal
 	koreaderProgress: String

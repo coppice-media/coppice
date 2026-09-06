@@ -4,6 +4,8 @@
 //! It also defines the [`OpdsStreamLink`] struct for representing an OPDS page steaming extension
 //! link element as specified at https://github.com/anansi-project/opds-pse/blob/master/v1.2.md
 
+use std::borrow::Cow;
+
 use xml::{writer::XmlEvent, EventWriter};
 
 use crate::error::CoreResult;
@@ -24,10 +26,22 @@ pub enum OpdsLinkType {
 	Zip,         // "application/zip"
 	Epub,        // "application/epub+zip"
 	Search,      // "application/opensearchdescription+xml"
+	/// An audiobook container, carrying the [`ContentType`] that decides the
+	/// MIME (`audio/mp4`, `audio/mpeg`, `audio/opus`, `audio/ogg`,
+	/// `audio/flac`). `stump_media` already owns the extension → type table,
+	/// so the feed defers to it instead of growing a second one.
+	Audio(ContentType),
 }
 
 impl OpdsLinkType {
 	pub fn from_extension(extension: &str) -> Option<Self> {
+		// An audiobook is a first-class acquisition, and all six audio
+		// containers are already mapped by `ContentType`.
+		let content_type = ContentType::from_extension(extension);
+		if content_type.is_audio() {
+			return Some(OpdsLinkType::Audio(content_type));
+		}
+
 		match extension {
 			"jpeg" | "jpg" => Some(OpdsLinkType::ImageJpeg),
 			"png" => Some(OpdsLinkType::ImagePng),
@@ -36,6 +50,33 @@ impl OpdsLinkType {
 			// TODO: RARs as ZIP??? Obviously for content type it's different, but does OPDS concern itself with that?
 			"zip" | "cbz" | "rar" | "cbr" => Some(OpdsLinkType::Zip),
 			_ => None,
+		}
+	}
+
+	/// The value written into the Atom `link@type` attribute.
+	///
+	/// Every variant but [`OpdsLinkType::Audio`] is a fixed string and still
+	/// borrows; audio renders through [`ContentType`]'s `Display`, which is
+	/// why this returns a [`Cow`] rather than the `&'static str` the other
+	/// v1.2 enums hand back through [`OpdsEnumStr`].
+	pub fn mime(&self) -> Cow<'static, str> {
+		match self {
+			OpdsLinkType::Acquisition => Cow::Borrowed(
+				"application/atom+xml;profile=opds-catalog;kind=acquisition",
+			),
+			OpdsLinkType::ImageJpeg => Cow::Borrowed("image/jpeg"),
+			OpdsLinkType::ImagePng => Cow::Borrowed("image/png"),
+			OpdsLinkType::ImageGif => Cow::Borrowed("image/gif"),
+			OpdsLinkType::Navigation => {
+				Cow::Borrowed("application/atom+xml;profile=opds-catalog;kind=navigation")
+			},
+			OpdsLinkType::OctetStream => Cow::Borrowed("application/octet-stream"),
+			OpdsLinkType::Zip => Cow::Borrowed("application/zip"),
+			OpdsLinkType::Epub => Cow::Borrowed("application/epub+zip"),
+			OpdsLinkType::Search => {
+				Cow::Borrowed("application/opensearchdescription+xml")
+			},
+			OpdsLinkType::Audio(content_type) => Cow::Owned(content_type.mime_type()),
 		}
 	}
 }
@@ -49,26 +90,6 @@ impl TryFrom<ContentType> for OpdsLinkType {
 			ContentType::PNG => Ok(OpdsLinkType::ImagePng),
 			ContentType::GIF => Ok(OpdsLinkType::ImageGif),
 			_ => Err(format!("Unsupported content type: {content_type}")),
-		}
-	}
-}
-
-impl OpdsEnumStr for OpdsLinkType {
-	fn as_str(&self) -> &'static str {
-		match self {
-			OpdsLinkType::Acquisition => {
-				"application/atom+xml;profile=opds-catalog;kind=acquisition"
-			},
-			OpdsLinkType::ImageJpeg => "image/jpeg",
-			OpdsLinkType::ImagePng => "image/png",
-			OpdsLinkType::ImageGif => "image/gif",
-			OpdsLinkType::Navigation => {
-				"application/atom+xml;profile=opds-catalog;kind=navigation"
-			},
-			OpdsLinkType::OctetStream => "application/octet-stream",
-			OpdsLinkType::Zip => "application/zip",
-			OpdsLinkType::Epub => "application/epub+zip",
-			OpdsLinkType::Search => "application/opensearchdescription+xml",
 		}
 	}
 }
@@ -125,8 +146,9 @@ impl OpdsLink {
 	}
 
 	pub fn write(&self, writer: &mut EventWriter<Vec<u8>>) -> CoreResult<()> {
+		let link_type = self.link_type.mime();
 		let link = XmlEvent::start_element("link")
-			.attr("type", self.link_type.as_str())
+			.attr("type", link_type.as_ref())
 			.attr("rel", self.rel.as_str())
 			.attr("href", &self.href);
 

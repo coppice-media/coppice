@@ -35,6 +35,38 @@ impl OPDSProperties {
 			..self
 		}
 	}
+
+	/// Advertise the length of the linked resource in octets.
+	///
+	/// OPDS 2.0 has no length key of its own, but Atom's `link@length`
+	/// (RFC 4287 4.2.7.5) is exactly this advisory value and the OPDS 1.2
+	/// feed already speaks it, so the JSON feed reuses the name inside the
+	/// open `properties` object rather than coining a Stump-only one. An
+	/// audiobook is the first publication in the feed made of many files,
+	/// and a client choosing which tracks to download needs their sizes.
+	pub fn with_length(self, length: i64) -> Self {
+		let Self {
+			authenticate,
+			dynamic_properties,
+		} = self;
+
+		// A dynamic value that is not an object cannot be flattened into
+		// `properties` at all, so there is nothing to preserve in that case.
+		let mut properties = match dynamic_properties {
+			Some(OPDSDynamicProperties(serde_json::Value::Object(properties))) => {
+				properties
+			},
+			_ => serde_json::Map::new(),
+		};
+		properties.insert(String::from("length"), serde_json::Value::from(length));
+
+		Self {
+			authenticate,
+			dynamic_properties: Some(OPDSDynamicProperties(serde_json::Value::Object(
+				properties,
+			))),
+		}
+	}
 }
 
 /// A struct for representing auth-related properties in an OPDS feed or collection. This

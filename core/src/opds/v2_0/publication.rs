@@ -4,7 +4,10 @@
 use std::collections::HashMap;
 
 use derive_builder::Builder;
-use models::entity::{media_analysis, media_metadata};
+use models::{
+	entity::{media_analysis, media_metadata},
+	services::audio::AudioBook,
+};
 use sea_orm::{prelude::*, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
@@ -15,6 +18,7 @@ use crate::{
 use stump_media::{media::get_content_type_for_page, ContentType};
 
 use super::{
+	audio,
 	entity::OPDSPublicationEntity,
 	link::{
 		OPDSBaseLinkBuilder, OPDSImageLink, OPDSImageLinkBuilder, OPDSLink,
@@ -88,6 +92,19 @@ impl OPDSPublication {
 			all_positions.extend(positions);
 		}
 
+		// The scanner stores an audio extension on every audiobook row, so a
+		// page of comics issues no audio query at all. The rest of the page
+		// costs one query per audio table instead of three per book.
+		let audio_books = audio::books(
+			conn,
+			books
+				.iter()
+				.filter(|book| audio::is_audio(&book.media.extension))
+				.map(|book| book.media.id.clone())
+				.collect(),
+		)
+		.await?;
+
 		let mut publications = Vec::with_capacity(books.len());
 
 		for book in books {
@@ -98,7 +115,9 @@ impl OPDSPublication {
 				})?
 				.clone();
 
-			let links = OPDSPublication::links_for_book(&book, &finalizer)?;
+			let audio = audio_books.get(&book.media.id);
+			let links = OPDSPublication::links_for_book(&book, audio, &finalizer)?;
+			let toc = OPDSPublication::toc_for_book(&book, audio, &finalizer)?;
 			let images = OPDSPublication::images_for_book(&book, &finalizer).await?;
 
 			let position = all_positions.get(&book.media.id).copied();
@@ -136,8 +155,9 @@ impl OPDSPublication {
 						)])
 						.build()?,
 				))
-				.webpub_metadata(OPDSWebPubMetadata::from_model(
+				.webpub_metadata(OPDSPublication::webpub_metadata(
 					media_metadata,
+					audio,
 					&finalizer,
 				)?)
 				.build()?;
@@ -146,6 +166,7 @@ impl OPDSPublication {
 				.metadata(metadata)
 				.links(links)
 				.images(images)
+				.toc(toc)
 				.build()?;
 
 			publications.push(publication);
@@ -159,7 +180,14 @@ impl OPDSPublication {
 		finalizer: OPDSLinkFinalizer,
 		book: OPDSPublicationEntity,
 	) -> CoreResult<Self> {
-		let links = OPDSPublication::links_for_book(&book, &finalizer)?;
+		let audio_book = if audio::is_audio(&book.media.extension) {
+			models::services::audio::book(conn, &book.media.id).await?
+		} else {
+			None
+		};
+		let audio = audio_book.as_ref();
+		let links = OPDSPublication::links_for_book(&book, audio, &finalizer)?;
+		let toc = OPDSPublication::toc_for_book(&book, audio, &finalizer)?;
 		let images = OPDSPublication::images_for_book(&book, &finalizer).await?;
 
 		let positions = conn
@@ -245,7 +273,11 @@ impl OPDSPublication {
 					)])
 					.build()?,
 			))
-			.webpub_metadata(OPDSWebPubMetadata::from_model(media_metadata, &finalizer)?)
+			.webpub_metadata(OPDSPublication::webpub_metadata(
+				media_metadata,
+				audio,
+				&finalizer,
+			)?)
 			.build()?;
 
 		let publication = OPDSPublicationBuilder::default()
@@ -256,7 +288,7 @@ impl OPDSPublication {
 			// Note: I'm not sure if this is necessary, but Cantook didn't seem to like when
 			// the below vectors were missing from the publication (even when otherwise empty)
 			.resources(vec![])
-			.toc(vec![])
+			.toc(toc.unwrap_or_default())
 			.landmarks(vec![])
 			.page_list(vec![])
 			.build()?;
@@ -295,23 +327,29 @@ impl OPDSPublication {
 		}
 	}
 
-	fn links_for_book(
+	/// The links of one publication: the self link, the acquisition, and the
+	/// progression resource.
+	///
+	/// `audio` is `Some` for an audiobook. A multi-file one has no single
+	/// file to acquire, so its acquisition is one link per track instead
+	/// (see [`audio::acquisition_links`]); every other book, audio or not,
+	/// keeps the one file link, whose type comes from the media extension
+	/// and is therefore already the audio MIME for a single container.
+	pub fn links_for_book(
 		book: &OPDSPublicationEntity,
+		audio: Option<&AudioBook>,
 		finalizer: &OPDSLinkFinalizer,
 	) -> CoreResult<Vec<OPDSLink>> {
-		Ok(finalizer.finalize_all(vec![
-			OPDSLink::Link(
-				OPDSBaseLinkBuilder::default()
-					.href(format!("/opds/v2.0/books/{}", book.media.id))
-					.rel(OPDSLinkRel::SelfLink.item())
-					._type(OPDSLinkType::DivinaJson)
-					.properties(
-						OPDSProperties::default()
-							.with_auth(finalizer.format_link(AUTH_ROUTE)),
-					)
-					.build()?,
-			),
-			OPDSLink::Link(
+		let per_track = audio
+			.map(|book_audio| {
+				audio::acquisition_links(&book.media.id, book_audio, finalizer)
+			})
+			.transpose()?
+			.flatten();
+
+		let acquisition = match per_track {
+			Some(links) => links,
+			None => vec![OPDSLink::Link(
 				OPDSBaseLinkBuilder::default()
 					.href(format!("/opds/v2.0/books/{}/file", book.media.id))
 					.rel(OPDSLinkRel::Acquisition.item())
@@ -323,9 +361,54 @@ impl OPDSPublication {
 							.with_auth(finalizer.format_link(AUTH_ROUTE)),
 					)
 					.build()?,
-			),
-			OPDSLink::progression(book.media.id.clone(), finalizer),
-		]))
+			)],
+		};
+
+		let mut links = vec![OPDSLink::Link(
+			OPDSBaseLinkBuilder::default()
+				.href(format!("/opds/v2.0/books/{}", book.media.id))
+				.rel(OPDSLinkRel::SelfLink.item())
+				._type(OPDSLinkType::DivinaJson)
+				.properties(
+					OPDSProperties::default()
+						.with_auth(finalizer.format_link(AUTH_ROUTE)),
+				)
+				.build()?,
+		)];
+		links.extend(acquisition);
+		links.push(OPDSLink::progression(book.media.id.clone(), finalizer));
+
+		Ok(finalizer.finalize_all(links))
+	}
+
+	/// The chapter marks of an audiobook as a `toc`, or `None` when the book
+	/// has none. An empty collection would claim "this publication has a
+	/// table of contents and it is empty" in a key every other book omits.
+	fn toc_for_book(
+		book: &OPDSPublicationEntity,
+		audio: Option<&AudioBook>,
+		finalizer: &OPDSLinkFinalizer,
+	) -> CoreResult<Option<Vec<OPDSLink>>> {
+		Ok(audio
+			.map(|book_audio| audio::toc(&book.media.id, book_audio, finalizer))
+			.transpose()?
+			.map(|toc| finalizer.finalize_all(toc))
+			.filter(|toc| !toc.is_empty()))
+	}
+
+	/// The Readium metadata of one publication, carrying the whole-publication
+	/// duration when the book is an audiobook.
+	fn webpub_metadata(
+		model: media_metadata::Model,
+		audio: Option<&AudioBook>,
+		finalizer: &OPDSLinkFinalizer,
+	) -> CoreResult<OPDSWebPubMetadata> {
+		let metadata = OPDSWebPubMetadata::from_model(model, finalizer)?;
+
+		Ok(match audio {
+			Some(audio) => metadata.with_duration_ms(audio.audio.duration_ms),
+			None => metadata,
+		})
 	}
 }
 
@@ -555,7 +638,7 @@ mod tests {
 		let book = mock_book();
 		let finalizer = OPDSLinkFinalizer::new("https://example.com".to_string());
 
-		let links = OPDSPublication::links_for_book(&book, &finalizer)
+		let links = OPDSPublication::links_for_book(&book, None, &finalizer)
 			.expect("Failed to generate links");
 
 		assert_eq!(links.len(), 3);

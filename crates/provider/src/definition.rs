@@ -411,7 +411,8 @@ impl DefinitionLoader {
 		};
 		let entries = parse_index(&bytes)?;
 		if let Origin::Remote { .. } = &self.origin {
-			self.write_cached(Path::new(INDEX_FILE_NAME), &bytes).await?;
+			self.write_cached(Path::new(INDEX_FILE_NAME), &bytes)
+				.await?;
 		}
 		let index = Arc::new(DefinitionIndex {
 			fetched_at: Utc::now(),
@@ -454,8 +455,9 @@ impl DefinitionLoader {
 		let entry = index
 			.find(id)
 			.ok_or_else(|| DefinitionError::NotFound(id.to_string()))?;
-		let file = sanitise_relative(&entry.file)
-			.ok_or_else(|| DefinitionError::Parse(format!("unsafe file `{}`", entry.file)))?;
+		let file = sanitise_relative(&entry.file).ok_or_else(|| {
+			DefinitionError::Parse(format!("unsafe file `{}`", entry.file))
+		})?;
 		let bytes = self.read_definition_bytes(&file).await?;
 		let definition: SourceDefinition = serde_json::from_slice(&bytes)
 			.map_err(|error| DefinitionError::Parse(error.to_string()))?;
@@ -604,7 +606,8 @@ pub fn parse_index(bytes: &[u8]) -> Result<Vec<DefinitionIndexEntry>, Definition
 			))
 		},
 	};
-	serde_json::from_value(array).map_err(|error| DefinitionError::Parse(error.to_string()))
+	serde_json::from_value(array)
+		.map_err(|error| DefinitionError::Parse(error.to_string()))
 }
 
 /// Reject absolute paths and `..` so a hostile index cannot write outside the
@@ -660,9 +663,10 @@ mod tests {
 		definition
 			.knobs
 			.insert("manga_sub_string".into(), KnobValue::Text("series".into()));
-		definition
-			.knobs
-			.insert("use_new_chapter_endpoint".into(), KnobValue::Text("true".into()));
+		definition.knobs.insert(
+			"use_new_chapter_endpoint".into(),
+			KnobValue::Text("true".into()),
+		);
 		definition
 			.knobs
 			.insert("version_code".into(), KnobValue::Int(12));
@@ -674,7 +678,10 @@ mod tests {
 			definition.text_knob(&["mangaSubString", "manga_sub_string"]),
 			Some("series")
 		);
-		assert_eq!(definition.bool_knob(&["use_new_chapter_endpoint"]), Some(true));
+		assert_eq!(
+			definition.bool_knob(&["use_new_chapter_endpoint"]),
+			Some(true)
+		);
 		assert_eq!(definition.int_knob(&["version_code"]), Some(12));
 		assert_eq!(definition.text_knob(&["blank"]), None);
 		assert_eq!(definition.text_knob(&["absent"]), None);
@@ -691,7 +698,10 @@ mod tests {
 
 		let mut relative = definition("madara");
 		relative.base_url = "example.com".into();
-		assert!(matches!(relative.validate(), Err(DefinitionError::Parse(_))));
+		assert!(matches!(
+			relative.validate(),
+			Err(DefinitionError::Parse(_))
+		));
 
 		assert!(definition("madara").validate().is_ok());
 		assert_eq!(definition("madara").base_url(), "https://example.com");

@@ -202,9 +202,10 @@ impl Tool for SourcesImport {
 				root.display()
 			)));
 		}
-		let output_dir = options.output_dir.clone().ok_or_else(|| {
-			ToolError::Invalid("output_dir is required".to_string())
-		})?;
+		let output_dir = options
+			.output_dir
+			.clone()
+			.ok_or_else(|| ToolError::Invalid("output_dir is required".to_string()))?;
 		if !output_dir.is_dir() {
 			return Err(ToolError::Invalid(format!(
 				"output_dir {} is not a directory",
@@ -382,20 +383,18 @@ impl Tool for SourcesImport {
 		);
 
 		let rows = stats.into_values().collect::<Vec<_>>();
-		plan.push(
-			Action::new(KIND_STATS)
-				.with_source(&root)
-				.with_detail(serde_json::json!({
-					"table": stats_table(&rows, definitions.len(), unsupported.len()),
-					"themes": rows,
-					"extensions": extensions,
-					"derived": definitions.len(),
-					"unsupported": unsupported.len(),
-					"filtered": filtered,
-					"commit": commit,
-					"repo": repo,
-				})),
-		);
+		plan.push(Action::new(KIND_STATS).with_source(&root).with_detail(
+			serde_json::json!({
+				"table": stats_table(&rows, definitions.len(), unsupported.len()),
+				"themes": rows,
+				"extensions": extensions,
+				"derived": definitions.len(),
+				"unsupported": unsupported.len(),
+				"filtered": filtered,
+				"commit": commit,
+				"repo": repo,
+			}),
+		));
 
 		Ok(plan)
 	}
@@ -417,10 +416,7 @@ impl Tool for SourcesImport {
 				KIND_DEFINITION => Some(pretty(&action.detail)?),
 				KIND_INDEX | KIND_UNSUPPORTED => {
 					let rows = action.detail.get("rows").ok_or_else(|| {
-						ToolError::Invalid(format!(
-							"{} action has no rows",
-							action.kind
-						))
+						ToolError::Invalid(format!("{} action has no rows", action.kind))
 					})?;
 					Some(pretty(rows)?)
 				},
@@ -487,7 +483,10 @@ fn stats_table(rows: &[ThemeStat], derived: usize, unsupported: usize) -> String
 		.chain(std::iter::once("TOTAL".len()))
 		.max()
 		.unwrap_or(5);
-	let mut table = format!("{:<width$}  {:>7}  {:>11}\n", "theme", "derived", "unsupported");
+	let mut table = format!(
+		"{:<width$}  {:>7}  {:>11}\n",
+		"theme", "derived", "unsupported"
+	);
 	let mut ordered = rows.to_vec();
 	ordered.sort_by(|left, right| {
 		right
@@ -683,7 +682,10 @@ fn derive(
 				&lang_dir,
 				None,
 				&rel,
-				&Reject::new("unparsed-gradle", format!("unreadable build.gradle.kts: {error}")),
+				&Reject::new(
+					"unparsed-gradle",
+					format!("unreadable build.gradle.kts: {error}"),
+				),
 			)]
 		},
 	};
@@ -746,9 +748,9 @@ fn derive(
 		},
 	};
 
-	let knobs = match parse_knobs(&mut class).and_then(|()| {
-		class_knobs(&class, themes.get(&theme))
-	}) {
+	let knobs = match parse_knobs(&mut class)
+		.and_then(|()| class_knobs(&class, themes.get(&theme)))
+	{
 		Ok(knobs) => knobs,
 		Err(reject) => {
 			return blocks
@@ -921,8 +923,8 @@ fn resolve_theme(
 		// the two Madara generations apart.
 		let declared = declared.to_ascii_lowercase();
 		let module = themes.get(&declared);
-		let declares_class = module
-			.is_some_and(|theme| theme.classes.contains(&class.base_class));
+		let declares_class =
+			module.is_some_and(|theme| theme.classes.contains(&class.base_class));
 		let unknown_module = module.is_none_or(|theme| theme.classes.is_empty());
 		if declares_class || unknown_module {
 			return Ok(declared);
@@ -1592,11 +1594,17 @@ fn parse_ctor_args(args: &str, class: &mut SourceClass) -> Result<(), Reject> {
 
 /// Split a class body into members and turn every `override` of a literal into
 /// a knob. Anything else is behaviour, and rejects the source.
+///
+/// Every blocking member is collected, not just the first: `unsupported.json`
+/// is the theme engines' work list, and a source that needs six members ported
+/// must not read as if it needed one. The reject keeps the *first* blocker's
+/// code and reason in file order and appends the names of the rest.
 fn parse_class_body(body: &str, class: &mut SourceClass) -> Result<(), Reject> {
 	// `override fun latestUpdatesSelector() = popularMangaSelector()` is one of
 	// the theme idioms: an alias for another member of the same class, which may
 	// be declared further down.
 	let mut aliases: Vec<(String, String, &'static str)> = Vec::new();
+	let mut blockers: Vec<Reject> = Vec::new();
 
 	for member in split_members(body) {
 		let member = member.trim();
@@ -1604,10 +1612,11 @@ fn parse_class_body(body: &str, class: &mut SourceClass) -> Result<(), Reject> {
 			continue;
 		}
 		if starts_with_word(member, "init") {
-			return Err(Reject::new(
+			blockers.push(Reject::new(
 				"init-block",
-				"the class has an init { } block",
+				"init: the class has an init { } block",
 			));
+			continue;
 		}
 		let Some(declaration) = declaration(member) else {
 			continue;
@@ -1616,12 +1625,17 @@ fn parse_class_body(body: &str, class: &mut SourceClass) -> Result<(), Reject> {
 			continue;
 		}
 
-		let (member_name, parameters, expression) = match declaration.kind {
-			DeclarationKind::Property => {
-				let (name, expression) = property(declaration.rest)?;
-				(name, Vec::new(), expression)
+		let parsed = match declaration.kind {
+			DeclarationKind::Property => property(declaration.rest)
+				.map(|(name, expression)| (name, Vec::new(), expression)),
+			DeclarationKind::Function => function(declaration.rest),
+		};
+		let (member_name, parameters, expression) = match parsed {
+			Ok(parsed) => parsed,
+			Err(reject) => {
+				blockers.push(reject);
+				continue;
 			},
-			DeclarationKind::Function => function(declaration.rest)?,
 		};
 		let key = snake_case(&member_name);
 		let code = match key.as_str() {
@@ -1638,28 +1652,61 @@ fn parse_class_body(body: &str, class: &mut SourceClass) -> Result<(), Reject> {
 					aliases.push((member_name, target, code));
 					continue;
 				}
-				let knobs = match request_url(&key, expression, &parameters) {
+				let recognised = match request_url(&key, expression, &parameters) {
 					Some(result) => result,
 					None => recognise(&key, expression),
 				}
 				// Reasons quote the upstream identifier, not the derived knob
 				// key, so a reader can go straight back to the Kotlin.
-				.map_err(|reason| Reject::new(code, format!("{member_name}: {reason}")))?;
-				class.knobs.extend(knobs);
+				.map_err(|reason| Reject::new(code, format!("{member_name}: {reason}")));
+				match recognised {
+					Ok(knobs) => class.knobs.extend(knobs),
+					Err(reject) => blockers.push(reject),
+				}
 			},
 		}
 	}
 
 	for (member_name, target, code) in aliases {
-		let knob = class.knobs.get(&target).cloned().ok_or_else(|| {
-			Reject::new(
+		match class.knobs.get(&target).cloned() {
+			Some(knob) => {
+				class.knobs.insert(snake_case(&member_name), knob);
+			},
+			None => blockers.push(Reject::new(
 				code,
 				format!("{member_name}: aliases {target}, which is not a knob"),
-			)
-		})?;
-		class.knobs.insert(snake_case(&member_name), knob);
+			)),
+		}
 	}
-	Ok(())
+
+	let mut blockers = blockers.into_iter();
+	let Some(first) = blockers.next() else {
+		return Ok(());
+	};
+	let rest = blockers
+		.map(|reject| member_of(&reject.reason).to_string())
+		.collect::<Vec<_>>();
+	if rest.is_empty() {
+		return Err(first);
+	}
+	Err(Reject::new(
+		first.code,
+		format!(
+			"{} (and {} more: {})",
+			first.reason,
+			rest.len(),
+			rest.join(", ")
+		),
+	))
+}
+
+/// The `<member>: ` a reject reason leads with — every member-level reason is
+/// built that way — so the summary can list names instead of whole reasons.
+fn member_of(reason: &str) -> &str {
+	match reason.split_once(':') {
+		Some((head, _)) if !head.is_empty() && head.bytes().all(is_ident_byte) => head,
+		_ => reason,
+	}
 }
 
 /// The knob key a `= otherMember()` / `= otherMember` body aliases.
@@ -1823,7 +1870,10 @@ fn property(rest: &str) -> Result<(String, &str), Reject> {
 fn function(rest: &str) -> Result<(String, Vec<String>, &str), Reject> {
 	let bytes = rest.as_bytes();
 	let open = top_level_byte(rest, 0, b'(').ok_or_else(|| {
-		Reject::new("custom-override", "function has no parameter list")
+		Reject::new(
+			"custom-override",
+			format!("{}: function has no parameter list", truncate(rest)),
+		)
 	})?;
 	let mut start = open;
 	while start > 0 && is_ident_byte(bytes[start - 1]) {
@@ -1838,7 +1888,9 @@ fn function(rest: &str) -> Result<(String, Vec<String>, &str), Reject> {
 		.filter_map(|parameter| {
 			let parameter = parameter.trim();
 			let parameter = parameter.split(':').next()?.trim();
-			let parameter = parameter.rsplit_once(' ').map_or(parameter, |(_, last)| last);
+			let parameter = parameter
+				.rsplit_once(' ')
+				.map_or(parameter, |(_, last)| last);
 			(!parameter.is_empty() && parameter.bytes().all(is_ident_byte))
 				.then(|| parameter.to_string())
 		})
@@ -1861,7 +1913,8 @@ fn recognise(key: &str, expression: &str) -> Result<Vec<(String, RawKnob)>, Stri
 
 	// Networking policy: the only non-literal forms that are still pure data.
 	if key == "configure_client" {
-		return rate_limit(expression).map_err(|reason| format!("{reason} (configureClient)"));
+		return rate_limit(expression)
+			.map_err(|reason| format!("{reason} (configureClient)"));
 	}
 	if key == "client" {
 		let chain = expression
@@ -1872,7 +1925,10 @@ fn recognise(key: &str, expression: &str) -> Result<Vec<(String, RawKnob)>, Stri
 		let chain = chain
 			.strip_suffix(".build()")
 			.ok_or_else(|| truncate(expression))?;
-		let call = chain.trim().strip_prefix('.').ok_or_else(|| truncate(expression))?;
+		let call = chain
+			.trim()
+			.strip_prefix('.')
+			.ok_or_else(|| truncate(expression))?;
 		if split_top_level(call, b'.').len() != 1 {
 			return Err(truncate(expression));
 		}
@@ -1903,7 +1959,10 @@ fn recognise(key: &str, expression: &str) -> Result<Vec<(String, RawKnob)>, Stri
 
 /// `SimpleDateFormat("p", Locale.X)` / `DateTimeFormatter.ofPattern("p", …)`
 /// become the pattern plus a BCP-47 locale knob.
-fn date_format(key: &str, expression: &str) -> Result<Option<Vec<(String, RawKnob)>>, String> {
+fn date_format(
+	key: &str,
+	expression: &str,
+) -> Result<Option<Vec<(String, RawKnob)>>, String> {
 	let args = ["SimpleDateFormat", "DateTimeFormatter.ofPattern"]
 		.into_iter()
 		.find_map(|prefix| {
@@ -1993,7 +2052,11 @@ fn locale(expression: &str) -> Option<String> {
 	let close = match_paren(rest.as_bytes(), open)?;
 	let parts = split_top_level(&rest[open + 1..close], b',');
 	let language = string_literal(parts.first()?.trim())?;
-	match parts.get(1).map(|part| part.trim()).filter(|part| !part.is_empty()) {
+	match parts
+		.get(1)
+		.map(|part| part.trim())
+		.filter(|part| !part.is_empty())
+	{
 		Some(region) => Some(format!("{language}-{}", string_literal(region)?)),
 		None => Some(language),
 	}
@@ -2008,7 +2071,10 @@ fn rate_limit(expression: &str) -> Result<Vec<(String, RawKnob)>, String> {
 		.or_else(|| expression.trim().strip_prefix("this.rateLimit"))
 		.ok_or_else(|| truncate(expression))?;
 	let rest = rest.trim_start();
-	let open = rest.find('(').filter(|open| *open == 0).ok_or_else(|| truncate(expression))?;
+	let open = rest
+		.find('(')
+		.filter(|open| *open == 0)
+		.ok_or_else(|| truncate(expression))?;
 	let close = match_paren(rest.as_bytes(), open).ok_or_else(|| truncate(expression))?;
 	let tail = rest[close + 1..].trim();
 	if !tail.is_empty() && !tail.starts_with('{') {
@@ -2038,7 +2104,9 @@ fn rate_limit(expression: &str) -> Result<Vec<(String, RawKnob)>, String> {
 			"permits" => {
 				permits = Some(int_literal(value).ok_or_else(|| truncate(expression))?)
 			},
-			"period" => period = duration_seconds(value).ok_or_else(|| truncate(expression))?,
+			"period" => {
+				period = duration_seconds(value).ok_or_else(|| truncate(expression))?
+			},
 			"interval" | "shouldLimit" => {},
 			_ => return Err(truncate(expression)),
 		}
@@ -2476,7 +2544,9 @@ fn parse_string(source: &str, parameters: &[String]) -> Option<String> {
 			'$' => {
 				let rest = chars.clone().collect::<String>();
 				let reference = if let Some(braced) = rest.strip_prefix('{') {
-					braced.split_once('}').map(|(name, _)| (name, name.len() + 2))
+					braced
+						.split_once('}')
+						.map(|(name, _)| (name, name.len() + 2))
 				} else {
 					let name = rest
 						.split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -2553,8 +2623,7 @@ fn snake_case(name: &str) -> String {
 			let boundary = previous.is_some_and(|previous| {
 				previous.is_lowercase()
 					|| previous.is_numeric()
-					|| (previous.is_uppercase()
-						&& next.is_some_and(char::is_lowercase))
+					|| (previous.is_uppercase() && next.is_some_and(char::is_lowercase))
 			});
 			if boundary && !out.ends_with('_') && !out.is_empty() {
 				out.push('_');

@@ -17,8 +17,8 @@ use async_graphql::{Context, Object, Result, ID};
 use models::shared::enums::{JobStatus, UserPermission};
 use sea_orm::EntityTrait;
 use stump_ingest::contract::SearchQuery;
-use stump_ingest::store::Pagination as StorePagination;
 use stump_ingest::policy;
+use stump_ingest::store::Pagination as StorePagination;
 
 use crate::object::metadata_policy::MetadataPolicy;
 
@@ -520,10 +520,7 @@ mod tests {
 			"applyBestIngestMetadata(dropItemId: ID, mediaId: ID): \
 			 IngestApplyBestPayload!",
 		] {
-			assert!(
-				sdl.contains(signature),
-				"{signature} drifted:\n{sdl}"
-			);
+			assert!(sdl.contains(signature), "{signature} drifted:\n{sdl}");
 		}
 	}
 }

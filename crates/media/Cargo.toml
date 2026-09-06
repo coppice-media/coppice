@@ -31,6 +31,11 @@ kmeans_colors = { version = "0.7.1", default-features = false, features = ["pale
 libc = "0.2.152"
 md5.workspace = true
 merge = "0.1.0"
+# Audiobook probing: MP4 `chpl` / chapter-track marks and `covr` artwork.
+# `symphonia-format-isomp4` reads neither, and `mp4ameta` is the only library
+# that distinguishes the two MP4 chapter mechanisms — that distinction is the
+# `AudioChapterSource` provenance Stump stores.
+mp4ameta.workspace = true
 models = { path = "../models", default-features = false }
 palette = "0.7.6"
 pdfium-render = { version = "0.9.1", optional = true }
@@ -42,6 +47,9 @@ sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_with.workspace = true
+# Audiobook probing: the one demuxer for duration, codec, sample rate,
+# channels, tags, cover art, and ID3v2/Vorbis chapter marks.
+symphonia.workspace = true
 stump_kepub = { path = "../kepub", default-features = false, optional = true }
 thiserror.workspace = true
 thumbhash = "0.1.0"

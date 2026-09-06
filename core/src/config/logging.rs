@@ -33,6 +33,11 @@ pub fn init_tracing(config: &StumpConfig) {
 				.expect("Error invalid tracing directive for stump_server!"),
 		)
 		.add_directive(
+			"stump_provider=trace"
+				.parse()
+				.expect("Error invalid tracing directive for stump_provider!"),
+		)
+		.add_directive(
 			"metadata_integrations=trace"
 				.parse()
 				.expect("Error invalid tracing directive for metadata_integrations!"),

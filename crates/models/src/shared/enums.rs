@@ -899,6 +899,8 @@ pub enum DeviceKind {
 	Liseur,
 	/// A generic OPDS reader
 	Opds,
+	/// An Audiobookshelf client using the ABS-compatible profile
+	Abs,
 	/// A script or integration using the native API
 	Api,
 	/// A browser session

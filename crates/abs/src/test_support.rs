@@ -1,0 +1,644 @@
+//! Shared in-memory fixtures for the route tests: a SQLite database with the
+//! profile's own tables materialised, a stub [`AbsBackend`] over it, and a
+//! helper that drives a request through the composed router.
+
+use std::{collections::HashMap, sync::Arc};
+
+use axum::{
+	body::Body,
+	http::{HeaderMap, Response, StatusCode},
+	Extension, Router,
+};
+use chrono::{DateTime, TimeZone, Utc};
+use models::{
+	entity::{
+		library, library_config, media, media_metadata, series, user, user::AuthUser,
+	},
+	shared::{enums::LibraryType, image::ImageRef},
+};
+use parking_lot::Mutex;
+use sea_orm::{
+	ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseBackend,
+	DatabaseConnection, EntityTrait, QueryFilter, Statement,
+};
+use tower::ServiceExt;
+
+use crate::{
+	auth::mint_tokens,
+	errors::{AbsError, AbsResult},
+	ids::{AbsIds, IdKind, CREATE_ABS_IDS_SQL},
+	model::{
+		AbsAudio, AbsAudioChapter, AbsAudioTrack, AbsBookmark, AbsImage,
+		AbsPositionUpdate, AbsProgress,
+	},
+	routes::{AbsBackend, AbsSession},
+	sessions::AbsSessions,
+};
+
+/// The token secret the stub signs with; a fixed value so a test can mint a
+/// token by hand and expect the server to accept it.
+pub(crate) const SECRET: &[u8] = b"abs-test-secret";
+
+pub(crate) async fn db() -> DatabaseConnection {
+	let conn = ::tests::db::test_database().await;
+	for sql in [CREATE_ABS_IDS_SQL, crate::sessions::CREATE_ABS_SESSIONS_SQL] {
+		conn.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
+			.await
+			.unwrap();
+	}
+	conn
+}
+
+pub(crate) fn auth_user(user: &models::entity::user::Model) -> AuthUser {
+	AuthUser {
+		id: user.id.clone(),
+		avatar_path: None,
+		avatar: ImageRef::default(),
+		username: user.username.clone(),
+		is_server_owner: user.is_server_owner,
+		is_locked: false,
+		permissions: Vec::new(),
+		age_restriction: None,
+		preferences: None,
+		device_library_scope: None,
+	}
+}
+
+/// A library of the given type; `fake_data::Library` always builds the
+/// default (`Mixed`) config, so the type is set afterwards.
+pub(crate) async fn library_of_type(
+	conn: &DatabaseConnection,
+	library_type: LibraryType,
+) -> library::Model {
+	let row = ::tests::fake_data::Library::default().insert(conn).await;
+	let config = library_config::Entity::find_by_id(row.config_id)
+		.one(conn)
+		.await
+		.unwrap()
+		.expect("library config");
+	library_config::ActiveModel {
+		library_type: Set(library_type),
+		..config.into()
+	}
+	.update(conn)
+	.await
+	.unwrap();
+	row
+}
+
+/// A series holding one media row per `(name, extension)`.
+pub(crate) async fn series_with_files(
+	conn: &DatabaseConnection,
+	library_id: &str,
+	name: &str,
+	files: &[(&str, &str)],
+) -> (series::Model, Vec<media::Model>) {
+	let series_row = ::tests::fake_data::Series {
+		name: Some(name.to_owned()),
+		library_id: Some(library_id.to_owned()),
+		..Default::default()
+	}
+	.insert(conn)
+	.await;
+	let mut rows = Vec::with_capacity(files.len());
+	for (name, extension) in files {
+		rows.push(
+			::tests::fake_data::Media {
+				series_id: series_row.id.clone(),
+				name: Some((*name).to_owned()),
+				extension: Some((*extension).to_owned()),
+				..Default::default()
+			}
+			.insert(conn)
+			.await,
+		);
+	}
+	(series_row, rows)
+}
+
+/// Attach `media_metadata` to a book.
+pub(crate) async fn metadata(
+	conn: &DatabaseConnection,
+	media_id: &str,
+	title: &str,
+	writers: Option<&str>,
+) -> media_metadata::Model {
+	media_metadata::ActiveModel {
+		media_id: Set(Some(media_id.to_owned())),
+		title: Set(Some(title.to_owned())),
+		writers: Set(writers.map(str::to_owned)),
+		..Default::default()
+	}
+	.insert(conn)
+	.await
+	.unwrap()
+}
+
+/// A single-track audiobook of `duration_ms`, whose track path is the media
+/// path (the `isFile: true` shape).
+pub(crate) fn one_track_audio(path: &str, duration_ms: i64) -> AbsAudio {
+	AbsAudio {
+		duration_ms,
+		codec: "aac".to_owned(),
+		sample_rate: Some(44_100),
+		channels: Some(2),
+		bitrate: Some(64_000),
+		tracks: vec![AbsAudioTrack {
+			index: 0,
+			path: path.to_owned(),
+			duration_ms,
+			start_offset_ms: 0,
+			byte_size: 3_781,
+			mime: "audio/mp4".to_owned(),
+		}],
+		chapters: vec![AbsAudioChapter {
+			index: 0,
+			title: Some("Chapter One".to_owned()),
+			start_ms: 0,
+			end_ms: Some(duration_ms),
+		}],
+	}
+}
+
+/// A folder audiobook: two tracks below the item path.
+pub(crate) fn two_track_audio(folder: &str) -> AbsAudio {
+	AbsAudio {
+		duration_ms: 8_000,
+		codec: "mp3".to_owned(),
+		sample_rate: Some(44_100),
+		channels: Some(2),
+		bitrate: Some(64_000),
+		tracks: vec![
+			AbsAudioTrack {
+				index: 0,
+				path: format!("{folder}/01 - Pass 1.mp3"),
+				duration_ms: 4_000,
+				start_offset_ms: 0,
+				byte_size: 1_000,
+				mime: "audio/mpeg".to_owned(),
+			},
+			AbsAudioTrack {
+				index: 1,
+				path: format!("{folder}/02 - Pass 2.mp3"),
+				duration_ms: 4_000,
+				start_offset_ms: 4_000,
+				byte_size: 1_100,
+				mime: "audio/mpeg".to_owned(),
+			},
+		],
+		chapters: vec![
+			AbsAudioChapter {
+				index: 0,
+				title: Some("Pass 1".to_owned()),
+				start_ms: 0,
+				end_ms: Some(4_000),
+			},
+			AbsAudioChapter {
+				index: 1,
+				title: Some("Pass 2".to_owned()),
+				start_ms: 4_000,
+				end_ms: Some(8_000),
+			},
+		],
+	}
+}
+
+/// An [`AbsBackend`] answering persistence from the in-memory database and
+/// audio/progress/bookmark/session state from maps a test seeds.
+pub(crate) struct TestBackend {
+	pub conn: DatabaseConnection,
+	pub audio: Mutex<HashMap<String, AbsAudio>>,
+	pub progress: Mutex<HashMap<String, HashMap<String, AbsProgress>>>,
+	pub bookmarks: Mutex<HashMap<String, HashMap<String, Vec<AbsBookmark>>>>,
+	/// Every position update the routes applied, in order: what a test
+	/// asserts the reading state would have received.
+	pub applied: Mutex<Vec<(String, AbsPositionUpdate)>>,
+	pub covers: Mutex<HashMap<String, AbsImage>>,
+	/// Range headers the track route was called with.
+	pub served: Mutex<Vec<(String, i32, Option<String>)>>,
+}
+
+impl TestBackend {
+	pub(crate) fn new(conn: DatabaseConnection) -> Arc<Self> {
+		Arc::new(Self {
+			conn,
+			audio: Mutex::new(HashMap::new()),
+			progress: Mutex::new(HashMap::new()),
+			bookmarks: Mutex::new(HashMap::new()),
+			applied: Mutex::new(Vec::new()),
+			covers: Mutex::new(HashMap::new()),
+			served: Mutex::new(Vec::new()),
+		})
+	}
+
+	pub(crate) fn set_audio(&self, media_id: &str, audio: AbsAudio) {
+		self.audio.lock().insert(media_id.to_owned(), audio);
+	}
+
+	pub(crate) fn set_cover(&self, media_id: &str, image: AbsImage) {
+		self.covers.lock().insert(media_id.to_owned(), image);
+	}
+
+	/// Every position update the routes applied, in order.
+	pub(crate) fn applied_updates(&self) -> Vec<(String, AbsPositionUpdate)> {
+		self.applied.lock().clone()
+	}
+
+	/// Seed a bookmark without going through a route.
+	pub(crate) fn upsert_bookmark_for_test(
+		&self,
+		user_id: &str,
+		media_id: &str,
+		position_ms: i64,
+		title: &str,
+	) {
+		self.bookmarks
+			.lock()
+			.entry(user_id.to_owned())
+			.or_default()
+			.entry(media_id.to_owned())
+			.or_default()
+			.push(AbsBookmark {
+				position_ms,
+				title: title.to_owned(),
+				created_at: fixed(1_788_699_586_221),
+			});
+	}
+
+	pub(crate) fn set_progress(
+		&self,
+		user_id: &str,
+		media_id: &str,
+		progress: AbsProgress,
+	) {
+		self.progress
+			.lock()
+			.entry(user_id.to_owned())
+			.or_default()
+			.insert(media_id.to_owned(), progress);
+	}
+}
+
+fn fixed(millis: i64) -> DateTime<Utc> {
+	Utc.timestamp_millis_opt(millis).unwrap()
+}
+
+#[async_trait::async_trait]
+impl AbsBackend for TestBackend {
+	fn conn(&self) -> &DatabaseConnection {
+		&self.conn
+	}
+
+	async fn token_secret(&self) -> AbsResult<Vec<u8>> {
+		Ok(SECRET.to_vec())
+	}
+
+	async fn authenticate_password(
+		&self,
+		username: &str,
+		password: &str,
+	) -> AbsResult<(AuthUser, Option<String>)> {
+		if password != "correct-horse" {
+			return Err(AbsError::Unauthorized);
+		}
+		let row = user::Entity::find()
+			.filter(user::Column::Username.eq(username))
+			.one(&self.conn)
+			.await?
+			.ok_or(AbsError::Unauthorized)?;
+		Ok((auth_user(&row), Some("device-abs".to_owned())))
+	}
+
+	fn is_docker(&self) -> bool {
+		false
+	}
+
+	async fn user(&self, user_id: &str) -> AbsResult<(AuthUser, DateTime<Utc>)> {
+		let row = user::Entity::find_by_id(user_id)
+			.one(&self.conn)
+			.await?
+			.ok_or(AbsError::Unauthorized)?;
+		Ok((auth_user(&row), fixed(1_788_699_170_786)))
+	}
+
+	async fn audio(&self, media_id: &str) -> AbsResult<Option<AbsAudio>> {
+		Ok(self.audio.lock().get(media_id).cloned())
+	}
+
+	async fn audio_batch(
+		&self,
+		media_ids: &[String],
+	) -> AbsResult<HashMap<String, AbsAudio>> {
+		let audio = self.audio.lock();
+		Ok(media_ids
+			.iter()
+			.filter_map(|id| audio.get(id).map(|audio| (id.clone(), audio.clone())))
+			.collect())
+	}
+
+	async fn progress(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+	) -> AbsResult<Option<AbsProgress>> {
+		Ok(self
+			.progress
+			.lock()
+			.get(&user.id)
+			.and_then(|rows| rows.get(media_id))
+			.cloned())
+	}
+
+	async fn progress_all(
+		&self,
+		user: &AuthUser,
+	) -> AbsResult<Vec<(String, AbsProgress)>> {
+		Ok(self
+			.progress
+			.lock()
+			.get(&user.id)
+			.map(|rows| {
+				rows.iter()
+					.map(|(id, progress)| (id.clone(), progress.clone()))
+					.collect()
+			})
+			.unwrap_or_default())
+	}
+
+	async fn apply_position(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+		update: AbsPositionUpdate,
+	) -> AbsResult<()> {
+		self.applied.lock().push((media_id.to_owned(), update));
+
+		let mut progress = self.progress.lock();
+		let rows = progress.entry(user.id.clone()).or_default();
+		let existing = rows.get(media_id).cloned();
+		let finished = update.is_finished.unwrap_or_else(|| {
+			update.duration_ms > 0 && update.position_ms >= update.duration_ms
+		});
+		rows.insert(
+			media_id.to_owned(),
+			AbsProgress {
+				position_ms: update.position_ms,
+				track_index: update.track_index,
+				is_finished: finished,
+				started_at: existing
+					.as_ref()
+					.map(|progress| progress.started_at)
+					.unwrap_or_else(|| fixed(1_788_699_327_363)),
+				last_update: fixed(1_788_699_586_130),
+				finished_at: finished.then(|| fixed(1_788_699_586_130)),
+			},
+		);
+		Ok(())
+	}
+
+	async fn bookmarks(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+	) -> AbsResult<Vec<AbsBookmark>> {
+		Ok(self
+			.bookmarks
+			.lock()
+			.get(&user.id)
+			.and_then(|rows| rows.get(media_id))
+			.cloned()
+			.unwrap_or_default())
+	}
+
+	async fn bookmarks_all(
+		&self,
+		user: &AuthUser,
+	) -> AbsResult<Vec<(String, AbsBookmark)>> {
+		Ok(self
+			.bookmarks
+			.lock()
+			.get(&user.id)
+			.map(|rows| {
+				rows.iter()
+					.flat_map(|(media_id, bookmarks)| {
+						bookmarks
+							.iter()
+							.map(|bookmark| (media_id.clone(), bookmark.clone()))
+							.collect::<Vec<_>>()
+					})
+					.collect()
+			})
+			.unwrap_or_default())
+	}
+
+	async fn upsert_bookmark(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+		position_ms: i64,
+		title: &str,
+	) -> AbsResult<AbsBookmark> {
+		let mut bookmarks = self.bookmarks.lock();
+		let rows = bookmarks
+			.entry(user.id.clone())
+			.or_default()
+			.entry(media_id.to_owned())
+			.or_default();
+		let created_at = rows
+			.iter()
+			.find(|bookmark| bookmark.position_ms == position_ms)
+			.map(|bookmark| bookmark.created_at)
+			.unwrap_or_else(|| fixed(1_788_699_586_221));
+		rows.retain(|bookmark| bookmark.position_ms != position_ms);
+		let bookmark = AbsBookmark {
+			position_ms,
+			title: title.to_owned(),
+			created_at,
+		};
+		rows.push(bookmark.clone());
+		rows.sort_by_key(|bookmark| bookmark.position_ms);
+		Ok(bookmark)
+	}
+
+	async fn delete_bookmark(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+		position_ms: i64,
+	) -> AbsResult<()> {
+		if let Some(rows) = self
+			.bookmarks
+			.lock()
+			.get_mut(&user.id)
+			.and_then(|rows| rows.get_mut(media_id))
+		{
+			rows.retain(|bookmark| bookmark.position_ms != position_ms);
+		}
+		Ok(())
+	}
+
+	async fn cover(&self, _user: &AuthUser, media_id: &str) -> AbsResult<AbsImage> {
+		self.covers
+			.lock()
+			.get(media_id)
+			.cloned()
+			.ok_or_else(|| AbsError::NotFound(format!("No cover for {media_id}")))
+	}
+
+	async fn serve_track(
+		&self,
+		headers: HeaderMap,
+		media_id: &str,
+		track_index: i32,
+	) -> AbsResult<Response<Body>> {
+		let audio = self
+			.audio
+			.lock()
+			.get(media_id)
+			.cloned()
+			.ok_or_else(|| AbsError::NotFound(format!("No audio for {media_id}")))?;
+		let track = audio
+			.track(track_index)
+			.ok_or_else(|| AbsError::NotFound(format!("No file {track_index}")))?
+			.clone();
+		let range = headers
+			.get(axum::http::header::RANGE)
+			.and_then(|value| value.to_str().ok())
+			.map(str::to_owned);
+		self.served
+			.lock()
+			.push((media_id.to_owned(), track_index, range.clone()));
+
+		let status = if range.is_some() {
+			StatusCode::PARTIAL_CONTENT
+		} else {
+			StatusCode::OK
+		};
+		Ok(Response::builder()
+			.status(status)
+			.header(axum::http::header::CONTENT_TYPE, track.mime)
+			.header(axum::http::header::ACCEPT_RANGES, "bytes")
+			.body(Body::from(vec![0u8; 8]))
+			.unwrap())
+	}
+
+	// The session store is exercised for real: the stub goes through the same
+	// `abs_sessions` SQL the server adapter uses, against the in-memory
+	// database, so a route test covers the table as well as the handler.
+	async fn create_session(&self, session: AbsSession) -> AbsResult<()> {
+		Ok(AbsSessions::insert(&self.conn, &session).await?)
+	}
+
+	async fn session(
+		&self,
+		user_id: &str,
+		session_id: &str,
+	) -> AbsResult<Option<AbsSession>> {
+		Ok(AbsSessions::get(&self.conn, user_id, session_id).await?)
+	}
+
+	async fn update_session(
+		&self,
+		session_id: &str,
+		current_time_ms: i64,
+		time_listening_ms: i64,
+	) -> AbsResult<()> {
+		Ok(AbsSessions::update(
+			&self.conn,
+			session_id,
+			current_time_ms,
+			time_listening_ms,
+		)
+		.await?)
+	}
+
+	async fn close_session(&self, session_id: &str) -> AbsResult<()> {
+		Ok(AbsSessions::close(&self.conn, session_id).await?)
+	}
+
+	async fn book_ids(&self, media_ids: &[String]) -> AbsResult<HashMap<String, String>> {
+		AbsIds::resolve_many(&self.conn, IdKind::Book, media_ids)
+			.await
+			.map_err(AbsError::from)
+	}
+
+	async fn folder_id(&self, library_id: &str) -> AbsResult<String> {
+		Ok(AbsIds::resolve(&self.conn, IdKind::Folder, library_id).await?)
+	}
+
+	async fn author_ids(&self, names: &[String]) -> AbsResult<HashMap<String, String>> {
+		AbsIds::resolve_many(&self.conn, IdKind::Author, names)
+			.await
+			.map_err(AbsError::from)
+	}
+
+	async fn author_name(&self, author_id: &str) -> AbsResult<Option<String>> {
+		Ok(AbsIds::lookup(&self.conn, IdKind::Author, author_id).await?)
+	}
+}
+
+/// The composed router, mounted the way the server mounts it: the public
+/// routes at the root and the authenticated ones under `/api`, with the user
+/// already resolved.
+fn router(backend: Arc<TestBackend>, user: &AuthUser) -> Router {
+	crate::routes::public_router::<()>()
+		.merge(Router::new().nest("/api", crate::routes::authenticated_router::<()>()))
+		.layer(Extension(user.clone()))
+		.layer(Extension(backend as Arc<dyn AbsBackend>))
+}
+
+/// Drive one request through the router and decode the JSON body. Going
+/// through the router (rather than calling a handler) is what exercises route
+/// registration, query parsing and the serialised DTOs.
+pub(crate) async fn request(
+	backend: Arc<TestBackend>,
+	user: &AuthUser,
+	method: &str,
+	uri: &str,
+	body: Option<serde_json::Value>,
+) -> (StatusCode, serde_json::Value) {
+	let (status, _, value) = request_full(backend, user, method, uri, body, &[]).await;
+	(status, value)
+}
+
+/// The same, keeping the response headers and accepting request headers — for
+/// the range and token-header cases.
+pub(crate) async fn request_full(
+	backend: Arc<TestBackend>,
+	user: &AuthUser,
+	method: &str,
+	uri: &str,
+	body: Option<serde_json::Value>,
+	headers: &[(&str, &str)],
+) -> (StatusCode, HeaderMap, serde_json::Value) {
+	let mut builder = axum::http::Request::builder().method(method).uri(uri);
+	for (name, value) in headers {
+		builder = builder.header(*name, *value);
+	}
+	let request = match body {
+		Some(body) => builder
+			.header(axum::http::header::CONTENT_TYPE, "application/json")
+			.body(Body::from(serde_json::to_vec(&body).unwrap()))
+			.unwrap(),
+		None => builder.body(Body::empty()).unwrap(),
+	};
+
+	let response = router(backend, user)
+		.oneshot(request)
+		.await
+		.expect("router response");
+	let status = response.status();
+	let headers = response.headers().clone();
+	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+		.await
+		.expect("response body");
+	let value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+	(status, headers, value)
+}
+
+/// A bearer token the profile itself would mint, for the token-shape tests.
+pub(crate) fn access_token(user: &AuthUser) -> String {
+	mint_tokens(SECRET, &user.id, &user.username, None)
+		.unwrap()
+		.access_token
+}

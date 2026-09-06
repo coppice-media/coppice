@@ -1,0 +1,533 @@
+//! The shared reads every item-serving route needs: which libraries have
+//! audio, which books are in one, and how a page of them becomes
+//! [`LibraryItemDto`]s without a query per row.
+
+use std::collections::{HashMap, HashSet};
+
+use models::entity::{library, media, media_metadata, series, user::AuthUser};
+use sea_orm::{
+	sea_query::{Expr, Func, SimpleExpr},
+	ColumnTrait, Condition, EntityTrait, FromQueryResult, IntoSimpleExpr, Order,
+	PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select,
+};
+
+use crate::{
+	dto::{CollapsedSeriesDto, LibraryItemDto, MediaProgressDto},
+	errors::{AbsError, AbsResult},
+	mapper::{self, ItemInput},
+	model::{AbsAudio, AbsProgress, ItemShape},
+	routes::AbsBackend,
+};
+
+/// The extensions this profile serves, i.e. Stump's audio containers
+/// (`stump_media::ContentType::is_audio`). A row with any other extension is
+/// not an ABS "library item" at all: Audiobookshelf has no page-based reading
+/// position, so an ebook would be a book a client could open and never track.
+pub(crate) const AUDIO_EXTENSIONS: [&str; 6] =
+	["m4b", "m4a", "mp3", "opus", "ogg", "flac"];
+
+/// `lower(media.extension) IN (…)`. Stump lower-cases extensions on ingest,
+/// but a row written by an older scan may not be, and a case-sensitive
+/// comparison would silently hide the book.
+pub(crate) fn audio_condition() -> Condition {
+	Condition::all().add(
+		Expr::expr(Func::lower(Expr::col((
+			media::Entity,
+			media::Column::Extension,
+		))))
+		.is_in(AUDIO_EXTENSIONS),
+	)
+}
+
+/// Books the request may see, narrowed to audio and to rows that still exist.
+pub(crate) fn audio_media(user: &AuthUser) -> Select<media::Entity> {
+	media::Entity::find_for_user(user)
+		.filter(audio_condition())
+		.filter(media::Column::DeletedAt.is_null())
+}
+
+/// The library ids that hold at least one audible book for this user.
+///
+/// `GET /api/libraries` hides everything else: a Lissen user who also has
+/// comic libraries should see only the ones they can listen to, and an ABS
+/// client offered an empty library has no way to say so.
+pub(crate) async fn audio_library_ids(
+	backend: &dyn AbsBackend,
+	user: &AuthUser,
+) -> AbsResult<HashSet<String>> {
+	#[derive(FromQueryResult)]
+	struct Row {
+		library_id: String,
+	}
+
+	let rows = audio_media(user)
+		.select_only()
+		.column_as(series::Column::LibraryId, "library_id")
+		.filter(series::Column::LibraryId.is_not_null())
+		.distinct()
+		.into_model::<Row>()
+		.all(backend.conn())
+		.await?;
+	Ok(rows.into_iter().map(|row| row.library_id).collect())
+}
+
+/// One library the user may see, or `404`.
+pub(crate) async fn library(
+	backend: &dyn AbsBackend,
+	user: &AuthUser,
+	library_id: &str,
+) -> AbsResult<library::Model> {
+	library::Entity::find_for_user(user)
+		.filter(library::Column::Id.eq(library_id))
+		.one(backend.conn())
+		.await?
+		.ok_or_else(|| AbsError::NotFound(format!("No library {library_id}")))
+}
+
+/// How `GET /api/libraries/{id}/items` was asked to sort.
+///
+/// The five values are exactly the ones Lissen sends
+/// (`library/converter/LibraryOrderingRequestConverter.kt:14-20` for the
+/// first four, `library/LibraryAudiobookshelfChannel.kt:85-89` for
+/// `sequence`); anything else falls back to title, which is abs-ref's
+/// behaviour for an unknown `sort`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ItemSort {
+	Title,
+	AuthorName,
+	AddedAt,
+	ModifiedAt,
+	Sequence,
+}
+
+impl ItemSort {
+	pub(crate) fn parse(value: &str) -> Self {
+		match value {
+			"media.metadata.authorName" => ItemSort::AuthorName,
+			"addedAt" => ItemSort::AddedAt,
+			"mtimeMs" | "updatedAt" => ItemSort::ModifiedAt,
+			"sequence" | "media.metadata.series.sequence" => ItemSort::Sequence,
+			_ => ItemSort::Title,
+		}
+	}
+
+	pub(crate) fn wire_value(self) -> &'static str {
+		match self {
+			ItemSort::Title => "media.metadata.title",
+			ItemSort::AuthorName => "media.metadata.authorName",
+			ItemSort::AddedAt => "addedAt",
+			ItemSort::ModifiedAt => "mtimeMs",
+			ItemSort::Sequence => "sequence",
+		}
+	}
+
+	/// The sort key, as SQL. The title falls back to the file name the way
+	/// the serialised `metadata.title` does, so the list order and the titles
+	/// a client renders cannot disagree.
+	fn key(self) -> SimpleExpr {
+		match self {
+			ItemSort::Title => {
+				Expr::cust("COALESCE(NULLIF(media_metadata.title, ''), media.name)")
+			},
+			ItemSort::AuthorName => Expr::cust("COALESCE(media_metadata.writers, '')"),
+			ItemSort::AddedAt => media::Column::CreatedAt.into_simple_expr(),
+			ItemSort::ModifiedAt => media::Column::ModifiedAt.into_simple_expr(),
+			ItemSort::Sequence => media_metadata::Column::Number.into_simple_expr(),
+		}
+	}
+}
+
+/// The `filter` query parameter: `<key>.<base64(value)>`
+/// (Lissen `common/api/EncodeLibraryFilter.kt`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ItemFilter {
+	Series(String),
+	Progress(ProgressFilter),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgressFilter {
+	NotFinished,
+	Finished,
+	InProgress,
+}
+
+impl ItemFilter {
+	/// `None` for an absent, malformed or unsupported filter: abs-ref
+	/// ignores a filter it does not know rather than erroring, and so does
+	/// this.
+	pub(crate) fn parse(value: &str) -> Option<Self> {
+		use base64::Engine;
+
+		let (key, encoded) = value.split_once('.')?;
+		let decoded = base64::engine::general_purpose::STANDARD
+			.decode(encoded)
+			.or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(encoded))
+			.ok()?;
+		let decoded = String::from_utf8(decoded).ok()?;
+		match key {
+			"series" => Some(ItemFilter::Series(decoded)),
+			"progress" => match decoded.as_str() {
+				"not-finished" => Some(ItemFilter::Progress(ProgressFilter::NotFinished)),
+				"finished" => Some(ItemFilter::Progress(ProgressFilter::Finished)),
+				"in-progress" => Some(ItemFilter::Progress(ProgressFilter::InProgress)),
+				_ => None,
+			},
+			_ => None,
+		}
+	}
+}
+
+/// One page of books plus the total the envelope reports.
+pub(crate) struct ItemPage {
+	pub rows: Vec<media::Model>,
+	pub total: i64,
+}
+
+/// Apply the ABS list parameters to the audio books of one library.
+///
+/// A progress filter cannot be expressed in SQL here — the reading state
+/// lives behind the backend — so the ids it selects are resolved first and
+/// applied as an `IN`/`NOT IN`. The set is small by construction: it only
+/// holds books the user has actually started.
+pub(crate) async fn item_page(
+	backend: &dyn AbsBackend,
+	user: &AuthUser,
+	library_id: &str,
+	sort: ItemSort,
+	desc: bool,
+	filter: Option<&ItemFilter>,
+	limit: u64,
+	page: u64,
+) -> AbsResult<ItemPage> {
+	let mut select = audio_media(user).filter(series::Column::LibraryId.eq(library_id));
+
+	match filter {
+		Some(ItemFilter::Series(series_id)) => {
+			select = select.filter(series::Column::Id.eq(series_id.as_str()));
+		},
+		Some(ItemFilter::Progress(state)) => {
+			let progress = backend.progress_all(user).await?;
+			let ids = progress
+				.iter()
+				.filter(|(_, progress)| match state {
+					ProgressFilter::NotFinished => !progress.is_finished,
+					ProgressFilter::Finished => progress.is_finished,
+					ProgressFilter::InProgress => {
+						!progress.is_finished && progress.position_ms > 0
+					},
+				})
+				.map(|(media_id, _)| media_id.clone())
+				.collect::<Vec<_>>();
+			select = match state {
+				// "not finished" includes books never started, so the
+				// exclusion is by *finished* id, not by the selected set.
+				ProgressFilter::NotFinished => {
+					let finished = progress
+						.iter()
+						.filter(|(_, progress)| progress.is_finished)
+						.map(|(media_id, _)| media_id.clone())
+						.collect::<Vec<_>>();
+					if finished.is_empty() {
+						select
+					} else {
+						select.filter(media::Column::Id.is_not_in(finished))
+					}
+				},
+				_ => select.filter(media::Column::Id.is_in(ids)),
+			};
+		},
+		None => {},
+	}
+
+	let total = select.clone().count(backend.conn()).await? as i64;
+	let order = if desc { Order::Desc } else { Order::Asc };
+	let select = select
+		.order_by(sort.key(), order)
+		// A stable tiebreak: two books with the same title must not swap
+		// places between two requests for the same page.
+		.order_by_asc(media::Column::Id);
+	let select = if limit > 0 {
+		select.limit(limit).offset(page.saturating_mul(limit))
+	} else {
+		select
+	};
+
+	Ok(ItemPage {
+		rows: select.all(backend.conn()).await?,
+		total,
+	})
+}
+
+/// The side data a page of books needs, all of it batched.
+pub(crate) struct ItemContext {
+	pub metadata: HashMap<String, media_metadata::Model>,
+	pub series: HashMap<String, series::Model>,
+	/// How many audible books each of those series holds, across the whole
+	/// library rather than the page.
+	pub series_book_counts: HashMap<String, i64>,
+	pub libraries: HashMap<String, library::Model>,
+	pub folder_ids: HashMap<String, String>,
+	pub book_ids: HashMap<String, String>,
+	pub author_ids: HashMap<String, String>,
+	pub audio: HashMap<String, AbsAudio>,
+	pub progress: HashMap<String, AbsProgress>,
+}
+
+/// Load everything a page of books needs in a fixed number of queries,
+/// regardless of the page size.
+pub(crate) async fn context(
+	backend: &dyn AbsBackend,
+	user: &AuthUser,
+	rows: &[media::Model],
+	with_progress: bool,
+) -> AbsResult<ItemContext> {
+	let media_ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+	let series_ids = rows
+		.iter()
+		.filter_map(|row| row.series_id.clone())
+		.collect::<HashSet<_>>()
+		.into_iter()
+		.collect::<Vec<_>>();
+
+	let metadata = media_metadata::Entity::find()
+		.filter(media_metadata::Column::MediaId.is_in(media_ids.clone()))
+		.all(backend.conn())
+		.await?
+		.into_iter()
+		.filter_map(|row| row.media_id.clone().map(|id| (id, row)))
+		.collect::<HashMap<_, _>>();
+
+	let series = series::Entity::find()
+		.filter(series::Column::Id.is_in(series_ids.clone()))
+		.all(backend.conn())
+		.await?
+		.into_iter()
+		.map(|row| (row.id.clone(), row))
+		.collect::<HashMap<String, series::Model>>();
+
+	// A Stump series is a folder, and an audiobook's folder is usually the
+	// book's own (`Author/Book/book.m4b`). It is only an Audiobookshelf
+	// series once it holds more than one audible book, which is why the
+	// count is taken over the library rather than over the page — abs-ref
+	// reports `seriesName: ""` for exactly that single-book case
+	// (`capture/library_items_minified.json`).
+	let mut series_book_counts: HashMap<String, i64> = HashMap::new();
+	if !series_ids.is_empty() {
+		#[derive(FromQueryResult)]
+		struct CountRow {
+			series_id: String,
+		}
+
+		let rows = audio_media(user)
+			.select_only()
+			.column_as(series::Column::Id, "series_id")
+			.filter(series::Column::Id.is_in(series_ids))
+			.into_model::<CountRow>()
+			.all(backend.conn())
+			.await?;
+		for row in rows {
+			*series_book_counts.entry(row.series_id).or_default() += 1;
+		}
+	}
+
+	let library_ids = series
+		.values()
+		.filter_map(|row| row.library_id.clone())
+		.collect::<HashSet<_>>();
+	let libraries = library::Entity::find()
+		.filter(library::Column::Id.is_in(library_ids.iter().cloned()))
+		.all(backend.conn())
+		.await?
+		.into_iter()
+		.map(|row| (row.id.clone(), row))
+		.collect::<HashMap<String, library::Model>>();
+
+	let mut folder_ids = HashMap::with_capacity(libraries.len());
+	for library_id in libraries.keys() {
+		folder_ids.insert(library_id.clone(), backend.folder_id(library_id).await?);
+	}
+
+	let author_names = metadata
+		.values()
+		.flat_map(|row| mapper::csv(row.writers.as_deref()))
+		.collect::<HashSet<_>>()
+		.into_iter()
+		.collect::<Vec<_>>();
+
+	let progress = if with_progress {
+		backend
+			.progress_all(user)
+			.await?
+			.into_iter()
+			.filter(|(media_id, _)| media_ids.contains(media_id))
+			.collect()
+	} else {
+		HashMap::new()
+	};
+
+	Ok(ItemContext {
+		metadata,
+		series,
+		series_book_counts,
+		libraries,
+		folder_ids,
+		book_ids: backend.book_ids(&media_ids).await?,
+		author_ids: backend.author_ids(&author_names).await?,
+		audio: backend.audio_batch(&media_ids).await?,
+		progress,
+	})
+}
+
+impl ItemContext {
+	/// The `(library id, library path)` a book lives under, resolved through
+	/// its series.
+	fn library_of(&self, row: &media::Model) -> (String, String) {
+		row.series_id
+			.as_ref()
+			.and_then(|series_id| self.series.get(series_id))
+			.and_then(|series| series.library_id.as_ref())
+			.and_then(|library_id| self.libraries.get(library_id))
+			.map(|library| (library.id.clone(), library.path.clone()))
+			.unwrap_or_default()
+	}
+
+	/// The Audiobookshelf series a book belongs to, if any: a Stump series
+	/// with a single audible book is that book's own folder, not a series.
+	pub(crate) fn series_of(&self, row: &media::Model) -> Option<(&str, &str)> {
+		let series = self.series.get(row.series_id.as_ref()?).filter(|series| {
+			self.series_book_counts
+				.get(&series.id)
+				.copied()
+				.unwrap_or(0)
+				> 1
+		})?;
+		Some((series.id.as_str(), series.name.as_str()))
+	}
+
+	/// One book, in the requested shape.
+	pub(crate) fn item(
+		&self,
+		row: &media::Model,
+		shape: ItemShape,
+		user_id: &str,
+		collapsed: Option<Option<CollapsedSeriesDto>>,
+	) -> LibraryItemDto {
+		let (library_id, library_path) = self.library_of(row);
+		let series = self.series_of(row);
+		let audio = self.audio.get(&row.id);
+		let book_id = self
+			.book_ids
+			.get(&row.id)
+			.map(String::as_str)
+			.unwrap_or(row.id.as_str());
+		let progress = self.progress.get(&row.id).map(|progress| {
+			mapper::progress_dto(
+				user_id,
+				&row.id,
+				book_id,
+				audio.map_or(0, |audio| audio.duration_ms),
+				progress,
+			)
+		});
+
+		mapper::item_dto(
+			ItemInput {
+				media: row,
+				metadata: self.metadata.get(&row.id),
+				series,
+				library_id: &library_id,
+				library_path: &library_path,
+				folder_id: self
+					.folder_ids
+					.get(&library_id)
+					.map(String::as_str)
+					.unwrap_or_default(),
+				book_id,
+				audio,
+				author_ids: &self.author_ids,
+				progress,
+				collapsed,
+			},
+			shape,
+		)
+	}
+
+	/// The progress DTOs for every book in the page, for `GET /api/me`.
+	pub(crate) fn progress_dtos(
+		&self,
+		user_id: &str,
+		rows: &[media::Model],
+	) -> Vec<MediaProgressDto> {
+		rows.iter()
+			.filter_map(|row| {
+				let progress = self.progress.get(&row.id)?;
+				let book_id = self
+					.book_ids
+					.get(&row.id)
+					.map(String::as_str)
+					.unwrap_or(row.id.as_str());
+				Some(mapper::progress_dto(
+					user_id,
+					&row.id,
+					book_id,
+					self.audio.get(&row.id).map_or(0, |audio| audio.duration_ms),
+					progress,
+				))
+			})
+			.collect()
+	}
+}
+
+/// One audible book the user may see, by id, or `404`.
+pub(crate) async fn media_for_user(
+	backend: &dyn AbsBackend,
+	user: &AuthUser,
+	media_id: &str,
+) -> AbsResult<media::Model> {
+	audio_media(user)
+		.filter(media::Column::Id.eq(media_id))
+		.one(backend.conn())
+		.await?
+		.ok_or_else(|| AbsError::NotFound(format!("No library item {media_id}")))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn sort_values_are_the_ones_lissen_sends() {
+		assert_eq!(ItemSort::parse("media.metadata.title"), ItemSort::Title);
+		assert_eq!(
+			ItemSort::parse("media.metadata.authorName"),
+			ItemSort::AuthorName
+		);
+		assert_eq!(ItemSort::parse("addedAt"), ItemSort::AddedAt);
+		assert_eq!(ItemSort::parse("mtimeMs"), ItemSort::ModifiedAt);
+		assert_eq!(ItemSort::parse("sequence"), ItemSort::Sequence);
+		// abs-ref ignores a sort it does not know rather than erroring.
+		assert_eq!(ItemSort::parse("media.metadata.nope"), ItemSort::Title);
+		assert_eq!(ItemSort::parse(""), ItemSort::Title);
+	}
+
+	#[test]
+	fn filter_parses_the_base64_encoding_lissen_builds() {
+		// The literal Lissen ships for "hide completed":
+		// library/converter/LibraryFilteringRequestConverter.kt:14.
+		assert_eq!(
+			ItemFilter::parse("progress.bm90LWZpbmlzaGVk"),
+			Some(ItemFilter::Progress(ProgressFilter::NotFinished))
+		);
+		assert_eq!(
+			ItemFilter::parse("series.YWJj"),
+			Some(ItemFilter::Series("abc".to_owned()))
+		);
+		// Unsupported key, unknown progress state, and malformed input all
+		// mean "no filter", never an error.
+		assert_eq!(ItemFilter::parse("authors.YWJj"), None);
+		assert_eq!(ItemFilter::parse("progress.bm9wZQ=="), None);
+		assert_eq!(ItemFilter::parse("progress.!!!"), None);
+		assert_eq!(ItemFilter::parse("nodot"), None);
+	}
+}

@@ -59,6 +59,8 @@ pub enum SourceProtocol {
 	Liseur,
 	/// The Kavita compatibility profile
 	Kavita,
+	/// The Audiobookshelf compatibility profile (Lissen)
+	Abs,
 }
 
 /// Whether the effective time of an update came from the device or was
@@ -96,6 +98,15 @@ pub enum Position {
 	Page(i32),
 	/// A Readium locator carried verbatim by a locator-based protocol.
 	Locator(ReadiumLocator),
+	/// A moment in a recording: milliseconds from the start of the
+	/// *publication*, plus the 0-based track the client was in for a
+	/// multi-file audiobook. This is never a page ordinal — an audiobook has
+	/// no pages, and rounding a millisecond offset into `progression` alone
+	/// loses the only thing a listener needs to resume.
+	Time {
+		position_ms: i64,
+		track_index: Option<i32>,
+	},
 	/// No projectable position: the update only carries progression and/or
 	/// completion (a KOReader x-pointer, a Kobo status-only state, ...). The
 	/// native position stays in the raw payload.
@@ -127,6 +138,21 @@ pub struct Publication<'a> {
 	pub media_id: &'a str,
 	/// The page count, `<= 0` when the publication is not page-addressed.
 	pub pages: i32,
+	/// The whole-publication duration in milliseconds, `Some` only for an
+	/// audio publication. It is what a [`Position::Time`] progression is
+	/// expressed against.
+	pub duration_ms: Option<i64>,
+}
+
+impl<'a> Publication<'a> {
+	/// Attach the audio duration of the publication so a
+	/// [`Position::Time`] update can derive progression. Callers that hold a
+	/// `media_audio` row use this on top of the `media`-derived context.
+	#[must_use]
+	pub fn with_duration_ms(mut self, duration_ms: i64) -> Self {
+		self.duration_ms = Some(duration_ms);
+		self
+	}
 }
 
 impl<'a> From<&'a media::Model> for Publication<'a> {
@@ -134,6 +160,7 @@ impl<'a> From<&'a media::Model> for Publication<'a> {
 		Publication {
 			media_id: &media.id,
 			pages: media.pages,
+			duration_ms: None,
 		}
 	}
 }
@@ -143,6 +170,8 @@ impl<'a> From<&'a media::Model> for Publication<'a> {
 pub struct Projection {
 	pub locator: Option<ReadiumLocator>,
 	pub page: Option<i32>,
+	pub position_ms: Option<i64>,
+	pub track_index: Option<i32>,
 	pub progression: Option<f64>,
 	pub completed: Option<bool>,
 }
@@ -175,6 +204,12 @@ pub struct Resolved {
 /// Whole-publication progression of a 1-based page, clamped to `0..=1`.
 pub fn page_progression(page: i32, pages: i32) -> Option<f64> {
 	(pages > 0).then(|| (f64::from(page) / f64::from(pages)).clamp(0.0, 1.0))
+}
+
+/// Whole-publication progression of a millisecond offset, clamped to `0..=1`.
+pub fn time_progression(position_ms: i64, duration_ms: i64) -> Option<f64> {
+	(duration_ms > 0)
+		.then(|| ((position_ms as f64) / (duration_ms as f64)).clamp(0.0, 1.0))
 }
 
 /// The locator synthesized for a page-based position. The `href` is Stump's
@@ -217,6 +252,9 @@ fn decimal_to_f64(value: Decimal) -> Option<f64> {
 /// - A locator-based position is stored verbatim; progression comes from the
 ///   asserted value, then `locations.total_progression`, then
 ///   `locations.position / pages`.
+/// - A time-based position is stored verbatim; progression comes from the
+///   asserted value, then `position_ms / duration_ms`. It never synthesizes
+///   a page or a locator: a recording has neither.
 /// - An update without a position keeps the head's locator and page.
 /// - `completed == Some(true)` without a position or progression lands on the
 ///   last page at `1.0`.
@@ -228,6 +266,7 @@ pub fn project(update: &ProtocolUpdate, publication: &Publication<'_>) -> Projec
 			page: Some(*page),
 			progression: asserted.or_else(|| page_progression(*page, publication.pages)),
 			completed: update.completed,
+			..Projection::default()
 		},
 		Position::Locator(locator) => {
 			let locations = locator.locations.as_ref();
@@ -246,21 +285,41 @@ pub fn project(update: &ProtocolUpdate, publication: &Publication<'_>) -> Projec
 				page: position,
 				progression,
 				completed: update.completed,
+				..Projection::default()
 			}
 		},
+		Position::Time {
+			position_ms,
+			track_index,
+		} => Projection {
+			position_ms: Some(*position_ms),
+			track_index: *track_index,
+			progression: asserted.or_else(|| {
+				publication
+					.duration_ms
+					.and_then(|duration| time_progression(*position_ms, duration))
+			}),
+			completed: update.completed,
+			..Projection::default()
+		},
 		Position::None => Projection {
-			locator: None,
-			page: None,
 			progression: asserted,
 			completed: update.completed,
+			..Projection::default()
 		},
 	};
 
 	if update.completed == Some(true)
 		&& projection.page.is_none()
+		&& projection.position_ms.is_none()
 		&& projection.progression.is_none()
 	{
-		projection.page = (publication.pages > 0).then_some(publication.pages);
+		match publication.duration_ms {
+			// A finished audiobook lands on its final millisecond; it has no
+			// last page to land on.
+			Some(duration) if duration > 0 => projection.position_ms = Some(duration),
+			_ => projection.page = (publication.pages > 0).then_some(publication.pages),
+		}
 		projection.progression = Some(1.0);
 	}
 
@@ -305,5 +364,130 @@ pub fn resolve(
 		outcome: Outcome::Accepted,
 		progression,
 		completed: projection.completed.unwrap_or(head.completed),
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn audiobook(duration_ms: i64) -> Publication<'static> {
+		Publication {
+			media_id: "book",
+			// An audiobook has no pages; a projection that leaned on `pages`
+			// would silently produce a page ordinal for a recording.
+			pages: 0,
+			duration_ms: Some(duration_ms),
+		}
+	}
+
+	fn update(position: Position) -> ProtocolUpdate {
+		ProtocolUpdate {
+			protocol: SourceProtocol::Stump,
+			device_id: None,
+			updated_at: None,
+			position,
+			progression: None,
+			completed: None,
+			raw_payload: serde_json::Value::Null,
+		}
+	}
+
+	/// A listening position is stored verbatim and its progression comes from
+	/// the publication duration. It must never synthesize a page or a
+	/// locator: a recording has neither, and a fabricated page would be
+	/// served to page-addressed clients as if it meant something.
+	#[test]
+	fn reading_state_projects_a_time_position_without_a_page() {
+		let projection = project(
+			&update(Position::Time {
+				position_ms: 1_500,
+				track_index: Some(2),
+			}),
+			&audiobook(6_000),
+		);
+
+		assert_eq!(projection.position_ms, Some(1_500));
+		assert_eq!(projection.track_index, Some(2));
+		assert_eq!(projection.progression, Some(0.25));
+		assert_eq!(projection.page, None);
+		assert_eq!(projection.locator, None);
+	}
+
+	/// Without a known duration there is nothing to divide by, so the
+	/// position is still recorded but progression stays unknown rather than
+	/// defaulting to 0 and reporting the listener back at the start.
+	#[test]
+	fn reading_state_keeps_a_time_position_when_the_duration_is_unknown() {
+		let publication = Publication {
+			media_id: "book",
+			pages: 0,
+			duration_ms: None,
+		};
+
+		let projection = project(
+			&update(Position::Time {
+				position_ms: 1_500,
+				track_index: None,
+			}),
+			&publication,
+		);
+
+		assert_eq!(projection.position_ms, Some(1_500));
+		assert_eq!(projection.progression, None);
+	}
+
+	/// An asserted progression wins over the derived one: a protocol that
+	/// states where it thinks it is knows something the duration does not,
+	/// such as a book whose parts were re-muxed since the last scan.
+	#[test]
+	fn reading_state_prefers_an_asserted_progression_over_the_derived_one() {
+		let mut incoming = update(Position::Time {
+			position_ms: 1_500,
+			track_index: None,
+		});
+		incoming.progression = Some(0.9);
+
+		let projection = project(&incoming, &audiobook(6_000));
+
+		assert_eq!(projection.progression, Some(0.9));
+		assert_eq!(projection.position_ms, Some(1_500));
+	}
+
+	/// A finished audiobook lands on its final millisecond. Falling back to
+	/// the last *page* would leave the head with no position at all, so a
+	/// device resuming a completed book would start it over.
+	#[test]
+	fn reading_state_completes_an_audiobook_at_its_duration() {
+		let mut incoming = update(Position::None);
+		incoming.completed = Some(true);
+
+		let projection = project(&incoming, &audiobook(6_000));
+
+		assert_eq!(projection.position_ms, Some(6_000));
+		assert_eq!(projection.progression, Some(1.0));
+		assert_eq!(projection.page, None);
+
+		// A paged publication keeps the existing last-page behaviour.
+		let paged = Publication {
+			media_id: "book",
+			pages: 42,
+			duration_ms: None,
+		};
+		let projection = project(&incoming, &paged);
+		assert_eq!(projection.page, Some(42));
+		assert_eq!(projection.position_ms, None);
+	}
+
+	/// Progression is a ratio clamped to `0..=1`: a container that reports a
+	/// mark past its own duration must not produce a head above 1.0, and a
+	/// zero-duration row must not divide by zero.
+	#[test]
+	fn reading_state_time_progression_is_clamped() {
+		assert_eq!(time_progression(0, 6_000), Some(0.0));
+		assert_eq!(time_progression(6_000, 6_000), Some(1.0));
+		assert_eq!(time_progression(99_999, 6_000), Some(1.0));
+		assert_eq!(time_progression(-1, 6_000), Some(0.0));
+		assert_eq!(time_progression(1_000, 0), None);
 	}
 }

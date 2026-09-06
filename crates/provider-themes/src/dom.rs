@@ -109,8 +109,7 @@ impl Document {
 						.children
 						.iter()
 						.filter(|id| self.nodes[**id as usize].element().is_some())
-						.count() as u32
-						+ 1;
+						.count() as u32 + 1;
 					let attrs: Vec<(String, String)> = attrs
 						.borrow()
 						.iter()
@@ -347,8 +346,8 @@ impl Document {
 					if element.name == "script" || element.name == "style" {
 						continue;
 					}
-					let breaks = hard_breaks
-						&& (element.name == "p" || element.name == "br");
+					let breaks =
+						hard_breaks && (element.name == "p" || element.name == "br");
 					if breaks {
 						out.push('\n');
 					} else if is_block(&element.name) {
@@ -393,37 +392,23 @@ fn is_block(tag: &str) -> bool {
 		tag,
 		"address"
 			| "article"
-			| "aside"
-			| "blockquote"
-			| "br"
-			| "dd"
-			| "div"
-			| "dl"
-			| "dt"
-			| "fieldset"
+			| "aside" | "blockquote"
+			| "br" | "dd"
+			| "div" | "dl"
+			| "dt" | "fieldset"
 			| "figcaption"
 			| "figure"
 			| "footer"
-			| "form"
-			| "h1"
-			| "h2"
-			| "h3"
-			| "h4"
-			| "h5"
-			| "h6"
-			| "header"
-			| "hr"
-			| "li"
-			| "main"
-			| "nav"
-			| "ol"
-			| "p"
-			| "pre"
-			| "section"
-			| "table"
-			| "td"
-			| "th"
-			| "tr"
+			| "form" | "h1"
+			| "h2" | "h3"
+			| "h4" | "h5"
+			| "h6" | "header"
+			| "hr" | "li"
+			| "main" | "nav"
+			| "ol" | "p"
+			| "pre" | "section"
+			| "table" | "td"
+			| "th" | "tr"
 			| "ul"
 	)
 }
@@ -478,11 +463,19 @@ mod tests {
 			.collect();
 		assert_eq!(paragraphs.len(), 2);
 		assert_eq!(
-			document.node(paragraphs[0]).element().unwrap().sibling_index,
+			document
+				.node(paragraphs[0])
+				.element()
+				.unwrap()
+				.sibling_index,
 			1
 		);
 		assert_eq!(
-			document.node(paragraphs[1]).element().unwrap().sibling_index,
+			document
+				.node(paragraphs[1])
+				.element()
+				.unwrap()
+				.sibling_index,
 			2
 		);
 	}
@@ -502,7 +495,10 @@ mod tests {
 		let script = document
 			.ids()
 			.find(|id| {
-				document.node(*id).element().is_some_and(|e| e.name == "script")
+				document
+					.node(*id)
+					.element()
+					.is_some_and(|e| e.name == "script")
 			})
 			.unwrap();
 		assert_eq!(document.data(script), "var chapter_id = 42;");
@@ -513,9 +509,7 @@ mod tests {
 		let document = Document::parse(PAGE, "https://site.test/read/x/");
 		let anchor = document
 			.ids()
-			.find(|id| {
-				document.node(*id).element().is_some_and(|e| e.name == "a")
-			})
+			.find(|id| document.node(*id).element().is_some_and(|e| e.name == "a"))
 			.unwrap();
 		assert_eq!(
 			document.abs_attr(anchor, "href").as_deref(),
@@ -524,7 +518,10 @@ mod tests {
 		let image = document
 			.ids()
 			.find(|id| {
-				document.node(*id).element().is_some_and(|e| e.name == "img")
+				document
+					.node(*id)
+					.element()
+					.is_some_and(|e| e.name == "img")
 			})
 			.unwrap();
 		assert_eq!(
@@ -560,7 +557,12 @@ mod tests {
 		);
 		let div = document
 			.ids()
-			.find(|id| document.node(*id).element().is_some_and(|e| e.name == "div"))
+			.find(|id| {
+				document
+					.node(*id)
+					.element()
+					.is_some_and(|e| e.name == "div")
+			})
 			.unwrap();
 		assert_eq!(document.text_with_newlines(div), "Summary\none\ntwo\nthree");
 	}

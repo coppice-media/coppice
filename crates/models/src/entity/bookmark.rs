@@ -16,6 +16,9 @@ pub struct Model {
 	#[sea_orm(column_type = "Json", nullable)]
 	pub locator: Option<ReadiumLocator>,
 	pub page: Option<i32>,
+	/// A bookmark in an audiobook: milliseconds from the start of the
+	/// publication, the same unit as `reading_heads.position_ms`.
+	pub position_ms: Option<i64>,
 	#[sea_orm(column_type = "Text")]
 	pub media_id: String,
 	#[sea_orm(column_type = "Text")]

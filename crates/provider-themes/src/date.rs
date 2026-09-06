@@ -385,21 +385,35 @@ const ITALIAN_MONTHS: [[&str; 2]; 12] = [
 const TODAY_WORDS: [&str; 3] = ["today", "hoje", "hoy"];
 const YESTERDAY_WORDS: [&str; 4] = ["yesterday", "ontem", "ayer", "يوم واحد"];
 const YEAR_WORDS: [&str; 7] = ["year", "año", "ano", "năm", "yıl", "سنة", "سنوات"];
-const MONTH_WORDS: [&str; 7] =
-	["month", "mes", "tháng", "ay", "شهر", "أشهر", "شهور"];
+const MONTH_WORDS: [&str; 7] = ["month", "mes", "tháng", "ay", "شهر", "أشهر", "شهور"];
 const WEEK_WORDS: [&str; 6] = ["week", "semana", "tuần", "hafta", "أسبوع", "أسابيع"];
 const DAY_WORDS: [&str; 10] = [
 	"day", "día", "dia", "jour", "hari", "gün", "ngày", "giorni", "أيام", "天",
 ];
 const HOUR_WORDS: [&str; 10] = [
-	"hour", "hora", "heure", "jam", "saat", "giờ", "ore", "ساعة", "ساعات", "小时",
+	"hour",
+	"hora",
+	"heure",
+	"jam",
+	"saat",
+	"giờ",
+	"ore",
+	"ساعة",
+	"ساعات",
+	"小时",
 ];
 const MINUTE_WORDS: [&str; 8] = [
-	"minute", "minuto", "min", "menit", "dakika", "phút", "دقيقة", "دقائق",
+	"minute",
+	"minuto",
+	"min",
+	"menit",
+	"dakika",
+	"phút",
+	"دقيقة",
+	"دقائق",
 ];
-const SECOND_WORDS: [&str; 7] = [
-	"second", "segundo", "sec", "detik", "giây", "ثانية", "ثوان",
-];
+const SECOND_WORDS: [&str; 7] =
+	["second", "segundo", "sec", "detik", "giây", "ثانية", "ثوان"];
 
 #[cfg(test)]
 mod tests {
@@ -411,7 +425,10 @@ mod tests {
 		assert_eq!(java_pattern_to_strftime("d MMM. yyyy"), "%d %b. %Y");
 		assert_eq!(java_pattern_to_strftime("yyyy-MM-dd"), "%Y-%m-%d");
 		assert_eq!(java_pattern_to_strftime("MM/dd/yyyy"), "%m/%d/%Y");
-		assert_eq!(java_pattern_to_strftime("dd MMMM yyyy HH:mm"), "%d %B %Y %H:%M");
+		assert_eq!(
+			java_pattern_to_strftime("dd MMMM yyyy HH:mm"),
+			"%d %B %Y %H:%M"
+		);
 		assert_eq!(java_pattern_to_strftime("MMM d, yyyy"), "%b %d, %Y");
 		// Quoted literals survive; 'de' is common in Spanish patterns.
 		assert_eq!(
@@ -424,7 +441,10 @@ mod tests {
 	fn absolute_dates_parse_with_the_theme_default() {
 		let parser = DateParser::default();
 		let parsed = parser.parse("January 12, 2024").expect("date parses");
-		assert_eq!(parsed.date_naive(), NaiveDate::from_ymd_opt(2024, 1, 12).unwrap());
+		assert_eq!(
+			parsed.date_naive(),
+			NaiveDate::from_ymd_opt(2024, 1, 12).unwrap()
+		);
 		// Single-digit days are accepted even though the pattern says `dd`.
 		assert!(parser.parse("March 3, 2023").is_some());
 		assert!(parser.parse("not a date at all").is_none());

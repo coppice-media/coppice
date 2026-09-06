@@ -1,3 +1,5 @@
+#[cfg(feature = "graphql")]
+mod audio;
 mod common;
 #[cfg(feature = "graphql")]
 mod device_pairing;

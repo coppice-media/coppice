@@ -2,6 +2,8 @@ use axum::Router;
 
 use crate::config::state::AppState;
 
+#[cfg(feature = "abs")]
+mod abs_backend;
 mod api;
 #[cfg(feature = "kavita")]
 mod kavita;
@@ -59,6 +61,18 @@ pub async fn mount(app_state: AppState) -> Router<AppState> {
 	#[cfg(feature = "kavita")]
 	if app_state.config.protocols.enable_kavita {
 		app_router = app_router.merge(kavita::mount(app_state.clone()));
+	}
+
+	#[cfg(feature = "abs")]
+	if app_state.config.protocols.enable_abs {
+		app_router = app_router.merge(abs_backend::mount(app_state.clone()));
+	}
+
+	#[cfg(not(feature = "abs"))]
+	if app_state.config.protocols.enable_abs {
+		tracing::warn!(
+			"STUMP_ENABLE_ABS is enabled, but this server was compiled without the `abs` feature; serving native API routes without Audiobookshelf compatibility"
+		);
 	}
 
 	#[cfg(not(feature = "kavita"))]

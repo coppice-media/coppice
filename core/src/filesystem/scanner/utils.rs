@@ -9,6 +9,7 @@ use futures::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
 use models::txn::begin_write;
 use models::{
 	entity::{library_config, media, media_metadata, media_tag, series, tag},
+	services::audio::{self as audio_service, AudioFacts},
 	shared::enums::FileStatus,
 };
 use sea_orm::{
@@ -128,6 +129,7 @@ pub(crate) async fn update_media(
 		media,
 		metadata,
 		tags,
+		audio,
 	}: BuiltMedia,
 ) -> CoreResult<media::Model> {
 	let txn = begin_write(db).await?;
@@ -142,6 +144,14 @@ pub(crate) async fn update_media(
 			.on_conflict(on_conflict)
 			.exec(&txn)
 			.await?;
+	}
+
+	// The audio facts are replaced wholesale in the same transaction as the
+	// media row: a re-probe is the authority on a book's track split, and
+	// `replace_in` is idempotent, so a rescan of an unchanged book writes the
+	// same rows back.
+	if let Some(facts) = audio.as_ref() {
+		audio_service::replace_in(&txn, &updated_media.id, facts).await?;
 	}
 
 	ensure_tags_linked(&txn, &updated_media.id, &tags).await?;
@@ -815,6 +825,7 @@ pub(crate) async fn safely_build_and_insert_media(
 		let mut media_models = Vec::with_capacity(chunk_count);
 		let mut meta_models: Vec<media_metadata::ActiveModel> = Vec::new();
 		let mut tags_by_media: Vec<(String, Vec<String>)> = Vec::new();
+		let mut audio_by_media: Vec<(String, AudioFacts)> = Vec::new();
 		let mut inserted_ids: Vec<String> = Vec::with_capacity(chunk_count);
 
 		for _ in 0..chunk_count {
@@ -822,6 +833,7 @@ pub(crate) async fn safely_build_and_insert_media(
 				media,
 				metadata,
 				tags,
+				audio,
 			}) = books.pop_front()
 			else {
 				break;
@@ -842,6 +854,10 @@ pub(crate) async fn safely_build_and_insert_media(
 
 			if let Some(meta) = metadata {
 				meta_models.push(meta);
+			}
+
+			if let Some(facts) = audio {
+				audio_by_media.push((media_id.clone(), facts));
 			}
 
 			if !tags.is_empty() {
@@ -865,6 +881,15 @@ pub(crate) async fn safely_build_and_insert_media(
 					.await
 					.map_err(CoreError::from)?;
 			}
+		}
+
+		// After the media rows exist, so the `media_audio.media_id` foreign
+		// key resolves, and inside the same transaction: a book is never
+		// visible without its tracks.
+		for (media_id, facts) in &audio_by_media {
+			audio_service::replace_in(&txn, media_id, facts)
+				.await
+				.map_err(CoreError::from)?;
 		}
 
 		let mut tag_links: Vec<media_tag::ActiveModel> = Vec::new();
@@ -1076,3 +1101,143 @@ pub(crate) async fn visit_and_update_media(
 
 // TODO(tests): sort out tests later. I had to remove them for now because
 // mocking apalis state and all that was too much
+
+/// The scan write path for an audiobook, against the real migrated schema.
+///
+/// The unit tests in `models` exercise `AudioBook`'s lookup helpers on
+/// hand-built rows, so nothing covered an actual `replace_in` round trip —
+/// which is how a `NOT NULL constraint failed: media_audio_tracks.id` shipped
+/// (`Entity::insert_many` never runs `ActiveModelBehavior::before_save`).
+#[cfg(test)]
+mod audio_persistence {
+	use super::*;
+	use migrations::{Migrator, MigratorTrait};
+	use models::{
+		domain::audio::AudioChapterSource,
+		services::audio::{ChapterFacts, TrackFacts},
+	};
+	use sea_orm::{ActiveModelTrait, Database};
+
+	/// `durations` becomes one track per part; the chapter marks tile them.
+	fn facts(durations: &[i64]) -> AudioFacts {
+		let mut start_ms = 0_i64;
+		let (tracks, chapters) = durations
+			.iter()
+			.enumerate()
+			.map(|(index, duration_ms)| {
+				let start = start_ms;
+				start_ms += duration_ms;
+				(
+					TrackFacts {
+						path: format!("/books/Book Vol. 1/{:02}.mp3", index + 1),
+						duration_ms: *duration_ms,
+						byte_size: 2_108,
+						mime: "audio/mpeg".to_string(),
+					},
+					ChapterFacts {
+						title: Some(format!("Part {}", index + 1)),
+						start_ms: start,
+						end_ms: Some(start_ms),
+					},
+				)
+			})
+			.collect::<(Vec<_>, Vec<_>)>();
+
+		AudioFacts {
+			duration_ms: start_ms,
+			codec: "mp3".to_string(),
+			sample_rate: Some(44_100),
+			channels: Some(2),
+			bitrate: Some(64_000),
+			chapter_source: AudioChapterSource::PerTrack,
+			tracks,
+			chapters,
+		}
+	}
+
+	/// A scanned audiobook is only usable if its tracks reach the database:
+	/// `start_offset_ms` is what maps a publication-relative position to one
+	/// file, and a re-probe is the authority on the split, so a rescan that
+	/// splits differently must leave no row of the old split behind.
+	#[tokio::test]
+	async fn update_media_persists_and_replaces_audio_facts() {
+		let db = Database::connect("sqlite::memory:").await.unwrap();
+		Migrator::up(&db, None).await.unwrap();
+
+		let inserted = media::ActiveModel {
+			id: Set("media-1".to_string()),
+			name: Set("Book Vol. 1".to_string()),
+			size: Set(6_324),
+			extension: Set("mp3".to_string()),
+			pages: Set(-1),
+			path: Set("/books/Book Vol. 1".to_string()),
+			status: Set(FileStatus::Ready),
+			created_at: Set(chrono::Utc::now().into()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+
+		let built = |audio| BuiltMedia {
+			media: media::ActiveModel {
+				id: Set(inserted.id.clone()),
+				name: Set("Book Vol. 1".to_string()),
+				..Default::default()
+			},
+			metadata: None,
+			tags: Vec::new(),
+			audio,
+		};
+
+		update_media(&db, built(Some(facts(&[2_000, 3_000, 1_500]))))
+			.await
+			.unwrap();
+		let book = audio_service::book(&db, &inserted.id)
+			.await
+			.unwrap()
+			.expect("the scan wrote media_audio");
+
+		assert_eq!(book.audio.duration_ms, 6_500);
+		assert_eq!(book.audio.chapter_source, AudioChapterSource::PerTrack);
+		// Contiguous indexes and the running sum of the durations, which is
+		// what `AudioBook::track_at` bisects.
+		assert_eq!(
+			book.tracks
+				.iter()
+				.map(|track| track.index)
+				.collect::<Vec<_>>(),
+			[0, 1, 2]
+		);
+		assert_eq!(
+			book.tracks
+				.iter()
+				.map(|track| track.start_offset_ms)
+				.collect::<Vec<_>>(),
+			[0, 2_000, 5_000]
+		);
+		assert_eq!(book.chapters.len(), 3);
+
+		// A re-probe that splits the same book into two parts must replace the
+		// three-track split outright: a leftover track would claim an index
+		// the new split no longer has.
+		update_media(&db, built(Some(facts(&[4_000, 2_500]))))
+			.await
+			.unwrap();
+		let rescanned = audio_service::book(&db, &inserted.id)
+			.await
+			.unwrap()
+			.expect("the rescan kept media_audio");
+
+		assert_eq!(rescanned.audio.duration_ms, 6_500);
+		assert_eq!(
+			rescanned
+				.tracks
+				.iter()
+				.map(|track| (track.index, track.start_offset_ms))
+				.collect::<Vec<_>>(),
+			[(0, 0), (1, 4_000)]
+		);
+		assert_eq!(rescanned.chapters.len(), 2);
+	}
+}

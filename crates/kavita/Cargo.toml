@@ -9,6 +9,7 @@ async-trait.workspace = true
 axum.workspace = true
 axum-extra = { version = "0.10.0", features = ["query"] }
 chrono.workspace = true
+imagesize = "0.14.0"
 jsonwebtoken = "9.3.0"
 models = { path = "../models", default-features = false }
 rust_decimal.workspace = true
@@ -18,6 +19,7 @@ serde_json.workspace = true
 stump_auth = { path = "../auth" }
 thiserror.workspace = true
 tracing = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 uuid.workspace = true
 urlencoding.workspace = true
 zip.workspace = true

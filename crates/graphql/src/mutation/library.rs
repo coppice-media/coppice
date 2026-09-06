@@ -7,8 +7,8 @@ use models::{
 	entity::{
 		last_library_visit,
 		library::{self, LibraryIdentSelect},
-		library_config, library_exclusion, library_scan_record, library_tag, media,
-		media_metadata, metadata_provider_config, series, series_metadata, tag, user,
+		library_config, library_exclusion, library_scan_record, media, media_metadata,
+		metadata_provider_config, series, series_metadata, user,
 	},
 	services::lists,
 	shared::enums::{FileStatus, MetadataResetImpact, UserPermission},
@@ -31,9 +31,8 @@ use stump_core::{
 	job::stump_job::StumpJob,
 	CoreEvent, MediaDeleted, SeriesDeleted,
 };
-use stump_media::{image::remove_thumbnails, ImageProcessorOptionsExt};
+use stump_media::image::remove_thumbnails;
 use stump_scanner::ScanOptions;
-use tokio::fs;
 
 use crate::{
 	data::CoreContext,
@@ -41,7 +40,6 @@ use crate::{
 	guard::PermissionGuard,
 	input::{library::CreateOrUpdateLibraryInput, thumbnail::UpdateThumbnailInput},
 	object::library::Library,
-	utils::db_statement,
 };
 
 #[derive(Default, SimpleObject)]

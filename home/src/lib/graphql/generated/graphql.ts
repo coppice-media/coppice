@@ -44,6 +44,21 @@ export type AnnotationKind =
   | 'NOTE';
 
 /**
+ * A listening position: milliseconds from the start of the publication,
+ * plus the file the client was in for a multi-file audiobook. A recording
+ * has no pages, so this carries neither a page nor a locator.
+ */
+export type AudioProgressInput = {
+  deviceId?: string | null | undefined;
+  elapsedSecondsDelta?: number | null | undefined;
+  isComplete?: boolean | null | undefined;
+  positionMs: number;
+  resetElapsedSeconds?: boolean | null | undefined;
+  /** The 0-based `mediaAudioTracks.index` the position fell in. */
+  trackIndex?: number | null | undefined;
+};
+
+/**
  * Represents a collected issue/series within a TPB or GN
  * See https://github.com/mylar3/mylar3/wiki/series.json-schema-%28version-1.0.1%29
  */
@@ -100,6 +115,8 @@ export type DeviceCredentialKind =
  * credential is minted for the device and which endpoints it is handed.
  */
 export type DeviceKind =
+  /** An Audiobookshelf client using the ABS-compatible profile */
+  | 'ABS'
   /** A script or integration using the native API */
   | 'API'
   /** A Kobo eReader using the native Kobo sync protocol */
@@ -419,8 +436,9 @@ export type MediaOrderByField = {
 };
 
 export type MediaProgressInput =
-  {   epub: EpubProgressInput; paged?: never; }
-  |  { epub?: never;   paged: PagedProgressInput; };
+  {   audio: AudioProgressInput; epub?: never; paged?: never; }
+  |  { audio?: never;   epub: EpubProgressInput; paged?: never; }
+  |  { audio?: never; epub?: never;   paged: PagedProgressInput; };
 
 /**
  * The events a user can route to a channel. Persisted by name in
