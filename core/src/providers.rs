@@ -14,8 +14,62 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use stump_provider::event::{ProviderEvent, ProviderEventSink};
+use tokio::sync::broadcast::Sender;
 
-use crate::{config::StumpConfig, Ctx};
+use crate::{
+	config::StumpConfig,
+	event::{
+		CoreEvent, ProviderCatalogRefreshed, ProviderSeriesMaterialized,
+		ProviderSourceHealthChanged,
+	},
+	Ctx,
+};
+
+/// Forwards provider host activity onto the core event channel, where the
+/// GraphQL subscriptions and notification routing pick it up.
+///
+/// This is the only place that knows both vocabularies: `stump_provider`
+/// cannot depend on `stump_core`, so it emits [`ProviderEvent`] and this
+/// maps every variant onto a [`CoreEvent`] one-to-one.
+pub(crate) struct CoreProviderEventSink {
+	events: Sender<CoreEvent>,
+}
+
+impl CoreProviderEventSink {
+	pub(crate) fn new(events: Sender<CoreEvent>) -> Self {
+		Self { events }
+	}
+}
+
+impl ProviderEventSink for CoreProviderEventSink {
+	fn emit(&self, event: ProviderEvent) {
+		let event = match event {
+			ProviderEvent::SourceHealthChanged {
+				source_id,
+				name,
+				status,
+			} => CoreEvent::ProviderSourceHealthChanged(ProviderSourceHealthChanged {
+				source_id,
+				name,
+				status: status.as_str().to_string(),
+			}),
+			ProviderEvent::SeriesMaterialized {
+				series_id,
+				source,
+				library_id,
+			} => CoreEvent::ProviderSeriesMaterialized(ProviderSeriesMaterialized {
+				series_id,
+				source,
+				library_id,
+			}),
+			ProviderEvent::CatalogRefreshed { count } => {
+				CoreEvent::ProviderCatalogRefreshed(ProviderCatalogRefreshed { count })
+			},
+		};
+		let _ = self.events.send(event);
+	}
+}
 
 /// How often the periodic GC sweep runs. `provider_gc_days` is the
 /// retention window; this is only how often the window is checked.
@@ -72,6 +126,7 @@ pub async fn init(
 	.await
 	.map_err(|error| crate::error::CoreError::InternalError(error.to_string()))?;
 	host.install();
+	host.set_event_sink(Arc::new(CoreProviderEventSink::new(ctx.get_event_tx())));
 
 	if ctx.set_provider_host(host.clone()).is_err() {
 		tracing::debug!("Provider host already initialized");

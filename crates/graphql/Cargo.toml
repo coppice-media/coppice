@@ -58,9 +58,10 @@ stump_devices = { path = "../devices", features = ["graphql"] }
 stump_notify = { path = "../notify" }
 stump_media = { path = "../media", default-features = false }
 stump_scanner = { path = "../scanner" }
-# `boko-convert` for the send-to-Kindle lane (shells out to the operator's
-# own boko; nothing GPL is linked).
-stump_tools = { path = "../tools" }
+# The send-to-Kindle lane (format policy, boko conversion, Amazon's 50 MB cap,
+# the `kindle_deliveries` history) is shared with the server's USB download
+# route; this crate only wires it to the primary emailer.
+stump_kindle = { path = "../kindle" }
 # The send-to-Kindle lane converts into a temporary directory under the
 # server's cache dir and removes it with the resolver.
 tempfile.workspace = true

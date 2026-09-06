@@ -13,6 +13,7 @@
 	import * as Tabs from '@stump/ui/components/ui/tabs';
 	import DuplicatePagesPanel from '$lib/components/DuplicatePagesPanel.svelte';
 	import ReworkDetailSheet from '$lib/components/ReworkDetailSheet.svelte';
+	import SendToKindleButton from '$lib/components/SendToKindleButton.svelte';
 	import { getEditorSession } from '$lib/editor/session.svelte';
 	import { request } from '@stump/ui/graphql/client';
 	import {
@@ -252,7 +253,7 @@
 								<TableHead>Path</TableHead>
 								<TableHead>Pages</TableHead>
 								<TableHead>Quality score</TableHead>
-								<TableHead class="text-right">Review</TableHead>
+								<TableHead class="text-right">Actions</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -277,7 +278,7 @@
 											<span class="tabular-nums font-medium {((scoreById.get(book.id) as number) < 70 ? 'text-destructive' : (scoreById.get(book.id) as number) < 90 ? 'text-amber-600' : 'text-emerald-600')}">{scoreById.get(book.id)}</span><span class="text-muted-foreground"> / 100</span>
 										{/if}
 									</TableCell>
-									<TableCell><div class="flex justify-end"><Button size="sm" variant="outline" onclick={() => review(book.id, book.resolvedName)}>Open review</Button></div></TableCell>
+									<TableCell><div class="flex items-center justify-end gap-1"><Button size="sm" variant="outline" onclick={() => review(book.id, book.resolvedName)}>Open review</Button><SendToKindleButton mediaId={book.id} /></div></TableCell>
 								</TableRow>
 							{/each}
 						</TableBody>

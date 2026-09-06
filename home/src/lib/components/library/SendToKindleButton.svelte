@@ -10,6 +10,7 @@
 		ConsoleSendToKindleDocument
 	} from '$lib/graphql/generated/graphql';
 	import { bytesLabel } from '$lib/format';
+	import { downloadKindleFile } from '$lib/kindle';
 
 	let { mediaId }: { mediaId: string } = $props();
 
@@ -39,6 +40,20 @@
 		},
 		onError: (error) =>
 			toast.error(error instanceof Error ? error.message : 'Unable to send the book.')
+	}));
+
+	// The USB lane needs no device: it is a plain download of the file a Kindle
+	// mounted over USB can open, so it is offered even with no address stored.
+	const sideload = createMutation(() => ({
+		mutationFn: () => downloadKindleFile(mediaId),
+		onSuccess: ({ filename, bytes, converted }) =>
+			toast.success(`Saved ${filename} (${bytesLabel(bytes)}).`, {
+				description: converted
+					? "Converted for your Kindle — copy it into the device's documents folder over USB."
+					: "Copy it into your Kindle's documents folder over USB."
+			}),
+		onError: (error) =>
+			toast.error(error instanceof Error ? error.message : 'Unable to build the Kindle file.')
 	}));
 </script>
 
@@ -71,3 +86,12 @@
 		</Select.Content>
 	</Select.Root>
 {/if}
+<Button
+	size="xs"
+	variant="ghost"
+	title="Download the file a Kindle mounted over USB can open"
+	onclick={() => sideload.mutate()}
+	disabled={sideload.isPending}
+>
+	{sideload.isPending ? 'Preparing…' : 'Kindle file'}
+</Button>

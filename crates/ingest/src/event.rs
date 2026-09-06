@@ -7,7 +7,10 @@
 //! maps every variant onto a `CoreEvent` one-to-one in
 //! `core/src/ingest_host.rs`.
 
-/// Something an analysis run decided that a human may need to know about.
+use crate::contract::DropItemStatus;
+
+/// Something the pipeline decided that a human — or a client cache — may need
+/// to know about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestEvent {
 	/// An analysis job failed; the job row carries the same message.
@@ -38,6 +41,17 @@ pub enum IngestEvent {
 		drop_item_id: String,
 		source_filename: String,
 		created_by: Option<String>,
+	},
+	/// A drop item's row was persisted with a bumped `revision`: a status
+	/// transition, an attached quality report, or a preprocess rewrite. The
+	/// store emits this for every write it makes to `ingest_drop_item`, so a
+	/// client can invalidate a cached item without knowing which column
+	/// moved. Deletions (`IngestStore::discard`) are not announced.
+	ItemChanged {
+		library_id: String,
+		item_id: String,
+		status: DropItemStatus,
+		revision: i32,
 	},
 }
 

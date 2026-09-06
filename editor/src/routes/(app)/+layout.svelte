@@ -15,6 +15,7 @@
 		progressReducer,
 		startIngestProgressSubscription
 	} from '$lib/ingest/progress';
+	import { startIngestItemSubscription } from '$lib/ingest/items';
 	import { offsetPagination } from '$lib/ingest/helpers';
 
 	let { children } = $props();
@@ -62,6 +63,26 @@
 			onCursorExpired: () => {
 				session.progress = progressReducer(session.progress, { type: 'CURSOR_EXPIRED' });
 				void queryClient.invalidateQueries();
+			},
+			onError: (message) => {
+				session.liveError = message;
+			}
+		});
+		return () => unsubscribe();
+	});
+
+	// Drop-item rows change behind the editor's back: analysis moves an item to
+	// AWAITING_REVIEW, a drop-folder scan admits new files, a preprocess hook
+	// fails one. `ingestEvents` carries one event per persisted revision, so the
+	// queues follow server state instead of only refreshing on our own writes.
+	$effect(() => {
+		if (!browser || !session.selectedLibraryId) return;
+		const unsubscribe = startIngestItemSubscription({
+			variables: { libraryId: session.selectedLibraryId },
+			onEvent: () => {
+				void queryClient.invalidateQueries({ queryKey: ['drop-items'] });
+				void queryClient.invalidateQueries({ queryKey: ['drop-folder'] });
+				void queryClient.invalidateQueries({ queryKey: ['analysis-queue'] });
 			},
 			onError: (message) => {
 				session.liveError = message;

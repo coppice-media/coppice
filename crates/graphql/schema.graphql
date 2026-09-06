@@ -695,7 +695,7 @@ type ConfidenceFactor {
 }
 
 "An event that is emitted by the core and consumed by a client"
-union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | DiscoveredMissingLibrary | CreatedMedia | MediaDeleted | SeriesDeleted | CreatedManySeries | CreatedOrUpdatedManyMedia | DeviceSeen | DevicePairingRequested | DevicePaired | IngestAwaitingReview | QualityFailed | AnalysisJobFailed | ProviderMatchDone | CollectionAdded | CollectionChanged | CollectionDeleted | ReadListAdded | ReadListChanged | ReadListDeleted | LibraryCreated | LibraryUpdated | LibraryDeleted
+union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | DiscoveredMissingLibrary | CreatedMedia | MediaDeleted | SeriesDeleted | CreatedManySeries | CreatedOrUpdatedManyMedia | DeviceSeen | DevicePairingRequested | DevicePaired | IngestAwaitingReview | QualityFailed | AnalysisJobFailed | ProviderMatchDone | ProviderSourceHealthChanged | ProviderSeriesMaterialized | ProviderCatalogRefreshed | IngestItemChanged | CollectionAdded | CollectionChanged | CollectionDeleted | ReadListAdded | ReadListChanged | ReadListDeleted | LibraryCreated | LibraryUpdated | LibraryDeleted
 
 union CoreJobOutput = LibraryScanOutput | SeriesScanOutput | ThumbnailGenerationOutput | PlaceholderGenerationOutput | MetadataFetchJobOutput | AnalyzeMediaOutput | NotificationDispatchOutput | AnnotationSyncOutput | ProviderSourceHealthOutput
 
@@ -1590,6 +1590,27 @@ enum IngestDropItemStatus {
 	FAILED
 }
 
+"""
+A staged ingest item's row changed.
+
+Emitted on every persisted `revision` bump, which is exactly the set of
+writes the pipeline makes to a drop item: a status transition, an attached
+quality report, a preprocess rewrite. A client can therefore treat one
+event as "this item is stale, refetch it" without knowing which column
+moved. Discarding an item deletes its row and is announced by no event —
+the client that issued the discard already knows.
+"""
+type IngestItemChanged {
+	libraryId: String!
+	itemId: String!
+	"""
+	The wire value of `stump_ingest::contract::DropItemStatus`, as stored
+	in `ingest_drop_item.status` (`STAGED`, `AWAITING_REVIEW`, ...).
+	"""
+	status: String!
+	revision: Int!
+}
+
 enum IngestMediaKind {
 	COMIC_ARCHIVE
 	COMIC_RAR_ARCHIVE
@@ -1882,11 +1903,20 @@ type JobUpdate {
 	totalSubtasks: Int
 }
 
-"What one send-to-Kindle delivery did."
+"""
+What one send-to-Kindle delivery did: the stored `kindle_deliveries` row,
+plus the device's name so the caller can say "sent Dune.azw3 (412 KB) to
+Paperwhite" without a second query.
+"""
 type KindleDelivery {
+	id: ID!
+	mediaId: String!
 	deviceId: String!
 	deviceName: String!
-	"The address the book was mailed to, as registered on the device."
+	"""
+	The address the book was mailed to, as registered on the device when
+	the delivery happened.
+	"""
 	recipient: String!
 	"""
 	Extension of the attachment that went out: `azw3` when it was
@@ -1903,6 +1933,12 @@ type KindleDelivery {
 	Amazon converts an EPUB itself.
 	"""
 	note: String
+	"""
+	Why the delivery failed, when it did. A failed send is recorded, which
+	is what makes this a delivery history rather than a success list.
+	"""
+	error: String
+	sentAt: DateTime!
 }
 
 "A librarian decision about one recurring page hash inside a library."
@@ -3300,6 +3336,17 @@ type Mutation {
 	resolving and live browse is rejected.
 	"""
 	disableProviderSource(id: String!): Boolean!
+	"""
+	Replace the request headers one source instance sends with every
+	request, e.g. the `cf_clearance` cookie and matching `User-Agent`
+	copied out of a browser for a source behind a Cloudflare challenge.
+	
+	The map replaces whatever was configured: an empty map clears it, and
+	an empty value drops that header. The response describes the stored
+	headers by name with a masked value — the values themselves are never
+	returned or logged, because they are live credentials.
+	"""
+	setProviderSourceHeaders(instanceId: String!, headers: JSON!): [ProviderSourceHeader!]!
 	"Fetch (or refresh) the Keiyoushi catalog snapshot."
 	refreshProviderCatalog: Boolean!
 	"""
@@ -3860,11 +3907,26 @@ type ProviderCatalogEntry {
 	health: ProviderSourceHealth
 }
 
+"The source catalog index was re-fetched from its upstream URL."
+type ProviderCatalogRefreshed {
+	"Catalog sources in the new snapshot."
+	count: Int!
+}
+
 type ProviderCredentialVerification {
 	responseStatus: Int!
 	isValid: Boolean!
 	error: String
 }
+
+"""
+The provider lane of [`CoreEvent`], as one union a client can exhaust.
+
+The members are the same object types `readEvents` yields, so the schema
+registers each exactly once and a client's `... on` selections are portable
+between the two subscriptions.
+"""
+union ProviderEvent = ProviderSourceHealthChanged | ProviderSeriesMaterialized | ProviderCatalogRefreshed
 
 """
 Provider identify/lookup finished for a staged item and candidates were
@@ -3918,6 +3980,22 @@ type ProviderSeriesDuplicate {
 }
 
 """
+A remote series finished materialising into a library: the `series` and
+`media` rows exist under the deterministic ids the browse surface reported
+([`stump_provider::add_series`]).
+"""
+type ProviderSeriesMaterialized {
+	seriesId: String!
+	"The `provider_sources` instance the series was materialised from."
+	source: String!
+	"""
+	Carried like every other library-scoped event so an adapter can gate
+	visibility without re-querying the series row.
+	"""
+	libraryId: String!
+}
+
+"""
 A remote series surfaced by a live provider search, identified by its
 deterministic Stump id.
 """
@@ -3945,6 +4023,25 @@ type ProviderSource {
 	lang: String!
 	baseUrl: String!
 	enabled: Boolean!
+	"""
+	The operator-configured request headers this instance sends with every
+	request. Names in full, values only as a fingerprint: a `cf_clearance`
+	cookie is a live credential and is never returned or logged.
+	"""
+	requestHeaders: [ProviderSourceHeader!]!
+}
+
+"One configured request header as the API is allowed to describe it."
+type ProviderSourceHeader {
+	"The header name, lower-cased (HTTP/2 permits nothing else)."
+	name: String!
+	"""
+	`cf_c…mnop` for a value long enough that its ends identify it, `…`
+	for a short one. Never the value.
+	"""
+	preview: String!
+	"Characters in the configured value."
+	length: Int!
 }
 
 type ProviderSourceHealth {
@@ -3964,12 +4061,44 @@ type ProviderSourceHealth {
 	"Failed runs in a row; reset by one reachable run."
 	consecutiveFailures: Int!
 	"""
+	Whether the last probe hit a Cloudflare managed challenge: the host is
+	up and refuses clients without a clearance cookie, which is why such a
+	source stays `DEGRADED` and never becomes `dead`. Configure the cookie
+	with `setProviderSourceHeaders`.
+	"""
+	challenged: Boolean!
+	"""
 	Whether the source reached `provider_health_dead_after` failures and
 	is hidden from the catalog by default.
 	"""
 	dead: Boolean!
 	"When the source was last probed."
 	lastCheckedAt: DateTime
+}
+
+"""
+A catalog source's health status changed between two probe runs
+([`stump_provider::health::probe_target`]).
+
+Only a *transition* is announced: the first observation of a source writes
+its `source_health` row without an event, so one cold run over a full
+catalog cannot flood the bus with a thousand "now OK" events.
+"""
+type ProviderSourceHealthChanged {
+	"""
+	The catalog source id (`source_health.source_id`), a Keiyoushi decimal
+	string. Not a `provider_sources` instance id: health is per catalog
+	source, and several instances can share one.
+	"""
+	sourceId: String!
+	"The catalog name, so a client can name the source without re-querying."
+	name: String!
+	"""
+	`OK`, `DEGRADED`, or `DEAD` — the wire value of
+	`stump_provider::health::HealthStatus`, as stored in
+	`source_health.status`. `OK` after a change *is* the recovery signal.
+	"""
+	status: String!
 }
 
 "Summary of one provider source-health run."
@@ -4240,6 +4369,15 @@ type Query {
 	credential is minted.
 	"""
 	deviceEndpoints(id: String!): [DeviceEndpoint!]!
+	"""
+	Books mailed to a Kindle, newest first.
+	
+	Scoped to the devices the caller can see: their own, or every device
+	for the server owner. `deviceId` narrows it to one device and
+	`mediaId` to one book; a device the caller cannot see resolves to no
+	rows rather than to an error, exactly like the registry's own lookups.
+	"""
+	kindleDeliveries(deviceId: ID, mediaId: ID, limit: Int): [KindleDelivery!]!
 	"""
 	Reading activity over `span`, for the current user's sessions. With a
 	`deviceId` the stats cover the sessions that device contributed to, for
@@ -5299,10 +5437,23 @@ type Subscription {
 	readEvents: CoreEvent!
 	ingestProgress(libraryId: ID, dropItemId: ID, analysisJobId: ID, afterEventId: ID): IngestProgressEvent!
 	"""
+	Drop-item row changes, optionally narrowed to one library. One event
+	per persisted `revision` bump, which is what lets a client hold a drop
+	queue live instead of refetching it on a timer. Ungated, like
+	`readEvents`, which carries the same events unfiltered.
+	"""
+	ingestEvents(libraryId: ID): IngestItemChanged!
+	"""
 	Sightings of the current user's devices (every device for the server
 	owner), optionally narrowed to one device.
 	"""
 	deviceSeen(deviceId: String): DeviceSeen!
+	"""
+	Provider host activity: source health transitions, materialised
+	series, and catalog refreshes. Ungated, like `readEvents`, which
+	carries the same events unfiltered.
+	"""
+	providerEvents: ProviderEvent!
 }
 
 input SuggestBookInput {

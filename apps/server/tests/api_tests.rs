@@ -9,6 +9,7 @@ mod device_touch;
 mod epub;
 #[cfg(feature = "graphql")]
 mod graphql;
+mod kindle;
 #[cfg(feature = "kobo")]
 mod kobo;
 #[cfg(feature = "komga")]

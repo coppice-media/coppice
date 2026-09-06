@@ -79,14 +79,24 @@ together; absence in a later snapshot is not a tombstone
 ## Amazon Kindle
 
 A Kindle is the one device family that never talks to Stump. It has no sync
-protocol, no credential, and no endpoint: Amazon's *Send to Kindle* service
-delivers whatever an approved sender mails to the device's own address, so the
-address on the device row (`devices.kindle_email`) is the entire transport and
-the direction is one-way — nothing comes back, not progress, not annotations.
+protocol, no credential, and no endpoint, and it is reached in exactly two
+ways — both of them one-way, and both implemented by one crate
+(`crates/kindle`) so they cannot disagree about what the device can read:
+
+1. **E-mail.** Amazon's *Send to Kindle* service delivers whatever an approved
+   sender mails to the device's own address, so the address on the device row
+   (`devices.kindle_email`) is the entire transport.
+2. **USB.** The Kindle mounts as a disk and anything dropped into its
+   `documents/` folder is a book. There is no gateway on that path, so it is
+   the stricter of the two: a Kindle plugged into a computer opens AZW3/MOBI,
+   PDF and text, and **not** EPUB.
+
+Nothing comes back either way — not progress, not annotations.
 
 | Device family | Reached over | Works today | Gaps | Status | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| Kindle (Paperwhite, Oasis, Scribe, Colorsoft, basic) | `sendToKindle(mediaId, deviceId)`: primary emailer → `<name>@kindle.com`, EPUB converted to AZW3 by the operator's `boko` when present, otherwise mailed as EPUB (Amazon converts it), recorded as `{"protocol":"kindle-email","bytes","format"}` | One book per call to one device address; refuses formats Amazon discards (CBZ/CBR); emailer size cap enforced before the SMTP connection | One-way: no progress, no annotations, no browse, no download. The sender address must be on the operator's Amazon *Approved Personal Document E-mail List* — Stump cannot check that, so a rejected send only shows up as a bounce in the operator's mailbox. No KFX (`boko` can write it; AZW3 is the safer sideload) | not verified — no Kindle and no live Amazon delivery; the lane's conversion, EPUB fallback, refusals, and recording are covered by `cargo test -p graphql --lib kindle` with a fake mailer and a fake `boko` | [devices — send to Kindle](/docs/developer/devices#send-to-kindle), [calibre tooling](/docs/developer/calibre-tooling), [Send to Kindle by e-mail](https://www.amazon.com/sendtokindle/email) |
+| Kindle (Paperwhite, Oasis, Scribe, Colorsoft, basic) — e-mail | `sendToKindle(mediaId, deviceId)`: primary emailer → `<name>@kindle.com`, EPUB converted to AZW3 by the operator's `boko` when present, otherwise mailed as EPUB (Amazon converts it), recorded as a `kindle_deliveries` row plus `{"protocol":"kindle-email","bytes","format"}` on the device | One book per call to one device address; refuses formats Amazon discards (CBZ/CBR); Amazon's 50 MB per-document ceiling and the emailer's own cap enforced before the SMTP connection; failures recorded with their reason and readable back through `kindleDeliveries` | One-way: no progress, no annotations, no browse. The sender address must be on the operator's Amazon *Approved Personal Document E-mail List* — Stump cannot check that, so a rejected send only shows up as a bounce in the operator's mailbox. No KFX (`boko` can write it; AZW3 is the safer sideload) | not verified — no Kindle and no live Amazon delivery; the lane's conversion, EPUB fallback, size refusals, failure recording, and history are covered by `cargo test -p stump_kindle` (13 tests, `lettre` stub transport + a fake `boko`) and `cargo test -p graphql --lib kindle` | [devices — send to Kindle](/docs/developer/devices#send-to-kindle), [calibre tooling](/docs/developer/calibre-tooling), [Send to Kindle by e-mail](https://www.amazon.com/sendtokindle/email) |
+| Kindle — USB sideload | `POST /api/v2/media/{id}/kindle-file`: the converted file as a download, `Content-Disposition: attachment; filename="<book>.azw3"`, `X-Stump-Kindle-Converted` header; save it into the mounted device's `documents/` folder | Any accepted format passes through untouched; an EPUB is converted with `boko`; no size limit (no relay involved); needs `DOWNLOAD_FILE` | An EPUB with no `boko` installed is refused with 400 rather than handed over, because the device cannot open it; nothing is recorded (there is no device on this path, so there is no delivery to log) | route-verified — `cargo test -p stump_server --no-default-features --features minimal --test api_tests kindle` (4 tests: pass-through, never-an-EPUB, CBZ refusal, unknown book) | [devices — USB](/docs/developer/devices#usb-post-apiv2mediaidkindle-file) |
 
 ## Android
 
@@ -123,6 +133,7 @@ the direction is one-way — nothing comes back, not progress, not annotations.
 | Sync protocol | Three routes under `/koreader/{api_key}`: `GET users/auth`, `PUT syncs/progress`, `GET syncs/progress/{document}`; key owner needs `AccessKoreaderSync`; username/password accepted but not validated | harness (probe) | [sync platforms](/docs/developer/sync-platforms) |
 | Document identity | Binary partial-MD5 (`generateDocChecksum` port) stored as `media.koreader_hash` for EPUB and PDF when the library flag is on; ZIP/RAR never hash | source-derived | [sync platforms](/docs/developer/sync-platforms) |
 | KEPUB and x-pointer | KOReader opens `.kepub.epub` as EPUB; its progress string is a page or crengine DOM x-pointer, explicitly not a Readium locator, and KoboSpan ids from our converter are not used by it | source-derived | [sync platforms](/docs/developer/sync-platforms), [Kobo capabilities](/docs/developer/kobo-sync-capabilities) |
+| `stump.koplugin` (ours, `/home/al/Code/koreader-stump`) | First-party KOReader client: continue-reading dashboard over `GET /api/v2/reading/continue`, catalogue/search over `/opds/v2.0` (Basic `<user>:<api key>` or `<user>:<password>`), downloads over `GET /api/v2/media/{id}/file`, progress by configuring KOReader's own `kosync` plugin at `/koreader/{api_key}` (`checksum_method=0`, username/userkey filled because the built-in client requires them) plus on-demand PUT/GET, and highlight/note/bookmark export over `POST /v1/annotations` (liseur-sync). Book identity: sidecar `stump_media_id` → `koreaderHash` match → manual search link | harness — every route curl-verified live (annotation create/`conflict`/edit/live-read round trip); route contract has 9 `api_tests`; 184 pure-logic checks under `lua`/`luajit`. Never run inside KOReader: no device or desktop run, so the UI, menu wiring and KOReader's own networking are unverified. Push-only annotations (no tombstones, no import); `/opds/v2.0/books/browse` unusable (its `BrowseParams` flattens pagination, so `?page=1` is a `400`) | [KOReader plugin](/docs/developer/koreader-plugin) |
 | Kamare `b85ab0a` (KOReader plugin for Kavita) | `Plugin/authenticate`, dashboard/on-deck streams, `Reader/image`, `Reader/progress`, search, reading lists | not verified (Kavita profile in progress) | `local://kavita-clients-inventory.md` |
 | hardcoverapp.koplugin (Billiam) | Writes reading status, progress, ratings, and journal notes to Hardcover directly from the device with a user PAT | not verified; overlaps our planned journal sink — a user running both would produce duplicate `user_book_reads`/journal rows for the same book, so the sink must query before insert | [repo](https://github.com/Billiam/hardcoverapp.koplugin), [Hardcover integration](/docs/developer/hardcover-integration) |
 
@@ -156,7 +167,12 @@ Never tried on real hardware or a real app (as of 2026-09-05):
    tombstones, markup SVG inlining) — the mapping is host-tested, the device
    read is not.
 3. The KOReader app (any platform) against `/koreader/{api_key}`; only the
-   server probe and Liseur's pairing lane exist.
+   server probe and Liseur's pairing lane exist. Our own
+   [`stump.koplugin`](/docs/developer/koreader-plugin) has never been loaded by
+   KOReader either: its four lanes are curl-verified and its pure logic is
+   host-tested, but no menu has been tapped, and the hand-off to the built-in
+   `kosync` plugin (settings file written from outside, restart required) is
+   the least verified part of it.
 4. Any of the seven pinned Kavita clients against the Kavita profile.
 5. The Stump Mihon extension: no APK built, no device run.
 6. `.kobo/markups` and notebook files — never inspected on a device. The

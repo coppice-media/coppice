@@ -241,3 +241,92 @@ async fn audio_is_exposed_on_the_graphql_media_object() {
 	assert_eq!(audio["tracks"][1]["startOffsetMs"], 2_000);
 	assert_eq!(audio["chapters"][0]["title"], "Opening");
 }
+
+/// Liseur reads paginated documents: an audiobook listed in its catalogue is
+/// a book it can open and never track, and a folder book's "download" is a
+/// directory - the harness saw `ServeFile` answer that with a truncated 200.
+/// The ebook profile must not see audio rows at all.
+#[tokio::test]
+async fn audiobooks_are_not_liseur_catalogue_books() {
+	use migrations::{Migrator, MigratorTrait};
+	use sea_orm::{ActiveModelTrait, ActiveValue::Set, IntoActiveModel};
+
+	// The liseur token tables have no entities, so this runs on the real schema.
+	let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+	Migrator::up(&db, None).await.unwrap();
+	let app = TestApp::with_parts(db, stump_core::config::StumpConfig::debug()).await;
+	let token = app.create_initial_account().await;
+	*app.access_token.write().await = Some(token);
+	let library = fake_data::Library {
+		name: Some("Shelf".to_string()),
+		..Default::default()
+	}
+	.insert(app.conn())
+	.await;
+	let (_series, books) = setup_single_series_with_n_books(
+		&app,
+		fake_data::Series {
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		},
+		2,
+	)
+	.await;
+	let mut audiobook = books[0].clone().into_active_model();
+	audiobook.extension = Set("m4b".to_string());
+	audiobook.pages = Set(-1);
+	audiobook.update(app.conn()).await.unwrap();
+	let ebook_id = books[1].id.clone();
+	let audiobook_id = books[0].id.clone();
+
+	let login: Value = app
+		.server
+		.post("/v1/login")
+		.json(
+			&serde_json::json!({ "username": "initial-server-admin", "password": "password" }),
+		)
+		.await
+		.json();
+	let session = format!("Bearer {}", login["auth_token"].as_str().unwrap());
+	let minted: Value = app
+		.server
+		.post("/v1/tokens")
+		.add_header("Authorization", session)
+		.json(&serde_json::json!({ "name": "probe", "scopes": ["sync", "library-read"] }))
+		.await
+		.json();
+	let bearer = format!("Bearer {}", minted["secret"].as_str().unwrap());
+	let folders: Value = app
+		.server
+		.get("/v1/folders")
+		.add_header("Authorization", bearer.clone())
+		.await
+		.json();
+	let folder_id = folders["folders"][0]["folder_id"]
+		.as_str()
+		.unwrap_or_else(|| panic!("{folders:?}"));
+
+	let listed: Value = app
+		.server
+		.get(&format!("/v1/folders/{folder_id}/books?limit=10"))
+		.add_header("Authorization", bearer.clone())
+		.await
+		.json();
+	let ids = listed["books"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.map(|book| book["book_id"].as_str().unwrap().to_string())
+		.collect::<Vec<_>>();
+	assert_eq!(
+		ids,
+		vec![ebook_id],
+		"only the paginated book is a catalogue book"
+	);
+
+	app.server
+		.get(&format!("/v1/books/{audiobook_id}/download"))
+		.add_header("Authorization", bearer)
+		.await
+		.assert_status(StatusCode::NOT_FOUND);
+}

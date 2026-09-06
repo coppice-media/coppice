@@ -38,6 +38,47 @@ impl ProviderSource {
 	async fn enabled(&self) -> bool {
 		self.0.enabled
 	}
+
+	/// The operator-configured request headers this instance sends with every
+	/// request. Names in full, values only as a fingerprint: a `cf_clearance`
+	/// cookie is a live credential and is never returned or logged.
+	async fn request_headers(&self) -> Vec<ProviderSourceHeader> {
+		masked_headers(&self.0)
+	}
+}
+
+/// One configured request header as the API is allowed to describe it.
+#[derive(async_graphql::SimpleObject)]
+pub struct ProviderSourceHeader {
+	/// The header name, lower-cased (HTTP/2 permits nothing else).
+	pub name: String,
+	/// `cf_c…mnop` for a value long enough that its ends identify it, `…`
+	/// for a short one. Never the value.
+	pub preview: String,
+	/// Characters in the configured value.
+	pub length: i32,
+}
+
+impl From<stump_provider::MaskedHeader> for ProviderSourceHeader {
+	fn from(header: stump_provider::MaskedHeader) -> Self {
+		Self {
+			name: header.name,
+			preview: header.preview,
+			length: header.length as i32,
+		}
+	}
+}
+
+/// The masked description of one instance's configured headers: everything
+/// the API is allowed to say about them.
+pub fn masked_headers(
+	row: &models::entity::provider_source::Model,
+) -> Vec<ProviderSourceHeader> {
+	stump_provider::RequestHeaders::parse(row.request_headers.as_deref())
+		.masked()
+		.into_iter()
+		.map(ProviderSourceHeader::from)
+		.collect()
 }
 
 /// A Keiyoushi catalog entry flattened to one source, annotated with
@@ -116,6 +157,14 @@ impl ProviderSourceHealth {
 	/// Failed runs in a row; reset by one reachable run.
 	async fn consecutive_failures(&self) -> i32 {
 		self.0.consecutive_failures
+	}
+
+	/// Whether the last probe hit a Cloudflare managed challenge: the host is
+	/// up and refuses clients without a clearance cookie, which is why such a
+	/// source stays `DEGRADED` and never becomes `dead`. Configure the cookie
+	/// with `setProviderSourceHeaders`.
+	async fn challenged(&self) -> bool {
+		self.0.error.as_deref() == Some(stump_provider::health::CHALLENGE_ERROR)
 	}
 
 	/// Whether the source reached `provider_health_dead_after` failures and
@@ -202,5 +251,55 @@ pub fn series_summary(source_id: &str, remote: &RemoteSeries) -> ProviderSeriesS
 		genres: remote.genres.clone(),
 		status: remote.status.as_metadata_status().to_string(),
 		nsfw: remote.nsfw,
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use models::entity::provider_source;
+
+	fn row(request_headers: Option<&str>) -> provider_source::Model {
+		provider_source::Model {
+			id: "en.readcomicsonline".to_string(),
+			implementation: "en.readcomicsonline".to_string(),
+			catalog_id: None,
+			name: "Read Comics Online".to_string(),
+			lang: "en".to_string(),
+			base_url: "https://readcomicsonline.ru".to_string(),
+			enabled: true,
+			request_headers: request_headers.map(str::to_string),
+			created_by: None,
+			created_at: chrono::Utc::now().into(),
+			updated_at: None,
+		}
+	}
+
+	/// The API describes the configured headers; it never hands one back. A
+	/// `cf_clearance` cookie is a live credential, and the operator only
+	/// needs to recognise which value is stored.
+	#[test]
+	fn request_headers_are_reported_by_name_and_never_by_value() {
+		let headers = masked_headers(&row(Some(
+			r#"{"cookie":"cf_clearance=abcdefghijklmnop","user-agent":"Mozilla/5.0 (X11; Linux x86_64)"}"#,
+		)));
+		assert_eq!(
+			headers
+				.iter()
+				.map(|header| header.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["cookie", "user-agent"]
+		);
+		assert_eq!(headers[0].preview, "cf_c…mnop");
+		assert_eq!(headers[0].length, 29);
+		assert!(
+			!headers
+				.iter()
+				.any(|header| header.preview.contains("clearance")
+					|| header.preview.contains("Linux")),
+			"a preview must not carry the value"
+		);
+
+		assert!(masked_headers(&row(None)).is_empty());
 	}
 }

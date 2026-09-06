@@ -25,8 +25,8 @@ use crate::{
 	config::StumpConfig,
 	error::CoreError,
 	event::{
-		AnalysisJobFailed, CoreEvent, IngestAwaitingReview, ProviderMatchDone,
-		QualityFailed,
+		AnalysisJobFailed, CoreEvent, IngestAwaitingReview, IngestItemChanged,
+		ProviderMatchDone, QualityFailed,
 	},
 	filesystem::{
 		media::MediaBuilder, metadata::ProviderClientCache, series::SeriesBuilder,
@@ -225,6 +225,17 @@ impl IngestEventSink for CoreEventSink {
 				drop_item_id,
 				source_filename,
 				created_by,
+			}),
+			IngestEvent::ItemChanged {
+				library_id,
+				item_id,
+				status,
+				revision,
+			} => CoreEvent::IngestItemChanged(IngestItemChanged {
+				library_id,
+				item_id,
+				status: status.as_str().to_string(),
+				revision,
 			}),
 		};
 		let _ = self.events.send(event);

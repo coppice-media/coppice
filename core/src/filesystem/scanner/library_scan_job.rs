@@ -47,9 +47,10 @@ use super::{
 	series_scan_job::SeriesScanTask,
 	store::SeaOrmScanSource,
 	utils::{
-		handle_missing_media, handle_missing_series, handle_restored_media,
-		safely_build_and_insert_media, safely_build_series, visit_and_update_media,
-		MediaBuildOperation, MediaOperationOutput, MissingSeriesOutput,
+		handle_missing_media, handle_missing_series, handle_recovered_series,
+		handle_restored_media, safely_build_and_insert_media, safely_build_series,
+		visit_and_update_media, MediaBuildOperation, MediaOperationOutput,
+		MissingSeriesOutput, RecoveredSeriesOutput,
 	},
 };
 
@@ -510,35 +511,18 @@ impl JobLifecycle for LibraryScanJob {
 				if !recovered_series.is_empty() {
 					ctx.report_progress(JobProgress::msg("Recovering series"));
 
-					let mut total_affected = 0u64;
-					for chunk in recovered_series.chunks(SQLITE_BIND_LIMIT) {
-						let chunk_affected_rows = series::Entity::update_many()
-							.col_expr(
-								series::Column::Status,
-								Expr::value(FileStatus::Ready.to_string()),
-							)
-							.filter(series::Column::Id.is_in(chunk.to_vec()))
-							.exec(ctx.conn())
-							.await
-							.map_or_else(
-								|error| {
-									tracing::error!(error = ?error, "Failed to recover series");
-									logs.push(JobExecuteLog::error(format!(
-										"Failed to recover series: {:?}",
-										error.to_string()
-									)));
-									0
-								},
-								|result| {
-									output.updated_series = result.rows_affected;
-									result.rows_affected
-								},
-							);
-						total_affected += chunk_affected_rows;
-					}
+					// Only the series rows: the books of a recovered series are
+					// restored by the series walk that follows, which is the
+					// only step that knows which files actually came back.
+					let RecoveredSeriesOutput {
+						updated_series,
+						logs: new_logs,
+					} = handle_recovered_series(ctx.conn(), &recovered_series).await?;
+					output.updated_series += updated_series;
+					logs.extend(new_logs);
 
 					ctx.report_progress(JobProgress::subtask_position(
-						if total_affected > 0 {
+						if updated_series > 0 {
 							current_subtask_index += 1;
 							current_subtask_index
 						} else {
@@ -555,33 +539,21 @@ impl JobLifecycle for LibraryScanJob {
 						.map(|e| e.to_string_lossy().to_string())
 						.collect::<Vec<String>>();
 
-					let mut total_affected = 0u64;
-					for chunk in missing_series_str.chunks(SQLITE_BIND_LIMIT) {
-						let chunk_affected_rows = series::Entity::update_many()
-							.col_expr(
-								series::Column::Status,
-								Expr::value(FileStatus::Missing.to_string()),
-							)
-							.filter(series::Column::Path.is_in(chunk.to_vec()))
-							.exec(ctx.conn())
-							.await
-							.map_or_else(
-								|error| {
-									tracing::error!(error = ?error, "Failed to update missing series");
-									logs.push(JobExecuteLog::error(format!(
-										"Failed to update missing series: {:?}",
-										error.to_string()
-									)));
-									0
-								},
-								|result| result.rows_affected,
-							);
-						total_affected += chunk_affected_rows;
-					}
-					output.updated_series = total_affected;
+					// The books of a series that is gone from disk are gone with
+					// it, so they are marked in this same step. Marking only the
+					// series row left its books READY, and every listing funnel
+					// filters on the book status, not the series status.
+					let MissingSeriesOutput {
+						updated_series,
+						updated_media,
+						logs: new_logs,
+					} = handle_missing_series(ctx.conn(), &missing_series_str).await?;
+					output.updated_series += updated_series;
+					output.updated_media += updated_media;
+					logs.extend(new_logs);
 
 					ctx.report_progress(JobProgress::subtask_position(
-						if total_affected > 0 {
+						if updated_series > 0 {
 							{
 								current_subtask_index += 1;
 								current_subtask_index
@@ -777,7 +749,7 @@ impl JobLifecycle for LibraryScanJob {
 						logs: new_logs,
 					} = handle_missing_series(
 						ctx.conn(),
-						path_buf.to_str().unwrap_or_default(),
+						&[path_buf.to_string_lossy().to_string()],
 					)
 					.await?;
 					output.updated_series += updated_series;
@@ -841,7 +813,7 @@ impl JobLifecycle for LibraryScanJob {
 						updated_media,
 						logs: new_logs,
 						..
-					} = handle_restored_media(ctx, &series_id, ids).await;
+					} = handle_restored_media(ctx.conn(), &series_id, ids).await;
 
 					ctx.emit_event(CoreEvent::CreatedOrUpdatedManyMedia(
 						CreatedOrUpdatedManyMedia {
@@ -867,7 +839,7 @@ impl JobLifecycle for LibraryScanJob {
 						updated_media,
 						logs: new_logs,
 						..
-					} = handle_missing_media(ctx, &series_id, paths).await;
+					} = handle_missing_media(ctx.conn(), &series_id, paths).await;
 
 					ctx.emit_event(CoreEvent::CreatedOrUpdatedManyMedia(
 						CreatedOrUpdatedManyMedia {

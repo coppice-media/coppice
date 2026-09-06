@@ -42,9 +42,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use models::entity::provider_source;
 use stump_provider::{
-	definition::SourceDefinition, RemoteChapter, RemotePage, RemoteSeries, SearchFilter,
-	Source, SourceCapabilities, SourceError, SourceHttp, SourceInfo, SourcePage,
-	SourceResult,
+	definition::SourceDefinition, RemoteChapter, RemotePage, RemoteSeries,
+	RequestHeaders, SearchFilter, Source, SourceCapabilities, SourceError, SourceHttp,
+	SourceInfo, SourcePage, SourceResult,
 };
 
 use crate::{
@@ -175,14 +175,20 @@ impl MadaraSource {
 		definition: &SourceDefinition,
 		row: &provider_source::Model,
 	) -> Result<Arc<dyn Source>, ThemeError> {
-		Self::new(definition, &row.id, Some(row.base_url.as_str()))
-			.map(|source| Arc::new(source) as Arc<dyn Source>)
+		Self::new(
+			definition,
+			&row.id,
+			Some(row.base_url.as_str()),
+			RequestHeaders::parse(row.request_headers.as_deref()),
+		)
+		.map(|source| Arc::new(source) as Arc<dyn Source>)
 	}
 
 	pub fn new(
 		definition: &SourceDefinition,
 		instance_id: &str,
 		base_url: Option<&str>,
+		headers: RequestHeaders,
 	) -> Result<Self, ThemeError> {
 		let supports_latest = definition.bool_knob(&["supports_latest"]).unwrap_or(true);
 		let context = ThemeContext::new(
@@ -194,6 +200,7 @@ impl MadaraSource {
 				latest: supports_latest,
 				search: true,
 			},
+			headers,
 		)?;
 		let archive = theme::selector(
 			definition,
@@ -1194,7 +1201,13 @@ mod tests {
 	}
 
 	fn engine(knobs: &[(&str, KnobValue)]) -> MadaraSource {
-		MadaraSource::new(&definition(knobs), "en.example", None).expect("engine builds")
+		MadaraSource::new(
+			&definition(knobs),
+			"en.example",
+			None,
+			RequestHeaders::default(),
+		)
+		.expect("engine builds")
 	}
 
 	const ARCHIVE: &str = r#"<html><body>
@@ -1475,7 +1488,9 @@ mod tests {
 		let mut legacy = definition(&[]);
 		legacy.theme = "madaralegacy".into();
 		assert_eq!(
-			MadaraSource::new(&legacy, "x", None).unwrap().browse_mode,
+			MadaraSource::new(&legacy, "x", None, RequestHeaders::default())
+				.unwrap()
+				.browse_mode,
 			BrowseMode::AutoDetect
 		);
 		assert_eq!(
@@ -1544,6 +1559,7 @@ mod tests {
 			)]),
 			"en.example",
 			None,
+			RequestHeaders::default(),
 		)
 		.expect_err("invalid selector is rejected");
 		assert!(
@@ -1555,9 +1571,13 @@ mod tests {
 	#[test]
 	fn base_url_override_from_the_row_wins() {
 		let definition = definition(&[]);
-		let source =
-			MadaraSource::new(&definition, "en.example", Some("https://mirror.test/"))
-				.unwrap();
+		let source = MadaraSource::new(
+			&definition,
+			"en.example",
+			Some("https://mirror.test/"),
+			RequestHeaders::default(),
+		)
+		.unwrap();
 		assert_eq!(source.context.base_url, "https://mirror.test");
 		assert_eq!(source.series_url("x"), "https://mirror.test/manga/x/");
 	}

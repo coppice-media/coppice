@@ -107,6 +107,9 @@ stump_scanner = { path = "../../crates/scanner" }
 stump_auth = { path = "../../crates/auth" }
 stump_api_types = { path = "../../crates/api-types" }
 stump_devices = { path = "../../crates/devices" }
+# The USB send-to-Kindle download (`POST /api/v2/media/{id}/kindle-file`)
+# runs the same lane as the `sendToKindle` mutation.
+stump_kindle = { path = "../../crates/kindle" }
 stump_komga = { path = "../../crates/komga", optional = true }
 stump_kavita = { path = "../../crates/kavita", optional = true }
 stump_abs = { path = "../../crates/abs", optional = true }

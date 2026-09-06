@@ -136,6 +136,72 @@ pub struct ProviderMatchDone {
 	pub candidate_count: usize,
 }
 
+/// A catalog source's health status changed between two probe runs
+/// ([`stump_provider::health::probe_target`]).
+///
+/// Only a *transition* is announced: the first observation of a source writes
+/// its `source_health` row without an event, so one cold run over a full
+/// catalog cannot flood the bus with a thousand "now OK" events.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSourceHealthChanged {
+	/// The catalog source id (`source_health.source_id`), a Keiyoushi decimal
+	/// string. Not a `provider_sources` instance id: health is per catalog
+	/// source, and several instances can share one.
+	pub source_id: String,
+	/// The catalog name, so a client can name the source without re-querying.
+	pub name: String,
+	/// `OK`, `DEGRADED`, or `DEAD` — the wire value of
+	/// `stump_provider::health::HealthStatus`, as stored in
+	/// `source_health.status`. `OK` after a change *is* the recovery signal.
+	pub status: String,
+}
+
+/// A remote series finished materialising into a library: the `series` and
+/// `media` rows exist under the deterministic ids the browse surface reported
+/// ([`stump_provider::add_series`]).
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSeriesMaterialized {
+	pub series_id: String,
+	/// The `provider_sources` instance the series was materialised from.
+	pub source: String,
+	/// Carried like every other library-scoped event so an adapter can gate
+	/// visibility without re-querying the series row.
+	pub library_id: String,
+}
+
+/// The source catalog index was re-fetched from its upstream URL.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCatalogRefreshed {
+	/// Catalog sources in the new snapshot.
+	pub count: u64,
+}
+
+/// A staged ingest item's row changed.
+///
+/// Emitted on every persisted `revision` bump, which is exactly the set of
+/// writes the pipeline makes to a drop item: a status transition, an attached
+/// quality report, a preprocess rewrite. A client can therefore treat one
+/// event as "this item is stale, refetch it" without knowing which column
+/// moved. Discarding an item deletes its row and is announced by no event —
+/// the client that issued the discard already knows.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
+#[serde(rename_all = "camelCase")]
+pub struct IngestItemChanged {
+	pub library_id: String,
+	pub item_id: String,
+	/// The wire value of `stump_ingest::contract::DropItemStatus`, as stored
+	/// in `ingest_drop_item.status` (`STAGED`, `AWAITING_REVIEW`, ...).
+	pub status: String,
+	pub revision: i32,
+}
+
 /// An event that is emitted by the core and consumed by a client
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::Union))]
@@ -165,6 +231,14 @@ pub enum CoreEvent {
 	AnalysisJobFailed(AnalysisJobFailed),
 	/// Provider lookup finished for a staged item
 	ProviderMatchDone(ProviderMatchDone),
+	/// A catalog source's health status changed (dead, degraded, recovered)
+	ProviderSourceHealthChanged(ProviderSourceHealthChanged),
+	/// A remote series finished materialising into a library
+	ProviderSeriesMaterialized(ProviderSeriesMaterialized),
+	/// The source catalog index was re-fetched
+	ProviderCatalogRefreshed(ProviderCatalogRefreshed),
+	/// A staged ingest item's row changed; see [`IngestItemChanged`]
+	IngestItemChanged(IngestItemChanged),
 	/// A shelf collection was created (any protocol, incl. Kobo write-back)
 	CollectionAdded(CollectionAdded),
 	/// A shelf collection's name, ordering, or membership changed

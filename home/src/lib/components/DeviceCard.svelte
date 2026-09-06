@@ -10,7 +10,10 @@
 	import * as Select from '@stump/ui/components/ui/select';
 	import { request } from '@stump/ui/graphql/client';
 	import {
+		ConsoleBooksDocument,
+		ConsoleKindleDeliveriesDocument,
 		ConsoleLibraryOptionsDocument,
+		ConsoleSendToKindleDocument,
 		RenameDeviceDocument,
 		RevokeDeviceDocument,
 		RotateDeviceCredentialDocument,
@@ -30,10 +33,15 @@
 		type Device,
 		type IssuedCredential
 	} from '$lib/devices';
-	import { absoluteTime, relativeTime, summarizeSync } from '$lib/format';
+	import { absoluteTime, bytesLabel, relativeTime, summarizeSync } from '$lib/format';
 	import CredentialReveal from './CredentialReveal.svelte';
 
 	let { device, now }: { device: Device; now: Date } = $props();
+
+	/** Books offered per search in the send dialog. */
+	const BOOK_PICKER_SIZE = 20;
+	/** Deliveries listed on the card; the full history lives on the server. */
+	const RECENT_DELIVERIES = 3;
 
 	const queryClient = useQueryClient();
 	const revoked = $derived(device.revokedAt !== null && device.revokedAt !== undefined);
@@ -69,12 +77,55 @@
 	let kindleEmailEdit = $state<string | null>(null);
 	const storedKindleEmail = $derived(device.kindleEmail ?? '');
 	const draftKindleEmail = $derived(kindleEmailEdit ?? storedKindleEmail);
+	// A device is a "send to Kindle" target only once it carries an address; a
+	// revoked one keeps its history but can no longer be sent to.
+	const canSendToKindle = $derived(!revoked && !!device.kindleEmail);
+
+	let sendOpen = $state(false);
+	let bookSearch = $state('');
+	let bookFilterText = $state('');
+	let pickedBookId = $state<string | null>(null);
+
+	// The picker queries 300ms after the last keystroke, so typing a title
+	// costs one request instead of one per character.
+	$effect(() => {
+		const term = bookSearch.trim();
+		const timer = setTimeout(() => (bookFilterText = term), 300);
+		return () => clearTimeout(timer);
+	});
+
+	// Shares the book list with every other card: same search, same request.
+	const booksQuery = createQuery(() => ({
+		queryKey: ['kindleBookPicker', bookFilterText],
+		queryFn: () =>
+			request(ConsoleBooksDocument, {
+				filter: bookFilterText ? { name: { contains: bookFilterText } } : {},
+				orderBy: [{ media: { field: 'NAME', direction: 'ASC' } }],
+				pagination: { offset: { page: 1, pageSize: BOOK_PICKER_SIZE } }
+			}),
+		enabled: browser && sendOpen
+	}));
+	const books = $derived(booksQuery.data?.media.nodes ?? []);
+
+	const deliveriesQuery = createQuery(() => ({
+		queryKey: ['kindleDeliveries', device.id],
+		queryFn: () =>
+			request(ConsoleKindleDeliveriesDocument, {
+				deviceId: device.id,
+				limit: RECENT_DELIVERIES
+			}),
+		enabled: browser && canSendToKindle
+	}));
+	const deliveries = $derived(deliveriesQuery.data?.kindleDeliveries ?? []);
 
 	function invalidate(): void {
 		void queryClient.invalidateQueries({ queryKey: ['devices'] });
 		// A saved or cleared address changes which books can be sent, so the
 		// library rows' target list has to be refetched too.
 		void queryClient.invalidateQueries({ queryKey: ['kindleTargets'] });
+		// A send, a cleared address, or a revoke all change what this device's
+		// delivery history says, so the card's recent list refetches too.
+		void queryClient.invalidateQueries({ queryKey: ['kindleDeliveries'] });
 	}
 
 	function failure(fallback: string): (error: unknown) => void {
@@ -142,6 +193,27 @@
 		},
 		onError: failure('Unable to save the Kindle address.')
 	}));
+	const sendBook = createMutation(() => ({
+		mutationFn: (mediaId: string) =>
+			request(ConsoleSendToKindleDocument, { mediaId, deviceId: device.id }),
+		onSuccess: (result) => {
+			const delivery = result.sendToKindle;
+			toast.success(
+				`Sent ${delivery.format.toUpperCase()} (${bytesLabel(delivery.bytes)}) to ${delivery.recipient}.`,
+				// The note says why the book went unconverted — usually that the
+				// server has no boko and Amazon converts the EPUB itself.
+				{ description: delivery.note ?? undefined }
+			);
+			sendOpen = false;
+			invalidate();
+		},
+		onError: failure('Unable to send the book.')
+	}));
+
+	function openSend(): void {
+		pickedBookId = null;
+		sendOpen = true;
+	}
 
 	function submitKindleEmail(event: SubmitEvent): void {
 		event.preventDefault();
@@ -324,6 +396,26 @@
 				</span>
 			</div>
 		{/if}
+		{#if canSendToKindle && deliveries.length}
+			<div class="mt-2 flex flex-col gap-1 sm:col-span-2">
+				<span class="text-muted-foreground">Recent deliveries</span>
+				<ul class="flex flex-col gap-1 text-xs">
+					{#each deliveries as delivery (delivery.id)}
+						<li class="flex flex-col">
+							<span class={delivery.error ? 'text-muted-foreground' : ''}>
+								{delivery.format.toUpperCase()} · {bytesLabel(delivery.bytes)} ·
+								<span title={absoluteTime(delivery.sentAt)}>
+									{relativeTime(delivery.sentAt, now)}
+								</span>
+							</span>
+							{#if delivery.error}
+								<span class="text-destructive">{delivery.error}</span>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{/if}
 	</CardContent>
 	{#if !revoked}
 		<CardFooter class="flex flex-wrap gap-2">
@@ -332,6 +424,9 @@
 				<Button size="sm" variant="outline" onclick={confirmRotate} disabled={rotate.isPending}>
 					{rotate.isPending ? 'Rotating…' : 'Rotate credential'}
 				</Button>
+			{/if}
+			{#if canSendToKindle}
+				<Button size="sm" variant="outline" onclick={openSend}>Send to Kindle</Button>
 			{/if}
 			<Button
 				size="sm"
@@ -359,6 +454,68 @@
 		{/if}
 		<Dialog.Footer>
 			<Button onclick={() => (rotatedOpen = false)}>Done</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={sendOpen}>
+	<Dialog.Content class="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-2xl">
+		<Dialog.Header>
+			<Dialog.Title>Send a book to {device.name}</Dialog.Title>
+			<Dialog.Description>
+				Amazon delivers it to {storedKindleEmail}. Pick one book; the server converts it when it
+				can.
+			</Dialog.Description>
+		</Dialog.Header>
+		<Input
+			bind:value={bookSearch}
+			placeholder="Search books by name"
+			aria-label="Search books"
+			class="h-8"
+		/>
+		<div class="min-h-0 flex-1 overflow-y-auto pr-1">
+			{#if booksQuery.isPending}
+				<p class="text-sm text-muted-foreground">Loading books…</p>
+			{:else if booksQuery.isError}
+				<p class="text-sm text-destructive">
+					{booksQuery.error instanceof Error
+						? booksQuery.error.message
+						: 'Unable to load the books.'}
+				</p>
+			{:else if !books.length}
+				<p class="text-sm text-muted-foreground">
+					{bookFilterText ? 'No book matches that search.' : 'This account has no books yet.'}
+				</p>
+			{:else}
+				<ul class="flex flex-col gap-1">
+					{#each books as book (book.id)}
+						<li>
+							<button
+								type="button"
+								class="flex w-full flex-col rounded-md px-2 py-1 text-left hover:bg-muted"
+								class:bg-muted={pickedBookId === book.id}
+								aria-pressed={pickedBookId === book.id}
+								onclick={() => (pickedBookId = book.id)}
+							>
+								<span class="truncate text-sm font-medium">{book.resolvedName}</span>
+								<span class="truncate text-xs text-muted-foreground">
+									{book.series.resolvedName} · {book.extension.toUpperCase()} ·
+									{bytesLabel(book.size)}
+								</span>
+							</button>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</div>
+		<Dialog.Footer>
+			<Button variant="ghost" onclick={() => (sendOpen = false)}>Cancel</Button>
+			<Button
+				onclick={() => pickedBookId && sendBook.mutate(pickedBookId)}
+				disabled={!pickedBookId || sendBook.isPending}
+			>
+				{sendBook.isPending ? 'Sending…' : 'Send'}
+			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

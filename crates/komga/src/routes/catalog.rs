@@ -1388,6 +1388,12 @@ async fn list_books_page(
 	} else {
 		media::Column::DeletedAt.is_null()
 	});
+	if !deleted {
+		// A book whose file the scanner could not find is not browsable: Komga
+		// drops such a book out of its lists rather than serving an entry that
+		// 404s on read, so `MISSING` maps onto that hidden state.
+		query = query.filter(media::Column::Status.ne(FileStatus::Missing));
+	}
 	query = apply_book_search(query, search, user)?;
 	if let Some(legacy) = legacy {
 		query = apply_legacy_book_metadata_filters(query, legacy)?;

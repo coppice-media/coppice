@@ -1,3 +1,4 @@
+mod continue_reading;
 #[cfg(feature = "graphql")]
 mod keep_reading;
 #[cfg(feature = "graphql")]

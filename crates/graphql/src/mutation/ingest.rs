@@ -15,6 +15,7 @@ use sea_orm::{
 };
 use serde_json::{json, Value};
 use stump_api_types::settings::SettingValues;
+use stump_core::event::{CoreEvent, IngestItemChanged};
 use stump_ingest::policy::{self, PolicyCandidate, PolicyPlan};
 use stump_ingest::{
 	contract::{FieldPick, ProviderIdentity},
@@ -1055,7 +1056,7 @@ async fn persist_pending_fields(
 	let mut active: ingest_drop_item::ActiveModel = item.clone().into_active_model();
 	active.pending_fields = Set(Some(pending));
 	active.revision = Set(item.revision.saturating_add(1));
-	active.update(&transaction).await?;
+	let updated = active.update(&transaction).await?;
 	let strategy = serde_json::to_value(strategy)
 		.ok()
 		.and_then(|value| value.as_str().map(ToOwned::to_owned))
@@ -1073,5 +1074,13 @@ async fn persist_pending_fields(
 	};
 	audit.insert(&transaction).await?;
 	transaction.commit().await?;
+	// The only drop-item write outside `IngestStore`, so it announces itself:
+	// every persisted revision bump is on the bus (`core/src/event.rs`).
+	core.emit_event(CoreEvent::IngestItemChanged(IngestItemChanged {
+		library_id: updated.library_id,
+		item_id: updated.id,
+		status: updated.status,
+		revision: updated.revision,
+	}));
 	Ok(())
 }

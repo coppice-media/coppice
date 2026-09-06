@@ -1,6 +1,8 @@
-use async_graphql::{Context, Error, ErrorExtensions, Subscription, ID};
+use async_graphql::{Context, Error, ErrorExtensions, Result, Subscription, ID};
 use futures_util::{stream, Stream, StreamExt};
 use models::shared::enums::UserPermission;
+use stump_core::event::{CoreEvent, IngestItemChanged};
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
 	data::CoreContext, guard::PermissionGuard, object::ingest::IngestProgressEvent,
@@ -64,5 +66,38 @@ impl IngestSubscription {
 			})
 			.boxed(),
 		}
+	}
+
+	/// Drop-item row changes, optionally narrowed to one library. One event
+	/// per persisted `revision` bump, which is what lets a client hold a drop
+	/// queue live instead of refetching it on a timer. Ungated, like
+	/// `readEvents`, which carries the same events unfiltered.
+	async fn ingest_events(
+		&self,
+		ctx: &Context<'_>,
+		library_id: Option<ID>,
+	) -> Result<impl Stream<Item = Result<IngestItemChanged>>> {
+		let mut rx = ctx.data::<CoreContext>()?.get_client_receiver();
+		let library_id = library_id.map(|id| id.to_string());
+
+		Ok(async_stream::stream! {
+			loop {
+				match rx.recv().await {
+					Ok(CoreEvent::IngestItemChanged(changed)) => {
+						let wanted = library_id
+							.as_deref()
+							.is_none_or(|wanted| wanted == changed.library_id);
+						if wanted {
+							yield Ok(changed);
+						}
+					},
+					Ok(_) => {},
+					// A slow consumer skips what it could not keep up with
+					// instead of losing the subscription.
+					Err(RecvError::Lagged(_)) => {},
+					Err(RecvError::Closed) => break,
+				}
+			}
+		})
 	}
 }

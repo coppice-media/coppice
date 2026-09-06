@@ -259,9 +259,13 @@ async fn visible_media(
 	book_id: Option<&str>,
 ) -> Result<Vec<CatalogRow>, LiseurSyncError> {
 	let user = auth.user();
+	// Liseur reads paginated documents; an audiobook has no pages and a
+	// folder book has no single file to download, so audio rows are not
+	// catalogue books here (the ABS profile serves them).
 	let query = media::Entity::find_for_user(&user)
 		.filter(media::Column::SeriesId.is_not_null())
-		.filter(series::Column::LibraryId.is_not_null());
+		.filter(series::Column::LibraryId.is_not_null())
+		.filter(media::audio_extension_condition().not());
 	let query = if let Some(folder_id) = folder_id {
 		query.filter(series::Column::LibraryId.eq(folder_id))
 	} else {

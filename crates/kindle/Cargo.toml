@@ -1,0 +1,34 @@
+[package]
+name = "stump_kindle"
+version.workspace = true
+edition = "2021"
+description = "Send-to-Kindle delivery lane: Amazon format policy, boko conversion, attachment build, and the delivery history"
+
+[dependencies]
+chrono.workspace = true
+# `AttachmentPayload` is what both the SMTP path and the tests hand around, so
+# the lane speaks the emailer's own attachment type rather than inventing one.
+email = { path = "../email" }
+models = { path = "../models", default-features = false }
+sea-orm.workspace = true
+stump_devices = { path = "../devices" }
+# `FileParts` for the attachment name and `ContentType` for its MIME type.
+stump_media = { path = "../media", default-features = false }
+# `boko-convert` for EPUB → AZW3. The operator's own GPL install is shelled
+# out to by the tool; nothing GPL is linked here.
+stump_tools = { path = "../tools" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "rt"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# The delivery tests put the built message through a real lettre transport
+# (`StubTransport`) instead of asserting on a hand-made struct.
+lettre.workspace = true
+pretty_assertions.workspace = true
+# The stored `last_sync_summary` is JSON; the tests assert on it directly.
+serde_json.workspace = true
+tempfile.workspace = true
+tests = { path = "../tests" }
+tokio = { workspace = true, features = ["full"] }

@@ -270,6 +270,12 @@ pub enum SourceError {
 	Http(#[from] reqwest::Error),
 	#[error("Unexpected HTTP status {status} from {url}")]
 	Status { status: u16, url: String },
+	/// The host answered with a Cloudflare managed challenge instead of the
+	/// page: it is up, but it will not talk to anything that cannot run the
+	/// challenge script until the request carries a browser's `cf_clearance`
+	/// cookie (`provider_sources.request_headers`).
+	#[error("`{host}` is behind a Cloudflare challenge; configure a `cf_clearance` cookie and matching User-Agent for the source")]
+	Challenged { host: String },
 	#[error("Rate limited by the remote source")]
 	RateLimited { retry_after: Option<Duration> },
 	#[error("Failed to decode a source response: {0}")]
@@ -341,25 +347,13 @@ impl SourceHttp {
 		headers: &[(String, String)],
 	) -> SourceResult<FetchedPage> {
 		self.limiter().until_ready().await;
-		let mut request = self.client().get(url);
+		let mut request = self.headers().apply(self.client().get(url));
 		for (name, value) in headers {
 			request = request.header(name.as_str(), value.as_str());
 		}
 		let response = request.send().await?;
-		let status = response.status();
-		if status.as_u16() == 429 {
-			return Err(SourceError::RateLimited {
-				retry_after: retry_after(response.headers()),
-			});
-		}
-		if status.as_u16() == 404 {
-			return Err(SourceError::NotFound(url.to_string()));
-		}
-		if !status.is_success() {
-			return Err(SourceError::Status {
-				status: status.as_u16(),
-				url: url.to_string(),
-			});
+		if let Some(error) = classify(&response, url) {
+			return Err(error);
 		}
 		let content_type = response
 			.headers()
@@ -380,21 +374,14 @@ impl SourceHttp {
 		query: &[(&str, String)],
 	) -> SourceResult<T> {
 		self.limiter().until_ready().await;
-		let response = self.client().get(url).query(query).send().await?;
-		let status = response.status();
-		if status.as_u16() == 429 {
-			return Err(SourceError::RateLimited {
-				retry_after: retry_after(response.headers()),
-			});
-		}
-		if status.as_u16() == 404 {
-			return Err(SourceError::NotFound(url.to_string()));
-		}
-		if !status.is_success() {
-			return Err(SourceError::Status {
-				status: status.as_u16(),
-				url: url.to_string(),
-			});
+		let response = self
+			.headers()
+			.apply(self.client().get(url))
+			.query(query)
+			.send()
+			.await?;
+		if let Some(error) = classify(&response, url) {
+			return Err(error);
 		}
 		let body = response.bytes().await?;
 		serde_json::from_slice(&body).map_err(SourceError::decode)
@@ -410,7 +397,7 @@ impl SourceHttp {
 		headers: &[(&str, &str)],
 	) -> SourceResult<HtmlDocument> {
 		self.limiter().until_ready().await;
-		let mut request = self.client().get(url);
+		let mut request = self.headers().apply(self.client().get(url));
 		for (name, value) in headers {
 			request = request.header(*name, *value);
 		}
@@ -426,7 +413,7 @@ impl SourceHttp {
 		form: &[(String, String)],
 	) -> SourceResult<HtmlDocument> {
 		self.limiter().until_ready().await;
-		let mut request = self.client().post(url).form(form);
+		let mut request = self.headers().apply(self.client().post(url).form(form));
 		for (name, value) in headers {
 			request = request.header(*name, *value);
 		}
@@ -437,20 +424,14 @@ impl SourceHttp {
 		response: reqwest::Response,
 		requested: &str,
 	) -> SourceResult<HtmlDocument> {
-		let status = response.status();
-		if status.as_u16() == 429 {
-			return Err(SourceError::RateLimited {
-				retry_after: retry_after(response.headers()),
-			});
-		}
-		if status.as_u16() == 404 {
-			return Err(SourceError::NotFound(requested.to_string()));
-		}
+		// `Status` and `Challenged` report the URL the response came from,
+		// which is where the challenge actually sits after a redirect.
 		let url = response.url().to_string();
-		if !status.is_success() {
-			return Err(SourceError::Status {
-				status: status.as_u16(),
-				url,
+		if let Some(error) = classify(&response, &url) {
+			return Err(match error {
+				// A 404 is about the resource that was asked for.
+				SourceError::NotFound(_) => SourceError::NotFound(requested.to_string()),
+				other => other,
 			});
 		}
 		Ok(HtmlDocument {
@@ -458,6 +439,34 @@ impl SourceHttp {
 			url,
 		})
 	}
+}
+
+/// The error every `SourceHttp` helper agrees a non-success response means, or
+/// `None` when the response is usable.
+///
+/// A Cloudflare managed challenge is told apart from a plain rejection here so
+/// that exactly one place decides it (`crate::http::challenge_host`): every
+/// caller — page fetch, JSON API call, HTML browse — has to report the same
+/// verdict for the same response.
+fn classify(response: &reqwest::Response, url: &str) -> Option<SourceError> {
+	let status = response.status();
+	if status.as_u16() == 429 {
+		return Some(SourceError::RateLimited {
+			retry_after: retry_after(response.headers()),
+		});
+	}
+	if status.as_u16() == 404 {
+		return Some(SourceError::NotFound(url.to_string()));
+	}
+	if let Some(host) =
+		crate::http::challenge_host(status.as_u16(), response.headers(), url)
+	{
+		return Some(SourceError::Challenged { host });
+	}
+	(!status.is_success()).then(|| SourceError::Status {
+		status: status.as_u16(),
+		url: url.to_string(),
+	})
 }
 
 fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
@@ -504,6 +513,132 @@ mod tests {
 	fn series_status_projects_to_metadata_status() {
 		assert_eq!(SeriesStatus::Ongoing.as_metadata_status(), "Continuing");
 		assert_eq!(SeriesStatus::Completed.as_metadata_status(), "Ended");
+	}
+
+	/// The operator's configured headers must reach the wire on every lane a
+	/// source uses, and a `User-Agent` among them must replace the Stump one:
+	/// a `cf_clearance` cookie is only accepted with the exact user agent it
+	/// was issued to.
+	#[tokio::test]
+	async fn configured_headers_are_attached_to_every_request() {
+		use crate::{
+			http::RequestHeaders,
+			mock_http::{CannedResponse, MockServer},
+			rate_limit::RateLimiter,
+		};
+
+		let server = MockServer::spawn(vec![
+			("/manga", CannedResponse::html("<html>ok</html>")),
+			("/api", CannedResponse::json(b"{}".to_vec())),
+			(
+				"/page.jpg",
+				CannedResponse::ok("image/jpeg", b"jpg".to_vec()),
+			),
+			("/ajax", CannedResponse::html("<html>more</html>")),
+		])
+		.await;
+		let http = SourceHttp::with_limiter(RateLimiter::unlimited())
+			.expect("client")
+			.with_headers(
+				RequestHeaders::from_pairs([
+					(
+						"Cookie".to_string(),
+						"cf_clearance=deadbeefcafe".to_string(),
+					),
+					(
+						"User-Agent".to_string(),
+						"Mozilla/5.0 (operator)".to_string(),
+					),
+				])
+				.expect("valid headers"),
+			);
+
+		http.get_text(&server.url("/manga"), &[("Referer", "https://site.test/")])
+			.await
+			.expect("html");
+		http.get_json::<serde_json::Value>(&server.url("/api"), &[])
+			.await
+			.expect("json");
+		http.fetch_bytes(&server.url("/page.jpg"), &[])
+			.await
+			.expect("bytes");
+		http.post_form(&server.url("/ajax"), &[], &[])
+			.await
+			.expect("form");
+
+		let requests = server.requests();
+		assert_eq!(requests.len(), 4);
+		for request in &requests {
+			let header = |name: &str| {
+				request
+					.headers
+					.iter()
+					.find(|(key, _)| key == name)
+					.map(|(_, value)| value.as_str())
+			};
+			assert_eq!(
+				header("cookie"),
+				Some("cf_clearance=deadbeefcafe"),
+				"{} {}",
+				request.method,
+				request.path
+			);
+			assert_eq!(
+				header("user-agent"),
+				Some("Mozilla/5.0 (operator)"),
+				"the configured user agent must replace the Stump default"
+			);
+		}
+		// A per-request header the engine needs is still sent.
+		assert!(requests[0]
+			.headers
+			.iter()
+			.any(|(name, value)| name == "referer" && value == "https://site.test/"));
+	}
+
+	/// A Cloudflare challenge is its own error on every lane, so callers can
+	/// tell "the site refuses robots" from "the site is broken".
+	#[tokio::test]
+	async fn a_challenge_response_is_not_reported_as_a_bad_status() {
+		use crate::{
+			mock_http::{CannedResponse, MockServer},
+			rate_limit::RateLimiter,
+		};
+
+		let server = MockServer::spawn(vec![
+			(
+				"/comic",
+				CannedResponse::status(403).with_header("cf-mitigated", "challenge"),
+			),
+			("/blocked", CannedResponse::status(403)),
+		])
+		.await;
+		let http = SourceHttp::with_limiter(RateLimiter::unlimited()).expect("client");
+
+		let host = crate::http::host_of(server.base_url());
+		let challenged = http
+			.get_text(&server.url("/comic"), &[])
+			.await
+			.expect_err("challenge");
+		assert!(
+			matches!(&challenged, SourceError::Challenged { host: reported } if *reported == host),
+			"{challenged:?}"
+		);
+		let challenged = http
+			.fetch_bytes(&server.url("/comic"), &[])
+			.await
+			.expect_err("challenge");
+		assert!(matches!(challenged, SourceError::Challenged { .. }));
+
+		// A 403 without the marker stays a plain status failure.
+		let refused = http
+			.get_text(&server.url("/blocked"), &[])
+			.await
+			.expect_err("refused");
+		assert!(
+			matches!(refused, SourceError::Status { status: 403, .. }),
+			"{refused:?}"
+		);
 	}
 
 	/// The documented `contentRating` → `age_rating` table. `Safe` stores no

@@ -6,7 +6,7 @@ use std::{
 	collections::HashMap,
 	io::{Cursor, Write},
 	path::PathBuf,
-	sync::{Arc, Mutex, RwLock},
+	sync::{Arc, Mutex, OnceLock, RwLock},
 	time::{Duration, Instant},
 };
 
@@ -27,7 +27,9 @@ use crate::{
 	cache::{CacheKey, PageCache},
 	catalog::{CatalogError, CatalogSnapshot, SourceCatalog},
 	definition::{DefinitionEngine, DefinitionError, DefinitionLoader, SourceDefinition},
+	event::{ProviderEvent, ProviderEventSink},
 	health::{self, HealthChecker, HealthRunSummary},
+	http::RequestHeaders,
 	source::{RemotePage, RemoteSeries, Source, SourceError},
 	virtual_path::VirtualPath,
 };
@@ -92,7 +94,13 @@ pub enum ProviderError {
 	#[error("HTTP client error: {0}")]
 	Http(#[from] reqwest::Error),
 	#[error(transparent)]
-	Source(#[from] SourceError),
+	Source(SourceError),
+	/// The source's host answered with a Cloudflare managed challenge. The
+	/// site is up: it refuses every client that cannot run the challenge
+	/// script until the source carries a browser's `cf_clearance` cookie
+	/// (`setProviderSourceHeaders`).
+	#[error("`{host}` is behind a Cloudflare challenge; configure a `cf_clearance` cookie and matching User-Agent for the source")]
+	Challenged { host: String },
 	#[error(transparent)]
 	Catalog(#[from] CatalogError),
 	#[error("Database error: {0}")]
@@ -111,6 +119,17 @@ pub enum ProviderError {
 	Other(String),
 }
 
+/// A challenge is lifted out of `Source` so the host, the resolver, and the
+/// API all see one error for it instead of a status buried in a source error.
+impl From<SourceError> for ProviderError {
+	fn from(error: SourceError) -> Self {
+		match error {
+			SourceError::Challenged { host } => ProviderError::Challenged { host },
+			other => ProviderError::Source(other),
+		}
+	}
+}
+
 impl From<ProviderError> for FileError {
 	fn from(error: ProviderError) -> Self {
 		match error {
@@ -124,6 +143,10 @@ impl From<ProviderError> for FileError {
 			ProviderError::Unavailable { .. } => {
 				FileError::Unavailable(error.to_string())
 			},
+			// The page exists and the host is up; it is gated. `Unavailable`
+			// is the lane-wide 404 with a reason, which is what every reader
+			// (native, Komga, OPDS, Kobo) can show a user.
+			ProviderError::Challenged { .. } => FileError::Unavailable(error.to_string()),
 			ProviderError::NotVirtual(path) => FileError::UnsupportedFileType(path),
 			other => FileError::UnknownError(other.to_string()),
 		}
@@ -170,6 +193,10 @@ pub struct ProviderHost {
 	checker: HealthChecker,
 	manifests: Mutex<HashMap<String, Manifest>>,
 	browse: VirtualBrowseCache,
+	/// Where host activity is announced. Installed once, after `open`, by
+	/// whoever owns an event channel (`core/src/providers.rs`); absent in
+	/// tests, which assert on rows instead.
+	events: OnceLock<Arc<dyn ProviderEventSink>>,
 }
 
 impl std::fmt::Debug for ProviderHost {
@@ -214,6 +241,7 @@ impl ProviderHost {
 			checker,
 			manifests: Mutex::new(HashMap::new()),
 			browse,
+			events: OnceLock::new(),
 		});
 		host.reload_sources().await?;
 		Ok(host)
@@ -223,6 +251,21 @@ impl ProviderHost {
 	pub fn install(self: &Arc<Self>) {
 		let resolver: Arc<dyn VirtualMediaResolver> = self.clone();
 		virtual_media::register(resolver);
+	}
+
+	/// Install the sink host activity is announced on. Called once, right
+	/// after [`ProviderHost::open`]; a second call is ignored.
+	pub fn set_event_sink(&self, events: Arc<dyn ProviderEventSink>) {
+		if self.events.set(events).is_err() {
+			tracing::debug!("Provider event sink already installed");
+		}
+	}
+
+	/// Announce host activity, if a sink was installed.
+	pub(crate) fn emit(&self, event: ProviderEvent) {
+		if let Some(sink) = self.events.get() {
+			sink.emit(event);
+		}
 	}
 
 	pub fn conn(&self) -> &DatabaseConnection {
@@ -538,12 +581,57 @@ impl ProviderHost {
 		Ok(true)
 	}
 
+	/// Replace the operator-configured request headers of one instance and
+	/// rebuild it so the next request carries them.
+	///
+	/// The row is the only store: the built source holds a copy, so a source
+	/// that is not rebuilt keeps sending the old cookie. A disabled instance
+	/// has nothing in the registry — the headers are persisted and applied
+	/// when it is enabled again.
+	pub async fn set_source_headers(
+		&self,
+		id: &str,
+		headers: RequestHeaders,
+	) -> Result<(provider_source::Model, RequestHeaders), ProviderError> {
+		let existing = provider_source::Entity::find_by_id(id)
+			.one(self.conn.as_ref())
+			.await?
+			.ok_or_else(|| ProviderError::UnknownSource(id.to_string()))?;
+		let mut active: provider_source::ActiveModel = existing.into();
+		active.request_headers = Set(headers.to_json());
+		let row = active.update(self.conn.as_ref()).await?;
+		if row.enabled {
+			self.register_source(self.build_row(&row).await?);
+		}
+		Ok((row, headers))
+	}
+
+	/// The headers configured for one instance, read back from the row.
+	pub async fn source_headers(
+		&self,
+		id: &str,
+	) -> Result<RequestHeaders, ProviderError> {
+		let row = provider_source::Entity::find_by_id(id)
+			.one(self.conn.as_ref())
+			.await?
+			.ok_or_else(|| ProviderError::UnknownSource(id.to_string()))?;
+		Ok(RequestHeaders::parse(row.request_headers.as_deref()))
+	}
+
 	pub async fn catalog_snapshot(&self) -> Result<Arc<CatalogSnapshot>, ProviderError> {
 		Ok(self.catalog.snapshot().await?)
 	}
 
 	pub async fn refresh_catalog(&self) -> Result<Arc<CatalogSnapshot>, ProviderError> {
-		Ok(self.catalog.refresh().await?)
+		let snapshot = self.catalog.refresh().await?;
+		self.emit(ProviderEvent::CatalogRefreshed {
+			count: snapshot
+				.entries
+				.iter()
+				.map(|entry| entry.sources.len() as u64)
+				.sum(),
+		});
+		Ok(snapshot)
 	}
 
 	/// Probe every catalog source, enabled instances first. `dead_after` is
@@ -560,7 +648,7 @@ impl ProviderHost {
 			.iter()
 			.map(|source| source.info().base_url.clone())
 			.collect();
-		Ok(health::check_catalog(
+		let summary = health::check_catalog(
 			self.conn.as_ref(),
 			&self.checker,
 			&snapshot,
@@ -568,7 +656,11 @@ impl ProviderHost {
 			concurrency,
 			dead_after,
 		)
-		.await?)
+		.await?;
+		for change in &summary.changed {
+			self.emit(change.as_event());
+		}
+		Ok(summary)
 	}
 
 	/// The health checker this host probes with, shared by the core health
@@ -622,7 +714,7 @@ impl ProviderHost {
 				SourceError::NotFound(_) => ProviderError::Unavailable {
 					source_id: source_id.to_string(),
 				},
-				other => ProviderError::Source(other),
+				other => ProviderError::from(other),
 			},
 		)?);
 		self.manifests.lock().expect("manifests poisoned").insert(
@@ -1054,6 +1146,85 @@ mod tests {
 			"Vol. 1 Ch. 2_ Title_"
 		);
 		assert_eq!(sanitize_file_stem("  "), "chapter");
+	}
+
+	/// The row is the only store, and the built instance holds a copy of it:
+	/// setting headers must rebuild the source, or the next request still
+	/// carries the cookie the operator just replaced.
+	#[tokio::test]
+	async fn setting_headers_persists_them_and_rebuilds_the_instance() {
+		use std::sync::Mutex as StdMutex;
+
+		/// What the factory saw the last time it built the instance.
+		static BUILT: StdMutex<Vec<Option<String>>> = StdMutex::new(Vec::new());
+
+		let conn = ::tests::db::test_database().await;
+		let dir = tempfile::tempdir().unwrap();
+		let factory = SourceFactory {
+			implementation: "mock",
+			name: "Mock",
+			catalog_pkg: "eu.kanade.tachiyomi.extension.all.mock",
+			base_url: "https://mock.test",
+			build: |row| {
+				BUILT
+					.lock()
+					.expect("built")
+					.push(row.request_headers.clone());
+				Ok(crate::mock::MockSource::with_id(&row.id))
+			},
+		};
+		let host = ProviderHost::open(
+			Arc::new(conn),
+			vec![factory],
+			Vec::new(),
+			ProviderHostConfig {
+				cache_dir: dir.path().to_path_buf(),
+				cache_max_bytes: u64::MAX,
+				catalog_url: Some("http://127.0.0.1:9/".to_string()),
+				definitions_url: Some("http://127.0.0.1:9/".to_string()),
+				virtual_series_ttl: Duration::from_secs(300),
+			},
+		)
+		.await
+		.unwrap();
+		host.enable_implementation("mock", "en", None)
+			.await
+			.unwrap();
+		assert_eq!(BUILT.lock().expect("built").last(), Some(&None));
+
+		let headers = RequestHeaders::from_pairs([(
+			"Cookie".to_string(),
+			"cf_clearance=abcdefghijklmnop".to_string(),
+		)])
+		.expect("valid headers");
+		let (row, _) = host
+			.set_source_headers("mock-en", headers.clone())
+			.await
+			.unwrap();
+		assert_eq!(
+			row.request_headers.as_deref(),
+			Some(r#"{"cookie":"cf_clearance=abcdefghijklmnop"}"#)
+		);
+		// Rebuilt, and rebuilt *with* the new headers.
+		assert_eq!(
+			BUILT.lock().expect("built").last(),
+			Some(&row.request_headers)
+		);
+		assert_eq!(host.source_headers("mock-en").await.unwrap(), headers);
+
+		// Clearing puts the column back to NULL rather than storing `{}`.
+		let (cleared, _) = host
+			.set_source_headers("mock-en", RequestHeaders::default())
+			.await
+			.unwrap();
+		assert_eq!(cleared.request_headers, None);
+		assert!(host.source_headers("mock-en").await.unwrap().is_empty());
+
+		assert!(matches!(
+			host.set_source_headers("nope", RequestHeaders::default())
+				.await,
+			Err(ProviderError::UnknownSource(id)) if id == "nope"
+		));
 	}
 
 	#[test]

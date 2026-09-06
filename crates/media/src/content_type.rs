@@ -589,7 +589,9 @@ mod tests {
 	/// must report itself as audio (the scanner and OPDS both branch on it).
 	#[test]
 	fn test_audio_content_types_are_audio() {
-		for extension in ["m4b", "m4a", "mp3", "opus", "ogg", "flac"] {
+		// `models::entity::media::AUDIO_EXTENSIONS` is the SQL-side list of the
+		// same set; the two must never drift.
+		for extension in models::entity::media::AUDIO_EXTENSIONS {
 			let content_type = ContentType::from_extension(extension);
 			assert!(content_type.is_audio(), "{extension} is not audio");
 			assert!(!content_type.is_image(), "{extension} is an image");

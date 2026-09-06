@@ -151,6 +151,16 @@ impl TestApp {
 			.await
 	}
 
+	/// issue a bodyless POST request to the specified path with auth headers.
+	/// Routes that act rather than read (converting a book for a Kindle, for
+	/// instance) take no payload but must not be a GET.
+	pub async fn post(&self, path: &str) -> TestResponse {
+		self.server
+			.post(path)
+			.add_header("Authorization", self.auth_header().await)
+			.await
+	}
+
 	/// issue a PUT request to the specified path with auth headers and a JSON body, returning the response directly
 	pub async fn put(&self, path: &str, body: &Value) -> TestResponse {
 		let response = self

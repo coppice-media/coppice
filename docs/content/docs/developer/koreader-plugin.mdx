@@ -1,0 +1,431 @@
+---
+title: KOReader plugin
+description: stump.koplugin — the first-party KOReader client, the surfaces it uses, and what is verified
+---
+
+`stump.koplugin` is Stump's first-party KOReader plugin: continue-reading
+dashboard, OPDS 2.0 catalogue browsing and search, book downloads, reading
+progress in both directions, and highlight/note/bookmark export. It lives in
+its own repository (`/home/al/Code/koreader-stump` in this working tree)
+because it ships to a device's `koreader/plugins/` directory, not with the
+server.
+
+It adds exactly one route to Stump — [`GET /api/v2/reading/continue`](#the-continue-reading-route)
+— and otherwise uses surfaces that already existed.
+
+## Evidence and status
+
+Facts below are **[observed]** against a live server built from `apps/server`
+with `--no-default-features --features headless,liseur-sync` (fixture database,
+`ENABLE_KOREADER_SYNC=true`), or cite the source file that defines them.
+Design choices are **[inference]**.
+
+| Claim | Status |
+| --- | --- |
+| Every route the plugin calls answers as documented here | **harness** — each one exercised with `curl` against the live fixture server |
+| `GET /api/v2/reading/continue` contract | **harness** — 9 integration tests (`cargo test -p stump_server --no-default-features --features headless,liseur-sync --test api_tests -- continue`) plus live `curl` |
+| The annotation lane round-trips (create, stale replay, edit, live read) | **harness** — live `curl` against `/v1/annotations` |
+| The plugin's pure logic (URL building, OPDS mapping, annotation mapping, kosync patch) | **harness** — 184 checks in `tests/pure_checks.lua` under `lua`, `luajit` and `lua5.1` |
+| The plugin running inside KOReader | **not verified** — no device and no desktop KOReader run has happened. The Lua loads and the pure logic and server contract are checked; the UI, the menu wiring, KOReader's own networking stack, and the interaction with the built-in `kosync` plugin are unverified. |
+
+This is the same distinction the [platforms](/docs/developer/platforms) table
+draws: the server contract is proved, the app is not.
+
+## Surfaces and credentials
+
+**[observed]** Stump does not accept one credential everywhere, and the
+plugin's four lanes follow that exactly.
+
+| Lane | Route(s) | Credential | Why |
+| --- | --- | --- | --- |
+| Dashboard, downloads, thumbnails | `/api/v2/...` | `Authorization: Bearer <api key>`, or a `stump_session` cookie from `POST /api/v2/auth/login` | `basic_auth_accepted` allows Basic only on `/opds` and the Komga compatibility paths (`apps/server/src/middleware/auth.rs`); a prefixed API key is accepted as a Bearer token by `validate_api_key` |
+| Catalogue | `/opds/v2.0/...` | `Authorization: Basic <user>:<api key>` **or** `Basic <user>:<password>` | Basic is unconditional on OPDS; a device API key stands in for the password when the username matches its owner (`verify_basic_api_key`) |
+| Progress | `/koreader/{api_key}/...` | the key in the path | `api_key_middleware`; KOReader sends `md5(password)` in `x-auth-user`/`x-auth-key`, which cannot be checked against a bcrypt hash, so those headers are accepted and ignored |
+| Annotations | `/v1/...` | `Authorization: Bearer <device secret>` | Minted by `POST /v1/login` → `POST /v1/tokens` with scopes `sync` and `library-read`; `login` bcrypt-verifies the real password (`liseur_sync::storage::login`), so an API key cannot substitute |
+
+**[observed]** There is no `/opds/{api_key}/v2.0` route — only OPDS 1.2 has the
+key-in-path form (`apps/server/src/routers/opds_backend.rs`), and `X-API-Key`
+is honoured only on the Komga paths. A request to `/opds/v2.0/catalog` with
+`X-API-Key` is a `401`. That is why the plugin puts the key in a Basic header
+for OPDS rather than in the path.
+
+**[inference]** The key is preferred wherever it works because an API key can
+carry narrower permissions than the account (`APIKeyPermissions`). The password
+is used only where the protocol requires it.
+
+## The continue-reading route
+
+### Why it exists
+
+**[observed]** OPDS 2.0 already answers "which books am I part-way through":
+`GET /opds/v2.0/books/keep-reading` filters on an active `reading_sessions` row
+and returns a publication feed. But an OPDS publication carries its position
+only as a link — `OPDSPublication::links` pushes
+`OPDSLink::progression(...)` with `rel=http://www.cantook.com/api/progression`
+(`core/src/opds/v2_0/publication.rs`) — so a device that wants to draw a
+progress bar per row needs one extra request per row.
+
+**[observed]** It also reads `reading_sessions`, the statistics history, rather
+than `reading_heads`, the [unified reading state](/docs/developer/unified-reading-state)
+that every protocol adapter writes through `reading_state::apply`.
+
+`GET /api/v2/reading/continue` answers the same question in one request, off
+the heads. **[inference]** A dashboard is the one screen where the N+1 matters,
+because it is the first screen.
+
+### Contract
+
+`GET /api/v2/reading/continue?limit=N`
+
+`limit` defaults to `10` and is clamped to `1..=50`: `limit=0` returns one row
+rather than none, and an over-large limit is capped rather than becoming an
+unbounded scan.
+
+Completed heads are excluded — "continue reading" is the unfinished set.
+Ordering is `reading_heads.updated_at` descending: the effective *source* time
+of the winning update, so a position pushed from a device sorts by when the
+device says it happened.
+
+Visibility is enforced by filtering the heads through
+`media::Entity::find_for_user`, so library exclusions, per-device library
+scope, and age restrictions all apply. The limit is applied to the
+already-filtered set, so an invisible book never consumes a row.
+
+**[observed]** Live response (fixture server, owner API key as a Bearer
+token):
+
+```http
+GET /api/v2/reading/continue HTTP/1.1
+Authorization: Bearer stump_…
+```
+
+```json
+{
+  "items": [
+    {
+      "mediaId": "55d400b2-632e-4150-9b5e-aa7b0f3bbecb",
+      "name": "The Lottery (Audio)",
+      "extension": "m4b",
+      "seriesId": "234169b3-2c62-4c19-8d0d-9ed2d4829536",
+      "seriesName": "The Lottery (Audio)",
+      "koreaderHash": "397b950b48f3eabeb8ab7fa668cfeaaf",
+      "progression": 0.0749712610166103,
+      "page": null,
+      "pages": -1,
+      "positionMs": 4500,
+      "updatedAt": "2026-09-06T17:24:43.129152304+00:00",
+      "sourceProtocol": "abs",
+      "downloadUrl": "/api/v2/media/55d400b2-632e-4150-9b5e-aa7b0f3bbecb/file",
+      "thumbnailUrl": "/api/v2/media/55d400b2-632e-4150-9b5e-aa7b0f3bbecb/thumbnail"
+    },
+    {
+      "mediaId": "146403e1-3116-49ed-bc33-5e7cf368cfc6",
+      "name": "01 synthetic chapter one",
+      "extension": "cbz",
+      "seriesId": "8ec8fab3-7868-450d-b6c7-2c8f047109e0",
+      "seriesName": "Synthetic Solo",
+      "koreaderHash": null,
+      "progression": 0.1111111111111111,
+      "page": 4,
+      "pages": 36,
+      "positionMs": null,
+      "updatedAt": "2026-09-06T14:07:52.924488732+00:00",
+      "sourceProtocol": "kavita",
+      "downloadUrl": "/api/v2/media/146403e1-3116-49ed-bc33-5e7cf368cfc6/file",
+      "thumbnailUrl": "/api/v2/media/146403e1-3116-49ed-bc33-5e7cf368cfc6/thumbnail"
+    }
+  ]
+}
+```
+
+The two rows above came from the `abs` and `kavita` adapters, which is the
+point of reading heads rather than one protocol's table.
+
+| Field | Source | Notes |
+| --- | --- | --- |
+| `mediaId`, `name`, `extension`, `pages` | `media` | `pages` is `-1` for a format Stump does not page |
+| `seriesId`, `seriesName` | `media.series_id`, `series.name` | `null` for a book with no series row |
+| `koreaderHash` | `media.koreader_hash` | The partial MD5 a KOReader client already holds for its local file; `null` when Stump never hashed it |
+| `progression` | `reading_heads.progression` | Whole-publication, `0..=1` |
+| `page` | `reading_heads.page` | `null` unless the head is page-addressed |
+| `positionMs` | `reading_heads.position_ms` | Milliseconds into an audio publication; never a page ordinal |
+| `updatedAt` | `reading_heads.updated_at` | RFC 3339 |
+| `sourceProtocol` | `reading_heads.source_protocol` | `snake_case`: `stump`, `komga`, `kobo`, `koreader`, `abs`, `kavita`, … |
+| `downloadUrl`, `thumbnailUrl` | derived | Server-relative, same credential as this route |
+
+`koreaderHash` is the field that makes the row useful to a device rather than
+only to a web UI. **[inference]** It is the one identifier a KOReader-class
+client already has for a *local* file — KOReader stores it in the book's
+sidecar as `partial_md5_checksum` and Stump matches the same value in
+`media.koreader_hash` — so handing it back lets a device map its open document
+onto a Stump book with an exact string comparison instead of a title guess.
+
+### Implementation
+
+`apps/server/src/routers/api/v2/reading.rs`, mounted by
+`api::v2::mount`. Two queries: the heads (filtered, ordered, limited, with
+visibility as an `in_subquery` over `media::Entity::find_for_user`), then a
+name lookup for the media rows in that page. The head order is the answer; the
+second query never reorders it.
+
+Tests: `apps/server/tests/reading_progress/continue_reading.rs` — empty state,
+ordering, the full row shape, `koreaderHash` present/absent, completed
+exclusion, per-user scoping, library exclusion not eating a row, limit
+clamping, and the `401`.
+
+## Catalogue browsing
+
+The plugin follows OPDS 2.0 links rather than constructing feed URLs, which is
+what OPDS navigation is. It builds only the entry points:
+
+| Entry point | Verified |
+| --- | --- |
+| `GET /opds/v2.0/libraries` | `200` |
+| `GET /opds/v2.0/libraries/{id}` | `200` |
+| `GET /opds/v2.0/libraries/{id}/books?page=&page_size=` | `200` |
+| `GET /opds/v2.0/series?page=&page_size=` | `200` |
+| `GET /opds/v2.0/series/{id}?page=&page_size=` | `200` |
+| `GET /opds/v2.0/books/latest?page=&page_size=` | `200` |
+| `GET /opds/v2.0/search?query=&page=&page_size=` | `200` |
+| `GET /opds/v2.0/catalog` | `200` (used by the connection check) |
+
+**[observed] `/opds/v2.0/books/browse` cannot be paginated.** Its handler takes
+`BrowseParams` (`crates/opds/src/lib.rs`), which `#[serde(flatten)]`s
+`OffsetPagination` alongside the metadata filters. A flattened serde struct
+buffers query values as strings, so `?page=1` fails to deserialize:
+
+```
+GET /opds/v2.0/books/browse?page=1  -> 400
+Failed to deserialize query string: .: invalid type: string "1", expected u64
+```
+
+The bare route is `200`, but the `next` link the feed emits is
+`/opds/v2.0/books/browse?page=2`, which is the same `400`. Every other v2 feed
+takes `Query<OffsetPagination>` directly and pages correctly. **[inference]**
+The plugin therefore does not offer this feed at all; libraries, series, latest
+books and search reach every book. Fixing the extractor is a server change
+outside this plugin's scope.
+
+**[observed]** OPDS `href`s are absolute URLs built from the request origin
+(`OPDSLinkFinalizer`). **[inference]** The plugin re-bases every href onto the
+URL the user configured, which is reachable by definition — the response
+arrived over it — so a reverse proxy that rewrites `Host` cannot hand the
+device links it cannot follow.
+
+**[observed]** A multi-file audiobook advertises one `acquisition` link *per
+track*, pointing at `/api/v2/media/{id}/audio/track/{n}`. **[inference]** That
+is a playlist, not a book file, so the plugin lists it and refuses to download
+it rather than fetching track 0 and calling it the book.
+
+## Downloads
+
+`GET /api/v2/media/{id}/file`, not the OPDS acquisition link, so the download
+rides the same credential as the dashboard. Both serve the original bytes.
+
+**[observed]**
+
+```
+HTTP/1.1 200 OK
+content-type: application/epub+zip
+accept-ranges: bytes
+content-length: 312742
+content-disposition: attachment; filename="Enders_Game_v1.epub"
+```
+
+A `Range: bytes=0-64` request answers `206`. The plugin writes through a
+`.part` file and renames on success, so an interrupted download never leaves a
+truncated file for KOReader to open.
+
+## Progress sync: pointing KOReader's own client at Stump
+
+**[observed]** KOReader ships a kosync client (`plugins/kosync.koplugin`,
+`009367df`) that already debounces pushes on page turn, suspend and document
+close, with prompt/silent/disable strategies per direction. `KOSyncClient`
+appends the paths from its `api.json` to a `base_url` taken verbatim from the
+`custom_server` setting:
+
+| `api.json` method | Path appended | Stump route |
+| --- | --- | --- |
+| `authorize` | `GET /users/auth` | `GET /koreader/{key}/users/auth` |
+| `update_progress` | `PUT /syncs/progress` | `PUT /koreader/{key}/syncs/progress` |
+| `get_progress` | `GET /syncs/progress/:document` | `GET /koreader/{key}/syncs/progress/{document}` |
+
+**[inference]** So the correct integration is to *configure* that client, not
+reimplement its scheduling. The plugin's `Set up automatic progress sync`
+writes three fields into `<settings dir>/kosync.lua` under the key `settings`,
+preserving every other kosync preference:
+
+| Field | Value | Why |
+| --- | --- | --- |
+| `custom_server` | `<base>/koreader/<api key>` | Stump authenticates kosync by the key in the path, so the key is part of the base URL |
+| `username` / `userkey` | the Stump username, and `md5(api key)` | **[observed]** `KOSync:updateProgress` returns early when either is nil, so both must be non-empty; Stump ignores their values |
+| `checksum_method` | `0` (BINARY) | **[observed]** Stump matches only the partial MD5 in `media.koreader_hash`; on FILENAME every push is a `404` |
+
+A restart is required: the built-in plugin holds its own `LuaSettings` handle
+and flushes on `onFlushSettings`, so writing the file and letting it be re-read
+on next start is the only race-free way to change it from outside.
+
+The plugin also speaks the three routes itself for the explicit
+`Push this book's progress now` / `Pull this book's progress from Stump`
+actions, because a menu action has to report a result.
+
+**[observed]** Live round trip:
+
+```http
+PUT /koreader/{key}/syncs/progress
+{"document":"397b950b48f3eabeb8ab7fa668cfeaaf","progress":"12","percentage":0.12,
+ "device":"KOReader","device_id":"koreader-verify"}
+```
+
+```json
+{"document":"397b950b48f3eabeb8ab7fa668cfeaaf","timestamp":1788718449409}
+```
+
+```http
+GET /koreader/{key}/syncs/progress/397b950b48f3eabeb8ab7fa668cfeaaf
+```
+
+```json
+{"document":"397b950b48f3eabeb8ab7fa668cfeaaf","progress":"12","percentage":0.12,
+ "device":"KOReader","device_id":"koreader-verify","timestamp":1788718449408}
+```
+
+`progress` is a string: a page number for a paged document, a crengine DOM
+x-pointer for a reflowable one. Stump parses a numeric value as a page and
+retains a non-numeric one verbatim as `koreader_progress`; it never converts
+between them ([unified reading state](/docs/developer/unified-reading-state)).
+
+## Annotations
+
+**[observed]** kosync carries no annotation fields at all
+(`crates/koreader/src/lib.rs`), so highlights go over the liseur-sync
+annotation lane instead ([liseur-sync integration](/docs/developer/liseur-sync-integration)).
+
+### Mapping
+
+**[observed]** KOReader's `doc_settings.annotations` is one flat table per
+annotation, built by `ReaderAnnotation:buildAnnotation`: `datetime`, `drawer`
+(the highlight style; `nil` exactly for a page bookmark), `color`, `text` (the
+highlighted passage), `note` (the user's own note), `chapter`, `pageno`,
+`pageref`, `page`, `pos0`, `pos1`, `pboxes`, `ext`.
+
+| KOReader | liseur-sync | Guard |
+| --- | --- | --- |
+| `drawer` set | `kind: highlight` | — |
+| `drawer` unset | `kind: bookmark` | The server rejects a `body` or a `color` on a bookmark, so neither is sent even when KOReader has one |
+| `text` | `excerpt` | Clipped to 1 KiB on a UTF-8 boundary |
+| `note` | `body` (highlight only) | Clipped to 16 KiB |
+| `color` | `color` | Only the six palette tokens `yellow green blue pink purple orange`; `magenta`/`violet` alias onto `pink`/`purple`; KOReader's `red`, `olive`, `cyan`, `gray` are **dropped**, not mapped onto a neighbour |
+| `page`, `pos0`, `pos1`, `pageno`, `chapter`, `drawer`, `ext` | `locator` | Verbatim, tagged `{"format":"koreader-annotation","version":1,"document":"<partial md5>"}`. `pboxes` and `pageref` are excluded: render boxes are rewritten by KOReader itself and `pageref` is a display string |
+| `pageno / page count` | `progression` | Clamped to `[0,1]`; absent when either is unknown |
+| `datetime` | `client_ts` | Device-local `%Y-%m-%d %H:%M:%S` converted to RFC 3339 UTC |
+| — | `edition_sha` | Only when `POST /v1/books/{id}/resolve` returned a matched `sha256` identifier; never invented |
+
+**[inference]** Two mappings are deliberately absent. The `note` kind is never
+produced: it is defined as the unanchored one, and every KOReader annotation is
+anchored, so a highlight with a note stays a `highlight` with a `body` — the
+same choice this repo documents for its own `media_annotations` projection. And
+the x-pointer is never converted into a Readium locator or a CFI; it is a
+crengine DOM pointer, and converting it would fabricate an anchor.
+
+### Identity and revisions
+
+**[inference]** The record id is `ko-` plus an MD5 of the document hash, the
+creation `datetime`, and the start/end anchors, so re-exporting the same book
+addresses the same records. The last accepted revision per record is stored in
+the book's sidecar as `stump_annotation_revs`.
+
+**[observed]** That ledger is not optional. A replay with `base_rev: 0` is a
+`conflict`, not a `duplicate`:
+
+```json
+{"results":[{"id":"ko-1a2b…","status":"conflict","reason":"annotation revision conflict",
+  "server":{"id":"ko-1a2b…","rev":1,"seq":41,"kind":"highlight",
+            "locator":{"format":"koreader-annotation","page":"/body/DocFragment[3]/…","pageno":40,…},
+            "excerpt":"the selected passage","color":"yellow","body":"my thought about it",…}}]}
+```
+
+The plugin records `server.rev` from that response, so the next export is a
+compare-and-set edit. **[observed]** Full live sequence against the fixture:
+
+| Step | Request | Result |
+| --- | --- | --- |
+| Mint | `POST /v1/login` → `POST /v1/tokens {scopes:["sync","library-read"]}` | `200`, then `201` with a one-time `secret` |
+| Confirm | `GET /v1/token` | `200` with `id`, `device_id`, `scopes`, `account_id` |
+| Resolve | `POST /v1/books/{id}/resolve {}` | `200` `{"work_id":"dffcb202-…","confidence":"high","created":false,"identifiers":[]}` |
+| Create | `POST /v1/annotations` (highlight + bookmark) | `[{"status":"applied","rev":1,"seq":41},{"status":"applied","rev":1,"seq":42}]` |
+| Stale replay | same item, `base_rev: 0` | `conflict` + `server.rev: 1` |
+| Edit | same item, `base_rev: 1`, new `body`/`color` | `applied`, `rev: 2`, `seq: 43` |
+| Live read | `GET /v1/works/{id}/annotations` | both records, locator returned byte-for-byte |
+
+### Known failures on the resolve step
+
+**[observed]** Two `POST /v1/books/{id}/resolve` failures are reachable with a
+normal library and the plugin reports the server's own message for both:
+
+- `500 {"error":"Is a directory (os error 21)"}` — the resolver digests the
+  file, and a directory-backed book (multi-file audiobook, folder book) has no
+  single file to digest.
+- `409 {"error":"identifiers resolve to multiple works","works":[…]}` — two
+  copies of the same book claim the same strong identity; the resolver refuses
+  to guess and mutates nothing, which is the documented behaviour.
+
+Highlight export therefore needs a file-backed book with an unambiguous
+identity.
+
+### Push-only
+
+**[inference]** The plugin does not tombstone device-side deletions
+(`DELETE /v1/annotations/{id}?rev=`) and does not import server annotations
+into KOReader. It reads `GET /v1/works/{id}/annotations` only to report how
+many records the server now holds. Two-way annotation sync needs a local
+merge/conflict UI, which is a bigger change than an export.
+
+## Book identity on the device
+
+**[inference]** The one thing Stump and KOReader do not already agree on is
+which Stump book a local file is. The plugin resolves it in three steps and
+guesses nothing:
+
+1. a book downloaded through the plugin has its media id written into the
+   sidecar as `stump_media_id`;
+2. otherwise the sidecar's `partial_md5_checksum` is compared against
+   `koreaderHash` from `/api/v2/reading/continue` — an exact string match,
+   covering every book that has ever synced progress;
+3. otherwise the user picks the book from an OPDS search
+   (`Link this book to a Stump book…`).
+
+## Plugin layout
+
+| File | Responsibility |
+| --- | --- |
+| `main.lua` | Lifecycle, settings, menu, progress and annotation actions, book identity |
+| `stump_api.lua` | HTTP client for all four lanes and their credentials |
+| `stump_url.lua` | URL building, base normalization, href re-basing (pure) |
+| `stump_opds.lua` | OPDS 2.0 feed → browser rows (pure) |
+| `stump_annotations.lua` | KOReader annotations → `AnnotationInput` (pure) |
+| `stump_kosync.lua` | Writes the built-in kosync plugin's settings |
+| `stump_browser.lua` | The browser `Menu`: dashboard, catalogue, downloads |
+| `tests/pure_checks.lua` | 184 checks over the pure modules |
+
+## How to verify
+
+```sh
+# The one server-side route
+cargo test -p stump_server --no-default-features --features headless,liseur-sync \
+  --test api_tests -- continue
+
+# The plugin's pure logic (no KOReader needed)
+cd /home/al/Code/koreader-stump && luajit tests/pure_checks.lua
+```
+
+Live probes against the fixture server (`scripts/dev-fixture-server.sh`, key
+from the generated `ENDPOINTS.md`) are listed per section above.
+
+## Deep docs
+
+- [KOReader sync guide](/docs/guides/integrations/koreader) — the user-facing setup for progress sync.
+- [Sync platforms](/docs/developer/sync-platforms) — the kosync routes, DTOs and hash coverage.
+- [Unified reading state](/docs/developer/unified-reading-state) — what a head projects and the KOReader precision tiers.
+- [liseur-sync integration](/docs/developer/liseur-sync-integration) — the annotation wire contract, scopes and identity model.
+- [Platforms and devices](/docs/developer/platforms) — the verification matrix row for this plugin.

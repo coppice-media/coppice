@@ -65,6 +65,7 @@ Routes (`src/lib.rs:677-706`):
 | Annotations | `POST /v1/annotations`, `GET /v1/annotations/changes`, `DELETE /v1/annotations/{id}?rev=`, `GET /v1/works/{id}/annotations` |
 | Catalog (read-only) | `GET /v1/folders`, `/v1/folders/{f}/books`, `/v1/folders/{f}/search`, `/v1/books/{id}`, `/cover`, `/download`, `/series`; `POST /v1/books/{id}/resolve` |
 | Deferred | `ANY /v1/entities/series/{id}/order`, `.../name` → 404 |
+| The catalogue (`/v1/folders/{id}/books`, `/search`, `/books/{id}`, `/download`) excludes audiobook rows (`models::entity::media::audio_extension_condition().not()`) | Liseur reads paginated documents; an audiobook has no pages to track, and a folder book's "download" is a directory — `ServeFile` answered that with a truncated `200` (`Content-Length: 82`, 35 bytes) and broke `replay-liseur-sync`. The ABS profile serves audio | `apps/server/src/routers/liseur_sync/storage.rs` `visible_media`; server test `audio::audiobooks_are_not_liseur_catalogue_books` |
 
 ## Layout
 

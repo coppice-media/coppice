@@ -216,6 +216,30 @@ cargo run -p cli --bin cli-bin -- tools apply sources-import /tmp/keiyoushi-src 
 `plan` writes nothing: it parses the whole checkout and carries each definition
 in the action's `detail`, so `apply` only serialises what the dry run showed.
 
+## Publishing
+
+The generator's output directory *is* the published data repository:
+[stumpapp/stump-sources](https://github.com/stumpapp/stump-sources) holds the
+derived `<lang>/<id>.json` files, `index.json`, `unsupported.json` and `NOTICE`
+exactly as `apply` wrote them, which is why `STUMP_SOURCE_DEFINITIONS_URL`
+defaults to that repository's raw `index.json` and why two runs at one upstream
+commit produce an empty diff. `scripts/regenerate.sh` in that repository is the
+whole publishing flow — refresh a blobless checkout to the pinned
+`UPSTREAM_COMMIT`, run `stump tools apply sources-import` into a scratch
+directory, sync the generated half in (deleting a `<lang>/` directory whose last
+source vanished upstream), merge the hand-authored rows into `index.json` with
+`scripts/merge-index.py`, assert every row resolves to a file, then `--check`
+(reproducibility gate) or `--commit`. Definitions a run cannot derive but a
+theme engine can still drive live in `hand-authored/<id>.json`, a directory the
+generator never writes, and their index rows carry that path; schema v1 allows
+no extra fields, so a definition is *not* tagged with its origin — the directory
+and its own `upstream` object are the provenance. Definitions bound to a local
+test mirror stay out of `index.json` altogether (`fixtures/`, plus a
+`fixtures/`-aware root builder), because the published index is what every
+installation fetches by default. The repository is Apache-2.0 with the upstream
+`LICENSE` verbatim and the generated `NOTICE` intact, per
+[Attribution](#attribution).
+
 ## Runtime loading
 
 | Layer | Switch | Effect |

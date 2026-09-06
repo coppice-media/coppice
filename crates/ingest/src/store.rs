@@ -40,6 +40,7 @@ use super::{
 use crate::{
 	config::IngestSettings,
 	error::{IngestError, IngestResult},
+	event::{IngestEvent, IngestEventSink},
 	host::RowFactory,
 };
 use stump_media::{
@@ -157,6 +158,9 @@ pub struct IngestStore {
 	config: Arc<IngestSettings>,
 	conn: Arc<DatabaseConnection>,
 	progress: Arc<ProgressHub>,
+	/// Where drop-item row changes are announced. `None` in tests, which
+	/// assert on rows instead.
+	events: Option<Arc<dyn IngestEventSink>>,
 }
 
 impl IngestStore {
@@ -167,7 +171,15 @@ impl IngestStore {
 			config,
 			conn,
 			progress,
+			events: None,
 		}
+	}
+
+	/// Attach the host's event sink so every persisted drop-item revision is
+	/// announced. Called by [`crate::IngestServices`] at construction.
+	pub fn with_event_sink(mut self, events: Arc<dyn IngestEventSink>) -> Self {
+		self.events = Some(events);
+		self
 	}
 
 	pub fn config(&self) -> &Arc<IngestSettings> {
@@ -180,6 +192,41 @@ impl IngestStore {
 
 	pub fn progress(&self) -> &Arc<ProgressHub> {
 		&self.progress
+	}
+
+	/// Announce a drop-item row the store just persisted. Every write to
+	/// `ingest_drop_item` bumps `revision`, so one call per successful write
+	/// is the complete change feed for the row.
+	fn announce(&self, item: &DropItemModel) {
+		let Some(sink) = &self.events else {
+			return;
+		};
+		let Some(status) = DropItemStatus::parse(&item.status) else {
+			tracing::warn!(
+				item_id = %item.id,
+				status = %item.status,
+				"Drop item carries an unknown status; not announcing the change"
+			);
+			return;
+		};
+		sink.emit(IngestEvent::ItemChanged {
+			library_id: item.library_id.clone(),
+			item_id: item.id.clone(),
+			status,
+			revision: item.revision,
+		});
+	}
+
+	/// Update a drop item and announce the row that landed. Every mutation of
+	/// `ingest_drop_item` outside a transaction goes through here, so the
+	/// change feed cannot drift from what was written.
+	async fn persist(
+		&self,
+		active: ingest_drop_item::ActiveModel,
+	) -> IngestResult<DropItemModel> {
+		let item = active.update(self.conn.as_ref()).await?;
+		self.announce(&item);
+		Ok(item)
 	}
 
 	pub async fn stage_upload<R>(
@@ -254,7 +301,10 @@ impl IngestStore {
 			updated_at: NotSet,
 		};
 		match active.insert(self.conn.as_ref()).await {
-			Ok(item) => Ok(StagedUpload::fresh(item)),
+			Ok(item) => {
+				self.announce(&item);
+				Ok(StagedUpload::fresh(item))
+			},
 			Err(error) => {
 				// Lost a race with a concurrent identical upload.
 				if let Some(item) = self
@@ -331,7 +381,10 @@ impl IngestStore {
 				updated_at: NotSet,
 			};
 			match active.insert(self.conn.as_ref()).await {
-				Ok(item) => admitted.push(item),
+				Ok(item) => {
+					self.announce(&item);
+					admitted.push(item);
+				},
 				Err(error) => {
 					if let Some(existing) = self
 						.find_identity(library_id, &source_sha256, &file.filename)
@@ -559,10 +612,7 @@ impl IngestStore {
 		active.status = Set(DropItemStatus::Rejected.as_str().to_string());
 		active.error = Set(reason.map(str::to_owned));
 		active.revision = Set(revision.saturating_add(1));
-		active
-			.update(self.conn.as_ref())
-			.await
-			.map_err(IngestError::from)
+		self.persist(active).await
 	}
 	/// Commit a staged item into its library: the file moves to its final
 	/// path, `rows` builds the series and media rows the same way a scan
@@ -745,10 +795,13 @@ impl IngestStore {
 				return Err(error);
 			},
 		};
+		// The commit ran in a transaction, so the change is announced from the
+		// re-read row once it is durable.
 		let committed = self
 			.item(item_id)
 			.await?
 			.ok_or_else(|| IngestError::NotFound(format!("ingest item {item_id}")))?;
+		self.announce(&committed);
 		Ok((media_id, committed))
 	}
 
@@ -781,7 +834,7 @@ impl IngestStore {
 		let mut item = item.into_active_model();
 		item.quality_report_id = Set(Some(report_model.id.clone()));
 		item.revision = Set(revision.saturating_add(1));
-		item.update(self.conn.as_ref()).await?;
+		self.persist(item).await?;
 		Ok(report_model)
 	}
 
@@ -1109,7 +1162,7 @@ impl IngestStore {
 		item.analysis_job_id = Set(Some(job.id.clone()));
 		item.status = Set(DropItemStatus::Staged.as_str().to_string());
 		item.revision = Set(revision.saturating_add(1));
-		item.update(self.conn.as_ref()).await?;
+		self.persist(item).await?;
 		Ok(job)
 	}
 
@@ -1343,10 +1396,7 @@ impl IngestStore {
 		active.status = Set(status.as_str().to_string());
 		active.error = Set(None);
 		active.revision = Set(revision.saturating_add(1));
-		active
-			.update(self.conn.as_ref())
-			.await
-			.map_err(IngestError::from)
+		self.persist(active).await
 	}
 
 	/// Run the configured preprocess hook for `item`, at most once in the
@@ -1410,10 +1460,7 @@ impl IngestStore {
 		active.byte_size = Set(byte_size);
 		active.preprocessed_at = Set(Some(Utc::now().into()));
 		active.revision = Set(revision.saturating_add(1));
-		active
-			.update(self.conn.as_ref())
-			.await
-			.map_err(IngestError::from)
+		self.persist(active).await
 	}
 
 	/// Terminal failure of one item, with the reason the editor displays.
@@ -1431,10 +1478,7 @@ impl IngestStore {
 		active.status = Set(DropItemStatus::Failed.as_str().to_string());
 		active.error = Set(Some(reason.to_string()));
 		active.revision = Set(revision.saturating_add(1));
-		active
-			.update(self.conn.as_ref())
-			.await
-			.map_err(IngestError::from)
+		self.persist(active).await
 	}
 }
 fn phase_name(phase: super::contract::AnalysisPhase) -> String {

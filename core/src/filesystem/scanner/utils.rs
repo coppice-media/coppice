@@ -15,8 +15,7 @@ use models::{
 use sea_orm::{
 	prelude::*,
 	sea_query::{OnConflict, Query},
-	ActiveValue, Condition, DatabaseConnection, DatabaseTransaction, IntoActiveModel,
-	Iterable, Set,
+	ActiveValue, DatabaseConnection, DatabaseTransaction, IntoActiveModel, Iterable, Set,
 };
 use tokio::task::spawn_blocking;
 
@@ -283,6 +282,7 @@ pub(crate) async fn handle_book_visit_operation(
 	Ok(())
 }
 
+/// The outcome of marking series, and the books that belong to them, missing.
 #[derive(Default)]
 pub(crate) struct MissingSeriesOutput {
 	pub updated_series: u64,
@@ -290,75 +290,153 @@ pub(crate) struct MissingSeriesOutput {
 	pub logs: Vec<JobExecuteLog>,
 }
 
+/// Marks every series found at `paths` as missing, along with every book that
+/// belongs to those series.
+///
+/// A book of a series that vanished from disk is just as gone as the series
+/// itself, so the two statuses are written in the same pass: a scan can never
+/// leave a `MISSING` series holding `READY` books, which is what previously let
+/// a moved-away folder keep serving its books to every listing profile. The
+/// inverse is handled by [`handle_restored_media`], which only promotes books
+/// whose status `is_recovered_if_present`, so an `ERROR`/`UNSUPPORTED` book that
+/// went missing does not come back as `READY`.
 pub(crate) async fn handle_missing_series(
 	client: &DatabaseConnection,
-	path: &str,
+	paths: &[String],
 ) -> Result<MissingSeriesOutput, JobError> {
 	let mut output = MissingSeriesOutput::default();
 
-	let affected_rows = series::Entity::update_many()
-		.filter(series::Column::Path.eq(path.to_string()))
-		.col_expr(
-			series::Column::Status,
-			Expr::value(FileStatus::Missing.to_string()),
-		)
-		.exec(client)
-		.await
-		.map_or_else(
-			|error| {
-				tracing::error!(error = ?error, "Failed to update missing series");
-				output.logs.push(JobExecuteLog::error(format!(
-					"Failed to update missing series: {:?}",
-					error.to_string()
-				)));
-				0
-			},
-			|res| {
-				output.updated_series += res.rows_affected;
-				res.rows_affected
-			},
-		);
-
-	if affected_rows > 1 {
-		tracing::warn!(
-			affected_rows,
-			"Updated more than one series with path: {}",
-			path
-		);
+	if paths.is_empty() {
+		tracing::debug!("No missing series to handle");
+		return Ok(output);
 	}
 
-	let _affected_media = media::Entity::update_many()
-		.filter(
-			Condition::any().add(
+	for (index, chunk) in paths.chunks(SQLITE_BIND_LIMIT).enumerate() {
+		let affected_series = series::Entity::update_many()
+			.filter(series::Column::Path.is_in(chunk.to_vec()))
+			.col_expr(
+				series::Column::Status,
+				Expr::value(FileStatus::Missing.to_string()),
+			)
+			.exec(client)
+			.await
+			.map_or_else(
+				|error| {
+					tracing::error!(chunk = index + 1, error = ?error, "Failed to update missing series");
+					output.logs.push(JobExecuteLog::error(format!(
+						"Failed to update missing series: {:?}",
+						error.to_string()
+					)));
+					0
+				},
+				|res| res.rows_affected,
+			);
+		output.updated_series += affected_series;
+
+		let affected_media = media::Entity::update_many()
+			.filter(
 				media::Column::SeriesId.in_subquery(
 					Query::select()
 						.column(series::Column::Id)
 						.from(series::Entity)
-						.and_where(series::Column::Path.eq(path.to_string()))
+						.and_where(series::Column::Path.is_in(chunk.to_vec()))
 						.to_owned(),
 				),
-			),
-		)
-		.col_expr(
-			media::Column::Status,
-			Expr::value(FileStatus::Missing.to_string()),
-		)
-		.exec(client)
-		.await
-		.map_or_else(
-			|error| {
-				tracing::error!(error = ?error, "Failed to update missing media");
-				output.logs.push(JobExecuteLog::error(format!(
-					"Failed to update missing media: {:?}",
-					error.to_string()
-				)));
-				0
-			},
-			|res| {
-				output.updated_media += res.rows_affected;
-				res.rows_affected
-			},
+			)
+			.col_expr(
+				media::Column::Status,
+				Expr::value(FileStatus::Missing.to_string()),
+			)
+			.exec(client)
+			.await
+			.map_or_else(
+				|error| {
+					tracing::error!(chunk = index + 1, error = ?error, "Failed to update missing media");
+					output.logs.push(JobExecuteLog::error(format!(
+						"Failed to update missing media: {:?}",
+						error.to_string()
+					)));
+					0
+				},
+				|res| res.rows_affected,
+			);
+		output.updated_media += affected_media;
+	}
+
+	if output.updated_series > paths.len() as u64 {
+		tracing::warn!(
+			updated_series = output.updated_series,
+			expected = paths.len(),
+			"Updated more series than there were missing paths"
 		);
+	}
+
+	tracing::debug!(
+		updated_series = output.updated_series,
+		updated_media = output.updated_media,
+		"Marked series and their books as missing"
+	);
+
+	Ok(output)
+}
+
+/// The outcome of marking series ready again after they reappeared on disk.
+#[derive(Default)]
+pub(crate) struct RecoveredSeriesOutput {
+	pub updated_series: u64,
+	pub logs: Vec<JobExecuteLog>,
+}
+
+/// Marks every series with `ids` as ready again, because the walk found it back
+/// on disk.
+///
+/// The update is guarded by the same predicate the walk uses to decide a series
+/// is recovered (`FileStatus::is_recovered_if_present`), so the caller may pass
+/// any scanned series: a `READY` series is not rewritten, and an `ERROR` series
+/// is not promoted by a folder move. Only the series row is touched — the walk
+/// is the only step that knows which of its books came back, so those are
+/// restored by [`handle_restored_media`].
+pub(crate) async fn handle_recovered_series(
+	client: &DatabaseConnection,
+	ids: &[String],
+) -> Result<RecoveredSeriesOutput, JobError> {
+	let mut output = RecoveredSeriesOutput::default();
+
+	if ids.is_empty() {
+		tracing::debug!("No recovered series to handle");
+		return Ok(output);
+	}
+
+	for (index, chunk) in ids.chunks(SQLITE_BIND_LIMIT).enumerate() {
+		let affected_series = series::Entity::update_many()
+			.filter(series::Column::Id.is_in(chunk.to_vec()))
+			.filter(
+				series::Column::Status.is_in([FileStatus::Missing, FileStatus::Unknown]),
+			)
+			.col_expr(
+				series::Column::Status,
+				Expr::value(FileStatus::Ready.to_string()),
+			)
+			.exec(client)
+			.await
+			.map_or_else(
+				|error| {
+					tracing::error!(chunk = index + 1, error = ?error, "Failed to recover series");
+					output.logs.push(JobExecuteLog::error(format!(
+						"Failed to recover series: {:?}",
+						error.to_string()
+					)));
+					0
+				},
+				|res| res.rows_affected,
+			);
+		output.updated_series += affected_series;
+	}
+
+	tracing::debug!(
+		updated_series = output.updated_series,
+		"Marked series as recovered"
+	);
 
 	Ok(output)
 }
@@ -370,10 +448,10 @@ pub(crate) struct MediaOperationOutput {
 	pub logs: Vec<JobExecuteLog>,
 }
 
-/// Handles missing media by updating the database with the latest information. A media is
-/// considered missing if it was previously marked as ready and is no longer found on disk.
+/// Marks the books at `paths` as missing. A book is missing when its row still
+/// exists but its file no longer does, whatever status the row held before.
 pub(crate) async fn handle_missing_media(
-	ctx: &JobContext<JobServices>,
+	conn: &DatabaseConnection,
 	series_id: &str,
 	paths: Vec<PathBuf>,
 ) -> MediaOperationOutput {
@@ -397,7 +475,7 @@ pub(crate) async fn handle_missing_media(
 				media::Column::Status,
 				Expr::value(FileStatus::Missing.to_string()),
 			)
-			.exec(ctx.conn())
+			.exec(conn)
 			.await
 			.map_or_else(
 				|error| {
@@ -422,11 +500,11 @@ pub(crate) async fn handle_missing_media(
 	output
 }
 
-/// Handles restored media by updating the database with the latest information. A
-/// media is considered restored if it was previously marked as missing and has been
-/// found on disk.
+/// Marks the books with `ids` as ready again. The caller passes only the books
+/// the walk found back on disk whose status `is_recovered_if_present`, so a book
+/// that failed to build is never silently promoted to `READY`.
 pub(crate) async fn handle_restored_media(
-	ctx: &JobContext<JobServices>,
+	conn: &DatabaseConnection,
 	series_id: &str,
 	ids: Vec<String>,
 ) -> MediaOperationOutput {
@@ -447,7 +525,7 @@ pub(crate) async fn handle_restored_media(
 				media::Column::Status,
 				Expr::value(FileStatus::Ready.to_string()),
 			)
-			.exec(ctx.conn())
+			.exec(conn)
 			.await
 			.map_or_else(
 				|error| {
@@ -1239,5 +1317,176 @@ mod audio_persistence {
 			[(0, 0), (1, 4_000)]
 		);
 		assert_eq!(rescanned.chapters.len(), 2);
+	}
+}
+
+/// The status a scan leaves behind for a series that vanished from disk, and for
+/// the same series once it is put back.
+///
+/// A `MISSING` series used to keep `READY` books: every listing funnel filters
+/// on the book status, not the series status, so a moved-away folder went on
+/// serving books whose files were gone (and reading one 404s at the file read).
+#[cfg(test)]
+mod missing_series_lifecycle {
+	use super::super::store::SeaOrmScanSource;
+	use super::*;
+	use globset::GlobSet;
+	use migrations::{Migrator, MigratorTrait};
+	use sea_orm::{ActiveModelTrait, Database};
+	use stump_scanner::{walk_library, walk_series, ScanOptions, WalkerCtx};
+	use tempfile::TempDir;
+
+	const LIBRARY_ID: &str = "library-1";
+	const SERIES_ID: &str = "series-1";
+	const MEDIA_ID: &str = "media-1";
+
+	fn walker_ctx(series_id: Option<&str>) -> WalkerCtx {
+		WalkerCtx {
+			ignore_rules: GlobSet::empty(),
+			max_depth: None,
+			options: ScanOptions::default(),
+			dir_mtimes: Arc::new(HashMap::new()),
+			library_id: LIBRARY_ID.to_string(),
+			series_id: series_id.map(str::to_string),
+		}
+	}
+
+	/// The pair a client actually sees: the series status and its book's status.
+	async fn statuses(conn: &DatabaseConnection) -> (FileStatus, FileStatus) {
+		let series = series::Entity::find_by_id(SERIES_ID)
+			.one(conn)
+			.await
+			.unwrap()
+			.expect("the series row survives a scan");
+		let book = media::Entity::find_by_id(MEDIA_ID)
+			.one(conn)
+			.await
+			.unwrap()
+			.expect("the book row survives a scan");
+		(series.status, book.status)
+	}
+
+	#[tokio::test]
+	async fn missing_series_takes_its_books_with_it_and_gives_them_back() {
+		let temp = TempDir::new().unwrap();
+		let library_root = temp.path().join("library");
+		let series_path = library_root.join("Some Series");
+		std::fs::create_dir_all(&series_path).unwrap();
+		let book_path = series_path.join("book.cbz");
+		std::fs::write(&book_path, b"pretend this is a cbz").unwrap();
+		// Outside the library root, so the walk sees the series as gone rather
+		// than as a new series at a new path.
+		let stash = temp.path().join("stash");
+		std::fs::create_dir_all(&stash).unwrap();
+		let stashed_series = stash.join("Some Series");
+
+		let db = Arc::new(Database::connect("sqlite::memory:").await.unwrap());
+		Migrator::up(db.as_ref(), None).await.unwrap();
+
+		tests::fake_data::Library {
+			id: Some(LIBRARY_ID.to_string()),
+			name: Some("Missing Series Library".to_string()),
+			path: Some(library_root.to_string_lossy().to_string()),
+		}
+		.insert(db.as_ref())
+		.await;
+
+		tests::fake_data::Series {
+			id: Some(SERIES_ID.to_string()),
+			name: Some("Some Series".to_string()),
+			path: Some(series_path.to_string_lossy().to_string()),
+			library_id: Some(LIBRARY_ID.to_string()),
+		}
+		.insert(db.as_ref())
+		.await;
+
+		media::ActiveModel {
+			id: Set(MEDIA_ID.to_string()),
+			name: Set("book".to_string()),
+			size: Set(21),
+			extension: Set("cbz".to_string()),
+			pages: Set(1),
+			path: Set(book_path.to_string_lossy().to_string()),
+			status: Set(FileStatus::Ready),
+			series_id: Set(Some(SERIES_ID.to_string())),
+			created_at: Set(chrono::Utc::now().into()),
+			..Default::default()
+		}
+		.insert(db.as_ref())
+		.await
+		.unwrap();
+
+		let source = SeaOrmScanSource::new(Arc::clone(&db));
+		let db = db.as_ref();
+		let library_root_str = library_root.to_string_lossy().to_string();
+
+		// The folder is moved out from under the scanner.
+		std::fs::rename(&series_path, &stashed_series).unwrap();
+
+		let walked = walk_library(&library_root_str, &source, walker_ctx(None))
+			.await
+			.unwrap();
+		assert_eq!(walked.missing_series, vec![series_path.clone()]);
+		// Nothing re-walks a missing series, so this is the only step that can
+		// mark its books.
+		assert!(walked.series_to_visit.is_empty());
+
+		let missing_paths = walked
+			.missing_series
+			.iter()
+			.map(|path| path.to_string_lossy().to_string())
+			.collect::<Vec<_>>();
+		let missing = handle_missing_series(db, &missing_paths).await.unwrap();
+		assert_eq!(missing.updated_series, 1);
+		assert_eq!(missing.updated_media, 1);
+		assert!(missing.logs.is_empty());
+		assert_eq!(
+			statuses(db).await,
+			(FileStatus::Missing, FileStatus::Missing)
+		);
+
+		// ...and put back.
+		std::fs::rename(&stashed_series, &series_path).unwrap();
+
+		let rewalked = walk_library(&library_root_str, &source, walker_ctx(None))
+			.await
+			.unwrap();
+		assert_eq!(rewalked.recovered_series, vec![SERIES_ID.to_string()]);
+		assert_eq!(rewalked.series_to_visit, vec![series_path.clone()]);
+		assert!(rewalked.missing_series.is_empty());
+
+		let recovered = handle_recovered_series(db, &rewalked.recovered_series)
+			.await
+			.unwrap();
+		assert_eq!(recovered.updated_series, 1);
+		// `SeriesScanJob` calls this for every series it scans, so a series that
+		// is already `READY` must not be rewritten.
+		assert_eq!(
+			handle_recovered_series(db, &[SERIES_ID.to_string()])
+				.await
+				.unwrap()
+				.updated_series,
+			0
+		);
+		// The series is back but its book is still MISSING until the series walk
+		// reports it, which is the half that was never verified.
+		assert_eq!(statuses(db).await, (FileStatus::Ready, FileStatus::Missing));
+
+		let walked_series =
+			walk_series(&series_path, &source, walker_ctx(Some(SERIES_ID)))
+				.await
+				.unwrap();
+		assert!(!walked_series.series_is_missing);
+		assert_eq!(walked_series.recovered_media, vec![MEDIA_ID.to_string()]);
+		assert!(walked_series.missing_media.is_empty());
+		// The file is unchanged since the row was written, so no rebuild is
+		// queued: restoring the status is the whole recovery.
+		assert!(walked_series.media_to_create.is_empty());
+
+		let restored =
+			handle_restored_media(db, SERIES_ID, walked_series.recovered_media).await;
+		assert_eq!(restored.updated_media, 1);
+		assert!(restored.logs.is_empty());
+		assert_eq!(statuses(db).await, (FileStatus::Ready, FileStatus::Ready));
 	}
 }

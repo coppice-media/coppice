@@ -1,0 +1,37 @@
+query ProviderSources {
+	providerSources {
+		id
+		implementation
+		name
+		lang
+		baseUrl
+		enabled
+		requestHeaders {
+			name
+			preview
+			length
+		}
+	}
+}
+
+query ProviderSourceHealthRows {
+	providerSourceHealth(includeDead: true) {
+		sourceId
+		name
+		baseUrl
+		status
+		error
+		challenged
+		httpStatus
+		consecutiveFailures
+		lastCheckedAt
+	}
+}
+
+mutation SetProviderSourceHeaders($instanceId: String!, $headers: JSON!) {
+	setProviderSourceHeaders(instanceId: $instanceId, headers: $headers) {
+		name
+		preview
+		length
+	}
+}

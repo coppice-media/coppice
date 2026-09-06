@@ -9,6 +9,7 @@ pub(crate) mod ingest_events;
 pub(crate) mod library;
 pub(crate) mod media;
 mod oidc;
+pub(crate) mod reading;
 pub(crate) mod series;
 mod user;
 
@@ -39,7 +40,8 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 		.merge(device_pairing::mount(app_state.clone()))
 		.merge(oidc::mount())
 		.merge(emoji::mount(app_state.clone()))
-		.merge(media::mount(app_state.clone()));
+		.merge(media::mount(app_state.clone()))
+		.merge(reading::mount(app_state.clone()));
 
 	#[cfg(feature = "ingest")]
 	let router = router.merge(ingest_events::mount(app_state.clone()));

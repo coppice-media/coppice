@@ -136,6 +136,94 @@ change. Two conventions exist for that case:
   one: `""` strips the series title a host repeats in every chapter label,
   absent falls back to the per-language default (`Chapter`, `Capítulo`, …).
 
+### Challenged sources
+
+Some hosts sit behind a Cloudflare *managed challenge*: since 2026-06
+`readcomicsonline.ru` answers every HTML path with `403` and
+`cf-mitigated: challenge` to any client that cannot run the challenge script,
+which is every non-browser. The site is up — it simply refuses robots.
+
+The provider HTTP client tells that apart from a rejection
+(`crates/provider/src/http.rs::challenge_host`): a `403`/`503` carrying
+`cf-mitigated: challenge` or any `cf-chl-*` header becomes
+`SourceError::Challenged { host }`, lifted to `ProviderError::Challenged` at
+the host boundary and to `FileError::Unavailable` on the page lanes, instead
+of a generic bad status.
+
+Health follows the same rule: a challenged probe records `status: DEGRADED`
+with `error: "cloudflare challenge"`, `http_status: 403` and
+`consecutive_failures: 0`, and a challenge **never** escalates to `DEAD` no
+matter how many runs it survives (`HealthProbe::next_state`). A `DEAD` source
+is hidden from `providerCatalog`; hiding a live source for a reason an
+operator can fix with a cookie would be wrong. The probe itself is always sent
+without any configured header, so the row reports what an unauthenticated
+client sees rather than what one configured instance can reach.
+
+#### The cookie recipe
+
+Getting through requires the clearance a human already earned. There is no
+automation here — no headless browser, no FlareSolverr, no challenge solver:
+
+1. Open the site in a normal browser and let the challenge complete.
+2. Copy the `cf_clearance` cookie value (devtools → Application → Cookies).
+3. Copy the browser's exact `User-Agent`. The cookie is bound to it (and to
+   your IP); a mismatch is refused just like no cookie at all.
+4. Store both on the source instance:
+
+`User-Agent` is not a GraphQL name, so the map goes in as a variable:
+
+```graphql
+mutation SetHeaders($instanceId: String!, $headers: JSON!) {
+  setProviderSourceHeaders(instanceId: $instanceId, headers: $headers) {
+    name
+    preview
+    length
+  }
+}
+```
+
+```json
+{
+  "instanceId": "en.readcomicsonline",
+  "headers": {
+    "Cookie": "cf_clearance=<value>",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 …"
+  }
+}
+```
+
+which answers with the stored headers described, never echoed:
+
+```json
+[
+  { "name": "cookie", "preview": "cf_c…Sd4g", "length": 45 },
+  { "name": "user-agent", "preview": "Mozi…7.36", "length": 101 }
+]
+```
+
+`provider_sources.request_headers` (migration `m20260941`) stores the map as
+a JSON object and every request that instance makes carries it — browse,
+search, details, chapters, page manifests and page bytes
+(`RequestHeaders::apply`, applied before the engine's own `Referer`/XHR
+headers, so a configured `User-Agent` replaces the Stump one). The editor
+exposes the same thing as a *Request headers* form under
+**Settings → Remote sources**.
+
+The values are credentials, so:
+
+- they are never logged (`RequestHeaders`' `Debug` prints names and byte
+  counts) and never returned in full. `providerSources.requestHeaders` and
+  the mutation answer with `{ name, preview, length }`, where `preview` is
+  `cf_c…mnop` for a long value and `…` for a short one;
+- header names normalise to lower case, because HTTP/2 permits nothing else;
+- the mutation *replaces* the whole map: an empty map clears it, an empty
+  value drops that header.
+
+A `cf_clearance` cookie expires (typically within the hour, sooner if the
+site tightens its rules), so a challenged source is a manual, temporary
+arrangement: when it lapses the requests 403 again and health goes back to
+reporting `cloudflare challenge`.
+
 ## Mode A: materialised series in any library
 
 `addProviderSeries(libraryId, sourceId, remoteId)` fetches details and
@@ -364,6 +452,9 @@ Per target (`crates/provider/src/health.rs`):
    increments `consecutive_failures` and marks the source `DEGRADED`, or
    `DEAD` at `provider_health_dead_after`; a reachable one resets the count
    to zero and marks `OK`, or `DEGRADED` when only the latest path failed.
+5. Except for a Cloudflare challenge, which is neither reachable nor a
+   failure: `DEGRADED`, `error: "cloudflare challenge"`, count cleared, never
+   `DEAD`. See [Challenged sources](#challenged-sources).
 
 The result is one upserted `source_health` row per catalog source
 (`status`, `http_status`, `latency_ms`, `redirect_url`, `latest_path_ok`,

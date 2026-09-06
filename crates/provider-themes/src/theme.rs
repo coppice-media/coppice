@@ -11,8 +11,8 @@ use std::{sync::Arc, time::Duration};
 
 use stump_provider::{
 	definition::SourceDefinition, HtmlDocument, RateLimiter, RemoteChapter, RemotePage,
-	RemoteSeries, SeriesStatus, SourceCapabilities, SourceError, SourceHttp, SourceInfo,
-	SourceResult,
+	RemoteSeries, RequestHeaders, SeriesStatus, SourceCapabilities, SourceError,
+	SourceHttp, SourceInfo, SourceResult,
 };
 
 use crate::{
@@ -67,13 +67,15 @@ impl ThemeContext {
 		instance_id: &str,
 		base_url_override: Option<&str>,
 		capabilities: SourceCapabilities,
+		headers: RequestHeaders,
 	) -> Result<Self, ThemeError> {
 		let limiter = rate_limiter(definition);
-		let http =
-			SourceHttp::with_limiter(limiter).map_err(|source| ThemeError::Http {
+		let http = SourceHttp::with_limiter(limiter)
+			.map_err(|source| ThemeError::Http {
 				id: definition.id.clone(),
 				source,
-			})?;
+			})?
+			.with_headers(headers);
 		let base_url = base_url_override
 			.map(|url| url.trim_end_matches('/').to_string())
 			.filter(|url| !url.is_empty())

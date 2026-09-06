@@ -24,6 +24,7 @@ editing it.
 | `kavita` | `stump_kavita` | Serde contract types and routes for the client-derived Kavita compatibility API | planned server `kavita` feature | in flight (untracked; `KavitaWave1`) |
 | `kepub` | `stump_kepub` | Pure-Rust EPUB → KEPUB conversion (kepubify parity) | server `kobo` (`dep:stump_kepub`) | README done (`ReadmeMediaKepub`) |
 | `kobo` | `stump_kobo` | Kobo sync protocol routes and `KoboBackend` trait | server `kobo` | README by `ReadmeProtocols` |
+| `kindle` | `stump_kindle` | Send-to-Kindle delivery lane: Amazon format policy, boko EPUB->AZW3 conversion, attachment build with Amazon's 50 MB cap, the USB sideload file, and the `kindle_deliveries` history | linked by server `headless`, GraphQL `sendToKindle` | README done |
 | `komga` | `stump_komga` | Komga-compatible API surface and `KomgaBackend` trait | server `komga` (implies `readium`) | README by `ReadmeProtocols` |
 | `koreader` | `stump_koreader` | KOReader sync API and `KoreaderBackend` trait | server `koreader` | README by `ReadmeProtocols` |
 | `library` | `stump_library` | Library create/update/delete and series reshape (move/merge/split) with the filesystem moves that keep the next scan a no-op | linked by server `komga` and by `graphql` (absent from `minimal`) | README done |

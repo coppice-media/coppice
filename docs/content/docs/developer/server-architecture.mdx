@@ -142,6 +142,89 @@ The following ownership boundaries keep Stump as one process rather than splitti
 
 Implemented and proposed seams must preserve one Rust process, one configured database, current authentication, and the existing GraphQL/REST/protocol surfaces.
 
+## Event bus and sinks
+
+There is one bus. `CoreEvent` (`core/src/event.rs`) is a broadcast channel on
+`Ctx`; every producer calls `Ctx::emit_event` (or `JobContext::emit_event`,
+which forwards through `JobServices`), and every sink *subscribes and
+translates*. A sink never owns state and never becomes a second bus.
+
+Two crates produce events without being allowed to name `CoreEvent`
+(`stump_ingest` and `stump_provider` are dependencies of `stump_core`, not the
+other way round). They emit their own vocabulary through a sink trait the host
+installs, and `stump_core` is the only place that knows both:
+
+| Producer crate | Crate vocabulary | Sink trait | Mapped in |
+| --- | --- | --- | --- |
+| `stump_ingest` | `IngestEvent` (`crates/ingest/src/event.rs`) | `IngestEventSink`, installed by `IngestServices::with_event_sink` on both the store and the coordinator | `core/src/ingest_host.rs` (`CoreEventSink`) |
+| `stump_provider` | `ProviderEvent` (`crates/provider/src/event.rs`) | `ProviderEventSink`, installed by `ProviderHost::set_event_sink` | `core/src/providers.rs` (`CoreProviderEventSink`) |
+
+### Events to sinks
+
+`readEvents` is the unfiltered lane and carries every row below, so it is
+omitted from the table. The other sinks are: `deviceSeen`, `ingestEvents`, and
+`providerEvents` (`crates/graphql/src/subscription/`), Komga SSE
+(`apps/server/src/routers/komga_backend.rs` translates into the Komga wire
+vocabulary served by `crates/komga/src/routes/sse.rs`), and notification
+routing (`core/src/notification.rs`, `route_event`, which fans out to the
+configured channels).
+
+| `CoreEvent` variant | Emitted at | Sinks besides `readEvents` |
+| --- | --- | --- |
+| `JobStarted`, `JobUpdate`, `JobOutput` | `stump_jobs` worker lifecycle | notifications (`JobOutput` with a `LibraryScan` output only) |
+| `JobQueueStatus` | `stump_jobs` queue transitions | Komga SSE |
+| `DiscoveredMissingLibrary` | library scan | — |
+| `CreatedMedia`, `MediaDeleted`, `SeriesDeleted` | scanner, media mutations | Komga SSE |
+| `CreatedManySeries`, `CreatedOrUpdatedManyMedia` | library scan | — |
+| `DeviceSeen` | `stump_devices` first/repeat sighting | `deviceSeen`, notifications (first sighting only) |
+| `DevicePairingRequested` | `apps/server/src/routers/api/v2/device_pairing.rs` | — |
+| `DevicePaired` | device pairing completion | notifications |
+| `IngestAwaitingReview` | ingest coordinator, analysis finished | notifications |
+| `QualityFailed` | ingest coordinator, failed check | notifications |
+| `AnalysisJobFailed` | ingest coordinator, job failure | notifications |
+| `ProviderMatchDone` | ingest coordinator, candidates stored | notifications (only when candidates exist) |
+| `IngestItemChanged` | `IngestStore::persist`/`announce`, i.e. every persisted `ingest_drop_item` revision, plus the one out-of-store write in `persist_pending_fields` | `ingestEvents` |
+| `ProviderSourceHealthChanged` | `stump_provider::health::probe_target` records the transition; the health job (`core/src/job/provider_health.rs`) and `ProviderHost::run_health_checks` emit it | `providerEvents` |
+| `ProviderSeriesMaterialized` | `stump_provider::materialize::add_series` | `providerEvents` |
+| `ProviderCatalogRefreshed` | `ProviderHost::refresh_catalog` | `providerEvents` |
+| `CollectionAdded/Changed/Deleted`, `ReadListAdded/Changed/Deleted` | shelf and reading-list services (any protocol, incl. Kobo write-back) | Komga SSE |
+| `LibraryCreated/Updated/Deleted` | shared library service, after commit | Komga SSE |
+
+Two live surfaces are deliberately *not* on this bus. `ingestProgress`
+(`crates/graphql/src/subscription/ingest.rs`) replays a durable, cursored
+`ingest_progress_events` table so a reconnecting editor can resume, which a
+broadcast channel cannot do; and Komga read-progress events come from
+`Ctx::reading_state_events`, a separate channel, because a reading head moves
+far more often than anything here.
+
+### Rules for a new event or sink
+
+- Emit at the state transition, once, after the write is durable. A
+  transaction announces from the re-read row after commit.
+- Announce transitions, not observations. `ProviderSourceHealthChanged` fires
+  only when a `source_health` row already existed and its status differs, so
+  one cold run over a full catalog cannot broadcast a thousand events.
+- A payload carries what a sink needs to act without re-querying — the
+  identity triple, and a display name where a client would otherwise have to
+  resolve an opaque id.
+- New sinks subscribe and translate. Adding a variant must not require
+  touching an existing sink: every `CoreEvent` match in the tree ends in a
+  catch-all.
+
+### The liseur-sync lane
+
+There is no liseur-sync push lane, and adding one would be inventing protocol.
+Both ends of the pinned contract are pull-only: liseur-sync `f8ce32b7` exposes
+`GET /v1/changes?since=<seq>` and
+`GET /v1/annotations/changes?since=<seq>&limit=<n>` with `high_water`/`has_more`
+cursors and no streaming route, and the Liseur client `31f8182d` depends on
+plain `okhttp` (`gradle/libs.versions.toml` lists `okhttp`, `okhttp-tls`, and
+`mockwebserver3-junit4` — no `okhttp-sse`), with no `EventSource`, SSE, or
+WebSocket use anywhere under
+`app/src/main/kotlin/com/chmouel/liseur/data/liseursync/`. A push lane would
+have no consumer. See
+[liseur-sync integration](/docs/developer/liseur-sync-integration).
+
 ## Profiles
 
 ### Full/default

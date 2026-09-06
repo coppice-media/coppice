@@ -91,6 +91,14 @@ subscription DashboardLiveEvents {
 			deviceId
 			protocol
 		}
+		# Emitted only on a transition, so `OK` here *is* "recovered". `status`
+		# is aliased because `JobUpdate.status` above shares the response key
+		# with an incompatible type (`JobStatus` vs `String!`).
+		... on ProviderSourceHealthChanged {
+			sourceId
+			name
+			healthStatus: status
+		}
 		... on JobQueueStatus {
 			count
 			countByType

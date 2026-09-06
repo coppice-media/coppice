@@ -22,7 +22,7 @@ mod emailer;
 mod epub;
 mod ingest;
 mod job;
-mod kindle;
+pub(crate) mod kindle;
 mod library;
 mod log;
 mod media;

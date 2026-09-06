@@ -149,43 +149,7 @@ impl EmailerClient {
 		plain_text: String,
 		payloads: Vec<AttachmentPayload>,
 	) -> EmailResult<()> {
-		let address: Address = self
-			.config
-			.sender_email
-			.parse()
-			.map_err(|e: AddressError| EmailError::InvalidEmail(e.to_string()))?;
-
-		let display_name = &self.config.sender_display_name;
-		let from = Mailbox::new(
-			if display_name.is_empty() {
-				None
-			} else {
-				Some(display_name.clone())
-			},
-			address,
-		);
-
-		let to = recipient
-			.parse()
-			.map_err(|e: AddressError| EmailError::InvalidEmail(e.to_string()))?;
-
-		let mut multipart_builder = MultiPart::mixed().singlepart(
-			SinglePart::builder()
-				.header(header::ContentType::TEXT_PLAIN)
-				.body(plain_text),
-		);
-
-		for payload in payloads {
-			let attachment =
-				Attachment::new(payload.name).body(payload.content, payload.content_type);
-			multipart_builder = multipart_builder.singlepart(attachment);
-		}
-
-		let email = Message::builder()
-			.from(from)
-			.to(to)
-			.subject(subject)
-			.multipart(multipart_builder)?;
+		let email = self.build_message(subject, recipient, plain_text, payloads)?;
 
 		let password = self
 			.config
@@ -229,6 +193,58 @@ impl EmailerClient {
 				Err(e.into())
 			},
 		}
+	}
+
+	/// The RFC 5322 message a send would put on the wire: the sender from this
+	/// client's config, a plain-text body, and one MIME part per attachment.
+	///
+	/// Separate from [`EmailerClient::send_message`] so that a caller — or a
+	/// test with a `lettre` stub transport — can hold the exact bytes that
+	/// would be transmitted without opening an SMTP connection.
+	pub fn build_message(
+		&self,
+		subject: &str,
+		recipient: &str,
+		plain_text: String,
+		payloads: Vec<AttachmentPayload>,
+	) -> EmailResult<Message> {
+		let address: Address = self
+			.config
+			.sender_email
+			.parse()
+			.map_err(|e: AddressError| EmailError::InvalidEmail(e.to_string()))?;
+
+		let display_name = &self.config.sender_display_name;
+		let from = Mailbox::new(
+			if display_name.is_empty() {
+				None
+			} else {
+				Some(display_name.clone())
+			},
+			address,
+		);
+
+		let to = recipient
+			.parse()
+			.map_err(|e: AddressError| EmailError::InvalidEmail(e.to_string()))?;
+
+		let mut multipart_builder = MultiPart::mixed().singlepart(
+			SinglePart::builder()
+				.header(header::ContentType::TEXT_PLAIN)
+				.body(plain_text),
+		);
+
+		for payload in payloads {
+			let attachment =
+				Attachment::new(payload.name).body(payload.content, payload.content_type);
+			multipart_builder = multipart_builder.singlepart(attachment);
+		}
+
+		Ok(Message::builder()
+			.from(from)
+			.to(to)
+			.subject(subject)
+			.multipart(multipart_builder)?)
 	}
 
 	/// Send an email with the given subject and attachments to the given recipient.

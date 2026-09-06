@@ -19,6 +19,23 @@ use crate::{
 use super::{media_metadata, series, series_metadata};
 use crate::shared::visibility::VisibilityScope;
 
+/// The lower-case `extension` values of an audiobook row. One list for every
+/// SQL filter that has to include or exclude audio (the ABS profile serves
+/// only these; ebook profiles such as liseur-sync serve everything else);
+/// `stump_media::ContentType::is_audio` is the same set as a predicate.
+pub const AUDIO_EXTENSIONS: [&str; 6] = ["m4b", "m4a", "mp3", "opus", "ogg", "flac"];
+
+/// `lower(media.extension) IN (AUDIO_EXTENSIONS)`. Extensions are lower-cased
+/// on ingest, but a row written by an older scan may not be.
+pub fn audio_extension_condition() -> Condition {
+	Condition::all().add(
+		sea_orm::sea_query::Expr::expr(sea_orm::sea_query::Func::lower(
+			sea_orm::sea_query::Expr::col((Entity, Column::Extension)),
+		))
+		.is_in(AUDIO_EXTENSIONS),
+	)
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[cfg_attr(feature = "graphql", derive(Ordering))]

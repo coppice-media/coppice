@@ -3388,12 +3388,12 @@ dependencies = [
  "stump_core",
  "stump_devices",
  "stump_ingest",
+ "stump_kindle",
  "stump_library",
  "stump_media",
  "stump_notify",
  "stump_provider",
  "stump_scanner",
- "stump_tools",
  "subtle",
  "tempfile",
  "tests",
@@ -9125,6 +9125,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "stump_kindle"
+version = "0.1.6"
+dependencies = [
+ "chrono",
+ "email",
+ "lettre",
+ "models",
+ "pretty_assertions",
+ "sea-orm",
+ "serde_json",
+ "stump_devices",
+ "stump_media",
+ "stump_tools",
+ "tempfile",
+ "tests",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "uuid 1.18.1",
+]
+
+[[package]]
 name = "stump_kobo"
 version = "0.1.6"
 dependencies = [
@@ -9438,6 +9460,7 @@ dependencies = [
  "stump_ingest",
  "stump_kavita",
  "stump_kepub",
+ "stump_kindle",
  "stump_kobo",
  "stump_komga",
  "stump_koreader",

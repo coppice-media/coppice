@@ -166,6 +166,16 @@ pub async fn add_series(
 			"Reconciled chapters against what the source can serve"
 		);
 	}
+	host.emit(crate::event::ProviderEvent::SeriesMaterialized {
+		series_id: series_row.id.clone(),
+		source: source_id.to_string(),
+		// The row's own library, not the requested one: re-materialising a
+		// series that already exists never moves it between libraries.
+		library_id: series_row
+			.library_id
+			.clone()
+			.unwrap_or_else(|| library_id.to_string()),
+	});
 	Ok(Materialized {
 		series: series_row,
 		created,

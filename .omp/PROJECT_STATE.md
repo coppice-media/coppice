@@ -7,7 +7,7 @@ On-demand resume file. The evidence snapshot lives in
 
 ## Working tree
 
-- Branch `headless-modular` @ batch 7b (ABS/Lissen live on 25600: `STUMP_ENABLE_ABS=true` in the launcher, fixture library **Audiobooks** at `~/.local/share/stump-komga-test/audiobooks` (chaptered M4B + 2-track MP3 folder, `processMetadata` on — the capture library has it off), audio cover = page 1, per-file chapters, album tag, session tracks keep tags, deviceInfo echo; `make replay-abs` 43/43, `make replay-abs-diff` 7/9 vs abs-ref 13450 — only `tagEncoder` differs), gate 1666+302 tests, replays 7/7.
+- Branch `headless-modular` @ batch 8 (missing series take their books MISSING + recover; Cloudflare-challenge classification + per-source request headers (`setProviderSourceHeaders`, editor Remote sources page, m20260941); event bus: provider/ingest CoreEvents + `providerEvents`/`ingestEvents` subscriptions, editor live drop queue, console health toasts; `stump_kindle` crate: sendToKindle e-mail + `POST /api/v2/media/{id}/kindle-file` USB lane + `kindleDeliveries` (m20260940); `GET /api/v2/reading/continue` for the KOReader plugin repo `~/Code/koreader-stump`; `~/Code/stump-sources` repo (421 definitions, regenerate.sh byte-identical); docs nav fixed; liseur catalogue excludes audio, Kavita bookmarks exclude time bookmarks, `models::entity::media::AUDIO_EXTENSIONS` is the one audio list), gate 1691+316 tests, both profiles, replays 7/7 on 25600 (liseur spec picks its folder by name).
   Clean tree at that commit. `git config core.hooksPath /dev/null` is set on
   purpose: upstream's husky hook runs prettier/cargo-fmt on every commit and
   aborts on generated files; the gate replaces it.

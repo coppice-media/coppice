@@ -157,6 +157,7 @@ mod tests {
 			lang: "en".into(),
 			base_url: "https://mirror.test".into(),
 			enabled: true,
+			request_headers: None,
 			created_by: None,
 			created_at: chrono::Utc::now().into(),
 			updated_at: None,

@@ -365,7 +365,7 @@ The JSON search DTOs are defined in [`crates/komga/src/search.rs`](https://githu
 - `AnyOfBook` / `AnyOfSeries`: nested conditions are combined with logical OR.
 - Book `LibraryId` with `operator: { "is": ... }`.
 - Book `SeriesId` with `operator: { "is": ... }`.
-- Book `MediaStatus` with `operator: { "is": ... }`: `READY`, `UNKNOWN` (Stump `UNKNOWN` or `MISSING`), `ERROR`, and `UNSUPPORTED` map to Stump file statuses. `OUTDATED` is intentionally always false, so it matches no books.
+- Book `MediaStatus` with `operator: { "is": ... }`: `READY`, `UNKNOWN` (Stump `UNKNOWN`), `ERROR`, and `UNSUPPORTED` map to Stump file statuses. `OUTDATED` is intentionally always false, so it matches no books. Stump `MISSING` is not reachable through this filter: a book the scanner could not find on disk — including every book of a series whose folder disappeared — is dropped from `POST /api/v1/books/list`, legacy `GET /api/v1/books`, and `GET /api/v1/series/{id}/books` unless `deleted=true` is requested, because upstream Komga marks such a book deleted and hides it rather than serving an entry that 404s on read. The single-book routes (`GET /api/v1/books/{id}`, pages, file) still answer for it, and it still maps to `UNKNOWN` where a DTO carries its status.
 - Book `ReleaseDate` with `operator: { "isInTheLast": ... }`.
 - Series `LibraryId` with `operator: { "is": ... }`.
 - Series `Language` with `operator: { "is": ... }`; matching is case-insensitive against the language stored on a book's metadata and then projects the matching series.

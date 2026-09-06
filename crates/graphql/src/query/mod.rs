@@ -24,6 +24,7 @@ mod epub;
 mod filesystem;
 mod ingest;
 mod job;
+mod kindle;
 mod library;
 mod log;
 pub(crate) mod media;
@@ -71,6 +72,7 @@ use emailer::EmailerQuery;
 use epub::EpubQuery;
 use filesystem::FilesystemQuery;
 use ingest::IngestQuery;
+use kindle::KindleQuery;
 use library::LibraryQuery;
 use log::LogQuery;
 use media::MediaQuery;
@@ -153,6 +155,7 @@ struct ListQueries(
 #[derive(async_graphql::MergedObject, Default)]
 struct DeviceQueries(
 	DeviceQuery,
+	KindleQuery,
 	ReadingStatsQuery,
 	AnnotationQuery,
 	AnnotationAttachmentQuery,

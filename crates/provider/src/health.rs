@@ -17,10 +17,15 @@ use sea_orm::{
 	QueryFilter,
 };
 
-use crate::catalog::{CatalogSnapshot, SourceTheme};
+use crate::{
+	catalog::{CatalogSnapshot, SourceTheme},
+	event::ProviderEvent,
+};
 
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEAD_AFTER_FAILURES: i32 = 3;
+/// `source_health.error` for a host behind a Cloudflare managed challenge.
+pub const CHALLENGE_ERROR: &str = "cloudflare challenge";
 /// Bytes of landing-page markup inspected for theme detection.
 const THEME_SNIFF_LIMIT: usize = 512 * 1024;
 /// Parallel base URLs probed by one run.
@@ -62,6 +67,9 @@ pub struct HealthProbe {
 	pub redirect_url: Option<String>,
 	pub theme: Option<SourceTheme>,
 	pub latest_path_ok: Option<bool>,
+	/// The base URL answered with a Cloudflare managed challenge: the host is
+	/// up and gated, not broken (`crate::http::challenge_host`).
+	pub challenged: bool,
 	pub error: Option<String>,
 }
 
@@ -75,11 +83,21 @@ impl HealthProbe {
 	/// Fold this probe into the previous failure count: `(status, failures)`.
 	/// `dead_after` is the number of consecutive failures that marks a source
 	/// dead (`provider_health_dead_after`).
+	///
+	/// A Cloudflare challenge never counts as a failure: the host answered, it
+	/// simply refuses clients that cannot run the challenge script, so it is
+	/// reported `DEGRADED` for as long as it stays gated and the count is
+	/// cleared like any other answered probe. Escalating one to `DEAD` would
+	/// hide a live source from the catalog for a reason an operator can fix
+	/// with a cookie.
 	pub fn next_state(
 		&self,
 		previous_failures: i32,
 		dead_after: i32,
 	) -> (HealthStatus, i32) {
+		if self.challenged {
+			return (HealthStatus::Degraded, 0);
+		}
 		if !self.reachable() {
 			let failures = previous_failures.saturating_add(1);
 			let status = if failures >= dead_after.max(1) {
@@ -139,6 +157,20 @@ impl HealthChecker {
 			Some(started.elapsed().as_millis().min(u32::MAX as u128) as u32);
 		probe.http_status = Some(response.status().as_u16());
 		probe.redirect_url = redirect_target(base_url, response.url().as_str());
+		if let Some(host) = crate::http::challenge_host(
+			response.status().as_u16(),
+			response.headers(),
+			response.url().as_str(),
+		) {
+			// Reported, never worked around: the probe deliberately carries no
+			// clearance cookie, so an operator sees that the source needs one
+			// instead of a green row that only the configured instance can
+			// reach.
+			tracing::debug!(host, "Source is behind a Cloudflare challenge");
+			probe.challenged = true;
+			probe.error = Some(CHALLENGE_ERROR.to_string());
+			return probe;
+		}
 		if !probe.reachable() {
 			probe.error = Some(format!("HTTP {}", response.status().as_u16()));
 			return probe;
@@ -175,6 +207,26 @@ fn redirect_target(base_url: &str, final_url: &str) -> Option<String> {
 	(!same).then(|| final_url.to_string())
 }
 
+/// One source whose persisted status differed from what this run observed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceStatusChange {
+	/// `source_health.source_id`, the Keiyoushi catalog source id.
+	pub source_id: String,
+	pub name: String,
+	pub status: HealthStatus,
+}
+
+impl SourceStatusChange {
+	/// The host-facing event for this transition.
+	pub fn as_event(&self) -> ProviderEvent {
+		ProviderEvent::SourceHealthChanged {
+			source_id: self.source_id.clone(),
+			name: self.name.clone(),
+			status: self.status,
+		}
+	}
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct HealthRunSummary {
 	pub probed_urls: usize,
@@ -182,6 +234,10 @@ pub struct HealthRunSummary {
 	pub ok: usize,
 	pub degraded: usize,
 	pub dead: usize,
+	/// Sources whose status *changed* in this run. A source observed for the
+	/// first time is not a change: a cold run over a full catalog writes
+	/// every row but announces nothing.
+	pub changed: Vec<SourceStatusChange>,
 }
 
 /// One base URL to probe, with every catalog source that shares it. This is
@@ -279,8 +335,8 @@ pub async fn probe_target<C: ConnectionTrait>(
 	};
 	let checked_at = Utc::now();
 	for source in &target.sources {
-		let previous_failures = existing
-			.get(&source.id)
+		let previous = existing.get(&source.id);
+		let previous_failures = previous
 			.map(|row| row.consecutive_failures)
 			.unwrap_or_default();
 		let (status, failures) = probe.next_state(previous_failures, dead_after);
@@ -289,6 +345,16 @@ pub async fn probe_target<C: ConnectionTrait>(
 			HealthStatus::Degraded => summary.degraded += 1,
 			HealthStatus::Dead => summary.dead += 1,
 			HealthStatus::Unknown => {},
+		}
+		// A first observation writes the row but is not a transition: one
+		// cold run over the whole catalog would otherwise announce every
+		// source at once.
+		if previous.is_some_and(|row| HealthStatus::parse(&row.status) != status) {
+			summary.changed.push(SourceStatusChange {
+				source_id: source.id.clone(),
+				name: source.name.clone(),
+				status,
+			});
 		}
 		let model = source_health::ActiveModel {
 			source_id: Set(source.id.clone()),
@@ -335,13 +401,14 @@ pub async fn probe_target<C: ConnectionTrait>(
 }
 
 impl HealthRunSummary {
-	/// Fold another run's (or target's) counters into this one.
+	/// Fold another run's (or target's) counters and transitions into this one.
 	pub fn merge(&mut self, other: HealthRunSummary) {
 		self.probed_urls += other.probed_urls;
 		self.updated_sources += other.updated_sources;
 		self.ok += other.ok;
 		self.degraded += other.degraded;
 		self.dead += other.dead;
+		self.changed.extend(other.changed);
 	}
 }
 
@@ -574,5 +641,61 @@ mod tests {
 		let dead_again = dead_row(&conn).await;
 		assert_eq!(dead_again.status, "DEAD");
 		assert_eq!(dead_again.consecutive_failures, 1);
+	}
+
+	/// `readcomicsonline.ru` since 2026-06: every HTML path answers `403`
+	/// with `cf-mitigated: challenge`. The site is up, so it must be reported
+	/// as gated for as long as it stays gated — never buried as `DEAD`, which
+	/// would hide it from the catalog for a reason a cookie fixes.
+	#[tokio::test]
+	async fn a_challenged_source_stays_degraded_and_never_dies() {
+		let conn = ::tests::db::test_database().await;
+		let challenged = MockServer::spawn(vec![(
+			"/",
+			CannedResponse::status(403).with_header("cf-mitigated", "challenge"),
+		)])
+		.await;
+		let snapshot = CatalogSnapshot {
+			fetched_at: Utc::now(),
+			entries: vec![source("1", "Gated", challenged.base_url())],
+		};
+		let checker = HealthChecker::with_client(reqwest::Client::new());
+
+		// One run past `dead_after` is where a plain failure would flip to
+		// DEAD; a challenge must not.
+		for run in 1..=DEAD_AFTER_FAILURES + 1 {
+			let summary =
+				check_catalog(&conn, &checker, &snapshot, &[], 4, DEAD_AFTER_FAILURES)
+					.await
+					.unwrap();
+			assert_eq!(summary.degraded, 1, "run {run}");
+			assert_eq!(summary.dead, 0, "run {run}");
+			let row = source_health::Entity::find()
+				.filter(source_health::Column::SourceId.eq("1"))
+				.one(&conn)
+				.await
+				.unwrap()
+				.unwrap();
+			assert_eq!(row.status, "DEGRADED", "run {run}");
+			assert_eq!(row.consecutive_failures, 0, "run {run}");
+			assert_eq!(row.http_status, Some(403), "run {run}");
+			assert_eq!(row.error.as_deref(), Some(CHALLENGE_ERROR), "run {run}");
+			// The challenge is reported before theme sniffing, so no
+			// latest-path claim is invented from an interstitial.
+			assert_eq!(row.latest_path_ok, None, "run {run}");
+		}
+
+		let probe = checker.probe(challenged.base_url(), None).await;
+		assert!(probe.challenged);
+		assert!(!probe.reachable());
+		// And the same host answering a plain 403 does escalate.
+		challenged.set_route("/", CannedResponse::status(403));
+		let plain = checker.probe(challenged.base_url(), None).await;
+		assert!(!plain.challenged);
+		assert_eq!(plain.error.as_deref(), Some("HTTP 403"));
+		assert_eq!(
+			plain.next_state(2, DEAD_AFTER_FAILURES),
+			(HealthStatus::Dead, 3)
+		);
 	}
 }

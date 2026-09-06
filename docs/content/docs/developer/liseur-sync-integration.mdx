@@ -80,8 +80,33 @@ The following matrix records observed external behavior, not current Stump route
 | Pull changes | `GET /v1/annotations/changes?since=<seq>&limit=<n>` defaults to `since=0`, `limit=500`, and caps the limit at 500. It returns `{ annotations, high_water, has_more }`. `high_water` is an annotation-feed counter separate from the position-operation counter. | ResearchLiseurSync, `docs/openapi.yaml:672-702`; `docs/integrating.md:321-338` |
 | Delete | `DELETE /v1/annotations/{id}?rev=N` requires the revision the client read. A matching delete returns `200` with `applied` and a new `rev`/`seq`; an already deleted record is `duplicate`; a stale revision returns `409` with the current server copy. | ResearchLiseurSync, `docs/openapi.yaml:703-738`; `internal/store/sqlite/annotations.go:65-199,253-356` |
 | Live set | `GET /v1/works/{id}/annotations` returns live annotations only, with no tombstones, ordered by `progression` and then `client_ts` (records without progression sort last). | ResearchLiseurSync, `docs/openapi.yaml:739-765` |
+| Push notification | **None.** The pinned OpenAPI has no SSE, WebSocket, or long-poll route; both change feeds are cursored polls. | ResearchLiseurSync, `docs/openapi.yaml` (no `text/event-stream` producer, no `ws` scheme) |
 
 A successful write starts at revision 1 and increments the revision. The changes feed is state, not history: an edit moves the current record to the feed head. Deletes are tombstones containing identity/revision/sequence and deletion timestamps, retained for 180 days by default and then swept. A client that was offline longer than retention must reconcile its local set against the live-work endpoint ([ResearchLiseurSync, `docs/integrating.md:298-338`; `docs/adr/0028-annotation-sync.md:107-226`; `internal/store/sqlite/annotations.go:358+`).
+
+### There is no push lane, by evidence
+
+Stump's core event bus ([server architecture](/docs/developer/server-architecture))
+would happily feed a liseur-sync push transport, and it is deliberately not
+wired to one: neither end of the pinned contract can consume it.
+
+- **Server.** liseur-sync `f8ce32b7` advertises exactly two change feeds,
+  `GET /v1/changes?since=<seq>` for position operations and
+  `GET /v1/annotations/changes?since=<seq>&limit=<n>` for annotations, both
+  returning `high_water`/`has_more` cursors. Adding an event stream to
+  Stump's `/v1/*` tree would be inventing a route the protocol does not
+  define, which every other client would then have to ignore.
+- **Client.** Liseur `31f8182d` depends on plain `okhttp`: its
+  `gradle/libs.versions.toml` lists `okhttp`, `okhttp-tls`, `mockwebserver3-junit4`,
+  and `coil-network-okhttp`, and does **not** list `okhttp-sse` or any
+  WebSocket/ktor artifact. No file under
+  `app/src/main/kotlin/com/chmouel/liseur/data/liseursync/` references
+  `EventSource`, SSE, or a WebSocket; `LiseurSyncHttp.kt` and
+  `LiseurSyncApi.kt` are request/response only.
+
+A push lane would therefore have exactly zero consumers while adding a second,
+unpinned wire contract to maintain. Stump's live surfaces stay where clients
+actually read them: the GraphQL subscriptions and Komga SSE.
 
 ### Annotation wire shape
 
@@ -396,3 +421,6 @@ Until those deferred capabilities are deliberately specified, the safe
 behavior is to retain raw evidence, report unresolved/conflict states, and
 never make an approximate identity or locator appear exact.
 
+## Audiobooks
+
+The catalogue routes never list audiobook rows (`models::entity::media::AUDIO_EXTENSIONS`): Liseur reads paginated documents, and a folder book has no single file to download. Audiobooks are served by the Audiobookshelf profile (`/docs/developer/abs-compat`).

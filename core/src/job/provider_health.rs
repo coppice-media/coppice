@@ -24,7 +24,10 @@ use stump_provider::{
 	health::{self, HealthChecker, HealthTarget},
 };
 
-use crate::job::{output::ProviderSourceHealthOutput, JobServices};
+use crate::{
+	event::{CoreEvent, ProviderSourceHealthChanged},
+	job::{output::ProviderSourceHealthOutput, JobServices},
+};
 
 /// Probes the catalog and records `source_health` rows.
 pub struct ProviderSourceHealthJob {
@@ -86,6 +89,19 @@ impl JobLifecycle for ProviderSourceHealthJob {
 
 		let summary =
 			health::probe_target(ctx.conn(), checker, &task, dead_after).await?;
+		// The job runs without the `ProviderHost` (it only ever gets the
+		// database and the configuration), so it maps the run's transitions
+		// onto the core event channel itself rather than through the host's
+		// `ProviderEventSink`.
+		for change in &summary.changed {
+			ctx.emit_event(CoreEvent::ProviderSourceHealthChanged(
+				ProviderSourceHealthChanged {
+					source_id: change.source_id.clone(),
+					name: change.name.clone(),
+					status: change.status.as_str().to_string(),
+				},
+			));
+		}
 		let mut logs = Vec::new();
 		if summary.dead > 0 {
 			logs.push(

@@ -49,10 +49,18 @@ impl IngestServices {
 		}
 	}
 
-	/// Attach the host's event sink so analysis outcomes are announced to
-	/// notification routing. Called by the host context at construction.
+	/// Attach the host's event sink so analysis outcomes and drop-item row
+	/// changes are announced. Called by the host context at construction; the
+	/// coordinator is rebuilt because it holds its own [`IngestStore`] clone,
+	/// which has to be the one carrying the sink.
 	pub fn with_event_sink(mut self, events: Arc<dyn IngestEventSink>) -> Self {
-		self.coordinator = self.coordinator.with_event_sink(events);
+		self.store = self.store.with_event_sink(events.clone());
+		self.coordinator = IngestCoordinator::new(
+			self.store.clone(),
+			self.quality.clone(),
+			self.providers.clone(),
+		)
+		.with_event_sink(events);
 		self
 	}
 

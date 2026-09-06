@@ -67,8 +67,8 @@ use models::entity::provider_source;
 use serde::Deserialize;
 use stump_provider::{
 	definition::{KnobValue, SourceDefinition},
-	RemoteChapter, RemotePage, RemoteSeries, SearchFilter, Source, SourceCapabilities,
-	SourceHttp, SourceInfo, SourcePage, SourceResult,
+	RemoteChapter, RemotePage, RemoteSeries, RequestHeaders, SearchFilter, Source,
+	SourceCapabilities, SourceHttp, SourceInfo, SourcePage, SourceResult,
 };
 
 use crate::{
@@ -153,14 +153,20 @@ impl MmrcmsSource {
 		definition: &SourceDefinition,
 		row: &provider_source::Model,
 	) -> Result<Arc<dyn Source>, ThemeError> {
-		Self::new(definition, &row.id, Some(row.base_url.as_str()))
-			.map(|source| Arc::new(source) as Arc<dyn Source>)
+		Self::new(
+			definition,
+			&row.id,
+			Some(row.base_url.as_str()),
+			RequestHeaders::parse(row.request_headers.as_deref()),
+		)
+		.map(|source| Arc::new(source) as Arc<dyn Source>)
 	}
 
 	pub fn new(
 		definition: &SourceDefinition,
 		instance_id: &str,
 		base_url: Option<&str>,
+		headers: RequestHeaders,
 	) -> Result<Self, ThemeError> {
 		let supports_latest = definition.bool_knob(&["supports_latest"]).unwrap_or(true);
 		let context = ThemeContext::new(
@@ -172,6 +178,7 @@ impl MmrcmsSource {
 				latest: supports_latest,
 				search: true,
 			},
+			headers,
 		)?;
 		let card_default = "div.media";
 		let selectors = Selectors {
@@ -907,7 +914,13 @@ mod tests {
 	}
 
 	fn engine(knobs: &[(&str, KnobValue)]) -> MmrcmsSource {
-		MmrcmsSource::new(&definition(knobs), "en.mmrcms", None).expect("engine builds")
+		MmrcmsSource::new(
+			&definition(knobs),
+			"en.mmrcms",
+			None,
+			RequestHeaders::default(),
+		)
+		.expect("engine builds")
 	}
 
 	/// The knob set that expresses Read Comics Online's redesigned layout.
@@ -1367,7 +1380,8 @@ mod tests {
 		// Spanish hosts get the localised word.
 		let mut spanish = definition(&[]);
 		spanish.lang = "es".into();
-		let spanish = MmrcmsSource::new(&spanish, "es.x", None).unwrap();
+		let spanish =
+			MmrcmsSource::new(&spanish, "es.x", None, RequestHeaders::default()).unwrap();
 		assert_eq!(
 			spanish.clean_chapter_name("Naruto", "Naruto 700"),
 			"Capítulo 700"

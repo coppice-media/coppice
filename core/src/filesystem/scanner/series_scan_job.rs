@@ -4,11 +4,8 @@ use std::{
 	sync::Arc,
 };
 
-use models::{
-	entity::{library, library_config, media, series},
-	shared::enums::FileStatus,
-};
-use sea_orm::{prelude::*, sea_query::Query, Condition, UpdateResult};
+use models::entity::{library, library_config, series};
+use sea_orm::{prelude::*, sea_query::Query, Condition};
 use serde::{Deserialize, Serialize};
 use stump_jobs::{
 	JobContext, JobError, JobLifecycle, JobOutputExt, JobProgress, JobTaskOutput,
@@ -33,8 +30,9 @@ use stump_scanner::{
 use super::{
 	store::SeaOrmScanSource,
 	utils::{
-		handle_missing_media, handle_restored_media, safely_build_and_insert_media,
-		visit_and_update_media, MediaBuildOperation, MediaOperationOutput,
+		handle_missing_media, handle_missing_series, handle_recovered_series,
+		handle_restored_media, safely_build_and_insert_media, visit_and_update_media,
+		MediaBuildOperation, MediaOperationOutput, RecoveredSeriesOutput,
 	},
 };
 
@@ -186,11 +184,23 @@ impl JobLifecycle for SeriesScanJob {
 		};
 
 		if series_is_missing {
-			let _ = handle_missing_series(ctx.conn(), self.path.as_str()).await;
+			let _ = handle_missing_series(ctx.conn(), &[self.path.clone()]).await;
 			return Err(JobError::InitFailed(
 				"Series could not be found on disk".to_string(),
 			));
 		}
+
+		// The series is on disk, so a `MISSING` (or `UNKNOWN`) status left by an
+		// earlier scan is stale. This is the series-scan half of the library
+		// scan's `recovered_series` step: without it a rescan of a restored
+		// folder put the books back to `READY` under a series still marked
+		// `MISSING` — the mirror of the bug that left `READY` books under a
+		// `MISSING` series. The books themselves are restored by the
+		// `RestoreMedia` task the walk populates below.
+		let RecoveredSeriesOutput {
+			logs: recovery_logs,
+			..
+		} = handle_recovered_series(ctx.conn(), &[self.id.clone()]).await?;
 
 		tracing::debug!(
 			media_to_create = media_to_create.len(),
@@ -218,7 +228,7 @@ impl JobLifecycle for SeriesScanJob {
 		Ok(WorkingState {
 			output: Some(output),
 			tasks,
-			logs: vec![],
+			logs: recovery_logs,
 		})
 	}
 
@@ -299,7 +309,7 @@ impl JobLifecycle for SeriesScanJob {
 					updated_media,
 					logs: new_logs,
 					..
-				} = handle_restored_media(ctx, &self.id, ids).await;
+				} = handle_restored_media(ctx.conn(), &self.id, ids).await;
 				if let Some(library_id) = self.library_id() {
 					ctx.report_progress(JobProgress::msg("Restored media entities"));
 					ctx.emit_event(CoreEvent::CreatedOrUpdatedManyMedia(
@@ -319,7 +329,7 @@ impl JobLifecycle for SeriesScanJob {
 					updated_media,
 					logs: new_logs,
 					..
-				} = handle_missing_media(ctx, &self.id, paths).await;
+				} = handle_missing_media(ctx.conn(), &self.id, paths).await;
 				if let Some(library_id) = self.library_id() {
 					ctx.report_progress(JobProgress::msg("Handled missing media"));
 					ctx.emit_event(CoreEvent::CreatedOrUpdatedManyMedia(
@@ -409,45 +419,4 @@ impl JobLifecycle for SeriesScanJob {
 			subtasks: vec![],
 		})
 	}
-}
-
-async fn handle_missing_series(
-	conn: &DatabaseConnection,
-	path: &str,
-) -> Result<(), JobError> {
-	let affected_rows = series::Entity::update_many()
-		.filter(series::Column::Path.eq(path))
-		.col_expr(
-			series::Column::Status,
-			Expr::value(FileStatus::Missing.to_string()),
-		)
-		.exec(conn)
-		.await
-		.unwrap_or_else(|error| {
-			tracing::error!(error = ?error, "Failed to update missing series");
-			UpdateResult::default()
-		})
-		.rows_affected;
-	tracing::trace!(affected_rows, "Marked series as missing");
-
-	if affected_rows > 1 {
-		tracing::warn!(?path, "Updated more than expected");
-	}
-
-	let affected_media = media::Entity::update_many()
-		.filter(media::Column::SeriesId.eq(path))
-		.col_expr(
-			media::Column::Status,
-			Expr::value(FileStatus::Missing.to_string()),
-		)
-		.exec(conn)
-		.await
-		.unwrap_or_else(|error| {
-			tracing::error!(error = ?error, "Failed to update missing media");
-			UpdateResult::default()
-		})
-		.rows_affected;
-	tracing::trace!(?affected_media, "Marked media as missing");
-
-	Ok(())
 }

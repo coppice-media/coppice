@@ -99,16 +99,38 @@ A Kindle speaks no sync protocol. Amazon's *Send to Kindle* service takes an e-m
 
 No `kind` is a Kindle: a Kindle never authenticates, so it has no credential, no endpoints, and nothing to mint. Any device row may carry an address — in practice the row that stands for the operator's reading setup — and a row with one is a `sendToKindle` target. `setDeviceKindleEmail(id: String!, email: String): Device!` writes it (`email: null` clears it) and `Device.kindleEmail: String` reads it back. The address is validated syntactically by `stump_devices::normalize_kindle_email` — trimmed, one `@`, a non-empty local part, a hostname domain — and refused with `DeviceError::InvalidEmail` (HTTP 400) otherwise. The domain is deliberately not pinned: Amazon runs several regional Send-to-Kindle domains and an operator may point the device at their own forwarder. Nothing verifies the address with Amazon; only a delivery can.
 
+Both lanes below are one crate — `crates/kindle` (`stump_kindle`) — so the mail and the USB download can never disagree about what a Kindle can read. The crate owns no transport: the mutation hands it the primary emailer, which is why a Kindle delivery honours the same SMTP client, size cap, forbidden-recipient list and send history as `sendAttachmentEmail`.
+
+### E-mail: `sendToKindle`
+
 `sendToKindle(mediaId: ID!, deviceId: ID!): KindleDelivery!` (`crates/graphql/src/mutation/kindle.rs`, `EMAIL_SEND` permission) is one book to one device:
 
 | Step | Rule |
 | --- | --- |
 | Format | Amazon accepts `azw3`, `doc`, `docx`, `epub`, `htm`, `html`, `mobi`, `pdf`, `rtf`, `txt`. Anything else — a CBZ, a CBR — is refused locally: a Kindle cannot open it and Amazon discards it, which would look like a successful send. |
 | Conversion | An EPUB becomes AZW3 through the `boko-convert` tool in its pinned send-to-Kindle shape (`stump_tools::boko::KindleExport`) when the operator has `boko` on `PATH`. Without it the EPUB is mailed as it is — Amazon converts EPUB itself — and the delivery reports why in `note`. A missing converter is therefore normal, not an error. See [calibre tooling](/docs/developer/calibre-tooling). |
-| Delivery | The primary emailer and `stump_notify::EmailChannel`, i.e. the same SMTP client, size cap, and error mapping as `sendAttachmentEmail`, and the same forbidden-recipient list. The subject is the book's name; Stump never sends Amazon's magic `Convert` subject, so it never asks the service to reflow a PDF on the operator's behalf. |
-| Recording | Only what actually went out: one `emailer_send_records` row (so the emailer history shows every send, whichever lane made it) plus `DeviceService::record_delivery`, which writes `last_sync_at` and `last_sync_summary` = `{"protocol":"kindle-email","bytes","format"}`. `last_seen_at` deliberately does not move — nothing authenticated, the device was written to, not seen. |
+| Size | Amazon discards an attachment over its 50 MB per-document limit without telling the sender, so that ceiling is checked first, then the emailer's own `maxAttachmentSizeBytes`, both before an SMTP connection is opened. The refusal names the limit and points at USB. |
+| Delivery | The primary emailer and `stump_notify::EmailChannel`, i.e. the same SMTP client and error mapping as `sendAttachmentEmail`, and the same forbidden-recipient list — checked *before* the book is read or converted. The subject is the book's name; Stump never sends Amazon's magic `Convert` subject, so it never asks the service to reflow a PDF on the operator's behalf. |
+| Recording | Three places, each meaning something different. One `kindle_deliveries` row per attempt — including a refused one, with the relay's message in `error` — is the delivery history. One `emailer_send_records` row is written **only** when the mail went out, so the Emailer screen shows every send whichever lane made it. `DeviceService::record_delivery` then writes `last_sync_at` and `last_sync_summary` = `{"protocol":"kindle-email","bytes","format"}`; `last_seen_at` deliberately does not move — nothing authenticated, the device was written to, not seen. |
 
-The converted file is a temporary under the server's cache directory and is removed when the request ends; the library file is never touched. `KindleDelivery` returns `{ deviceId, deviceName, recipient, format, bytes, converted, note }`, so the caller can say "sent Dune.azw3 (412 KB) to al@kindle.com" without a second query.
+The converted file is a temporary under the server's cache directory and is removed when the request ends; the library file is never touched. `KindleDelivery` returns `{ id, mediaId, deviceId, deviceName, recipient, format, bytes, converted, note, error, sentAt }`, so the caller can say "sent Dune.azw3 (412 KB) to al@kindle.com" without a second query.
+
+### USB: `POST /api/v2/media/{id}/kindle-file`
+
+The other way a book reaches a Kindle is a cable: the device mounts as a disk and anything dropped into its `documents/` folder is a book. There is no gateway on that path, so the rule is stricter than the mail's — a Kindle plugged into a computer opens AZW3/MOBI, PDF and text, and *not* EPUB.
+
+`POST /api/v2/media/{id}/kindle-file` (`apps/server/src/routers/api/v2/media.rs`, `DOWNLOAD_FILE` permission) therefore runs the same lane with `FormatPolicy::RequireKindle`:
+
+| Behaviour | Detail |
+| --- | --- |
+| Response | The file itself, `Content-Disposition: attachment; filename="<book>.<format>"` (that name decides the extension on disk, so it is the whole reason the route is not a plain `/file` download), `Content-Type` sniffed from the bytes (`application/vnd.amazon.mobi8-ebook` for AZW3), and `X-Stump-Kindle-Converted: true|false`. |
+| EPUB | Converted with `boko`, or **refused** with 400 `a Kindle opens no .epub over USB; install boko …`. Handing over an EPUB would put a file on the device that it silently cannot open. |
+| Other formats | `.cbz`/`.cbr` and anything else outside the accepted list is a 400; an unknown or invisible book is a 404. |
+| `POST`, not `GET` | The route may run a converter and write a temporary file (under the server's cache directory, removed as the response is built). It records nothing: there is no device on this path, so there is no delivery to log. |
+
+### Delivery history: `kindleDeliveries`
+
+`kindleDeliveries(deviceId: ID, mediaId: ID, limit: Int): [KindleDelivery!]!` (`crates/graphql/src/query/kindle.rs`) reads the `kindle_deliveries` rows newest first — default 20, hard ceiling 100 — scoped to the devices the caller can see (their own; every device for the server owner). A `deviceId` the caller cannot see resolves to an empty list rather than an error, exactly like the registry's own lookups. Migration `m20260940_000000_add_kindle_deliveries` creates the table: `id`, `media_id`, `device_id`, `recipient`, `format`, `bytes`, `converted`, `note`, `error`, `sent_at`. Every value is what it was at send time — re-pointing a device's address later never rewrites its history.
 
 ## GraphQL
 
@@ -123,6 +145,7 @@ Every field is scoped to the caller: users see their own devices, the server own
 | `setDeviceLibraryScope(id, libraryIds)` | owner or server owner; `libraryIds: null` restores inherit — see [Library scope](#library-scope) |
 | `setDeviceKindleEmail(id, email)` | owner or server owner; `email: null` clears it — see [Send to Kindle](#send-to-kindle) |
 | `sendToKindle(mediaId, deviceId): KindleDelivery!` | `EMAIL_SEND`; mails one book to the device's address — see [Send to Kindle](#send-to-kindle) |
+| `kindleDeliveries(deviceId, mediaId, limit): [KindleDelivery!]!` | the delivery history, newest first, scoped to the caller's devices — see [Send to Kindle](#send-to-kindle) |
 | `rotateDeviceCredential(id): DeviceWithCredential!` | rejected with a conflict once the device is revoked |
 | `readingStats(span, deviceId): ReadingStats!` | see below |
 | `subscription deviceSeen(deviceId)` | filtered `DeviceSeen` events; `readEvents` also carries them |

@@ -6,6 +6,7 @@
 
 	const tabs = [
 		{ href: resolve('/settings/providers'), label: 'Ingest providers' },
+		{ href: resolve('/settings/sources'), label: 'Remote sources' },
 		{ href: resolve('/settings/keys'), label: 'API keys' }
 	];
 

@@ -67,6 +67,8 @@ mod m20260932_000000_add_media_audio_chapters;
 mod m20260933_000000_add_time_positions;
 mod m20260934_000000_add_bookmark_position_ms;
 mod m20260935_000000_add_abs_compat;
+mod m20260940_000000_add_kindle_deliveries;
+mod m20260941_000000_add_provider_request_headers;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -139,6 +141,8 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260933_000000_add_time_positions::Migration),
 			Box::new(m20260934_000000_add_bookmark_position_ms::Migration),
 			Box::new(m20260935_000000_add_abs_compat::Migration),
+			Box::new(m20260940_000000_add_kindle_deliveries::Migration),
+			Box::new(m20260941_000000_add_provider_request_headers::Migration),
 		]
 	}
 }

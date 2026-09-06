@@ -370,3 +370,16 @@ mutation ConsoleSendToKindle($mediaId: ID!, $deviceId: ID!) {
 		note
 	}
 }
+
+# The last few deliveries of one device (or one book), newest first. The
+# device cards show three per device so an operator can tell a failed send
+# from a silent one without opening a log.
+query ConsoleKindleDeliveries($deviceId: ID, $mediaId: ID, $limit: Int) {
+	kindleDeliveries(deviceId: $deviceId, mediaId: $mediaId, limit: $limit) {
+		id
+		format
+		bytes
+		sentAt
+		error
+	}
+}

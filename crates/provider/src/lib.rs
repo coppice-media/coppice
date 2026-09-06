@@ -22,6 +22,7 @@ pub mod browse;
 pub mod cache;
 pub mod catalog;
 pub mod definition;
+pub mod event;
 pub mod gc;
 pub mod health;
 pub mod host;
@@ -44,12 +45,15 @@ pub use definition::{
 	DefinitionEngine, DefinitionError, DefinitionIndex, DefinitionIndexEntry,
 	DefinitionLoader, KnobValue, SourceDefinition,
 };
+pub use event::{ProviderEvent, ProviderEventSink};
 pub use gc::{gc_materialised_series, GcReport};
 pub use health::{HealthProbe, HealthStatus, HealthTarget};
 pub use host::{
 	ProviderError, ProviderHost, ProviderHostConfig, SourceFactory, VirtualArchive,
 };
-pub use http::{SourceHttp, USER_AGENT};
+pub use http::{
+	challenge_host, HeaderError, MaskedHeader, RequestHeaders, SourceHttp, USER_AGENT,
+};
 pub use identity::{merge_series, normalise_title, MergeReport, SeriesDuplicate};
 pub use materialize::{add_series, refresh_series, Materialized, SkippedChapter};
 pub use rate_limit::RateLimiter;

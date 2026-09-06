@@ -6,6 +6,7 @@
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import * as Tabs from '@stump/ui/components/ui/tabs';
+	import { toast } from 'svelte-sonner';
 	import { request, subscribe } from '@stump/ui/graphql/client';
 	import {
 		DashboardJobsDocument,
@@ -99,7 +100,9 @@
 		return () => clearInterval(timer);
 	});
 
-	// One socket for both live surfaces: job progress and device sightings.
+	// One socket for every live surface: job progress, device sightings, and
+	// provider source health. `readEvents` already carries all three, so a
+	// second subscription would only cost a second WebSocket.
 	$effect(() => {
 		return subscribe(
 			DashboardLiveEventsDocument,
@@ -133,6 +136,10 @@
 					if (event.__typename === 'DeviceSeen') {
 						now = new Date();
 						void queryClient.invalidateQueries({ queryKey: ['devices'] });
+						return;
+					}
+					if (event.__typename === 'ProviderSourceHealthChanged') {
+						announceSourceHealth(event.name, event.healthStatus);
 					}
 				},
 				error: () => {
@@ -151,6 +158,20 @@
 				.map(([kind, count]) => [kind, Number(count)] as const)
 				.filter(([, count]) => Number.isFinite(count) && count > 0)
 		);
+	}
+
+	/**
+	 * A source health event is only emitted on a transition, so `OK` is a
+	 * recovery and anything else is a degradation worth interrupting for.
+	 */
+	function announceSourceHealth(name: string, status: string): void {
+		if (status === 'OK') {
+			toast.success(`${name} is reachable again.`);
+		} else if (status === 'DEAD') {
+			toast.error(`${name} is down; Stump stopped listing it.`);
+		} else {
+			toast.warning(`${name} is degraded.`);
+		}
 	}
 </script>
 

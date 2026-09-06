@@ -29,6 +29,14 @@ pub struct Model {
 	#[sea_orm(column_type = "Text")]
 	pub base_url: String,
 	pub enabled: bool,
+	/// Operator-configured request headers sent with every request this
+	/// instance makes, as a JSON object of strings (`{"Cookie": "cf_clearance=…"}`).
+	/// The values are credentials, so they are never logged and the API only
+	/// ever returns names plus a masked preview — which is why this field is
+	/// hidden from the generated GraphQL object.
+	#[sea_orm(column_type = "Text", nullable)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub request_headers: Option<String>,
 	/// The user who enabled the instance.
 	#[sea_orm(column_type = "Text", nullable)]
 	pub created_by: Option<String>,

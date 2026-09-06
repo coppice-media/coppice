@@ -876,8 +876,12 @@ pub(crate) async fn load_bookmarks(
 	})
 }
 
+/// A Kavita bookmark is a page (`BookmarkDto.page` is an `int`); a bookmark
+/// with no page — an audiobook position — has nothing Kavita could render
+/// and must not surface as `page: 0`.
 fn bookmark_query(user: &AuthUser) -> Select<bookmark::Entity> {
 	bookmark::Entity::find_for_user(user)
+		.filter(bookmark::Column::Page.is_not_null())
 		.order_by_asc(bookmark::Column::CreatedAt)
 		.order_by_asc(bookmark::Column::Id)
 }
@@ -1743,6 +1747,21 @@ mod bookmarks {
 			})),
 		)
 		.await;
+		// A time bookmark (an audiobook position written by the ABS profile)
+		// has no page: Kavita must not list it as `page: 0`.
+		bookmark::ActiveModel {
+			id: sea_orm::ActiveValue::Set("time-bookmark".to_string()),
+			media_id: sea_orm::ActiveValue::Set(files[0].id.clone()),
+			user_id: sea_orm::ActiveValue::Set(user.id.clone()),
+			page: sea_orm::ActiveValue::Set(None),
+			position_ms: sea_orm::ActiveValue::Set(Some(7_000)),
+			preview_content: sea_orm::ActiveValue::Set(None),
+			locator: sea_orm::ActiveValue::Set(None),
+			created_at: sea_orm::ActiveValue::Set(chrono::Utc::now()),
+		}
+		.insert(backend.conn())
+		.await
+		.unwrap();
 
 		// `all-bookmarks` is POST-only with a filter body, as Kamigura calls it.
 		let (status, body) = request(

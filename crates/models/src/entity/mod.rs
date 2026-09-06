@@ -34,6 +34,7 @@ pub mod ingest_progress_event;
 pub mod ingest_quality_report;
 pub mod job;
 pub mod kavita_on_deck_removal;
+pub mod kindle_delivery;
 pub mod known_duplicate_page;
 pub mod kobo_shelf_tombstone;
 pub mod kobo_sync_session;

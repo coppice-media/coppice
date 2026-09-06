@@ -47,8 +47,9 @@ use models::entity::provider_source;
 use regex::Regex;
 use serde::Deserialize;
 use stump_provider::{
-	definition::SourceDefinition, RemoteChapter, RemotePage, RemoteSeries, SearchFilter,
-	Source, SourceCapabilities, SourceHttp, SourceInfo, SourcePage, SourceResult,
+	definition::SourceDefinition, RemoteChapter, RemotePage, RemoteSeries,
+	RequestHeaders, SearchFilter, Source, SourceCapabilities, SourceHttp, SourceInfo,
+	SourcePage, SourceResult,
 };
 
 use crate::{
@@ -120,14 +121,20 @@ impl MangaThemesiaSource {
 		definition: &SourceDefinition,
 		row: &provider_source::Model,
 	) -> Result<Arc<dyn Source>, ThemeError> {
-		Self::new(definition, &row.id, Some(row.base_url.as_str()))
-			.map(|source| Arc::new(source) as Arc<dyn Source>)
+		Self::new(
+			definition,
+			&row.id,
+			Some(row.base_url.as_str()),
+			RequestHeaders::parse(row.request_headers.as_deref()),
+		)
+		.map(|source| Arc::new(source) as Arc<dyn Source>)
 	}
 
 	pub fn new(
 		definition: &SourceDefinition,
 		instance_id: &str,
 		base_url: Option<&str>,
+		headers: RequestHeaders,
 	) -> Result<Self, ThemeError> {
 		let supports_latest = definition.bool_knob(&["supports_latest"]).unwrap_or(true);
 		let context = ThemeContext::new(
@@ -139,6 +146,7 @@ impl MangaThemesiaSource {
 				latest: supports_latest,
 				search: true,
 			},
+			headers,
 		)?;
 		let selectors = Selectors {
 			list: theme::selector(
@@ -733,8 +741,13 @@ mod tests {
 	}
 
 	fn engine(knobs: &[(&str, KnobValue)]) -> MangaThemesiaSource {
-		MangaThemesiaSource::new(&definition(knobs), "en.themesia", None)
-			.expect("engine builds")
+		MangaThemesiaSource::new(
+			&definition(knobs),
+			"en.themesia",
+			None,
+			RequestHeaders::default(),
+		)
+		.expect("engine builds")
 	}
 
 	#[test]

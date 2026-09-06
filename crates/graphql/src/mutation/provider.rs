@@ -1,10 +1,14 @@
 //! GraphQL mutations for the provider host: virtual libraries, source
 //! enablement, and materialised series management.
 
+use std::collections::BTreeMap;
+
 use crate::{
-	data::CoreContext, guard::PermissionGuard, object::provider::ProviderSource,
+	data::CoreContext,
+	guard::PermissionGuard,
+	object::provider::{ProviderSource, ProviderSourceHeader},
 };
-use async_graphql::{Context, Object, Result};
+use async_graphql::{Context, Json, Object, Result};
 use models::{
 	entity::{library, series},
 	shared::enums::UserPermission,
@@ -87,6 +91,36 @@ impl ProviderMutation {
 			.disable_source(&id)
 			.await
 			.map_err(|error| error.to_string())?)
+	}
+
+	/// Replace the request headers one source instance sends with every
+	/// request, e.g. the `cf_clearance` cookie and matching `User-Agent`
+	/// copied out of a browser for a source behind a Cloudflare challenge.
+	///
+	/// The map replaces whatever was configured: an empty map clears it, and
+	/// an empty value drops that header. The response describes the stored
+	/// headers by name with a masked value — the values themselves are never
+	/// returned or logged, because they are live credentials.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
+	async fn set_provider_source_headers(
+		&self,
+		ctx: &Context<'_>,
+		instance_id: String,
+		headers: Json<BTreeMap<String, String>>,
+	) -> Result<Vec<ProviderSourceHeader>> {
+		let core = ctx.data::<CoreContext>()?;
+		let host = core.provider_host().ok_or("Provider host is not enabled")?;
+		let parsed = stump_provider::RequestHeaders::from_pairs(headers.0)
+			.map_err(|error| async_graphql::Error::new(error.to_string()))?;
+		let (_, stored) = host
+			.set_source_headers(&instance_id, parsed)
+			.await
+			.map_err(|error| error.to_string())?;
+		Ok(stored
+			.masked()
+			.into_iter()
+			.map(ProviderSourceHeader::from)
+			.collect())
 	}
 
 	/// Fetch (or refresh) the Keiyoushi catalog snapshot.

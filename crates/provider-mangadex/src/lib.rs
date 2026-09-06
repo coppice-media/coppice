@@ -30,8 +30,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use stump_provider::{
 	ContentRating, FetchedPage, ProviderError, RateLimiter, RemoteChapter, RemotePage,
-	RemoteSeries, SearchFilter, SeriesStatus, Source, SourceCapabilities, SourceFactory,
-	SourceHttp, SourceInfo, SourcePage, SourceResult,
+	RemoteSeries, RequestHeaders, SearchFilter, SeriesStatus, Source, SourceCapabilities,
+	SourceFactory, SourceHttp, SourceInfo, SourcePage, SourceResult,
 };
 
 pub const IMPLEMENTATION: &str = "mangadex";
@@ -54,9 +54,13 @@ pub fn factory() -> SourceFactory {
 		catalog_pkg: CATALOG_PKG,
 		base_url: SITE_URL,
 		build: |row| {
-			MangaDexSource::new(&row.id, &row.lang)
-				.map(|source| Arc::new(source) as Arc<dyn Source>)
-				.map_err(ProviderError::from)
+			MangaDexSource::new(
+				&row.id,
+				&row.lang,
+				RequestHeaders::parse(row.request_headers.as_deref()),
+			)
+			.map(|source| Arc::new(source) as Arc<dyn Source>)
+			.map_err(ProviderError::from)
 		},
 	}
 }
@@ -70,12 +74,18 @@ pub struct MangaDexSource {
 
 impl MangaDexSource {
 	/// A source instance whose chapters are filtered to `lang` (`all` for
-	/// every language).
-	pub fn new(instance_id: &str, lang: &str) -> Result<Self, reqwest::Error> {
+	/// every language). `headers` are the operator's configured request
+	/// headers for the instance (`provider_sources.request_headers`).
+	pub fn new(
+		instance_id: &str,
+		lang: &str,
+		headers: RequestHeaders,
+	) -> Result<Self, reqwest::Error> {
 		Ok(Self::with_http(
 			instance_id,
 			lang,
-			SourceHttp::with_limiter(RateLimiter::per_second(REQUESTS_PER_SECOND))?,
+			SourceHttp::with_limiter(RateLimiter::per_second(REQUESTS_PER_SECOND))?
+				.with_headers(headers),
 			API_URL,
 			Some(REPORT_URL),
 		))
@@ -686,6 +696,7 @@ mod tests {
 			lang: "ja".to_string(),
 			base_url: SITE_URL.to_string(),
 			enabled: true,
+			request_headers: None,
 			created_by: None,
 			created_at: Utc::now().into(),
 			updated_at: None,
@@ -1050,7 +1061,8 @@ mod tests {
 	#[tokio::test]
 	#[ignore]
 	async fn live_search_details_chapters_and_first_page() {
-		let source = MangaDexSource::new("mangadex-en", "en").unwrap();
+		let source =
+			MangaDexSource::new("mangadex-en", "en", RequestHeaders::default()).unwrap();
 		let results = source.search("one piece", &[], 1).await.unwrap();
 		let first = results.items.first().expect("live search result");
 		let details = source.details(&first.remote_id).await.unwrap();

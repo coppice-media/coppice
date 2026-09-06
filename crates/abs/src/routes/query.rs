@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use models::entity::{library, media, media_metadata, series, user::AuthUser};
 use sea_orm::{
-	sea_query::{Expr, Func, SimpleExpr},
+	sea_query::{Expr, SimpleExpr},
 	ColumnTrait, Condition, EntityTrait, FromQueryResult, IntoSimpleExpr, Order,
 	PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select,
 };
@@ -19,24 +19,13 @@ use crate::{
 	routes::AbsBackend,
 };
 
-/// The extensions this profile serves, i.e. Stump's audio containers
-/// (`stump_media::ContentType::is_audio`). A row with any other extension is
-/// not an ABS "library item" at all: Audiobookshelf has no page-based reading
-/// position, so an ebook would be a book a client could open and never track.
-pub(crate) const AUDIO_EXTENSIONS: [&str; 6] =
-	["m4b", "m4a", "mp3", "opus", "ogg", "flac"];
-
-/// `lower(media.extension) IN (…)`. Stump lower-cases extensions on ingest,
-/// but a row written by an older scan may not be, and a case-sensitive
-/// comparison would silently hide the book.
+/// The rows this profile serves are Stump's audio containers
+/// (`models::entity::media::AUDIO_EXTENSIONS`). A row with any other
+/// extension is not an ABS "library item" at all: Audiobookshelf has no
+/// page-based reading position, so an ebook would be a book a client could
+/// open and never track.
 pub(crate) fn audio_condition() -> Condition {
-	Condition::all().add(
-		Expr::expr(Func::lower(Expr::col((
-			media::Entity,
-			media::Column::Extension,
-		))))
-		.is_in(AUDIO_EXTENSIONS),
-	)
+	media::audio_extension_condition()
 }
 
 /// Books the request may see, narrowed to audio and to rows that still exist.

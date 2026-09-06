@@ -1,0 +1,11 @@
+# One event per persisted drop-item revision (`CoreEvent::IngestItemChanged`),
+# narrowed to the selected library. This is what keeps the drop queue and the
+# analysis queue live: without it the editor only sees a change it made itself.
+subscription IngestItemEvents($libraryId: ID) {
+	ingestEvents(libraryId: $libraryId) {
+		libraryId
+		itemId
+		status
+		revision
+	}
+}
