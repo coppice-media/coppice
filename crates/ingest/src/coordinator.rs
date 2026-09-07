@@ -221,6 +221,62 @@ impl IngestCoordinator {
 		self.store.job(job_id).await
 	}
 
+	/// Run one quality finding's repair tool against a staged item, then
+	/// re-run the checks so the report reflects the file that is now there.
+	///
+	/// The re-run is the point: a fix that did not fix it must show as the
+	/// same finding rather than as a green report, and a fix that worked must
+	/// not need a manual requeue to be believed. Providers are deliberately
+	/// not re-queried — a repaired container is the same book, and a fix
+	/// button must not spend somebody's API quota.
+	pub async fn run_quality_fix(
+		&self,
+		item_id: &str,
+		check_id: &str,
+	) -> IngestResult<super::store::DropItemModel> {
+		// The tool and its options come from the *registry*, not from the
+		// stored report: a check declares its repair once, so a persisted
+		// report can never name a tool this build does not have or options
+		// it no longer accepts.
+		let fix = self
+			.quality
+			.checks()
+			.iter()
+			.find(|check| check.id() == check_id)
+			.and_then(|check| check.fix())
+			.ok_or_else(|| {
+				IngestError::BadRequest(format!(
+					"quality check {check_id} has no repair tool"
+				))
+			})?;
+		let repaired = self.store.run_quality_fix(item_id, check_id, &fix).await?;
+		let snapshot = self.store.snapshot(&repaired.id).await?;
+		let report = self
+			.quality
+			.run_all(&snapshot, &BTreeMap::new())
+			.await
+			.map_err(|error| {
+				IngestError::InternalError(format!("quality analysis failed: {error}"))
+			})?;
+		let score = report.score;
+		self.store.save_report(&repaired.id, &report).await?;
+		let failed_checks = Self::failed_check_ids(&report);
+		if !failed_checks.is_empty() {
+			self.notify(IngestEvent::QualityFailed {
+				library_id: repaired.library_id.clone(),
+				drop_item_id: Some(repaired.id.clone()),
+				media_id: None,
+				created_by: repaired.created_by.clone(),
+				score,
+				failed_checks,
+			});
+		}
+		let has_candidates = !self.store.candidates(&repaired.id).await?.is_empty();
+		self.store
+			.set_item_analysis_result(&repaired.id, score, has_candidates)
+			.await
+	}
+
 	pub async fn subscribe(
 		&self,
 		library_id: Option<&str>,
@@ -327,7 +383,17 @@ impl IngestCoordinator {
 		// staged bytes before anything reads them, and its result (a re-hashed
 		// row, or a failed item) is what the rest of the phases work from.
 		let preprocessed = self.store.run_preprocess(item).await?;
-		let item = &preprocessed;
+		// An audiobook is demuxed once, here, and the result is persisted:
+		// every quality check, the editor's track table, and the assemble
+		// decision all read the same probe rather than repeating it. A
+		// non-audio item passes straight through.
+		let analysed = self.store.run_audio_analysis(&preprocessed).await?;
+		// `auto_assemble` turns a folder of parts into the canonical M4B
+		// *before* the report runs, so the score describes the book the
+		// library will receive rather than the delivery it arrived as.
+		let policy = self.store.audio_policy(&analysed.library_id).await?;
+		let assembled = self.store.run_audio_assemble(&analysed, &policy).await?;
+		let item = &assembled;
 		let snapshot = self.store.snapshot(&item.id).await?;
 		self.emit_phase(
 			job,

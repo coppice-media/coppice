@@ -4,6 +4,8 @@ version.workspace = true
 edition = "2021"
 
 [dependencies]
+chrono.workspace = true
+metadata_integrations = { path = "../integrations/metadata", default-features = false }
 models = { path = "../models", default-features = false }
 sea-orm.workspace = true
 serde_json.workspace = true
@@ -14,6 +16,10 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+metadata_integrations = { path = "../integrations/metadata", default-features = false, features = [
+	"mock",
+] }
 migrations = { path = "../migrations", default-features = false }
 tempfile.workspace = true
 tests = { path = "../tests" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

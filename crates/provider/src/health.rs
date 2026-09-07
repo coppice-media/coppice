@@ -11,7 +11,7 @@ use std::{
 
 use chrono::Utc;
 use futures::{stream, StreamExt};
-use models::entity::source_health;
+use models::entity::{provider_source, source_health};
 use sea_orm::{
 	sea_query::OnConflict, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait,
 	QueryFilter,
@@ -20,6 +20,7 @@ use sea_orm::{
 use crate::{
 	catalog::{CatalogSnapshot, SourceTheme},
 	event::ProviderEvent,
+	http::RequestHeaders,
 };
 
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -130,21 +131,40 @@ impl HealthChecker {
 		Self { client }
 	}
 
-	/// Probe `base_url`. `known_theme` skips markup sniffing when the theme
-	/// was detected by an earlier run.
+	/// Probe `base_url` as any anonymous client sees it. `known_theme` skips
+	/// markup sniffing when the theme was detected by an earlier run.
 	pub async fn probe(
 		&self,
 		base_url: &str,
 		known_theme: Option<SourceTheme>,
 	) -> HealthProbe {
+		self.probe_with(base_url, known_theme, &RequestHeaders::default())
+			.await
+	}
+
+	/// Probe `base_url` carrying one source instance's configured request
+	/// headers.
+	///
+	/// This is never the *first* probe of a host: the unauthenticated answer
+	/// is what a catalog row reports, and this one answers the different
+	/// question an operator has about a source they configured — whether the
+	/// clearance it carries still gets through
+	/// ([`probe_target`] runs it only after an unauthenticated probe came
+	/// back challenged).
+	pub async fn probe_with(
+		&self,
+		base_url: &str,
+		known_theme: Option<SourceTheme>,
+		headers: &RequestHeaders,
+	) -> HealthProbe {
 		let mut probe = HealthProbe::default();
 		let started = Instant::now();
-		let head = self.client.head(base_url).send().await;
+		let head = headers.apply(self.client.head(base_url)).send().await;
 		let response = match head {
 			Ok(response) if !matches!(response.status().as_u16(), 405 | 501 | 403) => {
 				Ok(response)
 			},
-			_ => self.client.get(base_url).send().await,
+			_ => headers.apply(self.client.get(base_url)).send().await,
 		};
 		let response = match response {
 			Ok(response) => response,
@@ -178,7 +198,7 @@ impl HealthChecker {
 
 		probe.theme = known_theme;
 		if probe.theme.is_none() {
-			let html = match self.client.get(base_url).send().await {
+			let html = match headers.apply(self.client.get(base_url)).send().await {
 				Ok(response) => response.bytes().await.ok().map(|bytes| {
 					let end = bytes.len().min(THEME_SNIFF_LIMIT);
 					String::from_utf8_lossy(&bytes[..end]).into_owned()
@@ -191,10 +211,11 @@ impl HealthChecker {
 		if let Some(theme) = probe.theme {
 			let latest =
 				format!("{}{}", base_url.trim_end_matches('/'), theme.latest_path());
-			probe.latest_path_ok = Some(match self.client.get(&latest).send().await {
-				Ok(response) => response.status().is_success(),
-				Err(_) => false,
-			});
+			probe.latest_path_ok =
+				Some(match headers.apply(self.client.get(&latest)).send().await {
+					Ok(response) => response.status().is_success(),
+					Err(_) => false,
+				});
 		}
 		probe
 	}
@@ -227,6 +248,19 @@ impl SourceStatusChange {
 	}
 }
 
+/// An enabled source instance whose host is still gated after the request
+/// headers the instance already carries were tried. This is the input of an
+/// automatic `challenge_solve`: the one thing that can clear it is a browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChallengedInstance {
+	/// `provider_sources.id`.
+	pub instance_id: String,
+	/// The host the challenge sits on, after any redirect.
+	pub host: String,
+	/// The URL a browser should be pointed at to earn the clearance.
+	pub url: String,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct HealthRunSummary {
 	pub probed_urls: usize,
@@ -238,6 +272,10 @@ pub struct HealthRunSummary {
 	/// first time is not a change: a cold run over a full catalog writes
 	/// every row but announces nothing.
 	pub changed: Vec<SourceStatusChange>,
+	/// Enabled instances still behind a challenge after their configured
+	/// headers were tried. Empty unless a probe came back challenged, so a
+	/// healthy run allocates nothing.
+	pub challenged: Vec<ChallengedInstance>,
 }
 
 /// One base URL to probe, with every catalog source that shares it. This is
@@ -306,16 +344,77 @@ pub async fn plan<C: ConnectionTrait>(
 	Ok(targets)
 }
 
+/// The health target for one base URL: every catalog source that shares it,
+/// and the theme an earlier run detected.
+///
+/// `sources` is empty when the catalog does not know the host — a source
+/// enabled straight from a definition repository, or a snapshot that has not
+/// been fetched. [`probe_target`] then probes and reports as usual and simply
+/// writes no rows, which is the honest outcome: there is no catalog source
+/// for the row to be about.
+pub async fn target_for<C: ConnectionTrait>(
+	conn: &C,
+	snapshot: &CatalogSnapshot,
+	base_url: &str,
+) -> Result<HealthTarget, sea_orm::DbErr> {
+	let base_url = base_url.trim_end_matches('/').to_string();
+	let sources: Vec<crate::catalog::CatalogSource> = snapshot
+		.entries
+		.iter()
+		.flat_map(|entry| entry.sources.iter())
+		.filter(|source| source.base_url.trim_end_matches('/') == base_url)
+		.cloned()
+		.collect();
+	let known_theme = if sources.is_empty() {
+		None
+	} else {
+		source_health::Entity::find()
+			.filter(
+				source_health::Column::SourceId
+					.is_in(sources.iter().map(|source| source.id.clone())),
+			)
+			.all(conn)
+			.await?
+			.into_iter()
+			.find_map(|row| row.theme.as_deref().and_then(SourceTheme::parse))
+	};
+	Ok(HealthTarget {
+		base_url,
+		sources,
+		known_theme,
+	})
+}
+
 /// Probe one target and upsert a `source_health` row for every catalog
 /// source sharing its base URL. A source is marked dead once it has
 /// `dead_after` consecutive failed runs; one reachable run resets the count.
+///
+/// A host that answers the anonymous probe with a Cloudflare challenge is
+/// probed a *second* time, once per enabled instance that carries request
+/// headers, and the first attempt that gets through is what the row records.
+/// The two probes answer two different questions and both are worth asking:
+/// the anonymous one is what any client sees (and is the only one a source
+/// nobody configured gets), the authenticated one is whether this server can
+/// reach it — and without the second the row of a source whose clearance
+/// works would sit at `DEGRADED` forever, with no way to tell it from one
+/// that is genuinely gated.
+///
+/// Every enabled instance the challenge survives is reported in
+/// [`HealthRunSummary::challenged`], which is what the caller feeds to an
+/// automatic solve.
 pub async fn probe_target<C: ConnectionTrait>(
 	conn: &C,
 	checker: &HealthChecker,
 	target: &HealthTarget,
 	dead_after: i32,
 ) -> Result<HealthRunSummary, sea_orm::DbErr> {
-	let probe = checker.probe(&target.base_url, target.known_theme).await;
+	let mut probe = checker.probe(&target.base_url, target.known_theme).await;
+	let mut challenged = Vec::new();
+	if probe.challenged {
+		probe =
+			clear_with_configured_headers(conn, checker, target, probe, &mut challenged)
+				.await?;
+	}
 	let source_ids: Vec<String> = target
 		.sources
 		.iter()
@@ -331,6 +430,7 @@ pub async fn probe_target<C: ConnectionTrait>(
 
 	let mut summary = HealthRunSummary {
 		probed_urls: 1,
+		challenged,
 		..Default::default()
 	};
 	let checked_at = Utc::now();
@@ -400,6 +500,65 @@ pub async fn probe_target<C: ConnectionTrait>(
 	Ok(summary)
 }
 
+/// Re-probe a gated host with each enabled instance's configured request
+/// headers, and record the instances the challenge survived.
+///
+/// Every instance is tried on its own: they share a host, so in practice they
+/// share one clearance, but each carries its own header map and "can *this*
+/// instance reach the host" is the question a solve is queued from. The first
+/// probe that gets through is what the shared `source_health` row records; an
+/// instance with no configured headers has nothing to try and is reported
+/// challenged without a request, which is exactly the state an automatic
+/// solve exists to leave.
+async fn clear_with_configured_headers<C: ConnectionTrait>(
+	conn: &C,
+	checker: &HealthChecker,
+	target: &HealthTarget,
+	anonymous: HealthProbe,
+	challenged: &mut Vec<ChallengedInstance>,
+) -> Result<HealthProbe, sea_orm::DbErr> {
+	let url = anonymous
+		.redirect_url
+		.clone()
+		.unwrap_or_else(|| target.base_url.clone());
+	let host = crate::http::host_of(&url);
+	// Enabled instances are a handful, and matching a base URL means
+	// comparing it without its trailing slash, which is not a SQL predicate
+	// worth writing.
+	let instances = provider_source::Entity::find()
+		.filter(provider_source::Column::Enabled.eq(true))
+		.all(conn)
+		.await?;
+
+	let mut cleared = None;
+	for instance in instances {
+		if instance.base_url.trim_end_matches('/') != target.base_url {
+			continue;
+		}
+		let headers = RequestHeaders::parse(instance.request_headers.as_deref());
+		if !headers.is_empty() {
+			let probe = checker
+				.probe_with(&target.base_url, target.known_theme, &headers)
+				.await;
+			if !probe.challenged {
+				tracing::debug!(
+					instance = %instance.id,
+					host,
+					"Configured request headers cleared the Cloudflare challenge"
+				);
+				cleared = cleared.or(Some(probe));
+				continue;
+			}
+		}
+		challenged.push(ChallengedInstance {
+			instance_id: instance.id,
+			host: host.clone(),
+			url: url.clone(),
+		});
+	}
+	Ok(cleared.unwrap_or(anonymous))
+}
+
 impl HealthRunSummary {
 	/// Fold another run's (or target's) counters and transitions into this one.
 	pub fn merge(&mut self, other: HealthRunSummary) {
@@ -409,6 +568,7 @@ impl HealthRunSummary {
 		self.degraded += other.degraded;
 		self.dead += other.dead;
 		self.changed.extend(other.changed);
+		self.challenged.extend(other.challenged);
 	}
 }
 

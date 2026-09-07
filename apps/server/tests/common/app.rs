@@ -72,7 +72,7 @@ impl TestApp {
 		self.ctx.conn.as_ref()
 	}
 
-	async fn auth_header(&self) -> String {
+	pub(crate) async fn auth_header(&self) -> String {
 		format!(
 			"Bearer {}",
 			self.access_token

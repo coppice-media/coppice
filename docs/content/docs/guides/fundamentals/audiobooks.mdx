@@ -211,6 +211,64 @@ The audio bytes of one track, where `index` is the track's index in the manifest
 
 `Content-Type` is the track's stored MIME, unless the requesting device's [transform preset](#device-preset) asks for a transcode — then it is the delivered format (`audio/ogg` for Opus), because the stored MIME would be a lie on transcoded bytes. Range support is identical either way. The Audiobookshelf lane (`GET /api/items/{id}/file/{ino}`) resolves the same preset for the same device, so a client's encoding does not depend on which protocol it speaks.
 
+## Ingesting
+
+An audiobook rarely arrives as one tidy folder in a library path. It arrives as
+`Liu, Cixin - Three Body 01 mp3.rar`, or as `Audiobook.rar` sitting beside
+`Ebooks.rar`. [Staged ingest](/docs/developer/modular-ingest) handles both.
+
+### Dropping an archive
+
+Drop the `.rar`/`.zip`/`.7z` into the library's ingest drop folder and run a
+scan. The container's member list is read first — without extracting it — and
+if it holds publications the archive is **exploded**:
+
+- A flat folder of audio files plus its `cover.jpg`/`.nfo`/`.cue` becomes **one**
+  audiobook item, using the same folder rule described in
+  [How a folder becomes one book](#how-a-folder-becomes-one-book). Thirty-five
+  numbered MP3s are one book, not thirty-five.
+- Each EPUB/MOBI/CBZ/PDF beside it becomes its own item.
+- Every item of one archive shares a drop group, so the editor shows them
+  together.
+- The archive itself is removed: it was the delivery, not the book. An
+  extraction that fails leaves it in place and fails one item with the
+  extractor's own message, so fixing the installation and rescanning is the
+  whole recovery.
+
+RAR needs either a build with the `rar` feature or an `unrar` (or `7z`, or
+`bsdtar`) on the server's `PATH`; 7-Zip always needs `7z` or `bsdtar`.
+
+### What the item shows
+
+An audio item is probed once during analysis, and the drop-item page renders
+that probe: total duration, codec and bitrate, the track list with each part's
+name and publication-relative start offset, the chapter list with its
+[provenance](#chapters) (a `per_track` list is Stump's synthesis from file
+boundaries, not a publisher's chapter list), the embedded cover, and the
+editable narrator/title/authors/series/year fields. The
+[quality checks](#quality-checks) run beside it, and each failing check offers
+the tool that repairs it — **Assemble to M4B** and **Write chapters** are
+buttons, not commands to look up. Pressing one runs the tool and re-runs the
+checks, so the report always describes the file that is now there.
+
+### Assembling during ingest
+
+With `audio.autoAssemble` on for the library, a split book is
+[assembled](#assembling) into one M4B as part of ingest, before the quality
+report runs — so the score describes the book the library will receive rather
+than the delivery it arrived as. The M4B becomes the item's file and the parts
+are kept beside it as sidecars unless `audio.keepOriginal` is turned off. They
+default off and on respectively: an ingest run analyses and reports, and only
+rewrites your audio once you have asked it to per library.
+
+### The ebook and the audiobook of one book
+
+When one drop yields both an audiobook and an ebook, committing both records an
+edition-pair *suggestion* linking them — the two files arriving together is a
+far stronger signal than their titles matching. It is a suggestion, never an
+assertion: an archive that happened to hold two unrelated books gives you
+something to decline.
+
 ## Tools
 
 Three library tools operate on audiobooks, run through the [CLI](/docs/developer/cli)'s `tools` subcommand. Like every other Stump tool they plan first and apply second, so a run always shows what it would do before anything is written:

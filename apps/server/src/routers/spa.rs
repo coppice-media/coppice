@@ -3,7 +3,7 @@ use std::path::Path;
 use axum::{
 	body::Body,
 	extract::State,
-	http::{header, HeaderMap, HeaderValue, Request},
+	http::{header, HeaderMap, HeaderValue, Request, Uri},
 	response::IntoResponse,
 	response::Response,
 	routing::get,
@@ -57,13 +57,6 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 				.precompressed_gzip(),
 		);
 
-	let spa_fallback = ServiceBuilder::new()
-		.layer(SetResponseHeaderLayer::if_not_present(
-			header::CACHE_CONTROL,
-			HeaderValue::from_static("no-cache"),
-		))
-		.service(ServeFile::new(dist_path.join("index.html")));
-
 	Router::new()
 		.route(INDEX, get(index_html))
 		.route(INDEX_HTML, get(index_html))
@@ -71,7 +64,35 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 		.route(SW, get(serve_sw))
 		.nest_service(ASSETS, static_assets)
 		.nest_service(DIST, dist_files)
-		.fallback_service(spa_fallback)
+		.fallback(spa_fallback)
+}
+
+/// Prefixes the SPA fallback must never answer.
+///
+/// The web UI's fallback becomes the *server's* fallback once this router is
+/// merged, so without this an unknown API path answers `200 text/html` — the
+/// SPA shell — instead of a `404`. That is worse than a missing route: a
+/// client asked for JSON or a file and got an HTML document with a success
+/// status, which is exactly how `GET /api/items/{id}/download` and
+/// `/api/items/{id}/ebook` looked like working routes on a `full` build
+/// while returning the web UI.
+const NON_SPA_PREFIXES: [&str; 4] = ["/api/", "/opds/", "/public/", "/koreader/"];
+
+/// `index.html` for a deep link into the web UI, a JSON `404` for anything
+/// under an API prefix.
+async fn spa_fallback(
+	State(ctx): State<AppState>,
+	uri: Uri,
+	headers: HeaderMap,
+) -> APIResult<Response> {
+	let path = uri.path();
+	if NON_SPA_PREFIXES
+		.iter()
+		.any(|prefix| path.starts_with(prefix))
+	{
+		return Err(APIError::NotFound(format!("No route for {path}")));
+	}
+	serve_with_no_cache(ctx, headers, "index.html").await
 }
 
 pub(crate) fn relative_favicon_path(webui_enabled: bool) -> Option<String> {

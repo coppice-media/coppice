@@ -58,6 +58,181 @@ The names below are logical records. Their exact SeaORM entities and migrations 
 5. `approveIngestItem` is the only proposed transition to committed library state. It applies selected metadata in the same database transaction as the media/series association. `rejectIngestItem` removes or quarantines staging only; it does not delete unrelated existing media.
 6. All list ordering is deterministic: score/priority first, then creation timestamp, then opaque ID. Provider response order is never a tie-breaker.
 
+## Archive drops
+
+A dropped file is normally one publication. A dropped `.zip`, `.rar`, or `.7z`
+may instead be a *delivery*: a folder of MP3 parts, an EPUB beside its MOBI and
+cover, several books at once. Treating every container as one book meant the
+audiobook arrived as a "comic archive" with 35 unreadable pages and the EPUB
+inside `Ebooks.rar` never arrived at all. **Implemented** in
+`crates/ingest/src/archive.rs`, driven from `IngestStore::scan_drop_folder`.
+
+### The one question, asked before extracting
+
+Every dropped container is asked whether it **holds publications** — answered
+from the member list alone, out of the zip central directory or `unrar l`,
+without writing a byte:
+
+| Member list | Outcome |
+| --- | --- |
+| no publications (only images, document resources, junk) | one book, exactly as before: a `.cbz`/`.zip` comic or an EPUB-shaped zip stays one drop item whose staged file is the container |
+| one or more publications | a delivery: extracted, exploded into one item per publication, and the archive is removed |
+
+`.cbz`, `.cbr`, `.epub`, and `.pdf` are never considered: those extensions are
+a *claim* that the container is one publication, and the explode path never
+overrules it. A 400 MB comic is therefore never extracted to discover it was a
+comic.
+
+### How members become items
+
+`archive::classify` walks the extracted tree once, depth-first, and applies
+three rules in order:
+
+1. **A directory of audio is one book.** The same collapse the scanner performs
+   through `PathUtils::dir_is_audio_book`: a flat directory whose files are
+   audio plus sidecars becomes one `AUDIO` item whose target is the *directory*.
+   This is the only item kind whose staged target is not a file.
+2. **Every other publication is its own item.** EPUB, MOBI, AZW3, PRC, CBZ,
+   CBR, PDF — three of them in one archive are three items.
+3. **Everything else is a sidecar or a note.** `cover.jpg`/`folder.jpg`/
+   `front.*`, `.nfo`, `.cue`, `.txt`, `.opf`, `.json`, `.url` attach to the
+   item they describe *when exactly one item can own them*; with two
+   publications and one cover, nothing can say which book it belongs to, so it
+   is reported in the explosion's notes rather than guessed at. Loose images are
+   pages, and a directory of pages is a comic, not a delivery.
+
+A member path that would escape the extraction directory (`..`, absolute, a
+drive prefix) is skipped rather than sanitised: an archive naming
+`../../etc/passwd` is hostile, and the honest response is to write it nowhere.
+
+### Drop groups
+
+Every item of one explosion shares a `drop_group_id`
+(`ingest_drop_items.drop_group_id`, migration `m20260945`). Nothing else on the
+row relates them: `relative_path` is the path inside the container and is often
+identical for every member, `source_sha256` is per-file by definition, and
+`idempotency_key` belongs to one upload request. The group is what lets the
+editor show "these three arrived together", and it is the strongest edition-pair
+signal ingest ever sees — see [Edition pairs from one drop](#edition-pairs-from-one-drop).
+
+`IngestDropItem.dropGroupSiblings` exposes the group; `IngestDropItem.sidecars`
+exposes the file names an item owns without being them.
+
+### Extraction, and when it fails
+
+| Format | Extractor |
+| --- | --- |
+| zip | in-process (`zip` crate) |
+| rar | the `unrar` bindings when built with the `rar` feature — the same library the RAR page processor uses, so a rar ingest cannot succeed where a rar *read* would fail — falling back to an operator-installed `unrar`, then `bsdtar` |
+| 7z | operator-installed `7z`, then `bsdtar`. There is no in-tree 7z reader, and writing one for an ingest edge case would be a codec, not a feature |
+
+External extractors are located and version-checked through the same
+`stump_tools::external::ExternalTool` adapter calibre and ffmpeg use, so a
+missing one is a single failure naming the install hint.
+
+A failed extraction produces **one failed drop item** carrying the extractor's
+own stderr tail, and the archive is left exactly where it was — fixing the
+installation and rescanning is the whole recovery. A rescan updates the reason
+in place rather than accumulating one failed row per scan. It is never a
+partially exploded group: the destination is removed first.
+
+Re-dropping the same delivery deduplicates onto the items it already produced.
+A folder book's identity is a digest over its sorted
+`<relative path>\0<file digest>` lines (`staging::hash_dir`), so it identifies
+the set of files the folder holds independently of traversal order, and a
+renamed part is a different book.
+
+## Audiobook items
+
+An `AUDIO` drop item is the only kind addressed in time rather than in pages,
+and the only kind whose staged target may be a directory.
+
+### The probe runs once
+
+Demuxing is the expensive part of an audiobook — symphonia walks every
+container, and a 62-part folder book means 62 walks — so the analysis phase
+probes once and persists the answer in `ingest_drop_items.audio_analysis`
+(`crates/ingest/src/contract.rs`, `AudioAnalysis`). Every screen that shows a
+duration, a track table, or a chapter list reads that column; nothing
+re-probes. It carries duration, codec, sample rate, channels, bitrate, the
+chapter list *and its provenance*, per-track publication-relative start
+offsets, the embedded tags (including narrator), and the cover's content type
+and size — never the cover bytes, because a cover on every row would make
+listing a drop folder a multi-megabyte query.
+
+Every time value is milliseconds from the start of the **publication**, which
+is the unit `reading_heads.position_ms` is already in, so a resume never needs
+a per-track conversion.
+
+A probe that fails is not a failed item: the audio quality family already
+reports an unreadable publication as a finding carrying the demuxer's own
+message, and failing here would hide it behind a bare error.
+
+### Assembling
+
+`AudioPolicy.auto_assemble` (per library, **off** by default) runs
+`audio-assemble` over a folder book *before* the quality report, so the score
+describes the book the library will receive rather than the delivery it arrived
+as. The M4B lands beside the parts in staging and becomes the item's file; the
+row is re-hashed exactly the way the preprocess hook's rewrite is, so
+`source_sha256` always describes the bytes a commit will move. The parts become
+the item's sidecars when `AudioPolicy.keep_original` is set (the default) and
+are removed when it is not — which is the only way ingest ever deletes an
+operator's audio.
+
+A tool result that assembled nothing (no ffmpeg for a transcode, or a
+verification failure) leaves the item exactly as it was and logs the reason: an
+unassembled folder book is still a book, and the `single_file` finding already
+says it is split. `IngestAssembledAudio` records the output's name, size,
+duration, chapter count, whether `moov` precedes `mdat`, whether the parts were
+kept, and whether it was a lossless remux or a re-encode.
+
+### Fixing a finding
+
+Every audio check names the tool that repairs it, so a failing report is one
+step away from a plan. `runIngestQualityFix(dropItemId, checkId)` runs that
+tool and then **re-runs the checks**: a repair that worked must show as a
+passing check without a manual requeue, and one that did not must show as the
+same finding rather than as a green report. Providers are deliberately not
+re-queried — a repaired container is the same book, and a fix button must not
+spend an operator's API quota.
+
+The tool and its options come from the check *registry*, not from the stored
+report, so a persisted report can never offer a fix naming a tool this build
+does not have. The finding must exist on the item's current report: a fix
+belongs to the findings the librarian was looking at.
+
+`audio-assemble` is routed through the same assemble path the policy uses, so
+the manual fix and the automatic one cannot behave differently. Tools that
+rewrite in place (`audio-chapters`, `meta-edit`) leave the path alone and the
+row is re-hashed.
+
+### Edition pairs from one drop
+
+A librarian who downloads "Dark Eden" gets `Audiobook.rar` and `Ebooks.rar` in
+one folder. Nothing later in the pipeline can recover that: once both are
+library rows, only their titles relate them, and a title match is the weakest
+edition signal there is.
+
+So at **commit** time — the earliest point at which both sides have media rows,
+which `models::domain::edition_pair::suggest_pair` requires — a committed item
+whose drop group holds an already-committed sibling of the complementary kind
+records a `PairEvidence::SameDrop` suggestion. Three rules keep that safe:
+
+- **Suggested, never confirmed.** An archive that happened to hold two
+  unrelated books produces a suggestion a user declines, never a wrong edition
+  list, and an existing confirmed link is never downgraded.
+- **Complementary kinds only.** Audio pairs with text. Two EPUBs in one archive
+  are a format duplicate of one edition, and three volumes of a series are not
+  editions of anything.
+- **Never fatal.** Pairing runs after the commit transaction and every failure
+  is logged and swallowed: the books are in the library either way, and a
+  missing suggestion is a missing convenience.
+
+`IngestDropGroupSibling.pairState` is per-viewer (the link rows are per-user)
+and reads `PENDING_COMMIT` until both sides have media rows, `SUGGESTED` once
+the row exists, `NOT_A_PAIR` when the kinds do not pair.
+
 ## Preprocess hook
 
 `ingest_preprocess_command` (`STUMP_INGEST_PREPROCESS`) is an optional executable run once per dropped item, before analysis. It is any executable; typical uses are format normalisation and running your own conversion pipeline. It is **implemented** in `core/src/ingest/preprocess.rs`, invoked from the staging phase of staged analysis in `core/src/ingest/coordinator.rs`, and unset by default, in which case nothing about the pipeline changes.

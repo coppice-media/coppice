@@ -28,8 +28,8 @@ use crate::{
 	errors::{AbsError, AbsResult},
 	ids::{AbsIds, IdKind, CREATE_ABS_IDS_SQL},
 	model::{
-		AbsAudio, AbsAudioChapter, AbsAudioTrack, AbsBookmark, AbsImage,
-		AbsPositionUpdate, AbsProgress,
+		AbsAudio, AbsAudioChapter, AbsAudioTrack, AbsBookmark, AbsEbookFile, AbsImage,
+		AbsPlaylist, AbsPositionUpdate, AbsProgress,
 	},
 	routes::{AbsBackend, AbsSession},
 	sessions::AbsSessions,
@@ -224,6 +224,14 @@ pub(crate) struct TestBackend {
 	/// server adapter plays in production: an accepted head is announced by
 	/// whoever wrote it, never by the route.
 	pub events: Mutex<Option<crate::socket::AbsEvents>>,
+	/// Confirmed audiobook -> EPUB pairs, per user id.
+	pub ebooks: Mutex<HashMap<String, HashMap<String, AbsEbookFile>>>,
+	/// Reading lists, per user id, newest last.
+	pub playlists: Mutex<HashMap<String, Vec<AbsPlaylist>>>,
+	/// `(media_id, Range)` per served ebook and `media_id` per zipped
+	/// download: what a test asserts the delivery layer received.
+	pub served_ebooks: Mutex<Vec<(String, Option<String>)>>,
+	pub downloaded: Mutex<Vec<(String, Option<String>)>>,
 }
 
 impl TestBackend {
@@ -238,6 +246,10 @@ impl TestBackend {
 			served: Mutex::new(Vec::new()),
 			device_id: Mutex::new(None),
 			events: Mutex::new(None),
+			ebooks: Mutex::new(HashMap::new()),
+			playlists: Mutex::new(HashMap::new()),
+			served_ebooks: Mutex::new(Vec::new()),
+			downloaded: Mutex::new(Vec::new()),
 		})
 	}
 
@@ -298,6 +310,15 @@ impl TestBackend {
 			.entry(user_id.to_owned())
 			.or_default()
 			.insert(media_id.to_owned(), progress);
+	}
+
+	/// Record a confirmed audiobook -> EPUB pair for `user_id`.
+	pub(crate) fn set_ebook(&self, user_id: &str, media_id: &str, ebook: AbsEbookFile) {
+		self.ebooks
+			.lock()
+			.entry(user_id.to_owned())
+			.or_default()
+			.insert(media_id.to_owned(), ebook);
 	}
 }
 
@@ -544,7 +565,11 @@ impl AbsBackend for TestBackend {
 		Ok(())
 	}
 
-	async fn cover(&self, _user: &AuthUser, media_id: &str) -> AbsResult<AbsImage> {
+	async fn cover(
+		&self,
+		_user: Option<&AuthUser>,
+		media_id: &str,
+	) -> AbsResult<AbsImage> {
 		self.covers
 			.lock()
 			.get(media_id)
@@ -654,6 +679,159 @@ impl AbsBackend for TestBackend {
 	async fn author_name(&self, author_id: &str) -> AbsResult<Option<String>> {
 		Ok(AbsIds::lookup(&self.conn, IdKind::Author, author_id).await?)
 	}
+
+	async fn session_by_id(&self, session_id: &str) -> AbsResult<Option<AbsSession>> {
+		Ok(AbsSessions::get_any(&self.conn, session_id).await?)
+	}
+
+	async fn ebook_editions(
+		&self,
+		user: &AuthUser,
+		media_ids: &[String],
+	) -> AbsResult<HashMap<String, AbsEbookFile>> {
+		let ebooks = self.ebooks.lock();
+		let Some(rows) = ebooks.get(&user.id) else {
+			return Ok(HashMap::new());
+		};
+		Ok(media_ids
+			.iter()
+			.filter_map(|id| rows.get(id).map(|ebook| (id.clone(), ebook.clone())))
+			.collect())
+	}
+
+	async fn paired_ebook_media_ids(&self, user: &AuthUser) -> AbsResult<Vec<String>> {
+		Ok(self
+			.ebooks
+			.lock()
+			.get(&user.id)
+			.map(|rows| rows.keys().cloned().collect())
+			.unwrap_or_default())
+	}
+
+	async fn serve_ebook(
+		&self,
+		headers: HeaderMap,
+		_user: &AuthUser,
+		ebook: &AbsEbookFile,
+	) -> AbsResult<Response<Body>> {
+		let range = headers
+			.get(axum::http::header::RANGE)
+			.and_then(|value| value.to_str().ok())
+			.map(str::to_owned);
+		self.served_ebooks
+			.lock()
+			.push((ebook.media_id.clone(), range.clone()));
+		let status = if range.is_some() {
+			StatusCode::PARTIAL_CONTENT
+		} else {
+			StatusCode::OK
+		};
+		Ok(Response::builder()
+			.status(status)
+			.header(axum::http::header::CONTENT_TYPE, "application/epub+zip")
+			.header(axum::http::header::ACCEPT_RANGES, "bytes")
+			.body(Body::from(vec![0u8; 8]))
+			.unwrap())
+	}
+
+	async fn download_item(
+		&self,
+		_headers: HeaderMap,
+		_user: &AuthUser,
+		media_id: &str,
+		ebook: Option<&AbsEbookFile>,
+	) -> AbsResult<Response<Body>> {
+		self.downloaded.lock().push((
+			media_id.to_owned(),
+			ebook.map(|ebook| ebook.media_id.clone()),
+		));
+		Ok(Response::builder()
+			.status(StatusCode::OK)
+			.header(axum::http::header::CONTENT_TYPE, "application/zip")
+			.header(
+				axum::http::header::CONTENT_DISPOSITION,
+				format!("attachment; filename=\"{media_id}.zip\""),
+			)
+			.body(Body::from(vec![0u8; 8]))
+			.unwrap())
+	}
+
+	async fn playlists(&self, user: &AuthUser) -> AbsResult<Vec<AbsPlaylist>> {
+		Ok(self
+			.playlists
+			.lock()
+			.get(&user.id)
+			.cloned()
+			.unwrap_or_default())
+	}
+
+	async fn playlist(
+		&self,
+		user: &AuthUser,
+		playlist_id: &str,
+	) -> AbsResult<Option<AbsPlaylist>> {
+		Ok(self
+			.playlists
+			.lock()
+			.get(&user.id)
+			.and_then(|rows| rows.iter().find(|row| row.id == playlist_id).cloned()))
+	}
+
+	async fn create_playlist(
+		&self,
+		user: &AuthUser,
+		name: &str,
+		description: Option<&str>,
+		media_ids: &[String],
+	) -> AbsResult<AbsPlaylist> {
+		let playlist = AbsPlaylist {
+			id: format!("playlist-{}", uuid::Uuid::new_v4()),
+			name: name.to_owned(),
+			description: description.map(str::to_owned),
+			media_ids: media_ids.to_vec(),
+			created_at: fixed(1_788_699_586_221),
+			updated_at: fixed(1_788_699_586_221),
+		};
+		self.playlists
+			.lock()
+			.entry(user.id.clone())
+			.or_default()
+			.push(playlist.clone());
+		Ok(playlist)
+	}
+
+	async fn update_playlist(
+		&self,
+		user: &AuthUser,
+		playlist_id: &str,
+		name: Option<&str>,
+		description: Option<Option<&str>>,
+		media_ids: Option<&[String]>,
+	) -> AbsResult<AbsPlaylist> {
+		let mut playlists = self.playlists.lock();
+		let row = playlists
+			.get_mut(&user.id)
+			.and_then(|rows| rows.iter_mut().find(|row| row.id == playlist_id))
+			.ok_or_else(|| AbsError::NotFound(format!("No playlist {playlist_id}")))?;
+		if let Some(name) = name {
+			row.name = name.to_owned();
+		}
+		if let Some(description) = description {
+			row.description = description.map(str::to_owned);
+		}
+		if let Some(media_ids) = media_ids {
+			row.media_ids = media_ids.to_vec();
+		}
+		row.updated_at = fixed(1_788_699_600_000);
+		Ok(row.clone())
+	}
+
+	async fn delete_playlist(&self, user: &AuthUser, playlist_id: &str) -> AbsResult<()> {
+		if let Some(rows) = self.playlists.lock().get_mut(&user.id) {
+			rows.retain(|row| row.id != playlist_id);
+		}
+		Ok(())
+	}
 }
 
 /// The composed router, mounted the way the server mounts it: the public
@@ -676,6 +854,39 @@ pub(crate) fn router_with_events(
 		.layer(Extension(auth))
 		.layer(Extension(events))
 		.layer(Extension(backend as Arc<dyn AbsBackend>))
+}
+
+/// The same router with **no** user resolved: what the server serves on the
+/// public prefix, where the auth middleware never ran.
+pub(crate) fn router_anonymous(backend: Arc<TestBackend>) -> Router {
+	crate::routes::public_router::<()>()
+		.merge(Router::new().nest("/api", crate::routes::authenticated_router::<()>()))
+		.layer(Extension(crate::socket::AbsEvents::new()))
+		.layer(Extension(backend as Arc<dyn AbsBackend>))
+}
+
+/// Drive one anonymous request through the router.
+pub(crate) async fn request_anonymous(
+	backend: Arc<TestBackend>,
+	method: &str,
+	uri: &str,
+	headers: &[(&str, &str)],
+) -> (StatusCode, HeaderMap, Vec<u8>) {
+	let app = router_anonymous(backend);
+	let mut builder = axum::http::Request::builder().method(method).uri(uri);
+	for (name, value) in headers {
+		builder = builder.header(*name, *value);
+	}
+	let response = app
+		.oneshot(builder.body(Body::empty()).unwrap())
+		.await
+		.expect("router response");
+	let status = response.status();
+	let headers = response.headers().clone();
+	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+		.await
+		.expect("response body");
+	(status, headers, bytes.to_vec())
 }
 
 /// Drive one request through the router and decode the JSON body. Going

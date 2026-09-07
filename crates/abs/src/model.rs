@@ -124,6 +124,51 @@ pub struct AbsImage {
 	pub data: Vec<u8>,
 }
 
+/// The ebook edition paired with an audiobook.
+///
+/// Audiobookshelf models one item as *both* an audiobook and an ebook —
+/// `media.ebookFile` next to `media.audioFiles` — because its scanner folds
+/// an `.m4b` and an `.epub` in one folder into one library item. Stump keeps
+/// them as two `media` rows and records the relationship instead
+/// (`liseur_sync_media_links`, `pair_status = 'confirmed'`), so this is the
+/// *other* row, resolved for the requesting user.
+///
+/// The official app needs it twice over: `media.ebookFile` is what enables
+/// the "Read" button (`pages/item/_id/index.vue:461-466`) and what the
+/// download service fetches as a file part
+/// (`android/.../plugins/AbsDownloader.kt:182-191`), and the
+/// `filter=ebooks.<base64>` library filter selects on its presence
+/// (`components/modals/FilterModal.vue:129-133,237-248`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbsEbookFile {
+	/// The paired Stump `media.id`; the profile's `ino` for the file.
+	pub media_id: String,
+	pub path: String,
+	/// Lower-case, without the leading period: Audiobookshelf's
+	/// `ebookFormat` (`epub`, `pdf`, …).
+	pub format: String,
+	pub byte_size: i64,
+}
+
+/// A playlist, as the profile stores it: a Stump reading list plus the
+/// audible books in it.
+///
+/// Audiobookshelf playlists are per user and per library. Stump reading
+/// lists are per user and span libraries, so the profile reports the library
+/// of the playlist's first audible member and lists a member-less playlist
+/// under every library — see `abs-compat.mdx`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbsPlaylist {
+	pub id: String,
+	pub name: String,
+	pub description: Option<String>,
+	/// The reading list's members, in order, already narrowed to books the
+	/// requesting user may see.
+	pub media_ids: Vec<String>,
+	pub created_at: DateTime<Utc>,
+	pub updated_at: DateTime<Utc>,
+}
+
 /// Which of abs-ref's three library-item shapes a response carries.
 ///
 /// abs-ref signals the shape only by which keys are present, so the mapper

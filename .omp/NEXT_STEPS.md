@@ -140,3 +140,12 @@ depends on one of the two.
 - `home/`'s `bun run build` is not concurrency-safe (it wipes
   `.svelte-kit/output`): serialize builds and `rm -rf home/.svelte-kit/output`
   after an aborted one.
+
+## Resume point (paused 2026-09-07 after batch 11, HEAD = this commit)
+
+Not yet done from the user's live test with `input/`:
+1. **Real-data ingest run on 25600** (IngestArchives fixed the `unrar l` 4 KB-truncation bug but was cut off before re-running): copy `input/audio/*.rar` + `input/audio/The Three-Body Problem - Cixin Liu.epub` into 25600's drop folder, scan from the editor, report per item kind/title/tracks/chapters/duration/quality score, the pair suggestion (Three-Body EPUB <-> audiobook), and the assembled M4Bs (Three-Body 37 MP3, Dark Eden 62 MP3; MP3->AAC via /usr/bin/ffmpeg, minutes). Env-gated harness: `STUMP_LIVE_INPUT=/home/al/Code/stump/input cargo test -p stump_ingest explode_tests::live_archive_drop_of_the_real_input`.
+2. **Official ABS app retest on the phone** (round-2 fixes deployed on 25600 but not phone-verified): play (retry loop), covers, download, playlists, ebooks tab.
+3. **Browser lane** for challenged sources (cf_clearance is fingerprint-bound): HTML fetches through the browser worker, images direct; downgrade the cookie recipe in provider-host.mdx.
+4. Read-aloud steps 3-4 (align job + aligner container on the RTX 3070; on-demand Storyteller EPUB), then requests, readiness checks, editions/provenance implementation - see docs/developer/read-aloud.mdx and editions.mdx.
+5. Worker claim-deadline sweep (a third-party worker that never claims holds a row until disconnect).

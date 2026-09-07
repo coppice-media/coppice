@@ -155,14 +155,96 @@ with `error: "cloudflare challenge"`, `http_status: 403` and
 `consecutive_failures: 0`, and a challenge **never** escalates to `DEAD` no
 matter how many runs it survives (`HealthProbe::next_state`). A `DEAD` source
 is hidden from `providerCatalog`; hiding a live source for a reason an
-operator can fix with a cookie would be wrong. The probe itself is always sent
-without any configured header, so the row reports what an unauthenticated
-client sees rather than what one configured instance can reach.
+operator can fix with a cookie would be wrong.
 
-#### The cookie recipe
+A gated host is probed **twice**, and the two probes answer two different
+questions:
 
-Getting through requires the clearance a human already earned. There is no
-automation here — no headless browser, no FlareSolverr, no challenge solver:
+1. an anonymous probe, always, carrying no configured header — what any
+   client sees, and the only probe a source nobody configured ever gets;
+2. if that comes back challenged, one probe per enabled instance *with* the
+   headers that instance carries — whether this server can reach the host.
+
+The first probe that gets through is what the row records
+(`health::probe_target` → `clear_with_configured_headers`). Without the second
+one the row of a source whose clearance works would sit at `DEGRADED` forever,
+with nothing to distinguish it from one that is genuinely gated. Every enabled
+instance the challenge survives is reported in `HealthRunSummary::challenged`,
+which is the input of an automatic solve.
+
+#### The automatic path
+
+A server cannot clear a managed challenge — it has no browser, and that is
+precisely what the challenge tests for. So it asks one:
+
+1. the health job hands its challenged instances to
+   `ProviderHost::solve_challenges`;
+2. that enqueues a [`challenge_solve`](/docs/developer/workers#challenge_solve)
+   worker job, `requires: {"browser": true}`, input
+   `{source_instance_id, host, url}`. Nothing is queued when a solve for that
+   instance is already in flight;
+3. a paired worker started with `stump-worker --chrome …` opens a **visible**
+   Chrome window at the URL, waits out the interstitial for up to 90 seconds
+   (long enough for a human to tick a Turnstile checkbox if one appears), and
+   reports the host's cookie jar, its user agent, and the clearance's expiry;
+4. the server merges `Cookie` and `User-Agent` into that instance's
+   `request_headers` — the same store the mutation below writes, keeping
+   whatever else was configured — rebuilds the instance, and re-probes it.
+   **The probe is the verdict**: a clearance that does not get through leaves
+   the row where it was and the next run asks again.
+
+With no browser worker connected the job parks in `needs_worker`, which the
+console shows and `CoreEvent::WorkerJobChanged` announces; it runs the moment
+one connects. A solve that finished while nobody was waiting on it — the
+operator started the worker hours after the job was parked — is **adopted** by
+the next ask instead of being paid for twice.
+
+`solveSourceChallenge(instanceId)` is the manual trigger, and the editor puts
+it behind a **Solve now** button next to the *Cloudflare challenge* badge on
+**Settings → Remote sources**. It answers as soon as routing is decided
+(`APPLIED`, `QUEUED`, `ALREADY_QUEUED`, `NEEDS_WORKER`) rather than holding the
+request open while a human clicks.
+
+A clearance is trusted until the cookie's own expiry, or for seven days when
+the browser reports a session cookie
+(`stump_provider::challenge::DEFAULT_CLEARANCE_TTL`). Nothing polls for that
+moment: when it lapses the next probe is challenged again and queues another
+solve, which a connected worker answers in seconds.
+
+#### What a clearance cannot do
+
+Replaying `cf_clearance` only works where Cloudflare binds it to the user
+agent and the IP. It does **not** work where the clearance is also bound to
+the client's TLS fingerprint, and `readcomicsonline.ru` is such a host as of
+2026-09. Measured on one machine, with a clearance a real Chrome had earned
+forty seconds earlier and the exact user agent it was issued to:
+
+```text
+curl -H "Cookie: cf_clearance=…" -H "User-Agent: …Chrome/152.0.0.0…" https://readcomicsonline.ru/
+→ 403, cf-mitigated: challenge     (same with the full sec-ch-ua/sec-fetch header set, and over HTTP/2)
+```
+
+Every path answers the same way — `/filterList`, `/comic/…`, even a cover
+image. A `reqwest` client cannot present Chrome's TLS handshake, so no cookie
+makes it reachable. This is a property of the host's configuration, and it
+limits the manual recipe below exactly as much as it limits the automatic
+path: both store a credential the origin's edge will not accept from this
+client.
+
+What the machinery still buys, and why it is not wasted: the solve, the store,
+the rebuild and the re-probe all work, and **the probe is the verdict** — a
+fingerprint-bound host stays `DEGRADED` instead of being reported healthy and
+then 404-ing every page. Sources whose Cloudflare is configured the ordinary
+way are fixed by it without an operator touching anything. Making a
+fingerprint-bound host reachable needs a different mechanism — either an HTTP
+client that impersonates Chrome's handshake, or routing that source's fetches
+through the browser worker as well as its clearance — and neither is this
+change.
+
+#### The cookie recipe, by hand
+
+A server with no browser worker needs the clearance copied out of a browser by
+hand. Same two headers, same store:
 
 1. Open the site in a normal browser and let the challenge complete.
 2. Copy the `cf_clearance` cookie value (devtools → Application → Cookies).
@@ -217,12 +299,15 @@ The values are credentials, so:
   `cf_c…mnop` for a long value and `…` for a short one;
 - header names normalise to lower case, because HTTP/2 permits nothing else;
 - the mutation *replaces* the whole map: an empty map clears it, an empty
-  value drops that header.
+  value drops that header. An automatic solve does not — it merges, so a
+  clearance landing does not wipe a `Referer` you configured.
 
-A `cf_clearance` cookie expires (typically within the hour, sooner if the
-site tightens its rules), so a challenged source is a manual, temporary
-arrangement: when it lapses the requests 403 again and health goes back to
-reporting `cloudflare challenge`.
+A `cf_clearance` cookie expires (typically within the hour, sooner if the site
+tightens its rules). With a browser worker connected that is a non-event: the
+next probe is challenged, a solve is queued, and the source heals itself.
+Copied by hand it is a temporary arrangement — when it lapses the requests 403
+again and health goes back to reporting `cloudflare challenge` until somebody
+pastes a new cookie.
 
 ## Mode A: materialised series in any library
 

@@ -102,6 +102,22 @@ impl JobLifecycle for ProviderSourceHealthJob {
 				},
 			));
 		}
+		// A challenged instance is the one source failure this server cannot
+		// fix by itself, so the probe that found it is also what asks a
+		// browser worker to. `solve_challenges` decides whether anything is
+		// actually queued — an in-flight solve, or one that already finished
+		// and was never applied, is not queued twice.
+		if !summary.challenged.is_empty() {
+			match ctx.services().provider_host() {
+				Some(host) => {
+					host.solve_challenges(&summary.challenged, dead_after).await
+				},
+				None => tracing::warn!(
+					challenged = summary.challenged.len(),
+					"Sources are behind a Cloudflare challenge but the provider host is not running"
+				),
+			}
+		}
 		let mut logs = Vec::new();
 		if summary.dead > 0 {
 			logs.push(

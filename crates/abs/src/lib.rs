@@ -29,8 +29,8 @@ pub use auth::{mint_tokens, verify_token, AbsClaims, MintedTokens, TokenError};
 pub use errors::{AbsError, AbsResult};
 pub use ids::{AbsIds, IdKind, CREATE_ABS_IDS_SQL};
 pub use model::{
-	AbsAudio, AbsAudioChapter, AbsAudioTrack, AbsBookmark, AbsImage, AbsPositionUpdate,
-	AbsProgress, ItemShape,
+	AbsAudio, AbsAudioChapter, AbsAudioTrack, AbsBookmark, AbsEbookFile, AbsImage,
+	AbsPlaylist, AbsPositionUpdate, AbsProgress, ItemShape,
 };
 pub use routes::{
 	authenticated_router, public_router, AbsBackend, AbsSession, PLAY_METHOD_DIRECT,

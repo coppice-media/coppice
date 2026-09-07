@@ -1,0 +1,55 @@
+# The Workers page: who is connected, what the queue holds, and cancelling.
+# Live status arrives on the shared `readEvents` socket as `WorkerJobChanged`.
+
+fragment WorkerFields on Worker {
+	id
+	name
+	version
+	kinds
+	connectedAt
+	lastSeenAt
+}
+
+fragment WorkerJobFields on WorkerJob {
+	id
+	kind
+	status
+	workerId
+	priority
+	progress
+	message
+	error
+	createdAt
+	startedAt
+	finishedAt
+}
+
+query Workers {
+	workers {
+		...WorkerFields
+	}
+	workerJobs(limit: 50) {
+		...WorkerJobFields
+	}
+}
+
+mutation CancelWorkerJob($id: String!) {
+	cancelWorkerJob(id: $id) {
+		...WorkerJobFields
+	}
+}
+
+subscription WorkerJobEvents {
+	readEvents {
+		__typename
+		... on WorkerJobChanged {
+			id
+			kind
+			status
+			workerId
+			progress
+			message
+			error
+		}
+	}
+}

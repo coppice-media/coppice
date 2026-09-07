@@ -446,7 +446,7 @@ pub(crate) fn stats(sessions: Vec<PlaybackSessionDto>) -> ListeningStatsDto {
 	let mut total = 0.0;
 
 	for session in &sessions {
-		let listened = session.time_listening;
+		let listened = session.time_listening as f64;
 		total += listened;
 		*days.entry(session.date.clone()).or_default() += listened;
 		*day_of_week.entry(session.day_of_week.clone()).or_default() += listened;

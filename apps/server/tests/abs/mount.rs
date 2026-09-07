@@ -139,3 +139,119 @@ async fn abs_app_routes_reject_an_anonymous_request() {
 		);
 	}
 }
+
+/// An unknown `/api/...` path is a JSON `404`, never the web UI shell.
+///
+/// On a `full` build the SPA's `fallback` becomes the *server's* fallback, so
+/// before `NON_SPA_PREFIXES` every unmatched `/api/...` request answered
+/// `200 text/html`. On a real phone that made `GET /api/items/{id}/download`
+/// and `GET /api/items/{id}/ebook` look like working routes that returned the
+/// Nuxt shell instead of a file.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn an_unknown_api_path_is_a_json_404_and_not_the_spa() {
+	let app = app().await;
+	let token = app.create_initial_account().await;
+	*app.access_token.write().await = Some(token.clone());
+
+	for path in [
+		"/api/x",
+		"/api/items/does-not-exist/nonsense",
+		"/api/definitely/not/a/route",
+	] {
+		let response = app
+			.server
+			.get(path)
+			.add_header("authorization", format!("Bearer {token}"))
+			.await;
+		assert_eq!(
+			response.status_code(),
+			axum::http::StatusCode::NOT_FOUND,
+			"{path}"
+		);
+		let content_type = response
+			.headers()
+			.get("content-type")
+			.and_then(|value| value.to_str().ok())
+			.unwrap_or_default()
+			.to_owned();
+		assert!(
+			content_type.starts_with("application/json"),
+			"{path} answered {content_type}, not JSON"
+		);
+		assert!(
+			!String::from_utf8_lossy(&response.as_bytes().to_vec())
+				.to_lowercase()
+				.contains("<html"),
+			"{path} answered the SPA shell"
+		);
+	}
+}
+
+/// The routes the official app needs that the SPA fallback used to swallow
+/// are mounted, and the public track lane takes no credential.
+#[tokio::test]
+async fn abs_download_ebook_and_public_track_routes_are_mounted() {
+	let app = app().await;
+	let token = app.create_initial_account().await;
+	*app.access_token.write().await = Some(token.clone());
+
+	// A real item id is not needed: what is asserted is that the router
+	// matches the path at all, i.e. answers the profile's `404`, not the SPA.
+	for path in [
+		"/api/items/missing/download",
+		"/api/items/missing/ebook",
+		"/api/items/missing/ebook/some-file",
+		"/api/items/missing/file/0/download",
+	] {
+		let response = app
+			.server
+			.get(path)
+			.add_header("authorization", format!("Bearer {token}"))
+			.await;
+		assert_eq!(
+			response.status_code(),
+			axum::http::StatusCode::NOT_FOUND,
+			"{path}"
+		);
+	}
+
+	// `/public/session/{id}/track/{index}` is outside the auth middleware:
+	// an anonymous request reaches the handler and 404s on the session id
+	// rather than being refused with a 401.
+	let response = app
+		.server
+		.get("/public/session/00000000-0000-0000-0000-000000000000/track/1")
+		.await;
+	assert_eq!(response.status_code(), axum::http::StatusCode::NOT_FOUND);
+
+	// So is the cover route, from Audiobookshelf 2.17.0 on.
+	let response = app.server.get("/api/items/missing/cover").await;
+	assert_eq!(response.status_code(), axum::http::StatusCode::NOT_FOUND);
+}
+
+/// Playlists are mounted and answer the app's envelope.
+#[tokio::test]
+async fn abs_playlist_routes_are_mounted() {
+	let app = app().await;
+	let token = app.create_initial_account().await;
+	*app.access_token.write().await = Some(token.clone());
+
+	let response = app
+		.server
+		.get("/api/playlists")
+		.add_header("authorization", format!("Bearer {token}"))
+		.await;
+	response.assert_status_ok();
+	assert!(response.json::<Value>()["results"].is_array());
+
+	// `POST /api/playlists` was a 405 before this batch.
+	let response = app
+		.server
+		.post("/api/playlists")
+		.add_header("authorization", format!("Bearer {token}"))
+		.json(&json!({ "items": [], "name": "Commute" }))
+		.await;
+	response.assert_status_ok();
+	assert_eq!(response.json::<Value>()["name"], "Commute");
+}

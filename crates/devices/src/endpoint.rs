@@ -63,6 +63,12 @@ impl Endpoint {
 			// logs in with a username and password; the API key works as a
 			// bearer token for clients that skip the login.
 			DeviceKind::Abs => vec![with_user("Audiobookshelf server", base)],
+			// The worker binary is handed the server root and its key; it
+			// derives the socket and upload paths itself, so one entry is the
+			// whole `stump-worker --server URL --api-key KEY` invocation.
+			DeviceKind::Worker => {
+				vec![keyed("stump-worker --server", base)]
+			},
 			DeviceKind::Api | DeviceKind::Web => {
 				vec![keyed("Stump API (Bearer)", format!("{base}/api"))]
 			},

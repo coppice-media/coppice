@@ -33,7 +33,8 @@ export const SOURCE_LABELS: Record<DeviceKind, string> = {
 	OPDS: 'OPDS',
 	ABS: 'Audiobookshelf',
 	MIHON: 'Mihon',
-	KOMELIA: 'Komelia'
+	KOMELIA: 'Komelia',
+	WORKER: 'Worker'
 };
 
 export const SOURCE_OPTIONS: { value: DeviceKind; label: string }[] = (

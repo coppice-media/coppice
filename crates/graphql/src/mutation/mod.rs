@@ -17,6 +17,7 @@ mod custom_emoji;
 mod device;
 mod device_pairing;
 mod duplicate_page;
+mod edition_pair;
 mod email_device;
 mod emailer;
 mod epub;
@@ -46,6 +47,7 @@ mod tag;
 #[cfg(feature = "web")]
 mod upload;
 mod user;
+mod worker;
 
 use ingest::IngestMutation;
 
@@ -68,6 +70,7 @@ use custom_emoji::CustomEmojiMutation;
 use device::DeviceMutation;
 use device_pairing::DevicePairingMutation;
 use duplicate_page::DuplicatePageMutation;
+use edition_pair::EditionPairMutation;
 use email_device::EmailDeviceMutation;
 use emailer::EmailerMutation;
 use epub::EpubMutation;
@@ -96,6 +99,7 @@ use tag::TagMutation;
 #[cfg(feature = "web")]
 use upload::UploadMutation;
 use user::UserMutation;
+use worker::WorkerMutation;
 
 #[cfg(feature = "web")]
 #[derive(async_graphql::MergedObject, Default)]
@@ -119,6 +123,7 @@ struct ContentMutations(
 	TagMutation,
 	#[cfg(feature = "web")] UploadMutation,
 	DuplicatePageMutation,
+	EditionPairMutation,
 );
 
 #[derive(async_graphql::MergedObject, Default)]
@@ -142,6 +147,7 @@ struct SystemMutations(
 	#[cfg(feature = "providers")] ProviderMutation,
 	IngestMutation,
 	DevicePairingMutation,
+	WorkerMutation,
 );
 
 #[derive(async_graphql::MergedObject, Default)]

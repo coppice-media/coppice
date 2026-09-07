@@ -4,10 +4,16 @@
 //! fetch jobs live in `stump_core`. See `crates/integrations/metadata/README.md`.
 
 pub mod client;
+pub mod editions;
 pub mod error;
 mod mangaupdates;
 pub mod merge;
-mod mock_http;
+/// Test-only HTTP mock. Public under `mock` so crates that consume
+/// [`editions::EditionLookup`] can point a real provider client at a local
+/// server without a network dependency, the same way `stump_provider`
+/// exposes its own.
+#[cfg(any(test, feature = "mock"))]
+pub mod mock_http;
 mod provider;
 mod providers;
 pub mod rate_limit;
@@ -16,6 +22,7 @@ pub(crate) mod serde_utils;
 pub mod types;
 
 pub use client::build_client_with_retry;
+pub use editions::{create_edition_lookup, EditionIdentifier, EditionLookup};
 pub use error::{MetadataProviderError, MetadataResult};
 pub use mangaupdates::MangaUpdatesClient;
 pub use merge::{AutoApplyConfig, FieldMerger, MergeStrategy, MetadataFieldOverride};

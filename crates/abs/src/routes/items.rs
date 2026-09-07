@@ -104,16 +104,37 @@ pub(crate) async fn batch_get(
 	Ok(Json(ItemsBatchResponseDto { library_items }))
 }
 
+/// `GET /api/items/{id}/cover`.
+///
+/// Unauthenticated on purpose: from Audiobookshelf 2.17.0 the official app
+/// stops putting a token on image requests
+/// (`store/index.js:89-102` — `getDoesServerImagesRequireToken` is *false*
+/// for any server >= 2.17 — used by `store/globals.js:54-56,68-70`; the
+/// native notification art loader does the same at
+/// `android/.../data/PlaybackSession.kt:186-190`). The profile reports
+/// 2.36.0, so every cover request from this app arrives anonymous, and
+/// answering `401` is what left the app's shelves blank.
+///
+/// A credential is still honoured when one is present, and the row must
+/// still be an audible, undeleted book: the route is a cover lane, not a
+/// generic file oracle.
 pub(crate) async fn cover(
 	backend: Backend,
-	Extension(user): User,
+	user: Option<Extension<AuthUser>>,
 	Path(item_id): Path<String>,
 	Query(_): Query<CoverQuery>,
 ) -> AbsResult<Response<Body>> {
-	// Resolve through the visibility funnel first: a cover must not leak the
-	// existence of a book the request may not see.
-	query::media_for_user(&**backend, &user, &item_id).await?;
-	let image = backend.cover(&user, &item_id).await?;
+	let user = match user {
+		Some(Extension(user)) => {
+			query::media_for_user(&**backend, &user, &item_id).await?;
+			Some(user)
+		},
+		None => {
+			query::audio_media_row(&**backend, &item_id).await?;
+			None
+		},
+	};
+	let image = backend.cover(user.as_ref(), &item_id).await?;
 	Ok(([(header::CONTENT_TYPE, image.content_type)], image.data).into_response())
 }
 
@@ -145,6 +166,195 @@ pub(crate) async fn file(
 	backend
 		.serve_track(headers, &item_id, index, auth.device_id())
 		.await
+}
+
+/// `GET /api/items/{id}/file/{ino}/download` — the same bytes as
+/// [`file`], with `Content-Disposition: attachment`.
+///
+/// This is the route the official app's downloader actually uses, once per
+/// audio track and once for the paired ebook
+/// (`android/.../plugins/AbsDownloader.kt:184,201,242`); `ino` there is
+/// `audioFiles[].ino` for a track and `media.ebookFile.ino` for the ebook,
+/// so both kinds of id land here.
+pub(crate) async fn file_download(
+	backend: Backend,
+	Extension(user): User,
+	Extension(auth): Extension<AuthContext>,
+	Path((item_id, ino)): Path<(String, String)>,
+	headers: HeaderMap,
+) -> AbsResult<Response<Body>> {
+	query::media_for_user(&**backend, &user, &item_id).await?;
+
+	// The ebook part of a download names the paired row's media id, not a
+	// track index, so that lane is resolved first.
+	if let Some(ebook) = backend
+		.ebook_editions(&user, std::slice::from_ref(&item_id))
+		.await?
+		.remove(&item_id)
+		.filter(|ebook| ebook.media_id == ino)
+	{
+		let mut response = backend.serve_ebook(headers, &user, &ebook).await?;
+		attach(&mut response, &ebook.path);
+		return Ok(response);
+	}
+
+	let index = ino
+		.parse::<i32>()
+		.map_err(|_| AbsError::NotFound(format!("No file {ino}")))?;
+	let track_path = backend
+		.audio(&item_id)
+		.await?
+		.and_then(|audio| audio.track(index).map(|track| track.path.clone()))
+		.ok_or_else(|| AbsError::NotFound(format!("No file {ino}")))?;
+	let mut response = backend
+		.serve_track(headers, &item_id, index, auth.device_id())
+		.await?;
+	attach(&mut response, &track_path);
+	Ok(response)
+}
+
+/// `GET /api/items/{id}/download` — every file of the item as one zip.
+///
+/// abs-ref answers `application/zip` with
+/// `Content-Disposition: attachment; filename="<title>.zip"`, and accepts
+/// `?token=` as well as a bearer header, which the profile's auth middleware
+/// already covers.
+pub(crate) async fn download(
+	backend: Backend,
+	Extension(user): User,
+	Path(item_id): Path<String>,
+	headers: HeaderMap,
+) -> AbsResult<Response<Body>> {
+	query::media_for_user(&**backend, &user, &item_id).await?;
+	let ebook = backend
+		.ebook_editions(&user, std::slice::from_ref(&item_id))
+		.await?
+		.remove(&item_id);
+	backend
+		.download_item(headers, &user, &item_id, ebook.as_ref())
+		.await
+}
+
+/// `GET /api/items/{id}/ebook` and `/ebook/{fileId}` — the paired EPUB.
+///
+/// The app's reader fetches the second form when it knows a file id and the
+/// first otherwise (`components/readers/Reader.vue:325-335`), so both are
+/// the same bytes; a `fileId` that is not this item's ebook is a `404`
+/// rather than a silent fallback.
+pub(crate) async fn ebook(
+	backend: Backend,
+	Extension(user): User,
+	Path(item_id): Path<String>,
+	headers: HeaderMap,
+) -> AbsResult<Response<Body>> {
+	serve_paired_ebook(backend, user, item_id, None, headers).await
+}
+
+pub(crate) async fn ebook_file(
+	backend: Backend,
+	Extension(user): User,
+	Path((item_id, file_id)): Path<(String, String)>,
+	headers: HeaderMap,
+) -> AbsResult<Response<Body>> {
+	serve_paired_ebook(backend, user, item_id, Some(file_id), headers).await
+}
+
+async fn serve_paired_ebook(
+	backend: Backend,
+	user: AuthUser,
+	item_id: String,
+	file_id: Option<String>,
+	headers: HeaderMap,
+) -> AbsResult<Response<Body>> {
+	query::media_for_user(&**backend, &user, &item_id).await?;
+	let ebook = backend
+		.ebook_editions(&user, std::slice::from_ref(&item_id))
+		.await?
+		.remove(&item_id)
+		.filter(|ebook| file_id.as_ref().is_none_or(|id| id == &ebook.media_id))
+		.ok_or_else(|| AbsError::NotFound(format!("No ebook for {item_id}")))?;
+	backend.serve_ebook(headers, &user, &ebook).await
+}
+
+/// `PATCH /api/items/{id}/ebook/{ino}/status` — abs-ref's toggle between a
+/// primary and a supplementary ebook file
+/// (`components/tables/ebook/EbookFilesTable.vue:84`).
+///
+/// Stump's pairing has no supplementary tier: an edition is an edition. The
+/// route exists so the app's ebook table does not get a `404` on a tap, and
+/// answers the item unchanged.
+pub(crate) async fn ebook_status(
+	backend: Backend,
+	Extension(user): User,
+	Path((item_id, _file_id)): Path<(String, String)>,
+) -> AbsResult<Json<LibraryItemDto>> {
+	let row = query::media_for_user(&**backend, &user, &item_id).await?;
+	let rows = [row];
+	let context = query::context(&**backend, &user, &rows, false).await?;
+	Ok(Json(context.item(
+		&rows[0],
+		ItemShape::Expanded,
+		&user.id,
+		None,
+	)))
+}
+
+/// `GET /public/session/{sessionId}/track/{index}` — the direct-play track
+/// lane, unauthenticated.
+///
+/// **This is the route whose absence made the official app unusable.** From
+/// Audiobookshelf 2.22.0 the app stops streaming `audioTracks[].contentUrl`
+/// and streams this instead (`android/.../data/PlaybackSession.kt:196-204`,
+/// `plugins/capacitor/AbsAudioPlayer.js:254-261`). Against a server that
+/// does not serve it, ExoPlayer fails to load, which lands in
+/// `PlayerNotificationService.handlePlayerPlaybackError`
+/// (`android/.../player/PlayerNotificationService.kt:617-641`): a direct-play
+/// session there is retried by re-POSTing `/api/items/{id}/play`, whose new
+/// session is direct play again, which fails again — an unthrottled loop
+/// that only stops at the inbound rate limiter.
+///
+/// `index` is `audioTracks[].index`, which is **1-based**, while the
+/// profile's own track index and the `ino` of
+/// `GET /api/items/{id}/file/{ino}` are 0-based (`mapper::audio_files`).
+/// abs-ref answers `404` for index `0` and for an unknown session, honours
+/// `Range` with a `206`, and sets `Accept-Ranges: bytes`.
+pub(crate) async fn public_track(
+	backend: Backend,
+	Path((session_id, track)): Path<(String, String)>,
+	headers: HeaderMap,
+) -> AbsResult<Response<Body>> {
+	let session = backend
+		.session_by_id(&session_id)
+		.await?
+		.ok_or_else(|| AbsError::NotFound(format!("No session {session_id}")))?;
+	let wire_index = track
+		.parse::<i32>()
+		.ok()
+		.filter(|index| *index >= 1)
+		.ok_or_else(|| AbsError::NotFound(format!("No track {track}")))?;
+	backend
+		.serve_track(
+			headers,
+			&session.media_id,
+			wire_index - 1,
+			session.device_id.as_deref(),
+		)
+		.await
+}
+
+/// Turn a byte response into a download by naming the file it came from.
+fn attach(response: &mut Response<Body>, path: &str) {
+	let filename = path.rsplit('/').next().unwrap_or(path);
+	// The header is a quoted-string; a quote or a backslash in a file name
+	// would otherwise end it early.
+	let escaped = filename.replace('\\', r"\\").replace('"', "\\\"");
+	if let Ok(value) =
+		header::HeaderValue::from_str(&format!("attachment; filename=\"{escaped}\""))
+	{
+		response
+			.headers_mut()
+			.insert(header::CONTENT_DISPOSITION, value);
+	}
 }
 
 /// `POST /api/items/{id}/play`.

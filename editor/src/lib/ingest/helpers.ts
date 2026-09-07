@@ -104,6 +104,15 @@ export function formatDate(value: string | null | undefined): string {
 	return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
 
+// `h:mm:ss`, spelled exactly like the `duration`/`start` strings the audio
+// probe already returns, so a client-formatted offset and a server-formatted
+// one line up in the same table. Hours are never zero-padded.
+export function formatDurationMs(milliseconds: number): string {
+	const seconds = Math.floor(Math.max(0, milliseconds) / 1000);
+	const minutes = Math.floor(seconds / 60) % 60;
+	return `${Math.floor(seconds / 3600)}:${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 export function humanize(value: string): string {
 	return value
 		.toLowerCase()

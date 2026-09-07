@@ -43,6 +43,25 @@ pub struct Model {
 	/// hook to one successful run per item across retries and re-analysis.
 	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
 	pub preprocessed_at: Option<DateTimeWithTimeZone>,
+	/// The delivery this item arrived in, when one dropped file produced
+	/// several items (an archive holding an EPUB, a MOBI and a cover).
+	/// `NULL` is a drop of one file. Siblings sharing a group are shown
+	/// together and are the strongest edition-pair signal ingest sees: the
+	/// ebook and the audiobook of one book, in one download.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub drop_group_id: Option<String>,
+	/// JSON array of absolute staged paths that describe this item without
+	/// being it: cover art, `.nfo`/`.cue` notes, and the source parts kept
+	/// beside an assembled M4B. Owned by the item and removed with it.
+	#[sea_orm(column_type = "Json", nullable)]
+	pub sidecar_paths: Option<JsonValue>,
+	/// The audio probe's result for an [`Audio`](crate::domain::audio)
+	/// publication: duration, codec, per-track offsets, chapter marks and
+	/// their provenance, tags, and the assembled M4B when one was produced.
+	/// `NULL` for every other kind. Persisted because demuxing a 62-part
+	/// folder book is 62 container walks, not a query.
+	#[sea_orm(column_type = "Json", nullable)]
+	pub audio_analysis: Option<JsonValue>,
 	pub revision: i32,
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]
 	pub created_at: DateTimeWithTimeZone,

@@ -60,9 +60,24 @@ pub struct RecordedRequest {
 	pub body: Vec<u8>,
 }
 
+/// One route that answers differently to a request carrying a particular
+/// header. A Cloudflare-gated host is exactly this: everyone gets the
+/// interstitial, a request with the clearance cookie gets the page.
+#[derive(Debug, Clone)]
+struct ConditionalRoute {
+	path: String,
+	/// Lower-case header name.
+	header: String,
+	/// Matched as a *substring* of the header value, so a `Cookie` carrying
+	/// several cookies still matches the one that matters.
+	contains: String,
+	response: CannedResponse,
+}
+
 pub struct MockServer {
 	base_url: String,
 	routes: Arc<Mutex<HashMap<String, CannedResponse>>>,
+	conditional: Arc<Mutex<Vec<ConditionalRoute>>>,
 	requests: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
@@ -81,7 +96,9 @@ impl MockServer {
 				.collect(),
 		));
 		let requests = Arc::new(Mutex::new(Vec::new()));
+		let conditional: Arc<Mutex<Vec<ConditionalRoute>>> = Arc::new(Mutex::new(vec![]));
 		let server_routes = routes.clone();
+		let server_conditional = conditional.clone();
 		let server_requests = requests.clone();
 		tokio::spawn(async move {
 			loop {
@@ -89,17 +106,32 @@ impl MockServer {
 					break;
 				};
 				let routes = server_routes.clone();
+				let conditional = server_conditional.clone();
 				let requests = server_requests.clone();
 				tokio::spawn(async move {
 					let Some(request) = read_request(&mut stream).await else {
 						return;
 					};
-					let response = routes
+					let matched = conditional
 						.lock()
-						.expect("routes poisoned")
-						.get(&request.path)
-						.cloned()
-						.unwrap_or_else(|| CannedResponse::status(404));
+						.expect("conditional routes poisoned")
+						.iter()
+						.find(|route| {
+							route.path == request.path
+								&& request.headers.iter().any(|(name, value)| {
+									*name == route.header
+										&& value.contains(&route.contains)
+								})
+						})
+						.map(|route| route.response.clone());
+					let response = matched.unwrap_or_else(|| {
+						routes
+							.lock()
+							.expect("routes poisoned")
+							.get(&request.path)
+							.cloned()
+							.unwrap_or_else(|| CannedResponse::status(404))
+					});
 					let is_head = request.method == "HEAD";
 					requests.lock().expect("requests poisoned").push(request);
 					let mut head = format!(
@@ -124,6 +156,7 @@ impl MockServer {
 		Self {
 			base_url: format!("http://{address}"),
 			routes,
+			conditional,
 			requests,
 		}
 	}
@@ -141,6 +174,27 @@ impl MockServer {
 			.lock()
 			.expect("routes poisoned")
 			.insert(path.to_string(), response);
+	}
+
+	/// Answer `response` on `path` when the request's `header` value contains
+	/// `contains`. Checked before the plain route, so one path can answer a
+	/// client that carries a credential differently from one that does not.
+	pub fn set_route_when_header(
+		&self,
+		path: &str,
+		header: &str,
+		contains: &str,
+		response: CannedResponse,
+	) {
+		self.conditional
+			.lock()
+			.expect("conditional routes poisoned")
+			.push(ConditionalRoute {
+				path: path.to_string(),
+				header: header.to_ascii_lowercase(),
+				contains: contains.to_string(),
+				response,
+			});
 	}
 
 	pub fn requests(&self) -> Vec<RecordedRequest> {

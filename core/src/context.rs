@@ -7,6 +7,7 @@ use stump_devices::DeviceService;
 use stump_jobs::{JobError, JobRuntime, JobScheduler};
 #[cfg(feature = "watcher")]
 use stump_watcher::{Watcher, DEFAULT_DEBOUNCE};
+use stump_worker::{KindRegistry, WorkerJobs};
 use tokio::sync::{
 	broadcast::{channel, Receiver, Sender},
 	Mutex,
@@ -67,6 +68,13 @@ pub struct Ctx {
 	/// [`crate::providers::init`] when `STUMP_ENABLE_PROVIDERS` is on.
 	#[cfg(feature = "providers")]
 	provider_host: Arc<OnceLock<Arc<stump_provider::ProviderHost>>>,
+	/// The remote-worker queue and its connected-worker hub
+	/// ([`stump_worker`]). Created lazily like the device registry; the job
+	/// kinds' local implementations are installed by the host at boot with
+	/// [`Ctx::install_worker_registry`], because running one needs `ffmpeg`
+	/// and the media rows, neither of which the core owns.
+	worker_jobs: Arc<OnceLock<Arc<WorkerJobs>>>,
+	worker_registry: Arc<OnceLock<KindRegistry>>,
 }
 
 impl Ctx {
@@ -117,6 +125,8 @@ impl Ctx {
 			visible_pages: Arc::new(VisiblePagesCache::default()),
 			#[cfg(feature = "providers")]
 			provider_host: Arc::new(OnceLock::new()),
+			worker_jobs: Arc::new(OnceLock::new()),
+			worker_registry: Arc::new(OnceLock::new()),
 		}
 	}
 
@@ -181,12 +191,18 @@ impl Ctx {
 		Ok(self
 			.job_runtime
 			.get_or_init(|| {
-				Arc::new(JobRuntime::new(Arc::new(JobServices::new(
+				let services = JobServices::new(
 					self.conn.clone(),
 					self.config.clone(),
 					self.event_channel.0.clone(),
 					self.visible_pages.clone(),
-				))))
+				);
+				// The same cell `provider_host()` reads, so the health job
+				// sees the host as soon as `providers::init` installs it —
+				// which is after the runtime may already have been built.
+				#[cfg(feature = "providers")]
+				let services = services.with_provider_host(self.provider_host.clone());
+				Arc::new(JobRuntime::new(Arc::new(services)))
 			})
 			.clone())
 	}
@@ -418,6 +434,45 @@ impl Ctx {
 						let _ = event_tx.send(CoreEvent::DeviceSeen(seen));
 					},
 				))
+			})
+			.clone()
+	}
+
+	/// Install the job kinds' local implementations. Called once by the host
+	/// during startup, before any route that can enqueue is mounted.
+	///
+	/// A registry installed after the service was first used is refused rather
+	/// than silently ignored: a `transcode` that silently lost its `ffmpeg`
+	/// fallback would answer `needs_worker` on a server that can do the work.
+	pub fn install_worker_registry(&self, registry: KindRegistry) {
+		if self.worker_jobs.get().is_some() {
+			tracing::error!(
+				"The worker job registry was installed after the queue was first used; the local implementations it carries will not be reachable"
+			);
+			return;
+		}
+		let _ = self.worker_registry.set(registry);
+	}
+
+	/// The remote-worker queue, constructed lazily on first use. Transitions
+	/// recorded through it are forwarded as [`CoreEvent::WorkerJobChanged`].
+	pub fn worker_jobs(&self) -> Arc<WorkerJobs> {
+		self.worker_jobs
+			.get_or_init(|| {
+				let event_tx = self.event_channel.0.clone();
+				let service = WorkerJobs::new(
+					self.conn.clone(),
+					// A subdirectory of the transform cache: the outputs are
+					// the same kind of artifact and share its disk, but the
+					// cache's LRU sweep enumerates only its own directory, so
+					// an in-flight upload can be neither served nor evicted.
+					self.config.get_transform_cache_dir().join("worker-output"),
+				)
+				.with_registry(self.worker_registry.get().cloned().unwrap_or_default())
+				.with_change_listener(Arc::new(move |changed| {
+					let _ = event_tx.send(CoreEvent::WorkerJobChanged(changed));
+				}));
+				Arc::new(service)
 			})
 			.clone()
 	}

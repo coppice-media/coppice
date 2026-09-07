@@ -135,7 +135,7 @@ pub use image::{
 #[cfg(feature = "pdf")]
 pub use media::format::pdf::PdfProcessor;
 #[cfg(feature = "rar")]
-pub use media::format::rar::RarProcessor;
+pub use media::format::rar::{RarEntry, RarProcessor};
 pub use media::format::{
 	audio::{AudioProcessor, AUDIO_PAGES},
 	epub::{EpubNavEntry, EpubProcessor, EpubStructure},

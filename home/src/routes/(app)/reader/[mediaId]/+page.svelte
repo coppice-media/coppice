@@ -28,6 +28,7 @@
 		ReaderVisiblePagesDocument,
 		type MediaProgressInput
 	} from '$lib/graphql/generated/graphql';
+	import AlsoAvailableAs from '$lib/components/reader/AlsoAvailableAs.svelte';
 	import AudioReader from '$lib/components/reader/AudioReader.svelte';
 	import EpubReader from '$lib/components/reader/EpubReader.svelte';
 	import PagedReader from '$lib/components/reader/PagedReader.svelte';
@@ -36,14 +37,17 @@
 	const mediaId = $derived(pageState.params.mediaId ?? '');
 
 	/**
-	 * A deep link from the annotation hub: `?href=…&fragment=…&progression=…`
-	 * anchors an EPUB, `?page=…` a paged book. `progression` is the
-	 * whole-publication fraction (the hub's `progression`), so it selects a
-	 * resource, never an in-resource offset — `fragment` is the only precise
-	 * in-resource anchor an annotation carries.
+	 * A deep link from the annotation hub or from an "Also available as" jump:
+	 * `?href=…&fragment=…&progression=…&itemProgression=…` anchors an EPUB,
+	 * `?page=…` a paged book, `?positionMs=…` a recording. `progression` is
+	 * the whole-publication fraction (the hub's `progression`), so it selects
+	 * a resource, never an in-resource offset; `itemProgression` is the
+	 * fraction *inside* the resource, which is what a chapter-map conversion
+	 * produces and the only way a mapped position lands mid-chapter.
 	 *
 	 * It decides where the reader opens and nothing else: the relocation it
-	 * causes is not written back, so following a link never moves the book's
+	 * causes is not written back, so following a link — or opening the other
+	 * edition at a converted, approximate position — never moves the book's
 	 * saved position until the reader is actually paged.
 	 */
 	const deepLink = $derived.by(() => {
@@ -53,10 +57,23 @@
 		const progression = params.has('progression')
 			? Number(params.get('progression'))
 			: Number.NaN;
+		const itemProgression = params.has('itemProgression')
+			? Number(params.get('itemProgression'))
+			: Number.NaN;
 		const startPage = Number.parseInt(params.get('page') ?? '', 10);
+		const startPositionMs = Number.parseInt(params.get('positionMs') ?? '', 10);
 		const percentage = Number.isFinite(progression) ? progression : undefined;
+		const within = Number.isFinite(itemProgression) ? itemProgression : null;
 		const page = Number.isFinite(startPage) ? startPage : undefined;
-		if (!href && !fragment && percentage === undefined && page === undefined) return null;
+		const positionMs = Number.isFinite(startPositionMs) ? startPositionMs : undefined;
+		if (
+			!href &&
+			!fragment &&
+			percentage === undefined &&
+			page === undefined &&
+			positionMs === undefined
+		)
+			return null;
 		return {
 			locator: href
 				? ({
@@ -66,7 +83,7 @@
 						type: 'application/xhtml+xml',
 						locations: {
 							fragments: fragment ? [fragment] : null,
-							progression: null,
+							progression: within,
 							position: page ?? null,
 							totalProgression: percentage ?? null,
 							cssSelector: null,
@@ -76,7 +93,8 @@
 					} satisfies ReaderLocator)
 				: null,
 			percentage,
-			page
+			page,
+			positionMs
 		};
 	});
 
@@ -222,6 +240,10 @@
 		{/if}
 	</div>
 
+	{#if mediaId}
+		<AlsoAvailableAs {mediaId} />
+	{/if}
+
 	{#if saveError}
 		<Alert variant="destructive">
 			<AlertTitle>Progress not saved</AlertTitle>
@@ -252,12 +274,14 @@
 		</Empty>
 	{:else if book.audio}
 		<!-- Keyed on the book rather than `anchorKey`: a recording has no
-		deep-link anchor, and remounting a playing element because some
-		unrelated query parameter changed would stop the audio. -->
+		in-resource anchor to re-seek to, and remounting a playing element
+		because some unrelated query parameter changed would stop the audio. A
+		`?positionMs=` jump from the other edition is therefore read once, at
+		mount, exactly like a stored head. -->
 		{#key mediaId}
 			<AudioReader
 				audio={book.audio}
-				startPositionMs={book.readProgress?.positionMs ?? 0}
+				startPositionMs={deepLink?.positionMs ?? book.readProgress?.positionMs ?? 0}
 				onPosition={({ positionMs, trackIndex, isComplete }) =>
 					schedule({ audio: { positionMs, trackIndex, isComplete } })}
 			/>

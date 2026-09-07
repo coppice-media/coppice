@@ -509,6 +509,43 @@ after its cursor state has moved. Native `media_annotations` and `bookmarks`
 may remain as local projections; the unified annotation/tombstone stream is
 the source of truth for cross-provider synchronization.
 
+## Mapped positions
+
+**[observed]** A head is one row per `(user, media)`, so an audiobook and its
+EPUB have two heads and neither is the other's. Tier 1 of read-aloud
+(`docs/developer/read-aloud.mdx` §3) does not merge them; it *converts* on
+read.
+
+`models::domain::reading_state` carries the conversion as two pure functions
+over the pair's `media_chapter_map`:
+
+| Direction | Rule | Result |
+| --- | --- | --- |
+| audio → ebook (`map_time_to_locator`) | `f = (t − chapter.start_ms) / chapter.duration_ms`, then `f` of the mapped spine item's character count | a `ReadiumLocator` whose `href` is the spine item, `locations.progression` is `f`, and `locations.total_progression` agrees with `positions.json` |
+| ebook → audio (`map_locator_to_time`) | the inverse: the fraction inside the spine item (from `locations.progression`, or derived from `total_progression` over the cumulative character counts) times the mapped chapter's runtime | `position_ms` from the start of the publication |
+
+Three rules make this safe rather than merely convenient:
+
+- **It is never written.** The result is a `MappedPosition`, not a
+  `Projection`: it cannot be handed to `reading_state::resolve`, so no code
+  path can promote a derived position into a head. A reader who opens the
+  other edition and actually reads there writes a real head through the
+  ordinary mutation.
+- **It is always flagged.** `MappedPosition::approximate` is `true` for every
+  chapter-map conversion. Narrators are not metronomes: ±1-3 minutes on a
+  30-minute chapter. GraphQL exposes it as `Media.pairedPosition`, and the
+  console labels it *approximate*. Tier 2 (forced alignment) produces the
+  same shape with `approximate: false`.
+- **Unmapped matter converts to nothing.** Front and back matter — opening
+  credits, the copyright page, an end-of-book advert — has no counterpart and
+  gets no chapter-map row, so a position inside it returns `None` rather than
+  a guess. Guessing would resume the listener on the copyright page.
+
+**[observed]** Only a **confirmed** pair converts
+(`models::domain::edition_pair::PairStatus::Confirmed`). A suggestion is a
+guess about *identity*; converting through one would show a position from a
+different book.
+
 ## Non-negotiable invariants
 
 - **[inference]** A normalized Readium locator is never the sole copy of a

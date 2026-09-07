@@ -4,6 +4,7 @@ use sea_orm::prelude::DateTimeWithTimeZone;
 use serde::{Deserialize, Serialize};
 use stump_devices::DeviceSeen;
 use stump_jobs::{JobEvent, JobQueueStatus, JobUpdate};
+pub use stump_worker::WorkerJobChanged;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
@@ -257,6 +258,9 @@ pub enum CoreEvent {
 	LibraryUpdated(LibraryUpdated),
 	/// A library (and all of its series/media) was deleted
 	LibraryDeleted(LibraryDeleted),
+	/// A `worker_jobs` row changed: created, offered, claimed, progressed, or
+	/// finished. See [`stump_worker::WorkerJobs`].
+	WorkerJobChanged(WorkerJobChanged),
 }
 
 /// Container events share one payload shape per container kind: the id plus

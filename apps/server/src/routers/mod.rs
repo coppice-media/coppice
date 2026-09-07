@@ -24,6 +24,7 @@ mod opds_backend;
 pub(crate) mod provider_virtual;
 mod static_apps;
 pub(crate) use api::v2::auth::enforce_max_sessions;
+use api::v2::transcode_job::registry as worker_job_registry;
 
 #[cfg(feature = "webui")]
 mod spa;
@@ -37,6 +38,11 @@ pub(crate) fn relative_favicon_path(_webui_enabled: bool) -> Option<String> {
 }
 
 pub async fn mount(app_state: AppState) -> Router<AppState> {
+	// The job kinds' local implementations, installed before any route that
+	// can enqueue is mounted: without them a `transcode` on a server that has
+	// `ffmpeg` would answer `needs_worker`. Installed here rather than by the
+	// binary so the test harness and any other router owner get it too.
+	app_state.install_worker_registry(worker_job_registry(&app_state));
 	let mut app_router = Router::new();
 
 	#[cfg(feature = "koreader")]

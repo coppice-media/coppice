@@ -130,6 +130,30 @@ impl AbsSessions {
 		Ok(Some(Self::from_row(&row)?))
 	}
 
+	/// One session by id alone.
+	///
+	/// `GET /public/session/{id}/track/{index}` is unauthenticated by
+	/// Audiobookshelf's design, so there is no user to scope by: the v4
+	/// session uuid *is* the capability. The row still carries its own
+	/// `user_id`, which is what the track lane uses to decide whose device
+	/// preset applies.
+	pub async fn get_any(
+		conn: &impl ConnectionTrait,
+		session_id: &str,
+	) -> Result<Option<AbsSession>, DbErr> {
+		let row = conn
+			.query_one(statement(
+				conn,
+				&format!("SELECT {} FROM abs_sessions WHERE id = $1", Self::COLUMNS),
+				vec![session_id.into()],
+			))
+			.await?;
+		let Some(row) = row else {
+			return Ok(None);
+		};
+		Ok(Some(Self::from_row(&row)?))
+	}
+
 	/// Every session of `user_id`, newest first, optionally for one book.
 	///
 	/// This is the listening history `GET /api/me/listening-sessions` and

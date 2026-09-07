@@ -22,6 +22,12 @@ sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 stump_media = { path = "../media", default-features = false }
+# The `challenge_solve` queue. Server half only: this crate enqueues jobs and
+# reads their results, it never speaks the socket protocol. The dependency
+# runs one way — `stump_worker` knows nothing about sources.
+stump_worker = { path = "../worker", default-features = false, features = [
+	"server",
+] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "time"] }
 tracing.workspace = true

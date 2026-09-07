@@ -1,0 +1,215 @@
+---
+title: Editions, provenance, and supersede
+description: Design for paged-media editions - where a file came from (digital, scan, fan translation), which of two copies of the same issue wins, what happens to the loser and to the reader's progress, how an omnibus covers a range of issues, and the four quality checks that score all of it. Status - design accepted, not implemented.
+---
+
+**Status: design, not implemented.** Nothing here exists yet except the pieces
+marked *exists*. This is the paged-media half of the edition model whose
+audio/ebook half is [read-aloud](/docs/developer/read-aloud); the quality-check
+style, weights and scoring formula are
+[modular ingest › quality checks](/docs/developer/modular-ingest#quality-checks-and-deterministic-score).
+
+## 1. The problem
+
+| Have | Today | Want |
+| --- | --- | --- |
+| `Batman 001 (2016) (digital) (Empire).cbz` and `Batman 001 (2016) (c2c) (Minutemen).cbz` | two books in the series, one `duplicate_existing` `WARN` (`crates/ingest/src/quality/duplicate_existing.rs:97-181`) | one issue, two editions, the digital one preferred and the scan hidden but kept |
+| `Saga v01 (Ch 01-06).cbz` beside `Saga Ch 01.cbz … Ch 06.cbz` | the omnibus and the issues both count as covering 1-6 (`analyze_sequence`, `crates/scanner/src/sequence.rs:226-262`), so the series looks duplicated | one series, two shapes, "read as omnibus / as issues" |
+| a `v2` that fixes ten crushed pages | a second file nobody knows supersedes the first | the reader opens the `v2` at the page they reached in the `v1` |
+| `[Group] Chapter 12 (fan translation)` | invisible - the bracket is stripped and thrown away (`clean_name`, `crates/scanner/src/sequence.rs:264-298`) | provenance: kind `fan_translation`, group `Group` |
+
+## 2. What exists and what is added
+
+| Piece | Status | Where |
+| --- | --- | --- |
+| `works` / `editions` / `aliases` / `media_links` - a work has editions, a media row links to an edition | *exists*, **user-scoped** (`liseur_sync_works.user_id`, `uq-liseur-sync-media-links-user-media`) | `crates/migrations/src/m20260904_000000_add_liseur_sync.rs:106-147,150-226,281-367`, `apps/server/src/routers/liseur_sync/` (`POST /v1/works/resolve`) |
+| `pair_editions`, library-scoped edition grouping | to build, batch 11 | `crates/library` ([read-aloud §2](/docs/developer/read-aloud#2-pairing-which-audiobook-is-which-ebook)) |
+| `identifier_isbn` / `_amazon` / `_google` / `_mobi_asin` / `_calibre` / `_uuid` on metadata | *exists* | `crates/models/src/entity/media_metadata.rs` |
+| one sequence parser: identifier vocabulary, omnibus ranges, `()`/`[]` stripping | *exists* | `crates/scanner/src/sequence.rs` |
+| per-page dHash rows, `stump_media::DUPLICATE_PAGE_TOLERANCE` = 4, serve-time hiding | *exists* | `crates/models/src/entity/page_hash.rs:9-18`, `core/src/filesystem/media/visible_pages.rs:69-73,93-94` |
+| `media_provenance (media_id PK, kind, release_group, language, format, revision, confidence, evidence JSON, algorithm_version, generated_at)` | to build | one append-only migration + entity; `crates/ingest` writes it during analysis |
+| `media.superseded_by TEXT NULL` → `media(id)`, and `media_coverage (media_id PK, kind, start_milli, end_milli)` | to build | same migration |
+
+Provenance is keyed on `media_id`, never on a user: which scan a file is, is a
+fact about the bytes. The liseur-sync work graph stays user-scoped and is joined
+through whatever `pair_editions` records, so neither table grows a second
+meaning.
+
+## 3. The provenance record
+
+```json
+{ "kind": "digital|scan|fan_translation|unknown", "group": "Empire",
+  "language": "en", "format": "issue|tpb|omnibus", "revision": 2,
+  "confidence": 0.82, "evidence": [{"source": "filename", "signal": "tag", "value": "digital", "weight": 0.4}] }
+```
+
+`kind` is what the pages *are*, `format` is what the publication *is*, and both
+are `unknown` rather than guessed. `confidence` is the summed weight of the
+agreeing evidence, clamped to `0..=1`; every entry names its source, so a
+librarian sees why a file was called a scan and can override it (the override is
+an evidence entry of source `user` with weight `1.0`, which is how a correction
+outranks every extractor without deleting what they found).
+
+### 3a. ComicInfo
+
+| Element | In `ProcessedMediaMetadata`? | Use |
+| --- | --- | --- |
+| `Format` | *exists* - `format` (`crates/media/src/media/metadata.rs:22-25`) | `issue` / `tpb` / `omnibus`, matched case-insensitively against the [anansi vocabulary](https://anansi-project.github.io/docs/comicinfo/documentation#format) (`TPB`, `Trade Paperback`, `Omnibus`, `Annual`, `One-Shot`) |
+| `Notes` | *exists* - `notes` (`:70-72`) | scraper banners: `Tagged with ComicTagger`, `digital`, `scanned by`, group names |
+| `Web` | *exists* - `links` (`:185-191`) | a `comixology.com` link is `digital` evidence; a scanner-forum link is not |
+| `Language` | *exists* - `language` (`:96-98`) | preferred-language comparison |
+| `LanguageISO` | **missing** - `stump_media` only aliases `<Language>`, a gap `stump_tools` already records rather than works around (`crates/tools/README.md:47`) | add the alias; it is the element Kavita, Komga and ComicRack write |
+| `ScanInformation` | **missing** - no reader in the tree | add; it is the one element authored *for* this question (`(digital) (Empire)`, `Rescanned`, DPI) |
+| `Translator` | **missing** - no reader in the tree (`crates/kavita/src/dto.rs:271` is Kavita's own role enum, not ours) | add; a populated `Translator` on a comic is `fan_translation` evidence and a credit worth showing |
+
+The three additions are fields on `ProcessedMediaMetadata` plus columns on
+`media_metadata`, merged by the existing `Merge` derive and the embedded
+provider; no reader changes shape.
+
+### 3b. Filename release tags
+
+`clean_name` deletes every `()`/`[]` chunk *and its contents* while parsing
+(`crates/scanner/src/sequence.rs:264-298,277-293`) - correct for sequencing, and
+exactly the information provenance needs. So it keeps that behaviour and gains a
+sibling, `pub fn release_tags(file_name: &str) -> Vec<String>`, returning the
+stripped chunks in order. One parser, two outputs; no sequence result moves.
+
+| Tag (case-insensitive) | Reads as | Weight |
+| --- | --- | --- |
+| `digital`, `digital-Empire`, `Digital Rip`, `webrip` | `kind = digital` | 0.40 |
+| `scan`, `c2c` (cut-and-paste scan - still a scan), `dcp`, `rescan`, `hd`, `dpi` | `kind = scan` | 0.40 |
+| `fan translation`, `fantrans`, `scanlation`, `translated by` | `kind = fan_translation` | 0.45 |
+| a chunk that is only a name (`[Empire]`, `(Minutemen)`) | `group`, and `kind = scan` at 0.15 unless another tag says otherwise | 0.20 |
+| `v2`, `v3`, `fixed`, `repaired`, `rescan`, `redux` **inside a chunk** | `revision = n` (`fixed` without a number is 2) | 0.25 |
+| `(en)`, `[Japanese]` and the rest of `stump_tools::cbzit::LANGUAGES` (`crates/tools/src/cbzit.rs:737-739`) | `language` | 0.20 |
+
+A **bare** `v2` outside a chunk stays a volume identifier and nothing else: `v`
+is in the sequence vocabulary (`identifier_kind`,
+`crates/scanner/src/sequence.rs:424-441`), and reading `Saga v02` as "revision 2
+of Saga" would break every series that numbers volumes. Revision detection is
+bracketed-chunk-only, which is also how release groups actually write it.
+
+### 3c. Image forensics
+
+Deterministic, header-first, and never a network call - the same discipline as
+the rest of the registry.
+
+| Signal | Measurement | Reads as |
+| --- | --- | --- |
+| Uniform dimensions | the modal `(width,height)` share `image_dimensions_consistent` already computes per page, with the snapshot's analysis data as its fallback (`crates/ingest/src/quality/image_dimensions_consistent.rs:127-149,68-72`) | share `= 1` → `digital` 0.20; `< 0.9` → `scan` 0.20 |
+| JPEG quality | walk the `DQT` marker and compare the luma table with the Annex K table (`q = 100 - mean(ratio)`), a header-only byte read like `image_dimensions` (`crates/ingest/src/quality/mod.rs:212-216`) | `q >= 90` and uniform tables → `digital` 0.15; mixed tables across pages → `scan` 0.15 |
+| Borders and skew | mean luma of the outer 8-px frame per edge, and the row-offset slope of the first non-white run down the left edge | a frame darker than the page interior by `>= 12/255`, or slope `> 0.2 px/row` → `scan` 0.25 |
+| Recurring credits page | a `page_hashes` dHash within tolerance 4 recurring in at least `MIN_DUPLICATE_BOOKS_DEFAULT` = 3 books of the library - the `duplicate_pages_across_books` aggregation (`crates/ingest/src/quality/duplicate_pages_across_books.rs:17-18,161-205`), unchanged | the recurring page's own text is not read; recurrence alone is `group` evidence 0.15, and the page is a `known_duplicate_pages` `SKIP` candidate as it is today |
+| No page decodes | - | `kind = unknown`, `confidence = 0` |
+
+## 4. Supersede
+
+Editions are compared, not deduplicated. `duplicate_existing` keeps its exact-digest
+`FAIL` (`crates/ingest/src/quality/duplicate_existing.rs:58-95`: identical bytes are
+not an edition) and its `MatchScorer` `>= 0.70` candidate set, and then, when the
+candidate carries provenance and the same `(series, number)` or a confirmed work
+link, produces an **edition comparison** instead of a bare `WARN`.
+
+| Order | Criterion | Source |
+| --- | ---: | --- |
+| 1 | `kind`: `digital` > `scan` > `fan_translation` > `unknown` | `media_provenance.kind` |
+| 2 | higher quality score | `quality_report.score`, then `page_quality`'s `q` as the tie-break |
+| 3 | preferred language | first match in the library's language list; no list means no opinion |
+| 4 | `v2`/`fixed` > `v1` | `media_provenance.revision` |
+| 5 | more visible pages, then larger byte size, then lower `media.id` | deterministic, so two runs never disagree |
+
+The winner is the **preferred edition**. The loser gets
+`media.superseded_by = <winner id>` and is filtered out of listings by the same
+query funnel that already hides `deleted_at` rows
+(`media::Column::DeletedAt.is_null()`, `crates/ingest/src/quality/duplicate_existing.rs:59`),
+so it stays readable by direct link, stays in search with an "superseded"
+badge, and is never deleted. Deleting bytes needs `keep_original: false`, the
+flag `AudioPolicy` already spells for the assembler
+(`crates/ingest/src/policy.rs:184-198`, validated so it cannot be set without the
+replacement existing); default `true`, and the delete is a separate explicit action
+with the winner's id recorded. A librarian can pin the loser as preferred, which
+writes an evidence entry rather than re-running the policy.
+
+**Progress carry-over.** A reader with a head on the superseded edition opens
+the winner at the same place, through the tier-1 conversion rather than a new
+mechanism: `page → progression = (page - 1) / (pages - 1) → page' = round(progression × (pages' - 1)) + 1`,
+clamped to `1..=pages'` (`Publication::pages`, `Projection.page/progression`,
+`crates/models/src/domain/reading_state.rs:135-177`). It is *shown*, not written:
+`resolve` (`:333-336`) records it as a mapped position exactly as read-aloud's
+mapped audio positions do, so a derived page never overwrites a real one, and
+the head stays one row per (user, media). A locator head on a reflowable edition
+carries over unchanged when the winner's spine matches, and falls back to
+`total_progression` (`crates/media/src/media/readium.rs:374-385`) when it does not.
+
+## 5. Omnibus ranges
+
+The parser already covers the hard part: `ParsedIdentifier { kind, start, end }`
+carries an inclusive span (`crates/scanner/src/sequence.rs:132-139`), `Chapter 01-03`
+covers 1, 2 and 3, a span wider than `MAX_RANGE_LEN = 500` is release metadata
+rather than chapters (`:19-21`), and numbers are integer thousandths so `112.1`
+compares exactly (`:45-48`). `missing_chapters_in_series` consumes exactly that
+and does not open a gap for an omnibus (`crates/ingest/src/quality/missing_chapters_in_series.rs:20-27`).
+
+What is added is persistence and a view. `media_coverage (media_id, kind, start_milli, end_milli)`
+stores the span the file's own name (or `Format = Omnibus` plus a `Number` range)
+asserts, and the series view gains a **read as omnibus / as issues** toggle:
+
+| Toggle | Series listing | Reading head |
+| --- | --- | --- |
+| as issues (default when both shapes exist) | issue rows; an omnibus contributes the issues it covers | a head on the omnibus projects onto issue `n` by page offset |
+| as omnibus | one row per omnibus; covered issues are collapsed under it | a head on issue `n` projects into the omnibus at `offset(n) + page` |
+
+`offset(n)` is the summed visible page count of the covered issues preceding
+`n`, so the mapping is exact when every covered issue is present and marked
+approximate (the same mapped-position rule as §4) when it is not. An issue that
+exists *only* inside an omnibus is not invented as a media row; it is a covered
+number, which is precisely what the sequence analysis already reports
+(`SequenceAnalysis.found_ranges`, `crates/scanner/src/sequence.rs:154-174`).
+
+## 6. The four new checks
+
+Same registry, same shape - id, weight, deterministic `q`, fix action, positive
+and negative fixture (`crates/ingest/src/quality/registry.rs:45-88`). A fix may
+only name a registered tool (`crates/ingest/src/quality/audio.rs:50-53`), so a
+check whose only remedy is a better file carries no fix and routes to a
+[request](/docs/developer/read-aloud#7-requests---asking-for-what-is-missing).
+
+| Check ID | Weight | Deterministic definition and normalized score | Fix |
+| --- | ---: | --- | --- |
+| `provenance_known` | 5 | Paged formats. Run the three extractors of §3 and score the record: `kind != unknown` **and** `confidence >= 0.6` is `PASS`, `q=1`; `kind != unknown` with `0.3 <= confidence < 0.6`, or `kind == unknown` with a known `group` or `language`, is `WARN`, `q=0.5`; no signal at all is `FAIL`, `q=0`. Evidence is the record itself, capped at 20 entries. Reflowable formats are `NOT_APPLICABLE`. | `meta-edit` (`crates/tools/src/meta_edit.rs:65`) - write `ScanInformation`, `LanguageISO` and `Format` |
+| `page_quality` | 10 | Paged image formats. Four terms, each `0..=1`, averaged: modal-dimension share (§3c); JPEG `q` mapped `(q - 60) / 30` clamped, non-JPEG pages count 1; border/skew clean fraction; fraction of pages that are not a `>= 3`-book recurring hash. `PASS` when the mean `>= 0.8`, `WARN` when `0.5 <= mean < 0.8`, `FAIL` below. Evidence lists the worst 20 pages with the term that failed. A book with no decodable image page is `NOT_APPLICABLE`. | none - the fix is a better edition, so this becomes an edition comparison (§4) or a `comic` request |
+| `metadata_complete` | 5 | Every format. Of `title`, `series`, `number`, `year`, `publisher`, `language`, `summary`, `writers`, and at least one `identifier_*` (`crates/models/src/entity/media_metadata.rs`), count those present and non-blank: `q = present / 9`. `PASS` at `q = 1`, `WARN` at `q >= 0.55`, `FAIL` below. `number` is `NOT_APPLICABLE`-exempt for a standalone book with no series, which drops the denominator to 8 rather than penalising a one-shot. | `meta-edit`, after the provider policy has run (`applyBestIngestMetadata`) |
+| `audio_quality` | 0 | Recordings, **WARN-only**. Decode the publication with the in-tree `symphonia` path (`crates/media/src/audio/probe.rs`) and measure, per track: clipped-sample runs (`>= 3` consecutive full-scale samples) per minute, DC offset, peak and RMS in dBFS, and the inter-track RMS spread. `WARN`, `q=0.5`, when clipping `> 1/min`, or `|DC| > 0.01`, or RMS `< -30 dBFS` or `> -12 dBFS`, or the inter-track spread exceeds 6 dB; `PASS`, `q=1`, otherwise. Never `FAIL`. Bitrate is deliberately out of scope: `bitrate_sane` owns it (`crates/ingest/src/quality/audio_bitrate_sane.rs:34-43`). Non-audio is `NOT_APPLICABLE`. | none - a re-encode cannot un-clip a master |
+
+`audio_quality` ships at **weight 0** for the same reason `drm_protected` does:
+most audiobooks exist in exactly one recording, and deducting points from the only
+copy of a book describes nothing a librarian can act on. A library that *is*
+curating recordings raises it through `AudioPolicy::audio_quality_weight`, the
+knob `single_file_weight` already establishes (`crates/ingest/src/policy.rs:139-168`,
+bounded by `MAX_CHECK_WEIGHT`); the score normalises by applicable weight
+(`score_report`, `crates/ingest/src/quality/registry.rs:131`), so raising it needs
+no other weight to move.
+
+The three paged checks do need 20 points, and they come from the checks whose
+signal they now carry:
+
+| Check | Was | Is | Why |
+| --- | ---: | ---: | --- |
+| `image_dimensions_consistent` | 15 | 5 | its modal-share measurement is one of `page_quality`'s four terms; the standalone finding stays, at advisory weight |
+| `cover_not_page_two` | 10 | 5 | the duplicate-page signal it exact-matches is generalised by `page_quality`'s recurring-hash term |
+| `filename_series_parse` | 10 | 5 | the filename now also feeds `provenance_known`, and `metadata_complete` measures the metadata whose absence made the filename load-bearing |
+| **new** | - | 20 | `provenance_known` 5 + `page_quality` 10 + `metadata_complete` 5 |
+
+The paged family still sums to 100 (`family_weight`,
+`crates/ingest/src/quality/registry.rs:146-152`) and the audio family is untouched
+at 100 (`CheckFamily::AUDIO_IDS`, `:167-187`) with `audio_quality` joining it as an
+eighth id. Reports move to `algorithmVersion = "ingest-quality-3"`, so no stored
+score is silently reinterpreted.
+
+## 7. Implementation order
+
+1. `release_tags` in `stump_scanner` + the three `ProcessedMediaMetadata` fields (`ScanInformation`, `Translator`, `LanguageISO`) + `media_provenance` + the extractors, behind `provenance_known`. Nothing else can be decided without the record.
+2. `page_quality` (DQT walk, border/skew, reuse of the modal-share and recurring-hash aggregations) and `metadata_complete`, with the weight rebalance and `ingest-quality-3`.
+3. `media.superseded_by` + the edition comparison in `duplicate_existing` + the visibility filter + the console's "editions" panel on the book page. Progress carry-over lands with it, on top of tier 1's read-time conversion.
+4. `media_coverage` + the series **read as omnibus / as issues** toggle and head mapping through issue boundaries.
+5. `audio_quality` + `AudioPolicy::audio_quality_weight`. Last, because it is the only check that decodes a whole publication and the only one whose default weight is 0.

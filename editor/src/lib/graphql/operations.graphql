@@ -41,6 +41,11 @@ fragment IngestDropItemFields on IngestDropItem {
 			normalizedScore
 			contribution
 			evidence
+			fix {
+				tool
+				summary
+				options
+			}
 		}
 	}
 	metadataCandidates {
@@ -119,6 +124,63 @@ query IngestDropFolderAndItems(
 query IngestItem($id: ID!) {
 	ingestItem(id: $id) {
 		...IngestDropItemFields
+		dropGroupId
+		sidecars
+		dropGroupSiblings {
+			id
+			filename
+			mediaType
+			status
+			qualityScore
+			mediaId
+			editionPairCandidate
+			pairState
+		}
+		audio {
+			durationMs
+			duration
+			codec
+			sampleRate
+			channels
+			bitrate
+			chapterSource
+			coverContentType
+			coverByteSize
+			title
+			author
+			narrator
+			album
+			description
+			genre
+			year
+			tracks {
+				filename
+				duration
+				durationMs
+				startOffsetMs
+				byteSize
+				codec
+				bitrate
+				title
+				trackNumber
+			}
+			chapters {
+				title
+				startMs
+				start
+				endMs
+			}
+			assembled {
+				filename
+				byteSize
+				durationMs
+				duration
+				chapters
+				faststart
+				partsKept
+				method
+			}
+		}
 	}
 }
 
@@ -464,6 +526,15 @@ mutation ApproveIngestItem($dropItemId: ID!, $strategy: MergeStrategy) {
 mutation RejectIngestItem($dropItemId: ID!, $reason: String) {
 	rejectIngestItem(dropItemId: $dropItemId, reason: $reason) {
 		...IngestDropItemFields
+	}
+}
+
+mutation RunIngestQualityFix($input: RunIngestQualityFixInput!) {
+	runIngestQualityFix(input: $input) {
+		id
+		revision
+		status
+		error
 	}
 }
 

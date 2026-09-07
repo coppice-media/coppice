@@ -39,6 +39,12 @@ pub struct JobServices {
 	pub config: Arc<StumpConfig>,
 	event_tx: broadcast::Sender<CoreEvent>,
 	visible_pages: Arc<VisiblePagesCache>,
+	/// The provider host, shared with [`Ctx`](crate::Ctx) rather than built
+	/// here: it is installed once during startup and a job must see the same
+	/// one every route does. Read-only — a job never installs it, so a job
+	/// that runs before the host is up simply has none.
+	#[cfg(feature = "providers")]
+	provider_host: Arc<std::sync::OnceLock<Arc<stump_provider::ProviderHost>>>,
 }
 
 impl JobServices {
@@ -53,7 +59,26 @@ impl JobServices {
 			config,
 			event_tx,
 			visible_pages,
+			#[cfg(feature = "providers")]
+			provider_host: Arc::new(std::sync::OnceLock::new()),
 		}
+	}
+
+	/// Share the context's provider-host cell, so a job sees the host the
+	/// moment `crate::providers::init` installs it.
+	#[cfg(feature = "providers")]
+	pub(crate) fn with_provider_host(
+		mut self,
+		host: Arc<std::sync::OnceLock<Arc<stump_provider::ProviderHost>>>,
+	) -> Self {
+		self.provider_host = host;
+		self
+	}
+
+	/// The provider host, if one is running.
+	#[cfg(feature = "providers")]
+	pub fn provider_host(&self) -> Option<Arc<stump_provider::ProviderHost>> {
+		self.provider_host.get().cloned()
 	}
 
 	/// Drop the cached visible-page list for a media whose page hashes changed.

@@ -123,6 +123,31 @@ impl ProviderMutation {
 			.collect())
 	}
 
+	/// Ask a browser worker to earn a Cloudflare clearance for one gated
+	/// source instance, and apply it when it lands.
+	///
+	/// This is the manual form of what a health run does by itself: it exists
+	/// because an operator who has just started a browser worker should not
+	/// have to wait for the next six-hourly probe. It returns as soon as
+	/// routing is decided — the solve then runs on the worker, where a human
+	/// may have to click a checkbox in the window that opens, and the result
+	/// is applied by the server without another call.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
+	async fn solve_source_challenge(
+		&self,
+		ctx: &Context<'_>,
+		instance_id: String,
+	) -> Result<ProviderChallengeSolve> {
+		let core = ctx.data::<CoreContext>()?;
+		let host = core.provider_host().ok_or("Provider host is not enabled")?;
+		let dead_after = stump_core::providers::health_dead_after(&core.config);
+		let state = host
+			.solve_challenge(&instance_id, dead_after)
+			.await
+			.map_err(|error| error.to_string())?;
+		Ok(ProviderChallengeSolve::from(state))
+	}
+
 	/// Fetch (or refresh) the Keiyoushi catalog snapshot.
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
 	async fn refresh_provider_catalog(&self, ctx: &Context<'_>) -> Result<bool> {
@@ -220,4 +245,47 @@ pub struct ProviderMergeResult {
 	/// deleted with their media row.
 	pub heads_unmatched: i32,
 	pub media_deleted: i32,
+}
+
+/// What routing did with a `solveSourceChallenge` request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
+pub enum ProviderChallengeSolveState {
+	/// A solve that had already finished was applied on the spot; nothing was
+	/// queued.
+	Applied,
+	/// Queued, and a browser worker is connected to take it.
+	Queued,
+	/// A solve for this instance was already in flight.
+	AlreadyQueued,
+	/// Queued and parked: no connected worker advertises `browser`. It runs
+	/// the moment one does — start `stump-worker --chrome …`.
+	NeedsWorker,
+}
+
+/// What one `solveSourceChallenge` call set in motion.
+#[derive(async_graphql::SimpleObject)]
+pub struct ProviderChallengeSolve {
+	pub state: ProviderChallengeSolveState,
+	/// Ready to show an operator; the states are not self-explanatory.
+	pub message: String,
+	/// Whether the source is still gated *now*. Only meaningful for
+	/// `APPLIED`, which re-probes before answering; a queued solve has not
+	/// happened yet.
+	pub challenged: bool,
+}
+
+impl From<stump_provider::ChallengeSolveState> for ProviderChallengeSolve {
+	fn from(state: stump_provider::ChallengeSolveState) -> Self {
+		use stump_provider::ChallengeSolveState as State;
+		Self {
+			message: state.message().to_string(),
+			challenged: matches!(state, State::Adopted { challenged: true }),
+			state: match state {
+				State::Adopted { .. } => ProviderChallengeSolveState::Applied,
+				State::Queued => ProviderChallengeSolveState::Queued,
+				State::AlreadyQueued => ProviderChallengeSolveState::AlreadyQueued,
+				State::NeedsWorker => ProviderChallengeSolveState::NeedsWorker,
+			},
+		}
+	}
 }

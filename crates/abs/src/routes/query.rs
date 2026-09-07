@@ -15,7 +15,7 @@ use crate::{
 	dto::{CollapsedSeriesDto, LibraryItemDto, MediaProgressDto},
 	errors::{AbsError, AbsResult},
 	mapper::{self, ItemInput},
-	model::{AbsAudio, AbsProgress, ItemShape},
+	model::{AbsAudio, AbsEbookFile, AbsProgress, ItemShape},
 	routes::AbsBackend,
 };
 
@@ -137,6 +137,21 @@ pub(crate) enum ItemFilter {
 	/// (`ApiHandler.kt:564`).
 	Author(String),
 	Progress(ProgressFilter),
+	/// `ebooks.<base64>`: the official app's "Ebooks" filter, whose two
+	/// values are `ebook` and `supplementary`
+	/// (`components/modals/FilterModal.vue:237-248`). Ignoring it made the
+	/// "Audiobooks with an ebook" shelf list the whole library.
+	Ebook(EbookFilter),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EbookFilter {
+	/// `ebook`: items that have a primary ebook file.
+	Primary,
+	/// `supplementary`: items whose ebook file is marked supplementary.
+	/// Stump's pairing has no supplementary tier — an edition is an edition
+	/// — so this selects nothing rather than everything.
+	Supplementary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +181,11 @@ impl ItemFilter {
 				"not-finished" => Some(ItemFilter::Progress(ProgressFilter::NotFinished)),
 				"finished" => Some(ItemFilter::Progress(ProgressFilter::Finished)),
 				"in-progress" => Some(ItemFilter::Progress(ProgressFilter::InProgress)),
+				_ => None,
+			},
+			"ebooks" => match decoded.as_str() {
+				"ebook" => Some(ItemFilter::Ebook(EbookFilter::Primary)),
+				"supplementary" => Some(ItemFilter::Ebook(EbookFilter::Supplementary)),
 				_ => None,
 			},
 			_ => None,
@@ -244,6 +264,16 @@ pub(crate) async fn item_page(
 				_ => select.filter(media::Column::Id.is_in(ids)),
 			};
 		},
+		Some(ItemFilter::Ebook(state)) => {
+			// The set is the user's confirmed audiobook↔ebook pairs, small
+			// by construction, so it is resolved and applied as an `IN` the
+			// same way the progress filter is.
+			let ids = match state {
+				EbookFilter::Primary => backend.paired_ebook_media_ids(user).await?,
+				EbookFilter::Supplementary => Vec::new(),
+			};
+			select = select.filter(media::Column::Id.is_in(ids));
+		},
 		None => {},
 	}
 
@@ -279,6 +309,8 @@ pub(crate) struct ItemContext {
 	pub author_ids: HashMap<String, String>,
 	pub audio: HashMap<String, AbsAudio>,
 	pub progress: HashMap<String, AbsProgress>,
+	/// Confirmed EPUB editions of the page's audiobooks, by audiobook id.
+	pub ebooks: HashMap<String, AbsEbookFile>,
 }
 
 /// Load everything a page of books needs in a fixed number of queries,
@@ -383,6 +415,7 @@ pub(crate) async fn context(
 		author_ids: backend.author_ids(&author_names).await?,
 		audio: backend.audio_batch(&media_ids).await?,
 		progress,
+		ebooks: backend.ebook_editions(user, &media_ids).await?,
 	})
 }
 
@@ -452,6 +485,7 @@ impl ItemContext {
 					.unwrap_or_default(),
 				book_id,
 				audio,
+				ebook: self.ebooks.get(&row.id),
 				author_ids: &self.author_ids,
 				progress,
 				collapsed,
@@ -493,6 +527,25 @@ pub(crate) async fn media_for_user(
 	media_id: &str,
 ) -> AbsResult<media::Model> {
 	audio_media(user)
+		.filter(media::Column::Id.eq(media_id))
+		.one(backend.conn())
+		.await?
+		.ok_or_else(|| AbsError::NotFound(format!("No library item {media_id}")))
+}
+
+/// One audible, undeleted book by id, with no user to scope it — the cover
+/// lane's resolution when the request carries no credential.
+///
+/// It is deliberately *not* `find_for_user`: there is no user. What it does
+/// keep is the profile's own funnel, so an anonymous cover request cannot
+/// name a comic, a deleted row or anything that is not an ABS library item.
+pub(crate) async fn audio_media_row(
+	backend: &dyn AbsBackend,
+	media_id: &str,
+) -> AbsResult<media::Model> {
+	media::Entity::find()
+		.filter(audio_condition())
+		.filter(media::Column::DeletedAt.is_null())
 		.filter(media::Column::Id.eq(media_id))
 		.one(backend.conn())
 		.await?

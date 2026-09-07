@@ -18,6 +18,7 @@ mod custom_emoji;
 mod device;
 mod device_pairing;
 pub(crate) mod duplicate_page;
+mod edition_pair;
 mod email_device;
 mod emailer;
 mod epub;
@@ -46,6 +47,7 @@ mod smart_lists;
 pub(crate) mod smart_lists_builder;
 mod tag;
 pub(crate) mod user;
+mod worker;
 
 use annotation::AnnotationQuery;
 use annotation_attachment::AnnotationAttachmentQuery;
@@ -67,6 +69,7 @@ use custom_emoji::CustomEmojiQuery;
 use device::DeviceQuery;
 use device_pairing::DevicePairingQuery;
 use duplicate_page::DuplicatePageQuery;
+use edition_pair::EditionPairQuery;
 use email_device::EmailDeviceQuery;
 use emailer::EmailerQuery;
 use epub::EpubQuery;
@@ -92,6 +95,7 @@ use smart_list_view::SmartListViewQuery;
 use smart_lists::SmartListsQuery;
 use tag::TagQuery;
 use user::UserQuery;
+use worker::WorkerQuery;
 
 use crate::query::job::JobQuery;
 
@@ -119,6 +123,7 @@ struct ContentQueries(
 	TagQuery,
 	MediaMetadataOverviewQuery,
 	DuplicatePageQuery,
+	EditionPairQuery,
 );
 
 #[derive(async_graphql::MergedObject, Default)]
@@ -141,6 +146,7 @@ struct SystemQueries(
 	FilesystemQuery,
 	IngestQuery,
 	DevicePairingQuery,
+	WorkerQuery,
 	#[cfg(feature = "providers")] ProviderQuery,
 );
 

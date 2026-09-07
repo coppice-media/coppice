@@ -6,6 +6,7 @@
 //! its host instead.
 #![warn(clippy::dbg_macro)]
 
+pub mod archive;
 pub mod config;
 pub mod contract;
 pub mod coordinator;
@@ -13,6 +14,7 @@ pub mod drop_folder;
 pub mod error;
 pub mod event;
 pub mod host;
+pub mod pairing;
 pub mod policy;
 pub mod preprocess;
 pub mod progress;
@@ -21,6 +23,9 @@ pub mod quality;
 pub mod services;
 pub mod staging;
 pub mod store;
+
+#[cfg(test)]
+mod explode_tests;
 
 pub use config::IngestSettings;
 pub use error::{IngestError, IngestResult};

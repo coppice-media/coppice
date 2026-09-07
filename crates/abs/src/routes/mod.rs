@@ -7,7 +7,7 @@ use axum::{
 	body::Body,
 	http::{HeaderMap, Response},
 	response::IntoResponse,
-	routing::{delete, get, post},
+	routing::{delete, get, patch, post},
 	Extension, Router,
 };
 use models::entity::user::AuthUser;
@@ -15,13 +15,17 @@ use sea_orm::DatabaseConnection;
 
 use crate::{
 	errors::AbsResult,
-	model::{AbsAudio, AbsBookmark, AbsImage, AbsPositionUpdate, AbsProgress},
+	model::{
+		AbsAudio, AbsBookmark, AbsEbookFile, AbsImage, AbsPlaylist, AbsPositionUpdate,
+		AbsProgress,
+	},
 };
 
 mod identity;
 mod items;
 mod libraries;
 pub(crate) mod me;
+mod playlists;
 pub(crate) mod query;
 mod session;
 #[cfg(test)]
@@ -170,8 +174,12 @@ pub trait AbsBackend: Send + Sync {
 		position_ms: i64,
 	) -> AbsResult<()>;
 
-	/// The book's cover image.
-	async fn cover(&self, user: &AuthUser, media_id: &str) -> AbsResult<AbsImage>;
+	/// The book's cover image. `None` for the user is the anonymous cover
+	/// lane: from 2.17.0 the official app sends no credential with an image
+	/// request, and the route has already established that the row is an
+	/// audible, undeleted book.
+	async fn cover(&self, user: Option<&AuthUser>, media_id: &str)
+		-> AbsResult<AbsImage>;
 
 	/// Stream one audio track, honouring `Range` from `headers`.
 	///
@@ -196,6 +204,17 @@ pub trait AbsBackend: Send + Sync {
 		user_id: &str,
 		session_id: &str,
 	) -> AbsResult<Option<AbsSession>>;
+
+	/// Load a play session by id alone, with no user to scope it.
+	///
+	/// `GET /public/session/{id}/track/{index}` is unauthenticated by
+	/// Audiobookshelf's own design — the official app streams every
+	/// direct-play track from it once the server reports >= 2.22.0
+	/// (`android/.../data/PlaybackSession.kt:198-201`,
+	/// `plugins/capacitor/AbsAudioPlayer.js:258`) — so the session id is the
+	/// capability. It is a v4 uuid, minted per play request and never
+	/// enumerable.
+	async fn session_by_id(&self, session_id: &str) -> AbsResult<Option<AbsSession>>;
 
 	/// Every play session of the user, newest first, optionally for one
 	/// book: the listening history behind `GET /api/me/listening-sessions`,
@@ -227,6 +246,71 @@ pub trait AbsBackend: Send + Sync {
 
 	/// The author name an allocated author id belongs to.
 	async fn author_name(&self, author_id: &str) -> AbsResult<Option<String>>;
+
+	/// The confirmed EPUB edition paired with each of `media_ids`, for the
+	/// requesting user.
+	///
+	/// Pairs are per user (`liseur_sync_media_links.user_id`), so this takes
+	/// the caller: two users of the same server can disagree about whether
+	/// an audiobook and an ebook are the same work.
+	async fn ebook_editions(
+		&self,
+		user: &AuthUser,
+		media_ids: &[String],
+	) -> AbsResult<HashMap<String, AbsEbookFile>>;
+
+	/// Every audiobook of the user that has a confirmed EPUB edition, for
+	/// the `filter=ebooks.<base64>` list filter. Bounded by the user's
+	/// confirmed pairs, not by the library.
+	async fn paired_ebook_media_ids(&self, user: &AuthUser) -> AbsResult<Vec<String>>;
+
+	/// Stream the paired EPUB, honouring `Range`.
+	async fn serve_ebook(
+		&self,
+		headers: HeaderMap,
+		user: &AuthUser,
+		ebook: &AbsEbookFile,
+	) -> AbsResult<Response<Body>>;
+
+	/// Zip every file of one library item — its audio tracks, plus the
+	/// paired EPUB when there is one — as `GET /api/items/{id}/download`.
+	async fn download_item(
+		&self,
+		headers: HeaderMap,
+		user: &AuthUser,
+		media_id: &str,
+		ebook: Option<&AbsEbookFile>,
+	) -> AbsResult<Response<Body>>;
+
+	/// The user's playlists, newest first, or one of them.
+	async fn playlists(&self, user: &AuthUser) -> AbsResult<Vec<AbsPlaylist>>;
+
+	async fn playlist(
+		&self,
+		user: &AuthUser,
+		playlist_id: &str,
+	) -> AbsResult<Option<AbsPlaylist>>;
+
+	async fn create_playlist(
+		&self,
+		user: &AuthUser,
+		name: &str,
+		description: Option<&str>,
+		media_ids: &[String],
+	) -> AbsResult<AbsPlaylist>;
+
+	/// Rename, re-describe or re-populate a playlist. `None` leaves a field
+	/// untouched.
+	async fn update_playlist(
+		&self,
+		user: &AuthUser,
+		playlist_id: &str,
+		name: Option<&str>,
+		description: Option<Option<&str>>,
+		media_ids: Option<&[String]>,
+	) -> AbsResult<AbsPlaylist>;
+
+	async fn delete_playlist(&self, user: &AuthUser, playlist_id: &str) -> AbsResult<()>;
 }
 
 /// The type every handler takes: the backend, plus the user the server's
@@ -251,7 +335,23 @@ pub(crate) fn ok_text() -> Response<Body> {
 }
 
 /// The routes that need no credentials: the two probes a client hits before
-/// login, plus login and refresh themselves.
+/// login, login and refresh themselves, the direct-play track lane, and the
+/// item covers.
+///
+/// The last two are unauthenticated because Audiobookshelf made them so and
+/// the official app depends on it:
+///
+/// - `GET /public/session/{id}/track/{index}` is where every direct-play
+///   track is streamed from once the server reports >= 2.22.0
+///   (`android/.../data/PlaybackSession.kt:196-204`,
+///   `plugins/capacitor/AbsAudioPlayer.js:254-261`). The v4 session uuid is
+///   the capability.
+/// - `GET /api/items/{id}/cover` carries no token once the server reports
+///   >= 2.17.0: the webview builds the `<img>` src without one
+///   (`store/index.js:89-102`, `store/globals.js:54-56,68-70`) and so does
+///   the notification art loader
+///   (`android/.../data/PlaybackSession.kt:186-190`). abs-ref 2.36.0 agrees
+///   — an anonymous cover request there answers `404`, not `401`.
 pub fn public_router<S>() -> Router<S>
 where
 	S: Clone + Send + Sync + 'static,
@@ -263,6 +363,11 @@ where
 		.route("/login", post(identity::login))
 		.route("/logout", post(identity::logout))
 		.route("/auth/refresh", post(identity::refresh))
+		.route(
+			"/public/session/{session_id}/track/{track}",
+			get(items::public_track),
+		)
+		.route("/api/items/{item_id}/cover", get(items::cover))
 }
 
 /// Everything behind authentication. The server mounts this under the same
@@ -317,13 +422,23 @@ where
 		)
 		.route(
 			"/libraries/{library_id}/playlists",
-			get(libraries::playlists),
+			get(playlists::list_for_library),
 		)
 		.route("/libraries/{library_id}/search", get(libraries::search))
 		.route("/items/batch/get", post(items::batch_get))
 		.route("/items/{item_id}", get(items::detail))
-		.route("/items/{item_id}/cover", get(items::cover))
 		.route("/items/{item_id}/file/{ino}", get(items::file))
+		.route(
+			"/items/{item_id}/file/{ino}/download",
+			get(items::file_download),
+		)
+		.route("/items/{item_id}/download", get(items::download))
+		.route("/items/{item_id}/ebook", get(items::ebook))
+		.route("/items/{item_id}/ebook/{file_id}", get(items::ebook_file))
+		.route(
+			"/items/{item_id}/ebook/{file_id}/status",
+			patch(items::ebook_status),
+		)
 		.route("/items/{item_id}/play", post(items::play))
 		.route("/session/{session_id}", get(session::detail))
 		.route("/session/{session_id}/sync", post(session::sync))
@@ -332,4 +447,27 @@ where
 		.route("/session/local-all", post(session::local_all))
 		.route("/authors/{author_id}", get(items::author))
 		.route("/authors/{author_id}/image", get(items::author_image))
+		.route(
+			"/playlists",
+			post(playlists::create).get(playlists::list_all),
+		)
+		.route(
+			"/playlists/{playlist_id}",
+			get(playlists::detail)
+				.patch(playlists::update)
+				.delete(playlists::remove),
+		)
+		.route("/playlists/{playlist_id}/item", post(playlists::add_item))
+		.route(
+			"/playlists/{playlist_id}/item/{item_id}",
+			delete(playlists::remove_item),
+		)
+		.route(
+			"/playlists/{playlist_id}/batch/add",
+			post(playlists::batch_add),
+		)
+		.route(
+			"/playlists/{playlist_id}/batch/remove",
+			post(playlists::batch_remove),
+		)
 }

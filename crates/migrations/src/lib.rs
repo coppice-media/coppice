@@ -71,6 +71,9 @@ mod m20260940_000000_add_kindle_deliveries;
 mod m20260941_000000_add_provider_request_headers;
 mod m20260942_000000_add_media_metadata_narrators;
 mod m20260943_000000_add_abs_session_play_method;
+mod m20260944_000000_add_worker_jobs;
+mod m20260945_000000_add_ingest_drop_groups;
+mod m20260946_000000_add_edition_pairing;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -147,6 +150,9 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260941_000000_add_provider_request_headers::Migration),
 			Box::new(m20260942_000000_add_media_metadata_narrators::Migration),
 			Box::new(m20260943_000000_add_abs_session_play_method::Migration),
+			Box::new(m20260944_000000_add_worker_jobs::Migration),
+			Box::new(m20260945_000000_add_ingest_drop_groups::Migration),
+			Box::new(m20260946_000000_add_edition_pairing::Migration),
 		]
 	}
 }

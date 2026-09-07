@@ -42,6 +42,11 @@ query IngestMediaQualityReport($mediaId: ID!) {
 			contribution
 			normalizedScore
 			evidence
+			fix {
+				tool
+				summary
+				options
+			}
 		}
 	}
 }

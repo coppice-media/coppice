@@ -614,6 +614,21 @@ input BulkApplyIngestMetadataInput {
 	strategy: MergeStrategy
 }
 
+"One entry of a pair's chapter map: this spine item is that audio chapter."
+type ChapterMapEntry {
+	ebookMediaId: ID!
+	audioMediaId: ID!
+	"0-based index into the ebook's linear spine."
+	ebookSpineIndex: Int!
+	"0-based `mediaAudioChapter.index`."
+	audioChapterIndex: Int!
+	"""
+	`1.0` for a normalised-title match, `0.85` for an ordinal match, and
+	lower for a positional fallback. The console reviews the low ones.
+	"""
+	confidence: Float!
+}
+
 type CleanLibraryResponse {
 	deletedMediaCount: Int!
 	deletedSeriesCount: Int!
@@ -695,7 +710,7 @@ type ConfidenceFactor {
 }
 
 "An event that is emitted by the core and consumed by a client"
-union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | DiscoveredMissingLibrary | CreatedMedia | MediaDeleted | SeriesDeleted | CreatedManySeries | CreatedOrUpdatedManyMedia | DeviceSeen | DevicePairingRequested | DevicePaired | IngestAwaitingReview | QualityFailed | AnalysisJobFailed | ProviderMatchDone | ProviderSourceHealthChanged | ProviderSeriesMaterialized | ProviderCatalogRefreshed | IngestItemChanged | CollectionAdded | CollectionChanged | CollectionDeleted | ReadListAdded | ReadListChanged | ReadListDeleted | LibraryCreated | LibraryUpdated | LibraryDeleted
+union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | DiscoveredMissingLibrary | CreatedMedia | MediaDeleted | SeriesDeleted | CreatedManySeries | CreatedOrUpdatedManyMedia | DeviceSeen | DevicePairingRequested | DevicePaired | IngestAwaitingReview | QualityFailed | AnalysisJobFailed | ProviderMatchDone | ProviderSourceHealthChanged | ProviderSeriesMaterialized | ProviderCatalogRefreshed | IngestItemChanged | CollectionAdded | CollectionChanged | CollectionDeleted | ReadListAdded | ReadListChanged | ReadListDeleted | LibraryCreated | LibraryUpdated | LibraryDeleted | WorkerJobChanged
 
 union CoreJobOutput = LibraryScanOutput | SeriesScanOutput | ThumbnailGenerationOutput | PlaceholderGenerationOutput | MetadataFetchJobOutput | AnalyzeMediaOutput | NotificationDispatchOutput | AnnotationSyncOutput | ProviderSourceHealthOutput
 
@@ -955,6 +970,12 @@ enum DeviceKind {
 	API
 	"A browser session"
 	WEB
+	"""
+	A remote worker process (`stump-worker`) that claims `worker_jobs` over
+	the worker socket. Not a reading client: it holds no reading state and
+	is never offered a transformed stream.
+	"""
+	WORKER
 }
 
 "A device pairing completed and its credential was minted for `user_id`."
@@ -1130,6 +1151,41 @@ type DuplicatePageOccurrence {
 
 input EditMessageInput {
 	content: String!
+}
+
+"""
+What a pairing mutation did. `changed == false` with a `status` is a
+no-op the client should not treat as an error: re-confirming a confirmed
+pair, or re-suggesting a rejected one.
+"""
+type EditionPairResult {
+	"`null` when nothing was written and there was no pair to write about."
+	workId: ID
+	status: PairStatus
+	changed: Boolean!
+	"Human-readable reason a write was a no-op."
+	message: String
+	"""
+	Entries written into the pair's chapter map, when the mutation built
+	one.
+	"""
+	chapterMapEntries: Int!
+}
+
+"""
+An edition of the same work as the book being viewed, with why pairing
+believes it.
+"""
+type EditionSuggestion {
+	media: Media!
+	"The work both editions link to."
+	workId: ID!
+	status: PairStatus!
+	"""
+	`null` only for a link the native liseur lane created before pairing
+	existed; every suggestion this server makes records its evidence.
+	"""
+	evidence: PairEvidence
 }
 
 "Input object for creating or updating an email device"
@@ -1557,6 +1613,50 @@ type IngestApplyPayload {
 	media: Media
 }
 
+type IngestAssembledAudio {
+	filename: String!
+	byteSize: Int!
+	durationMs: Int!
+	duration: String!
+	chapters: Int!
+	"""
+	Whether `moov` precedes `mdat`, so playback starts without
+	downloading the whole file.
+	"""
+	faststart: Boolean!
+	"Whether the source parts were kept beside the output."
+	partsKept: Boolean!
+	"`assemble-remux` (lossless) or `assemble-transcode` (re-encoded)."
+	method: String!
+}
+
+type IngestAudioChapter {
+	title: String
+	startMs: Int!
+	start: String!
+	endMs: Int
+}
+
+type IngestAudioTrack {
+	"""
+	File name of the part. The staging layout is server-owned, so no path
+	is exposed.
+	"""
+	filename: String!
+	durationMs: Int!
+	duration: String!
+	"""
+	Offset of this part's first sample within the publication, which is
+	the unit a reading position is expressed in.
+	"""
+	startOffsetMs: Int!
+	byteSize: Int!
+	codec: String!
+	bitrate: Int
+	title: String
+	trackNumber: Int
+}
+
 "A staged ingest item finished analysis and is waiting for a decision."
 type IngestAwaitingReview {
 	libraryId: String!
@@ -1589,6 +1689,23 @@ type IngestDropFolder {
 	lastDiscoveredAt: DateTime
 }
 
+"One other item of the same archive drop."
+type IngestDropGroupSibling {
+	id: ID!
+	filename: String!
+	mediaType: String!
+	status: IngestDropItemStatus!
+	qualityScore: Int
+	"Set once this sibling committed into the library."
+	mediaId: ID
+	"""
+	Whether this sibling and the item are an audio/text edition pair, so
+	committing both records a same-drop pair suggestion.
+	"""
+	editionPairCandidate: Boolean!
+	pairState: IngestEditionPairState!
+}
+
 type IngestDropItem {
 	id: ID!
 	libraryId: ID!
@@ -1607,8 +1724,72 @@ type IngestDropItem {
 	media: Media
 	series: Series
 	error: String
+	"""
+	The delivery this item arrived in, when one dropped archive produced
+	several items. `null` for a drop of one file.
+	"""
+	dropGroupId: ID
+	"""
+	The other items of the same delivery, oldest first.
+	
+	Empty for an item that arrived on its own, which is most of them, so a
+	client may render the strip unconditionally.
+	"""
+	dropGroupSiblings: [IngestDropGroupSibling!]!
+	"""
+	Staged files this item owns without being them: cover art, notes, and
+	the source parts kept beside an assembled M4B.
+	"""
+	sidecars: [String!]!
+	"""
+	The audio probe's result. `null` for every non-audio item and for an
+	audio item whose analysis has not run yet.
+	"""
+	audio: IngestDropItemAudio
 	createdAt: DateTime!
 	updatedAt: DateTime!
+}
+
+"""
+The audio probe's result for one staged publication.
+
+A projection of the persisted `ingest_drop_items.audio_analysis`, never a
+fresh probe: demuxing a 62-part folder book is 62 container walks, and a
+screen that renders a chapter list must not cost that.
+"""
+type IngestDropItemAudio {
+	durationMs: Int!
+	"`h:mm:ss`, the field a librarian actually reads."
+	duration: String!
+	"The publication codec, or `mixed` when a folder book's parts disagree."
+	codec: String!
+	sampleRate: Int
+	channels: Int
+	bitrate: Int
+	"""
+	Where the chapter marks came from: `mp4_chpl`, `mp4_chapter_track`,
+	`id3_chap`, `vorbis_comment`, `per_track` (synthesized from file
+	boundaries), or `none`. Provenance, never a quality tier.
+	"""
+	chapterSource: String!
+	tracks: [IngestAudioTrack!]!
+	chapters: [IngestAudioChapter!]!
+	"""
+	Set when a part carries embedded artwork. The bytes are not served
+	here: a cover on every row would make listing a drop folder a
+	multi-megabyte query.
+	"""
+	coverContentType: String
+	coverByteSize: Int
+	title: String
+	author: String
+	narrator: String
+	album: String
+	description: String
+	genre: String
+	year: Int
+	"The M4B an assemble produced, when one has run for this item."
+	assembled: IngestAssembledAudio
 }
 
 enum IngestDropItemStatus {
@@ -1620,6 +1801,29 @@ enum IngestDropItemStatus {
 	COMMITTED
 	REJECTED
 	FAILED
+}
+
+"How far along the edition pairing of two items of one drop group is."
+enum IngestEditionPairState {
+	"""
+	The two kinds do not pair: two ebooks are a format duplicate, and two
+	audiobooks are two books.
+	"""
+	NOT_A_PAIR
+	"""
+	A pair once both sides are in the library. A suggestion needs two
+	media rows, and a staged item has none.
+	"""
+	PENDING_COMMIT
+	"The suggestion exists and is waiting for the user."
+	SUGGESTED
+	"The user accepted it, or the liseur lane already asserted the work."
+	CONFIRMED
+	"""
+	The user declined it. Kept, because pairing is recomputed on every
+	book-page query.
+	"""
+	REJECTED
 }
 
 """
@@ -1763,6 +1967,14 @@ type IngestQualityCheckResult {
 	normalizedScore: Float!
 	contribution: Float!
 	evidence: JSON!
+	"""
+	The tool that repairs this finding, when one exists in this build.
+	
+	Resolved from the check *registry* rather than stored on the report: a
+	check declares its repair once, so a persisted report can never offer
+	a fix naming a tool this build does not have.
+	"""
+	fix: IngestQualityFixAction
 }
 
 type IngestQualityCheckSettings {
@@ -2286,6 +2498,32 @@ enum LogModelOrdering {
 	CONTEXT
 }
 
+"A reading position derived from the *other* edition of the same work."
+type MappedPosition {
+	"The edition the position was read from."
+	sourceMediaId: ID!
+	"""
+	Set when this edition is the ebook: a locator inside the mapped spine
+	item.
+	"""
+	locator: ReadiumLocator
+	"""
+	Set when this edition is the audiobook: milliseconds from the start of
+	the publication.
+	"""
+	positionMs: Int
+	"Whole-publication progression in *this* edition."
+	progression: Float!
+	"The confidence of the chapter-map entry the conversion went through."
+	confidence: Float!
+	"""
+	Always `true` for a chapter-map conversion: it is worth ±1-3 minutes
+	on a 30-minute chapter. Clients must label it, and must not write it
+	back as a real position.
+	"""
+	approximate: Boolean!
+}
+
 "A potential match from an external provider"
 type MatchCandidate {
 	"The provider this match came from"
@@ -2377,6 +2615,38 @@ type Media {
 	empty [`MediaAudio`].
 	"""
 	audio: MediaAudio
+	"""
+	Other editions of the same work: the audiobook of this ebook, or the
+	ebook of this audiobook.
+	
+	Confirmed pairs only, and a plain read — a confirmed pair is two link
+	rows, so this costs one indexed query and is safe to select on a grid.
+	Unconfirmed guesses are [`Media::edition_suggestions`], which is what
+	actually runs the heuristics.
+	"""
+	editions: [Media!]!
+	"""
+	Unconfirmed pairings for this book, recomputed on demand.
+	
+	This is the field a book page selects: it runs the three pairing rules
+	(shared work, identifier through a provider's edition list, normalised
+	title and author) and caches every verdict as a link row, so a
+	rejection sticks and a second load is a read. Provider lookups are
+	best-effort — an upstream that is down costs the *evidence* of a
+	suggestion, never the page.
+	"""
+	editionSuggestions: [EditionSuggestion!]!
+	"""
+	This book's position, derived from the reader's real position in
+	`fromMediaId` — the other edition of the same work.
+	
+	`null` when the two are not a confirmed pair, when there is no reading
+	head to convert, or when the position falls in front or back matter
+	that has no counterpart: guessing there would land a listener on the
+	copyright page. The result is always
+	[`MappedPosition::approximate`] and is never written to a head.
+	"""
+	pairedPosition(fromMediaId: ID!): MappedPosition
 	"""
 	A reference to the thumbnail image for the media. This will be a fully
 	qualified URL to the image.
@@ -3384,6 +3654,34 @@ type Mutation {
 	a former `SKIP`, its pages become visible again.
 	"""
 	unmarkDuplicatePage(libraryId: ID!, dhash: String!): Boolean!
+	"""
+	Confirm that two books are editions of the same work, and build their
+	chapter map.
+	
+	Works with or without a prior suggestion: an operator who knows the
+	pair can create it directly, which also mints the work row when
+	neither book has one. Re-confirming is a no-op, and a book that is
+	already a confirmed edition of a *different* work is refused rather
+	than re-homed — the liseur lane owns those links.
+	"""
+	confirmEditionPair(mediaIdA: ID!, mediaIdB: ID!): EditionPairResult!
+	"""
+	Refuse a suggested pair. The refusal is a row, not a deletion:
+	suggestions are recomputed on every book-page query, so a forgotten
+	refusal comes straight back.
+	"""
+	rejectEditionPair(mediaIdA: ID!, mediaIdB: ID!): EditionPairResult!
+	"""
+	Point one ebook spine item at a different audio chapter, or add an
+	entry the heuristics did not produce. A hand-set entry has confidence
+	`1.0` unless one is given: a person looked at it.
+	"""
+	setChapterMapEntry(ebookMediaId: ID!, audioMediaId: ID!, ebookSpineIndex: Int!, audioChapterIndex: Int!, confidence: Float): ChapterMapEntry!
+	"""
+	Drop one entry, for a spine item that turns out to have no
+	counterpart. Returns `false` when there was nothing to drop.
+	"""
+	clearChapterMapEntry(ebookMediaId: ID!, audioMediaId: ID!, ebookSpineIndex: Int!): Boolean!
 	deleteLoginActivity: Int!
 	"""
 	Delete the avatar for the authenticated viewer, or for any user if
@@ -3487,6 +3785,18 @@ type Mutation {
 	returned or logged, because they are live credentials.
 	"""
 	setProviderSourceHeaders(instanceId: String!, headers: JSON!): [ProviderSourceHeader!]!
+	"""
+	Ask a browser worker to earn a Cloudflare clearance for one gated
+	source instance, and apply it when it lands.
+	
+	This is the manual form of what a health run does by itself: it exists
+	because an operator who has just started a browser worker should not
+	have to wait for the next six-hourly probe. It returns as soon as
+	routing is decided — the solve then runs on the worker, where a human
+	may have to click a checkbox in the window that opens, and the result
+	is applied by the server without another call.
+	"""
+	solveSourceChallenge(instanceId: String!): ProviderChallengeSolve!
 	"Fetch (or refresh) the Keiyoushi catalog snapshot."
 	refreshProviderCatalog: Boolean!
 	"""
@@ -3514,6 +3824,20 @@ type Mutation {
 	scanIngestDropFolder(libraryId: ID!): IngestDropFolder!
 	enqueueIngestAnalysis(input: EnqueueIngestAnalysisInput!): [IngestAnalysisJob!]!
 	requeueIngestAnalysis(dropItemId: ID!, force: Boolean! = false): IngestAnalysisJob!
+	"""
+	Run a quality finding's named repair tool against a staged drop item,
+	then re-run its checks.
+	
+	The re-run is the point of the button: a repair that worked must show
+	as a passing check without a manual requeue, and one that did not must
+	show as the same finding rather than as a green report. Providers are
+	not re-queried — a repaired container is the same book, and a fix must
+	not spend an operator's API quota.
+	
+	A tool that produced nothing returns the item unchanged; the finding
+	simply persists in the next report.
+	"""
+	runIngestQualityFix(input: RunIngestQualityFixInput!): IngestDropItem!
 	pauseIngestAnalysis(jobId: ID!): IngestAnalysisJob!
 	resumeIngestAnalysis(jobId: ID!): IngestAnalysisJob!
 	retryIngestAnalysis(jobId: ID!): IngestAnalysisJob!
@@ -3563,6 +3887,16 @@ type Mutation {
 	suspicious request can be shut down by whoever sees it first.
 	"""
 	denyDevicePairing(pairingId: ID!): DevicePairing!
+	"""
+	Stop a worker job.
+	
+	The holder is told to stop and the row lands `FAILED` with the
+	canceller's name in `error` — cancellation is a terminal failure, not a
+	seventh status, because the status set is the protocol's contract and a
+	cancelled job is exactly a job that will not produce its output.
+	Cancelling a finished job is a no-op that returns the row unchanged.
+	"""
+	cancelWorkerJob(id: String!): WorkerJob!
 	createSmartList(input: SaveSmartListInput!): SmartList!
 	updateSmartList(id: ID!, input: SaveSmartListInput!): SmartList!
 	deleteSmartList(id: ID!): SmartList!
@@ -3988,6 +4322,53 @@ input Pagination @oneOf {
 
 union PaginationInfo = CursorPaginationInfo | OffsetPaginationInfo
 
+"""
+Why pairing believes two media rows are the same work.
+
+Ordered by strength through [`PairEvidence::rank`], which is what keeps a
+title guess from overwriting an identifier match on the same link.
+"""
+enum PairEvidence {
+	"An operator paired them by hand."
+	MANUAL
+	"Both media rows already linked to the same work."
+	WORK_ID
+	"""
+	An identifier of one matched an identifier of the other through a
+	provider's edition list (Audnexus `/books/{asin}`, Open Library
+	works→editions).
+	"""
+	PROVIDER_EDITION_LIST
+	"Both files arrived in one ingest drop group."
+	SAME_DROP
+	"""
+	Normalised `title + first author` matched. The weakest signal, and the
+	reason confirmation exists at all.
+	"""
+	TITLE_AUTHOR
+}
+
+"""
+Whether a link is an asserted edition of the work, a guess, or a guess the
+user refused.
+"""
+enum PairStatus {
+	"""
+	An edition of the work. The schema default, so every link the liseur
+	lane wrote — a client asserting a work for a file whose edition digest
+	it computed — keeps meaning what it always did. This is what
+	`Media.editions` returns.
+	"""
+	CONFIRMED
+	"A heuristic match awaiting confirmation. Never presented as an edition."
+	SUGGESTED
+	"""
+	The user said no. Kept as a row rather than deleted, because the
+	suggestion is recomputed on every book-page query.
+	"""
+	REJECTED
+}
+
 input PatchEmailDeviceInput {
 	name: String
 	email: String
@@ -4059,6 +4440,37 @@ type ProviderCatalogEntry {
 type ProviderCatalogRefreshed {
 	"Catalog sources in the new snapshot."
 	count: Int!
+}
+
+"What one `solveSourceChallenge` call set in motion."
+type ProviderChallengeSolve {
+	state: ProviderChallengeSolveState!
+	"Ready to show an operator; the states are not self-explanatory."
+	message: String!
+	"""
+	Whether the source is still gated *now*. Only meaningful for
+	`APPLIED`, which re-probes before answering; a queued solve has not
+	happened yet.
+	"""
+	challenged: Boolean!
+}
+
+"What routing did with a `solveSourceChallenge` request."
+enum ProviderChallengeSolveState {
+	"""
+	A solve that had already finished was applied on the spot; nothing was
+	queued.
+	"""
+	APPLIED
+	"Queued, and a browser worker is connected to take it."
+	QUEUED
+	"A solve for this instance was already in flight."
+	ALREADY_QUEUED
+	"""
+	Queued and parked: no connected worker advertises `browser`. It runs
+	the moment one does — start `stump-worker --chrome …`.
+	"""
+	NEEDS_WORKER
 }
 
 type ProviderCredentialVerification {
@@ -4377,6 +4789,18 @@ type Query {
 	served for visible page `n`.
 	"""
 	mediaVisiblePages(id: ID!): [Int!]!
+	"""
+	The tier-1 chapter map of one ebook↔audiobook pair, in spine order.
+	
+	Empty when the pair has no map yet, which is also what the readiness
+	checks read to say a book is not ready for read-aloud.
+	"""
+	chapterMap(
+		"The ebook edition; it owns the spine index"
+		ebookMediaId: ID!,
+		"The audio edition; it owns the chapter index"
+		audioMediaId: ID!
+	): [ChapterMapEntry!]!
 	me: User!
 	userCount: Int!
 	topReaders(take: Int): [User!]!
@@ -4460,6 +4884,22 @@ type Query {
 	them; approving binds the pairing to the approver.
 	"""
 	pendingDevicePairings: [DevicePairing!]!
+	"""
+	The workers currently holding a socket, with what each advertises.
+	
+	Read from the hub, not the database: "connected" is a property of this
+	process, and a `devices` row cannot answer it. A worker that is paired
+	but offline is a device, and the Devices page is where it shows.
+	"""
+	workers: [Worker!]!
+	"""
+	Worker jobs, newest first, optionally narrowed to one status.
+	
+	`NEEDS_WORKER` is the interesting filter: it is the list of work this
+	server has been asked for and cannot do, which is the whole reason the
+	status exists.
+	"""
+	workerJobs(status: WorkerJobStatus, limit: Int): [WorkerJob!]!
 	"All registered provider source instances."
 	providerSources: [ProviderSource!]!
 	"""
@@ -4868,6 +5308,17 @@ type ResumeReadingCursor {
 	"when the very first session in the current readthrough started"
 	startedAt: DateTime
 	updatedAt: DateTime
+}
+
+"Which finding to repair, on which staged item."
+input RunIngestQualityFixInput {
+	dropItemId: ID!
+	"""
+	The failing check's id, e.g. `single_file` or `chapters_present`. The
+	tool and its options come from the check registry, so a client never
+	names a command line.
+	"""
+	checkId: String!
 }
 
 input SaveSmartListInput {
@@ -5865,6 +6316,11 @@ enum UserPermission {
 	"Grant access to the kobo sync feature"
 	ACCESS_KOBO_SYNC
 	"""
+	Grant a device the right to act as a remote worker: open the worker
+	socket, claim `worker_jobs`, and upload their outputs
+	"""
+	ACCESS_WORKER
+	"""
 	TODO: Expand permissions for bookclub + smartlist
 	Grant access to the book club feature
 	"""
@@ -6000,6 +6456,105 @@ input ValidateMetadataProviderConfigInput {
 	providerType: MetadataProvider!
 	"The API token for authenticating with the provider"
 	apiToken: String!
+}
+
+type Worker {
+	"""
+	The `devices.id` of the paired worker device, so the console can link
+	straight to its card (and its revoke button).
+	"""
+	id: ID!
+	name: String!
+	"The `stump-worker` version this host is running, when it reported one."
+	version: String
+	"""
+	The `hello` payload verbatim, e.g.
+	`{"transcode":{"ffmpeg":"7.1.0","hwaccel":["vaapi"]}}`. Free-form: the
+	vocabulary is per job kind and a schema here would have to change every
+	time a kind does.
+	"""
+	capabilities: JSON!
+	"""
+	The job kinds this worker advertises, for a page that wants a chip row
+	rather than a JSON blob.
+	"""
+	kinds: [String!]!
+	connectedAt: String!
+	"""
+	When this worker last said anything. A worker mid-encode reports
+	progress, so this is also "is it still working".
+	"""
+	lastSeenAt: String!
+}
+
+"One `worker_jobs` row."
+type WorkerJob {
+	id: ID!
+	"The registry id of the work: `transcode` today."
+	kind: String!
+	status: WorkerJobStatus!
+	"""
+	The worker holding (or that ran) the job. `null` on a job the server ran
+	itself with its local implementation, which is how the console tells
+	"served by the GPU box" from "the server did it".
+	"""
+	workerId: ID
+	priority: Int!
+	"`0.0..=1.0`."
+	progress: Float!
+	"The runner's last human-readable line."
+	message: String
+	input: JSON!
+	requires: JSON!
+	result: JSON
+	error: String
+	createdAt: String!
+	updatedAt: String!
+	startedAt: String
+	finishedAt: String
+}
+
+"A `worker_jobs` row changed."
+type WorkerJobChanged {
+	id: String!
+	kind: String!
+	status: WorkerJobStatus!
+	"""
+	The worker holding the job, or `None` for an unassigned or locally-run
+	job — the console distinguishes "served by the GPU box" from "the
+	server did it itself".
+	"""
+	workerId: String
+	progress: Float!
+	message: String
+	error: String
+}
+
+"""
+Where a [`crate::entity::worker_job`] row is in its life.
+
+`needs_worker` is a resting state, not an error: the job is well-formed and
+nobody who can run it is connected. It becomes `queued` again the moment a
+capable worker says `hello`. There is deliberately no `cancelled`: the
+protocol's status set is its contract, and a cancelled job is exactly a job
+that will not produce its output, so it is `failed` with a reason.
+"""
+enum WorkerJobStatus {
+	"Created, and either not yet offered or offered and not yet claimed."
+	QUEUED
+	"A worker answered the offer with `claim`."
+	CLAIMED
+	"The job is executing — remotely (first `progress` frame) or locally."
+	RUNNING
+	"The job produced its output."
+	DONE
+	"The job did not produce its output; `error` says why."
+	FAILED
+	"""
+	No connected worker advertises what this job needs and the kind has no
+	local implementation. Shown, never hidden.
+	"""
+	NEEDS_WORKER
 }
 
 "Marks an element of a GraphQL schema as no longer supported."

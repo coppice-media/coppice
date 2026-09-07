@@ -20,7 +20,10 @@ use models::shared::enums::UserPermission;
 
 use crate::{
 	dto::*,
-	model::{AbsAudio, AbsAudioTrack, AbsBookmark, AbsProgress, ItemShape},
+	model::{
+		AbsAudio, AbsAudioTrack, AbsBookmark, AbsEbookFile, AbsPlaylist, AbsProgress,
+		ItemShape,
+	},
 	ABS_BUILD_NUMBER, ABS_VERSION,
 };
 
@@ -432,6 +435,9 @@ pub struct ItemInput<'a> {
 	/// The ABS `media.id` allocated for this row in `abs_ids`.
 	pub book_id: &'a str,
 	pub audio: Option<&'a AbsAudio>,
+	/// The confirmed EPUB edition paired with this audiobook, when the user
+	/// has one.
+	pub ebook: Option<&'a AbsEbookFile>,
 	/// Author name → the ABS author id allocated for it.
 	pub author_ids: &'a HashMap<String, String>,
 	pub progress: Option<MediaProgressDto>,
@@ -658,6 +664,35 @@ fn library_files(files: &[AudioFileDto]) -> Vec<LibraryFileDto> {
 		.collect()
 }
 
+/// `media.ebookFile`, from the confirmed EPUB edition paired with the
+/// audiobook.
+///
+/// `ino` is the paired row's `media.id`, which is what
+/// `GET /api/items/{id}/ebook/{fileid}` and the app's download part
+/// (`android/.../plugins/AbsDownloader.kt:184`,
+/// `/api/items/{id}/file/{ino}/download`) address it by. `ebookFormat` is
+/// lower-case with no leading period — the reader compares it against
+/// `'epub'` verbatim (`components/readers/Reader.vue:307-309`).
+fn ebook_file(ebook: &AbsEbookFile, added_at: i64, updated_at: i64) -> EBookFileDto {
+	let filename = file_name(&ebook.path);
+	EBookFileDto {
+		ino: ebook.media_id.clone(),
+		metadata: FileMetadataDto {
+			filename: filename.clone(),
+			ext: dotted_ext(&ebook.format),
+			path: ebook.path.clone(),
+			rel_path: filename,
+			size: ebook.byte_size,
+			mtime_ms: updated_at,
+			ctime_ms: updated_at,
+			birthtime_ms: added_at,
+		},
+		ebook_format: ebook.format.clone(),
+		added_at,
+		updated_at,
+	}
+}
+
 pub fn book_metadata(input: &ItemInput<'_>, shape: ItemShape) -> BookMetadataDto {
 	let metadata = input.metadata;
 	let title = metadata
@@ -780,7 +815,11 @@ pub fn item_dto(input: ItemInput<'_>, shape: ItemShape) -> LibraryItemDto {
 		chapters: shape
 			.has_detail_keys()
 			.then(|| input.audio.map(chapters).unwrap_or_default()),
-		ebook_file: shape.has_detail_keys().then_some(None),
+		ebook_file: shape.has_detail_keys().then(|| {
+			input
+				.ebook
+				.map(|ebook| ebook_file(ebook, added_at, updated_at))
+		}),
 		tracks,
 	};
 
@@ -815,6 +854,42 @@ pub fn item_dto(input: ItemInput<'_>, shape: ItemShape) -> LibraryItemDto {
 			.then(|| files.as_deref().map(library_files).unwrap_or_default()),
 		user_media_progress: input.progress,
 		collapsed_series: input.collapsed,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Playlists — captured live from abs-ref 2.36.0
+// ---------------------------------------------------------------------------
+
+/// One playlist plus the expanded items the playlist page renders.
+///
+/// `items` is built from `entries`, already narrowed to books the user may
+/// see and in the reading list's own order, so a reading list holding a
+/// comic or a book in a library the request cannot reach simply carries
+/// fewer entries here — never a dangling `libraryItemId` the app would
+/// dereference (`pages/playlist/_id.vue:52`).
+pub fn playlist_dto(
+	playlist: &AbsPlaylist,
+	user_id: &str,
+	library_id: &str,
+	items: Vec<LibraryItemDto>,
+) -> PlaylistDto {
+	PlaylistDto {
+		id: playlist.id.clone(),
+		library_id: library_id.to_owned(),
+		user_id: user_id.to_owned(),
+		name: playlist.name.clone(),
+		description: playlist.description.clone(),
+		last_update: playlist.updated_at.timestamp_millis(),
+		created_at: playlist.created_at.timestamp_millis(),
+		items: items
+			.into_iter()
+			.map(|item| PlaylistItemDto {
+				library_item_id: item.id.clone(),
+				episode_id: None,
+				library_item: item,
+			})
+			.collect(),
 	}
 }
 
@@ -965,7 +1040,10 @@ pub fn session_dto(input: SessionInput<'_>) -> PlaybackSessionDto {
 		server_version: ABS_VERSION.to_owned(),
 		date: input.started_at.format("%Y-%m-%d").to_string(),
 		day_of_week: input.started_at.weekday().to_string(),
-		time_listening: ms_to_secs(input.time_listening_ms),
+		// Whole seconds: the app's `PlaybackSession.timeListening` is a
+		// Kotlin `Long` (`data/PlaybackSession.kt:45`) and abs-ref emits an
+		// integer.
+		time_listening: ms_to_secs(input.time_listening_ms).round() as i64,
 		start_time: ms_to_secs(input.current_time_ms),
 		current_time: ms_to_secs(input.current_time_ms),
 		started_at: ts_ms(input.started_at),

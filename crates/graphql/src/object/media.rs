@@ -1,14 +1,19 @@
 use async_graphql::{
-	dataloader::DataLoader, ComplexObject, Context, Result, SimpleObject,
+	dataloader::DataLoader, ComplexObject, Context, Result, SimpleObject, ID,
 };
 
 use models::{
-	entity::{library, media, media_analysis, series, tag},
+	domain::{
+		edition_pair::{self, PairStatus},
+		reading_state::{map_locator_to_time, map_time_to_locator, ChapterMapping},
+	},
+	entity::{library, media, media_analysis, media_audio, reading_head, series, tag},
 	services::audio,
 	shared::{analysis::MediaAnalysisData, image::ImageRef},
 };
 use num_traits::cast::ToPrimitive;
 use sea_orm::{prelude::*, sea_query::Query, FromQueryResult, QuerySelect};
+use stump_library::editions;
 
 use crate::{
 	data::CoreContext,
@@ -28,9 +33,15 @@ use crate::{
 };
 
 use super::{
-	audio::MediaAudio, library::Library, library_config::LibraryConfig,
-	media_metadata::MediaMetadata, readthrough_record::ReadthroughRecord,
-	resume_reading_cursor::ResumeReadingCursor, series::Series, tag::Tag,
+	audio::MediaAudio,
+	edition_pair::{EditionSuggestion, MappedPosition},
+	library::Library,
+	library_config::LibraryConfig,
+	media_metadata::MediaMetadata,
+	readthrough_record::ReadthroughRecord,
+	resume_reading_cursor::ResumeReadingCursor,
+	series::Series,
+	tag::Tag,
 };
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -195,6 +206,90 @@ impl Media {
 		Ok(audio::book(conn, &self.model.id)
 			.await?
 			.map(MediaAudio::from))
+	}
+
+	/// Other editions of the same work: the audiobook of this ebook, or the
+	/// ebook of this audiobook.
+	///
+	/// Confirmed pairs only, and a plain read — a confirmed pair is two link
+	/// rows, so this costs one indexed query and is safe to select on a grid.
+	/// Unconfirmed guesses are [`Media::edition_suggestions`], which is what
+	/// actually runs the heuristics.
+	async fn editions(&self, ctx: &Context<'_>) -> Result<Vec<Media>> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+
+		let links = edition_pair::linked_media(
+			conn,
+			&user.id,
+			&self.model.id,
+			Some(PairStatus::Confirmed),
+		)
+		.await?;
+		editions_by_id(conn, user, links.iter().map(|link| link.media_id.clone())).await
+	}
+
+	/// Unconfirmed pairings for this book, recomputed on demand.
+	///
+	/// This is the field a book page selects: it runs the three pairing rules
+	/// (shared work, identifier through a provider's edition list, normalised
+	/// title and author) and caches every verdict as a link row, so a
+	/// rejection sticks and a second load is a read. Provider lookups are
+	/// best-effort — an upstream that is down costs the *evidence* of a
+	/// suggestion, never the page.
+	async fn edition_suggestions(
+		&self,
+		ctx: &Context<'_>,
+	) -> Result<Vec<EditionSuggestion>> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+
+		let lookups = editions::enabled_edition_lookups(conn).await?;
+		let links = editions::pair_editions(conn, user, &self.model.id, &lookups)
+			.await?
+			.into_iter()
+			.filter(|link| link.status == PairStatus::Suggested)
+			.collect::<Vec<_>>();
+		let media =
+			editions_by_id(conn, user, links.iter().map(|link| link.media_id.clone()))
+				.await?;
+
+		Ok(links
+			.into_iter()
+			.filter_map(|link| {
+				media
+					.iter()
+					.find(|candidate| candidate.model.id == link.media_id)
+					.map(|candidate| EditionSuggestion {
+						media: candidate.clone(),
+						work_id: async_graphql::ID::from(link.work_id),
+						status: link.status,
+						evidence: link.evidence,
+					})
+			})
+			.collect())
+	}
+
+	/// This book's position, derived from the reader's real position in
+	/// `fromMediaId` — the other edition of the same work.
+	///
+	/// `null` when the two are not a confirmed pair, when there is no reading
+	/// head to convert, or when the position falls in front or back matter
+	/// that has no counterpart: guessing there would land a listener on the
+	/// copyright page. The result is always
+	/// [`MappedPosition::approximate`] and is never written to a head.
+	async fn paired_position(
+		&self,
+		ctx: &Context<'_>,
+		from_media_id: ID,
+	) -> Result<Option<MappedPosition>> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+
+		mapped_position(conn, user, &self.model, from_media_id.as_str()).await
 	}
 
 	/// A reference to the thumbnail image for the media. This will be a fully
@@ -407,4 +502,127 @@ impl Media {
 
 		Ok(self.model.path.replace(&library_path, ""))
 	}
+}
+
+/// Load paired media in one query, keeping the caller's order and dropping
+/// anything the request may not see. A link is per user, but visibility is
+/// per request: a device-scoped credential must not learn about a book
+/// outside its libraries just because the account paired it.
+async fn editions_by_id(
+	conn: &DatabaseConnection,
+	user: &models::entity::user::AuthUser,
+	ids: impl Iterator<Item = String>,
+) -> Result<Vec<Media>> {
+	let ids: Vec<String> = ids.collect();
+	if ids.is_empty() {
+		return Ok(Vec::new());
+	}
+
+	let models = media::ModelWithMetadata::find_for_user(user)
+		.filter(media::Column::Id.is_in(ids.clone()))
+		.filter(media::Column::DeletedAt.is_null())
+		.into_model::<media::ModelWithMetadata>()
+		.all(conn)
+		.await?;
+
+	Ok(ids
+		.iter()
+		.filter_map(|id| {
+			models
+				.iter()
+				.find(|model| &model.media.id == id)
+				.map(|model| {
+					Media::from(media::ModelWithMetadata {
+						media: model.media.clone(),
+						metadata: model.metadata.clone(),
+					})
+				})
+		})
+		.collect())
+}
+
+/// Convert the reader's head on `from_media_id` into `target`'s coordinates.
+///
+/// The direction is decided by which side is the audio edition, not by what
+/// the client asked for: the ebook is always the canonical text and the
+/// audiobook the canonical time, so there are exactly two conversions and
+/// each needs the *other* edition's chapter geometry.
+async fn mapped_position(
+	conn: &DatabaseConnection,
+	user: &models::entity::user::AuthUser,
+	target: &media::Model,
+	from_media_id: &str,
+) -> Result<Option<MappedPosition>> {
+	if from_media_id == target.id {
+		return Ok(None);
+	}
+
+	// Only a confirmed pair converts. A suggestion is a guess about identity;
+	// converting through it would show a position from a different book.
+	let paired = edition_pair::linked_media(
+		conn,
+		&user.id,
+		&target.id,
+		Some(PairStatus::Confirmed),
+	)
+	.await?
+	.into_iter()
+	.any(|link| link.media_id == from_media_id);
+	if !paired {
+		return Ok(None);
+	}
+
+	let Some(head) = reading_head::Entity::find()
+		.filter(reading_head::Column::UserId.eq(user.id.clone()))
+		.filter(reading_head::Column::MediaId.eq(from_media_id))
+		.one(conn)
+		.await?
+	else {
+		return Ok(None);
+	};
+
+	let source = media::Entity::find_by_id(from_media_id.to_owned())
+		.one(conn)
+		.await?
+		.ok_or("Paired media not found")?;
+	let source_is_audio = media_audio::Entity::find()
+		.filter(media_audio::Column::MediaId.eq(from_media_id))
+		.one(conn)
+		.await?
+		.is_some();
+
+	let (ebook, audio) = if source_is_audio {
+		(target, &source)
+	} else {
+		(&source, target)
+	};
+
+	let spine = editions::ebook_spine(&ebook.path)?;
+	let chapters = editions::audio_chapter_spans(conn, &audio.id).await?;
+	let mappings: Vec<ChapterMapping> = editions::chapter_map(conn, &ebook.id, &audio.id)
+		.await?
+		.into_iter()
+		.map(|entry| ChapterMapping {
+			ebook_spine_index: entry.ebook_spine_index,
+			audio_chapter_index: entry.audio_chapter_index,
+			confidence: entry.confidence,
+		})
+		.collect();
+	if mappings.is_empty() {
+		return Ok(None);
+	}
+
+	let mapped = if source_is_audio {
+		let Some(position_ms) = head.position_ms else {
+			return Ok(None);
+		};
+		map_time_to_locator(position_ms, &chapters, &spine, &mappings)
+	} else {
+		let Some(locator) = head.locator.as_ref() else {
+			return Ok(None);
+		};
+		map_locator_to_time(locator, &spine, &chapters, &mappings)
+	};
+
+	Ok(mapped.map(|mapped| MappedPosition::new(from_media_id, mapped)))
 }

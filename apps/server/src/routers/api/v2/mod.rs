@@ -11,7 +11,9 @@ pub(crate) mod media;
 mod oidc;
 pub(crate) mod reading;
 pub(crate) mod series;
+pub(crate) mod transcode_job;
 mod user;
+pub(crate) mod workers;
 
 use std::sync::Arc;
 
@@ -52,7 +54,8 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 	router
 		.merge(series::mount(app_state.clone()))
 		.merge(library::mount(app_state.clone()))
-		.merge(user::mount(app_state))
+		.merge(user::mount(app_state.clone()))
+		.merge(workers::mount(app_state))
 		.route("/claim", get(claim))
 		.route("/health", get(health))
 		.route("/ping", get(ping))

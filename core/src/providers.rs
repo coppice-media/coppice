@@ -127,6 +127,12 @@ pub async fn init(
 	.map_err(|error| crate::error::CoreError::InternalError(error.to_string()))?;
 	host.install();
 	host.set_event_sink(Arc::new(CoreProviderEventSink::new(ctx.get_event_tx())));
+	// The queue a gated source's `challenge_solve` goes on. Installed here
+	// because this is the one place that holds both the host and the context;
+	// `Ctx::worker_jobs` is lazy, and `http_server` has already installed the
+	// job-kind registry by the time providers start, so forcing it now cannot
+	// lose a local implementation.
+	host.set_worker_jobs(ctx.worker_jobs());
 
 	if ctx.set_provider_host(host.clone()).is_err() {
 		tracing::debug!("Provider host already initialized");

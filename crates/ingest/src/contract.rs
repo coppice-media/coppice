@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stump_api_types::settings::{SettingDefinition, SettingValues};
 
-use stump_media::media::ProcessedMediaMetadata;
+use stump_media::{audio::ProbedAudio, media::ProcessedMediaMetadata};
 
 /// Algorithm version stamped on every quality report produced by the
 /// built-in checks.  Bump when a check definition, weight, or threshold
@@ -25,7 +25,7 @@ pub const QUALITY_ALGORITHM_VERSION: &str = "ingest-quality-2";
 
 /// Media container kinds the ingest layer understands.  Mirrors the
 /// processor selection in `filesystem::media::process` without exposing it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum IngestMediaKind {
 	/// ZIP-backed comic (`.cbz`, `.zip`).
@@ -38,6 +38,10 @@ pub enum IngestMediaKind {
 	/// The only kind whose target can be a directory, because a folder
 	/// audiobook is one publication rather than one file per book.
 	Audio,
+	/// The kind a file the processor selection does not recognise gets, and
+	/// the default: a MOBI/AZW3 is read by the processor but has neither a
+	/// page lane nor a time lane.
+	#[default]
 	Unknown,
 }
 
@@ -96,6 +100,151 @@ pub struct BookSnapshot {
 	pub pages: Vec<IngestPageEntry>,
 	/// Page dimensions/content types when an analysis has already run.
 	pub analysis: Option<MediaAnalysisData>,
+}
+
+/// What the analysis phase learned about an audio publication.
+///
+/// The probe is the expensive part of an audiobook (symphonia walks every
+/// container, and a folder book means one walk per part), so its result is
+/// persisted on the drop item rather than recomputed per screen. Every time
+/// value is milliseconds from the start of the *publication*, which is the
+/// unit `reading_heads.position_ms` is already in.
+///
+/// Cover *bytes* are deliberately absent: a 2 MB JPEG on every drop-item row
+/// would make listing a drop folder a multi-megabyte query. The content type
+/// and size are what a client needs to decide whether to fetch it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioAnalysis {
+	pub duration_ms: i64,
+	/// The publication codec, or `mixed` when a folder book's parts disagree.
+	pub codec: String,
+	pub sample_rate: Option<i32>,
+	pub channels: Option<i32>,
+	pub bitrate: Option<i32>,
+	/// Where the chapter marks came from, as
+	/// [`stump_media::audio::ChapterSource`] spells it. Provenance, never a
+	/// quality tier: `per_track` means Stump synthesized the list from file
+	/// boundaries, which is exactly what a librarian needs to know before
+	/// trusting it.
+	pub chapter_source: String,
+	pub tracks: Vec<AudioAnalysisTrack>,
+	pub chapters: Vec<AudioAnalysisChapter>,
+	pub cover_content_type: Option<String>,
+	pub cover_byte_size: Option<u64>,
+	pub title: Option<String>,
+	pub author: Option<String>,
+	pub narrator: Option<String>,
+	pub album: Option<String>,
+	pub description: Option<String>,
+	pub genre: Option<String>,
+	pub year: Option<i32>,
+	/// Set once `audio-assemble` produced this item's current file.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub assembled: Option<AssembledAudio>,
+}
+
+/// One file of a probed audio publication, in playback order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioAnalysisTrack {
+	/// File name of the part. A path is never exposed: the staging layout is
+	/// server-owned and a client has no use for it.
+	pub filename: String,
+	pub duration_ms: i64,
+	/// Offset of this part's first sample within the publication.
+	pub start_offset_ms: i64,
+	pub byte_size: i64,
+	pub codec: String,
+	pub bitrate: Option<i32>,
+	pub title: Option<String>,
+	pub track_number: Option<u32>,
+}
+
+/// One chapter mark, relative to the publication.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioAnalysisChapter {
+	pub title: Option<String>,
+	pub start_ms: i64,
+	pub end_ms: Option<i64>,
+}
+
+/// The M4B an `audio-assemble` run produced for a drop item.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssembledAudio {
+	/// File name of the assembled book, which is now the item's file.
+	pub filename: String,
+	pub byte_size: u64,
+	pub duration_ms: i64,
+	pub chapters: usize,
+	/// Whether the output puts `moov` ahead of `mdat`, so playback starts
+	/// without downloading the whole file.
+	pub faststart: bool,
+	/// Whether the source parts were kept beside the output as sidecars
+	/// (`AudioPolicy::keep_original`).
+	pub parts_kept: bool,
+	/// `assemble-remux` (lossless) or `assemble-transcode` (re-encoded).
+	pub method: String,
+}
+
+impl From<&ProbedAudio> for AudioAnalysis {
+	fn from(probed: &ProbedAudio) -> Self {
+		// `ProbedTrack` deliberately carries no start offset: it is the
+		// running sum of the preceding durations and is assigned exactly once,
+		// here, so no two callers can disagree about where a part begins.
+		let mut start_offset_ms = 0_i64;
+		let mut tracks = Vec::with_capacity(probed.tracks.len());
+		for track in &probed.tracks {
+			tracks.push(AudioAnalysisTrack {
+				filename: track
+					.path
+					.file_name()
+					.map(|name| name.to_string_lossy().into_owned())
+					.unwrap_or_default(),
+				duration_ms: track.duration_ms,
+				start_offset_ms,
+				byte_size: track.byte_size,
+				codec: track.codec.clone(),
+				bitrate: track.bitrate,
+				title: track.title.clone(),
+				track_number: track.track_number,
+			});
+			start_offset_ms = start_offset_ms.saturating_add(track.duration_ms);
+		}
+		Self {
+			duration_ms: probed.duration_ms,
+			codec: probed.codec.clone(),
+			sample_rate: probed.sample_rate,
+			channels: probed.channels,
+			bitrate: probed.bitrate,
+			chapter_source: probed.chapter_source.to_string(),
+			tracks,
+			chapters: probed
+				.chapters
+				.iter()
+				.map(|chapter| AudioAnalysisChapter {
+					title: chapter.title.clone(),
+					start_ms: chapter.start_ms,
+					end_ms: chapter.end_ms,
+				})
+				.collect(),
+			cover_content_type: probed
+				.cover
+				.as_ref()
+				.map(|(content_type, _)| content_type.to_string()),
+			cover_byte_size: probed.cover.as_ref().map(|(_, bytes)| bytes.len() as u64),
+			title: probed.title.clone(),
+			author: probed.author.clone(),
+			narrator: probed.narrator.clone(),
+			album: probed.album.clone(),
+			description: probed.description.clone(),
+			genre: probed.genre.clone(),
+			year: probed.year,
+			assembled: None,
+		}
+	}
 }
 
 /// Status of one quality finding.
@@ -539,10 +688,13 @@ impl FieldPick {
 
 /// Lifecycle of a drop item.  Terminal states for an attempt are
 /// `Rejected` and `Failed`; a retry starts a new analysis attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DropItemStatus {
 	Received,
+	/// The immutable staged copy exists and analysis has not run. Where every
+	/// admitted item starts, and therefore the default.
+	#[default]
 	Staged,
 	Analyzing,
 	AwaitingReview,

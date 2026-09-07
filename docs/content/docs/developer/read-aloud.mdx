@@ -3,9 +3,11 @@ title: Read-aloud, remote workers, and requests
 description: Design for ebook↔audiobook synchronisation (EPUB 3 Media Overlays, Storyteller-compatible), the remote worker protocol that runs GPU work off the server, and the request model that lets users ask for what the library lacks. Status - design accepted, not implemented.
 ---
 
-**Status: design, not implemented.** Nothing on this page exists in the tree yet
-except the pieces marked *exists*. Every other section names the crate it will
-land in so the work can be split without re-deciding it.
+**Status: partly implemented.** Each section carries its own status line;
+where a section has none, nothing on it exists in the tree yet except the
+pieces marked *exists*. Sections 2 and 3 (pairing and tier 1) are built.
+Every other section names the crate it will land in so the work can be split
+without re-deciding it.
 
 ## 1. The problem in one table
 
@@ -32,8 +34,25 @@ The key is the **work**, and the tree already has one.
 | Audible ASIN from the `audible` provider | *exists* (batch 9) | `crates/integrations/metadata/src/providers/audible.rs` |
 | **Pairing rule**: two media rows are the same work when (a) they link to the same work id, or (b) an identifier matches through a provider's edition list (Audnexus and OpenLibrary both expose "other editions"), or (c) normalised `title + first author` match and the user confirms | to build | `crates/library` (`pair_editions`), surfaced as `Media.editions: [Media]` in GraphQL and an "Also available as" row in the console |
 
+**Status: implemented.** ✅ same work id · ✅ identifier through a provider's
+edition list (Audnexus `GET /books/{asin}` → the print ISBN; Open Library
+`/isbn/{isbn}.json` → `works[…]` → `/works/{id}/editions.json`) · ✅
+normalised `title + first author`, as a suggestion.
+`stump_library::editions::pair_editions` computes the rules on demand and
+caches every verdict; `metadata_integrations::editions::EditionLookup` is the
+provider half.
+
 Pairing is a suggestion until confirmed; a confirmed pair is a `media_links`
-row. The ebook is always the **canonical text**; the audiobook is the canonical
+row. There is no pair table: a pair is two `liseur_sync_media_links` rows for
+one user sharing a `work_id`, and `m20260946` adds the two columns the liseur
+lane cannot carry — `pair_status` (`confirmed` | `suggested` | `rejected`,
+defaulting to `confirmed` so every existing row keeps its meaning) and
+`pair_evidence`. A rejection is a row, not a deletion, because suggestions are
+recomputed on every book-page query. `resolution_status` is *not* the carrier:
+it means "was the edition digest verified against the file" and the liseur
+lane rewrites it on every re-resolve.
+
+The ebook is always the **canonical text**; the audiobook is the canonical
 **time**.
 
 ## 3. Tier 1 - chapter + percentage (free)
@@ -55,6 +74,28 @@ and the audiobook's `media_audio_chapters`.
    The console shows the converted position as *approximate* and the unified
    head records `source_kind: mapped` so nothing overwrites a real position with
    a derived one.
+
+**Status: implemented** (except the readiness family, §4b). ✅ chapter map
+(`media_chapter_map`, `m20260946`) · ✅ normalised-title match, then the
+ordinal inside the title, then position, with front/back matter skipped and a
+`confidence` per entry (`stump_library::editions::build_chapter_map`) · ✅
+both position conversions (`models::domain::reading_state::{map_time_to_locator,
+map_locator_to_time}`) · ✅ console "Also available as" row with **Open here**
+and an *approximate* badge · ✅ GraphQL `Media.editions`,
+`Media.editionSuggestions`, `Media.pairedPosition(fromMediaId)`,
+`chapterMap`, `confirmEditionPair` / `rejectEditionPair`,
+`setChapterMapEntry`.
+
+Two deviations from the sketch above, both deliberate:
+
+- The map is keyed by `(ebook_media_id, audio_media_id, ebook_spine_index)`
+  rather than by a `pair_id`. A pair has no row of its own to point at, so
+  there is nothing a `pair_id` could reference; the composite unique index is
+  what makes recomputing idempotent and one entry editable.
+- The head records nothing. A mapped position is a `MappedPosition`, a type
+  that cannot reach `reading_state::resolve`, so `source_kind: mapped` is
+  unnecessary: there is no code path that could write a derived position. See
+  `docs/developer/unified-reading-state.mdx` § Mapped positions.
 
 Where it plugs in: `models::domain::reading_state::Projection` already carries
 both `page/locator` and `position_ms`; conversion happens at **read time** in

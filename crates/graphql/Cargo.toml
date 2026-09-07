@@ -55,6 +55,10 @@ stump_core = { path = "../../core", default-features = false, features = ["graph
 stump_ingest = { path = "../ingest" }
 stump_library = { path = "../library" }
 stump_devices = { path = "../devices", features = ["graphql"] }
+# The `workers` / `workerJobs` / `cancelWorkerJob` resolvers read the queue and
+# the connected-worker hub off `Ctx`; `graphql` adds the derives on its own
+# status enum and change event.
+stump_worker = { path = "../worker", default-features = false, features = ["server", "graphql"] }
 stump_notify = { path = "../notify" }
 stump_media = { path = "../media", default-features = false }
 stump_scanner = { path = "../scanner" }

@@ -43,6 +43,10 @@ bcrypt = "0.17.1"
 derive_builder = "0.20.2"
 derivative = "2.2.0"
 chrono = { version = "0.4.42", features = ["serde"] }
+# The `challenge_solve` worker runner drives a real, visible Chrome over CDP.
+# Pure Rust and tokio-native; `fetcher` (which downloads a Chromium behind the
+# operator's back) stays off, so it only ever drives an installed browser.
+chromiumoxide = "0.9.1"
 clap = { version = "4.5.48", features = ["derive"] }
 croner = "3.0.1"
 english-to-cron = "0.1.7"

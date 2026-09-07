@@ -101,6 +101,11 @@ pub enum ProviderError {
 	/// (`setProviderSourceHeaders`).
 	#[error("`{host}` is behind a Cloudflare challenge; configure a `cf_clearance` cookie and matching User-Agent for the source")]
 	Challenged { host: String },
+	/// A `challenge_solve` was asked for on a server whose remote-worker
+	/// queue was never installed. Not an outage: nothing is going to make
+	/// this server able to queue one.
+	#[error("The remote-worker queue is not available on this server")]
+	NoWorkerQueue,
 	#[error(transparent)]
 	Catalog(#[from] CatalogError),
 	#[error("Database error: {0}")]
@@ -219,6 +224,16 @@ pub struct ProviderHost {
 	/// whoever owns an event channel (`core/src/providers.rs`); absent in
 	/// tests, which assert on rows instead.
 	events: OnceLock<Arc<dyn ProviderEventSink>>,
+	/// The remote-worker queue, for the `challenge_solve` jobs a gated source
+	/// needs. Installed once by `core/src/providers.rs` after the queue's own
+	/// registry is in place; absent in tests and on a build with no worker
+	/// support, where asking for a solve is [`ProviderError::NoWorkerQueue`].
+	worker_jobs: OnceLock<Arc<stump_worker::WorkerJobs>>,
+	/// Instances a `challenge_solve` has been decided for but whose row may
+	/// not exist yet: the enqueue happens on a spawned task, so this is what
+	/// keeps a double-clicked "Solve now" from queueing twice
+	/// (`crate::challenge`).
+	pub(crate) solving: Mutex<std::collections::HashSet<String>>,
 }
 
 impl std::fmt::Debug for ProviderHost {
@@ -267,6 +282,8 @@ impl ProviderHost {
 			manifests: Mutex::new(HashMap::new()),
 			browse,
 			events: OnceLock::new(),
+			worker_jobs: OnceLock::new(),
+			solving: Mutex::new(std::collections::HashSet::new()),
 		});
 		let unbuildable = host.reload_sources().await?;
 		host.disable_unbuildable(&unbuildable).await?;
@@ -285,6 +302,23 @@ impl ProviderHost {
 		if self.events.set(events).is_err() {
 			tracing::debug!("Provider event sink already installed");
 		}
+	}
+
+	/// Install the remote-worker queue. Called once by `core/src/providers.rs`
+	/// during startup; a second call is ignored.
+	pub fn set_worker_jobs(&self, jobs: Arc<stump_worker::WorkerJobs>) {
+		if self.worker_jobs.set(jobs).is_err() {
+			tracing::debug!("Worker queue already installed on the provider host");
+		}
+	}
+
+	/// The remote-worker queue, or the verdict that this server cannot queue
+	/// remote work at all.
+	pub fn worker_jobs(&self) -> Result<Arc<stump_worker::WorkerJobs>, ProviderError> {
+		self.worker_jobs
+			.get()
+			.cloned()
+			.ok_or(ProviderError::NoWorkerQueue)
 	}
 
 	/// Announce host activity, if a sink was installed.

@@ -38,6 +38,7 @@ use serde::Deserialize;
 
 use crate::{
 	client::{build_client_with_retry, RetryClientConfig},
+	editions::{EditionIdentifier, EditionLookup},
 	error::MetadataProviderError,
 	provider::ProviderCredentialVerification,
 	rate_limit::RateLimiter,
@@ -146,6 +147,17 @@ impl AudibleClient {
 	#[cfg(test)]
 	fn with_catalog_url(mut self, catalog_url: impl Into<String>) -> Self {
 		self.catalog_url = catalog_url.into();
+		self
+	}
+
+	/// Point both bases at one local server, for tests in crates that consume
+	/// [`crate::editions::EditionLookup`] and cannot reach the two private
+	/// overrides above.
+	#[cfg(any(test, feature = "mock"))]
+	#[must_use]
+	pub fn pointed_at(mut self, base_url: &str) -> Self {
+		self.audnex_url = base_url.to_string();
+		self.catalog_url = base_url.to_string();
 		self
 	}
 
@@ -424,6 +436,40 @@ impl MetadataProvider for AudibleClient {
 			is_valid,
 			error: (!is_valid).then(|| format!("unexpected status {status}")),
 		})
+	}
+}
+
+/// Audnexus' edition graph is one hop wide and only in one direction: an
+/// audiobook record carries the print edition's `isbn`, and there is no
+/// endpoint that walks back from an ISBN to an ASIN. That one hop is the hop
+/// pairing needs, because it is the only place an Audible ASIN and a book
+/// ISBN appear in the same document.
+#[async_trait::async_trait]
+impl EditionLookup for AudibleClient {
+	fn provider_id(&self) -> &'static str {
+		"AUDIBLE"
+	}
+
+	async fn sibling_identifiers(
+		&self,
+		identifier: &EditionIdentifier,
+	) -> Result<Vec<EditionIdentifier>, MetadataProviderError> {
+		let EditionIdentifier::Asin(asin) = identifier else {
+			return Ok(Vec::new());
+		};
+
+		match self.fetch_book(asin).await {
+			Ok(book) => Ok(book
+				.isbn
+				.and_then(|isbn| EditionIdentifier::Isbn(isbn).normalized())
+				.into_iter()
+				.collect()),
+			// An ASIN Audnexus does not carry (a regional title, a podcast)
+			// is a miss, not a failure: pairing simply learns nothing from
+			// this provider.
+			Err(MetadataProviderError::NotFound(_)) => Ok(Vec::new()),
+			Err(error) => Err(error),
+		}
 	}
 }
 

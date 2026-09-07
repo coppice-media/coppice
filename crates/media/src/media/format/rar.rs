@@ -81,6 +81,74 @@ impl RarProcessor {
 		Archive::new(path).open_for_listing()
 	}
 }
+/// One member of a RAR archive as its header describes it.
+///
+/// The listing pass reads headers only, so a member list costs a walk of the
+/// archive's directory rather than a decompression of its contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RarEntry {
+	/// Path inside the archive, as the archive spells it.
+	pub path: String,
+	/// Uncompressed size.
+	pub byte_size: u64,
+	pub is_dir: bool,
+}
+
+impl RarProcessor {
+	/// List an archive's members without extracting anything.
+	pub fn list_entries(path: &Path) -> Result<Vec<RarEntry>, FileError> {
+		let mut archive = RarProcessor::open_for_listing(&path.to_string_lossy())?;
+		let mut entries = Vec::new();
+		while let Some(header) = archive.read_header()? {
+			let entry = header.entry();
+			entries.push(RarEntry {
+				path: entry.filename.to_string_lossy().replace('\\', "/"),
+				byte_size: entry.unpacked_size,
+				is_dir: entry.is_directory(),
+			});
+			archive = header.skip()?;
+		}
+		Ok(entries)
+	}
+
+	/// Extract every file member into `destination`, returning how many files
+	/// were written.
+	///
+	/// Member directories are recreated, so a folder audiobook keeps its
+	/// shape. A member whose name would escape `destination` is skipped
+	/// rather than sanitised: an archive naming `../../etc/passwd` is hostile,
+	/// and the honest response is to write it nowhere.
+	pub fn extract_all(path: &Path, destination: &Path) -> Result<usize, FileError> {
+		std::fs::create_dir_all(destination)?;
+		let mut archive = RarProcessor::open_for_processing(&path.to_string_lossy())?;
+		let mut written = 0_usize;
+		while let Some(header) = archive.read_header()? {
+			let entry = header.entry();
+			let is_file = entry.is_file();
+			let relative = entry.filename.clone();
+			if !is_file || !is_contained(&relative) {
+				archive = header.skip()?;
+				continue;
+			}
+			let target = destination.join(&relative);
+			if let Some(parent) = target.parent() {
+				std::fs::create_dir_all(parent)?;
+			}
+			archive = header.extract_to(&target)?;
+			written += 1;
+		}
+		Ok(written)
+	}
+}
+
+/// Whether a member path stays inside the extraction directory.
+fn is_contained(relative: &Path) -> bool {
+	use std::path::Component;
+
+	relative
+		.components()
+		.all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+}
 
 impl FileProcessor for RarProcessor {
 	fn get_sample_size(path: &str) -> Result<u64, FileError> {

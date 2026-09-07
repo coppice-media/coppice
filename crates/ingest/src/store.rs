@@ -25,11 +25,14 @@ use tokio::{fs, io::AsyncRead};
 use uuid::Uuid;
 
 use super::{
+	archive,
 	contract::{
-		BookSnapshot, DropItemStatus, FieldPick, IngestMediaKind, IngestPageEntry,
-		MetadataCandidate, MetadataField, QualityReport,
+		AssembledAudio, AudioAnalysis, BookSnapshot, DropItemStatus, FieldPick,
+		FixAction, IngestMediaKind, IngestPageEntry, MetadataCandidate, MetadataField,
+		QualityReport,
 	},
 	drop_folder,
+	policy::AudioPolicy,
 	preprocess::{HookOutcome, PreprocessHook},
 	progress::{ProgressHub, ProgressStream, StoredProgressStream},
 	providers::apply::{
@@ -273,33 +276,19 @@ impl IngestStore {
 			return Ok(StagedUpload::deduplicated(item));
 		}
 
-		let active = ingest_drop_item::ActiveModel {
-			id: Set(Uuid::new_v4().to_string()),
-			library_id: Set(library_id.to_string()),
-			created_by: Set(created_by.map(str::to_owned)),
-			source_filename: Set(filename.clone()),
-			relative_path: Set(relative_path),
-			byte_size: Set(i64::try_from(staged.byte_size).map_err(|_| {
-				IngestError::BadRequest(
-					"uploaded file is too large for the database".to_string(),
-				)
-			})?),
-			source_sha256: Set(staged.source_sha256.clone()),
-			media_kind: Set(media_kind_name(media_kind_for_filename(&filename))),
-			staging_path: Set(staged.path.to_string_lossy().into_owned()),
-			status: Set(DropItemStatus::Staged.as_str().to_string()),
-			analysis_job_id: Set(None),
-			quality_report_id: Set(None),
-			media_id: Set(None),
-			series_id: Set(None),
-			pending_fields: Set(Some(Value::Object(Default::default()))),
-			error: Set(None),
-			idempotency_key: Set(idempotency_key.map(str::to_owned)),
-			preprocessed_at: Set(None),
-			revision: Set(1),
-			created_at: NotSet,
-			updated_at: NotSet,
-		};
+		let active = NewDropItem {
+			library_id: library_id.to_string(),
+			created_by: created_by.map(str::to_owned),
+			source_filename: filename.clone(),
+			relative_path,
+			byte_size: staged.byte_size,
+			source_sha256: staged.source_sha256.clone(),
+			media_kind: media_kind_for_filename(&filename),
+			staging_path: staged.path.to_string_lossy().into_owned(),
+			idempotency_key: idempotency_key.map(str::to_owned),
+			..NewDropItem::default()
+		}
+		.into_active_model()?;
 		match active.insert(self.conn.as_ref()).await {
 			Ok(item) => {
 				self.announce(&item);
@@ -321,6 +310,14 @@ impl IngestStore {
 		}
 	}
 
+	/// Admit everything sitting in a library's drop folder.
+	///
+	/// A dropped file is normally one publication. A dropped `.zip`/`.rar`/
+	/// `.7z` may instead be a *delivery* — a folder of MP3 parts, an EPUB
+	/// beside its MOBI and cover, several books — and those explode into one
+	/// item per publication through [`Self::explode_archive`]. The question is
+	/// answered from the container's member list, so a comic archive is never
+	/// extracted to discover it was a comic.
 	pub async fn scan_drop_folder(
 		&self,
 		library_id: &str,
@@ -330,6 +327,10 @@ impl IngestStore {
 		let files = drop_folder::list_files(&root).await?;
 		let mut admitted = Vec::with_capacity(files.len());
 		for file in files {
+			if let Some(exploded) = self.try_explode(library_id, &file).await? {
+				admitted.extend(exploded);
+				continue;
+			}
 			let (source_sha256, byte_size) = staging::hash_file(&file.path).await?;
 			if let Some(existing) = self
 				.find_identity(library_id, &source_sha256, &file.filename)
@@ -349,37 +350,17 @@ impl IngestStore {
 				&source_sha256,
 			)
 			.await?;
-			let relative_path = Path::new(&file.relative_path)
-				.parent()
-				.filter(|path| !path.as_os_str().is_empty())
-				.map(|path| path.to_string_lossy().replace('\\', "/"));
-			let active = ingest_drop_item::ActiveModel {
-				id: Set(Uuid::new_v4().to_string()),
-				library_id: Set(library_id.to_string()),
-				created_by: Set(None),
-				source_filename: Set(file.filename.clone()),
-				relative_path: Set(relative_path),
-				byte_size: Set(i64::try_from(byte_size).map_err(|_| {
-					IngestError::BadRequest(
-						"drop file is too large for the database".to_string(),
-					)
-				})?),
-				source_sha256: Set(source_sha256.clone()),
-				media_kind: Set(media_kind_name(media_kind_for_filename(&file.filename))),
-				staging_path: Set(staged_path.to_string_lossy().into_owned()),
-				status: Set(DropItemStatus::Staged.as_str().to_string()),
-				analysis_job_id: Set(None),
-				quality_report_id: Set(None),
-				media_id: Set(None),
-				series_id: Set(None),
-				pending_fields: Set(Some(Value::Object(Default::default()))),
-				error: Set(None),
-				idempotency_key: Set(None),
-				preprocessed_at: Set(None),
-				revision: Set(1),
-				created_at: NotSet,
-				updated_at: NotSet,
-			};
+			let active = NewDropItem {
+				library_id: library_id.to_string(),
+				source_filename: file.filename.clone(),
+				relative_path: parent_of(&file.relative_path),
+				byte_size,
+				source_sha256: source_sha256.clone(),
+				media_kind: media_kind_for_filename(&file.filename),
+				staging_path: staged_path.to_string_lossy().into_owned(),
+				..NewDropItem::default()
+			}
+			.into_active_model()?;
 			match active.insert(self.conn.as_ref()).await {
 				Ok(item) => {
 					self.announce(&item);
@@ -399,6 +380,293 @@ impl IngestStore {
 		}
 		admitted.sort_by(|left, right| left.id.cmp(&right.id));
 		Ok(admitted)
+	}
+
+	/// Explode a dropped container, or decline and let the normal path stage
+	/// it as one book.
+	///
+	/// `Ok(None)` means "not a delivery": the extension is not a container's,
+	/// or its member list holds no publication (a comic archive, an
+	/// EPUB-shaped zip). Anything else is exploded, and a *failed* explosion
+	/// is `Ok(Some(vec![failed item]))` rather than an error, because a
+	/// missing `unrar` must fail one drop and not the whole scan.
+	async fn try_explode(
+		&self,
+		library_id: &str,
+		file: &drop_folder::DropFile,
+	) -> IngestResult<Option<Vec<DropItemModel>>> {
+		let Some(format) = archive::ArchiveFormat::for_filename(&file.filename) else {
+			return Ok(None);
+		};
+		let path = file.path.clone();
+		let members = match tokio::task::spawn_blocking(move || {
+			archive::list_members(format, &path)
+		})
+		.await
+		.map_err(|error| IngestError::Unknown(error.to_string()))?
+		{
+			Ok(members) => members,
+			// An unreadable container is a failed drop, not a book: a
+			// `.rar` whose header cannot be read has no pages either.
+			Err(error) => {
+				return Ok(Some(vec![
+					self.fail_drop(library_id, file, &error.to_string()).await?,
+				]));
+			},
+		};
+		if !archive::holds_publications(&members) {
+			return Ok(None);
+		}
+		Ok(Some(self.explode_archive(library_id, file, format).await?))
+	}
+
+	/// Extract a container into staging and admit one drop item per
+	/// publication, all sharing a drop group.
+	///
+	/// The archive is removed on success: it was the *delivery*, and leaving
+	/// it in the drop folder would re-explode it on every scan. On failure it
+	/// is left exactly where it was, so fixing the extractor and rescanning is
+	/// the whole recovery.
+	pub async fn explode_archive(
+		&self,
+		library_id: &str,
+		file: &drop_folder::DropFile,
+		format: archive::ArchiveFormat,
+	) -> IngestResult<Vec<DropItemModel>> {
+		let scratch = self
+			.config
+			.staging_dir
+			.join(library_id)
+			.join(format!(".explode-{}", Uuid::new_v4()));
+		let source = file.path.clone();
+		let destination = scratch.clone();
+		let exploded = tokio::task::spawn_blocking(move || {
+			archive::extract(format, &source, &destination)?;
+			archive::classify(&destination)
+		})
+		.await
+		.map_err(|error| IngestError::Unknown(error.to_string()))?;
+		let exploded = match exploded {
+			Ok(exploded) => exploded,
+			Err(error) => {
+				let _ = fs::remove_dir_all(&scratch).await;
+				return Ok(vec![
+					self.fail_drop(library_id, file, &error.to_string()).await?,
+				]);
+			},
+		};
+		if exploded.items.is_empty() {
+			let _ = fs::remove_dir_all(&scratch).await;
+			let reason = if exploded.notes.is_empty() {
+				format!("{} held no publications", file.filename)
+			} else {
+				format!(
+					"{} held no publications: {}",
+					file.filename,
+					exploded.notes.join("; ")
+				)
+			};
+			return Ok(vec![self.fail_drop(library_id, file, &reason).await?]);
+		}
+
+		// One group per successful explosion, so a re-drop of the same archive
+		// produces a new group whose members deduplicate onto the existing
+		// items individually.
+		let drop_group_id = Uuid::new_v4().to_string();
+		let container_directory = parent_of(&file.relative_path);
+		let mut admitted = Vec::with_capacity(exploded.items.len());
+		for item in exploded.items {
+			match self
+				.admit_exploded(
+					library_id,
+					&drop_group_id,
+					container_directory.as_deref(),
+					item,
+				)
+				.await
+			{
+				Ok(model) => admitted.push(model),
+				Err(error) => {
+					// One unstageable member must not swallow the rest of the
+					// delivery, and it must not vanish either.
+					tracing::error!(
+						?error,
+						archive = %file.filename,
+						"Failed to admit one member of an exploded archive"
+					);
+					admitted.push(
+						self.fail_drop(library_id, file, &error.to_string()).await?,
+					);
+				},
+			}
+		}
+		if !exploded.notes.is_empty() {
+			tracing::info!(
+				archive = %file.filename,
+				notes = ?exploded.notes,
+				"Archive members that became neither an item nor a sidecar"
+			);
+		}
+		let _ = fs::remove_dir_all(&scratch).await;
+		staging::remove_if_exists(&file.path).await?;
+		Ok(admitted)
+	}
+
+	/// Stage one exploded publication and insert its row.
+	async fn admit_exploded(
+		&self,
+		library_id: &str,
+		drop_group_id: &str,
+		container_directory: Option<&str>,
+		item: archive::ExplodedItem,
+	) -> IngestResult<DropItemModel> {
+		let is_folder = item.path.is_dir();
+		let (source_sha256, byte_size) = if is_folder {
+			staging::hash_dir(&item.path).await?
+		} else {
+			staging::hash_file(&item.path).await?
+		};
+		if let Some(existing) = self
+			.find_identity(library_id, &source_sha256, &item.filename)
+			.await?
+		{
+			return Ok(existing);
+		}
+		let staged_path = if is_folder {
+			staging::move_dir_into_staging(
+				&item.path,
+				&self.config.staging_dir,
+				library_id,
+				&item.filename,
+				&source_sha256,
+			)
+			.await?
+		} else {
+			staging::move_into_staging(
+				&item.path,
+				&self.config.staging_dir,
+				library_id,
+				&item.filename,
+				&source_sha256,
+			)
+			.await?
+		};
+		// A folder book's sidecars moved with it; a file's are staged beside
+		// it under the same digest prefix so they are found and removed with
+		// the item.
+		let sidecars = if is_folder {
+			staging::sidecars_in(&staged_path).await?
+		} else {
+			self.stage_sidecars(library_id, &source_sha256, &item.sidecars)
+				.await?
+		};
+		let relative_path =
+			join_relative(container_directory, item.relative_path.as_deref());
+		let active = NewDropItem {
+			library_id: library_id.to_string(),
+			source_filename: item.filename,
+			relative_path,
+			byte_size,
+			source_sha256,
+			media_kind: item.kind,
+			staging_path: staged_path.to_string_lossy().into_owned(),
+			drop_group_id: Some(drop_group_id.to_string()),
+			sidecar_paths: sidecars,
+			..NewDropItem::default()
+		}
+		.into_active_model()?;
+		let model = active.insert(self.conn.as_ref()).await?;
+		self.announce(&model);
+		Ok(model)
+	}
+
+	/// Move an item's sidecars beside its staged file, keeping their names.
+	async fn stage_sidecars(
+		&self,
+		library_id: &str,
+		sha256: &str,
+		sidecars: &[PathBuf],
+	) -> IngestResult<Vec<String>> {
+		let mut staged = Vec::with_capacity(sidecars.len());
+		for sidecar in sidecars {
+			let Some(name) = sidecar.file_name().and_then(|name| name.to_str()) else {
+				continue;
+			};
+			let target = staging::move_into_staging(
+				sidecar,
+				&self.config.staging_dir,
+				library_id,
+				name,
+				sha256,
+			)
+			.await?;
+			staged.push(target.to_string_lossy().into_owned());
+		}
+		staged.sort();
+		Ok(staged)
+	}
+
+	/// One failed drop item for a container that could not be exploded.
+	///
+	/// The archive itself is left in the drop folder: the reason names the
+	/// missing tool or the broken container, and a rescan after fixing either
+	/// is the retry.
+	async fn fail_drop(
+		&self,
+		library_id: &str,
+		file: &drop_folder::DropFile,
+		reason: &str,
+	) -> IngestResult<DropItemModel> {
+		if let Some(existing) = ingest_drop_item::Entity::find()
+			.filter(ingest_drop_item::Column::LibraryId.eq(library_id))
+			.filter(ingest_drop_item::Column::SourceFilename.eq(file.filename.clone()))
+			.filter(ingest_drop_item::Column::Status.eq(DropItemStatus::Failed.as_str()))
+			.one(self.conn.as_ref())
+			.await?
+		{
+			// A rescan of an archive that still cannot be extracted updates
+			// the reason rather than accumulating one row per scan.
+			let revision = existing.revision;
+			let mut active = existing.into_active_model();
+			active.error = Set(Some(reason.to_string()));
+			active.revision = Set(revision.saturating_add(1));
+			return self.persist(active).await;
+		}
+		let active = NewDropItem {
+			library_id: library_id.to_string(),
+			source_filename: file.filename.clone(),
+			relative_path: parent_of(&file.relative_path),
+			byte_size: file.byte_size,
+			// The archive is still in the drop folder, so the row records
+			// where it is rather than a staging path it never reached.
+			source_sha256: String::new(),
+			media_kind: media_kind_for_filename(&file.filename),
+			staging_path: file.path.to_string_lossy().into_owned(),
+			status: DropItemStatus::Failed,
+			error: Some(reason.to_string()),
+			..NewDropItem::default()
+		}
+		.into_active_model()?;
+		let model = active.insert(self.conn.as_ref()).await?;
+		self.announce(&model);
+		Ok(model)
+	}
+
+	/// The other items that arrived in the same delivery, oldest first.
+	pub async fn group_siblings(
+		&self,
+		item: &DropItemModel,
+	) -> IngestResult<Vec<DropItemModel>> {
+		let Some(group) = item.drop_group_id.as_deref() else {
+			return Ok(Vec::new());
+		};
+		Ok(ingest_drop_item::Entity::find()
+			.filter(ingest_drop_item::Column::DropGroupId.eq(group))
+			.filter(ingest_drop_item::Column::Id.ne(item.id.clone()))
+			.order_by_asc(ingest_drop_item::Column::CreatedAt)
+			.order_by_asc(ingest_drop_item::Column::Id)
+			.all(self.conn.as_ref())
+			.await?)
 	}
 
 	pub async fn drop_folder(&self, library_id: &str) -> IngestResult<DropFolderInfo> {
@@ -556,6 +824,9 @@ impl IngestStore {
 					media_row.path
 				))
 			})?;
+		// A library rework target is a path on disk; its kind is what the
+		// extension says, which is exactly what the scanner recorded for it.
+		let media_kind = media_kind_for_filename(&source_filename);
 		let config = self.config.clone();
 		tokio::task::spawn_blocking(move || {
 			snapshot_from_source(
@@ -567,6 +838,7 @@ impl IngestStore {
 					source_sha256,
 					byte_size,
 					relative_path: String::new(),
+					media_kind,
 				},
 				&config,
 			)
@@ -575,12 +847,21 @@ impl IngestStore {
 		.map_err(|error| IngestError::Unknown(error.to_string()))?
 	}
 
+	/// Remove one staged item and everything it owns.
+	///
+	/// A folder audiobook's target is a directory and an item's sidecars are
+	/// files it owns rather than files it is; both go with the row, or
+	/// discarding an archive drop would leave its cover art and its MP3 parts
+	/// in staging forever.
 	pub async fn discard(&self, item_id: &str) -> IngestResult<DropItemModel> {
 		let item = self
 			.item(item_id)
 			.await?
 			.ok_or_else(|| IngestError::NotFound(format!("ingest item {item_id}")))?;
-		staging::remove_if_exists(Path::new(&item.staging_path)).await?;
+		staging::remove_staged(Path::new(&item.staging_path)).await?;
+		for sidecar in Self::sidecars(&item) {
+			staging::remove_staged(Path::new(&sidecar)).await?;
+		}
 		item.clone()
 			.into_active_model()
 			.delete(self.conn.as_ref())
@@ -605,7 +886,12 @@ impl IngestStore {
 			fs::create_dir_all(&rejected_dir).await?;
 			let target =
 				rejected_dir.join(format!("{}-{}", item.id, item.source_filename));
-			move_file(Path::new(&item.staging_path), &target).await?;
+			let staged = PathBuf::from(&item.staging_path);
+			if staged.is_dir() {
+				staging::move_dir(&staged, &target).await?;
+			} else if staged.is_file() {
+				move_file(&staged, &target).await?;
+			}
 		}
 		let revision = item.revision;
 		let mut active = item.into_active_model();
@@ -682,7 +968,11 @@ impl IngestStore {
 				"destination escapes library root".to_string(),
 			));
 		}
-		if !Path::new(&item.staging_path).is_file() {
+		let staged = PathBuf::from(&item.staging_path);
+		// A folder audiobook commits as a directory of parts, which is the
+		// shape the scanner already recognises as one book.
+		let staged_is_dir = staged.is_dir();
+		if !staged.is_file() && !staged_is_dir {
 			return Err(IngestError::FileNotFound(item.staging_path));
 		}
 		if fs::try_exists(&destination).await? {
@@ -735,8 +1025,21 @@ impl IngestStore {
 		// move happens inside the transaction window; any failure after this
 		// point rolls the database back (transaction drop) and moves the file
 		// back to staging so the item stays approvable.
-		move_file(Path::new(&item.staging_path), &destination).await?;
 		let staging_path = item.staging_path.clone();
+		let sidecars = Self::sidecars(&item);
+		let drop_group_id = item.drop_group_id.clone();
+		let media_kind = media_kind_for_item(&item);
+		let created_by = item.created_by.clone();
+		if staged_is_dir {
+			staging::move_dir(&staged, &destination).await?;
+		} else {
+			move_file(&staged, &destination).await?;
+		}
+		// Cover art and notes land beside the publication, which is where the
+		// scanner looks for a `cover.jpg` and where a librarian expects the
+		// `.nfo` they downloaded to be.
+		let moved_sidecars =
+			move_sidecars_beside(&sidecars, &destination, staged_is_dir).await;
 		let commit = async {
 			let media_config = config.clone();
 			let destination_for_build = destination.clone();
@@ -773,6 +1076,9 @@ impl IngestStore {
 			updated_item.status = Set(DropItemStatus::Committed.as_str().to_string());
 			updated_item.media_id = Set(Some(media_model.id.clone()));
 			updated_item.series_id = Set(Some(series_id));
+			updated_item.sidecar_paths = Set((!moved_sidecars.is_empty())
+				.then(|| serde_json::to_value(&moved_sidecars))
+				.transpose()?);
 			updated_item.error = Set(None);
 			updated_item.revision = Set(revision.saturating_add(1));
 			updated_item.update(&txn).await?;
@@ -782,9 +1088,14 @@ impl IngestStore {
 		let media_id = match commit.await {
 			Ok(media_id) => media_id,
 			Err(error) => {
-				if let Err(restore_error) =
-					move_file(&destination, Path::new(&staging_path)).await
-				{
+				let restore = if staged_is_dir {
+					staging::move_dir(&destination, Path::new(&staging_path)).await
+				} else {
+					move_file(&destination, Path::new(&staging_path))
+						.await
+						.map_err(IngestError::from)
+				};
+				if let Err(restore_error) = restore {
 					tracing::error!(
 						?restore_error,
 						destination = %destination.display(),
@@ -795,6 +1106,10 @@ impl IngestStore {
 				return Err(error);
 			},
 		};
+		if let Some(group) = drop_group_id {
+			self.suggest_group_pairs(&group, item_id, &media_id, media_kind, created_by)
+				.await;
+		}
 		// The commit ran in a transaction, so the change is announced from the
 		// re-read row once it is durable.
 		let committed = self
@@ -803,6 +1118,76 @@ impl IngestStore {
 			.ok_or_else(|| IngestError::NotFound(format!("ingest item {item_id}")))?;
 		self.announce(&committed);
 		Ok((media_id, committed))
+	}
+
+	/// Record an edition-pair suggestion for every already-committed sibling
+	/// of this item's drop group that is the complementary kind.
+	///
+	/// Runs after the commit transaction, deliberately: the books are in the
+	/// library either way, and a suggestion nobody asked for must never be
+	/// able to roll back an ingest. Every failure is logged and swallowed.
+	async fn suggest_group_pairs(
+		&self,
+		drop_group_id: &str,
+		item_id: &str,
+		media_id: &str,
+		media_kind: IngestMediaKind,
+		created_by: Option<String>,
+	) {
+		let siblings = match ingest_drop_item::Entity::find()
+			.filter(ingest_drop_item::Column::DropGroupId.eq(drop_group_id))
+			.filter(ingest_drop_item::Column::Id.ne(item_id.to_string()))
+			.filter(ingest_drop_item::Column::MediaId.is_not_null())
+			.all(self.conn.as_ref())
+			.await
+		{
+			Ok(siblings) => siblings,
+			Err(error) => {
+				tracing::warn!(%error, drop_group_id, "Could not read drop group siblings");
+				return;
+			},
+		};
+		for sibling in siblings {
+			let Some(sibling_media_id) = sibling.media_id.as_deref() else {
+				continue;
+			};
+			if !crate::pairing::is_edition_pair(media_kind, media_kind_for_item(&sibling))
+			{
+				continue;
+			}
+			// The pair belongs to whoever committed it; a drop with no user
+			// (the folder watcher) pairs for the sibling's owner, and a
+			// sibling with none either is a server-owned drop.
+			let Some(user_id) = created_by.clone().or_else(|| sibling.created_by.clone())
+			else {
+				tracing::debug!(
+					drop_group_id,
+					"Drop group pair has no owning user; no suggestion written"
+				);
+				continue;
+			};
+			match crate::pairing::suggest_same_drop_pair(
+				self.conn.as_ref(),
+				&user_id,
+				media_id,
+				sibling_media_id,
+			)
+			.await
+			{
+				Ok(outcome) => tracing::info!(
+					drop_group_id,
+					media_id,
+					sibling_media_id,
+					?outcome,
+					"Recorded a same-drop edition pair suggestion"
+				),
+				Err(error) => tracing::warn!(
+					%error,
+					drop_group_id,
+					"Could not record a same-drop edition pair suggestion"
+				),
+			}
+		}
 	}
 
 	pub async fn save_report(
@@ -1480,6 +1865,302 @@ impl IngestStore {
 		active.revision = Set(revision.saturating_add(1));
 		self.persist(active).await
 	}
+
+	/// Probe an audio item and persist the result on the row.
+	///
+	/// Every screen that shows a chapter list, a track table, or a duration
+	/// reads this column; recomputing it would mean demuxing 62 MP3s per page
+	/// view. Non-audio items are returned untouched, and a probe that fails is
+	/// *not* a failed item: the audio quality family already reports an
+	/// unreadable publication as a finding with the demuxer's own message, and
+	/// failing here would hide that behind a bare error.
+	pub(crate) async fn run_audio_analysis(
+		&self,
+		item: &DropItemModel,
+	) -> IngestResult<DropItemModel> {
+		if media_kind_for_item(item) != IngestMediaKind::Audio {
+			return Ok(item.clone());
+		}
+		let path = PathBuf::from(&item.staging_path);
+		let probed =
+			tokio::task::spawn_blocking(move || stump_media::audio::probe(&path))
+				.await
+				.map_err(|error| IngestError::Unknown(error.to_string()))?;
+		let probed = match probed {
+			Ok(probed) => probed,
+			Err(error) => {
+				tracing::warn!(
+					item_id = %item.id,
+					%error,
+					"Audio probe failed; the quality report carries the finding"
+				);
+				return Ok(item.clone());
+			},
+		};
+		let analysis = AudioAnalysis::from(&probed);
+		self.save_audio_analysis(item, analysis).await
+	}
+
+	async fn save_audio_analysis(
+		&self,
+		item: &DropItemModel,
+		analysis: AudioAnalysis,
+	) -> IngestResult<DropItemModel> {
+		let revision = item.revision;
+		let mut active = item.clone().into_active_model();
+		active.audio_analysis = Set(Some(serde_json::to_value(&analysis)?));
+		active.revision = Set(revision.saturating_add(1));
+		self.persist(active).await
+	}
+
+	/// Run a quality finding's named repair tool against a staged item.
+	///
+	/// The finding names the tool *and* the options that address it
+	/// ([`crate::contract::FixAction`]), so a fix cannot drift from what the
+	/// tool accepts and the editor never has to know a command line. The
+	/// report is read back from the database rather than recomputed: the
+	/// button a librarian pressed belongs to the findings they were looking
+	/// at.
+	///
+	/// Two shapes of outcome, both handled here:
+	///
+	/// * the tool wrote a **new file** (`audio-assemble` produces an M4B) —
+	///   it becomes the item's file, the old target's contents become
+	///   sidecars or are removed per policy, and the row is re-hashed;
+	/// * the tool **rewrote in place** (`audio-chapters`, `meta-edit`) — the
+	///   path is unchanged and the row is re-hashed, exactly as the
+	///   preprocess hook's rewrite is.
+	///
+	/// A tool that produced nothing leaves the item untouched and returns it:
+	/// the next report simply carries the same finding, which is a truthful
+	/// answer rather than a fabricated success.
+	pub(crate) async fn run_quality_fix(
+		&self,
+		item_id: &str,
+		check_id: &str,
+		fix: &FixAction,
+	) -> IngestResult<DropItemModel> {
+		let item = self
+			.item(item_id)
+			.await?
+			.ok_or_else(|| IngestError::NotFound(format!("ingest item {item_id}")))?;
+		// A fix belongs to a finding: the button a librarian pressed must be
+		// on the report they were looking at, so an item with no report — or
+		// a report that never ran this check — is refused rather than
+		// silently rewritten.
+		let report = self.report_for_item(item_id).await?.ok_or_else(|| {
+			IngestError::BadRequest(format!(
+				"ingest item {item_id} has no quality report to fix"
+			))
+		})?;
+		let stored: QualityReport = serde_json::from_value(report.checks.clone())?;
+		if !stored
+			.checks
+			.iter()
+			.any(|check| check.outcome.check_id == check_id)
+		{
+			return Err(IngestError::BadRequest(format!(
+				"quality check {check_id} did not run for this item"
+			)));
+		}
+
+		// `audio-assemble` is the one fix whose output replaces the
+		// publication, and the assemble path already owns re-hashing it,
+		// recording it, and deciding what happens to the parts. Routing the
+		// button through it means the manual fix and the policy-driven one
+		// cannot behave differently.
+		if fix.tool == "audio-assemble" {
+			let policy = self.audio_policy(&item.library_id).await?;
+			let forced = AudioPolicy {
+				auto_assemble: true,
+				..policy
+			};
+			let analysed = self.run_audio_analysis(&item).await?;
+			return self.run_audio_assemble(&analysed, &forced).await;
+		}
+
+		let staged = PathBuf::from(&item.staging_path);
+		let tool_id = fix.tool.clone();
+		let options = fix.options.clone();
+		let target = staged.clone();
+		let ran = tokio::task::spawn_blocking(move || {
+			run_tool_in_place(&tool_id, &target, options)
+		})
+		.await
+		.map_err(|error| IngestError::Unknown(error.to_string()))??;
+		if !ran {
+			return Ok(item);
+		}
+
+		// The tool rewrote the staged bytes; the row must describe what is
+		// there now, or a commit would move a file whose digest the audit
+		// trail disagrees with.
+		let updated = if staged.is_dir() {
+			let (source_sha256, byte_size) = staging::hash_dir(&staged).await?;
+			self.rehash(&item, source_sha256, byte_size).await?
+		} else {
+			let (source_sha256, byte_size) = staging::hash_file(&staged).await?;
+			self.rehash(&item, source_sha256, byte_size).await?
+		};
+		self.run_audio_analysis(&updated).await
+	}
+
+	async fn rehash(
+		&self,
+		item: &DropItemModel,
+		source_sha256: String,
+		byte_size: u64,
+	) -> IngestResult<DropItemModel> {
+		let byte_size = i64::try_from(byte_size).map_err(|_| {
+			IngestError::BadRequest("file is too large for the database".to_string())
+		})?;
+		let revision = item.revision;
+		let mut active = item.clone().into_active_model();
+		active.source_sha256 = Set(source_sha256);
+		active.byte_size = Set(byte_size);
+		active.revision = Set(revision.saturating_add(1));
+		self.persist(active).await
+	}
+
+	/// The persisted probe result, when this item is an analysed audiobook.
+	pub fn audio_analysis(item: &DropItemModel) -> Option<AudioAnalysis> {
+		let value = item.audio_analysis.clone()?;
+		match serde_json::from_value(value) {
+			Ok(analysis) => Some(analysis),
+			Err(error) => {
+				tracing::warn!(
+					item_id = %item.id,
+					%error,
+					"Stored audio analysis could not be read; treating the item as unanalysed"
+				);
+				None
+			},
+		}
+	}
+
+	/// The staged files an item owns without them being it.
+	pub fn sidecars(item: &DropItemModel) -> Vec<String> {
+		item.sidecar_paths
+			.as_ref()
+			.and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
+			.unwrap_or_default()
+	}
+
+	/// Assemble a split audiobook into one canonical M4B and make it the
+	/// item's file.
+	///
+	/// Runs only for [`IngestMediaKind::Audio`] items with more than one part
+	/// and only when the library's [`AudioPolicy::auto_assemble`] is on. The
+	/// output lands beside the parts in staging, is re-hashed onto the row the
+	/// same way the preprocess hook's rewrite is — the digest always describes
+	/// the bytes the library will receive — and the parts become sidecars when
+	/// `keep_original` is set, or are removed when it is not.
+	///
+	/// A tool result that assembled nothing (no ffmpeg for a transcode, a
+	/// verification failure) leaves the item exactly as it was and records the
+	/// reason in the log: an unassembled folder book is still a book, and the
+	/// `single_file` quality finding already says it is split.
+	pub(crate) async fn run_audio_assemble(
+		&self,
+		item: &DropItemModel,
+		policy: &AudioPolicy,
+	) -> IngestResult<DropItemModel> {
+		if !policy.auto_assemble || media_kind_for_item(item) != IngestMediaKind::Audio {
+			return Ok(item.clone());
+		}
+		let Some(analysis) = Self::audio_analysis(item) else {
+			return Ok(item.clone());
+		};
+		// One container is already the canonical shape; re-muxing it would
+		// rewrite a file to produce the same file.
+		if analysis.tracks.len() < 2 || analysis.assembled.is_some() {
+			return Ok(item.clone());
+		}
+
+		let source = PathBuf::from(&item.staging_path);
+		let outcome = tokio::task::spawn_blocking(move || assemble_audio(&source))
+			.await
+			.map_err(|error| IngestError::Unknown(error.to_string()))?;
+		let assembled = match outcome {
+			Ok(Some(assembled)) => assembled,
+			Ok(None) => return Ok(item.clone()),
+			Err(error) => {
+				tracing::warn!(
+					item_id = %item.id,
+					%error,
+					"audio-assemble produced no output; the item keeps its parts"
+				);
+				return Ok(item.clone());
+			},
+		};
+
+		let (source_sha256, byte_size) = staging::hash_file(&assembled.output).await?;
+		let byte_size = i64::try_from(byte_size).map_err(|_| {
+			IngestError::BadRequest(
+				"assembled audiobook is too large for the database".to_string(),
+			)
+		})?;
+		let parts_directory = PathBuf::from(&item.staging_path);
+		let mut sidecars = Vec::new();
+		if policy.keep_original {
+			sidecars = staging::files_in(&parts_directory).await?;
+		} else {
+			staging::remove_staged(&parts_directory).await?;
+		}
+		sidecars.sort();
+
+		let filename = assembled
+			.output
+			.file_name()
+			.map(|name| name.to_string_lossy().into_owned())
+			.unwrap_or_default();
+		let analysis = AudioAnalysis {
+			assembled: Some(AssembledAudio {
+				filename: filename.clone(),
+				byte_size: byte_size.max(0) as u64,
+				duration_ms: assembled.duration_ms,
+				chapters: assembled.chapters,
+				faststart: assembled.faststart,
+				parts_kept: policy.keep_original,
+				method: assembled.method,
+			}),
+			..analysis
+		};
+
+		let revision = item.revision;
+		let mut active = item.clone().into_active_model();
+		active.source_filename = Set(filename);
+		active.media_kind = Set(media_kind_name(IngestMediaKind::Audio));
+		active.staging_path = Set(assembled.output.to_string_lossy().into_owned());
+		active.source_sha256 = Set(source_sha256);
+		active.byte_size = Set(byte_size);
+		active.sidecar_paths = Set(Some(serde_json::to_value(&sidecars)?));
+		active.audio_analysis = Set(Some(serde_json::to_value(&analysis)?));
+		active.revision = Set(revision.saturating_add(1));
+		self.persist(active).await
+	}
+
+	/// The library's effective audio policy, for the assemble decision.
+	///
+	/// A stored override that does not parse is not a reason to rewrite an
+	/// operator's audio: the server default (both auto-fixes off, sources
+	/// kept) is what an unreadable document means.
+	pub(crate) async fn audio_policy(
+		&self,
+		library_id: &str,
+	) -> IngestResult<AudioPolicy> {
+		match crate::policy::effective_policy(self.conn.as_ref(), library_id).await {
+			Ok(effective) => Ok(*effective.policy.audio()),
+			Err(error) => {
+				tracing::warn!(
+					library_id,
+					%error,
+					"Library metadata policy could not be read; using the server default"
+				);
+				Ok(*AudioPolicy::server_default())
+			},
+		}
+	}
 }
 fn phase_name(phase: super::contract::AnalysisPhase) -> String {
 	serde_json::to_string(&phase)
@@ -1515,6 +2196,228 @@ fn media_kind_for_filename(filename: &str) -> IngestMediaKind {
 	}
 }
 
+/// Everything that distinguishes one new drop item row from another.
+///
+/// Three call sites create drop items — an upload, a plain drop-folder file,
+/// and one publication of an exploded archive — and they differ in four
+/// fields out of nineteen. One builder is what keeps a new column (a drop
+/// group, a sidecar list) from being silently absent from two of them.
+#[derive(Debug, Default)]
+struct NewDropItem {
+	library_id: String,
+	created_by: Option<String>,
+	source_filename: String,
+	relative_path: Option<String>,
+	byte_size: u64,
+	source_sha256: String,
+	media_kind: IngestMediaKind,
+	staging_path: String,
+	idempotency_key: Option<String>,
+	drop_group_id: Option<String>,
+	sidecar_paths: Vec<String>,
+	status: DropItemStatus,
+	error: Option<String>,
+}
+
+impl NewDropItem {
+	fn into_active_model(self) -> IngestResult<ingest_drop_item::ActiveModel> {
+		Ok(ingest_drop_item::ActiveModel {
+			id: Set(Uuid::new_v4().to_string()),
+			library_id: Set(self.library_id),
+			created_by: Set(self.created_by),
+			source_filename: Set(self.source_filename),
+			relative_path: Set(self.relative_path),
+			byte_size: Set(i64::try_from(self.byte_size).map_err(|_| {
+				IngestError::BadRequest(
+					"dropped file is too large for the database".to_string(),
+				)
+			})?),
+			source_sha256: Set(self.source_sha256),
+			media_kind: Set(media_kind_name(self.media_kind)),
+			staging_path: Set(self.staging_path),
+			status: Set(self.status.as_str().to_string()),
+			analysis_job_id: Set(None),
+			quality_report_id: Set(None),
+			media_id: Set(None),
+			series_id: Set(None),
+			pending_fields: Set(Some(Value::Object(Default::default()))),
+			error: Set(self.error),
+			idempotency_key: Set(self.idempotency_key),
+			preprocessed_at: Set(None),
+			drop_group_id: Set(self.drop_group_id),
+			sidecar_paths: Set((!self.sidecar_paths.is_empty())
+				.then(|| serde_json::to_value(&self.sidecar_paths))
+				.transpose()?),
+			audio_analysis: Set(None),
+			revision: Set(1),
+			created_at: NotSet,
+			updated_at: NotSet,
+		})
+	}
+}
+
+/// The directory part of a drop-folder relative path, `/`-separated.
+fn parent_of(relative_path: &str) -> Option<String> {
+	Path::new(relative_path)
+		.parent()
+		.filter(|path| !path.as_os_str().is_empty())
+		.map(|path| path.to_string_lossy().replace('\\', "/"))
+}
+
+/// The relative path an exploded item commits under: the container's own
+/// directory in the drop folder, then the item's directory inside the
+/// container. A nested delivery keeps its shape; a flat one has neither.
+fn join_relative(container: Option<&str>, inside: Option<&str>) -> Option<String> {
+	match (container, inside) {
+		(Some(container), Some(inside)) => Some(format!("{container}/{inside}")),
+		(Some(only), None) | (None, Some(only)) => Some(only.to_string()),
+		(None, None) => None,
+	}
+}
+
+/// Move an item's sidecars next to its committed publication.
+///
+/// A folder audiobook's sidecars moved with the directory, so there is
+/// nothing to do; a single file's land in its parent directory, which is
+/// where the scanner looks for a `cover.jpg`.
+///
+/// A sidecar that cannot be moved is dropped from the item's list rather than
+/// failing the commit: the book is in the library, and a lost `.nfo` is not
+/// worth refusing it over. The returned list is what actually exists.
+async fn move_sidecars_beside(
+	sidecars: &[String],
+	destination: &Path,
+	staged_is_dir: bool,
+) -> Vec<String> {
+	if staged_is_dir {
+		// They travelled inside the directory; their paths are now relative
+		// to the committed publication and are recomputed by the scanner.
+		return Vec::new();
+	}
+	let Some(parent) = destination.parent() else {
+		return Vec::new();
+	};
+	let mut moved = Vec::with_capacity(sidecars.len());
+	for sidecar in sidecars {
+		let source = Path::new(sidecar);
+		let Some(name) = source.file_name() else {
+			continue;
+		};
+		let target = parent.join(name);
+		if fs::try_exists(&target).await.unwrap_or(false) {
+			// Something is already there — a cover from a previous commit in
+			// the same series directory. Leaving it alone is the only safe
+			// answer; the staged copy is removed with the drop item.
+			continue;
+		}
+		match move_file(source, &target).await {
+			Ok(()) => moved.push(target.to_string_lossy().into_owned()),
+			Err(error) => tracing::warn!(
+				?error,
+				sidecar = %sidecar,
+				"Could not move an ingest sidecar beside its book"
+			),
+		}
+	}
+	moved.sort();
+	moved
+}
+
+/// Run one repair tool over `target`, returning whether it applied anything.
+///
+/// Blocking: every tool demuxes or rewrites a file, and some shell out.
+/// An unknown tool id is an error rather than a silent no-op — the ids come
+/// from the check registry, so one that the build cannot find means the two
+/// have drifted and that is worth surfacing.
+fn run_tool_in_place(tool_id: &str, target: &Path, options: Value) -> IngestResult<bool> {
+	let tool = stump_tools::find(tool_id).ok_or_else(|| {
+		IngestError::BadRequest(format!("this build has no `{tool_id}` tool"))
+	})?;
+	let mut input = stump_tools::ToolInput::new(vec![target.to_path_buf()]);
+	if !options.is_null() {
+		input = input.with_options(options);
+	}
+	let plan = tool
+		.plan(&input)
+		.map_err(|error| IngestError::InternalError(error.to_string()))?;
+	let report = tool
+		.apply(&plan, &mut stump_tools::NoopProgress)
+		.map_err(|error| IngestError::InternalError(error.to_string()))?;
+	for (action, reason) in &report.skipped {
+		tracing::warn!(
+			tool = tool_id,
+			kind = %action.kind,
+			reason = %reason,
+			"A quality fix skipped an action"
+		);
+	}
+	Ok(!report.applied.is_empty())
+}
+
+pub(crate) fn media_kind_for_item(item: &DropItemModel) -> IngestMediaKind {
+	serde_json::from_value(Value::String(item.media_kind.clone()))
+		.unwrap_or(IngestMediaKind::Unknown)
+}
+
+/// What one `audio-assemble` run produced.
+struct AssembleOutcome {
+	output: PathBuf,
+	duration_ms: i64,
+	chapters: usize,
+	faststart: bool,
+	method: String,
+}
+
+/// Plan and apply `audio-assemble` over one staged publication.
+///
+/// Blocking by nature: it demuxes every part and may shell out to ffmpeg for
+/// hours on a 60-part book, so callers run it on the blocking pool.
+///
+/// `Ok(None)` is a truthful "nothing was assembled": the tool plans a
+/// transcode it cannot run (no ffmpeg), or refuses its own output because the
+/// duration, the chapter list, or the box order did not match the plan. Either
+/// way the parts are untouched and the caller keeps the item as it was.
+fn assemble_audio(source: &Path) -> IngestResult<Option<AssembleOutcome>> {
+	use stump_tools::Tool;
+
+	let tool = stump_tools::audio_assemble::AudioAssemble;
+	let input = stump_tools::ToolInput::new(vec![source.to_path_buf()]);
+	let plan = tool
+		.plan(&input)
+		.map_err(|error| IngestError::InternalError(error.to_string()))?;
+	let report = tool
+		.apply(&plan, &mut stump_tools::NoopProgress)
+		.map_err(|error| IngestError::InternalError(error.to_string()))?;
+	if let Some((action, reason)) = report.skipped.first() {
+		tracing::warn!(
+			kind = %action.kind,
+			reason = %reason,
+			source = %source.display(),
+			"audio-assemble skipped a publication"
+		);
+	}
+	let Some(action) = report.applied.first() else {
+		return Ok(None);
+	};
+	let Some(output) = action.target.clone() else {
+		return Ok(None);
+	};
+	// The plan's detail is the tool's own description of what it wrote; the
+	// output is re-probed instead so the row records what is actually on disk.
+	let probed = stump_media::audio::probe(&output)?;
+	let faststart = crate::quality::audio::moov_before_mdat(&output)
+		.ok()
+		.flatten()
+		.unwrap_or(false);
+	Ok(Some(AssembleOutcome {
+		output,
+		duration_ms: probed.duration_ms,
+		chapters: probed.chapters.len(),
+		faststart,
+		method: action.kind.clone(),
+	}))
+}
+
 /// File identity consumed by the shared snapshot builder: one `SnapshotSource`
 /// per ingest target, whether a staged drop item or an existing library file.
 struct SnapshotSource {
@@ -1527,6 +2430,12 @@ struct SnapshotSource {
 	source_sha256: String,
 	byte_size: u64,
 	relative_path: String,
+	/// The kind the *row* recorded, never re-derived from the file name here.
+	/// A folder audiobook's name is a directory with no extension, so a
+	/// filename rule would call the one kind that can be a directory
+	/// `Unknown` and every audio quality check would report
+	/// `NOT_APPLICABLE` for the books the family exists for.
+	media_kind: IngestMediaKind,
 }
 
 fn build_snapshot(
@@ -1534,7 +2443,16 @@ fn build_snapshot(
 	config: &IngestSettings,
 ) -> IngestResult<BookSnapshot> {
 	let staged_path = PathBuf::from(&item.staging_path);
-	if !staged_path.is_file() {
+	let media_kind = media_kind_for_item(&item);
+	// A folder audiobook is one publication whose target is a directory —
+	// the only kind for which that is true. Every other kind is a file, and a
+	// directory standing in for one is a broken row rather than a book.
+	let staged = if media_kind == IngestMediaKind::Audio {
+		staged_path.is_file() || staged_path.is_dir()
+	} else {
+		staged_path.is_file()
+	};
+	if !staged {
 		return Err(IngestError::FileNotFound(item.staging_path));
 	}
 	snapshot_from_source(
@@ -1546,6 +2464,7 @@ fn build_snapshot(
 			source_sha256: item.source_sha256,
 			byte_size: item.byte_size.max(0) as u64,
 			relative_path: item.relative_path.unwrap_or_default(),
+			media_kind,
 		},
 		config,
 	)
@@ -1558,7 +2477,7 @@ fn snapshot_from_source(
 	source: SnapshotSource,
 	config: &IngestSettings,
 ) -> IngestResult<BookSnapshot> {
-	let media_kind = media_kind_for_filename(&source.source_filename);
+	let media_kind = source.media_kind;
 	let embedded_metadata = process_metadata(&source.path)
 		.map_err(|error| IngestError::Unknown(error.to_string()))?;
 	let pages = match media_kind {

@@ -179,6 +179,46 @@ impl RequestHeaders {
 		})
 	}
 
+	/// These headers with `overrides` applied: an entry replaces the header of
+	/// the same name, adds one that was not configured, and — empty, the way
+	/// [`RequestHeaders::from_pairs`] treats an empty value — removes one.
+	///
+	/// Merging is offered instead of a value getter on purpose. A caller that
+	/// has to rebuild the map by hand needs to read the stored `cf_clearance`
+	/// back out, and a getter for that is a getter anything else can call
+	/// too. The only caller is the clearance a browser worker earned
+	/// (`crate::challenge`), which replaces `Cookie` and `User-Agent` and must
+	/// not drop whatever else the operator configured.
+	pub fn merged_with(
+		&self,
+		overrides: impl IntoIterator<Item = (String, String)>,
+	) -> Result<Self, HeaderError> {
+		let mut merged: BTreeMap<String, (HeaderName, HeaderValue)> = self
+			.headers
+			.iter()
+			.map(|(name, value)| {
+				(name.as_str().to_string(), (name.clone(), value.clone()))
+			})
+			.collect();
+		for (name, value) in overrides {
+			let name = name.trim();
+			let value = value.trim();
+			if name.is_empty() {
+				continue;
+			}
+			let pair = parse_pair(name, value)?;
+			let key = pair.0.as_str().to_string();
+			if value.is_empty() {
+				merged.remove(&key);
+			} else {
+				merged.insert(key, pair);
+			}
+		}
+		Ok(Self {
+			headers: Arc::new(merged.into_values().collect()),
+		})
+	}
+
 	/// The JSON object to store, or `None` when nothing is configured so the
 	/// column goes back to `NULL`.
 	pub fn to_json(&self) -> Option<String> {

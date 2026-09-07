@@ -367,6 +367,265 @@ pub fn resolve(
 	}
 }
 
+/// One linear spine item of an ebook edition.
+///
+/// Mirrors what the Readium positions generator already enumerates
+/// (`stump_media::media::readium::SpinePositionMeta`), reduced to the three
+/// facts a position conversion needs. It is repeated here rather than
+/// imported because `models` sits below `stump_media`, and because the
+/// conversion has to stay a pure function testable without an EPUB on disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpineItem {
+	/// 0-based index into the linear spine.
+	pub index: i32,
+	/// The package-relative path of the item, which is what a locator's
+	/// `href` ends with.
+	pub href: String,
+	/// The item's content length — `SpinePositionMeta::size`, the weight
+	/// `positions.json` divides the book by. For XHTML it tracks character
+	/// count closely enough that a chapter fraction lands in the right
+	/// paragraph, which is all tier 1 promises.
+	pub char_count: i64,
+}
+
+/// One chapter mark of an audio edition with its end resolved.
+///
+/// `media_audio_chapters.end_ms` is nullable — most containers only carry
+/// start marks — so the caller resolves the last chapter's end against
+/// `media_audio.duration_ms` before converting. A span with a non-positive
+/// length carries no position information and is skipped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioChapterSpan {
+	/// 0-based `media_audio_chapters.index`.
+	pub index: i32,
+	pub start_ms: i64,
+	pub end_ms: i64,
+}
+
+impl AudioChapterSpan {
+	fn duration_ms(&self) -> i64 {
+		self.end_ms - self.start_ms
+	}
+}
+
+/// One `media_chapter_map` entry: spine item ↔ audio chapter.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChapterMapping {
+	pub ebook_spine_index: i32,
+	pub audio_chapter_index: i32,
+	pub confidence: f64,
+}
+
+/// A position derived from the *other* edition of the same work.
+///
+/// It is never written to a reading head. Narrators are not metronomes, so a
+/// chapter-fraction conversion is worth ±1-3 minutes on a 30-minute chapter:
+/// good enough to resume near, and nothing that should overwrite a position
+/// the reader actually reached. `approximate` is a field rather than a
+/// constant because tier 2 (forced alignment) produces the same shape from
+/// real cues, where it is `false`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MappedPosition {
+	/// Set when the target edition is the ebook.
+	pub locator: Option<ReadiumLocator>,
+	/// Set when the target edition is the audiobook.
+	pub position_ms: Option<i64>,
+	/// Whole-publication progression in the *target* edition.
+	pub progression: f64,
+	/// The confidence of the chapter-map entry the conversion went through.
+	pub confidence: f64,
+	/// Always `true` for a chapter-map conversion.
+	pub approximate: bool,
+}
+
+/// The chapter containing `position_ms`: the last span that starts at or
+/// before it. A position past the end of the recording belongs to the final
+/// chapter, which is what a client sending `duration_ms` means.
+fn chapter_at(
+	chapters: &[AudioChapterSpan],
+	position_ms: i64,
+) -> Option<AudioChapterSpan> {
+	chapters
+		.iter()
+		.filter(|chapter| chapter.duration_ms() > 0 && chapter.start_ms <= position_ms)
+		.max_by_key(|chapter| chapter.start_ms)
+		.copied()
+}
+
+fn mapped_spine_index(
+	mappings: &[ChapterMapping],
+	audio_chapter_index: i32,
+) -> Option<&ChapterMapping> {
+	mappings
+		.iter()
+		.find(|entry| entry.audio_chapter_index == audio_chapter_index)
+}
+
+fn mapped_chapter_index(
+	mappings: &[ChapterMapping],
+	ebook_spine_index: i32,
+) -> Option<&ChapterMapping> {
+	mappings
+		.iter()
+		.find(|entry| entry.ebook_spine_index == ebook_spine_index)
+}
+
+/// Characters before `index` and the whole book's characters.
+fn spine_offsets(spine: &[SpineItem], index: i32) -> Option<(i64, i64)> {
+	let total: i64 = spine.iter().map(|item| item.char_count.max(0)).sum();
+	let before: i64 = spine
+		.iter()
+		.take_while(|item| item.index != index)
+		.map(|item| item.char_count.max(0))
+		.sum();
+	spine
+		.iter()
+		.any(|item| item.index == index)
+		.then_some((before, total.max(1)))
+}
+
+/// Audio → ebook: `f` of the containing chapter becomes `f` of the mapped
+/// spine item's characters.
+///
+/// `None` when the chapter has no counterpart — front and back matter
+/// (opening credits, an end-of-book advert) is deliberately unmapped, and
+/// guessing a spine item for it would land the reader in the copyright page.
+#[must_use]
+pub fn map_time_to_locator(
+	position_ms: i64,
+	chapters: &[AudioChapterSpan],
+	spine: &[SpineItem],
+	mappings: &[ChapterMapping],
+) -> Option<MappedPosition> {
+	let chapter = chapter_at(chapters, position_ms)?;
+	let mapping = mapped_spine_index(mappings, chapter.index)?;
+	let item = spine
+		.iter()
+		.find(|item| item.index == mapping.ebook_spine_index)?;
+	let (chars_before, total_chars) = spine_offsets(spine, item.index)?;
+
+	let within = clamp_unit(
+		(position_ms - chapter.start_ms) as f64 / chapter.duration_ms() as f64,
+	)?;
+	let char_offset = chars_before as f64 + within * item.char_count.max(0) as f64;
+	let total_progression = clamp_unit(char_offset / total_chars as f64)?;
+
+	Some(MappedPosition {
+		locator: Some(ReadiumLocator {
+			chapter_title: String::new(),
+			href: item.href.clone(),
+			title: None,
+			locations: Some(ReadiumLocation {
+				fragments: None,
+				progression: Decimal::try_from(within).ok(),
+				// A character offset is not a `positions.json` ordinal, and
+				// publishing it as one would make readers jump to page 4812.
+				position: None,
+				total_progression: Decimal::try_from(total_progression).ok(),
+				css_selector: None,
+				partial_cfi: None,
+			}),
+			text: None,
+			kobo_span: None,
+			r#type: "application/xhtml+xml".to_string(),
+		}),
+		position_ms: None,
+		progression: total_progression,
+		confidence: mapping.confidence,
+		approximate: true,
+	})
+}
+
+/// Which spine item a locator is inside, and how far through it.
+///
+/// The `href` is matched by suffix in either direction, because a locator
+/// minted by a reader carries a resource URL
+/// (`/api/v2/media/{id}/resource/OEBPS/ch2.xhtml`) while the spine carries the
+/// package-relative path. Without an `href` hit the item is derived from
+/// `locations.total_progression` over the cumulative character counts, which
+/// is how a Kobo or KOReader state — progression and nothing else — still
+/// converts.
+fn locate_in_spine(
+	locator: &ReadiumLocator,
+	spine: &[SpineItem],
+) -> Option<(SpineItem, f64)> {
+	let locations = locator.locations.as_ref();
+	let href = locator.href.trim_end_matches('/');
+	let by_href = (!href.is_empty())
+		.then(|| {
+			spine.iter().find(|item| {
+				!item.href.is_empty()
+					&& (href.ends_with(item.href.as_str()) || item.href.ends_with(href))
+			})
+		})
+		.flatten();
+
+	if let Some(item) = by_href {
+		let within = locations
+			.and_then(|locations| locations.progression)
+			.and_then(decimal_to_f64)
+			.unwrap_or(0.0);
+		return Some((item.clone(), within));
+	}
+
+	let total_progression = locations
+		.and_then(|locations| locations.total_progression)
+		.and_then(decimal_to_f64)?;
+	let total: i64 = spine.iter().map(|item| item.char_count.max(0)).sum();
+	let target = total_progression * total.max(1) as f64;
+	let mut cumulative = 0i64;
+	for item in spine {
+		let chars = item.char_count.max(0);
+		if target < (cumulative + chars) as f64 || item.index == spine.last()?.index {
+			let within = if chars > 0 {
+				clamp_unit((target - cumulative as f64) / chars as f64)?
+			} else {
+				0.0
+			};
+			return Some((item.clone(), within));
+		}
+		cumulative += chars;
+	}
+	None
+}
+
+/// Ebook → audio: the inverse. The fraction through the spine item becomes the
+/// same fraction through the mapped chapter's runtime.
+///
+/// `None` when the spine item has no counterpart, which is what keeps a
+/// dedication or a copyright page from resolving to second 0 of chapter 1.
+#[must_use]
+pub fn map_locator_to_time(
+	locator: &ReadiumLocator,
+	spine: &[SpineItem],
+	chapters: &[AudioChapterSpan],
+	mappings: &[ChapterMapping],
+) -> Option<MappedPosition> {
+	let (item, within) = locate_in_spine(locator, spine)?;
+	let mapping = mapped_chapter_index(mappings, item.index)?;
+	let chapter = chapters
+		.iter()
+		.find(|chapter| chapter.index == mapping.audio_chapter_index)
+		.filter(|chapter| chapter.duration_ms() > 0)?;
+
+	let within = clamp_unit(within)?;
+	let position_ms =
+		chapter.start_ms + (within * chapter.duration_ms() as f64).round() as i64;
+	let duration_ms = chapters
+		.iter()
+		.map(|chapter| chapter.end_ms)
+		.max()
+		.unwrap_or_default();
+
+	Some(MappedPosition {
+		locator: None,
+		position_ms: Some(position_ms),
+		progression: time_progression(position_ms, duration_ms).unwrap_or(0.0),
+		confidence: mapping.confidence,
+		approximate: true,
+	})
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -489,5 +748,243 @@ mod tests {
 		assert_eq!(time_progression(99_999, 6_000), Some(1.0));
 		assert_eq!(time_progression(-1, 6_000), Some(0.0));
 		assert_eq!(time_progression(1_000, 0), None);
+	}
+
+	/// A three-chapter audiobook of deliberately unequal chapters, so a
+	/// conversion that mistook "chapter 2 of 3" for "two thirds of the book"
+	/// would be visibly wrong.
+	fn fixture_chapters() -> Vec<AudioChapterSpan> {
+		vec![
+			// Opening credits: real, unmapped front matter.
+			AudioChapterSpan {
+				index: 0,
+				start_ms: 0,
+				end_ms: 10_000,
+			},
+			AudioChapterSpan {
+				index: 1,
+				start_ms: 10_000,
+				end_ms: 30_000,
+			},
+			AudioChapterSpan {
+				index: 2,
+				start_ms: 30_000,
+				end_ms: 90_000,
+			},
+			AudioChapterSpan {
+				index: 3,
+				start_ms: 90_000,
+				end_ms: 120_000,
+			},
+		]
+	}
+
+	/// Spine item 0 is the copyright page: front matter with no counterpart.
+	fn fixture_spine() -> Vec<SpineItem> {
+		vec![
+			SpineItem {
+				index: 0,
+				href: "OEBPS/copyright.xhtml".into(),
+				char_count: 400,
+			},
+			SpineItem {
+				index: 1,
+				href: "OEBPS/ch1.xhtml".into(),
+				char_count: 1_000,
+			},
+			SpineItem {
+				index: 2,
+				href: "OEBPS/ch2.xhtml".into(),
+				char_count: 3_000,
+			},
+			SpineItem {
+				index: 3,
+				href: "OEBPS/ch3.xhtml".into(),
+				char_count: 1_600,
+			},
+		]
+	}
+
+	fn fixture_map() -> Vec<ChapterMapping> {
+		vec![
+			ChapterMapping {
+				ebook_spine_index: 1,
+				audio_chapter_index: 1,
+				confidence: 1.0,
+			},
+			ChapterMapping {
+				ebook_spine_index: 2,
+				audio_chapter_index: 2,
+				confidence: 0.6,
+			},
+			ChapterMapping {
+				ebook_spine_index: 3,
+				audio_chapter_index: 3,
+				confidence: 1.0,
+			},
+		]
+	}
+
+	fn progression_of(locator: &ReadiumLocator) -> (f64, f64) {
+		let locations = locator.locations.as_ref().expect("locations");
+		(
+			decimal_to_f64(locations.progression.expect("progression")).expect("finite"),
+			decimal_to_f64(locations.total_progression.expect("total")).expect("finite"),
+		)
+	}
+
+	/// Audio → ebook lands at the same fraction of the *mapped* spine item,
+	/// not at the same fraction of the book: chapter 2 runs 30 s-90 s of a
+	/// 120 s recording but its spine item is 3,000 of 6,000 characters.
+	#[test]
+	fn reading_state_maps_an_audio_position_into_the_mapped_spine_item() {
+		let mapped = map_time_to_locator(
+			45_000,
+			&fixture_chapters(),
+			&fixture_spine(),
+			&fixture_map(),
+		)
+		.expect("chapter 2 is mapped");
+
+		let locator = mapped.locator.as_ref().expect("locator");
+		assert_eq!(locator.href, "OEBPS/ch2.xhtml");
+		let (within, total) = progression_of(locator);
+		// 15 s into a 60 s chapter.
+		assert!((within - 0.25).abs() < 1e-9, "within = {within}");
+		// 400 + 1000 characters before it, plus a quarter of its 3,000, over
+		// the book's 6,000.
+		assert!((total - 0.358_333_333).abs() < 1e-6, "total = {total}");
+		assert!((mapped.progression - total).abs() < 1e-9);
+		// A character offset is not a positions.json ordinal.
+		assert_eq!(locator.locations.as_ref().and_then(|l| l.position), None);
+		assert!(mapped.approximate);
+		assert_eq!(mapped.confidence, 0.6);
+		assert_eq!(mapped.position_ms, None);
+	}
+
+	/// Ebook → audio is the inverse: a quarter into the spine item is a
+	/// quarter into the chapter's runtime, and the progression is measured
+	/// against the recording, not the text.
+	#[test]
+	fn reading_state_maps_a_locator_into_the_mapped_chapter() {
+		let locator = ReadiumLocator {
+			chapter_title: String::new(),
+			href: "/api/v2/media/book/resource/OEBPS/ch2.xhtml".into(),
+			title: None,
+			locations: Some(ReadiumLocation {
+				fragments: None,
+				progression: Decimal::try_from(0.25).ok(),
+				position: None,
+				total_progression: None,
+				css_selector: None,
+				partial_cfi: None,
+			}),
+			text: None,
+			kobo_span: None,
+			r#type: "application/xhtml+xml".into(),
+		};
+
+		let mapped = map_locator_to_time(
+			&locator,
+			&fixture_spine(),
+			&fixture_chapters(),
+			&fixture_map(),
+		)
+		.expect("spine item 2 is mapped");
+
+		assert_eq!(mapped.position_ms, Some(45_000));
+		assert!((mapped.progression - 0.375).abs() < 1e-9);
+		assert!(mapped.approximate);
+		assert_eq!(mapped.confidence, 0.6);
+		assert!(mapped.locator.is_none());
+	}
+
+	/// A state that carries only progression (Kobo, KOReader) still converts:
+	/// the spine item is derived from the cumulative character counts.
+	#[test]
+	fn reading_state_maps_a_progression_only_locator() {
+		let locator = ReadiumLocator {
+			chapter_title: String::new(),
+			href: String::new(),
+			title: None,
+			locations: Some(ReadiumLocation {
+				fragments: None,
+				progression: None,
+				position: None,
+				// 2,900 of 6,000 characters: inside item 2, which spans
+				// 1,400..4,400.
+				total_progression: Decimal::try_from(0.483_333_333).ok(),
+				css_selector: None,
+				partial_cfi: None,
+			}),
+			text: None,
+			kobo_span: None,
+			r#type: "application/xhtml+xml".into(),
+		};
+
+		let mapped = map_locator_to_time(
+			&locator,
+			&fixture_spine(),
+			&fixture_chapters(),
+			&fixture_map(),
+		)
+		.expect("derived from total progression");
+
+		// Half of item 2 -> half of chapter 2's 60 s.
+		assert_eq!(mapped.position_ms, Some(60_000));
+	}
+
+	/// Front and back matter has no counterpart and must convert to nothing.
+	/// Forcing a guess would resume the listener on the copyright page and
+	/// the reader on the opening credits.
+	#[test]
+	fn reading_state_skips_unmapped_front_matter() {
+		let chapters = fixture_chapters();
+		let spine = fixture_spine();
+		let map = fixture_map();
+
+		// Inside the opening-credits chapter.
+		assert_eq!(map_time_to_locator(3_000, &chapters, &spine, &map), None);
+
+		// Inside the copyright page.
+		let front = ReadiumLocator {
+			chapter_title: String::new(),
+			href: "OEBPS/copyright.xhtml".into(),
+			title: None,
+			locations: Some(ReadiumLocation {
+				fragments: None,
+				progression: Decimal::try_from(0.5).ok(),
+				position: None,
+				total_progression: None,
+				css_selector: None,
+				partial_cfi: None,
+			}),
+			text: None,
+			kobo_span: None,
+			r#type: "application/xhtml+xml".into(),
+		};
+		assert_eq!(map_locator_to_time(&front, &spine, &chapters, &map), None);
+	}
+
+	/// Round-tripping a mapped position must not walk: the same chapter
+	/// fraction has to come back out, or a reader that switches devices twice
+	/// would drift a chapter at a time.
+	#[test]
+	fn reading_state_round_trips_a_mapped_position() {
+		let chapters = fixture_chapters();
+		let spine = fixture_spine();
+		let map = fixture_map();
+
+		let forward =
+			map_time_to_locator(75_000, &chapters, &spine, &map).expect("mapped chapter");
+		let back = map_locator_to_time(
+			forward.locator.as_ref().expect("locator"),
+			&spine,
+			&chapters,
+			&map,
+		)
+		.expect("mapped spine item");
+
+		assert_eq!(back.position_ms, Some(75_000));
 	}
 }

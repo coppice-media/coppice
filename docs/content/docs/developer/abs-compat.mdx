@@ -157,9 +157,96 @@ The rows below were added for the **official Audiobookshelf app** `v0.14.0-beta`
 | `POST /api/session/local-all` | `ApiHandler:775` | The offline merge, the whole backlog → `{results:[{id, success, progressSynced}]}` |
 | `GET /api/libraries/{id}/series?minified&sort&desc&limit&page` | `ApiHandler:516` | `{results, total, limit, page, sortBy, sortDesc, minified, include}`. A series entity is `{id, libraryId, name, nameIgnorePrefix, description, addedAt, updatedAt, books[]}`. A Stump series holding **one** audiobook is that book's own folder, not a series, and is absent — the same rule the item list applies with `seriesName: ""` |
 | `GET /api/series/{id}` | web view (`pages/series/_id.vue:12`) | **Not served.** The Kavita profile already owns `/api/series/{seriesId}` in the shared `/api` namespace (`crates/kavita/src/routes/series.rs:158`), and a second parameter name at the same position is a `matchit` conflict that panics while the router is built. The page's data is reachable through `/api/libraries/{id}/series` and the `series.<base64>` item filter, which is what the same page uses to list a series' books |
-| `GET /api/libraries/{id}/collections`, `/playlists` | `ApiHandler:585`, web view | `{results: [], total: 0, limit, page}`. Stump's shelves and reading lists span every media type and carry no audio semantics, so they are not dressed up as Audiobookshelf collections — but the tab the app opens must not 404 |
+| `GET /api/libraries/{id}/collections` | `ApiHandler:585`, web view | `{results: [], total: 0, limit, page}`. Stump collections span every media type and carry no audio semantics, so they are not dressed up as Audiobookshelf collections — but the tab the app opens must not 404 |
 | `GET /api/libraries/{id}/items?filter=authors.<base64 author id>` | `ApiHandler:565` | Narrows the page to the books crediting that author. The value is the **id** the profile allocated in `abs_ids`, resolved back to the `media_metadata.writers` name; an id with no name behind it selects nothing rather than everything |
 | `GET /socket.io/?EIO=4&transport=websocket` | `plugins/server.js:36-42` | The socket lane. See [socket.io](#socketio) |
+
+#### Fixed after the 2026-09-07 phone run
+
+Everything in this block was found by running the official app against a live
+Stump on a real phone and reading the app's own source for each failure. The
+"App source" column is the line that proves the behaviour, relative to the
+`v0.14.0-beta` (`12025ab5`) checkout.
+
+| Method + path | App source | Stump behaviour |
+| --- | --- | --- |
+| `GET /public/session/{sessionId}/track/{index}` | `android/.../data/PlaybackSession.kt:196-204`, `plugins/capacitor/AbsAudioPlayer.js:254-261` | **Unauthenticated.** The direct-play track lane every Audiobookshelf client >= 2.22.0 streams from. `index` is `audioTracks[].index`, i.e. **1-based**; the profile's own track index and the `ino` of `/api/items/{id}/file/{ino}` are 0-based. `Accept-Ranges: bytes`, `206` for a `Range`, `404` for index `0` and for an unknown session — all four verified against abs-ref 2.36.0 |
+| `GET /api/items/{id}/cover?ts&raw&width` | `store/index.js:89-102` (`getDoesServerImagesRequireToken` is false for >= 2.17), `store/globals.js:50-72`, `android/.../data/PlaybackSession.kt:186-190` | **Unauthenticated**, moved out from behind the auth middleware. A credential is still honoured when one is sent, and the row must still be an audible, undeleted book |
+| `GET /api/items/{id}/download` | web view | The item's audio tracks plus the paired EPUB, as one `application/zip` with `Content-Disposition: attachment; filename="<title>.zip"`. Accepts `?token=`. Built once into the transform cache and served with `ServeFile`, so a second or resumed download is a ranged read of a finished archive |
+| `GET /api/items/{id}/file/{ino}/download` | `android/.../plugins/AbsDownloader.kt:184,201,242` | **The route the Android downloader actually uses** — one part per audio track and one for the ebook. Same bytes as `/api/items/{id}/file/{ino}`, plus `Content-Disposition: attachment`. `ino` is the 0-based track index for a track and `media.ebookFile.ino` (the paired row's `media.id`) for the ebook |
+| `GET /api/items/{id}/ebook`, `/ebook/{fileId}` | `components/readers/Reader.vue:325-335` | The paired EPUB, `application/epub+zip`, `Range`-capable. Both forms are the same bytes; a `fileId` that is not this item's ebook is a `404`, not a silent fallback |
+| `PATCH /api/items/{id}/ebook/{ino}/status` | `components/tables/ebook/EbookFilesTable.vue:84` | Answers the item unchanged. Stump pairing has no primary/supplementary tier, so there is nothing to toggle — but the app's ebook table must not get a `404` on a tap |
+| `GET /api/libraries/{id}/items?filter=ebooks.<base64>` | `components/modals/FilterModal.vue:129-133,237-248,283` | `ebooks.ZWJvb2s=` (`ebook`) narrows the page to items with a confirmed EPUB edition; `ebooks.c3VwcGxlbWVudGFyeQ==` (`supplementary`) selects nothing. Ignoring the filter is what made the app's "Audiobooks with an ebook" list show the whole library |
+| `POST /api/playlists` | `components/modals/playlists/AddCreateModal.vue:180-188` | Body `{items:[{libraryItemId, episodeId}], libraryId, name}` → the playlist. Was a `405` |
+| `GET /api/playlists`, `GET /api/playlists/{id}` | `pages/playlist/_id.vue:41` | The whole-user envelope and one playlist |
+| `PATCH /api/playlists/{id}`, `DELETE /api/playlists/{id}` | web view | Rename/re-describe; delete answers `200 text/plain` (`OK`), as abs-ref does |
+| `POST /api/playlists/{id}/item`, `DELETE /api/playlists/{id}/item/{itemId}[/{episodeId}]` | `components/modals/ItemMoreMenuModal.vue:491-495` | Add/remove one member; both answer the updated playlist |
+| `POST /api/playlists/{id}/batch/add`, `/batch/remove` | `components/modals/playlists/AddCreateModal.vue:137-139,155-157` | Body `{items:[{libraryItemId, episodeId}]}` → the updated playlist |
+| `GET /api/libraries/{id}/playlists` | `components/modals/playlists/AddCreateModal.vue:113-115` | `{results, total, limit, page}`; the app reads `data.results` |
+| Unknown `/api/…`, `/opds/…`, `/public/…`, `/koreader/…` | — | A JSON `404`. On a `full` build the web UI's fallback is the server's fallback, so before this every unmatched API path answered `200 text/html` — which is how `/api/items/{id}/download` and `/api/items/{id}/ebook` looked like working routes that returned the Nuxt shell |
+
+#### Why the app hammered `POST /api/items/{id}/play`
+
+On the phone run the two audiobooks "did not play" and the app issued
+hundreds of `POST /api/items/{id}/play` per second until the inbound rate
+limiter answered `429`. The mechanism is entirely in the app's own source and
+is not a retry policy:
+
+1. The play response is fine, and ExoPlayer is prepared with it.
+2. `PlaybackSession.getContentUri` (`android/.../data/PlaybackSession.kt:196-204`)
+   does **not** use `audioTracks[].contentUrl` for a direct-play session once
+   the server reports >= 2.22.0. It streams
+   `{server}/public/session/{id}/track/{index}` instead.
+3. Stump served no such route, so on a `full` build the SPA fallback answered
+   `200 text/html` and ExoPlayer failed to load it.
+4. A player error lands in `handlePlayerPlaybackError`
+   (`android/.../player/PlayerNotificationService.kt:617-641`): for a
+   direct-play session it re-POSTs `/play` with `forceTranscode: true`.
+5. Stump answers `playMethod: 0` again (it never transcodes), so
+   `isDirectPlay` is still true, ExoPlayer fails again immediately, and step 4
+   repeats with no delay.
+
+Serving `/public/session/{id}/track/{index}` breaks the loop at step 3. There
+is no throttle to add on the server side: the app's fallback terminates only
+when the track actually loads.
+
+#### Ebook editions
+
+Audiobookshelf models one library item as both an audiobook and an ebook —
+`media.ebookFile` next to `media.audioFiles` — because its scanner folds an
+`.m4b` and an `.epub` in one folder into a single item. Stump keeps them as
+two `media` rows and records the relationship instead: two
+`liseur_sync_media_links` rows for one user naming the same `work_id`, with
+`pair_status = 'confirmed'` (migration `m20260946`,
+`models::domain::edition_pair`).
+
+`AbsBackend::ebook_editions` is the batched form of
+`edition_pair::linked_media(.., Some(PairStatus::Confirmed))` and keeps its
+rule exactly: only a `confirmed` link is a pair, a `rejected` anchor yields
+nothing, and a `suggested` link never reaches an ABS client. Pairs are **per
+user**, so two users of the same server can disagree about whether an
+audiobook and an ebook are the same work, and the profile resolves them
+against the requesting user. Only `epub` counterparts are reported: the app
+has readers for mobi/pdf/cbz too (`components/readers/Reader.vue:300-318`),
+but EPUB is the only format Stump's pairing treats as an edition.
+
+#### Playlists
+
+A playlist is a Stump **reading list**. Every mutation goes through
+`stump_collections` — the same path the Komga read-list routes take — so a
+playlist created in the Audiobookshelf app is the same row a Komga client, a
+Kobo shelf and the web UI see. Two shape differences follow from that and are
+deliberate:
+
+- A reading list is not scoped to a library. `libraryId` is reported as the
+  library of the playlist's first audible member, and a member-less playlist
+  appears under whichever library is being browsed.
+- A reading list may hold books this profile does not serve. Those entries are
+  dropped from `items[]` rather than emitted as ids: `pages/playlist/_id.vue:52`
+  dereferences `playlist.items[0].libraryItem.mediaType` with no null check.
+
+`reading_lists` carries no creation timestamp, so `createdAt` and `lastUpdate`
+are both its `updated_at`. The app reads neither.
 
 #### Offline sessions
 
@@ -352,14 +439,12 @@ One track, trimmed from `capture/play_session.json` (`metadata` and the ffprobe-
 
 | Deviation | Reason |
 | --- | --- |
-| **Podcast libraries are not served.** `mediaType` is always `book`, so a client never enters its podcast lane | Stump has no podcast model — no feed, no episode, no download queue. Lissen has a complete podcast channel (`channel/audiobookshelf/podcast/**`, declarations at `:92-100`, `:118-123`, `:130-133`, `:151-156`) which stays dormant because it is selected by library type (`channel/audiobookshelf/AudiobookshelfChannelProvider.kt:26-30`) |
+| `playMethod` is always `0` (DirectPlay) | Stump never transcodes on this lane. `forceTranscode` in the play request is accepted and ignored — including the one the app sends from `handlePlayerPlaybackError` (`android/.../player/PlayerNotificationService.kt:617-641`), which is why `/public/session/{id}/track/{index}` has to work: that fallback only terminates when the track loads |
 | Only media whose extension is an audio container (`.m4b`, `.m4a`, `.mp3`, `.opus`, `.ogg`, `.flac`) appear, and a library with no audio at all is hidden from `GET /api/libraries` | Audiobookshelf has no per-page reading position, so a Stump ebook has nothing to say here. A visible library full of unplayable items is worse than an absent one |
 | `libraryItem.ino` echoes the item's own id and `audioFiles[].ino` is the 0-based track index — neither is a filesystem inode | The reference reports real inode strings (`"105885034"` in `item.json`), but Stump has no inode that survives a rescan. The values only need to be stable and to round-trip through `GET /api/items/{id}/file/{ino}`, which they do |
-| `media.id`, `libraryFolder.id` and author ids come from `abs_ids` | They are second, third and fourth uuids for things Stump identifies once, or not at all ([Identity mapping](#identity-mapping)) |
-| `playMethod` is always `0` (DirectPlay) | Stump never transcodes. `forceTranscode` in the play request is accepted and ignored |
+| No `/api/search/books`, no collections, no session list | Lissen never calls them, and each would need a mapping decision that no client is asking for. Playlists **are** served, onto reading lists; `numUserPlaylists` is still `0` because the library detail route reports it before the reading lists are read |
 | `ereaderDevices` is always `[]` | Stump's Kindle/ereader registry is not exposed through this profile; nothing in the client reads it |
 | `serverSettings` fields Stump has no analogue for carry the `abs-ref` 2.36.0 defaults verbatim | The block is large, mostly about scanner and metadata behaviour Stump implements differently, and clients read a handful of flags from it. Reproducing the reference defaults is honest about what is not configurable here |
-| No `/api/search/books`, no playlists, no collections, no session list | Lissen never calls them, and each would need a mapping decision that no client is asking for. `numUserPlaylists` is `0` |
 | `GET /api/authors/{id}/image` is always `404` | Stump stores no author images; the client's author-image fetch simply fails (`common/AudiobookshelfChannel.kt:77-80`) |
 | `POST /api/authorize` omits `accessToken`/`refreshToken` | Matching the reference (`authorize.json`), not the login envelope |
 | `recent-series` and `newest-authors` shelves are not served, and `continue-listening` is served although it is absent from the capture | The client reads exactly one shelf, by `labelStringKey == "LabelContinueListening"` ([the note above](#where-the-capture-and-the-client-disagree)) |

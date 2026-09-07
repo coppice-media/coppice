@@ -6,6 +6,9 @@ edition = "2021"
 [features]
 default = []
 graphql = ["dep:async-graphql"]
+# Exposes `mock_http` and `editions::create_edition_lookup_at` so consuming
+# crates can test against a local server instead of the real upstreams.
+mock = []
 
 [dependencies]
 async-graphql = { workspace = true, optional = true }

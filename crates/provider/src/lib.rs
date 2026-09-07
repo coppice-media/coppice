@@ -21,6 +21,7 @@
 pub mod browse;
 pub mod cache;
 pub mod catalog;
+pub mod challenge;
 pub mod definition;
 pub mod event;
 pub mod gc;
@@ -41,13 +42,14 @@ pub mod virtual_path;
 pub use browse::{BrowseKind, RemoteOrigin, VirtualBrowseCache};
 pub use cache::{CacheKey, PageCache};
 pub use catalog::{CatalogEntry, CatalogSource, SourceCatalog, SourceTheme};
+pub use challenge::{ChallengeSolveState, DEFAULT_CLEARANCE_TTL, SOLVE_TIMEOUT};
 pub use definition::{
 	DefinitionEngine, DefinitionError, DefinitionIndex, DefinitionIndexEntry,
 	DefinitionLoader, KnobValue, SourceDefinition,
 };
 pub use event::{ProviderEvent, ProviderEventSink};
 pub use gc::{gc_materialised_series, GcReport};
-pub use health::{HealthProbe, HealthStatus, HealthTarget};
+pub use health::{ChallengedInstance, HealthProbe, HealthStatus, HealthTarget};
 pub use host::{
 	ProviderError, ProviderHost, ProviderHostConfig, SourceFactory, VirtualArchive,
 };

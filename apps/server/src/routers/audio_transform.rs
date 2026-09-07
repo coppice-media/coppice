@@ -18,13 +18,24 @@
 //! An Opus transcode is cached in the comic transform cache directory under
 //! its own key ([`TransformCache::audio_path_for`]) and swept by the same byte
 //! budget, because it is the same kind of artifact: an expensive, reproducible
-//! re-encode of a file the server already has. A failed transcode falls back
-//! to the stored bytes — delivery is best-effort, and a missing `ffmpeg` must
-//! degrade playback quality, never break playback.
+//! re-encode of a file the server already has.
+//!
+//! The re-encode itself is a **worker job**, not a direct `ffmpeg` call. The
+//! request enqueues a `transcode` job and awaits it; the queue offers it to a
+//! connected worker when one advertises `transcode`, and otherwise runs the
+//! server's own `ffmpeg` (`crate::routers::api::v2::transcode_job`). Both
+//! produce the same bytes at the same staged path, so this module publishes
+//! one file and never learns which happened — which is exactly what lets a VPS
+//! with no `ffmpeg` serve Opus from a worker on the operator's PC.
+//!
+//! Every failure is the same failure: no worker, no local `ffmpeg`, a dead
+//! worker, a timeout, a broken file all fall back to the stored bytes.
+//! Delivery is best-effort, and a missing encoder must degrade playback
+//! quality, never break playback.
 
 use std::{
 	path::{Path, PathBuf},
-	time::UNIX_EPOCH,
+	time::{Duration, UNIX_EPOCH},
 };
 
 use axum::{
@@ -33,12 +44,18 @@ use axum::{
 	http::{header, HeaderMap, HeaderValue},
 	response::{IntoResponse, Response},
 };
-use models::entity::{device, media_audio_track};
+use models::{
+	entity::{device, media_audio_track},
+	shared::enums::DeviceKind,
+};
 use sea_orm::EntityTrait;
 use stump_media::transform::{
 	AudioOutput, AudioProfile, TransformCache, TransformProfile, AUDIO_OGG,
 };
-use stump_tools::ffmpeg::{self, Codec, Encode};
+use stump_worker::{
+	kind::{TranscodeInput, TranscodeOutput},
+	JobOutcome, INTERACTIVE_PRIORITY, TRANSCODE,
+};
 use tower_http::services::ServeFile;
 
 use crate::{
@@ -50,6 +67,16 @@ use crate::{
 /// the output extension, so this is also what selects Ogg for the Opus
 /// stream.
 const OPUS_EXTENSION: &str = "ogg";
+
+/// How long a delivery request waits for its transcode before falling back to
+/// the stored bytes.
+///
+/// It is a *delivery* deadline, not an encoding budget: a player is holding
+/// the connection open, and a 30-minute chapter that has not been produced in
+/// this long is better answered with the stored MP3 than with a spinner. The
+/// job itself is not cancelled — it keeps running and fills the cache, so the
+/// next request for the same track is a hit.
+const TRANSCODE_DEADLINE: Duration = Duration::from_secs(120);
 
 /// The audio delivery rules of the device that authenticated this request.
 ///
@@ -80,6 +107,15 @@ pub(crate) async fn resolve_audio_profile(
 			return AudioProfile::default();
 		},
 	};
+
+	// A worker fetches its job's input through this very route. Negotiating a
+	// transcode for it would ask the server for the thing the worker was asked
+	// to produce, so a `Worker` device always gets the stored bytes — the rule
+	// is here rather than in the queue because it is a property of *delivery*,
+	// not of routing.
+	if device.kind == DeviceKind::Worker {
+		return AudioProfile::default();
+	}
 
 	let Some(profile_json) = device.transform_profile.as_ref() else {
 		return AudioProfile::default();
@@ -124,7 +160,7 @@ pub(crate) async fn serve_track(
 	}
 }
 
-/// The cached Opus rendition of `track`, transcoding it first if necessary.
+/// The cached Opus rendition of `track`, producing it first if necessary.
 /// `None` on any failure, which the caller answers with the stored bytes.
 async fn transcoded_path(
 	ctx: &AppState,
@@ -146,29 +182,40 @@ async fn transcoded_path(
 		return Some(cache_path);
 	}
 
-	let bin_dir = ffmpeg_bin_dir(ctx);
-	let transcode = tokio::task::spawn_blocking({
-		let source = PathBuf::from(&track.path);
-		let cache_dir = cache.dir().to_path_buf();
-		let cache_path = cache_path.clone();
-		let bitrate = bitrate.to_string();
-		let duration_ms = track.duration_ms;
-		move || {
-			build_opus(
-				&source,
-				&cache_dir,
-				&cache_path,
-				&bitrate,
-				duration_ms,
-				bin_dir.as_deref(),
-			)
-		}
+	let jobs = ctx.worker_jobs();
+	let input = serde_json::to_value(TranscodeInput {
+		media_id: track.media_id.clone(),
+		track_index: track.index,
+		duration_ms: track.duration_ms,
+		output: TranscodeOutput::Opus {
+			bitrate: bitrate.to_string(),
+		},
 	})
-	.await;
+	.ok()?;
 
-	match transcode {
-		Ok(Ok(())) => {},
-		Ok(Err(error)) => {
+	let outcome = jobs
+		.enqueue_and_wait(
+			TRANSCODE,
+			input,
+			stump_worker::transcode_requires(),
+			// A player is waiting on this one; a scheduled alignment is not.
+			INTERACTIVE_PRIORITY,
+			TRANSCODE_DEADLINE,
+		)
+		.await;
+
+	let produced = match outcome {
+		Ok(JobOutcome::Done { output_path, .. }) => output_path,
+		Ok(JobOutcome::NeedsWorker) => {
+			// No worker advertises `transcode` and this server has no
+			// `ffmpeg`. Documented degraded mode, not an error.
+			tracing::debug!(
+				path = %track.path,
+				"No transcode worker and no local ffmpeg; serving the stored audio"
+			);
+			return None;
+		},
+		Ok(JobOutcome::Failed { error }) => {
 			tracing::warn!(
 				%error,
 				path = %track.path,
@@ -177,9 +224,38 @@ async fn transcoded_path(
 			return None;
 		},
 		Err(error) => {
-			tracing::error!(?error, "Opus transcode task panicked");
+			tracing::warn!(
+				?error,
+				path = %track.path,
+				"Opus transcode did not finish in time; serving the stored audio"
+			);
 			return None;
 		},
+	};
+
+	// Publish the job's bytes into the delivery cache. The rename is what
+	// makes the entry visible, so a request that arrives mid-publish either
+	// sees the finished file or misses and enqueues its own job — never a
+	// truncated one. The job's output directory is a child of the cache
+	// directory, so this is a same-filesystem rename.
+	if let Err(error) = tokio::task::spawn_blocking({
+		let produced = produced.clone();
+		let cache_path = cache_path.clone();
+		let cache_dir = cache.dir().to_path_buf();
+		move || {
+			std::fs::create_dir_all(&cache_dir)?;
+			TransformCache::publish(&produced, &cache_path)
+		}
+	})
+	.await
+	.map_err(|error| std::io::Error::other(error.to_string()))
+	.and_then(|result| result)
+	{
+		tracing::warn!(
+			?error,
+			"Failed to publish a transcode into the delivery cache; serving the stored audio"
+		);
+		return None;
 	}
 
 	// Best-effort LRU sweep after publishing a new entry, as the comic
@@ -192,64 +268,6 @@ async fn transcoded_path(
 	.await;
 
 	Some(cache_path)
-}
-
-/// Transcode into the cache: staging directory → rename, so a killed or
-/// failed run never leaves a truncated file behind for the next request to
-/// serve.
-///
-/// The staging directory is a temp *subdirectory* of the cache, for two
-/// reasons: the rename into place is then within one filesystem, so it is
-/// atomic, and the sweep enumerates only the files directly in the cache
-/// directory, so it can neither delete an in-flight transcode nor count it
-/// against the budget. The directory is removed when this returns, whichever
-/// way it returns.
-fn build_opus(
-	source: &Path,
-	cache_dir: &Path,
-	cache_path: &Path,
-	bitrate: &str,
-	duration_ms: i64,
-	bin_dir: Option<&Path>,
-) -> Result<(), String> {
-	std::fs::create_dir_all(cache_dir).map_err(|error| error.to_string())?;
-
-	let install = ffmpeg::locate(bin_dir).map_err(|error| error.to_string())?;
-
-	let staging = tempfile::Builder::new()
-		.prefix("audio-transcode-")
-		.tempdir_in(cache_dir)
-		.map_err(|error| error.to_string())?;
-	// `ffmpeg` reads the muxer off the output path, so the staging name
-	// carries the real extension rather than a `.tmp` suffix.
-	let staged = staging.path().join(format!("track.{OPUS_EXTENSION}"));
-
-	let inputs = [source.to_path_buf()];
-	let output = ffmpeg::encode(
-		&install,
-		&Encode {
-			inputs: &inputs,
-			output: &staged,
-			codec: Codec::Opus,
-			bitrate: Some(bitrate),
-			metadata: None,
-			cover: None,
-			// MP4-only flag; an Ogg stream has no `moov` atom to move.
-			faststart: false,
-			timeout: ffmpeg::timeout_for(duration_ms),
-		},
-	)
-	.map_err(|error| error.to_string())?;
-
-	if !output.succeeded() {
-		return Err(format!(
-			"ffmpeg {}: {}",
-			output.describe_status(),
-			output.stderr.trim()
-		));
-	}
-
-	TransformCache::publish(&staged, cache_path).map_err(|error| error.to_string())
 }
 
 /// Stream `path` with `ServeFile`, forcing `mime` as the content type.

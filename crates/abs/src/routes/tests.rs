@@ -1844,3 +1844,753 @@ async fn the_track_route_hands_the_delivery_layer_its_device() {
 		)]
 	);
 }
+
+// ---------------------------------------------------------------------------
+// The official Audiobookshelf app, v0.14.0-beta (`12025ab5`)
+//
+// Everything below is pinned to that checkout's own source. The app is a Nuxt
+// web view plus a native Kotlin player; the player parses server JSON with
+// `jacksonObjectMapper()` (`android/app/src/main/java/com/audiobookshelf/app/
+// server/ApiHandler.kt:21,49`), i.e. jackson-module-kotlin, whose rule is:
+//
+// - a **missing** non-nullable *primitive* (Boolean/Int/Long/Double) takes the
+//   JVM default, which is why abs-ref can omit `AudioTrack.isLocal`;
+// - a **missing or null** non-nullable *reference* (String, List, object)
+//   throws `MissingKotlinParameterException`, and
+// - an explicit `null` for a non-nullable primitive throws too.
+//
+// A throw there is not a caught error: `ApiHandler.playLibraryItem`
+// (`ApiHandler.kt:637`) calls `jacksonMapper.readValue<PlaybackSession>` with
+// no try/catch.
+// ---------------------------------------------------------------------------
+
+/// The non-nullable fields of the app's `PlaybackSession` and everything it
+/// contains, as a table taken straight from the Kotlin declarations.
+///
+/// `(json pointer, must never be null, source)`. A `false` in the middle
+/// column means the app declares the field nullable and only the *key* is
+/// interesting.
+const PLAYBACK_SESSION_FIELDS: &[(&str, bool, &str)] = &[
+	// data/PlaybackSession.kt:29-53
+	("/id", true, "PlaybackSession.kt:30 id: String"),
+	(
+		"/mediaType",
+		true,
+		"PlaybackSession.kt:34 mediaType: String",
+	),
+	(
+		"/mediaMetadata",
+		true,
+		"PlaybackSession.kt:35 mediaMetadata: MediaTypeMetadata",
+	),
+	(
+		"/deviceInfo",
+		true,
+		"PlaybackSession.kt:36 deviceInfo: DeviceInfo",
+	),
+	(
+		"/chapters",
+		true,
+		"PlaybackSession.kt:37 chapters: List<BookChapter>",
+	),
+	("/duration", true, "PlaybackSession.kt:41 duration: Double"),
+	("/playMethod", true, "PlaybackSession.kt:42 playMethod: Int"),
+	("/startedAt", true, "PlaybackSession.kt:43 startedAt: Long"),
+	("/updatedAt", true, "PlaybackSession.kt:44 updatedAt: Long"),
+	(
+		"/timeListening",
+		true,
+		"PlaybackSession.kt:45 timeListening: Long",
+	),
+	(
+		"/audioTracks",
+		true,
+		"PlaybackSession.kt:46 audioTracks: MutableList<AudioTrack>",
+	),
+	(
+		"/currentTime",
+		true,
+		"PlaybackSession.kt:47 currentTime: Double",
+	),
+	// data/DeviceClasses.kt:134-140 — every field non-null
+	(
+		"/deviceInfo/deviceId",
+		true,
+		"DeviceClasses.kt:135 deviceId: String",
+	),
+	(
+		"/deviceInfo/manufacturer",
+		true,
+		"DeviceClasses.kt:136 manufacturer: String",
+	),
+	(
+		"/deviceInfo/model",
+		true,
+		"DeviceClasses.kt:137 model: String",
+	),
+	(
+		"/deviceInfo/sdkVersion",
+		true,
+		"DeviceClasses.kt:138 sdkVersion: Int",
+	),
+	(
+		"/deviceInfo/clientVersion",
+		true,
+		"DeviceClasses.kt:139 clientVersion: String",
+	),
+	// data/AudioTrack.kt:7-18
+	("/audioTracks/0/index", true, "AudioTrack.kt:8 index: Int"),
+	(
+		"/audioTracks/0/startOffset",
+		true,
+		"AudioTrack.kt:9 startOffset: Double",
+	),
+	(
+		"/audioTracks/0/duration",
+		true,
+		"AudioTrack.kt:10 duration: Double",
+	),
+	(
+		"/audioTracks/0/title",
+		true,
+		"AudioTrack.kt:11 title: String",
+	),
+	(
+		"/audioTracks/0/contentUrl",
+		true,
+		"AudioTrack.kt:12 contentUrl: String",
+	),
+	// data/DataClasses.kt:207-237 — BookMetadata, deduced from its key set
+	(
+		"/mediaMetadata/title",
+		true,
+		"DataClasses.kt:207 title: String",
+	),
+	(
+		"/mediaMetadata/explicit",
+		true,
+		"DataClasses.kt:207 explicit: Boolean",
+	),
+	(
+		"/mediaMetadata/genres",
+		true,
+		"DataClasses.kt:218 genres: MutableList<String>",
+	),
+	// data/LibraryItem.kt:15-37, nullable on the session but parsed when present
+	("/libraryItem/ino", true, "LibraryItem.kt:17 ino: String"),
+	(
+		"/libraryItem/libraryId",
+		true,
+		"LibraryItem.kt:18 libraryId: String",
+	),
+	(
+		"/libraryItem/folderId",
+		true,
+		"LibraryItem.kt:19 folderId: String",
+	),
+	("/libraryItem/path", true, "LibraryItem.kt:20 path: String"),
+	(
+		"/libraryItem/relPath",
+		true,
+		"LibraryItem.kt:21 relPath: String",
+	),
+	(
+		"/libraryItem/mediaType",
+		true,
+		"LibraryItem.kt:31 mediaType: String",
+	),
+	(
+		"/libraryItem/media",
+		true,
+		"LibraryItem.kt:32 media: MediaType",
+	),
+	// data/DataClasses.kt:131-141 — Book
+	(
+		"/libraryItem/media/metadata",
+		true,
+		"DataClasses.kt:132 metadata: BookMetadata",
+	),
+	(
+		"/libraryItem/media/tags",
+		true,
+		"DataClasses.kt:134 tags: List<String>",
+	),
+	// `ebookFile` is nullable, but the key must exist for the app's
+	// `media.ebookFile` read (pages/item/_id/index.vue:461-466).
+	(
+		"/libraryItem/media/ebookFile",
+		false,
+		"DataClasses.kt:138 ebookFile: EBookFile?",
+	),
+];
+
+/// Every field the app's Kotlin data classes require of `POST /api/items/{id}/play`
+/// is present and non-null.
+///
+/// The two audiobooks "did not play" on a real phone because the app looped
+/// `POST /api/items/{id}/play` hundreds of times a second; this table is the
+/// half of that investigation that has to keep holding.
+#[tokio::test]
+async fn the_play_session_satisfies_the_apps_kotlin_field_table() {
+	let fixture = fixture().await;
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		&format!("/api/items/{}/play", fixture.item_id),
+		Some(json!({
+			"deviceInfo": {
+				"deviceId": "official-app",
+				"manufacturer": "Google",
+				"model": "Pixel 8",
+				"sdkVersion": 35,
+				"clientVersion": "0.14.0-beta"
+			},
+			"mediaPlayer": "exo-player",
+			"forceDirectPlay": true,
+			"forceTranscode": false
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	for (pointer, non_null, source) in PLAYBACK_SESSION_FIELDS {
+		let value = body.pointer(pointer).unwrap_or_else(|| {
+			panic!("{pointer} is absent; the app needs it ({source})")
+		});
+		if *non_null {
+			assert!(
+				!value.is_null(),
+				"{pointer} is null; jackson-module-kotlin throws for {source}"
+			);
+		}
+	}
+
+	// `deviceInfo` is echoed from the request, and the app's own DeviceInfo
+	// has no nullable field: a request that named a manufacturer must not
+	// come back with `null` there.
+	assert_eq!(body["deviceInfo"]["manufacturer"], "Google");
+	assert_eq!(body["deviceInfo"]["model"], "Pixel 8");
+	assert_eq!(body["deviceInfo"]["clientVersion"], "0.14.0-beta");
+	// `audioTracks[].index` is 1-based on the wire; `/public/session/{id}/track/{index}`
+	// is addressed with exactly this number.
+	assert_eq!(body["audioTracks"][0]["index"], 1);
+}
+
+/// `GET /public/session/{id}/track/{index}` serves the track with **no
+/// credential**, because that is where the app streams direct play from once
+/// the server reports >= 2.22.0
+/// (`android/.../data/PlaybackSession.kt:196-204`,
+/// `plugins/capacitor/AbsAudioPlayer.js:254-261`).
+///
+/// Without it ExoPlayer errors, `PlayerNotificationService.kt:617-641` retries
+/// by re-POSTing `/play`, and the retry loops forever — the failure a real
+/// phone produced as hundreds of `POST /api/items/{id}/play` per second.
+#[tokio::test]
+async fn the_public_track_route_streams_direct_play_without_a_credential() {
+	let fixture = fixture().await;
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		&format!("/api/items/{}/play", fixture.item_id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let session_id = body["id"].as_str().expect("a session id").to_owned();
+
+	let (status, headers, bytes) = crate::test_support::request_anonymous(
+		fixture.backend.clone(),
+		"GET",
+		&format!("/public/session/{session_id}/track/1"),
+		&[],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["accept-ranges"], "bytes");
+	assert!(!bytes.is_empty());
+
+	// The wire index is 1-based and the profile's own track index is 0-based
+	// (`mapper::audio_files`); serving track 0 for `track/1` is the bug that
+	// would silently play the wrong file on a multi-track book.
+	let served = fixture.backend.served.lock().clone();
+	assert_eq!(served.len(), 1);
+	assert_eq!(served[0].0, fixture.item_id);
+	assert_eq!(served[0].1, 0);
+
+	// abs-ref answers 404 for index 0 and for an unknown session.
+	let (status, _, _) = crate::test_support::request_anonymous(
+		fixture.backend.clone(),
+		"GET",
+		&format!("/public/session/{session_id}/track/0"),
+		&[],
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+
+	let (status, _, _) = crate::test_support::request_anonymous(
+		fixture.backend.clone(),
+		"GET",
+		"/public/session/00000000-0000-0000-0000-000000000000/track/1",
+		&[],
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// A ranged public-track request is a `206`, so ExoPlayer can seek.
+#[tokio::test]
+async fn the_public_track_route_honours_range() {
+	let fixture = fixture().await;
+	let (_, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		&format!("/api/items/{}/play", fixture.item_id),
+		None,
+	)
+	.await;
+	let session_id = body["id"].as_str().unwrap().to_owned();
+
+	let (status, _, _) = crate::test_support::request_anonymous(
+		fixture.backend.clone(),
+		"GET",
+		&format!("/public/session/{session_id}/track/1"),
+		&[("range", "bytes=0-99")],
+	)
+	.await;
+	assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+}
+
+/// `GET /api/items/{id}/cover` needs no credential.
+///
+/// `getDoesServerImagesRequireToken` (`store/index.js:95-102`) is *false* for
+/// any server >= 2.17, so the webview's `<img src>` carries no token
+/// (`store/globals.js:50-57`) and neither does the native art loader
+/// (`android/.../data/PlaybackSession.kt:186-190`). Answering `401` is what
+/// left the app's shelves blank — 19 of them on the phone run.
+#[tokio::test]
+async fn the_cover_route_serves_an_anonymous_request() {
+	let fixture = fixture().await;
+	fixture.backend.set_cover(
+		&fixture.item_id,
+		AbsImage {
+			content_type: "image/jpeg".to_owned(),
+			data: vec![1, 2, 3, 4],
+		},
+	);
+
+	let (status, headers, bytes) = crate::test_support::request_anonymous(
+		fixture.backend.clone(),
+		"GET",
+		&format!("/api/items/{}/cover?ts=1788714442778", fixture.item_id),
+		&[],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "image/jpeg");
+	assert_eq!(bytes, vec![1, 2, 3, 4]);
+
+	// It is still a cover lane, not a file oracle: an id that is not an
+	// audible book is a 404 even anonymously.
+	let (status, _, _) = crate::test_support::request_anonymous(
+		fixture.backend.clone(),
+		"GET",
+		"/api/items/not-a-book/cover",
+		&[],
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// The paired EPUB is `media.ebookFile`, the `ebooks.*` filter selects on it,
+/// and `/api/items/{id}/ebook` serves it.
+#[tokio::test]
+async fn a_paired_ebook_edition_is_reported_filtered_and_served() {
+	let fixture = fixture().await;
+	let ebook = crate::model::AbsEbookFile {
+		media_id: "epub-row-id".to_owned(),
+		path: "/books/Analytical Engine/Analytical Engine.epub".to_owned(),
+		format: "epub".to_owned(),
+		byte_size: 4096,
+	};
+
+	// Before the pair: the key exists and is null, which is what
+	// `Book.ebookFile: EBookFile?` (DataClasses.kt:138) expects, and the
+	// item is not in the "has ebook" filter.
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/items/{}", fixture.item_id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(body["media"]["ebookFile"].is_null());
+
+	// `ebooks.ZWJvb2s=` is base64("ebook") — the value the app's filter modal
+	// builds (`components/modals/FilterModal.vue:237-248,283`).
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!(
+			"/api/libraries/{}/items?filter=ebooks.ZWJvb2s%3D",
+			fixture.library_id
+		),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		body["total"], 0,
+		"an audiobook with no paired ebook must not be in the ebooks filter"
+	);
+
+	fixture
+		.backend
+		.set_ebook(&fixture.user.id, &fixture.item_id, ebook.clone());
+
+	let (_, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/items/{}", fixture.item_id),
+		None,
+	)
+	.await;
+	// EBookFile.kt:6-13 declares `ino` and `ebookFormat` non-null.
+	assert_eq!(body["media"]["ebookFile"]["ino"], "epub-row-id");
+	assert_eq!(body["media"]["ebookFile"]["ebookFormat"], "epub");
+	assert_eq!(
+		body["media"]["ebookFile"]["metadata"]["filename"],
+		"Analytical Engine.epub"
+	);
+	assert_eq!(body["media"]["ebookFile"]["metadata"]["ext"], ".epub");
+	assert_eq!(body["media"]["ebookFile"]["metadata"]["size"], 4096);
+
+	let (_, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!(
+			"/api/libraries/{}/items?filter=ebooks.ZWJvb2s%3D",
+			fixture.library_id
+		),
+		None,
+	)
+	.await;
+	assert_eq!(body["total"], 1);
+	assert_eq!(body["results"][0]["id"], fixture.item_id);
+
+	// `supplementary` has no Stump equivalent, so it selects nothing rather
+	// than falling back to the whole library.
+	let (_, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!(
+			"/api/libraries/{}/items?filter=ebooks.c3VwcGxlbWVudGFyeQ%3D%3D",
+			fixture.library_id
+		),
+		None,
+	)
+	.await;
+	assert_eq!(body["total"], 0);
+
+	// `/ebook` and `/ebook/{fileId}` are the same bytes
+	// (`components/readers/Reader.vue:325-335`).
+	for uri in [
+		format!("/api/items/{}/ebook", fixture.item_id),
+		format!("/api/items/{}/ebook/epub-row-id", fixture.item_id),
+	] {
+		let (status, headers, _) = request_full(
+			fixture.backend.clone(),
+			&fixture.user,
+			"GET",
+			&uri,
+			None,
+			&[],
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK, "{uri}");
+		assert_eq!(headers["content-type"], "application/epub+zip");
+	}
+
+	// A file id that is not this item's ebook is a 404, not the ebook.
+	let (status, _) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/items/{}/ebook/some-other-row", fixture.item_id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+
+	let served = fixture.backend.served_ebooks.lock().clone();
+	assert_eq!(served.len(), 2);
+	assert!(served.iter().all(|(id, _)| id == "epub-row-id"));
+}
+
+/// `GET /api/items/{id}/download` is a zip, and the per-file download route
+/// the Android downloader actually uses names its file.
+///
+/// The app downloads one part per audio track and one for the ebook, all
+/// through `/api/items/{id}/file/{ino}/download`
+/// (`android/.../plugins/AbsDownloader.kt:184,201,242`) — the `/download`
+/// suffix is what distinguishes it from the playback route.
+#[tokio::test]
+async fn the_download_routes_answer_a_zip_and_named_files() {
+	let fixture = fixture().await;
+	fixture.backend.set_ebook(
+		&fixture.user.id,
+		&fixture.item_id,
+		crate::model::AbsEbookFile {
+			media_id: "epub-row-id".to_owned(),
+			path: "/books/Analytical Engine/Analytical Engine.epub".to_owned(),
+			format: "epub".to_owned(),
+			byte_size: 4096,
+		},
+	);
+
+	let (status, headers, _) = request_full(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/items/{}/download", fixture.item_id),
+		None,
+		&[],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "application/zip");
+	assert!(headers["content-disposition"]
+		.to_str()
+		.unwrap()
+		.starts_with("attachment; filename="));
+	// The paired ebook goes in the archive alongside the tracks.
+	assert_eq!(
+		fixture.backend.downloaded.lock().clone(),
+		vec![(fixture.item_id.clone(), Some("epub-row-id".to_owned()))]
+	);
+
+	// Per-track download: the same bytes as the playback route, named.
+	let (status, headers, _) = request_full(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/items/{}/file/0/download", fixture.item_id),
+		None,
+		&[],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(headers["content-disposition"]
+		.to_str()
+		.unwrap()
+		.contains("attachment; filename=\""));
+
+	// The ebook part addresses the paired row's id, not a track index.
+	let (status, headers, _) = request_full(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/items/{}/file/epub-row-id/download", fixture.item_id),
+		None,
+		&[],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		headers["content-disposition"],
+		"attachment; filename=\"Analytical Engine.epub\""
+	);
+}
+
+/// Playlists round-trip through the reading-list store, in exactly the
+/// request shapes the app sends.
+#[tokio::test]
+async fn playlists_round_trip_onto_reading_lists() {
+	let fixture = fixture().await;
+
+	// `POST /api/playlists` — `{items, libraryId, name}`
+	// (`components/modals/playlists/AddCreateModal.vue:180-185`).
+	let (status, created) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		"/api/playlists",
+		Some(json!({
+			"items": [{ "libraryItemId": fixture.item_id, "episodeId": null }],
+			"libraryId": fixture.library_id,
+			"name": "Commute"
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let playlist_id = created["id"].as_str().expect("a playlist id").to_owned();
+	assert_eq!(created["name"], "Commute");
+	assert_eq!(created["libraryId"], fixture.library_id);
+	assert_eq!(created["userId"], fixture.user.id);
+	// `items[].libraryItem` is dereferenced with no null check at
+	// `pages/playlist/_id.vue:52`.
+	assert_eq!(created["items"][0]["libraryItemId"], fixture.item_id);
+	assert_eq!(created["items"][0]["libraryItem"]["mediaType"], "book");
+	assert!(created["items"][0]["episodeId"].is_null());
+	assert!(created["lastUpdate"].is_number());
+
+	// The linkage is the reading list itself, not a second store.
+	let stored = fixture
+		.backend
+		.playlists
+		.lock()
+		.get(&fixture.user.id)
+		.cloned()
+		.unwrap_or_default();
+	assert_eq!(stored.len(), 1);
+	assert_eq!(stored[0].media_ids, vec![fixture.item_id.clone()]);
+
+	// `GET /api/libraries/{id}/playlists` -> `{results}`
+	// (`AddCreateModal.vue:113-115`).
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/libraries/{}/playlists", fixture.library_id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["total"], 1);
+	assert_eq!(body["results"][0]["id"], playlist_id);
+
+	// `POST /api/playlists/{id}/batch/remove` -> the updated playlist.
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		&format!("/api/playlists/{playlist_id}/batch/remove"),
+		Some(json!({
+			"items": [{ "libraryItemId": fixture.item_id, "episodeId": null }]
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["items"].as_array().map(Vec::len), Some(0));
+
+	// `POST /api/playlists/{id}/batch/add` puts it back.
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		&format!("/api/playlists/{playlist_id}/batch/add"),
+		Some(json!({
+			"items": [{ "libraryItemId": fixture.item_id, "episodeId": null }]
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["items"].as_array().map(Vec::len), Some(1));
+
+	// `PATCH /api/playlists/{id}`.
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"PATCH",
+		&format!("/api/playlists/{playlist_id}"),
+		Some(json!({ "name": "Renamed", "description": "for the train" })),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["name"], "Renamed");
+	assert_eq!(body["description"], "for the train");
+
+	// `DELETE /api/playlists/{id}/item/{itemId}`
+	// (`components/modals/ItemMoreMenuModal.vue:491-495`).
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"DELETE",
+		&format!("/api/playlists/{playlist_id}/item/{}", fixture.item_id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["items"].as_array().map(Vec::len), Some(0));
+
+	// `POST /api/playlists/{id}/item` — `{libraryItemId}`.
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		&format!("/api/playlists/{playlist_id}/item"),
+		Some(json!({ "libraryItemId": fixture.item_id })),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["items"].as_array().map(Vec::len), Some(1));
+
+	// `GET /api/playlists/{id}` (`pages/playlist/_id.vue:41`).
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/playlists/{playlist_id}"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["id"], playlist_id);
+
+	// `DELETE /api/playlists/{id}` — abs-ref answers 200 text/plain.
+	let (status, _, _) = request_full(
+		fixture.backend.clone(),
+		&fixture.user,
+		"DELETE",
+		&format!("/api/playlists/{playlist_id}"),
+		None,
+		&[],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	let (status, _) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/playlists/{playlist_id}"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// A playlist entry naming a book the request cannot see is dropped from
+/// `items[]` rather than emitted as an id the app would dereference.
+#[tokio::test]
+async fn a_playlist_never_emits_an_item_without_its_library_item() {
+	let fixture = fixture().await;
+	let (_, created) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		"/api/playlists",
+		Some(json!({
+			"items": [
+				{ "libraryItemId": fixture.item_id },
+				{ "libraryItemId": "a-book-that-is-not-visible" }
+			],
+			"libraryId": fixture.library_id,
+			"name": "Mixed"
+		})),
+	)
+	.await;
+
+	let items = created["items"].as_array().expect("items");
+	assert_eq!(items.len(), 1);
+	assert_eq!(items[0]["libraryItemId"], fixture.item_id);
+	assert!(items[0]["libraryItem"].is_object());
+}

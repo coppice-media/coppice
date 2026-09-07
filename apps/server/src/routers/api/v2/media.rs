@@ -199,7 +199,34 @@ pub(crate) async fn get_media_thumbnail_by_id(
 		.one(ctx.conn.as_ref())
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
+	thumbnail_for_row(ctx, book).await
+}
 
+/// The same thumbnail, for a book resolved without a user.
+///
+/// The only caller is the Audiobookshelf profile's cover route, which is
+/// unauthenticated by that protocol's design from 2.17.0 on and has already
+/// narrowed the row to an audible, undeleted book.
+#[cfg(feature = "abs")]
+pub(crate) async fn get_media_thumbnail_unscoped(
+	ctx: &Ctx,
+	book_id: &str,
+) -> APIResult<ImageResponse> {
+	let book = media::Entity::find()
+		.columns(media::MediaThumbSelect::columns())
+		.filter(media::Column::Id.eq(book_id))
+		.filter(media::Column::DeletedAt.is_null())
+		.into_model::<media::MediaThumbSelect>()
+		.one(ctx.conn.as_ref())
+		.await?
+		.ok_or(APIError::NotFound("Book not found".to_string()))?;
+	thumbnail_for_row(ctx, book).await
+}
+
+async fn thumbnail_for_row(
+	ctx: &Ctx,
+	book: media::MediaThumbSelect,
+) -> APIResult<ImageResponse> {
 	// Note: This doesn't hard-fail because if the saved thumbnail is missing or corrupt, we want
 	// to just pull something else instead of erroring out entirely.
 	if let Some(path) = &book.thumbnail_path {

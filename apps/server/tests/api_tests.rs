@@ -26,6 +26,8 @@ mod liseur;
 mod opds;
 #[cfg(feature = "graphql")]
 mod reading_progress;
+#[cfg(feature = "graphql")]
+mod worker;
 
 use common::TestApp;
 

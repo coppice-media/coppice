@@ -1,0 +1,345 @@
+---
+title: Remote workers
+description: The worker socket protocol, pairing, capabilities, the worker_jobs queue, job kinds, and the local-fallback rules. Implemented - transcode and challenge_solve.
+---
+
+The server stays **one Rust process**. Work that is heavy or hardware-bound is a
+row in `worker_jobs` that a process somewhere else may claim. Workers dial
+*out*, so a VPS never needs a route back to the machine that has the GPU — or,
+today, the machine that has `ffmpeg`.
+
+This page is the protocol reference. The design it implements is section 6 of
+[Read-aloud, remote workers, and requests](/docs/developer/read-aloud).
+
+## 1. What exists
+
+| Piece | Where |
+| --- | --- |
+| `worker_jobs` table | `crates/migrations/src/m20260944_000000_add_worker_jobs.rs`, entity `crates/models/src/entity/worker_job.rs` |
+| Queue, dispatcher, hub, protocol | `crates/worker` (`stump_worker`) |
+| Socket + upload routes | `apps/server/src/routers/api/v2/workers.rs` |
+| `transcode` local fallback | `apps/server/src/routers/api/v2/transcode_job.rs` |
+| `challenge_solve` runner (browser) | `crates/worker/src/challenge.rs`, feature `browser` |
+| `challenge_solve` server side | `crates/provider/src/challenge.rs` (`ProviderHost::solve_challenge`) |
+| Worker binary | `cargo run -p stump_worker --bin stump-worker` (add `--features browser` for `--chrome`) |
+| GraphQL | `workers`, `workerJobs(status)`, `cancelWorkerJob`, `solveSourceChallenge(instanceId)`; live via `readEvents` → `WorkerJobChanged` |
+| Console | `/workers` |
+
+## 2. Pairing
+
+A worker is a **device**, of kind `WORKER`. It pairs the same way a Kobo does —
+in the console, or through the QR/pairing flow — and it is revoked the same way.
+
+1. Console → **Devices** → *Add client* → kind **Worker**. The credential is a
+   prefixed API key (`stump_<short>_<long>`) shown once.
+2. Run the binary with the server URL and that key.
+
+```sh
+STUMP_WORKER_API_KEY=stump_ab_cdef \
+  stump-worker --server https://stump.example --name gpu-box
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--server` | Base URL. `http` → `ws`, `https` → `wss` for the socket. |
+| `--api-key` / `STUMP_WORKER_API_KEY` | The worker device's key. Prefer the env var: a key on a command line is visible in `ps`. |
+| `--ffmpeg` | Path to the `ffmpeg` **binary**. Default: search `PATH`. Omitted *and* absent, the worker simply does not advertise `transcode`. |
+| `--chrome` | Path to the Chrome/Chromium **binary** for `challenge_solve`. Needs a `--features browser` build; without the flag the worker does not advertise `browser`. |
+| `--chrome-profile` | Where that browser's persistent profile lives. Default `$XDG_DATA_HOME/stump-worker/chrome`. Never a profile you use yourself. |
+| `--name` | Reported in `hello`; defaults to the hostname. |
+| `STUMP_WORKER_LOG` | `tracing` filter; default `info`. |
+
+The worker's key is narrowed to two permissions — `ACCESS_WORKER` and
+`DOWNLOAD_FILE` — so a stolen worker key cannot act as its owner. A worker
+**refuses to start when it can do nothing**: no usable `ffmpeg` and no
+`--chrome` is a process that would connect, advertise an empty capability set
+and serve nothing. A capability whose tool is missing is dropped rather than
+advertised — a worker that claimed `transcode` and then failed every job would
+keep the server routing to it instead of using its own fallback — but
+`--chrome` pointing at a binary that does not run is fatal, because it is an
+explicit instruction that cannot be honoured.
+
+## 3. Transport
+
+One WebSocket: `GET /api/v2/workers/socket`, authenticated with the device
+credential as `Authorization: Bearer <api key>`. The ordinary auth middleware
+resolves the device; the route adds one rule — the device must be of kind
+`WORKER`, live, and not revoked. Everything else is a `403`.
+
+Text frames, one JSON object each, discriminated by `type`.
+
+### Worker → server
+
+| Frame | Payload | When |
+| --- | --- | --- |
+| `hello` | `capabilities` (object), `name?`, `version?` | **First frame, always.** A connection that starts otherwise is dropped: the hub cannot address a worker whose capabilities it does not know. |
+| `claim` | `job_id` | Accepts an offer. A claim for somebody else's job, or a job that already finished, is ignored. |
+| `progress` | `job_id`, `fraction` (0–1, clamped), `message?` | Persisted; the console shows the last message. |
+| `result` | `job_id`, `output` (object) | The job is `done`. Any bytes were uploaded **before** this frame. |
+| `fail` | `job_id`, `error` | The job is `failed`. The worker stays connected and available. |
+
+### Server → worker
+
+| Frame | Payload | When |
+| --- | --- | --- |
+| `job` | `id`, `kind`, `input`, `priority` | An offer, or a resume. |
+| `cancel` | `job_id` | Stop; the row is already terminal server-side. |
+
+```json
+{"type":"hello","capabilities":{"transcode":{"ffmpeg":"7.1.0","hwaccel":["vaapi"]}},"name":"gpu-box"}
+{"type":"job","id":"b1…","kind":"transcode","input":{"media_id":"m1","track_index":1,"duration_ms":1800000,"output":{"opus":{"bitrate":"64k"}}},"priority":0}
+{"type":"claim","job_id":"b1…"}
+{"type":"progress","job_id":"b1…","fraction":0.25,"message":"encoding audio/ogg"}
+{"type":"result","job_id":"b1…","output":{"bytes":481233,"sha256":"9f…","mime":"audio/ogg"}}
+```
+
+There is **no** acknowledgement frame and **no** heartbeat frame. An offer is a
+`job`, an acceptance is the `claim` answering it, and liveness is the
+WebSocket's own ping/pong. Unknown fields are ignored, so a newer worker can add
+one without a flag day; an unknown `type` is a dropped frame, not a dropped
+connection.
+
+### Reconnect
+
+Reconnect is not a frame either. On `hello`, the server re-sends a `job` for
+every row still assigned to that device in `queued`, `claimed` or `running`, so
+a worker's resume path and its cold-start path are one code path. A worker that
+drops mid-encode keeps its jobs; a worker that drops holding an *unclaimed*
+offer releases it immediately, because nobody had started it.
+
+The client reconnects with capped backoff (1 s → 30 s). One device holds one
+connection: a second `hello` from the same device replaces the first, so a
+worker that reconnected before the server noticed the dead socket is not offered
+everything twice.
+
+## 4. Capabilities
+
+Free-form JSON, one key per job kind, validated per kind rather than by a
+schema — the vocabulary grows with the kinds.
+
+```json
+{
+  "transcode": { "ffmpeg": "7.1.0", "hwaccel": ["vaapi", "nvenc"] },
+  "align":     { "device": "cuda", "models": ["wav2vec2-base-960h"] }
+}
+```
+
+A job carries a `requires` document, and matching is a **structural subset
+test** (`stump_worker::kind::satisfies`) so a new kind adds a vocabulary and
+never a matcher:
+
+| `requires` value | Satisfied when |
+| --- | --- |
+| `true` | the key is advertised as anything but `null`/`false` (`{"transcode": {}}` counts) |
+| object | every entry is satisfied recursively |
+| array | the advertised array **contains** every element — `{"hwaccel":["nvenc"]}` picks the GPU box out of a pool |
+| other scalar | equality |
+| `false` / `null` | nothing; a caller can write a requirement out in full and switch parts off |
+
+## 5. The queue
+
+`worker_jobs (id, kind, input, requires, status, worker_id, priority, progress,
+progress_message, result, error, created_at, updated_at, started_at,
+finished_at)`.
+
+| Status | Meaning |
+| --- | --- |
+| `queued` | created; either not yet offered, or offered and not yet claimed (`worker_id` names the offer target) |
+| `claimed` | a worker answered `claim` |
+| `running` | executing — remotely (first `progress`) or locally |
+| `done` | produced its output |
+| `failed` | did not; `error` says why |
+| `needs_worker` | nobody advertises what it needs and the kind has no local implementation |
+
+`needs_worker` is **shown, not hidden**: the console says *"no worker advertises
+`align` right now"* instead of queueing forever. It is a resting state — the
+moment a capable worker says `hello`, parked jobs are re-dispatched with no
+operator action.
+
+There is no `cancelled`. Cancelling sends `cancel` to the holder and lands the
+row `failed` with `error: "cancelled by <user>"`: the status set is the
+protocol's contract, and a cancelled job is exactly a job that will not produce
+its output.
+
+`kind` is free text in the schema on purpose — a job kind is a registry entry in
+`stump_worker::kind`, so adding `align` is a registry row, not a migration.
+
+### Routing, once per dispatch
+
+1. a connected worker satisfying `requires` → offer it;
+2. else the kind's **local implementation**, when it has one → run it here;
+3. else `needs_worker`.
+
+Priority is an integer, higher first. `INTERACTIVE_PRIORITY` (0) is work a
+request is blocked on; `BACKGROUND_PRIORITY` (−10) is the default for everything
+else, so an alignment never competes with a scan.
+
+Every transition is one conditional `UPDATE` guarded by the status it leaves, so
+two frames that cross on the wire cannot both win.
+
+## 6. Data path
+
+**Input** is an ordinary authenticated download with the worker's own key —
+`/api/v2/media/{id}/file`, `/api/v2/media/{id}/audio/track/{i}`. A `WORKER`
+device is never served a transformed stream, even if a preset is attached to it:
+otherwise a worker would ask the server for the very thing it was asked to
+produce.
+
+**Output** is uploaded before the `result` frame:
+
+```
+PUT /api/v2/workers/jobs/{id}/output
+Authorization: Bearer <worker api key>
+x-stump-sha256: <lowercase hex>
+Content-Type: application/octet-stream
+
+<raw bytes>
+```
+
+Raw body, not multipart: the body is one file and nothing else. The digest is
+**required**, not optional — these bytes go straight into the delivery cache,
+and an upload truncated by a dropped connection would otherwise be served to
+every later request as a valid entry. Three guards: the caller must be a worker,
+it must hold *this* job, and the bytes must match the digest. The write is
+staged and renamed, so a failed upload leaves no partial file.
+
+Bytes land at `<transform cache>/worker-output/<job id>` — a *subdirectory* of
+the delivery cache, so the cache's LRU sweep (which enumerates only its own
+directory) can neither serve nor evict an in-flight upload. The awaiting caller
+then renames that one file into the cache, and never learns who produced it.
+
+## 7. Job kinds
+
+### `transcode`
+
+Re-encode one audio track into a delivery codec.
+
+```jsonc
+// input
+{ "media_id": "…", "track_index": 1, "duration_ms": 1800000,
+  "output": { "opus": { "bitrate": "64k" } } }   // or { "aac": { "bitrate": "96k" } }
+// requires
+{ "transcode": true }
+// result
+{ "bytes": 481233, "sha256": "9f…", "mime": "audio/ogg" }
+```
+
+`duration_ms` is there because the worker has no manifest to read it from and
+sizes its `ffmpeg` timeout from it.
+
+**Local fallback: yes.** Both the worker runner and the server fallback go
+through the same `stump_tools::ffmpeg` adapter, so one argv builder serves both
+hosts and a cache entry does not depend on who filled it.
+
+This is what the per-device `phone-opus` preset now runs on. Requesting a track
+with a device whose profile says Opus enqueues a `transcode` and awaits it for
+120 s; the result is published into the delivery cache and served as
+`audio/ogg`. The deadline is a *delivery* deadline — the job keeps running and
+fills the cache, so the next request for that track is a hit.
+
+Every failure is the same failure — no worker, no local `ffmpeg`, a dead worker,
+a timeout, a broken file — and the answer is always the stored bytes with the
+stored MIME. Delivery is best-effort: a missing encoder must degrade playback
+quality, never break playback.
+
+| Deployment | What a `phone-opus` device gets |
+| --- | --- |
+| server with `ffmpeg` | Opus, encoded locally |
+| server without `ffmpeg`, worker connected | Opus, encoded by the worker |
+| server without `ffmpeg`, no worker | the stored MP3/M4B |
+
+### `challenge_solve`
+
+Earn a Cloudflare clearance for one gated remote source, in a real browser.
+
+```jsonc
+// input
+{ "source_instance_id": "en.readcomicsonline",
+  "host": "readcomicsonline.ru",
+  "url": "https://readcomicsonline.ru" }
+// requires
+{ "browser": true }
+// result
+{ "cookies": { "cf_clearance": "…", "__cf_bm": "…" },
+  "user_agent": "Mozilla/5.0 (X11; Linux x86_64) …",
+  "expires_at": 1789200000 }          // the cookie's own expiry, Unix seconds; absent for a session cookie
+```
+
+**Local fallback: no, and never.** A server has no browser, and the entire
+reason a managed challenge exists is that it cannot be cleared by anything that
+cannot execute the challenge script. With no browser worker connected the job
+parks in `needs_worker`, the console says so, and it runs the moment one
+connects.
+
+The worker reports observations, not policy: the host's cookie jar, the user
+agent they were issued to, and the clearance's own expiry if it has one. The
+server decides what to store, and trusts a clearance with no expiry of its own
+for seven days (`stump_provider::challenge::DEFAULT_CLEARANCE_TTL`).
+
+On a `result` the server merges `Cookie` and `User-Agent` into that instance's
+`provider_sources.request_headers` — the same store `setProviderSourceHeaders`
+writes, masked by the same rule, with whatever else the operator configured
+left alone — rebuilds the source, and re-probes it. **The probe is the
+verdict**: a clearance that does not actually get through leaves the health row
+where it was and the next run asks again. Full rules:
+[Challenged sources](/docs/developer/provider-host#challenged-sources).
+
+### `align` (reserved)
+
+Tier 2 read-aloud forced alignment. Registered with **no** local implementation,
+so a server with no aligner worker parks the job in `needs_worker` and says so.
+Lands with step 3 of the read-aloud order.
+
+## 8. Browser workers
+
+The `challenge_solve` runner does the opposite of everything a scraper is
+normally told to do, and each of those is load-bearing.
+
+| Choice | Why |
+| --- | --- |
+| **Headed**, never headless | A headless Chrome is the exact shape a bot detector looks for. A challenge a real browser clears in two seconds can take a headless one forever. |
+| A **persistent profile** (`--chrome-profile`), not a temp dir | Cloudflare remembers a browser. The first solve may be interactive; later ones are usually instant because the profile is the same one. |
+| The worker's **own** profile, never yours | Chrome refuses a `--user-data-dir` another process holds, so pointing it at your live profile fails outright — and a remote source has no business near your cookies. |
+| chromiumoxide's default flags **dropped** | They include `--enable-automation`, which sets `navigator.webdriver`, shows the "controlled by automated test software" infobar, and is read by every detector. What is kept is what a desktop Chrome has, minus the first-run prompts nobody is there to dismiss. |
+| A **90 second** budget | Long enough for a human to notice the window and tick a Turnstile checkbox. An unattended solve of a plain managed challenge finishes in two or three seconds and never comes near it. |
+
+**What the operator sees.** A Chrome window opens on the worker's screen at the
+source's URL. Usually it flickers through the interstitial by itself and the
+job is done. Sometimes Cloudflare shows a checkbox — *click it*; that is the
+whole reason the window is visible, and the job succeeds on the next poll. The
+window closes itself either way. The worker is polling `document.title` and the
+`#challenge-running` / `cf-chl` markers twice a second, and reports progress
+against the budget, so the console shows the solve counting up.
+
+A worker with a browser is therefore an interactive machine: a desktop, or a
+box with an X/Wayland session. It does not have to be the server, and normally
+is not — that is the point of the whole worker design.
+
+**Expiry.** `cf_clearance` carries its own lifetime; the job result records it
+and the server stops trusting the clearance then. Nothing polls for expiry: the
+next health probe finds the host gated again and queues another solve, which a
+connected browser worker answers in seconds.
+
+## 9. Verifying
+
+```sh
+cargo test -p stump_worker      # protocol round-trip over a real 127.0.0.1 listener
+cargo test -p stump_provider    # the challenge_solve side effect: headers, rebuild, re-probe
+cargo test -p stump_server --no-default-features --features headless,liseur-sync \
+  --test api_tests -- worker    # socket auth, output upload, worker passthrough
+```
+
+Live, against a running server:
+
+```sh
+cargo run -p stump_worker --bin stump-worker -- \
+  --server http://127.0.0.1:25600 --api-key stump_… --name dev-box
+
+# with a browser, on a machine that has a display
+cargo run -p stump_worker --features browser --bin stump-worker -- \
+  --server http://127.0.0.1:25600 --api-key stump_… --chrome google-chrome-stable
+```
+
+The server logs `Worker connected`, then `Offered a worker job` for each
+dispatch; `workerJobs` shows the row with `workerId` set. A job the server ran
+itself has `workerId: null`, which is how the console tells the two apart.

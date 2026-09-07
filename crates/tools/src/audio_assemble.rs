@@ -110,7 +110,7 @@ const DURATION_TOLERANCE: f64 = 0.01;
 /// Assembles an audiobook into one canonical M4B.
 pub struct AudioAssemble;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AudioAssembleOptions {
 	/// Where the M4B goes. Empty puts it beside the publication, which is
@@ -138,6 +138,26 @@ pub struct AudioAssembleOptions {
 
 fn enabled() -> bool {
 	true
+}
+
+/// Hand-written rather than derived, because the derive would disagree with
+/// the `serde` defaults above: `#[derive(Default)]` gives `allow_transcode:
+/// false`, and [`crate::ToolInput::parse_options`] resolves a *null* option
+/// blob through `Default` rather than through `serde`. A tool run with no
+/// options at all would then refuse every transcode while the same tool run
+/// with `{}` allowed it. One meaning per field, whichever way the options
+/// arrive.
+impl Default for AudioAssembleOptions {
+	fn default() -> Self {
+		Self {
+			output_dir: None,
+			bitrate: None,
+			bin_dir: None,
+			force: false,
+			allow_transcode: enabled(),
+			titles_from_filename: false,
+		}
+	}
 }
 
 impl AudioAssembleOptions {
@@ -1135,6 +1155,39 @@ mod tests {
 			.find(|warning| warning.code == "transcode-refused")
 			.expect("a transcode-refused warning");
 		assert_eq!(refused.severity, Severity::Error);
+	}
+
+	/// A null option blob and `{}` are the same run.
+	///
+	/// `ToolInput::parse_options` resolves a null blob through `Default` and a
+	/// present object through `serde`, so the two paths only agree while
+	/// `Default` agrees with the `#[serde(default = ...)]` attributes. They
+	/// did not: a derived `Default` gave `allow_transcode: false`, and every
+	/// caller that passed no options at all — the ingest auto-assemble among
+	/// them — silently refused every MP3 book while the same tool invoked
+	/// with `{}` assembled it.
+	#[test]
+	fn no_options_and_an_empty_object_plan_the_same_transcode() {
+		let (_dir, book) = staged(&["folder-tracknum/alpha.mp3"]);
+
+		let implicit = AudioAssemble
+			.plan(&ToolInput::new(vec![book.clone()]))
+			.expect("plan with no options at all");
+		let explicit = plan_for(&[book], serde_json::json!({}));
+
+		assert_eq!(implicit, explicit);
+		assert!(
+			implicit
+				.warnings
+				.iter()
+				.all(|warning| warning.code != "transcode-refused"),
+			"{implicit:?}"
+		);
+		assert_eq!(
+			implicit.actions.len(),
+			1,
+			"an mp3 book plans a transcode by default: {implicit:?}"
+		);
 	}
 
 	/// Marks a publisher authored beat the file list.

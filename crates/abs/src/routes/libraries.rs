@@ -993,16 +993,3 @@ pub(crate) async fn collections(
 		params.page.unwrap_or(0) as i64,
 	)))
 }
-
-pub(crate) async fn playlists(
-	backend: Backend,
-	Extension(user): User,
-	Path(library_id): Path<String>,
-	Query(params): Query<EmptyPageQuery>,
-) -> AbsResult<Json<EmptyPageDto>> {
-	query::library(&**backend, &user, &library_id).await?;
-	Ok(Json(EmptyPageDto::new(
-		params.limit.unwrap_or(0) as i64,
-		params.page.unwrap_or(0) as i64,
-	)))
-}

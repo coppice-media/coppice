@@ -34,9 +34,11 @@ use axum::{
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use models::{
+	domain::edition_pair::PairStatus,
 	entity::{
-		device, media, media_audio, media_audio_chapter, media_audio_track, reading_head,
-		user, user::AuthUser,
+		device, liseur_sync_media_link, media, media_audio, media_audio_chapter,
+		media_audio_track, reading_head, reading_list, reading_list_item, user,
+		user::AuthUser,
 	},
 	services::{reading_progress, reading_state as reading_state_service},
 	shared::enums::DeviceKind,
@@ -46,8 +48,8 @@ use sea_orm::{prelude::*, DatabaseConnection, QueryOrder};
 use stump_abs::{
 	errors::{AbsError, AbsResult},
 	model::{
-		AbsAudio, AbsAudioChapter, AbsAudioTrack, AbsBookmark, AbsImage,
-		AbsPositionUpdate, AbsProgress,
+		AbsAudio, AbsAudioChapter, AbsAudioTrack, AbsBookmark, AbsEbookFile, AbsImage,
+		AbsPlaylist, AbsPositionUpdate, AbsProgress,
 	},
 	routes::{AbsBackend, AbsSession},
 	AbsEvent, AbsEvents, AbsIds, AbsSessions, IdKind,
@@ -56,6 +58,7 @@ use stump_api_types::RequestOrigin;
 use stump_auth::AuthContext;
 use stump_core::CoreEvent;
 use stump_devices::{CredentialRef, Protocol};
+use stump_media::transform::cache::TransformCache;
 use tokio::sync::broadcast;
 
 use crate::{
@@ -416,6 +419,31 @@ impl AbsBackendAdapter {
 				None
 			},
 		}
+	}
+
+	/// A reading list plus its ordered membership, as the profile's playlist.
+	///
+	/// `reading_lists` carries no creation timestamp, so `createdAt` and
+	/// `lastUpdate` are both `updated_at`. The official app reads neither.
+	async fn hydrate_playlist(&self, row: reading_list::Model) -> AbsResult<AbsPlaylist> {
+		let media_ids = reading_list_item::Entity::find()
+			.filter(reading_list_item::Column::ReadingListId.eq(row.id.clone()))
+			.order_by_asc(reading_list_item::Column::DisplayOrder)
+			.order_by_asc(reading_list_item::Column::Id)
+			.all(self.conn())
+			.await?
+			.into_iter()
+			.map(|item| item.media_id)
+			.collect();
+		let updated_at = row.updated_at.to_utc();
+		Ok(AbsPlaylist {
+			id: row.id,
+			name: row.name,
+			description: row.description,
+			media_ids,
+			created_at: updated_at,
+			updated_at,
+		})
 	}
 }
 
@@ -793,14 +821,26 @@ impl AbsBackend for AbsBackendAdapter {
 		Ok(())
 	}
 
-	async fn cover(&self, user: &AuthUser, media_id: &str) -> AbsResult<AbsImage> {
-		let image = api_media::get_media_thumbnail_by_id(
-			self.ctx.as_ref(),
-			user,
-			media_id.to_owned(),
-		)
-		.await
-		.map_err(map_server_error)?;
+	async fn cover(
+		&self,
+		user: Option<&AuthUser>,
+		media_id: &str,
+	) -> AbsResult<AbsImage> {
+		// From 2.17.0 the official app sends no credential with an image
+		// request; the route has already established the row is an audible,
+		// undeleted book, so the anonymous lane reads the row directly.
+		let image = match user {
+			Some(user) => api_media::get_media_thumbnail_by_id(
+				self.ctx.as_ref(),
+				user,
+				media_id.to_owned(),
+			)
+			.await
+			.map_err(map_server_error)?,
+			None => api_media::get_media_thumbnail_unscoped(self.ctx.as_ref(), media_id)
+				.await
+				.map_err(map_server_error)?,
+		};
 		Ok(AbsImage {
 			content_type: image.content_type.to_string(),
 			data: image.data,
@@ -897,6 +937,415 @@ impl AbsBackend for AbsBackendAdapter {
 	async fn author_name(&self, author_id: &str) -> AbsResult<Option<String>> {
 		Ok(AbsIds::lookup(self.conn(), IdKind::Author, author_id).await?)
 	}
+
+	async fn session_by_id(&self, session_id: &str) -> AbsResult<Option<AbsSession>> {
+		Ok(AbsSessions::get_any(self.conn(), session_id).await?)
+	}
+
+	async fn ebook_editions(
+		&self,
+		user: &AuthUser,
+		media_ids: &[String],
+	) -> AbsResult<std::collections::HashMap<String, AbsEbookFile>> {
+		ebook_editions_for(self.conn(), user, media_ids).await
+	}
+
+	async fn paired_ebook_media_ids(&self, user: &AuthUser) -> AbsResult<Vec<String>> {
+		let links = confirmed_links(self.conn(), &user.id, None).await?;
+		let anchors = links
+			.iter()
+			.map(|link| link.media_id.clone())
+			.collect::<Vec<_>>();
+		Ok(ebook_editions_for(self.conn(), user, &anchors)
+			.await?
+			.into_keys()
+			.collect())
+	}
+
+	async fn serve_ebook(
+		&self,
+		headers: HeaderMap,
+		user: &AuthUser,
+		ebook: &AbsEbookFile,
+	) -> AbsResult<Response<Body>> {
+		// The pair was resolved for this user, but the ebook row is a
+		// separate media row: re-check it is one they may read before its
+		// bytes leave the server.
+		media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(ebook.media_id.clone()))
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| AbsError::NotFound(format!("No ebook {}", ebook.media_id)))?;
+		serve_file(std::path::Path::new(&ebook.path), EPUB_MIME, headers).await
+	}
+
+	async fn download_item(
+		&self,
+		headers: HeaderMap,
+		user: &AuthUser,
+		media_id: &str,
+		ebook: Option<&AbsEbookFile>,
+	) -> AbsResult<Response<Body>> {
+		let audio = self.audio(media_id).await?;
+		let mut files = audio
+			.map(|audio| {
+				audio
+					.tracks
+					.iter()
+					.map(|track| std::path::PathBuf::from(&track.path))
+					.collect::<Vec<_>>()
+			})
+			.unwrap_or_default();
+		if let Some(ebook) = ebook {
+			files.push(std::path::PathBuf::from(&ebook.path));
+		}
+		if files.is_empty() {
+			return Err(AbsError::NotFound(format!("No files for {media_id}")));
+		}
+
+		let name = media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(media_id))
+			.one(self.conn())
+			.await?
+			.map(|row| row.name)
+			.unwrap_or_else(|| media_id.to_owned());
+		zip_response(&self.ctx, media_id, &name, files, headers).await
+	}
+
+	async fn playlists(&self, user: &AuthUser) -> AbsResult<Vec<AbsPlaylist>> {
+		let rows = reading_list::Entity::find()
+			.filter(reading_list::Column::CreatingUserId.eq(user.id.clone()))
+			.order_by_desc(reading_list::Column::UpdatedAt)
+			.order_by_asc(reading_list::Column::Id)
+			.all(self.conn())
+			.await?;
+		let mut playlists = Vec::with_capacity(rows.len());
+		for row in rows {
+			playlists.push(self.hydrate_playlist(row).await?);
+		}
+		Ok(playlists)
+	}
+
+	async fn playlist(
+		&self,
+		user: &AuthUser,
+		playlist_id: &str,
+	) -> AbsResult<Option<AbsPlaylist>> {
+		let Some(row) = reading_list::Entity::find_by_id(playlist_id.to_owned())
+			.filter(reading_list::Column::CreatingUserId.eq(user.id.clone()))
+			.one(self.conn())
+			.await?
+		else {
+			return Ok(None);
+		};
+		Ok(Some(self.hydrate_playlist(row).await?))
+	}
+
+	async fn create_playlist(
+		&self,
+		user: &AuthUser,
+		name: &str,
+		description: Option<&str>,
+		media_ids: &[String],
+	) -> AbsResult<AbsPlaylist> {
+		// The same mutation path the Komga read-list routes take, so a
+		// playlist created in the Audiobookshelf app is the same row a Komga
+		// client, a Kobo shelf and the web UI see.
+		let row = stump_collections::create_read_list(
+			self.ctx.as_ref(),
+			user,
+			stump_collections::ReadListCreate {
+				name: name.to_owned(),
+				summary: description.map(str::to_owned),
+				// Audiobookshelf playlists are ordered.
+				ordered: true,
+				book_ids: media_ids.to_vec(),
+			},
+		)
+		.await
+		.map_err(|error| map_server_error(APIError::from(error)))?;
+		self.hydrate_playlist(row).await
+	}
+
+	async fn update_playlist(
+		&self,
+		user: &AuthUser,
+		playlist_id: &str,
+		name: Option<&str>,
+		description: Option<Option<&str>>,
+		media_ids: Option<&[String]>,
+	) -> AbsResult<AbsPlaylist> {
+		stump_collections::update_read_list(
+			self.ctx.as_ref(),
+			user,
+			playlist_id,
+			stump_collections::ReadListUpdate {
+				name: name.map(str::to_owned),
+				summary: description.map(|value| value.map(str::to_owned)),
+				ordered: None,
+				book_ids: media_ids.map(<[String]>::to_vec),
+			},
+		)
+		.await
+		.map_err(|error| map_server_error(APIError::from(error)))?;
+		self.playlist(user, playlist_id)
+			.await?
+			.ok_or_else(|| AbsError::NotFound(format!("No playlist {playlist_id}")))
+	}
+
+	async fn delete_playlist(&self, user: &AuthUser, playlist_id: &str) -> AbsResult<()> {
+		stump_collections::delete_read_list(self.ctx.as_ref(), user, playlist_id)
+			.await
+			.map_err(|error| map_server_error(APIError::from(error)))
+	}
+}
+
+/// What an EPUB is served as; the app's reader switches on `ebookFormat`,
+/// but a browser and ExoPlayer both go by the content type.
+const EPUB_MIME: &str = "application/epub+zip";
+
+/// The extensions this profile will report as `media.ebookFile`.
+///
+/// The official app has readers for epub, mobi/azw3, pdf and cbz/cbr
+/// (`components/readers/Reader.vue:300-318`), but only the EPUB one is a
+/// paired *edition* in Stump's model, and only EPUB is what the ebook route
+/// streams; anything else in a work stays a Stump book and no ABS ebook.
+const EBOOK_EXTENSIONS: [&str; 1] = ["epub"];
+
+/// The user's confirmed pair links, optionally narrowed to a set of works.
+async fn confirmed_links(
+	conn: &DatabaseConnection,
+	user_id: &str,
+	work_ids: Option<&[String]>,
+) -> AbsResult<Vec<liseur_sync_media_link::Model>> {
+	let mut select = liseur_sync_media_link::Entity::find()
+		.filter(liseur_sync_media_link::Column::UserId.eq(user_id))
+		.filter(
+			liseur_sync_media_link::Column::PairStatus
+				.eq(PairStatus::Confirmed.to_string()),
+		);
+	if let Some(work_ids) = work_ids {
+		select = select
+			.filter(liseur_sync_media_link::Column::WorkId.is_in(work_ids.to_vec()));
+	}
+	Ok(select
+		.order_by_asc(liseur_sync_media_link::Column::CreatedAt)
+		.order_by_asc(liseur_sync_media_link::Column::Id)
+		.all(conn)
+		.await?)
+}
+
+/// The confirmed EPUB edition of each of `media_ids`, in two queries however
+/// long the page is.
+///
+/// This is the batched form of
+/// `models::domain::edition_pair::linked_media(.., Some(PairStatus::Confirmed))`
+/// and keeps its rule: only a `confirmed` link is a pair, a `rejected` one is
+/// never surfaced, and a `suggested` one must never reach an ABS client.
+async fn ebook_editions_for(
+	conn: &DatabaseConnection,
+	user: &AuthUser,
+	media_ids: &[String],
+) -> AbsResult<std::collections::HashMap<String, AbsEbookFile>> {
+	use std::collections::HashMap;
+
+	if media_ids.is_empty() {
+		return Ok(HashMap::new());
+	}
+
+	let anchors = liseur_sync_media_link::Entity::find()
+		.filter(liseur_sync_media_link::Column::UserId.eq(user.id.clone()))
+		.filter(liseur_sync_media_link::Column::MediaId.is_in(media_ids.to_vec()))
+		.filter(
+			liseur_sync_media_link::Column::PairStatus
+				.ne(PairStatus::Rejected.to_string()),
+		)
+		.all(conn)
+		.await?;
+	if anchors.is_empty() {
+		return Ok(HashMap::new());
+	}
+
+	let work_ids = anchors
+		.iter()
+		.map(|link| link.work_id.clone())
+		.collect::<std::collections::HashSet<_>>()
+		.into_iter()
+		.collect::<Vec<_>>();
+	let counterparts = confirmed_links(conn, &user.id, Some(&work_ids)).await?;
+
+	// One `media` read for every counterpart, narrowed to rows the user may
+	// see and to the ebook extensions this profile serves.
+	let counterpart_ids = counterparts
+		.iter()
+		.map(|link| link.media_id.clone())
+		.collect::<Vec<_>>();
+	let rows = media::Entity::find_for_user(user)
+		.filter(media::Column::Id.is_in(counterpart_ids))
+		.filter(media::Column::DeletedAt.is_null())
+		.all(conn)
+		.await?
+		.into_iter()
+		.filter(|row| EBOOK_EXTENSIONS.contains(&row.extension.to_lowercase().as_str()))
+		.map(|row| (row.id.clone(), row))
+		.collect::<HashMap<_, _>>();
+
+	let mut out = HashMap::new();
+	for anchor in &anchors {
+		let ebook = counterparts
+			.iter()
+			.filter(|link| {
+				link.work_id == anchor.work_id && link.media_id != anchor.media_id
+			})
+			.find_map(|link| rows.get(&link.media_id));
+		if let Some(row) = ebook {
+			out.insert(
+				anchor.media_id.clone(),
+				AbsEbookFile {
+					media_id: row.id.clone(),
+					path: row.path.clone(),
+					format: row.extension.to_lowercase(),
+					byte_size: row.size,
+				},
+			);
+		}
+	}
+	Ok(out)
+}
+
+/// Serve one file, honouring `Range`.
+///
+/// `ServeFile` answers `206` with a `Content-Range` for a ranged request and
+/// sets `Accept-Ranges: bytes` either way, which is what an EPUB reader
+/// streaming a spine item needs.
+async fn serve_file(
+	path: &std::path::Path,
+	mime: &str,
+	headers: HeaderMap,
+) -> AbsResult<Response<Body>> {
+	// `ServeFile::try_call` is inherent in tower-http 0.5; no `ServiceExt`.
+	use tower_http::services::ServeFile;
+
+	let mut request = axum::extract::Request::new(Body::empty());
+	*request.headers_mut() = headers;
+	let mut response = ServeFile::new(path)
+		.try_call(request)
+		.await
+		.map_err(|error| {
+			tracing::error!(?error, ?path, "Failed to serve file");
+			AbsError::NotFound("File is missing".to_owned())
+		})?
+		.map(Body::new);
+	if let Ok(value) = mime.parse::<header::HeaderValue>() {
+		response.headers_mut().insert(header::CONTENT_TYPE, value);
+	}
+	Ok(response)
+}
+
+/// Build (or reuse) the item's zip in the transform cache and serve it.
+///
+/// `zip` 1.1.3 patches each local header after writing its data
+/// (`write.rs:1520`), so the archive is written to a seekable file rather
+/// than streamed; the transform cache is where the server already keeps
+/// expensive, reproducible artifacts of files it owns, so a second download
+/// — or a resumed one — is a `ServeFile` over a finished archive with
+/// working `Range` support.
+///
+/// Entries are **stored**, not deflated: audio and EPUB are already
+/// compressed. abs-ref's own zip of three 10 450-byte MP3s is 31 738 bytes,
+/// which is stored plus headers.
+async fn zip_response(
+	ctx: &AppState,
+	media_id: &str,
+	name: &str,
+	files: Vec<std::path::PathBuf>,
+	headers: HeaderMap,
+) -> AbsResult<Response<Body>> {
+	let cache = TransformCache::new(
+		ctx.config.get_transform_cache_dir(),
+		ctx.config.transform.transform_cache_max_bytes,
+	);
+	// Invalidated by the newest source mtime and the file count, which is
+	// what changes when a book is re-scanned, re-tagged or re-paired.
+	let stamp = newest_mtime_nanos(&files).await;
+	let path = cache
+		.dir()
+		.join(format!("{media_id}-dl{}-{stamp}.zip", files.len()));
+
+	if !cache.hit(&path) {
+		let temp = path.with_extension("zip.part");
+		let dir = cache.dir().to_path_buf();
+		let build = tokio::task::spawn_blocking({
+			let temp = temp.clone();
+			let path = path.clone();
+			move || -> std::io::Result<()> {
+				std::fs::create_dir_all(&dir)?;
+				let mut writer = zip::ZipWriter::new(std::fs::File::create(&temp)?);
+				let options = zip::write::SimpleFileOptions::default()
+					.compression_method(zip::CompressionMethod::Stored)
+					.large_file(true);
+				for source in &files {
+					let entry = source
+						.file_name()
+						.and_then(|name| name.to_str())
+						.unwrap_or("file")
+						.to_owned();
+					writer.start_file(entry, options)?;
+					std::io::copy(&mut std::fs::File::open(source)?, &mut writer)?;
+				}
+				writer.finish()?.sync_all()?;
+				TransformCache::publish(&temp, &path)
+			}
+		})
+		.await;
+
+		match build {
+			Ok(Ok(())) => {
+				if let Err(error) = cache.sweep() {
+					tracing::warn!(%error, "Failed to sweep the transform cache");
+				}
+			},
+			Ok(Err(error)) => {
+				let _ = tokio::fs::remove_file(&temp).await;
+				return Err(AbsError::InternalServerError(format!(
+					"Failed to build the download for {media_id}: {error}"
+				)));
+			},
+			Err(error) => {
+				let _ = tokio::fs::remove_file(&temp).await;
+				return Err(AbsError::InternalServerError(format!(
+					"The download task for {media_id} panicked: {error}"
+				)));
+			},
+		}
+	}
+
+	let mut response = serve_file(&path, "application/zip", headers).await?;
+	let disposition = format!(
+		"attachment; filename=\"{}.zip\"",
+		name.replace('\\', r"\\").replace('"', "\\\"")
+	);
+	if let Ok(value) = disposition.parse::<header::HeaderValue>() {
+		response
+			.headers_mut()
+			.insert(header::CONTENT_DISPOSITION, value);
+	}
+	Ok(response)
+}
+
+/// The newest source mtime in nanoseconds, `0` when none can be read.
+async fn newest_mtime_nanos(files: &[std::path::PathBuf]) -> u128 {
+	let mut newest = 0u128;
+	for path in files {
+		if let Ok(meta) = tokio::fs::metadata(path).await {
+			if let Ok(modified) = meta.modified() {
+				if let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH) {
+					newest = newest.max(since.as_nanos());
+				}
+			}
+		}
+	}
+	newest
 }
 
 /// The user's audio bookmarks — the rows that carry a millisecond position —
@@ -948,7 +1397,8 @@ mod tests {
 			DatabaseBackend::Sqlite,
 		)));
 		let backend: Arc<dyn AbsBackend> = Arc::new(AbsBackendAdapter::new(ctx.clone()));
-		let _router: Router<()> = compose(ctx.clone(), backend, AbsEvents::new()).with_state(ctx);
+		let _router: Router<()> =
+			compose(ctx.clone(), backend, AbsEvents::new()).with_state(ctx);
 	}
 
 	#[test]

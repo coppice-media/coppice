@@ -715,6 +715,7 @@ fn kind_label(kind: DeviceKind) -> &'static str {
 		DeviceKind::Abs => "Audiobookshelf client",
 		DeviceKind::Api => "API client",
 		DeviceKind::Web => "Browser",
+		DeviceKind::Worker => "Worker",
 	}
 }
 

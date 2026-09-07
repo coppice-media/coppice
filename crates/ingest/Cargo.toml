@@ -3,6 +3,13 @@ name = "stump_ingest"
 version.workspace = true
 edition = "2021"
 
+[features]
+# `rar` links the `unrar` bindings through `stump_media` so a dropped RAR is
+# exploded in-process. Without it an archive drop falls back to an
+# operator-installed `unrar`/`7z`/`bsdtar`, which is also the fallback when
+# the bindings refuse a container they cannot read.
+rar = ["stump_media/rar"]
+
 [dependencies]
 alphanumeric-sort.workspace = true
 async-trait.workspace = true
@@ -10,6 +17,9 @@ chrono.workspace = true
 data-encoding = "2.5.0"
 epub.workspace = true
 futures.workspace = true
+# An exploded archive resolves a folder audiobook through
+# `PathUtils::dir_is_audio_book`, which takes the scanner's ignore rules.
+globset.workspace = true
 image = { version = "0.25.2", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 imagesize = "0.14.0"
 metadata_integrations = { path = "../integrations/metadata", default-features = false }
@@ -25,6 +35,11 @@ serde_json.workspace = true
 stump_api_types = { path = "../api-types" }
 stump_media = { path = "../media", default-features = false }
 stump_scanner = { path = "../scanner" }
+# Ingest runs `audio-assemble` on a folder audiobook and locates the
+# operator's `unrar`/`7z`/`bsdtar` through the tool crate's `ExternalTool`.
+# `stump_tools` depends only on `stump_media` and `stump_scanner`, both of
+# which are already above, so this adds no new leaf to the graph.
+stump_tools = { path = "../tools" }
 thiserror.workspace = true
 # `fs`/`io-util`: staging streams and hashes files; `process`/`time`: the
 # preprocess hook spawns a child under a timeout; `sync`: progress broadcast

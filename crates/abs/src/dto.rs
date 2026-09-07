@@ -390,8 +390,11 @@ pub struct BookDto {
 	pub audio_files: Option<Vec<AudioFileDto>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub chapters: Option<Vec<BookChapterDto>>,
+	/// Detail and expanded only. `Some(None)` writes `"ebookFile": null`
+	/// for an audiobook with no paired ebook edition, which is what abs-ref
+	/// emits and what the app's `Book.ebookFile: EBookFile?` expects.
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub ebook_file: Option<Option<serde_json::Value>>,
+	pub ebook_file: Option<Option<EBookFileDto>>,
 	/// Expanded only: the audio files with playback fields attached.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub tracks: Option<Vec<AudioTrackDto>>,
@@ -581,6 +584,25 @@ pub struct LibraryFileDto {
 	pub file_type: String,
 }
 
+/// `media.ebookFile`. The official app's Kotlin model
+/// (`android/.../data/EBookFile.kt:5-13`) declares
+/// `ino: String`, `ebookFormat: String` and `isLocal: Boolean` **non-null**,
+/// with `metadata`, `localFileId` and `contentUrl` nullable; `isLocal` is a
+/// Kotlin primitive, so it defaults to `false` when absent (abs-ref omits
+/// it), but `ino` and `ebookFormat` must be present or the whole enclosing
+/// `LibraryItem` fails to deserialize.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EBookFileDto {
+	pub ino: String,
+	pub metadata: FileMetadataDto,
+	/// Lower-case, no leading period (`epub`), which is what the reader
+	/// switches on (`components/readers/Reader.vue:292-318`).
+	pub ebook_format: String,
+	pub added_at: i64,
+	pub updated_at: i64,
+}
+
 /// `POST /api/items/batch/get` request and response.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -766,7 +788,11 @@ pub struct PlaybackSessionDto {
 	/// `YYYY-MM-DD` in the server's timezone.
 	pub date: String,
 	pub day_of_week: String,
-	pub time_listening: f64,
+	/// Whole seconds. The app declares `PlaybackSession.timeListening: Long`
+	/// (`android/.../data/PlaybackSession.kt:45`) and abs-ref emits an
+	/// integer (`capture/play_session.json`); a fractional value only decodes
+	/// because `ACCEPT_FLOAT_AS_INT` happens to be on by default.
+	pub time_listening: i64,
 	pub start_time: f64,
 	pub current_time: f64,
 	pub started_at: i64,
@@ -921,9 +947,10 @@ pub struct SeriesPageDto {
 }
 
 /// The `{results, total, limit, page}` envelope abs-ref answers for a
-/// library's collections and playlists. Stump's shelves are not
-/// Audiobookshelf collections (see `abs-compat.mdx`), so the profile serves
-/// the envelope empty rather than 404ing a browse tab the app opens.
+/// library's collections. Stump's collections are not Audiobookshelf
+/// collections (see `abs-compat.mdx`), so the profile serves the envelope
+/// empty rather than 404ing a browse tab the app opens. Playlists *are*
+/// served, through [`PlaylistsPageDto`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EmptyPageDto {
@@ -942,6 +969,102 @@ impl EmptyPageDto {
 			page,
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Playlists — captured live from abs-ref 2.36.0 (see `abs-compat.mdx`)
+// ---------------------------------------------------------------------------
+
+/// One playlist. The key set is abs-ref's `POST /api/playlists` response:
+/// `id, libraryId, userId, name, description, lastUpdate, createdAt,
+/// items[]` — note `lastUpdate`, not `updatedAt`.
+///
+/// The app reads `id`, `name`, `description` and `items[]`
+/// (`pages/playlist/_id.vue:88-94`, `components/cards/LazyPlaylistCard.vue:44-47`)
+/// and matches membership on `items[].libraryItemId` / `items[].episodeId`
+/// (`components/modals/playlists/AddCreateModal.vue:104-109`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistDto {
+	pub id: String,
+	pub library_id: String,
+	pub user_id: String,
+	pub name: String,
+	pub description: Option<String>,
+	pub last_update: i64,
+	pub created_at: i64,
+	pub items: Vec<PlaylistItemDto>,
+}
+
+/// One playlist entry. `libraryItem` is the expanded item the playlist page
+/// renders from — it dereferences `playlist.items[0].libraryItem.mediaType`
+/// with no null check (`pages/playlist/_id.vue:52`), so it is never omitted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistItemDto {
+	pub library_item_id: String,
+	/// Always `null` here: the profile serves no podcast library, so a
+	/// playlist entry never names an episode.
+	pub episode_id: Option<String>,
+	pub library_item: LibraryItemDto,
+}
+
+/// `GET /api/libraries/{id}/playlists`. The app reads `data.results`
+/// (`components/modals/playlists/AddCreateModal.vue:113-115`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistsPageDto {
+	pub results: Vec<PlaylistDto>,
+	pub total: i64,
+	pub limit: i64,
+	pub page: i64,
+}
+
+/// `POST /api/playlists` — `{items, libraryId, name}`
+/// (`components/modals/playlists/AddCreateModal.vue:180-185`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct PlaylistCreateRequestDto {
+	pub library_id: Option<String>,
+	pub name: Option<String>,
+	pub description: Option<String>,
+	pub items: Vec<PlaylistItemRefDto>,
+}
+
+/// `PATCH /api/playlists/{id}`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct PlaylistUpdateRequestDto {
+	pub name: Option<String>,
+	/// `Option<Option<_>>` so an omitted key leaves the description alone
+	/// and an explicit `null` clears it.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub description: Option<Option<String>>,
+	/// A whole-membership replacement, which abs-ref accepts on the same
+	/// route; the official app only ever sends `name`/`description`.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub items: Option<Vec<PlaylistItemRefDto>>,
+}
+
+/// One `{libraryItemId, episodeId}` reference, the body element of
+/// `POST /api/playlists/{id}/batch/{add,remove}`
+/// (`components/modals/playlists/AddCreateModal.vue:137,155`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct PlaylistItemRefDto {
+	pub library_item_id: String,
+	pub episode_id: Option<String>,
+}
+
+/// `POST /api/playlists/{id}/batch/add` and `/batch/remove`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct PlaylistItemsRequestDto {
+	pub items: Vec<PlaylistItemRefDto>,
 }
 
 // ---------------------------------------------------------------------------

@@ -98,3 +98,65 @@ mutation ReaderUpdateProgress($id: ID!, $input: MediaProgressInput!) {
 		}
 	}
 }
+
+# The "Also available as" row. Split out of `ReaderBook` on purpose:
+# `editionSuggestions` runs the pairing heuristics, which may call out to
+# Audnexus or Open Library, and opening a book must not wait for that.
+# `editions` is the cheap half — a confirmed pair is two link rows.
+query ReaderEditions($id: ID!) {
+	mediaById(id: $id) {
+		id
+		editions {
+			id
+			resolvedName
+			extension
+			# Non-null exactly for an audiobook, so it tells the row which
+			# reader "Open here" is heading for.
+			audio {
+				durationMs
+			}
+			# This edition's position, derived from the reader's real position
+			# in the book being viewed. Null when there is nothing to convert
+			# or the position falls in unmapped front matter.
+			pairedPosition(fromMediaId: $id) {
+				sourceMediaId
+				positionMs
+				progression
+				confidence
+				approximate
+				locator {
+					...ReaderLocatorFields
+				}
+			}
+		}
+		editionSuggestions {
+			workId
+			status
+			evidence
+			media {
+				id
+				resolvedName
+				extension
+			}
+		}
+	}
+}
+
+mutation ReaderConfirmEditionPair($mediaIdA: ID!, $mediaIdB: ID!) {
+	confirmEditionPair(mediaIdA: $mediaIdA, mediaIdB: $mediaIdB) {
+		workId
+		status
+		changed
+		message
+		chapterMapEntries
+	}
+}
+
+mutation ReaderRejectEditionPair($mediaIdA: ID!, $mediaIdB: ID!) {
+	rejectEditionPair(mediaIdA: $mediaIdA, mediaIdB: $mediaIdB) {
+		workId
+		status
+		changed
+		message
+	}
+}

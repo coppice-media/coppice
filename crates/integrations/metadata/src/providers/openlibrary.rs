@@ -21,6 +21,7 @@ use serde::Deserialize;
 
 use crate::{
 	client::{build_client_with_retry, RetryClientConfig},
+	editions::{EditionIdentifier, EditionLookup},
 	error::MetadataProviderError,
 	provider::ProviderCredentialVerification,
 	rate_limit::RateLimiter,
@@ -45,6 +46,11 @@ const OPEN_LIBRARY_MAX_AUTHOR_FETCHES: usize = 5;
 
 /// Subjects are unbounded and noisy; keep the leading few as tags.
 const OPEN_LIBRARY_MAX_SUBJECTS: usize = 10;
+
+/// Editions fetched per work when expanding an edition list for pairing. An
+/// identifier that is not in the first page of a work's editions is not going
+/// to decide a pair, and the budget is one request per second.
+const OPEN_LIBRARY_MAX_WORK_EDITIONS: u32 = 100;
 
 /// Fields requested from the search endpoint; anything else is dead weight.
 const SEARCH_FIELDS: &str = "key,title,subtitle,author_name,author_key,first_publish_year,isbn,cover_i,cover_edition_key,number_of_pages_median,subject";
@@ -96,6 +102,16 @@ impl OpenLibraryClient {
 	#[cfg(test)]
 	fn with_api_url(mut self, api_url: impl Into<String>) -> Self {
 		self.api_url = api_url.into();
+		self
+	}
+
+	/// Point the base at one local server, for tests in crates that consume
+	/// [`crate::editions::EditionLookup`] and cannot reach the private
+	/// override above.
+	#[cfg(any(test, feature = "mock"))]
+	#[must_use]
+	pub fn pointed_at(mut self, api_url: &str) -> Self {
+		self.api_url = api_url.to_string();
 		self
 	}
 
@@ -155,6 +171,24 @@ impl OpenLibraryClient {
 		key: &str,
 	) -> Result<OpenLibraryWork, MetadataProviderError> {
 		self.get(&format!("/works/{key}.json"), &[]).await
+	}
+
+	/// Every edition catalogued under a work. The endpoint paginates at 50 by
+	/// default; one page of [`OPEN_LIBRARY_MAX_WORK_EDITIONS`] is enough to
+	/// decide a pairing and keeps a much-reprinted classic from costing a
+	/// dozen requests against a one-per-second budget.
+	async fn fetch_work_editions(
+		&self,
+		key: &str,
+	) -> Result<Vec<OpenLibraryEdition>, MetadataProviderError> {
+		let limit = OPEN_LIBRARY_MAX_WORK_EDITIONS.to_string();
+		let response: OpenLibraryWorkEditions = self
+			.get(
+				&format!("/works/{key}/editions.json"),
+				&[("limit", limit.as_str())],
+			)
+			.await?;
+		Ok(response.entries)
 	}
 
 	/// Resolve author keys to display names, tolerating individual misses.
@@ -448,6 +482,69 @@ impl MetadataProvider for OpenLibraryClient {
 	}
 }
 
+/// Open Library is the only keyless upstream with a real edition graph: an
+/// ISBN resolves an edition, the edition names its work, and the work lists
+/// every edition ever catalogued under it. Two hops, and the second one is
+/// paginated, so it is capped — a pairing decision does not improve after
+/// the first hundred ISBNs of a classic.
+#[async_trait::async_trait]
+impl EditionLookup for OpenLibraryClient {
+	fn provider_id(&self) -> &'static str {
+		"OPEN_LIBRARY"
+	}
+
+	async fn sibling_identifiers(
+		&self,
+		identifier: &EditionIdentifier,
+	) -> Result<Vec<EditionIdentifier>, MetadataProviderError> {
+		let (work_key, seed) = match identifier {
+			EditionIdentifier::OpenLibraryWork(key) => (key.clone(), None),
+			EditionIdentifier::Isbn(isbn) => {
+				match self.fetch_edition_by_isbn(isbn).await {
+					Ok(edition) => {
+						let Some(work) = edition.works.first() else {
+							return Ok(Vec::new());
+						};
+						(strip_prefix(&work.key).to_string(), Some(isbn.clone()))
+					},
+					// An ISBN Open Library has never seen is a miss.
+					Err(MetadataProviderError::NotFound(_)) => return Ok(Vec::new()),
+					Err(error) => return Err(error),
+				}
+			},
+			// Open Library indexes Amazon ids only as free-form
+			// `identifiers.amazon` on some editions, with no lookup route,
+			// so there is nothing to walk from an ASIN.
+			EditionIdentifier::Asin(_) => return Ok(Vec::new()),
+		};
+
+		let editions = match self.fetch_work_editions(&work_key).await {
+			Ok(editions) => editions,
+			Err(MetadataProviderError::NotFound(_)) => return Ok(Vec::new()),
+			Err(error) => return Err(error),
+		};
+
+		let mut siblings = vec![EditionIdentifier::OpenLibraryWork(work_key)];
+		for edition in editions {
+			siblings.extend(
+				edition
+					.isbn_10
+					.into_iter()
+					.chain(edition.isbn_13)
+					.filter_map(|isbn| EditionIdentifier::Isbn(isbn).normalized()),
+			);
+		}
+		siblings.sort_unstable();
+		siblings.dedup();
+		if let Some(seed) =
+			seed.and_then(|isbn| EditionIdentifier::Isbn(isbn).normalized())
+		{
+			siblings.retain(|candidate| *candidate != seed);
+		}
+		Ok(siblings)
+	}
+}
+
 /// Map a search document straight onto media metadata. Prefers the cover
 /// edition as the external id so a later lookup resolves an edition with
 /// ISBNs and page counts; falls back to the work.
@@ -620,6 +717,15 @@ struct OpenLibraryEdition {
 	series: Vec<String>,
 	#[serde(default)]
 	subjects: Vec<String>,
+}
+
+/// `GET /works/{key}/editions.json`. Only `entries` matters; the sibling
+/// `links` and `size` describe the pagination this deliberately does not
+/// follow.
+#[derive(Debug, Deserialize)]
+struct OpenLibraryWorkEditions {
+	#[serde(default)]
+	entries: Vec<OpenLibraryEdition>,
 }
 
 #[derive(Debug, Deserialize)]

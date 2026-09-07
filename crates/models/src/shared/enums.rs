@@ -753,6 +753,9 @@ pub enum UserPermission {
 	AccessKoreaderSync,
 	/// Grant access to the kobo sync feature
 	AccessKoboSync,
+	/// Grant a device the right to act as a remote worker: open the worker
+	/// socket, claim `worker_jobs`, and upload their outputs
+	AccessWorker,
 	///TODO: Expand permissions for bookclub + smartlist
 	/// Grant access to the book club feature
 	AccessBookClub,
@@ -911,6 +914,10 @@ pub enum DeviceKind {
 	Api,
 	/// A browser session
 	Web,
+	/// A remote worker process (`stump-worker`) that claims `worker_jobs` over
+	/// the worker socket. Not a reading client: it holds no reading state and
+	/// is never offered a transformed stream.
+	Worker,
 }
 
 /// The wire protocol through which a device credential was exercised
@@ -1034,4 +1041,79 @@ pub enum TagKind {
 	Genre,
 	#[default]
 	Tag,
+}
+
+/// Where a [`crate::entity::worker_job`] row is in its life.
+///
+/// `needs_worker` is a resting state, not an error: the job is well-formed and
+/// nobody who can run it is connected. It becomes `queued` again the moment a
+/// capable worker says `hello`. There is deliberately no `cancelled`: the
+/// protocol's status set is its contract, and a cancelled job is exactly a job
+/// that will not produce its output, so it is `failed` with a reason.
+#[derive(
+	Eq,
+	Copy,
+	Hash,
+	Debug,
+	Clone,
+	Default,
+	EnumIter,
+	PartialEq,
+	Serialize,
+	Deserialize,
+	DeriveActiveEnum,
+	EnumString,
+	Display,
+)]
+#[cfg_attr(feature = "graphql", derive(async_graphql::Enum))]
+#[sea_orm(
+	rs_type = "String",
+	rename_all = "snake_case",
+	db_type = "String(StringLen::None)"
+)]
+#[strum(serialize_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerJobStatus {
+	/// Created, and either not yet offered or offered and not yet claimed.
+	#[default]
+	Queued,
+	/// A worker answered the offer with `claim`.
+	Claimed,
+	/// The job is executing — remotely (first `progress` frame) or locally.
+	Running,
+	/// The job produced its output.
+	Done,
+	/// The job did not produce its output; `error` says why.
+	Failed,
+	/// No connected worker advertises what this job needs and the kind has no
+	/// local implementation. Shown, never hidden.
+	NeedsWorker,
+}
+
+impl WorkerJobStatus {
+	/// Whether the job will not change again without a new dispatch.
+	#[must_use]
+	pub fn is_terminal(self) -> bool {
+		matches!(self, Self::Done | Self::Failed)
+	}
+
+	/// Whether a worker holding this job should be re-offered it on reconnect.
+	#[must_use]
+	pub fn is_assigned(self) -> bool {
+		matches!(self, Self::Queued | Self::Claimed | Self::Running)
+	}
+
+	/// The wire word: the text the column stores, the GraphQL enum renders and
+	/// the docs name. `Display` agrees with it through strum.
+	#[must_use]
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Queued => "queued",
+			Self::Claimed => "claimed",
+			Self::Running => "running",
+			Self::Done => "done",
+			Self::Failed => "failed",
+			Self::NeedsWorker => "needs_worker",
+		}
+	}
 }

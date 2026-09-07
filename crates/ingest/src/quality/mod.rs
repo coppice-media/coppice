@@ -22,7 +22,7 @@ use crate::{
 };
 use stump_media::{media::get_page, EpubProcessor, FileError, PathUtils};
 
-mod audio;
+pub(crate) mod audio;
 pub mod audio_bitrate_sane;
 pub mod audio_chapters_present;
 pub mod audio_cover_embedded;

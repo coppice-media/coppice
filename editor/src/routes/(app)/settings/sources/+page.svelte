@@ -11,7 +11,8 @@
 	import {
 		ProviderSourceHealthRowsDocument,
 		ProviderSourcesDocument,
-		SetProviderSourceHeadersDocument
+		SetProviderSourceHeadersDocument,
+		SolveSourceChallengeDocument
 	} from '$lib/graphql/generated/graphql';
 
 	const queryClient = useQueryClient();
@@ -55,6 +56,22 @@
 		},
 		onError: (error, variables) => {
 			saved[variables.instanceId] = error instanceof Error ? error.message : 'The server refused the headers.';
+		}
+	}));
+
+	/// Ask a browser worker for a clearance. The mutation returns as soon as
+	/// routing is decided, so the message is about what *will* happen — the
+	/// solve itself runs in a window on the worker's screen and the server
+	/// applies the cookie without another call from here.
+	const solveMutation = createMutation(() => ({
+		mutationFn: (instanceId: string) => request(SolveSourceChallengeDocument, { instanceId }),
+		onSuccess: (result, instanceId) => {
+			saved[instanceId] = result.solveSourceChallenge.message;
+			void queryClient.invalidateQueries({ queryKey: ['provider-sources'] });
+			void queryClient.invalidateQueries({ queryKey: ['provider-source-health'] });
+		},
+		onError: (error, instanceId) => {
+			saved[instanceId] = error instanceof Error ? error.message : 'The server refused to queue a solve.';
 		}
 	}));
 
@@ -113,9 +130,12 @@
 		<p class="text-sm font-medium text-primary">Provider host</p>
 		<h1 class="text-3xl font-semibold tracking-tight">Remote sources</h1>
 		<p class="mt-1 max-w-3xl text-muted-foreground">
-			Request headers sent with every request one source makes. Use them for a source behind a Cloudflare challenge:
-			copy the <code>cf_clearance</code> cookie <em>and</em> the exact User-Agent from a browser that solved the
-			challenge. Values are write-only — the server only ever reports a masked preview, and a clearance cookie expires.
+			Request headers sent with every request one source makes. A source behind a Cloudflare challenge is solved for
+			you: the health probe queues a <code>challenge_solve</code> job, a paired worker running
+			<code>stump-worker --chrome …</code> opens a browser window, and the server stores the
+			<code>cf_clearance</code> cookie and its User-Agent here. <strong>Solve now</strong> does the same without
+			waiting for the next probe. Fill the fields in by hand only when you have no browser worker. Values are
+			write-only — the server only ever reports a masked preview, and a clearance cookie expires.
 		</p>
 	</div>
 	{#if sourcesQuery.isPending}
@@ -144,6 +164,14 @@
 								</Badge>
 								{#if isChallenged(health)}
 									<Badge variant="destructive">Cloudflare challenge</Badge>
+									<Button
+										size="sm"
+										variant="secondary"
+										disabled={!source.enabled || solveMutation.isPending}
+										onclick={() => solveMutation.mutate(source.id)}
+									>
+										{solveMutation.isPending ? 'Queueing…' : 'Solve now'}
+									</Button>
 								{:else if health}
 									<Badge variant="outline">{health.status}</Badge>
 								{/if}

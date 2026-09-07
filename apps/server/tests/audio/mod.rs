@@ -332,6 +332,60 @@ async fn audio_track_negotiates_the_requesting_devices_preset() {
 	}
 }
 
+/// A `Worker` device fetches its transcode job's *input* through this very
+/// route. Negotiating a transcode for it would ask the server for the thing
+/// the worker was asked to produce, so a worker is always served the stored
+/// bytes — even when someone attaches an Opus preset to it.
+///
+/// The name carries `worker` so the worker suite's filter picks it up: it is a
+/// rule about the worker lane that can only be asserted where the audiobook
+/// fixture lives.
+#[tokio::test]
+async fn audio_track_is_never_transcoded_for_a_worker_device() {
+	use models::{entity::user::AuthUser, shared::enums::DeviceKind};
+	use sea_orm::EntityTrait;
+
+	let fixture = audiobook().await;
+	let owner = models::entity::user::Entity::find()
+		.one(fixture.app.conn())
+		.await
+		.expect("user query")
+		.expect("the default user exists");
+	let owner = AuthUser {
+		id: owner.id,
+		username: owner.username,
+		is_server_owner: true,
+		..Default::default()
+	};
+
+	let devices = fixture.app.ctx.devices();
+	let (device, issued) = devices
+		.create_device(&owner, DeviceKind::Worker, Some("gpu box".to_string()))
+		.await
+		.expect("worker device");
+	devices
+		.set_transform_profile(
+			&owner,
+			&device.id,
+			Some(serde_json::json!({ "preset": "phone-opus" })),
+		)
+		.await
+		.expect("preset");
+
+	let response = fixture
+		.app
+		.server
+		.get(&format!("/api/v2/media/{}/audio/track/1", fixture.book_id))
+		.add_header("Authorization", format!("Bearer {}", issued.secret))
+		.await;
+	response.assert_status_ok();
+	assert_eq!(
+		response.headers().get(header::CONTENT_TYPE).unwrap(),
+		"audio/mpeg",
+		"a worker must never be handed a transcode of its own job's input"
+	);
+}
+
 /// Both routes are user-scoped like every other media route: a book the user
 /// cannot see is a 404, never a 403 that confirms it exists.
 #[tokio::test]

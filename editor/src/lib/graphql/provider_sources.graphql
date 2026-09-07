@@ -35,3 +35,11 @@ mutation SetProviderSourceHeaders($instanceId: String!, $headers: JSON!) {
 		length
 	}
 }
+
+mutation SolveSourceChallenge($instanceId: String!) {
+	solveSourceChallenge(instanceId: $instanceId) {
+		state
+		message
+		challenged
+	}
+}

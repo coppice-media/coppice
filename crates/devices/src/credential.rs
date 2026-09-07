@@ -63,6 +63,9 @@ pub fn protocol_for(kind: DeviceKind) -> DeviceProtocol {
 		DeviceKind::Abs => DeviceProtocol::Api,
 		DeviceKind::Liseur => DeviceProtocol::Liseur,
 		DeviceKind::Api | DeviceKind::Web => DeviceProtocol::Api,
+		// A worker authenticates with a prefixed API key on the native API,
+		// exactly like a script; the worker socket is a native route.
+		DeviceKind::Worker => DeviceProtocol::Api,
 	}
 }
 
@@ -89,6 +92,13 @@ pub fn api_key_permissions_for(kind: DeviceKind) -> APIKeyPermissions {
 		DeviceKind::Mihon | DeviceKind::Komelia | DeviceKind::Opds | DeviceKind::Abs => {
 			APIKeyPermissions::Custom(vec![UserPermission::DownloadFile])
 		},
+		// A worker opens the socket and downloads the inputs of the jobs it
+		// claims; it never acts as the user, so its key is narrowed to those
+		// two rights and nothing else.
+		DeviceKind::Worker => APIKeyPermissions::Custom(vec![
+			UserPermission::AccessWorker,
+			UserPermission::DownloadFile,
+		]),
 		DeviceKind::Liseur | DeviceKind::Api | DeviceKind::Web => {
 			APIKeyPermissions::inherit()
 		},

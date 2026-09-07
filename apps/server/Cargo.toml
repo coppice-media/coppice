@@ -36,7 +36,7 @@ komga = ["readium", "dep:stump_komga", "dep:stump_collections", "dep:stump_libra
 kavita = ["dep:stump_kavita", "dep:stump_collections"]
 # The Audiobookshelf compatibility profile (Lissen and other ABS clients);
 # gated at runtime by `STUMP_ENABLE_ABS`.
-abs = ["dep:stump_abs"]
+abs = ["dep:stump_abs", "dep:stump_collections"]
 liseur-sync = ["dep:stump_liseur_sync"]
 providers = [
 	"dep:stump_provider",
@@ -111,6 +111,10 @@ stump_tools = { path = "../../crates/tools" }
 stump_auth = { path = "../../crates/auth" }
 stump_api_types = { path = "../../crates/api-types" }
 stump_devices = { path = "../../crates/devices" }
+# The worker socket and output-upload routes; the queue itself lives on `Ctx`.
+# `server` only — the `stump-worker` binary is the crate's other half and is
+# never linked here.
+stump_worker = { path = "../../crates/worker", default-features = false, features = ["server"] }
 # The USB send-to-Kindle download (`POST /api/v2/media/{id}/kindle-file`)
 # runs the same lane as the `sendToKindle` mutation.
 stump_kindle = { path = "../../crates/kindle" }

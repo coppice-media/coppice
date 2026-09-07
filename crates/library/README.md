@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | **Package** | `stump_library` (`crates/library`) |
-| **Purpose** | Library create/update/delete (`library`) and series reshape — move books between series, merge series, split books out into a new series (`series`) — as one shared path for every surface. Owns validation, persistence, watcher and scheduled-scan wiring, the filesystem moves that keep the next scan a no-op, and core-event emission. It does not own scanning, thumbnailing, or the transport surfaces (GraphQL mutations, Komga/Kavita routes) that call in here. |
+| **Purpose** | Library create/update/delete (`library`), series reshape — move books between series, merge series, split books out into a new series (`series`) — and edition pairing plus the tier-1 chapter map (`editions`), as one shared path for every surface. Owns validation, persistence, watcher and scheduled-scan wiring, the filesystem moves that keep the next scan a no-op, and core-event emission. It does not own scanning, thumbnailing, or the transport surfaces (GraphQL mutations, Komga/Kavita routes) that call in here. |
 | **Reference / upstream** | Komga library CRUD semantics pinned to `komga-client` 0.11.0 `74412a6e` (`crates/komga/src/routes/library.rs` delegates here); scanner recognition rules in `stump_core::filesystem::scanner` (existing media are matched by `series_id` **and** `path`). |
 
 ## Decisions
@@ -16,20 +16,29 @@
 | Filesystem moves use `stump_media::move_file` (rename, falling back to copy + remove) | Library roots and staging roots are frequently on different filesystems, where `rename` fails with `EXDEV` | `src/series.rs`; `crates/media/src/common.rs::move_file` |
 | Thumbnails are removed through `stump_media::image::remove_thumbnails` on delete | Orphaned thumbnails otherwise survive the row and are served for a book that no longer exists | `src/library.rs`, `src/series.rs` |
 | The crate depends on `stump_core` (`Ctx`, `CoreEvent`, `CoreError`, `job::stump_job`) | It is an application service above core: it dispatches scan jobs and emits core events. Nothing in `stump_core` depends on it, so there is no cycle | `Cargo.toml`; `src/library.rs` imports |
+| Edition pairing writes no pair table: a pair is two `liseur_sync_media_links` rows for one user sharing a `work_id` | The liseur-sync model already owns work↔edition identity with a unique index making a media row belong to one work per user; a parallel table would let the two disagree, and the ABS/Komga surfaces would have to pick one | `src/editions.rs` module doc, `crates/migrations/src/m20260946_000000_add_edition_pairing.rs` |
+| Pairing *state* is its own column (`pair_status`), not `resolution_status` | `resolution_status` means "was the edition digest verified against the file" and `POST /v1/works/resolve` rewrites it on every re-resolve; overloading it would silently unpair books | `crates/models/src/entity/liseur_sync_media_link.rs`, `apps/server/src/routers/liseur_sync/storage.rs::1369` |
+| A rejected suggestion is a row, never a deletion | Suggestions are recomputed on every book-page query, so a deleted rejection comes straight back on the next load | `src/editions.rs::pair_editions`, `models::domain::edition_pair::write_pair` |
+| The row-writing half of pairing lives in `models::domain::edition_pair`, not here | `stump_ingest` must record a pair when two files of one archive drop commit, and it cannot depend on this crate: `stump_core` optional-deps `stump_ingest`, so `stump_ingest -> stump_library -> stump_core -> stump_ingest` is a Cargo cycle | `core/Cargo.toml:21,57`; `models::domain::edition_pair::suggest_pair` |
+| Provider edition lists are best-effort; a lookup failure is a `warn!`, never an error | A book page must render when Audnexus is rate-limited or Open Library is down. The cost of an outage is the *evidence* of a suggestion, not the page | `src/editions.rs::expand` |
+| Stored ISBNs are normalised in SQL (`UPPER(REPLACE(REPLACE(…)))`) rather than compared verbatim | Hyphenation is the publisher's choice, not part of the number: an OPF gives `978-0-374-52953-6` and Open Library `9780374529536`. It costs the index, but an unhyphenated-only comparison pairs nothing on a library imported from calibre | `src/editions.rs::stored_isbn` |
+| Title candidates are restricted to the *complementary* kind (audio ↔ text) | Two EPUBs of one work have no time↔text conversion to offer, and the restriction is what keeps the candidate set bounded on a book-page query | `src/editions.rs::title_candidates` |
 
 ## Layout
 
 | File | Responsibility |
 | --- | --- |
-| `lib.rs` | Crate docs and the two modules |
+| `lib.rs` | Crate docs and the three modules |
 | `library.rs` | `create`/`update`/`delete` for libraries, tag and config handling, watcher add/remove, scheduled-scan wiring, `LibraryCreated`/`Updated`/`Deleted` events (1 test) |
 | `series.rs` | Series reshape: move books, merge two series, split books into a new series, with the filesystem renames and rollback (8 tests) |
+| `editions.rs` | Edition pairing (`pair_editions`, confirm/reject), the chapter-map matcher and its persistence, the EPUB spine read for position conversion (7 tests in `editions/tests.rs`) |
 
 ## How to verify
 
 ```bash
 cargo test -p stump_library                      # CRUD + reshape, including the rollback paths
 cargo test -p graphql --lib library              # the GraphQL surface that delegates here
+cargo test -p stump_library editions             # pairing rules and the chapter map
 ```
 
 From `../komga-compat/`: `make replay-library-management LIBRARY_ROOT=<dir>`.

@@ -48,6 +48,7 @@ members come from the root globs `crates/macros/*` and `crates/integrations/*`
 | `tests` | `tests` | Shared test DB/fake-data helpers for integration tests | dev only — `[dev-dependencies]` of `core`, `apps/server` and 12 crates | README done |
 | `tools` | `stump_tools` | Library maintenance tools (Kavita/MangaManager "external tools" parity): the `Tool` plan/apply contract plus `calibre-convert`, `calibre-meta`, `calibre-polish`, `cbz-covers`, `cbzit`, `epub-check`, `epub2cbz`, `meta-edit`, `missing-sequence`, `webp-convert`, driven by `stump tools list`/`plan`/`apply` | always linked (`apps/server/Cargo.toml:110`, `crates/cli/Cargo.toml:14`, `crates/kindle/Cargo.toml:19`); not in the server route graph | README done |
 | `watcher` | `stump_watcher` | Library filesystem watching, debounced scan requests | core `watcher` (default on, `core/Cargo.toml:29`) / server `watcher` (in `headless`, not `minimal`) | README done |
+| `worker` | `stump_worker` | Remote worker protocol: the `worker_jobs` queue and dispatcher, the connected-worker hub, and the `stump-worker` client binary (transcode runner) | always linked via `stump_core` (`core/Cargo.toml:65`) and `graphql` (`crates/graphql/Cargo.toml:61`) with `default-features = false, features = ["server"]`; `apps/server` the same; crate feature `client` builds only the `stump-worker` binary | README done |
 
 ## README template
 

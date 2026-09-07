@@ -14,6 +14,7 @@ graphql = [
 	"stump_devices/graphql",
 	"stump_jobs/graphql",
 	"stump_notify/graphql",
+	"stump_worker/graphql",
 ]
 # The staged ingest pipeline (`stump_ingest`): drop folder, analysis queue,
 # quality reports, metadata candidates. Off in the `minimal` server profile,
@@ -25,7 +26,7 @@ providers = [
 	"dep:stump_provider_mangadex",
 	"dep:stump_provider_themes",
 ]
-rar = ["stump_media/rar"]
+rar = ["stump_media/rar", "stump_ingest?/rar"]
 watcher = ["dep:stump_watcher"]
 
 [dependencies]
@@ -59,6 +60,10 @@ stump_media = { path = "../crates/media", default-features = false }
 stump_scanner = { path = "../crates/scanner" }
 stump_notify = { path = "../crates/notify" }
 stump_watcher = { path = "../crates/watcher", optional = true }
+# The `worker_jobs` queue and the connected-worker hub. `server` only: the
+# client half (the `stump-worker` binary's WS client and ffmpeg runner) and the
+# axum transport are both outside the core graph.
+stump_worker = { path = "../crates/worker", default-features = false, features = ["server"] }
 stump_provider = { path = "../crates/provider", optional = true }
 stump_provider_mangadex = { path = "../crates/provider-mangadex", optional = true }
 stump_provider_themes = { path = "../crates/provider-themes", optional = true }

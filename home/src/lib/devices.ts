@@ -17,7 +17,8 @@ export const DEVICE_KIND_LABELS: Record<DeviceKind, string> = {
 	OPDS: 'OPDS reader',
 	ABS: 'Audiobookshelf client',
 	API: 'API client',
-	WEB: 'Browser'
+	WEB: 'Browser',
+	WORKER: 'Worker'
 };
 
 /** The kinds a user can register from the Home app, in menu order. */

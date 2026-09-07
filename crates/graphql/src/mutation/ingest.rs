@@ -31,8 +31,9 @@ use crate::{
 		ingest::{
 			ApplyIngestMetadataInput, BulkApplyIngestMetadataInput,
 			EnqueueIngestAnalysisInput, IngestMetadataFieldMode,
-			IngestMetadataFieldSelectionInput, SetIngestProviderSettingsInput,
-			SetIngestQualityCheckSettingsInput, StageIngestUploadsInput,
+			IngestMetadataFieldSelectionInput, RunIngestQualityFixInput,
+			SetIngestProviderSettingsInput, SetIngestQualityCheckSettingsInput,
+			StageIngestUploadsInput,
 		},
 		metadata_policy::MetadataPolicyInput,
 	},
@@ -345,6 +346,32 @@ impl IngestMutation {
 			.requeue(drop_item_id.as_ref(), force)
 			.await
 			.map(IngestAnalysisJob::from)
+			.map_err(core_error)
+	}
+
+	/// Run a quality finding's named repair tool against a staged drop item,
+	/// then re-run its checks.
+	///
+	/// The re-run is the point of the button: a repair that worked must show
+	/// as a passing check without a manual requeue, and one that did not must
+	/// show as the same finding rather than as a green report. Providers are
+	/// not re-queried — a repaired container is the same book, and a fix must
+	/// not spend an operator's API quota.
+	///
+	/// A tool that produced nothing returns the item unchanged; the finding
+	/// simply persists in the next report.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
+	async fn run_ingest_quality_fix(
+		&self,
+		ctx: &Context<'_>,
+		input: RunIngestQualityFixInput,
+	) -> Result<IngestDropItem> {
+		ctx.data::<CoreContext>()?
+			.ingest()
+			.coordinator
+			.run_quality_fix(input.drop_item_id.as_ref(), &input.check_id)
+			.await
+			.map(IngestDropItem::from)
 			.map_err(core_error)
 	}
 

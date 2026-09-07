@@ -24,6 +24,7 @@ pub mod device;
 pub mod device_pairing;
 pub mod directory_listing;
 pub mod duplicate_page;
+pub mod edition_pair;
 pub mod email_device;
 pub mod emailer;
 pub mod emailer_send_record;
@@ -66,3 +67,4 @@ pub mod user;
 pub mod user_login_activity;
 #[cfg(feature = "web")]
 pub mod user_preferences;
+pub mod worker;

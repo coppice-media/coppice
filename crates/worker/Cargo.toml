@@ -1,0 +1,90 @@
+[package]
+name = "stump_worker"
+version.workspace = true
+edition = "2021"
+description = "Remote worker protocol: the worker_jobs queue and socket hub (server), and the stump-worker client"
+
+[features]
+# Both halves build by default so `cargo test -p stump_worker` can run a real
+# client against a real hub over a real listener. The server graph takes
+# `server` only, and the binary needs `client` only.
+default = ["server", "client"]
+server = [
+	"dep:chrono",
+	"dep:models",
+	"dep:sea-orm",
+	"dep:uuid",
+]
+client = [
+	"dep:clap",
+	"dep:futures-util",
+	"dep:reqwest",
+	"dep:sha2",
+	"dep:stump_tools",
+	"dep:tempfile",
+	"dep:tokio-tungstenite",
+	"dep:tracing-subscriber",
+]
+# The `challenge_solve` runner: drives a real, visible Chrome over CDP. Off by
+# default because it is the one capability with a heavyweight dependency (the
+# generated CDP protocol crate), and an operator who only wants Opus should
+# not compile a browser automation stack to get it.
+browser = ["client", "dep:chromiumoxide"]
+graphql = ["server", "dep:async-graphql", "models/graphql"]
+
+[[bin]]
+name = "stump-worker"
+path = "src/bin/stump-worker.rs"
+required-features = ["client"]
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# `sync`: the hub's per-worker outbound channels and the enqueue-and-await
+# waiters; `time`: dispatch timeouts and the client's reconnect backoff.
+tokio = { workspace = true, features = ["sync", "time"] }
+
+# --- server half -------------------------------------------------------
+async-graphql = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+models = { path = "../models", default-features = false, optional = true }
+sea-orm = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+
+# --- client half -------------------------------------------------------
+# `env`: the API key is a secret, and a secret on a command line is visible in
+# `ps` to every user on the worker's machine.
+clap = { workspace = true, features = ["env"], optional = true }
+futures-util = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+sha2 = { version = "0.10", optional = true }
+# The transcode runner shells out through the *same* `ffmpeg` adapter the
+# server's local fallback uses, so both sides build the identical argv and a
+# worker-produced Opus stream is byte-comparable with a locally produced one.
+stump_tools = { path = "../tools", optional = true }
+tempfile = { workspace = true, optional = true }
+# 0.28 is the version axum already links for its own `ws` feature, so the lock
+# gains an edge and no package.
+tokio-tungstenite = { version = "0.28", optional = true }
+tracing-subscriber = { version = "0.3.18", features = [
+	"env-filter",
+], optional = true }
+# The CDP client for the `browser` capability. Pure Rust, tokio-native, and it
+# drives a Chrome that is already installed: the `fetcher` feature (which
+# downloads a Chromium behind the operator's back) is deliberately off.
+chromiumoxide = { workspace = true, optional = true }
+
+[dev-dependencies]
+# A real axum `ws` upgrade in front of the hub: the protocol test must exercise
+# the transport the server actually mounts, not an in-memory channel pair.
+axum.workspace = true
+futures-util.workspace = true
+tempfile.workspace = true
+# The production DDL: the protocol tests run against the schema the migration
+# writes, not a hand-mirrored copy of it, so the entity and the migration
+# cannot drift apart unnoticed.
+migrations = { path = "../migrations", default-features = false }
+tokio = { workspace = true, features = ["full", "test-util"] }

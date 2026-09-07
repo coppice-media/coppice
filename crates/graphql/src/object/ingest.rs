@@ -8,7 +8,7 @@ use models::{
 	},
 	shared::enums::JobStatus,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use serde_json::{json, Value};
 use stump_api_types::settings::{SettingDefinition, SettingKind};
 use stump_ingest::contract::{
@@ -276,6 +276,97 @@ impl IngestDropItem {
 		self.model.error.as_deref()
 	}
 
+	/// The delivery this item arrived in, when one dropped archive produced
+	/// several items. `null` for a drop of one file.
+	async fn drop_group_id(&self) -> Option<ID> {
+		self.model.drop_group_id.clone().map(ID::from)
+	}
+
+	/// The other items of the same delivery, oldest first.
+	///
+	/// Empty for an item that arrived on its own, which is most of them, so a
+	/// client may render the strip unconditionally.
+	async fn drop_group_siblings(
+		&self,
+		ctx: &Context<'_>,
+	) -> Result<Vec<IngestDropGroupSibling>> {
+		let Some(group) = self.model.drop_group_id.as_deref() else {
+			return Ok(Vec::new());
+		};
+		let core = ctx.data::<CoreContext>()?;
+		let conn = core.conn.as_ref();
+		// A pair belongs to a user: the link rows are per-user, so the state
+		// shown is the viewer's own, never somebody else's decision.
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let siblings = ingest_drop_item::Entity::find()
+			.filter(ingest_drop_item::Column::DropGroupId.eq(group))
+			.filter(ingest_drop_item::Column::Id.ne(self.model.id.clone()))
+			.order_by_asc(ingest_drop_item::Column::CreatedAt)
+			.order_by_asc(ingest_drop_item::Column::Id)
+			.all(conn)
+			.await?;
+		let own_kind = ingest_media_kind(&self.model.media_kind);
+		let mut out = Vec::with_capacity(siblings.len());
+		for sibling in siblings {
+			let candidate = stump_ingest::pairing::is_edition_pair(
+				own_kind,
+				ingest_media_kind(&sibling.media_kind),
+			);
+			let state = if !candidate {
+				IngestEditionPairState::NotAPair
+			} else {
+				match (self.model.media_id.as_deref(), sibling.media_id.as_deref()) {
+					(Some(left), Some(right)) => {
+						pair_state(conn, &user.id, left, right).await?
+					},
+					// A suggestion needs two media rows; until both sides
+					// commit there is nothing to suggest yet.
+					_ => IngestEditionPairState::PendingCommit,
+				}
+			};
+			let quality_score = match sibling.quality_report_id.as_deref() {
+				Some(id) => ingest_quality_report::Entity::find_by_id(id)
+					.one(conn)
+					.await?
+					.map(|report| report.score),
+				None => None,
+			};
+			out.push(IngestDropGroupSibling {
+				id: sibling.id.into(),
+				filename: sibling.source_filename,
+				media_type: sibling.media_kind,
+				status: sibling.status.parse()?,
+				quality_score,
+				media_id: sibling.media_id.map(ID::from),
+				edition_pair_candidate: candidate,
+				pair_state: state,
+			});
+		}
+		Ok(out)
+	}
+
+	/// Staged files this item owns without being them: cover art, notes, and
+	/// the source parts kept beside an assembled M4B.
+	async fn sidecars(&self) -> Vec<String> {
+		stump_ingest::store::IngestStore::sidecars(&self.model)
+			.into_iter()
+			.filter_map(|path| {
+				// File names only: the staging layout is server-owned.
+				std::path::Path::new(&path)
+					.file_name()
+					.map(|name| name.to_string_lossy().into_owned())
+			})
+			.collect()
+	}
+
+	/// The audio probe's result. `null` for every non-audio item and for an
+	/// audio item whose analysis has not run yet.
+	async fn audio(&self) -> Option<IngestDropItemAudio> {
+		stump_ingest::store::IngestStore::audio_analysis(&self.model)
+			.map(IngestDropItemAudio::from)
+	}
+
 	async fn created_at(&self) -> sea_orm::prelude::DateTimeWithTimeZone {
 		self.model.created_at
 	}
@@ -453,6 +544,275 @@ impl IngestQualityCheckResult {
 
 	async fn evidence(&self) -> Json<Value> {
 		Json(self.check.outcome.evidence.clone())
+	}
+
+	/// The tool that repairs this finding, when one exists in this build.
+	///
+	/// Resolved from the check *registry* rather than stored on the report: a
+	/// check declares its repair once, so a persisted report can never offer
+	/// a fix naming a tool this build does not have.
+	async fn fix(&self, ctx: &Context<'_>) -> Result<Option<IngestQualityFixAction>> {
+		let check_id = self.check.outcome.check_id.as_str();
+		Ok(ctx
+			.data::<CoreContext>()?
+			.ingest()
+			.quality
+			.checks()
+			.iter()
+			.find(|check| check.id() == check_id)
+			.and_then(|check| check.fix())
+			.map(IngestQualityFixAction::from))
+	}
+}
+
+/// The audio probe's result for one staged publication.
+///
+/// A projection of the persisted `ingest_drop_items.audio_analysis`, never a
+/// fresh probe: demuxing a 62-part folder book is 62 container walks, and a
+/// screen that renders a chapter list must not cost that.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct IngestDropItemAudio {
+	pub duration_ms: i32,
+	/// `h:mm:ss`, the field a librarian actually reads.
+	pub duration: String,
+	/// The publication codec, or `mixed` when a folder book's parts disagree.
+	pub codec: String,
+	pub sample_rate: Option<i32>,
+	pub channels: Option<i32>,
+	pub bitrate: Option<i32>,
+	/// Where the chapter marks came from: `mp4_chpl`, `mp4_chapter_track`,
+	/// `id3_chap`, `vorbis_comment`, `per_track` (synthesized from file
+	/// boundaries), or `none`. Provenance, never a quality tier.
+	pub chapter_source: String,
+	pub tracks: Vec<IngestAudioTrack>,
+	pub chapters: Vec<IngestAudioChapter>,
+	/// Set when a part carries embedded artwork. The bytes are not served
+	/// here: a cover on every row would make listing a drop folder a
+	/// multi-megabyte query.
+	pub cover_content_type: Option<String>,
+	pub cover_byte_size: Option<i32>,
+	pub title: Option<String>,
+	pub author: Option<String>,
+	pub narrator: Option<String>,
+	pub album: Option<String>,
+	pub description: Option<String>,
+	pub genre: Option<String>,
+	pub year: Option<i32>,
+	/// The M4B an assemble produced, when one has run for this item.
+	pub assembled: Option<IngestAssembledAudio>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct IngestAudioTrack {
+	/// File name of the part. The staging layout is server-owned, so no path
+	/// is exposed.
+	pub filename: String,
+	pub duration_ms: i32,
+	pub duration: String,
+	/// Offset of this part's first sample within the publication, which is
+	/// the unit a reading position is expressed in.
+	pub start_offset_ms: i32,
+	pub byte_size: i32,
+	pub codec: String,
+	pub bitrate: Option<i32>,
+	pub title: Option<String>,
+	pub track_number: Option<i32>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct IngestAudioChapter {
+	pub title: Option<String>,
+	pub start_ms: i32,
+	pub start: String,
+	pub end_ms: Option<i32>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct IngestAssembledAudio {
+	pub filename: String,
+	pub byte_size: i32,
+	pub duration_ms: i32,
+	pub duration: String,
+	pub chapters: i32,
+	/// Whether `moov` precedes `mdat`, so playback starts without
+	/// downloading the whole file.
+	pub faststart: bool,
+	/// Whether the source parts were kept beside the output.
+	pub parts_kept: bool,
+	/// `assemble-remux` (lossless) or `assemble-transcode` (re-encoded).
+	pub method: String,
+}
+
+/// How far along the edition pairing of two items of one drop group is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
+pub enum IngestEditionPairState {
+	/// The two kinds do not pair: two ebooks are a format duplicate, and two
+	/// audiobooks are two books.
+	NotAPair,
+	/// A pair once both sides are in the library. A suggestion needs two
+	/// media rows, and a staged item has none.
+	PendingCommit,
+	/// The suggestion exists and is waiting for the user.
+	Suggested,
+	/// The user accepted it, or the liseur lane already asserted the work.
+	Confirmed,
+	/// The user declined it. Kept, because pairing is recomputed on every
+	/// book-page query.
+	Rejected,
+}
+
+/// The kind a drop item's stored `media_kind` names.
+///
+/// An unrecognised value reads as `Unknown`, which pairs with audio and with
+/// nothing else — the same answer the ingest crate gives.
+fn ingest_media_kind(value: &str) -> stump_ingest::contract::IngestMediaKind {
+	serde_json::from_value(Value::String(value.to_string()))
+		.unwrap_or(stump_ingest::contract::IngestMediaKind::Unknown)
+}
+
+/// Where the edition pairing of two committed media rows currently stands,
+/// for the user asking.
+///
+/// Read from the link rows the pairing lane owns, so the strip cannot claim a
+/// suggestion that was never written or hide one the user already rejected.
+/// A pair is two links naming one work: it is confirmed only when *both*
+/// sides are, rejected as soon as either is, and pending until both exist.
+async fn pair_state(
+	conn: &sea_orm::DatabaseConnection,
+	user_id: &str,
+	left_media_id: &str,
+	right_media_id: &str,
+) -> Result<IngestEditionPairState> {
+	use models::domain::edition_pair::{self, PairStatus};
+
+	let left = edition_pair::link_for_media(conn, user_id, left_media_id).await?;
+	let right = edition_pair::link_for_media(conn, user_id, right_media_id).await?;
+	let (Some(left), Some(right)) = (left, right) else {
+		return Ok(IngestEditionPairState::PendingCommit);
+	};
+	if left.work_id != right.work_id {
+		// Both belong to works, but not to the same one: nothing has paired
+		// them, and re-homing a link is the pairing lane's decision, not a
+		// display concern.
+		return Ok(IngestEditionPairState::PendingCommit);
+	}
+	let statuses = [
+		PairStatus::from_stored(&left.pair_status),
+		PairStatus::from_stored(&right.pair_status),
+	];
+	Ok(if statuses.contains(&PairStatus::Rejected) {
+		IngestEditionPairState::Rejected
+	} else if statuses.contains(&PairStatus::Suggested) {
+		IngestEditionPairState::Suggested
+	} else {
+		IngestEditionPairState::Confirmed
+	})
+}
+
+/// One other item of the same archive drop.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct IngestDropGroupSibling {
+	pub id: ID,
+	pub filename: String,
+	pub media_type: String,
+	pub status: IngestDropItemStatus,
+	pub quality_score: Option<i32>,
+	/// Set once this sibling committed into the library.
+	pub media_id: Option<ID>,
+	/// Whether this sibling and the item are an audio/text edition pair, so
+	/// committing both records a same-drop pair suggestion.
+	pub edition_pair_candidate: bool,
+	pub pair_state: IngestEditionPairState,
+}
+
+/// `h:mm:ss` from milliseconds, the one spelling every audio field uses.
+fn human_duration(duration_ms: i64) -> String {
+	let total = duration_ms.max(0) / 1_000;
+	format!(
+		"{}:{:02}:{:02}",
+		total / 3_600,
+		(total % 3_600) / 60,
+		total % 60
+	)
+}
+
+fn clamp_i32(value: i64) -> i32 {
+	value.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
+impl From<stump_ingest::contract::AudioAnalysis> for IngestDropItemAudio {
+	fn from(analysis: stump_ingest::contract::AudioAnalysis) -> Self {
+		Self {
+			duration_ms: clamp_i32(analysis.duration_ms),
+			duration: human_duration(analysis.duration_ms),
+			codec: analysis.codec,
+			sample_rate: analysis.sample_rate,
+			channels: analysis.channels,
+			bitrate: analysis.bitrate,
+			chapter_source: analysis.chapter_source,
+			tracks: analysis
+				.tracks
+				.into_iter()
+				.map(IngestAudioTrack::from)
+				.collect(),
+			chapters: analysis
+				.chapters
+				.into_iter()
+				.map(IngestAudioChapter::from)
+				.collect(),
+			cover_content_type: analysis.cover_content_type,
+			cover_byte_size: analysis.cover_byte_size.map(|size| clamp_i32(size as i64)),
+			title: analysis.title,
+			author: analysis.author,
+			narrator: analysis.narrator,
+			album: analysis.album,
+			description: analysis.description,
+			genre: analysis.genre,
+			year: analysis.year,
+			assembled: analysis.assembled.map(IngestAssembledAudio::from),
+		}
+	}
+}
+
+impl From<stump_ingest::contract::AudioAnalysisTrack> for IngestAudioTrack {
+	fn from(track: stump_ingest::contract::AudioAnalysisTrack) -> Self {
+		Self {
+			filename: track.filename,
+			duration_ms: clamp_i32(track.duration_ms),
+			duration: human_duration(track.duration_ms),
+			start_offset_ms: clamp_i32(track.start_offset_ms),
+			byte_size: clamp_i32(track.byte_size),
+			codec: track.codec,
+			bitrate: track.bitrate,
+			title: track.title,
+			track_number: track.track_number.map(|number| number as i32),
+		}
+	}
+}
+
+impl From<stump_ingest::contract::AudioAnalysisChapter> for IngestAudioChapter {
+	fn from(chapter: stump_ingest::contract::AudioAnalysisChapter) -> Self {
+		Self {
+			title: chapter.title,
+			start_ms: clamp_i32(chapter.start_ms),
+			start: human_duration(chapter.start_ms),
+			end_ms: chapter.end_ms.map(clamp_i32),
+		}
+	}
+}
+
+impl From<stump_ingest::contract::AssembledAudio> for IngestAssembledAudio {
+	fn from(assembled: stump_ingest::contract::AssembledAudio) -> Self {
+		Self {
+			filename: assembled.filename,
+			byte_size: clamp_i32(assembled.byte_size as i64),
+			duration_ms: clamp_i32(assembled.duration_ms),
+			duration: human_duration(assembled.duration_ms),
+			chapters: assembled.chapters as i32,
+			faststart: assembled.faststart,
+			parts_kept: assembled.parts_kept,
+			method: assembled.method,
+		}
 	}
 }
 

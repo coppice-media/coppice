@@ -105,6 +105,16 @@ pub struct EnqueueIngestAnalysisInput {
 	pub force: bool,
 }
 
+/// Which finding to repair, on which staged item.
+#[derive(Debug, InputObject)]
+pub struct RunIngestQualityFixInput {
+	pub drop_item_id: async_graphql::ID,
+	/// The failing check's id, e.g. `single_file` or `chapters_present`. The
+	/// tool and its options come from the check registry, so a client never
+	/// names a command line.
+	pub check_id: String,
+}
+
 /// Exactly one of `drop_item_id` (staged item) or `media_id` (library-wide
 /// rework target) must be provided.
 #[derive(Debug, InputObject)]

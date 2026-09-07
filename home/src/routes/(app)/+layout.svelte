@@ -30,6 +30,7 @@
 		{ href: resolve('/reading'), label: 'Reading' },
 		{ href: resolve('/annotations'), label: 'Annotations' },
 		{ href: resolve('/devices'), label: 'Devices' },
+		{ href: resolve('/workers'), label: 'Workers' },
 		{ href: resolve('/account'), label: 'Account' }
 	];
 
