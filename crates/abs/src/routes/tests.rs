@@ -378,6 +378,11 @@ async fn the_item_page_carries_the_minified_envelope_and_shape() {
 	assert_eq!(item["media"]["metadata"]["seriesName"], "");
 	// The full author/series objects belong to the detail shape.
 	assert!(item["media"]["metadata"].get("authors").is_none());
+	// abs-ref's minified capture omits ebookFile, ebookFormat and numEbooks;
+	// ebook metadata is only present on detail/expanded rows.
+	assert!(item["media"].get("ebookFile").is_none());
+	assert!(item["media"].get("ebookFormat").is_none());
+	assert!(item["media"].get("numEbooks").is_none());
 }
 
 #[tokio::test]
@@ -536,6 +541,12 @@ async fn item_detail_is_the_full_shape_and_expanded_adds_tracks() {
 	// A single-container audiobook is a file, not a folder.
 	assert_eq!(detail["isFile"], true);
 	assert!(detail["media"].get("tracks").is_none());
+	// `item.json` has the explicit null detail field, but no sibling
+	// ebookFormat/numEbooks keys.
+	assert!(detail["media"].get("ebookFile").is_some());
+	assert!(detail["media"]["ebookFile"].is_null());
+	assert!(detail["media"].get("ebookFormat").is_none());
+	assert!(detail["media"].get("numEbooks").is_none());
 
 	let (status, expanded) = request(
 		fixture.backend,
@@ -551,6 +562,10 @@ async fn item_detail_is_the_full_shape_and_expanded_adds_tracks() {
 		track["contentUrl"],
 		json!(format!("/api/items/{}/file/0", fixture.item_id))
 	);
+	assert!(expanded["media"].get("ebookFile").is_some());
+	assert!(expanded["media"]["ebookFile"].is_null());
+	assert!(expanded["media"].get("ebookFormat").is_none());
+	assert!(expanded["media"].get("numEbooks").is_none());
 	assert_eq!(track["startOffset"], 0.0);
 	assert!(track["title"].is_string());
 	// The expanded shape carries both metadata dialects.
@@ -1618,6 +1633,26 @@ async fn an_episode_progress_path_is_a_404_not_a_missing_route() {
 		.await;
 		assert_eq!(status, StatusCode::NOT_FOUND, "{method}");
 	}
+}
+
+#[tokio::test]
+async fn rss_open_is_a_clean_unsupported_not_found() {
+	let response = crate::routes::me::unsupported_rss_feed().await;
+	assert_eq!(response.status(), StatusCode::NOT_FOUND);
+	assert_eq!(
+		response
+			.headers()
+			.get(axum::http::header::CONTENT_TYPE)
+			.and_then(|value| value.to_str().ok()),
+		Some("text/plain; charset=utf-8")
+	);
+	let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+		.await
+		.expect("body");
+	assert_eq!(
+		body.as_ref(),
+		b"RSS feeds are not supported by the Audiobookshelf profile"
+	);
 }
 
 #[tokio::test]

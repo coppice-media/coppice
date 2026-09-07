@@ -42,7 +42,7 @@ use crate::{
 };
 
 /// Render one playlist, resolving its members into expanded library items.
-async fn render(
+pub(crate) async fn render(
 	backend: &dyn AbsBackend,
 	user: &AuthUser,
 	playlist: &AbsPlaylist,
@@ -120,10 +120,22 @@ async fn load(
 		.ok_or_else(|| AbsError::NotFound(format!("No playlist {playlist_id}")))
 }
 
+/// The socket bus, when the server mounted one. Playlist mutation routes
+/// publish the same expanded DTO they return over REST, matching
+/// `PlaylistController.js:117-119,249-255,265-271`.
+type Events = Option<Extension<crate::socket::AbsEvents>>;
+
+fn announce_playlist(events: &Events, event: crate::socket::AbsEvent) {
+	if let Some(Extension(events)) = events.as_ref() {
+		events.send(event);
+	}
+}
+
 /// `POST /api/playlists` — `{items, libraryId, name}`.
 pub(crate) async fn create(
 	backend: Backend,
 	Extension(user): User,
+	events: Events,
 	Json(body): Json<PlaylistCreateRequestDto>,
 ) -> AbsResult<Json<PlaylistDto>> {
 	let name = body
@@ -140,6 +152,13 @@ pub(crate) async fn create(
 		.create_playlist(&user, name, body.description.as_deref(), &media_ids)
 		.await?;
 	let dto = render(&**backend, &user, &playlist, body.library_id.as_deref()).await?;
+	announce_playlist(
+		&events,
+		crate::socket::AbsEvent::PlaylistAdded {
+			user_id: user.id.clone(),
+			playlist: dto.clone(),
+		},
+	);
 	Ok(Json(dto))
 }
 
@@ -177,6 +196,7 @@ pub(crate) async fn detail(
 pub(crate) async fn update(
 	backend: Backend,
 	Extension(user): User,
+	events: Events,
 	Path(playlist_id): Path<String>,
 	Json(body): Json<PlaylistUpdateRequestDto>,
 ) -> AbsResult<Json<PlaylistDto>> {
@@ -197,17 +217,34 @@ pub(crate) async fn update(
 			media_ids.as_deref(),
 		)
 		.await?;
-	Ok(Json(render(&**backend, &user, &playlist, None).await?))
+	let dto = render(&**backend, &user, &playlist, None).await?;
+	announce_playlist(
+		&events,
+		crate::socket::AbsEvent::PlaylistUpdated {
+			user_id: user.id.clone(),
+			playlist: dto.clone(),
+		},
+	);
+	Ok(Json(dto))
 }
 
 /// `DELETE /api/playlists/{id}`. abs-ref answers `200 text/plain` here.
 pub(crate) async fn remove(
 	backend: Backend,
 	Extension(user): User,
+	events: Events,
 	Path(playlist_id): Path<String>,
 ) -> AbsResult<Response<Body>> {
-	load(&**backend, &user, &playlist_id).await?;
+	let playlist = load(&**backend, &user, &playlist_id).await?;
+	let dto = render(&**backend, &user, &playlist, None).await?;
 	backend.delete_playlist(&user, &playlist_id).await?;
+	announce_playlist(
+		&events,
+		crate::socket::AbsEvent::PlaylistRemoved {
+			user_id: user.id.clone(),
+			playlist: dto,
+		},
+	);
 	Ok(ok_text())
 }
 
@@ -215,10 +252,11 @@ pub(crate) async fn remove(
 pub(crate) async fn add_item(
 	backend: Backend,
 	Extension(user): User,
+	events: Events,
 	Path(playlist_id): Path<String>,
 	Json(body): Json<PlaylistItemRefDto>,
 ) -> AbsResult<Json<PlaylistDto>> {
-	mutate_items(backend, user, playlist_id, vec![body], true).await
+	mutate_items(backend, user, events, playlist_id, vec![body], true).await
 }
 
 /// `DELETE /api/playlists/{id}/item/{itemId}[/{episodeId}]`
@@ -226,33 +264,36 @@ pub(crate) async fn add_item(
 pub(crate) async fn remove_item(
 	backend: Backend,
 	Extension(user): User,
+	events: Events,
 	Path((playlist_id, item_id)): Path<(String, String)>,
 ) -> AbsResult<Json<PlaylistDto>> {
 	let item = PlaylistItemRefDto {
 		library_item_id: item_id,
 		episode_id: None,
 	};
-	mutate_items(backend, user, playlist_id, vec![item], false).await
+	mutate_items(backend, user, events, playlist_id, vec![item], false).await
 }
 
 /// `POST /api/playlists/{id}/batch/add`.
 pub(crate) async fn batch_add(
 	backend: Backend,
 	Extension(user): User,
+	events: Events,
 	Path(playlist_id): Path<String>,
 	Json(body): Json<PlaylistItemsRequestDto>,
 ) -> AbsResult<Json<PlaylistDto>> {
-	mutate_items(backend, user, playlist_id, body.items, true).await
+	mutate_items(backend, user, events, playlist_id, body.items, true).await
 }
 
 /// `POST /api/playlists/{id}/batch/remove`.
 pub(crate) async fn batch_remove(
 	backend: Backend,
 	Extension(user): User,
+	events: Events,
 	Path(playlist_id): Path<String>,
 	Json(body): Json<PlaylistItemsRequestDto>,
 ) -> AbsResult<Json<PlaylistDto>> {
-	mutate_items(backend, user, playlist_id, body.items, false).await
+	mutate_items(backend, user, events, playlist_id, body.items, false).await
 }
 
 /// Add or remove members and answer the updated playlist, which is what
@@ -261,6 +302,7 @@ pub(crate) async fn batch_remove(
 async fn mutate_items(
 	backend: Backend,
 	user: AuthUser,
+	events: Events,
 	playlist_id: String,
 	refs: Vec<PlaylistItemRefDto>,
 	add: bool,
@@ -286,7 +328,15 @@ async fn mutate_items(
 	let playlist = backend
 		.update_playlist(&user, &playlist_id, None, None, Some(&media_ids))
 		.await?;
-	Ok(Json(render(&**backend, &user, &playlist, None).await?))
+	let dto = render(&**backend, &user, &playlist, None).await?;
+	announce_playlist(
+		&events,
+		crate::socket::AbsEvent::PlaylistUpdated {
+			user_id: user.id.clone(),
+			playlist: dto.clone(),
+		},
+	);
+	Ok(Json(dto))
 }
 
 /// `GET /api/libraries/{id}/playlists`. The app reads `data.results`

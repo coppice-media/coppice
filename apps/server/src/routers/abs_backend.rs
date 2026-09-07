@@ -81,11 +81,12 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 
 /// Bridge the process-wide event buses onto the profile's socket lane.
 ///
-/// Two subscriptions, translated into the three things an Audiobookshelf
+/// Two subscriptions, translated into the state changes an Audiobookshelf
 /// client can be told: a reading head moved (from any protocol — a Kobo, a
-/// KOReader plugin, this profile's own sync), books appeared, or a book's
-/// row was rewritten. Everything else on the core bus is server business no
-/// Audiobookshelf client subscribes to.
+/// KOReader plugin, this profile's own sync), books appeared, or a book's row
+/// was rewritten. Playlist mutations are announced by their own route
+/// handlers because they are not core-media events. Everything else on the
+/// core bus is server business no Audiobookshelf client subscribes to.
 ///
 /// The forwarder lives here, not on the backend adapter, because the adapter
 /// is also constructed per request for `Basic` authentication; spawning from
@@ -629,6 +630,34 @@ impl AbsBackend for AbsBackendAdapter {
 			.map(|audio| audio.duration_ms)
 			.unwrap_or(0);
 		Ok(Some(progress_from_head(&head, duration_ms)))
+	}
+
+	async fn clear_progress(&self, user: &AuthUser, media_id: &str) -> AbsResult<bool> {
+		let book = media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(media_id))
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| AbsError::NotFound(format!("No library item {media_id}")))?;
+		let media_ids = vec![media_id.to_owned()];
+		let txn = models::txn::begin_write(self.conn()).await?;
+		let removed = reading_state_service::clear(
+			&txn,
+			&user.id,
+			&media_ids,
+			stump_core::reading_state::SourceProtocol::Abs,
+			None,
+		)
+		.await?;
+		txn.commit().await?;
+		if removed > 0 {
+			stump_core::reading_state::announce_cleared(
+				self.ctx.as_ref(),
+				&user.id,
+				&book,
+				stump_core::reading_state::SourceProtocol::Abs,
+			);
+		}
+		Ok(removed > 0)
 	}
 
 	async fn progress_all(

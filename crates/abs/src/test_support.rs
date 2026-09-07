@@ -392,6 +392,22 @@ impl AbsBackend for TestBackend {
 			.cloned())
 	}
 
+	async fn clear_progress(&self, user: &AuthUser, media_id: &str) -> AbsResult<bool> {
+		let removed = self
+			.progress
+			.lock()
+			.get_mut(&user.id)
+			.is_some_and(|rows| rows.remove(media_id).is_some());
+		if removed {
+			if let Some(events) = self.events.lock().clone() {
+				events.send(crate::socket::AbsEvent::UserChanged {
+					user_id: user.id.clone(),
+				});
+			}
+		}
+		Ok(removed)
+	}
+
 	async fn progress_all(
 		&self,
 		user: &AuthUser,

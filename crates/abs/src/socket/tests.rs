@@ -33,6 +33,7 @@ type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 struct Fixture {
 	address: String,
 	user: AuthUser,
+	library_id: String,
 	item_id: String,
 	backend: Arc<TestBackend>,
 	events: AbsEvents,
@@ -69,6 +70,7 @@ async fn serve() -> Fixture {
 	Fixture {
 		address,
 		user,
+		library_id: library.id,
 		item_id: item.id,
 		backend,
 		events,
@@ -253,7 +255,151 @@ async fn a_progress_patch_over_rest_reaches_the_socket() {
 	// keeps its media-progress list and its bookmarks current.
 	let updated = next_event(&mut socket, "user_updated").await;
 	assert_eq!(updated[1]["id"], fixture.user.id);
+
 	assert_eq!(updated[1]["mediaProgress"][0]["currentTime"], 6.5);
+}
+#[tokio::test]
+async fn playlist_mutations_push_expanded_added_updated_and_removed_events() {
+	let fixture = serve().await;
+	let mut socket = connect(&fixture.address).await;
+	handshake(&mut socket).await;
+	send(
+		&mut socket,
+		&format!("42{}", json!(["auth", token(&fixture.user)])),
+	)
+	.await;
+	next_event(&mut socket, "init").await;
+
+	let (status, created) = crate::test_support::request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		"/api/playlists",
+		Some(json!({
+			"items": [],
+			"libraryId": fixture.library_id,
+			"name": "Socket playlist"
+		})),
+	)
+	.await;
+	assert_eq!(status, axum::http::StatusCode::OK);
+	let added = next_event(&mut socket, "playlist_added").await;
+	assert_eq!(added[1], created);
+	let playlist_id = created["id"].as_str().expect("playlist id");
+	let (status, member_added) = crate::test_support::request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		&format!("/api/playlists/{playlist_id}/item"),
+		Some(json!({"libraryItemId": fixture.item_id, "episodeId": null})),
+	)
+	.await;
+	assert_eq!(status, axum::http::StatusCode::OK);
+	let membership_added = next_event(&mut socket, "playlist_updated").await;
+	assert_eq!(membership_added[1], member_added);
+
+	let (status, member_removed) = crate::test_support::request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"DELETE",
+		&format!("/api/playlists/{playlist_id}/item/{}", fixture.item_id),
+		None,
+	)
+	.await;
+	assert_eq!(status, axum::http::StatusCode::OK);
+	let membership_removed = next_event(&mut socket, "playlist_updated").await;
+	assert_eq!(membership_removed[1], member_removed);
+
+	let (status, updated) = crate::test_support::request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"PATCH",
+		&format!("/api/playlists/{playlist_id}"),
+		Some(json!({"name": "Renamed playlist"})),
+	)
+	.await;
+	assert_eq!(status, axum::http::StatusCode::OK);
+	let changed = next_event(&mut socket, "playlist_updated").await;
+	assert_eq!(changed[1], updated);
+
+	let (status, _) = crate::test_support::request(
+		fixture.backend,
+		&fixture.user,
+		"DELETE",
+		&format!("/api/playlists/{playlist_id}"),
+		None,
+	)
+	.await;
+	assert_eq!(status, axum::http::StatusCode::OK);
+	let removed = next_event(&mut socket, "playlist_removed").await;
+	assert_eq!(removed[1], updated);
+}
+
+#[tokio::test]
+async fn deleting_media_progress_removes_it_and_pushes_only_user_updated() {
+	let fixture = serve().await;
+	let mut socket = connect(&fixture.address).await;
+	handshake(&mut socket).await;
+	send(
+		&mut socket,
+		&format!("42{}", json!(["auth", token(&fixture.user)])),
+	)
+	.await;
+	next_event(&mut socket, "init").await;
+
+	let (status, _) = crate::test_support::request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"PATCH",
+		&format!("/api/me/progress/{}", fixture.item_id),
+		Some(json!({ "currentTime": 6.5, "duration": 12.0 })),
+	)
+	.await;
+	assert_eq!(status, axum::http::StatusCode::OK);
+	next_event(&mut socket, "user_item_progress_updated").await;
+	next_event(&mut socket, "user_updated").await;
+
+	let (status, progress) = crate::test_support::request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/me/progress/{}", fixture.item_id),
+		None,
+	)
+	.await;
+	assert_eq!(status, axum::http::StatusCode::OK);
+	let progress_id = progress["id"].as_str().expect("media progress id");
+
+	let (status, _) = crate::test_support::request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"DELETE",
+		&format!("/api/me/progress/{progress_id}"),
+		None,
+	)
+	.await;
+	assert_eq!(status, axum::http::StatusCode::OK);
+	let updated = next_event(&mut socket, "user_updated").await;
+	assert!(updated[1]["mediaProgress"]
+		.as_array()
+		.expect("media progress")
+		.iter()
+		.all(|item| item["libraryItemId"] != json!(fixture.item_id)));
+	let trailing = tokio::time::timeout(Duration::from_millis(100), socket.next()).await;
+	assert!(
+		trailing.is_err(),
+		"progress deletion emitted an unexpected second socket event: {trailing:?}"
+	);
+
+	let (status, _) = crate::test_support::request(
+		fixture.backend,
+		&fixture.user,
+		"GET",
+		&format!("/api/me/progress/{}", fixture.item_id),
+		None,
+	)
+	.await;
+	assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

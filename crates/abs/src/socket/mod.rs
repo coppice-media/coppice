@@ -6,7 +6,7 @@
 //! REST-only server costs that app a feature no REST route can give back.
 //! This module is the smallest thing that closes that gap honestly: an
 //! Engine.IO v4 handshake, a Socket.IO v5 connect, the app's `auth`
-//! round-trip, and the three server events it can be told the truth about.
+//! round-trip, and the state events it can be told the truth about.
 //!
 //! It is a **sink**, not a source of state: it holds no reading position, no
 //! session and no user list of its own. Everything it emits is translated
@@ -68,7 +68,7 @@ const EVENT_BUFFER: usize = 256;
 /// A change one of Stump's lanes committed, in the terms this profile can
 /// translate. The server adapter fills these from the core event buses; the
 /// profile's own writes publish them directly.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AbsEvent {
 	/// One user's listening position for one book moved (or was cleared).
 	ProgressChanged { user_id: String, media_id: String },
@@ -82,6 +82,20 @@ pub enum AbsEvent {
 	/// to gate visibility, so the bus never carries an id list that a
 	/// subscriber may not see.
 	SeriesUpdated { series_id: String },
+	/// A playlist mutation, carrying the exact expanded DTO returned by REST.
+	/// The app's modal and playlist page consume the same `id`/`items` shape.
+	PlaylistAdded {
+		user_id: String,
+		playlist: crate::dto::PlaylistDto,
+	},
+	PlaylistUpdated {
+		user_id: String,
+		playlist: crate::dto::PlaylistDto,
+	},
+	PlaylistRemoved {
+		user_id: String,
+		playlist: crate::dto::PlaylistDto,
+	},
 }
 
 /// The per-server socket bus: the event fan-out plus the presence registry
@@ -451,6 +465,21 @@ impl Connection {
 					.map(|payload| protocol::event_frame("item_updated", Some(payload)))
 					.collect()
 			},
+			AbsEvent::PlaylistAdded { user_id, playlist } if user_id == user.id => {
+				playlist_frame("playlist_added", playlist)
+					.into_iter()
+					.collect()
+			},
+			AbsEvent::PlaylistUpdated { user_id, playlist } if user_id == user.id => {
+				playlist_frame("playlist_updated", playlist)
+					.into_iter()
+					.collect()
+			},
+			AbsEvent::PlaylistRemoved { user_id, playlist } if user_id == user.id => {
+				playlist_frame("playlist_removed", playlist)
+					.into_iter()
+					.collect()
+			},
 			_ => Vec::new(),
 		};
 
@@ -502,6 +531,11 @@ async fn progress_frame(
 async fn user_frame(backend: &dyn AbsBackend, user: &AuthUser) -> Option<String> {
 	let payload = serde_json::to_value(me::user_dto(backend, user).await.ok()?).ok()?;
 	Some(protocol::event_frame("user_updated", Some(payload)))
+}
+
+fn playlist_frame(name: &str, playlist: crate::dto::PlaylistDto) -> Option<String> {
+	let payload = serde_json::to_value(playlist).ok()?;
+	Some(protocol::event_frame(name, Some(payload)))
 }
 
 async fn items_frame(

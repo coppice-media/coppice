@@ -123,6 +123,12 @@ pub trait AbsBackend: Send + Sync {
 		media_id: &str,
 	) -> AbsResult<Option<AbsProgress>>;
 
+	/// Remove the user's listening head for one book. Returns whether a head
+	/// existed and was removed; the route uses that distinction for abs-ref's
+	/// `404` on an unknown media-progress id. Implementations also announce the
+	/// committed change so the socket lane can publish `user_updated`.
+	async fn clear_progress(&self, user: &AuthUser, media_id: &str) -> AbsResult<bool>;
+
 	/// Every book the user has a position for, newest first — the shape
 	/// `GET /api/me` and the "continue listening" shelf both need.
 	async fn progress_all(
@@ -382,7 +388,9 @@ where
 		.route("/me", get(me::me))
 		.route(
 			"/me/progress/{item_id}",
-			get(me::progress).patch(me::patch_progress),
+			get(me::progress)
+				.patch(me::patch_progress)
+				.delete(me::delete_progress),
 		)
 		// The official app suffixes an episode id for a podcast
 		// (`ApiHandler.kt:688,696`). The profile serves no podcast library,
@@ -392,6 +400,7 @@ where
 			"/me/progress/{item_id}/{episode_id}",
 			get(me::episode_progress).patch(me::episode_progress),
 		)
+		.route("/feeds/item/{item_id}/open", post(me::unsupported_rss_feed))
 		.route("/me/items-in-progress", get(me::items_in_progress))
 		.route("/me/listening-sessions", get(me::listening_sessions))
 		.route("/me/listening-stats", get(me::listening_stats))

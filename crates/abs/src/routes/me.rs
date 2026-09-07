@@ -1,5 +1,5 @@
-//! The per-user surface: `GET /api/me`, the media-progress read/patch, the
-//! bookmark writes, and the two screens the official app opens on launch —
+//! The per-user surface: `GET /api/me`, the media-progress read/patch/delete,
+//! the bookmark writes, and the two screens the official app opens on launch —
 //! the "continue" row (`GET /api/me/items-in-progress`) and the listening
 //! history (`/listening-sessions`, `/listening-stats`).
 //!
@@ -151,6 +151,31 @@ pub(crate) async fn progress(
 	)))
 }
 
+/// `DELETE /api/me/progress/{progressId}`. The official app sends the
+/// `MediaProgress.id` from `/api/me`, not the library-item id
+/// (`components/modals/ItemMoreMenuModal.vue:368-397`). Stump derives that
+/// id as `{userId}-{mediaId}` in [`mapper::progress_dto`].
+///
+/// abs-ref removes the row and pushes only `user_updated`
+/// (`server/controllers/MeController.js:253-265`); it does not send a
+/// `user_item_progress_updated` frame with `data: null`.
+pub(crate) async fn delete_progress(
+	backend: Backend,
+	Extension(user): User,
+	events: Events,
+	Path(progress_id): Path<String>,
+) -> AbsResult<Response> {
+	let prefix = format!("{}-", user.id);
+	let media_id = progress_id
+		.strip_prefix(&prefix)
+		.filter(|media_id| !media_id.is_empty())
+		.ok_or_else(|| AbsError::NotFound(format!("No progress {progress_id}")))?;
+	if !backend.clear_progress(&user, media_id).await? {
+		return Err(AbsError::NotFound(format!("No progress {progress_id}")));
+	}
+	Ok(crate::routes::ok_text())
+}
+
 /// `PATCH /api/me/progress/{itemId}`: a partial update. The two fields that
 /// matter are `currentTime` and `isFinished`; a patch that carries neither
 /// still succeeds, as it does on abs-ref.
@@ -210,6 +235,23 @@ pub(crate) async fn episode_progress(
 	Err(AbsError::NotFound(format!(
 		"No episode {episode_id} in {item_id}"
 	)))
+}
+
+/// `POST /api/feeds/item/{id}/open` is an official-app menu action
+/// (`components/modals/rssfeeds/RssFeedModal.vue:151-160`), but this profile
+/// has no RSS feed store. Keep the reference's `404` while returning a useful
+/// plain-text message for the app's toast instead of the full-server SPA JSON.
+pub(crate) async fn unsupported_rss_feed() -> Response {
+	Response::builder()
+		.status(axum::http::StatusCode::NOT_FOUND)
+		.header(
+			axum::http::header::CONTENT_TYPE,
+			"text/plain; charset=utf-8",
+		)
+		.body(axum::body::Body::from(
+			"RSS feeds are not supported by the Audiobookshelf profile",
+		))
+		.expect("valid RSS unsupported response")
 }
 
 /// The socket bus, when the server mounted one. A bookmark write is the one
