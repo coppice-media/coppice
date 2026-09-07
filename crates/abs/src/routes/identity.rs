@@ -49,6 +49,18 @@ pub(crate) async fn status() -> Json<crate::dto::StatusDto> {
 	Json(mapper::status())
 }
 
+/// `POST /logout`. The official app calls it when a server connection is
+/// removed (`store/user.js:158`) and ignores the body; abs-ref answers
+/// `{"redirect_url": null}`, which is what an OpenID install would fill in.
+///
+/// The profile mints stateless JWTs and keeps no server-side session to
+/// destroy, so this is an acknowledgement, not a revocation — a token stays
+/// valid until it expires. It is public for the same reason: a client whose
+/// token has already expired must still be able to log out of it.
+pub(crate) async fn logout() -> Json<crate::dto::LogoutDto> {
+	Json(crate::dto::LogoutDto { redirect_url: None })
+}
+
 fn wants_tokens(headers: &HeaderMap) -> bool {
 	headers
 		.get(RETURN_TOKENS_HEADER)

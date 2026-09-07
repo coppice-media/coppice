@@ -21,6 +21,7 @@ pub mod mapper;
 pub mod model;
 pub mod routes;
 pub mod sessions;
+pub mod socket;
 #[cfg(test)]
 mod test_support;
 
@@ -31,8 +32,12 @@ pub use model::{
 	AbsAudio, AbsAudioChapter, AbsAudioTrack, AbsBookmark, AbsImage, AbsPositionUpdate,
 	AbsProgress, ItemShape,
 };
-pub use routes::{authenticated_router, public_router, AbsBackend, AbsSession};
+pub use routes::{
+	authenticated_router, public_router, AbsBackend, AbsSession, PLAY_METHOD_DIRECT,
+	PLAY_METHOD_LOCAL,
+};
 pub use sessions::{AbsSessions, CREATE_ABS_SESSIONS_SQL};
+pub use socket::{router as socket_router, AbsEvent, AbsEvents};
 
 /// The Audiobookshelf release whose reference responses this profile
 /// reproduces.

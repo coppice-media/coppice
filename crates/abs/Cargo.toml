@@ -11,6 +11,9 @@ axum-extra = { version = "0.10.0", features = ["query"] }
 base64.workspace = true
 chrono.workspace = true
 jsonwebtoken = "9.3.0"
+# The socket.io lane's heartbeat, event bus and connection loop; the crate
+# has no other async machinery of its own.
+tokio = { workspace = true }
 models = { path = "../models", default-features = false }
 sea-orm.workspace = true
 serde.workspace = true
@@ -23,5 +26,10 @@ uuid.workspace = true
 [dev-dependencies]
 parking_lot = "0.12"
 tokio = { workspace = true, features = ["full", "test-util"] }
+# A websocket *client* for the socket.io lane's tests. 0.28 is the version
+# axum already links for its own `ws` feature, so the lock gains an edge and
+# no package.
+tokio-tungstenite = "0.28"
 tests = { path = "../tests" }
 tower = { version = "0.5", features = ["util"] }
+futures-util = { workspace = true }

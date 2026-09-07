@@ -97,6 +97,14 @@ pub struct AbsPositionUpdate {
 	/// position-only update such as `PATCH /api/me/progress/{id}`.
 	pub elapsed_ms: i64,
 	pub is_finished: Option<bool>,
+	/// The device clock time this position was reached, when the client
+	/// dated it. `None` stamps the server's ingestion time.
+	///
+	/// Only the offline merge (`POST /api/session/local`, `/local-all`) sends
+	/// one: the app uploads sessions recorded hours earlier, and the unified
+	/// head's conflict rule needs the *source* time to decide whether such a
+	/// session still moves the head or is provenance only.
+	pub at: Option<DateTime<Utc>>,
 }
 
 /// One audio bookmark. Audiobookshelf identifies a bookmark by

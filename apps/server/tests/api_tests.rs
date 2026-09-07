@@ -1,3 +1,5 @@
+#[cfg(feature = "abs")]
+mod abs;
 #[cfg(feature = "graphql")]
 mod audio;
 mod common;

@@ -46,6 +46,15 @@ pub fn ts_ms(at: DateTime<Utc>) -> i64 {
 	at.timestamp_millis()
 }
 
+/// The inverse, for the millisecond timestamps a client *sends*: the
+/// `lastUpdate` of a progress patch and the `updatedAt` of an uploaded
+/// offline session. Out-of-range values answer `None` rather than clamping
+/// to an epoch a conflict rule would then trust.
+pub fn ms_to_utc(millis: i64) -> Option<DateTime<Utc>> {
+	use chrono::TimeZone;
+	Utc.timestamp_millis_opt(millis).single()
+}
+
 fn opt_ts_ms<Tz: chrono::TimeZone>(at: Option<DateTime<Tz>>) -> Option<i64> {
 	at.map(|at| at.timestamp_millis())
 }
@@ -876,11 +885,28 @@ pub struct SessionInput<'a> {
 	pub time_listening_ms: i64,
 	pub started_at: DateTime<Utc>,
 	pub updated_at: DateTime<Utc>,
+	/// `0` DirectPlay for a session a play request opened, `3` Local for one
+	/// the client recorded offline and uploaded.
+	pub play_method: i64,
+	pub shape: SessionShape,
 }
 
-/// The `PlaybackSession` a play request answers with. `playMethod` is always
-/// `0` (DirectPlay): Stump never transcodes, so a client must play the tracks
-/// as served.
+/// Which of abs-ref's two playback-session shapes a response carries: the
+/// answer to a play request, which a player needs the tracks and the whole
+/// library item from, or a row of the listening history, which carries
+/// neither (24 keys against 26 in the live 2.36.0 capture).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionShape {
+	Full,
+	Listed,
+}
+
+/// One `PlaybackSession`, in the shape the caller asked for.
+///
+/// `playMethod` is `0` (DirectPlay) for every session this profile opens —
+/// Stump serves the stored tracks and never transcodes on this lane — and
+/// `3` (Local) for a session the client recorded offline and uploaded
+/// through `POST /api/session/local`.
 pub fn session_dto(input: SessionInput<'_>) -> PlaybackSessionDto {
 	let item = input.item;
 	let metadata = item.media.metadata.clone();
@@ -900,10 +926,14 @@ pub fn session_dto(input: SessionInput<'_>) -> PlaybackSessionDto {
 		.filter(|name| !name.is_empty());
 	// The item was mapped with its metadata; the session's tracks are the
 	// same files, so the tags must not be dropped on the way.
-	let tracks = match item.media.audio_files.clone() {
-		Some(files) => tracks_of(&item.id, input.audio, files),
-		None => audio_tracks(&item.id, input.audio, None, item.added_at, item.updated_at),
-	};
+	let tracks = (input.shape == SessionShape::Full).then(|| {
+		match item.media.audio_files.clone() {
+			Some(files) => tracks_of(&item.id, input.audio, files),
+			None => {
+				audio_tracks(&item.id, input.audio, None, item.added_at, item.updated_at)
+			},
+		}
+	});
 	PlaybackSessionDto {
 		id: input.session_id.to_owned(),
 		user_id: input.user_id.to_owned(),
@@ -918,7 +948,7 @@ pub fn session_dto(input: SessionInput<'_>) -> PlaybackSessionDto {
 		display_author,
 		cover_path: item.media.cover_path.clone(),
 		duration: ms_to_secs(input.audio.duration_ms),
-		play_method: 0,
+		play_method: input.play_method,
 		media_player: input.media_player.unwrap_or_else(|| "unknown".to_owned()),
 		device_info: DeviceInfoDto {
 			id: input.session_id.to_owned(),
@@ -941,7 +971,34 @@ pub fn session_dto(input: SessionInput<'_>) -> PlaybackSessionDto {
 		started_at: ts_ms(input.started_at),
 		updated_at: ts_ms(input.updated_at),
 		audio_tracks: tracks,
-		library_item: item,
+		library_item: (input.shape == SessionShape::Full).then(|| Box::new(item)),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Series — GET /api/libraries/{id}/series, GET /api/series/{id}
+// ---------------------------------------------------------------------------
+
+/// One Audiobookshelf series. Stump's series row is a folder, so `addedAt`
+/// and `updatedAt` are the folder's own timestamps and `books` are the
+/// audible members the caller may see, already mapped.
+pub fn series_dto(
+	series: &models::entity::series::Model,
+	library_id: &str,
+	books: Option<Vec<LibraryItemDto>>,
+) -> SeriesDto {
+	SeriesDto {
+		id: series.id.clone(),
+		library_id: library_id.to_owned(),
+		name: series.name.clone(),
+		name_ignore_prefix: ignore_prefix(&series.name),
+		description: series.description.clone(),
+		added_at: ts_ms(series.created_at.into()),
+		updated_at: series
+			.updated_at
+			.map(|at| ts_ms(at.into()))
+			.unwrap_or_else(|| ts_ms(series.created_at.into())),
+		books,
 	}
 }
 

@@ -220,6 +220,10 @@ pub(crate) struct TestBackend {
 	/// The device the request's credential resolves to, as the server's auth
 	/// middleware would have put on the [`AuthContext`].
 	pub device_id: Mutex<Option<String>>,
+	/// The socket bus, when a test mounted one. The stub plays the part the
+	/// server adapter plays in production: an accepted head is announced by
+	/// whoever wrote it, never by the route.
+	pub events: Mutex<Option<crate::socket::AbsEvents>>,
 }
 
 impl TestBackend {
@@ -233,11 +237,18 @@ impl TestBackend {
 			covers: Mutex::new(HashMap::new()),
 			served: Mutex::new(Vec::new()),
 			device_id: Mutex::new(None),
+			events: Mutex::new(None),
 		})
 	}
 
 	pub(crate) fn set_audio(&self, media_id: &str, audio: AbsAudio) {
 		self.audio.lock().insert(media_id.to_owned(), audio);
+	}
+
+	/// Announce accepted reading-head changes on this bus, the way the
+	/// server adapter forwards `ReadingHeadChanged` to the socket lane.
+	pub(crate) fn set_events(&self, events: crate::socket::AbsEvents) {
+		*self.events.lock() = Some(events);
 	}
 
 	/// Authenticate every later request as this device, so the per-device
@@ -376,20 +387,57 @@ impl AbsBackend for TestBackend {
 			.unwrap_or_default())
 	}
 
+	/// Applies the **real** conflict rule
+	/// ([`models::domain::reading_state::resolve`]) rather than a second
+	/// opinion about it, so a route test that asserts an offline session was
+	/// or was not merged is asserting what the server would do.
 	async fn apply_position(
 		&self,
 		user: &AuthUser,
 		media_id: &str,
 		update: AbsPositionUpdate,
-	) -> AbsResult<()> {
+	) -> AbsResult<bool> {
+		use models::domain::reading_state::{resolve, HeadState, Outcome, Projection};
+
 		self.applied.lock().push((media_id.to_owned(), update));
 
 		let mut progress = self.progress.lock();
 		let rows = progress.entry(user.id.clone()).or_default();
 		let existing = rows.get(media_id).cloned();
-		let finished = update.is_finished.unwrap_or_else(|| {
-			update.duration_ms > 0 && update.position_ms >= update.duration_ms
+		let duration_ms = update.duration_ms;
+		let progression = (duration_ms > 0)
+			.then(|| (update.position_ms as f64 / duration_ms as f64).clamp(0.0, 1.0));
+		let head = existing.as_ref().map(|progress| HeadState {
+			updated_at: progress.last_update,
+			progression: if duration_ms > 0 {
+				(progress.position_ms as f64 / duration_ms as f64).clamp(0.0, 1.0)
+			} else {
+				0.0
+			},
+			completed: progress.is_finished,
 		});
+		let incoming_at = update.at.unwrap_or_else(Utc::now);
+		let resolved = resolve(
+			head,
+			&Projection {
+				position_ms: Some(update.position_ms),
+				track_index: update.track_index,
+				progression,
+				completed: update.is_finished,
+				..Default::default()
+			},
+			incoming_at,
+		);
+		if resolved.outcome != Outcome::Accepted {
+			// Provenance only: the update was recorded (`applied`) and the
+			// head did not move.
+			return Ok(false);
+		}
+
+		let finished = resolved.completed
+			|| (update.is_finished.is_none()
+				&& duration_ms > 0
+				&& update.position_ms >= duration_ms);
 		rows.insert(
 			media_id.to_owned(),
 			AbsProgress {
@@ -399,12 +447,20 @@ impl AbsBackend for TestBackend {
 				started_at: existing
 					.as_ref()
 					.map(|progress| progress.started_at)
-					.unwrap_or_else(|| fixed(1_788_699_327_363)),
-				last_update: fixed(1_788_699_586_130),
-				finished_at: finished.then(|| fixed(1_788_699_586_130)),
+					.unwrap_or(incoming_at),
+				last_update: incoming_at,
+				finished_at: finished.then_some(incoming_at),
 			},
 		);
-		Ok(())
+		drop(progress);
+
+		if let Some(events) = self.events.lock().clone() {
+			events.send(crate::socket::AbsEvent::ProgressChanged {
+				user_id: user.id.clone(),
+				media_id: media_id.to_owned(),
+			});
+		}
+		Ok(true)
 	}
 
 	async fn bookmarks(
@@ -552,6 +608,14 @@ impl AbsBackend for TestBackend {
 		Ok(AbsSessions::get(&self.conn, user_id, session_id).await?)
 	}
 
+	async fn sessions(
+		&self,
+		user_id: &str,
+		media_id: Option<&str>,
+	) -> AbsResult<Vec<AbsSession>> {
+		Ok(AbsSessions::list(&self.conn, user_id, media_id).await?)
+	}
+
 	async fn update_session(
 		&self,
 		session_id: &str,
@@ -593,18 +657,24 @@ impl AbsBackend for TestBackend {
 }
 
 /// The composed router, mounted the way the server mounts it: the public
-/// routes at the root and the authenticated ones under `/api`, with the user
-/// already resolved.
-fn router(backend: Arc<TestBackend>, user: &AuthUser) -> Router {
+/// routes and the socket endpoint at the root, the authenticated ones under
+/// `/api`, with the user already resolved.
+pub(crate) fn router_with_events(
+	backend: Arc<TestBackend>,
+	user: &AuthUser,
+	events: crate::socket::AbsEvents,
+) -> Router {
 	let auth = stump_auth::AuthContext {
 		user: user.clone(),
 		api_key: None,
 		device_id: backend.device_id.lock().clone(),
 	};
 	crate::routes::public_router::<()>()
+		.merge(crate::socket::router::<()>())
 		.merge(Router::new().nest("/api", crate::routes::authenticated_router::<()>()))
 		.layer(Extension(user.clone()))
 		.layer(Extension(auth))
+		.layer(Extension(events))
 		.layer(Extension(backend as Arc<dyn AbsBackend>))
 }
 
@@ -632,6 +702,12 @@ pub(crate) async fn request_full(
 	body: Option<serde_json::Value>,
 	headers: &[(&str, &str)],
 ) -> (StatusCode, HeaderMap, serde_json::Value) {
+	let events = backend
+		.events
+		.lock()
+		.clone()
+		.unwrap_or_else(crate::socket::AbsEvents::new);
+	let app = router_with_events(backend, user, events);
 	let mut builder = axum::http::Request::builder().method(method).uri(uri);
 	for (name, value) in headers {
 		builder = builder.header(*name, *value);
@@ -644,10 +720,7 @@ pub(crate) async fn request_full(
 		None => builder.body(Body::empty()).unwrap(),
 	};
 
-	let response = router(backend, user)
-		.oneshot(request)
-		.await
-		.expect("router response");
+	let response = app.oneshot(request).await.expect("router response");
 	let status = response.status();
 	let headers = response.headers().clone();
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)

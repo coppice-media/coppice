@@ -21,8 +21,8 @@ use crate::{
 mod identity;
 mod items;
 mod libraries;
-mod me;
-mod query;
+pub(crate) mod me;
+pub(crate) mod query;
 mod session;
 #[cfg(test)]
 mod tests;
@@ -49,7 +49,17 @@ pub struct AbsSession {
 	pub time_listening_ms: i64,
 	pub started_at: chrono::DateTime<chrono::Utc>,
 	pub updated_at: chrono::DateTime<chrono::Utc>,
+	/// Audiobookshelf's `playMethod`: `0` DirectPlay for a session opened by
+	/// a play request, `3` Local for one the official app recorded offline
+	/// and uploaded through `POST /api/session/local`.
+	pub play_method: i64,
 }
+
+/// Audiobookshelf's `playMethod` for a session served from the stored
+/// tracks. Stump never transcodes on this lane.
+pub const PLAY_METHOD_DIRECT: i64 = 0;
+/// Audiobookshelf's `playMethod` for listening the client did offline.
+pub const PLAY_METHOD_LOCAL: i64 = 3;
 
 /// The persistence and platform operations the Audiobookshelf surface needs
 /// from the server.
@@ -117,12 +127,18 @@ pub trait AbsBackend: Send + Sync {
 	) -> AbsResult<Vec<(String, AbsProgress)>>;
 
 	/// Apply a position from a client onto the unified reading state.
+	///
+	/// Answers whether the update **moved the head**. It is not always
+	/// accepted: the head keeps the newest position, and an update dated
+	/// more than the tolerance behind it that also reports less progress is
+	/// recorded as provenance only. `POST /api/session/local-all` reports
+	/// exactly that distinction back to the client as `progressSynced`.
 	async fn apply_position(
 		&self,
 		user: &AuthUser,
 		media_id: &str,
 		update: AbsPositionUpdate,
-	) -> AbsResult<()>;
+	) -> AbsResult<bool>;
 
 	async fn bookmarks(
 		&self,
@@ -181,6 +197,15 @@ pub trait AbsBackend: Send + Sync {
 		session_id: &str,
 	) -> AbsResult<Option<AbsSession>>;
 
+	/// Every play session of the user, newest first, optionally for one
+	/// book: the listening history behind `GET /api/me/listening-sessions`,
+	/// `/listening-stats` and `/api/me/item/listening-sessions/{id}`.
+	async fn sessions(
+		&self,
+		user_id: &str,
+		media_id: Option<&str>,
+	) -> AbsResult<Vec<AbsSession>>;
+
 	/// Record the position and accumulated listening time of a session.
 	async fn update_session(
 		&self,
@@ -236,6 +261,7 @@ where
 		.route("/healthcheck", get(identity::healthcheck))
 		.route("/status", get(identity::status))
 		.route("/login", post(identity::login))
+		.route("/logout", post(identity::logout))
 		.route("/auth/refresh", post(identity::refresh))
 }
 
@@ -253,6 +279,21 @@ where
 			"/me/progress/{item_id}",
 			get(me::progress).patch(me::patch_progress),
 		)
+		// The official app suffixes an episode id for a podcast
+		// (`ApiHandler.kt:688,696`). The profile serves no podcast library,
+		// so the book has no episode to address and the pair answers `404`,
+		// as abs-ref does for an episode id that is not in the item.
+		.route(
+			"/me/progress/{item_id}/{episode_id}",
+			get(me::episode_progress).patch(me::episode_progress),
+		)
+		.route("/me/items-in-progress", get(me::items_in_progress))
+		.route("/me/listening-sessions", get(me::listening_sessions))
+		.route("/me/listening-stats", get(me::listening_stats))
+		.route(
+			"/me/item/listening-sessions/{item_id}",
+			get(me::item_listening_sessions),
+		)
 		.route(
 			"/me/item/{item_id}/bookmark",
 			post(me::create_bookmark).patch(me::update_bookmark),
@@ -269,6 +310,15 @@ where
 			get(libraries::personalized),
 		)
 		.route("/libraries/{library_id}/authors", get(libraries::authors))
+		.route("/libraries/{library_id}/series", get(libraries::series))
+		.route(
+			"/libraries/{library_id}/collections",
+			get(libraries::collections),
+		)
+		.route(
+			"/libraries/{library_id}/playlists",
+			get(libraries::playlists),
+		)
 		.route("/libraries/{library_id}/search", get(libraries::search))
 		.route("/items/batch/get", post(items::batch_get))
 		.route("/items/{item_id}", get(items::detail))
@@ -278,6 +328,8 @@ where
 		.route("/session/{session_id}", get(session::detail))
 		.route("/session/{session_id}/sync", post(session::sync))
 		.route("/session/{session_id}/close", post(session::close))
+		.route("/session/local", post(session::local))
+		.route("/session/local-all", post(session::local_all))
 		.route("/authors/{author_id}", get(items::author))
 		.route("/authors/{author_id}/image", get(items::author_image))
 }

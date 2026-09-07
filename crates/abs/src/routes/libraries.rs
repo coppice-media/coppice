@@ -410,13 +410,20 @@ pub(crate) async fn items(
 	}))
 }
 
-/// `GET /api/libraries/{id}/personalized`. Lissen reads exactly one shelf,
-/// the one whose `labelStringKey` is `LabelContinueListening`
-/// (`common/converter/RecentListeningResponseConverter.kt:30`), and needs
-/// minified items on it. The other two shelves are the ones abs-ref puts
-/// beside it for a book library; its `recent-series` and `newest-authors`
-/// shelves carry non-item entities no inventoried client reads, so they are
-/// not served.
+/// `GET /api/libraries/{id}/personalized`.
+///
+/// Lissen reads exactly one shelf, the one whose `labelStringKey` is
+/// `LabelContinueListening`
+/// (`common/converter/RecentListeningResponseConverter.kt:30`). The official
+/// app reads five by id, and drops any shelf it does not know: its Android
+/// Auto browser caches `recently-added` and `recent-series` as the "recent"
+/// rows, fans `discover` out into browsable items and lists `newest-authors`
+/// (`media/MediaManager.kt:215-290`). All five are served — with abs-ref's
+/// ids, labels and `type` values, because the app's Jackson subtype
+/// resolution keys on `type` and a name outside
+/// `book|series|authors|episode|podcast` fails the whole response.
+/// The podcast-only shelves (`newest-episodes`) are not served: this profile
+/// has no podcast library.
 pub(crate) async fn personalized(
 	backend: Backend,
 	Extension(user): User,
@@ -483,19 +490,99 @@ pub(crate) async fn personalized(
 		"recently-added",
 		"Recently Added",
 		"LabelRecentlyAdded",
-		all.rows.iter().take(10).collect(),
+		all.rows.iter().take(SHELF_LIMIT).collect(),
 	));
+
+	// A Stump series is a folder, and a folder holding one audiobook is that
+	// book, not a series (`ItemContext::series_of`), so the series shelf is
+	// built from the same rule the browse routes use.
+	let mut recent_series = Vec::new();
+	let mut seen = HashSet::new();
+	for row in &all.rows {
+		let Some((series_id, _)) = context.series_of(row) else {
+			continue;
+		};
+		if !seen.insert(series_id.to_owned()) {
+			continue;
+		}
+		let Some(series) = context.series.get(series_id) else {
+			continue;
+		};
+		let books = all
+			.rows
+			.iter()
+			.filter(|member| member.series_id.as_deref() == Some(series_id))
+			.map(|member| context.item(member, ItemShape::Minified, &user.id, None))
+			.collect::<Vec<_>>();
+		recent_series.push(PersonalizedEntityDto::Series(Box::new(mapper::series_dto(
+			series,
+			&library_id,
+			Some(books),
+		))));
+		if recent_series.len() == SHELF_LIMIT {
+			break;
+		}
+	}
+	if !recent_series.is_empty() {
+		shelves.push(PersonalizedShelfDto {
+			id: "recent-series".to_owned(),
+			label: "Recent Series".to_owned(),
+			label_string_key: "LabelRecentSeries".to_owned(),
+			shelf_type: "series".to_owned(),
+			total: recent_series.len() as i64,
+			entities: recent_series,
+		});
+	}
+
 	let untouched = all
 		.rows
 		.iter()
 		.filter(|row| !context.progress.contains_key(&row.id))
-		.take(10)
+		.take(SHELF_LIMIT)
 		.collect::<Vec<_>>();
 	if !untouched.is_empty() {
 		shelves.push(shelf("discover", "Discover", "LabelDiscover", untouched));
 	}
+
+	// Newest by the first book credited to them, which is the only "added"
+	// an author has here: Stump keeps writers as metadata, not as rows.
+	let mut facts = author_facts(&**backend, &user, &library_id).await?;
+	facts.sort_by_key(|fact| std::cmp::Reverse(fact.added_at));
+	facts.truncate(SHELF_LIMIT);
+	if !facts.is_empty() {
+		let names = facts
+			.iter()
+			.map(|fact| fact.name.clone())
+			.collect::<Vec<_>>();
+		let ids = backend.author_ids(&names).await?;
+		let entities = facts
+			.iter()
+			.map(|fact| {
+				PersonalizedEntityDto::Author(Box::new(author_dto(
+					ids.get(&fact.name)
+						.cloned()
+						.unwrap_or_else(|| fact.name.clone()),
+					fact,
+					&library_id,
+					true,
+				)))
+			})
+			.collect::<Vec<_>>();
+		shelves.push(PersonalizedShelfDto {
+			id: "newest-authors".to_owned(),
+			label: "Newest Authors".to_owned(),
+			label_string_key: "LabelNewestAuthors".to_owned(),
+			shelf_type: "authors".to_owned(),
+			total: entities.len() as i64,
+			entities,
+		});
+	}
+
 	Ok(Json(shelves))
 }
+
+/// How many entities abs-ref puts on one personalized shelf.
+const SHELF_LIMIT: usize = 10;
 
 /// One author of a library: Stump has no author row, so an author is a
 /// distinct `media_metadata.writers` value with an id allocated in
@@ -767,4 +854,155 @@ pub(crate) async fn search(
 		series,
 		authors,
 	}))
+}
+
+// ---------------------------------------------------------------------------
+// Series, collections and playlists
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct SeriesQuery {
+	limit: Option<u64>,
+	page: Option<u64>,
+	sort: Option<String>,
+	desc: Option<String>,
+	minified: Option<String>,
+	include: Option<String>,
+}
+
+/// `GET /api/libraries/{id}/series`. The official app browses by series with
+/// `?minified=1&sort=name&limit=10000` (`ApiHandler.kt:516`) and reads
+/// `results[]` as `LibrarySeriesItem{id,libraryId,name,description,addedAt,
+/// updatedAt,books}` (`data/LibrarySeriesItem.kt:11-20`).
+///
+/// A Stump series is a folder; a folder holding one audiobook is that book,
+/// not a series, so it is absent here for the same reason it reports
+/// `seriesName: ""` in a library listing.
+pub(crate) async fn series(
+	backend: Backend,
+	Extension(user): User,
+	Path(library_id): Path<String>,
+	Query(params): Query<SeriesQuery>,
+) -> AbsResult<Json<SeriesPageDto>> {
+	query::library(&**backend, &user, &library_id).await?;
+
+	let all = query::item_page(
+		&**backend,
+		&user,
+		&library_id,
+		ItemSort::Title,
+		false,
+		None,
+		0,
+		0,
+	)
+	.await?;
+	let context = query::context(&**backend, &user, &all.rows, false).await?;
+	let minified = flag(params.minified.as_ref());
+	let shape = if minified {
+		ItemShape::Minified
+	} else {
+		ItemShape::Detail
+	};
+
+	let mut results = Vec::new();
+	let mut seen = HashSet::new();
+	for row in &all.rows {
+		let Some((series_id, _)) = context.series_of(row) else {
+			continue;
+		};
+		if !seen.insert(series_id.to_owned()) {
+			continue;
+		}
+		let Some(series) = context.series.get(series_id) else {
+			continue;
+		};
+		let books = all
+			.rows
+			.iter()
+			.filter(|member| member.series_id.as_deref() == Some(series_id))
+			.map(|member| context.item(member, shape, &user.id, None))
+			.collect::<Vec<_>>();
+		results.push(mapper::series_dto(series, &library_id, Some(books)));
+	}
+
+	let desc = flag(params.desc.as_ref());
+	results.sort_by(|left, right| left.name.cmp(&right.name));
+	if desc {
+		results.reverse();
+	}
+	let total = results.len() as i64;
+	let limit = params.limit.unwrap_or(0);
+	let page = params.page.unwrap_or(0);
+	if limit > 0 {
+		results = results
+			.into_iter()
+			.skip((page * limit) as usize)
+			.take(limit as usize)
+			.collect();
+	}
+
+	Ok(Json(SeriesPageDto {
+		results,
+		total,
+		limit: limit as i64,
+		page: page as i64,
+		sort_by: params.sort.unwrap_or_else(|| "name".to_owned()),
+		sort_desc: desc,
+		minified,
+		include: params.include.unwrap_or_default(),
+	}))
+}
+
+/// `GET /api/series/{id}` — the app's web-view series page (`pages/series/_id.vue:12`)
+/// — is **not** served, and cannot be: the Kavita profile already owns
+/// `/api/series/{seriesId}` in the shared `/api` namespace
+/// (`crates/kavita/src/routes/series.rs:158`, lower-cased by `route_ci`), and a
+/// second parameter name at the same position is a `matchit` conflict that
+/// panics while the router is built. The page's data is reachable anyway:
+/// `GET /api/libraries/{id}/series` carries every series with its books, and the
+/// same page lists a series' books through the `series.<base64>` item filter.
+/// `apps/server/tests/abs/mount.rs` is what keeps this honest — the collision
+/// only surfaces when both profiles are mounted together.
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct EmptyPageQuery {
+	limit: Option<u64>,
+	page: Option<u64>,
+}
+
+/// `GET /api/libraries/{id}/collections` and `/playlists`.
+///
+/// The official app opens both tabs on a library (`ApiHandler.kt:585`,
+/// `store/libraries.js`). Stump's shelves and reading lists are not
+/// Audiobookshelf collections — they span every media type and carry no
+/// audio semantics — so the profile answers the envelope empty instead of
+/// 404ing a tab, and instead of dressing a comic shelf up as an audiobook
+/// collection.
+pub(crate) async fn collections(
+	backend: Backend,
+	Extension(user): User,
+	Path(library_id): Path<String>,
+	Query(params): Query<EmptyPageQuery>,
+) -> AbsResult<Json<EmptyPageDto>> {
+	query::library(&**backend, &user, &library_id).await?;
+	Ok(Json(EmptyPageDto::new(
+		params.limit.unwrap_or(0) as i64,
+		params.page.unwrap_or(0) as i64,
+	)))
+}
+
+pub(crate) async fn playlists(
+	backend: Backend,
+	Extension(user): User,
+	Path(library_id): Path<String>,
+	Query(params): Query<EmptyPageQuery>,
+) -> AbsResult<Json<EmptyPageDto>> {
+	query::library(&**backend, &user, &library_id).await?;
+	Ok(Json(EmptyPageDto::new(
+		params.limit.unwrap_or(0) as i64,
+		params.page.unwrap_or(0) as i64,
+	)))
 }

@@ -50,11 +50,13 @@ use stump_abs::{
 		AbsPositionUpdate, AbsProgress,
 	},
 	routes::{AbsBackend, AbsSession},
-	AbsIds, AbsSessions, IdKind,
+	AbsEvent, AbsEvents, AbsIds, AbsSessions, IdKind,
 };
 use stump_api_types::RequestOrigin;
 use stump_auth::AuthContext;
+use stump_core::CoreEvent;
 use stump_devices::{CredentialRef, Protocol};
+use tokio::sync::broadcast;
 
 use crate::{
 	config::{jwt::access_token_secret, state::AppState},
@@ -70,13 +72,84 @@ use crate::{
 pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 	let backend: Arc<dyn AbsBackend> =
 		Arc::new(AbsBackendAdapter::new(app_state.clone()));
-	compose(app_state, backend)
+	let events = spawn_event_forwarder(&app_state);
+	compose(app_state, backend, events)
 }
 
-/// The public routes sit at the server root (`/login`, `/auth/refresh`,
-/// `/ping`, `/healthcheck`, `/status`) and the authenticated ones under
-/// `/api`, exactly where an Audiobookshelf client looks for them.
-fn compose(app_state: AppState, backend: Arc<dyn AbsBackend>) -> Router<AppState> {
+/// Bridge the process-wide event buses onto the profile's socket lane.
+///
+/// Two subscriptions, translated into the three things an Audiobookshelf
+/// client can be told: a reading head moved (from any protocol — a Kobo, a
+/// KOReader plugin, this profile's own sync), books appeared, or a book's
+/// row was rewritten. Everything else on the core bus is server business no
+/// Audiobookshelf client subscribes to.
+///
+/// The forwarder lives here, not on the backend adapter, because the adapter
+/// is also constructed per request for `Basic` authentication; spawning from
+/// its constructor would start a task per login.
+fn spawn_event_forwarder(app_state: &AppState) -> AbsEvents {
+	let events = AbsEvents::new();
+
+	let mut heads = app_state.reading_state_events();
+	let sink = events.clone();
+	tokio::spawn(async move {
+		loop {
+			match heads.recv().await {
+				Ok(changed) => sink.send(AbsEvent::ProgressChanged {
+					user_id: changed.user_id,
+					media_id: changed.media_id,
+				}),
+				Err(broadcast::error::RecvError::Lagged(skipped)) => {
+					tracing::debug!(skipped, "ABS reading-state forwarder lagged")
+				},
+				Err(broadcast::error::RecvError::Closed) => break,
+			}
+		}
+	});
+
+	let mut core = app_state.get_client_receiver();
+	let sink = events.clone();
+	tokio::spawn(async move {
+		loop {
+			match core.recv().await {
+				Ok(CoreEvent::CreatedMedia(media)) => sink.send(AbsEvent::ItemsAdded {
+					media_ids: vec![media.id],
+				}),
+				// A materialised provider series rewrote rows that already
+				// existed under deterministic ids, so each of its audible
+				// books is an update. A filesystem rescan announces a count
+				// and a series (`CreatedOrUpdatedManyMedia`) with no ids at
+				// all, so it cannot name an item and is not translated.
+				Ok(CoreEvent::ProviderSeriesMaterialized(series)) => {
+					sink.send(AbsEvent::SeriesUpdated {
+						series_id: series.series_id,
+					})
+				},
+				Ok(_) => {},
+				Err(broadcast::error::RecvError::Lagged(skipped)) => {
+					tracing::debug!(skipped, "ABS core event forwarder lagged")
+				},
+				Err(broadcast::error::RecvError::Closed) => break,
+			}
+		}
+	});
+
+	events
+}
+
+/// The public routes sit at the server root (`/login`, `/logout`,
+/// `/auth/refresh`, `/ping`, `/healthcheck`, `/status`, `/socket.io`) and the
+/// authenticated ones under `/api`, exactly where an Audiobookshelf client
+/// looks for them.
+///
+/// The socket endpoint carries no auth middleware on purpose: a socket.io
+/// client cannot put a header on the upgrade request, so the token arrives
+/// in the `auth` event and is verified there.
+fn compose(
+	app_state: AppState,
+	backend: Arc<dyn AbsBackend>,
+	events: AbsEvents,
+) -> Router<AppState> {
 	let protected = Router::new()
 		.nest("/api", stump_abs::authenticated_router::<AppState>())
 		.layer(middleware::from_fn_with_state(
@@ -84,7 +157,9 @@ fn compose(app_state: AppState, backend: Arc<dyn AbsBackend>) -> Router<AppState
 			abs_auth_middleware,
 		));
 	stump_abs::public_router::<AppState>()
+		.merge(stump_abs::socket_router::<AppState>())
 		.merge(protected)
+		.layer(Extension(events))
 		.layer(Extension(backend))
 }
 
@@ -568,7 +643,7 @@ impl AbsBackend for AbsBackendAdapter {
 		user: &AuthUser,
 		media_id: &str,
 		update: AbsPositionUpdate,
-	) -> AbsResult<()> {
+	) -> AbsResult<bool> {
 		let book = media::Entity::find_for_user(user)
 			.filter(media::Column::Id.eq(media_id))
 			.one(self.conn())
@@ -593,7 +668,10 @@ impl AbsBackend for AbsBackendAdapter {
 			stump_core::reading_state::ProtocolUpdate {
 				protocol: stump_core::reading_state::SourceProtocol::Abs,
 				device_id: None,
-				updated_at: None,
+				// The device clock time, for an offline session the app
+				// uploaded hours after it was recorded; `None` for a live
+				// sync, which stamps the server's own clock.
+				updated_at: update.at,
 				position: stump_core::reading_state::Position::Time {
 					position_ms: update.position_ms,
 					track_index: update.track_index,
@@ -627,7 +705,7 @@ impl AbsBackend for AbsBackendAdapter {
 		txn.commit().await?;
 
 		stump_core::reading_state::announce(self.ctx.as_ref(), &book, &applied);
-		Ok(())
+		Ok(applied.accepted())
 	}
 
 	async fn bookmarks(
@@ -771,6 +849,14 @@ impl AbsBackend for AbsBackendAdapter {
 		Ok(AbsSessions::get(self.conn(), user_id, session_id).await?)
 	}
 
+	async fn sessions(
+		&self,
+		user_id: &str,
+		media_id: Option<&str>,
+	) -> AbsResult<Vec<AbsSession>> {
+		Ok(AbsSessions::list(self.conn(), user_id, media_id).await?)
+	}
+
 	async fn update_session(
 		&self,
 		session_id: &str,
@@ -862,7 +948,7 @@ mod tests {
 			DatabaseBackend::Sqlite,
 		)));
 		let backend: Arc<dyn AbsBackend> = Arc::new(AbsBackendAdapter::new(ctx.clone()));
-		let _router: Router<()> = compose(ctx.clone(), backend).with_state(ctx);
+		let _router: Router<()> = compose(ctx.clone(), backend, AbsEvents::new()).with_state(ctx);
 	}
 
 	#[test]

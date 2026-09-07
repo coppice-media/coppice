@@ -127,10 +127,15 @@ impl ItemSort {
 }
 
 /// The `filter` query parameter: `<key>.<base64(value)>`
-/// (Lissen `common/api/EncodeLibraryFilter.kt`).
+/// (Lissen `common/api/EncodeLibraryFilter.kt`; the official app builds the
+/// same shape with `Base64.encodeToString`, `ApiHandler.kt:531,564`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ItemFilter {
 	Series(String),
+	/// The **author id** the profile allocated in `abs_ids`, not the name:
+	/// the official app encodes the id it read off `/libraries/{id}/authors`
+	/// (`ApiHandler.kt:564`).
+	Author(String),
 	Progress(ProgressFilter),
 }
 
@@ -156,6 +161,7 @@ impl ItemFilter {
 		let decoded = String::from_utf8(decoded).ok()?;
 		match key {
 			"series" => Some(ItemFilter::Series(decoded)),
+			"authors" => Some(ItemFilter::Author(decoded)),
 			"progress" => match decoded.as_str() {
 				"not-finished" => Some(ItemFilter::Progress(ProgressFilter::NotFinished)),
 				"finished" => Some(ItemFilter::Progress(ProgressFilter::Finished)),
@@ -194,6 +200,18 @@ pub(crate) async fn item_page(
 	match filter {
 		Some(ItemFilter::Series(series_id)) => {
 			select = select.filter(series::Column::Id.eq(series_id.as_str()));
+		},
+		Some(ItemFilter::Author(author_id)) => {
+			// The id was allocated for a `media_metadata.writers` value, so
+			// it is resolved back to the name and matched against the CSV
+			// column the same way `GET /api/authors/{id}` does. An id with
+			// no name behind it selects nothing rather than everything.
+			let name = backend.author_name(author_id).await?;
+			let ids = match name {
+				Some(name) => media_ids_crediting(backend, user, &name).await?,
+				None => Vec::new(),
+			};
+			select = select.filter(media::Column::Id.is_in(ids));
 		},
 		Some(ItemFilter::Progress(state)) => {
 			let progress = backend.progress_all(user).await?;
@@ -481,6 +499,43 @@ pub(crate) async fn media_for_user(
 		.ok_or_else(|| AbsError::NotFound(format!("No library item {media_id}")))
 }
 
+/// The ids of the audible books that credit `name` as a writer.
+///
+/// `media_metadata.writers` is a comma-separated column, so the SQL
+/// `contains` is only a prefilter: a name that is a substring of another
+/// author's would drag their books in, and the CSV values decide. Shared by
+/// `GET /api/authors/{id}` and by the `authors.<base64>` item filter, so
+/// browsing an author two ways cannot answer two different sets.
+pub(crate) async fn media_ids_crediting(
+	backend: &dyn AbsBackend,
+	user: &AuthUser,
+	name: &str,
+) -> AbsResult<Vec<String>> {
+	let candidates = media_metadata::Entity::find()
+		.filter(media_metadata::Column::Writers.contains(name))
+		.all(backend.conn())
+		.await?;
+	let ids = candidates
+		.into_iter()
+		.filter(|row| {
+			mapper::csv(row.writers.as_deref())
+				.iter()
+				.any(|w| w == name)
+		})
+		.filter_map(|row| row.media_id)
+		.collect::<Vec<_>>();
+	if ids.is_empty() {
+		return Ok(Vec::new());
+	}
+	Ok(audio_media(user)
+		.filter(media::Column::Id.is_in(ids))
+		.select_only()
+		.column(media::Column::Id)
+		.into_tuple::<String>()
+		.all(backend.conn())
+		.await?)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -512,9 +567,15 @@ mod tests {
 			ItemFilter::parse("series.YWJj"),
 			Some(ItemFilter::Series("abc".to_owned()))
 		);
-		// Unsupported key, unknown progress state, and malformed input all
+		// The official app browses an author by encoding the id it read off
+		// `/libraries/{id}/authors` the same way.
+		assert_eq!(
+			ItemFilter::parse("authors.YWJj"),
+			Some(ItemFilter::Author("abc".to_owned()))
+		);
+		// An unknown key, an unknown progress state and malformed input all
 		// mean "no filter", never an error.
-		assert_eq!(ItemFilter::parse("authors.YWJj"), None);
+		assert_eq!(ItemFilter::parse("narrators.YWJj"), None);
 		assert_eq!(ItemFilter::parse("progress.bm9wZQ=="), None);
 		assert_eq!(ItemFilter::parse("progress.!!!"), None);
 		assert_eq!(ItemFilter::parse("nodot"), None);

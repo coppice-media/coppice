@@ -1,3 +1,7 @@
+//! `cli-bin`: standalone harness for the `cli` crate's command surface.
+//!
+//! See `crates/cli/README.md` for the crate contract and decisions.
+
 use cli::{handle_command, Cli, Parser};
 use stump_core::{config, StumpCore};
 

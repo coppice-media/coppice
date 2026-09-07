@@ -619,6 +619,7 @@ pub struct PersonalizedShelfDto {
 #[serde(untagged)]
 pub enum PersonalizedEntityDto {
 	Item(Box<LibraryItemDto>),
+	Series(Box<SeriesDto>),
 	Author(Box<AuthorDto>),
 }
 
@@ -770,8 +771,13 @@ pub struct PlaybackSessionDto {
 	pub current_time: f64,
 	pub started_at: i64,
 	pub updated_at: i64,
-	pub audio_tracks: Vec<AudioTrackDto>,
-	pub library_item: LibraryItemDto,
+	/// The tracks and the item are on the session a play request answers
+	/// with; `GET /api/me/listening-sessions` lists the same object without
+	/// them (abs-ref's listening-session rows carry 24 keys, not 26).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub audio_tracks: Option<Vec<AudioTrackDto>>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub library_item: Option<Box<LibraryItemDto>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -873,6 +879,250 @@ pub struct AudioBookmarkDto {
 pub struct BookmarkRequestDto {
 	pub time: Option<f64>,
 	pub title: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Series — capture/series_page.json (abs-ref 2.36.0, live)
+// ---------------------------------------------------------------------------
+
+/// One series of `GET /api/libraries/{id}/series` and the `recent-series`
+/// personalized shelf. The official app decodes
+/// `LibrarySeriesItem{id,libraryId,name,description,addedAt,updatedAt,books}`
+/// (`data/LibrarySeriesItem.kt:11-20`); `books` is minified library items.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesDto {
+	pub id: String,
+	pub library_id: String,
+	pub name: String,
+	pub name_ignore_prefix: String,
+	pub description: Option<String>,
+	pub added_at: i64,
+	pub updated_at: i64,
+	/// Absent on `GET /api/series/{id}`, present on the list and the shelf.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub books: Option<Vec<LibraryItemDto>>,
+}
+
+/// `GET /api/libraries/{id}/series`. The app sends
+/// `?minified=1&sort=name&limit=10000` (`ApiHandler.kt:516`) and reads
+/// `results` alone.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesPageDto {
+	pub results: Vec<SeriesDto>,
+	pub total: i64,
+	pub limit: i64,
+	pub page: i64,
+	pub sort_by: String,
+	pub sort_desc: bool,
+	pub minified: bool,
+	pub include: String,
+}
+
+/// The `{results, total, limit, page}` envelope abs-ref answers for a
+/// library's collections and playlists. Stump's shelves are not
+/// Audiobookshelf collections (see `abs-compat.mdx`), so the profile serves
+/// the envelope empty rather than 404ing a browse tab the app opens.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmptyPageDto {
+	pub results: Vec<serde_json::Value>,
+	pub total: i64,
+	pub limit: i64,
+	pub page: i64,
+}
+
+impl EmptyPageDto {
+	pub fn new(limit: i64, page: i64) -> Self {
+		Self {
+			results: Vec::new(),
+			total: 0,
+			limit,
+			page,
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Home screen — items in progress, listening history
+// ---------------------------------------------------------------------------
+
+/// One row of `GET /api/me/items-in-progress`: a minified library item with
+/// one extra key. `progressLastUpdate` is **required** — the app reads it
+/// with `serverItem.getLong("progressLastUpdate")`
+/// (`data/ItemInProgress.kt`), which throws on a missing key.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemInProgressDto {
+	#[serde(flatten)]
+	pub item: LibraryItemDto,
+	pub progress_last_update: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemsInProgressDto {
+	pub library_items: Vec<ItemInProgressDto>,
+}
+
+/// `GET /api/me/listening-sessions` and
+/// `GET /api/me/item/listening-sessions/{id}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListeningSessionsPageDto {
+	pub total: i64,
+	pub num_pages: i64,
+	pub page: i64,
+	pub items_per_page: i64,
+	pub sessions: Vec<PlaybackSessionDto>,
+}
+
+/// `GET /api/me/listening-stats`, the stats screen (`pages/stats.vue:109`).
+/// `days` is keyed `YYYY-MM-DD` and `dayOfWeek` by weekday name, both in the
+/// server's timezone, exactly as abs-ref reports them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListeningStatsDto {
+	/// Seconds listened over the whole history.
+	pub total_time: f64,
+	pub items: std::collections::BTreeMap<String, ListeningStatsItemDto>,
+	pub days: std::collections::BTreeMap<String, f64>,
+	pub day_of_week: std::collections::BTreeMap<String, f64>,
+	pub today: f64,
+	pub recent_sessions: Vec<PlaybackSessionDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListeningStatsItemDto {
+	pub id: String,
+	pub time_listening: f64,
+	pub media_metadata: BookMetadataDto,
+}
+
+// ---------------------------------------------------------------------------
+// Offline session merge — POST /api/session/local, /local-all
+// ---------------------------------------------------------------------------
+
+/// One offline playback session, as the official app uploads it.
+///
+/// The body is the app's `createPartialPlaybackSession`
+/// (`server/ApiHandler.kt:650-668`): the session identity, the book, and the
+/// three numbers that matter — `currentTime` (absolute position, seconds),
+/// `timeListening` (cumulative seconds on this session) and `updatedAt` (the
+/// device clock time of that position, milliseconds). `updatedAt` is what
+/// decides the merge: it is the source time the unified reading state
+/// compares against the head it already holds.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct LocalSessionDto {
+	pub id: Option<String>,
+	pub user_id: Option<String>,
+	pub library_item_id: Option<String>,
+	pub episode_id: Option<String>,
+	pub media_type: Option<String>,
+	pub display_title: Option<String>,
+	pub display_author: Option<String>,
+	pub duration: Option<f64>,
+	/// `3` (Local) for every session the app uploads here.
+	pub play_method: Option<i64>,
+	pub started_at: Option<i64>,
+	pub updated_at: Option<i64>,
+	pub time_listening: Option<f64>,
+	pub current_time: Option<f64>,
+	pub media_player: Option<String>,
+	pub device_info: Option<DeviceInfoRequestDto>,
+}
+
+/// `POST /api/session/local-all`: every stored session in one request, with
+/// the device that recorded them (`ApiHandler.kt:770-775`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct LocalSessionsRequestDto {
+	pub sessions: Vec<LocalSessionDto>,
+	pub device_info: Option<DeviceInfoRequestDto>,
+}
+
+/// One entry of the `local-all` answer. The app decodes
+/// `LocalSessionSyncResult(id, success, progressSynced, error)` and logs each
+/// one (`ApiHandler.kt:52-53,776-795`); `progressSynced` is `true` only when
+/// the upload actually moved the server's position.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSessionResultDto {
+	pub id: String,
+	pub success: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub progress_synced: Option<bool>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSessionsResponseDto {
+	pub results: Vec<LocalSessionResultDto>,
+}
+
+/// `POST /logout`, which the app calls when a server connection is removed
+/// (`store/user.js:158`). abs-ref answers `{"redirect_url": null}` —
+/// snake_case, unlike every neighbouring key.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LogoutDto {
+	pub redirect_url: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// socket.io payloads — observed on abs-ref 2.36.0, `EIO=4&transport=websocket`
+// ---------------------------------------------------------------------------
+
+/// The `init` event the server answers a successful `auth` with. The app
+/// only checks that it arrived (`plugins/server.js:104-108`, which sets
+/// `isAuthenticated` and unhides the socket-gated bookmark button), but the
+/// key set is abs-ref's.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SocketInitDto {
+	pub user_id: String,
+	pub username: String,
+	pub users_online: Vec<UserOnlineDto>,
+}
+
+/// One entry of `usersOnline`: a user with at least one open socket on this
+/// server, and how many they hold.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserOnlineDto {
+	pub id: String,
+	pub username: String,
+	#[serde(rename = "type")]
+	pub user_type: String,
+	/// The playback session the user is streaming, which this profile does
+	/// not track per socket; abs-ref emits `null` for an idle user.
+	pub session: Option<serde_json::Value>,
+	pub last_seen: Option<i64>,
+	pub created_at: i64,
+	pub connections: i64,
+}
+
+/// The `user_item_progress_updated` event: a position of *this* user moved.
+///
+/// The app's store applies `payload.data` straight onto its media-progress
+/// list (`plugins/server.js:117-121`), which is why `data` is the same
+/// `MediaProgress` object `GET /api/me/progress/{id}` answers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserItemProgressUpdatedDto {
+	pub id: String,
+	/// The playback session that moved the position. Always `null` here: a
+	/// Stump reading head is shared by every protocol, so the change that
+	/// reached this lane may have come from a Kobo, a KOReader plugin or the
+	/// native API, and naming an unrelated open ABS session would be a lie.
+	pub session_id: Option<String>,
+	pub data: MediaProgressDto,
 }
 
 #[cfg(test)]

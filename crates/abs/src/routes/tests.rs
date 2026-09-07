@@ -1309,3 +1309,538 @@ async fn collapse_series_folds_a_series_into_one_row() {
 		.iter()
 		.any(|item| item["collapsedSeries"].is_null()));
 }
+
+// ---------------------------------------------------------------------------
+// The official app: offline merge, the launch screens, series browsing
+// ---------------------------------------------------------------------------
+
+/// One offline session as `createPartialPlaybackSession` uploads it
+/// (`server/ApiHandler.kt:650-668`).
+fn local_session(
+	id: &str,
+	item_id: &str,
+	current_time: f64,
+	time_listening: f64,
+	updated_at: i64,
+) -> serde_json::Value {
+	json!({
+		"id": id,
+		"userId": "local",
+		"libraryItemId": item_id,
+		"episodeId": null,
+		"mediaType": "book",
+		"displayTitle": "Analytical Engine",
+		"displayAuthor": "Ada Lovelace",
+		"duration": 12.0,
+		"playMethod": 3,
+		"startedAt": updated_at - 60_000,
+		"updatedAt": updated_at,
+		"timeListening": time_listening,
+		"currentTime": current_time,
+		"mediaPlayer": "exo-player",
+		"deviceInfo": {
+			"deviceId": "cap-device",
+			"clientName": "Abs Android",
+			"clientVersion": "0.14.0-beta",
+			"manufacturer": "Google",
+			"model": "Pixel",
+			"sdkVersion": 34
+		}
+	})
+}
+
+/// Seed the head at `position_ms`, dated now, as if another client had just
+/// written it.
+fn seed_head(fixture: &Fixture, position_ms: i64) {
+	fixture.backend.set_progress(
+		&fixture.user.id,
+		&fixture.item_id,
+		AbsProgress {
+			position_ms,
+			track_index: Some(0),
+			is_finished: false,
+			started_at: chrono::Utc::now(),
+			last_update: chrono::Utc::now(),
+			finished_at: None,
+		},
+	);
+}
+
+async fn current_time(fixture: &Fixture) -> f64 {
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/me/progress/{}", fixture.item_id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	body["currentTime"].as_f64().expect("currentTime")
+}
+
+#[tokio::test]
+async fn a_local_session_newer_than_the_head_advances_it() {
+	let fixture = fixture().await;
+	seed_head(&fixture, 2_000);
+	let now = chrono::Utc::now().timestamp_millis();
+
+	let (status, _) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		"/api/session/local",
+		Some(local_session("local-1", &fixture.item_id, 9.0, 30.0, now)),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(current_time(&fixture).await, 9.0);
+
+	// The upload is dated by the device clock, not by its arrival: that is
+	// what the unified head resolves against.
+	let applied = fixture.backend.applied_updates();
+	let (media_id, update) = applied.last().expect("an applied update");
+	assert_eq!(media_id, &fixture.item_id);
+	assert_eq!(update.position_ms, 9_000);
+	assert_eq!(update.elapsed_ms, 30_000);
+	assert_eq!(update.at.map(|at| at.timestamp_millis()), Some(now));
+
+	// And it is a listening-history row, marked as offline listening.
+	let (status, sessions) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		"/api/me/listening-sessions",
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(sessions["total"], 1);
+	assert_eq!(sessions["sessions"][0]["id"], "local-1");
+	assert_eq!(sessions["sessions"][0]["playMethod"], 3);
+	assert_eq!(sessions["sessions"][0]["timeListening"], 30.0);
+	// A history row is not a play answer: it carries no tracks and no item.
+	assert!(sessions["sessions"][0]["audioTracks"].is_null());
+	assert!(sessions["sessions"][0]["libraryItem"].is_null());
+}
+
+#[tokio::test]
+async fn a_local_session_older_than_the_head_is_provenance_only() {
+	let fixture = fixture().await;
+	seed_head(&fixture, 9_000);
+	let stale = chrono::Utc::now().timestamp_millis() - 3_600_000;
+
+	let (status, _) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		"/api/session/local",
+		Some(local_session("local-2", &fixture.item_id, 3.0, 12.0, stale)),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	// The head keeps the newer position: an hour-old upload that reports
+	// less progress does not rewind a listener.
+	assert_eq!(current_time(&fixture).await, 9.0);
+
+	// It still reached the reading state as provenance, and it is still a
+	// listening-history row: the listening happened.
+	let applied = fixture.backend.applied_updates();
+	assert_eq!(
+		applied.last().expect("an applied update").1.position_ms,
+		3_000
+	);
+	let (_, sessions) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		"/api/me/listening-sessions",
+		None,
+	)
+	.await;
+	assert_eq!(sessions["total"], 1);
+	assert_eq!(sessions["sessions"][0]["id"], "local-2");
+	assert_eq!(sessions["sessions"][0]["playMethod"], 3);
+}
+
+#[tokio::test]
+async fn local_all_reports_per_session_whether_the_head_moved() {
+	let fixture = fixture().await;
+	seed_head(&fixture, 2_000);
+	let now = chrono::Utc::now().timestamp_millis();
+
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		"/api/session/local-all",
+		Some(json!({
+			"sessions": [
+				local_session("fresh", &fixture.item_id, 10.0, 40.0, now),
+				local_session("stale", &fixture.item_id, 1.0, 5.0, now - 7_200_000),
+				local_session("gone", "00000000-0000-0000-0000-000000000000", 5.0, 5.0, now),
+			],
+			"deviceInfo": { "deviceId": "cap-device", "manufacturer": "Google", "model": "Pixel" }
+		})),
+	)
+	.await;
+
+	assert_eq!(status, StatusCode::OK);
+	let results = body["results"].as_array().expect("results");
+	assert_eq!(results.len(), 3);
+	// The app matches these back to its stored sessions by id and only
+	// deletes the ones that succeeded (`ApiHandler.kt:780-795`).
+	assert_eq!(results[0]["id"], "fresh");
+	assert_eq!(results[0]["success"], true);
+	assert_eq!(results[0]["progressSynced"], true);
+	assert_eq!(results[1]["id"], "stale");
+	assert_eq!(results[1]["success"], true);
+	assert_eq!(results[1]["progressSynced"], false);
+	// A book that is gone fails its own session and not the batch.
+	assert_eq!(results[2]["id"], "gone");
+	assert_eq!(results[2]["success"], false);
+	assert!(results[2]["error"].is_string());
+
+	assert_eq!(current_time(&fixture).await, 10.0);
+	let (_, sessions) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		"/api/me/listening-sessions",
+		None,
+	)
+	.await;
+	assert_eq!(
+		sessions["total"], 2,
+		"both merged sessions are history rows"
+	);
+}
+
+#[tokio::test]
+async fn listening_stats_are_derived_from_the_same_session_rows() {
+	let fixture = fixture().await;
+	let now = chrono::Utc::now().timestamp_millis();
+	for (id, listened) in [("s-1", 30.0), ("s-2", 12.0)] {
+		request(
+			fixture.backend.clone(),
+			&fixture.user,
+			"POST",
+			"/api/session/local",
+			Some(local_session(id, &fixture.item_id, 9.0, listened, now)),
+		)
+		.await;
+	}
+
+	let (status, stats) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		"/api/me/listening-stats",
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(stats["totalTime"], 42.0);
+	assert_eq!(stats["items"][&fixture.item_id]["timeListening"], 42.0);
+	assert_eq!(
+		stats["items"][&fixture.item_id]["mediaMetadata"]["title"],
+		"Analytical Engine"
+	);
+	let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+	assert_eq!(stats["days"][&today], 42.0);
+	assert_eq!(stats["today"], 42.0);
+	assert_eq!(stats["recentSessions"].as_array().expect("recent").len(), 2);
+}
+
+#[tokio::test]
+async fn items_in_progress_carries_the_key_the_app_reads_with_getlong() {
+	let fixture = fixture().await;
+	seed_head(&fixture, 4_000);
+
+	let (status, body) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		"/api/me/items-in-progress",
+		None,
+	)
+	.await;
+
+	assert_eq!(status, StatusCode::OK);
+	let items = body["libraryItems"].as_array().expect("libraryItems");
+	assert_eq!(items.len(), 1);
+	assert_eq!(items[0]["id"], fixture.item_id);
+	// `ItemInProgress.makeFromServerObject` reads this with `getLong`, which
+	// throws on a missing key.
+	assert!(items[0]["progressLastUpdate"].is_i64());
+	// The row is a minified library item, not a bare id.
+	assert_eq!(items[0]["media"]["metadata"]["title"], "Analytical Engine");
+	assert!(items[0]["media"]["numTracks"].is_i64());
+
+	// A finished book is not "in progress".
+	fixture.backend.set_progress(
+		&fixture.user.id,
+		&fixture.item_id,
+		AbsProgress {
+			position_ms: 12_000,
+			track_index: Some(0),
+			is_finished: true,
+			started_at: chrono::Utc::now(),
+			last_update: chrono::Utc::now(),
+			finished_at: Some(chrono::Utc::now()),
+		},
+	);
+	let (_, body) = request(
+		fixture.backend,
+		&fixture.user,
+		"GET",
+		"/api/me/items-in-progress",
+		None,
+	)
+	.await;
+	assert!(body["libraryItems"]
+		.as_array()
+		.expect("libraryItems")
+		.is_empty());
+}
+
+#[tokio::test]
+async fn an_episode_progress_path_is_a_404_not_a_missing_route() {
+	let fixture = fixture().await;
+	for method in ["GET", "PATCH"] {
+		let (status, _) = request(
+			fixture.backend.clone(),
+			&fixture.user,
+			method,
+			&format!("/api/me/progress/{}/episode-1", fixture.item_id),
+			Some(json!({ "isFinished": true })),
+		)
+		.await;
+		assert_eq!(status, StatusCode::NOT_FOUND, "{method}");
+	}
+}
+
+#[tokio::test]
+async fn the_series_route_lists_multi_book_folders_only() {
+	let conn = db().await;
+	let user_row = ::tests::fake_data::User::new("ada").insert(&conn).await;
+	let user = auth_user(&user_row);
+	let library = library_of_type(&conn, LibraryType::Mixed).await;
+	let (_, trilogy) = series_with_files(
+		&conn,
+		&library.id,
+		"Compiler Chronicles",
+		&[("First Pass", "m4b"), ("Second Pass", "m4b")],
+	)
+	.await;
+	let (_, solo) =
+		series_with_files(&conn, &library.id, "Analytical Engine", &[("Solo", "m4b")])
+			.await;
+
+	let backend = TestBackend::new(conn);
+	for row in trilogy.iter().chain(solo.iter()) {
+		backend.set_audio(&row.id, one_track_audio(&row.path, 12_000));
+	}
+
+	let (status, body) = request(
+		backend.clone(),
+		&user,
+		"GET",
+		&format!(
+			"/api/libraries/{}/series?minified=1&sort=name&limit=10000",
+			library.id
+		),
+		None,
+	)
+	.await;
+
+	assert_eq!(status, StatusCode::OK);
+	let results = body["results"].as_array().expect("results");
+	// A Stump series holding one audiobook is that book's own folder, not an
+	// Audiobookshelf series — the same rule the item list applies.
+	assert_eq!(results.len(), 1);
+	assert_eq!(results[0]["name"], "Compiler Chronicles");
+	assert_eq!(results[0]["libraryId"], library.id);
+	assert!(results[0]["nameIgnorePrefix"].is_string());
+	assert!(results[0]["addedAt"].is_i64());
+	assert_eq!(results[0]["books"].as_array().expect("books").len(), 2);
+	assert_eq!(body["total"], 1);
+}
+
+#[tokio::test]
+async fn the_collections_and_playlists_tabs_answer_an_empty_page() {
+	let fixture = fixture().await;
+	for path in ["collections?minified=1&sort=name&limit=1000", "playlists"] {
+		let (status, body) = request(
+			fixture.backend.clone(),
+			&fixture.user,
+			"GET",
+			&format!("/api/libraries/{}/{path}", fixture.library_id),
+			None,
+		)
+		.await;
+		// Never a 404: the app opens both tabs on a library, and a Stump
+		// shelf is not an Audiobookshelf collection.
+		assert_eq!(status, StatusCode::OK, "{path}");
+		assert_eq!(body["results"], json!([]), "{path}");
+		assert_eq!(body["total"], 0, "{path}");
+	}
+}
+
+#[tokio::test]
+async fn personalized_carries_the_shelves_the_official_app_browses() {
+	let conn = db().await;
+	let user_row = ::tests::fake_data::User::new("ada").insert(&conn).await;
+	let user = auth_user(&user_row);
+	let library = library_of_type(&conn, LibraryType::Mixed).await;
+	let (_, rows) = series_with_files(
+		&conn,
+		&library.id,
+		"Compiler Chronicles",
+		&[("First Pass", "m4b"), ("Second Pass", "m4b")],
+	)
+	.await;
+	for row in &rows {
+		metadata(&conn, &row.id, &row.name, Some("Grace Hopper")).await;
+	}
+	let backend = TestBackend::new(conn);
+	for row in &rows {
+		backend.set_audio(&row.id, one_track_audio(&row.path, 12_000));
+	}
+
+	let (status, body) = request(
+		backend,
+		&user,
+		"GET",
+		&format!("/api/libraries/{}/personalized", library.id),
+		None,
+	)
+	.await;
+
+	assert_eq!(status, StatusCode::OK);
+	let shelves = body.as_array().expect("shelves");
+	let by_id = |id: &str| {
+		shelves
+			.iter()
+			.find(|shelf| shelf["id"] == id)
+			.unwrap_or_else(|| panic!("no {id} shelf"))
+			.clone()
+	};
+	// `MediaManager.populatePersonalizedDataForLibrary` keys on these four
+	// ids and refuses to decode a `type` outside its subtype list.
+	assert_eq!(by_id("recently-added")["type"], "book");
+	assert_eq!(by_id("discover")["type"], "book");
+	let series = by_id("recent-series");
+	assert_eq!(series["type"], "series");
+	assert_eq!(series["labelStringKey"], "LabelRecentSeries");
+	assert_eq!(series["entities"][0]["name"], "Compiler Chronicles");
+	assert_eq!(
+		series["entities"][0]["books"]
+			.as_array()
+			.expect("books")
+			.len(),
+		2
+	);
+	let authors = by_id("newest-authors");
+	assert_eq!(authors["type"], "authors");
+	assert_eq!(authors["entities"][0]["name"], "Grace Hopper");
+	assert_eq!(authors["entities"][0]["numBooks"], 2);
+}
+
+#[tokio::test]
+async fn an_author_filter_narrows_a_page_to_that_authors_books() {
+	let conn = db().await;
+	let user_row = ::tests::fake_data::User::new("ada").insert(&conn).await;
+	let user = auth_user(&user_row);
+	let library = library_of_type(&conn, LibraryType::Mixed).await;
+	let (_, rows) = series_with_files(
+		&conn,
+		&library.id,
+		"Mixed Shelf",
+		&[("Engine", "m4b"), ("Compiler", "m4b")],
+	)
+	.await;
+	metadata(&conn, &rows[0].id, "Engine", Some("Ada Lovelace")).await;
+	metadata(&conn, &rows[1].id, "Compiler", Some("Grace Hopper")).await;
+	let backend = TestBackend::new(conn);
+	for row in &rows {
+		backend.set_audio(&row.id, one_track_audio(&row.path, 12_000));
+	}
+
+	let (_, authors) = request(
+		backend.clone(),
+		&user,
+		"GET",
+		&format!("/api/libraries/{}/authors", library.id),
+		None,
+	)
+	.await;
+	let ada = authors["results"]
+		.as_array()
+		.expect("authors")
+		.iter()
+		.find(|author| author["name"] == "Ada Lovelace")
+		.expect("Ada")["id"]
+		.as_str()
+		.expect("author id")
+		.to_owned();
+
+	use base64::Engine as _;
+	let encoded = base64::engine::general_purpose::STANDARD.encode(&ada);
+	let (status, body) = request(
+		backend,
+		&user,
+		"GET",
+		&format!(
+			"/api/libraries/{}/items?limit=1000&minified=1&filter=authors.{encoded}",
+			library.id
+		),
+		None,
+	)
+	.await;
+
+	assert_eq!(status, StatusCode::OK);
+	let results = body["results"].as_array().expect("results");
+	assert_eq!(results.len(), 1, "only the filtered author's books");
+	assert_eq!(results[0]["media"]["metadata"]["title"], "Engine");
+}
+
+#[tokio::test]
+async fn logout_answers_the_envelope_the_app_posts_to() {
+	let fixture = fixture().await;
+	let (status, body) =
+		request(fixture.backend, &fixture.user, "POST", "/logout", None).await;
+	assert_eq!(status, StatusCode::OK);
+	// abs-ref's key is snake_case here, alone among the profile's routes.
+	assert_eq!(body, json!({ "redirect_url": null }));
+}
+
+#[tokio::test]
+async fn the_track_route_hands_the_delivery_layer_its_device() {
+	let fixture = fixture().await;
+	fixture.backend.set_device("device-phone-opus");
+
+	let (status, _, _) = request_full(
+		fixture.backend.clone(),
+		&fixture.user,
+		"GET",
+		&format!("/api/items/{}/file/0", fixture.item_id),
+		None,
+		&[("range", "bytes=0-1023")],
+	)
+	.await;
+
+	assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+	// The audio transform preset lives on the device, so a delivery that
+	// did not carry it would serve every ABS client the stored encoding.
+	let served = fixture.backend.served.lock().clone();
+	assert_eq!(
+		served,
+		vec![(
+			fixture.item_id.clone(),
+			0,
+			Some("bytes=0-1023".to_owned()),
+			Some("device-phone-opus".to_owned())
+		)]
+	);
+}

@@ -7,17 +7,17 @@ This page is the authoritative specification for Stump's Audiobookshelf compatib
 
 ## Scope and evidence
 
-- **The client that drove the profile:** Lissen **1.11.22-release** (`f30bf9be`), an Android audiobook player. Its entire server contract is one Retrofit interface, `channel/audiobookshelf/common/client/AudiobookshelfApiClient.kt` — 26 declarations, of which 4 belong to the podcast lane this profile does not serve. Every Lissen path in this page is relative to `app/src/main/kotlin/org/grakovne/lissen/`, and a bare `:NN` in the route matrix means that API-client file.
+- **The clients that drove the profile:** Lissen **1.11.22-release** (`f30bf9be`), an Android audiobook player, and the **official Audiobookshelf app** `v0.14.0-beta` (`12025ab5`, Nuxt 2 + Capacitor). Lissen's entire server contract is one Retrofit interface, `channel/audiobookshelf/common/client/AudiobookshelfApiClient.kt` — 26 declarations, of which 4 belong to the podcast lane this profile does not serve. Every Lissen path in this page is relative to `app/src/main/kotlin/org/grakovne/lissen/`, and a bare `:NN` in the route matrix means that API-client file. The official app's 23 REST paths are in `server/ApiHandler.kt:427-854` and its socket contract in `plugins/server.js`; both are cited by file and line where they drove a decision.
 - **The server that pinned the wire shapes:** a live `abs-ref` container (`abs/compose.yml`, port 13450) in the `komga-compat` sibling repository. `abs/capture/capture.sh` drives it end to end — init, login, library create + scan, item detail, play session, sync, close, progress patch, bookmarks, byte ranges, negatives, refresh — and writes every response verbatim to `abs/capture/<name>.json`, so DTOs are diffed against the reference rather than guessed.
 - **Licensing boundary:** Audiobookshelf is GPL-3.0 and Stump is MIT. Nothing in `crates/abs` is derived from Audiobookshelf source; the profile is written from observed behaviour and captured JSON only. Lissen's own Retrofit declarations (paths, query parameters, field names) are cited as the client contract, which is what a client contract is for.
-- **Contract types** live in [`crates/abs/src`](https://github.com/stumpapp/stump/tree/nightly/crates/abs/src) (`stump_abs`): DTOs in `dto.rs`, the audio projection in `model.rs`, tokens in [`auth.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/abs/src/auth.rs), allocated identities in [`ids.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/abs/src/ids.rs). The server adapter is `apps/server/src/routers/abs_backend.rs`; persistence comes from migration `m20260935_000000_add_abs_compat` (`abs_ids`, `abs_sessions`).
+- **Contract types** live in [`crates/abs/src`](https://github.com/stumpapp/stump/tree/nightly/crates/abs/src) (`stump_abs`): DTOs in `dto.rs`, the audio projection in `model.rs`, tokens in [`auth.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/abs/src/auth.rs), allocated identities in [`ids.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/abs/src/ids.rs), the socket lane in [`socket/`](https://github.com/stumpapp/stump/tree/nightly/crates/abs/src/socket). The server adapter is `apps/server/src/routers/abs_backend.rs`; persistence comes from migrations `m20260935_000000_add_abs_compat` (`abs_ids`, `abs_sessions`) and `m20260943_000000_add_abs_session_play_method`.
 - **Replay harness:** `specs/abs.hurl` with `make replay-abs`, plus `make replay-abs-diff` (a JSON key-set diff of Stump's responses against `abs-ref`), in the `komga-compat` sibling repository; bring-up and capture steps are in its `abs/README.md`.
-- **Verification status:** no Lissen device run and no replay result is recorded against Stump yet. The captures above are reference evidence — they establish the target wire shape, not that the app works.
+- **Verification status:** no device run of either app is recorded against Stump yet, and Lissen is still the only recorded live ABS client. The socket lane was verified at the protocol level: frame-for-frame against `abs-ref` 2.36.0, and end to end with a `socket.io-client@4` script (`transports: ['websocket']`) against a fixture instance — `init` on connect, `user_item_progress_updated` after a REST progress patch. The captures establish the target wire shape, not that either app works.
 
 ### Non-goals
 
 - This is not a claim of complete Audiobookshelf server compatibility.
-- Podcast libraries, playlists, collections, the session list, `/api/search/books`, ereader devices, and OIDC are outside the profile ([Known deviations](#known-deviations)).
+- Podcast libraries, playlists, ereader devices, and OIDC are outside the profile ([Known deviations](#known-deviations)). Collections and playlists answer an empty page rather than a `404`, because the app opens both tabs.
 - Audiobookshelf endpoints outside the route matrix answer `404`.
 
 ## Enabling
@@ -124,7 +124,7 @@ Audio bytes are fetched by ExoPlayer through the same authenticated OkHttp clien
 | `GET /api/libraries` | `:40-41` | `libraries.json` | `{"libraries":[…]}`, only libraries the user (and the device scope) can see and which contain audio; `mediaType` is always `book` |
 | `GET /api/libraries/{id}?include=filterdata` | `:43-47` (`include` defaults to `filterdata`) | `library_include_filterdata.json` | `{filterdata, issues, numUserPlaylists, library}`; without `include`, just the library object |
 | `GET /api/libraries/{id}/items?limit&page&sort&desc&minified&filter&collapseseries&include` | `:80-90` | `library_items_minified.json`, `library_items_collapseseries.json`, `library_items_filter_not_finished.json` | The paged item envelope. `sort`, `desc` and `filter` values are enumerated below |
-| `GET /api/libraries/{id}/personalized` | `:49-52` | `personalized.json` | An array of shelves. Stump serves `continue-listening`, `recently-added` and `discover` (see the note below) |
+| `GET /api/libraries/{id}/personalized` | `:49-52` | `personalized.json` | An array of shelves: `continue-listening`, `recently-added`, `recent-series`, `discover`, `newest-authors` ([Personalized shelves](#personalized-shelves)) |
 | `GET /api/libraries/{id}/authors?limit&page&sort&desc` | `:102-109` | `library_authors.json` | `{results:[…]}`; authors are synthesised from `media_metadata.writers` and their ids allocated in `abs_ids` |
 | `GET /api/libraries/{id}/search?q&limit` | `:111-116` | `library_search.json` | `{book[], narrators[], tags[], genres[], series[], authors[]}`. A `book[]` element is a `{libraryItem:{…}}` wrapper, not a bare item |
 | `GET /api/items/{id}?expanded&include` | `:125-128` | `item.json`, `item_expanded.json`, `item_multitrack.json` | The full item. `media.audioFiles[]` and `media.chapters[]` always; `media.tracks[]`, `duration`, `size`, `numTracks`, `numAudioFiles`, `numChapters` only with `expanded=1` |
@@ -142,6 +142,36 @@ Audio bytes are fetched by ExoPlayer through the same authenticated OkHttp clien
 | `DELETE /api/me/item/{id}/bookmark/{time}` | `:71-75` (`totalTime` is an `Int`) | none — status only, recorded by `capture.sh:111-112` | Deletes the bookmark at that whole-second time |
 | `GET /api/authors/{id}?include=items` | `:135-138` (the query is inside the `@GET` path) | `library_authors.json` (author object), `personalized.json` (`newest-authors` shelf) | The synthesised author plus `libraryItems[]` |
 | `GET /api/authors/{id}/image` | `:189-194` | none | Always `404`: Stump stores no author images |
+
+The rows below were added for the **official Audiobookshelf app** `v0.14.0-beta` (`12025ab5`), whose 23 REST paths are declared in `android/app/src/main/java/com/audiobookshelf/app/server/ApiHandler.kt:427-854`; a bare `ApiHandler:NN` cites that file, and `plugins/`, `pages/`, `store/` cite its Nuxt web view. They were captured live against the same `abs-ref` 2.36.0 container.
+
+| Method + path | Official-app call site | Stump behaviour |
+| --- | --- | --- |
+| `POST /logout` | `store/user.js:158` | `{"redirect_url": null}` — snake_case on the wire, alone in the profile. Unauthenticated, because a client whose token expired must still be able to log out; the profile mints stateless JWTs and has no server-side session to destroy, so this acknowledges rather than revokes |
+| `GET /api/me/items-in-progress` | `ApiHandler:612` | `{libraryItems:[…]}`: started, unfinished books, newest position first, each a **minified** item plus `progressLastUpdate`. The app reads that key with `getLong` (`data/ItemInProgress.kt`), so it is never absent. `?limit=` defaults to 25 |
+| `GET /api/me/listening-sessions?itemsPerPage&page` | web view (stats) | `{total, numPages, page, itemsPerPage, sessions[]}` over `abs_sessions`, newest first. A history row is a `PlaybackSession` **without** `audioTracks` and `libraryItem` (24 keys against 26), matching the reference |
+| `GET /api/me/item/listening-sessions/{id}` | web view | The same envelope for one book |
+| `GET /api/me/listening-stats` | `pages/stats.vue:109` | `{totalTime, items{}, days{}, dayOfWeek{}, today, recentSessions[]}`, derived from the same session rows the history lists — there is no second store of listening time. A session counts on the day it started, which is the day stamped on the session |
+| `GET`/`PATCH /api/me/progress/{id}/{episodeId}` | `ApiHandler:688,696` | `404`. The episode id addresses a podcast episode; this profile serves book libraries only, so the episode never resolves. Mounted deliberately rather than left to the router's fallback |
+| `POST /api/session/local` | `ApiHandler:677` | The offline merge, one session. `200 OK`. See [Offline sessions](#offline-sessions) |
+| `POST /api/session/local-all` | `ApiHandler:775` | The offline merge, the whole backlog → `{results:[{id, success, progressSynced}]}` |
+| `GET /api/libraries/{id}/series?minified&sort&desc&limit&page` | `ApiHandler:516` | `{results, total, limit, page, sortBy, sortDesc, minified, include}`. A series entity is `{id, libraryId, name, nameIgnorePrefix, description, addedAt, updatedAt, books[]}`. A Stump series holding **one** audiobook is that book's own folder, not a series, and is absent — the same rule the item list applies with `seriesName: ""` |
+| `GET /api/series/{id}` | web view (`pages/series/_id.vue:12`) | **Not served.** The Kavita profile already owns `/api/series/{seriesId}` in the shared `/api` namespace (`crates/kavita/src/routes/series.rs:158`), and a second parameter name at the same position is a `matchit` conflict that panics while the router is built. The page's data is reachable through `/api/libraries/{id}/series` and the `series.<base64>` item filter, which is what the same page uses to list a series' books |
+| `GET /api/libraries/{id}/collections`, `/playlists` | `ApiHandler:585`, web view | `{results: [], total: 0, limit, page}`. Stump's shelves and reading lists span every media type and carry no audio semantics, so they are not dressed up as Audiobookshelf collections — but the tab the app opens must not 404 |
+| `GET /api/libraries/{id}/items?filter=authors.<base64 author id>` | `ApiHandler:565` | Narrows the page to the books crediting that author. The value is the **id** the profile allocated in `abs_ids`, resolved back to the `media_metadata.writers` name; an id with no name behind it selects nothing rather than everything |
+| `GET /socket.io/?EIO=4&transport=websocket` | `plugins/server.js:36-42` | The socket lane. See [socket.io](#socketio) |
+
+#### Offline sessions
+
+The official app plays downloaded books offline and uploads whole sessions afterwards — one per call while it plays (`media/MediaProgressSyncer.kt:274`), the backlog in one request on reconnect. The body is its `createPartialPlaybackSession` (`ApiHandler:650-668`): identity, book, `currentTime`, `timeListening` and `updatedAt`, plus `deviceInfo`.
+
+`updatedAt` is the **device clock time of the position**, not of the upload, and that is what the merge turns on: the profile passes it as the source time of the reading-state update, so the unified head's ordinary conflict rule decides. An upload dated more than the 60 s tolerance behind the head that also reports **less** progress is recorded as provenance and does not move the position; anything else moves it. `local-all` reports that decision per session as `progressSynced`, which is what the app logs and what tells it the server was already ahead. A session that names a book the caller cannot see comes back as `success: false` with an error, never as a status code: the app matches results to stored sessions by id and only deletes the ones that succeeded (`ApiHandler:780-795`).
+
+Either way the upload becomes a listening-history row with `playMethod: 3` (Local) — the listening happened even when the position did not move. That is what `abs_sessions.play_method` (migration `m20260943_000000_add_abs_session_play_method`) exists for: a history that could not tell offline listening from streamed listening would report every uploaded session as if the server had served the bytes.
+
+#### Personalized shelves
+
+The app's Android Auto browser keys on four shelf ids and refuses to decode a `type` outside `book|series|authors|episode|podcast` (`media/MediaManager.kt:215-290`, Jackson `@JsonSubTypes`). The profile serves `continue-listening` (book), `recently-added` (book), `recent-series` (series), `discover` (book) and `newest-authors` (authors), with abs-ref's ids, labels and `labelStringKey`s. `newest-episodes` is podcast-only and is not served.
 
 Reference status codes reproduced from `capture/negatives.txt`: unknown item `404`, unknown library `404`, unknown library items `404`, unknown progress `404`, unknown session sync `404`.
 
@@ -165,8 +195,67 @@ The response envelope is `{results, page, total, limit, offset, sortBy, sortDesc
 ### Where the capture and the client disagree
 
 - **`POST /api/authorize`** carries `user.token` alone on the reference — no `accessToken`, no `refreshToken` (`authorize.json`), unlike `login.json` and `refresh.json`, which carry all three. Stump matches the capture: Lissen reads no token from this route, only `user.username` (required) and the optional `serverSettings.version`/`buildNumber` (`common/model/connection/ConnectionInfoResponse.kt`).
-- **`GET /api/libraries/{id}/personalized`** on the reference returned four shelves — `recently-added` / `LabelRecentlyAdded`, `recent-series` / `LabelRecentSeries`, `discover` / `LabelDiscover`, `newest-authors` / `LabelNewestAuthors` — and **no** continue-listening shelf, because nothing was mid-listen when the capture ran. Lissen reads exactly one shelf, selected by `labelStringKey == "LabelContinueListening"` (`common/converter/RecentListeningResponseConverter.kt:17,34`), so a profile that emitted only what the capture contains would leave its home screen permanently empty. Stump therefore serves `continue-listening` with `labelStringKey: "LabelContinueListening"` alongside `recently-added` and `discover`, and does not serve `recent-series` or `newest-authors`. Every shelf must still carry `id`, `labelStringKey` and a non-null `entities` array, and every entity `id`, `libraryId` and `media.metadata.title`, or Moshi rejects the whole response (`common/model/user/PersonalizedFeedResponse.kt`).
+- **`GET /api/libraries/{id}/personalized`** on the reference returned four shelves — `recently-added` / `LabelRecentlyAdded`, `recent-series` / `LabelRecentSeries`, `discover` / `LabelDiscover`, `newest-authors` / `LabelNewestAuthors` — and **no** continue-listening shelf, because nothing was mid-listen when the capture ran. Lissen reads exactly one shelf, selected by `labelStringKey == "LabelContinueListening"` (`common/converter/RecentListeningResponseConverter.kt:17,34`), so a profile that emitted only what the capture contains would leave its home screen permanently empty. Stump therefore serves `continue-listening` with `labelStringKey: "LabelContinueListening"` alongside the four the capture shows ([Personalized shelves](#personalized-shelves)).
 - **`serverSettings.buildNumber`** is the JSON number `1` on the reference, while Lissen types the field as `String?` (`common/model/connection/ConnectionInfoResponse.kt`). Moshi's `nextString()` coerces a JSON number, so the number decodes; the profile emits the number to match the reference (`stump_abs::ABS_BUILD_NUMBER`) rather than the client's declared type. This is the same class of mismatch that broke Komelia on Readium `rel` ([Komga adapter](/docs/developer/komga-compat)), so it is worth knowing which side each field follows.
+
+## socket.io
+
+Audiobookshelf pushes state changes over socket.io, and the official app **hides its bookmark button unless the socket is connected** — `v-if="… && socketConnected"` (`components/app/AudioPlayer.vue:68`, state in `store/index.js:15,176`). A REST-only server therefore costs that app a feature no REST route can give back, which is why this lane exists. Lissen has no socket.io dependency at all and is unaffected either way.
+
+The lane is a **sink**: it holds no reading position, no session and no user list of its own. Everything it emits is translated from a change another lane already committed, so a dropped socket loses notifications, never data.
+
+### Framing
+
+Hand-rolled in [`crates/abs/src/socket/protocol.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/abs/src/socket/protocol.rs) from the MIT-licensed `socketio/engine.io-protocol` and `socketio/socket.io-protocol` specifications, and verified frame for frame against `abs-ref` 2.36.0. No socket.io crate is linked: the app forces `transports: ['websocket'], upgrade: false` (`plugins/server.js:36-42`), which reduces both protocols to the closed set of text frames below, and a server crate would bring its own connection model, namespaces and polling transport for a lane that needs none of them.
+
+```text
+GET /socket.io/?EIO=4&transport=websocket        (also /socket.io, no redirect between them)
+server → 0{"sid":…,"upgrades":[],"pingInterval":25000,"pingTimeout":20000,"maxPayload":1000000}
+client → 40                     Socket.IO CONNECT, default namespace
+server → 40{"sid":…}            a second id, the socket's, exactly as abs-ref answers
+client → 42["auth","<jwt>"]
+server → 42["init",{userId,username,usersOnline:[…]}]   or  42["auth_failed",{"message":…}]
+server → 2      client → 3      heartbeat, every 25 s, 20 s to answer
+```
+
+`upgrades` is empty because there is no second transport to upgrade to. The heartbeat is server-initiated per Engine.IO v4: a socket that misses a pong for `pingTimeout` is closed. A client `2` is answered with a `3`. A namespace other than `/` is refused with `connect_error` and the socket stays open. An unknown frame — a binary attachment, an ack, garbage — is ignored, never fatal.
+
+### Authentication
+
+The upgrade request carries **no credential**: a socket.io client cannot put a header on it. The endpoint is therefore mounted outside the profile's auth middleware, and the token arrives afterwards in the `auth` event — the same HS256 token `POST /login` mints, verified with the same secret ([`crates/abs/src/auth.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/abs/src/auth.rs)). A refresh token is refused: it buys a new pair at `POST /auth/refresh` and must not open a live channel.
+
+A failed `auth` answers `auth_failed` and **keeps the socket open**, because the app retries on the same connection once it has refreshed. Nothing at all is pushed before a successful `auth`: an unauthenticated socket has no user to scope visibility by. When the token's `exp` passes, the socket is closed — the client reconnects and re-`auth`s with a fresh token, exactly as it does after a REST `401`. One user may hold several sockets; `usersOnline[].connections` reports how many, from the per-server presence registry the lane keeps.
+
+### Events emitted
+
+| Event | Source | Payload |
+| --- | --- | --- |
+| `init` | a successful `auth` | `{userId, username, usersOnline[]}` |
+| `auth_failed` | a rejected `auth` | `{message}` |
+| `user_item_progress_updated` | `ReadingHeadChanged` for this user, on an audio book they may see — **any** protocol's write, including Kobo, KOReader and the native API | `{id, sessionId, data}`, where `data` is the same `MediaProgress` object `GET /api/me/progress/{id}` answers. The app's store applies `payload.data` wholesale (`plugins/server.js:117-121`) |
+| `user_updated` | the same head change, and every bookmark write | The whole `/api/me` user object, built by the one function `GET /api/me` uses |
+| `items_added` | `CoreEvent::CreatedMedia` | The new books, minified, filtered to the ones this user may see |
+| `item_updated` | `CoreEvent::ProviderSeriesMaterialized` | One event per audible book of the series, minified |
+
+**`sessionId` is always `null`.** abs-ref names the playback session that moved the position; a Stump reading head is shared by every protocol, so the change that reached this lane may not have come from an ABS session at all, and naming an unrelated open one would be a lie. The app does not read the field.
+
+**Bookmarks are published by the profile's own routes**, not by a core event: nothing outside `crates/abs` writes an ABS bookmark, so `POST`/`PATCH`/`DELETE /api/me/item/{id}/bookmark` announce themselves on the bus. This is what keeps the socket-gated bookmark UI live.
+
+**Not translated:** a filesystem rescan announces a count and a series (`CoreEvent::CreatedOrUpdatedManyMedia`) with no media ids, so it cannot name an item. Every other core event is server business no Audiobookshelf client subscribes to.
+
+### What the app gets, against abs-ref
+
+| abs-ref emits | This lane | Why |
+| --- | --- | --- |
+| `init`, `auth_failed`, `user_updated`, `user_item_progress_updated` | yes | The four the app's socket plugin subscribes to (`plugins/server.js:52-61`) |
+| `playlist_added` | no | Playlists are outside the profile; the app uses the event only to decide whether to show a playlists tab |
+| `user_online` / `user_offline` | no | Presence broadcast to other users. The app ignores both |
+| `user_stream_update`, `user_session_closed` | no | Live stream state per socket, which this lane does not track |
+| `item_added`/`_removed`, `library_*`, `series_*`, `author_*`, `collection_*` | partly (`items_added`, `item_updated`) | Only the ones a Stump core event can name |
+| `task_*`, `track_*`, `episode_download_*`, `metadata_embed_queue_update`, `backup_applied`, `notifications_updated`, `rss_feed_*`, `share_*`, `admin_message` | no | Server administration, podcast downloads and RSS feeds, none of which the profile serves |
+| `cover_search_result`, log listeners, `cancel_scan` | no | Socket-only administration surfaces |
+
+The endpoint is gated exactly like the REST surface: the `abs` cargo feature and `STUMP_ENABLE_ABS`. With the profile off, `/socket.io` is not registered and answers `404`.
 
 ## Identity mapping
 

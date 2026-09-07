@@ -29,7 +29,8 @@ pub const CREATE_ABS_SESSIONS_SQL: &str = "CREATE TABLE IF NOT EXISTS abs_sessio
     time_listening_ms BIGINT NOT NULL DEFAULT 0,
     started_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
-    closed_at BIGINT
+    closed_at BIGINT,
+    play_method INTEGER NOT NULL DEFAULT 0
 )";
 
 fn statement(conn: &impl ConnectionTrait, sql: &str, values: Vec<Value>) -> Statement {
@@ -59,8 +60,8 @@ impl AbsSessions {
 			"INSERT INTO abs_sessions (
                 id, user_id, media_id, library_id, device_id, client_name,
                 client_version, media_player, current_time_ms,
-                time_listening_ms, started_at, updated_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                time_listening_ms, started_at, updated_at, play_method
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
 			vec![
 				session.id.as_str().into(),
 				session.user_id.as_str().into(),
@@ -74,33 +75,22 @@ impl AbsSessions {
 				session.time_listening_ms.into(),
 				to_millis(session.started_at).into(),
 				to_millis(session.updated_at).into(),
+				session.play_method.into(),
 			],
 		))
 		.await?;
 		Ok(())
 	}
 
-	/// One session of `user_id`. Scoping the read by user is what stops a
-	/// client syncing progress onto somebody else's book with a guessed id.
-	pub async fn get(
-		conn: &impl ConnectionTrait,
-		user_id: &str,
-		session_id: &str,
-	) -> Result<Option<AbsSession>, DbErr> {
-		let row = conn
-			.query_one(statement(
-				conn,
-				"SELECT id, user_id, media_id, library_id, device_id, client_name,
-                        client_version, media_player, current_time_ms,
-                        time_listening_ms, started_at, updated_at
-                 FROM abs_sessions WHERE id = $1 AND user_id = $2",
-				vec![session_id.into(), user_id.into()],
-			))
-			.await?;
-		let Some(row) = row else {
-			return Ok(None);
-		};
-		Ok(Some(AbsSession {
+	/// The columns every read of the table projects, in one place so the
+	/// list and the single read cannot drift apart.
+	const COLUMNS: &'static str = "id, user_id, media_id, library_id, device_id,
+                        client_name, client_version, media_player,
+                        current_time_ms, time_listening_ms, started_at,
+                        updated_at, play_method";
+
+	fn from_row(row: &sea_orm::QueryResult) -> Result<AbsSession, DbErr> {
+		Ok(AbsSession {
 			id: row.try_get("", "id")?,
 			user_id: row.try_get("", "user_id")?,
 			media_id: row.try_get("", "media_id")?,
@@ -113,7 +103,59 @@ impl AbsSessions {
 			time_listening_ms: row.try_get("", "time_listening_ms")?,
 			started_at: from_millis(row.try_get("", "started_at")?),
 			updated_at: from_millis(row.try_get("", "updated_at")?),
-		}))
+			play_method: row.try_get("", "play_method")?,
+		})
+	}
+
+	/// One session of `user_id`. Scoping the read by user is what stops a
+	/// client syncing progress onto somebody else's book with a guessed id.
+	pub async fn get(
+		conn: &impl ConnectionTrait,
+		user_id: &str,
+		session_id: &str,
+	) -> Result<Option<AbsSession>, DbErr> {
+		let row = conn
+			.query_one(statement(
+				conn,
+				&format!(
+					"SELECT {} FROM abs_sessions WHERE id = $1 AND user_id = $2",
+					Self::COLUMNS
+				),
+				vec![session_id.into(), user_id.into()],
+			))
+			.await?;
+		let Some(row) = row else {
+			return Ok(None);
+		};
+		Ok(Some(Self::from_row(&row)?))
+	}
+
+	/// Every session of `user_id`, newest first, optionally for one book.
+	///
+	/// This is the listening history `GET /api/me/listening-sessions` and
+	/// `GET /api/me/item/listening-sessions/{id}` report: one row per play
+	/// request and per uploaded offline session, closed or not, because
+	/// abs-ref keeps closed sessions in the same list.
+	pub async fn list(
+		conn: &impl ConnectionTrait,
+		user_id: &str,
+		media_id: Option<&str>,
+	) -> Result<Vec<AbsSession>, DbErr> {
+		let mut values: Vec<Value> = vec![user_id.into()];
+		let mut sql = format!(
+			"SELECT {} FROM abs_sessions WHERE user_id = $1",
+			Self::COLUMNS
+		);
+		if let Some(media_id) = media_id {
+			sql.push_str(" AND media_id = $2");
+			values.push(media_id.into());
+		}
+		sql.push_str(" ORDER BY updated_at DESC, id ASC");
+		conn.query_all(statement(conn, &sql, values))
+			.await?
+			.iter()
+			.map(Self::from_row)
+			.collect()
 	}
 
 	pub async fn update(
@@ -202,6 +244,7 @@ mod tests {
 			time_listening_ms: 0,
 			started_at: Utc::now(),
 			updated_at: Utc::now(),
+			play_method: crate::routes::PLAY_METHOD_DIRECT,
 		}
 	}
 

@@ -70,6 +70,7 @@ mod m20260935_000000_add_abs_compat;
 mod m20260940_000000_add_kindle_deliveries;
 mod m20260941_000000_add_provider_request_headers;
 mod m20260942_000000_add_media_metadata_narrators;
+mod m20260943_000000_add_abs_session_play_method;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -145,6 +146,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260940_000000_add_kindle_deliveries::Migration),
 			Box::new(m20260941_000000_add_provider_request_headers::Migration),
 			Box::new(m20260942_000000_add_media_metadata_narrators::Migration),
+			Box::new(m20260943_000000_add_abs_session_play_method::Migration),
 		]
 	}
 }

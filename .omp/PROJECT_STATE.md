@@ -7,7 +7,7 @@ On-demand resume file. The evidence snapshot lives in
 
 ## Working tree
 
-- Branch `headless-modular` @ batch 9 (audiobooks step 3: `audio-assemble` tool (pure-Rust AAC remux via `mp4` 0.14 + faststart + SLConfig repair, ffmpeg ExternalTool plan-only otherwise), seven audio quality checks with fix actions, `audible` Audnexus provider + `media_metadata.narrators` (m20260942), console audio player; audio settings: `AudioPolicy` in the metadata policy document, `STUMP_AUDIO_{CANONICAL,AAC_BITRATE,FFMPEG}` validated at boot, per-device `AudioOutput::{Passthrough,Opus}` preset (`phone-opus`) honoured by the native track route and ABS file lane), gate 1741+317 tests, both profiles, replays 7/7 on 25600.
+- Branch `headless-modular` @ batch 10 (official Audiobookshelf app: 37 ABS routes incl. `session/local(-all)`, listening sessions/stats, items-in-progress, series/collections/playlists envelopes, author filter, Auto shelves; hand-rolled Engine.IO v4 / Socket.IO v5 sink at `/socket.io` (auth→init, progress/bookmark/items events from CoreEvent); m20260943 `abs_sessions.play_method`; `GET /api/series/{id}` dropped - Kavita owns that path), gate 1741+318 tests (abs 93), replays 7/7, socket handshake verified on 25600. Docs catch-up a1ef6911: state/roadmap/comparison @ 7de64602, architecture map, 10 crate READMEs, read-aloud + workers + requests design (docs/developer/read-aloud.mdx).
   Clean tree at that commit. `git config core.hooksPath /dev/null` is set on
   purpose: upstream's husky hook runs prettier/cargo-fmt on every commit and
   aborts on generated files; the gate replaces it.

@@ -9,8 +9,8 @@ use axum::{
 	Extension,
 };
 use chrono::Utc;
-use models::entity::{media, media_metadata, series, user::AuthUser};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use models::entity::{media, series, user::AuthUser};
+use sea_orm::{ColumnTrait, QueryFilter, QueryOrder};
 use serde::Deserialize;
 use stump_auth::AuthContext;
 use uuid::Uuid;
@@ -191,6 +191,7 @@ pub(crate) async fn play(
 		time_listening_ms: 0,
 		started_at: now,
 		updated_at: now,
+		play_method: crate::routes::PLAY_METHOD_DIRECT,
 	};
 	backend.create_session(session.clone()).await?;
 
@@ -205,6 +206,8 @@ pub(crate) async fn play(
 		time_listening_ms: 0,
 		started_at: now,
 		updated_at: now,
+		play_method: crate::routes::PLAY_METHOD_DIRECT,
+		shape: crate::mapper::SessionShape::Full,
 	})))
 }
 
@@ -232,17 +235,7 @@ pub(crate) async fn author(
 		.ok_or_else(|| AbsError::NotFound(format!("No author {author_id}")))?;
 
 	// The author's books, across every library the request may see.
-	let media_ids = media_metadata::Entity::find()
-		.filter(media_metadata::Column::Writers.contains(name.as_str()))
-		.select_only()
-		.column(media_metadata::Column::MediaId)
-		.into_tuple::<Option<String>>()
-		.all(backend.conn())
-		.await?
-		.into_iter()
-		.flatten()
-		.collect::<Vec<_>>();
-
+	let media_ids = query::media_ids_crediting(&**backend, &user, &name).await?;
 	let rows = if media_ids.is_empty() {
 		Vec::new()
 	} else {
@@ -251,25 +244,6 @@ pub(crate) async fn author(
 			.order_by_asc(media::Column::Name)
 			.all(backend.conn())
 			.await?
-	};
-	// `contains` matches substrings, so a name that is a prefix of another
-	// author's would drag their books in; the CSV values decide.
-	let rows = {
-		let context = query::context(&**backend, &user, &rows, false).await?;
-		let rows = rows
-			.iter()
-			.filter(|row| {
-				context
-					.metadata
-					.get(&row.id)
-					.map(|metadata| {
-						mapper::csv(metadata.writers.as_deref()).contains(&name)
-					})
-					.unwrap_or(false)
-			})
-			.cloned()
-			.collect::<Vec<_>>();
-		rows
 	};
 
 	let context = query::context(&**backend, &user, &rows, false).await?;
