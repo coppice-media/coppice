@@ -408,7 +408,12 @@ impl AbsBackendAdapter {
 		match self
 			.ctx
 			.devices()
-			.create_device(user, DeviceKind::Abs, None)
+			.create_device(
+				user,
+				stump_devices::CredentialIssuance::DelegatedCredential,
+				DeviceKind::Abs,
+				None,
+			)
 			.await
 		{
 			Ok((device, _)) => Some(device.id),

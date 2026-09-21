@@ -239,9 +239,11 @@ Not yet done from the user's live test with `input/`:
 2. **Broader official ABS app retest on a phone** (the scoped emulator evidence
    and socket.io-client fixture proof are recorded): play retry loop, covers,
    download, playlists, ebooks tab, and live bookmark updates.
-3. **Browser lane** for challenged sources (`cf_clearance` is fingerprint-bound):
-   HTML fetches through the browser worker, images direct; downgrade the cookie
-   recipe in `provider-host.mdx`.
+3. **Deferred Mihon-derived remote sources:** keep `STUMP_ENABLE_PROVIDERS=false`
+   (the default) and keep the sibling `stump-sources` repository local-only;
+   do not publish its site list. Revisit only after the browser-worker
+   Cloudflare authentication model is solved and every candidate source has
+   been curated for public linkage.
 4. **Read-aloud next:** import exact Storyteller/SMIL timing, then complete the
    worker-side alignment/playback acceptance. The pairing, SyncMap validation,
    alignment enqueue, and authenticated cache-only status/download path are

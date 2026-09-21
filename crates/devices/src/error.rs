@@ -6,6 +6,8 @@ pub enum DeviceError {
 	NotFound,
 	#[error("you do not have access to this device")]
 	Forbidden,
+	#[error("an API key cannot issue another API key with inherited permissions")]
+	InheritedCredentialRequiresSession,
 	#[error("device has been revoked")]
 	Revoked,
 	#[error("invalid device name: {0}")]

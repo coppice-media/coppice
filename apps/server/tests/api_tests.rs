@@ -5,6 +5,8 @@ mod audio;
 mod common;
 #[cfg(feature = "graphql")]
 mod device_pairing;
+#[cfg(feature = "graphql")]
+mod device_security;
 #[cfg(all(feature = "graphql", feature = "liseur-sync"))]
 mod device_touch;
 #[cfg(feature = "readium")]

@@ -87,11 +87,21 @@ async fn fixture(narrow_kind: DeviceKind, wide_kind: DeviceKind) -> Fixture {
 
 	let devices = app.ctx.devices();
 	let (narrow, narrow_issued) = devices
-		.create_device(&owner, narrow_kind, Some("Narrow".to_string()))
+		.create_device(
+			&owner,
+			stump_devices::CredentialIssuance::InteractiveSession,
+			narrow_kind,
+			Some("Narrow".to_string()),
+		)
 		.await
 		.expect("narrow device");
 	let (_, wide_issued) = devices
-		.create_device(&owner, wide_kind, Some("Wide".to_string()))
+		.create_device(
+			&owner,
+			stump_devices::CredentialIssuance::InteractiveSession,
+			wide_kind,
+			Some("Wide".to_string()),
+		)
 		.await
 		.expect("wide device");
 	devices

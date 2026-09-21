@@ -7,12 +7,14 @@ use crate::{
 };
 use async_graphql::{Context, Object, Result, ID};
 use chrono::Utc;
+#[cfg(feature = "web")]
+use models::entity::user_preferences;
 use models::txn::begin_write;
 use models::{
 	entity::{
 		age_restriction, session,
 		user::{self, AuthUser},
-		user_login_activity, user_preferences,
+		user_login_activity,
 	},
 	shared::{enums::UserPermission, permission_set::PermissionSet},
 };

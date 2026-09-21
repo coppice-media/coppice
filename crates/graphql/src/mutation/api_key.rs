@@ -83,12 +83,52 @@ fn check_permissions(
 	req_ctx: &stump_auth::AuthContext,
 	permissions: &APIKeyPermissions,
 ) -> Result<()> {
-	if let APIKeyPermissions::Custom(permissions) = permissions {
-		req_ctx.enforce_permissions(permissions).map_err(|e| {
-			tracing::trace!(?e, "User does not have requested permissions");
-			"You lack the required permissions".to_string()
-		})?;
+	match permissions {
+		APIKeyPermissions::Inherit(_) => {
+			if req_ctx.api_key().is_some() {
+				return Err(
+					"You cannot use an API key to create another API key with inherited permissions"
+						.into(),
+				);
+			}
+		},
+		APIKeyPermissions::Custom(permissions) => {
+			req_ctx.enforce_permissions(permissions).map_err(|e| {
+				tracing::trace!(?e, "User does not have requested permissions");
+				"You lack the required permissions".to_string()
+			})?;
+		},
 	}
 
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use models::{entity::user::AuthUser, shared::api_key::InheritPermissionValue};
+
+	fn context(api_key: Option<&str>) -> stump_auth::AuthContext {
+		stump_auth::AuthContext {
+			user: AuthUser {
+				is_server_owner: true,
+				..Default::default()
+			},
+			api_key: api_key.map(str::to_string),
+			device_id: None,
+		}
+	}
+
+	#[test]
+	fn inherited_permissions_require_an_interactive_session() {
+		let inherit = APIKeyPermissions::Inherit(InheritPermissionValue::Inherit);
+
+		assert!(check_permissions(&context(None), &inherit).is_ok());
+
+		let error = check_permissions(&context(Some("api-key")), &inherit).unwrap_err();
+		assert_eq!(
+			error.message,
+			"You cannot use an API key to create another API key with inherited permissions"
+		);
+	}
 }

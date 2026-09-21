@@ -38,21 +38,21 @@ The remaining boundaries are explicit:
 
 ## Enabling
 
-| Layer | Switch | Default | Effect |
-| --- | --- | --- | --- |
-| Cargo | feature `providers` (server, `stump_core`, `graphql`) | on in `headless`/`full`, off in `minimal` | Links `stump_provider` + `stump_provider_mangadex` + `stump_provider_themes`, the GraphQL ops, and the Komga/OPDS branches |
-| Runtime | `STUMP_ENABLE_PROVIDERS` / `providers.enable_providers` | `false` | Creates the `ProviderHost` at boot (`core/src/providers.rs::init`), installs the `provider://` media resolver, starts the GC scheduler. Off: GraphQL ops answer `Provider host is not enabled`, virtual branches fall through |
+| Layer   | Switch                                                  | Default                                   | Effect                                                                                                                                                                                                                        |
+| ------- | ------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cargo   | feature `providers` (server, `stump_core`, `graphql`)   | on in `headless`/`full`, off in `minimal` | Links `stump_provider` + `stump_provider_mangadex` + `stump_provider_themes`, the GraphQL ops, and the Komga/OPDS branches                                                                                                    |
+| Runtime | `STUMP_ENABLE_PROVIDERS` / `providers.enable_providers` | `false`                                   | Creates the `ProviderHost` at boot (`core/src/providers.rs::init`), installs the `provider://` media resolver, starts the GC scheduler. Off: GraphQL ops answer `Provider host is not enabled`, virtual branches fall through |
 
 Other keys (`core/src/config/providers.rs`):
 
-| Key | Env | Default | Meaning |
-| --- | --- | --- | --- |
-| `provider_cache_max_bytes` | `STUMP_PROVIDER_CACHE_MAX_BYTES` | 2 GiB | Bound of the on-disk page/cover cache under `<config>/cache/providers` |
-| `virtual_series_ttl` | `STUMP_VIRTUAL_SERIES_TTL` | `300` s | How long one live browse page `(source, kind, page)` is cached |
-| `provider_gc_days` | `STUMP_PROVIDER_GC_DAYS` | `30` | Materialised series with no reading head older than this are reclaimed |
-| `provider_health_interval_secs` | `STUMP_PROVIDER_HEALTH_INTERVAL_SECS` | `21600` s (6 h) | How often the source-health job probes every catalog source (floored at 60 s) |
-| `provider_health_dead_after` | `STUMP_PROVIDER_HEALTH_DEAD_AFTER` | `3` | Consecutive failed runs after which a source is `DEAD` and hidden from the catalog (floored at 1) |
-| `source_definitions_url` | `STUMP_SOURCE_DEFINITIONS_URL` | `https://raw.githubusercontent.com/stumpapp/stump-sources/main/index.json` | Definition repository the theme engines are driven from; see [Theme engines and definitions](#theme-engines-and-definitions) |
+| Key                             | Env                                   | Default                           | Meaning                                                                                                                                                               |
+| ------------------------------- | ------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider_cache_max_bytes`      | `STUMP_PROVIDER_CACHE_MAX_BYTES`      | 2 GiB                             | Bound of the on-disk page/cover cache under `<config>/cache/providers`                                                                                                |
+| `virtual_series_ttl`            | `STUMP_VIRTUAL_SERIES_TTL`            | `300` s                           | How long one live browse page `(source, kind, page)` is cached                                                                                                        |
+| `provider_gc_days`              | `STUMP_PROVIDER_GC_DAYS`              | `30`                              | Materialised series with no reading head older than this are reclaimed                                                                                                |
+| `provider_health_interval_secs` | `STUMP_PROVIDER_HEALTH_INTERVAL_SECS` | `21600` s (6 h)                   | How often the source-health job probes every catalog source (floored at 60 s)                                                                                         |
+| `provider_health_dead_after`    | `STUMP_PROVIDER_HEALTH_DEAD_AFTER`    | `3`                               | Consecutive failed runs after which a source is `DEAD` and hidden from the catalog (floored at 1)                                                                     |
+| `source_definitions_url`        | `STUMP_SOURCE_DEFINITIONS_URL`        | reserved; no supported public set | Reviewed local definition root used by the theme engines. Remote source definitions are deferred; see [Theme engines and definitions](#theme-engines-and-definitions) |
 
 ## Sources and the catalog
 
@@ -65,7 +65,7 @@ Other keys (`core/src/config/providers.rs`):
   See [Theme engines and definitions](#theme-engines-and-definitions).
 - **Catalog.** The Keiyoushi extension index is fetched daily into
   `<cache>/providers/keiyoushi-index.json`. `providerCatalog(lang, query,
-  includeDead)` flattens it to one row per source with `hasImplementation`
+includeDead)` flattens it to one row per source with `hasImplementation`
   telling the operator whether Stump can actually run it and `health` the
   entry's badge (the `source_health` row). Dead sources are omitted unless
   `includeDead: true`.
@@ -85,21 +85,21 @@ site templates (`lib-multisrc` "themes") with per-site selectors and paths.
 Compiling one Rust source per site would mean ~1400 crates that go stale
 whenever a site redesigns. Instead a site is **data**:
 
-| Half | Where | Owns |
-| --- | --- | --- |
-| Definition | the `stump-sources` data repository, generated by `sources-import` | `theme`, `base_url`, `lang`, `nsfw`, and the per-site `knobs`. No code. See [Source definitions](/docs/developer/source-definitions) for schema v1 and the generator |
-| Engine | `crates/provider-themes` (`stump_provider_themes`) | One `Source` implementation per theme, executing a definition. Includes a jsoup-subset selector engine (`:has()`, `:contains()`, `:containsOwn()`, `[attr~=v]`, `:not()`, direct-child `:has(> a)`) because the upstream selectors are jsoup, not CSS |
-| Loader | `crates/provider/src/definition.rs` | Fetches and caches `index.json` plus individual definitions under `<cache>/providers/source-definitions/`, beside the APK catalog |
+| Half       | Where                                                              | Owns                                                                                                                                                                                                                                                  |
+| ---------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Definition | the `stump-sources` data repository, generated by `sources-import` | `theme`, `base_url`, `lang`, `nsfw`, and the per-site `knobs`. No code. See [Source definitions](/docs/developer/source-definitions) for schema v1 and the generator                                                                                  |
+| Engine     | `crates/provider-themes` (`stump_provider_themes`)                 | One `Source` implementation per theme, executing a definition. Includes a jsoup-subset selector engine (`:has()`, `:contains()`, `:containsOwn()`, `[attr~=v]`, `:not()`, direct-child `:has(> a)`) because the upstream selectors are jsoup, not CSS |
+| Loader     | `crates/provider/src/definition.rs`                                | Fetches and caches `index.json` plus individual definitions under `<cache>/providers/source-definitions/`, beside the APK catalog                                                                                                                     |
 
 `engines()` registers four themes, and `supports_theme` is what the catalog
 consults:
 
-| `theme` | Engine | Kotlin base classes |
-| --- | --- | --- |
-| `madara` | `madara::MadaraSource` | `Madara`, `MadaraNoAjax` |
-| `madaralegacy` | `madara::MadaraSource` | the pre-KSP `Madara` with `useLoadMoreRequest` |
-| `mangathemesia` | `mangathemesia::MangaThemesiaSource` | `MangaThemesia` |
-| `mmrcms` | `mmrcms::MmrcmsSource` | `MMRCMS` |
+| `theme`         | Engine                               | Kotlin base classes                            |
+| --------------- | ------------------------------------ | ---------------------------------------------- |
+| `madara`        | `madara::MadaraSource`               | `Madara`, `MadaraNoAjax`                       |
+| `madaralegacy`  | `madara::MadaraSource`               | the pre-KSP `Madara` with `useLoadMoreRequest` |
+| `mangathemesia` | `mangathemesia::MangaThemesiaSource` | `MangaThemesia`                                |
+| `mmrcms`        | `mmrcms::MmrcmsSource`               | `MMRCMS`                                       |
 
 Each engine's module doc carries the full knob table with the Kotlin member
 every knob comes from and its default. Three rules hold across all of them:
@@ -142,16 +142,16 @@ unimplemented, exactly like a catalog entry with no implementation.
 ### Sites the schema cannot express
 
 `sources-import` only derives knobs from literal Kotlin, so a subclass that
-overrides a *method body* is reported as `custom-override` and not derived —
+overrides a _method body_ is reported as `custom-override` and not derived —
 `readcomicsonline.ru`, for instance, rebuilt its front end and overrides six
 members (`popularMangaFromElement`, `fetchSearchManga`, `searchMangaRequest`,
 `mangaDetailsParse`, `chapterFromElement`, `pageListParse`). Those are still
-*data* in engine terms: every extraction point in the MMRCMS engine is a knob,
+_data_ in engine terms: every extraction point in the MMRCMS engine is a knob,
 so such a site is expressible as a hand-authored definition without any Rust
 change. Two conventions exist for that case:
 
 - An anchor knob (`manga_url_selector`, `search_manga_url_selector`,
-  `chapter_url_selector`) set to `:self` means the matched card *is* the
+  `chapter_url_selector`) set to `:self` means the matched card _is_ the
   anchor, which is how a Tailwind rebuild wraps a whole cell in one `<a>`.
 - `chapter_string` distinguishes an explicitly empty value from an absent
   one: `""` strips the series title a host repeats in every chapter label,
@@ -159,7 +159,7 @@ change. Two conventions exist for that case:
 
 ### Challenged sources
 
-Some hosts sit behind a Cloudflare *managed challenge*: since 2026-06
+Some hosts sit behind a Cloudflare _managed challenge_: since 2026-06
 `readcomicsonline.ru` answers every HTML path with `403` and
 `cf-mitigated: challenge` to any client that cannot run the challenge script,
 which is every non-browser. The site is up — it simply refuses robots.
@@ -183,7 +183,7 @@ questions:
 
 1. an anonymous probe, always, carrying no configured header — what any
    client sees, and the only probe a source nobody configured ever gets;
-2. if that comes back challenged, one probe per enabled instance *with* the
+2. if that comes back challenged, one probe per enabled instance _with_ the
    headers that instance carries — whether this server can reach the host.
 
 The first probe that gets through is what the row records
@@ -221,7 +221,7 @@ operator started the worker hours after the job was parked — is **adopted** by
 the next ask instead of being paid for twice.
 
 `solveSourceChallenge(instanceId)` is the manual trigger, and the editor puts
-it behind a **Solve now** button next to the *Cloudflare challenge* badge on
+it behind a **Solve now** button next to the _Cloudflare challenge_ badge on
 **Settings → Remote sources**. It answers as soon as routing is decided
 (`APPLIED`, `QUEUED`, `ALREADY_QUEUED`, `NEEDS_WORKER`) rather than holding the
 request open while a human clicks.
@@ -277,21 +277,21 @@ hand. Same two headers, same store:
 
 ```graphql
 mutation SetHeaders($instanceId: String!, $headers: JSON!) {
-  setProviderSourceHeaders(instanceId: $instanceId, headers: $headers) {
-    name
-    preview
-    length
-  }
+	setProviderSourceHeaders(instanceId: $instanceId, headers: $headers) {
+		name
+		preview
+		length
+	}
 }
 ```
 
 ```json
 {
-  "instanceId": "en.readcomicsonline",
-  "headers": {
-    "Cookie": "cf_clearance=<value>",
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 …"
-  }
+	"instanceId": "en.readcomicsonline",
+	"headers": {
+		"Cookie": "cf_clearance=<value>",
+		"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 …"
+	}
 }
 ```
 
@@ -299,8 +299,8 @@ which answers with the stored headers described, never echoed:
 
 ```json
 [
-  { "name": "cookie", "preview": "cf_c…Sd4g", "length": 45 },
-  { "name": "user-agent", "preview": "Mozi…7.36", "length": 101 }
+	{ "name": "cookie", "preview": "cf_c…Sd4g", "length": 45 },
+	{ "name": "user-agent", "preview": "Mozi…7.36", "length": 101 }
 ]
 ```
 
@@ -309,7 +309,7 @@ a JSON object and every request that instance makes carries it — browse,
 search, details, chapters, page manifests and page bytes
 (`RequestHeaders::apply`, applied before the engine's own `Referer`/XHR
 headers, so a configured `User-Agent` replaces the Stump one). The editor
-exposes the same thing as a *Request headers* form under
+exposes the same thing as a _Request headers_ form under
 **Settings → Remote sources**.
 
 The values are credentials, so:
@@ -319,7 +319,7 @@ The values are credentials, so:
   the mutation answer with `{ name, preview, length }`, where `preview` is
   `cf_c…mnop` for a long value and `…` for a short one;
 - header names normalise to lower case, because HTTP/2 permits nothing else;
-- the mutation *replaces* the whole map: an empty map clears it, an empty
+- the mutation _replaces_ the whole map: an empty map clears it, an empty
   value drops that header. An automatic solve does not — it merges, so a
   clearance landing does not wipe a `Referer` you configured.
 
@@ -359,11 +359,11 @@ client ──▶ books/{id}/pages/{n}    ─▶ provider:// resolver ──▶ p
 
 Request mapping (`apps/server/src/routers/provider_virtual.rs::browse_kind`):
 
-| Client request | `BrowseKind` |
-| --- | --- |
-| Komga `fullTextSearch` / OPDS `?search=` | `Search { query }` |
-| Komga sort on `readCount`, `booksCount`, `readProgress` | `Popular` |
-| Anything else (including the unsorted default) | `Latest` |
+| Client request                                          | `BrowseKind`       |
+| ------------------------------------------------------- | ------------------ |
+| Komga `fullTextSearch` / OPDS `?search=`                | `Search { query }` |
+| Komga sort on `readCount`, `booksCount`, `readProgress` | `Popular`          |
+| Anything else (including the unsorted default)          | `Latest`           |
 
 Rules:
 
@@ -384,16 +384,16 @@ Rules:
 
 Routes that answer from a virtual library today:
 
-| Protocol | Route | Live / materialised |
-| --- | --- | --- |
-| Komga | `POST /api/v1/series/list` | live |
-| Komga | `GET /api/v1/series/{id}` | live until materialised |
-| Komga | `GET /api/v1/series/{id}/thumbnail` | live (source cover) or stored |
-| Komga | `GET /api/v1/series/{id}/books` | materialises, then DB |
-| Komga | `GET /api/v1/books/{id}`, `/pages/{n}`, `/thumbnail` | materialised rows via resolver |
-| OPDS 1.2 | `GET /libraries/{id}` | live |
-| OPDS 1.2 | `GET /series/{id}` | materialises, then DB (PSE pages as usual) |
-| Kobo, Kavita, OPDS 2.0, native GraphQL | — | materialised rows only (they read the database) |
+| Protocol                               | Route                                                | Live / materialised                             |
+| -------------------------------------- | ---------------------------------------------------- | ----------------------------------------------- |
+| Komga                                  | `POST /api/v1/series/list`                           | live                                            |
+| Komga                                  | `GET /api/v1/series/{id}`                            | live until materialised                         |
+| Komga                                  | `GET /api/v1/series/{id}/thumbnail`                  | live (source cover) or stored                   |
+| Komga                                  | `GET /api/v1/series/{id}/books`                      | materialises, then DB                           |
+| Komga                                  | `GET /api/v1/books/{id}`, `/pages/{n}`, `/thumbnail` | materialised rows via resolver                  |
+| OPDS 1.2                               | `GET /libraries/{id}`                                | live                                            |
+| OPDS 1.2                               | `GET /series/{id}`                                   | materialises, then DB (PSE pages as usual)      |
+| Kobo, Kavita, OPDS 2.0, native GraphQL | —                                                    | materialised rows only (they read the database) |
 
 ## Unavailable chapters
 
@@ -406,19 +406,19 @@ readable chapters — a row for an unreadable one is a book whose every page
 MangaDex sets `readable = false` from three documented `ChapterAttributes`
 fields ([API spec](https://api.mangadex.org/docs/static/api.yaml)):
 
-| Field | Spec | Skip reason |
-| --- | --- | --- |
-| `externalUrl` | "Denotes a chapter that links to an external source." | `ExternallyHosted` (the URL is kept, so a client can be told where the chapter lives) |
-| `pages` | "Count of readable images for this chapter" — `0` means none | `NoPages` |
-| `isUnavailable` | `boolean`; the chapter is listed but withheld | `Unavailable` |
+| Field           | Spec                                                         | Skip reason                                                                           |
+| --------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| `externalUrl`   | "Denotes a chapter that links to an external source."        | `ExternallyHosted` (the URL is kept, so a client can be told where the chapter lives) |
+| `pages`         | "Count of readable images for this chapter" — `0` means none | `NoPages`                                                                             |
+| `isUnavailable` | `boolean`; the chapter is listed but withheld                | `Unavailable`                                                                         |
 
 `Materialized.skipped` reports every skip as `{ remote_id, reason }`, and
 `add_series` logs one `INFO` line per series with the skip count, the readable
-count, and the distinct reasons. A licensed title such as *The Witch and the
-Beast* on `mangadex-en` therefore materialises with zero books and a full
+count, and the distinct reasons. A licensed title such as _The Witch and the
+Beast_ on `mangadex-en` therefore materialises with zero books and a full
 skip list, instead of books that cannot be opened.
 
-A chapter can also stop being available *after* it was materialised. The page
+A chapter can also stop being available _after_ it was materialised. The page
 manifest lookup (`/at-home/server/{chapterId}`, documented to answer
 `404 Not Found`) is the moment that shows: `ProviderHost::pages` maps that
 404 to `ProviderError::Unavailable { source_id }`, which converts to
@@ -430,7 +430,7 @@ manifest lookup (`/at-home/server/{chapterId}`, documented to answer
 
 ### Rematerialising a stale series
 
-Skipping unreadable chapters only helps series materialised *after* the rule
+Skipping unreadable chapters only helps series materialised _after_ the rule
 existed. A series materialised before it — or before the source retracted a
 chapter — still has a `media` row per unreadable chapter, complete with the
 page count the feed once advertised: One Piece on `mangadex-en` listed a
@@ -468,13 +468,13 @@ Two things the flags cannot do, so the refresh does them:
 
 An unchanged, verified feed hides and restores nothing, so a refresh is
 still idempotent. `refreshProviderSeries` is the only trigger: the Komga
-`GET /api/v1/series/{id}/books` lane materialises a *live-only* id — it runs
+`GET /api/v1/series/{id}/books` lane materialises a _live-only_ id — it runs
 only when no `series` row exists — so listing books never repairs a series
 that is already stored, and no scheduled job refreshes one either.
 
 ## Covers
 
-A provider series has no file to render a thumbnail from, so its cover *is*
+A provider series has no file to render a thumbnail from, so its cover _is_
 the source cover, cached under `cover:<remote_id>`:
 
 - The MangaDex list, search, and detail queries all send
@@ -502,11 +502,11 @@ to each series it materialises.
 vocabulary, projected onto `age_rating`:
 
 | `contentRating` | `age_rating` |
-| --- | --- |
-| `safe` | *(none)* |
-| `suggestive` | 13 |
-| `erotica` | 16 |
-| `pornographic` | 18 |
+| --------------- | ------------ |
+| `safe`          | _(none)_     |
+| `suggestive`    | 13           |
+| `erotica`       | 16           |
+| `pornographic`  | 18           |
 
 `safe` deliberately stores no rating: a user whose restriction does not
 `restrict_on_unset` must still see unrestricted titles, which is how locally

@@ -357,7 +357,9 @@ impl From<stump_devices::DeviceError> for APIError {
 		use stump_devices::DeviceError;
 		match error {
 			DeviceError::NotFound => APIError::NotFound(error.to_string()),
-			DeviceError::Forbidden => APIError::Forbidden(error.to_string()),
+			DeviceError::Forbidden | DeviceError::InheritedCredentialRequiresSession => {
+				APIError::Forbidden(error.to_string())
+			},
 			DeviceError::Revoked => APIError::Conflict(error.to_string()),
 			DeviceError::InvalidName(_)
 			| DeviceError::InvalidScope(_)

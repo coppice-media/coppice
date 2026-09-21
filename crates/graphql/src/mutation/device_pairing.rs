@@ -8,7 +8,8 @@ use sea_orm::{prelude::*, DatabaseConnection};
 use subtle::ConstantTimeEq;
 
 use crate::{
-	data::CoreContext, guard::PermissionGuard, object::device_pairing::DevicePairing,
+	data::CoreContext, guard::PermissionGuard, mutation::device::credential_issuance,
+	object::device_pairing::DevicePairing,
 };
 
 #[derive(Default)]
@@ -28,12 +29,16 @@ impl DevicePairingMutation {
 		code: Option<String>,
 		nonce: Option<String>,
 	) -> Result<DevicePairing> {
-		let stump_auth::AuthContext { user, .. } =
-			ctx.data::<stump_auth::AuthContext>()?;
+		let req_ctx = ctx.data::<stump_auth::AuthContext>()?;
+		let user = &req_ctx.user;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let now = DateTimeWithTimeZone::from(Utc::now());
 
 		let pairing = load_pending(conn, pairing_id.as_str(), now).await?;
+		stump_devices::authorize_credential_issuance(
+			pairing.kind,
+			credential_issuance(req_ctx),
+		)?;
 
 		// The poll that follows mints the credential as this user; refuse now
 		// rather than leave the device polling an approved-but-forbidden pairing.

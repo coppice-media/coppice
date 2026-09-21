@@ -80,6 +80,31 @@ impl CredentialRef<'_> {
 	}
 }
 
+/// The authority under which a device credential is being issued.
+///
+/// A credential-authenticated request is delegated authority: it may mint
+/// another narrowed credential, but it may not reproduce all permissions of
+/// the owning user.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CredentialIssuance {
+	InteractiveSession,
+	DelegatedCredential,
+}
+
+/// Enforce that `issuance` may mint the credential required by `kind`.
+pub fn authorize_credential_issuance(
+	kind: DeviceKind,
+	issuance: CredentialIssuance,
+) -> DeviceResult<()> {
+	if issuance == CredentialIssuance::DelegatedCredential
+		&& matches!(kind, DeviceKind::Api | DeviceKind::Web)
+	{
+		Err(DeviceError::InheritedCredentialRequiresSession)
+	} else {
+		Ok(())
+	}
+}
+
 /// The protocol a device of `kind` speaks, i.e. what its credential is minted for
 pub fn protocol_for(kind: DeviceKind) -> DeviceProtocol {
 	match kind {

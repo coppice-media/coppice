@@ -675,10 +675,13 @@ pub async fn validate_api_key(
 
 	let constructed_user = match api_key_permissions {
 		APIKeyPermissions::Inherit(_) => AuthUser::from(user),
+		// TODO(permissions): server owner going away
 		// Note: we don't construct permission sets for inferred permissions. What you
-		// give to your API key is what it gets.
+		// give to your API key is what it gets, however the server owner flag
+		// will be set to false always.
 		APIKeyPermissions::Custom(permissions) => AuthUser {
 			permissions,
+			is_server_owner: false,
 			..AuthUser::from(user)
 		},
 	};
@@ -1606,5 +1609,41 @@ mod tests {
 		}
 		assert!(basic_auth_cache::get(&new_good).is_none());
 		basic_auth_cache::clear();
+	}
+
+	#[tokio::test]
+	async fn custom_api_key_from_server_owner_never_grants_owner_status() {
+		use sea_orm::{ActiveModelTrait, Set};
+
+		let conn = ::tests::db::test_database().await;
+		let owner = ::tests::fake_data::User::new("owner").insert(&conn).await;
+		let (key, hash) = stump_core::api_key::create_prefixed_key().unwrap();
+		let custom_permissions = vec![UserPermission::AccessApiKeys];
+
+		api_key::ActiveModel {
+			user_id: Set(owner.id),
+			name: Set("restricted owner key".to_string()),
+			short_token: Set(key.short_token().to_string()),
+			long_token_hash: Set(hash),
+			permissions: Set(APIKeyPermissions::Custom(custom_permissions.clone())),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+
+		let authenticated_user = validate_api_key(key, &conn).await.unwrap();
+
+		assert!(!authenticated_user.is_server_owner);
+		assert_eq!(authenticated_user.permissions, custom_permissions);
+		assert_eq!(
+			AuthContext {
+				user: authenticated_user,
+				api_key: Some("restricted-owner-key".to_string()),
+				device_id: None,
+			}
+			.enforce_server_owner(),
+			Err(stump_auth::AuthorizationError::ForbiddenAction)
+		);
 	}
 }

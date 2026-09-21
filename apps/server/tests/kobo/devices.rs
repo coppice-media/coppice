@@ -22,7 +22,12 @@ async fn test_kobo_request_with_device_key_updates_last_seen() {
 
 	let devices = app.ctx.devices();
 	let (device, issued) = devices
-		.create_device(&owner, DeviceKind::Kobo, Some("Clara".to_string()))
+		.create_device(
+			&owner,
+			stump_devices::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kobo,
+			Some("Clara".to_string()),
+		)
 		.await
 		.expect("failed to create device");
 	assert!(device.last_seen_at.is_none());

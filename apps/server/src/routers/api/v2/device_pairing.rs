@@ -431,7 +431,12 @@ async fn issue_credential(
 
 	let devices = ctx.devices();
 	let (device, credential) = match devices
-		.create_device(&approver, pairing.kind, pairing.name.clone())
+		.create_device(
+			&approver,
+			stump_devices::CredentialIssuance::InteractiveSession,
+			pairing.kind,
+			pairing.name.clone(),
+		)
 		.await
 	{
 		Ok(minted) => minted,

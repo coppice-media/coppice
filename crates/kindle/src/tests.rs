@@ -218,7 +218,12 @@ impl Fixture {
 
 		let devices = DeviceService::new(conn.clone());
 		let (device, _) = devices
-			.create_device(&user, DeviceKind::Opds, Some("Paperwhite".to_string()))
+			.create_device(
+				&user,
+				stump_devices::CredentialIssuance::InteractiveSession,
+				DeviceKind::Opds,
+				Some("Paperwhite".to_string()),
+			)
 			.await
 			.expect("device");
 		let device = devices

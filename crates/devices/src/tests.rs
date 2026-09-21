@@ -55,7 +55,12 @@ async fn create_device_mints_narrowed_api_key_and_default_name() {
 	let service = DeviceService::new(conn.clone());
 
 	let (device, issued) = service
-		.create_device(&user, DeviceKind::Kobo, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kobo,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -102,7 +107,12 @@ async fn kavita_device_mints_download_only_api_key_and_server_endpoint() {
 	let missing_api_keys = reader(&owner.id, vec![UserPermission::DownloadFile]);
 	assert!(matches!(
 		service
-			.create_device(&missing_api_keys, DeviceKind::Kavita, None)
+			.create_device(
+				&missing_api_keys,
+				crate::CredentialIssuance::InteractiveSession,
+				DeviceKind::Kavita,
+				None,
+			)
 			.await,
 		Err(DeviceError::Forbidden)
 	));
@@ -110,7 +120,12 @@ async fn kavita_device_mints_download_only_api_key_and_server_endpoint() {
 	let missing_download = reader(&owner.id, vec![UserPermission::AccessApiKeys]);
 	assert!(matches!(
 		service
-			.create_device(&missing_download, DeviceKind::Kavita, None)
+			.create_device(
+				&missing_download,
+				crate::CredentialIssuance::InteractiveSession,
+				DeviceKind::Kavita,
+				None,
+			)
 			.await,
 		Err(DeviceError::Forbidden)
 	));
@@ -120,7 +135,12 @@ async fn kavita_device_mints_download_only_api_key_and_server_endpoint() {
 		vec![UserPermission::AccessApiKeys, UserPermission::DownloadFile],
 	);
 	let (device, issued) = service
-		.create_device(&allowed, DeviceKind::Kavita, None)
+		.create_device(
+			&allowed,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kavita,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -165,15 +185,30 @@ async fn default_names_are_numbered_on_collision() {
 	let service = DeviceService::new(conn);
 
 	let first = service
-		.create_device(&user, DeviceKind::Koreader, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Koreader,
+			None,
+		)
 		.await
 		.expect("first");
 	let second = service
-		.create_device(&user, DeviceKind::Koreader, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Koreader,
+			None,
+		)
 		.await
 		.expect("second");
 	let third = service
-		.create_device(&user, DeviceKind::Koreader, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Koreader,
+			None,
+		)
 		.await
 		.expect("third");
 
@@ -182,11 +217,21 @@ async fn default_names_are_numbered_on_collision() {
 	assert_eq!(third.0.name, "al's KOReader 3");
 
 	let taken = service
-		.create_device(&user, DeviceKind::Koreader, Some("al's KOReader".into()))
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Koreader,
+			Some("al's KOReader".into()),
+		)
 		.await;
 	assert!(matches!(taken, Err(DeviceError::InvalidName(_))));
 	let blank = service
-		.create_device(&user, DeviceKind::Koreader, Some("   ".into()))
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Koreader,
+			Some("   ".into()),
+		)
 		.await;
 	assert!(matches!(blank, Err(DeviceError::InvalidName(_))));
 }
@@ -199,7 +244,12 @@ async fn create_device_requires_the_kind_permissions() {
 	let no_key_access = reader(&owner.id, vec![UserPermission::AccessKoboSync]);
 	assert!(matches!(
 		service
-			.create_device(&no_key_access, DeviceKind::Kobo, None)
+			.create_device(
+				&no_key_access,
+				crate::CredentialIssuance::InteractiveSession,
+				DeviceKind::Kobo,
+				None,
+			)
 			.await,
 		Err(DeviceError::Forbidden)
 	));
@@ -210,7 +260,12 @@ async fn create_device_requires_the_kind_permissions() {
 	);
 	assert!(matches!(
 		service
-			.create_device(&no_kobo, DeviceKind::Kobo, None)
+			.create_device(
+				&no_kobo,
+				crate::CredentialIssuance::InteractiveSession,
+				DeviceKind::Kobo,
+				None,
+			)
 			.await,
 		Err(DeviceError::Forbidden)
 	));
@@ -224,14 +279,87 @@ async fn create_device_requires_the_kind_permissions() {
 		],
 	);
 	assert!(service
-		.create_device(&allowed, DeviceKind::Kobo, None)
+		.create_device(
+			&allowed,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kobo,
+			None,
+		)
 		.await
 		.is_ok());
 
 	// Liseur tokens are not API keys: no ACCESS_API_KEYS needed
 	let liseur_only = reader(&owner.id, vec![]);
 	assert!(service
-		.create_device(&liseur_only, DeviceKind::Liseur, None)
+		.create_device(
+			&liseur_only,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Liseur,
+			None,
+		)
+		.await
+		.is_ok());
+}
+
+#[tokio::test]
+async fn delegated_credentials_cannot_mint_or_rotate_inherited_api_keys() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn.clone());
+
+	let rejected = service
+		.create_device(
+			&user,
+			crate::CredentialIssuance::DelegatedCredential,
+			DeviceKind::Api,
+			None,
+		)
+		.await;
+	assert!(matches!(
+		rejected,
+		Err(DeviceError::InheritedCredentialRequiresSession)
+	));
+	assert_eq!(
+		device::Entity::find().count(conn.as_ref()).await.unwrap(),
+		0
+	);
+
+	let (device, first) = service
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Api,
+			None,
+		)
+		.await
+		.expect("interactive session may issue inherited key");
+	let rejected = service
+		.rotate_credential(
+			&user,
+			crate::CredentialIssuance::DelegatedCredential,
+			&device.id,
+		)
+		.await;
+	assert!(matches!(
+		rejected,
+		Err(DeviceError::InheritedCredentialRequiresSession)
+	));
+	assert_eq!(
+		service
+			.credential(&device.id)
+			.await
+			.unwrap()
+			.unwrap()
+			.credential_ref,
+		first.credential_ref
+	);
+
+	assert!(service
+		.create_device(
+			&user,
+			crate::CredentialIssuance::DelegatedCredential,
+			DeviceKind::Kobo,
+			None,
+		)
 		.await
 		.is_ok());
 }
@@ -244,6 +372,7 @@ async fn liseur_device_mints_bound_device_token() {
 	let (device, issued) = service
 		.create_device(
 			&user,
+			crate::CredentialIssuance::InteractiveSession,
 			DeviceKind::Liseur,
 			Some("Kobo Clara (NickelStump)".into()),
 		)
@@ -274,7 +403,12 @@ async fn coppice_mints_and_replaces_both_bound_credentials() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn.clone());
 	let (device, first) = service
-		.create_device(&user, DeviceKind::Coppice, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Coppice,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -344,7 +478,11 @@ async fn coppice_mints_and_replaces_both_bound_credentials() {
 	}));
 
 	let second = service
-		.rotate_credential(&user, &device.id)
+		.rotate_credential(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			&device.id,
+		)
 		.await
 		.expect("rotate");
 	let second_credentials = second.credentials();
@@ -385,12 +523,21 @@ async fn rotate_replaces_the_api_key() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn.clone());
 	let (device, first) = service
-		.create_device(&user, DeviceKind::Opds, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Opds,
+			None,
+		)
 		.await
 		.expect("device");
 
 	let second = service
-		.rotate_credential(&user, &device.id)
+		.rotate_credential(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			&device.id,
+		)
 		.await
 		.expect("rotated");
 	assert_ne!(first.secret, second.secret);
@@ -430,11 +577,21 @@ async fn revoke_deletes_credentials_and_blocks_rotation() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn.clone());
 	let (device, issued) = service
-		.create_device(&user, DeviceKind::Mihon, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Mihon,
+			None,
+		)
 		.await
 		.expect("device");
 	let (liseur_device, liseur_issued) = service
-		.create_device(&user, DeviceKind::Liseur, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Liseur,
+			None,
+		)
 		.await
 		.expect("liseur device");
 
@@ -471,7 +628,13 @@ async fn revoke_deletes_credentials_and_blocks_rotation() {
 		.is_none());
 
 	assert!(matches!(
-		service.rotate_credential(&user, &device.id).await,
+		service
+			.rotate_credential(
+				&user,
+				crate::CredentialIssuance::InteractiveSession,
+				&device.id,
+			)
+			.await,
 		Err(DeviceError::Revoked)
 	));
 	// revoking again is a no-op
@@ -493,11 +656,21 @@ async fn rename_updates_device_and_credential_names() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn.clone());
 	let (device, issued) = service
-		.create_device(&user, DeviceKind::Komelia, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Komelia,
+			None,
+		)
 		.await
 		.expect("device");
 	let (liseur_device, liseur_issued) = service
-		.create_device(&user, DeviceKind::Liseur, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Liseur,
+			None,
+		)
 		.await
 		.expect("liseur device");
 
@@ -537,7 +710,12 @@ async fn transform_profile_round_trips() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);
 	let (device, _) = service
-		.create_device(&user, DeviceKind::Kobo, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kobo,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -560,7 +738,12 @@ async fn audio_transform_preset_round_trips_verbatim() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);
 	let (device, _) = service
-		.create_device(&user, DeviceKind::Abs, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Abs,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -593,7 +776,12 @@ async fn touch_records_sighting_and_sync_summary() {
 	let service = DeviceService::new(conn.clone())
 		.with_seen_listener(move |event| sink.lock().push(event));
 	let (device, issued) = service
-		.create_device(&user, DeviceKind::Kobo, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kobo,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -681,11 +869,21 @@ async fn touch_coalesces_sightings_per_credential_for_an_interval() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn.clone());
 	let (kobo, kobo_key) = service
-		.create_device(&user, DeviceKind::Kobo, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kobo,
+			None,
+		)
 		.await
 		.expect("kobo");
 	let (reader, reader_key) = service
-		.create_device(&user, DeviceKind::Opds, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Opds,
+			None,
+		)
 		.await
 		.expect("reader");
 	let touch = |secret: String| {
@@ -745,7 +943,12 @@ async fn device_for_credential_resolves_live_devices_only() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);
 	let (device, issued) = service
-		.create_device(&user, DeviceKind::Kobo, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kobo,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -774,7 +977,12 @@ async fn touch_resolves_liseur_tokens_by_id() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);
 	let (device, issued) = service
-		.create_device(&user, DeviceKind::Liseur, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Liseur,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -805,11 +1013,21 @@ async fn visibility_is_per_user_with_server_owner_override() {
 	let service = DeviceService::new(conn);
 
 	let (owner_device, _) = service
-		.create_device(&owner, DeviceKind::Api, None)
+		.create_device(
+			&owner,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Api,
+			None,
+		)
 		.await
 		.expect("owner device");
 	let (bea_device, _) = service
-		.create_device(&bea, DeviceKind::Web, None)
+		.create_device(
+			&bea,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Web,
+			None,
+		)
 		.await
 		.expect("bea device");
 
@@ -840,7 +1058,12 @@ async fn endpoints_use_secret_once_then_hints() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);
 	let (device, issued) = service
-		.create_device(&user, DeviceKind::Kobo, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kobo,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -909,7 +1132,11 @@ async fn protocol_registered_devices_are_listed_without_credentials() {
 
 	// rotating gives a protocol-registered device a real credential
 	let issued = service
-		.rotate_credential(&user, "koreader-device-id")
+		.rotate_credential(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			"koreader-device-id",
+		)
 		.await
 		.expect("rotated");
 	assert_eq!(issued.protocol, DeviceProtocol::Koreader);
@@ -924,7 +1151,12 @@ async fn set_library_scope_restricts_and_clears() {
 	let library = fake_data::Library::default().insert(conn.as_ref()).await;
 	let other = fake_data::Library::default().insert(conn.as_ref()).await;
 	let (device, _) = service
-		.create_device(&user, DeviceKind::Komelia, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Komelia,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -993,7 +1225,12 @@ async fn set_library_scope_is_owner_or_device_user_only() {
 	let stranger_user = reader(&stranger_row.id, vec![UserPermission::AccessApiKeys]);
 
 	let (device, _) = service
-		.create_device(&reader_user, DeviceKind::Api, None)
+		.create_device(
+			&reader_user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Api,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -1023,7 +1260,12 @@ async fn authenticate_reports_the_current_scope_every_request() {
 	let service = DeviceService::new(conn.clone());
 	let library = fake_data::Library::default().insert(conn.as_ref()).await;
 	let (device, issued) = service
-		.create_device(&user, DeviceKind::Komelia, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Komelia,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -1075,7 +1317,12 @@ async fn kobo_scope_changes_record_entitlement_deltas() {
 	let dropped_book = book_in(conn.as_ref(), &dropped.id).await;
 
 	let (kobo, _) = service
-		.create_device(&user, DeviceKind::Kobo, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kobo,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -1108,7 +1355,12 @@ async fn kobo_scope_changes_record_entitlement_deltas() {
 	);
 
 	let (komelia, _) = service
-		.create_device(&user, DeviceKind::Komelia, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Komelia,
+			None,
+		)
 		.await
 		.expect("device");
 	service
@@ -1132,7 +1384,12 @@ async fn kindle_email_round_trips_and_clears() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);
 	let (device, _) = service
-		.create_device(&user, DeviceKind::Komelia, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Komelia,
+			None,
+		)
 		.await
 		.expect("device");
 	assert_eq!(device.kindle_email, None);
@@ -1157,7 +1414,12 @@ async fn kindle_email_rejects_malformed_addresses() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);
 	let (device, _) = service
-		.create_device(&user, DeviceKind::Komelia, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Komelia,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -1192,7 +1454,12 @@ async fn kindle_email_is_owner_or_device_user_only() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);
 	let (device, _) = service
-		.create_device(&user, DeviceKind::Komelia, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Komelia,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -1211,7 +1478,12 @@ async fn record_delivery_writes_a_sync_summary_without_a_sighting() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);
 	let (device, _) = service
-		.create_device(&user, DeviceKind::Komelia, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Komelia,
+			None,
+		)
 		.await
 		.expect("device");
 
@@ -1239,7 +1511,12 @@ async fn telemetry_merges_partial_scalars_and_monotonic_counters() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);
 	let (device, _) = service
-		.create_device(&user, DeviceKind::Kobo, None)
+		.create_device(
+			&user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Kobo,
+			None,
+		)
 		.await
 		.expect("device");
 

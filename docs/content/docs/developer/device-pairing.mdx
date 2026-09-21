@@ -38,7 +38,8 @@ the server never has to trust the network the device sits on.
                                     (5 wrong proofs → DENIED)
  GET …/pair/{id}/status?nonce= ──►
                                     first approved poll: claim credential_issued,
-                                    devices.create_device(approver, kind, name),
+                                    devices.create_device(approver, InteractiveSession,
+                                                          kind, name),
                                     devices.endpoints(…)
  ◄─ {status: "approved", credentials [{secret…}], device, endpoints}
  store each secret; done
@@ -82,12 +83,12 @@ Response `200`:
 
 ```json
 {
-  "pairing_id": "2f4c9f8a-2c9c-4d5c-a3ff-3d7d0f1f8b1e",
-  "code": "048213",
-  "nonce": "8d3f6c7a1b2e4f5061728394a5b6c7d8",
-  "qr_payload": "stump://pair?host=http%3A%2F%2F192.168.8.153%3A25640&id=2f4c9f8a-…&nonce=8d3f6c7a…",
-  "expires_at": "2026-09-05T12:34:56Z",
-  "poll_interval_secs": 2
+	"pairing_id": "2f4c9f8a-2c9c-4d5c-a3ff-3d7d0f1f8b1e",
+	"code": "048213",
+	"nonce": "8d3f6c7a1b2e4f5061728394a5b6c7d8",
+	"qr_payload": "stump://pair?host=http%3A%2F%2F192.168.8.153%3A25640&id=2f4c9f8a-…&nonce=8d3f6c7a…",
+	"expires_at": "2026-09-05T12:34:56Z",
+	"poll_interval_secs": 2
 }
 ```
 
@@ -109,43 +110,48 @@ nonce are indistinguishable (`404`), so the id space cannot be probed and
 users who see a pairing id in the pending list still cannot poll for its
 credentials. Otherwise the response is always `200` with a `status`:
 
-| Body | Meaning |
-| --- | --- |
-| `{"status":"pending"}` | Waiting for a user. Poll again after `poll_interval_secs`. |
-| `{"status":"denied"}` | A user denied it, or five wrong proofs were entered. Stop. |
-| `{"status":"expired"}` | The five-minute window passed. Start over. |
-| `{"status":"approved","credential_issued":true,"device":{…},"username":"…","credentials":[…],"credential":{…},"endpoints":[…]}` | **Once**, on the first poll after approval. Store every `credentials[].secret` immediately. |
-| `{"status":"approved","credential_issued":true}` | Every later poll. The secrets are gone; if the device lost them the user must revoke the device and pair again. |
+| Body                                                                                                                            | Meaning                                                                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `{"status":"pending"}`                                                                                                          | Waiting for a user. Poll again after `poll_interval_secs`.                                                      |
+| `{"status":"denied"}`                                                                                                           | A user denied it, or five wrong proofs were entered. Stop.                                                      |
+| `{"status":"expired"}`                                                                                                          | The five-minute window passed. Start over.                                                                      |
+| `{"status":"approved","credential_issued":true,"device":{…},"username":"…","credentials":[…],"credential":{…},"endpoints":[…]}` | **Once**, on the first poll after approval. Store every `credentials[].secret` immediately.                     |
+| `{"status":"approved","credential_issued":true}`                                                                                | Every later poll. The secrets are gone; if the device lost them the user must revoke the device and pair again. |
 
 Credentials are minted lazily by that first approved poll (not at approval
 time), so no plaintext secret is persisted, an abandoned approval creates no
-orphan device, and `endpoints` are rendered for the origin the *device* used
+orphan device, and `endpoints` are rendered for the origin the _device_ used
 to reach the server. `credential` is the primary `IssuedCredential` retained
 for older clients; `credentials` includes it and every additional credential:
 
+Approving an `api` or `web` pairing requires an interactive session because those device keys
+inherit all permissions of the approving user. An API-key-authenticated request may approve
+pairings only for device kinds whose credentials are explicitly narrowed. The same rule is
+enforced again by `DeviceService` for direct creation and rotation.
+
 ```json
 {
-  "username": "initial-server-admin",
-  "credential": {
-    "kind": "api_key",
-    "protocol": "koreader",
-    "credential_ref": "17",
-    "secret": "stump_XXXXXXXX_YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"
-  },
-  "credentials": [
-    {
-      "kind": "api_key",
-      "protocol": "koreader",
-      "credential_ref": "17",
-      "secret": "stump_XXXXXXXX_YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"
-    },
-    {
-      "kind": "liseur_token",
-      "protocol": "liseur",
-      "credential_ref": "token-uuid",
-      "secret": "liseur-uuid"
-    }
-  ]
+	"username": "initial-server-admin",
+	"credential": {
+		"kind": "api_key",
+		"protocol": "koreader",
+		"credential_ref": "17",
+		"secret": "stump_XXXXXXXX_YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"
+	},
+	"credentials": [
+		{
+			"kind": "api_key",
+			"protocol": "koreader",
+			"credential_ref": "17",
+			"secret": "stump_XXXXXXXX_YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"
+		},
+		{
+			"kind": "liseur_token",
+			"protocol": "liseur",
+			"credential_ref": "token-uuid",
+			"secret": "liseur-uuid"
+		}
+	]
 }
 ```
 
@@ -231,13 +237,13 @@ trail.
 
 ## Threat model
 
-| Threat | Mitigation |
-| --- | --- |
-| **Brute-forcing the code.** An authenticated user (or a malicious one) guesses the 6-digit code of a pending pairing to bind somebody else's device to their own account. | Codes are uniformly random (10⁶ space), stored as bcrypt hashes, and `MAX_FAILED_ATTEMPTS = 5` wrong proofs deny the pairing for good, so the success probability is 5 × 10⁻⁶ per pairing. The approval mutation requires an authenticated session with `AccessApiKeys`; the 5-minute TTL bounds the window; every attempt is logged with the user id. |
-| **Replay / credential theft by polling.** Someone who learns a `pairing_id` (it appears in the pending list of every user allowed to approve, and in server logs) polls the status endpoint and grabs credentials when the owner approves. | Polls are nonce-bound: without the 128-bit nonce handed only to the device the poll is a `404`. All credentials are returned exactly once (`credential_issued` claimed atomically), so even the legitimate device cannot fetch them twice and a late attacker gets a bare `approved`. Coppice's API key and liseur token are minted in the same device transaction, so a partial pair cannot be exposed. Pairings are single-use: a settled row cannot be approved, denied or re-issued. The QR PNG needs the same nonce, so the image (which embeds the nonce) is not fetchable by id alone. |
-| **Phishing a user into approving.** An attacker starts a pairing from their own device and convinces a user to type the code (or scan their QR), turning the attacker's device into a credential for the victim's account. | The proof of possession only proves that the approver is looking at *some* device screen, so this is fundamentally a social-engineering risk. The UI shows the device kind, the requested name and the remote IP before approval so a request from an unexpected network stands out; the approver must hold `AccessApiKeys`, and the credential is a device row on the victim's account that Home lists with last-seen data and a revoke action, so a mistaken approval is visible and reversible. Codes are only ever displayed by the device and never sent by Stump over email or chat; anyone asking a user to "read them a code" is outside the protocol. |
-| **Pending-list spam / DoS.** Unauthenticated `start` requests flood the table and the toasts. | `start` is in the AUTH rate-limit class (per-IP token bucket) and each remote IP may hold at most 10 open pairings. A bcrypt hash per start bounds CPU to the same budget as a login attempt. |
-| **Downgrade to a weaker approval.** A client tries to approve with both a code and a nonce, or with neither. | The mutation demands exactly one proof and counts any mismatch against the attempt budget; nonce comparison is constant-time (`subtle`). |
+| Threat                                                                                                                                                                                                                                     | Mitigation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Brute-forcing the code.** An authenticated user (or a malicious one) guesses the 6-digit code of a pending pairing to bind somebody else's device to their own account.                                                                  | Codes are uniformly random (10⁶ space), stored as bcrypt hashes, and `MAX_FAILED_ATTEMPTS = 5` wrong proofs deny the pairing for good, so the success probability is 5 × 10⁻⁶ per pairing. The approval mutation requires an authenticated session with `AccessApiKeys`; the 5-minute TTL bounds the window; every attempt is logged with the user id.                                                                                                                                                                                                                                                                                                         |
+| **Replay / credential theft by polling.** Someone who learns a `pairing_id` (it appears in the pending list of every user allowed to approve, and in server logs) polls the status endpoint and grabs credentials when the owner approves. | Polls are nonce-bound: without the 128-bit nonce handed only to the device the poll is a `404`. All credentials are returned exactly once (`credential_issued` claimed atomically), so even the legitimate device cannot fetch them twice and a late attacker gets a bare `approved`. Coppice's API key and liseur token are minted in the same device transaction, so a partial pair cannot be exposed. Pairings are single-use: a settled row cannot be approved, denied or re-issued. The QR PNG needs the same nonce, so the image (which embeds the nonce) is not fetchable by id alone.                                                                  |
+| **Phishing a user into approving.** An attacker starts a pairing from their own device and convinces a user to type the code (or scan their QR), turning the attacker's device into a credential for the victim's account.                 | The proof of possession only proves that the approver is looking at _some_ device screen, so this is fundamentally a social-engineering risk. The UI shows the device kind, the requested name and the remote IP before approval so a request from an unexpected network stands out; the approver must hold `AccessApiKeys`, and the credential is a device row on the victim's account that Home lists with last-seen data and a revoke action, so a mistaken approval is visible and reversible. Codes are only ever displayed by the device and never sent by Stump over email or chat; anyone asking a user to "read them a code" is outside the protocol. |
+| **Pending-list spam / DoS.** Unauthenticated `start` requests flood the table and the toasts.                                                                                                                                              | `start` is in the AUTH rate-limit class (per-IP token bucket) and each remote IP may hold at most 10 open pairings. A bcrypt hash per start bounds CPU to the same budget as a login attempt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Downgrade to a weaker approval.** A client tries to approve with both a code and a nonce, or with neither.                                                                                                                               | The mutation demands exactly one proof and counts any mismatch against the attempt budget; nonce comparison is constant-time (`subtle`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 What pairing does **not** protect against: a compromised approver account
 (it can create keys directly), a compromised server database (it holds the

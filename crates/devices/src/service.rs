@@ -27,8 +27,9 @@ use tokio::time::Instant;
 
 use crate::{
 	credential::{
-		api_key_permissions_for, credential_kind_for, liseur, mint_api_key, protocol_for,
-		required_permissions, CredentialRef, IssuedCredential,
+		api_key_permissions_for, authorize_credential_issuance, credential_kind_for,
+		liseur, mint_api_key, protocol_for, required_permissions, CredentialIssuance,
+		CredentialRef, IssuedCredential,
 	},
 	endpoint::Endpoint,
 	error::{DeviceError, DeviceResult},
@@ -135,9 +136,11 @@ impl DeviceService {
 	pub async fn create_device(
 		&self,
 		user: &AuthUser,
+		issuance: CredentialIssuance,
 		kind: DeviceKind,
 		name: Option<String>,
 	) -> DeviceResult<(device::Model, IssuedCredential)> {
+		authorize_credential_issuance(kind, issuance)?;
 		authorize_creation(user, kind)?;
 
 		let txn = begin_write(&self.conn).await?;
@@ -175,9 +178,11 @@ impl DeviceService {
 	pub async fn rotate_credential(
 		&self,
 		user: &AuthUser,
+		issuance: CredentialIssuance,
 		device_id: &str,
 	) -> DeviceResult<IssuedCredential> {
 		let device = self.get(user, device_id).await?;
+		authorize_credential_issuance(device.kind, issuance)?;
 		if device.is_revoked() {
 			return Err(DeviceError::Revoked);
 		}

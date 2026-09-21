@@ -1,6 +1,8 @@
 use async_graphql::{Context, Error, Object, Result, ID};
 use models::shared::enums::DeviceKind;
-use stump_devices::{Device as DeviceModel, IssuedCredential, LibraryScope};
+use stump_devices::{
+	CredentialIssuance, Device as DeviceModel, IssuedCredential, LibraryScope,
+};
 
 use crate::{
 	data::CoreContext,
@@ -21,12 +23,14 @@ impl DeviceMutation {
 		kind: DeviceKind,
 		name: Option<String>,
 	) -> Result<DeviceWithCredential> {
-		let stump_auth::AuthContext { user, .. } =
-			ctx.data::<stump_auth::AuthContext>()?;
+		let req_ctx = ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
+		let issuance = credential_issuance(req_ctx);
 		let devices = core.devices();
-		let (device, credential) = devices.create_device(user, kind, name).await?;
+		let (device, credential) = devices
+			.create_device(&req_ctx.user, issuance, kind, name)
+			.await?;
 		with_credential(ctx, device, credential).await
 	}
 
@@ -50,13 +54,14 @@ impl DeviceMutation {
 		ctx: &Context<'_>,
 		id: String,
 	) -> Result<DeviceWithCredential> {
-		let stump_auth::AuthContext { user, .. } =
-			ctx.data::<stump_auth::AuthContext>()?;
+		let req_ctx = ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let devices = core.devices();
-		let credential = devices.rotate_credential(user, &id).await?;
-		let device = devices.get(user, &id).await?;
+		let device = devices.get(&req_ctx.user, &id).await?;
+		let credential = devices
+			.rotate_credential(&req_ctx.user, credential_issuance(req_ctx), &id)
+			.await?;
 		with_credential(ctx, device, credential).await
 	}
 
@@ -146,6 +151,16 @@ impl DeviceMutation {
 				.set_kindle_email(user, &id, email.as_deref())
 				.await?,
 		))
+	}
+}
+
+pub(super) fn credential_issuance(
+	req_ctx: &stump_auth::AuthContext,
+) -> CredentialIssuance {
+	if req_ctx.api_key().is_some() {
+		CredentialIssuance::DelegatedCredential
+	} else {
+		CredentialIssuance::InteractiveSession
 	}
 }
 

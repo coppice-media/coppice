@@ -48,7 +48,12 @@ async fn test_komga_basic_request_with_device_key_updates_last_seen() {
 
 	let devices = app.ctx.devices();
 	let (device, issued) = devices
-		.create_device(&owner, DeviceKind::Komelia, Some("Pixel".to_string()))
+		.create_device(
+			&owner,
+			stump_devices::CredentialIssuance::InteractiveSession,
+			DeviceKind::Komelia,
+			Some("Pixel".to_string()),
+		)
 		.await
 		.expect("failed to create device");
 	let mut events = app.ctx.get_client_receiver();

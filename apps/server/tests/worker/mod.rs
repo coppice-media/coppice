@@ -92,7 +92,12 @@ impl Fixture {
 			.app
 			.ctx
 			.devices()
-			.create_device(&owner, kind, Some(name.to_string()))
+			.create_device(
+				&owner,
+				stump_devices::CredentialIssuance::InteractiveSession,
+				kind,
+				Some(name.to_string()),
+			)
 			.await
 			.expect("device");
 		(device.id, issued.secret)

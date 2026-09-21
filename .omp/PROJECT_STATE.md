@@ -15,18 +15,27 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
 
 ## Working tree
 
-- Branch `integrate/upstream-nightly-2026-09-20`; an active no-commit merge of
-  `origin/nightly` at `766c7347dbc0a2fc8c93d04a8f922db3b5a41ba8` is in progress.
-  `HEAD`/`ORIG_HEAD` is `0526084b62dc012069a2d1f47a12dde605004010`, the
-  pre-merge `headless-modular` tip; `MERGE_HEAD` is the nightly SHA. GitHub's
-  compare counted 87 upstream commits; local `HEAD..MERGE_HEAD` is 88 because
-  one merged release parent is included.
+- Branch `coppice/nightly`; an active no-commit merge of upstream security
+  release v0.1.10 at `44e1de12dd058bc27d40323cf495fe751088b364` is in
+  progress. `HEAD`/`ORIG_HEAD` is
+  `5f0eec8bca01424cc0731a8ab2fb50eaa13dc31f`; `MERGE_HEAD` is the release
+  commit. The merge applied cleanly, the complete gate and protocol replay are
+  green, and all intended changes are staged for the user-owned commit/push.
 - The dirty tree was preserved before the merge:
   - `/home/al/Code/.stump-integration-backup/headless-modular-2026-09-20.patch`
     (sha256 `c2e57571c02727b5f476f7b462297e39bf0612c1051d82514e562edf782fb3a0`)
   - `/home/al/Code/.stump-integration-backup/headless-modular-untracked-2026-09-20.tar.gz`
     (sha256 `9aaf6d0236f0f90911f3978fb3af54d0d7d8ebc8c6742c40b2ba1155b3ea6c3b`)
     Keep these recovery artifacts unchanged.
+- The working umbrella is `/home/al/Code/coppice/`: `stump/` is this main
+  repository; `nickelstump/`, `koreader-stump/`, and
+  `stump-mihon-extension/` are independent Git repositories awaiting
+  user-owned remotes/commits; `komga-compat/` is private local evidence, not a
+  publishable repository.
+- `stump-sources/` stays local-only with no remote. Do not publish or link its
+  derived site list. Remote source definitions and Cloudflare-challenged sites
+  are deferred until a browser-worker authentication design and a
+  source-by-source linkage review exist. Keep `STUMP_ENABLE_PROVIDERS=false`.
 - The integration carries Home/editor dark-first UX, OIDC-first login and
   group-permission mapping, device management and sync summaries, head-backed
   progress/session fixes, liseur annotation projection, persistent read-aloud
@@ -52,20 +61,27 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
 
 ## Absorbed upstream security fixes
 
-- Upstream security commit `3d5854228d8f314f36ed6aeb9a4714cc4c30ed50`
-  is included in the merge target. Its protections now cover the user
-  self-permission-escalation path, the `libraryMissingEntities` management
+- Upstream commit `3d5854228d8f314f36ed6aeb9a4714cc4c30ed50` protects the
+  user self-permission-escalation path, the `libraryMissingEntities` management
   guard, user-scoped `mediaMetadataOverview` results, and book-club read
   access.
+- Upstream security release v0.1.10 / commit
+  `44e1de12dd058bc27d40323cf495fe751088b364` prevents owner authority from
+  flowing through custom API keys and requires an interactive session before
+  creating or updating inherited-permission API keys. Coppice extends the same
+  boundary to API/Web device creation, credential rotation, and pairing
+  approval. Reader-device credentials remain custom/narrowed and are
+  unaffected.
 
 ## Fixture and launcher
 
-- One instance, every profile on: `hub` process `stump-komga`, port 25600,
-  launcher `scripts/dev-fixture-server.sh`, binary `target/debug/stump_server`
-  (headless,liseur-sync). Launch env: `STUMP_ENABLE_KAVITA=true
-STUMP_ENABLE_BACKGROUND_JOBS=true STUMP_ENABLE_PROVIDERS=true`; Komga,
-  Kobo, KOReader default on; `/editor` and `/app` mount the built SvelteKit
-  apps (`INGEST_EDITOR_DIR`, `STUMP_HOME_APP_DIR`).
+- One instance, every supported protocol profile on: `hub` process
+  `stump-komga`, port 25600, launcher `scripts/dev-fixture-server.sh`, binary
+  `target/debug/stump_server` (headless,liseur-sync). Launch env:
+  `STUMP_ENABLE_KAVITA=true STUMP_ENABLE_BACKGROUND_JOBS=true
+STUMP_ENABLE_PROVIDERS=false`; Komga, Kobo, and KOReader default on. `/editor`
+  and `/app` mount the source-relative SvelteKit builds (`INGEST_EDITOR_DIR`,
+  `STUMP_HOME_APP_DIR`).
 - Root `$HOME/.local/share/stump-komga-test`; the launcher regenerates
   `$FIXTURE_ROOT/ENDPOINTS.md` (0600) with every URL and credential; never
   quote that sheet. The DB was upgraded in place through `m20260949` on
@@ -79,8 +95,8 @@ STUMP_ENABLE_BACKGROUND_JOBS=true STUMP_ENABLE_PROVIDERS=true`; Komga,
 
 ## Replay commands
 
-The 2026-09-20 post-merge replay passed every currently required server
-contract. These are server-contract results, not physical-client proof:
+The 2026-09-21 v0.1.10 security-refresh replay passed every currently required
+server contract. These are server-contract results, not physical-client proof:
 
 - `make replay`: 8 files, 36 requests.
 - `make replay-negative-auth`: 1 file, 3 requests.
@@ -114,7 +130,7 @@ make replay-komf KOMF_BASE_URL=$BASE_URL
 
 ## Only definition of green
 
-The 2026-09-20 post-merge gate is green:
+The 2026-09-21 v0.1.10 security-refresh gate is green:
 
 ```text
 cargo fmt --all
@@ -124,17 +140,18 @@ cargo test -p stump_server --no-default-features --features headless,liseur-sync
 cargo build -p stump_server --no-default-features --features headless,liseur-sync
 ```
 
-The non-server workspace run passed 1,897 tests (29 ignored across 93 suites);
-the headless server run passed 366 tests across four suites. Schema generation
-and drift checking passed (`cargo dump-schema` and `cargo dump-schema --check`).
-`yarn check-types`, Expo `check-types`, Home and Editor Svelte checks, and the
-web, Home, Editor, and docs builds passed; docs prerendered 199 pages. The
-authenticated `/app/dashboard` and public `/editor/` surfaces loaded in a real
-browser against the fixture server. Expo native visual/device verification did
-not run, and native `ktlint`/`swiftformat` are unavailable on this workstation.
+The non-server workspace run passed 1,899 tests (29 ignored across 93 suites);
+the headless server run passed 369 tests across four suites. Schema generation
+and drift checking passed (`cargo dump-schema` and
+`cargo dump-schema -- --check`). Root `yarn check-types`, Expo `check-types`,
+Home and Editor Bun/Svelte checks, and the web, Home, Editor, and docs builds
+passed. The authenticated `/app/dashboard` and `/app/devices` surfaces and the
+public `/editor/` surface loaded in a real browser against the fixture server.
+Expo native visual/device verification did not run, and native
+`ktlint`/`swiftformat` remain outside this workstation's gate.
 
-After deploying the headless build, the replay set above passed 341 requests
-with no failures. `make replay-containers` remains explicitly unrun.
+After deploying the refreshed headless build, the replay set above passed 341
+requests with no failures. `make replay-containers` remains explicitly unrun.
 
 `apps/server/src/{lib,main}.rs` carry `#![recursion_limit = "256"]` because
 the merged GraphQL schema overflows rustc's query depth.

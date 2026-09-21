@@ -7,14 +7,14 @@ description: Schema v1 of the data-only Mihon source definitions, how `sources-i
 
 A **source definition** is a small JSON document that describes one remote
 content source (`Madara`-style WordPress site, `MangaThemesia` scanlation site,
-`MMRCMS` site, …) as *data*: base URL, language, theme, and the per-site knobs
+`MMRCMS` site, …) as _data_: base URL, language, theme, and the per-site knobs
 that theme needs. Stump never runs Mihon/Tachiyomi extension code — no Android
 runtime, no Kotlin, no APK. Instead:
 
-| Half | Where | Owns |
-| --- | --- | --- |
-| Generator | `crates/tools/src/sources_import.rs`, tool id `sources-import` | Reads a checkout of [keiyoushi/extensions-source](https://github.com/keiyoushi/extensions-source) and derives definitions into a **separate** output directory (the `stump-sources` data repo). Never runs Gradle, Kotlin, or Android code |
-| Engines | `crates/provider-themes` + the definition loader in `crates/provider` | Executes a definition natively: one Rust engine per theme, driven entirely by the definition's `theme` + `knobs` |
+| Half      | Where                                                                 | Owns                                                                                                                                                                                                                                       |
+| --------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Generator | `crates/tools/src/sources_import.rs`, tool id `sources-import`        | Reads a checkout of [keiyoushi/extensions-source](https://github.com/keiyoushi/extensions-source) and derives definitions into a **separate** output directory (the `stump-sources` data repo). Never runs Gradle, Kotlin, or Android code |
+| Engines   | `crates/provider-themes` + the definition loader in `crates/provider` | Executes a definition natively: one Rust engine per theme, driven entirely by the definition's `theme` + `knobs`                                                                                                                           |
 
 The definition file is the only contract between the two: the generator may be
 re-run against a newer upstream commit, and the engines never parse Kotlin.
@@ -26,41 +26,41 @@ This page **freezes schema v1**. A field or knob rule changes only by bumping
 
 ```json
 {
-  "schema": 1,
-  "id": "en.zinmanga",
-  "name": "Zinmanga",
-  "lang": "en",
-  "base_url": "https://mangazin.org",
-  "theme": "madara",
-  "version": 3,
-  "nsfw": false,
-  "knobs": {
-    "base_class": "Madara",
-    "browse_mode": "ajax",
-    "filter_non_manga_items": false
-  },
-  "upstream": {
-    "repo": "keiyoushi/extensions-source",
-    "commit": "064c1a0e8c58be4b36c21444c3d3df6840636950",
-    "path": "src/en/zinmanga"
-  }
+	"schema": 1,
+	"id": "en.zinmanga",
+	"name": "Zinmanga",
+	"lang": "en",
+	"base_url": "https://mangazin.org",
+	"theme": "madara",
+	"version": 3,
+	"nsfw": false,
+	"knobs": {
+		"base_class": "Madara",
+		"browse_mode": "ajax",
+		"filter_non_manga_items": false
+	},
+	"upstream": {
+		"repo": "keiyoushi/extensions-source",
+		"commit": "064c1a0e8c58be4b36c21444c3d3df6840636950",
+		"path": "src/en/zinmanga"
+	}
 }
 ```
 
-| Field | Type | Required | Derivation |
-| --- | --- | --- | --- |
-| `schema` | int | yes | Always `1` |
-| `id` | string | yes | The extension's application-id suffix: gradle `pkgName` when set, else `<lang dir>.<source dir>` (`src/en/zinmanga` → `en.zinmanga`). An extension that yields several sources appends a disambiguator (see [Multi-source extensions](#multi-source-extensions)) |
-| `name` | string | yes | `source { name = … }` when set, else the extension's `keiyoushi { name = … }` |
-| `lang` | string | yes | `source { lang = … }`, else the language directory. Verbatim upstream value, so regional tags (`zh-Hant`, `pt-BR`) and the catch-all `all` occur |
-| `base_url` | string | yes | `baseUrl = "…"`, or `baseUrl { custom("…") }`, or the **first** entry of `baseUrl { mirrors(…) }` (labelled `"Label" to "url"` pairs take the url). Trailing `/` trimmed. A source with no static default is unsupported (`no-base-url`) |
-| `theme` | string | yes | `keiyoushi { theme = … }` — the `lib-multisrc/<theme>/` module name, always lowercase. Without it, the Kotlin base class must be a known `lib-multisrc` class and its simple name lowercased is used; otherwise the source is unsupported |
-| `version` | int | yes | `keiyoushi { versionCode = … }` verbatim. The upstream *APK* version code is `theme.baseVersionCode + version`; the theme's base version is deliberately not folded in, because it versions the theme implementation (ours, in Rust) and not the derived data |
-| `nsfw` | bool | yes | `contentWarning != SAFE`, which is exactly upstream's own manifest rule (`gradle/build-logic/.../tasks/GenerateManifestTask.kt:40`: `nsfw = if (cw == ContentWarning.SAFE) "0" else "1"`). `MIXED` is therefore `true` |
-| `knobs` | object | yes (may be empty) | Per-theme settings recognised in the Kotlin subclass, see [Knobs](#knobs) |
-| `upstream.repo` | string | yes | `owner/repo` of the checkout's `origin` remote, else `keiyoushi/extensions-source` |
-| `upstream.commit` | string | yes | The checked-out commit (`.git/HEAD` → ref → `refs/heads/*` or `packed-refs`); `unknown` with an `unresolved-upstream-commit` warning when the tree is not a git checkout |
-| `upstream.path` | string | yes | Extension directory relative to the checkout root, POSIX separators (`src/en/zinmanga`) |
+| Field             | Type   | Required           | Derivation                                                                                                                                                                                                                                                       |
+| ----------------- | ------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema`          | int    | yes                | Always `1`                                                                                                                                                                                                                                                       |
+| `id`              | string | yes                | The extension's application-id suffix: gradle `pkgName` when set, else `<lang dir>.<source dir>` (`src/en/zinmanga` → `en.zinmanga`). An extension that yields several sources appends a disambiguator (see [Multi-source extensions](#multi-source-extensions)) |
+| `name`            | string | yes                | `source { name = … }` when set, else the extension's `keiyoushi { name = … }`                                                                                                                                                                                    |
+| `lang`            | string | yes                | `source { lang = … }`, else the language directory. Verbatim upstream value, so regional tags (`zh-Hant`, `pt-BR`) and the catch-all `all` occur                                                                                                                 |
+| `base_url`        | string | yes                | `baseUrl = "…"`, or `baseUrl { custom("…") }`, or the **first** entry of `baseUrl { mirrors(…) }` (labelled `"Label" to "url"` pairs take the url). Trailing `/` trimmed. A source with no static default is unsupported (`no-base-url`)                         |
+| `theme`           | string | yes                | `keiyoushi { theme = … }` — the `lib-multisrc/<theme>/` module name, always lowercase. Without it, the Kotlin base class must be a known `lib-multisrc` class and its simple name lowercased is used; otherwise the source is unsupported                        |
+| `version`         | int    | yes                | `keiyoushi { versionCode = … }` verbatim. The upstream _APK_ version code is `theme.baseVersionCode + version`; the theme's base version is deliberately not folded in, because it versions the theme implementation (ours, in Rust) and not the derived data    |
+| `nsfw`            | bool   | yes                | `contentWarning != SAFE`, which is exactly upstream's own manifest rule (`gradle/build-logic/.../tasks/GenerateManifestTask.kt:40`: `nsfw = if (cw == ContentWarning.SAFE) "0" else "1"`). `MIXED` is therefore `true`                                           |
+| `knobs`           | object | yes (may be empty) | Per-theme settings recognised in the Kotlin subclass, see [Knobs](#knobs)                                                                                                                                                                                        |
+| `upstream.repo`   | string | yes                | `owner/repo` of the checkout's `origin` remote, else `keiyoushi/extensions-source`                                                                                                                                                                               |
+| `upstream.commit` | string | yes                | The checked-out commit (`.git/HEAD` → ref → `refs/heads/*` or `packed-refs`); `unknown` with an `unresolved-upstream-commit` warning when the tree is not a git checkout                                                                                         |
+| `upstream.path`   | string | yes                | Extension directory relative to the checkout root, POSIX separators (`src/en/zinmanga`)                                                                                                                                                                          |
 
 Unknown fields are not allowed: a v1 consumer may reject a definition carrying
 any key not in this table.
@@ -75,23 +75,23 @@ regenerated definition is byte-identical when nothing upstream changed.
 
 Upstream declares metadata through the Gradle DSL and injects it with KSP
 (`CONTRIBUTING.md` "Source declaration": `name`, `lang`, `id`, `baseUrl` are
-generated, not written in Kotlin), so a subclass body contains *only* knobs and
+generated, not written in Kotlin), so a subclass body contains _only_ knobs and
 site-specific code. These are the forms the recogniser accepts:
 
-| Kotlin | Knob |
-| --- | --- |
-| `override val mangaSubString = "truyen"` | `manga_sub_string: "truyen"` |
-| `override val filterNonMangaItems = false` | `filter_non_manga_items: false` |
-| `override val pageSize = 24` | `page_size: 24` |
-| `override val apiUrl = "$baseUrl/api"` | `api_url: "https://site/api"` — only `$baseUrl`/`${baseUrl}` is substituted; any other template is unsupported |
-| `override fun chapterListSelector() = "#chapterlist li"` | `chapter_list_selector: "#chapterlist li"` |
-| `override fun popularMangaRequest(page: Int) = GET("$baseUrl/list?page=$page")` | `popular_manga_url: "https://site/list?page={page}"` — the `_request` suffix becomes `_url` and the function's own parameters render as `{name}` placeholders |
-| `override fun latestUpdatesSelector() = popularMangaSelector()` | `latest_updates_selector: <the value of popular_manga_selector>` — an alias is resolved to the knob it names, under the **aliasing** member's key, wherever in the class that knob is declared |
-| `override val chapterMode = ChapterMode.MangaAjaxPaginated` | `chapter_mode: "manga_ajax_paginated"` — any `Enum.Constant` becomes `snake_case` of the constant |
-| `override val dateFormat = SimpleDateFormat("MMM d, yyyy", Locale("tr"))` | `date_format: "MMM d, yyyy"` + `date_locale: "tr"` |
-| `override val chapterDateFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.ROOT)` | `chapter_date_format: "dd/MM/yyyy"` + `chapter_date_locale: ""` (root) |
-| `override fun OkHttpClient.Builder.configureClient() = rateLimit(3)` | `rate_limit_permits: 3` + `rate_limit_period_seconds: 1` |
-| `override val client = super.client.newBuilder().rateLimit(1, 2.seconds).build()` | `rate_limit_permits: 1` + `rate_limit_period_seconds: 2` — only when the chain is exactly `newBuilder()` + `rateLimit(…)` + `build()` |
+| Kotlin                                                                                    | Knob                                                                                                                                                                                           |
+| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `override val mangaSubString = "truyen"`                                                  | `manga_sub_string: "truyen"`                                                                                                                                                                   |
+| `override val filterNonMangaItems = false`                                                | `filter_non_manga_items: false`                                                                                                                                                                |
+| `override val pageSize = 24`                                                              | `page_size: 24`                                                                                                                                                                                |
+| `override val apiUrl = "$baseUrl/api"`                                                    | `api_url: "https://site/api"` — only `$baseUrl`/`${baseUrl}` is substituted; any other template is unsupported                                                                                 |
+| `override fun chapterListSelector() = "#chapterlist li"`                                  | `chapter_list_selector: "#chapterlist li"`                                                                                                                                                     |
+| `override fun popularMangaRequest(page: Int) = GET("$baseUrl/list?page=$page")`           | `popular_manga_url: "https://site/list?page={page}"` — the `_request` suffix becomes `_url` and the function's own parameters render as `{name}` placeholders                                  |
+| `override fun latestUpdatesSelector() = popularMangaSelector()`                           | `latest_updates_selector: <the value of popular_manga_selector>` — an alias is resolved to the knob it names, under the **aliasing** member's key, wherever in the class that knob is declared |
+| `override val chapterMode = ChapterMode.MangaAjaxPaginated`                               | `chapter_mode: "manga_ajax_paginated"` — any `Enum.Constant` becomes `snake_case` of the constant                                                                                              |
+| `override val dateFormat = SimpleDateFormat("MMM d, yyyy", Locale("tr"))`                 | `date_format: "MMM d, yyyy"` + `date_locale: "tr"`                                                                                                                                             |
+| `override val chapterDateFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.ROOT)` | `chapter_date_format: "dd/MM/yyyy"` + `chapter_date_locale: ""` (root)                                                                                                                         |
+| `override fun OkHttpClient.Builder.configureClient() = rateLimit(3)`                      | `rate_limit_permits: 3` + `rate_limit_period_seconds: 1`                                                                                                                                       |
+| `override val client = super.client.newBuilder().rateLimit(1, 2.seconds).build()`         | `rate_limit_permits: 1` + `rate_limit_period_seconds: 2` — only when the chain is exactly `newBuilder()` + `rateLimit(…)` + `build()`                                                          |
 
 Rules that follow from the table:
 
@@ -100,12 +100,12 @@ Rules that follow from the table:
   companion locale knob replaces a trailing `_format` with `_locale`
   (`chapter_date_format` → `chapter_date_locale`) and carries a BCP-47 tag
   (`Locale.US` → `en-US`, `Locale.ROOT` → `""`, `Locale("tr")` → `tr`,
-  `Locale.forLanguageTag("vi")` → `vi`). `Locale.getDefault()` is *not* data and
+  `Locale.forLanguageTag("vi")` → `vi`). `Locale.getDefault()` is _not_ data and
   makes the source unsupported.
 - **Rate limits** come from upstream's `rateLimit(permits, period = 1.seconds)`
   (`core/src/main/kotlin/keiyoushi/network/RateLimit.kt:37-41`), so a bare
   `rateLimit(3)` is 3 requests per second. A host/path predicate on the call is
-  dropped: ignoring it can only make an engine *more* polite. An engine **must
+  dropped: ignoring it can only make an engine _more_ polite. An engine **must
   not** exceed `rate_limit_permits` per `rate_limit_period_seconds`; a
   definition without those knobs uses the engine's own default.
 - **Request URLs** are the one non-selector extraction point a subclass states
@@ -116,9 +116,9 @@ Rules that follow from the table:
   onto `GET(…)` — is behaviour, and the source is unsupported.
 - **Universal knobs**, emitted for every definition regardless of theme:
 
-| Knob | Type | Meaning |
-| --- | --- | --- |
-| `base_class` | string | Kotlin simple name of the class the subclass extends (`Madara`, `MadaraNoAjax`, `MangaThemesia`, …). One theme module can expose several base classes, and they are not interchangeable |
+| Knob          | Type   | Meaning                                                                                                                                                                                                    |
+| ------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `base_class`  | string | Kotlin simple name of the class the subclass extends (`Madara`, `MadaraNoAjax`, `MangaThemesia`, …). One theme module can expose several base classes, and they are not interchangeable                    |
 | `browse_mode` | string | `"ajax"` or `"no_ajax"`, derived from `base_class`: a base class named `<Theme>NoAjax` is `no_ajax`, the plain `<Theme>` is `ajax`. Only emitted when the theme has such a pair (`madara`, `madaralegacy`) |
 
 An engine ignores knobs it does not know (and should report them) rather than
@@ -163,10 +163,10 @@ necessarily a package — so those sources are enabled by id
 
 `index.json` rows:
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `id`, `name`, `lang`, `theme`, `nsfw`, `version` | — | Copies of the definition's fields, so a client can filter without fetching every file |
-| `file` | string | Relative POSIX path from the output root: `<lang>/<id>.json`. Never absolute, never `./`-prefixed |
+| Field                                            | Type   | Notes                                                                                             |
+| ------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------- |
+| `id`, `name`, `lang`, `theme`, `nsfw`, `version` | —      | Copies of the definition's fields, so a client can filter without fetching every file             |
+| `file`                                           | string | Relative POSIX path from the output root: `<lang>/<id>.json`. Never absolute, never `./`-prefixed |
 
 `unsupported.json` rows carry `id`, `name`, `lang`, `theme` (`null` when none was
 declared), `path` (upstream extension directory), `code`, and `reason` (prose,
@@ -176,20 +176,20 @@ by `(and N more: <member>, <member>, …)`, and the `code` is that first
 blocker's — a row is therefore the whole porting work item, not one member of
 it. Codes are stable:
 
-| Code | Meaning |
-| --- | --- |
-| `no-theme` | No `theme` in the Gradle DSL and the Kotlin base class is not a `lib-multisrc` class — a hand-written source (`KeiSource`, `HttpSource`, …) |
-| `unknown-base-class` | A `lib-multisrc` theme is declared but the class extends something that is not one of that theme's classes |
-| `extra-supertype` | The class implements more than the theme base class (`ConfigurableSource`, an interface, …), i.e. behaviour that is not in the theme |
-| `custom-override` | An `override fun` whose body is not a single literal expression |
-| `custom-client` | An `override val client` that is not a pure `rateLimit` chain (interceptors, deobfuscators, image decryption) |
-| `unparsed-knob` | An `override val` whose initialiser is not a recognised literal (`super.x + …`, `by lazy`, `Regex(…)`, `Locale.getDefault()`, a computed template, …) |
-| `init-block` | The class has an `init { … }` block, i.e. constructor-time behaviour |
-| `ctor-args` | The base class is constructed with arguments that are not recognised literals (legacy pre-KSP layout) |
-| `no-base-url` | The `source {}` block declares no static base URL (self-hosted sources such as Komga or LANraragi) |
-| `no-source-class` | No `@Source`-annotated class under the extension directory |
-| `multiple-source-classes` | More than one `@Source` class, so `source {}` blocks cannot be mapped to a class |
-| `unparsed-gradle` | No `keiyoushi {}` block, no `source {}` block, or an unknown key inside either — the DSL grew a knob the generator does not understand |
+| Code                      | Meaning                                                                                                                                               |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `no-theme`                | No `theme` in the Gradle DSL and the Kotlin base class is not a `lib-multisrc` class — a hand-written source (`KeiSource`, `HttpSource`, …)           |
+| `unknown-base-class`      | A `lib-multisrc` theme is declared but the class extends something that is not one of that theme's classes                                            |
+| `extra-supertype`         | The class implements more than the theme base class (`ConfigurableSource`, an interface, …), i.e. behaviour that is not in the theme                  |
+| `custom-override`         | An `override fun` whose body is not a single literal expression                                                                                       |
+| `custom-client`           | An `override val client` that is not a pure `rateLimit` chain (interceptors, deobfuscators, image decryption)                                         |
+| `unparsed-knob`           | An `override val` whose initialiser is not a recognised literal (`super.x + …`, `by lazy`, `Regex(…)`, `Locale.getDefault()`, a computed template, …) |
+| `init-block`              | The class has an `init { … }` block, i.e. constructor-time behaviour                                                                                  |
+| `ctor-args`               | The base class is constructed with arguments that are not recognised literals (legacy pre-KSP layout)                                                 |
+| `no-base-url`             | The `source {}` block declares no static base URL (self-hosted sources such as Komga or LANraragi)                                                    |
+| `no-source-class`         | No `@Source`-annotated class under the extension directory                                                                                            |
+| `multiple-source-classes` | More than one `@Source` class, so `source {}` blocks cannot be mapped to a class                                                                      |
+| `unparsed-gradle`         | No `keiyoushi {}` block, no `source {}` block, or an unknown key inside either — the DSL grew a knob the generator does not understand                |
 
 A source that is filtered out by the `themes`/`langs` options is **not**
 unsupported: it is counted separately and appears in neither file.
@@ -214,45 +214,38 @@ cargo run -p cli --bin cli-bin -- tools apply sources-import /tmp/keiyoushi-src 
   --options '{"output_dir":"/tmp/stump-sources","themes":["madara","mangathemesia","mmrcms"]}'
 ```
 
-| Option | Type | Default | Effect |
-| --- | --- | --- | --- |
-| `extensions_source` | path | first input path | Checkout root; must contain `src/` and `lib-multisrc/` |
-| `output_dir` | path | required | Existing directory the data repo is written into |
-| `themes` | string[] | all | Only derive these themes; everything else is counted as filtered |
-| `langs` | string[] | all | Only derive these source languages |
+| Option              | Type     | Default          | Effect                                                           |
+| ------------------- | -------- | ---------------- | ---------------------------------------------------------------- |
+| `extensions_source` | path     | first input path | Checkout root; must contain `src/` and `lib-multisrc/`           |
+| `output_dir`        | path     | required         | Existing directory the data repo is written into                 |
+| `themes`            | string[] | all              | Only derive these themes; everything else is counted as filtered |
+| `langs`             | string[] | all              | Only derive these source languages                               |
 
 `plan` writes nothing: it parses the whole checkout and carries each definition
 in the action's `detail`, so `apply` only serialises what the dry run showed.
 
-## Publishing
+## Publishing (deferred)
 
-The generator's output directory *is* the published data repository:
-[stumpapp/stump-sources](https://github.com/stumpapp/stump-sources) holds the
-derived `<lang>/<id>.json` files, `index.json`, `unsupported.json` and `NOTICE`
-exactly as `apply` wrote them, which is why `STUMP_SOURCE_DEFINITIONS_URL`
-defaults to that repository's raw `index.json` and why two runs at one upstream
-commit produce an empty diff. `scripts/regenerate.sh` in that repository is the
-whole publishing flow — refresh a blobless checkout to the pinned
-`UPSTREAM_COMMIT`, run `stump tools apply sources-import` into a scratch
-directory, sync the generated half in (deleting a `<lang>/` directory whose last
-source vanished upstream), merge the hand-authored rows into `index.json` with
-`scripts/merge-index.py`, assert every row resolves to a file, then `--check`
-(reproducibility gate) or `--commit`. Definitions a run cannot derive but a
-theme engine can still drive live in `hand-authored/<id>.json`, a directory the
-generator never writes, and their index rows carry that path; schema v1 allows
-no extra fields, so a definition is *not* tagged with its origin — the directory
-and its own `upstream` object are the provenance. Definitions bound to a local
-test mirror stay out of `index.json` altogether (`fixtures/`, plus a
-`fixtures/`-aware root builder), because the published index is what every
-installation fetches by default. The repository is Apache-2.0 with the upstream
-`LICENSE` verbatim and the generated `NOTICE` intact, per
-[Attribution](#attribution).
+The generator output is currently local-only. Do not publish or link the
+derived site list: it has not been curated for public linkage, and challenged
+sources still lack a workable Cloudflare authentication model. Development
+runs use a local output directory and point `STUMP_SOURCE_DEFINITIONS_URL` at
+that directory.
+
+The future publishing flow is deterministic: refresh a blobless
+`keiyoushi/extensions-source` checkout to a pinned `UPSTREAM_COMMIT`, run
+`stump tools apply sources-import` into a scratch directory, merge any reviewed
+hand-authored rows, assert that every index row resolves, and run the
+reproducibility check. Definitions tied to local mirrors remain fixtures and
+never enter a published index. Publication also requires a source-by-source
+linkage review and preservation of the upstream Apache-2.0 `LICENSE` and
+generated `NOTICE`.
 
 ## Runtime loading
 
-| Layer | Switch | Effect |
-| --- | --- | --- |
-| Runtime | `STUMP_SOURCE_DEFINITIONS_URL` | Root of the definition set. Default: the raw GitHub root of the `stump-sources` repo. A local directory (or `file://` URL) is accepted, which is how a generator run is tested before it is published |
+| Layer   | Switch                         | Effect                                                                                                                                                                                                    |
+| ------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime | `STUMP_SOURCE_DEFINITIONS_URL` | Root of the definition set. Providers are disabled by default; local development must override this with a reviewed directory (or `file://` URL). No public default definition set is currently supported |
 
 The loader resolves `<root>/index.json`, then each row's `file` against the same
 root, and caches both under `<cache>/providers/source-definitions/` — beside
@@ -264,7 +257,7 @@ same way a catalog entry without a compiled implementation is today.
 
 ## Attribution
 
-keiyoushi/extensions-source is Apache-2.0. Reading it and deriving *data* from
+keiyoushi/extensions-source is Apache-2.0. Reading it and deriving _data_ from
 it is unrestricted, but a selector table that is carried over verbatim into an
 engine keeps the Apache attribution in that crate (`crates/provider-themes`
 `README.md` and the `lib.rs` header), exactly as the upstream repository does.

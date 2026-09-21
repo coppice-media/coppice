@@ -26,8 +26,9 @@ pub mod telemetry;
 mod tests;
 
 pub use credential::{
-	api_key_permissions_for, credential_kind_for, protocol_for, required_permissions,
-	CredentialRef, IssuedCredential,
+	api_key_permissions_for, authorize_credential_issuance, credential_kind_for,
+	protocol_for, required_permissions, CredentialIssuance, CredentialRef,
+	IssuedCredential,
 };
 pub use endpoint::Endpoint;
 pub use error::{DeviceError, DeviceResult};

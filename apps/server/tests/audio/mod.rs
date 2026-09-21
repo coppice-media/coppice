@@ -228,7 +228,12 @@ async fn opus_device(app: &TestApp) -> String {
 
 	let devices = app.ctx.devices();
 	let (device, issued) = devices
-		.create_device(&owner, DeviceKind::Api, Some("Opus phone".to_string()))
+		.create_device(
+			&owner,
+			stump_devices::CredentialIssuance::InteractiveSession,
+			DeviceKind::Api,
+			Some("Opus phone".to_string()),
+		)
 		.await
 		.expect("device");
 	devices
@@ -360,7 +365,12 @@ async fn audio_track_is_never_transcoded_for_a_worker_device() {
 
 	let devices = fixture.app.ctx.devices();
 	let (device, issued) = devices
-		.create_device(&owner, DeviceKind::Worker, Some("gpu box".to_string()))
+		.create_device(
+			&owner,
+			stump_devices::CredentialIssuance::InteractiveSession,
+			DeviceKind::Worker,
+			Some("gpu box".to_string()),
+		)
 		.await
 		.expect("worker device");
 	devices

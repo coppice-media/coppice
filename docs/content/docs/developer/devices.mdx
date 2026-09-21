@@ -3,7 +3,7 @@ title: Devices
 description: The unified device registry, its credentials, endpoints, and last-seen tracking
 ---
 
-A *device* is a registered client owned by a user: a Kobo, a KOReader install,
+A _device_ is a registered client owned by a user: a Kobo, a KOReader install,
 CrossPoint Reader, Coppice, Mihon, Komelia, Liseur, a generic OPDS reader, a
 script using the API, or a browser. The registry lives in `crates/devices`
 is reached through `Ctx::devices()` (`core/src/context.rs`). It mints the
@@ -14,19 +14,18 @@ configure, and records when each device was last seen and last synced.
 
 Migration `m20260910_000000_add_devices` (`crates/migrations/src/m20260910_000000_add_devices.rs`) creates two tables and folds the old `reading_devices` registry into the first one:
 
-| Table | Columns |
-| --- | --- |
-| `devices` | `id` (text PK), `user_id` (FK `users`, cascade), `name`, `kind`, `transform_profile` (JSON, nullable), `created_at`, `last_seen_at`, `last_sync_at`, `last_sync_summary` (JSON, nullable), `revoked_at` |
-| `device_credentials` | `id`, `device_id` (FK `devices`, cascade), `protocol`, `credential_kind`, `credential_ref`; unique on `(credential_kind, credential_ref)` |
+| Table                | Columns                                                                                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `devices`            | `id` (text PK), `user_id` (FK `users`, cascade), `name`, `kind`, `transform_profile` (JSON, nullable), `created_at`, `last_seen_at`, `last_sync_at`, `last_sync_summary` (JSON, nullable), `revoked_at` |
+| `device_credentials` | `id`, `device_id` (FK `devices`, cascade), `protocol`, `credential_kind`, `credential_ref`; unique on `(credential_kind, credential_ref)`                                                               |
 
 `kind` is one of `kobo | koreader | crosspoint | coppice | mihon | komelia |
-`liseur | opds | abs | api | web | worker | kavita`; `protocol` is `kobo |
+`liseur | opds | abs | api | web | worker | kavita`; `protocol`is`kobo |
 `koreader | komga | opds | liseur | api`; `credential_kind` is `api_key |
 `liseur_token | session`
 (`models::shared::enums::DeviceKind`, `DeviceProtocol`, and `DeviceCredentialKind`).
-`credential_ref` is polymorphic and therefore has no foreign key: the
-`api_keys.short_token` for an API key, the `liseur_sync_tokens.id` for a liseur
-token, the `sessions.session_id` for a session.
+`credential_ref`is polymorphic and therefore has no foreign key: the`api_keys.short_token`for an API key, the`liseur_sync_tokens.id`for a liseur
+token, the`sessions.session_id` for a session.
 
 The old `reading_devices` rows (KOReader and OPDS progression clients
 registering themselves by id + name) become `devices` rows owned by the user
@@ -35,29 +34,34 @@ dropped with the table.
 
 ## Credentials
 
-`DeviceService::create_device(user, kind, name)` mints the credential(s) the
-kind needs and stores every reference on the device. The name defaults to
+`DeviceService::create_device(user, issuance, kind, name)` mints the credential(s) the
+kind needs and stores every reference on the device. `issuance` distinguishes an interactive
+session from a delegated credential. The name defaults to
 `"<Username>'s <Kind>"` and is numbered on collision. For compatibility the
 Rust and GraphQL singular `credential` is always the deterministic API-key
 primary when one exists; the additive `credentials` collection contains every
 credential and must be matched by kind and protocol.
 
-| Kind | Credential(s) | Minted permissions |
-| --- | --- | --- |
-| `kobo` | prefixed API key | `ACCESS_KOBO_SYNC`, `DOWNLOAD_FILE` |
-| `koreader` | prefixed API key | `ACCESS_KOREADER_SYNC` |
-| `crosspoint` | prefixed API key (`koreader`) | `ACCESS_KOREADER_SYNC` (the physical receiver is unauthenticated LAN I/O) |
-| `coppice` | prefixed API key (`koreader`) + device-bound liseur token (`liseur`) | API key: `ACCESS_KOREADER_SYNC`, `DOWNLOAD_FILE`; liseur: `sync`, `read-insights`, `library-read` |
-| `api`, `web` | prefixed API key | inherit the user's permissions |
-| `abs`, `kavita` | prefixed API key | `DOWNLOAD_FILE` |
-| `worker` | prefixed API key | `ACCESS_WORKER`, `DOWNLOAD_FILE` |
-| `liseur` | liseur-sync device token (`liseur-<uuid>`, scopes `sync`, `read-insights`, `library-read`, bound to the device id) | n/a |
+| Kind            | Credential(s)                                                                                                      | Minted permissions                                                                                |
+| --------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `kobo`          | prefixed API key                                                                                                   | `ACCESS_KOBO_SYNC`, `DOWNLOAD_FILE`                                                               |
+| `koreader`      | prefixed API key                                                                                                   | `ACCESS_KOREADER_SYNC`                                                                            |
+| `crosspoint`    | prefixed API key (`koreader`)                                                                                      | `ACCESS_KOREADER_SYNC` (the physical receiver is unauthenticated LAN I/O)                         |
+| `coppice`       | prefixed API key (`koreader`) + device-bound liseur token (`liseur`)                                               | API key: `ACCESS_KOREADER_SYNC`, `DOWNLOAD_FILE`; liseur: `sync`, `read-insights`, `library-read` |
+| `api`, `web`    | prefixed API key                                                                                                   | inherit the user's permissions                                                                    |
+| `abs`, `kavita` | prefixed API key                                                                                                   | `DOWNLOAD_FILE`                                                                                   |
+| `worker`        | prefixed API key                                                                                                   | `ACCESS_WORKER`, `DOWNLOAD_FILE`                                                                  |
+| `liseur`        | liseur-sync device token (`liseur-<uuid>`, scopes `sync`, `read-insights`, `library-read`, bound to the device id) | n/a                                                                                               |
 
 A key never grants what its owner does not hold, and an API key only
 authenticates for users allowed to use API keys (`validate_api_key` in
 `apps/server/src/middleware/auth.rs`), so creating an API-key device requires
 `ACCESS_API_KEYS` plus the minted permissions; the server owner bypasses the
 check. Coppice's two credentials are minted in one write transaction.
+Only an interactive session may create or rotate `api` and `web` devices, because those keys
+inherit all permissions of their user. A request authenticated by another credential may still
+create and rotate the narrowed protocol kinds above; the service rejects inherited issuance
+before changing any device or credential row.
 Plaintext secrets are returned exactly once (`IssuedCredential`), afterwards
 only hints such as `stump_abcdefgh_…` and `liseur-…` are available.
 
@@ -76,18 +80,18 @@ configure on a one-credential client. `Endpoint::for_credential` selects the
 explicit Coppice lane; its `secret` is full just after minting and a redacted
 hint for an existing device:
 
-| Kind | Endpoints |
-| --- | --- |
-| `kobo` | `{origin}/kobo/{key}` |
-| `koreader` | `{origin}/koreader/{key}` with the username |
-| `crosspoint` | `{origin}/koreader/{key}`; rich routes are nested at `{origin}/koreader/{key}/api/v1` |
+| Kind              | Endpoints                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------- |
+| `kobo`            | `{origin}/kobo/{key}`                                                                           |
+| `koreader`        | `{origin}/koreader/{key}` with the username                                                     |
+| `crosspoint`      | `{origin}/koreader/{key}`; rich routes are nested at `{origin}/koreader/{key}/api/v1`           |
 | `coppice` API key | `{origin}/koreader/{key}`, `{origin}/api`, `{origin}/opds/{key}/v1.2`, and `{origin}/opds/v2.0` |
-| `opds` | `{origin}/opds/{key}/v1.2` and `{origin}/opds/v2.0` (Bearer) |
-| `mihon` | `{origin}` as a Komga server with username + `X-API-Key`, plus `{origin}/api` (Bearer) |
-| `komelia` | `{origin}` as a Komga server with username + `X-API-Key` |
-| `liseur` | `{origin}` as the liseur-sync server (Bearer) |
-| `abs`, `kavita` | `{origin}` (Bearer) |
-| `api`, `web` | `{origin}/api` (Bearer) |
+| `opds`            | `{origin}/opds/{key}/v1.2` and `{origin}/opds/v2.0` (Bearer)                                    |
+| `mihon`           | `{origin}` as a Komga server with username + `X-API-Key`, plus `{origin}/api` (Bearer)          |
+| `komelia`         | `{origin}` as a Komga server with username + `X-API-Key`                                        |
+| `liseur`          | `{origin}` as the liseur-sync server (Bearer)                                                   |
+| `abs`, `kavita`   | `{origin}` (Bearer)                                                                             |
+| `api`, `web`      | `{origin}/api` (Bearer)                                                                         |
 
 `deviceEndpoints(id)` returns all endpoint lanes with secrets redacted;
 `createDevice` and `rotateDeviceCredential` return the full secret for every
@@ -100,12 +104,12 @@ the primary compatibility field.
 
 The document has two halves, and a device may use either or both:
 
-| Half | Keys | Honoured by |
-| --- | --- | --- |
-| Comic pages | `max_width`, `max_height`, `grayscale`, `black_level`, `gamma`, `format`, `split_tall_pages`, `container` | The Kobo book-file route, with `STUMP_TRANSFORM_ENABLED` — see [comic transform](/docs/developer/comics-transform) |
-| Audio delivery | `audio.output`: `{"type": "passthrough"}` (default) or `{"type": "opus", "bitrate": "64k"}` | `GET /api/v2/media/{id}/audio/track/{index}` and the Audiobookshelf `GET /api/items/{id}/file/{ino}` lane |
+| Half           | Keys                                                                                                      | Honoured by                                                                                                        |
+| -------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Comic pages    | `max_width`, `max_height`, `grayscale`, `black_level`, `gamma`, `format`, `split_tall_pages`, `container` | The Kobo book-file route, with `STUMP_TRANSFORM_ENABLED` — see [comic transform](/docs/developer/comics-transform) |
+| Audio delivery | `audio.output`: `{"type": "passthrough"}` (default) or `{"type": "opus", "bitrate": "64k"}`               | `GET /api/v2/media/{id}/audio/track/{index}` and the Audiobookshelf `GET /api/items/{id}/file/{ino}` lane          |
 
-Preset names are `clara`, `libra`, `sage`, `elipsa`, `nia`, `clara-colour`, `libra-colour`, `sage-colour`, `koreader`, `phone`, `phone-opus` (`TransformProfile::preset_names()`). Every one of them delivers audio as stored except `phone-opus`, which is `phone` plus `audio.output = opus @ 64k` — so switching a device to an Opus preset changes only what that device is *sent*, never what the library stores. The transcode runs through the operator's `ffmpeg` (`STUMP_AUDIO_FFMPEG`), is cached in the transform cache directory under the audio section's own digest, and falls back to the stored bytes on any failure. See [audiobooks](/docs/guides/fundamentals/audiobooks#settings).
+Preset names are `clara`, `libra`, `sage`, `elipsa`, `nia`, `clara-colour`, `libra-colour`, `sage-colour`, `koreader`, `phone`, `phone-opus` (`TransformProfile::preset_names()`). Every one of them delivers audio as stored except `phone-opus`, which is `phone` plus `audio.output = opus @ 64k` — so switching a device to an Opus preset changes only what that device is _sent_, never what the library stores. The transcode runs through the operator's `ffmpeg` (`STUMP_AUDIO_FFMPEG`), is cached in the transform cache directory under the audio section's own digest, and falls back to the stored bytes on any failure. See [audiobooks](/docs/guides/fundamentals/audiobooks#settings).
 
 ## Sightings
 
@@ -113,21 +117,21 @@ Preset names are `clara`, `libra`, `sage`, `elipsa`, `nia`, `clara-colour`, `lib
 
 The registry is best effort at every call site: a failure is logged and never fails the request. The call sites are:
 
-| Site | Protocol | Summary |
-| --- | --- | --- |
-| `api_key_middleware`, `apps/server/src/middleware/auth.rs` — path keys on `/kobo/{key}`, `/koreader/{key}`, `/opds/{key}/v1.2` | from the mount prefix | none |
-| `auth_middleware`, same file — `X-API-Key` on the Komga-scoped paths | `komga` | none |
-| `auth_middleware`, same file — `Authorization: Bearer <api key>`, or `Authorization: Basic` whose password is a device key | `komga` on Komga paths, `opds` on `/opds`, otherwise `api` | none |
-| `authenticate`, `apps/server/src/routers/liseur_sync/storage.rs` — every liseur bearer request | `liseur` | none |
-| `library_sync`, `apps/server/src/routers/kobo_backend/router.rs` | `kobo` | `{"protocol":"kobo","items","new_entitlements","should_continue","kobo_device_id"}` |
-| `put_progress`, `apps/server/src/routers/koreader_backend/sync.rs` | `koreader` | `{"protocol":"koreader","document","progress","percentage","koreader_device","koreader_device_id"}` |
-| `update_read_progress`, `crates/komga/src/routes/progress.rs` via `KomgaBackend::record_sync` (`apps/server/src/routers/komga_backend.rs`) | `komga` | `{"protocol":"komga","book_id","page","completed"}` |
-| `save_progress`, `crates/kavita/src/routes/reader.rs` — `POST /api/Reader/progress` | `api` (`profile: kavita`) | `{"protocol":"kavita","profile":"kavita","media_id","page","completed"}` |
-| `sync`/`close`, `crates/abs/src/routes/session.rs` — ABS session progress writes | `api` (`profile: abs`) | `{"protocol":"abs","profile":"abs","session_id","media_id","position_ms"}` |
-| `put_progression`, `crates/komga/src/routes/readium.rs` — Readium progression PUT | `komga` | `{"protocol":"komga","book_id","progression","completed"}` |
-| `update_book_progression`, `apps/server/src/routers/opds_backend/v2_0.rs` — OPDS 2.0 progression PUT | `opds` | `{"protocol":"opds","media_id","progression","device"}` |
-| `append_ops`, `apps/server/src/routers/liseur_sync/storage.rs` — an accepted ops push | `liseur` | `{"protocol":"liseur","ops","applied","duplicate","conflict"}` |
-| `POST /api/v2/devices/me/touch`, `apps/server/src/routers/liseur_sync/touch.rs` | `liseur` | the request body, verbatim |
+| Site                                                                                                                                       | Protocol                                                   | Summary                                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `api_key_middleware`, `apps/server/src/middleware/auth.rs` — path keys on `/kobo/{key}`, `/koreader/{key}`, `/opds/{key}/v1.2`             | from the mount prefix                                      | none                                                                                                |
+| `auth_middleware`, same file — `X-API-Key` on the Komga-scoped paths                                                                       | `komga`                                                    | none                                                                                                |
+| `auth_middleware`, same file — `Authorization: Bearer <api key>`, or `Authorization: Basic` whose password is a device key                 | `komga` on Komga paths, `opds` on `/opds`, otherwise `api` | none                                                                                                |
+| `authenticate`, `apps/server/src/routers/liseur_sync/storage.rs` — every liseur bearer request                                             | `liseur`                                                   | none                                                                                                |
+| `library_sync`, `apps/server/src/routers/kobo_backend/router.rs`                                                                           | `kobo`                                                     | `{"protocol":"kobo","items","new_entitlements","should_continue","kobo_device_id"}`                 |
+| `put_progress`, `apps/server/src/routers/koreader_backend/sync.rs`                                                                         | `koreader`                                                 | `{"protocol":"koreader","document","progress","percentage","koreader_device","koreader_device_id"}` |
+| `update_read_progress`, `crates/komga/src/routes/progress.rs` via `KomgaBackend::record_sync` (`apps/server/src/routers/komga_backend.rs`) | `komga`                                                    | `{"protocol":"komga","book_id","page","completed"}`                                                 |
+| `save_progress`, `crates/kavita/src/routes/reader.rs` — `POST /api/Reader/progress`                                                        | `api` (`profile: kavita`)                                  | `{"protocol":"kavita","profile":"kavita","media_id","page","completed"}`                            |
+| `sync`/`close`, `crates/abs/src/routes/session.rs` — ABS session progress writes                                                           | `api` (`profile: abs`)                                     | `{"protocol":"abs","profile":"abs","session_id","media_id","position_ms"}`                          |
+| `put_progression`, `crates/komga/src/routes/readium.rs` — Readium progression PUT                                                          | `komga`                                                    | `{"protocol":"komga","book_id","progression","completed"}`                                          |
+| `update_book_progression`, `apps/server/src/routers/opds_backend/v2_0.rs` — OPDS 2.0 progression PUT                                       | `opds`                                                     | `{"protocol":"opds","media_id","progression","device"}`                                             |
+| `append_ops`, `apps/server/src/routers/liseur_sync/storage.rs` — an accepted ops push                                                      | `liseur`                                                   | `{"protocol":"liseur","ops","applied","duplicate","conflict"}`                                      |
+| `POST /api/v2/devices/me/touch`, `apps/server/src/routers/liseur_sync/touch.rs`                                                            | `liseur`                                                   | the request body, verbatim                                                                          |
 
 ### Basic authentication with a device key
 
@@ -137,24 +141,24 @@ Clients that only speak `Authorization: Basic` (Mihon's Komga extension, OPDS 1.
 
 A device can be restricted to a subset of the libraries its user can see, so the same protocol routes resolve to a different visible library set depending on which device authenticated. Migration `m20260925_000000_add_device_library_scope` adds `devices.library_scope`: a JSON array of library ids, or `NULL` for "inherit whatever the user sees". `stump_devices::LibraryScope` is the typed form (`Inherit` or `Only(ids)`), and `device::Model::library_scope_ids` falls back to inherit and logs when the column holds anything that is not an array of ids, because a corrupt scope must not hide a device's whole library.
 
-`setDeviceLibraryScope(id: String!, libraryIds: [ID!]): Device!` writes it: `libraryIds: null` clears the restriction back to inherit, `[]` restricts the device to nothing. `Device.libraryScope: [String!]` reads it back, `null` again meaning inherit. The caller must own the device or be the server owner — the same `DeviceService::get` check the other device mutations use — and every id must name a library the device's *owner* can see, or the write is rejected with `DeviceError::InvalidScope` (`crates/devices/src/service.rs::set_library_scope`). Validating against the owner rather than the caller keeps a server-owner edit from naming a library the device's user cannot open.
+`setDeviceLibraryScope(id: String!, libraryIds: [ID!]): Device!` writes it: `libraryIds: null` clears the restriction back to inherit, `[]` restricts the device to nothing. `Device.libraryScope: [String!]` reads it back, `null` again meaning inherit. The caller must own the device or be the server owner — the same `DeviceService::get` check the other device mutations use — and every id must name a library the device's _owner_ can see, or the write is rejected with `DeviceError::InvalidScope` (`crates/devices/src/service.rs::set_library_scope`). Validating against the owner rather than the caller keeps a server-owner edit from naming a library the device's user cannot open.
 
-Enforcement is not per protocol. `models::shared::visibility::VisibilityScope` is the single funnel behind the `find_for_user` family on `library`, `series`, and `media`, and its `library_condition` `AND`s the user's `library_exclusions` subquery with `<library column> IN (scope)`. Komga, Kavita, OPDS 1.2 and 2.0, Kobo, KOReader, liseur-sync, and GraphQL all read through those helpers, so one scope narrows every one of them at once. `From<&AuthUser>` yields the request's resolved scope, which is why existing call sites are scoped without being touched; `VisibilityScope::inherit(user)` is the only, explicit opt-out and is reserved for describing what a *user* owns rather than what a device sees.
+Enforcement is not per protocol. `models::shared::visibility::VisibilityScope` is the single funnel behind the `find_for_user` family on `library`, `series`, and `media`, and its `library_condition` `AND`s the user's `library_exclusions` subquery with `<library column> IN (scope)`. Komga, Kavita, OPDS 1.2 and 2.0, Kobo, KOReader, liseur-sync, and GraphQL all read through those helpers, so one scope narrows every one of them at once. `From<&AuthUser>` yields the request's resolved scope, which is why existing call sites are scoped without being touched; `VisibilityScope::inherit(user)` is the only, explicit opt-out and is reserved for describing what a _user_ owns rather than what a device sees.
 
-| Device scope | Library in the user's visibility | Result |
-| --- | --- | --- |
-| `NULL` (inherit) | yes | visible |
-| `NULL` (inherit) | no — excluded by `library_exclusions` | hidden |
-| lists the library | yes | visible |
+| Device scope      | Library in the user's visibility      | Result                                                 |
+| ----------------- | ------------------------------------- | ------------------------------------------------------ |
+| `NULL` (inherit)  | yes                                   | visible                                                |
+| `NULL` (inherit)  | no — excluded by `library_exclusions` | hidden                                                 |
+| lists the library | yes                                   | visible                                                |
 | lists the library | no — excluded by `library_exclusions` | hidden; the scope is an intersection, never a widening |
-| omits the library | yes | hidden |
-| `[]` | any | nothing visible |
+| omits the library | yes                                   | hidden                                                 |
+| `[]`              | any                                   | nothing visible                                        |
 
 The scope is resolved once per request from the credential that authenticated it (`DeviceService::authenticate`) onto `AuthUser::device_library_scope`, and `AuthContext::scope()` hands that to the query helpers. A session or password-Basic request carries no device credential, so it has no scope and inherits. Nothing caches the resolved value, so a change is in force on the device's next request. Kobo is the one protocol that needs further bookkeeping, because its sync is incremental and a book that entered or left a scope has no timestamp change for the incremental window to notice; both directions are recorded in `device_entitlement_deltas` (see [Kobo capabilities](/docs/developer/kobo-sync-capabilities)).
 
 ## Send to Kindle
 
-A Kindle speaks no sync protocol. Amazon's *Send to Kindle* service takes an e-mail from an approved sender with the book attached and delivers it to the device that owns the recipient address, so the address is the whole transport. Migration `m20260928_000000_add_device_kindle_email` adds `devices.kindle_email` (text, nullable) for exactly that, next to the transform profile and the library scope.
+A Kindle speaks no sync protocol. Amazon's _Send to Kindle_ service takes an e-mail from an approved sender with the book attached and delivers it to the device that owns the recipient address, so the address is the whole transport. Migration `m20260928_000000_add_device_kindle_email` adds `devices.kindle_email` (text, nullable) for exactly that, next to the transform profile and the library scope.
 
 No `kind` is a Kindle: a Kindle never authenticates, so it has no credential, no endpoints, and nothing to mint. Any device row may carry an address — in practice the row that stands for the operator's reading setup — and a row with one is a `sendToKindle` target. `setDeviceKindleEmail(id: String!, email: String): Device!` writes it (`email: null` clears it) and `Device.kindleEmail: String` reads it back. The address is validated syntactically by `stump_devices::normalize_kindle_email` — trimmed, one `@`, a non-empty local part, a hostname domain — and refused with `DeviceError::InvalidEmail` (HTTP 400) otherwise. The domain is deliberately not pinned: Amazon runs several regional Send-to-Kindle domains and an operator may point the device at their own forwarder. Nothing verifies the address with Amazon; only a delivery can.
 
@@ -164,28 +168,28 @@ Both lanes below are one crate — `crates/kindle` (`stump_kindle`) — so the m
 
 `sendToKindle(mediaId: ID!, deviceId: ID!): KindleDelivery!` (`crates/graphql/src/mutation/kindle.rs`, `EMAIL_SEND` permission) is one book to one device:
 
-| Step | Rule |
-| --- | --- |
-| Format | Amazon accepts `azw3`, `doc`, `docx`, `epub`, `htm`, `html`, `mobi`, `pdf`, `rtf`, `txt`. Anything else — a CBZ, a CBR — is refused locally: a Kindle cannot open it and Amazon discards it, which would look like a successful send. |
-| Conversion | An EPUB becomes AZW3 through the `boko-convert` tool in its pinned send-to-Kindle shape (`stump_tools::boko::KindleExport`) when the operator has `boko` on `PATH`. Without it the EPUB is mailed as it is — Amazon converts EPUB itself — and the delivery reports why in `note`. A missing converter is therefore normal, not an error. See [calibre tooling](/docs/developer/calibre-tooling). |
-| Size | Amazon discards an attachment over its 50 MB per-document limit without telling the sender, so that ceiling is checked first, then the emailer's own `maxAttachmentSizeBytes`, both before an SMTP connection is opened. The refusal names the limit and points at USB. |
-| Delivery | The primary emailer and `stump_notify::EmailChannel`, i.e. the same SMTP client and error mapping as `sendAttachmentEmail`, and the same forbidden-recipient list — checked *before* the book is read or converted. The subject is the book's name; Stump never sends Amazon's magic `Convert` subject, so it never asks the service to reflow a PDF on the operator's behalf. |
-| Recording | Three places, each meaning something different. One `kindle_deliveries` row per attempt — including a refused one, with the relay's message in `error` — is the delivery history. One `emailer_send_records` row is written **only** when the mail went out, so the Emailer screen shows every send whichever lane made it. `DeviceService::record_delivery` then writes `last_sync_at` and `last_sync_summary` = `{"protocol":"kindle-email","bytes","format"}`; `last_seen_at` deliberately does not move — nothing authenticated, the device was written to, not seen. |
+| Step       | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Format     | Amazon accepts `azw3`, `doc`, `docx`, `epub`, `htm`, `html`, `mobi`, `pdf`, `rtf`, `txt`. Anything else — a CBZ, a CBR — is refused locally: a Kindle cannot open it and Amazon discards it, which would look like a successful send.                                                                                                                                                                                                                                                                                                                                     |
+| Conversion | An EPUB becomes AZW3 through the `boko-convert` tool in its pinned send-to-Kindle shape (`stump_tools::boko::KindleExport`) when the operator has `boko` on `PATH`. Without it the EPUB is mailed as it is — Amazon converts EPUB itself — and the delivery reports why in `note`. A missing converter is therefore normal, not an error. See [calibre tooling](/docs/developer/calibre-tooling).                                                                                                                                                                         |
+| Size       | Amazon discards an attachment over its 50 MB per-document limit without telling the sender, so that ceiling is checked first, then the emailer's own `maxAttachmentSizeBytes`, both before an SMTP connection is opened. The refusal names the limit and points at USB.                                                                                                                                                                                                                                                                                                   |
+| Delivery   | The primary emailer and `stump_notify::EmailChannel`, i.e. the same SMTP client and error mapping as `sendAttachmentEmail`, and the same forbidden-recipient list — checked _before_ the book is read or converted. The subject is the book's name; Stump never sends Amazon's magic `Convert` subject, so it never asks the service to reflow a PDF on the operator's behalf.                                                                                                                                                                                            |
+| Recording  | Three places, each meaning something different. One `kindle_deliveries` row per attempt — including a refused one, with the relay's message in `error` — is the delivery history. One `emailer_send_records` row is written **only** when the mail went out, so the Emailer screen shows every send whichever lane made it. `DeviceService::record_delivery` then writes `last_sync_at` and `last_sync_summary` = `{"protocol":"kindle-email","bytes","format"}`; `last_seen_at` deliberately does not move — nothing authenticated, the device was written to, not seen. |
 
 The converted file is a temporary under the server's cache directory and is removed when the request ends; the library file is never touched. `KindleDelivery` returns `{ id, mediaId, deviceId, deviceName, recipient, format, bytes, converted, note, error, sentAt }`, so the caller can say "sent Dune.azw3 (412 KB) to al@kindle.com" without a second query.
 
 ### USB: `POST /api/v2/media/{id}/kindle-file`
 
-The other way a book reaches a Kindle is a cable: the device mounts as a disk and anything dropped into its `documents/` folder is a book. There is no gateway on that path, so the rule is stricter than the mail's — a Kindle plugged into a computer opens AZW3/MOBI, PDF and text, and *not* EPUB.
+The other way a book reaches a Kindle is a cable: the device mounts as a disk and anything dropped into its `documents/` folder is a book. There is no gateway on that path, so the rule is stricter than the mail's — a Kindle plugged into a computer opens AZW3/MOBI, PDF and text, and _not_ EPUB.
 
 `POST /api/v2/media/{id}/kindle-file` (`apps/server/src/routers/api/v2/media.rs`, `DOWNLOAD_FILE` permission) therefore runs the same lane with `FormatPolicy::RequireKindle`:
 
-| Behaviour | Detail |
-| --- | --- |
-| Response | The file itself, `Content-Disposition: attachment; filename="<book>.<format>"` (that name decides the extension on disk, so it is the whole reason the route is not a plain `/file` download), `Content-Type` sniffed from the bytes (`application/vnd.amazon.mobi8-ebook` for AZW3), and `X-Stump-Kindle-Converted: true|false`. |
-| EPUB | Converted with `boko`, or **refused** with 400 `a Kindle opens no .epub over USB; install boko …`. Handing over an EPUB would put a file on the device that it silently cannot open. |
-| Other formats | `.cbz`/`.cbr` and anything else outside the accepted list is a 400; an unknown or invisible book is a 404. |
-| `POST`, not `GET` | The route may run a converter and write a temporary file (under the server's cache directory, removed as the response is built). It records nothing: there is no device on this path, so there is no delivery to log. |
+| Behaviour         | Detail                                                                                                                                                                                                                                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Response          | The file itself, `Content-Disposition: attachment; filename="<book>.<format>"` (that name decides the extension on disk, so it is the whole reason the route is not a plain `/file` download), `Content-Type` sniffed from the bytes (`application/vnd.amazon.mobi8-ebook` for AZW3), and `X-Stump-Kindle-Converted: true | false`. |
+| EPUB              | Converted with `boko`, or **refused** with 400 `a Kindle opens no .epub over USB; install boko …`. Handing over an EPUB would put a file on the device that it silently cannot open.                                                                                                                                      |
+| Other formats     | `.cbz`/`.cbr` and anything else outside the accepted list is a 400; an unknown or invisible book is a 404.                                                                                                                                                                                                                |
+| `POST`, not `GET` | The route may run a converter and write a temporary file (under the server's cache directory, removed as the response is built). It records nothing: there is no device on this path, so there is no delivery to log.                                                                                                     |
 
 ### Delivery history: `kindleDeliveries`
 
@@ -195,19 +199,19 @@ The other way a book reaches a Kindle is a cable: the device mounts as a disk an
 
 Every field is scoped to the caller: users see their own devices, the server owner sees all of them (`crates/graphql/src/{query,mutation,object,subscription}/device.rs`).
 
-| Field | Notes |
-| --- | --- |
-| `devices: [Device!]!`, `device(id): Device!` | `Device` flattens the row and adds `credential { kind protocol secretHint }` |
-| `deviceEndpoints(id): [DeviceEndpoint!]!` | secret redacted |
-| `createDevice(kind, name): DeviceWithCredential!` | `{ device, credential { kind protocol credentialRef secret }, endpoints }`; permissions enforced by the registry as above |
-| `renameDevice(id, name)`, `revokeDevice(id)`, `setDeviceTransformProfile(id, profile)` | owner or server owner |
-| `setDeviceLibraryScope(id, libraryIds)` | owner or server owner; `libraryIds: null` restores inherit — see [Library scope](#library-scope) |
-| `setDeviceKindleEmail(id, email)` | owner or server owner; `email: null` clears it — see [Send to Kindle](#send-to-kindle) |
-| `sendToKindle(mediaId, deviceId): KindleDelivery!` | `EMAIL_SEND`; mails one book to the device's address — see [Send to Kindle](#send-to-kindle) |
-| `kindleDeliveries(deviceId, mediaId, limit): [KindleDelivery!]!` | the delivery history, newest first, scoped to the caller's devices — see [Send to Kindle](#send-to-kindle) |
-| `rotateDeviceCredential(id): DeviceWithCredential!` | rejected with a conflict once the device is revoked |
-| `readingStats(span, deviceId): ReadingStats!` | see below |
-| `subscription deviceSeen(deviceId)` | filtered `DeviceSeen` events; `readEvents` also carries them |
+| Field                                                                                  | Notes                                                                                                                     |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `devices: [Device!]!`, `device(id): Device!`                                           | `Device` flattens the row and adds `credential { kind protocol secretHint }`                                              |
+| `deviceEndpoints(id): [DeviceEndpoint!]!`                                              | secret redacted                                                                                                           |
+| `createDevice(kind, name): DeviceWithCredential!`                                      | `{ device, credential { kind protocol credentialRef secret }, endpoints }`; permissions enforced by the registry as above |
+| `renameDevice(id, name)`, `revokeDevice(id)`, `setDeviceTransformProfile(id, profile)` | owner or server owner                                                                                                     |
+| `setDeviceLibraryScope(id, libraryIds)`                                                | owner or server owner; `libraryIds: null` restores inherit — see [Library scope](#library-scope)                          |
+| `setDeviceKindleEmail(id, email)`                                                      | owner or server owner; `email: null` clears it — see [Send to Kindle](#send-to-kindle)                                    |
+| `sendToKindle(mediaId, deviceId): KindleDelivery!`                                     | `EMAIL_SEND`; mails one book to the device's address — see [Send to Kindle](#send-to-kindle)                              |
+| `kindleDeliveries(deviceId, mediaId, limit): [KindleDelivery!]!`                       | the delivery history, newest first, scoped to the caller's devices — see [Send to Kindle](#send-to-kindle)                |
+| `rotateDeviceCredential(id): DeviceWithCredential!`                                    | rejected with a conflict once the device is revoked                                                                       |
+| `readingStats(span, deviceId): ReadingStats!`                                          | see below                                                                                                                 |
+| `subscription deviceSeen(deviceId)`                                                    | filtered `DeviceSeen` events; `readEvents` also carries them                                                              |
 
 ### Reading statistics
 

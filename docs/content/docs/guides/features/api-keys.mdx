@@ -62,10 +62,15 @@ There are instances where you can embed an API key in the URL directly. This is 
 
 ## Permissions
 
-API keys use the same permissions as user accounts. When creating a key, you have the option of:
+API keys use the same permissions as user accounts. When creating a key from an interactive
+session, you have the option of:
 
 - Inheriting the permissions of the user that created the key
 - Assigning specific permissions to the key
+
+An API key cannot create or update another key to inherit all user permissions. A key with
+specific permissions never receives server-owner status, even when the server owner created it.
+These constraints keep a limited key from escalating its own access.
 
 It is generally recommended to assign only the permissions that are necessary for the key to function. This is a security best practice, as it limits the potential damage that could be done if the key were to be compromised.
 
