@@ -19,7 +19,27 @@
 	let password = $state('');
 	let submitting = $state(false);
 	let errorMessage = $state<string | null>(null);
-	let returnTo = $derived(page.url.searchParams.get('returnTo') ?? resolve('/dashboard'));
+	const returnTo = $derived.by(() => {
+		const candidate = page.url.searchParams.get('returnTo');
+		return isSafeReturnTo(candidate) ? candidate : resolve('/dashboard');
+	});
+	const manual = $derived(page.url.searchParams.get('manual') === '1');
+	const hasOidcError = $derived(page.url.searchParams.has('error'));
+	const oidcError = $derived(page.url.searchParams.get('error'));
+	const displayedError = $derived(
+		errorMessage ?? oidcError ?? (hasOidcError ? 'Single sign-on sign-in failed.' : null)
+	);
+
+	function isSafeReturnTo(value: string | null): value is string {
+		return (
+			value !== null &&
+			value.startsWith('/') &&
+			!value.startsWith('//') &&
+			!value.includes('://') &&
+			!value.includes('\\') &&
+			!(/[\u0000-\u001f\u007f]/.test(value))
+		);
+	}
 
 	const oidcQuery = createQuery(() => ({
 		queryKey: ['oidcConfig'],
@@ -32,6 +52,13 @@
 		staleTime: Number.POSITIVE_INFINITY
 	}));
 	const oidc = $derived(oidcQuery.data);
+
+	$effect(() => {
+		if (!browser || !oidc?.enabled || hasOidcError || (!oidc.disableLocalAuth && manual)) return;
+		window.location.assign(
+			`/api/v2/auth/oidc/authorize?return_to=${encodeURIComponent(returnTo)}`
+		);
+	});
 
 	async function submit(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
@@ -54,31 +81,35 @@
 				}
 				throw new Error(message);
 			}
-			window.location.href = returnTo.startsWith('/') ? returnTo : resolve('/dashboard');
+			window.location.href = returnTo;
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Unable to sign in.';
 			submitting = false;
 		}
 	}
 
-	// The server creates the session in its callback and redirects to `/`;
-	// the web UI (or a 404 on headless builds) takes it from there.
 	function signInWithOidc(): void {
-		window.location.assign('/api/v2/auth/oidc/authorize');
+		window.location.assign(
+			`/api/v2/auth/oidc/authorize?return_to=${encodeURIComponent(returnTo)}`
+		);
 	}
+
 </script>
 
 <svelte:head>
-	<title>Sign in · Stump</title>
+	<title>Sign in · Coppice</title>
 </svelte:head>
 
 <div class="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-12">
 	<Card class="w-full max-w-md">
 		<CardHeader>
-			<CardTitle>Sign in to Stump</CardTitle>
+			<CardTitle>Sign in to Coppice</CardTitle>
 			<CardDescription>Manage your devices, reading activity, and account.</CardDescription>
 		</CardHeader>
 		<CardContent class="flex flex-col gap-5">
+			{#if displayedError}
+				<p class="text-sm text-destructive" role="alert">{displayedError}</p>
+			{/if}
 			{#if !oidc?.disableLocalAuth}
 				<form class="flex flex-col gap-5" onsubmit={submit}>
 					<div class="flex flex-col gap-2">
@@ -95,9 +126,6 @@
 							required
 						/>
 					</div>
-					{#if errorMessage}
-						<p class="text-sm text-destructive" role="alert">{errorMessage}</p>
-					{/if}
 					<Button type="submit" disabled={submitting}>
 						{submitting ? 'Signing in…' : 'Sign in'}
 					</Button>

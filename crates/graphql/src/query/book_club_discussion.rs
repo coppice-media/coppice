@@ -1,7 +1,7 @@
 use async_graphql::{Context, Object, Result, ID};
 use models::entity::{
-	book_club, book_club_book, book_club_discussion, book_club_discussion_message,
-	book_club_member, user::AuthUser,
+	book_club_book, book_club_discussion, book_club_discussion_message, book_club_member,
+	user::AuthUser,
 };
 use sea_orm::{
 	prelude::*, sea_query::Query, ColumnTrait, QueryFilter, QueryOrder, QuerySelect,
@@ -202,7 +202,11 @@ impl BookClubDiscussionQuery {
 		ctx: &Context<'_>,
 		book_club_id: ID,
 	) -> Result<Vec<BookClubDiscussion>> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+
+		verify_read_access(book_club_id.as_ref(), user, conn).await?;
 
 		let current_book_position =
 			match book_club_book::Entity::get_current_or_next_position(
@@ -212,7 +216,6 @@ impl BookClubDiscussionQuery {
 			.await?
 			{
 				Some(pos) => pos,
-				// No books exist at all, so there can be no previous discussions
 				None => return Ok(vec![]),
 			};
 
@@ -261,26 +264,12 @@ async fn verify_read_access(
 	user: &AuthUser,
 	conn: &DatabaseConnection,
 ) -> Result<()> {
-	if user.is_server_owner {
-		return Ok(());
-	}
-
-	let is_member = book_club_member::Entity::find_by_club_for_user(user, book_club_id)
-		.one(conn)
-		.await?
-		.is_some();
-
-	if is_member {
-		return Ok(());
-	}
-
-	let is_public = book_club::Entity::find_by_id(book_club_id)
-		.filter(book_club::Column::IsPrivate.eq(false))
-		.one(conn)
-		.await?
-		.is_some();
-
-	if is_public {
+	if user.is_server_owner
+		|| book_club_member::Entity::find_by_club_for_user(user, book_club_id)
+			.one(conn)
+			.await?
+			.is_some()
+	{
 		Ok(())
 	} else {
 		Err("You must be a member of the book club to access this discussion".into())

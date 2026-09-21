@@ -32,16 +32,11 @@ pub struct Model {
 	pub name: String,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub description: Option<String>,
-	#[sea_orm(column_type = "custom(\"DATETIME\")")]
-	pub created_at: DateTimeWithTimeZone,
-	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
-	pub updated_at: Option<DateTimeWithTimeZone>,
-	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
-	pub deleted_at: Option<DateTimeWithTimeZone>,
 	#[sea_orm(column_type = "Text")]
 	pub path: String,
 	#[sea_orm(column_type = "Text")]
 	pub status: FileStatus,
+	pub is_oneshot: bool,
 	#[sea_orm(column_type = "Json", nullable)]
 	pub thumbnail_meta: Option<ImageMetadata>,
 	#[sea_orm(column_type = "Text", nullable)]
@@ -55,6 +50,12 @@ pub struct Model {
 	/// The remote series identifier on the provider source
 	#[sea_orm(column_type = "Text", nullable)]
 	pub remote_id: Option<String>,
+	#[sea_orm(column_type = "custom(\"DATETIME\")")]
+	pub created_at: DateTimeWithTimeZone,
+	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
+	pub updated_at: Option<DateTimeWithTimeZone>,
+	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
+	pub deleted_at: Option<DateTimeWithTimeZone>,
 }
 
 pub fn get_age_restriction_filter(min_age: i32, restrict_on_unset: bool) -> Condition {
@@ -294,7 +295,9 @@ impl ActiveModelBehavior for ActiveModel {
 			if self.status.is_not_set() {
 				self.status = ActiveValue::Set(FileStatus::Ready);
 			}
-
+			if self.is_oneshot.is_not_set() {
+				self.is_oneshot = ActiveValue::Set(false);
+			}
 			self.created_at = ActiveValue::Set(DateTimeWithTimeZone::from(Utc::now()));
 		} else {
 			self.updated_at =

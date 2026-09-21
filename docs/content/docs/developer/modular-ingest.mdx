@@ -14,7 +14,7 @@ This page extends the uploader-prepared boundary and metadata/book-lab proposal 
 The current path is deliberately preserved:
 
 - GraphQL `uploadBooks` and `uploadSeries` receive multipart `Upload` values, copy them into a library path, and enqueue a library scan. They return only `Boolean`; there is no durable drop-item or analysis-report identity ([observed — `crates/graphql/src/mutation/upload.rs:43-102,108-167`]).
-- The library watcher receives create/modify notifications, accumulates paths, waits until the tree has been quiet for its debounce interval, and submits a `library_scan` job ([observed — `core/src/filesystem/scanner/library_watcher.rs:15-104`]).
+- The modular watcher in `crates/watcher` receives create/modify notifications, accumulates paths, waits until the tree has been quiet for its debounce interval, and submits a `ScanRequest`; core's adapter turns that request into a `library_scan` job ([observed — `crates/watcher/src/watcher.rs:19-41,98-100,238-242`; `core/src/filesystem/scanner/watcher_adapters.rs:55-61`]).
 - `StumpJob`, queued through the `stump_jobs` runtime, currently contains library/series scans, thumbnail work, metadata fetches, and media analysis. `AnalyzeMediaJob` accepts book, list-of-books, library, and series scopes and creates one `ProcessBook` task per selected media ([observed — `core/src/job/stump_job.rs:19-44`; `core/src/filesystem/media/analysis/job.rs:12-136`]).
 - Page analysis currently stores dimensions and content types in `MediaAnalysisData`; it reuses complete existing page entries unless forced and reports task/subtask progress through the job event channel ([observed — `core/src/filesystem/media/analysis/analyze.rs:99-194`; `crates/jobs/src/progress.rs:6-45`]).
 - The existing `metadata_integrations::MetadataProvider` has provider identity, supported media types, series/media search, scoring, detail fetch, and credential verification methods. `MatchCandidate` already carries provider, external ID, metadata, confidence, and confidence factors ([observed — `crates/integrations/metadata/src/provider.rs:19-75`; `crates/integrations/metadata/src/types/match_candidate.rs:5-44`]).
@@ -235,7 +235,7 @@ the row exists, `NOT_A_PAIR` when the kinds do not pair.
 
 ## Preprocess hook
 
-`ingest_preprocess_command` (`STUMP_INGEST_PREPROCESS`) is an optional executable run once per dropped item, before analysis. It is any executable; typical uses are format normalisation and running your own conversion pipeline. It is **implemented** in `core/src/ingest/preprocess.rs`, invoked from the staging phase of staged analysis in `core/src/ingest/coordinator.rs`, and unset by default, in which case nothing about the pipeline changes.
+`ingest_preprocess_command` (`STUMP_INGEST_PREPROCESS`) is an optional executable run once per dropped item, before analysis. It is any executable; typical uses are format normalisation and running your own conversion pipeline. It is **implemented** in `crates/ingest/src/preprocess.rs`, invoked from the staging phase of staged analysis in `crates/ingest/src/coordinator.rs`, and unset by default, in which case nothing about the pipeline changes.
 
 The contract is a plain child process:
 
@@ -328,7 +328,7 @@ Serve-time renumbering: `visible_pages(conn, cache, media_id, pages)` returns th
 
 ### Two plugin traits
 
-The ingest layer has exactly two logical plugin seams. The provider seam is now implemented as `IngestMetadataProvider` in `core/src/ingest/contract.rs:334-365` (with `capabilities`, `settings`, a `settings` argument on `identify`/`lookup`, and a default `search`); the sketch below is the original proposal and is kept for the quality-check seam. The per-provider inventory — ids, domains, key type and `help_url`, client rate limits, capabilities, defaults, fields filled, Komf reference, and test counts — plus the facade fan-out, scoring, apply path, missing policy layer, and planned providers are maintained in [Provider status › Metadata providers](/docs/developer/provider-status#metadata-providers); this page does not duplicate that table.
+The ingest layer has exactly two logical plugin seams. The provider seam is now implemented as `IngestMetadataProvider` in `crates/ingest/src/contract.rs:334-365` (with `capabilities`, `settings`, a `settings` argument on `identify`/`lookup`, and a default `search`); the sketch below is the original proposal and is kept for the quality-check seam. The per-provider inventory — ids, domains, key type and `help_url`, client rate limits, capabilities, defaults, fields filled, Komf reference, and test counts — plus the facade fan-out, scoring, apply path, missing policy layer, and planned providers are maintained in [Provider status › Metadata providers](/docs/developer/provider-status#metadata-providers); this page does not duplicate that table.
 
 ```rust
 #[async_trait]
@@ -383,7 +383,7 @@ The existing integration is reused through an adapter rather than renamed:
 | Apply/merge | **Reuse:** `FieldMerger`, locked fields, `MergeStrategy`, `apply_media_match`, `apply_series_match`, and current metadata permissions. **New:** field-level candidate/manual picks and a transactional pending-item projection. |
 | Queue execution | **Reuse:** `StumpJob`, `JobLifecycle`, the `stump_jobs` runtime, cancellation, logs, and `JobProgress`. **New:** durable drop-item/analysis-job priority and typed progress/replay. |
 
-The existing `metadata_integrations::MetadataProvider` is the lower-level client contract and remains source-compatible ([observed — `crates/integrations/metadata/src/provider.rs:19-75`]). It has separate `search_*` and `fetch_*` methods rather than `identify`/`lookup`; `IntegrationProvider` (`core/src/ingest/providers/facade.rs:40-224`) supplies those higher-level semantics without renaming an existing type. Implemented providers, their settings stores, and the registry are documented in [Provider status](/docs/developer/provider-status#metadata-providers).
+The existing `metadata_integrations::MetadataProvider` is the lower-level client contract and remains source-compatible ([observed — `crates/integrations/metadata/src/provider.rs:19-75`]). It has separate `search_*` and `fetch_*` methods rather than `identify`/`lookup`; `IntegrationProvider` (`crates/ingest/src/providers/facade.rs:40-224`) supplies those higher-level semantics without renaming an existing type. Implemented providers, their settings stores, and the registry are documented in [Provider status](/docs/developer/provider-status#metadata-providers).
 
 ### Registration and discovery
 

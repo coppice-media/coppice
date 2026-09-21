@@ -1,3 +1,5 @@
+#[cfg(feature = "crosspoint")]
+mod crosspoint;
 mod sync;
 
 use axum::{
@@ -7,20 +9,28 @@ use axum::{
 	Extension, Router,
 };
 use stump_auth::AuthContext;
+use stump_core::component_runtime::COMPONENT_CROSSPOINT;
 use stump_koreader::{KoreaderBackend, PutProgressInput as ProviderPutProgressInput};
 
-use crate::{config::state::AppState, middleware::auth::api_key_middleware};
-
+use crate::{
+	config::state::AppState,
+	middleware::{auth::api_key_middleware, component::gate},
+};
 #[derive(Clone)]
 pub(crate) struct KoreaderBackendImpl(pub(crate) AppState);
 
 pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
-	stump_koreader::router::<AppState, _>(KoreaderBackendImpl(app_state.clone()))
-		.layer(middleware::from_fn(sync::authorize))
-		.layer(middleware::from_fn_with_state(
-			app_state,
-			api_key_middleware,
-		))
+	let router =
+		stump_koreader::router::<AppState, _>(KoreaderBackendImpl(app_state.clone()));
+	#[cfg(feature = "crosspoint")]
+	let router = router.merge(gate(
+		crosspoint::router(),
+		app_state.clone(),
+		COMPONENT_CROSSPOINT,
+	));
+	router.layer(middleware::from_fn(sync::authorize)).layer(
+		middleware::from_fn_with_state(app_state, api_key_middleware),
+	)
 }
 #[async_trait::async_trait]
 

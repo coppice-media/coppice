@@ -3,7 +3,12 @@ title: Devices
 description: The unified device registry, its credentials, endpoints, and last-seen tracking
 ---
 
-A *device* is a registered client owned by a user: a Kobo, a KOReader install, Mihon, Komelia, Liseur, a generic OPDS reader, a script using the API, or a browser. The registry lives in `crates/devices` (`stump_devices`) and is reached through `Ctx::devices()` (`core/src/context.rs`). It mints the credential a device authenticates with, tells the client which URLs to configure, and records when each device was last seen and last synced.
+A *device* is a registered client owned by a user: a Kobo, a KOReader install,
+CrossPoint Reader, Coppice, Mihon, Komelia, Liseur, a generic OPDS reader, a
+script using the API, or a browser. The registry lives in `crates/devices`
+is reached through `Ctx::devices()` (`core/src/context.rs`). It mints the
+credential(s) a device authenticates with, tells the client which URLs to
+configure, and records when each device was last seen and last synced.
 
 ## Storage
 
@@ -14,43 +19,80 @@ Migration `m20260910_000000_add_devices` (`crates/migrations/src/m20260910_00000
 | `devices` | `id` (text PK), `user_id` (FK `users`, cascade), `name`, `kind`, `transform_profile` (JSON, nullable), `created_at`, `last_seen_at`, `last_sync_at`, `last_sync_summary` (JSON, nullable), `revoked_at` |
 | `device_credentials` | `id`, `device_id` (FK `devices`, cascade), `protocol`, `credential_kind`, `credential_ref`; unique on `(credential_kind, credential_ref)` |
 
-`kind` is one of `kobo | koreader | mihon | komelia | liseur | opds | api | web`; `protocol` is `kobo | koreader | komga | opds | liseur | api`; `credential_kind` is `api_key | liseur_token | session` (`models::shared::enums::{DeviceKind, DeviceProtocol, DeviceCredentialKind}`). `credential_ref` is polymorphic and therefore has no foreign key: the `api_keys.short_token` for an API key, the `liseur_sync_tokens.id` for a liseur token, the `sessions.session_id` for a session.
+`kind` is one of `kobo | koreader | crosspoint | coppice | mihon | komelia |
+`liseur | opds | abs | api | web | worker | kavita`; `protocol` is `kobo |
+`koreader | komga | opds | liseur | api`; `credential_kind` is `api_key |
+`liseur_token | session`
+(`models::shared::enums::DeviceKind`, `DeviceProtocol`, and `DeviceCredentialKind`).
+`credential_ref` is polymorphic and therefore has no foreign key: the
+`api_keys.short_token` for an API key, the `liseur_sync_tokens.id` for a liseur
+token, the `sessions.session_id` for a session.
 
-The old `reading_devices` rows (KOReader and OPDS progression clients registering themselves by id + name) become `devices` rows owned by the user whose reading sessions reference them, with kind `koreader` when any of those sessions carries a `koreader_progress` and `opds` otherwise. Rows no session references are dropped with the table. `reading_sessions.device_ids` keeps pointing at these ids as a JSON array; replacing it with a junction table that carries a foreign key to `devices` is the documented follow-up. The KOReader adapter (`apps/server/src/routers/koreader_backend/sync.rs`), the OPDS 2.0 progression route (`apps/server/src/routers/opds_backend/v2_0.rs`), and the Komga Readium progression route (`crates/komga/src/routes/readium.rs`) now register their client-reported devices directly in `devices`.
+The old `reading_devices` rows (KOReader and OPDS progression clients
+registering themselves by id + name) become `devices` rows owned by the user
+whose reading sessions reference them. Rows with no session references are
+dropped with the table.
 
 ## Credentials
 
-`DeviceService::create_device(user, kind, name)` mints the credential the kind needs and stores its reference on the device. The name defaults to `"<Username>'s <Kind>"` and is numbered on collision.
+`DeviceService::create_device(user, kind, name)` mints the credential(s) the
+kind needs and stores every reference on the device. The name defaults to
+`"<Username>'s <Kind>"` and is numbered on collision. For compatibility the
+Rust and GraphQL singular `credential` is always the deterministic API-key
+primary when one exists; the additive `credentials` collection contains every
+credential and must be matched by kind and protocol.
 
-| Kind | Credential | Minted permissions |
+| Kind | Credential(s) | Minted permissions |
 | --- | --- | --- |
 | `kobo` | prefixed API key | `ACCESS_KOBO_SYNC`, `DOWNLOAD_FILE` |
 | `koreader` | prefixed API key | `ACCESS_KOREADER_SYNC` |
-| `opds`, `mihon`, `komelia` | prefixed API key | `DOWNLOAD_FILE` |
+| `crosspoint` | prefixed API key (`koreader`) | `ACCESS_KOREADER_SYNC` (the physical receiver is unauthenticated LAN I/O) |
+| `coppice` | prefixed API key (`koreader`) + device-bound liseur token (`liseur`) | API key: `ACCESS_KOREADER_SYNC`, `DOWNLOAD_FILE`; liseur: `sync`, `read-insights`, `library-read` |
 | `api`, `web` | prefixed API key | inherit the user's permissions |
+| `abs`, `kavita` | prefixed API key | `DOWNLOAD_FILE` |
+| `worker` | prefixed API key | `ACCESS_WORKER`, `DOWNLOAD_FILE` |
 | `liseur` | liseur-sync device token (`liseur-<uuid>`, scopes `sync`, `read-insights`, `library-read`, bound to the device id) | n/a |
 
-A key never grants what its owner does not hold, and an API key only authenticates for users allowed to use API keys (`validate_api_key` in `apps/server/src/middleware/auth.rs`), so creating an API-key device requires `ACCESS_API_KEYS` plus the minted permissions; the server owner bypasses the check. The plaintext secret is returned exactly once (`IssuedCredential`), afterwards only a hint such as `stump_abcdefgh_…` is available.
+A key never grants what its owner does not hold, and an API key only
+authenticates for users allowed to use API keys (`validate_api_key` in
+`apps/server/src/middleware/auth.rs`), so creating an API-key device requires
+`ACCESS_API_KEYS` plus the minted permissions; the server owner bypasses the
+check. Coppice's two credentials are minted in one write transaction.
+Plaintext secrets are returned exactly once (`IssuedCredential`), afterwards
+only hints such as `stump_abcdefgh_…` and `liseur-…` are available.
 
-`rotate_credential` deletes the API key row (or revokes the liseur token) and mints a replacement. `revoke` does the same without a replacement, drops the credential rows, and stamps `revoked_at`; the device row stays so its history remains visible. `rename` also renames the API key / liseur token; `set_transform_profile` stores the [transform profile](#transform-profile) JSON for the protocol adapters.
-
-The liseur-sync storage shares the secret format, hash, and default expiry with the registry through `stump_devices::liseur_token::{new_secret, hash_secret, DEVICE_TOKEN_TTL_SECS}`, so tokens minted either way authenticate through the same bearer middleware.
+`rotate_credential` discards every old credential (deleting API-key rows and
+revoking liseur tokens) before minting the replacement set in one transaction.
+`revoke` does the same without a replacement, drops all credential rows, and
+stamps `revoked_at`; the device row stays so its history remains visible.
+`rename` updates every API key and liseur token name. `set_transform_profile`
+stores the [transform profile](#transform-profile) JSON for the protocol
+adapters.
 
 ## Endpoints
 
-`Endpoint::for_kind(kind, origin, username, secret)` describes what to configure on the client, where `origin` is the scheme and host the request arrived at:
+`Endpoint::for_kind(kind, origin, username, secret)` describes what to
+configure on a one-credential client. `Endpoint::for_credential` selects the
+explicit Coppice lane; its `secret` is full just after minting and a redacted
+hint for an existing device:
 
 | Kind | Endpoints |
 | --- | --- |
 | `kobo` | `{origin}/kobo/{key}` |
 | `koreader` | `{origin}/koreader/{key}` with the username |
+| `crosspoint` | `{origin}/koreader/{key}`; rich routes are nested at `{origin}/koreader/{key}/api/v1` |
+| `coppice` API key | `{origin}/koreader/{key}`, `{origin}/api`, `{origin}/opds/{key}/v1.2`, and `{origin}/opds/v2.0` |
 | `opds` | `{origin}/opds/{key}/v1.2` and `{origin}/opds/v2.0` (Bearer) |
 | `mihon` | `{origin}` as a Komga server with username + `X-API-Key`, plus `{origin}/api` (Bearer) |
 | `komelia` | `{origin}` as a Komga server with username + `X-API-Key` |
 | `liseur` | `{origin}` as the liseur-sync server (Bearer) |
+| `abs`, `kavita` | `{origin}` (Bearer) |
 | `api`, `web` | `{origin}/api` (Bearer) |
 
-`deviceEndpoints(id)` returns these with the secret redacted; `createDevice` and `rotateDeviceCredential` return them with the full secret.
+`deviceEndpoints(id)` returns all endpoint lanes with secrets redacted;
+`createDevice` and `rotateDeviceCredential` return the full secret for every
+new credential in additive `credentials`, while singular `credential` remains
+the primary compatibility field.
 
 ## Transform profile
 
@@ -80,6 +122,10 @@ The registry is best effort at every call site: a failure is logged and never fa
 | `library_sync`, `apps/server/src/routers/kobo_backend/router.rs` | `kobo` | `{"protocol":"kobo","items","new_entitlements","should_continue","kobo_device_id"}` |
 | `put_progress`, `apps/server/src/routers/koreader_backend/sync.rs` | `koreader` | `{"protocol":"koreader","document","progress","percentage","koreader_device","koreader_device_id"}` |
 | `update_read_progress`, `crates/komga/src/routes/progress.rs` via `KomgaBackend::record_sync` (`apps/server/src/routers/komga_backend.rs`) | `komga` | `{"protocol":"komga","book_id","page","completed"}` |
+| `save_progress`, `crates/kavita/src/routes/reader.rs` — `POST /api/Reader/progress` | `api` (`profile: kavita`) | `{"protocol":"kavita","profile":"kavita","media_id","page","completed"}` |
+| `sync`/`close`, `crates/abs/src/routes/session.rs` — ABS session progress writes | `api` (`profile: abs`) | `{"protocol":"abs","profile":"abs","session_id","media_id","position_ms"}` |
+| `put_progression`, `crates/komga/src/routes/readium.rs` — Readium progression PUT | `komga` | `{"protocol":"komga","book_id","progression","completed"}` |
+| `update_book_progression`, `apps/server/src/routers/opds_backend/v2_0.rs` — OPDS 2.0 progression PUT | `opds` | `{"protocol":"opds","media_id","progression","device"}` |
 | `append_ops`, `apps/server/src/routers/liseur_sync/storage.rs` — an accepted ops push | `liseur` | `{"protocol":"liseur","ops","applied","duplicate","conflict"}` |
 | `POST /api/v2/devices/me/touch`, `apps/server/src/routers/liseur_sync/touch.rs` | `liseur` | the request body, verbatim |
 

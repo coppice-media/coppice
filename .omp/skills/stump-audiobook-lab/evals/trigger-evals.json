@@ -1,0 +1,34 @@
+[
+	{
+		"query": "Slice a lawfully accessed private M4B and EPUB at complete chapter boundaries for a 10% Storyteller Whisper fixture, then inspect the SMIL output.",
+		"should_trigger": true
+	},
+	{
+		"query": "Compare the Whisper/fuzzy Storyteller EPUB with an external CTC/Viterbi EPUB and report common text-target timing deltas.",
+		"should_trigger": true
+	},
+	{
+		"query": "My read-aloud EPUB has OPF media-overlay links and SMIL clipBegin/clipEnd values; validate targets, monotonicity, and duration bounds without printing text.",
+		"should_trigger": true
+	},
+	{
+		"query": "Document a Stump audiobook experiment using audio-assemble, audio-chapters, epub-check, separate immutable mode directories, GPU proof, and provenance hashes.",
+		"should_trigger": true
+	},
+	{
+		"query": "Recommend three commercial audiobook players for commuting and explain which has the best sleep timer.",
+		"should_trigger": false
+	},
+	{
+		"query": "Rewrite this EPUB chapter's dialogue to sound more literary and preserve the author's voice.",
+		"should_trigger": false
+	},
+	{
+		"query": "Design a colorful Storyteller landing page with a hero illustration and responsive CSS animations.",
+		"should_trigger": false
+	},
+	{
+		"query": "My CUDA training job cannot find libcublasLt.so; diagnose the generic Docker image and suggest a compatible base image.",
+		"should_trigger": false
+	}
+]

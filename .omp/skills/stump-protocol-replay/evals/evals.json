@@ -1,0 +1,41 @@
+{
+	"skill_name": "stump-protocol-replay",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "Komelia's shared cookie jar lost its live session after a stale-cookie 401. I want to check the Stump fixture without running unrelated lanes. Which replay should I select, what must I verify about the 401, and where should the credentials come from?",
+			"expected_output": "Select make replay, verify that a Komga-scoped 401 emits no cookie-deletion Set-Cookie while preserving non-Komga policy, and inject owner-only local runtime values without logging them.",
+			"files": [],
+			"expectations": [
+				"Chooses the Komga make replay target rather than ABS, Kavita, or library management.",
+				"Verifies a Komga-scoped stale-cookie 401 emits no Set-Cookie cookie deletion such as Max-Age=0, without generalizing the exception to non-Komga routes.",
+				"Routes current ports, IDs, and credentials to .omp/PROJECT_STATE.md or owner-only ENDPOINTS.md, injects values through the runtime environment, and never quotes them in logs or reports.",
+				"States that the replay proves only the exercised server contract and that a physical Komelia run is required for shared-cookie-jar and login-persistence evidence."
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "We need evidence for a stock Kobo sync and a KOReader KOSync progress round trip. The sibling repository has Hurl targets for Komga, Mihon, Kavita, ABS, and liseur-sync, but no obvious Kobo target. Give me the focused plan and label the evidence correctly.",
+			"expected_output": "Use the existing targeted fixture and physical-client lanes for Kobo and KOReader; do not invent Make targets, and distinguish server HTTP evidence from firmware/app evidence.",
+			"files": [],
+			"expectations": [
+				"Does not invent make replay-kobo or make replay-koreader targets and selects existing fixture probes or physical-client lanes instead.",
+				"Requires Kobo initialization/sync/state/download coverage and KOReader KOSync users/auth plus progress write/read coverage.",
+				"Separates Hurl/probe HTTP evidence from physical firmware/app evidence and never relabels KOReader evidence as Komga or native Liseur.",
+				"Reports variable names only; redacts cookies, tokens, credentials, and local paths; and excludes endpoint-sheet lines from logs and committed reports."
+			]
+		},
+		{
+			"id": 3,
+			"prompt": "A compatibility review must cover native Liseur annotations and a throwaway Komga library create/patch/filesystem/delete sequence. The target machine already has the fixture launcher and sibling harness. Which two focused targets apply, and what safety condition matters for the library root?",
+			"expected_output": "Run replay-liseur-sync and replay-library-management with runtime credentials; use an existing disposable root that is neither inside nor above any existing library root.",
+			"files": [],
+			"expectations": [
+				"Selects make replay-liseur-sync for native Liseur work/position/session/annotation evidence.",
+				"Selects make replay-library-management for the library lifecycle rather than the broad Komga replay.",
+				"Requires LIBRARY_ROOT to be an existing disposable directory that is neither inside nor above an existing library root.",
+				"Requires the fixture service to be managed as a long-running hub process before replay."
+			]
+		}
+	]
+}

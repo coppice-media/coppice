@@ -165,6 +165,9 @@ pub trait KavitaBackend: Send + Sync {
 		username: &str,
 		password: &str,
 	) -> APIResult<AuthUser>;
+	/// Record a successful progress write against the API-key-bound device.
+	/// Registry failures are best effort and never fail the request.
+	async fn record_sync(&self, _auth: &AuthContext, _summary: serde_json::Value) {}
 
 	fn server_facts(&self) -> ServerFacts;
 

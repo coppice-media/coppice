@@ -33,6 +33,7 @@ impl BookClub {
 	}
 
 	async fn creator(&self, ctx: &Context<'_>) -> Result<BookClubMember> {
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let creator = book_club_member::Entity::find()
@@ -50,6 +51,7 @@ impl BookClub {
 
 	/// The current book being read
 	async fn current_book(&self, ctx: &Context<'_>) -> Result<Option<BookClubBook>> {
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let book = book_club_book::Entity::find_current_for_book_club_id(&self.model.id)
@@ -61,6 +63,7 @@ impl BookClub {
 
 	/// The previous book that was read, if it exists
 	async fn previous_book(&self, ctx: &Context<'_>) -> Result<Option<BookClubBook>> {
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let book = book_club_book::Entity::find()
@@ -76,6 +79,7 @@ impl BookClub {
 	// TODO: Pagination
 	/// All previous books that were read, ordered by completion date (most recent first)
 	async fn previous_books(&self, ctx: &Context<'_>) -> Result<Vec<BookClubBook>> {
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let books = book_club_book::Entity::find()
@@ -91,6 +95,7 @@ impl BookClub {
 	// TODO: Pagination
 	/// All books in the club's queue, ordered by position
 	async fn books(&self, ctx: &Context<'_>) -> Result<Vec<BookClubBook>> {
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let books = book_club_book::Entity::find_for_book_club_id(&self.model.id)
@@ -101,6 +106,7 @@ impl BookClub {
 	}
 
 	async fn invitations(&self, ctx: &Context<'_>) -> Result<Vec<BookClubInvitation>> {
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let book_club_invitations =
 			book_club_invitation::Entity::find_for_book_club_id(&self.model.id.clone())
@@ -117,6 +123,7 @@ impl BookClub {
 	async fn members(&self, ctx: &Context<'_>) -> Result<Vec<BookClubMember>> {
 		let stump_auth::AuthContext { user, .. } =
 			ctx.data::<stump_auth::AuthContext>()?;
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let book_club_members =
 			book_club_member::Entity::find_members_accessible_to_user_for_book_club_id(
@@ -136,6 +143,7 @@ impl BookClub {
 	async fn moderators(&self, ctx: &Context<'_>) -> Result<Vec<BookClubMember>> {
 		let stump_auth::AuthContext { user, .. } =
 			ctx.data::<stump_auth::AuthContext>()?;
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let book_club_members =
@@ -157,6 +165,7 @@ impl BookClub {
 	async fn members_count(&self, ctx: &Context<'_>) -> Result<u64> {
 		let stump_auth::AuthContext { user, .. } =
 			ctx.data::<stump_auth::AuthContext>()?;
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let count =
 			book_club_member::Entity::find_members_accessible_to_user_for_book_club_id(
@@ -172,6 +181,7 @@ impl BookClub {
 	async fn membership(&self, ctx: &Context<'_>) -> Result<Option<BookClubMember>> {
 		let stump_auth::AuthContext { user, .. } =
 			ctx.data::<stump_auth::AuthContext>()?;
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let membership = book_club_member::Entity::find()
@@ -192,6 +202,7 @@ impl BookClub {
 		&self,
 		ctx: &Context<'_>,
 	) -> Result<Vec<BookClubDiscussion>> {
+		ensure_membership(ctx, &self.model.id).await?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let discussions = book_club_discussion::Entity::find()
@@ -209,6 +220,7 @@ impl BookClub {
 
 	async fn previous_discussions_count(&self, ctx: &Context<'_>) -> Result<u64> {
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+		ensure_membership(ctx, &self.model.id).await?;
 
 		let current_book_position =
 			match book_club_book::Entity::get_current_or_next_position(
@@ -255,5 +267,22 @@ impl BookClub {
 			.await?;
 
 		Ok(count)
+	}
+}
+
+async fn ensure_membership(ctx: &Context<'_>, book_club_id: &str) -> Result<()> {
+	let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
+	if user.is_server_owner {
+		return Ok(());
+	}
+	let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+	if book_club_member::Entity::find_by_club_for_user(user, book_club_id)
+		.one(conn)
+		.await?
+		.is_some()
+	{
+		Ok(())
+	} else {
+		Err("You must be a member of the book club to access this field".into())
 	}
 }

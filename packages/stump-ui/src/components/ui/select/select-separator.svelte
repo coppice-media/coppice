@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Separator } from "../separator/index.js";
+	import { Separator } from "@stump/ui/components/ui/separator/index.js";
 	import { cn } from "@stump/ui/utils.js";
 	import type { Separator as SeparatorPrimitive } from "bits-ui";
 
@@ -13,6 +13,6 @@
 <Separator
 	bind:ref
 	data-slot="select-separator"
-	class={cn("-mx-1 my-1 h-px bg-border pointer-events-none", className)}
+	class={cn("bg-border -mx-1 my-1 h-px pointer-events-none", className)}
 	{...restProps}
 />

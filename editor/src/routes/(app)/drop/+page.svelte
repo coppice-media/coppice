@@ -136,7 +136,7 @@
 	}
 </script>
 
-<svelte:head><title>Drop folder · Stump ingest</title></svelte:head>
+<svelte:head><title>Drop folder · Coppice ingest</title></svelte:head>
 
 <div class="flex flex-col gap-6">
 	<div class="flex flex-wrap items-start justify-between gap-4">

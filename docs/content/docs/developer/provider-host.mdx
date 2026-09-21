@@ -15,6 +15,27 @@ knowing about providers. This page covers the design; the metadata
 providers that enrich local files are a different subsystem
 (see [Provider status](/docs/developer/provider-status)).
 
+## Current status
+
+The merged provider host is **Shipped** at the source level: Mode A
+materialisation, Mode B virtual-library browsing, the MangaDex and
+definition-backed source paths, page/cover caching, per-source quotas, stale
+chapter reconciliation, per-user age filtering, garbage collection, source
+health, and cross-source duplicate inspection/merge are implemented. The
+challenge solver is also wired through the worker protocol; server storage keeps
+the header values private and exposes only redacted request-header metadata.
+
+The remaining boundaries are explicit:
+
+- definition-backed coverage still depends on the fetched catalog and on a
+  matching theme engine; an unimplemented theme remains visible but cannot run;
+- a fingerprint-bound Cloudflare origin can remain `DEGRADED` even after a
+  browser supplies a clearance, because the ordinary HTTP client cannot replay
+  Chrome's TLS handshake;
+- real-origin/device replay and the post-merge full gate are pending. The
+  statuses on this page describe the merged implementation, not a green
+  verification claim.
+
 ## Enabling
 
 | Layer | Switch | Default | Effect |

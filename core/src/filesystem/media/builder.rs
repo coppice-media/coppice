@@ -40,6 +40,20 @@ pub struct BuiltMedia {
 	pub audio: Option<AudioFacts>,
 }
 
+impl BuiltMedia {
+	/// Mark this draft as a one-shot media item while preserving all processed
+	/// metadata and audio facts for the scanner's normal persistence path.
+	pub fn oneshot(self) -> Self {
+		Self {
+			media: media::ActiveModel {
+				is_oneshot: Set(true),
+				..self.media
+			},
+			..self
+		}
+	}
+}
+
 /// The extension of `path`, lowercased and without the dot.
 ///
 /// `media.extension` is what OPDS turns into an acquisition mime type, so it
@@ -73,6 +87,8 @@ impl MediaBuilder {
 		Ok(BuiltMedia {
 			media: media::ActiveModel {
 				id: Set(media.media.id.clone()),
+				is_oneshot: Set(media.media.is_oneshot),
+				created_at: Set(media.media.created_at.clone()),
 				..generated.media
 			},
 			metadata: generated.metadata.map(|meta| media_metadata::ActiveModel {
@@ -254,6 +270,47 @@ mod tests {
 		assert_eq!(media.extension, ActiveValue::Set("epub".to_string()));
 	}
 
+	#[test]
+	fn test_rebuild_preserves_created_at() {
+		let created_at = DateTime::parse_from_rfc3339("2020-01-02T03:04:05+00:00")
+			.expect("valid timestamp");
+		let existing = media::Model {
+			id: "existing-media-id".to_string(),
+			name: "Existing Media".to_string(),
+			size: 0,
+			extension: "zip".to_string(),
+			pages: 0,
+			is_oneshot: false,
+			hash: None,
+			koreader_hash: None,
+			path: get_test_zip_path(),
+			status: FileStatus::Ready,
+			thumbnail_meta: None,
+			thumbnail_path: None,
+			series_id: Some("series_id".to_string()),
+			updated_at: None,
+			created_at: created_at.clone(),
+			modified_at: None,
+			deleted_at: None,
+			source_provider: None,
+			remote_id: None,
+			remote_chapter_id: None,
+		};
+		let rebuilt = MediaBuilder::new(
+			Path::new(&existing.path),
+			"series_id",
+			library_config(),
+			&StumpConfig::debug(),
+		)
+		.rebuild(&media::ModelWithMetadata {
+			media: existing,
+			metadata: None,
+		})
+		.expect("media rebuild succeeds");
+
+		assert_eq!(rebuilt.media.created_at, ActiveValue::Set(created_at));
+	}
+
 	/// A folder audiobook is ONE publication whose shape comes from its
 	/// tracks, not from its path: a directory has no extension of its own and
 	/// its `metadata().len()` is the size of a directory entry, not of the
@@ -355,6 +412,7 @@ mod tests {
 			library_type: LibraryType::Mixed,
 			skip_book_overview: false,
 			metadata_policy: None,
+			oneshots_directory: None,
 		}
 	}
 }

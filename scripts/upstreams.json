@@ -1,0 +1,92 @@
+{
+	"schemaVersion": 1,
+	"repositories": [
+		{
+			"name": "Stump upstream",
+			"repo": "stumpapp/stump",
+			"branch": "nightly",
+			"baseline": { "kind": "commit", "value": "37fdb7d7340894a777c40d685d5262becceae007" },
+			"sourcePolicy": "inspect"
+		},
+		{
+			"name": "Liseur",
+			"repo": "chmouel/liseur",
+			"baseline": { "kind": "commit", "value": "bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53" },
+			"sourcePolicy": "inspect"
+		},
+		{
+			"name": "Liseur Sync",
+			"repo": "chmouel/liseur-sync",
+			"baseline": { "kind": "commit", "value": "f8ce32b79aca0cddde84e9004fedde121fb77365" },
+			"sourcePolicy": "inspect"
+		},
+		{
+			"name": "BookOrbit",
+			"repo": "bookorbit/bookorbit",
+			"baseline": { "kind": "release", "value": "v2.9.0" },
+			"sourcePolicy": "release-notes-only"
+		},
+		{
+			"name": "Grimmory",
+			"repo": "grimmory-tools/grimmory",
+			"sourcePolicy": "release-notes-only"
+		},
+		{
+			"name": "Kavita",
+			"repo": "Kareadita/Kavita",
+			"baseline": { "kind": "release", "value": "v0.9.1.4" },
+			"sourcePolicy": "release-notes-only"
+		},
+		{
+			"name": "Komga",
+			"repo": "gotson/komga",
+			"sourcePolicy": "inspect"
+		},
+		{
+			"name": "Calibre-Web Automated",
+			"repo": "crocodilestick/Calibre-Web-Automated",
+			"baseline": { "kind": "release", "value": "v4.0.6" },
+			"sourcePolicy": "release-notes-only"
+		},
+		{
+			"name": "Audiobookshelf",
+			"repo": "advplyr/audiobookshelf",
+			"baseline": { "kind": "release", "value": "v2.30.0" },
+			"sourcePolicy": "release-notes-only"
+		},
+		{
+			"name": "Calibre-Web",
+			"repo": "janeczku/calibre-web",
+			"baseline": { "kind": "release", "value": "0.6.27" },
+			"sourcePolicy": "release-notes-only"
+		},
+		{
+			"name": "Komelia",
+			"repo": "Snd-R/Komelia",
+			"baseline": { "kind": "commit", "value": "65f92fde60b7b7b62b85a55ceb80b92adf50eec8" },
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Mihon",
+			"repo": "mihonapp/mihon",
+			"baseline": { "kind": "commit", "value": "21af65b10012f23e53dba9d01fd2474fcb810f7c" },
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Komf",
+			"repo": "Snd-R/komf",
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "KOReader",
+			"repo": "koreader/koreader",
+			"baseline": { "kind": "commit", "value": "009367df7ac7142bc0d1eb5782d061260b11baa6" },
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Calibre",
+			"repo": "kovidgoyal/calibre",
+			"sourcePolicy": "release-notes-only"
+		}
+	]
+}

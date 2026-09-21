@@ -7,11 +7,11 @@ default-run = "stump_server"
 [features]
 default = ["full"]
 full = ["headless", "webui"]
-headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "komga", "kavita", "abs", "liseur-sync", "providers", "watcher", "qr", "ingest", "apalis"]
+headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "crosspoint", "komga", "kavita", "abs", "liseur-sync", "providers", "watcher", "qr", "ingest", "apalis"]
 # Apalis-backed job executor (links `apalis`); `minimal` runs jobs on the inline executor.
 apalis = ["stump_core/apalis"]
-# Media format backends that link native code; every profile keeps them on.
-# Turn one off explicitly (e.g. `--no-default-features --features minimal,rar`).
+# Native format bundle used by `minimal`, `headless`, and `full`; bare
+# no-default and leaf profiles can opt into individual processors.
 formats = ["pdf", "rar", "transform"]
 pdf = ["stump_core/pdf", "stump_media/pdf"]
 rar = ["stump_core/rar", "stump_media/rar"]
@@ -29,9 +29,10 @@ graphql = [
 ingest = ["dep:stump_ingest", "stump_core/ingest"]
 minimal = ["formats"]
 opds = ["dep:stump_opds"]
-readium = []
-kobo = ["dep:stump_kobo", "dep:stump_kepub", "dep:stump_collections"]
-koreader = ["dep:stump_koreader"]
+readium = ["dep:stump_library"]
+kobo = ["dep:stump_kobo", "dep:stump_kepub"]
+koreader = ["dep:stump_koreader", "crosspoint"]
+crosspoint = ["dep:stump_crosspoint", "stump_core/crosspoint", "graphql?/crosspoint"]
 komga = ["readium", "dep:stump_komga", "dep:stump_collections", "dep:stump_library"]
 kavita = ["dep:stump_kavita", "dep:stump_collections"]
 # The Audiobookshelf compatibility profile (Lissen and other ABS clients);
@@ -52,7 +53,7 @@ qr = ["dep:qrcode", "dep:image"]
 watcher = ["stump_core/watcher"]
 # Serves the bundled React SPA and forwards the GraphQL resolvers only that SPA
 # (and the Expo app) reaches; `headless` deliberately omits it, `full` has it.
-webui = ["graphql?/web"]
+webui = ["graphql", "graphql/web"]
 
 [dependencies]
 alphanumeric-sort.workspace = true
@@ -125,6 +126,7 @@ stump_kobo = { path = "../../crates/kobo", optional = true }
 stump_kepub = { path = "../../crates/kepub", optional = true }
 filetime = "0.2.25"
 stump_koreader = { path = "../../crates/koreader", optional = true }
+stump_crosspoint = { path = "../../crates/crosspoint", optional = true }
 stump_liseur_sync = { path = "../../crates/liseur-sync", optional = true }
 stump_opds = { path = "../../crates/opds", optional = true }
 stump_provider = { path = "../../crates/provider", optional = true }

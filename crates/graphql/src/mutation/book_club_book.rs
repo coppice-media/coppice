@@ -3,6 +3,7 @@ use chrono::Utc;
 use models::txn::begin_write;
 use models::{
 	entity::{book_club_book, book_club_discussion},
+	services::social::visible_media,
 	shared::book_club::{BookClubExternalBook, BookClubInternalBook},
 };
 use sea_orm::{prelude::*, Set};
@@ -34,6 +35,11 @@ impl BookClubBookMutation {
 			.await?
 			.ok_or("Book club not found or you lack permission to add books")?;
 
+		if let BookClubBookVariant::Stored(BookClubInternalBook { id }) = &input.book {
+			visible_media(conn, user, id)
+				.await
+				.map_err(|_| "Book is not visible to you")?;
+		}
 		let txn = begin_write(conn).await?;
 
 		let next_position = book_club_book::Entity::get_max_position_for_club(
@@ -136,13 +142,21 @@ impl BookClubBookMutation {
 			.ok_or("Book club not found or you lack permission")?;
 
 		let txn = begin_write(conn).await?;
-
 		let completed_count = book_club_book::Entity::find()
-			.filter(book_club_book::Column::Id.is_in(&book_ids))
+			.filter(book_club_book::Column::Id.is_in(book_ids.clone()))
+			.filter(book_club_book::Column::BookClubId.eq(book_club_id.as_ref()))
 			.filter(book_club_book::Column::CompletedAt.is_not_null())
 			.count(&txn)
 			.await?;
+		let club_book_count = book_club_book::Entity::find()
+			.filter(book_club_book::Column::Id.is_in(book_ids.clone()))
+			.filter(book_club_book::Column::BookClubId.eq(book_club_id.as_ref()))
+			.count(&txn)
+			.await?;
 
+		if club_book_count != book_ids.len() as u64 {
+			return Err("Every book ID must belong to this book club exactly once".into());
+		}
 		if completed_count > 0 {
 			return Err("Cannot reorder completed books".into());
 		}

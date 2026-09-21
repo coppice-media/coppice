@@ -202,6 +202,54 @@ async fn happy_path_issues_credential_exactly_once() {
 }
 
 #[tokio::test]
+async fn coppice_pairing_issues_both_credentials_with_stable_metadata() {
+	let app = TestApp::new_with_default_user().await;
+	let started = start(&app, json!({ "kind": "coppice" })).await;
+	let approved = approve(
+		&app,
+		started["pairing_id"].as_str().unwrap(),
+		started["code"].as_str().unwrap(),
+	)
+	.await;
+	assert_eq!(
+		approved["data"]["approveDevicePairing"]["status"], "APPROVED",
+		"{approved:#}"
+	);
+
+	let issued = status(&app, &started).await;
+	assert_eq!(issued["status"], "approved", "{issued:#}");
+	assert_eq!(issued["credential_issued"], true);
+	assert_eq!(issued["username"], "initial-server-admin");
+
+	let credentials = issued["credentials"]
+		.as_array()
+		.expect("Coppice credentials array");
+	assert_eq!(credentials.len(), 2, "{issued:#}");
+	let api = credentials
+		.iter()
+		.find(|credential| {
+			credential["kind"] == "api_key" && credential["protocol"] == "koreader"
+		})
+		.expect("Coppice API credential");
+	let liseur = credentials
+		.iter()
+		.find(|credential| {
+			credential["kind"] == "liseur_token" && credential["protocol"] == "liseur"
+		})
+		.expect("Coppice liseur credential");
+	assert!(api["secret"].as_str().unwrap().starts_with("stump_"));
+	assert!(liseur["secret"].as_str().unwrap().starts_with("liseur-"));
+	assert_eq!(&issued["credential"], api);
+	assert!(issued["endpoints"].as_array().is_some());
+
+	let again = status(&app, &started).await;
+	assert_eq!(
+		again,
+		json!({ "status": "approved", "credential_issued": true })
+	);
+}
+
+#[tokio::test]
 async fn qr_nonce_approves_without_the_code() {
 	let app = TestApp::new_with_default_user().await;
 	let started = start(&app, json!({ "kind": "liseur" })).await;

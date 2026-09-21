@@ -37,6 +37,7 @@ mod m20260702_000000_metadata_fetch_partial_results;
 mod m20260804_000000_smart_list_role_to_integer;
 mod m20260815_205755_avatar_image_metadata;
 mod m20260816_000000_drop_legacy_epubcfi;
+mod m20260830_015110_oneshots;
 mod m20260902_000000_add_reading_lists_and_collections;
 mod m20260904_000000_add_liseur_sync;
 mod m20260905_000000_add_kobo_reading_state;
@@ -74,6 +75,15 @@ mod m20260943_000000_add_abs_session_play_method;
 mod m20260944_000000_add_worker_jobs;
 mod m20260945_000000_add_ingest_drop_groups;
 mod m20260946_000000_add_edition_pairing;
+mod m20260947_000000_add_media_sync_maps;
+mod m20260949_000000_add_liseur_session_id;
+mod m20260950_000000_add_connections;
+mod m20260951_000000_add_crosspoint;
+mod m20260951_100000_add_crosspoint_target_created_at;
+mod m20260952_000000_add_book_detail;
+mod m20260953_000000_add_component_runtime;
+mod m20260954_000000_social_recommendations;
+mod m20260955_000000_add_book_requests;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -116,6 +126,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260804_000000_smart_list_role_to_integer::Migration),
 			Box::new(m20260815_205755_avatar_image_metadata::Migration),
 			Box::new(m20260816_000000_drop_legacy_epubcfi::Migration),
+			Box::new(m20260830_015110_oneshots::Migration),
 			Box::new(m20260902_000000_add_reading_lists_and_collections::Migration),
 			Box::new(m20260904_000000_add_liseur_sync::Migration),
 			Box::new(m20260905_000000_add_kobo_reading_state::Migration),
@@ -153,6 +164,15 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260944_000000_add_worker_jobs::Migration),
 			Box::new(m20260945_000000_add_ingest_drop_groups::Migration),
 			Box::new(m20260946_000000_add_edition_pairing::Migration),
+			Box::new(m20260947_000000_add_media_sync_maps::Migration),
+			Box::new(m20260949_000000_add_liseur_session_id::Migration),
+			Box::new(m20260950_000000_add_connections::Migration),
+			Box::new(m20260951_000000_add_crosspoint::Migration),
+			Box::new(m20260951_100000_add_crosspoint_target_created_at::Migration),
+			Box::new(m20260952_000000_add_book_detail::Migration),
+			Box::new(m20260953_000000_add_component_runtime::Migration),
+			Box::new(m20260954_000000_social_recommendations::Migration),
+			Box::new(m20260955_000000_add_book_requests::Migration),
 		]
 	}
 }

@@ -16,27 +16,28 @@
 //! builds `git2` with `default-features = false`, so no vendored
 //! openssl/libssh2 is compiled in).
 
-use std::path::{Path, PathBuf};
-
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use stump_api_types::settings::{SettingDefinition, SettingKind, SettingValues};
 
 use crate::error::AnnotationSyncError;
-use crate::markdown::{base_url_setting, write_books, RenderOptions};
+use crate::markdown::{
+	acquire_user_lock, base_url_setting, preset_descriptors, user_dir_for_root,
+	write_books_locked_for_git, RenderOptions,
+};
 use crate::model::ExportBatch;
 use crate::sink::{string_setting, Sink, SinkDescriptor, SinkState};
 
 pub const GIT_SINK_ID: &str = "git";
-
 const REMOTE_NAME: &str = "origin";
-
 fn git_settings() -> Vec<SettingDefinition> {
 	vec![
 		SettingDefinition {
 			key: "remote_url",
 			label: "Remote URL",
-			description: "Git remote to publish to (https URL or a local path). Leave empty to only commit locally.",
+			description: "Remote to publish to (HTTPS or a local path outside this user's worktree). Leave empty to commit locally only.",
 			kind: SettingKind::String,
 			default: Value::Null,
 			required: false,
@@ -68,7 +69,7 @@ fn git_settings() -> Vec<SettingDefinition> {
 			label: "Commit author name",
 			description: "Name used for export commits.",
 			kind: SettingKind::String,
-			default: serde_json::json!("Stump"),
+			default: serde_json::json!("Coppice"),
 			required: false,
 			secret: false,
 			help_url: None,
@@ -79,6 +80,58 @@ fn git_settings() -> Vec<SettingDefinition> {
 			description: "Email used for export commits.",
 			kind: SettingKind::String,
 			default: serde_json::json!("annotations@stump.local"),
+			required: false,
+			secret: false,
+			help_url: None,
+		},
+		// Git and Markdown deliberately share the format-v2 layout settings.
+		// Versionless rows remain on the old key/UUID path lane.
+		SettingDefinition {
+			key: "format_version",
+			label: "Export format version",
+			description: "Use version 2 for human filenames and structured frontmatter; omit for legacy UUID filenames.",
+			kind: SettingKind::Int,
+			default: serde_json::json!(2),
+			required: false,
+			secret: false,
+			help_url: None,
+		},
+		SettingDefinition {
+			key: "preset",
+			label: "Export preset",
+			description: "A built-in safe path/body layout.",
+			kind: SettingKind::Enum,
+			default: serde_json::json!("obsidian"),
+			required: false,
+			secret: false,
+			help_url: None,
+		},
+		SettingDefinition {
+			key: "destination",
+			label: "Destination",
+			description: "Contained relative directory below the per-user worktree.",
+			kind: SettingKind::String,
+			default: serde_json::json!(""),
+			required: false,
+			secret: false,
+			help_url: None,
+		},
+		SettingDefinition {
+			key: "path_template",
+			label: "Path template",
+			description: "Safe relative template using {{author}}, {{title}}, {{source}}, {{source_id}}, or {{book_id}}.",
+			kind: SettingKind::String,
+			default: serde_json::json!("{{author}} - {{title}}/annotations.md"),
+			required: false,
+			secret: false,
+			help_url: None,
+		},
+		SettingDefinition {
+			key: "body_template",
+			label: "Body template",
+			description: "Optional constrained template using book fields and {{content}}.",
+			kind: SettingKind::String,
+			default: Value::Null,
 			required: false,
 			secret: false,
 			help_url: None,
@@ -106,7 +159,7 @@ impl GitConfig {
 		};
 		Self {
 			branch: string_setting(values, "branch", "main"),
-			author_name: string_setting(values, "author_name", "Stump"),
+			author_name: string_setting(values, "author_name", "Coppice"),
 			author_email: string_setting(
 				values,
 				"author_email",
@@ -141,6 +194,7 @@ struct PublishResult {
 	committed: bool,
 	pushed: bool,
 	commit_id: Option<String>,
+	path_map: BTreeMap<String, String>,
 }
 
 /// Blocking git work: render files, commit, push with one rebase retry.
@@ -148,20 +202,23 @@ fn publish(
 	dir: &Path,
 	batch: &ExportBatch,
 	config: &GitConfig,
+	state: &SinkState,
 ) -> Result<PublishResult, AnnotationSyncError> {
+	let _lock = acquire_user_lock(dir)?;
+	validate_branch(&config.branch)?;
 	let repo = open_or_init(dir, &config.branch)?;
 	let signature = git2::Signature::now(&config.author_name, &config.author_email)?;
 
-	let written = write_books(dir, batch, &config.render)?;
-	if written > 0 {
-		commit_all(&repo, &signature, batch)?;
+	let write = write_books_locked_for_git(dir, batch, &config.render, Some(state))?;
+	if write.written > 0 {
+		commit_all(&repo, &signature, batch, &write.managed_paths)?;
 	}
 
 	// Push whenever the branch has commits: a previous run may have committed
 	// and then failed to push, so an unchanged batch still publishes.
 	let pushed = match &config.remote_url {
 		Some(url) if repo.head().is_ok() => {
-			ensure_remote(&repo, url)?;
+			ensure_remote(&repo, dir, url)?;
 			push_with_retry(&repo, &config.branch, config.token.as_deref(), &signature)?;
 			true
 		},
@@ -169,9 +226,10 @@ fn publish(
 	};
 
 	Ok(PublishResult {
-		committed: written > 0,
+		committed: write.written > 0,
 		pushed,
 		commit_id: head_commit_id(&repo),
+		path_map: write.path_map,
 	})
 }
 
@@ -199,10 +257,15 @@ fn open_or_init(
 	}
 }
 
-fn ensure_remote(repo: &git2::Repository, url: &str) -> Result<(), AnnotationSyncError> {
+fn ensure_remote(
+	repo: &git2::Repository,
+	worktree: &Path,
+	url: &str,
+) -> Result<(), AnnotationSyncError> {
+	validate_remote_boundary(worktree, url)?;
 	match repo.find_remote(REMOTE_NAME) {
 		Ok(remote) => {
-			if remote.url()? != url {
+			if remote.url().unwrap_or_default() != url {
 				repo.remote_set_url(REMOTE_NAME, url)?;
 			}
 		},
@@ -213,13 +276,80 @@ fn ensure_remote(repo: &git2::Repository, url: &str) -> Result<(), AnnotationSyn
 	Ok(())
 }
 
+fn validate_branch(branch: &str) -> Result<(), AnnotationSyncError> {
+	if branch.is_empty()
+		|| branch.starts_with('/')
+		|| branch.contains('\\')
+		|| branch
+			.split('/')
+			.any(|part| part.is_empty() || part == "." || part == "..")
+	{
+		return Err(AnnotationSyncError::sink("invalid git branch"));
+	}
+	Ok(())
+}
+
+fn local_remote_path(url: &str) -> Option<PathBuf> {
+	if let Some(path) = url.strip_prefix("file://") {
+		return Some(PathBuf::from(path));
+	}
+	if url.contains("://") || url.starts_with("git@") {
+		return None;
+	}
+	Some(PathBuf::from(url))
+}
+
+fn canonicalish(path: &Path) -> Result<PathBuf, AnnotationSyncError> {
+	if path.exists() {
+		return Ok(path.canonicalize()?);
+	}
+	let mut suffix = Vec::new();
+	let mut current = path;
+	while !current.exists() {
+		if let Some(name) = current.file_name() {
+			suffix.push(name.to_owned());
+		}
+		current = current.parent().ok_or_else(|| {
+			AnnotationSyncError::sink("remote path has no existing parent")
+		})?;
+	}
+	let mut output = current.canonicalize()?;
+	for name in suffix.iter().rev() {
+		output.push(name);
+	}
+	Ok(output)
+}
+
+fn validate_remote_boundary(
+	worktree: &Path,
+	url: &str,
+) -> Result<(), AnnotationSyncError> {
+	let Some(remote) = local_remote_path(url) else {
+		return Ok(());
+	};
+	let worktree = canonicalish(worktree)?;
+	let remote = canonicalish(&remote)?;
+	if worktree == remote
+		|| worktree.starts_with(&remote)
+		|| remote.starts_with(&worktree)
+	{
+		return Err(AnnotationSyncError::sink(
+			"git remote path must not overlap the export worktree",
+		));
+	}
+	Ok(())
+}
+
 fn commit_all(
 	repo: &git2::Repository,
 	signature: &git2::Signature<'_>,
 	batch: &ExportBatch,
+	managed_paths: &[PathBuf],
 ) -> Result<String, AnnotationSyncError> {
 	let mut index = repo.index()?;
-	index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
+	for path in managed_paths {
+		index.add_path(path)?;
+	}
 	index.write()?;
 	let tree_id = index.write_tree()?;
 	let tree = repo.find_tree(tree_id)?;
@@ -231,7 +361,7 @@ fn commit_all(
 	let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
 	let message = format!(
-		"Export annotations ({} books)\n\nStump annotation sync for user {}.",
+		"Export annotations ({} books)\n\nCoppice annotation sync for user {}.",
 		batch.books.len(),
 		batch.user_id
 	);
@@ -368,8 +498,9 @@ impl Sink for GitSink {
 		SinkDescriptor {
 			id: GIT_SINK_ID,
 			name: "Git repository",
-			description: "Commits the markdown export to a git work tree and pushes it to a remote, rebasing once onto the remote branch when the push is rejected.",
+			description: "Commits safe markdown exports to a git work tree and pushes them to a remote, rebasing once onto the remote branch when the push is rejected.",
 			settings: git_settings(),
+			presets: preset_descriptors(),
 		}
 	}
 
@@ -379,15 +510,19 @@ impl Sink for GitSink {
 		state: &SinkState,
 	) -> Result<SinkState, AnnotationSyncError> {
 		// libgit2 calls are blocking; keep them off the async context.
-		let dir = self.user_dir(&batch.user_id);
+		let dir = user_dir_for_root(&self.root, &batch.user_id)?;
 		let config = self.config.clone();
+		let is_v2 = config.render.format_version >= 2;
+		let preset = config.render.preset.clone();
 		let batch_for_task = batch.clone();
-		let result =
-			tokio::task::spawn_blocking(move || publish(&dir, &batch_for_task, &config))
-				.await
-				.map_err(|error| {
-					AnnotationSyncError::sink(format!("git task panicked: {error}"))
-				})??;
+		let state_for_task = state.clone();
+		let result = tokio::task::spawn_blocking(move || {
+			publish(&dir, &batch_for_task, &config, &state_for_task)
+		})
+		.await
+		.map_err(|error| {
+			AnnotationSyncError::sink(format!("git task panicked: {error}"))
+		})??;
 
 		tracing::debug!(
 			user_id = %batch.user_id,
@@ -396,9 +531,19 @@ impl Sink for GitSink {
 			"git sink export complete"
 		);
 
+		let mut data = serde_json::Map::new();
+		data.insert(
+			"last_commit".to_owned(),
+			serde_json::to_value(result.commit_id)?,
+		);
+		if is_v2 {
+			data.insert("format_version".to_owned(), serde_json::json!(2));
+			data.insert("preset".to_owned(), serde_json::json!(preset));
+			data.insert("paths".to_owned(), serde_json::to_value(result.path_map)?);
+		}
 		Ok(SinkState {
 			liseur_seq: state.liseur_seq,
-			data: serde_json::json!({ "last_commit": result.commit_id }),
+			data: Value::Object(data),
 		})
 	}
 }

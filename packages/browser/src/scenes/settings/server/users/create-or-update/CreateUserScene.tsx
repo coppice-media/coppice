@@ -32,7 +32,7 @@ export default function CreateUserScene() {
 	return (
 		<SceneContainer>
 			<Helmet>
-				<title>Stump | {t('settingsScene.server/users.createUser.helmet')}</title>
+				<title>Coppice | {t('settingsScene.server/users.createUser.helmet')}</title>
 			</Helmet>
 
 			<CreateOrUpdateUserForm existingUsernames={existingUsernames} />

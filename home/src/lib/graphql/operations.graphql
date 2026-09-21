@@ -7,11 +7,27 @@ fragment DeviceFields on Device {
 	kind
 	transformProfile
 	libraryScope
-	kindleEmail
 	createdAt
 	lastSeenAt
 	lastSyncAt
 	lastSyncSummary
+	telemetry {
+		batteryPercent
+		charging
+		batterySource
+		batteryObservedAt
+		syncStatus
+		syncProtocol
+		syncedAt
+		counters {
+			progress
+			highlights
+			notes
+			bookmarks
+			sessions
+			items
+		}
+	}
 	revokedAt
 	credential {
 		kind
@@ -139,9 +155,8 @@ subscription DeviceSeen($deviceId: String) {
 	}
 }
 
-query ReadingStats($span: ReadingStatsSpan!) {
-	readingStats(span: $span) {
-		span
+query ReadingStats($span: ReadingStatsSpan!, $deviceId: String) {
+	readingStats(span: $span, deviceId: $deviceId) {
 		from
 		to
 		sessions
@@ -173,5 +188,85 @@ query MyLoginActivity($userId: ID!) {
 		userAgent
 		authenticationSuccessful
 		timestamp
+	}
+}
+# Runtime component controls and server capability descriptors. The resolver
+# enforces owner access for the mutation; the read-only descriptors are used to
+# keep client setup honest when a protocol was not compiled or is disabled.
+query RuntimeComponents {
+	runtimeComponents {
+		key
+		label
+		description
+		category
+		compiled
+		desiredEnabled
+		effectiveEnabled
+		transitionMode
+		transitionReason
+		dependencies
+		health
+		restartRequired
+		usageStatus
+		usageEvidence
+		activityCount
+		lastActivityAt
+		lastTransitionAt
+		lastError
+		ownedGauges {
+			name
+			kind
+			value
+		}
+	}
+	runtimeMemory {
+		totalProcessRssBytes
+		rssAvailable
+		rssUnavailableReason
+		anonymousPssBytes
+		fileBackedPssBytes
+		privateDirtyBytes
+		memoryBreakdownAvailable
+		memoryBreakdownUnavailableReason
+	}
+}
+
+mutation SetRuntimeComponentEnabled($key: String!, $enabled: Boolean!) {
+	setRuntimeComponentEnabled(key: $key, enabled: $enabled) {
+		key
+		label
+		description
+		category
+		compiled
+		desiredEnabled
+		effectiveEnabled
+		transitionMode
+		transitionReason
+		dependencies
+		health
+		restartRequired
+		usageStatus
+		usageEvidence
+		activityCount
+		lastActivityAt
+		lastTransitionAt
+		lastError
+		ownedGauges {
+			name
+			kind
+			value
+		}
+	}
+}
+
+query DeviceCapabilities {
+	deviceCapabilities {
+		kind
+		protocol
+		componentKey
+		compiled
+		enabled
+		available
+		reason
 	}
 }

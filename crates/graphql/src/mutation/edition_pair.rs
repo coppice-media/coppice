@@ -56,7 +56,11 @@ impl EditionPairMutation {
 		let chapters = match (&audio_id, &ebook_id) {
 			(Some(audio_id), Some(ebook_id)) => {
 				let ebook_path = media_path(conn, ebook_id).await?;
-				let ebook = editions::ebook_map_chapters(&ebook_path)?;
+				let ebook = tokio::task::spawn_blocking(move || {
+					editions::ebook_map_chapters(&ebook_path)
+				})
+				.await
+				.map_err(|error| async_graphql::Error::new(error.to_string()))??;
 				let audio = editions::audio_map_chapters(conn, audio_id).await?;
 				Some((ebook, audio))
 			},

@@ -1,0 +1,155 @@
+---
+title: Modular deployment profiles
+description: Compose a Coppice server from Cargo features, runtime switches, and optional static apps
+---
+
+Coppice keeps the default server as the compatibility baseline while allowing
+smaller compositions for a NAS, a protocol gateway, or a dedicated test
+fixture. The distinction that matters is:
+
+- **Cargo features** decide which routes and dependencies are compiled.
+- **Runtime switches** (`STUMP_*` and `ENABLE_*`) decide which compiled routes
+  are mounted or which lifecycle components start.
+
+An environment switch cannot add code to a binary that was built without its
+Cargo feature. Conversely, compiling an adapter does not mount it unless its
+runtime switch is enabled where a switch exists.
+
+The [server architecture source map](/docs/developer/server-architecture) is
+the canonical record of feature seams and lifecycle behavior.
+
+## Profiles
+
+These commands use the `stump_server` package and binary explicitly. A bare
+`--no-default-features` build is leaner than `minimal`; `minimal` is exactly the
+`formats` feature bundle.
+
+| Profile | Exact command | What is compiled or mounted |
+| --- | --- | --- |
+| No-default base | `cargo run -p stump_server --bin stump_server --no-default-features` | Leanest server composition: core REST/auth/database without the `formats` bundle or optional protocol adapters. |
+| Minimal | `cargo run -p stump_server --bin stump_server --no-default-features --features minimal` | `minimal = ["formats"]`; adds the PDF/RAR/transform format bundle while keeping optional protocol adapters out. |
+| KOReader-only | `ENABLE_KOREADER_SYNC=true cargo run -p stump_server --bin stump_server --no-default-features --features koreader` | Compiles the KOReader adapter and mounts it through `ENABLE_KOREADER_SYNC=true`. |
+| Kavita-only | `STUMP_ENABLE_KAVITA=true cargo run -p stump_server --bin stump_server --no-default-features --features kavita` | Compiles the Kavita adapter and mounts it through `STUMP_ENABLE_KAVITA=true`. |
+| Headless | `cargo run -p stump_server --bin stump_server --no-default-features --features headless` | Compiles all backend protocol and processing features, but no web SPA module or frontend assets. |
+| Full/default | `cargo run -p stump_server --bin stump_server` | `default = ["full"]`; `full = ["headless", "webui"]`, the browser-compatible baseline. |
+
+The leaf recipes are intentionally literal. Do not replace the KOReader
+command with `headless` if the goal is to prove a KOReader-only composition,
+and do not call a `minimal` build a no-default build.
+
+### Docker targets
+
+The repository Dockerfile has two final targets:
+
+```sh
+docker buildx build -f docker/Dockerfile --target full .
+docker buildx build -f docker/Dockerfile --target headless .
+```
+
+The `full` target copies the web build to `/app/client` and sets
+`STUMP_CLIENT_DIR=/app/client`. The `headless` target copies only the server
+binary and sets `STUMP_ENABLE_WEBUI=false`; it does not contain SPA assets.
+
+## Feature gates and runtime switches
+
+The following pairs are the important protocol gates. The exact environment
+key names are part of the existing configuration contract:
+
+| Cargo feature | Runtime switch | Result |
+| --- | --- | --- |
+| `webui` | `STUMP_ENABLE_WEBUI` | Compiles and, when enabled, mounts the SPA. `webui` now implies `graphql` and `graphql/web`; a headless binary cannot re-enable the SPA through configuration. |
+| `koreader` | `ENABLE_KOREADER_SYNC` | Mounts `/koreader/{api_key}` when both compile and runtime gates are present. |
+| `kobo` | `ENABLE_KOBO_SYNC` | Mounts `/kobo/{api_key}` when both gates are present. |
+| `komga` | `STUMP_ENABLE_KOMGA` | Mounts the Komga-shaped routes, including the Grimmory `/komga` identity split, when both gates are present. |
+| `kavita` | `STUMP_ENABLE_KAVITA` | Mounts the Kavita compatibility routes when both gates are present. |
+| `abs` | `STUMP_ENABLE_ABS` | Mounts the Audiobookshelf-compatible REST profile when both gates are present. |
+| `opds` | `ENABLE_OPDS_PROGRESSION` | Compiles OPDS 1.2/2.0 routes; the separate switch controls progression writes where supported. |
+| `liseur-sync` | — | Compiles and mounts the native liseur-sync surface; it has no separate enable switch. |
+| `watcher`/`apalis` | `STUMP_ENABLE_BACKGROUND_JOBS` | Compiles watcher/executor support; the runtime switch controls scheduled jobs, watcher startup, and worker initialization. |
+
+If a switch is enabled on a binary without its feature, the server keeps its
+native API routes and logs an explicit warning rather than pretending that the
+compatibility adapter is available. See the [configuration reference](/docs/guides/configuration/server-config)
+for defaults and the complete key list.
+
+## Web UI and static apps are different
+
+`webui` is the Cargo feature for the bundled browser SPA and its GraphQL web
+surface. `STUMP_CLIENT_DIR` points at the SPA directory; in a full Docker image
+that directory is `/app/client`.
+
+The ingest editor and Home app are separate static applications. They are
+runtime mounts, not Cargo features, and can be served by a headless binary when
+their build directories contain `index.html`:
+
+| Environment key | URL | Requirement |
+| --- | --- | --- |
+| `INGEST_EDITOR_DIR` | `/editor` | A built ingest editor directory with `index.html`. |
+| `STUMP_HOME_APP_DIR` | `/app` | A built Home app directory with `index.html`. |
+
+The server mounts these paths before the web SPA fallback so `/editor` and `/app`
+are not swallowed by the full build. The [static-app implementation](/docs/developer/home-app)
+is the source reference for this boundary.
+
+## Proving a leaf composition
+
+A leaf profile is useful only if its disabled neighbors stay disabled. For a
+KOReader-only proof, start the exact command above with an empty state directory
+and verify the health endpoint, authentication, and the KOReader route. Do not
+infer that Kobo, Komga, Kavita, ABS, OPDS, or the SPA exists merely because the
+same binary family supports them in `headless` or `full`.
+
+For a Kavita-only proof, use the exact Kavita command and verify the Kavita
+profile routes with `STUMP_ENABLE_KAVITA=true`. Keep the other runtime switches
+unset or false. A protocol replay is **Contract-tested** evidence; only a real
+client or device run earns **Device-tested** evidence. See the [compatibility
+matrix](/docs/guides/integrations/compatibility) before reporting a client as
+working.
+
+## Historical memory measurements
+
+These numbers are historical observations, not resource guarantees. The
+controlled profile comparison used five fresh launches per profile on the same
+16-logical-CPU Linux host, an empty SQLite database and state directory on
+tmpfs, a health wait, and repeated `/proc/<pid>/smaps_rollup` samples. The
+pristine binary came from an `origin/nightly` worktree; it is not the same build
+input as the optimized release binary.
+
+| Build/profile | Runtime settings | RSS (KiB) | PSS (KiB) | Private dirty (KiB) | Threads | FDs |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Pristine `origin/nightly` full/default | Upstream defaults | 40,776 | 36,929 | 11,028 | 21 | 19 |
+| Optimized headless | 2 Tokio workers, 8 blocking max, DB max 2, statement cache 32, jobs enabled | 29,924 | 26,085 | 6,036 | 5 | 16 |
+| Optimized headless, lean runtime | Same, DB max 1, background jobs disabled | 28,708 | 24,866 | 5,908 | 4 | 14 |
+
+A separate debug fixture report recorded **14.5 MB RSS idle** and **110 MB peak**
+during a parallel KEPUB batch after five hours of uptime. That workload and
+build are not comparable to the release medians above. Host CPU count, allocator
+state, database contents, libraries, enabled features, request mix, and whether
+a scan or conversion is running all change the result. Never publish one of
+these values as a Coppice memory promise.
+
+The [measurement gates](/docs/developer/server-architecture#measurement-gates)
+contain the original method and commit/build context.
+
+## Future measurement matrix
+
+Before and after a modularity change, compare the current `full` and candidate
+profiles using the same commit, compiler, database, library, configuration, and
+workload. Record at least:
+
+- clean startup time and stable idle behavior;
+- RSS, PSS, private dirty memory, and (where available) live heap/allocation
+  data, SQLite page-cache usage, mapped files/native libraries, thread count,
+  and file descriptors;
+- idle, library scan, staged ingest, parallel KEPUB conversion, audiobook range
+  serving, and post-work retained state, separating live objects from allocator
+  retention;
+- binary size, image size, image layers, frontend/PDFium presence, and build
+  inputs; and
+- route/auth smoke coverage for GraphQL HTTP and WebSocket, REST/media/EPUB and
+  range responses, OPDS 1.2/PSE, OPDS 2.0 auth/progression, KOReader, Kobo,
+  and native/mobile SDK flows.
+
+A profile comparison is **Contract-tested** only when the same route and payload
+contracts are exercised. It is **Device-tested** only when a real app or device
+runs the flow. The evidence labels do not change because a binary is smaller.

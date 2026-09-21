@@ -18,6 +18,40 @@ export default defineConfig({
 		assetsDir: './assets',
 		manifest: true,
 		outDir: '../dist',
+		emptyOutDir: true,
+		rollupOptions: {
+			output: {
+				manualChunks(id) {
+					const path = id.replaceAll('\\', '/')
+					if (!path.includes('/node_modules/')) {
+						return
+					}
+
+					if (path.includes('/node_modules/lucide-react/')) {
+						return 'vendor-lucide'
+					}
+					if (path.includes('/node_modules/@tanstack/')) {
+						return 'vendor-tanstack'
+					}
+					if (path.includes('/node_modules/lodash/')) {
+						return 'vendor-lodash'
+					}
+					if (path.includes('/node_modules/framer-motion/')) {
+						return 'vendor-framer'
+					}
+					if (path.includes('/node_modules/overlayscrollbars/')) {
+						return 'vendor-overlayscrollbars'
+					}
+					if (
+						path.includes('/node_modules/react/') ||
+						path.includes('/node_modules/react-dom/') ||
+						path.includes('/node_modules/scheduler/')
+					) {
+						return 'vendor-react'
+					}
+				},
+			},
+		},
 	},
 	clearScreen: false,
 	define: {
@@ -63,8 +97,8 @@ export default defineConfig({
 			// TODO(pwa): Add more manifest definitions for better overall experience
 			manifest: {
 				id: 'stump',
-				name: 'Stump PWA',
-				short_name: 'Stump',
+				name: 'Coppice PWA',
+				short_name: 'Coppice',
 				theme_color: '#161719',
 				icons: [
 					{

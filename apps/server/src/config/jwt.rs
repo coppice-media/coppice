@@ -20,6 +20,7 @@ static ACCESS_TOKEN_SECRET: OnceLock<String> = OnceLock::new();
 /// for the value and cache it for consecutive calls
 static REFRESH_TOKEN_SECRET: OnceLock<String> = OnceLock::new();
 
+#[cfg(any(feature = "abs", feature = "kavita"))]
 /// The access-token secret, shared with the Kavita profile's JWT minting.
 pub(crate) async fn access_token_secret(conn: &DatabaseConnection) -> APIResult<String> {
 	get_access_token_secret(conn).await

@@ -1,293 +1,205 @@
 ---
 title: Provider status
-description: Evidence-backed status of Stump's metadata providers, compatibility providers, and sync integrations
+description: Evidence-backed status of Coppice metadata providers, compatibility providers, and sync integrations
 ---
 
-This page is the source map for Stump's compatibility providers. **[observed]** means the
-route, setting, or behavior is present in this worktree. **[inference]** marks a conclusion
-or recommendation drawn from observed source. **[future]** marks a capability that is not
-implemented. In the tables below, `implemented`, `partial`, and `future` describe the
-current implementation status, not a protocol's theoretical capabilities.
+This page is the source map for Coppice providers. The evidence labels are
+literal: **Shipped**, **Contract-tested**, **Device-tested**, **Source-only**,
+**Planned**, and **Blocked**. A source inspection or server replay never becomes
+app/device proof; [Client verification](/docs/developer/client-verification)
+records that boundary. Integration ownership is summarized in [Integration
+architecture](/docs/developer/integration-architecture).
 
 ## Metadata providers
 
-Remote clients live in `crates/integrations/metadata/src/{providers/*,mangaupdates.rs}` and
-implement `metadata_integrations::MetadataProvider` (`search_media`/`search_series`,
-`fetch_*`, `verify_credentials`). The ingest layer wraps them in `IntegrationProvider`
-(`core/src/ingest/providers/facade.rs:40-224`) and lists them in `INTEGRATIONS`
-(`core/src/ingest/providers/registry.rs:68-140`). Two providers are native to the ingest
-contract: `builtin:embedded` and `llm`. The Komf reference is master `428dac6`
-(`komf-core/src/commonMain/kotlin/snd/komf/providers/`), cited only where the Rust module
-header names it.
+Remote clients live in `crates/integrations/metadata/src/{providers/*,mangaupdates.rs}`
+and implement `metadata_integrations::MetadataProvider`
+(`search_media`/`search_series`, `fetch_*`, `verify_credentials`). The ingest
+layer wraps them in `IntegrationProvider`
+(`crates/ingest/src/providers/facade.rs:40-224`) and lists them in `INTEGRATIONS`
+(`crates/ingest/src/providers/registry.rs:68-140`). Two providers are native to
+the ingest contract: `builtin:embedded` and `llm`.
 
-| id | Domain (media types) | Free | Key type, where to get it | Client rate limit | Capabilities | Enabled by default | Media fields filled by the client mapper | Komf reference | Tests |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `builtin:embedded` | all kinds incl. `Unknown` (`builtin_embedded.rs:31-40`) | yes | none; `requires_api_token: true` in the descriptor but `configured: true` unconditionally (`registry.rs:181-201`) | none (no network) | Identify, Lookup (`builtin_embedded.rs:42-46`) | `true` (`registry.rs:198`) | embedded metadata (confidence 1.0) plus filename parse (`builtin_embedded.rs:127-310`) | — | 3 (`builtin_embedded.rs`) |
-| `comic_vine` | comics: `Comic` → CBZ/CBR (`registry.rs:57,207-212`) | no | API key in `metadata_provider_configs`; `https://comicvine.gamespot.com/api/` (`crates/graphql/src/object/ingest.rs:671,678`) | 1 req/s (`comic_vine/client.rs:27-30`); official 200/h | Identify, Lookup, Search (`registry.rs:227-231`) | `false` (`registry.rs:75`) | title, summary, number, series_name/id, year/month/day, writers, artists, colorists, letterers, cover_artists, cover_url, provider_url (`comic_vine/client.rs:450-473`) | — (Stump-native) | 4 (`comic_vine/client.rs`) |
-| `hardcover` | books: `Book` → EPUB/PDF (`registry.rs:58,213-219`) | no | Bearer token; `https://hardcover.app/account/api` (`ingest.rs:672,679`) | 5 req/s (`hardcover.rs:17`) | Identify, Lookup, Search | `false` (`registry.rs:83`) | title, summary, number, series_name/id, year/month/day, page_count, isbn, isbn_13, writers, genres, tags, cover_url, provider_url (`hardcover.rs:438-460`) | — (Stump-native) | 5 (`hardcover.rs`) |
-| `anilist` | manga: `Manga`, `LightNovel` (`registry.rs:59`) | yes | none (`requires_api_token: false`, `registry.rs:90`) | 2 req/s (`anilist.rs:29-31`); official 30/min | Identify, Lookup, Search | `true` (`registry.rs:91`) | title (english→romaji→native), summary (HTML-stripped), page_count (=chapters), series_name/id, year/month/day, genres, tags (rank ≥ 60, max 15), writers, artists, cover_url, provider_url (`anilist.rs:660-694`) | `providers/anilist/` at `428dac6` (`anilist.rs:3-8`) | 12 (`anilist.rs`) |
-| `mal` | manga: `Manga`, `LightNovel`, `Webtoon` (`registry.rs:60-61`) | no | `X-MAL-CLIENT-ID` stored as the encrypted token (`mal.rs:9-11`); `https://myanimelist.net/apiconfig` (`ingest.rs:673,680`) | 1 req/s (`mal.rs:27-30`) | Identify, Lookup, Search | `false` (`registry.rs:99`) | title, summary, series_name/id, year/month/day, genres, writers, artists, cover_url, provider_url (`mal.rs:569-599`) | `providers/mal/` (`mal.rs:3-4`; pin not stated in source) | 9 (`mal.rs`) |
-| `mangadex` | manga: `Manga`, `Manhwa` (`registry.rs:62`) | yes | none (`registry.rs:106`) | 4 req/s (`mangadex.rs:30-31`); official 5/s | Identify, Lookup, Search | `true` (`registry.rs:107`) | title (`en`→`ja-ro`→first), summary, series_name/id, year, genres (`genre` group), tags (`theme` group + demographic), writers, artists, cover_url, provider_url (`mangadex.rs:403-431`) | `MangaDexMetadataMapper` (`mangadex.rs:7-10`; pin not stated in source) | 8 (`mangadex.rs`) |
-| `mangaupdates` | manga: `Manga`, `Manhwa`, `Webtoon` (`registry.rs:63-64`) | yes | none (`registry.rs:114`) | 2 req/s (`mangaupdates.rs:32-34`) | Identify, Lookup, Search | `true` (`registry.rs:115`) | title (`(Novel)` suffix stripped), summary, year, number (=latest_chapter), writers, artists, genres, tags (top 15 by category votes), cover_url, provider_url (`mangaupdates.rs:691-715`) | `providers/mangaupdates/` at `428dac6` (`mangaupdates.rs:3-7`) | 12 (`mangaupdates.rs`) |
-| `openlibrary` | books: `Book` → EPUB/PDF (`registry.rs:65,213-219`) | yes | none (`registry.rs:122-123`) | 1 req/s (`openlibrary.rs:37`) | Identify, Lookup, Search; ISBN-first (`openlibrary.rs:329-360`) | `true` (`registry.rs:123`) | title, summary, page_count, series_name (edition `series` list), year/month/day, tags (subjects, top 10), isbn/isbn_13, writers, cover_url, provider_url (`openlibrary.rs:431-481,207-304`); no series entity (`OperationNotSupported`, `openlibrary.rs:321-327`) | — (Stump-native) | 9 (`openlibrary.rs`) |
-| `audible` | audiobooks: `Book` → EPUB/PDF (`registry.rs`, `AUDIBLE_MEDIA_TYPES`) | yes | none (keyless: Audnexus + the unauthenticated Audible catalogue) | 60 req/min shared by both halves (Audnexus publishes 100/min) | Identify, Lookup, Search; ASIN-first (`provider_hints["audible_asin"]`, else an ASIN-shaped title), else `GET api.audible.com/1.0/catalog/products?title=…` | `true` | title, subtitle, summary, authors (`writers`), **narrators**, series_name + number, publisher, year/month/day, genres, cover_url, runtime_minutes, ASIN as `external_id` (`audible.rs`); no series entity (`OperationNotSupported`) | — (Stump-native) | 10 offline + 2 `#[ignore]` live (`audible.rs`) |
-| `googlebooks` | books: `Book` → EPUB/PDF (`registry.rs:66,213-219`) | yes | none; an optional API key (stored as the encrypted token) only raises the per-project quota (`googlebooks.rs:54-62`); key page `https://console.cloud.google.com/apis/credentials` (`ingest.rs:676,682`) | 1 req/s (`googlebooks.rs:32-34`) | Identify, Lookup, Search; ISBN-first (`googlebooks.rs:177-191`) | `true` (`registry.rs:131`) | title, summary, page_count, year/month/day, genres (categories), isbn/isbn_13, writers (authors), cover_url (https thumbnail, curl overlay stripped), provider_url (`googlebooks.rs:247-278`); no series entity (`OperationNotSupported`, `googlebooks.rs:162-168`) | — (Stump-native) | 8 (`googlebooks.rs`) |
-| `metron` | comics: `Comic` → CBZ/CBR (`registry.rs:67,207-212`) | no | Basic auth `username:password` stored as the encrypted token (a pre-encoded Basic token is passed through); signup `https://metron.cloud/accounts/signup/` (`ingest.rs:675,681`) | 30 req/min (`metron.rs:38-39`); official ~30/min | Identify, Lookup, Search | `false` (`registry.rs:138-139`) | title (story title→collection title), summary, number, series_name/id, year/month/day (cover date), page_count (`page`), isbn, genres (series genres), tags (story arcs), writers/artists/colorists/letterers/cover_artists (credits by role), cover_url, provider_url (`metron.rs:326-405,188-223`); series mapper fills `status` (Metron status string), `publisher`, `alternative_titles`, `volume_count` (`metron.rs:326-344`) | — (Stump-native) | 12 (`metron.rs`) |
-| `llm` | all kinds incl. `Unknown` (`llm.rs:609-618`) | depends on endpoint | `api_key` secret setting (may be empty for local servers), `help_url` `https://platform.openai.com/api-keys` (`llm.rs:145-154`) | none client-side; HTTP 429 maps to `RateLimited` (`llm.rs:455-457`) | Identify, Lookup, Search (`llm.rs:620-627`); `search` always returns zero hits (`llm.rs:711-720`) | `false` (`registry.rs:264`; `available` only once a settings row exists, `registry.rs:243-252`) | title, series, number, authors, summary, year, tags at confidence 0.6 (`llm.rs:46-49,491-537`) | — | 10 (`llm.rs`) |
+| id | Domain | Key / configuration | Capabilities | Default | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| `builtin:embedded` | all media kinds, including `Unknown` | none; configured unconditionally | Identify, Lookup | yes | **Shipped**, **Contract-tested** (`builtin_embedded.rs`) |
+| `comic_vine` | comics (`Comic` → CBZ/CBR) | API key in `metadata_provider_configs`; [ComicVine API](https://comicvine.gamespot.com/api/) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline |
+| `hardcover` | books (`Book` → EPUB/PDF) | Bearer token; [Hardcover API account](https://hardcover.app/account/api) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline; live credential **Blocked** |
+| `anilist` | manga (`Manga`, `LightNovel`) | no token | Identify, Lookup, Search | yes | **Shipped**, **Contract-tested** offline |
+| `mal` | manga (`Manga`, `LightNovel`, `Webtoon`) | `X-MAL-CLIENT-ID` encrypted token; [MAL API config](https://myanimelist.net/apiconfig) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline |
+| `mangadex` | manga (`Manga`, `Manhwa`) | no token | Identify, Lookup, Search | yes | **Shipped**, **Contract-tested** offline |
+| `mangaupdates` | manga (`Manga`, `Manhwa`, `Webtoon`) | no token | Identify, Lookup, Search | yes | **Shipped**, **Contract-tested** offline |
+| `openlibrary` | books (`Book` → EPUB/PDF) | no token | Identify, Lookup, Search; ISBN-first | yes | **Shipped**, **Contract-tested** offline |
+| `googlebooks` | books (`Book` → EPUB/PDF) | optional API key raises project quota; [Google credentials](https://console.cloud.google.com/apis/credentials) | Identify, Lookup, Search; ISBN-first | yes | **Shipped**, **Contract-tested** offline; live key **Blocked** |
+| `metron` | comics (`Comic` → CBZ/CBR) | Basic credentials as encrypted token; [Metron signup](https://metron.cloud/accounts/signup/) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline; live key **Blocked** |
+| `audible` | audiobooks | keyless Audnexus + Audible catalogue | Identify, Lookup, Search; ASIN-first | yes | **Shipped**, **Contract-tested** offline; live request **Blocked** |
+| `llm` | all media kinds, including `Unknown` | `api_key` secret setting; local endpoint may be keyless | Identify, Lookup; Search returns zero hits | no | **Shipped**, **Contract-tested** offline |
 
-**[observed]** Integration providers also carry a series mapper (`fetch_series_metadata`) that adds `alternative_titles`, `status`, `publisher` (ComicVine, MAL, MangaUpdates, Metron), `volume_count`, and `age_rating` slots; ComicVine issues, Metron issues, and Hardcover books are per-volume records, Open Library, Google Books and Audible have no series entity (`OperationNotSupported` on the series half), and the four manga providers project a series onto the media shape. Test counts are `#[test]`/`#[tokio::test]` occurrences per file; none exercise the live APIs.
+Provider mappers fill candidate fields; they do not make a catalog/source
+provider or fulfillment connector. Series mapping adds fields such as
+`alternative_titles`, `status`, `publisher`, `volume_count`, and `age_rating`
+where that provider exposes them. The offline test records are not live-vendor
+verification.
 
-### How the trait works
+### Hardcover boundary
 
-- **Contract.** `IngestMetadataProvider` (`core/src/ingest/contract.rs:334-365`): `id`, `name`, `version`, `supported_media_kinds`, `capabilities`, `settings`, `identify(book, settings) -> Vec<ProviderIdentity>`, `lookup(book, identity, settings) -> Vec<MetadataCandidate>`, and a default `search` that returns `ProviderError::Unsupported`. Capabilities are `Identify`, `Lookup`, `Search`, `Tags`, `AiEnrichment` (`contract.rs:305-314`); no built-in provider advertises `Tags` or `AiEnrichment`.
-- **Settings schema.** `SettingDefinition { key, label, description, kind, default, required, secret, help_url }` (`contract.rs:196-211`); `help_url` reaches the editor as `helpUrl` (`crates/graphql/src/object/ingest.rs:799-811`). Integration adapters deliberately return no settings (`facade.rs:96-101`); only `llm` (`llm.rs:113-166`) and the quality checks define any.
-- **Two credential stores.** Token-bearing integrations use the existing `metadata_provider_configs` row (`encrypted_api_token`, `enabled`, auto-apply policy); the registry decrypts through `ProviderClientCache` with the server encryption key (`registry.rs:641-667`). Provider-level `helpUrl` for that store is a hard-coded map in `crates/graphql/src/object/ingest.rs:671-686`. Native providers (`llm`) persist `ingest_plugin_settings` rows via `setIngestProviderSettings` (`crates/graphql/src/mutation/ingest.rs:80-119`); secret values are redacted on read (`object/ingest.rs:822-843`). **[observed]** That write path stores `values` as plain JSON; the encryption promised by the `secret` doc comment (`contract.rs:205`) is not visible in `save_plugin_settings`.
-- **Keyless providers.** `requires_api_token: false` (`registry.rs:51-55`) means a config row with `enabled = true` counts as configured (`registry.rs:169-180`) and scheduling skips the missing-token check (`registry.rs:361-367`). The editor's API-keys page lists them in a collapsed "no key" card (`editor/src/routes/(app)/settings/keys/+page.svelte:271-276,393-436`).
-- **Discovery.** `ProviderRegistry::catalog` (`registry.rs:166-285`) emits embedded, `INTEGRATIONS`, `llm`, then an `available: false` descriptor for any persisted `PROVIDER` plugin id it does not know, sorted by id. **[observed]** `unknown_plugin_ids` treats only embedded and `INTEGRATIONS` ids as known (`registry.rs:594-618`), so an `llm` settings row also produces a second, unavailable `llm` descriptor; the registry test uses empty rows and does not cover this (`registry.rs:742-811`).
+Hardcover metadata lookup and field mapping are **Shipped** and
+**Contract-tested** against offline payloads. Live credential verification and
+the owner-scoped Connections flow are implemented but remain **Blocked** until
+an operator supplies a PAT; no external-network smoke is run without one.
+Manual journal import is read-only and preserves unresolved provenance when no
+exact media link/page locator exists. Progress projection is opt-in and
+non-regressing. Remote quote writes are not shipped.
+
+### How the ingest trait works
+
+- **Contract:** `IngestMetadataProvider`
+  (`crates/ingest/src/contract.rs:334-365`) exposes `id`, `name`, `version`,
+  `supported_media_kinds`, `capabilities`, `settings`, `identify(book,
+  settings) -> Vec<ProviderIdentity>`, `lookup(book, identity, settings) ->
+  Vec<MetadataCandidate>`, and a default `search` returning
+  `ProviderError::Unsupported`. Capabilities are `Identify`, `Lookup`,
+  `Search`, `Tags`, and `AiEnrichment` (`contract.rs:305-314`); no built-in
+  provider advertises `Tags` or `AiEnrichment`.
+- **Settings schema:** `SettingDefinition { key, label, description, kind,
+  default, required, secret, help_url }` (`contract.rs:196-211`) reaches the
+  editor as `helpUrl` (`crates/graphql/src/object/ingest.rs:799-811`).
+  Integration adapters return no settings; `llm` and quality checks define
+  their own settings.
+- **Credential stores:** token-bearing integrations use
+  `metadata_provider_configs` (`encrypted_api_token`, `enabled`, auto-apply
+  policy); the registry decrypts through `ProviderClientCache` with the server
+  encryption key (`crates/ingest/src/providers/registry.rs:641-667`). Native
+  providers such as `llm` use `ingest_plugin_settings` via
+  `setIngestProviderSettings`; secret values are redacted on read.
+- **Keyless providers:** `requires_api_token: false`
+  (`crates/ingest/src/providers/registry.rs:51-55`) means an enabled config row
+  counts as configured and scheduling skips the missing-token check. The editor
+  lists them in a collapsed “no key” card.
+- **Discovery:** `ProviderRegistry::catalog`
+  (`crates/ingest/src/providers/registry.rs:166-285`) emits embedded,
+  `INTEGRATIONS`, `llm`, and an unavailable descriptor for an unknown persisted
+  `PROVIDER` plugin id, sorted by id.
 
 ### Facade fan-out and scoring
 
-`identify_and_lookup_selected` (`registry.rs:303-404`) runs embedded first, then every `INTEGRATIONS` entry that supports the snapshot kind (`registry.rs:685-698`), is in the optional allowlist, has an enabled config row, and has a token when required. Per provider: `identify` composes one `SearchQuery` from embedded title/writer/ISBN/year/number with the filename parse as fallback (`facade.rs:241-268`), calls `search_media` **and** `search_series`, tags each hit with `result_kind`, and sorts by confidence desc, external id, display (`facade.rs:103-150`). `best_identity` keeps only confidence `> 0.5` and takes the first (`registry.rs:670-683`); `lookup` fetches the media or series detail and normalizes it through `normalize_metadata` (`facade.rs:152-201,371-401`). Failures are logged and isolated per provider. **[observed]** `llm` is catalogued and verifiable (`registry.rs:534-536`) but is not part of this loop or of `search` (`registry.rs:409-470`); the LLM module itself documents the missing `rank_candidates` hook (`llm.rs:16-20`).
+`identify_and_lookup_selected`
+(`crates/ingest/src/providers/registry.rs:303-404`) runs embedded first, then
+every selected integration that supports the snapshot kind, has an enabled
+config row, and has a token when required. Each provider composes a
+`SearchQuery` from embedded title/writer/ISBN/year/number, calls media and
+series search, tags each hit with `result_kind`, and sorts by confidence,
+external id, and display. `best_identity` keeps confidence `> 0.5`; lookup
+normalizes detail through `normalize_metadata`.
 
-Confidence comes from the wrapped client's `MatchScorer` (`crates/integrations/metadata/src/scoring.rs:8-35`: ISBN ≥ 0.98, exact title ≥ 0.90, alt title ≥ 0.80, fuzzy 0–0.75, author +0.05). Every field in a candidate inherits the candidate confidence (`facade.rs:387-390`). Free-text search fans out concurrently with `join_all`, requires the `Search` capability, and orders hits score desc, provider id, external id (`facade.rs:319-369`); unscored hits fall back to `title_similarity` (`facade.rs:292-317`; `scoring.rs:98-103`).
+`crates/integrations/metadata/src/scoring.rs` defines the common scorer (ISBN
+≥ 0.98, exact title ≥ 0.90, alternate title ≥ 0.80, fuzzy 0–0.75, author +0.05).
+Every candidate field inherits candidate confidence. Free-text search fans out
+concurrently, requires `Search`, and orders hits by score, provider id, and
+external id.
 
-The mapper (`facade.rs:403-482`) produces `MetadataField` values: Title, Summary, Series, SeriesIndex, Authors (from `writers` only), Genres, Tags, Isbn (`isbn` else `isbn_13`), PublishedDate (`YYYY[-MM[-DD]]`), PageCount, CoverUrl, Identifiers (`{provider, externalId, url}`); series candidates add AgeRating when numeric. **[observed]** `Publisher`, `Language`, `SortTitle`, and the artist/colorist/letterer credits are never emitted by this mapper even when the client fills them.
+### Apply path and policy
 
-### Apply path
+Candidates are persisted per drop item or media row
+(`crates/ingest/src/store.rs:812-905`) by the coordinator's Identify/Lookup
+phases (`crates/ingest/src/coordinator.rs:342-359,433-447`). A user recipe of
+`FieldPick`s (`crates/ingest/src/providers/contract.rs:367-396`) is validated,
+resolved against the same drop item and source digest, the locked-field list,
+and the existing `MergeStrategy`, then written with an audit row in one
+transaction. Only `STORABLE_FIELDS` reach `media_metadata`/tags; `CoverUrl` and
+`Identifiers` remain candidate-only (`crates/ingest/src/providers/apply.rs:28-46`).
 
-Candidates are persisted per drop item or per media row (`core/src/ingest/store.rs:812-905`) by the coordinator's Identify/Lookup phases (`core/src/ingest/coordinator.rs:342-359,433-447`). A user recipe of `FieldPick`s (`contract.rs:367-396`) is validated (`core/src/ingest/providers/apply.rs:71-110`), resolved against the candidate rows with the same drop item and source digest, the locked-field list, and the existing `MergeStrategy` (`apply.rs:144-221`; strategies in `crates/integrations/metadata/src/merge/config.rs:11-21`), then written with an audit row in one transaction (`apply.rs:420-509`). Only `STORABLE_FIELDS` reach `media_metadata`/tags; `CoverUrl` and `Identifiers` stay candidate-only (`apply.rs:28-46`). `approve` merges pending picks and commits together with the source move (`store.rs:566-603`).
+#### What the policy layer covers
 
-### What the policy layer covers
+The per-field policy is **Shipped** in `crates/ingest/src/policy.rs`: each field
+has an ordered provider list, a strategy (`FIRST`, `MERGE_UNION`, `LONGEST`,
+`PREFER_EXISTING`, `HIGHEST_RESOLUTION`), and `lock_respected`, with a server
+default and a per-library override in `library_configs.metadata_policy`.
+Design and mapping: [Modular ingest — Policy](/docs/developer/modular-ingest#policy).
 
-**[observed]** The per-field metadata policy is implemented in
-`crates/ingest/src/policy.rs`: per field an ordered provider list, a merge
-strategy (`FIRST`/`MERGE_UNION`/`LONGEST`/`PREFER_EXISTING`/`HIGHEST_RESOLUTION`),
-and `lock_respected`, with the server default in code and a per-library
-override in `library_configs.metadata_policy`. Design and Komf mapping: [modular
-ingest — Policy](/docs/developer/modular-ingest#policy). Komf's remaining
-*post-processing* (title language selection, book ordering, score tags,
-publisher tag names) is still unimplemented; roadmap owner: [Future —
-engineering carried forward](/docs/developer/roadmap#engineering-carried-forward).
-
-| Komf policy item | Status | Evidence |
+| Policy item | Evidence | Notes |
 | --- | --- | --- |
-| Field/provider priority (which provider wins per field) | **[observed]** | `FieldPolicy { providers, strategy, lock_respected }` per field; offers are collected in list order, then by candidate confidence (`policy.rs`, test `priority_order_decides_the_winner`). |
-| Merge tags/genres across providers | **[observed]** | `MERGE_UNION` unions the stored value and every allowed provider case-insensitively, first spelling kept; the default for `TAGS`/`GENRES` (test `union_dedupes_case_insensitively_and_keeps_stored_values`). |
-| Title language preference | **[future]** | Fixed per client: AniList english→romaji→native (`anilist.rs:3-8`), MangaDex `en`→`ja-ro` (`mangadex.rs:272-293`); no user setting. |
-| Cover pick / thumbnail replacement | partial | `HIGHEST_RESOLUTION` ranks candidates by advertised width and is the `COVER` default, but `CoverUrl` is still outside `STORABLE_FIELDS`, so the decision comes back with `applied: false` and nothing is written (`policy.rs`, `providers/apply.rs`). |
-| Per-library provider rules | **[observed]** | `library_configs.metadata_policy` overrides the server default per field; `metadataPolicy`/`setMetadataPolicy` read and write it, and the editor's Policy tab edits it (test `per_library_override_beats_the_server_default`). |
-| Auto-match | **[observed]** | `approveIngestItem` stages the policy plan as pending fields before committing, and `applyBestIngestMetadata` runs the same resolver on demand; the legacy `AutoApplyConfig` (`merge/config.rs:39-48`) still governs the pre-ingest fetch path only. |
+| Field/provider priority | **Contract-tested** | `FieldPolicy { providers, strategy, lock_respected }`; offers are collected in list order, then by confidence (`priority_order_decides_the_winner`) |
+| Merge tags/genres | **Contract-tested** | `MERGE_UNION` unions stored and provider values case-insensitively, keeping first spelling (`union_dedupes_case_insensitively_and_keeps_stored_values`) |
+| Title language preference | **Planned** | Current choices are fixed per client (AniList English → Romaji → native; MangaDex `en` → `ja-ro`); no user setting |
+| Cover pick / thumbnail replacement | **Shipped**, **Planned** | `HIGHEST_RESOLUTION` ranks candidates and is the `COVER` default, but `CoverUrl` is outside `STORABLE_FIELDS`, so the decision returns `applied: false`; writing the chosen cover is **Planned** |
+| Per-library provider rules | **Contract-tested** | `library_configs.metadata_policy` overrides server defaults; `metadataPolicy`/`setMetadataPolicy` and the editor Policy tab read/write it |
+| Auto-match | **Contract-tested** | `approveIngestItem` stages the policy plan as pending fields; `applyBestIngestMetadata` runs the same resolver on demand |
 
-### Remaining planned providers
+### Remaining metadata providers
 
-**[observed]** The three book/comics providers from this plan are implemented and catalogued above (`metron`, `openlibrary`, `googlebooks`, `audible`); `MetadataProvider` (`crates/models/src/shared/enums.rs`, matched in `registry.rs:700-709`) has exactly ten variants (`audible` added in batch 9). Still planned:
+MangaBaka and BookWalker DB (manga) are **Planned**; port them with the same
+module-header pin used for AniList/MangaUpdates. They remain metadata providers,
+not remote catalog fulfillment.
 
-- MangaBaka and BookWalker DB (manga) — Komf ships both; port with the same module-header pin as AniList/MangaUpdates.
+## Catalog/source providers are separate
+
+Catalog/source providers own popular/latest/search/details/chapters/pages and
+materialized or virtual remote content. They are not this metadata registry.
+The current host and source definitions live in `crates/provider`,
+`crates/provider-mangadex`, and `crates/provider-themes`; their source contract
+is documented in [Provider host](/docs/developer/provider-host) and [Source
+definitions](/docs/developer/source-definitions). Storyteller is not a catalog or
+metadata provider. Shelfmark is a future external fulfillment connector, not a
+provider in this registry. See [Integration architecture](/docs/developer/integration-architecture).
 
 ## Common feature gates and settings
 
-**[observed]** `apps/server/Cargo.toml` makes `headless` include `opds`, `kobo`, `koreader`,
-`komga`, and `liseur-sync`; `kobo` also enables `stump_kepub`. Runtime mounting differs by
-provider: KOReader, Kobo, and Komga check their runtime settings; liseur-sync and OPDS are
-merged whenever their Cargo features are compiled. Evidence: `apps/server/Cargo.toml:7-24`;
-`apps/server/src/routers/mod.rs:34-85`.
+`apps/server/Cargo.toml` makes `headless` include `opds`, `kobo`, `koreader`,
+`komga`, and `liseur-sync`; `kobo` also enables `stump_kepub`. Runtime mounting
+differs by provider: KOReader, Kobo, Komga, Kavita, and ABS check runtime
+settings; liseur-sync and OPDS mount whenever their Cargo features are compiled.
+The setting names intentionally are not uniform: `ENABLE_KOBO_SYNC`,
+`ENABLE_KOREADER_SYNC`, and `ENABLE_OPDS_PROGRESSION` have no `STUMP_` prefix,
+while `STUMP_ENABLE_KOMGA`, `STUMP_ENABLE_KAVITA`, and `STUMP_ENABLE_ABS` do.
 
-The setting names are intentionally not uniform: **`ENABLE_KOBO_SYNC`**,
-**`ENABLE_KOREADER_SYNC`**, and **`ENABLE_OPDS_PROGRESSION`** carry no `STUMP_` prefix,
-while **`STUMP_ENABLE_KOMGA`** does. **[observed]** These keys are declared in
-`core/src/config/env_keys.rs`.
-
-| Provider or setting | Cargo feature | Env key | TOML key | Default | Effect | Evidence |
-| --- | --- | --- | --- | --- | --- | --- |
-| Komga | `komga` | `STUMP_ENABLE_KOMGA` | `enable_komga` | `false` in release; `true` under `debug_value` | Mounts the root Komga profile and `/komga` Grimmory alias. If the binary lacks the feature, the setting only produces a warning. | `core/src/config/protocols.rs`; `apps/server/src/routers/mod.rs:34-85` |
-| OPDS routes | `opds` | — | — | Compile-time only | Mounts `/opds/v1.2` and `/opds/v2.0`; there is no OPDS route-enable setting. | `apps/server/Cargo.toml:7-24`; `apps/server/src/routers/mod.rs:34-85` |
-| OPDS page side effect | `opds` | `ENABLE_OPDS_PROGRESSION` | `enable_opds_progression` | `false` | Only v1.2 page GETs upsert reading progression when true; v2 progression PUT is explicit and is not disabled by this key. | `core/src/config/env_keys.rs`; `apps/server/src/routers/opds_backend/v1_2.rs:795-833` |
-| Kobo routes | `kobo` | `ENABLE_KOBO_SYNC` | `enable_kobo_sync` | `false` in release; `true` under `debug_value` | Mounts the API-key Kobo route tree. | `core/src/config/protocols.rs`; `apps/server/src/routers/mod.rs:34-85` |
-| Kobo KEPUB conversion | `kobo` + `stump_kepub` | `KOBO_KEPUB_CONVERSION` | `kobo_kepub_conversion` | `false` | Lazily converts EPUB downloads at the existing Kobo `file/epub` URL. Non-EPUB media is served unchanged. | `core/src/config/protocols.rs`; `apps/server/src/routers/kobo_backend/kepub.rs:18-104,126-157` |
-| KOReader routes | `koreader` | `ENABLE_KOREADER_SYNC` | `enable_koreader_sync` | `false` in release; `true` under `debug_value` | Mounts `/koreader/{api_key}`. | `core/src/config/protocols.rs`; `apps/server/src/routers/mod.rs:34-85` |
-| KOReader library hashing | — | — | — | `false` | A per-library database/GraphQL setting, not a `StumpConfig` env/TOML key: `LibraryConfig.generateKoreaderHashes` / `generate_koreader_hashes`. It must be enabled before a scan or reprocessing pass can populate `media.koreader_hash`. | `crates/models/src/entity/library_config.rs:31-37,112-119`; `crates/graphql/schema.graphql:1081-1100` |
-| liseur-sync | `liseur-sync` | — | — | Compile-time only | Mounts the native `/v1/...` protocol; there is no runtime config gate. | `apps/server/Cargo.toml:7-24`; `apps/server/src/routers/mod.rs:34-85` |
-
-`SESSION_TTL` is not a provider gate. **[observed]** Komga `GET /api/v1/settings` reports it
-as `rememberMeDurationDays`; the Komga settings PATCH is owner-only, accepted, logged, and
-not persisted: `apps/server/src/routers/komga/settings.rs:46-100,307-328,412-423`.
-
-## Komga (`crates/komga` and `apps/server/src/routers/komga_backend*.rs`)
-
-| Feature | Status | Evidence | Notes |
-| --- | --- | --- | --- |
-| Current Komelia/Grimmory route profile | implemented | `crates/komga/src/routes/mod.rs:170-190`; `apps/server/src/routers/komga/mod.rs:14-69` | **[observed]** Catalog, lists, library actions, book/series metadata, media, progress, Readium, and SSE route trees are composed. The server mounts the normal profile at root and a Grimmory-compatible alias under `/komga`. |
-| Catalog, search, libraries, books, series, read lists, collections | implemented | `crates/komga/src/routes/catalog.rs:38-74`; `crates/komga/src/routes/lists.rs:46-84` | **[observed]** Collection GET/PATCH is present; read-list endpoints in this profile are read-only. |
-| Page, thumbnail, and file delivery; library scan/analyze | implemented | `crates/komga/src/routes/media.rs:56-96`; `apps/server/src/routers/komga_backend.rs:154-185` | **[observed]** File download is guarded by `DownloadFile`; scan, analyze, and trash actions require `ManageLibrary` and enqueue Stump jobs. |
-| Readium manifest, positions, resources, progression | implemented | `crates/komga/src/routes/readium.rs:30-48`; `apps/server/src/routers/komga_backend.rs:340-380` | **[observed]** EPUB-only Readium routes use visible-media checks and extensionless plus `.json` manifest/positions aliases. |
-| Book and series progress writes | implemented | `crates/komga/src/routes/progress.rs:15-23,70-110`; `crates/komga/src/routes/series.rs:38-43` | **[observed]** Komga book page numbers are normalized as zero-based; progress writes emit user-scoped mutation events. |
-| Metadata writes | implemented | `crates/komga/src/routes/book.rs:35-45`; `crates/komga/src/routes/series.rs:69-222,322-424` | **[observed]** Supported fields include series `titleSort`, `readingDirection`, `language`, and `alternateTitles`, each with persisted set/clear/lock behavior; only sharing labels remain unsupported and are rejected rather than dropped. Writes require `ManageLibrary`. |
-| Identity, users, announcements, and settings | partial | `apps/server/src/routers/komga/settings.rs:46-100,307-328,412-423`; existing `developer/komga-compat.mdx` | **[observed]** The observed client profile is implemented, but settings expose neutral values for unsupported Stump concepts, settings PATCH is not persisted, and unsupported user roles, labels, and shared-library updates are rejected. |
-| SSE | partial | `crates/komga/src/routes/sse.rs:20-100`; `apps/server/src/routers/komga_backend.rs:50-75` | **[observed]** The route is real and visibility-filtered, but the adapter forwards only `CreatedMedia` from core events. Komga route mutations emit the truthful Stump subset; unsupported event types are ignored. |
-| Full Komga API parity | future | `crates/komga/src/routes/mod.rs:185-190`; existing `developer/komga-compat.mdx:1-38,371-378` | **[future]** Missing pieces include endpoint families outside the Komelia profile, unsupported search operators and fields, persisted Komga settings, sidecar or user-uploaded series artwork CRUD, and richer event parity. The wildcard under `/api/v1/{*path}` logs and returns 404; it is not a compatibility implementation. |
-
-### What a Komga user must configure
-
-- **[inference]** Compile with `--features komga` (or `headless`/`full`): `apps/server/Cargo.toml:7-24`.
-- Set `STUMP_ENABLE_KOMGA=true` or `enable_komga=true`: `core/src/config/protocols.rs`.
-- Use Basic, Bearer, or session authentication, including the documented Komga-scoped API-key behavior: `apps/server/src/routers/komga/settings.rs:46-100,307-328,412-423`; existing `developer/komga-compat.mdx`.
-- Grant `ManageLibrary` for metadata and jobs, and `DownloadFile` for full files: `apps/server/src/routers/komga_backend.rs:154-185`.
-- **[inference]** Consult `developer/komga-compat.mdx` for the already-documented route, DTO, and authentication profile rather than treating this status page as a second protocol specification.
-
-## OPDS 1.2 and 2.0 (`crates/opds`, `apps/server/src/routers/opds_backend*.rs`)
-
-| Feature | Status | Evidence | Notes |
-| --- | --- | --- | --- |
-| OPDS 1.2 catalog, navigation, and search | implemented | `crates/opds/src/lib.rs:245-276`; `apps/server/src/routers/opds_backend/v1_2.rs:106-367,376-524,528-765` | **[observed]** XML catalog, OpenSearch description/search feed, keep-reading, libraries, series, books, latest feeds, thumbnails, and pages are wired. |
-| OPDS 1.2 acquisition and page streaming | implemented | `crates/opds/src/lib.rs:276-286`; `apps/server/src/routers/opds_backend/v1_2.rs:795-854` | **[observed]** Page links use OPDS/PSE-style page access; full-file acquisition delegates to the common `DownloadFile`-guarded media service. |
-| OPDS 2.0 authentication, catalog, search, browse, and groups | implemented | `crates/opds/src/lib.rs:288-340`; `apps/server/src/routers/opds_backend/v2_0.rs:204-248,247-389,416-545,550-787` | **[observed]** The auth document advertises Basic authentication and handlers build navigation and publication groups. |
-| OPDS 2.0 book pages, acquisition, and progression | implemented | `crates/opds/src/lib.rs:318-340`; `apps/server/src/routers/opds_backend/v2_0.rs:1195-1279,1356-1363`; `apps/server/tests/opds/v2/progression.rs:47-126` | **[observed]** Progression GET/PUT is user-scoped, timestamp-conflict checked, and round-tripped by an integration test. |
-| Authentication variants and mounts | implemented | `apps/server/src/routers/opds_backend.rs:49-76`; `core/src/opds/v2_0/authentication.rs:31-40,73-108` | **[observed]** v1.2 has common auth and an API-key-in-path alias (`/opds/{api_key}/v1.2`). v2.0 has common auth and a public auth document, but no v2 path-key alias. |
-| Spec fidelity: facets and strict mode | partial | `core/src/opds/v2_0/mod.rs:1-21`; `apps/server/src/routers/opds_backend/v1_2.rs:733-736` | **[observed]** Groups are implemented, but the core explicitly has a facet TODO and v1.2 still has a TODO for conditional strict compliance. |
-| EPUB chapter and resource streaming | future | `apps/server/src/routers/opds_backend/v2_0.rs:1200-1227` | **[future]** The v2 page handler is present, while chapter/resource route registrations and handlers remain commented out. |
-| v2 path-key auth parity and complete strict conformance | future | `apps/server/src/routers/opds_backend.rs:49-76`; the facet/strict TODOs above | **[future]** Add only when the contract and client behavior are defined; do not describe the v1 path-key alias as applying to v2. |
-
-### What an OPDS user must configure
-
-- **[inference]** Compile with `--features opds` (or `headless`/`full`): `apps/server/Cargo.toml:7-24`.
-- Use Basic or session authentication for `/opds/v1.2` and `/opds/v2.0`, or the full prefixed API key in the v1.2 path alias: `apps/server/src/routers/opds_backend.rs:49-76`; `core/src/opds/v2_0/authentication.rs:31-40,73-108`.
-- Grant `DownloadFile` for acquisitions: `apps/server/src/utils/serve_media.rs:22-35`.
-- Set `ENABLE_OPDS_PROGRESSION=true` only when v1 page loads should count as progress; clients that preload pages can otherwise create inaccurate progress: `apps/server/src/routers/opds_backend/v1_2.rs:795-833`.
-- No env/TOML key enables the OPDS routes themselves: `apps/server/src/routers/mod.rs:34-85`.
-
-## Kobo (`crates/kobo`, `apps/server/src/routers/kobo_backend*.rs`)
-
-| Feature | Status | Evidence | Notes |
-| --- | --- | --- | --- |
-| API-key initialization and resource rewriting | implemented | `crates/kobo/src/lib.rs:135-174`; `apps/server/src/routers/kobo_backend/router.rs:148-202` | **[observed]** Initialization rewrites Stump-owned resources, templates, and host values. Store-only resources remain official Kobo URLs. |
-| Full and incremental library sync | implemented | `crates/kobo/src/sync.rs:78-120,243-326`; `crates/kobo/src/sync.rs:356-410,475-541,717-790` | **[observed]** Sync tokens, paging, user visibility, changed metadata, new entitlements, state-only deltas, and session pruning are implemented. The sync query deliberately filters to `extension == "epub"`. |
-| ReadingState GET/PUT | implemented | `apps/server/src/routers/kobo_backend/router.rs:396-482`; `core/src/kobo/entity.rs:307-390,497-563` | **[observed]** One `ReadingStates[0]` is parsed, Kobo percentages/status/location are normalized, KoboSpan locations are mapped when explicitly typed, and the complete native JSON request is retained in the user reading session. |
-| Metadata, JPEG thumbnails, and EPUB download | implemented | `apps/server/src/routers/kobo_backend/router.rs:487-575`; `apps/server/src/utils/serve_media.rs:22-51` | **[observed]** Metadata is a Stump projection and can report `KEPUB` when conversion is enabled. Full files require `DownloadFile`; metadata, thumbnail, and state routes use visibility and sync authorization. |
-| Device auth tokens | partial | `apps/server/src/routers/kobo_backend/router.rs:98-109` | **[observed]** `/v1/auth/device` returns fresh dummy UUID access, refresh, and tracking values and echoes `UserKey`; it does not persist or refresh a device credential. |
-| Unrecognized protocol routes | future | `crates/kobo/src/lib.rs:161-174`; `apps/server/src/routers/kobo_backend/router.rs:113-129` | **[future]** The catch-all currently returns HTTP success with `{}`. Real semantics for tags/shelves, archive/delete, user/profile, products/store proxy, device refresh, and other advertised resources are missing. |
-| Format and metadata compatibility | partial | `crates/kobo/src/sync.rs:78-120`; `core/src/kobo/sync_types.rs:24-30,156-227` | **[observed]** Stock sync is EPUB-only and the wire projection is a limited DRM-free local-library shape; it has no Kobo annotation/highlight contract. |
-
-### What a Kobo user must configure
-
-- **[inference]** Compile `kobo`/`headless`/`full`: `apps/server/Cargo.toml:7-24`.
-- Set `ENABLE_KOBO_SYNC=true`: `core/src/config/protocols.rs`.
-- Create a full API key whose effective permissions include `ACCESS_KOBO_SYNC` and `DOWNLOAD_FILE`; the key owner must also be allowed to use API keys: `apps/server/src/routers/kobo_backend/router.rs:98-145`; `apps/server/src/middleware/auth.rs:487-598`.
-- Put the full key in the device `api_endpoint` as `/kobo/<key>`: `crates/kobo/src/lib.rs:135-174`.
-- Expect only visible EPUBs in stock sync: `crates/kobo/src/sync.rs:78-120`.
-- **[inference]** Optionally set `KOBO_KEPUB_CONVERSION=true`, ensure the config cache is writable, and test with EPUB media: `core/src/config/protocols.rs`; `apps/server/src/routers/kobo_backend/kepub.rs:18-104,126-157`.
-
-## KOReader (`crates/koreader`, `apps/server/src/routers/koreader_backend*.rs`)
-
-| Feature | Status | Evidence | Notes |
-| --- | --- | --- | --- |
-| Auth probe and progress GET/PUT | implemented | `crates/koreader/src/lib.rs:14-79`; `apps/server/src/routers/koreader_backend/sync.rs:56-89,93-181,199-281` | **[observed]** The surface is exactly `/koreader/{api_key}/users/auth`, PUT `/syncs/progress`, and GET `/syncs/progress/{document}`; progress, percentage, device, device ID, and raw x-pointer/page strings are handled. |
-| Binary or partial-MD5 document matching | partial | `apps/server/src/routers/koreader_backend/sync.rs:93-181,199-226`; `core/src/filesystem/hash.rs:68-105` | **[observed]** Binary mode works only when a Stump `media.koreader_hash` exists. GET filters sessions by authenticated user plus media KoReader hash; PUT resolves the media row by hash and writes a session for the authenticated user. |
-| Filename document matching | future | `https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/plugins/kosync.koplugin/main.lua#L666-L691`; no filename-MD5 column or lookup exists in Stump | **[observed]** KOReader's filename mode is MD5 of the basename, not the full path. Stump does not compute or index that value. |
-| Hash coverage | partial | `core/src/filesystem/media/format/epub.rs:72-90`; `pdf.rs:56-74`; `zip.rs:60-79`; `rar.rs:126-145` | **[observed]** With the per-library flag on, EPUB and PDF processors call `generate_koreader_hash`; ZIP/CBZ and RAR deliberately return `koreader_hash: None`, with ZIP's generation commented out. |
-| Raw x-pointer preservation and Stump-reader translation | partial | `apps/server/src/routers/koreader_backend/sync.rs:68-89,181-196` | **[observed]** Numeric progress becomes a page; nonnumeric x-pointers are retained verbatim but are not translated to a Stump Readium locator. |
-| Permission boundary | partial | `apps/server/src/routers/koreader_backend.rs:17-23`; `sync.rs:40-53,199-226`; `apps/server/src/middleware/auth.rs:487-598` | **[observed]** API-key middleware validates a full, unexpired key; its owner must be server owner or have `AccessApiKeys`; the route additionally requires `AccessKoreaderSync`. Progress does not require `DownloadFile`. GET is user-scoped. PUT's media lookup uses `media::Entity::find()` rather than `find_for_user`, so the current write path is not visibility-scoped even though the resulting reading session is user-owned. Keep this as an explicit caveat, not full isolation. |
-| Device management and healthcheck | future | `apps/server/src/routers/koreader_backend/sync.rs:30-33`; existing `guides/integrations/koreader.mdx` future list | **[future]** Device IDs and names are recorded, but no device-management UI or x-pointer translation exists; healthcheck/user-password auth is not implemented or required by the current path-key integration. |
-
-### KOReader matching: binary versus filename
-
-At pinned KOReader commit `009367df7ac7142bc0d1eb5782d061260b11baa6`, `main.lua` defines
-`CHECKSUM_METHOD.BINARY = 0` and `FILENAME = 1`, defaults `checksum_method` to
-`CHECKSUM_METHOD.BINARY`, and presents the menu labels “Binary. Only identical files will be
-kept in sync.” and “Filename. Files with matching names will be kept in sync.”:
-
-- Enum and default: `https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/plugins/kosync.koplugin/main.lua#L46-L67`
-- Menu labels: `https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/plugins/kosync.koplugin/main.lua#L421-L440`
-- Digest selection: `https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/plugins/kosync.koplugin/main.lua#L666-L691`
-
-**[observed]** In `getDocumentDigest`, Binary returns
-`self.ui.doc_settings:readSetting("partial_md5_checksum")`; Filename takes the basename from
-the document path and returns `md5(file_name)`. Therefore Binary is the Stump-compatible mode;
-Filename is not supported by Stump. The pinned digest-selection source is
-`https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/plugins/kosync.koplugin/main.lua#L666-L691`.
-
-Stump's `generate_koreader_hash` samples 1 KiB at offset 0 and then offsets
-`1024 << (2*i)` for `i = 0..10`: `core/src/filesystem/hash.rs:68-105`. EPUB and PDF processors
-call it only when `generate_koreader_hashes` is true: `core/src/filesystem/media/format/epub.rs:72-90`;
-`pdf.rs:56-74`. ZIP/CBZ generation is visibly commented out at
-`core/src/filesystem/media/format/zip.rs:60-73` and returns `None`; RAR does the same at
-`rar.rs:126-145`. The library flag defaults false: `crates/models/src/entity/library_config.rs:31-37,112-119`.
-
-**[observed]** Stump has unit vectors matching the KOReader EPUB/PDF fixtures:
-`https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/spec/unit/util_spec.lua#L338-L345`.
-**[inference]** Stump's implementation consumes a fixed zero-filled 1 KiB buffer for a short
-final read, whereas current KOReader hashes only the bytes returned by `file:read(size)`:
-`https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/frontend/util.lua#L1109-L1125`.
-Ordinary EPUB/PDF vectors match, but exact identity for short or truncated sampled reads is a
-narrow caveat.
-
-### What a KOReader user must configure
-
-1. Compile the `koreader` feature: `apps/server/Cargo.toml:7-24`.
-2. Set `ENABLE_KOREADER_SYNC=true` or `enable_koreader_sync=true`: `core/src/config/protocols.rs`.
-3. Enable the library's `KoReader-compatible hashes` / GraphQL `generateKoreaderHashes` setting and run a scan or reprocessing pass for existing files: `crates/models/src/entity/library_config.rs:31-37,112-119`; `crates/graphql/schema.graphql:1081-1100`.
-4. Create an API key with `ACCESS_KOREADER_SYNC`; the creator must have `ACCESS_API_KEYS` unless they are server owner: `apps/server/src/routers/koreader_backend.rs:17-23`; `apps/server/src/middleware/auth.rs:487-598`.
-5. Configure KOReader's custom server URL as `https://host[:port][/base]/koreader/<full_api_key>`: `crates/koreader/src/lib.rs:14-79`.
-6. Enter any nonblank username and password because the path-key route does not validate those credentials: `crates/koreader/src/lib.rs:14-79`; `apps/server/src/routers/koreader_backend/sync.rs:56-89`.
-7. Choose `Document matching method -> Binary`: `https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/plugins/kosync.koplugin/main.lua#L421-L440`.
-
-EPUB and PDF are the supported Stump hash formats. CBZ/ZIP and RAR have no KoReader hash and
-will otherwise return a 404 for a missing hash: `core/src/filesystem/media/format/zip.rs:60-79`;
-`rar.rs:126-145`.
-
-### KOReader settings
-
-| Setting | Env key | TOML key | Default | Effect | Evidence |
+| Provider or setting | Cargo feature | Env key | TOML key | Effect | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| KOReader sync routes | `ENABLE_KOREADER_SYNC` | `enable_koreader_sync` | `false` in release; debug override `true` | Mounts `/koreader/<api_key>`. | `core/src/config/protocols.rs`; `apps/server/src/routers/mod.rs:34-85` |
-| Library KoReader hashes | — | — (per-library DB/GraphQL: `generate_koreader_hashes` / `generateKoreaderHashes`) | `false` | Generates EPUB/PDF KoReader-compatible hashes during processing; it is not a server-wide env/TOML setting. | `crates/models/src/entity/library_config.rs:31-37,112-119`; `crates/graphql/schema.graphql:1081-1100` |
+| Komga | `komga` | `STUMP_ENABLE_KOMGA` | `enable_komga` | Mounts the root Komga profile and `/komga` Grimmory alias; both feature and setting gates are required | **Shipped**, **Contract-tested** |
+| Kavita | `kavita` | `STUMP_ENABLE_KAVITA` | `enable_kavita` | Mounts `/api` Kavita routes when both gates are open | **Shipped**, **Contract-tested** |
+| Audiobookshelf | `abs` | `STUMP_ENABLE_ABS` | `enable_abs` | Mounts root ABS routes when both gates are open | **Shipped**, **Contract-tested** |
+| OPDS routes | `opds` | — | — | Mounts `/opds/v1.2` and `/opds/v2.0`; compile-time only | **Shipped**, **Contract-tested** |
+| KOReader | `koreader` | `ENABLE_KOREADER_SYNC` | `enable_koreader_sync` | Mounts `/koreader/{api_key}/*`; both gates are required | **Shipped**, **Contract-tested** |
+| Kobo | `kobo` + `stump_kepub` | `ENABLE_KOBO_SYNC` | `enable_kobo_sync` | Mounts `/kobo/{api_key}/*`; both gates are required | **Shipped**, **Contract-tested** |
+| liseur-sync | `liseur-sync` | — | — | Mounts the native `/v1/...` protocol; no runtime gate | **Shipped**, **Contract-tested** |
 
-## liseur-sync (`crates/liseur-sync`, `apps/server/src/routers/liseur_sync`)
+If a runtime setting is true while its Cargo feature is absent, no route is
+mounted; the configuration warning is not compatibility evidence. See [Server
+architecture](/docs/developer/server-architecture) for the complete profile
+matrix, including the lean base, `minimal=["formats"]`, and WebUI → GraphQL
+implication.
 
-| Feature | Status | Evidence | Notes |
-| --- | --- | --- | --- |
-| Native route set and bearer authentication | implemented | `crates/liseur-sync/src/lib.rs:495-535`; `apps/server/src/routers/liseur_sync/mod.rs:21-30` | **[observed]** Public `POST /v1/login`; protected token, work, operation, change, head, position, session, and annotation routes use Bearer tokens. |
-| Login and device-token lifecycle | implemented | `crates/liseur-sync/src/lib.rs:544-650`; `apps/server/src/routers/liseur_sync/storage.rs:56-280` | **[observed]** Login creates a one-hour management-only session; a login session can mint or revoke device tokens; secrets are hashed, expiry/revocation/last-used are stored; `admin` scope requires server owner. |
-| Scope enforcement | partial | `crates/liseur-sync/src/lib.rs:1-45,1025-1043` | **[observed]** Seven scope names are accepted, but current handlers enforce only device `sync`; other catalog/admin scopes are accepted and reportable metadata, not capabilities. Future implementation must map them to Stump permissions. |
-| Work, edition, and media identity | partial | `apps/server/src/routers/liseur_sync/storage.rs:305-344,379-583` | **[observed]** Direct `sha256` and `partial-md5` media matches work; full SHA-256 is computed when bytes are readable; `source`, `dc`, and `ta` identifiers are accepted and stored but have no approximate lookup implementation. Direct candidate SQL is global-by-hash, while resulting work/edition/link rows are user-scoped; keep that boundary visible. |
-| Position operations, changes, heads, and positions | implemented | `apps/server/src/routers/liseur_sync/storage.rs:883-1060` | **[observed]** Per-user sequence counters, idempotent `op_id` duplicate/conflict handling, changes paging, heads, and work positions are persisted transactionally. |
-| Closed sessions | implemented | `apps/server/src/routers/liseur_sync/storage.rs:1065-1135`; `crates/liseur-sync/src/lib.rs:1080-1108` | **[observed]** Session input is bounded and validated, and duplicate `session_id` payloads are idempotent. |
-| Annotation push, CAS, delete, and change feed | partial | `apps/server/src/routers/liseur_sync/storage.rs:1225-1515`; `crates/liseur-sync/src/lib.rs:838-1025` | **[observed]** Adapter-owned tables preserve revisions, sequences, opaque locators, payloads, and tombstones. They are not projected or reconciled into Stump `media_annotations` or `bookmarks`. |
-| Catalog, insights, upload/delete, registration, series claims, token listing, and scope update | future | `crates/liseur-sync/src/lib.rs:495-513`; existing `developer/liseur-sync-integration.mdx` | **[future]** The scope names exist, but no route handlers are mounted for these capabilities. |
-| Retention/compaction and local annotation projection | future | `apps/server/src/routers/liseur_sync/storage.rs:1225-1515`; migration tables plus existing liseur integration doc | **[future]** Add tombstone sweeping/feed compaction and a deliberate local core projection/reconciliation policy before calling this a complete annotation integration. |
+## Komga, OPDS, Kobo, KOReader, and liseur-sync status
 
-### What a liseur-sync user must configure
+The protocol pages below summarize the current boundaries; each is **Shipped**
+with the contract evidence linked in the table above:
 
-- **[inference]** Compile with `--features liseur-sync` (included by `headless`/`full`): `apps/server/Cargo.toml:7-24`.
-- Apply migrations: `apps/server/src/routers/liseur_sync/storage.rs:56-280`.
-- `POST /v1/login` with Stump credentials: `crates/liseur-sync/src/lib.rs:544-650`.
-- Use the one-hour session to `POST /v1/tokens` with `scopes:["sync"]`; save the one-time returned secret: `crates/liseur-sync/src/lib.rs:544-650`; `apps/server/src/routers/liseur_sync/storage.rs:56-280`.
-- Use that device secret as Bearer for resolve, operations, changes, heads, positions, sessions, and annotations: `crates/liseur-sync/src/lib.rs:495-535`; `crates/liseur-sync/src/lib.rs:1025-1043`.
-- An `admin` scope can only be minted by the server owner, and non-sync scope names currently do not activate absent handlers: `crates/liseur-sync/src/lib.rs:1-45,1025-1043`.
+- **Komga:** `/api/v1/*`, `/api/v2/*`, and `/sse/v1/events`; Komelia/Mihon
+  profile, Basic/Bearer/session/API-key auth, remember-me cookie, Readium
+  positions, Tachiyomi tracker, metadata writes, and mutation SSE. Full Komga
+  parity remains **Planned** and is not implied.
+- **OPDS 1.2:** `/opds/v1.2/*` plus the key-in-path alias; Basic/session/API-key
+  auth, catalog/search/acquisition, PSE pages, and optional
+  `ENABLE_OPDS_PROGRESSION=true`. Strict compliance and additional facets are
+  **Planned**.
+- **OPDS 2.0:** `/opds/v2.0/*`; JSON catalog, auth document, acquisition, and
+  explicit progression GET/PUT. Every feed pages on `page`/`page_size`, search
+  has a paged route per kind (`/libraries/search`, `/series/search`,
+  `/books/search`), and a feed links only to pages and routes that exist.
+  Facets, chapter/resource streaming, and a v2 key-in-path alias are
+  **Planned**.
+- **Kobo:** `/kobo/{api_key}/*`; initialization, sync, ReadingState, metadata,
+  thumbnails, EPUB/KEPUB and `Range`. Device-auth persistence, tags/shelves,
+  annotations, and physical-device verification are **Blocked** or **Planned**
+  as recorded in [Client verification](/docs/developer/client-verification).
+- **KOReader:** `/koreader/{api_key}/users/auth`, progress PUT, and progress
+  GET by document hash; binary partial-MD5 matching for EPUB/PDF when library
+  hash generation is enabled. Filename-MD5, ZIP/RAR hashes, x-pointer
+  translation, and device-management UI are **Planned**.
+- **liseur-sync:** `/v1/*`; login, token lifecycle, work/edition resolution,
+  positions, changes, heads, sessions, CAS annotations, and device catalog.
+  Attachment blobs, upload/delete, insights, and series claims are **Planned**;
+  Kobo markup is described but not transported.
 
-### liseur-sync settings
-
-| Setting | Env key | TOML key | Default | Effect | Evidence |
-| --- | --- | --- | --- | --- | --- |
-| liseur-sync routes | — | — | Compile-time only | The only gate is `--features liseur-sync`; `routers::mount` merges it whenever compiled. | `apps/server/Cargo.toml:7-24`; `apps/server/src/routers/mod.rs:34-85` |
-
-## KEPUB (`crates/kepub` and `apps/server/src/routers/kobo_backend/kepub.rs`)
-
-The KEPUB path is the **built-in converter with kepubify-corpus parity (pending gate)**.
-This is a pure-Rust replacement direction: the converter is being brought to 1:1 parity
-with kepubify at pinned revision `9546034`; the parity gate is still pending.
-
-| Feature | Status | Evidence | Notes |
-| --- | --- | --- | --- |
-| Built-in converter with kepubify-corpus parity (pending gate) | partial | `crates/kepub/src/lib.rs:1-86`; `crates/kepub/tests/transform.rs:28-86` | **[observed]** Only OPF spine content documents are transformed; wrappers, `kobostylehacks`, and deterministic `koboSpan` anchors are added; non-content ZIP entries use raw copy. Tests assert deterministic output and unchanged non-content entries. **[inference]** The pinned `9546034` corpus parity gate is the acceptance boundary for 1:1 behavior. |
-| Kobo delivery integration and cache | implemented | `apps/server/src/routers/kobo_backend/kepub.rs:18-104,126-157`; `core/src/config/protocols.rs` | **[observed]** The existing `/v1/books/{id}/file/epub` URL is retained; conversion is lazy and cached under `<config>/cache/kepub/<converter-namespace>/<media-id>-<mtime>.kepub.epub`, with atomic temporary-file publication. |
-| Conversion switch | implemented | `core/src/config/protocols.rs`; `apps/server/src/routers/kobo_backend/kepub.rs:18-104` | **[observed]** `KOBO_KEPUB_CONVERSION` defaults to `false`; when enabled, EPUB responses are converted and non-EPUB media is served unchanged. |
-| Optional upstream modes not yet matched | partial | existing `developer/kobo-sync-capabilities.mdx:161-212`; `crates/kepub/src/lib.rs` | **[observed]** The built-in path intentionally omits optional punctuation cleanup, charset transcoding, dummy title-page heuristics, OPF Calibre metadata cleanup, and the lenient HTML5 tokenizer. |
-| Non-EPUB conversion and full cache lifecycle | future | `apps/server/src/routers/kobo_backend/kepub.rs:18-104,126-157`; Kobo adapter checks EPUB and only writes or reads cache for that type | **[future]** Add explicit support only with a format contract; cache garbage collection and observability are also not currently provider features. |
-
-### What a Kobo user must configure for KEPUB
-
-- Compile the `kobo` feature (or `headless`/`full`): `apps/server/Cargo.toml:7-24`.
-- Enable Kobo sync: `core/src/config/protocols.rs`.
-- Set `KOBO_KEPUB_CONVERSION=true`: `core/src/config/protocols.rs`.
-- Ensure the configuration cache is writable and test with EPUB media: `apps/server/src/routers/kobo_backend/kepub.rs:18-104,126-157`.
-- **[inference]** Treat parity with the pinned `9546034` corpus as pending until the parity gate passes: `crates/kepub/tests/transform.rs:28-86`.
+For route-level detail use [Standards and protocols](/docs/developer/standards),
+[Client apps](/docs/developer/clients), and the individual compatibility pages.

@@ -19,6 +19,7 @@ pub mod order;
 pub mod pagination;
 pub mod query;
 pub mod schema;
+pub(crate) mod social;
 pub mod subscription;
 pub(crate) mod utils;
 

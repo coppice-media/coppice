@@ -1,0 +1,1048 @@
+//! Durable CrossPoint rich-sync records and verified LAN delivery queues.
+//!
+//! This is intentionally a single additive migration after
+//! `m20260950_000000_add_connections`. Rich sync rows are owned by a user and
+//! the credential-bound device; transfer rows retain immutable source/profile
+//! snapshots so a restart cannot silently send a different file.
+
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+	async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+		manager
+			.create_table(
+				Table::create()
+					.table(CrosspointDocuments::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(CrosspointDocuments::UserId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDocuments::Document)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(CrosspointDocuments::Title).text())
+					.col(ColumnDef::new(CrosspointDocuments::Author).text())
+					.col(ColumnDef::new(CrosspointDocuments::Filename).text())
+					.col(ColumnDef::new(CrosspointDocuments::Filesize).big_integer())
+					.col(
+						ColumnDef::new(CrosspointDocuments::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.primary_key(
+						Index::create()
+							.col(CrosspointDocuments::UserId)
+							.col(CrosspointDocuments::Document),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-documents-user")
+							.from(CrosspointDocuments::Table, CrosspointDocuments::UserId)
+							.to(Users::Table, Users::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(CrosspointProgress::Table)
+					.if_not_exists()
+					.col(ColumnDef::new(CrosspointProgress::UserId).text().not_null())
+					.col(
+						ColumnDef::new(CrosspointProgress::Document)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointProgress::DeviceId)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(CrosspointProgress::Device).text())
+					.col(
+						ColumnDef::new(CrosspointProgress::Progress)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointProgress::Percentage)
+							.double()
+							.not_null(),
+					)
+					.col(ColumnDef::new(CrosspointProgress::PositionJson).json())
+					.col(ColumnDef::new(CrosspointProgress::MetadataJson).json())
+					.col(
+						ColumnDef::new(CrosspointProgress::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.primary_key(
+						Index::create()
+							.col(CrosspointProgress::UserId)
+							.col(CrosspointProgress::Document)
+							.col(CrosspointProgress::DeviceId),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-progress-user")
+							.from(CrosspointProgress::Table, CrosspointProgress::UserId)
+							.to(Users::Table, Users::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-progress-device")
+							.from(CrosspointProgress::Table, CrosspointProgress::DeviceId)
+							.to(Devices::Table, Devices::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(CrosspointBookmarks::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(CrosspointBookmarks::UserId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointBookmarks::Document)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(CrosspointBookmarks::Id).text().not_null())
+					.col(ColumnDef::new(CrosspointBookmarks::Xpath).text())
+					.col(ColumnDef::new(CrosspointBookmarks::Percentage).double())
+					.col(ColumnDef::new(CrosspointBookmarks::Summary).text())
+					.col(ColumnDef::new(CrosspointBookmarks::SpineIndex).integer())
+					.col(ColumnDef::new(CrosspointBookmarks::ParagraphCount).integer())
+					.col(ColumnDef::new(CrosspointBookmarks::ParagraphPos).integer())
+					.col(
+						ColumnDef::new(CrosspointBookmarks::Deleted)
+							.boolean()
+							.not_null()
+							.default(false),
+					)
+					.col(
+						ColumnDef::new(CrosspointBookmarks::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.primary_key(
+						Index::create()
+							.col(CrosspointBookmarks::UserId)
+							.col(CrosspointBookmarks::Document)
+							.col(CrosspointBookmarks::Id),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-bookmarks-user")
+							.from(CrosspointBookmarks::Table, CrosspointBookmarks::UserId)
+							.to(Users::Table, Users::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(CrosspointClippings::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(CrosspointClippings::UserId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointClippings::Document)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(CrosspointClippings::Id).text().not_null())
+					.col(ColumnDef::new(CrosspointClippings::Spine).big_integer())
+					.col(ColumnDef::new(CrosspointClippings::StartPage).big_integer())
+					.col(ColumnDef::new(CrosspointClippings::EndPage).big_integer())
+					.col(ColumnDef::new(CrosspointClippings::Pages).big_integer())
+					.col(ColumnDef::new(CrosspointClippings::StartWord).big_integer())
+					.col(ColumnDef::new(CrosspointClippings::EndWord).big_integer())
+					.col(ColumnDef::new(CrosspointClippings::Words).big_integer())
+					.col(ColumnDef::new(CrosspointClippings::Para).big_integer())
+					.col(ColumnDef::new(CrosspointClippings::Chapter).text())
+					.col(ColumnDef::new(CrosspointClippings::Text).text())
+					.col(ColumnDef::new(CrosspointClippings::Note).text())
+					.col(ColumnDef::new(CrosspointClippings::Color).text())
+					.col(ColumnDef::new(CrosspointClippings::CreatedAt).big_integer())
+					.col(
+						ColumnDef::new(CrosspointClippings::Deleted)
+							.boolean()
+							.not_null()
+							.default(false),
+					)
+					.col(
+						ColumnDef::new(CrosspointClippings::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.primary_key(
+						Index::create()
+							.col(CrosspointClippings::UserId)
+							.col(CrosspointClippings::Document)
+							.col(CrosspointClippings::Id),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-clippings-user")
+							.from(CrosspointClippings::Table, CrosspointClippings::UserId)
+							.to(Users::Table, Users::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(CrosspointStatsGlobal::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::UserId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::DeviceId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::Device)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::Version)
+							.integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::Sessions)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::Seconds)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::Pages)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::Completed)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::TodJson)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::DowJson)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::AnchorDay)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::HistoryBlob)
+							.blob()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::Streak)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsGlobal::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.primary_key(
+						Index::create()
+							.col(CrosspointStatsGlobal::UserId)
+							.col(CrosspointStatsGlobal::DeviceId),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-stats-global-user")
+							.from(
+								CrosspointStatsGlobal::Table,
+								CrosspointStatsGlobal::UserId,
+							)
+							.to(Users::Table, Users::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-stats-global-device")
+							.from(
+								CrosspointStatsGlobal::Table,
+								CrosspointStatsGlobal::DeviceId,
+							)
+							.to(Devices::Table, Devices::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(CrosspointStatsBook::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(CrosspointStatsBook::UserId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::DeviceId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::Document)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::Version)
+							.integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::Sessions)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::Seconds)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::Pages)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::Completed)
+							.boolean()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::AvgFwd)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::PaceN)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::Eta)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::StartManual)
+							.boolean()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::FinishManual)
+							.boolean()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::StartDate)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::FinishedDate)
+							.big_integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::TodJson)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::DowJson)
+							.json()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointStatsBook::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.primary_key(
+						Index::create()
+							.col(CrosspointStatsBook::UserId)
+							.col(CrosspointStatsBook::DeviceId)
+							.col(CrosspointStatsBook::Document),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-stats-book-user")
+							.from(CrosspointStatsBook::Table, CrosspointStatsBook::UserId)
+							.to(Users::Table, Users::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-stats-book-device")
+							.from(
+								CrosspointStatsBook::Table,
+								CrosspointStatsBook::DeviceId,
+							)
+							.to(Devices::Table, Devices::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(CrosspointDeviceTargets::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::DeviceId)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::UserId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::HostOrIp)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::HttpPort)
+							.integer()
+							.not_null()
+							.default(80),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::WsPort)
+							.integer()
+							.not_null()
+							.default(81),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::RootPath)
+							.text()
+							.not_null()
+							.default("/"),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::DiscoveryMethod)
+							.text()
+							.not_null()
+							.default("manual"),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::VerifiedAt)
+							.timestamp_with_time_zone(),
+					)
+					.col(ColumnDef::new(CrosspointDeviceTargets::Fingerprint).json())
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::ProfileJson)
+							.json()
+							.not_null()
+							.default("{}"),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::ProfileDigest)
+							.text()
+							.not_null()
+							.default(""),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeviceTargets::RevokedAt)
+							.timestamp_with_time_zone(),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-device-targets-user")
+							.from(
+								CrosspointDeviceTargets::Table,
+								CrosspointDeviceTargets::UserId,
+							)
+							.to(Users::Table, Users::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-device-targets-device")
+							.from(
+								CrosspointDeviceTargets::Table,
+								CrosspointDeviceTargets::DeviceId,
+							)
+							.to(Devices::Table, Devices::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(CrosspointDeliveryQueue::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::UserId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::DeviceId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::MediaId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::SourceRevision)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::ProfileDigest)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::ProfileJson)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::DestinationPath)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::IdempotencyKey)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::Status)
+							.text()
+							.not_null()
+							.default("QUEUED"),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::Attempts)
+							.integer()
+							.not_null()
+							.default(0),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::MaxAttempts)
+							.integer()
+							.not_null()
+							.default(4),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::NextAttemptAt)
+							.timestamp_with_time_zone(),
+					)
+					.col(ColumnDef::new(CrosspointDeliveryQueue::LastError).text())
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::QueuedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::StartedAt)
+							.timestamp_with_time_zone(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::CompletedAt)
+							.timestamp_with_time_zone(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryQueue::UpdatedAt)
+							.timestamp_with_time_zone()
+							.not_null()
+							.default(Expr::current_timestamp()),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-delivery-queue-user")
+							.from(
+								CrosspointDeliveryQueue::Table,
+								CrosspointDeliveryQueue::UserId,
+							)
+							.to(Users::Table, Users::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-delivery-queue-device")
+							.from(
+								CrosspointDeliveryQueue::Table,
+								CrosspointDeliveryQueue::DeviceId,
+							)
+							.to(Devices::Table, Devices::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-delivery-queue-media")
+							.from(
+								CrosspointDeliveryQueue::Table,
+								CrosspointDeliveryQueue::MediaId,
+							)
+							.to(Media::Table, Media::Id)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("uq-crosspoint-delivery-queue-idempotency")
+					.table(CrosspointDeliveryQueue::Table)
+					.col(CrosspointDeliveryQueue::IdempotencyKey)
+					.unique()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("idx-crosspoint-delivery-queue-device-status")
+					.table(CrosspointDeliveryQueue::Table)
+					.col(CrosspointDeliveryQueue::DeviceId)
+					.col(CrosspointDeliveryQueue::Status)
+					.to_owned(),
+			)
+			.await?;
+
+		manager
+			.create_table(
+				Table::create()
+					.table(CrosspointDeliveryAttempts::Table)
+					.if_not_exists()
+					.col(
+						ColumnDef::new(CrosspointDeliveryAttempts::Id)
+							.text()
+							.not_null()
+							.primary_key(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryAttempts::QueueId)
+							.text()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryAttempts::AttemptNo)
+							.integer()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryAttempts::Status)
+							.text()
+							.not_null(),
+					)
+					.col(ColumnDef::new(CrosspointDeliveryAttempts::Error).text())
+					.col(
+						ColumnDef::new(CrosspointDeliveryAttempts::Bytes)
+							.big_integer()
+							.not_null()
+							.default(0),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryAttempts::StartedAt)
+							.timestamp_with_time_zone()
+							.not_null(),
+					)
+					.col(
+						ColumnDef::new(CrosspointDeliveryAttempts::FinishedAt)
+							.timestamp_with_time_zone(),
+					)
+					.foreign_key(
+						ForeignKey::create()
+							.name("fk-crosspoint-delivery-attempts-queue")
+							.from(
+								CrosspointDeliveryAttempts::Table,
+								CrosspointDeliveryAttempts::QueueId,
+							)
+							.to(
+								CrosspointDeliveryQueue::Table,
+								CrosspointDeliveryQueue::Id,
+							)
+							.on_update(ForeignKeyAction::Cascade)
+							.on_delete(ForeignKeyAction::Cascade),
+					)
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.create_index(
+				Index::create()
+					.name("uq-crosspoint-delivery-attempts-queue-number")
+					.table(CrosspointDeliveryAttempts::Table)
+					.col(CrosspointDeliveryAttempts::QueueId)
+					.col(CrosspointDeliveryAttempts::AttemptNo)
+					.unique()
+					.to_owned(),
+			)
+			.await
+	}
+
+	async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+		manager
+			.drop_table(
+				Table::drop()
+					.table(CrosspointDeliveryAttempts::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(CrosspointDeliveryQueue::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(CrosspointDeviceTargets::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(CrosspointStatsBook::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(CrosspointStatsGlobal::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(CrosspointClippings::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(CrosspointBookmarks::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(CrosspointProgress::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await?;
+		manager
+			.drop_table(
+				Table::drop()
+					.table(CrosspointDocuments::Table)
+					.if_exists()
+					.to_owned(),
+			)
+			.await
+	}
+}
+
+#[derive(DeriveIden)]
+enum CrosspointDocuments {
+	#[sea_orm(iden = "crosspoint_documents")]
+	Table,
+	UserId,
+	Document,
+	Title,
+	Author,
+	Filename,
+	Filesize,
+	UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum CrosspointProgress {
+	#[sea_orm(iden = "crosspoint_progress")]
+	Table,
+	UserId,
+	Document,
+	DeviceId,
+	Device,
+	Progress,
+	Percentage,
+	PositionJson,
+	MetadataJson,
+	UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum CrosspointBookmarks {
+	#[sea_orm(iden = "crosspoint_bookmarks")]
+	Table,
+	UserId,
+	Document,
+	Id,
+	Xpath,
+	Percentage,
+	Summary,
+	SpineIndex,
+	ParagraphCount,
+	ParagraphPos,
+	Deleted,
+	UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum CrosspointClippings {
+	#[sea_orm(iden = "crosspoint_clippings")]
+	Table,
+	UserId,
+	Document,
+	Id,
+	Spine,
+	StartPage,
+	EndPage,
+	Pages,
+	StartWord,
+	EndWord,
+	Words,
+	Para,
+	Chapter,
+	Text,
+	Note,
+	Color,
+	CreatedAt,
+	Deleted,
+	UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum CrosspointStatsGlobal {
+	#[sea_orm(iden = "crosspoint_stats_global")]
+	Table,
+	UserId,
+	DeviceId,
+	Device,
+	Version,
+	Sessions,
+	Seconds,
+	Pages,
+	Completed,
+	TodJson,
+	DowJson,
+	AnchorDay,
+	HistoryBlob,
+	Streak,
+	UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum CrosspointStatsBook {
+	#[sea_orm(iden = "crosspoint_stats_book")]
+	Table,
+	UserId,
+	DeviceId,
+	Document,
+	Version,
+	Sessions,
+	Seconds,
+	Pages,
+	Completed,
+	AvgFwd,
+	PaceN,
+	Eta,
+	StartManual,
+	FinishManual,
+	StartDate,
+	FinishedDate,
+	TodJson,
+	DowJson,
+	UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum CrosspointDeviceTargets {
+	#[sea_orm(iden = "crosspoint_device_targets")]
+	Table,
+	DeviceId,
+	UserId,
+	HostOrIp,
+	HttpPort,
+	WsPort,
+	RootPath,
+	DiscoveryMethod,
+	VerifiedAt,
+	Fingerprint,
+	ProfileJson,
+	ProfileDigest,
+	UpdatedAt,
+	RevokedAt,
+}
+
+#[derive(DeriveIden)]
+enum CrosspointDeliveryQueue {
+	#[sea_orm(iden = "crosspoint_delivery_queue")]
+	Table,
+	Id,
+	UserId,
+	DeviceId,
+	MediaId,
+	SourceRevision,
+	ProfileDigest,
+	ProfileJson,
+	DestinationPath,
+	IdempotencyKey,
+	Status,
+	Attempts,
+	MaxAttempts,
+	NextAttemptAt,
+	LastError,
+	QueuedAt,
+	StartedAt,
+	CompletedAt,
+	UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum CrosspointDeliveryAttempts {
+	#[sea_orm(iden = "crosspoint_delivery_attempts")]
+	Table,
+	Id,
+	QueueId,
+	AttemptNo,
+	Status,
+	Error,
+	Bytes,
+	StartedAt,
+	FinishedAt,
+}
+
+#[derive(DeriveIden)]
+enum Users {
+	#[sea_orm(iden = "users")]
+	Table,
+	Id,
+}
+
+#[derive(DeriveIden)]
+enum Devices {
+	#[sea_orm(iden = "devices")]
+	Table,
+	Id,
+}
+
+#[derive(DeriveIden)]
+enum Media {
+	#[sea_orm(iden = "media")]
+	Table,
+	Id,
+}

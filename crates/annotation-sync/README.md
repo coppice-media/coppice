@@ -1,88 +1,93 @@
 # annotation-sync
 
-| | |
-| --- | --- |
-| **Package** | `stump_annotation_sync` (`crates/annotation-sync`) |
-| **Purpose** | The canonical per-user annotation export model (`ExportBatch`/`ExportBook` built from `media_annotations`, `bookmarks`, the liseur-sync CAS, and reading heads/sessions), the `Sink` trait, and the `markdown` (Obsidian-friendly, byte-stable) and `git` (libgit2 commit/push, rebase-once) sinks. Host wiring — config group, debounce, `AnnotationSyncJob`, encryption of secret settings, GraphQL — lives in `stump_core::annotation_sync` / `stump_core::job::annotation_sync`; this crate only ever sees a `DatabaseConnection`. |
-| **Reference / upstream** | liseur-sync CAS tables from `crates/migrations/src/m20260904_000000_add_liseur_sync.rs` (read-only here); Readium locator shape `models::shared::readium::ReadiumLocator`; Obsidian block ids / properties (<https://help.obsidian.md/>); `git2` 0.21 (libgit2, `default-features = false`). |
+|                          |                                                                                                     |
+| ------------------------ | --------------------------------------------------------------------------------------------------- |
+| **Package**              | `stump_annotation_sync` (`crates/annotation-sync`)                                                  |
+| **Purpose**              | Canonical per-user annotation export model plus safe Markdown and Git sinks.                        |
+| **Reference / upstream** | liseur-sync CAS tables; `models::shared::readium::ReadiumLocator`; Obsidian block ids; `git2` 0.21. |
 
 ## Decisions
 
-| Decision | Why | Evidence |
-| --- | --- | --- |
-| Native books are always rebuilt in full and fold every linked liseur work; only standalone liseur works are incremental by CAS `seq` | Native rows are hard-deleted, so a delta would miss deletions; a partial rebuild of a native book would flip its file between including and omitting linked liseur rows | `model.rs::build_export_batch`, `build_native_book`; test `builds_native_and_liseur_books_in_canonical_order` |
-| One batch per run, built from the oldest sink cursor; every successful sink advances to the batch high-water mark | Sinks never diverge on what they saw; a failed sink keeps its old cursor and re-receives the delta next run | `stump_core::job::annotation_sync` (`init`, `execute_task`) |
-| Canonical ordering fixed in code: books by key (`liseur:<work>` < `native:<media>`), annotations by `(created_at, id)` with native rows first, identifiers by `(scheme, value)` | Byte-identical re-exports for unchanged data | `model.rs` sorts; `markdown.rs` module doc |
-| Tombstones stay in the model, are skipped by the renderer | Sinks that diff or mirror deletions can act on them; markdown readers never see them | `ExportAnnotation::deleted`; `render_book` filters |
-| Markdown: YAML frontmatter with JSON-quoted scalars, `# <title>`, `## Highlights` / `## Bookmarks` lists, one `↗` meta line per row ending in an Obsidian block id (`^<row id>`) | Obsidian properties + block links work out of the box; ids survive round trips; `serde_json` escaping is valid YAML double-quote style | `markdown.rs`; golden test `renders_obsidian_layout_and_skips_tombstones` |
-| Reader links only when the `base_url` setting is set (native books only) | The web reader has no locator deep link yet and a relative link would be an Obsidian vault path; liseur-only works have no Stump route | `markdown.rs::render_book`; `base_url_setting` shared with the git sink |
-| Files are named `<key with ':'→'-'>.md` (`native-<media_id>.md`); unchanged files are not rewritten | Stable names for links; mtimes stay untouched on re-export | `markdown.rs::file_name`, `write_books` |
-| Git sink: init `<root>/<user>` as a work tree, `add_all`, commit with the configured author, push `refs/heads/<branch>`; on `NotFastForward` fetch + rebase once, then push again; a rebase conflict aborts and surfaces `GitConflict` with the local branch intact | Two writers (another device, a human editing the vault) must not lose data silently; the job records the error on the row for the user to resolve | `git.rs::push_with_retry`, `rebase_onto_remote`; test `publishes_then_rebases_once_and_surfaces_conflicts` |
-| Push runs whenever the branch has commits, even with an unchanged batch | A previous run may have committed and then failed to push | `git.rs::publish` |
-| `git2` with `default-features = false` (no vendored openssl/libssh2); token offered as `x-access-token` user/pass | Keeps the headless build small; HTTPS token auth is what forges accept | `Cargo.toml`; `git.rs::auth_callbacks` |
-| Secret settings are encrypted by the host before storage; sinks receive plaintext | Encryption key lives in `server_config`; one place to decrypt | `stump_core::annotation_sync::{encrypt,decrypt}_sink_values` |
+| Decision                                                                                                                                                        | Why                                                                                                                                              | Evidence                                                                              |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Versionless sink rows stay on the legacy key/UUID filename and renderer; format 2 is explicit                                                                   | Existing vault links and paths must remain byte/path compatible until a user upgrades                                                            | `RenderOptions::from_settings`; `file_name`; legacy renderer test                     |
+| Format 2 defaults to `{{author}} - {{title}}/annotations.md` below the per-user root                                                                            | Human navigation without allowing a user path to escape the admin-mounted root                                                                   | `DEFAULT_PATH_TEMPLATE`; `path_for_book`                                              |
+| Built-in presets are Obsidian folders, flat notes, and author folders; custom templates allow only fixed book variables                                         | UI can offer safe choices without exposing filesystem or expression evaluation                                                                   | `preset_descriptors`; `validate_path_template`; `validate_body_template`              |
+| NFC-normalize and sanitize title/author components; reject traversal, roots, reserved names, control bytes, and oversized segments                              | Unicode-equivalent names should not split books, and path input must not cross the mounted root                                                  | `normalize_component`; `validate_relative_destination`                                |
+| Format-2 source-key → relative-path map lives in `SinkState.data` and collision suffixes are deterministic                                                      | Duplicate human names must never overwrite one another; title changes retain ownership                                                           | `plan_paths`; `prior_path_map`                                                        |
+| Frontmatter is structured, ordered YAML with schema/book/source/source ids, source_updated_at, reading state, row provenance, and timestamps; no generated time | The export is inspectable and unchanged data remains byte-identical                                                                              | `push_frontmatter_v2`; `source_updated_at`                                            |
+| V2 body block ids include the source book key; legacy ids remain unchanged                                                                                      | Native and liseur rows can share an id without broken Obsidian links                                                                             | `block_id_v2`; legacy renderer test                                                   |
+| Reviews are optional, user-scoped, and rendered once with explicit rating/content/privacy/timestamps                                                            | A work review must not be copied into both editions or leak another user's private note; deterministic exports need review changes to be visible | `ExportReview`; `review_for_native`; `push_review_frontmatter_v2`; `push_review_body` |
+| Every user export takes a lock; files use same-directory 0600 temp + sync + atomic rename, and every existing path component/final target rejects symlinks      | Concurrent Markdown/Git exports cannot interleave or publish partial/symlinked output                                                            | `acquire_user_lock`; `write_atomic`; `ensure_no_symlink`                              |
+| Git stages only returned managed relative paths and rejects overlapping local remotes                                                                           | Unmanaged vault edits must not enter an export commit, and a worktree must not be its own remote                                                 | `write_books_locked_for_git`; `commit_all`; `validate_remote_boundary`                |
+| Secret sink settings are encrypted by the host; omitted object keys merge with the stored row                                                                   | Updating layout or metadata must not erase an encrypted token                                                                                    | `stump_core::annotation_sync::merge_sink_settings`                                    |
 
 ## Layout
 
-| File | Responsibility |
-| --- | --- |
-| `model.rs` | `ExportBatch`, `ExportBook`, `ExportAnnotation`, `ExportBookmark`, `ReadingSummary`, `build_export_batch` (native + liseur folding, ordering) |
-| `sink.rs` | `Sink` trait, `SinkDescriptor`, `SinkState` (host cursor + opaque sink data), `string_setting` |
-| `markdown.rs` | `RenderOptions`, `render_book`, `write_books`, `file_name`, `MarkdownSink`, `base_url_setting` |
-| `git.rs` | `GitSink` (feature `git`): commit/push/rebase-once via `git2` on a `spawn_blocking` thread |
-| `registry.rs` | `catalog()` of compiled-in sinks and `sink(id, root, values)` factory |
-| `error.rs` | `AnnotationSyncError` (`Db`, `Io`, `Json`, `Sink`, `Git`, `GitConflict`) |
+| File          | Responsibility                                                                                           |
+| ------------- | -------------------------------------------------------------------------------------------------------- |
+| `model.rs`    | `ExportBatch`/`ExportBook`/`ExportReview` model, deterministic native/liseur folding and reading summary |
+| `sink.rs`     | `Sink`, `SinkDescriptor`, `SinkPresetDescriptor`, and durable `SinkState`                                |
+| `markdown.rs` | Legacy/v2 rendering, safe templates/paths, review rendering, collision map, atomic writer and lock       |
+| `git.rs`      | Git worktree commit/push/rebase; managed-path staging (feature `git`)                                    |
+| `registry.rs` | Compiled sink catalog and factory                                                                        |
+| `error.rs`    | Export model and sink errors                                                                             |
 
-## Markdown format
+## Format 2
 
-```markdown
----
-title: "Dune"
-authors:
-  - "Frank Herbert"
-source: "native"
-media_id: "m1"
-identifiers:
-  isbn: "9780441172696"
-progression: 0.7512
-page: 300
-completed: false
-last_read: "2023-11-14T22:14:30Z"
-last_read_via: "liseur"
-sessions: 2
-reading_time_seconds: 5400
----
+The frontmatter is deterministic and ordered:
 
-# Dune
-
-## Highlights
-
-- > The spice must flow.
-
-  Opening line
-
-  ↗ [ch1.xhtml](https://stump.example.com/books/m1/epub-reader) · 25.00% · 2023-11-14T22:13:30Z ^a1
-
-## Bookmarks
-
-- > A beginning is the time
-
-  ↗ [ch3.xhtml · page 42](https://stump.example.com/books/m1/epub-reader) · 2023-11-14T22:14:20Z ^b1
+```yaml
+schema: 'coppice.annotation/v2'
+book:
+  key: 'native:m1'
+  title: 'Dune'
+  authors:
+    - 'Frank Herbert'
+  identifiers: {}
+source:
+  kind: 'native'
+  id: 'm1'
+  media_id: 'm1'
+  key: 'native:m1'
+source_updated_at: '2023-11-14T22:14:30Z'
+reading:
+  progression: 0.7512
+  page: 300
+  completed: false
+  finished: false
+  last_read_at: '2023-11-14T22:14:30Z'
+  source_protocol: 'liseur'
+  session_count: 2
+  total_seconds: 5400
+  last_session_at: null
+annotations:
+  - id: 'a1'
+    kind: 'highlight'
+    source: 'native'
+    source_id: 'm1'
+    provenance:
+      kind: 'native'
+      source_id: 'm1'
+    created_at: '2023-11-14T22:13:30Z'
+    updated_at: '2023-11-14T22:13:30Z'
+    deleted: false
+bookmarks: []
 ```
 
-Meta line parts, each present only when known: position (`href`, `cfi`, or
-`position N` from the locator; bookmarks add `page N`), progression as a
-percentage, liseur colour, created time (RFC 3339 UTC), then `^<row id>`.
+Tombstones remain in structured frontmatter for provenance but never render in
+body sections. Source-aware body blocks use `^native-m1-a1` (or the liseur
+source key), while legacy files retain `^a1`.
 
 ## How to verify
 
 ```bash
-cargo test -p stump_annotation_sync                    # model build, markdown golden + stability, git bare-repo publish/rebase/conflict
-cargo check -p stump_annotation_sync --no-default-features   # markdown only, no libgit2
-cargo test -p stump_core --lib annotation              # debounce, secret round-trip
+cargo test -p stump_annotation_sync
+cargo check -p stump_annotation_sync --no-default-features
+cargo test -p stump_core --lib annotation
 ```
 
 ## Deep docs
 
-`docs/content/docs/developer/annotation-sync.mdx` — config keys, GraphQL
-operations, sink settings, and the job lifecycle.
+`docs/content/docs/developer/annotation-sync.mdx` documents config keys,
+GraphQL operations, safe templates, and the job lifecycle.

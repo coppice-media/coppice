@@ -18,6 +18,8 @@ pub mod directory_listing;
 pub mod drm;
 pub mod error;
 pub mod hash;
+pub mod read_aloud;
+pub use read_aloud::ReadAloudError;
 pub mod transform;
 pub mod image {
 	mod error;

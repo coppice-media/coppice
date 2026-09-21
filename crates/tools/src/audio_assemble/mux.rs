@@ -48,6 +48,7 @@ use symphonia::core::{
 	formats::{probe::Hint, FormatOptions, FormatReader, TrackType as StreamType},
 	io::MediaSourceStream,
 	meta::MetadataOptions,
+	units::Duration as StreamDuration,
 };
 
 use crate::{util::write_atomic, ToolError, ToolResult};
@@ -174,6 +175,40 @@ fn open(path: &Path) -> ToolResult<Box<dyn FormatReader>> {
 			MetadataOptions::default(),
 		)
 		.map_err(|error| ToolError::Invalid(format!("{}: {error}", path.display())))
+}
+/// Exact playable duration of one audio stream, obtained from packet timing.
+///
+/// A container duration is normally enough for a library scan. It is not
+/// authoritative enough for assembly: an MP3 without Xing/VBRI timing makes
+/// Symphonia estimate from the whole file size, including ID3 metadata, which
+/// can move every later per-file chapter by seconds. Reading packet headers is
+/// linear I/O but performs no decode and allocates no publication-sized
+/// buffer; `audio-assemble` is already about to read the complete source.
+pub fn exact_audio_duration_ms(path: &Path) -> ToolResult<i64> {
+	let mut format = open(path)?;
+	let (stream_id, time_base) = {
+		let track = format.default_track(StreamType::Audio).ok_or_else(|| {
+			ToolError::Invalid(format!("{} has no audio stream", path.display()))
+		})?;
+		let time_base = track.time_base.ok_or_else(|| {
+			ToolError::Invalid(format!("{} has no audio time base", path.display()))
+		})?;
+		(track.id, time_base)
+	};
+	let mut duration = StreamDuration::ZERO;
+	loop {
+		let packet = format.next_packet().map_err(|error| {
+			ToolError::Invalid(format!("{}: {error}", path.display()))
+		})?;
+		let Some(packet) = packet else { break };
+		if packet.track_id == stream_id {
+			duration = duration.saturating_add(packet.dur);
+		}
+	}
+	let time = time_base.calc_duration(duration).ok_or_else(|| {
+		ToolError::Invalid(format!("{} duration cannot be represented", path.display()))
+	})?;
+	Ok(i64::try_from(time.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// The default audio stream's id and codec parameters.

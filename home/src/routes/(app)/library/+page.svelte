@@ -32,7 +32,7 @@
 </script>
 
 <svelte:head>
-	<title>Library · Stump</title>
+	<title>Library · Coppice</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">
@@ -68,7 +68,7 @@
 			<EmptyHeader>
 				<EmptyTitle>No libraries yet</EmptyTitle>
 				<EmptyDescription>
-					Point a library at a folder inside one of this server's library roots and Stump will
+					Point a library at a folder inside one of this server's library roots and Coppice will
 					scan it into series and books.
 				</EmptyDescription>
 			</EmptyHeader>

@@ -86,6 +86,47 @@ pub fn locate(bin_dir: Option<&Path>) -> ToolResult<Install> {
 	FFMPEG_TOOL.locate(bin_dir)
 }
 
+/// Read the duration libavformat will assign to one concat input.
+///
+/// `audio-assemble` must use the same clock as ffmpeg's concat demuxer when it
+/// writes permanent chapter marks. A cheap MP3 estimate may count trailing
+/// tags, while a packet-duration sum may discard per-file delay that the
+/// concat demuxer retains between parts. `ffprobe` ships beside ffmpeg and
+/// exposes libavformat's exact `format.duration` without decoding.
+pub fn probe_duration_ms(install: &Install, path: &Path) -> ToolResult<i64> {
+	let program = FFMPEG_TOOL.binary(&install.dir, "ffprobe");
+	let args = [
+		OsString::from("-v"),
+		OsString::from("error"),
+		OsString::from("-show_entries"),
+		OsString::from("format=duration"),
+		OsString::from("-of"),
+		OsString::from("default=noprint_wrappers=1:nokey=1"),
+		path.as_os_str().to_owned(),
+	];
+	let output = FFMPEG_TOOL.run(&program, &args, Duration::from_secs(30))?;
+	if !output.succeeded() {
+		return Err(ToolError::Invalid(format!(
+			"ffprobe {}: {}",
+			output.describe_status(),
+			output.stderr.trim()
+		)));
+	}
+	let seconds = output.stdout.trim().parse::<f64>().map_err(|error| {
+		ToolError::Invalid(format!(
+			"ffprobe returned an unreadable duration for {}: {error}",
+			path.display()
+		))
+	})?;
+	if !seconds.is_finite() || seconds <= 0.0 {
+		return Err(ToolError::Invalid(format!(
+			"ffprobe returned an invalid duration for {}: {seconds}",
+			path.display()
+		)));
+	}
+	Ok((seconds * 1000.0).round().min(i64::MAX as f64) as i64)
+}
+
 /// What the output stream is encoded as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {

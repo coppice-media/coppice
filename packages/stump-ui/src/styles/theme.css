@@ -1,0 +1,378 @@
+/*
+ * The design tokens both companion apps render with. Each app's
+ * `src/routes/layout.css` pulls Tailwind, the shadcn preflight and its own
+ * `@source` lines, then imports this file; nothing below is app-specific.
+ *
+ * Coppice is dark first: `app.html` ships `<html class="dark">` and the
+ * inline boot script (`@stump/ui/theme.svelte.js`) only ever corrects that
+ * for a stored `light`/`system` choice, so there is no light flash.
+ *
+ * A *preset* is two knobs, never a second copy of the palette:
+ *
+ *   --tint-h / --tint-c   the hue and chroma of the neutral scale, so
+ *                         `zinc`, `slate`, `stone` and `gray` are one line
+ *                         each instead of twenty-five overrides.
+ *   --brand-*             lightness, chroma, hue and foreground lightness
+ *                         of the accent (`--primary`, `--ring`, the sidebar
+ *                         highlight). Neutral means chroma 0, which is
+ *                         exactly the shadcn default palette.
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+	--tint-h: 0;
+	--tint-c: 0;
+	--brand-l: 0.205;
+	--brand-c: 0;
+	--brand-h: 0;
+	--brand-fg-l: 0.985;
+
+	--background: oklch(1 var(--tint-c) var(--tint-h));
+	--foreground: oklch(0.145 calc(var(--tint-c) * 4) var(--tint-h));
+	--card: oklch(1 var(--tint-c) var(--tint-h));
+	--card-foreground: var(--foreground);
+	--popover: oklch(1 var(--tint-c) var(--tint-h));
+	--popover-foreground: var(--foreground);
+	--primary: oklch(var(--brand-l) var(--brand-c) var(--brand-h));
+	--primary-foreground: oklch(var(--brand-fg-l) calc(var(--brand-c) * 0.06) var(--brand-h));
+	--secondary: oklch(0.97 var(--tint-c) var(--tint-h));
+	--secondary-foreground: oklch(0.205 calc(var(--tint-c) * 3) var(--tint-h));
+	--muted: oklch(0.97 var(--tint-c) var(--tint-h));
+	--muted-foreground: oklch(0.556 calc(var(--tint-c) * 2) var(--tint-h));
+	--accent: oklch(0.97 var(--tint-c) var(--tint-h));
+	--accent-foreground: var(--secondary-foreground);
+	--destructive: oklch(0.577 0.245 27.325);
+	--border: oklch(0.922 var(--tint-c) var(--tint-h));
+	--input: oklch(0.922 var(--tint-c) var(--tint-h));
+	--ring: oklch(0.708 calc(var(--brand-c) * 0.3) var(--brand-h));
+	--chart-1: oklch(0.87 var(--tint-c) var(--tint-h));
+	--chart-2: oklch(0.556 var(--tint-c) var(--tint-h));
+	--chart-3: oklch(0.439 var(--tint-c) var(--tint-h));
+	--chart-4: oklch(0.371 var(--tint-c) var(--tint-h));
+	--chart-5: oklch(0.269 var(--tint-c) var(--tint-h));
+	--radius: 0.625rem;
+	--sidebar: oklch(0.985 var(--tint-c) var(--tint-h));
+	--sidebar-foreground: var(--foreground);
+	--sidebar-primary: var(--primary);
+	--sidebar-primary-foreground: var(--primary-foreground);
+	--sidebar-accent: oklch(0.97 var(--tint-c) var(--tint-h));
+	--sidebar-accent-foreground: var(--secondary-foreground);
+	--sidebar-border: oklch(0.922 var(--tint-c) var(--tint-h));
+	--sidebar-ring: var(--ring);
+}
+
+.dark {
+	--brand-l: 0.922;
+	--brand-fg-l: 0.205;
+
+	--background: oklch(0.145 var(--tint-c) var(--tint-h));
+	--foreground: oklch(0.985 var(--tint-c) var(--tint-h));
+	--card: oklch(0.205 var(--tint-c) var(--tint-h));
+	--popover: oklch(0.205 var(--tint-c) var(--tint-h));
+	--secondary: oklch(0.269 var(--tint-c) var(--tint-h));
+	--secondary-foreground: var(--foreground);
+	--muted: oklch(0.269 var(--tint-c) var(--tint-h));
+	--muted-foreground: oklch(0.708 calc(var(--tint-c) * 2) var(--tint-h));
+	--accent: oklch(0.269 var(--tint-c) var(--tint-h));
+	--destructive: oklch(0.704 0.191 22.216);
+	--border: oklch(1 0 0 / 10%);
+	--input: oklch(1 0 0 / 15%);
+	--ring: oklch(0.556 calc(var(--brand-c) * 0.4) var(--brand-h));
+	--sidebar: oklch(0.205 var(--tint-c) var(--tint-h));
+	--sidebar-accent: oklch(0.269 var(--tint-c) var(--tint-h));
+	--sidebar-accent-foreground: var(--foreground);
+	--sidebar-border: oklch(1 0 0 / 10%);
+}
+
+/* Neutral scales. `neutral` is the default above, so it needs no block. */
+[data-theme="zinc"] {
+	--tint-h: 285.9;
+	--tint-c: 0.006;
+}
+[data-theme="slate"] {
+	--tint-h: 257.4;
+	--tint-c: 0.013;
+}
+[data-theme="stone"] {
+	--tint-h: 58.1;
+	--tint-c: 0.005;
+}
+[data-theme="gray"] {
+	--tint-h: 264.4;
+	--tint-c: 0.008;
+}
+
+/*
+ * Accents. The neutral scale picks up a trace of the same hue so the accent
+ * does not sit on an unrelated gray. `--brand-l` is one value for both
+ * modes — these are mid-lightness colours that carry white text either way,
+ * which is why the dark blocks only lift the foreground.
+ */
+[data-theme="blue"] {
+	--brand-l: 0.546;
+	--brand-c: 0.215;
+	--brand-h: 262.9;
+	--tint-h: 262.9;
+	--tint-c: 0.006;
+}
+[data-theme="green"] {
+	--brand-l: 0.545;
+	--brand-c: 0.155;
+	--brand-h: 162.5;
+	--tint-h: 162.5;
+	--tint-c: 0.006;
+}
+[data-theme="orange"] {
+	--brand-l: 0.605;
+	--brand-c: 0.192;
+	--brand-h: 41.1;
+	--tint-h: 41.1;
+	--tint-c: 0.006;
+}
+[data-theme="rose"] {
+	--brand-l: 0.565;
+	--brand-c: 0.211;
+	--brand-h: 16.5;
+	--tint-h: 16.5;
+	--tint-c: 0.006;
+}
+[data-theme="violet"] {
+	--brand-l: 0.56;
+	--brand-c: 0.222;
+	--brand-h: 293;
+	--tint-h: 293;
+	--tint-c: 0.006;
+}
+
+.dark[data-theme="blue"],
+.dark[data-theme="green"],
+.dark[data-theme="orange"],
+.dark[data-theme="rose"],
+.dark[data-theme="violet"],
+.dark[data-theme="amber"],
+.dark[data-theme="teal"],
+.dark[data-theme="cyan"],
+.dark[data-theme="indigo"] {
+	--brand-fg-l: 0.985;
+}
+
+[data-theme="amber"] {
+	--brand-l: 0.666;
+	--brand-c: 0.179;
+	--brand-h: 58.3;
+	--tint-h: 58.3;
+	--tint-c: 0.006;
+}
+[data-theme="teal"] {
+	--brand-l: 0.6;
+	--brand-c: 0.118;
+	--brand-h: 184.7;
+	--tint-h: 184.7;
+	--tint-c: 0.006;
+}
+[data-theme="cyan"] {
+	--brand-l: 0.6;
+	--brand-c: 0.13;
+	--brand-h: 210;
+	--tint-h: 210;
+	--tint-c: 0.006;
+}
+[data-theme="indigo"] {
+	--brand-l: 0.511;
+	--brand-c: 0.262;
+	--brand-h: 277;
+	--tint-h: 277;
+	--tint-c: 0.006;
+}
+
+/*
+ * Named palettes intentionally override semantic tokens instead of copying
+ * the generated neutral/accent scales. Every light/dark surface is explicit
+ * here so these two palettes remain coherent if the base scale changes.
+ */
+[data-theme="coppice"] {
+	--background: oklch(0.97 0.015 90);
+	--foreground: oklch(0.23 0.04 165);
+	--card: oklch(0.99 0.012 90);
+	--card-foreground: oklch(0.23 0.04 165);
+	--popover: oklch(0.99 0.012 90);
+	--popover-foreground: oklch(0.23 0.04 165);
+	--primary: oklch(0.42 0.13 155);
+	--primary-foreground: oklch(0.98 0.012 90);
+	--secondary: oklch(0.92 0.03 90);
+	--secondary-foreground: oklch(0.25 0.04 165);
+	--muted: oklch(0.93 0.02 90);
+	--muted-foreground: oklch(0.42 0.05 165);
+	--accent: oklch(0.9 0.05 150);
+	--accent-foreground: oklch(0.25 0.04 165);
+	--border: oklch(0.86 0.025 90);
+	--input: oklch(0.86 0.025 90);
+	--ring: oklch(0.42 0.13 155);
+	--chart-1: oklch(0.42 0.13 155);
+	--chart-2: oklch(0.58 0.13 85);
+	--chart-3: oklch(0.55 0.1 35);
+	--chart-4: oklch(0.5 0.09 190);
+	--chart-5: oklch(0.45 0.08 230);
+	--sidebar: oklch(0.95 0.025 90);
+	--sidebar-foreground: oklch(0.23 0.04 165);
+	--sidebar-primary: oklch(0.42 0.13 155);
+	--sidebar-primary-foreground: oklch(0.98 0.012 90);
+	--sidebar-accent: oklch(0.9 0.05 150);
+	--sidebar-accent-foreground: oklch(0.25 0.04 165);
+	--sidebar-border: oklch(0.86 0.025 90);
+	--sidebar-ring: oklch(0.42 0.13 155);
+}
+
+.dark[data-theme="coppice"] {
+	--background: oklch(0.16 0.025 165);
+	--foreground: oklch(0.94 0.025 90);
+	--card: oklch(0.21 0.03 165);
+	--card-foreground: oklch(0.94 0.025 90);
+	--popover: oklch(0.21 0.03 165);
+	--popover-foreground: oklch(0.94 0.025 90);
+	--primary: oklch(0.72 0.13 85);
+	--primary-foreground: oklch(0.2 0.04 165);
+	--secondary: oklch(0.27 0.04 165);
+	--secondary-foreground: oklch(0.94 0.025 90);
+	--muted: oklch(0.27 0.04 165);
+	--muted-foreground: oklch(0.75 0.04 90);
+	--accent: oklch(0.28 0.06 150);
+	--accent-foreground: oklch(0.95 0.02 90);
+	--border: oklch(0.32 0.035 165);
+	--input: oklch(0.34 0.04 165);
+	--ring: oklch(0.72 0.13 85);
+	--chart-1: oklch(0.72 0.13 85);
+	--chart-2: oklch(0.62 0.13 155);
+	--chart-3: oklch(0.7 0.1 35);
+	--chart-4: oklch(0.68 0.1 190);
+	--chart-5: oklch(0.7 0.08 230);
+	--sidebar: oklch(0.2 0.03 165);
+	--sidebar-foreground: oklch(0.94 0.025 90);
+	--sidebar-primary: oklch(0.72 0.13 85);
+	--sidebar-primary-foreground: oklch(0.2 0.04 165);
+	--sidebar-accent: oklch(0.28 0.06 150);
+	--sidebar-accent-foreground: oklch(0.95 0.02 90);
+	--sidebar-border: oklch(0.32 0.035 165);
+	--sidebar-ring: oklch(0.72 0.13 85);
+}
+
+[data-theme="midnight"] {
+	--background: oklch(0.98 0.008 260);
+	--foreground: oklch(0.2 0.03 260);
+	--card: oklch(1 0.004 260);
+	--card-foreground: oklch(0.2 0.03 260);
+	--popover: oklch(1 0.004 260);
+	--popover-foreground: oklch(0.2 0.03 260);
+	--primary: oklch(0.44 0.19 260);
+	--primary-foreground: oklch(0.98 0.008 260);
+	--secondary: oklch(0.93 0.02 260);
+	--secondary-foreground: oklch(0.22 0.04 260);
+	--muted: oklch(0.94 0.015 260);
+	--muted-foreground: oklch(0.44 0.06 260);
+	--accent: oklch(0.9 0.05 250);
+	--accent-foreground: oklch(0.22 0.04 260);
+	--border: oklch(0.86 0.025 260);
+	--input: oklch(0.86 0.025 260);
+	--ring: oklch(0.44 0.19 260);
+	--chart-1: oklch(0.44 0.19 260);
+	--chart-2: oklch(0.56 0.16 220);
+	--chart-3: oklch(0.55 0.14 290);
+	--chart-4: oklch(0.58 0.12 185);
+	--chart-5: oklch(0.6 0.14 330);
+	--sidebar: oklch(0.95 0.015 260);
+	--sidebar-foreground: oklch(0.2 0.03 260);
+	--sidebar-primary: oklch(0.44 0.19 260);
+	--sidebar-primary-foreground: oklch(0.98 0.008 260);
+	--sidebar-accent: oklch(0.9 0.05 250);
+	--sidebar-accent-foreground: oklch(0.22 0.04 260);
+	--sidebar-border: oklch(0.86 0.025 260);
+	--sidebar-ring: oklch(0.44 0.19 260);
+}
+
+.dark[data-theme="midnight"] {
+	--background: oklch(0.12 0.03 260);
+	--foreground: oklch(0.95 0.015 250);
+	--card: oklch(0.18 0.04 260);
+	--card-foreground: oklch(0.95 0.015 250);
+	--popover: oklch(0.18 0.04 260);
+	--popover-foreground: oklch(0.95 0.015 250);
+	--primary: oklch(0.7 0.15 240);
+	--primary-foreground: oklch(0.15 0.03 260);
+	--secondary: oklch(0.24 0.05 260);
+	--secondary-foreground: oklch(0.95 0.015 250);
+	--muted: oklch(0.24 0.05 260);
+	--muted-foreground: oklch(0.74 0.04 250);
+	--accent: oklch(0.27 0.08 255);
+	--accent-foreground: oklch(0.96 0.012 250);
+	--border: oklch(0.31 0.05 260);
+	--input: oklch(0.34 0.06 260);
+	--ring: oklch(0.7 0.15 240);
+	--chart-1: oklch(0.7 0.15 240);
+	--chart-2: oklch(0.68 0.14 220);
+	--chart-3: oklch(0.7 0.14 290);
+	--chart-4: oklch(0.7 0.12 185);
+	--chart-5: oklch(0.72 0.14 330);
+	--sidebar: oklch(0.16 0.035 260);
+	--sidebar-foreground: oklch(0.95 0.015 250);
+	--sidebar-primary: oklch(0.7 0.15 240);
+	--sidebar-primary-foreground: oklch(0.15 0.03 260);
+	--sidebar-accent: oklch(0.27 0.08 255);
+	--sidebar-accent-foreground: oklch(0.96 0.012 250);
+	--sidebar-border: oklch(0.31 0.05 260);
+	--sidebar-ring: oklch(0.7 0.15 240);
+}
+
+@theme inline {
+	--font-sans: 'Inter Variable', sans-serif;
+	--color-sidebar-ring: var(--sidebar-ring);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar: var(--sidebar);
+	--color-chart-5: var(--chart-5);
+	--color-chart-4: var(--chart-4);
+	--color-chart-3: var(--chart-3);
+	--color-chart-2: var(--chart-2);
+	--color-chart-1: var(--chart-1);
+	--color-ring: var(--ring);
+	--color-input: var(--input);
+	--color-border: var(--border);
+	--color-destructive: var(--destructive);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-accent: var(--accent);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-muted: var(--muted);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-secondary: var(--secondary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-primary: var(--primary);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-popover: var(--popover);
+	--color-card-foreground: var(--card-foreground);
+	--color-card: var(--card);
+	--color-foreground: var(--foreground);
+	--color-background: var(--background);
+	--radius-sm: calc(var(--radius) * 0.6);
+	--radius-md: calc(var(--radius) * 0.8);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) * 1.4);
+	--radius-2xl: calc(var(--radius) * 1.8);
+	--radius-3xl: calc(var(--radius) * 2.2);
+	--radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground;
+	}
+	html {
+		@apply font-sans;
+	}
+}

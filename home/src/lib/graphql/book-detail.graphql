@@ -1,0 +1,436 @@
+# Merged work detail operations. These are deliberately separate from the
+# reader query: the first paint resolves one visible media id to its confirmed
+# work, while log/highlights/editor/search stay tab-scoped.
+
+fragment BookDetailMetadataFields on MediaMetadata {
+	id
+	title
+	titleSort
+	series
+	seriesGroup
+	storyArc
+	storyArcNumber
+	number
+	volume
+	summary
+	notes
+	genres
+	format
+	year
+	month
+	day
+	writers
+	pencillers
+	inkers
+	colorists
+	letterers
+	coverArtists
+	editors
+	narrators
+	publisher
+	links
+	characters
+	teams
+	pageCount
+	ageRating
+	identifierAmazon
+	identifierCalibre
+	identifierGoogle
+	identifierIsbn
+	identifierMobiAsin
+	identifierUuid
+	language
+	metadataSource
+	metadataExternalId
+	lockedFields
+}
+
+fragment BookDetailAudioFields on BookAudioFacts {
+	durationMs
+	codec
+	sampleRate
+	channels
+	bitrate
+	chapterSource
+	chapters {
+		id
+		index
+		title
+		startMs
+		endMs
+	}
+}
+
+fragment BookDetailFileFields on BookFile {
+	path
+	size
+	extension
+	hash
+	koreaderHash
+	status
+	modifiedAt
+}
+
+fragment BookDetailEditionFields on BookEdition {
+	mediaId
+	kind
+	title
+	metadata {
+		...BookDetailMetadataFields
+	}
+	file {
+		...BookDetailFileFields
+	}
+	audio {
+		...BookDetailAudioFields
+	}
+	pairEvidence
+}
+
+fragment BookDetailReviewFields on BookReview {
+	id
+	rating
+	content
+	isPrivate
+	mediaId
+	workId
+	createdAt
+	updatedAt
+}
+
+fragment BookDetailReadAloudFields on BookReadAloud {
+	status
+	reason
+	ebookMediaId
+	audioMediaId
+	chapterMap {
+		ebookMediaId
+		audioMediaId
+		ebookSpineIndex
+		audioChapterIndex
+		confidence
+	}
+	syncMap {
+		id
+		ebookMediaId
+		audioMediaId
+		granularity
+		generator
+		generatorVersion
+		algorithm
+		model
+		cueCount
+		coverage
+		source
+		jobId
+		createdAt
+		map
+	}
+	artifact {
+		url
+		mimeType
+		cacheKey
+	}
+}
+
+query BookDetail($mediaId: ID!) {
+	bookDetail(mediaId: $mediaId) {
+		mediaId
+		workId
+		title
+		authors
+		workMetadata {
+			workId
+			title
+			author
+			metadata
+			lockedFields
+		}
+		editions {
+			...BookDetailEditionFields
+		}
+		mismatches {
+			field
+			ebookValue
+			audiobookValue
+			workValue
+			resolved
+		}
+		review {
+			...BookDetailReviewFields
+		}
+		readAloud {
+			...BookDetailReadAloudFields
+		}
+	}
+}
+
+query BookCover($id: ID!) {
+	mediaById(id: $id) {
+		thumbnail {
+			url
+		}
+	}
+}
+
+fragment BookReadingLogDeviceFields on BookReadingDevice {
+	id
+	name
+	kind
+	revoked
+}
+
+query BookSearch($query: String!, $limit: Int) {
+	searchBooks(query: $query, limit: $limit) {
+		mediaId
+		workId
+		title
+		authors
+		kind
+		score
+	}
+}
+
+query BookReadingLog($mediaId: ID!) {
+	bookReadingLog(mediaId: $mediaId) {
+		mediaId
+		workId
+		editions {
+			mediaId
+			kind
+			head {
+				locator {
+					...ReaderLocatorFields
+				}
+				progression
+				page
+				positionMs
+				trackIndex
+				completed
+				updatedAt
+				sourceProtocol
+				sourceDeviceId
+				sourceDevice {
+					...BookReadingLogDeviceFields
+				}
+			}
+			sessions {
+				id
+				sessionDate
+				status
+				readthroughNumber
+				startLocator {
+					...ReaderLocatorFields
+				}
+				endLocator {
+					...ReaderLocatorFields
+				}
+				startPage
+				endPage
+				endPositionMs
+				startPercentage
+				endPercentage
+				elapsedSeconds
+				notes
+				sourceProtocol
+				sourceDeviceIds
+				sourceDevices {
+					...BookReadingLogDeviceFields
+				}
+				liseurSessionId
+				createdAt
+				updatedAt
+			}
+		}
+	}
+}
+
+query BookHighlights($mediaId: ID!) {
+	annotations(filter: { mediaId: $mediaId }, pagination: { page: 1, pageSize: 1000 }) {
+		items {
+			id
+			kind
+			source
+			sourceDeviceId
+			sourceDeviceName
+			editable
+			chapterTitle
+			href
+			fragment
+			page
+			progression
+			excerpt
+			note
+			color
+			createdAt
+			updatedAt
+			book {
+				mediaId
+				title
+			}
+		}
+	}
+}
+
+query SimilarBooks($mediaId: ID!, $limit: Int) {
+	similarBooks(mediaId: $mediaId, limit: $limit) {
+		mediaId
+		workId
+		title
+		authors
+		kind
+		score
+	}
+}
+
+query BookMetadataCandidates($mediaId: ID!) {
+	bookMetadataCandidates(mediaId: $mediaId) {
+		id
+		status
+		mediaId
+		rawHits
+		addedAt
+		updatedAt
+		matchCandidates {
+			provider
+			externalId
+			confidence
+			metadata {
+				... on ExternalMediaMetadata {
+					provider
+					externalId
+					title
+					summary
+					pageCount
+					seriesName
+					number
+					day
+					month
+					year
+					genres
+					tags
+					isbn
+					isbn13
+					writers
+					artists
+					colorists
+					letterers
+					coverArtists
+					coverUrl
+					providerUrl
+					subtitle
+					narrators
+					publisher
+					runtimeMinutes
+				}
+			}
+		}
+	}
+}
+
+query SearchBookMetadata($mediaId: ID!, $search: MediaMetadataSearchInput) {
+	searchBookMetadata(mediaId: $mediaId, search: $search) {
+		id
+		status
+		mediaId
+		rawHits
+		addedAt
+		updatedAt
+		matchCandidates {
+			provider
+			externalId
+			confidence
+			metadata {
+				... on ExternalMediaMetadata {
+					provider
+					externalId
+					title
+					summary
+					pageCount
+					seriesName
+					number
+					day
+					month
+					year
+					genres
+					tags
+					isbn
+					isbn13
+					writers
+					artists
+					colorists
+					letterers
+					coverArtists
+					coverUrl
+					providerUrl
+					subtitle
+					narrators
+					publisher
+					runtimeMinutes
+				}
+			}
+		}
+	}
+}
+
+mutation ApplyBookMetadata($mediaId: ID!, $input: BookMetadataApplyInput!) {
+	applyBookMetadata(mediaId: $mediaId, input: $input) {
+		...BookDetailFields
+	}
+}
+
+mutation ApplyBookMetadataCandidate(
+	$mediaId: ID!
+	$candidateIndex: Int!
+	$scope: BookMetadataScope!
+	$selectedFields: [MetadataField!]!
+) {
+	applyBookMetadataCandidate(
+		mediaId: $mediaId
+		candidateIndex: $candidateIndex
+		scope: $scope
+		selectedFields: $selectedFields
+	) {
+		...BookDetailFields
+	}
+}
+
+mutation UpsertBookReview($mediaId: ID!, $input: BookReviewInput!) {
+	upsertBookReview(mediaId: $mediaId, input: $input) {
+		...BookDetailReviewFields
+	}
+}
+
+mutation DeleteBookReview($mediaId: ID!) {
+	deleteBookReview(mediaId: $mediaId)
+}
+
+fragment BookDetailFields on BookDetail {
+	mediaId
+	workId
+	title
+	authors
+	workMetadata {
+		workId
+		title
+		author
+		metadata
+		lockedFields
+	}
+	editions {
+		...BookDetailEditionFields
+	}
+	mismatches {
+		field
+		ebookValue
+		audiobookValue
+		workValue
+		resolved
+	}
+	review {
+		...BookDetailReviewFields
+	}
+	readAloud {
+		...BookDetailReadAloudFields
+	}
+}

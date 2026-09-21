@@ -7,7 +7,7 @@
 	},
 	"authScene": {
 		"claimHeading": "Inicjalizuj serwer",
-		"claimText": "Ten serwer Stump nie został zainicjowany. Użyj formularza poniżej, aby stworzyć konto. Gdy będzie już ono stworzone, uzyskasz pełen dostęp do wszystkich funkcji serwera.",
+		"claimText": "Ten serwer Coppice nie został zainicjowany. Użyj formularza poniżej, aby stworzyć konto. Gdy będzie już ono stworzone, uzyskasz pełen dostęp do wszystkich funkcji serwera.",
 		"form": {
 			"validation": {
 				"missingUsername": "Nazwa użytkownika jest wymagana",
@@ -410,7 +410,7 @@
 			"convertOptions": {
 				"section": {
 					"heading": "Konwersja pliku",
-					"description": "Stump jest w stanie przekonwertować niektóre formaty plików na bardziej kompatybilne"
+					"description": "Coppice jest w stanie przekonwertować niektóre formaty plików na bardziej kompatybilne"
 				},
 				"rarToZip": {
 					"label": "Konwertuj RAR do ZIP",
@@ -458,7 +458,7 @@
 				},
 				"options": {
 					"label": "Wzorzec biblioteki",
-					"description": "Ustawienie, które określa, jak Stump zorganizuje Twoją bibliotekę",
+					"description": "Ustawienie, które określa, jak Coppice zorganizuje Twoją bibliotekę",
 					"collectionPriority": {
 						"label": "Priorytet kolekcji",
 						"description": "Każdy folder na najwyższym poziomie katalogu głównego biblioteki jest pojedynczą serią"
@@ -497,12 +497,12 @@
 				{
 					"label": "Skanowanie",
 					"heading": "Skanowanie",
-					"description": "Ustawienia związane z tym, jak Stump skanuje tę bibliotekę"
+					"description": "Ustawienia związane z tym, jak Coppice skanuje tę bibliotekę"
 				},
 				{
 					"label": "Miniatury",
 					"heading": "Miniatury",
-					"description": "Opcje czy i jak Stump generować będzie miniatury dla tej biblioteki"
+					"description": "Opcje czy i jak Coppice generować będzie miniatury dla tej biblioteki"
 				},
 				{
 					"label": "Podsumowanie",
@@ -609,7 +609,7 @@
 		},
 		"options/scanning": {
 			"title": "Skanowanie",
-			"description": "Ustawienia związane z tym, jak Stump skanuje tę bibliotekę",
+			"description": "Ustawienia związane z tym, jak Coppice skanuje tę bibliotekę",
 			"sections": {
 				"configureScan": {
 					"heading": "Skonfiguruj skanowanie",
@@ -1318,7 +1318,7 @@
 					"description": "Zmień filtry dla tej sesji przeglądania",
 					"rawData": {
 						"heading": "Nieprzetworzone dane filtru",
-						"description": "Stump będzie przetwarzać filtry w następujący sposób"
+						"description": "Coppice będzie przetwarzać filtry w następujący sposób"
 					},
 					"buttons": {
 						"save": "Zapisz",
@@ -1421,7 +1421,7 @@
 					"avatarPicker": {
 						"label": "Awatar",
 						"heading": "Prześlij awatar",
-						"subtitle": "Możesz przesłać dowolny obraz do użycia jako awatar dla funkcji społecznościowych w Stump",
+						"subtitle": "Możesz przesłać dowolny obraz do użycia jako awatar dla funkcji społecznościowych w Coppice",
 						"dropzone": "Upuść obraz lub kliknij aby wybrać",
 						"changeImage": "Zmień obraz",
 						"removeImage": "Usuń obraz",
@@ -1439,8 +1439,8 @@
 					},
 					"heading": "Język i ustawienia regionalne",
 					"subtitle": [
-						"Stump obsługuje wiele języków i ustawień regionalnych, ustaw swoje preferencje poniżej. Jeśli jesteś w stanie, proszę rozważ pomoc w poprawie jakości",
-						"tłumaczeń Stump",
+						"Coppice obsługuje wiele języków i ustawień regionalnych, ustaw swoje preferencje poniżej. Jeśli jesteś w stanie, proszę rozważ pomoc w poprawie jakości",
+						"tłumaczeń Coppice",
 						"!"
 					]
 				}
@@ -1453,7 +1453,7 @@
 			"sections": {
 				"themeAndAppearance": {
 					"label": "Motyw i wygląd",
-					"description": "Podstawowe opcje wyglądu Stump"
+					"description": "Podstawowe opcje wyglądu Coppice"
 				},
 				"interface": {
 					"title": "Interfejs",
@@ -1531,7 +1531,7 @@
 				},
 				"layoutAndArrangement": {
 					"label": "Układ i aranżacja",
-					"description": "Dostosuj jak Stump wyświetla informacje i organizuje zawartość"
+					"description": "Dostosuj jak Coppice wyświetla informacje i organizuje zawartość"
 				},
 				"primaryNavigation": {
 					"label": "Główna nawigacja",
@@ -1589,7 +1589,7 @@
 				},
 				"maxWidthPreference": {
 					"label": "Dostosowana szerokość",
-					"description": "Stump stosuje maksymalną szerokość widoku. To ustawienie pozwala dostosować lub usunąć ten limit",
+					"description": "Coppice stosuje maksymalną szerokość widoku. To ustawienie pozwala dostosować lub usunąć ten limit",
 					"tooltip": "To ustawienie nie jest obecnie obsługiwane, jeśli główna nawigacja ustawiona jest jako panel boczny",
 					"options": {
 						"noLimit": "Bez limitu"
@@ -1601,7 +1601,7 @@
 				},
 				"additionalPreferences": {
 					"label": "Dodatkowe ustawienia",
-					"description": "Dostosuj wygląd i zachowanie Stump za pomocą tych dodatkowych ustawień"
+					"description": "Dostosuj wygląd i zachowanie Coppice za pomocą tych dodatkowych ustawień"
 				},
 				"contentBrowsing": {
 					"label": "Przeglądanie treści",
@@ -1656,7 +1656,7 @@
 		"app/apiKeys": {
 			"helmet": "Klucze API",
 			"title": "Klucze API",
-			"description": "Zarządzaj wygenerowanymi kluczami API Stump",
+			"description": "Zarządzaj wygenerowanymi kluczami API Coppice",
 			"shared": {
 				"fields": {
 					"name": "Nazwa",
@@ -1768,11 +1768,11 @@
 		"app/desktop": {
 			"helmet": "Ustawienia aplikacji desktopowej",
 			"title": "Ustawienia aplikacji desktopowej",
-			"description": "Ustawienia związane z aplikacją desktopową Stump",
+			"description": "Ustawienia związane z aplikacją desktopową Coppice",
 			"sections": {
 				"configuredServers": {
 					"label": "Skonfigurowane serwery",
-					"description": "Lista serwerów Stump, do których możesz się połączyć",
+					"description": "Lista serwerów Coppice, do których możesz się połączyć",
 					"getStarted": "Aby rozpocząć, dodaj serwer",
 					"unreachableServer": {
 						"tooltip": "Serwer niedostępny"
@@ -1793,14 +1793,14 @@
 								"placeholder": "Mój serwer"
 							},
 							"uri": {
-								"description": "Adres serwera Stump"
+								"description": "Adres serwera Coppice"
 							}
 						}
 					},
 					"addServer": {
 						"trigger": "Dodaj serwer",
 						"title": "Dodaj nowy serwer",
-						"description": "Dodaj nowy serwer Stump do aplikacji desktopowej",
+						"description": "Dodaj nowy serwer Coppice do aplikacji desktopowej",
 						"confirm": "Dodaj serwer"
 					},
 					"editServer": {
@@ -1866,7 +1866,7 @@
 					},
 					"discordPresence": {
 						"label": "Status aktywności Discord",
-						"description": "Wyświetl swoją aktywność Stump na Discordzie za pomocą statusu aktywności Discorda",
+						"description": "Wyświetl swoją aktywność Coppice na Discordzie za pomocą statusu aktywności Discorda",
 						"reconnect": "Połącz ponownie z Discord"
 					}
 				}
@@ -1875,14 +1875,14 @@
 		"server/general": {
 			"helmet": "Ustawienia ogólne serwera",
 			"title": "Ustawienia ogólne",
-			"description": "Ogólne ustawienia związane z instancją serwera Stump",
+			"description": "Ogólne ustawienia związane z instancją serwera Coppice",
 			"sections": {
 				"updateAvailable": {
 					"message": "Twój serwer jest nieaktualny. Zaktualizuj go do najnowszej wersji!"
 				},
 				"serverInfo": {
 					"title": "Informacja o serwerze",
-					"description": "Podstawowe informacje o Twojej instancji serwera Stump",
+					"description": "Podstawowe informacje o Twojej instancji serwera Coppice",
 					"build": {
 						"label": "Kompilacja",
 						"description": "Szczegóły dotyczące wersji i kompilacji",
@@ -1893,7 +1893,7 @@
 						}
 					},
 					"nonStableChannel": {
-						"title": "Używasz niestabilnej wersji Stump",
+						"title": "Używasz niestabilnej wersji Coppice",
 						"description": [
 							"Wygląda na to, że używasz",
 							"kanał kompilacji"
@@ -1902,7 +1902,7 @@
 				},
 				"helpfulLinks": {
 					"title": "Przydatne odnośniki",
-					"description": "Odnośniki do zasobów, które mogą okazać się pomocne w zarządzaniu Twoim serwerem Stump",
+					"description": "Odnośniki do zasobów, które mogą okazać się pomocne w zarządzaniu Twoim serwerem Coppice",
 					"links": {
 						"documentation": "Dokumentacja",
 						"changelog": "Historia zmian"
@@ -1938,7 +1938,7 @@
 		"server/logs": {
 			"helmet": "Logi",
 			"title": "Logi",
-			"description": "Logi generowane przez tą instancję serwera Stump",
+			"description": "Logi generowane przez tą instancję serwera Coppice",
 			"sections": {
 				"persistedLogs": {
 					"title": "Trwałe logi",
@@ -1961,14 +1961,14 @@
 				},
 				"liveLogs": {
 					"title": "Kanał logów na żywo",
-					"description": "Strumieniowany w czasie rzeczywistym bezpośrednio z instancji serwera Stump"
+					"description": "Strumieniowany w czasie rzeczywistym bezpośrednio z instancji serwera Coppice"
 				}
 			}
 		},
 		"server/jobs": {
 			"helmet": "Zadania",
 			"title": "Zadania",
-			"description": "Zadania w tle, które działają na Twojej instancji serwera Stump",
+			"description": "Zadania w tle, które działają na Twojej instancji serwera Coppice",
 			"sections": {
 				"scheduling": {
 					"title": "Zaplanowane zadania",
@@ -2046,7 +2046,7 @@
 				},
 				"history": {
 					"title": "Historia",
-					"description": "Historia zadań, które zostały uruchomione na Twojej instancji serwera Stump",
+					"description": "Historia zadań, które zostały uruchomione na Twojej instancji serwera Coppice",
 					"table": {
 						"columns": {
 							"name": "Rodzaj",
@@ -2253,12 +2253,12 @@
 		"server/email": {
 			"helmet": "Ustawienia e-mail",
 			"title": "Adres e-mail",
-			"description": "Ustawienia powiązane z konfiguracją wysyłki SMTP tego serwera Stump",
+			"description": "Ustawienia powiązane z konfiguracją wysyłki SMTP tego serwera Coppice",
 			"sections": {
 				"emailers": {
 					"title": "Wysyłka SMTP",
-					"description": "Klienci, którzy zostali utworzeni w celu wysyłki wiadomości e-mail z Twojego serwera Stump",
-					"singleInstanceDisclaimer": "Na ten moment Stump wspiera ustawienie tylko jednego serwera SMTP z poziomu interfejsu użytkownika. Funkcjonalność ta zostanie rozwinięta w przyszłości",
+					"description": "Klienci, którzy zostali utworzeni w celu wysyłki wiadomości e-mail z Twojego serwera Coppice",
+					"singleInstanceDisclaimer": "Na ten moment Coppice wspiera ustawienie tylko jednego serwera SMTP z poziomu interfejsu użytkownika. Funkcjonalność ta zostanie rozwinięta w przyszłości",
 					"list": {
 						"emptyHeading": "Brak skonfigurowanych ustawień wysyłki SMTP",
 						"primaryEmailer": "Domyślna wysyłka",
@@ -2279,7 +2279,7 @@
 				},
 				"devices": {
 					"title": "Urządzenia odbiorcze e-mail",
-					"description": "Aliasy urządzeń skonfigurowanych do otrzymywania wiadomości e-mail z Twojej instancji serwera Stump",
+					"description": "Aliasy urządzeń skonfigurowanych do otrzymywania wiadomości e-mail z Twojej instancji serwera Coppice",
 					"addDevice": "Dodaj alias urządzenia",
 					"addOrUpdateDevice": {
 						"title": {
@@ -2380,7 +2380,7 @@
 			"createEmailer": {
 				"helmet": "Utwórz nową wysyłkę",
 				"title": "Utwórz nową wysyłkę",
-				"description": "Stwórz nową wysyłkę SMTP dla tego serwera Stump"
+				"description": "Stwórz nową wysyłkę SMTP dla tego serwera Coppice"
 			},
 			"updateEmailer": {
 				"helmet": "Aktualizuj wysyłkę",
@@ -2576,10 +2576,10 @@
 	"serverSOS": {
 		"heading": "Serwer niedostępny",
 		"desktop": {
-			"message": "Wystąpił błąd sieciowy, który sugeruje, że Twój serwer Stump jest obecnie niedostępny. Upewnij się, że jest uruchomiony i dostępny z tego urządzenia.\nJeśli twój adres serwera uległ zmianie, możesz go zaktualizować za pomocą poniższego formularza"
+			"message": "Wystąpił błąd sieciowy, który sugeruje, że Twój serwer Coppice jest obecnie niedostępny. Upewnij się, że jest uruchomiony i dostępny z tego urządzenia.\nJeśli twój adres serwera uległ zmianie, możesz go zaktualizować za pomocą poniższego formularza"
 		},
 		"web": {
-			"message": "Wystąpił błąd sieciowy, który sugeruje, że Twój serwer Stump jest obecnie niedostępny. Upewnij się, że jest uruchomiony i dostępny z tego urządzenia"
+			"message": "Wystąpił błąd sieciowy, który sugeruje, że Twój serwer Coppice jest obecnie niedostępny. Upewnij się, że jest uruchomiony i dostępny z tego urządzenia"
 		},
 		"reconnected": "Połączono z serwerem! Przekierowywanie...",
 		"reconnectionFailed": "Niepowodzenie!"
@@ -3003,7 +3003,7 @@
 			"unknownSeriesName": "seria"
 		},
 		"emptyState": {
-			"noStumpServers": "Nie dodano żadnych serwerów Stump",
+			"noStumpServers": "Nie dodano żadnych serwerów Coppice",
 			"noOPDSServers": "Nie dodano żadnych serwerów OPDS",
 			"noServers": "Brak skonfigurowanych serwerów",
 			"cta": "Zacznij od dodania serwera, aby uzyskać do swojej kolekcji książek",
@@ -3165,7 +3165,7 @@
 				"incognitoReading": "Czytanie w trybie prywatnym"
 			},
 			"stump": {
-				"description": "Funkcje Stump są opcjonalne i, jeśli ich nie potrzebujesz, możesz je wyłączyć",
+				"description": "Funkcje Coppice są opcjonalne i, jeśli ich nie potrzebujesz, możesz je wyłączyć",
 				"bookClubsEnabled": "Funkcje klubu książki"
 			},
 			"autoSyncLocalData": "Automatycznie synchronizuj dane lokalne",
@@ -3182,7 +3182,7 @@
 				"label": "Zarządzanie",
 				"dataUsage": {
 					"label": "Wykorzystanie danych",
-					"nonStumpData": "Dane inne niż Stump",
+					"nonStumpData": "Dane inne niż Coppice",
 					"serversTotal": "Łącznie z serwerów",
 					"totalFiles": "Łącznie plików",
 					"totalSize": "Łączny rozmiar",

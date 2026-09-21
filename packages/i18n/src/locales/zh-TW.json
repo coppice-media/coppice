@@ -7,7 +7,7 @@
 	},
 	"authScene": {
 		"claimHeading": "初始化您的服务器",
-		"claimText": "Stump服务器尚未初始化。请使用下面的表单创建您的帐户。之后就能够完全访问服务器所有功能。",
+		"claimText": "Coppice服务器尚未初始化。请使用下面的表单创建您的帐户。之后就能够完全访问服务器所有功能。",
 		"form": {
 			"validation": {
 				"missingUsername": "用户名为必填项",
@@ -254,7 +254,7 @@
 					"description": "更改此视图会话的过滤器",
 					"rawData": {
 						"heading": "原始过滤器数据",
-						"description": "Stump 将如何处理过滤器"
+						"description": "Coppice 将如何处理过滤器"
 					},
 					"buttons": {
 						"save": "保存",
@@ -343,8 +343,8 @@
 					},
 					"heading": "语言及地区",
 					"subtitle": [
-						"Stump 支持多种语言和本地化，在下方设置您的偏好。请考虑帮助提升质量",
-						"Stump的翻译",
+						"Coppice 支持多种语言和本地化，在下方设置您的偏好。请考虑帮助提升质量",
+						"Coppice的翻译",
 						"如果你可以！"
 					]
 				}
@@ -388,7 +388,7 @@
 		"app/desktop": {
 			"helmet": "桌面设置",
 			"title": "桌面设置",
-			"description": "Stump 桌面应用程序相关设置",
+			"description": "Coppice 桌面应用程序相关设置",
 			"sections": {
 				"configuredServers": {
 					"resetTokens": {
@@ -410,14 +410,14 @@
 		"server/general": {
 			"helmet": "常规服务器设定",
 			"title": "常规设置",
-			"description": "与您的 Stump 服务器实例相关的常规设置",
+			"description": "与您的 Coppice 服务器实例相关的常规设置",
 			"sections": {
 				"updateAvailable": {
 					"message": "您的服务器不是最新版本。请更新到最新版本！"
 				},
 				"serverInfo": {
 					"title": "服务器信息",
-					"description": "Stump 服务器实例的基本详细信息",
+					"description": "Coppice 服务器实例的基本详细信息",
 					"build": {
 						"label": "构建",
 						"description": "关于版本和构建的细节",
@@ -433,7 +433,7 @@
 		"server/logs": {
 			"helmet": "日志",
 			"title": "日志",
-			"description": "Stump 服务器实例生成的日志",
+			"description": "Coppice 服务器实例生成的日志",
 			"sections": {
 				"persistedLogs": {
 					"title": "已存日志",
@@ -450,14 +450,14 @@
 				},
 				"liveLogs": {
 					"title": "实时日志",
-					"description": "直接实时从 Stump 服务器串流"
+					"description": "直接实时从 Coppice 服务器串流"
 				}
 			}
 		},
 		"server/jobs": {
 			"helmet": "任务",
 			"title": "任务",
-			"description": "Stump 服务器实例上运行的后台任务",
+			"description": "Coppice 服务器实例上运行的后台任务",
 			"sections": {
 				"scheduling": {
 					"title": "计划任务",
@@ -465,7 +465,7 @@
 				},
 				"history": {
 					"title": "历史记录",
-					"description": "Stump 服务器上已运行的任务记录",
+					"description": "Coppice 服务器上已运行的任务记录",
 					"table": {
 						"columns": {
 							"name": "类型",
@@ -706,10 +706,10 @@
 	"serverSOS": {
 		"heading": "服务器不可用",
 		"desktop": {
-			"message": "出现网络错误，您的 Stump 服务器目前不可用。请确保它正在运行并且可以在此设备上访问。\n如果您的服务器 URL 已经更改，您可以使用下面的表单更新它"
+			"message": "出现网络错误，您的 Coppice 服务器目前不可用。请确保它正在运行并且可以在此设备上访问。\n如果您的服务器 URL 已经更改，您可以使用下面的表单更新它"
 		},
 		"web": {
-			"message": "网络错误，您的 Stump 服务器目前不可用。请确保它正在运行并且可以从此设备访问"
+			"message": "网络错误，您的 Coppice 服务器目前不可用。请确保它正在运行并且可以从此设备访问"
 		},
 		"reconnected": "重连到服务器！正在重定向...",
 		"reconnectionFailed": "出了些问题"

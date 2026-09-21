@@ -44,11 +44,21 @@ impl ProviderHost {
 }
 
 /// OPDS v2 browse filters. These fields intentionally mirror the Readium metadata query names.
+///
+/// The pagination fields are spelled out instead of a `#[serde(flatten)]`ed
+/// [`OffsetPagination`]: [`Query`] deserializes with `serde_urlencoded`, which
+/// hands a flattened struct every value as a string, so `?page=1` was rejected
+/// with `invalid type: string "1", expected u64` — and the `next` link the feed
+/// emits for itself carries exactly that parameter. Absent fields fall back to
+/// [`OffsetPagination::default`], so this route pages like every other feed.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowseParams {
-	#[serde(flatten)]
-	pub pagination: OffsetPagination,
+	pub page: Option<u64>,
+	#[serde(rename = "page_size", alias = "pageSize")]
+	pub page_size: Option<u64>,
+	#[serde(rename = "zero_based", alias = "zeroBased")]
+	pub zero_based: Option<bool>,
 	pub author: Option<String>,
 	pub penciler: Option<String>,
 	pub colorist: Option<String>,
@@ -59,6 +69,19 @@ pub struct BrowseParams {
 	pub subject: Option<String>,
 	pub characters: Option<String>,
 	pub teams: Option<String>,
+}
+
+impl BrowseParams {
+	/// The page this request asked for, defaulted exactly like the feeds that
+	/// take an [`OffsetPagination`] directly.
+	pub fn pagination(&self) -> OffsetPagination {
+		let defaults = OffsetPagination::default();
+		OffsetPagination {
+			page: self.page.unwrap_or(defaults.page),
+			page_size: self.page_size.or(defaults.page_size),
+			zero_based: self.zero_based.or(defaults.zero_based),
+		}
+	}
 }
 
 /// The backend contract needed by the OPDS routes.
@@ -156,11 +179,36 @@ pub trait OpdsBackend: Send + Sync + 'static {
 		auth: AuthContext,
 		host: ProviderHost,
 	) -> Result<axum::response::Response, Self::Error>;
+	/// The mixed feed: one page of each of libraries, series and books.
 	async fn v2_search(
 		&self,
 		auth: AuthContext,
 		host: ProviderHost,
 		query: Option<String>,
+		pagination: OffsetPagination,
+	) -> Result<axum::response::Response, Self::Error>;
+	/// One kind of match on its own, so a client can page a single group of the
+	/// mixed feed. These are the routes the group `self` links point at.
+	async fn v2_search_libraries(
+		&self,
+		auth: AuthContext,
+		host: ProviderHost,
+		query: Option<String>,
+		pagination: OffsetPagination,
+	) -> Result<axum::response::Response, Self::Error>;
+	async fn v2_search_series(
+		&self,
+		auth: AuthContext,
+		host: ProviderHost,
+		query: Option<String>,
+		pagination: OffsetPagination,
+	) -> Result<axum::response::Response, Self::Error>;
+	async fn v2_search_books(
+		&self,
+		auth: AuthContext,
+		host: ProviderHost,
+		query: Option<String>,
+		pagination: OffsetPagination,
 	) -> Result<axum::response::Response, Self::Error>;
 	async fn v2_browse_libraries(
 		&self,
@@ -312,6 +360,7 @@ where
 			"/libraries",
 			Router::new()
 				.route("/", get(v2_browse_libraries::<B>))
+				.route("/search", get(v2_search_libraries::<B>))
 				.nest(
 					"/{id}",
 					Router::new()
@@ -326,15 +375,19 @@ where
 		)
 		.nest(
 			"/series",
-			Router::new().route("/", get(v2_browse_series::<B>)).nest(
-				"/{id}",
-				Router::new().route("/", get(v2_browse_series_by_id::<B>)),
-			),
+			Router::new()
+				.route("/", get(v2_browse_series::<B>))
+				.route("/search", get(v2_search_series::<B>))
+				.nest(
+					"/{id}",
+					Router::new().route("/", get(v2_browse_series_by_id::<B>)),
+				),
 		)
 		.nest(
 			"/books",
 			Router::new()
 				.route("/browse", get(v2_browse_books::<B>))
+				.route("/search", get(v2_search_books::<B>))
 				.route("/latest", get(v2_latest_books::<B>))
 				.route("/keep-reading", get(v2_keep_reading::<B>))
 				.nest(
@@ -544,9 +597,44 @@ async fn v2_search<B: OpdsBackend>(
 	Extension(backend): Extension<Arc<B>>,
 	Extension(host): Extension<ProviderHost>,
 	Query(V2SearchQuery { query }): Query<V2SearchQuery>,
+	Query(pagination): Query<OffsetPagination>,
 	Extension(auth): Extension<AuthContext>,
 ) -> Result<axum::response::Response, B::Error> {
-	backend.v2_search(auth, host, query).await
+	backend.v2_search(auth, host, query, pagination).await
+}
+
+async fn v2_search_libraries<B: OpdsBackend>(
+	Extension(backend): Extension<Arc<B>>,
+	Extension(host): Extension<ProviderHost>,
+	Query(V2SearchQuery { query }): Query<V2SearchQuery>,
+	Query(pagination): Query<OffsetPagination>,
+	Extension(auth): Extension<AuthContext>,
+) -> Result<axum::response::Response, B::Error> {
+	backend
+		.v2_search_libraries(auth, host, query, pagination)
+		.await
+}
+
+async fn v2_search_series<B: OpdsBackend>(
+	Extension(backend): Extension<Arc<B>>,
+	Extension(host): Extension<ProviderHost>,
+	Query(V2SearchQuery { query }): Query<V2SearchQuery>,
+	Query(pagination): Query<OffsetPagination>,
+	Extension(auth): Extension<AuthContext>,
+) -> Result<axum::response::Response, B::Error> {
+	backend
+		.v2_search_series(auth, host, query, pagination)
+		.await
+}
+
+async fn v2_search_books<B: OpdsBackend>(
+	Extension(backend): Extension<Arc<B>>,
+	Extension(host): Extension<ProviderHost>,
+	Query(V2SearchQuery { query }): Query<V2SearchQuery>,
+	Query(pagination): Query<OffsetPagination>,
+	Extension(auth): Extension<AuthContext>,
+) -> Result<axum::response::Response, B::Error> {
+	backend.v2_search_books(auth, host, query, pagination).await
 }
 
 async fn v2_browse_libraries<B: OpdsBackend>(
@@ -701,4 +789,55 @@ pub mod routes {
 	pub use super::{
 		router, v1_router, v2_router, BrowseParams, OpdsBackend, ProviderHost,
 	};
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	use axum::http::Uri;
+
+	fn browse_params(query: &str) -> BrowseParams {
+		let uri = format!("/opds/v2.0/books/browse?{query}")
+			.parse::<Uri>()
+			.expect("uri should parse");
+
+		Query::<BrowseParams>::try_from_uri(&uri)
+			.expect("browse params should deserialize")
+			.0
+	}
+
+	/// The `next` link a browse feed emits is `?page=N&page_size=M` beside the
+	/// filters it was asked for, so one query string has to carry both.
+	#[test]
+	fn browse_params_take_a_page_beside_a_filter() {
+		let params = browse_params("author=Rick%20Remender&page=2&page_size=5");
+
+		assert_eq!(params.author.as_deref(), Some("Rick Remender"));
+		assert_eq!(
+			params.pagination(),
+			OffsetPagination {
+				page: 2,
+				page_size: Some(5),
+				zero_based: Some(false),
+			}
+		);
+	}
+
+	/// A request with no pagination pages like every other OPDS feed.
+	#[test]
+	fn browse_params_default_to_the_first_page() {
+		assert_eq!(browse_params("").pagination(), OffsetPagination::default());
+	}
+
+	/// The filter vocabulary is camelCase, so the pagination keys answer to
+	/// both spellings instead of silently ignoring one of them.
+	#[test]
+	fn browse_params_accept_camel_case_pagination() {
+		let params = browse_params("coverArtist=Matteo%20Scalera&page=4&pageSize=3");
+
+		assert_eq!(params.cover_artist.as_deref(), Some("Matteo Scalera"));
+		assert_eq!(params.pagination().page, 4);
+		assert_eq!(params.pagination().limit(), 3);
+	}
 }

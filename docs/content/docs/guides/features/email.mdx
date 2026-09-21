@@ -7,11 +7,11 @@ title: Emailing
 	permissions, see the [permissions](/docs/guides/access-control/permissions) guide.
 </Callout>
 
-Stump has basic email functionality built-in, allowing you to send books via email. This feature was primarily developed to support email-to-ereader integrations, however there are loose plans for expanding it in the future.
+Coppice has basic email functionality built-in, allowing you to send books via email. This feature was primarily developed to support email-to-ereader integrations, however there are loose plans for expanding it in the future.
 
 ## Emailers
 
-An emailer is essentially just a named configuration object that tells Stump how to send emails from a specific email account. Stump doesn't have its own email server or client, so it relies on SMTP to send emails. This means that you'll need to provide the necessary connection and auth details to send emails.
+An emailer is essentially just a named configuration object that tells Coppice how to send emails from a specific email account. Coppice doesn't have its own email server or client, so it relies on SMTP to send emails. This means that you'll need to provide the necessary connection and auth details to send emails.
 
 ### Configuration
 
@@ -29,9 +29,9 @@ The following fields are required to configure an emailer:
   - `Email address` - The email address that will be displayed to recipients
 
 <Callout>
-	The password field is encrypted at rest and not visible after creation. Stump will decrypt the
+	The password field is encrypted at rest and not visible after creation. Coppice will decrypt the
 	password when sending emails. This is a security measure to prevent unauthorized access to your
-	email server. You should still take care to secure your Stump instance.
+	email server. You should still take care to secure your Coppice instance.
 </Callout>
 
 You may also optionally configure the following fields:
@@ -59,7 +59,7 @@ The following table lists perissions which can be assigned to users to control a
 
 ## Audit Logs
 
-Stump will log each email sent, however the logs are not currently exposed in the UI. This is a planned feature, but for now you can view the logs directly in the database with your preferred SQL client.
+Coppice will log each email sent, however the logs are not currently exposed in the UI. This is a planned feature, but for now you can view the logs directly in the database with your preferred SQL client.
 
 The following fields are logged for each record:
 

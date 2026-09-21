@@ -1049,7 +1049,7 @@ pub(crate) async fn plan(
 			| SeriesFilterField::CollapseSeriesRelationships => {
 				tracing::debug!(
 					?field,
-					"Kavita filter field has no Stump equivalent; ignored"
+					"Kavita filter field has no Coppice equivalent; ignored"
 				);
 			},
 		}

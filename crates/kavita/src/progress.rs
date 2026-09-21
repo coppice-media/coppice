@@ -229,6 +229,7 @@ mod tests {
 			notes: None,
 			kobo_state: None,
 			device_ids: None,
+			liseur_session_id: None,
 			media_id: "m".to_owned(),
 			user_id: "u".to_owned(),
 			created_at: now,

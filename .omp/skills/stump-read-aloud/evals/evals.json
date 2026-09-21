@@ -1,0 +1,55 @@
+{
+	"skill_name": "stump-read-aloud",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "In the Stump fork, a book page pairs an EPUB with an audiobook and the reader asks to resume the audiobook at the EPUB's current position. Explain the current implementation boundary and the safe implementation path before changing code.",
+			"expected_output": "Separates shipped tier-1 pairing/conversion from unshipped ML alignment and preserves read-only mapped positions.",
+			"files": [
+				"docs/content/docs/developer/read-aloud.mdx",
+				"docs/content/docs/developer/unified-reading-state.mdx",
+				".omp/PROJECT_STATE.md"
+			],
+			"expectations": [
+				"States that confirmed edition pairing, the chapter map, approximate conversion, generic worker substrate, and dormant align/SyncMap wire contract ship, while the ML runner, persistence, and read-aloud EPUB renderer remain unshipped.",
+				"Uses the two user-scoped liseur_sync_media_links rows sharing one work_id and says only a confirmed complementary ebook/audio pair may be converted.",
+				"Explains that MappedPosition is read-only, approximate for tier 1, and must never be passed to reading_state::resolve or written to a reading head; missing heads, invalid spans, and unmapped matter return no mapping rather than guesses.",
+				"Names actual symbol-level pointers including stump_library::editions::pair_editions/build_chapter_map, models::domain::reading_state::map_time_to_locator/map_locator_to_time, and GraphQL Media::paired_position.",
+				"Defines GET as cache-first and deterministic-only: no synchronous ML or align enqueue occurs, Stump alignment is not claimed shipped, and a real target head is created only after the user reads or listens there."
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "A reviewer says Storyteller's web alignment and its CLI --ctc mode are interchangeable, and asks us to copy whichever is easiest into Stump. Compare the two paths and give the Stump-safe integration boundary, including candidate reuse and licensing.",
+			"expected_output": "Distinguishes Whisper/fuzzy from CTC/Viterbi, keeps Storyteller external, and applies the legal candidate ladder.",
+			"files": [
+				"docs/content/docs/developer/read-aloud.mdx",
+				"docs/content/docs/developer/workers.mdx"
+			],
+			"expectations": [
+				"Identifies the Storyteller web/server path as Whisper transcription plus fuzzy reconciliation and the CLI pipeline --ctc path as direct CTC emissions plus Viterbi forced alignment.",
+				"Keeps both Storyteller paths external, identifies the align package as MIT with a GPL-3.0 ghost-story dependency, and does not claim Stump has shipped ML alignment.",
+				"Evaluates local SyncMap, exact-edition manifest, native SMIL, and Storyteller timing candidates without a hard-coded source order, selects the strongest valid candidate, and checks identity, duration, monotonicity, coverage, granularity, and provenance before GPU work.",
+				"Calls out ghost-story GPL-3.0 as external-only and MMS forced-aligner CC-BY-NC as unsuitable for a default/product dependency, while recording model provenance.",
+				"Explains that SMIL is an EPUB timing overlay rather than the full EPUB or Stump's internal SyncMap, and rejects transcript/content exchange."
+			]
+		},
+		{
+			"id": 3,
+			"prompt": "Design the future Stump GET /api/v2/media/{id}/read-aloud.epub behavior. It must be cache-first, avoid request-time ML, deduplicate align requests, and serve deterministic EPUB Media Overlays when alignment exists.",
+			"expected_output": "Defines an explicit asynchronous align action, immutable cache identities, observable unavailable/needs-worker GET states, validated SyncMap output, and atomically published deterministic EPUB derivatives.",
+			"files": [
+				"docs/content/docs/developer/read-aloud.mdx",
+				"docs/content/docs/developer/workers.mdx",
+				"crates/media/src/transform/cache.rs"
+			],
+			"expectations": [
+				"Requires GET to serve a completed derivative or build only a deterministic derivative from an accepted map; with no accepted map it exposes an explicit unavailable or needs-worker response state and never starts ML or creates an align job.",
+				"Defines explicit enqueue deduplication by canonical exact input plus algorithm identity, including exact text/audio digests, normalization, generator/version, model, options, and granularity rather than path or mtime alone.",
+				"Requires the worker to return a compact SyncMap whose server validator checks request identity/provenance, monotonic non-overlap, finite confidence bounds, probed duration bounds, cue coverage, and granularity—not a transcript, EPUB, or source audio.",
+				"Separates the SyncMap cache key from the EPUB derivative key and includes the accepted map payload plus renderer/schema identity in the derivative key; publication uses complete-file atomic rename so failed or concurrent writers never expose a partial ZIP.",
+				"Describes the derivative as XHTML with deterministic sentence IDs, per-spine SMIL, OPF overlay metadata, and verbatim single-file audio, with range behavior applying to a completed artifact."
+			]
+		}
+	]
+}

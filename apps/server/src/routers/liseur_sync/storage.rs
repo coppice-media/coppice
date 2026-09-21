@@ -9,17 +9,25 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, SecondsFormat, Utc};
 use models::txn::begin_write;
 use models::{
-	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
-	entity::{
-		library, media, media_metadata, series,
-		user::{self, AuthUser, LoginUser},
+	domain::{
+		reading_progress::calculate_logical_date,
+		reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
 	},
-	services::reading_state,
-	shared::{enums::FileStatus, readium::ReadiumLocator},
+	entity::{
+		library, media, media_metadata, reading_session, series,
+		user::{self, AuthUser, LoginUser},
+		user_preferences,
+	},
+	services::{reading_progress::derive_readthrough_number, reading_state},
+	shared::{
+		enums::{FileStatus, ReadingStatus},
+		readium::ReadiumLocator,
+	},
 };
 use sea_orm::{
-	ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
-	QueryOrder, QueryResult, Statement, Value as DbValue,
+	prelude::Decimal, ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait,
+	DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QueryResult, Statement,
+	Value as DbValue,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1803,6 +1811,97 @@ pub(crate) async fn positions(
 	rows.iter().map(op_record).collect()
 }
 
+/// Materialize one immutable liseur closed session in the native activity
+/// history. The source row is written by [`append_sessions`] in the same
+/// transaction, so a projection failure rolls back both writes.
+async fn project_liseur_session<C: ConnectionTrait>(
+	txn: &C,
+	user_id: &str,
+	device_id: &str,
+	session: &SessionInput,
+) -> Result<(), LiseurSyncError> {
+	let Some(media) = linked_media(txn, user_id, &session.work_id).await? else {
+		// Keep an unresolved source session immutable; a later retry can
+		// project it once its work is linked to Stump media.
+		return Ok(());
+	};
+
+	let already_projected = reading_session::Entity::find()
+		.filter(reading_session::Column::UserId.eq(user_id))
+		.filter(reading_session::Column::LiseurSessionId.eq(session.session_id.clone()))
+		.one(txn)
+		.await
+		.map_err(internal)?
+		.is_some();
+	if already_projected {
+		return Ok(());
+	}
+
+	let started_at =
+		DateTime::parse_from_rfc3339(&session.started_at).map_err(internal)?;
+	let ended_at = DateTime::parse_from_rfc3339(&session.ended_at).map_err(internal)?;
+	let elapsed_millis = (ended_at - started_at).num_milliseconds() - session.idle_ms;
+	let elapsed_seconds = elapsed_millis / 1000;
+	let day_reset_hour_offset = user_preferences::Entity::find()
+		.filter(user_preferences::Column::UserId.eq(user_id))
+		.one(txn)
+		.await
+		.map_err(internal)?
+		.map(|preferences| preferences.day_reset_hour_offset)
+		.unwrap_or_default();
+	let start_percentage =
+		Decimal::from_f64_retain(session.start_progression.ok_or_else(|| {
+			internal("validated liseur session has no start progression")
+		})?)
+		.ok_or_else(|| internal("invalid liseur start progression"))?;
+	let end_percentage =
+		Decimal::from_f64_retain(session.end_progression.ok_or_else(|| {
+			internal("validated liseur session has no end progression")
+		})?)
+		.ok_or_else(|| internal("invalid liseur end progression"))?;
+	let readthrough_number = derive_readthrough_number(txn, user_id, &media.id)
+		.await
+		.map_err(internal)?;
+
+	let projected = reading_session::ActiveModel {
+		session_date: Set(calculate_logical_date(
+			started_at.with_timezone(&Utc),
+			day_reset_hour_offset,
+		)),
+		start_percentage: Set(Some(start_percentage)),
+		end_percentage: Set(Some(end_percentage)),
+		elapsed_seconds: Set(Some(elapsed_seconds)),
+		readthrough_number: Set(readthrough_number),
+		status: Set(if session.end_progression.unwrap_or_default() >= 1.0 {
+			ReadingStatus::Finished
+		} else {
+			ReadingStatus::Reading
+		}),
+		device_ids: Set(Some(reading_session::DeviceIds(vec![device_id.to_owned()]))),
+		liseur_session_id: Set(Some(session.session_id.clone())),
+		media_id: Set(media.id),
+		user_id: Set(user_id.to_owned()),
+		created_at: Set(started_at.clone()),
+		updated_at: Set(Some(ended_at.clone())),
+		..Default::default()
+	}
+	.insert(txn)
+	.await
+	.map_err(internal)?;
+
+	// `reading_session::ActiveModelBehavior` stamps native writes with now.
+	// Restore the source timestamps after the insert so this immutable
+	// projection retains the closed-session interval.
+	txn.execute(db_statement(
+		txn,
+		"UPDATE reading_sessions SET created_at = $1, updated_at = $2 WHERE id = $3",
+		vec![started_at.into(), ended_at.into(), projected.id.into()],
+	))
+	.await
+	.map_err(internal)?;
+
+	Ok(())
+}
 pub(crate) async fn append_sessions(
 	ctx: &AppState,
 	user_id: &str,
@@ -1836,6 +1935,7 @@ pub(crate) async fn append_sessions(
 					"session_id reused with a different payload".into(),
 				));
 			}
+			project_liseur_session(&txn, user_id, device_id, &session).await?;
 			accepted += 1;
 			continue;
 		}
@@ -1849,12 +1949,12 @@ pub(crate) async fn append_sessions(
 			vec![
 				Uuid::new_v4().to_string().into(),
 				user_id.to_owned().into(),
-				session.session_id.into(),
-				session.work_id.into(),
-				session.edition_sha.into(),
+				session.session_id.clone().into(),
+				session.work_id.clone().into(),
+				session.edition_sha.clone().into(),
 				device_id.to_owned().into(),
-				session.started_at.into(),
-				session.ended_at.into(),
+				session.started_at.clone().into(),
+				session.ended_at.clone().into(),
 				session
 					.start_progression
 					.expect("validated progression")
@@ -1870,6 +1970,7 @@ pub(crate) async fn append_sessions(
 		))
 		.await
 		.map_err(internal)?;
+		project_liseur_session(&txn, user_id, device_id, &session).await?;
 		accepted += 1;
 	}
 	txn.commit().await.map_err(internal)?;
@@ -2367,5 +2468,132 @@ mod tests {
 		let annotations = work_annotations(&ctx, "user-1", "work-1").await.unwrap();
 		assert_eq!(annotations.len(), 1);
 		assert_eq!(annotations[0].id, "annotation-1");
+	}
+	#[tokio::test]
+	async fn append_sessions_projects_and_deduplicates_liseur_history() {
+		use std::sync::Arc;
+
+		use ::tests::{db::test_database, fake_data};
+		use models::entity::reading_session;
+		use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, Statement};
+
+		let db = test_database().await;
+		let user = fake_data::User::new("liseur-session-user")
+			.insert(&db)
+			.await;
+		let library = fake_data::Library::default().insert(&db).await;
+		let series = fake_data::Series {
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let media = fake_data::Media {
+			series_id: series.id.clone(),
+			id: Some("liseur-session-media".to_owned()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+
+		for sql in [
+			"CREATE TABLE liseur_sync_works (
+                id TEXT NOT NULL,
+                user_id TEXT NOT NULL
+            )",
+			"CREATE TABLE liseur_sync_media_links (
+                user_id TEXT NOT NULL,
+                work_id TEXT NOT NULL,
+                media_id TEXT NOT NULL
+            )",
+			"CREATE TABLE liseur_sync_sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                work_id TEXT NOT NULL,
+                edition_sha TEXT,
+                device_id TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL,
+                start_progression DOUBLE NOT NULL,
+                end_progression DOUBLE NOT NULL,
+                idle_ms BIGINT NOT NULL,
+                payload TEXT NOT NULL,
+                received_at TEXT NOT NULL
+            )",
+		] {
+			db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
+				.await
+				.unwrap();
+		}
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_works (id, user_id) VALUES ($1, $2)",
+			vec!["work-1".to_owned().into(), user.id.clone().into()],
+		))
+		.await
+		.unwrap();
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_media_links (user_id, work_id, media_id)
+             VALUES ($1, $2, $3)",
+			vec![
+				user.id.clone().into(),
+				"work-1".to_owned().into(),
+				media.id.clone().into(),
+			],
+		))
+		.await
+		.unwrap();
+
+		let ctx = Arc::new(stump_core::Ctx::for_testing(db));
+		let session = SessionInput {
+			session_id: "session-1".to_owned(),
+			work_id: "work-1".to_owned(),
+			edition_sha: None,
+			started_at: "2026-09-11T12:00:00Z".to_owned(),
+			ended_at: "2026-09-11T12:00:10Z".to_owned(),
+			start_progression: Some(0.25),
+			end_progression: Some(0.5),
+			idle_ms: 1_000,
+		};
+
+		assert_eq!(
+			append_sessions(&ctx, &user.id, "liseur-device", vec![session.clone()])
+				.await
+				.unwrap(),
+			1
+		);
+		assert_eq!(
+			append_sessions(&ctx, &user.id, "liseur-device", vec![session])
+				.await
+				.unwrap(),
+			1
+		);
+
+		let rows = reading_session::Entity::find()
+			.filter(reading_session::Column::LiseurSessionId.eq("session-1"))
+			.all(ctx.conn.as_ref())
+			.await
+			.unwrap();
+		assert_eq!(rows.len(), 1);
+		assert_eq!(rows[0].media_id, media.id);
+		assert_eq!(rows[0].elapsed_seconds, Some(9));
+		assert_eq!(
+			rows[0].device_ids,
+			Some(reading_session::DeviceIds(vec!["liseur-device".to_owned()]))
+		);
+
+		let source_rows = ctx
+			.conn
+			.query_all(db_statement(
+				ctx.conn.as_ref(),
+				"SELECT session_id FROM liseur_sync_sessions
+                 WHERE user_id = $1",
+				vec![user.id.into()],
+			))
+			.await
+			.unwrap();
+		assert_eq!(source_rows.len(), 1);
 	}
 }

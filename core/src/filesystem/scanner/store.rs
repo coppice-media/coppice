@@ -59,6 +59,7 @@ impl ScanSource for SeaOrmScanSource {
 				series::Column::Status,
 			])
 			.filter(series::Column::LibraryId.eq(library_id))
+			.filter(series::Column::IsOneshot.eq(false))
 			.into_model::<SeriesScanRow>()
 			.all(self.conn.as_ref())
 			.await

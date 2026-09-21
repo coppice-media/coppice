@@ -23,14 +23,19 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{
+	atomic::{AtomicBool, Ordering},
+	Arc, OnceLock,
+};
 
 use chrono::Utc;
 use sea_orm::{
-	prelude::*, ActiveValue::Set, DatabaseConnection, Order, QueryOrder, QuerySelect,
+	prelude::*, sea_query::Expr, ActiveValue::Set, DatabaseConnection, Order, QueryOrder,
+	QuerySelect,
 };
 use serde_json::Value;
 use tokio::sync::{oneshot, Mutex};
+use tokio::time::Duration;
 
 use models::{entity::worker_job as entity, shared::enums::WorkerJobStatus};
 
@@ -49,7 +54,14 @@ pub const BACKGROUND_PRIORITY: i32 = -10;
 /// The priority of work a request is blocked on.
 pub const INTERACTIVE_PRIORITY: i32 = 0;
 
-/// How a job ended, as the caller that awaited it sees it.
+/// How long an offered job may remain unclaimed before it is returned to the queue.
+///
+/// The claim sweep uses `updated_at` as the offer timestamp: offering is a
+/// guarded transition and therefore updates that column without requiring an
+/// extra schema column.
+pub const CLAIM_DEADLINE: Duration = Duration::from_secs(30);
+
+/// How a job ended, as the caller that awaited it sees.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobOutcome {
 	/// The job produced `result`; its bytes, if any, are at `output_path`.
@@ -66,6 +78,19 @@ pub enum JobOutcome {
 	NeedsWorker,
 }
 
+/// A kind-specific gate that runs before a worker result can transition to
+/// `done`. The validator owns the public contract for its output bytes and
+/// may persist an accepted derivative before the queue row is marked done.
+#[async_trait::async_trait]
+pub trait ResultValidator: Send + Sync {
+	async fn validate(
+		&self,
+		job: &entity::Model,
+		result: &Value,
+		output_path: &Path,
+	) -> Result<(), String>;
+}
+
 /// The queue and its dispatcher.
 pub struct WorkerJobs {
 	conn: Arc<DatabaseConnection>,
@@ -78,10 +103,11 @@ pub struct WorkerJobs {
 	output_dir: PathBuf,
 	on_change: Option<ChangeListener>,
 	waiters: Waiters,
+	claim_deadline: Duration,
+	claim_sweep_started: AtomicBool,
+	result_validator: Arc<OnceLock<Arc<dyn ResultValidator>>>,
 }
 
-/// The completion channels `enqueue_and_wait` is blocked on, shared with the
-/// tasks spawned for local runs.
 type Waiters = Arc<Mutex<HashMap<String, Vec<oneshot::Sender<JobOutcome>>>>>;
 
 impl WorkerJobs {
@@ -94,7 +120,40 @@ impl WorkerJobs {
 			output_dir,
 			on_change: None,
 			waiters: Waiters::default(),
+			claim_deadline: CLAIM_DEADLINE,
+			claim_sweep_started: AtomicBool::new(false),
+			result_validator: Arc::new(OnceLock::new()),
 		}
+	}
+
+	/// Override the claim deadline, primarily for deterministic protocol tests.
+	#[must_use]
+	pub fn with_claim_deadline(mut self, claim_deadline: Duration) -> Self {
+		assert!(!claim_deadline.is_zero(), "claim deadline must be non-zero");
+		self.claim_deadline = claim_deadline;
+		self
+	}
+
+	/// Start the background sweep that releases stale, unclaimed offers.
+	///
+	/// The service owns one sweep task even if a host accidentally calls this
+	/// more than once. A task is intentionally started by the host rather than
+	/// by `new`, so construction remains side-effect free for migrations and
+	/// command-line tooling.
+	pub fn start_claim_sweep(self: &Arc<Self>) {
+		if self.claim_sweep_started.swap(true, Ordering::AcqRel) {
+			return;
+		}
+		let jobs = Arc::clone(self);
+		tokio::spawn(async move {
+			let mut interval = tokio::time::interval(jobs.claim_deadline);
+			loop {
+				interval.tick().await;
+				if let Err(error) = jobs.sweep_claim_deadlines().await {
+					tracing::error!(?error, "Failed to sweep stale worker job offers");
+				}
+			}
+		});
 	}
 
 	/// Install the job-kind registry (the local fallbacks).
@@ -109,6 +168,19 @@ impl WorkerJobs {
 	pub fn with_change_listener(mut self, listener: ChangeListener) -> Self {
 		self.on_change = Some(listener);
 		self
+	}
+	/// Install the kind-specific completion gate. This is intentionally
+	/// one-shot: replacing it while jobs are running would let a result be
+	/// checked under a different contract than the one that was queued.
+	#[must_use]
+	pub fn set_result_validator(&self, validator: Arc<dyn ResultValidator>) -> bool {
+		self.result_validator.set(validator).is_ok()
+	}
+
+	/// Whether the host installed a completion gate.
+	#[must_use]
+	pub fn has_result_validator(&self) -> bool {
+		self.result_validator.get().is_some()
 	}
 
 	/// The shared hub, for the transport and for the console's `workers` query.
@@ -316,7 +388,31 @@ impl WorkerJobs {
 
 	/// Offer the job to a worker, run it locally, or park it in `needs_worker`.
 	async fn dispatch(&self, job: &entity::Model) -> WorkerResult<entity::Model> {
-		if let Some(worker) = self.hub.capable_worker(&job.requires).await {
+		self.dispatch_avoiding(job, None).await
+	}
+
+	/// Dispatch after withdrawing an offer, preferring a different capable
+	/// worker when one is connected. `WorkerHub::capable_worker` intentionally
+	/// has no exclusion argument, so the connected list supplies this one
+	/// routing preference without changing the hub contract.
+	async fn dispatch_avoiding(
+		&self,
+		job: &entity::Model,
+		avoid_worker: Option<&str>,
+	) -> WorkerResult<entity::Model> {
+		let worker = if let Some(avoid_worker) = avoid_worker {
+			self.hub.connected().await.into_iter().find(|worker| {
+				worker.device_id != avoid_worker
+					&& crate::kind::satisfies(&worker.capabilities, &job.requires)
+			})
+		} else {
+			None
+		};
+		let worker = match worker {
+			Some(worker) => Some(worker),
+			None => self.hub.capable_worker(&job.requires).await,
+		};
+		if let Some(worker) = worker {
 			if self.offer(job, &worker).await? {
 				let mut offered = job.clone();
 				offered.worker_id = Some(worker.device_id);
@@ -386,9 +482,11 @@ impl WorkerJobs {
 	fn run_locally(&self, job: entity::Model, runner: Arc<dyn crate::kind::LocalRunner>) {
 		let conn = self.conn.clone();
 		let output_path = self.output_path(&job.id);
+		let completion_path = output_path.clone();
 		let output_dir = self.output_dir.clone();
 		let on_change = self.on_change.clone();
 		let waiters = self.waiters.clone();
+		let result_validator = self.result_validator.clone();
 		tokio::spawn(async move {
 			let local = LocalJob {
 				id: job.id.clone(),
@@ -429,7 +527,15 @@ impl WorkerJobs {
 				"Running a worker job locally"
 			);
 			let outcome = runner.run(local).await;
-			match finish(conn.as_ref(), &job.id, outcome).await {
+			match finish(
+				conn.as_ref(),
+				&job.id,
+				outcome,
+				result_validator.get().cloned(),
+				&completion_path,
+			)
+			.await
+			{
 				Ok(Some(row)) => {
 					announce_with(on_change.as_ref(), &row);
 					wake_waiters(&waiters, &row, &output_dir).await;
@@ -440,6 +546,51 @@ impl WorkerJobs {
 				},
 			}
 		});
+	}
+
+	/// Release offers that have remained queued and assigned past the claim
+	/// deadline, then route them again. The worker id is part of the guarded
+	/// update so a racing `claim` changes the status to `claimed` and wins.
+	async fn sweep_claim_deadlines(&self) -> WorkerResult<usize> {
+		let cutoff = Utc::now().fixed_offset()
+			- chrono::Duration::from_std(self.claim_deadline)
+				.expect("claim deadline fits chrono duration");
+		let offered = entity::Entity::find()
+			.filter(entity::Column::Status.eq(WorkerJobStatus::Queued.as_str()))
+			.filter(entity::Column::WorkerId.is_not_null())
+			.filter(entity::Column::UpdatedAt.lt(cutoff))
+			.all(self.conn.as_ref())
+			.await?;
+		let mut released = 0;
+		for job in offered {
+			let Some(worker_id) = job.worker_id.clone() else {
+				continue;
+			};
+			let Some(requeued) = self
+				.transition(
+					&job.id,
+					&[WorkerJobStatus::Queued],
+					WorkerJobStatus::Queued,
+					Transition {
+						worker_id: Some(None),
+						worker_id_guard: Some(worker_id.clone()),
+						..Transition::default()
+					},
+				)
+				.await?
+			else {
+				continue;
+			};
+			tracing::warn!(
+				job_id = %job.id,
+				worker = %worker_id,
+				"Worker job offer exceeded its claim deadline; requeuing"
+			);
+			self.announce(&requeued);
+			self.dispatch_avoiding(&requeued, Some(&worker_id)).await?;
+			released += 1;
+		}
+		Ok(released)
 	}
 
 	// -- transport callbacks ---------------------------------------------
@@ -601,6 +752,7 @@ impl WorkerJobs {
 					&[WorkerJobStatus::Queued],
 					WorkerJobStatus::Claimed,
 					Transition {
+						worker_id_guard: Some(device_id.to_string()),
 						started_at: true,
 						..Transition::default()
 					},
@@ -716,8 +868,15 @@ impl WorkerJobs {
 		outcome: Result<Value, String>,
 	) -> WorkerResult<()> {
 		self.assert_holder(device_id, job_id).await?;
-		let failed = outcome.is_err();
-		let Some(job) = finish(self.conn.as_ref(), job_id, outcome).await? else {
+		let Some(job) = finish(
+			self.conn.as_ref(),
+			job_id,
+			outcome,
+			self.result_validator.get().cloned(),
+			&self.output_path(job_id),
+		)
+		.await?
+		else {
 			tracing::debug!(
 				job_id,
 				worker = %device_id,
@@ -725,7 +884,7 @@ impl WorkerJobs {
 			);
 			return Ok(());
 		};
-		if failed {
+		if job.status == WorkerJobStatus::Failed {
 			let _ = tokio::fs::remove_file(self.output_path(job_id)).await;
 		}
 		self.announce(&job);
@@ -772,6 +931,8 @@ impl WorkerJobs {
 /// to NULL", which the release-on-disconnect path needs for `worker_id`.
 #[derive(Default)]
 struct Transition {
+	/// Optional exact worker id guard for races between an offer and a claim.
+	worker_id_guard: Option<String>,
 	worker_id: Option<Option<String>>,
 	progress: Option<f64>,
 	message: Option<Option<String>>,
@@ -801,6 +962,9 @@ async fn update_status<C: ConnectionTrait>(
 		)
 		.col_expr(entity::Column::Status, Expr::value(to.as_str()))
 		.col_expr(entity::Column::UpdatedAt, Expr::value(now));
+	if let Some(worker_id) = change.worker_id_guard {
+		update = update.filter(entity::Column::WorkerId.eq(worker_id));
+	}
 	if let Some(worker_id) = change.worker_id {
 		update = update.col_expr(entity::Column::WorkerId, Expr::value(worker_id));
 	}
@@ -826,17 +990,40 @@ async fn update_status<C: ConnectionTrait>(
 	Ok(entity::Entity::find_by_id(id).one(conn).await?)
 }
 
-/// The terminal write shared by the remote and the local path.
+/// The terminal write shared by the remote and the local path. A configured
+/// validator runs before this write, so invalid ALIGN output can only become a
+/// failed row and never an apparently successful job.
 async fn finish<C: ConnectionTrait>(
 	conn: &C,
 	id: &str,
 	outcome: Result<Value, String>,
+	validator: Option<Arc<dyn ResultValidator>>,
+	output_path: &Path,
 ) -> WorkerResult<Option<entity::Model>> {
 	let from = [
 		WorkerJobStatus::Queued,
 		WorkerJobStatus::Claimed,
 		WorkerJobStatus::Running,
 	];
+	let outcome = match outcome {
+		Ok(result) => {
+			if let Some(validator) = validator {
+				let Some(job) = entity::Entity::find_by_id(id).one(conn).await? else {
+					return Ok(None);
+				};
+				if !from.contains(&job.status) {
+					return Ok(None);
+				}
+				match validator.validate(&job, &result, output_path).await {
+					Ok(()) => Ok(result),
+					Err(error) => Err(error),
+				}
+			} else {
+				Ok(result)
+			}
+		},
+		Err(error) => Err(error),
+	};
 	let now = Utc::now().fixed_offset();
 	let (to, result, error, progress) = match outcome {
 		Ok(result) => (WorkerJobStatus::Done, Some(result), None, 1.0),

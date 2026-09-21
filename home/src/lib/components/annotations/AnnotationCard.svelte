@@ -11,6 +11,7 @@
 	import BookOpenIcon from '@lucide/svelte/icons/book-open';
 	import BookmarkIcon from '@lucide/svelte/icons/bookmark';
 	import HighlighterIcon from '@lucide/svelte/icons/highlighter';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import StickyNoteIcon from '@lucide/svelte/icons/sticky-note';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { Badge } from '@stump/ui/components/ui/badge';
@@ -18,7 +19,8 @@
 	import { Textarea } from '@stump/ui/components/ui/textarea';
 	import type { ConsoleAnnotationFieldsFragment } from '$lib/graphql/generated/graphql';
 	import { KIND_LABELS, SOURCE_LABELS, anchorLabel, readerAnchor } from '$lib/annotations';
-	import { relativeTime } from '$lib/format';
+	import { DEVICE_KIND_ICONS } from '$lib/devices';
+	import { absoluteTime, relativeTime } from '$lib/format';
 
 	let {
 		annotation,
@@ -40,6 +42,7 @@
 		BOOKMARK: BookmarkIcon
 	};
 	const Icon = $derived(KIND_ICONS[annotation.kind]);
+	const SourceIcon = $derived(DEVICE_KIND_ICONS[annotation.source]);
 	const anchor = $derived(anchorLabel(annotation));
 	const readerHref = $derived(
 		annotation.book.mediaId
@@ -63,30 +66,47 @@
 	}
 </script>
 
-<li class="flex flex-col gap-2 border-t px-4 py-3 first:border-t-0">
+<li
+	class="flex flex-col gap-3 border-t px-6 py-4 first:border-t-0 {annotation.editable
+		? ''
+		: 'bg-muted/40'}"
+>
 	<div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-		<Badge variant="secondary" class="gap-1">
-			<Icon class="size-3" aria-hidden="true" />
+		<Badge variant="secondary">
+			<Icon aria-hidden="true" />
 			{KIND_LABELS[annotation.kind]}
 		</Badge>
-		<Badge variant="outline" title={annotation.sourceDeviceName ?? undefined}>
-			{SOURCE_LABELS[annotation.source]}
+		<Badge variant="outline" title={SOURCE_LABELS[annotation.source]}>
+			<SourceIcon aria-hidden="true" />
+			{annotation.sourceDeviceName ?? SOURCE_LABELS[annotation.source]}
 		</Badge>
+		{#if !annotation.editable}
+			<Badge variant="outline" class="text-muted-foreground">
+				<LockIcon aria-hidden="true" />
+				Read-only
+			</Badge>
+		{/if}
 		{#if annotation.color}
 			<span
-				class="size-3 rounded-full border"
-				style={`background-color: ${annotation.color}`}
+				class="size-3 rounded-full ring-1 ring-foreground/20"
+				style:background-color={annotation.color}
+				role="img"
+				aria-label={`Colour: ${annotation.color}`}
 				title={`Colour: ${annotation.color}`}
 			></span>
 		{/if}
 		{#if anchor}
 			<span>{anchor}</span>
 		{/if}
-		<span class="ml-auto">{relativeTime(annotation.createdAt)}</span>
+		<time class="ml-auto" datetime={annotation.createdAt ?? undefined} title={absoluteTime(annotation.createdAt)}>
+			{relativeTime(annotation.createdAt)}
+		</time>
 	</div>
 
 	{#if annotation.excerpt}
-		<blockquote class="border-l-2 pl-3 text-sm italic">{annotation.excerpt}</blockquote>
+		<blockquote class="border-l-2 border-primary/50 pl-4 text-[0.9375rem] leading-relaxed text-foreground">
+			{annotation.excerpt}
+		</blockquote>
 	{/if}
 
 	{#if editing}
@@ -105,7 +125,10 @@
 			</div>
 		</div>
 	{:else if annotation.note}
-		<p class="text-sm whitespace-pre-wrap">{annotation.note}</p>
+		<p class="flex gap-2 text-sm whitespace-pre-wrap text-muted-foreground">
+			<StickyNoteIcon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+			<span>{annotation.note}</span>
+		</p>
 	{:else if !annotation.excerpt}
 		<p class="text-sm text-muted-foreground">No text — this is a place marker.</p>
 	{/if}

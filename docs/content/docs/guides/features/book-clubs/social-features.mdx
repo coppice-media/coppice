@@ -27,13 +27,36 @@ The discussion rooms support basic chat features, such as:
 
 ### Future Improvements
 
-While Stump is notably **not** a chat application, I will try to make these as functional as possible while still keeping the scope reasonable. Some features that I think would be nice to have:
+While Coppice is notably **not** a chat application, I will try to make these as functional as possible while still keeping the scope reasonable. Some features that I think would be nice to have:
 
 - Editing and deleting messages
 - Live chat (currently, messages are only fetched when the page is loaded or manually refreshed)
 - Better UX for message actions (e.g., double-tapping to edit, etc.)
 - @mentions with notifications and other typical chat-like features
 - Inline markdown support, mostly for things like spoilers and inline emojis
+
+
+## Recommendations and scoped reading shares
+
+Recommendations are directed to one active user and keep an immutable snapshot
+of the title, authors, cover, provider, and remote identifiers. A recipient can
+accept, decline, dismiss an accepted recommendation, or request it through the
+normal private request flow. Accepting never starts a download and never grants
+access to the sender's library.
+
+Reading shares are separate, explicit grants. The recipient must accept a
+pending grant before any projection is visible, and the sender or recipient can
+revoke it. Each grant names its scopes: metadata, rating, review text,
+completion, coarse percentage, or annotations. Shared annotations are
+recipient-side projections; they do not become the recipient's own highlights,
+notes, or bookmarks and are removed from view when the grant is revoked.
+
+The server stores only normalized snapshots and opaque target keys for adaptive
+recommendations. Tracker credentials, private review text outside an accepted
+scope, raw download URLs, and sender-only media/work identifiers never cross a
+social boundary. Users can opt out of recommendations or sharing independently.
+Shared highlight colors are deterministic per source and work (yellow, green,
+blue, pink, purple, or orange), so a page remains visually stable.
 
 ## Important Disclaimers
 

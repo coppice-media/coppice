@@ -1,4 +1,4 @@
-use async_graphql::{Context, Json, Object, Result, SimpleObject, ID};
+use async_graphql::{Context, Json, MaybeUndefined, Object, Result, SimpleObject, ID};
 use chrono::Utc;
 use itertools::chain;
 use metadata_integrations::MetadataField;
@@ -15,8 +15,8 @@ use models::{
 };
 use sea_orm::{
 	prelude::*,
-	sea_query::{OnConflict, Query},
-	Condition, IntoActiveModel, QuerySelect, Set,
+	sea_query::{Expr, OnConflict, Query},
+	Condition, IntoActiveModel, QuerySelect, Set, TransactionTrait,
 };
 use stump_core::{
 	filesystem::{
@@ -38,8 +38,13 @@ use crate::{
 	data::CoreContext,
 	error_message,
 	guard::PermissionGuard,
-	input::{library::CreateOrUpdateLibraryInput, thumbnail::UpdateThumbnailInput},
-	object::library::Library,
+	input::{
+		library::{
+			CreateOrUpdateLibraryInput, PatchLibraryConfigInput, PatchLibraryInput,
+		},
+		thumbnail::UpdateThumbnailInput,
+	},
+	object::{library::Library, library_config::LibraryConfig},
 };
 
 #[derive(Default, SimpleObject)]
@@ -373,7 +378,10 @@ impl LibraryMutation {
 
 	/// Update an existing library with the provided configuration. If `scan_after_persist` is `true`,
 	/// the library will be scanned immediately after updating.
-	#[graphql(guard = "PermissionGuard::one(UserPermission::EditLibrary)")]
+	#[graphql(
+		guard = "PermissionGuard::one(UserPermission::EditLibrary)",
+		deprecation = "Use `patchLibrary` instead"
+	)]
 	async fn update_library(
 		&self,
 		ctx: &Context<'_>,
@@ -409,6 +417,108 @@ impl LibraryMutation {
 		.map_err(crate::error::map_core_error)?;
 
 		Ok(Library::from(updated_library))
+	}
+
+	#[graphql(guard = "PermissionGuard::one(UserPermission::EditLibrary)")]
+	async fn patch_library(
+		&self,
+		ctx: &Context<'_>,
+		id: ID,
+		input: PatchLibraryInput,
+	) -> Result<Library> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+
+		let (existing_library, existing_config) = library::Entity::find_for_user(user)
+			.filter(library::Column::Id.eq(id.to_string()))
+			.find_also_related(library_config::Entity)
+			.one(core.conn.as_ref())
+			.await?
+			.ok_or("Library not found")?;
+		let Some(existing_config) = existing_config else {
+			return Err("Library is missing associated config!".into());
+		};
+
+		let final_name = input
+			.name
+			.clone()
+			.unwrap_or_else(|| existing_library.name.clone());
+		let final_path = input
+			.path
+			.clone()
+			.unwrap_or_else(|| existing_library.path.clone());
+		let scan_after_persist = input.scan_after_persist;
+		let config_in_patch = input.config.is_some();
+		let watch_update = match input.config.as_ref().and_then(|config| config.watch) {
+			Some(true) if !existing_config.watch => {
+				stump_library::library::WatchUpdate::Add
+			},
+			Some(false) if existing_config.watch => {
+				stump_library::library::WatchUpdate::Remove
+			},
+			_ => stump_library::library::WatchUpdate::Keep,
+		};
+		let tags = match input.tags.clone() {
+			MaybeUndefined::Null => Some(vec![]),
+			MaybeUndefined::Value(tags) => Some(tags),
+			MaybeUndefined::Undefined => None,
+		};
+
+		let (library, config) = input.apply(existing_library, existing_config)?;
+		let updated_library = stump_library::library::patch_library(
+			core,
+			user,
+			&id.to_string(),
+			stump_library::library::PatchedLibrary {
+				library,
+				config: config_in_patch.then_some(config),
+				name: final_name,
+				path: final_path,
+				tags,
+				scan_after_persist,
+				watch: watch_update,
+			},
+		)
+		.await
+		.map_err(crate::error::map_core_error)?;
+
+		Ok(Library::from(updated_library))
+	}
+
+	#[graphql(guard = "PermissionGuard::one(UserPermission::EditLibrary)")]
+	async fn patch_library_config(
+		&self,
+		ctx: &Context<'_>,
+		id: ID,
+		input: PatchLibraryConfigInput,
+	) -> Result<LibraryConfig> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+
+		let (_library, existing_config) = library::Entity::find_for_user(user)
+			.filter(library::Column::Id.eq(id.to_string()))
+			.find_also_related(library_config::Entity)
+			.one(core.conn.as_ref())
+			.await?
+			.ok_or("Library not found")?;
+		let Some(existing_config) = existing_config else {
+			return Err("Library is missing associated config!".into());
+		};
+
+		let watch = input.watch;
+		let config = input.apply_to_model(existing_config)?;
+		let updated_config = stump_library::library::patch_library_config(
+			core,
+			user,
+			&id.to_string(),
+			stump_library::library::PatchedLibraryConfig { config, watch },
+		)
+		.await
+		.map_err(crate::error::map_core_error)?;
+
+		Ok(LibraryConfig::from(updated_config))
 	}
 
 	/// Update the emoji for a library
@@ -719,9 +829,10 @@ impl LibraryMutation {
 			.one(core.conn.as_ref())
 			.await?
 			.ok_or("Library not found")?;
+		let library_id = library.id;
 
-		let series = series::Entity::find_for_user(user)
-			.filter(series::Column::LibraryId.eq(library.id.clone()))
+		let series = series::Entity::find()
+			.filter(series::Column::LibraryId.eq(library_id.clone()))
 			.select_only()
 			.columns(series::SeriesIdentSelect::columns())
 			.into_model::<series::SeriesIdentSelect>()
@@ -730,8 +841,13 @@ impl LibraryMutation {
 
 		let books = media::Entity::find()
 			.filter(
-				media::Column::SeriesId
-					.is_in(series.iter().map(|s| s.id.clone()).collect::<Vec<_>>()),
+				media::Column::SeriesId.in_subquery(
+					Query::select()
+						.column(series::Column::Id)
+						.from(series::Entity)
+						.and_where(series::Column::LibraryId.eq(library_id.clone()))
+						.to_owned(),
+				),
 			)
 			.select_only()
 			.columns(media::MediaIdentSelect::columns())
@@ -740,7 +856,7 @@ impl LibraryMutation {
 			.await?;
 
 		let ids = chain(
-			[library.id],
+			[library_id.clone()],
 			series
 				.iter()
 				.map(|s| s.id.clone())
@@ -753,6 +869,52 @@ impl LibraryMutation {
 			tracing::error!(?error, "Failed to remove library thumbnails");
 			return Err(error.into());
 		}
+
+		let updated_at = Some(DateTimeWithTimeZone::from(Utc::now()));
+		let txn = core.conn.as_ref().begin().await?;
+
+		library::Entity::update_many()
+			.filter(library::Column::Id.eq(library_id.clone()))
+			.col_expr(library::Column::ThumbnailPath, Expr::value(None::<String>))
+			.col_expr(
+				library::Column::ThumbnailMeta,
+				Expr::value(None::<models::shared::image::ImageMetadata>),
+			)
+			.col_expr(library::Column::UpdatedAt, Expr::value(updated_at))
+			.exec(&txn)
+			.await?;
+
+		series::Entity::update_many()
+			.filter(series::Column::LibraryId.eq(library_id.clone()))
+			.col_expr(series::Column::ThumbnailPath, Expr::value(None::<String>))
+			.col_expr(
+				series::Column::ThumbnailMeta,
+				Expr::value(None::<models::shared::image::ImageMetadata>),
+			)
+			.col_expr(series::Column::UpdatedAt, Expr::value(updated_at))
+			.exec(&txn)
+			.await?;
+
+		media::Entity::update_many()
+			.filter(
+				media::Column::SeriesId.in_subquery(
+					Query::select()
+						.column(series::Column::Id)
+						.from(series::Entity)
+						.and_where(series::Column::LibraryId.eq(library_id))
+						.to_owned(),
+				),
+			)
+			.col_expr(media::Column::ThumbnailPath, Expr::value(None::<String>))
+			.col_expr(
+				media::Column::ThumbnailMeta,
+				Expr::value(None::<models::shared::image::ImageMetadata>),
+			)
+			.col_expr(media::Column::UpdatedAt, Expr::value(updated_at))
+			.exec(&txn)
+			.await?;
+
+		txn.commit().await?;
 
 		Ok(true)
 	}

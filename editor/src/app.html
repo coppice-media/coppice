@@ -1,9 +1,31 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark" data-theme="neutral">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<meta name="color-scheme" content="dark light" />
+		<!--
+			Coppice is dark first, so the markup above is already right for a
+			first visit. This corrects it for a stored choice before the first
+			paint; it is `themeBootScript` from `@stump/ui/theme.svelte.js`,
+			which owns the keys and the defaults.
+		-->
+		<script>
+			(() => {
+				try {
+					var el = document.documentElement;
+					var mode = localStorage.getItem('coppice.theme.mode') || 'dark';
+					var preset = localStorage.getItem('coppice.theme.preset') || 'neutral';
+					var dark = mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+					el.classList.toggle('dark', dark);
+					el.dataset.theme = preset;
+					el.style.colorScheme = dark ? 'dark' : 'light';
+				} catch (error) {
+					// Storage can be unavailable; the markup default (dark) stands.
+				}
+			})();
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

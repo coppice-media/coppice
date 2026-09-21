@@ -6,7 +6,8 @@
 //!    annotated (through Stump's native `media_annotations`, the liseur-sync
 //!    CAS, native bookmarks, or any combination) is projected once into
 //!    [`model::ExportBook`] with a deterministic field and row ordering, so a
-//!    re-export of unchanged data is byte-identical.
+//!    re-export of unchanged data is byte-identical. Explicit work/edition
+//!    reviews are carried as one optional [`model::ExportReview`].
 //! 2. [`sink`] — the [`sink::Sink`] contract plus the concrete sinks. The
 //!    [`markdown`] sink renders one Obsidian-friendly file per book into a
 //!    per-user directory; the [`git`] sink (feature `git`) commits and pushes
@@ -33,5 +34,7 @@ pub mod sink;
 mod test_support;
 
 pub use error::AnnotationSyncError;
-pub use model::{build_export_batch, BuildOptions, ExportBatch, ExportBook};
-pub use sink::{Sink, SinkDescriptor, SinkState};
+pub use model::{
+	build_export_batch, BuildOptions, ExportBatch, ExportBook, ExportReview,
+};
+pub use sink::{SinkDescriptor, SinkPresetDescriptor, SinkState};

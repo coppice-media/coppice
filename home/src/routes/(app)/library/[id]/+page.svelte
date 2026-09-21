@@ -33,11 +33,13 @@
 	import Pager from '$lib/components/library/Pager.svelte';
 	import SeriesGrid from '$lib/components/library/SeriesGrid.svelte';
 	import SeriesTable from '$lib/components/library/SeriesTable.svelte';
+	import CrossPointSendButton from '$lib/components/library/CrossPointSendButton.svelte';
 
 	const SERIES_PAGE_SIZE = 24;
 	const BOOKS_PAGE_SIZE = 25;
 
 	const libraryId = $derived(page.params.id ?? '');
+	let selected = $state<string[]>([]);
 
 	// The screen's state lives in the URL: the entity grids link straight to a
 	// filtered view, and back/forward keeps working.
@@ -55,6 +57,7 @@
 	});
 
 	function navigate(patch: Record<string, string | null>, resetPage = true): void {
+		selected = [];
 		const url = new URL(page.url);
 		for (const [key, value] of Object.entries(patch)) {
 			if (value === null || value === '') url.searchParams.delete(key);
@@ -115,7 +118,7 @@
 </script>
 
 <svelte:head>
-	<title>{library ? `${library.name} · Stump` : 'Library · Stump'}</title>
+	<title>{library ? `${library.name} · Coppice` : 'Library · Coppice'}</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">
@@ -191,6 +194,15 @@
 					<TableIcon />
 				</Button>
 			</div>
+			{#if tab === 'books' && selected.length}
+				<div class="flex w-full flex-wrap items-center gap-2 border-t pt-3">
+					<span class="text-sm text-muted-foreground">{countLabel(selected.length)} selected</span>
+					<CrossPointSendButton mediaIds={selected} />
+					<Button type="button" size="xs" variant="ghost" onclick={() => (selected = [])}>
+						Clear selection
+					</Button>
+				</div>
+			{/if}
 		</div>
 
 		<BookFilters {facets} onfacets={applyFacets} />
@@ -244,7 +256,7 @@
 				</EmptyHeader>
 			</Empty>
 		{:else}
-			<BookTable {books} showSeries onchange={() => booksQuery.refetch()} />
+			<BookTable {books} bind:selected selectable showSeries onchange={() => booksQuery.refetch()} />
 			<Pager page={booksPage} noun="book" onpage={(next) => navigate({ page: String(next) }, false)} />
 		{/if}
 	{/if}

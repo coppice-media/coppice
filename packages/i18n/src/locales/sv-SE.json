@@ -7,7 +7,7 @@
 	},
 	"authScene": {
 		"claimHeading": "Initiera din server",
-		"claimText": "Denna Stump-server är inte initierad. Använd formuläret nedan för att skapa ditt konto. När det är skapat kommer du ha full tillgång till alla serverfunktioner.",
+		"claimText": "Denna Coppice-server är inte initierad. Använd formuläret nedan för att skapa ditt konto. När det är skapat kommer du ha full tillgång till alla serverfunktioner.",
 		"form": {
 			"validation": {
 				"missingUsername": "Användarnamn krävs",
@@ -79,7 +79,8 @@
 			},
 			"description": {
 				"label": "Beskrivning",
-				"description": "En valfri, kort beskrivning av din bokklubb"
+				"description": "En valfri, kort beskrivning av din bokklubb",
+				"placeholder": "En 'Vår flagga innebär död' fanklubb. Vi läser pirathistorier med hjärtans lust"
 			},
 			"is_private": {
 				"label": "Privat klubb",
@@ -97,7 +98,9 @@
 					"description": "Namnet på standardrollen i din bokklubb"
 				},
 				"moderator": {
-					"description": "Namnet på moderatorrollen i din bokklubb"
+					"description": "Namnet på moderatorrollen i din bokklubb",
+					"label": "Moderator",
+					"placeholder": "Moderator"
 				},
 				"admin": {
 					"label": "Administratör",
@@ -162,7 +165,8 @@
 				}
 			},
 			"submit": "Skapa bokklubb"
-		}
+		},
+		"subtitle": "Du kan skapa en privat bokklubb för några få utvalda, eller göra den offentlig så att vem som helst kan gå med"
 	},
 	"bookClubSettingsScene": {
 		"sidebar": {
@@ -380,7 +384,7 @@
 			"convertOptions": {
 				"section": {
 					"heading": "Filkonvertering",
-					"description": "Stump kan konvertera vissa filformat till mer kompatibla format"
+					"description": "Coppice kan konvertera vissa filformat till mer kompatibla format"
 				},
 				"rarToZip": {
 					"label": "Konvertera RAR till ZIP",
@@ -428,7 +432,7 @@
 				},
 				"options": {
 					"label": "Biblioteksmönster",
-					"description": "Den inställning som avgör hur Stump kommer att organisera ditt bibliotek",
+					"description": "Den inställning som avgör hur Coppice kommer att organisera ditt bibliotek",
 					"collectionPriority": {
 						"label": "Samlingsprioritet",
 						"description": "Varje mapp på översta nivån av bibliotekets rot är en enda serie"
@@ -467,12 +471,12 @@
 				{
 					"label": "Skanning",
 					"heading": "Skanning",
-					"description": "Inställningar relaterade till hur Stump skannar detta bibliotek"
+					"description": "Inställningar relaterade till hur Coppice skannar detta bibliotek"
 				},
 				{
 					"label": "Miniatyrbilder",
 					"heading": "Miniatyrbilder",
-					"description": "Alternativen för om och hur Stump genererar miniatyrbilder för detta bibliotek"
+					"description": "Alternativen för om och hur Coppice genererar miniatyrbilder för detta bibliotek"
 				},
 				{
 					"label": "Granska",
@@ -577,7 +581,7 @@
 		},
 		"options/scanning": {
 			"title": "Skanning",
-			"description": "Inställningar relaterade till hur Stump skannar detta bibliotek",
+			"description": "Inställningar relaterade till hur Coppice skannar detta bibliotek",
 			"sections": {
 				"configureScan": {
 					"heading": "Konfigurera skanning",
@@ -1210,7 +1214,7 @@
 					"description": "Ändra filtren för denna visning",
 					"rawData": {
 						"heading": "Rå filterdata",
-						"description": "Så här kommer Stump att behandla filtren"
+						"description": "Så här kommer Coppice att behandla filtren"
 					},
 					"buttons": {
 						"save": "Spara",
@@ -1299,7 +1303,7 @@
 						"updateFailed": "Ett serverfel uppstod vid uppdateringen av din profil. Försök igen."
 					},
 					"avatarPicker": {
-						"subtitle": "Du kan ladda upp valfri bild och använda den som profilbild för sociala funktioner i Stump",
+						"subtitle": "Du kan ladda upp valfri bild och använda den som profilbild för sociala funktioner i Coppice",
 						"changeImage": "Byt bild",
 						"removeImage": "Ta bort bild",
 						"uploadFailed": "Det gick inte att ladda upp profilbilden",
@@ -1315,8 +1319,8 @@
 					},
 					"heading": "Språk och lokalisering",
 					"subtitle": [
-						"Stump stöder flera språk och lokaliseringar, ange dina inställningar nedan. Överväg att hjälpa till att förbättra kvaliteten på",
-						"Stumps översättningar",
+						"Coppice stöder flera språk och lokaliseringar, ange dina inställningar nedan. Överväg att hjälpa till att förbättra kvaliteten på",
+						"Coppices översättningar",
 						"om du kan göra det!"
 					]
 				}
@@ -1328,7 +1332,7 @@
 			"description": "Anpassa utseendet i programmet",
 			"sections": {
 				"themeAndAppearance": {
-					"description": "Grundläggande alternativ för Stumps utseende och känsla"
+					"description": "Grundläggande alternativ för Coppices utseende och känsla"
 				},
 				"themeSelect": {
 					"label": "Tema",
@@ -1355,7 +1359,7 @@
 					"label": "Miniatyrbildsförhållande"
 				},
 				"layoutAndArrangement": {
-					"description": "Anpassa hur Stump visar information och organiserar innehåll"
+					"description": "Anpassa hur Coppice visar information och organiserar innehåll"
 				},
 				"navigationArrangement": {
 					"label": "Navigationsarrangemang",
@@ -1385,7 +1389,7 @@
 		"app/apiKeys": {
 			"helmet": "API-nycklar",
 			"title": "API-nycklar",
-			"description": "Hantera dina genererade API-nycklar för Stump",
+			"description": "Hantera dina genererade API-nycklar för Coppice",
 			"shared": {
 				"fields": {
 					"name": "Namn",
@@ -1496,11 +1500,11 @@
 		"app/desktop": {
 			"helmet": "Skrivbordsinställningar",
 			"title": "Skrivbordsinställningar",
-			"description": "Inställningar relaterade till Stump-skrivbordsprogrammet",
+			"description": "Inställningar relaterade till Coppice-skrivbordsprogrammet",
 			"sections": {
 				"configuredServers": {
 					"label": "Konfigurerade servrar",
-					"description": "Listan över Stump-servrar som du kan ansluta till",
+					"description": "Listan över Coppice-servrar som du kan ansluta till",
 					"getStarted": "Lägg till en server för att komma igång",
 					"unreachableServer": {
 						"tooltip": "Servern kan inte nås"
@@ -1521,7 +1525,7 @@
 								"placeholder": "Min server"
 							},
 							"uri": {
-								"description": "Webbadressen till Stump-servern",
+								"description": "Webbadressen till Coppice-servern",
 								"placeholder": "https://stump.exempel.se"
 							}
 						}
@@ -1529,7 +1533,7 @@
 					"addServer": {
 						"trigger": "Lägg till server",
 						"title": "Lägg till en ny server",
-						"description": "Lägg till en ny Stump-server till skrivbordsprogrammet",
+						"description": "Lägg till en ny Coppice-server till skrivbordsprogrammet",
 						"confirm": "Lägg till server"
 					},
 					"editServer": {
@@ -1594,7 +1598,7 @@
 					},
 					"discordPresence": {
 						"label": "Närvaro i Discord",
-						"description": "Visa din Stump-aktivitet i Discord med Discord Rich Presence",
+						"description": "Visa din Coppice-aktivitet i Discord med Discord Rich Presence",
 						"reconnect": "Återanslut till Discord"
 					}
 				}
@@ -1603,14 +1607,14 @@
 		"server/general": {
 			"helmet": "Allmänna serverinställningar",
 			"title": "Allmänna inställningar",
-			"description": "Allmänna inställningar relaterade till din Stump-serverinstans",
+			"description": "Allmänna inställningar relaterade till din Coppice-serverinstans",
 			"sections": {
 				"updateAvailable": {
 					"message": "Din server är inte uppdaterad. Vänligen uppdatera till senaste versionen!"
 				},
 				"serverInfo": {
 					"title": "Serverinformation",
-					"description": "Grundläggande information om din Stump-serverinstans",
+					"description": "Grundläggande information om din Coppice-serverinstans",
 					"build": {
 						"label": "Bygge",
 						"description": "Detaljer om versionen och bygget",
@@ -1620,7 +1624,7 @@
 						}
 					},
 					"nonStableChannel": {
-						"title": "Du kör en icke-stabil version av Stump",
+						"title": "Du kör en icke-stabil version av Coppice",
 						"description": [
 							"Det ser ut som du kör",
 							"byggversionen"
@@ -1628,7 +1632,7 @@
 					}
 				},
 				"helpfulLinks": {
-					"description": "Länkar till resurser som kan vara användbara när du hanterar din Stump-serverinstans"
+					"description": "Länkar till resurser som kan vara användbara när du hanterar din Coppice-serverinstans"
 				},
 				"serverPublicUrl": {
 					"label": "Offentlig URL",
@@ -1642,7 +1646,7 @@
 		"server/logs": {
 			"helmet": "Loggar",
 			"title": "Loggar",
-			"description": "Loggarna som genereras av din Stump-serverinstans",
+			"description": "Loggarna som genereras av din Coppice-serverinstans",
 			"sections": {
 				"persistedLogs": {
 					"title": "Bestående loggar",
@@ -1665,14 +1669,14 @@
 				},
 				"liveLogs": {
 					"title": "Live logg-flöde",
-					"description": "Strömmas direkt från din Stump-serverinstans i realtid"
+					"description": "Strömmas direkt från din Coppice-serverinstans i realtid"
 				}
 			}
 		},
 		"server/jobs": {
 			"helmet": "Jobb",
 			"title": "Jobb",
-			"description": "Jobb som körs i bakgrunden på din Stump-serverinstans",
+			"description": "Jobb som körs i bakgrunden på din Coppice-serverinstans",
 			"sections": {
 				"scheduling": {
 					"title": "Schemaläggning",
@@ -1683,7 +1687,7 @@
 				},
 				"history": {
 					"title": "Historik",
-					"description": "Ett arkiv av jobb som har körts på din Stump-serverinstans",
+					"description": "Ett arkiv av jobb som har körts på din Coppice-serverinstans",
 					"table": {
 						"columns": {
 							"name": "Typ",
@@ -1883,12 +1887,12 @@
 		"server/email": {
 			"helmet": "E-postinställningar",
 			"title": "E-post",
-			"description": "Inställningar för att konfigurera en SMTP-avsändare för din Stump-serverinstans",
+			"description": "Inställningar för att konfigurera en SMTP-avsändare för din Coppice-serverinstans",
 			"sections": {
 				"emailers": {
 					"title": "SMTP-avsändare",
-					"description": "De klienter du har konfigurerat för att skicka e-post från din Stump-serverinstans",
-					"singleInstanceDisclaimer": "Medan Stump stöder flera SMTP-konfigurationer i backend, kan endast en konfigureras grafiskt. Detta kommer att förbättras i framtiden",
+					"description": "De klienter du har konfigurerat för att skicka e-post från din Coppice-serverinstans",
+					"singleInstanceDisclaimer": "Medan Coppice stöder flera SMTP-konfigurationer i backend, kan endast en konfigureras grafiskt. Detta kommer att förbättras i framtiden",
 					"list": {
 						"emptyHeading": "Inga SMTP e-postare konfigurerade",
 						"primaryEmailer": "Primär e-postare",
@@ -1909,7 +1913,7 @@
 				},
 				"devices": {
 					"title": "E-postenheter",
-					"description": "De enhetsalias du har konfigurerat för att motta e-post från din Stump-serverinstans",
+					"description": "De enhetsalias du har konfigurerat för att motta e-post från din Coppice-serverinstans",
 					"addDevice": "Lägg till enhetsalias",
 					"addOrUpdateDevice": {
 						"title": {
@@ -2000,7 +2004,7 @@
 			"createEmailer": {
 				"helmet": "Skapa e-postavsändare",
 				"title": "Skapa e-postavsändare",
-				"description": "Skapa en ny SMTP-e-postare för din Stump-serverinstans"
+				"description": "Skapa en ny SMTP-e-postare för din Coppice-serverinstans"
 			},
 			"updateEmailer": {
 				"helmet": "Uppdatera e-postare",
@@ -2088,10 +2092,10 @@
 	"serverSOS": {
 		"heading": "Servern är inte tillgänglig",
 		"desktop": {
-			"message": "Ett nätverksfel som uppstod tyder på att din Stump-server för närvarande inte är tillgänglig. Se till att den körs och är tillgänglig från denna enhet.\nOm din serverlänk har ändrats, kan du uppdatera den med formuläret nedan"
+			"message": "Ett nätverksfel som uppstod tyder på att din Coppice-server för närvarande inte är tillgänglig. Se till att den körs och är tillgänglig från denna enhet.\nOm din serverlänk har ändrats, kan du uppdatera den med formuläret nedan"
 		},
 		"web": {
-			"message": "Ett nätverksfel som uppstod tyder på att din Stump-server inte är tillgänglig. Se till att den körs och är tillgänglig från denna enhet"
+			"message": "Ett nätverksfel som uppstod tyder på att din Coppice-server inte är tillgänglig. Se till att den körs och är tillgänglig från denna enhet"
 		},
 		"reconnected": "Återansluten till servern! Omdirigerar...",
 		"reconnectionFailed": "Någonting gick fel!"
@@ -2264,6 +2268,39 @@
 			"labelEllipsis": "Sortera efter…",
 			"sortField": {
 				"SERIES": "Serier"
+			}
+		}
+	},
+	"bookManagementScene": {
+		"metadataSearch": {
+			"noProviders": "Ingen leverantör av metadata är konfigurerad för denna typ av bibliotek. Konfigurera en i serverinställningar först.",
+			"noResults": "Sökningen gav inga träffar",
+			"partialResults": "Vissa resultat kunde inte laddas från källan, sannolikt på grund av begränsad takt. Försök att söka igen för att se om fler dyker upp.",
+			"searchFailed": "Sökning av metadatakällor misslyckades",
+			"form": {
+				"title": {
+					"label": "Titel"
+				},
+				"author": {
+					"label": "Upphovsman"
+				},
+				"isbn": {
+					"label": "ISBN"
+				},
+				"year": {
+					"label": "År"
+				},
+				"number": {
+					"label": "Utfärdandenummer"
+				},
+				"comicVineVolumeId": {
+					"label": "ComicVine volym-ID",
+					"placeholder": "t.ex. 129260"
+				},
+				"provider": {
+					"label": "Leverantör",
+					"allOption": "Alla aktiva leverantörer"
+				}
 			}
 		}
 	}

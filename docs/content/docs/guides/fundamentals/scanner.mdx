@@ -4,13 +4,13 @@ title: File Scanner
 
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
-A scan is the process of indexing your filesystem to detect new media files and file changes/updates. Scans are essential for keeping your media libraries up-to-date in Stump. The _scanner_ is a queueable process which will perform these scans for you.
+A scan is the process of indexing your filesystem to detect new media files and file changes/updates. Scans are essential for keeping your media libraries up-to-date in Coppice. The _scanner_ is a queueable process which will perform these scans for you.
 
 Scans can be isolated to either the library level or the series level. There are no real differences between the two, except that a library scan will scan all series in the library, while a series scan will only scan the selected series.
 
 ## How does it work?
 
-When you start a scan, Stump will walk your filesystem to detect any new, updated, or otherwise changed series and media. It will then insert these changes into the database, which will make them available to you in the UI.
+When you start a scan, Coppice will walk your filesystem to detect any new, updated, or otherwise changed series and media. It will then insert these changes into the database, which will make them available to you in the UI.
 
 A high-level overview of the scan process is as follows:
 
@@ -28,7 +28,7 @@ Does the library exist on disk? If not, the scan will fail and adjust the librar
 
 ### Build the main task queue
 
-Stump will recursively traverse the filesystem (from the library root) to detect:
+Coppice will recursively traverse the filesystem (from the library root) to detect:
 
 1. New and **valid** series
 2. Missing series
@@ -41,7 +41,7 @@ Both are handled immediately and in chunks. Any series which are not missing, in
 
 ### Walk series
 
-This task doesn't do much itself aside from discovery operations. Stump will recursively traverse the filesystem (from the series root) to detect:
+This task doesn't do much itself aside from discovery operations. Coppice will recursively traverse the filesystem (from the series root) to detect:
 
 1. New and **valid** media
 2. Updated media (based on last modified time on disk)
@@ -51,7 +51,7 @@ These discoveries are then queued separately to be handled in an isolated manner
 
 <Callout title="Clarification">
 	This growing queue might seem like a problem, but it is actually a feature. In order to keep the
-	scan process as efficient as possible, Stump will not compute _all_ required tasks at the start.
+	scan process as efficient as possible, Coppice will not compute _all_ required tasks at the start.
 	As libraries grow in size, this can be a significant performance improvement.
 </Callout>
 
@@ -61,7 +61,7 @@ These discoveries are then queued separately to be handled in an isolated manner
 
 ### Handle media tasks
 
-Stump will handle the media tasks in the queue, which includes:
+Coppice will handle the media tasks in the queue, which includes:
 
 1. Adding new media to the database
 2. Updating media in the database
@@ -75,24 +75,24 @@ All of which are done in chunks, to both provide speedup and to avoid resource e
 
 #### New media
 
-Stump will take a chunk of paths and process/build their DB representations **in parallel**.
+Coppice will take a chunk of paths and process/build their DB representations **in parallel**.
 
 Once all paths in the chunk have been processed, they are inserted into the database **one by one**. This decision was made to avoid situations where one bad file would kill the entire batch of inserts. However, it is trivial to change this behavior in the future if needed.
 
 #### Updated media
 
-The process for updated media is exactly the same, except that stump diffs the newly built media representation with what already exists. The result of this diff is then used to update the database.
+The process for updated media is exactly the same, except that Coppice diffs the newly built media representation with what already exists. The result of this diff is then used to update the database.
 
 
 #### Missing media
 
-Stump issues a single `UPDATE` query for the entire set of missing media. This is generally safe since there is just one text column to update.
+Coppice issues a single `UPDATE` query for the entire set of missing media. This is generally safe since there is just one text column to update.
 
 <Step>
 
 ### Cleanup
 
-Stump will perform some cleanup operations, such as:
+Coppice will perform some cleanup operations, such as:
 
 1. Inserting any runtime logs (errors, warnings, etc) into the database
 2. Updating the library's last scan time **TODO**: This is not yet implemented
@@ -107,13 +107,13 @@ You are able to enable or disable certain processing options in the scanner
 
 ### Metadata
 
-When the `Process metadata` option is enabled, Stump will attempt to extract metadata from your media files. For example, `ComicInfo.xml` or `OPF` files in comic books and ebooks, respectively. This metadata is then stored in the database and can be used to search, filter, and categorize your media.
+When the `Process metadata` option is enabled, Coppice will attempt to extract metadata from your media files. For example, `ComicInfo.xml` or `OPF` files in comic books and ebooks, respectively. This metadata is then stored in the database and can be used to search, filter, and categorize your media.
 
 See the [metadata](/docs/guides/fundamentals/books#metadata) guide for more information.
 
 ### File Hashing
 
-There are two different hashing options available in Stump. They serve different purposes and may be enabled or disabled independently:
+There are two different hashing options available in Coppice. They serve different purposes and may be enabled or disabled independently:
 
 1. A generic hash used for file deduplication. This is useful for being able to identify duplicates and prevent clutter in your library.
 2. A KoReader-compatible hash, used exclusively for KoReader compatibility. See the [KoReader integration](/docs/guides/integrations/koreader) guide for more information.
@@ -122,13 +122,13 @@ If you don't care about either of these features, you can disable hashing entire
 
 ### File Conversion
 
-Stump supports converting RAR files to ZIP. You can enable this by checking the `Convert RAR to ZIP` option. The important thing to note that unless you also enable the `Delete RAR after conversion` option, the RAR files will remain on disk after conversion.
+Coppice supports converting RAR files to ZIP. You can enable this by checking the `Convert RAR to ZIP` option. The important thing to note that unless you also enable the `Delete RAR after conversion` option, the RAR files will remain on disk after conversion.
 
 ## Ignore Rules
 
-If you have files that you don't want Stump to scan, you can define a [glob pattern](<https://en.wikipedia.org/wiki/Glob_(programming)>) which will be used to filter **out** any candidate files which match the pattern.
+If you have files that you don't want Coppice to scan, you can define a [glob pattern](<https://en.wikipedia.org/wiki/Glob_(programming)>) which will be used to filter **out** any candidate files which match the pattern.
 
-Stump no longer supports `.stumpignore` files. Instead, ignore rules can be set during library creation or in the `Scanning` section of the library settings. There is no limit to the number of ignore rules you can set, so long as each is a valid glob.
+Coppice no longer supports `.stumpignore` files. Instead, ignore rules can be set during library creation or in the `Scanning` section of the library settings. There is no limit to the number of ignore rules you can set, so long as each is a valid glob.
 
 <Callout>
 	Please note that in some scenarios, updating the ignore rules may not take the desired effect. For

@@ -7,21 +7,30 @@
 //! server can run it itself when no worker can.
 //!
 //! `transcode` and `challenge_solve` are the registered kinds today. `align`
-//! (tier 2 read-aloud) is the next one and needs no schema change to arrive:
-//! like `challenge_solve` it registers with `local: None`, so a server with no
-//! aligner worker puts the job in `needs_worker` and says so.
+//! (tier 2 read-aloud) shares its input, capability requirement, and result
+//! contracts from this crate, but no aligner runner or server route is part of
+//! this slice.
 
 use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+// Keep the job contracts discoverable beside the other kind DTOs while their
+// validator lives in its own module.
+pub use crate::alignment::{
+	validate_sync_map, validate_sync_map_for_input, AlignExecutionProvider,
+	AlignGranularity, AlignInput, AlignPrecision, AlignResult, AudioClip, SyncCue,
+	SyncMapProvenance, SyncMapV1, SyncMapValidationContext, SyncMapValidationError,
+	TextFragment, TrackDurationsMs, SYNC_MAP_MIME, SYNC_MAP_SCHEMA_VERSION,
+};
 use serde_json::Value;
 
 /// The `transcode` job kind: re-encode one audio track into a delivery codec.
 pub const TRANSCODE: &str = "transcode";
 
 /// The `align` job kind: forced alignment of an EPUB against its audiobook.
-/// Reserved here so the capability vocabulary is one list; the runner lands
-/// with tier 2.
+/// The shared DTO and capability contract live in [`crate::alignment`]; no
+/// aligner runner is registered by this crate.
 pub const ALIGN: &str = "align";
 
 /// The `challenge_solve` job kind: drive a real browser through a Cloudflare
@@ -178,6 +187,24 @@ pub fn challenge_solve_requires() -> Value {
 #[must_use]
 pub fn transcode_requires() -> Value {
 	serde_json::json!({ TRANSCODE: true })
+}
+
+/// The capability requirement of an `align` job.
+///
+/// The documented `device` capability remains a scalar, while model,
+/// algorithm, and precision capabilities are arrays. The existing structural
+/// matcher treats requirement arrays as containment, so a worker can advertise
+/// several supported values while a job asks for exactly the values it needs.
+#[must_use]
+pub fn align_requires(input: &crate::alignment::AlignInput) -> Value {
+	serde_json::json!({
+		ALIGN: {
+			"device": input.execution_provider,
+			"models": [&input.model],
+			"algorithms": [&input.algorithm],
+			"precisions": [input.precision],
+		}
+	})
 }
 
 /// Whether `capabilities` satisfies `requires`.

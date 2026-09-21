@@ -50,7 +50,7 @@
 	}
 </script>
 
-<svelte:head><title>Rework · Stump ingest</title></svelte:head>
+<svelte:head><title>Rework · Coppice ingest</title></svelte:head>
 
 <div class="flex flex-col gap-6">
 	<div class="flex flex-wrap items-end justify-between gap-4">

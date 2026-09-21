@@ -149,6 +149,14 @@ pub trait AbsBackend: Send + Sync {
 		media_id: &str,
 		update: AbsPositionUpdate,
 	) -> AbsResult<bool>;
+	/// Record a successful sync against the API-key-bound device. Registry
+	/// failures are best effort and never fail the request.
+	async fn record_sync(
+		&self,
+		_auth: &stump_auth::AuthContext,
+		_summary: serde_json::Value,
+	) {
+	}
 
 	async fn bookmarks(
 		&self,

@@ -51,7 +51,7 @@ impl AttachmentSender for AttachmentSenderImpl {
 		payloads: Vec<AttachmentPayload>,
 	) -> EmailResult<()> {
 		self.channel
-			.deliver(recipient, "Attachment from Stump", payloads)
+			.deliver(recipient, "Attachment from Coppice", payloads)
 			.await
 			.map_err(map_channel_error)
 	}
@@ -440,6 +440,7 @@ mod tests {
 			source_provider: None,
 			remote_id: None,
 			remote_chapter_id: None,
+			is_oneshot: false,
 		}
 	}
 

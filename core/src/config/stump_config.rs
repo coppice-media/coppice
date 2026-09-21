@@ -192,7 +192,7 @@ impl StumpConfig {
 				Ok(_) => (),
 				Err(e) => {
 					return Err(CoreError::InitializationError(format!(
-						"Failed to create Stump configuration directory at {:?}: {:?}",
+						"Failed to create Coppice configuration directory at {:?}: {:?}",
 						config_dir,
 						e.to_string()
 					)));

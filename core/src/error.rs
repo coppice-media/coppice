@@ -3,6 +3,8 @@ use std::io;
 use derive_builder::UninitializedFieldError;
 use thiserror::Error;
 
+use stump_media::ProcessorError;
+
 pub type CoreResult<T> = Result<T, CoreError>;
 
 #[derive(Error, Debug)]
@@ -21,7 +23,7 @@ pub enum CoreError {
 	EncryptionFailed(String),
 	#[error("Failed to decrypt: {0}")]
 	DecryptionFailed(String),
-	#[error("Failed to initialize Stump core: {0}")]
+	#[error("Failed to initialize Coppice core: {0}")]
 	InitializationError(String),
 	#[error("{0}")]
 	EmailerError(#[from] email::EmailError),
@@ -61,6 +63,8 @@ pub enum CoreError {
 	UnImplemented(String),
 	#[error("An object failed to (de)serialize: {0}")]
 	SerdeFailure(#[from] serde_json::Error),
+	#[error("Failed to join tokio task: {0}")]
+	TokioTaskFailed(#[from] tokio::task::JoinError),
 	#[error("An unknown error occurred: {0}")]
 	Unknown(String),
 }
@@ -90,6 +94,12 @@ impl From<stump_jobs::JobError> for CoreError {
 }
 impl From<chrono::ParseError> for CoreError {
 	fn from(error: chrono::ParseError) -> Self {
+		Self::InternalError(error.to_string())
+	}
+}
+
+impl From<ProcessorError> for CoreError {
+	fn from(error: ProcessorError) -> Self {
 		Self::InternalError(error.to_string())
 	}
 }

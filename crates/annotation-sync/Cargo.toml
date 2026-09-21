@@ -23,6 +23,7 @@ stump_api_types = { path = "../api-types" }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 tracing.workspace = true
+unicode-normalization.workspace = true
 git2 = { version = "0.21.0", default-features = false, optional = true }
 
 [dev-dependencies]

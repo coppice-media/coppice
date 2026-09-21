@@ -78,9 +78,9 @@ mod tests {
 	fn json_feed_round_trip_matches_pinned_wire_names() {
 		let feed = KomgaJsonFeed {
 			version: "https://jsonfeed.org/version/1.1".to_owned(),
-			title: "Stump".to_owned(),
+			title: "Coppice".to_owned(),
 			home_page_url: None,
-			description: Some("Stump publishes no feed.".to_owned()),
+			description: Some("Coppice publishes no feed.".to_owned()),
 			items: vec![KomgaAnnouncement {
 				id: KomgaAnnouncementId("announcement-1".to_owned()),
 				url: Some("https://example.test/announcement-1".to_owned()),
@@ -93,10 +93,10 @@ mod tests {
 						.expect("valid timestamp"),
 				),
 				author: Some(Author {
-					name: Some("Stump".to_owned()),
+					name: Some("Coppice".to_owned()),
 					url: None,
 				}),
-				tags: BTreeSet::from(["news".to_owned(), "stump".to_owned()]),
+				tags: BTreeSet::from(["coppice".to_owned(), "news".to_owned()]),
 				komga_extension: Some(KomgaExtension { read: false }),
 			}],
 		};
@@ -106,9 +106,9 @@ mod tests {
 			encoded,
 			json!({
 				"version": "https://jsonfeed.org/version/1.1",
-				"title": "Stump",
+				"title": "Coppice",
 				"home_page_url": null,
-				"description": "Stump publishes no feed.",
+				"description": "Coppice publishes no feed.",
 				"items": [{
 					"id": "announcement-1",
 					"url": "https://example.test/announcement-1",
@@ -116,8 +116,8 @@ mod tests {
 					"summary": "Summary",
 					"content_html": "<p>Content</p>",
 					"date_modified": "2026-09-03T12:34:56Z",
-					"author": {"name": "Stump", "url": null},
-					"tags": ["news", "stump"],
+					"author": {"name": "Coppice", "url": null},
+					"tags": ["coppice", "news"],
 					"_komga": {"read": false},
 				}],
 			})

@@ -8,8 +8,11 @@ use std::{str::FromStr, sync::Arc};
 
 pub mod annotation_sync;
 pub mod api_key;
+pub mod component_runtime;
 pub mod config;
 mod context;
+#[cfg(feature = "crosspoint")]
+pub mod crosspoint_delivery;
 pub mod database;
 pub mod error;
 pub mod event;
@@ -23,6 +26,9 @@ pub mod opds;
 #[cfg(feature = "providers")]
 pub mod providers;
 pub mod reading_state;
+pub mod request_gateway;
+pub mod request_gateway_automation;
+pub mod request_gateway_poll;
 pub mod utils;
 
 use config::logging::STUMP_SHADOW_TEXT;
@@ -94,6 +100,13 @@ impl StumpCore {
 		notification::spawn_listener(core_ctx.clone());
 		// Debounced annotation export; see `annotation_sync::spawn_debounce_loop`.
 		annotation_sync::spawn_debounce_loop(core_ctx.clone());
+		#[cfg(feature = "crosspoint")]
+		{
+			let delivery = core_ctx
+				.crosspoint_delivery()
+				.expect("CrossPoint delivery service must initialize");
+			delivery.start();
+		}
 		StumpCore { ctx: core_ctx }
 	}
 
@@ -116,7 +129,7 @@ impl StumpCore {
 			.with_environment()?;
 
 		// TODO: I couldn't get this fully working inside the macro but would like to revisit
-		if let Some(env_oidc) = config::OidcConfig::from_env() {
+		if let Some(env_oidc) = config::OidcConfig::from_env()? {
 			config.oidc = Some(env_oidc);
 		}
 
@@ -319,6 +332,12 @@ impl StumpCore {
 
 	pub async fn init_scheduler(&self) -> Result<Option<JobScheduler>, CoreError> {
 		self.ctx.start_scheduler().await
+	}
+
+	pub async fn init_scheduler_with_maintenance(
+		&self,
+	) -> Result<Option<JobScheduler>, CoreError> {
+		self.ctx.start_scheduler_with_maintenance().await
 	}
 
 	/// Refreshes the scheduler after a scheduled-job configuration change.

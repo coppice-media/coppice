@@ -47,4 +47,6 @@ pub use file::{
 	KINDLE_FORMATS,
 };
 pub use models::entity::kindle_delivery::Model as KindleDeliveryRow;
-pub use send::{deliveries, subject, Delivery, KindleMailer, KindleSend};
+pub use send::{
+	deliveries, deliveries_for_user, subject, Delivery, KindleMailer, KindleSend,
+};

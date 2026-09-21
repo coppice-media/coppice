@@ -7,8 +7,11 @@ use axum::{
 	Extension, Json, Router,
 };
 use chrono::Utc;
-use models::entity::{server_config, user, user_preferences};
 use models::txn::begin_write;
+use models::{
+	entity::{server_config, user, user_preferences},
+	shared::permission_set::PermissionSet,
+};
 use sea_orm::{
 	entity::prelude::DateTimeWithTimeZone, ActiveModelTrait, ColumnTrait, EntityTrait,
 	IntoActiveModel, PaginatorTrait, QueryFilter, Set,
@@ -82,6 +85,20 @@ pub struct AuthorizeQuery {
 	/// Optional redirect URL for the mobile app (e.g., "stump://auth/callback")
 	/// If provided with generate_token=true, redirects to this URL with tokens as query params
 	pub redirect_uri: Option<String>,
+	/// Same-origin path for the browser Home app to return to after login.
+	pub return_to: Option<String>,
+}
+
+fn validate_return_to(value: Option<&str>) -> Option<String> {
+	value
+		.filter(|value| {
+			value.starts_with('/')
+				&& !value.starts_with("//")
+				&& !value.contains("://")
+				&& !value.contains('\\')
+				&& !value.chars().any(char::is_control)
+		})
+		.map(str::to_owned)
 }
 
 /// The OIDC state parameter passed through the authorization flow.
@@ -123,8 +140,9 @@ async fn authorize(
 	let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
 	let generate_token = query.generate_token;
+	let return_to = validate_return_to(query.return_to.as_deref());
 	let state = OidcState {
-		query,
+		query: AuthorizeQuery { return_to, ..query },
 		pkce_verifier: pkce_verifier.secret().to_string(),
 	};
 
@@ -134,12 +152,9 @@ async fn authorize(
 	})?;
 
 	let pkce_challenge_code = pkce_challenge.as_str().to_owned();
-	let redirect_to = get_oidc_authorize_url(
-		&client,
-		&oidc_config.get_scopes(),
-		&state_value,
-		Some(pkce_challenge),
-	);
+	let scopes = oidc_config.get_scopes();
+	let redirect_to =
+		get_oidc_authorize_url(&client, &scopes, &state_value, Some(pkce_challenge));
 
 	tracing::debug!(
 		%generate_token,
@@ -173,9 +188,11 @@ impl axum::response::IntoResponse for OidcCallbackResponse {
 }
 
 fn parse_state(state: Option<&str>) -> OidcState {
-	state
+	let mut parsed = state
 		.and_then(|s| serde_json::from_str::<OidcState>(s).ok())
-		.unwrap_or_default()
+		.unwrap_or_default();
+	parsed.query.return_to = validate_return_to(parsed.query.return_to.as_deref());
+	parsed
 }
 
 /// The handler for the OIDC callback (code exchange + user creation/login)
@@ -211,7 +228,7 @@ async fn callback(
 		oidc_provider.create_client(&base_url)?,
 	);
 
-	let extra_audiences = oidc_config.get_extra_audiences();
+	let extra_audiences = oidc_config.extra_audiences.clone();
 	let pkce_verifier = (!oidc_state.pkce_verifier.is_empty())
 		.then(|| openidconnect::PkceCodeVerifier::new(oidc_state.pkce_verifier));
 
@@ -220,6 +237,7 @@ async fn callback(
 		&client,
 		query.code,
 		extra_audiences,
+		&oidc_config.groups_claim,
 		pkce_verifier,
 	)
 	.await
@@ -239,7 +257,7 @@ async fn callback(
 			APIError::InternalServerError("Database error".to_string())
 		})?;
 
-	let (user_model, is_new_user) = if let Some(user) = existing_user {
+	let (mut user_model, is_new_user) = if let Some(user) = existing_user {
 		tracing::debug!(user_id = %user.id, "Existing OIDC user logging in");
 		// TODO(oidc): Re-download avatar from provider if the picture URL has changed?
 		// Currently the avatar is only fetched once at registration
@@ -359,6 +377,18 @@ async fn callback(
 		tracing::warn!(user_id = %user_model.id, "Locked user attempted login via OIDC");
 		return Err(APIError::Forbidden("Account is locked".to_string()));
 	};
+	if let Some(permissions) = claims.mapped_permissions(oidc_config) {
+		if !user_model.is_server_owner {
+			let tx = begin_write(&ctx.conn).await?;
+			let updated_user = user::ActiveModel {
+				id: Set(user_model.id.clone()),
+				permissions: Set(PermissionSet::new(permissions).resolve_into_string()),
+				..Default::default()
+			};
+			user_model = updated_user.update(&tx).await?;
+			tx.commit().await?;
+		}
+	}
 
 	let auth_user = user::LoginUser::find()
 		.filter(user::Column::Id.eq(user_model.id.clone()))
@@ -406,7 +436,9 @@ async fn callback(
 				APIError::InternalServerError("Session error".to_string())
 			})?;
 		tracing::debug!(user_id = %user_model.id, "Created session for OIDC user");
-		Ok(OidcCallbackResponse::Redirect(Redirect::temporary("/")))
+		Ok(OidcCallbackResponse::Redirect(Redirect::temporary(
+			oidc_state.query.return_to.as_deref().unwrap_or("/"),
+		)))
 	}
 }
 
@@ -440,6 +472,26 @@ async fn ensure_unique_username(
 			return Err(APIError::InternalServerError(
 				"Failed to generate unique username".to_string(),
 			));
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::validate_return_to;
+
+	#[test]
+	fn return_to_accepts_same_origin_paths_and_rejects_external_targets() {
+		assert_eq!(
+			validate_return_to(Some("/app/devices")).as_deref(),
+			Some("/app/devices")
+		);
+		for value in ["//evil", "https://evil", "javascript:"] {
+			assert_eq!(
+				validate_return_to(Some(value)),
+				None,
+				"accepted invalid return_to: {value}"
+			);
 		}
 	}
 }

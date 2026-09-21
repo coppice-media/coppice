@@ -5,8 +5,8 @@
 	 * One list of every highlight, note, and bookmark the user has, across
 	 * every book and every source: the native `media_annotations`/`bookmarks`
 	 * rows this console's reader writes, and the liseur-sync CAS records
-	 * pushed by their devices (NickelStump on a Kobo, KOReader, Liseur).
-	 * The server returns book-contiguous pages, so grouping is a single pass.
+	 * pushed by their devices (NickelCoppice on a Kobo, coppice.koplugin,
+	 * Liseur).
 	 *
 	 * Filters and the page number live in the URL so a filtered hub can be
 	 * linked and the back button works.
@@ -20,6 +20,7 @@
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import UploadIcon from '@lucide/svelte/icons/upload';
+	import XIcon from '@lucide/svelte/icons/x';
 	import { toast } from 'svelte-sonner';
 	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
 	import { Badge } from '@stump/ui/components/ui/badge';
@@ -41,7 +42,8 @@
 		NO_FACETS,
 		annotationFilter,
 		groupByBook,
-		type AnnotationFacets
+		type AnnotationFacets,
+		type AnnotationLane
 	} from '$lib/annotations';
 	import AnnotationBookGroup from '$lib/components/annotations/AnnotationBookGroup.svelte';
 	import AnnotationFilters from '$lib/components/annotations/AnnotationFilters.svelte';
@@ -53,7 +55,9 @@
 	const facets = $derived<AnnotationFacets>({
 		...NO_FACETS,
 		kind: (params.get('kind') as AnnotationKind | null) ?? null,
+		lane: (params.get('lane') as AnnotationLane | null) ?? null,
 		source: (params.get('source') as DeviceKind | null) ?? null,
+		sourceDeviceId: params.get('device'),
 		book: params.get('book'),
 		sinceDays: params.get('since'),
 		search: params.get('search')
@@ -72,12 +76,20 @@
 	}));
 	const result = $derived(annotationsQuery.data?.annotations);
 	const groups = $derived(groupByBook(result?.items ?? []));
+	const focusedDeviceName = $derived(
+		facets.sourceDeviceId
+			? (result?.items.find(
+					(item) =>
+						item.sourceDeviceId === facets.sourceDeviceId && item.sourceDeviceName
+				)?.sourceDeviceName ?? facets.sourceDeviceId)
+			: null
+	);
 
-	// The book selector needs every annotated book, not just the ones on the
-	// current page, so it reads an unfiltered slice of its own.
+	// The book selector follows the same applied filters, so a device deep link
+	// never offers books that belong only to another annotation source.
 	const booksQuery = createQuery(() => ({
-		queryKey: ['annotation-books'],
-		queryFn: () => request(ConsoleAnnotationBooksDocument, {}),
+		queryKey: ['annotation-books', facets],
+		queryFn: () => request(ConsoleAnnotationBooksDocument, { filter: annotationFilter(facets) }),
 		enabled: browser
 	}));
 	const books = $derived.by(() => {
@@ -150,7 +162,9 @@
 	function applyFacets(patch: Partial<AnnotationFacets>): void {
 		navigate({
 			...('kind' in patch ? { kind: patch.kind ?? null } : {}),
+			...('lane' in patch ? { lane: patch.lane ?? null } : {}),
 			...('source' in patch ? { source: patch.source ?? null } : {}),
+			...('sourceDeviceId' in patch ? { device: patch.sourceDeviceId ?? null } : {}),
 			...('book' in patch ? { book: patch.book ?? null } : {}),
 			...('sinceDays' in patch ? { since: patch.sinceDays ?? null } : {}),
 			...('search' in patch ? { search: patch.search ?? null } : {})
@@ -169,18 +183,27 @@
 </script>
 
 <svelte:head>
-	<title>Annotations · Stump</title>
+	<title>Annotations · Coppice</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">
 	<div class="flex flex-wrap items-start gap-3">
 		<div class="mr-auto">
-			<h1 class="text-2xl font-semibold tracking-tight">Annotations</h1>
+			<h1 class="text-2xl font-semibold tracking-tight">
+				{focusedDeviceName ? `${focusedDeviceName} annotations` : 'Annotations'}
+			</h1>
 			<p class="mt-1 max-w-2xl text-sm text-muted-foreground">
-				Every highlight, note, and bookmark you have, grouped by book — whether you made it in
-				this reader or on a device that syncs back to this server.
+				{focusedDeviceName
+					? `Annotations synced from ${focusedDeviceName}. This view is filtered to that registered device; account-wide history remains available by clearing the filter.`
+					: 'Every highlight, note, and bookmark you have, grouped by book — whether you made it in this reader or on a device that syncs back to this server.'}
 			</p>
 		</div>
+		{#if focusedDeviceName}
+			<Button size="sm" variant="outline" href={resolve('/annotations')}>
+				<XIcon aria-hidden="true" />
+				Clear device filter
+			</Button>
+		{/if}
 		<Button
 			size="sm"
 			variant="outline"
@@ -190,13 +213,19 @@
 			<UploadIcon aria-hidden="true" />
 			{runSync.isPending ? 'Queueing…' : 'Export now'}
 		</Button>
-		<Button size="sm" variant="ghost" href={resolve('/(app)/settings/annotations')}>
+		<Button size="sm" variant="ghost" href={`${resolve('/connections')}#exports`}>
 			<SettingsIcon aria-hidden="true" />
-			Sink settings
+			Export settings
 		</Button>
 	</div>
 
-	<AnnotationFilters {facets} {books} onfacets={applyFacets} />
+	<AnnotationFilters
+		{facets}
+		{books}
+		deviceLabel={(deviceId) =>
+			focusedDeviceName && facets.sourceDeviceId === deviceId ? focusedDeviceName : deviceId}
+		onfacets={applyFacets}
+	/>
 
 	{#if annotationsQuery.isPending}
 		<div class="flex flex-col gap-4">

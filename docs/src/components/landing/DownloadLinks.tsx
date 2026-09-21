@@ -8,6 +8,7 @@ import {
 } from '@icons-pack/react-simple-icons'
 import clsx from 'clsx'
 import { motion } from 'framer-motion'
+import type { ComponentType } from 'react'
 
 // Base delay to start after hero animations
 const BASE_DELAY = 1.4
@@ -47,43 +48,48 @@ const hoverVariants = {
 
 export default function DownloadLinks() {
 	return (
-		<div className="space-x-2 md:justify-start relative flex w-full items-start justify-center">
-			{links.map((link, idx) => (
-				<motion.div
-					key={idx}
-					custom={idx}
-					initial="hidden"
-					animate="visible"
-					variants={linkVariants}
-					whileHover={!link.disabled ? 'hover' : undefined}
-					whileTap={!link.disabled ? 'tap' : undefined}
-					{...(link.disabled ? {} : hoverVariants)}
-				>
-					<a
-						className={clsx(
-							'rounded-md p-1 text-sm font-medium text-neutral-700 dark:bg-opacity-90 dark:text-neutral-200 dark:shadow-sm flex items-center border border-transparent bg-transparent transition-all duration-300',
-							{ 'cursor-not-allowed opacity-50': link.disabled },
-							{
-								'hover:border-neutral-200 hover:bg-neutral-50 hover:text-neutral-900 active:border-neutral-200 active:bg-neutral-50 active:text-neutral-600 dark:hover:border-neutral-500 dark:hover:bg-neutral-700 dark:hover:bg-opacity-100 dark:hover:text-white dark:active:text-white focus:outline-none dark:active:opacity-90':
-									!link.disabled,
-							},
-						)}
-						href={link.disabled ? undefined : link.href}
-						target="_blank"
-						rel="noreferrer"
-						aria-label={link.title}
+		<div className="gap-2 md:justify-start relative flex w-full items-center justify-center">
+			<span className="text-xs text-neutral-500 dark:text-neutral-400">Upstream builds:</span>
+			{links.map((link, idx) => {
+				const Icon = link.icon as unknown as ComponentType<{ className?: string }>
+
+				return (
+					<motion.div
+						key={idx}
+						custom={idx}
+						initial="hidden"
+						animate="visible"
+						variants={linkVariants}
+						whileHover={!link.disabled ? 'hover' : undefined}
+						whileTap={!link.disabled ? 'tap' : undefined}
+						{...(link.disabled ? {} : hoverVariants)}
 					>
-						<link.icon className="h-5 w-5" />
-					</a>
-				</motion.div>
-			))}
+						<a
+							className={clsx(
+								'p-1 text-sm font-medium text-neutral-700 dark:bg-opacity-90 dark:text-neutral-200 dark:shadow-sm flex items-center rounded-md border border-transparent bg-transparent transition-all duration-300',
+								{ 'cursor-not-allowed opacity-50': link.disabled },
+								{
+									'hover:border-neutral-200 hover:bg-neutral-50 hover:text-neutral-900 active:border-neutral-200 active:bg-neutral-50 active:text-neutral-600 dark:hover:border-neutral-500 dark:hover:bg-neutral-700 dark:hover:bg-opacity-100 dark:hover:text-white dark:active:text-white focus:outline-none dark:active:opacity-90':
+										!link.disabled,
+								},
+							)}
+							href={link.disabled ? undefined : link.href}
+							target="_blank"
+							rel="noreferrer"
+							aria-label={link.title}
+						>
+							<Icon className="h-5 w-5" />
+						</a>
+					</motion.div>
+				)
+			})}
 		</div>
 	)
 }
 
 type Link = {
 	href: string
-	icon: React.ComponentType<React.SVGProps<SVGSVGElement>>
+	icon: typeof SiLinux
 	title: string
 	disabled?: boolean
 }
@@ -92,31 +98,31 @@ const links: Link[] = [
 	{
 		href: 'https://github.com/stumpapp/stump/releases/latest',
 		icon: SiLinux,
-		title: 'Linux',
+		title: 'Upstream Stump for Linux',
 	},
 	{
 		href: 'https://github.com/stumpapp/stump/releases/latest',
 		icon: SiApple,
-		title: 'macOS',
+		title: 'Upstream Stump for macOS',
 	},
 	{
 		href: 'https://github.com/stumpapp/stump/releases/latest',
 		icon: SiWindows10,
-		title: 'Windows',
+		title: 'Upstream Stump for Windows',
 	},
 	{
 		href: 'https://hub.docker.com/r/aaronleopold/stump',
 		icon: SiDocker,
-		title: 'Docker',
+		title: 'Upstream Stump Docker image',
 	},
 	{
 		href: 'https://play.google.com/store/apps/details?id=com.stumpapp.stump',
 		icon: SiAndroid,
-		title: 'Android',
+		title: 'Upstream Stump for Android',
 	},
 	{
 		href: 'https://testflight.apple.com/join/a4srR634',
 		icon: SiIos,
-		title: 'iOS',
+		title: 'Upstream Stump for iOS',
 	},
 ]

@@ -7,7 +7,7 @@
 	},
 	"authScene": {
 		"claimHeading": "Initialiseer je server",
-		"claimText": "Deze Stump-server is nog niet ingesteld. Gebruik het onderstaande formulier om je account aan te maken. Zodra je dat hebt gedaan, heb je volledige toegang tot alle functies van de server.",
+		"claimText": "Deze Coppice-server is nog niet ingesteld. Gebruik het onderstaande formulier om je account aan te maken. Zodra je dat hebt gedaan, heb je volledige toegang tot alle functies van de server.",
 		"form": {
 			"validation": {
 				"missingUsername": "Gebruikersnaam is vereist",
@@ -493,7 +493,7 @@
 					"description": "Wijzig de filters voor deze kijksessie",
 					"rawData": {
 						"heading": "Onbewerkte filtergegevens",
-						"description": "Zo worden de filters verwerkt door Stump"
+						"description": "Zo worden de filters verwerkt door Coppice"
 					},
 					"buttons": {
 						"save": "Opslaan",
@@ -607,7 +607,7 @@
 		"app/desktop": {
 			"helmet": "Desktop instellingen",
 			"title": "Desktop instellingen",
-			"description": "Instellingen gerelateerd aan de Stump desktop applicatie",
+			"description": "Instellingen gerelateerd aan de Coppice desktop applicatie",
 			"sections": {
 				"configuredServers": {
 					"resetTokens": {
@@ -629,14 +629,14 @@
 		"server/general": {
 			"helmet": "Algemene serverinstellingen",
 			"title": "Algemene instellingen",
-			"description": "Algemene instellingen gerelateerd aan je Stump server",
+			"description": "Algemene instellingen gerelateerd aan je Coppice server",
 			"sections": {
 				"updateAvailable": {
 					"message": "Uw server is niet up-to-date. Update alsjeblieft naar de nieuwste versie!"
 				},
 				"serverInfo": {
 					"title": "Serverinformatie",
-					"description": "Basisgegevens over uw Stump server instantie",
+					"description": "Basisgegevens over uw Coppice server instantie",
 					"build": {
 						"label": "Bouwversie",
 						"description": "Details over de versie en bouwversie",
@@ -692,7 +692,7 @@
 				}
 			},
 			"createEmailer": {
-				"description": "Maak een nieuwe SMTP-mailer aan voor je Stump-server"
+				"description": "Maak een nieuwe SMTP-mailer aan voor je Coppice-server"
 			}
 		}
 	},
@@ -757,10 +757,10 @@
 	"serverSOS": {
 		"heading": "Server niet beschikbaar",
 		"desktop": {
-			"message": "Er is een netwerkfout opgetreden die erop wijst dat uw Stump-server momenteel niet beschikbaar is. Zorg ervoor dat deze actief is en toegankelijk vanaf dit apparaat.\nAls de URL van uw server is gewijzigd, kunt u deze bijwerken met behulp van het onderstaande formulier."
+			"message": "Er is een netwerkfout opgetreden die erop wijst dat uw Coppice-server momenteel niet beschikbaar is. Zorg ervoor dat deze actief is en toegankelijk vanaf dit apparaat.\nAls de URL van uw server is gewijzigd, kunt u deze bijwerken met behulp van het onderstaande formulier."
 		},
 		"web": {
-			"message": "Er is een netwerkfout opgetreden die erop wijst dat je Stump-server momenteel niet beschikbaar is. Zorg ervoor dat deze actief is en toegankelijk vanaf dit apparaat."
+			"message": "Er is een netwerkfout opgetreden die erop wijst dat je Coppice-server momenteel niet beschikbaar is. Zorg ervoor dat deze actief is en toegankelijk vanaf dit apparaat."
 		},
 		"reconnected": "Opnieuw verbonden met server! Doorsturen...",
 		"reconnectionFailed": "Er is iets misgegaan!"

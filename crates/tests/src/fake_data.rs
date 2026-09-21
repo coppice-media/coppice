@@ -2,14 +2,13 @@ use chrono::Utc;
 use models::domain::reading_state::{
 	Position, ProtocolUpdate, Publication, SourceProtocol,
 };
+use models::entity::user::{AuthUser, LoginUser};
 use models::entity::{library, library_config, media, reading_session, series, user};
 use models::services::reading_state;
 use models::shared::enums::{FileStatus, ReadingStatus};
 use rand::distr::SampleString;
 use rust_decimal::prelude::FromPrimitive;
-use sea_orm::{
-	prelude::DateTimeWithTimeZone, ActiveModelTrait, ActiveValue, DbConn, EntityTrait,
-};
+use sea_orm::{prelude::*, ActiveModelTrait, ActiveValue, DbConn};
 use uuid::Uuid;
 
 // note that None here means "use some default", not necessarily "set the value to None".
@@ -21,6 +20,7 @@ pub struct Media {
 	pub id: Option<String>,
 	pub name: Option<String>,
 	pub extension: Option<String>,
+	pub size: Option<i64>,
 	pub created_at: Option<DateTimeWithTimeZone>,
 	pub modified_at: Option<DateTimeWithTimeZone>,
 	pub deleted_at: Option<DateTimeWithTimeZone>,
@@ -44,8 +44,8 @@ impl Media {
 			series_id: ActiveValue::Set(Some(self.series_id.clone())),
 			id: ActiveValue::Set(id.clone()),
 			name: ActiveValue::Set(name.clone()),
-			size: ActiveValue::Set(1234),
 			extension: sea_orm::Set(extension.clone()),
+			size: self.size.map_or(ActiveValue::Set(1234), ActiveValue::Set),
 			pages: ActiveValue::Set(self.pages.unwrap_or(940)),
 			modified_at: self
 				.modified_at
@@ -98,6 +98,18 @@ impl User {
 		};
 
 		model.insert(db).await.expect("could not insert user")
+	}
+
+	pub async fn auth_user(&self, db: &DbConn) -> AuthUser {
+		let user = self.insert(db).await;
+		AuthUser::from(
+			LoginUser::find_by_id(user.id)
+				.into_model::<LoginUser>()
+				.one(db)
+				.await
+				.expect("should exec query")
+				.expect("should find user"),
+		)
 	}
 }
 

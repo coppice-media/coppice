@@ -1,17 +1,24 @@
 <script lang="ts">
+	/**
+	 * `/dashboard` — the landing screen, as a grid of independent widgets.
+	 *
+	 * Every widget owns one query and its own loading / error / empty state,
+	 * so the first paint is a grid of skeletons that resolve one by one and
+	 * an empty shelf never blanks the tile beside it.
+	 */
 	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import BellIcon from '@lucide/svelte/icons/bell';
 	import { Button } from '@stump/ui/components/ui/button';
-	import { Skeleton } from '@stump/ui/components/ui/skeleton';
-	import * as Tabs from '@stump/ui/components/ui/tabs';
+	import { PageHeader } from '@stump/ui/components/ui/page-header';
 	import { toast } from 'svelte-sonner';
 	import { request, subscribe } from '@stump/ui/graphql/client';
 	import {
 		DashboardJobsDocument,
 		DashboardKeepReadingDocument,
 		DashboardLiveEventsDocument,
+		DashboardRecentAnnotationsDocument,
 		DashboardRecentlyAddedDocument,
 		DashboardViewerDocument,
 		DevicesDocument,
@@ -19,23 +26,19 @@
 		type ReadingStatsSpan
 	} from '$lib/graphql/generated/graphql';
 	import type { LiveJobProgress } from '$lib/dashboard';
-	import { minutesLabel } from '$lib/format';
 	import { getHomeSession } from '$lib/session.svelte';
-	import BookShelf from '$lib/components/dashboard/BookShelf.svelte';
-	import DeviceSyncPanel from '$lib/components/dashboard/DeviceSyncPanel.svelte';
+	import ContinueReadingShelf from '$lib/components/dashboard/ContinueReadingShelf.svelte';
+	import DevicesWidget from '$lib/components/dashboard/DevicesWidget.svelte';
 	import JobQueuePanel from '$lib/components/dashboard/JobQueuePanel.svelte';
 	import ReadingHeatmap from '$lib/components/dashboard/ReadingHeatmap.svelte';
-	import StatCard from '$lib/components/dashboard/StatCard.svelte';
+	import ReadingStatsWidget from '$lib/components/dashboard/ReadingStatsWidget.svelte';
+	import RecentHighlights from '$lib/components/dashboard/RecentHighlights.svelte';
+	import RecentlyAdded from '$lib/components/dashboard/RecentlyAdded.svelte';
 
-	const SPANS: { value: ReadingStatsSpan; label: string }[] = [
-		{ value: 'DAY', label: 'Today' },
-		{ value: 'WEEK', label: 'Week' },
-		{ value: 'MONTH', label: 'Month' },
-		{ value: 'YEAR', label: 'Year' },
-		{ value: 'ALL_TIME', label: 'All time' }
-	];
 	const SHELF_PAGE = { offset: { page: 1, pageSize: 12 } };
+	const RECENT_PAGE = { offset: { page: 1, pageSize: 6 } };
 	const JOB_PAGE = { offset: { page: 1, pageSize: 6 } };
+	const HIGHLIGHTS = 5;
 
 	const session = getHomeSession();
 	const queryClient = useQueryClient();
@@ -47,6 +50,12 @@
 	let queued = $state<number | null>(null);
 	let queuedByKind = $state<Record<string, number>>({});
 	let liveError = $state<string | null>(null);
+
+	const greeting = $derived.by(() => {
+		const hour = now.getHours();
+		const time = hour < 5 ? 'Good night' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+		return session.user ? `${time}, ${session.user.username}.` : `${time}.`;
+	});
 
 	const viewerQuery = createQuery(() => ({
 		queryKey: ['dashboard-viewer'],
@@ -78,12 +87,17 @@
 	}));
 	const recentQuery = createQuery(() => ({
 		queryKey: ['recentlyAddedMedia'],
-		queryFn: () => request(DashboardRecentlyAddedDocument, { pagination: SHELF_PAGE }),
+		queryFn: () => request(DashboardRecentlyAddedDocument, { pagination: RECENT_PAGE }),
 		enabled: browser
 	}));
 	const devicesQuery = createQuery(() => ({
 		queryKey: ['devices'],
 		queryFn: () => request(DevicesDocument, {}),
+		enabled: browser
+	}));
+	const highlightsQuery = createQuery(() => ({
+		queryKey: ['annotations', 'recent', HIGHLIGHTS],
+		queryFn: () => request(DashboardRecentAnnotationsDocument, { pageSize: HIGHLIGHTS }),
 		enabled: browser
 	}));
 	const jobsQuery = createQuery(() => ({
@@ -92,7 +106,6 @@
 		enabled: browser && canReadJobs
 	}));
 
-	const stats = $derived(statsQuery.data?.readingStats);
 	const year = $derived(yearQuery.data?.readingStats);
 
 	$effect(() => {
@@ -133,9 +146,13 @@
 						void queryClient.invalidateQueries({ queryKey: ['dashboard-jobs'] });
 						return;
 					}
+					// A sighting usually means a sync landed: the device row, the
+					// shelf, and the totals may all have moved.
 					if (event.__typename === 'DeviceSeen') {
 						now = new Date();
 						void queryClient.invalidateQueries({ queryKey: ['devices'] });
+						void queryClient.invalidateQueries({ queryKey: ['keepReading'] });
+						void queryClient.invalidateQueries({ queryKey: ['readingStats'] });
 						return;
 					}
 					if (event.__typename === 'ProviderSourceHealthChanged') {
@@ -168,7 +185,7 @@
 		if (status === 'OK') {
 			toast.success(`${name} is reachable again.`);
 		} else if (status === 'DEAD') {
-			toast.error(`${name} is down; Stump stopped listing it.`);
+			toast.error(`${name} is down; Coppice stopped listing it.`);
 		} else {
 			toast.warning(`${name} is degraded.`);
 		}
@@ -176,104 +193,74 @@
 </script>
 
 <svelte:head>
-	<title>Dashboard · Stump</title>
+	<title>Dashboard · Coppice</title>
 </svelte:head>
 
-<div class="flex flex-col gap-6">
-	<div class="flex flex-wrap items-center gap-3">
-		<div class="mr-auto">
-			<h1 class="text-2xl font-semibold tracking-tight">Dashboard</h1>
-			<p class="text-sm text-muted-foreground">
-				{session.user ? `Signed in as ${session.user.username}.` : 'Your server at a glance.'}
-			</p>
-		</div>
-		<Button href={resolve('/settings/notifications')} size="sm" variant="outline">
-			<BellIcon aria-hidden="true" />
-			Notifications
-		</Button>
-	</div>
+<div class="flex flex-col gap-8">
+	<PageHeader title="Dashboard" description={greeting}>
+		{#snippet actions()}
+			<Button href={`${resolve('/connections')}#notifications`} size="sm" variant="outline">
+				<BellIcon data-icon="inline-start" aria-hidden="true" />
+				Notifications
+			</Button>
+		{/snippet}
+	</PageHeader>
 
-	<Tabs.Root value={span} onValueChange={(value) => (span = value as ReadingStatsSpan)}>
-		<Tabs.List>
-			{#each SPANS as option (option.value)}
-				<Tabs.Trigger value={option.value}>{option.label}</Tabs.Trigger>
-			{/each}
-		</Tabs.List>
-	</Tabs.Root>
-
-	{#if statsQuery.isPending}
-		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-			{#each { length: 4 } as _, index (index)}
-				<Skeleton class="h-24 rounded-xl" />
-			{/each}
-		</div>
-	{:else}
-		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-			<StatCard
-				label="Time read"
-				value={minutesLabel(stats?.minutes ?? 0)}
-				hint={stats?.streakDays ? `${stats.streakDays}-day streak` : undefined}
-			/>
-			<StatCard label="Pages" value={String(stats?.pages ?? 0)} />
-			<StatCard label="Sessions" value={String(stats?.sessions ?? 0)} />
-			<StatCard
-				label="Books finished"
-				value={String(stats?.booksFinished ?? 0)}
-				hint={stats?.from ? `since ${stats.from}` : undefined}
-			/>
-		</div>
-	{/if}
-
-	<ReadingHeatmap
-		days={year?.days ?? []}
-		to={year?.to ?? ''}
-		streakDays={year?.streakDays ?? 0}
-		pending={yearQuery.isPending}
-		error={yearQuery.error}
-	/>
-
-	<BookShelf
-		title="Continue reading"
-		description="Books with an open reading session, most recent first."
-		books={keepReadingQuery.data?.keepReading.nodes ?? []}
-		pending={keepReadingQuery.isPending}
-		error={keepReadingQuery.error}
-		errorTitle="Unable to load your open books"
-		emptyTitle="Nothing in progress"
-		emptyDescription="Open a book on any device and it shows up here."
-		showProgress
-		{now}
-	/>
-
-	<BookShelf
-		title="Recently added"
-		description="The newest books in the libraries you can see."
-		books={recentQuery.data?.recentlyAddedMedia.nodes ?? []}
-		pending={recentQuery.isPending}
-		error={recentQuery.error}
-		errorTitle="Unable to load recently added books"
-		emptyTitle="No books yet"
-		emptyDescription="Scan a library to fill this shelf."
-		{now}
-	/>
-
-	<div class="grid gap-6 lg:grid-cols-2">
-		<DeviceSyncPanel
-			devices={devicesQuery.data?.devices ?? []}
-			pending={devicesQuery.isPending}
-			error={devicesQuery.error}
-			{now}
+	<div class="grid grid-cols-1 gap-6 @3xl/page:grid-cols-12">
+		<ReadingHeatmap
+			days={year?.days ?? []}
+			to={year?.to ?? ''}
+			streakDays={year?.streakDays ?? 0}
+			query={yearQuery}
+			class="@3xl/page:col-span-8 @5xl/page:col-span-8"
 		/>
+
+		<DevicesWidget
+			devices={devicesQuery.data?.devices ?? []}
+			query={devicesQuery}
+			{now}
+			class="@3xl/page:col-span-4 @5xl/page:col-span-4"
+		/>
+
+		<ContinueReadingShelf
+			books={keepReadingQuery.data?.keepReading.nodes ?? []}
+			query={keepReadingQuery}
+			{now}
+			class="@3xl/page:col-span-12"
+		/>
+
+		<ReadingStatsWidget
+			bind:span
+			stats={statsQuery.data?.readingStats}
+			query={statsQuery}
+			class="@3xl/page:col-span-7 @5xl/page:col-span-8"
+		/>
+
+		<RecentHighlights
+			annotations={highlightsQuery.data?.annotations.items ?? []}
+			total={highlightsQuery.data?.annotations.total ?? 0}
+			query={highlightsQuery}
+			{now}
+			class="@3xl/page:col-span-7"
+		/>
+
+		<RecentlyAdded
+			books={recentQuery.data?.recentlyAddedMedia.nodes ?? []}
+			query={recentQuery}
+			{now}
+			class="@3xl/page:col-span-5"
+		/>
+
 		{#if canReadJobs}
 			<JobQueuePanel
 				jobs={jobsQuery.data?.jobs.nodes ?? []}
 				live={liveJobs}
 				{queued}
 				{queuedByKind}
-				pending={jobsQuery.isPending}
-				error={jobsQuery.error}
+				query={jobsQuery}
 				{liveError}
 				{now}
+				class="@3xl/page:col-span-12"
 			/>
 		{/if}
 	</div>

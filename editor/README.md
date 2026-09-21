@@ -68,6 +68,27 @@ the base.
 - `/login` — cookie-session login
 - `/drop` — upload/stage, scan, queue, discard, and live item progress
 - `/queue` — analysis queue controls and live phase progress
-- `/rework` — quality evidence, provider candidates, field-level picks, and commit/reject/requeue
+- `/rework` — book/audiobook metadata, quality evidence, provider candidates,
+  field-level picks, and commit/reject/requeue
 - `/bulk` — TanStack Table v9 row selection and bulk manual-field recipe
-- `/settings/providers` — provider settings, verification, and quality-check catalog/toggles
+- `/library` — committed library media and supported metadata maintenance
+- `/settings/providers` — provider settings, verification, and quality-check
+  catalog/toggles
+- `/settings/sources` — ingest-source configuration
+- `/settings/keys` — provider secret configuration
+
+## UI and metadata ownership
+
+- Dark/light mode and the compact color presets are shared with Home through
+  `@stump/ui/theme.svelte.js`, `@stump/ui/styles/theme.css`, and
+  `ThemeSwitcher`. Keep shadcn tokens in the shared package; route components
+  consume semantic classes rather than app-local palettes.
+- Ingest item queries, analysis state, candidate field selection, and commit
+  mutations live in `src/lib/graphql/ingest.graphql`; generated documents live
+  in `src/lib/graphql/generated/`.
+- Metadata controls must map to fields accepted by the current GraphQL
+  mutation. Unsupported provider fields remain read-only rather than being
+  silently discarded.
+- Metadata write mutations require the server owner or `EDIT_METADATA`;
+  ingest workflow actions retain their own `MANAGE_LIBRARY`/upload guards.
+  The editor UI mirrors those gates but never replaces server authorization.

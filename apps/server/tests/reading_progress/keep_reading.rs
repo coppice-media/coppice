@@ -182,16 +182,13 @@ async fn test_keep_reading_filters_finished_and_prior_readthroughs() {
 	fudge_session_time_with_timestamp(&book_4_session, app.conn(), newest).await;
 
 	let ids = fetch_keep_reading_ids(&app).await;
-	assert_eq!(
-		ids,
-		vec![
-			book_ids[3].clone(),
-			book_ids[2].clone(),
-			book_ids[1].clone()
-		]
-	);
+	assert_eq!(ids, vec![book_ids[3].clone(), book_ids[1].clone()]);
 	assert!(!ids.contains(&book_ids[0]));
 	assert!(!ids.contains(&book_ids[4]));
+	assert!(
+		!ids.contains(&book_ids[2]),
+		"completion remains sticky until the client explicitly marks the book unread"
+	);
 
 	let active_sessions_for_book_4 = reading_session::Entity::find()
 		.filter(reading_session::Column::MediaId.eq(&book_ids[3]))

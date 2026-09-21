@@ -10,12 +10,14 @@ use super::{defaults::*, env_keys::*};
 ///
 /// Sink-specific settings (git remote, tokens, ...) are per-user rows in the
 /// `annotation_sink_configs` table, not environment keys; this group only
-/// carries the server-side defaults for the feature.
+/// carries the server-side defaults for the feature. The export root is an
+/// administrator-controlled mount (`STUMP_ANNOTATION_SYNC_ROOT`); users can
+/// select only contained relative destinations within their own directory.
 #[derive(StumpConfigGenerator, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AnnotationSyncConfig {
-	/// Root directory the markdown/git sinks export into, one subdirectory
-	/// per user. When unset, this resolves to `<config_dir>/annotations`, see
-	/// [`super::StumpConfig::get_annotation_sync_root`].
+	/// Administrator-controlled root directory the markdown/git sinks export
+	/// into, one subdirectory per user. When unset, this resolves to
+	/// `<config_dir>/annotations`, see [`super::StumpConfig::get_annotation_sync_root`].
 	#[default_value(None)]
 	#[env_key(ANNOTATION_SYNC_ROOT_KEY)]
 	pub annotation_sync_root: Option<String>,

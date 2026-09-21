@@ -1,64 +1,106 @@
 ---
 title: Kobo Sync
+description: Configure the Coppice Kobo compatibility profile and understand its evidence boundary
 ---
 
-import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Step, Steps } from 'fumadocs-ui/components/steps'
+
+# Kobo Sync
+
+Coppice exposes a Kobo-shaped sync profile for compatible Kobo clients. The
+server route and payloads are **Shipped** and **Contract-tested**. No physical
+Kobo has run against Coppice, so physical-device compatibility is **Blocked**
+and must not be inferred from a server replay. See the [compatibility and
+integration status](/docs/guides/integrations/compatibility) and the [Kobo
+developer record](/docs/developer/kobo-sync-capabilities) for the detailed
+route contract.
 
 <Callout title="Permission required">
 	This functionality is gated behind the `ACCESS_KOBO_SYNC` and `ACCESS_API_KEYS` user permissions.
-	To learn more about permissions, see the [permissions](/docs/guides/access-control/permissions) guide.
+	To learn more about permissions, see the [permissions](/docs/guides/access-control/permissions)
+	guide.
 </Callout>
 
-You can automatically sync books to your Kobo device with Stump.
+## What is covered
 
-## How it works
-
-You can configure your Kobo to retrieve books from Stump, rather than from the Kobo store.
+The contract-tested profile covers initialization, library sync, metadata,
+reading-state GET/PUT, file delivery with `Range`, and KEPUB delivery where the
+conversion option is enabled. ReadingState can carry progress, status,
+statistics, and a Kobo location. It does not make Kobo highlights or
+annotations available as Coppice records. Store purchases are not proxied or
+synchronized through this profile.
 
 ## Setup
 
-To set up Kobo sync with Stump, you need to:
+To set up Kobo sync with Coppice:
 
 <Steps>
 
 <Step>
-### Enable the Kobo routes on your Stump instance
 
-Kobo sync is disabled by default. To enable it, you need to set the `ENABLE_KOBO_SYNC` environment variable to `true`, or directly set `enable_kobo_sync=true` in the `Stump.toml` configuration file.
+### Enable the Kobo routes
 
-See the [configuration guide](/docs/guides/configuration/server-config) for more information.
-</Step>
+The server must be compiled with the Cargo `kobo` feature. In the default
+`full` profile it is included; in a leaf build use the [modular deployment
+guide](/docs/guides/configuration/modular-deployment).
 
-<Step>
-### Create an API key for your Kobo
+Enable the runtime route with `ENABLE_KOBO_SYNC=true`, or set
+`enable_kobo_sync=true` in the `Stump.toml` configuration file. The runtime
+switch does nothing if the binary was compiled without `kobo`.
 
-<Callout title="Permission required">This step requires the `ACCESS_API_KEYS` user permissions.</Callout>
-
-This API key will be stored in plaintext on the Kobo.
-
-1. Navigate to the app settings (`/settings`)
-2. Click the `API keys` tab (`/settings/api-keys`)
-3. Click the `Create API key` button
-4. Select the `ACCESS_KOBO_SYNC` and `DOWNLOAD_FILE` permissions.
-5. Create your key and save the full value after creation
+See the [configuration guide](/docs/guides/configuration/server-config) for
+other server settings.
 
 </Step>
 
 <Step>
-### Configure your Kobo to sync with Stump
 
-Connect your Kobo to your computer. On the device there is a file named `.kobo/Kobo/Kobo eReader.conf`.
+### Add the device in the Home app
 
-Open this file in a text editor. Somewhere in this file will be a line that reads:
+Open the Home app at `/app`, choose **Devices** → **Add client**, and select
+**Kobo**. The [Devices guide](/docs/guides/features/devices) explains the
+one-time secret and Kobo endpoint card. Copy the endpoint URL shown by the app;
+it is the value to use for `api_endpoint` below. Configure the Kobo before
+closing the dialog because the full secret is shown only once.
+</Step>
+
+<Step>
+
+### Fallback: Create an API key
+
+<Callout type="warn" title="API-key fallback">
+	This still works, but a raw API key does not provide a device kind, per-device
+	library scope, last-seen tracking, or device credential rotation. For reader
+	devices, the Home app flow above is the preferred path.
+</Callout>
+
+<Callout title="Permission required">This step requires the `ACCESS_API_KEYS` user permission.</Callout>
+
+The key is stored in plaintext on the Kobo device. In the Coppice web UI:
+
+1. Navigate to the app settings (`/settings`).
+2. Open the **API keys** tab (`/settings/api-keys`).
+3. Select **Create API key**.
+4. Grant `ACCESS_KOBO_SYNC` and `DOWNLOAD_FILE`.
+5. Save the complete value when it is shown; it cannot be recovered later.
+
+</Step>
+
+<Step>
+
+### Point the Kobo at Coppice
+
+Connect the Kobo to your computer and open
+`.kobo/Kobo/Kobo eReader.conf`. Replace the store endpoint:
 
 ```ini
 api_endpoint=https://storeapi.kobo.com
 ```
 
-Edit it to read:
+with the Coppice endpoint:
 
 ```ini
-api_endpoint=http(s)://your-server(:{port})(/{baseUrl})/kobo/{api_key}
+api_endpoint=http(s)://your-server(:port)(/baseUrl)/kobo/{api_key}
 ```
 
 For example:
@@ -66,30 +108,45 @@ For example:
 ```ini
 api_endpoint=http://192.168.4.100:10801/kobo/98765432109876543210876543210987
 ```
+
+For the API-key fallback, `api_key` is the complete key from the previous step.
+With the Home app flow, use the complete endpoint URL it showed instead. Keep
+the endpoint private: anyone who obtains the key can use the permissions granted
+to it.
 </Step>
 
 </Steps>
 
-## Force sync
+## Optional KEPUB conversion
 
-If your Kobo becomes out of sync with Stump, you can reset the server-side sync state so the next sync starts from scratch:
+Coppice can convert an EPUB to Kobo's KEPUB form when the server has the
+converter compiled and `KOBO_KEPUB_CONVERSION=true` is enabled. Conversion
+changes the delivered bytes and creates Kobo-specific `koboSpan` coordinates;
+it is separate from ReadingState persistence. If conversion is disabled, the
+server can still deliver ordinary EPUB files.
+
+## Force a sync
+
+If the server-side sync state needs to be rebuilt, use an authenticated request:
 
 ```http
 DELETE /api/v2/kobo/sync-sessions
 Authorization: Bearer <your-token>
 ```
 
-This deletes all stored sync sessions for your account, which should force a full re-sync the next time your Kobo connects.
+This removes stored sync sessions for the account. Trigger a fresh sync on the
+Kobo afterwards. If the device still skips the library sync step, restore
+`.kobo/Kobo/Kobo eReader.conf` to its original endpoint, sync once, then point
+it back to Coppice and sync again.
 
-<Callout>
-	After calling this endpoint you may also need to trigger a fresh sync from the Kobo itself. If the device still skips the library sync step, you may need to restore `.kobo/Kobo/Kobo eReader.conf` back to defaults, trigger a sync, then edit it again to point to Stump and trigger another sync.
-</Callout>
+## Evidence boundary
 
-## Future improvements
-
-The current implementation is very basic. It does not support:
-
-- accepting reading-state updates from Kobo (Stump emits a reading-state projection during library sync, derived from its own reading sessions; see [`KoboSync::sync_items`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo/sync.rs#L243-L286) and [`BookEntitlementContainer::from_media`](https://github.com/stumpapp/stump/blob/nightly/core/src/kobo/entity.rs#L363-L426))
-- converting EPUBs to KEPUBs: page turns take significantly longer with an EPUB
-- proxying to the Kobo store: if you point your device at Stump, you will not be able to sync books from the Kobo store
-- selecting which books should be synced to the Kobo: all EPUBs available to a user will be synced to the Kobo
+- **Shipped:** the Kobo adapter, ReadingState contract, file/range delivery,
+  and optional KEPUB conversion are in the server.
+- **Contract-tested:** initialization, library sync, ReadingState round-trip,
+  KEPUB output, and `Range` delivery have been replayed.
+- **Blocked:** no physical Kobo run has been recorded, so battery, firmware,
+  store-account, and device-database behavior are not claims.
+- **Planned:** broader device verification and any future annotation channel
+  require an explicit device-side contract; they are not implied by the current
+  ReadingState endpoint.

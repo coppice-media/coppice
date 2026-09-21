@@ -1,0 +1,145 @@
+# Operations of the metadata editor page (`/edit`). A staged item keeps using
+# the `IngestItem` document in `operations.graphql`; the documents here read
+# and write the library record a committed book already has.
+
+# `permissions` is self-guarded, so this is the current user's own set. The
+# editor hides what the viewer cannot do (search needs MANAGE_JOBS, saving
+# needs EDIT_METADATA); a server owner bypasses every guard.
+query EditorViewer {
+	me {
+		id
+		username
+		isServerOwner
+		permissions
+	}
+}
+
+fragment EditorMediaMetadataFields on MediaMetadata {
+	id
+	title
+	titleSort
+	series
+	seriesGroup
+	storyArc
+	storyArcNumber
+	number
+	volume
+	summary
+	notes
+	genres
+	format
+	year
+	month
+	day
+	writers
+	pencillers
+	inkers
+	colorists
+	letterers
+	coverArtists
+	editors
+	narrators
+	publisher
+	links
+	characters
+	teams
+	pageCount
+	ageRating
+	identifierAmazon
+	identifierCalibre
+	identifierGoogle
+	identifierIsbn
+	identifierMobiAsin
+	identifierUuid
+	language
+	metadataSource
+	metadataExternalId
+	lockedFields
+}
+
+# The whole record one editor screen needs: the file, its series, the stored
+# metadata row, the tag links, and the audio shape when the book is an
+# audiobook (`audio` is `null` for every other kind).
+query EditorMedia($id: ID!) {
+	mediaById(id: $id) {
+		id
+		name
+		resolvedName
+		extension
+		pages
+		size
+		path
+		libraryId
+		thumbnail {
+			url
+		}
+		series {
+			id
+			name
+			resolvedName
+		}
+		tags {
+			id
+			name
+			kind
+		}
+		metadata {
+			...EditorMediaMetadataFields
+		}
+		audio {
+			durationMs
+			codec
+			sampleRate
+			channels
+			bitrate
+			chapterSource
+			tracks {
+				index
+				mime
+				durationMs
+				startOffsetMs
+				byteSize
+				url
+			}
+			chapters {
+				index
+				title
+				startMs
+				endMs
+			}
+		}
+	}
+}
+
+# A full replacement of the metadata row: every column the input names is
+# written, so the editor always sends its complete draft.
+mutation UpdateEditorMediaMetadata($id: ID!, $input: MediaMetadataInput!) {
+	updateMediaMetadata(id: $id, input: $input) {
+		id
+		resolvedName
+		metadata {
+			...EditorMediaMetadataFields
+		}
+	}
+}
+
+mutation SetEditorMediaTags($id: ID!, $tags: [String!]!) {
+	setMediaTags(id: $id, tags: $tags) {
+		id
+		tags {
+			id
+			name
+			kind
+		}
+	}
+}
+
+mutation SetEditorMediaLockedFields($mediaId: ID!, $lockedFields: [MetadataField!]!) {
+	setMediaLockedFields(mediaId: $mediaId, lockedFields: $lockedFields) {
+		id
+		metadata {
+			id
+			lockedFields
+		}
+	}
+}

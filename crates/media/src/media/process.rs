@@ -520,6 +520,50 @@ pub fn get_content_types_for_pages(
 	}
 	dispatch_processor!(Path::new(path), get_page_content_types, path, pages)
 }
+/// Get the content types of a list of pages of a file in the context of a spawned, blocking task.
+///
+/// Virtual media is resolved directly, while physical media is processed as one batch on the
+/// blocking executor.
+#[tracing::instrument(err, fields(path = %path.as_ref().display()))]
+pub async fn get_content_types_for_pages_async(
+	path: impl AsRef<Path>,
+	pages: Vec<i32>,
+) -> Result<HashMap<i32, ContentType>, FileError> {
+	let path_str = path.as_ref().to_str().unwrap_or_default();
+	if let Some(resolver) = virtual_media::resolver_for(path_str) {
+		return resolver.page_content_types(path_str, &pages);
+	}
+
+	let (tx, rx) = oneshot::channel();
+
+	let handle = spawn_blocking({
+		let path = path.as_ref().to_path_buf();
+
+		move || {
+			let send_result = tx.send(get_content_types_for_pages(
+				path.to_str().unwrap_or_default(),
+				pages,
+			));
+			tracing::trace!(
+				is_err = send_result.is_err(),
+				"Sending result of sync get_content_types_for_pages"
+			);
+		}
+	});
+
+	let content_types = if let Ok(recv) = rx.await {
+		recv?
+	} else {
+		handle
+			.await
+			.map_err(|e| FileError::UnknownError(e.to_string()))?;
+		return Err(FileError::UnknownError(
+			"Failed to receive content types for pages".to_string(),
+		));
+	};
+
+	Ok(content_types)
+}
 
 /// Get the content type for a specific page of a file.
 ///

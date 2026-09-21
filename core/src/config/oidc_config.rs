@@ -1,8 +1,10 @@
-use std::env;
+use std::{collections::BTreeMap, env};
 
+use models::shared::enums::UserPermission;
 use serde::{Deserialize, Serialize};
 
 use super::env_keys::*;
+use crate::{CoreError, CoreResult};
 
 const REQUIRED_SCOPES: &str = "email";
 
@@ -41,6 +43,22 @@ pub struct OidcConfig {
 	#[serde(default)]
 	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub ca_cert_file: Option<String>,
+	/// Claim containing the user's OIDC groups
+	#[serde(default = "default_groups_claim")]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub groups_claim: String,
+	/// OIDC group names mapped to Coppice permissions
+	#[serde(default)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub group_permissions: BTreeMap<String, Vec<UserPermission>>,
+	/// Optional OIDC group that receives every Coppice permission
+	#[serde(default)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub admin_group: Option<String>,
+	/// Whether to synchronize mapped permissions on every OIDC login
+	#[serde(default = "default_true")]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub sync_permissions: bool,
 }
 
 impl Default for OidcConfig {
@@ -55,12 +73,20 @@ impl Default for OidcConfig {
 			disable_local_auth: false,
 			extra_audiences: Vec::new(),
 			ca_cert_file: None,
+			groups_claim: default_groups_claim(),
+			group_permissions: BTreeMap::new(),
+			admin_group: None,
+			sync_permissions: true,
 		}
 	}
 }
 
 fn default_oidc_scopes() -> String {
 	"openid,email,profile".to_string()
+}
+
+fn default_groups_claim() -> String {
+	"groups".to_string()
 }
 
 fn default_true() -> bool {
@@ -79,6 +105,10 @@ impl std::fmt::Debug for OidcConfig {
 			.field("disable_local_auth", &self.disable_local_auth)
 			.field("extra_audiences", &self.extra_audiences)
 			.field("ca_cert_file", &self.ca_cert_file)
+			.field("groups_claim", &self.groups_claim)
+			.field("group_permissions", &self.group_permissions)
+			.field("admin_group", &self.admin_group)
+			.field("sync_permissions", &self.sync_permissions)
 			.finish()
 	}
 }
@@ -86,14 +116,14 @@ impl std::fmt::Debug for OidcConfig {
 impl OidcConfig {
 	/// Load OIDC configuration from environment variables
 	/// Returns None if OIDC is not enabled or not properly configured
-	pub fn from_env() -> Option<Self> {
+	pub fn from_env() -> CoreResult<Option<Self>> {
 		let enabled = env::var(OIDC_ENABLED_KEY)
 			.ok()
 			.and_then(|v| v.parse::<bool>().ok())
 			.unwrap_or(false);
 
 		if !enabled {
-			return None;
+			return Ok(None);
 		}
 
 		let client_id = env::var(OIDC_CLIENT_ID_KEY).unwrap_or_default();
@@ -104,7 +134,7 @@ impl OidcConfig {
 			tracing::warn!(
 				"OIDC is enabled but missing required configuration (client_id, issuer_url, or client_secret)"
 			);
-			return None;
+			return Ok(None);
 		}
 
 		let scopes = env::var(OIDC_SCOPES_KEY).unwrap_or_else(|_| default_oidc_scopes());
@@ -144,11 +174,39 @@ impl OidcConfig {
 		let ca_cert_file = env::var(OIDC_CA_CERT_FILE_KEY)
 			.ok()
 			.filter(|v| !v.is_empty());
-		if let Some(ref ca_cert_file_specified) = ca_cert_file {
+		if let Some(ca_cert_file_specified) = &ca_cert_file {
 			tracing::info!("OIDC certificate specified as {}", ca_cert_file_specified);
 		}
 
-		Some(Self {
+		let groups_claim =
+			env::var(OIDC_GROUPS_CLAIM_KEY).unwrap_or_else(|_| default_groups_claim());
+		let group_permissions = env::var(OIDC_GROUP_PERMISSIONS_KEY)
+			.ok()
+			.map(|value| {
+				parse_group_permissions(&value).map_err(|error| {
+					CoreError::InitializationError(format!(
+						"Failed to parse {OIDC_GROUP_PERMISSIONS_KEY}: {error}"
+					))
+				})
+			})
+			.transpose()?
+			.unwrap_or_default();
+		let admin_group = env::var(OIDC_ADMIN_GROUP_KEY)
+			.ok()
+			.filter(|value| !value.is_empty());
+		let sync_permissions = env::var(OIDC_SYNC_PERMISSIONS_KEY)
+			.ok()
+			.map(|value| {
+				value.parse::<bool>().map_err(|error| {
+					CoreError::InitializationError(format!(
+						"Failed to parse {OIDC_SYNC_PERMISSIONS_KEY}: {error}"
+					))
+				})
+			})
+			.transpose()?
+			.unwrap_or(true);
+
+		Ok(Some(Self {
 			enabled,
 			client_id,
 			issuer_url,
@@ -158,7 +216,11 @@ impl OidcConfig {
 			disable_local_auth,
 			extra_audiences,
 			ca_cert_file,
-		})
+			groups_claim,
+			group_permissions,
+			admin_group,
+			sync_permissions,
+		}))
 	}
 
 	/// Check if OIDC is *properly* configured
@@ -191,6 +253,12 @@ impl OidcConfig {
 	pub fn get_extra_audiences(&self) -> Vec<String> {
 		self.extra_audiences.clone()
 	}
+}
+
+fn parse_group_permissions(
+	value: &str,
+) -> Result<BTreeMap<String, Vec<UserPermission>>, serde_json::Error> {
+	serde_json::from_str(value)
 }
 
 #[cfg(test)]
@@ -229,5 +297,78 @@ mod tests {
 		let scopes = config.get_scopes();
 		assert_eq!(scopes.len(), 3);
 		assert_eq!(scopes, vec!["openid", "email", "profile"]);
+	}
+
+	#[test]
+	fn test_group_permissions_json_env_parsing() {
+		let config = temp_env::with_vars(
+			[
+				(OIDC_ENABLED_KEY, Some("true")),
+				(OIDC_CLIENT_ID_KEY, Some("client")),
+				(OIDC_ISSUER_URL_KEY, Some("https://issuer.example")),
+				(OIDC_CLIENT_SECRET_KEY, Some("secret")),
+				(OIDC_GROUPS_CLAIM_KEY, Some("roles")),
+				(
+					OIDC_GROUP_PERMISSIONS_KEY,
+					Some(r#"{"reader":["READ_USERS","DOWNLOAD_FILE"]}"#),
+				),
+				(OIDC_ADMIN_GROUP_KEY, None::<&str>),
+				(OIDC_SYNC_PERMISSIONS_KEY, None::<&str>),
+			],
+			|| OidcConfig::from_env(),
+		)
+		.expect("JSON environment configuration should parse")
+		.expect("OIDC should be enabled");
+
+		assert_eq!(config.groups_claim, "roles");
+		assert_eq!(
+			config.group_permissions.get("reader"),
+			Some(&vec![
+				UserPermission::ReadUsers,
+				UserPermission::DownloadFile
+			])
+		);
+		assert!(config.sync_permissions);
+	}
+
+	#[test]
+	fn test_group_permissions_toml_parsing() {
+		let config: OidcConfig = toml::from_str(
+			r#"
+groups_claim = "roles"
+admin_group = "admins"
+[group_permissions]
+readers = ["READ_USERS", "DOWNLOAD_FILE"]
+admins = ["MANAGE_USERS"]
+"#,
+		)
+		.expect("TOML group permissions should parse");
+
+		assert_eq!(config.groups_claim, "roles");
+		assert_eq!(config.admin_group.as_deref(), Some("admins"));
+		assert_eq!(
+			config.group_permissions.get("readers"),
+			Some(&vec![
+				UserPermission::ReadUsers,
+				UserPermission::DownloadFile
+			])
+		);
+		assert!(config.sync_permissions);
+	}
+
+	#[test]
+	fn test_unknown_group_permission_rejected() {
+		let error = parse_group_permissions(r#"{"admins":["NOT_A_PERMISSION"]}"#)
+			.expect_err("unknown permission should be rejected");
+		assert!(error.to_string().contains("unknown variant"));
+
+		let error = toml::from_str::<OidcConfig>(
+			r#"
+[group_permissions]
+admins = ["NOT_A_PERMISSION"]
+"#,
+		)
+		.expect_err("unknown TOML permission should be rejected");
+		assert!(error.to_string().contains("unknown variant"));
 	}
 }

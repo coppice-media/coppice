@@ -425,6 +425,18 @@ async fn put_progression(
 		.map_err(|error| APIError::BadRequest(error.to_string()))?;
 	let did_complete = page.is_some_and(|page| book.pages > -1 && page >= book.pages)
 		|| total_progression.is_some_and(|progression| progression >= 1.0);
+	let sync_summary = serde_json::json!({
+		"protocol": "komga",
+		"book_id": event_book_id.clone(),
+		"progression": total_progression.or_else(|| {
+			input
+				.locator
+				.locations
+				.as_ref()
+				.and_then(|locations| locations.progression)
+		}),
+		"completed": did_complete,
+	});
 	let device_id = if input.device.id.is_empty() && input.device.name.is_empty() {
 		None
 	} else {
@@ -486,6 +498,7 @@ async fn put_progression(
 	upsert_reading_session(&txn, &user, &id, progression).await?;
 	reading_state::apply(&txn, &user.id, Publication::from(&book), head_update).await?;
 	txn.commit().await?;
+	ctx.record_sync(&auth, sync_summary).await;
 	events.send(KomgaEvent::ReadProgressChanged {
 		book_id: event_book_id.clone().into(),
 		user_id: user.id.clone().into(),

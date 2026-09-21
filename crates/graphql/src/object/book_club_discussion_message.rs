@@ -36,10 +36,12 @@ impl From<book_club_discussion_message::Model> for BookClubDiscussionMessage {
 impl BookClubDiscussionMessage {
 	/// Get the member who posted this message
 	async fn member(&self, ctx: &Context<'_>) -> Result<Option<BookClubMember>> {
+		ensure_membership(ctx, &self.model.book_club_id).await?;
 		let core = ctx.data::<CoreContext>()?;
 
 		if let Some(ref member_id) = self.model.member_id {
 			let member = book_club_member::Entity::find_by_id(member_id)
+				.filter(book_club_member::Column::BookClubId.eq(&self.model.book_club_id))
 				.one(core.conn.as_ref())
 				.await?;
 
@@ -49,9 +51,8 @@ impl BookClubDiscussionMessage {
 		}
 	}
 
-	/// Get aggregated reactions for this message, grouped by emoji, sorted by count desc
-	/// TODO(dataloader): Create dataloader
 	async fn reactions(&self, ctx: &Context<'_>) -> Result<Vec<AggregatedReaction>> {
+		ensure_membership(ctx, &self.model.book_club_id).await?;
 		let core = ctx.data::<CoreContext>()?;
 		let service = ctx.data::<stump_api_types::RequestOrigin>()?;
 		let auth_ctx = ctx.data::<stump_auth::AuthContext>()?;
@@ -127,6 +128,7 @@ impl BookClubDiscussionMessage {
 		&self,
 		ctx: &Context<'_>,
 	) -> Result<Option<BookClubDiscussionMessage>> {
+		ensure_membership(ctx, &self.model.book_club_id).await?;
 		let reply_to_id = match &self.model.reply_to_message_id {
 			Some(id) => id,
 			None => return Ok(None),
@@ -135,6 +137,10 @@ impl BookClubDiscussionMessage {
 		let core = ctx.data::<CoreContext>()?;
 
 		let message = book_club_discussion_message::Entity::find_by_id(reply_to_id)
+			.filter(
+				book_club_discussion_message::Column::BookClubId
+					.eq(&self.model.book_club_id),
+			)
 			.one(core.conn.as_ref())
 			.await?;
 
@@ -147,11 +153,15 @@ impl BookClubDiscussionMessage {
 		&self,
 		ctx: &Context<'_>,
 	) -> Result<Vec<BookClubDiscussionMessage>> {
+		ensure_membership(ctx, &self.model.book_club_id).await?;
 		let core = ctx.data::<CoreContext>()?;
-
 		let children = book_club_discussion_message::Entity::find()
 			.filter(
 				book_club_discussion_message::Column::ParentMessageId.eq(&self.model.id),
+			)
+			.filter(
+				book_club_discussion_message::Column::BookClubId
+					.eq(&self.model.book_club_id),
 			)
 			.filter(book_club_discussion_message::Column::DeletedAt.is_null())
 			.all(core.conn.as_ref())
@@ -162,20 +172,41 @@ impl BookClubDiscussionMessage {
 			.map(BookClubDiscussionMessage::from)
 			.collect())
 	}
-
 	/// Get the count of threaded replies to this message (if any)
 	/// TODO(dataloader): Create dataloader
 	async fn thread_children_count(&self, ctx: &Context<'_>) -> Result<i64> {
+		ensure_membership(ctx, &self.model.book_club_id).await?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let count = book_club_discussion_message::Entity::find()
 			.filter(
 				book_club_discussion_message::Column::ParentMessageId.eq(&self.model.id),
 			)
+			.filter(
+				book_club_discussion_message::Column::BookClubId
+					.eq(&self.model.book_club_id),
+			)
 			.filter(book_club_discussion_message::Column::DeletedAt.is_null())
 			.count(core.conn.as_ref())
 			.await?;
 
 		Ok(count as i64)
+	}
+}
+
+async fn ensure_membership(ctx: &Context<'_>, book_club_id: &str) -> Result<()> {
+	let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
+	if user.is_server_owner {
+		return Ok(());
+	}
+	let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+	if book_club_member::Entity::find_by_club_for_user(user, book_club_id)
+		.one(conn)
+		.await?
+		.is_some()
+	{
+		Ok(())
+	} else {
+		Err("You must be a member of the book club to access this field".into())
 	}
 }

@@ -7,7 +7,7 @@
 	},
 	"authScene": {
 		"claimHeading": "Sunucunuzu başlatın",
-		"claimText": "Bu Stump sunucusu henüz başlatılmamıştır. Hesabınızı oluşturmak için aşağıdaki formu kullanın. Hesabınız oluşturulduktan sonra, sunucunun tüm özelliklerine tam erişim hakkına sahip olacaksınız.",
+		"claimText": "Bu Coppice sunucusu henüz başlatılmamıştır. Hesabınızı oluşturmak için aşağıdaki formu kullanın. Hesabınız oluşturulduktan sonra, sunucunun tüm özelliklerine tam erişim hakkına sahip olacaksınız.",
 		"form": {
 			"validation": {
 				"missingUsername": "Kullanıcı adı gereklidir",
@@ -381,7 +381,7 @@
 			"convertOptions": {
 				"section": {
 					"heading": "Dosya dönüştürme",
-					"description": "Stump, belirli dosya formatlarını daha uyumlu formatlara dönüştürebilir"
+					"description": "Coppice, belirli dosya formatlarını daha uyumlu formatlara dönüştürebilir"
 				},
 				"rarToZip": {
 					"label": "RAR'ı ZIP'e dönüştür",
@@ -429,7 +429,7 @@
 				},
 				"options": {
 					"label": "Kütüphane düzeni",
-					"description": "Stump'ın kitaplığınızı nasıl düzenleyeceğini belirleyen ayar",
+					"description": "Coppice'ın kitaplığınızı nasıl düzenleyeceğini belirleyen ayar",
 					"collectionPriority": {
 						"label": "Koleksiyon öncelikli",
 						"description": "Kütüphane kök dizinindeki en üst düzeydeki her klasör tek bir seridir"
@@ -464,12 +464,12 @@
 				{
 					"label": "Taranıyor",
 					"heading": "Taranıyor",
-					"description": "Stump'ın bu kütüphaneyi nasıl taradığına ilişkin ayarlar"
+					"description": "Coppice'ın bu kütüphaneyi nasıl taradığına ilişkin ayarlar"
 				},
 				{
 					"label": "Küçük Resimler",
 					"heading": "Küçük Resimler",
-					"description": "Stump'ın bu kütüphane için küçük resimler oluşturup oluşturmayacağına ve nasıl oluşturacağına dair seçenekler"
+					"description": "Coppice'ın bu kütüphane için küçük resimler oluşturup oluşturmayacağına ve nasıl oluşturacağına dair seçenekler"
 				},
 				{
 					"label": "Önizleme",
@@ -556,7 +556,7 @@
 		},
 		"options/scanning": {
 			"title": "Tarama",
-			"description": "Stump'ın bu kütüphaneyi nasıl taradığına ilişkin ayarlar",
+			"description": "Coppice'ın bu kütüphaneyi nasıl taradığına ilişkin ayarlar",
 			"sections": {
 				"configureScan": {
 					"heading": "Taramayı yapılandır",
@@ -1090,7 +1090,7 @@
 				"filterDrawer": {
 					"rawData": {
 						"heading": "Ham filtre verisi",
-						"description": "Stump filtreleri bu şekilde işleyecek"
+						"description": "Coppice filtreleri bu şekilde işleyecek"
 					},
 					"buttons": {
 						"save": "Kaydet",
@@ -1233,12 +1233,12 @@
 				},
 				"maxWidthPreference": {
 					"label": "Ayarlanmış genişlik",
-					"description": "Stump, görüntü alanına bir maksimum genişlik uygular. Bu ayar, bu sınırı değiştirmenize veya kaldırmanıza olanak tanır",
+					"description": "Coppice, görüntü alanına bir maksimum genişlik uygular. Bu ayar, bu sınırı değiştirmenize veya kaldırmanıza olanak tanır",
 					"tooltip": "Ana gezinme yöntemi kenar çubuğu olarak ayarlandığında bu ayar şu anda desteklenmemektedir"
 				},
 				"additionalPreferences": {
 					"label": "Diğer tercihler",
-					"description": "Bu ek ayarlarla Stump'ın görünümünü ve davranışını özelleştirin"
+					"description": "Bu ek ayarlarla Coppice'ın görünümünü ve davranışını özelleştirin"
 				},
 				"hideScrollbarToggle": {
 					"label": "Kaydırma çubuğunu gizle",
@@ -1273,7 +1273,7 @@
 		"app/apiKeys": {
 			"helmet": "API anahtarları",
 			"title": "API anahtarları",
-			"description": "Oluşturduğunuz Stump API anahtarlarını yönetin",
+			"description": "Oluşturduğunuz Coppice API anahtarlarını yönetin",
 			"shared": {
 				"fields": {
 					"name": "İsim"
@@ -1281,11 +1281,11 @@
 			}
 		},
 		"app/desktop": {
-			"description": "Stump masaüstü uygulamasıyla ilgili ayarlar",
+			"description": "Coppice masaüstü uygulamasıyla ilgili ayarlar",
 			"sections": {
 				"configuredServers": {
 					"label": "Yapılandırılmış sunucular",
-					"description": "Bağlanabileceğiniz Stump sunucularının listesi",
+					"description": "Bağlanabileceğiniz Coppice sunucularının listesi",
 					"getStarted": "Başlamak için bir sunucu ekleyin",
 					"unreachableServer": {
 						"tooltip": "Sunucuya ulaşılamıyor"
@@ -1306,14 +1306,14 @@
 								"placeholder": "Sunucum"
 							},
 							"uri": {
-								"description": "Stump sunucusunun URL'si"
+								"description": "Coppice sunucusunun URL'si"
 							}
 						}
 					},
 					"addServer": {
 						"trigger": "Sunucu ekle",
 						"title": "Yeni bir sunucu ekle",
-						"description": "Masaüstü uygulamasına yeni bir Stump sunucusu ekle",
+						"description": "Masaüstü uygulamasına yeni bir Coppice sunucusu ekle",
 						"confirm": "Sunucu ekle"
 					},
 					"editServer": {
@@ -1378,7 +1378,7 @@
 					},
 					"discordPresence": {
 						"label": "Discord Durumu",
-						"description": "Discord Rich Presence özelliğini kullanarak Discord'da Stump etkinliklerinizi görüntüleyin",
+						"description": "Discord Rich Presence özelliğini kullanarak Discord'da Coppice etkinliklerinizi görüntüleyin",
 						"reconnect": "Discord'a Yeniden Bağlan"
 					}
 				}

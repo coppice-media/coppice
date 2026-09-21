@@ -9,9 +9,14 @@
 //! [`editions`] is the third shared path: which media rows are editions of the
 //! same work (an audiobook and its ebook), and the chapter map that lets a
 //! position in one be shown in the other.
-//!
+
+//! [`sync_maps`] validates and stores tier-2 timing artifacts, explicitly
+//! queues deduplicated alignment work, and finalizes only exact worker results
+//! into deterministic cached read-aloud EPUBs.
+
 //! See `README.md` for the decisions behind the modules.
 
 pub mod editions;
 pub mod library;
 pub mod series;
+pub mod sync_maps;

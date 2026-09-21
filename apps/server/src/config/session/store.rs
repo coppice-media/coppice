@@ -57,6 +57,7 @@ impl StumpSessionStore {
 	///
 	/// This is used for compatibility tokens whose lifetime differs from the
 	/// browser session configured on the normal [`Session`] layer.
+	#[cfg(feature = "komga")]
 	pub async fn create_for_user(
 		&self,
 		user_id: &str,

@@ -67,7 +67,7 @@ export default function IdentifiersSheet({ identifiers }: Props) {
 			>
 				<ScrollView className="gap-2 px-4 py-6 flex-1">
 					<Card label={t('bookMetadata.identifiers')}>
-						{identifiers.stumpId && <Card.Row label="Stump" value={identifiers.stumpId} />}
+						{identifiers.stumpId && <Card.Row label="Coppice" value={identifiers.stumpId} />}
 						{identifiers.identifier && (
 							<Card.Row label={t('bookMetadata.identifier')} value={identifiers.identifier} />
 						)}

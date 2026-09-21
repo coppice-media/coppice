@@ -32,7 +32,10 @@ export function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
 			/>
 			<div className="max-w-sm sm:max-w-md md:max-w-xl">
 				<div className="text-left">
-					<h1 className="text-4xl font-semibold text-foreground">
+					<p className="mb-1 text-sm font-semibold tracking-[0.16em] text-muted-foreground uppercase">
+						Coppice
+					</p>
+					<h1 className="text-4xl font-semibold text-foreground" data-testid="criticalErrorHeading">
 						{t('errorScene.criticalHeading')}
 					</h1>
 					<p className="mt-1.5 text-lg text-foreground">

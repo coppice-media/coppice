@@ -26,6 +26,7 @@ use axum::{
 use chrono::Utc;
 use models::entity::{media, user::AuthUser};
 use sea_orm::{ColumnTrait, QueryFilter};
+use stump_auth::AuthContext;
 
 use crate::{
 	dto::*,
@@ -91,7 +92,7 @@ async fn apply(
 	user: &models::entity::user::AuthUser,
 	session: &AbsSession,
 	body: ProgressSyncRequestDto,
-) -> AbsResult<()> {
+) -> AbsResult<(bool, i64)> {
 	let audio = backend.audio(&session.media_id).await?;
 	// The client's own `duration` wins when it sends one: a transcoding
 	// client can report a length the server's probe never saw.
@@ -115,7 +116,7 @@ async fn apply(
 		.as_ref()
 		.and_then(|audio| audio.track_at(position_ms).map(|track| track.index));
 
-	backend
+	let applied = backend
 		.apply_position(
 			user,
 			&session.media_id,
@@ -131,31 +132,55 @@ async fn apply(
 			},
 		)
 		.await?;
+	if applied {
+		backend
+			.update_session(
+				&session.id,
+				position_ms,
+				session.time_listening_ms.saturating_add(elapsed_ms),
+			)
+			.await?;
+	}
+	Ok((applied, position_ms))
+}
+async fn record_sync(
+	backend: &dyn AbsBackend,
+	auth: &AuthContext,
+	session: &AbsSession,
+	position_ms: i64,
+) {
 	backend
-		.update_session(
-			&session.id,
-			position_ms,
-			session.time_listening_ms.saturating_add(elapsed_ms),
+		.record_sync(
+			auth,
+			serde_json::json!({
+				"protocol": "abs",
+				"profile": "abs",
+				"session_id": session.id.clone(),
+				"media_id": session.media_id.clone(),
+				"position_ms": position_ms,
+			}),
 		)
-		.await
+		.await;
 }
 
-/// `POST /api/session/{id}/sync` → `200 OK`
-/// (`capture/session_sync.txt`).
 pub(crate) async fn sync(
 	backend: Backend,
 	Extension(user): User,
+	Extension(auth): Extension<AuthContext>,
 	Path(session_id): Path<String>,
 	body: Option<Json<ProgressSyncRequestDto>>,
 ) -> AbsResult<Response> {
 	let session = load(&**backend, &user.id, &session_id).await?;
-	apply(
+	let (applied, position_ms) = apply(
 		&**backend,
 		&user,
 		&session,
 		body.map(|Json(body)| body).unwrap_or_default(),
 	)
 	.await?;
+	if applied {
+		record_sync(&**backend, &auth, &session, position_ms).await;
+	}
 	Ok(crate::routes::ok_text())
 }
 
@@ -164,36 +189,32 @@ pub(crate) async fn sync(
 pub(crate) async fn close(
 	backend: Backend,
 	Extension(user): User,
+	Extension(auth): Extension<AuthContext>,
 	Path(session_id): Path<String>,
 	body: Option<Json<ProgressSyncRequestDto>>,
 ) -> AbsResult<Response> {
 	let session = load(&**backend, &user.id, &session_id).await?;
 	let body = body.map(|Json(body)| body).unwrap_or_default();
 	// A close with no position must not reset the session to zero.
-	if body != ProgressSyncRequestDto::default() {
-		apply(&**backend, &user, &session, body).await?;
-	}
+	let sync = if body != ProgressSyncRequestDto::default() {
+		Some(apply(&**backend, &user, &session, body).await?)
+	} else {
+		None
+	};
 	backend.close_session(&session.id).await?;
+	if let Some((applied, position_ms)) = sync {
+		if applied {
+			record_sync(&**backend, &auth, &session, position_ms).await;
+		}
+	}
 	Ok(crate::routes::ok_text())
 }
-
 // ---------------------------------------------------------------------------
 // Offline merge — POST /api/session/local, /local-all
 // ---------------------------------------------------------------------------
-
-/// Merge one session the client recorded while offline.
 ///
-/// The upload is not a live sync and must not be treated as one. It carries
-/// `updatedAt`, the device clock time of the position, and that is the
-/// source time the unified reading state resolves against the head it
-/// already holds: an upload dated behind the head that also reports less
-/// progress is kept as provenance and does **not** move the position, which
-/// is what abs-ref does with a stale local session and what the app is told
-/// through `progressSynced`.
-///
-/// Either way the session becomes a row in the listening history with
-/// `playMethod: 3` (Local), because the listening happened even when the
-/// position did not move.
+/// An offline session becomes listening history only when its position is
+/// accepted by the unified head; stale uploads remain provenance only.
 async fn merge_local(
 	backend: &dyn AbsBackend,
 	user: &AuthUser,
@@ -251,25 +272,26 @@ async fn merge_local(
 		)
 		.await?;
 
-	let device = body.device_info.unwrap_or_default();
-	backend
-		.create_session(AbsSession {
-			id: session_id.clone(),
-			user_id: user.id.clone(),
-			media_id: row.id,
-			library_id: library_of(backend, user, &item_id).await?,
-			device_id: device.device_id,
-			client_name: device.client_name,
-			client_version: device.client_version,
-			media_player: body.media_player,
-			current_time_ms: position_ms,
-			time_listening_ms: elapsed_ms,
-			started_at,
-			updated_at,
-			play_method: PLAY_METHOD_LOCAL,
-		})
-		.await?;
-
+	if synced {
+		let device = body.device_info.unwrap_or_default();
+		backend
+			.create_session(AbsSession {
+				id: session_id.clone(),
+				user_id: user.id.clone(),
+				media_id: row.id,
+				library_id: library_of(backend, user, &item_id).await?,
+				device_id: device.device_id,
+				client_name: device.client_name,
+				client_version: device.client_version,
+				media_player: body.media_player,
+				current_time_ms: position_ms,
+				time_listening_ms: elapsed_ms,
+				started_at,
+				updated_at,
+				play_method: PLAY_METHOD_LOCAL,
+			})
+			.await?;
+	}
 	Ok((session_id, synced))
 }
 

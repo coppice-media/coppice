@@ -1,25 +1,47 @@
 ---
 title: Read-aloud, remote workers, and requests
-description: Design for ebook↔audiobook synchronisation (EPUB 3 Media Overlays, Storyteller-compatible), the remote worker protocol that runs GPU work off the server, and the request model that lets users ask for what the library lacks. Status - design accepted, not implemented.
+description: "Ebook↔audiobook synchronisation design and implementation state: shipped edition pairing/chapter mapping, validated alignment jobs, an optional worker-local Storyteller adapter, and deterministic cache-only EPUB 3 Media Overlays."
 ---
 
-**Status: partly implemented.** Each section carries its own status line;
-where a section has none, nothing on it exists in the tree yet except the
-pieces marked *exists*. Sections 2 and 3 (pairing and tier 1) are built.
-Every other section names the crate it will land in so the work can be split
-without re-deciding it.
+**Shipped:** edition pairing, the free
+chapter/percentage map, the generic worker protocol, strict pair-scoped
+`SyncMapV1` import/enqueue, the optional worker-local Storyteller delegate, and
+server-finalized deterministic read-aloud EPUB delivery. The `align` wire
+contract and `SyncMapV1` validator live in `crates/worker`; the host validator
+checks the exact requester, pair, source digests, durations, output bytes, and
+prepared EPUB targets before persisting a map and publishing its cache.
+`Media.syncMap`, `Media.readAloud`, the authenticated status/download routes,
+and cache-only OPDS acquisition links never enqueue work or run ML.
+Native CTC/Viterbi, virtual composite delivery, and readiness quality checks
+remain **Planned**. The requests ledger, approval/release processor, automation
+defaults, and download polling backend are **Shipped**; real MAM/VPN/qBittorrent
+and physical-device delivery remain untested. Storyteller credentials stay in
+the worker process and never enter the server or job payload.
+
+**Integration status:** The rows below describe the merged implementation at
+source level. The post-merge full gate and protocol replay remain pending; they
+must not be read as a green verification result.
+
+The three rows below are **cost/input tiers, not three shipped alignment
+engines**. Today Coppice ships the deterministic first tier plus an optional
+worker-local external delegate; it has no in-process ML alignment engine. Tier 2
+is one product capability with replaceable worker backends; tier 3 is
+audiobook-only ASR and remains out of scope.
 
 ## 1. The problem in one table
 
-| Have | Want | Cost tier |
+| Have | Want | Evidence / cost tier |
 | --- | --- | --- |
-| an audiobook (`media_audio`, chapters) and the same book as an EPUB | "you were at 41 % of chapter 7 on the phone" → open the EPUB there, and back | **free** - chapter + percentage |
-| both, plus a worker | sentence-level sync: tap a sentence, hear it; playback highlights text | **cheap** - forced alignment of *known* text |
-| only the audiobook | a transcript / search | **expensive** - full ASR; out of scope until someone wants it |
+| an audiobook (`media_audio`, chapters) and the same book as an EPUB | “you were at 41 % of chapter 7 on the phone” → open the EPUB there, and back | **Shipped** — chapter + percentage |
+| both, plus a worker | sentence-level sync: tap a sentence, hear it; playback highlights text | **Shipped** — explicit alignment, validated `SyncMapV1`, and cached EPUB 3 delivery; synchronized console playback remains separate |
+| only the audiobook | a transcript / search | out of scope — full ASR is not a read-aloud prerequisite |
 
-The canonical portable output for tier 2 is **EPUB 3 Media Overlays** (SMIL) -
-the format Storyteller produces and Readest/Thorium consume. Stump does not
-invent a format; it stores a small internal map and *renders* the standard.
+The canonical portable output for the alignment tier is **EPUB 3
+Media Overlays** (SMIL) — the format Storyteller produces and Readest/Thorium
+consume. SMIL is the timing document inside the EPUB: it pairs one XHTML
+fragment with one audio interval. It is neither the complete audiobook EPUB nor
+Coppice's compact internal `SyncMapV1`; Coppice validates the latter and
+deterministically renders the former from an accepted map.
 
 ## 2. Pairing: which audiobook is which ebook
 
@@ -27,17 +49,17 @@ Neither ISBN nor ASIN is a safe key on its own: print, ebook and audio editions
 carry different ISBNs, and audiobooks usually carry an Audible ASIN and no ISBN.
 The key is the **work**, and the tree already has one.
 
-| Piece | Status | Where |
+| Piece | Evidence | Where |
 | --- | --- | --- |
-| `works` / `editions` / `aliases` / `media_links` (a work has editions; a media row links to an edition by identifier) | *exists* (liseur-sync model, `POST /v1/works/resolve`) | `crates/migrations/src/m20260904_000000_add_liseur_sync.rs`, `apps/server/src/routers/liseur_sync/` |
-| identifiers on media metadata: `identifier_isbn`, `identifier_amazon`, `identifier_google`, `identifier_mobi_asin`, `identifier_calibre`, `identifier_uuid` | *exists* | `crates/models/src/entity/media_metadata.rs` |
-| Audible ASIN from the `audible` provider | *exists* (batch 9) | `crates/integrations/metadata/src/providers/audible.rs` |
-| **Pairing rule**: two media rows are the same work when (a) they link to the same work id, or (b) an identifier matches through a provider's edition list (Audnexus and OpenLibrary both expose "other editions"), or (c) normalised `title + first author` match and the user confirms | to build | `crates/library` (`pair_editions`), surfaced as `Media.editions: [Media]` in GraphQL and an "Also available as" row in the console |
+| `works` / `editions` / `aliases` / `media_links` (a work has editions; a media row links to an edition by identifier) | **Shipped** (liseur-sync model, `POST /v1/works/resolve`) | `crates/migrations/src/m20260904_000000_add_liseur_sync.rs`, `apps/server/src/routers/liseur_sync/` |
+| identifiers on media metadata: `identifier_isbn`, `identifier_amazon`, `identifier_google`, `identifier_mobi_asin`, `identifier_calibre`, `identifier_uuid` | **Shipped** | `crates/models/src/entity/media_metadata.rs` |
+| Audible ASIN from the `audible` provider | **Shipped** | `crates/integrations/metadata/src/providers/audible.rs` |
+| **Pairing rule**: two media rows are the same work when (a) they link to the same work id, or (b) an identifier matches through a provider's edition list (Audnexus and OpenLibrary both expose “other editions”), or (c) normalised `title + first author` match and the user confirms | **Shipped** | `crates/library` (`pair_editions`), surfaced as `Media.editions: [Media]` in GraphQL and an “Also available as” row in the console |
 
-**Status: implemented.** ✅ same work id · ✅ identifier through a provider's
-edition list (Audnexus `GET /books/{asin}` → the print ISBN; Open Library
-`/isbn/{isbn}.json` → `works[…]` → `/works/{id}/editions.json`) · ✅
-normalised `title + first author`, as a suggestion.
+**Shipped:** same work id; identifier through a provider's edition list
+(Audnexus `GET /books/{asin}` → the print ISBN; Open Library
+`/isbn/{isbn}.json` → `works[…]` → `/works/{id}/editions.json`); and normalised
+`title + first author` as a suggestion.
 `stump_library::editions::pair_editions` computes the rules on demand and
 caches every verdict; `metadata_integrations::editions::EditionLookup` is the
 provider half.
@@ -48,9 +70,9 @@ one user sharing a `work_id`, and `m20260946` adds the two columns the liseur
 lane cannot carry — `pair_status` (`confirmed` | `suggested` | `rejected`,
 defaulting to `confirmed` so every existing row keeps its meaning) and
 `pair_evidence`. A rejection is a row, not a deletion, because suggestions are
-recomputed on every book-page query. `resolution_status` is *not* the carrier:
-it means "was the edition digest verified against the file" and the liseur
-lane rewrites it on every re-resolve.
+recomputed on every book-page query. `resolution_status` is not the carrier: it
+means “was the edition digest verified against the file” and the liseur lane
+rewrites it on every re-resolve.
 
 The ebook is always the **canonical text**; the audiobook is the canonical
 **time**.
@@ -59,79 +81,93 @@ The ebook is always the **canonical text**; the audiobook is the canonical
 
 No compute, no worker, no storage beyond a chapter map. Both sides already have
 chapters: the EPUB's nav/TOC (spine items, character counts per item are
-computed by the Readium positions generator - *exists*, `crates/media/src/media/readium.rs`)
-and the audiobook's `media_audio_chapters`.
+computed by the Readium positions generator — **Shipped**,
+`crates/media/src/media/readium.rs`) and the audiobook's
+`media_audio_chapters`.
 
-1. **Chapter map** - match chapter lists by normalised title, then by ordinal
-   when titles are unhelpful ("Chapter 12" ↔ "12"); front/back matter without a
-   counterpart (dedication, credits) is skipped, not forced. Stored once per pair
-   as `media_chapter_map` `(pair_id, ebook_spine_index, audio_chapter_index, confidence)`.
-2. **Position conversion** - audio → ebook: `f = (t − chapter.start_ms) / chapter.duration_ms`,
-   then a Readium locator at `f` of the mapped spine item's character count.
-   Ebook → audio: the inverse from `locations.progression` inside the spine item.
-3. **Accuracy** - narrators are not metronomes, so this is ±1-3 min on a 30-min
-   chapter; good enough for "resume near here", never for highlighting.
+1. **Chapter map** — match chapter lists by normalised title, then by ordinal
+   when titles are unhelpful (“Chapter 12” ↔ “12”); front/back matter without a
+   counterpart (dedication, credits) is skipped, not forced. Stored once per
+   pair as `media_chapter_map`
+   `(pair_id, ebook_spine_index, audio_chapter_index, confidence)`.
+2. **Position conversion** — audio → ebook:
+   `f = (t − chapter.start_ms) / chapter.duration_ms`, then a Readium locator at
+   `f` of the mapped spine item's character count. Ebook → audio: the inverse
+   from `locations.progression` inside the spine item.
+3. **Accuracy** — narrators are not metronomes, so this is ±1–3 min on a
+   30-minute chapter; good enough for “resume near here”, never for highlighting.
    The console shows the converted position as *approximate* and the unified
-   head records `source_kind: mapped` so nothing overwrites a real position with
-   a derived one.
+   head records no derived position.
 
-**Status: implemented** (except the readiness family, §4b). ✅ chapter map
-(`media_chapter_map`, `m20260946`) · ✅ normalised-title match, then the
-ordinal inside the title, then position, with front/back matter skipped and a
-`confidence` per entry (`stump_library::editions::build_chapter_map`) · ✅
-both position conversions (`models::domain::reading_state::{map_time_to_locator,
-map_locator_to_time}`) · ✅ console "Also available as" row with **Open here**
-and an *approximate* badge · ✅ GraphQL `Media.editions`,
-`Media.editionSuggestions`, `Media.pairedPosition(fromMediaId)`,
-`chapterMap`, `confirmEditionPair` / `rejectEditionPair`,
-`setChapterMapEntry`.
+**Shipped** (readiness remains **Planned**): `media_chapter_map`
+(`m20260946`), normalised-title match then ordinal/position fallback, front/back
+matter skipping and per-entry `confidence`
+(`stump_library::editions::build_chapter_map`), both position conversions
+(`models::domain::reading_state::{map_time_to_locator,map_locator_to_time}`),
+console “Also available as” with **Open here** and an *approximate* badge,
+GraphQL `Media.editions`, `Media.editionSuggestions`,
+`Media.pairedPosition(fromMediaId)`, `chapterMap`,
+`confirmEditionPair` / `rejectEditionPair`, and `setChapterMapEntry`.
 
-Two deviations from the sketch above, both deliberate:
+Two deviations from the sketch above are deliberate:
 
 - The map is keyed by `(ebook_media_id, audio_media_id, ebook_spine_index)`
   rather than by a `pair_id`. A pair has no row of its own to point at, so
   there is nothing a `pair_id` could reference; the composite unique index is
   what makes recomputing idempotent and one entry editable.
 - The head records nothing. A mapped position is a `MappedPosition`, a type
-  that cannot reach `reading_state::resolve`, so `source_kind: mapped` is
-  unnecessary: there is no code path that could write a derived position. See
-  `docs/developer/unified-reading-state.mdx` § Mapped positions.
+  that cannot reach `reading_state::resolve`, so no derived position can
+  overwrite a real position. See `docs/developer/unified-reading-state.mdx`
+  § Mapped positions.
 
-Where it plugs in: `models::domain::reading_state::Projection` already carries
-both `page/locator` and `position_ms`; conversion happens at **read time** in
-`reading_state::resolve` when the requested media is the pair's other edition.
-The head stays one row per (user, media) - a mapped position is shown, not
-written, until the user actually reads/listens there.
+Where it plugs in: GraphQL `Media.pairedPosition(fromMediaId)` loads the source
+reading head, confirms the pair, reads the chapter map plus audio spans and EPUB
+spine, then calls
+`models::domain::reading_state::{map_time_to_locator,map_locator_to_time}`.
+It returns a read-only `MappedPosition`; the head is not changed until the user
+actually reads or listens at the mapped location.
 
 ## 4. Tier 2 - forced alignment (cheap, needs a worker)
 
 Because the text is known, this is **alignment**, not transcription: a CTC
-forced aligner (torchaudio `MMS_FA` / `ctc-forced-aligner`) runs a single
-emission pass and Viterbi - roughly 100-300× realtime on a consumer GPU,
-5-10× on CPU, versus Whisper transcription at 30-50× on the same GPU plus a
-fuzzy-match step to reconcile ASR errors. Storyteller's `stalign` takes the
-Whisper route; it is the reference implementation, not the target.
+acoustic model emits per-frame character scores and Viterbi finds the known
+ebook text through those scores. Whisper takes the longer route: free-form
+transcription followed by fuzzy reconciliation of ASR text to the EPUB.
+Storyteller's web path validated below is a Whisper/fuzzy reference; its
+separate CLI exposes CTC/Viterbi. Both remain external references. The
+optional worker-local Storyteller adapter calls only an operator-managed
+instance; Storyteller is never a search/catalog provider, bundled dependency,
+or default server backend.
 
-Pipeline (worker side, Python packaged as a container - there is no Rust CTC
-aligner; the server side stays Rust):
+**Shipped** runner pipeline (the server-side finalizer remains authoritative;
+the runner remains outside the server):
 
 ```text
-epub ──► sentence segmentation (per spine item, stable ids injected: <span id="s0412">)
-m4b  ──► decode 16 kHz mono (symphonia) ──► VAD chunks
-              └──► per chapter: forced-align sentences of the mapped spine item
-                       (chapter map from tier 1 bounds the search - a 10-hour book
-                        becomes twenty 30-minute problems)
-       ──► SyncMap { chapters: [{ spine_index, audio_chapter_index,
-                                   cues: [{ element_id, begin_ms, end_ms }] }] }
+paired EPUB ──► deterministic preparation (per-spine stable ids:
+                 coppice-{spine_index}-{ordinal})
+single-file M4B ─► worker-local aligner (Storyteller delegate)
+                 └──► SyncMapV1 {
+                        provenance: { exact input digests, implementation/model/runtime },
+                        cues: [{ text: { spine_index, ordinal, element_id },
+                                 audio: { track_index, begin_ms, end_ms },
+                                 confidence }]
+                      }
+                 ──► server rechecks requester, pair, source, output, durations,
+                     targets, then persists the map and deterministic EPUB cache
 ```
 
-Stored as `media_sync_maps (pair_id, granularity: sentence|word, generator,
-version, blob)` - a few hundred KB per book. The original EPUB and M4B are never
-modified; the sentence-id-injected XHTML is regenerated deterministically from
-the original on export (tests pin the injection so ids are stable across runs).
+The **Shipped** `media_sync_maps` store is keyed by the ebook media, audio
+media, granularity and immutable generator/input identity; there is no
+`pair_id` row. `importSyncMap` validates the typed map against the confirmed
+pair and real track durations before upserting it, while `enqueueAlignment`
+reuses an active job for the same exact pair/input and granularity. The
+original EPUB and M4B are never modified. Sentence-id-injected XHTML is
+regenerated deterministically for the worker and export.
 
-Fallback when a sentence cannot be aligned: interpolate between neighbours and
-mark `confidence`; the console does not highlight low-confidence cues.
+Fallback interpolation is bounded inside one confirmed chapter and marked with
+`confidence`; never interpolate across front matter, an unmatched chapter or a
+track boundary. The console does not highlight low-confidence cues.
+
 
 ### A Rust aligner: how hard, and whether it is worth it
 
@@ -140,17 +176,19 @@ The aligner is four parts; three are easy in Rust today, one is the decision.
 | Part | Rust today | Effort |
 | --- | --- | --- |
 | Decode + resample to 16 kHz mono | `symphonia` (*exists* in `stump_media`) + `rubato` | hours |
-| Text → model vocabulary (lower-case, strip punctuation; multilingual needs a `uroman` port) | trivial for English; `uroman` is a ~1k-line rule table, port when a non-Latin book shows up | days for the port |
+| Text → model vocabulary (model-specific case, punctuation and script normalization; multilingual needs a `uroman` port) | trivial for English; `uroman` is a ~1k-line rule table, port when a non-Latin book shows up | days for the port |
 | Trellis + Viterbi forced alignment over CTC emissions, per chapter (memory `T × N`, bounded by the chapter map) | ~200 lines, no dependency | a day |
 | **CTC acoustic model inference** | `ort` (ONNX Runtime bindings, CUDA/ROCm/CoreML through the runtime's shared library - not a build dependency) with an ONNX export of the model; `candle` has no wav2vec2 and its GPU path is less mature | the real work: export, `ort` feature wiring, parity tests against the Python aligner |
 
-Verdict: **worth it, but second.** Phase A: `stump_worker` spawns the Python
-aligner container (`ctc-forced-aligner`/torchaudio) and ships in days, proving
-the job protocol, the SyncMap and the EPUB render. Phase B: the same job kind
-served by an in-binary `ort` aligner, swapped in only when its SyncMap matches
-phase A on the fixture corpus within a tolerance (median cue delta < 50 ms).
-Phase B buys a one-binary worker with no Python on the GPU box and roughly
-1-2 weeks; nothing above it changes.
+Verdict: **Planned** — CTC/Viterbi is the leading tier-2 candidate, but still
+second to reusing an existing valid timing map. Phase A can prove the `align`
+job, map, and EPUB render through an external process/container boundary with a
+permissively licensed runtime and model. An operator-managed Storyteller API is
+an optional worker-side backend; the GPL-3.0 `ghost-story` CLI/toolchain is
+external only and is never bundled or the default runner. Phase B may serve the
+same wire contract from an in-binary `ort` aligner only when its `SyncMapV1`
+matches the fixture corpus within a declared tolerance. Nothing above that
+boundary changes.
 
 Model licences decide what phase B may ship: `facebook/wav2vec2-base-960h`
 (English, Apache-2.0) is fine; `MMS_FA` (1,100+ languages) is **CC-BY-NC 4.0**
@@ -158,62 +196,317 @@ and cannot be the default; NVIDIA NeMo CTC models are CC-BY-4.0 and are the
 multilingual candidate. The worker advertises which model it carries in its
 capabilities, and the job records `generator` + model id in `media_sync_maps`.
 
+## 4a. Reference systems and BookBridge index
+
+### Why Storyteller is in the test
+[Storyteller](https://storyteller-platform.dev/docs/the-algorithm/) is a
+producer and reader for the target interchange format: it takes a DRM-free EPUB
+and audiobook, transcribes or emits CTC features, aligns the text, and writes an
+EPUB 3 publication with Media Overlays. Coppice does not bundle it or call it
+from the server. A worker-local adapter may call an operator-managed
+Storyteller API and return only validated `SyncMapV1`; the server never treats
+Storyteller as a search/catalog provider. The server and
+`@storyteller-platform/align` package are MIT, but the current align package
+depends on GPL-3.0 `ghost-story`; that CLI/toolchain stays an external
+lab/container boundary. We use it as an independent oracle for preparation,
+GPU behavior, and the EPUB/SMIL envelope.
+
+The 2026-09-08 reference run used Storyteller web-v2.14.21 at
+[`a1d5ad4`](https://github.com/smoores-dev/storyteller/tree/a1d5ad4ce4c7cb1dc6488e6fca9bf6e65a99bbc2),
+the CUDA 13.1 image digest
+`sha256:9250c71e611145fdfe4150e29649c69d262544ba6f526425235d2156f9e65e0b`,
+and a GeForce RTX 3070. A real 13 h 26 min *Three-Body Problem* M4B plus its
+EPUB completed the Whisper/fuzzy pipeline in 8 min 12 s with turbo mode 4:
+35/35 narrative chapters, 9,057/9,266 sentences (97.74 %), 35 SMIL overlays,
+9,266 resolved text targets, and no invalid or non-monotonic cues. This is
+**Contract-tested** evidence for the external reference and corrected M4B, not
+proof of a Coppice aligner.
+
+Storyteller's current
+[`align --ctc`](https://github.com/smoores-dev/storyteller/blob/a1d5ad4ce4c7cb1dc6488e6fca9bf6e65a99bbc2/libraries/align/src/cli/bin.ts)
+is especially useful reference behavior: direct CTC emissions and
+transcript/fuzzy alignment share EPUB markup and output stages. Coppice still
+owns its worker protocol, map schema, quality thresholds, and edition-transfer
+rules.
+
+### Measured 10 % mode comparison
+
+The private three-chapter fixture is 5,378 s of audio (11.12 % of the book) and
+997 narrative sentences (10.76 %). Both modes used the same prepared tracks:
+
+| External mode | Measured wall time | Direct sentence matches | Final EPUB |
+| --- | ---: | ---: | --- |
+| web Whisper/fuzzy, `tiny.en`, turbo 4, CUDA | 76.324 s (70.5× realtime) | 969 / 997 (97.19 %) | 997 cues, 3 SMIL, valid |
+| CLI CTC/Viterbi, `Xenova/wav2vec2-base-960h` fp16, CUDA | 39.453 s including markup, emissions and Viterbi (136.3× realtime) | 984 / 999 (98.50 %) | 999 cues, 3 SMIL, valid |
+
+The CTC emission pass was 22.57 s on the RTX 3070; Viterbi plus EPUB output was
+16.60 s. The model is the Apache-2.0 English Wav2Vec2 model, not the
+CC-BY-NC MMS default. Storyteller 0.1.58 needed three lab-only adaptations:
+an ONNX Runtime CUDA image with the missing CUDA 12 libraries, renaming binary
+`STEM` emissions from `.json` to `.emissions`, and upper-casing known English
+text for this model's vocabulary.
+
+The negative control matters more than the headline score. When front matter
+remained in the spine, CTC falsely matched the character list and contents
+against narration and produced five invalid cue intervals. Restricting search
+to the three tier-1-mapped narrative chapters removed those failures. Coppice
+must enforce chapter bounds and reject the artifact, not copy Storyteller's
+interpolation. Across 987 common text targets the two modes differed by a
+median 1.468 s and p95 17.268 s at cue starts; that is algorithm disagreement,
+not ground truth. Machine evidence is in
+`input/audio/experiments/three-body-10pct/experiment.json`.
+
+Three follow-up controls make that a useful lead rather than a one-run result:
+
+- A repeat CTC run produced identical reports, SMIL and audio bytes. Only
+  Storyteller's wall-clock `dcterms:modified` changed, so its whole EPUB is not
+  byte-deterministic; Coppice's cached renderer must be.
+- fp16 and fp32 produced the same 984/999 direct matches. Of 999 cues, the
+  median and p95 boundary delta were 0 ms and the maximum was 920 ms; fp16 took
+  22.57 s for emissions versus 43.92 s for fp32. fp16 is the current choice.
+- Without upper-casing known text for the English Wav2Vec vocabulary, the same
+  bounded input matched zero chapters and emitted no SMIL. Normalization is a
+  versioned cache-key input, not a hidden implementation detail.
+
+A second private 9.73 % fixture from *Dark Eden* exercised an EPUB 2 upgrade,
+one audio file containing six physical parts, and a different XHTML layout.
+Bounded to the three narrative chapters actually covered by the audio,
+CTC/Viterbi directly matched 794/801 sentences (99.13 %) and 98.83 % of audio;
+upgrade/markup, emissions and Viterbi/export took 32.10 s including container
+startup. The raw Storyteller EPUB was still rejected: aggregate
+`media:duration` ended 188 ms before its last cue even though the refined
+overlay durations and probed audio clock covered it. Recomputing only that
+aggregate from the overlays produced a valid 801-cue, 3-SMIL EPUB. Evidence is
+in `input/audio/experiments/dark-eden-10pct/experiment.json`.
+
+So yes: CTC/Viterbi is the best mode tested so far for the known-ebook tier.
+It is not yet a universal default. The two books are both English, timing
+deltas against Whisper are not ground truth, and the external CLI exposed
+case, chapter-bound and packaging traps. Next corpus expansion should target
+another language, a materially abridged edition, narrator variation and a
+small hand-checked timing set.
+
+### BookBridge, indexed at v7.6.0
+
+[BookBridge](https://github.com/cporcellijr/bookbridge) is an active MIT
+Python service for synchronising reading/listening state across
+Audiobookshelf, KOReader/KoSync, Storyteller, Grimmory, BookOrbit, Kavita,
+Calibre-Web Automated, BookFusion, Readest, and trackers. Snapshot:
+[v7.6.0](https://github.com/cporcellijr/bookbridge/releases/tag/v7.6.0),
+2026-09-01, commit
+[`b09417f`](https://github.com/cporcellijr/bookbridge/tree/b09417f8fb91ae939e2d8be65a9e6a33d0a64e4e);
+469 stars, 26 forks, 18 open issues on 2026-09-08.
+
+| Area | BookBridge v7.6.0 | Coppice |
+| --- | --- | --- |
+| Primary job | bridge positions, sessions, annotations, and books among existing services | own the library, media model, serving protocols, readers, and conversions |
+| Pairing | dashboard, suggestions, queue, same-folder matching, per-user links | work/edition pairing and editable chapter maps are shipped |
+| Alignment source order | regular worker and automatic Forge completion try an existing Storyteller word timeline, then EPUB SMIL, then local/cloud Whisper; Forge can also drive Storyteller processing | chapter map plus explicit `SyncMapV1` import/enqueue and Storyteller delegate are shipped; native CTC remains planned |
+| Storyteller reuse | can reuse an existing Storyteller artifact or upload source files, trigger processing, poll, download the read-aloud EPUB, and re-anchor its timing to the local EPUB | worker-local delegate uploads the exact prepared EPUB and single-file M4B, processes/polls/downloads, and returns only `SyncMapV1`; verified UUID reuse remains planned |
+| SMIL reuse | accepts overlays only after ≥85 % coverage and, by default, ≥60 % token overlap | server renders deterministic SMIL from accepted `SyncMapV1`; arbitrary external element IDs are rejected |
+| Compute fallback | `faster-whisper` with optional CUDA, Whisper.cpp server, Deepgram, or other providers; durable per-install transcript cache | native known-text CTC is the preferred future backend; audiobook-only ASR remains tier 3 |
+| Exact known-text CTC | not shipped; [issue #426](https://github.com/cporcellijr/bookbridge/issues/426) tracks it | planned after the Storyteller worker adapter |
+| Edition variance | lexical anchoring, optional Ollama similarity guard, then linear fallback; the guard is not applied to every Storyteller path | confirmed edition pairing plus deterministic target IDs; strict source identity is mandatory |
+| Provenance/cache | persists `transcript_source`, `align_method`, maps, Storyteller manifests, and reusable Whisper progress; v7.6 strips embedded narration from cached Storyteller EPUBs | `media_sync_maps` stores validated provenance and the server publishes an immutable deterministic cached derivative |
+| Portable output | consumes Storyteller/SMIL and translates positions; its adapter uses TUS upload, `POST /api/v2/books/{uuid}/process`, polling, and read-aloud EPUB download | shipped materialized EPUB 3 Media Overlays plus the smaller internal `SyncMapV1` |
+| Shared compute | one stored map is reused by local users of that book; no remote public alignment exchange | accepted maps/cache are scoped to the requesting user's confirmed pair; public federation remains planned |
+
+The pinned BookBridge adapter proves both useful Storyteller paths. It can
+download an already processed exact book, or upload EPUB/audio through
+Storyteller's TUS endpoint, trigger processing, poll the book, and download
+`files?format=readaloud`. It then strips the large embedded audio from its local
+locator cache and consumes the timing artifacts. Coppice should copy the
+**boundary**, not BookBridge's loose title matching: exact media identity and
+the `SyncMapV1` quality gates remain mandatory.
+
+BookBridge's priority ladder is the main idea to adopt: **reuse a valid timing
+artifact before spending GPU time**. Coppice should improve on a hard-coded
+source order: collect the local `SyncMap`, exact-edition shared manifest,
+native SMIL, and Storyteller timeline as zero-GPU candidates; validate content
+identity, duration, monotonicity, coverage, granularity, and provenance; then
+choose the strongest. Run known-text CTC only when none passes, and Whisper/fuzzy
+ASR only as the final fallback. Persist why a candidate won.
+
+Also adopt explicit provenance and durable resumable caches. Do not copy
+BookBridge's weakest fallback: a Storyteller re-anchor may degrade to a
+two-point linear map and still suppress SMIL/Whisper. Coppice quality gates must
+try the next candidate when coverage or confidence fails.
+
 ## 4b. Readiness scoring
 
-"Can this book be read aloud, and how well?" is a quality-check family in the
-existing ingest registry (`crates/ingest/src/quality/`, same shape as the comic
-and audio families: id, weight, positive/negative fixture, fix action). It is
-what the console's book page and the Requests page read to say *what is
-missing*, and every check names the action that fixes it.
+**Planned:** “Can this book be read aloud, and how well?” is a future
+quality-check family in the existing ingest registry shape
+(`crates/ingest/src/quality/`). It is not currently registered, and the console
+has no readiness badge or Requests page. When implemented, each check will name
+the action that fixes it without pretending that a missing source was acquired.
 
-| Check id | Passes when | Fix action |
+| Check id | Future pass condition | Future fix action |
 | --- | --- | --- |
-| `has_ebook_edition` | the work has a confirmed EPUB edition (`media_links`) | `request: ebook` |
-| `has_audio_edition` | the work has a confirmed audio edition | `request: audiobook` |
+| `has_ebook_edition` | the work has a confirmed EPUB edition (`media_links`) | attach or ingest an ebook |
+| `has_audio_edition` | the work has a confirmed audio edition | attach or ingest an audiobook |
 | `single_file_audio` | the audio edition is one container (reuses the audio family's `single_file`) | `audio-assemble` |
 | `chapters_present` | the audio edition has authored chapter marks (reuses `chapters_present`) | `audio-chapters` |
-| `chapter_map_confidence` | ≥ 90 % of ebook spine items map to an audio chapter with `confidence ≥ 0.8` | manual chapter map in the console |
+| `chapter_map_confidence` | ≥ 90 % of EPUB spine items map to an audio chapter with `confidence ≥ 0.8` | manual chapter map |
 | `epub_alignable` | every spine item parses and segments into sentences; no DRM | `epub-polish` / `epub-check` |
-| `sync_map_present` | a `media_sync_maps` row exists at sentence granularity | `align` job (or `request: alignment` when no worker) |
-| `sync_map_coverage` | ≥ 95 % of sentences have a cue with `confidence ≥ 0.6` | re-run `align` with the larger model |
+| `sync_map_present` | a `media_sync_maps` row exists at sentence granularity | explicit `align` job (parks in `needs_worker` until a capable worker exists) |
+| `sync_map_coverage` | ≥ 95 % of sentences have a cue with `confidence ≥ 0.6` | rerun the selected backend |
 
-Weights sum to 100 with `has_*_edition` and `sync_map_present` heaviest; the
-aggregate is the book's **read-aloud readiness** badge (none / approximate =
-tier 1 only / aligned). The family is `NOT_APPLICABLE` for a work with neither
-an ebook nor an audiobook, so comics never carry it.
+The future aggregate may be a read-aloud readiness badge (none / approximate =
+tier 1 only / aligned). The family must be `NOT_APPLICABLE` for a work with
+neither an ebook nor an audiobook, so comics never carry it.
 
-## 5. Output: Storyteller-compatible EPUB, rendered on demand
+## 4c. Shareable alignment manifests
 
-A read-aloud EPUB is a zip of: the XHTML with sentence ids, one SMIL per spine
-item, `package.opf` with `media-overlay` attributes and `media:duration`
-metadata, and the audio. Two facts make **on-demand rendering** reasonable:
+**Planned:** no public registry is being implemented. A public service requires
+legal, privacy, and abuse review first. The useful output of alignment is mostly
+mechanical timing data, but it must be separated from every copyrighted input
+before even local export is considered.
 
-- EPUB Media Overlays allow **one audio file for the whole book** with
-  `clipBegin`/`clipEnd` per `<par>`; the M4B is AAC-in-MP4, an EPUB core media
-  type (`audio/mp4`). So the audio entry is the original M4B **stored verbatim**
-  (zip method `store`, no deflate, no transcode) under `Audio/book.m4a`.
-- Every other entry is tiny and derived from the SyncMap.
+The safe first deliverable is an **exact-edition manifest**:
 
-So `GET /api/v2/media/{id}/read-aloud.epub` streams a zip: local headers →
-stored entries → central directory. All sizes are known up front (the small
-entries are rendered into memory first, the M4B size is on disk), so the
-response has a `Content-Length`, supports `Range` (offset arithmetic over a
-precomputed entry table, zip64 when the M4B exceeds 4 GB), and costs one
-sequential read of the M4B. Nothing is written to disk; the same bytes are
-served to OPDS (`application/epub+zip` acquisition link with
-`properties/…/media-overlay`), the console, and any EPUB reader. A folder book
-(multi-track) is first assembled with `audio-assemble` (*exists*); the read-aloud
-render requires a single-file audio edition.
+```text
+AlignmentManifestV1 {
+  work_ids
+  text_normalization_version
+  audio_fingerprint_version
+  exact_text_digest
+  robust_audio_digest
+  chapters [{
+    ebook_spine_index
+    audio_chapter_index
+    sentence_shape: [{ ordinal, token_count, punctuation_class }]
+    cues: [{ sentence_ordinal, begin_ms, end_ms, confidence }]
+  }]
+  generator { implementation, version, model, options }
+  source { kind: ctc|storyteller|smil|asr, coverage }
+  payload_digest
+}
+```
 
-The console's own reader does not need the EPUB at all: it reads the SyncMap
-through GraphQL (`Media.syncMap(granularity)`), plays the track route it already
-uses, and highlights `element_id`s in the rendered XHTML.
+The canonical text digest ignores ZIP layout, CSS, insignificant markup, and
+Unicode normalization differences. The audio digest is over robust acoustic
+landmarks, not M4B bytes, so container tags or a lossless remux do not miss.
+When both digests match, another server can trust the ordinal/timing map after
+structural validation and skip all GPU work.
 
-**Storyteller app support** is a *maybe*, not a plan: the Storyteller mobile app is the only consumer that needs it, and it is the Storyteller mobile
-app only talks to a Storyteller server API (AGPL-3.0 - same evidence boundary as
-the ABS profile: observed behaviour and captures, no code). Thorium Reader (Media Overlays
-support since 1.x; "read aloud" with highlighting) and Readest open the EPUB directly, and Storyteller's own OPDS 1.2 consumers do too, so the
-render above is the first deliverable and the app profile is the second.
+For a modified edition, reuse is deliberately partial:
+
+1. Match the work and narration, then align chapter title/order and duration.
+2. Run dynamic programming over the non-expressive sentence-shape sequence
+   (ordinal, token count, punctuation class) to locate insertions, deletions,
+   split paragraphs, and changed front/back matter.
+3. Transfer only monotonic high-confidence cue runs and fit a piecewise time
+   transform from the robust audio landmarks.
+4. Re-run local CTC only for unmatched gaps. Never stretch one global linear
+   map across an abridged, translated, revised, or differently narrated book.
+
+This handles packaging changes and modest editorial variation without sharing
+source expression. A second, optional format could add hashed word shingles for
+stronger semantic anchoring, but hashes of every sentence are dictionary-
+testable by anyone holding the book. They are not the default and need the same
+legal/privacy review as excerpts.
+
+Registry rules for a future public service:
+
+- opt-in upload only; private books and possession metadata never leave a
+  server by default;
+- accept DRM-free, lawfully accessed inputs only; Coppice never circumvents DRM;
+- publish manifests under CC0-1.0 with contributor attestation, immutable
+  payload digests, signatures, generator provenance, and revocation;
+- require proof of possession of a matching edition before download; useful
+  risk reduction, not a claim that possession settles copyright;
+- validate monotonic cues, duration, coverage, and content identity locally;
+  bad or low-confidence community data only seeds a local repair job.
+
+U.S. law says copyright does not protect facts, systems, or methods of
+operation ([Copyright Office FAQ](https://www.copyright.gov/help/faq/faq-protect.html);
+[17 U.S.C. §102(b)](https://www.law.cornell.edu/uscode/text/17/102)).
+That supports, but does not guarantee, treating bare timestamps and ordinals as
+shareable facts. It does **not** authorize sharing the source text/audio, and
+compilation rights, contracts, privacy, and other jurisdictions still matter.
+In the EU, text/data-mining exceptions require lawful access and can be
+reserved in some cases
+([Directive 2019/790, arts. 3-4](https://eur-lex.europa.eu/eli/dir/2019/790/oj/eng));
+they do not automatically authorize publishing the mined work. U.S.
+anti-circumvention law is a separate constraint
+([17 U.S.C. §1201](https://www.law.cornell.edu/uscode/text/17/1201)).
+Therefore exact manifests can ship locally first; a public federation waits for
+legal, privacy, and abuse review.
+
+## 5. Output: Storyteller-compatible EPUB from an accepted map
+
+**Shipped:** the read-aloud EPUB is a ZIP of XHTML with deterministic sentence
+ids, one SMIL per spine item, `package.opf` `media-overlay` references and
+`media:duration`, and the original single-file M4B at `audio/book.m4b`. The
+accepted `SyncMapV1` is the source of truth; the EPUB is a replaceable delivery
+derivative. Synchronized Storyteller read-aloud playback is not shipped;
+ordinary EPUB playback and ordinary audiobook playback remain separate.
+
+Two immutable cache identities stay separate:
+
+- the map key covers exact text/audio digests, segmentation, algorithm,
+  implementation/version, model/revision, execution provider, precision,
+  options, and granularity;
+- the EPUB key adds the accepted map payload digest and renderer/schema version.
+
+The **Shipped** `enqueueAlignment` action owns an explicit alignment request for
+a confirmed pair and granularity, and reuses an active identical `align` job
+instead of launching a second model. It does not start ML itself. After a
+worker result passes server validation, the renderer builds the ZIP and
+publishes it before the job becomes `done`. A completed derivative is cached;
+the original EPUB and M4B remain untouched.
+
+`GET /api/v2/media/{id}/read-aloud.epub` is **Shipped** and cache-only: it never
+starts ML, creates a job, or renders on demand. It serves an already published
+cache hit, otherwise returns a not-ready response. The completed file has
+`Content-Length`, `Accept-Ranges`, a stable ETag and single-range behavior.
+The original single-file M4B remains verbatim; folder audiobooks return a
+stable unsupported/not-ready response rather than being silently concatenated.
+### **Planned** experiment: a virtual composite EPUB
+
+The fully materialized ZIP is the conservative first implementation, not a
+requirement. A future experiment will expose one deterministic logical EPUB
+without copying the M4B into a second server-side file. The byte space is a
+sequence of generated ZIP headers/XHTML/SMIL/OPF bytes, ranges from the original
+M4B, and a generated central directory. The already-compressed audio entry uses
+ZIP `STORE`; an HTTP range inside that entry maps directly to the same range in
+the source M4B.
+
+This is **not** generic non-seekable `ZipWriter` streaming. Before serving byte
+zero, Coppice must know every entry's offset, size, CRC-32 and the final central
+directory, including ZIP64 values for large books. It also needs a stable
+`Content-Length`, representation ETag, and source identity for the lifetime of
+the response. Computing a missing audio CRC/digest costs one source scan, but
+does not create another audio copy.
+
+The experiment is accepted only when:
+
+1. a full virtual response is byte-identical to a materialized reference EPUB
+   and passes `unzip -t` plus `epub-check`;
+2. single-range reads work inside every generated segment, at the start/middle/
+   end of the M4B, across segment boundaries, and in the central directory;
+3. changing the source size/digest invalidates the representation rather than
+   mixing old headers with new audio;
+4. Thorium Reader, Readest, and at least one mobile EPUB reader open, seek, and
+   resume it over HTTP.
+
+If those checks pass, the cache keeps only the small immutable layout/metadata
+plan and generated text resources. A materialized ZIP remains the compatibility
+fallback for a client that cannot consume the virtual representation.
+
+The console's own reader does not need the EPUB at all: it reads the **Shipped**
+persisted SyncMap through GraphQL (`Media.syncMap(granularity)`), plays the track
+route it already uses, and highlights `element_id`s in the rendered XHTML.
+The field resolves a map from either the ebook or audiobook side; see
+`crates/graphql/src/object/media.rs` and `crates/graphql/src/object/sync_map.rs`.
+
+**External Storyteller references** are separate from Coppice's optional
+worker-local adapter. Coppice does not bundle a Storyteller app or call it from
+the server. The external server and apps are
+[MIT-licensed](https://github.com/smoores-dev/storyteller/blob/a1d5ad4ce4c7cb1dc6488e6fca9bf6e65a99bbc2/LICENSE).
+Thorium Reader, Readest, BookFusion, Colibrio, and Calibre can consume the
+read-aloud EPUB directly, so standards-based delivery stays first. The
+worker-side Storyteller API adapter returns only `SyncMapV1`.
 
 ## 6. Remote workers - the modular server
 
@@ -225,51 +518,132 @@ VPS never needs to reach the PC), so NAT and dynamic IPs are not a concern.
 | --- | --- |
 | Worker identity | a device of kind `Worker` (*devices crate exists*): paired with a QR/API key like every other device, scoped to the `worker` permission, revocable in the console |
 | Transport | one WebSocket `/api/v2/workers/socket` (the server already runs axum `ws`); worker sends `hello { capabilities }`, then `claim` / `progress` / `result` / `fail`; server sends `job` and `cancel`. Reconnect resumes claimed jobs by id |
-| Capabilities | `{ align: { device: cuda\|rocm\|metal\|cpu, models: [...] }, transcode: { ffmpeg, hwaccel: [nvenc,...] }, asr: {...} }` - free-form JSON validated per job kind; the console's Workers page lists who advertises what |
+| Capabilities | `{ align: { device: cuda\|rocm\|metal\|cpu, models: [...], algorithms: [...], precisions: [...] }, transcode: { ffmpeg, hwaccel: [nvenc,...] }, asr: {...} }` - free-form JSON matched structurally; the console's Workers page lists who advertises what |
 | Job table | `worker_jobs (id, kind, input JSON, requires JSON, status: queued\|claimed\|running\|done\|failed\|needs_worker, worker_id, priority, progress, result JSON, error)`; `needs_worker` is shown, not hidden - "no worker advertises `align` right now" |
 | Routing | a job kind declares `local: Option<fn>`; if a capable worker is connected it is offered first, else the local implementation runs (transcode has one: the `ffmpeg` ExternalTool), else the job waits. Priority is low by default: alignment never competes with a scan |
-| Data path | input by authenticated download (`/api/v2/media/{id}/file`, `/audio/track/{i}`), output by the existing ingest upload lane (`stageIngestUploads`) tagged with the job id, so results go through the same quality checks as any dropped file |
+| Data path | input by authenticated download (`/api/v2/media/{id}/file`, `/audio/track/{i}`); output uploaded as raw bytes to `PUT /api/v2/workers/jobs/{id}/output` with a required SHA-256, then atomically published only after result validation |
 | Events | job transitions are `CoreEvent::WorkerJobChanged` on the bus (*exists* as a pattern) → console live status, ntfy on completion |
-| Worker binary | `crates/worker` (`stump_worker`): the protocol client, capability probing, the align runner (spawns the aligner container or a local Python env), the transcode runner. Small; the ML lives in the container it launches, never in the Rust build |
+| Worker binary | `crates/worker` (`stump_worker`): protocol client, transcode/browser runners, and the optional worker-local Storyteller `align` runner; the server-side `AlignInput`, `AlignResult` and `SyncMapV1` contract remains shared |
 
-Job kinds at launch: `align` (tier 2), `transcode` (the Opus preset and
-`audio-assemble`'s AAC path, so a VPS without ffmpeg can still serve them),
-later `asr`.
+Current executable kinds are `transcode` and `challenge_solve`; an
+`align` runner is registered when the worker has a configured Storyteller
+endpoint. `align` has a typed wire/capability contract and explicit enqueue
+action; without a capable worker, the row parks in `needs_worker`.
+Audiobook-only `asr` remains later/out of scope.
+
+### Optional Storyteller align backend
+
+The practical `align` runner is a worker-side adapter for an operator who
+already runs Storyteller. Storyteller can run on the same worker device or
+anywhere that worker can reach. This keeps the existing topology: the worker
+dials Coppice, and neither the Coppice server nor its job payload needs a route
+or credentials for the Storyteller instance.
+
+The current adapter implements the **delegate** path: it downloads the exact
+paired EPUB and single-file M4B from Coppice, prepares the EPUB with the shared
+deterministic target contract, uploads both through Storyteller TUS, triggers
+processing, polls with a bounded budget, downloads the result, and converts it
+to `SyncMapV1`. Verified UUID reuse remains a separate future mode.
+
+Only the compact `SyncMapV1` returns to Coppice. Storyteller URL, username,
+password, and remote-library lifecycle policy stay in worker-local
+configuration. The worker advertises the configured implementation/profile
+under `align`; a generic “Storyteller is installed” capability is not enough
+for deduplication or provenance. A result is only a candidate until Coppice
+checks exact digests, chapter correspondence, monotonic timing, duration,
+targets, and coverage.
+
+This backend is **Shipped** behind the worker client feature. Native
+CTC/Viterbi remains the later independent backend; both produce the same map
+contract. The adapter never sends Storyteller credentials to the server or
+embeds them in an EPUB/archive.
 
 ## 7. Requests - asking for what is missing
 
-A request is a row, not a workflow engine:
+**Shipped (backend):** the `requests`/wanted ledger, request table, approval and
+release-selection mutations, automation defaults, and bounded download polling
+processor now exist. A catalog search result is still not a request, and the
+backend does not by itself claim a Requests page, real MAM download, or physical
+device delivery.
 
-`requests (id, kind: ebook|audiobook|alignment|metadata|comic, work_id?,
-identifiers JSON {isbn, asin, title, author, series, volume}, requested_by,
-status: open|in_progress|fulfilled|rejected, fulfilled_by_media_id?, note)`.
+The implemented orchestration is:
 
-| Path | How a request gets fulfilled |
-| --- | --- |
-| **Provider host** (*exists*) | a `comic`/manga request whose title matches a catalogued source series is fulfilled automatically by materialising it into a virtual library - the request is the search the user already did |
-| **Alignment** | `alignment` requests create a `worker_jobs` row when the pair exists; when it does not, the request stays open with "needs the ebook / needs the audiobook" |
-| **Ebook / audiobook** | shown on the console Requests page; fulfilled by an ingest drop (the drop item's `identifier_*` or a manual "fulfils request #" link), or by an admin marking it rejected. No downloading of copyrighted files is implied or built |
-| **Metadata** | routed to the provider policy layer (*exists*): re-run `applyBestIngestMetadata` with the requested identifiers |
+```text
+internal media/work or external work reference
+  -> optional destination device/shelf
+  -> approval (automation defaults off)
+  -> Torznab caps/search through private mam-gateway
+  -> opaque release selection and grab
+  -> bounded download polling
+  -> existing ingest staging + source verification
+  -> destination queue
+```
 
-Search is the existing unified search (`/api/v2/search` + provider search);
-a "Request this" action on an empty result creates the row with the query's
-identifiers. Users see their own requests; admins see all; ntfy/e-mail on
-status change through the notify crate (*exists*).
+The implemented `mam-gateway` is a narrow boundary with **mocked protocol-contract
+evidence pending Main validation**: MAM cookies, raw tracker URLs, and qBittorrent
+access stay inside the Gluetun namespace, while Coppice stores only the private
+gateway endpoint/token. Real MAM authentication, VPN-egress proof, qBittorrent
+download, ingest replay, and physical-device delivery are untested. Shelfmark is
+currently absent; its shared-folder export remains a separate future connector,
+and Coppice ships no arbitrary downloader or provider-host auto-fulfillment.
+
+Alignment is a separate explicit path: a user confirms an ebook + audiobook
+pair, then imports a validated map or enqueues an alignment job. The optional
+worker-local Storyteller adapter can fulfill that job; Storyteller is never a
+search/catalog provider.
 
 ## 8. What is deliberately not here
 
-- No DRM handling (a DRM'd source is refused, as everywhere in Stump).
-- No transcript store: tier 2 keeps cues, not text; the EPUB is the text.
-- No automatic library-wide alignment: jobs are created by a request or a
-  per-library policy flag (`AudioPolicy.auto_align`, default `false`).
+- No DRM handling (a DRM'd source is refused, as everywhere in Coppice).
+- No transcript store: tier 2 keeps cues, not text; the EPUB remains the text.
+- No public transcript or content-hash exchange: an alignment manifest contains
+  timing, ordinals, structural shapes, and provenance only. Exact-edition local
+  import/export comes before any federated registry.
+- No automatic library-wide alignment: the enqueue mutation is explicit and
+  pair-scoped; there is no scheduler or `AudioPolicy.auto_align` implementation.
 - No GPU code in the Rust build: `whisper-rs`/`ct2rs` are worker-container
   concerns if they are ever wanted.
+- No synchronized Storyteller read-aloud playback: ordinary EPUB playback and
+  ordinary audiobook playback remain separate until a reader contract consumes
+  the derivative.
 
 ## 9. Implementation order
 
-1. `pair_editions` + `media_chapter_map` + read-time position conversion (tier 1) + the readiness check family (4b) - `crates/library`, `models::domain::reading_state`, `crates/ingest/src/quality/`, console "Also available as" + readiness badge.
-2. Worker protocol + `crates/worker` + `worker_jobs` + console Workers page, with `transcode` as the first job kind (it has a local fallback, so it is testable without a GPU).
-3. `align` job kind + the aligner container + `media_sync_maps` + `Media.syncMap`.
-4. On-demand read-aloud EPUB route + OPDS link + console highlighting.
-5. Requests table + Requests page + provider-host auto-fulfilment.
-6. Storyteller app profile (`crates/storyteller`), evidence-first like ABS.
+1. `pair_editions` + `media_chapter_map` + read-time position conversion (tier
+   1) — **Shipped**; the readiness check family (4b) remains **Planned**.
+2. Worker protocol + `crates/worker` + `worker_jobs` + console Workers page,
+   with `transcode` as the first job kind — **Shipped**.
+3. `AlignInput`/capability requirements + `SyncMapV1` validation —
+   **Shipped**; `media_sync_maps`, `Media.syncMap`, the explicit enqueue action,
+   and the optional Storyteller delegate are **Shipped**. Native CTC remains
+   **Planned**.
+4. Add verified Storyteller UUID reuse, exact-edition local manifest
+   import/export, and gap-only repair after the delegate path has evidence.
+5. Add the native known-text CTC/Viterbi runner as an independent backend.
+6. Read-aloud EPUB delivery, the OPDS acquisition link, and GraphQL readiness —
+   the authenticated cache-only route, OPDS link, GraphQL map/artifact fields,
+   and materialized deterministic ZIP are **Shipped**. Readiness quality
+   checks and the virtual composite EPUB remain **Planned**.
+7. Add the `requests`/wanted ledger and fulfillment connectors. Shelfmark's
+   shared-folder export into ingest is first; a token-auth request bridge is
+   **Blocked** until Shelfmark has a stable service API. Do not auto-fulfill
+   provider-host search results.
+8. Public manifest federation only after legal/privacy review and abuse controls.
+9. Optional Storyteller app serving profile (`crates/storyteller`), independent
+   of the worker align backend.
+
+## 10. Project-local operator tooling
+
+Three project skills keep the lab and implementation contracts reusable:
+
+| Skill | Scope |
+| `.omp/skills/stump-audiobook-lab/` | audio/ebook preparation, complete-chapter slices, Storyteller Whisper and CTC runs, SMIL validation and comparison |
+| `.omp/skills/stump-read-aloud/` | tiers, pairing, worker/map contracts, candidate ranking, caching and licensing |
+| `.omp/skills/stump-protocol-replay/` | focused fixture/replay selection and sanitized failure evidence |
+
+The deterministic helper is
+`.omp/skills/stump-audiobook-lab/scripts/read-aloud-lab.py`. Its `slice`
+subcommand creates paired EPUB/M4B fixtures with a versioned manifest;
+`inspect` emits OCF/OPF/SMIL/cue evidence; `compare` emits common-target timing
+deltas. The ebook pipeline also routes through Coppice's native `epub-check`,
+`epub-polish`, `mobi2epub` and KEPUB code before external calibre/boko tools.

@@ -75,7 +75,7 @@
 </script>
 
 <svelte:head>
-	<title>Workers · Stump</title>
+	<title>Workers · Coppice</title>
 </svelte:head>
 
 <div class="flex flex-col gap-8">

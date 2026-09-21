@@ -189,22 +189,30 @@ what OPDS navigation is. It builds only the entry points:
 | `GET /opds/v2.0/search?query=&page=&page_size=` | `200` |
 | `GET /opds/v2.0/catalog` | `200` (used by the connection check) |
 
-**[observed] `/opds/v2.0/books/browse` cannot be paginated.** Its handler takes
-`BrowseParams` (`crates/opds/src/lib.rs`), which `#[serde(flatten)]`s
-`OffsetPagination` alongside the metadata filters. A flattened serde struct
-buffers query values as strings, so `?page=1` fails to deserialize:
+**[observed] Every v2 feed pages, and every link it emits is mounted.** Three
+server defects the plugin used to work around are fixed
+(`apps/server/src/routers/opds_backend/v2_0.rs`,
+`crates/opds/src/lib.rs`, tests in `apps/server/tests/opds/v2/`):
 
-```
-GET /opds/v2.0/books/browse?page=1  -> 400
-Failed to deserialize query string: .: invalid type: string "1", expected u64
-```
+- `/opds/v2.0/books/browse` took `BrowseParams`, which `#[serde(flatten)]`ed
+  `OffsetPagination` alongside the metadata filters. `Query` deserializes with
+  `serde_urlencoded`, which hands a flattened struct string values, so
+  `?page=1` — the parameter the feed's own `next` link carried — answered
+  `400 invalid type: string "1", expected u64`. The pagination keys are now
+  spelled out on `BrowseParams` beside the filters.
+- `/search` emitted `self` links to `/opds/v2.0/{libraries,series,books}/search`
+  that nothing mounted, and capped each group at ten rows. Those three routes
+  are now mounted and paged, and each group of the mixed feed serves the
+  `page`/`page_size` the client asked for.
+- A book feed emitted `next` unconditionally, and the library list named an
+  unmounted `/opds/v2.0/libraries/browse`. `first`/`previous`/`next`/`last` are
+  now emitted only for pages other than the one being served, and every `self`
+  link names the route that serves it.
 
-The bare route is `200`, but the `next` link the feed emits is
-`/opds/v2.0/books/browse?page=2`, which is the same `400`. Every other v2 feed
-takes `Query<OffsetPagination>` directly and pages correctly. **[inference]**
-The plugin therefore does not offer this feed at all; libraries, series, latest
-books and search reach every book. Fixing the extractor is a server change
-outside this plugin's scope.
+**[inference]** A client can therefore trust the presence of `next` instead of
+recomputing it from `numberOfItems`, and `/books/browse` is offerable — the
+plugin's own suppression of dead next rows and its avoidance of that feed are
+now belt-and-braces rather than load-bearing.
 
 **[observed]** OPDS `href`s are absolute URLs built from the request origin
 (`OPDSLinkFinalizer`). **[inference]** The plugin re-bases every href onto the

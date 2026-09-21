@@ -381,6 +381,31 @@ impl OPDSPublication {
 		Ok(finalizer.finalize_all(links))
 	}
 
+	/// Add the read-aloud acquisition only after the host has established that
+	/// the current user's accepted deterministic cache exists. Keeping this
+	/// helper separate leaves ordinary publication assembly unchanged.
+	pub fn add_read_aloud_link(
+		&mut self,
+		media_id: &str,
+		finalizer: &OPDSLinkFinalizer,
+	) -> CoreResult<()> {
+		let mut links = self.links.take().unwrap_or_default();
+		let link = OPDSBaseLinkBuilder::default()
+			.href(
+				finalizer
+					.format_link(format!("/api/v2/media/{media_id}/read-aloud.epub")),
+			)
+			.rel(OPDSLinkRel::Acquisition.item())
+			._type(OPDSLinkType::Epub)
+			.properties(
+				OPDSProperties::default().with_auth(finalizer.format_link(AUTH_ROUTE)),
+			)
+			.build()?;
+		links.push(OPDSLink::Link(link));
+		self.links = Some(finalizer.finalize_all(links));
+		Ok(())
+	}
+
 	/// The chapter marks of an audiobook as a `toc`, or `None` when the book
 	/// has none. An empty collection would claim "this publication has a
 	/// table of contents and it is empty" in a key every other book omits.
@@ -448,6 +473,7 @@ mod tests {
 				koreader_hash: None,
 				series_id: Some("1".to_string()),
 				pages: 3,
+				is_oneshot: false,
 				modified_at: None,
 				size: 2000,
 				thumbnail_meta: None,

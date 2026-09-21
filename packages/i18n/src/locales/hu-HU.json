@@ -7,7 +7,7 @@
 	},
 	"authScene": {
 		"claimHeading": "Szerver inicializálása",
-		"claimText": "Ez a Stump szerver nincs inicializálva. Használd az alábbi űrlapot fiókod létrehozásához. A létrehozás után teljes hozzáférést kapsz az összes szerverfunkcióhoz.",
+		"claimText": "Ez a Coppice szerver nincs inicializálva. Használd az alábbi űrlapot fiókod létrehozásához. A létrehozás után teljes hozzáférést kapsz az összes szerverfunkcióhoz.",
 		"form": {
 			"validation": {
 				"missingUsername": "Felhasználónév szükséges",
@@ -316,7 +316,7 @@
 			"convertOptions": {
 				"section": {
 					"heading": "Fájl átalakítás",
-					"description": "A Stump képes bizonyos fájlformátumokat kompatibilisebbé konvertálni"
+					"description": "A Coppice képes bizonyos fájlformátumokat kompatibilisebbé konvertálni"
 				},
 				"rarToZip": {
 					"label": "RAR átalakítása ZIP-é",
@@ -360,7 +360,7 @@
 				},
 				"options": {
 					"label": "Könyvtári minta",
-					"description": "Az a beállítás, amely meghatározza, hogy a Stump hogyan építse fel a könyvtáradat"
+					"description": "Az a beállítás, amely meghatározza, hogy a Coppice hogyan építse fel a könyvtáradat"
 				}
 			}
 		},
@@ -386,12 +386,12 @@
 				{
 					"label": "Szkennelés",
 					"heading": "Scanning",
-					"description": "Beállítások, hogy a Stump hogyan szkennelje ezt a könyvtárat"
+					"description": "Beállítások, hogy a Coppice hogyan szkennelje ezt a könyvtárat"
 				},
 				{
 					"label": "Bélyegképek",
 					"heading": "Bélyegképek",
-					"description": "A beállítások, hogy a Stump generáljon-e és hogyan bélyegképeket ehhez a könyvtárhoz"
+					"description": "A beállítások, hogy a Coppice generáljon-e és hogyan bélyegképeket ehhez a könyvtárhoz"
 				},
 				{
 					"label": "Áttekintés",
@@ -462,7 +462,7 @@
 			}
 		},
 		"options/scanning": {
-			"description": "Beállítások, hogy a Stump hogyan szkennelje ezt a könyvtárat"
+			"description": "Beállítások, hogy a Coppice hogyan szkennelje ezt a könyvtárat"
 		},
 		"options/thumbnails": {
 			"sections": {
@@ -656,7 +656,7 @@
 					"description": "A szűrők módosítása ehhez a megtekintési munkamenethez",
 					"rawData": {
 						"heading": "Nyers szűrési adatok",
-						"description": "A Stump így fogja dolgozni a szűrőket"
+						"description": "A Coppice így fogja dolgozni a szűrőket"
 					},
 					"buttons": {
 						"save": "Mentés",

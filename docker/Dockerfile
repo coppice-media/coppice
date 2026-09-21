@@ -114,11 +114,11 @@ FROM gcr.io/distroless/cc-debian12:debug AS runtime-base
 
 ARG PORT=10801
 
-LABEL org.opencontainers.image.title="Stump" \
+LABEL org.opencontainers.image.title="Coppice" \
     org.opencontainers.image.description="A free and open source comics, manga and digital book server with OPDS support" \
     org.opencontainers.image.source="https://github.com/stumpapp/stump" \
     org.opencontainers.image.url="https://stumpapp.dev" \
-    org.opencontainers.image.documentation="https://stumpapp.dev/guides" \
+    org.opencontainers.image.documentation="https://stumpapp.dev/docs" \
     org.opencontainers.image.licenses="MIT" \
     org.opencontainers.image.vendor="stumpapp"
 

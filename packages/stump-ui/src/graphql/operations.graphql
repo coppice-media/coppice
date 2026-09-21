@@ -11,5 +11,8 @@ query Me {
 		oidcEmail
 		lastLogin
 		loginSessionsCount
+		# The shells gate their own links on this: the Home app only offers
+		# the ingest editor to someone who can actually use it.
+		permissions
 	}
 }

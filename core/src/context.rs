@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 use chrono::Utc;
 use models::{entity::job, shared::enums::JobStatus};
@@ -21,10 +21,18 @@ use crate::filesystem::scanner::watcher_adapters::{
 use stump_ingest::IngestServices;
 
 #[cfg(feature = "ingest")]
+use crate::component_runtime::COMPONENT_INGEST;
+#[cfg(feature = "watcher")]
+use crate::component_runtime::COMPONENT_WATCHER;
+#[cfg(feature = "ingest")]
 use crate::ingest_host::{
 	ingest_settings, CoreEventSink, CoreProviderClients, CoreRowFactory,
 };
 use crate::{
+	component_runtime::{
+		ComponentDefinition, ComponentRuntime, ProcessMemory, COMPONENT_BACKGROUND_JOBS,
+		COMPONENT_SCHEDULER, COMPONENT_WORKER,
+	},
 	config::StumpConfig,
 	database,
 	event::CoreEvent,
@@ -48,6 +56,10 @@ pub struct Ctx {
 	pub config: Arc<StumpConfig>,
 	pub conn: Arc<DatabaseConnection>,
 	pub event_channel: Arc<EventChannel>,
+	component_runtime: Arc<ComponentRuntime>,
+	/// Weak owner handle passed to jobs that need the full context without
+	/// creating a Ctx ↔ JobRuntime strong-reference cycle.
+	self_weak: Arc<OnceLock<Weak<Ctx>>>,
 	job_runtime: Arc<OnceLock<Arc<JobRuntime<JobServices>>>>,
 	#[cfg(feature = "watcher")]
 	library_watcher: Arc<OnceLock<Arc<Watcher>>>,
@@ -55,6 +67,9 @@ pub struct Ctx {
 	#[cfg(feature = "ingest")]
 	ingest_services: Arc<OnceLock<Arc<IngestServices>>>,
 	devices: Arc<OnceLock<Arc<DeviceService>>>,
+	#[cfg(feature = "crosspoint")]
+	crosspoint_delivery:
+		Arc<OnceLock<Arc<crate::crosspoint_delivery::CrossPointDeliveryService>>>,
 	/// Accepted head changes from every protocol, for adapters that fan them
 	/// out to their own clients (Komga SSE). Not part of [`CoreEvent`], which
 	/// is streamed to every GraphQL subscriber regardless of user.
@@ -101,7 +116,11 @@ impl Ctx {
 				.await
 				.expect("Failed to connect to database"),
 		);
-		Self::from_parts(config, conn)
+		let ctx = Self::from_parts(config, conn);
+		if let Err(error) = ctx.component_runtime.initialize().await {
+			tracing::warn!(?error, "Failed to persist runtime component state");
+		}
+		ctx
 	}
 
 	fn from_parts(config: Arc<StumpConfig>, conn: Arc<DatabaseConnection>) -> Ctx {
@@ -109,10 +128,13 @@ impl Ctx {
 			Arc::new(crate::annotation_sync::AnnotationSyncDebouncer::new(
 				config.annotation_sync.annotation_sync_debounce_secs,
 			));
+		let component_runtime = Arc::new(ComponentRuntime::new(conn.clone(), &config));
 		Ctx {
 			config,
 			conn,
 			event_channel: Arc::new(channel::<CoreEvent>(1024)),
+			component_runtime,
+			self_weak: Arc::new(OnceLock::new()),
 			job_runtime: Arc::new(OnceLock::new()),
 			#[cfg(feature = "watcher")]
 			library_watcher: Arc::new(OnceLock::new()),
@@ -120,6 +142,8 @@ impl Ctx {
 			#[cfg(feature = "ingest")]
 			ingest_services: Arc::new(OnceLock::new()),
 			devices: Arc::new(OnceLock::new()),
+			#[cfg(feature = "crosspoint")]
+			crosspoint_delivery: Arc::new(OnceLock::new()),
 			annotation_debounce,
 			reading_state_events: Arc::new(channel::<ReadingHeadChanged>(256).0),
 			visible_pages: Arc::new(VisiblePagesCache::default()),
@@ -164,14 +188,14 @@ impl Ctx {
 	///     let config = StumpConfig::debug();
 	///
 	///     let ctx = Ctx::new(config).await;
-	///     let arced_ctx = ctx.arced();
+	///     let arced_ctx: Arc<Ctx> = ctx.arced();
 	///     let ctx_clone = arced_ctx.clone();
-	///
-	///     assert_eq!(2, Arc::strong_count(&ctx_clone))
 	/// }
 	/// ```
 	pub fn arced(&self) -> Arc<Ctx> {
-		Arc::new(self.clone())
+		let context = Arc::new(self.clone());
+		let _ = context.self_weak.set(Arc::downgrade(&context));
+		context
 	}
 
 	/// Returns whether the job runtime has already been initialized.
@@ -179,10 +203,64 @@ impl Ctx {
 		self.job_runtime.get().is_some()
 	}
 
+	/// Accesses the live component registry used by admin controls and HTTP
+	/// route guards.
+	pub fn component_runtime(&self) -> Arc<ComponentRuntime> {
+		self.component_runtime.clone()
+	}
+
+	/// Registers descriptors owned by the server host (protocol routes and
+	/// Cargo-feature integrations).
+	pub async fn register_components(
+		&self,
+		definitions: impl IntoIterator<Item = ComponentDefinition>,
+	) -> CoreResult<()> {
+		self.component_runtime.register(definitions).await
+	}
+
+	/// Returns whether a mounted route is currently available. This is
+	/// intentionally synchronous so request guards never perform database I/O.
+	pub fn component_enabled(&self, key: &str) -> bool {
+		self.component_runtime.is_effective(key)
+	}
+
+	/// Reads process-wide RSS and, on Linux, a PSS/private-dirty breakdown
+	/// without assigning any memory to a component.
+	pub fn process_memory(&self) -> ProcessMemory {
+		ProcessMemory::read()
+	}
+
 	/// The shared per-media visible-page cache (duplicate-page skipping),
 	/// used by every page-serving route and invalidated by jobs and marks.
 	pub fn visible_pages_cache(&self) -> Arc<VisiblePagesCache> {
 		self.visible_pages.clone()
+	}
+
+	/// Returns the durable CrossPoint delivery coordinator, creating it lazily
+	/// with the transform cache as its staging root.
+	#[cfg(feature = "crosspoint")]
+	pub fn crosspoint_delivery(
+		&self,
+	) -> CoreResult<Arc<crate::crosspoint_delivery::CrossPointDeliveryService>> {
+		if let Some(service) = self.crosspoint_delivery.get() {
+			return Ok(service.clone());
+		}
+		let service = Arc::new(
+			crate::crosspoint_delivery::CrossPointDeliveryService::new(
+				self.conn.clone(),
+				self.config.get_transform_cache_dir(),
+				crate::crosspoint_delivery::DeliveryConfig::default(),
+			)
+			.map_err(|error| CoreError::InitializationError(error.to_string()))?,
+		);
+		if self.crosspoint_delivery.set(service.clone()).is_err() {
+			return Ok(self
+				.crosspoint_delivery
+				.get()
+				.expect("CrossPoint service set concurrently")
+				.clone());
+		}
+		Ok(service)
 	}
 
 	/// Returns the lazily-created job runtime, starting its executor on first use.
@@ -194,6 +272,10 @@ impl Ctx {
 				let services = JobServices::new(
 					self.conn.clone(),
 					self.config.clone(),
+					self.self_weak
+						.get()
+						.cloned()
+						.unwrap_or_else(|| Arc::downgrade(&self.arced())),
 					self.event_channel.0.clone(),
 					self.visible_pages.clone(),
 				);
@@ -302,6 +384,7 @@ impl Ctx {
 
 		let watcher = self.get_or_init_library_watcher()?;
 		watcher.init().await?;
+		self.component_runtime.record_activity(COMPONENT_WATCHER);
 		Ok(true)
 	}
 
@@ -369,22 +452,59 @@ impl Ctx {
 	///
 	/// The job runtime is only created once a valid scheduled row needs it.
 	pub async fn start_scheduler(&self) -> CoreResult<Option<JobScheduler>> {
+		self.start_scheduler_inner(false).await
+	}
+
+	/// Starts or refreshes the scheduler and its host-owned durable maintenance
+	/// scan. The scan enqueues persisted due work without waiting in a worker.
+	pub async fn start_scheduler_with_maintenance(
+		&self,
+	) -> CoreResult<Option<JobScheduler>> {
+		self.start_scheduler_inner(true).await
+	}
+
+	async fn start_scheduler_inner(
+		&self,
+		with_maintenance: bool,
+	) -> CoreResult<Option<JobScheduler>> {
 		self.require_background_jobs()?;
+		if !self.component_enabled(crate::component_runtime::COMPONENT_SCHEDULER) {
+			return Ok(None);
+		}
 		let mut scheduler = self.scheduler.lock().await;
 		let runtime = || self.job_runtime().map_err(JobError::from);
 
 		if let Some(existing) = scheduler.clone() {
-			if existing.reload(self.conn.as_ref(), runtime).await? {
+			if with_maintenance && existing.maintenance_enabled() {
+				self.component_runtime.record_activity(COMPONENT_SCHEDULER);
+				return Ok(Some(existing));
+			}
+			let reload_result = if with_maintenance {
+				existing
+					.reload_with_maintenance(self.conn.as_ref(), runtime, true)
+					.await?
+			} else {
+				existing.reload(self.conn.as_ref(), runtime).await?
+			};
+			if reload_result {
+				self.component_runtime.record_activity(COMPONENT_SCHEDULER);
 				return Ok(Some(existing));
 			}
 			scheduler.take();
 			return Ok(None);
 		}
 
-		let Some(created) = JobScheduler::init(self.conn.as_ref(), runtime).await? else {
+		let Some(created) = JobScheduler::init_with_maintenance(
+			self.conn.as_ref(),
+			runtime,
+			with_maintenance,
+		)
+		.await?
+		else {
 			return Ok(None);
 		};
 		scheduler.replace(created.clone());
+		self.component_runtime.record_activity(COMPONENT_SCHEDULER);
 		Ok(Some(created))
 	}
 
@@ -403,12 +523,10 @@ impl Ctx {
 	}
 
 	/// Returns the staged-ingest services, constructing them lazily on first
-	/// use. The pipeline lives in `stump_ingest` and takes its settings, its
-	/// library-row builders, its provider clients, and its event sink from
-	/// here — see [`crate::ingest_host`].
 	#[cfg(feature = "ingest")]
 	pub fn ingest(&self) -> Arc<IngestServices> {
-		self.ingest_services
+		let services = self
+			.ingest_services
 			.get_or_init(|| {
 				Arc::new(
 					IngestServices::new(
@@ -420,7 +538,9 @@ impl Ctx {
 					.with_event_sink(Arc::new(CoreEventSink::new(self.get_event_tx()))),
 				)
 			})
-			.clone()
+			.clone();
+		self.component_runtime.record_activity(COMPONENT_INGEST);
+		services
 	}
 
 	/// Returns the device registry, constructing it lazily on first use. Device
@@ -445,6 +565,9 @@ impl Ctx {
 	/// than silently ignored: a `transcode` that silently lost its `ffmpeg`
 	/// fallback would answer `needs_worker` on a server that can do the work.
 	pub fn install_worker_registry(&self, registry: KindRegistry) {
+		if self.worker_registry.get().is_some() {
+			return;
+		}
 		if self.worker_jobs.get().is_some() {
 			tracing::error!(
 				"The worker job registry was installed after the queue was first used; the local implementations it carries will not be reachable"
@@ -457,7 +580,8 @@ impl Ctx {
 	/// The remote-worker queue, constructed lazily on first use. Transitions
 	/// recorded through it are forwarded as [`CoreEvent::WorkerJobChanged`].
 	pub fn worker_jobs(&self) -> Arc<WorkerJobs> {
-		self.worker_jobs
+		let service = self
+			.worker_jobs
 			.get_or_init(|| {
 				let event_tx = self.event_channel.0.clone();
 				let service = WorkerJobs::new(
@@ -472,9 +596,13 @@ impl Ctx {
 				.with_change_listener(Arc::new(move |changed| {
 					let _ = event_tx.send(CoreEvent::WorkerJobChanged(changed));
 				}));
-				Arc::new(service)
+				let service = Arc::new(service);
+				service.start_claim_sweep();
+				service
 			})
-			.clone()
+			.clone();
+		self.component_runtime.record_activity(COMPONENT_WORKER);
+		service
 	}
 	/// Returns the receiver for the `CoreEvent` channel. See [`emit_event`]
 	/// for more information and an example usage.
@@ -510,6 +638,8 @@ impl Ctx {
 			.enqueue(job)
 			.await
 			.map_err(|error| CoreError::InternalError(error.to_string()))?;
+		self.component_runtime
+			.record_activity(COMPONENT_BACKGROUND_JOBS);
 		Ok(())
 	}
 

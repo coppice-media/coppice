@@ -7,16 +7,16 @@ import { Step, Steps } from 'fumadocs-ui/components/steps';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 
-There are a couple key concepts to go over regarding how Stump represents libraries:
+There are a couple key concepts to go over regarding how Coppice represents libraries:
 
 - Libraries are really just paths on your computer that contain subdirectories representing series of books.
 - A library paths _must_ be recursively unique. This means if you have a library at `/books`, you cannot have a library at `/books/comics`.
 
-As long as a directory is accessible by Stump, and abides by the above specification, you can create a library with it. This allows for convenient configurations like network drives, etc.
+As long as a directory is accessible by Coppice, and abides by the above specification, you can create a library with it. This allows for convenient configurations like network drives, etc.
 
 ## Supported Patterns
 
-There are way too many varying organizational preferences for Stump to support all of them. Instead, Stump supports two different patterns for organizing your library:
+There are way too many varying organizational preferences for Coppice to support all of them. Instead, Coppice supports two different patterns for organizing your library:
 
 - **Collection-Priority**: Takes the top most folders and collapses their contents into it as a single series.
 - **Series-Priority**: Will create a separate series for each folder that directly contains media files, not just the top most folder.
@@ -36,7 +36,7 @@ A series-priority library is useful for libraries which should be grouped by any
 
 ### Examples
 
-A few examples to help illustrate the difference between the two library patterns and how Stump will interpret their differing structures.
+A few examples to help illustrate the difference between the two library patterns and how Coppice will interpret their differing structures.
 
 #### Example 1
 
@@ -68,20 +68,20 @@ Consider the following file tree:
 
 </Files>
 
-When Stump scans this library as a collection-priority library, it will create 3 series:
+When Coppice scans this library as a collection-priority library, it will create 3 series:
 
 1. _Shannon, Samantha_
 2. _Sanderson, Brandon_
 3. _J.R.R. Tolkien_.
 
-When Stump scans this library as a series-priority library, it will create 4 series:
+When Coppice scans this library as a series-priority library, it will create 4 series:
 
 1. _Shannon, Samantha_
 2. _Sanderson, Brandon_
 3. _Mistborn_
 4. _The Lord of the Rings_.
 
-Below is a visualization of this library in Stump, using a file tree for simplicity:
+Below is a visualization of this library in Coppice, using a file tree for simplicity:
 
 <Tabs items={['Collection priority', 'Series priority']}>
 
@@ -161,7 +161,7 @@ Consider the following file tree:
 
 </Files>
 
-When Stump scans this library as a series-priority library, it will create 2 series:
+When Coppice scans this library as a series-priority library, it will create 2 series:
 
 1. _Daredevil_
 2. _The Amazing Spider-Man (2018)_.
@@ -215,13 +215,13 @@ Let's consider the following file tree:
 
 Notice how I started mixing stand alone novels and book series, grouping the book series by folders, for each author.
 
-When Stump scans this library as a collection-priority library, it will create 3 series:
+When Coppice scans this library as a collection-priority library, it will create 3 series:
 
 1. _Martin, George R R_
 2. _Sanderson, Brandon_
 3. _Tolkien, J R R_.
 
-When Stump scans this library as a series-priority library, it will create 7 series:
+When Coppice scans this library as a series-priority library, it will create 7 series:
 
 1. _A Song of Ice and Fire_
 2. _Sanderson, Brandon_
@@ -231,7 +231,7 @@ When Stump scans this library as a series-priority library, it will create 7 ser
 6. _Tolkien, J R R_
 7. _The Lord of the Rings_.
 
-Below is a visualization of this library in Stump, using a file tree for simplicity:
+Below is a visualization of this library in Coppice, using a file tree for simplicity:
 
 <Tabs items={['Collection priority', 'Series priority']}>
 
@@ -329,7 +329,7 @@ Personally, I use a collection-priority library for my ebooks and a series-prior
 
 #### Alternative Options
 
-Unfortunately, Stump does not support any other patterns, as there are simply too many ways to organize a library to support them all. If you have a library that doesn't quite fit either of these patterns, or you just prefer a different organization method, you can always use the [File Explorer](/docs/guides/features/file-explorer) to navigate your library. This is akin to using a native file explorer to navigate your filesystem.
+Unfortunately, Coppice does not support any other patterns, as there are simply too many ways to organize a library to support them all. If you have a library that doesn't quite fit either of these patterns, or you just prefer a different organization method, you can always use the [File Explorer](/docs/guides/features/file-explorer) to navigate your library. This is akin to using a native file explorer to navigate your filesystem.
 
 ## Optional Processing
 
@@ -414,7 +414,7 @@ For deleting a library, see the [delete a library](#delete-a-library) section.
 
 ### Delete a Library
 
-> Deleting a library will remove all of the series, books, and other entities associated with the books (e.g., read progress, reading lists, etc) contained within it. Your actual files will not be deleted, but they will no longer exist in Stump.
+> Deleting a library will remove all of the series, books, and other entities associated with the books (e.g., read progress, reading lists, etc) contained within it. Your actual files will not be deleted, but they will no longer exist in Coppice.
 >
 > **This action cannot be undone.**
 

@@ -2,7 +2,7 @@
 title: Permissions
 ---
 
-Users can be assigned permissions that grant (or deny) them access to various features or actions within Stump. This allows for granular and flexible control over who can do what within your server.
+Users can be assigned permissions that grant (or deny) them access to various features or actions within Coppice. This allows for granular and flexible control over who can do what within your server.
 
 ## Available Permissions
 
@@ -40,3 +40,16 @@ Users can be assigned permissions that grant (or deny) them access to various fe
 | Read Persisted Logs | `READ_PERSISTED_LOGS`  | Allows reading application-level logs (e.g., job logs)      |
 | Read System Logs    | `READ_SYSTEM_LOGS`     | Allows reading system logs                                  |
 | Manage Server       | `MANAGE_SERVER`        | Allows managing server settings and features                |
+
+## OIDC group mappings
+
+When OIDC permission synchronization is enabled, Coppice maps the configured
+provider groups to these permissions at login. The result is the union of every
+matching group's permissions; duplicate permissions are removed and unknown
+provider groups are ignored. If no configured group matches, the synchronized
+set is empty and clears previously synchronized permissions for non-owner users.
+
+An `admin_group` can grant every available permission, but it never grants the
+server-owner flag. The owner status remains a local database property. See the
+[OIDC group-to-permission configuration](/docs/guides/access-control/oidc#group-to-permission-synchronization)
+section for the environment-variable and TOML forms.

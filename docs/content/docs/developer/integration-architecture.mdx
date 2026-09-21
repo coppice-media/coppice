@@ -1,0 +1,172 @@
+---
+title: Integration architecture
+description: The Coppice integration taxonomy, boundaries, evidence, and future request orchestration
+---
+
+Coppice is one Rust server process with explicit integration boundaries. A protocol
+adapter, metadata provider, catalog source, worker backend, or fulfillment
+connector may have a different owner and evidence level, but none silently owns
+another class's job. The server remains authoritative for identity, permissions,
+storage, and publication.
+
+## Evidence labels
+
+Use these labels literally in plans, issue reports, and compatibility pages:
+
+- **Shipped** — the behavior is present in the product source and available in a
+  supported build.
+- **Contract-tested** — a pinned protocol, fixture, or server probe exercised the
+  wire contract. This does not prove that a third-party app works.
+- **Device-tested** — a real app or device was exercised against the fixture
+  server; the scope and date must be stated.
+- **Source-only** — pinned client or upstream source was inspected, but no
+  product/device run proves the behavior.
+- **Planned** — an accepted future direction with no shipped implementation.
+- **Blocked** — the direction cannot be verified or started until a named
+  external prerequisite is available.
+
+Harness, source, and repository evidence never becomes app or device proof.
+
+## Integration taxonomy
+
+| Class | Owns | Current boundary and evidence | Does not imply |
+| --- | --- | --- | --- |
+| **Protocol adapters** | Translate an external client's routes, authentication, DTOs, and progress model at the HTTP/WebSocket edge. | `crates/komga`, `crates/kavita`, `crates/abs`, `crates/kobo`, `crates/koreader`, `crates/opds`, `crates/liseur-sync`, plus native GraphQL/REST/Readium. Profiles are **Shipped**; their harness and client records are separated in [Client verification](/docs/developer/client-verification). | A protocol adapter is not a search provider, downloader, metadata authority, or alignment engine. |
+| **Metadata providers** | Identify and look up metadata candidates, map fields, retain provenance, and participate in ingest policy. | `crates/integrations/metadata` and `crates/ingest` implement the candidate/apply boundary. Hardcover metadata is **Shipped** and **Contract-tested** offline; live credentials are **Blocked**, and account, progress, and journal sync are **Planned**. See [Provider status](/docs/developer/provider-status). | Metadata lookup does not create a wanted request, fetch copyrighted files, or synchronize a provider account. |
+| **Catalog/source providers** | Discover popular/latest/search/details/chapters/pages from a remote source and expose a materialized or virtual library. | `crates/provider`, `crates/provider-mangadex`, and `crates/provider-themes` own the `Source` contract and source definitions. The host and catalog path are **Shipped** when enabled; see [Provider host](/docs/developer/provider-host) and [Source definitions](/docs/developer/source-definitions). | A source provider is not the metadata-provider registry. It does not turn a search result into a fulfillment, and Storyteller never belongs here. |
+| **Worker backends** | Execute heavy or hardware-bound jobs outside the server process and return validated, digest-bound results. | `crates/worker`, `worker_jobs`, `transcode`, and `challenge_solve` are **Shipped**. The typed `align` contract is **Shipped**; a worker-local Storyteller adapter is **Planned**, with native known-text CTC/Viterbi as an independent later backend. See [Read-aloud](/docs/developer/read-aloud). | Storyteller is not a search/catalog provider, not a bundled dependency, and not the default server-side alignment runtime. |
+| **Fulfillment connectors** | Deliver a lawfully obtained requested item to a Coppice ingest boundary. | Generic staged ingest is **Shipped**. The request ledger, approval/release selection, automation defaults, download polling, and `mam-gateway` implementation are **Shipped**; mocked protocol-contract evidence is pending Main validation, while real MAM, qBittorrent/Gluetun deployment, and physical-device delivery remain untested. | Coppice does not put MAM credentials/raw tracker URLs in its config or database, and does not expose a downloader, arbitrary URL fetch, or provider-host auto-fulfillment. |
+
+These classes compose in the same process where the current source permits it.
+A worker is an optional executor that dials the server; it is not a second
+catalog or database. External systems keep their own credentials and lifecycle.
+
+## Search, wanted items, fulfillment, and ingest
+
+The current search and source layers discover metadata or remote catalog entries.
+The request ledger, approval/release orchestration, and polling backend are now
+**Shipped**; automation remains off by default. The implemented orchestration is:
+
+```text
+internal media/work or external work reference
+  -> optional destination device/shelf
+  -> approval (automation defaults off)
+  -> Torznab caps/search through private mam-gateway
+  -> opaque release selection and POST /v1/grabs
+  -> GET /v1/grabs/{id} download polling
+  -> existing ingest staging
+  -> destination queue
+```
+
+The gateway boundary is deliberately narrow. It owns MAM cookies/raw tracker URLs
+and qBittorrent access inside a Gluetun network namespace. Coppice reaches only
+the private control-network gateway port by service name; qBittorrent's WebUI is
+loopback-only. Gateway Torznab is limited to `/torznab/api?t=caps` and
+`/torznab/api?t=search`; the private API exposes authenticated `POST /v1/grabs`
+and `GET /v1/grabs/{id}` with short-lived opaque result IDs. Coppice stores only
+the gateway endpoint/token, never a cookie, raw URL, magnet, or tracker secret.
+The gateway rejects redirects, arbitrary URLs, and user-supplied magnets.
+The transport references are the [Torznab v1.3 specification](https://torznab.github.io/spec-1.3-draft/torznab/Specification-v1.3.html) and [qBittorrent WebUI API 5.0](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-(qBittorrent-5.0)); they are behavior references only, not copied source or a claim that either real integration is tested.
+
+The handoff remains the existing `INGEST_DROP_DIR`/`INGEST_STAGING_DIR` boundary:
+the gateway writes only to a dedicated handoff subtree, while Coppice canonicalizes
+paths, rejects traversal/symlink escapes, recomputes hashes, and admits files
+through normal ingest review. The `mam-gateway` implementation and Torznab
+transport have **mocked protocol-contract evidence pending Main validation**.
+Real MAM authentication, VPN-egress proof, qBittorrent download, ingest replay,
+and physical-device delivery are **untested** and must not be described as live,
+shipped, or device-tested.
+
+## BookOrbit behavior evidence (not an implementation dependency)
+
+BookOrbit v2.9.0 is behavior-only AGPL evidence, pinned to commit
+[`028d4287b4f727336eabd3af29d165a73c661faa`](https://github.com/bookorbit/bookorbit/commit/028d4287b4f727336eabd3af29d165a73c661faa)
+and its [release page](https://github.com/bookorbit/bookorbit/releases/tag/v2.9.0).
+Read only its public behavior/specification: request approval, Torznab/Prowlarr
+source handling, ranked release selection, grab/download polling, inspection,
+and import. No BookOrbit AGPL source, dependency, or implementation is copied
+or implied in Coppice.
+
+The defaults and request lifecycle are pinned in [`BOOK_REQUESTS.md`](https://raw.githubusercontent.com/bookorbit/bookorbit/028d4287b4f727336eabd3af29d165a73c661faa/docs/BOOK_REQUESTS.md), [`book-request-automation.ts`](https://raw.githubusercontent.com/bookorbit/bookorbit/028d4287b4f727336eabd3af29d165a73c661faa/packages/types/src/book-request-automation.ts), and [`book-request-profile.ts`](https://raw.githubusercontent.com/bookorbit/bookorbit/028d4287b4f727336eabd3af29d165a73c661faa/packages/types/src/book-request-profile.ts).
+Its documented automation defaults are a useful reference, not Coppice defaults:
+auto-grab **off**, minimum score **80**, retry **on** with **3** total attempts,
+auto-search **off**, 24-hour search interval with a 60-day age cap, verification
+**on** at threshold **70**, import formats `all`, and empty destinations/release
+profiles. The four relevant open issues remain external evidence: [#1338](https://github.com/bookorbit/bookorbit/issues/1338)
+bulk request automation/search; [#1359](https://github.com/bookorbit/bookorbit/issues/1359)
+format-agnostic ebook/audiobook requests; [#1379](https://github.com/bookorbit/bookorbit/issues/1379)
+saga/all-volume requests; and [#1381](https://github.com/bookorbit/bookorbit/issues/1381),
+whose private-address setting does not reach direct-download redirect checks.
+Issue #1381 is a direct warning against treating a private-address toggle as a
+VPN kill-switch; Coppice requires the Gluetun gateway boundary above.
+
+## Alignment orchestration is a separate path
+
+Alignment begins only after a user confirms the ebook and audiobook edition pair.
+It does not start from catalog search or a fulfillment request. The future path
+is:
+
+```text
+confirmed ebook + audiobook pair
+  -> exact timing import (existing SMIL, Storyteller artifact, or manifest)
+  -> validate SyncMapV1 and persist the accepted map
+  -> explicit alignment job
+  -> worker-local Storyteller adapter (optional external API)
+  -> native known-text CTC/Viterbi fallback
+  -> deterministic read-aloud EPUB derivative (future)
+```
+
+Storyteller may be used by a worker that the operator configures to reach an
+external instance. Storyteller credentials and remote-library lifecycle policy
+remain worker-local. The worker obtains the confirmed source EPUB/audio through
+Coppice's authenticated media routes and may send those bytes only to that
+operator-configured instance; only validated `SyncMapV1` timing returns as the
+job result. Synchronized Storyteller read-aloud EPUB playback is not shipped.
+Ordinary EPUB playback and ordinary audiobook playback remain separate
+supported experiences until the future derivative and reader contract are
+complete.
+
+## Application and server boundaries
+
+The `/editor` and `/app` static applications are separate web assets served by
+Coppice when their corresponding directories are configured (`INGEST_EDITOR_DIR`
+and `STUMP_HOME_APP_DIR`). Removing either static application does not remove the
+native API, protocol adapters, ingest, providers, or worker socket. A headless
+profile may omit both applications while retaining the backend contracts that
+its Cargo features include. See [Server architecture](/docs/developer/server-architecture)
+for the feature/profile matrix and lifecycle rules.
+
+## Connections: personal delivery and provider state
+
+Connections are split between a shared system sender and user-owned targets:
+
+- SMTP is one server emailer. Only the server owner or `ManageServer` may read
+  or change its host, sender, and TLS metadata; passwords are encrypted and
+  never returned. `EmailSend` remains sufficient for sending a book.
+- Kindle destinations belong to one user and can be created, renamed, made
+  default, or deleted without changing legacy `devices.kindle_email`. New
+  sends snapshot the destination id/name/address in `kindle_deliveries`; old
+  device-id sends continue unchanged. Deleting a destination never deletes
+  delivery history.
+- A Hardcover PAT is encrypted per user and verified through `me` before it is
+  stored. Personal status is redacted, clients are scoped by user and
+  credential version, and metadata use is opt-in for interactive lookups only.
+  Public metadata may use a provider/query/schema/expiry cache; journal,
+  quote, and progress responses never enter it.
+- Manual Hardcover sync is read-only for remote data. A quote becomes a local
+  annotation only when an explicit media link and exact page locator are
+  available; otherwise unresolved provider-neutral provenance is retained.
+  Progress projection is opt-in, page-bounded, and uses the shared
+  non-regressing reading-head conflict rule.
+
+## Source of truth
+
+- [Current state](/docs/developer/state) records what exists and the evidence
+  level for each client and subsystem.
+- [Provider status](/docs/developer/provider-status) records metadata and
+  protocol-provider contracts and their gates.
+- [Read-aloud](/docs/developer/read-aloud) records pairing, timing maps, worker
+  execution, the shipped request backend, the implemented gateway with mocked
+  contract evidence pending Main validation, and remaining alignment work.
+- [Client verification](/docs/developer/client-verification) records app/device
+  evidence separately from server contracts.

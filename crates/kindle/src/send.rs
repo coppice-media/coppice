@@ -4,8 +4,8 @@ use std::{future::Future, path::Path};
 
 use chrono::Utc;
 use email::AttachmentPayload;
-use models::entity::{kindle_delivery, media, user::AuthUser};
-use sea_orm::{prelude::*, DatabaseConnection, QueryOrder, QuerySelect, Set};
+use models::entity::{kindle_delivery, kindle_destination, media, user::AuthUser};
+use sea_orm::{prelude::*, Condition, DatabaseConnection, QueryOrder, QuerySelect, Set};
 use stump_devices::{DeviceService, KindleSendSummary};
 
 use crate::{
@@ -62,18 +62,14 @@ pub struct KindleSend<'a, M, C> {
 	/// [`AMAZON_MAX_ATTACHMENT_BYTES`] applies regardless.
 	pub max_attachment_size_bytes: Option<i32>,
 }
-
 impl<M, C> KindleSend<'_, M, C>
 where
 	M: KindleMailer,
 	C: KindleConverter,
 {
 	/// Mails `media_id` to the Kindle address registered on `device_id` and
-	/// records the delivery.
-	///
-	/// A refusal by the transport is recorded too, with its message in
-	/// `error`: a delivery log that only kept successes could not answer the
-	/// one question an operator asks it.
+	/// records the delivery. This is the compatibility lane used by existing
+	/// mobile clients.
 	pub async fn send_to_kindle(
 		&self,
 		user: &AuthUser,
@@ -88,6 +84,52 @@ where
 			.kindle_email
 			.clone()
 			.ok_or_else(|| KindleError::NoAddress(device.name.clone()))?;
+
+		self.send_file(
+			user,
+			media_id,
+			recipient,
+			device.name,
+			Some(device.id),
+			None,
+		)
+		.await
+	}
+
+	/// Mails `media_id` to a user-owned destination. Destinations are not
+	/// devices; the delivery row therefore stores a nullable device id and a
+	/// target snapshot so deleting the destination cannot erase its history.
+	pub async fn send_to_destination(
+		&self,
+		user: &AuthUser,
+		destination_id: &str,
+		media_id: &str,
+	) -> KindleResult<Delivery> {
+		let destination = kindle_destination::Entity::find_by_id(destination_id)
+			.filter(kindle_destination::Column::UserId.eq(&user.id))
+			.one(self.conn)
+			.await?
+			.ok_or_else(|| KindleError::NoAddress(destination_id.to_owned()))?;
+		self.send_file(
+			user,
+			media_id,
+			destination.email,
+			destination.name,
+			None,
+			Some(destination.id),
+		)
+		.await
+	}
+
+	async fn send_file(
+		&self,
+		user: &AuthUser,
+		media_id: &str,
+		recipient: String,
+		target_name: String,
+		device_id: Option<String>,
+		destination_id: Option<String>,
+	) -> KindleResult<Delivery> {
 		// A new lane must not reach an address the operator marked forbidden.
 		self.mailer.check_recipient(&recipient).await?;
 
@@ -124,13 +166,16 @@ where
 			.send(&recipient, &subject(&book.name), payload)
 			.await;
 		let error = outcome.as_ref().err().map(ToString::to_string);
-		// The row is written either way; only a delivery that went out moves
-		// the device's sync state.
+		// The row is written either way; only a delivery that actually left
+		// moves a device's sync state.
 		let row = self
 			.record(kindle_delivery::ActiveModel {
 				id: Set(Uuid::new_v4().to_string()),
 				media_id: Set(book.id.clone()),
-				device_id: Set(device.id.clone()),
+				device_id: Set(device_id.clone()),
+				user_id: Set(Some(user.id.clone())),
+				destination_id: Set(destination_id),
+				destination_name: Set(device_id.is_none().then_some(target_name.clone())),
 				recipient: Set(recipient),
 				format: Set(format.clone()),
 				bytes: Set(bytes as i64),
@@ -142,13 +187,15 @@ where
 			.await?;
 		outcome?;
 
-		self.devices
-			.record_delivery(&device.id, &KindleSendSummary::new(bytes, format))
-			.await?;
+		if let Some(device_id) = device_id {
+			self.devices
+				.record_delivery(&device_id, &KindleSendSummary::new(bytes, format))
+				.await?;
+		}
 
 		Ok(Delivery {
 			row,
-			device_name: device.name,
+			device_name: target_name,
 		})
 	}
 
@@ -196,8 +243,37 @@ pub async fn deliveries(
 	if device_ids.is_empty() {
 		return Ok(Vec::new());
 	}
-	let mut query = kindle_delivery::Entity::find()
-		.filter(kindle_delivery::Column::DeviceId.is_in(device_ids.to_vec()));
+	let mut query = kindle_delivery::Entity::find().filter(
+		Condition::all()
+			.add(kindle_delivery::Column::DeviceId.is_in(device_ids.to_vec()))
+			.add(kindle_delivery::Column::DeviceId.is_not_null()),
+	);
+	if let Some(media_id) = media_id {
+		query = query.filter(kindle_delivery::Column::MediaId.eq(media_id));
+	}
+	Ok(query
+		.order_by_desc(kindle_delivery::Column::SentAt)
+		.limit(limit)
+		.all(conn)
+		.await?)
+}
+
+/// All delivery history owned by `user_id`, including destination sends whose
+/// destination may since have been deleted. The device-id branch keeps rows
+/// written before the owner snapshot migration visible during recovery.
+pub async fn deliveries_for_user(
+	conn: &DatabaseConnection,
+	user_id: &str,
+	device_ids: &[String],
+	media_id: Option<&str>,
+	limit: u64,
+) -> KindleResult<Vec<kindle_delivery::Model>> {
+	let mut ownership = Condition::any().add(kindle_delivery::Column::UserId.eq(user_id));
+	if !device_ids.is_empty() {
+		ownership =
+			ownership.add(kindle_delivery::Column::DeviceId.is_in(device_ids.to_vec()));
+	}
+	let mut query = kindle_delivery::Entity::find().filter(ownership);
 	if let Some(media_id) = media_id {
 		query = query.filter(kindle_delivery::Column::MediaId.eq(media_id));
 	}
@@ -211,13 +287,13 @@ pub async fn deliveries(
 /// The subject Amazon sees.
 ///
 /// `Convert` is a magic word for the service — it makes Amazon reflow a PDF
-/// into Kindle format — and Stump never asks for that on the operator's
+/// into Kindle format — and Coppice never asks for that on the operator's
 /// behalf, so a book that happens to be called "Convert" is qualified.
 /// Everything else is ignored by Amazon and is there for the operator's own
 /// mail log.
 pub fn subject(book_name: &str) -> String {
 	if book_name.trim().eq_ignore_ascii_case("convert") {
-		format!("{book_name} (sent by Stump)")
+		format!("{book_name} (sent by Coppice)")
 	} else {
 		book_name.to_string()
 	}

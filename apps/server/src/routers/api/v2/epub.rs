@@ -16,8 +16,8 @@ use sea_orm::prelude::*;
 use serde::Deserialize;
 use stump_auth::AuthContext;
 use stump_media::{
-	search_epub, EpubProcessor, EpubSearchOptions, ReadiumManifestGenerator,
-	EPUB_SEARCH_DEFAULT_LIMIT,
+	media::format::epub::EpubProcessor, search_epub, EpubSearchOptions,
+	ReadiumManifestGenerator, EPUB_SEARCH_DEFAULT_LIMIT,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -109,8 +109,12 @@ async fn get_epub_manifest(
 	let ebook = find_ebook_for_user(ctx.conn.as_ref(), &user, &id).await?;
 
 	let base_url = epub_service_base_url(&host_details, &id);
-	let generator = ReadiumManifestGenerator::new(&ebook.path, base_url);
-	let manifest = generator.generate_manifest()?;
+	let path = ebook.path;
+	let manifest = tokio::task::spawn_blocking(move || {
+		ReadiumManifestGenerator::new(path, base_url).generate_manifest()
+	})
+	.await
+	.map_err(|error| APIError::InternalServerError(error.to_string()))??;
 
 	Ok(WebPubManifestResponse(manifest))
 }
@@ -128,8 +132,12 @@ async fn get_epub_positions(
 	let ebook = find_ebook_for_user(ctx.conn.as_ref(), &user, &id).await?;
 
 	let base_url = epub_service_base_url(&host_details, &id);
-	let generator = ReadiumManifestGenerator::new(&ebook.path, base_url);
-	let positions = generator.generate_positions()?;
+	let path = ebook.path;
+	let positions = tokio::task::spawn_blocking(move || {
+		ReadiumManifestGenerator::new(path, base_url).generate_positions()
+	})
+	.await
+	.map_err(|error| APIError::InternalServerError(error.to_string()))??;
 
 	Ok(WebPubPositionsResponse(positions))
 }
@@ -203,21 +211,24 @@ async fn get_epub_resource(
 	let path = path.trim_start_matches('/');
 	let path = path.split_once('#').map(|(p, _)| p).unwrap_or(path);
 	let path_buf = PathBuf::from(path);
+	let resource = path_buf.file_name().map(PathBuf::from);
+	let root = if resource.is_some() {
+		path_buf
+			.parent()
+			.map(|parent| parent.to_string_lossy().to_string())
+			.unwrap_or_default()
+	} else {
+		String::new()
+	};
+	let resource = resource.unwrap_or(path_buf);
+	let ebook_path = ebook.path;
 
-	if let Some(parent) = path_buf.parent() {
-		if let Some(file_name) = path_buf.file_name() {
-			let root = parent.to_string_lossy().to_string();
-			let resource = PathBuf::from(file_name);
-			let root_str = if root.is_empty() { "" } else { root.as_str() };
+	let (content_type, data) = tokio::task::spawn_blocking(move || {
+		EpubProcessor::get_resource_by_path(&ebook_path, &root, resource)
+	})
+	.await
+	.map_err(|error| APIError::InternalServerError(error.to_string()))?
+	.map_err(APIError::from)?;
 
-			return Ok(EpubProcessor::get_resource_by_path(
-				ebook.path.as_str(),
-				root_str,
-				resource,
-			)?
-			.into());
-		}
-	}
-
-	Ok(EpubProcessor::get_resource_by_path(ebook.path.as_str(), "", path_buf)?.into())
+	Ok((content_type, data).into())
 }

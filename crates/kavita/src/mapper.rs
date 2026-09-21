@@ -1463,6 +1463,7 @@ mod tests {
 			source_provider: None,
 			remote_id: None,
 			remote_chapter_id: None,
+			is_oneshot: false,
 		}
 	}
 
@@ -1493,6 +1494,7 @@ mod tests {
 			library_id: Some("lib".to_owned()),
 			source_provider: None,
 			remote_id: None,
+			is_oneshot: false,
 		}
 	}
 
@@ -2251,6 +2253,7 @@ mod tests {
 			process_thumbnail_colors_even_without_config: false,
 			ignore_rules: None,
 			library_id: Some("lib".to_owned()),
+			oneshots_directory: None,
 			metadata_policy: None,
 		}
 	}

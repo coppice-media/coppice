@@ -1,0 +1,180 @@
+# Book requests intentionally expose only metadata and opaque release ids. The
+# private gateway owns tracker credentials, raw URLs, and download handles.
+fragment BookRequestFields on BookRequest {
+	id
+	requesterId
+	title
+	authors
+	coverUrl
+	internalMediaId
+	internalWorkId
+	sourceProvider
+	remoteId
+	externalKey
+	destinationShelfId
+	destinationDeviceId
+	status
+	approvalPolicy
+	automationEnabled
+	scoringFloor
+	verificationThreshold
+	maxRetries
+	retries
+	approvedBy
+	rejectedBy
+	failureCode
+	failureMessage
+	createdAt
+	updatedAt
+	approvedAt
+	completedAt
+}
+
+fragment BookRequestReleaseFields on BookRequestRelease {
+	id
+	searchId
+	requestId
+	sourceProvider
+	remoteId
+	externalKey
+	title
+	authors
+	format
+	language
+	edition
+	quality
+	sizeBytes
+	seeders
+	previewName
+	previewMime
+	previewBytes
+	score
+	scoreComponents
+	rank
+	selected
+}
+
+fragment BookRequestGrabFields on BookRequestGrab {
+	id
+	requestId
+	releaseId
+	opaqueId
+	status
+	attempts
+	maxAttempts
+	failureCode
+	failureMessage
+	startedAt
+	finishedAt
+	lastPolledAt
+	nextPollAt
+	createdAt
+	updatedAt
+}
+
+fragment BookRequestGatewayFields on BookRequestGatewaySettings {
+	id
+	endpoint
+	enabled
+	requireApproval
+	automationEnabled
+	scoringFloor
+	verificationThreshold
+	maxRetries
+	handoffRoot
+	hasToken
+	tokenRedacted
+	updatedBy
+	updatedAt
+}
+
+query BookRequests($status: BookRequestStatus, $mineOnly: Boolean = false, $limit: Int = 50, $offset: Int = 0) {
+	bookRequests(status: $status, mineOnly: $mineOnly, limit: $limit, offset: $offset) {
+		...BookRequestFields
+	}
+}
+
+query RequestDestinations {
+	devices {
+		id
+		name
+		revokedAt
+	}
+	readingLists {
+		nodes {
+			id
+			name
+		}
+	}
+}
+query BookRequest($id: ID!) {
+	bookRequest(id: $id) {
+		...BookRequestFields
+	}
+}
+
+query BookRequestReleases($requestId: ID!) {
+	bookRequestReleases(requestId: $requestId) {
+		...BookRequestReleaseFields
+	}
+}
+
+query BookRequestGateway {
+	bookRequestGateway {
+		...BookRequestGatewayFields
+	}
+}
+
+mutation CreateBookRequest($input: CreateBookRequestInput!) {
+	createBookRequest(input: $input) {
+		...BookRequestFields
+	}
+}
+
+mutation ApproveBookRequest($requestId: ID!, $reason: String) {
+	approveBookRequest(requestId: $requestId, reason: $reason) {
+		...BookRequestFields
+	}
+}
+
+mutation RejectBookRequest($requestId: ID!, $reason: String) {
+	rejectBookRequest(requestId: $requestId, reason: $reason) {
+		...BookRequestFields
+	}
+}
+
+mutation SearchBookRequest($requestId: ID!) {
+	searchBookRequest(requestId: $requestId) {
+		...BookRequestFields
+	}
+}
+
+mutation SelectBookRequestRelease($requestId: ID!, $releaseId: ID!) {
+	selectBookRequestRelease(requestId: $requestId, releaseId: $releaseId) {
+		...BookRequestFields
+	}
+}
+
+mutation GrabBookRequest($requestId: ID!) {
+	grabBookRequest(requestId: $requestId) {
+		...BookRequestGrabFields
+	}
+}
+
+mutation PollBookRequestGrab($grabId: ID!) {
+	pollBookRequestGrab(grabId: $grabId) {
+		...BookRequestGrabFields
+	}
+}
+
+mutation RetryBookRequest($requestId: ID!) {
+	retryBookRequest(requestId: $requestId) {
+		...BookRequestFields
+	}
+}
+
+mutation UpdateBookRequestGateway($input: BookRequestGatewayInput!) {
+	updateBookRequestGateway(input: $input) {
+		...BookRequestGatewayFields
+	}
+}

@@ -1,4 +1,4 @@
-# Annotation hub (`/annotations`) and sink settings (`/settings/annotations`).
+# Annotation hub (`/annotations`) and the export section of `/connections`.
 #
 # Names are prefixed `Console*` because codegen merges every document under
 # `src/lib/graphql/**/*.graphql` into one set where operation and fragment
@@ -44,10 +44,10 @@ query ConsoleAnnotations($filter: AnnotationFilterInput, $pagination: OffsetPagi
 	}
 }
 
-# The filter bar's book selector and the per-book export target: every book the
-# user has annotated, without paging the annotations themselves.
-query ConsoleAnnotationBooks {
-	annotations(pagination: { page: 1, pageSize: 500 }) {
+# The filter bar's book selector follows the same filter as the visible list,
+# so a device-scoped hub never offers books from another device.
+query ConsoleAnnotationBooks($filter: AnnotationFilterInput) {
+	annotations(filter: $filter, pagination: { page: 1, pageSize: 500 }) {
 		items {
 			book {
 				key

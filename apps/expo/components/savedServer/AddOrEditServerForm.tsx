@@ -277,7 +277,7 @@ export default function AddOrEditServerForm({
 				<SegmentedPicker
 					value={broadKind}
 					options={[
-						{ label: 'Stump', value: 'stump' },
+						{ label: 'Coppice', value: 'stump' },
 						{ label: 'OPDS', value: 'opds' },
 					]}
 					onValueChange={(v) => form.setValue('kind', v as 'stump' | 'opds' | 'opds-legacy')}

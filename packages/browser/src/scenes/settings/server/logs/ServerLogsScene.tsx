@@ -13,7 +13,7 @@ export default function ServerLogsScene() {
 	return (
 		<SceneContainer>
 			<Helmet>
-				<title>Stump | {t('settingsScene.server/logs.helmet')}</title>
+				<title>Coppice | {t('settingsScene.server/logs.helmet')}</title>
 			</Helmet>
 
 			<ContentContainer>

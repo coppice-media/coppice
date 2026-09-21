@@ -1,5 +1,5 @@
 name: 🐛 Bug report
-description: Help us improve Stump by creating a bug report
+description: Help us improve Coppice by creating a bug report
 title: '[BUG] Give a suitable title'
 labels: ['bug']
 body:

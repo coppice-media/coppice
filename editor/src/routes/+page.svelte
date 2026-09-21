@@ -5,7 +5,7 @@
 </script>
 
 <svelte:head>
-	<title>Stump · Ingest editor</title>
+	<title>Coppice · Ingest editor</title>
 </svelte:head>
 
 <div class="mx-auto flex min-h-[60vh] max-w-2xl items-center justify-center">

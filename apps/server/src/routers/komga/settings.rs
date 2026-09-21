@@ -419,7 +419,7 @@ async fn patch_settings(
 	}
 
 	tracing::warn!(
-		"Accepted Komga settings update, but Stump does not persist Komga settings"
+		"Accepted Komga settings update, but Coppice does not persist Komga settings"
 	);
 	Ok(StatusCode::NO_CONTENT)
 }
@@ -430,9 +430,9 @@ async fn get_announcements(
 ) -> APIResult<Response<Body>> {
 	let feed = KomgaJsonFeed {
 		version: "https://jsonfeed.org/version/1.1".to_owned(),
-		title: "Stump".to_owned(),
+		title: "Coppice".to_owned(),
 		home_page_url: None,
-		description: Some("Stump does not publish an announcements feed.".to_owned()),
+		description: Some("Coppice does not publish an announcements feed.".to_owned()),
 		items: Vec::new(),
 	};
 

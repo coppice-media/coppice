@@ -76,7 +76,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
-      - name: Build stump server
+      - name: Build Coppice server
         uses: ./.github/actions/build-server
 
       - name: Copy bundled web app

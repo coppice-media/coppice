@@ -349,6 +349,53 @@ This is a direct canonical Readium path, not a second OPDS-specific converter.
 | 2.0 paged progression | **[observed]** Output synthesizes a server page URL and `image/jpeg` type from `end_page`; input position maps back to page and total progression. **[inference]** Mark the href/type as provider-derived, retain raw JSON, and do not treat the synthetic URL as a publication resource anchor. |
 | Annotation | **[observed]** OPDS route inventory has catalog, page/download, and v2 progression but no revisioned annotation resource (`crates/opds/src/lib.rs:225-236,332-337,650-665@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | `to_annotation`/`from_annotation=unsupported` **[inference]**; no annotation id, quote, body, revision, or tombstone can be obtained from OPDS. |
 
+## Reading sessions
+
+**[Source-only]** A reading session is one contiguous activity interval for
+one `(user_id, media_id)`. `reading_sessions` is the activity history used by
+reading statistics; `reading_heads` remains the canonical current position.
+Session rows are started by accepted position/progression writes and retain
+elapsed time, completion state, readthrough number, and every contributing
+device (`crates/models/src/entity/reading_session.rs:22-92`,
+`crates/models/src/services/reading_progress.rs:71-140`).
+
+**[Source-only]** The extension rule is explicit:
+
+- For the same media, a new accepted update extends the latest session when
+  the gap from its `updated_at` is less than or equal to the user's
+  `reading_session_grace_period_secs`; the default is 1,800 seconds.
+- A gap greater than the grace period creates a new session. The boundary is
+  inclusive, so a gap of exactly the grace period extends.
+- Device identity does not merge activity across a longer gap: switching
+  devices never prevents the split when the gap is greater than the grace
+  period. A device switch inside the grace period is another contributor to
+  the same session.
+
+This is the shared rule in
+`crates/models/src/domain/reading_progress.rs:10-55`, applied by
+`crates/models/src/services/reading_progress.rs:79-140`; the logical-day
+check still prevents a session from crossing a user's day boundary.
+
+**[Source-only]** `device_ids` is a JSON array of contributors. Statistics
+expand it with SQLite `json_each`, so a multi-device session contributes once
+to each listed device while contributing once to overall session totals.
+Unregistered ids remain visible in the per-device list with null device
+metadata (`crates/graphql/src/object/reading_stats.rs:119-213`).
+
+**[Source-only]** An accepted closed Liseur session remains immutable in
+`liseur_sync_sessions` and is projected in the same write transaction into
+`reading_sessions` when its work is linked to media. The projection stores
+`device_ids=[device_id]`, logical date from `started_at`, elapsed duration
+`(ended_at - started_at - idle_ms)` in whole seconds, start/end progression,
+completion status, and the source id. It is idempotent on
+`(user_id, liseur_session_id)`; the nullable column and unique index are
+added by `m20260949_000000_add_liseur_session_id`
+(`apps/server/src/routers/liseur_sync/storage.rs`,
+`crates/models/src/entity/reading_session.rs:75-92`,
+`crates/migrations/src/m20260949_000000_add_liseur_session_id.rs`).
+When no media link exists, the source row stays source-only; retrying the same
+payload after the link is created performs the projection.
+
 ## Conflict and materialization rule
 
 **[observed]** Komga R2 and OPDS v2 reject an update whose supplied
@@ -564,3 +611,37 @@ different book.
   the unified layer extends those boundaries rather than changing the public
   protocol behavior (`crates/komga/src/routes/readium.rs:337-399@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`,
   `apps/server/src/routers/liseur_sync/storage.rs:721-838,1046-1297@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+
+## Reads
+
+**[observed]** All position-bearing reads now project the canonical
+`reading_heads` row. The legacy `reading_sessions` row remains the source for
+activity fields that the head does not carry.
+
+| Lane | Position store | Session/history fallback |
+| --- | --- | --- |
+| Home GraphQL `Media.readProgress` | `reading_heads`, batched by `(user_id, media_id)` | `readthrough_number`, `session_id`, elapsed seconds, and `started_at`; position fields fall back per-field only when the head is absent |
+| Home GraphQL `keepReading` | unfinished `reading_heads`, ordered by `updated_at` | none; media visibility still comes from the user's library scope |
+| Native REST `GET /api/v2/reading/continue` | `reading_heads` | none |
+| Kobo `GET state` | `reading_heads` plus the latest Kobo provenance event for native statistics/bookmark round-tripping | no position read from the session row |
+| OPDS 2.0 `GET /books/{id}/progression` | `reading_heads` | no session position |
+| Kavita `GET /api/Reader/get-progress` | `reading_heads` | `bookScrollId` comes from `kavita_progress` |
+| Audiobookshelf progress | `reading_heads` | no session position |
+| liseur-sync and KOReader reads | `reading_heads` | provider-native fields come from provenance where the wire contract needs them |
+
+**[observed]** Position writes call
+`models::services::reading_state::apply` before touching
+`reading_sessions`. A session is created or extended only when
+`models::services::reading_state::Applied::accepted()` is true. A
+`ProvenanceOnly` update still records its raw event, but leaves both the
+materialized head and session end position unchanged. This ordering is used by
+native GraphQL (`crates/graphql/src/mutation/reading_progress.rs`), Kobo
+(`apps/server/src/routers/kobo_backend/router.rs`), ABS
+(`apps/server/src/routers/abs_backend.rs` and `crates/abs/src/routes/session.rs`),
+Kavita (`crates/kavita/src/routes/reader.rs`), OPDS 2.0
+(`apps/server/src/routers/opds_backend/v2_0.rs`), and liseur-sync
+(`apps/server/src/routers/liseur_sync/`).
+
+Closed liseur session uploads are activity-history inputs rather than
+position writes; only liseur position ops enter this ordering
+(`apps/server/src/routers/liseur_sync/storage.rs`).

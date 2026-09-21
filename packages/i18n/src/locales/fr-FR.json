@@ -7,7 +7,7 @@
 	},
 	"authScene": {
 		"claimHeading": "Initialisez votre serveur",
-		"claimText": "Le serveur Stump n'est pas encore initialisé. Remplissez le formulaire pour créer votre compte. Une fois créé, vous aurez accès à toutes les fonctionnalités du serveur.",
+		"claimText": "Le serveur Coppice n'est pas encore initialisé. Remplissez le formulaire pour créer votre compte. Une fois créé, vous aurez accès à toutes les fonctionnalités du serveur.",
 		"form": {
 			"validation": {
 				"missingUsername": "Le nom d'utilisateur est requis",
@@ -350,7 +350,7 @@
 			"convertOptions": {
 				"section": {
 					"heading": "Conversion de fichier",
-					"description": "Stump est capable de convertir certains formats de fichiers en formats plus compatibles"
+					"description": "Coppice est capable de convertir certains formats de fichiers en formats plus compatibles"
 				},
 				"rarToZip": {
 					"label": "Convertir RAR en ZIP",
@@ -391,14 +391,14 @@
 					"docs": [
 						"Vous ne savez pas quoi choisir ? Cliquez",
 						"ici",
-						"Le paramètre qui détermi.ne la façon dont Stump organisera votre bibliothèque",
+						"Le paramètre qui détermi.ne la façon dont Coppice organisera votre bibliothèque",
 						"Vous ne pourrez pas modifier ce paramètre plus tard"
 					],
 					"disabled": "Vous ne pourrez pas modifier ce paramètre"
 				},
 				"options": {
 					"label": "Modèle de bibliothèque",
-					"description": "Le paramètre qui détermine la façon dont Stump organisera votre bibliothèque",
+					"description": "Le paramètre qui détermine la façon dont Coppice organisera votre bibliothèque",
 					"collectionPriority": {
 						"label": "Priorité de la collection",
 						"description": "Chaque dossier au niveau le plus haut de la racine de la bibliothèque correspond à une série unique"
@@ -432,12 +432,12 @@
 				{
 					"label": "Scan",
 					"heading": "Scan",
-					"description": "Paramètres relatifs à la façon dont Stump analyse cette bibliothèque"
+					"description": "Paramètres relatifs à la façon dont Coppice analyse cette bibliothèque"
 				},
 				{
 					"label": "Vignettes",
 					"heading": "Vignettes",
-					"description": "Les options concernant la façon dont Stump génère les vignettes pour cette bibliothèque"
+					"description": "Les options concernant la façon dont Coppice génère les vignettes pour cette bibliothèque"
 				},
 				{
 					"label": "Vérification",
@@ -524,7 +524,7 @@
 		},
 		"options/scanning": {
 			"title": "Scan",
-			"description": "Paramètres relatifs à la façon dont Stump scanne cette bibliothèque",
+			"description": "Paramètres relatifs à la façon dont Coppice scanne cette bibliothèque",
 			"sections": {
 				"configureScan": {
 					"heading": "Configurer le scan",
@@ -1053,7 +1053,7 @@
 					"description": "Changer les filtres pour cette session affichée",
 					"rawData": {
 						"heading": "Données du filtre brut",
-						"description": "Voici comment Stump traitera les filtres"
+						"description": "Voici comment Coppice traitera les filtres"
 					},
 					"buttons": {
 						"save": "Sauvegarder",
@@ -1150,8 +1150,8 @@
 					},
 					"heading": "Langue",
 					"subtitle": [
-						"Stump prend en charge plusieurs langues, définissez vos préférences ci-dessous. Pensez à aider à améliorer la qualité des",
-						"traductions de Stump",
+						"Coppice prend en charge plusieurs langues, définissez vos préférences ci-dessous. Pensez à aider à améliorer la qualité des",
+						"traductions de Coppice",
 						"si vous le pouvez !"
 					]
 				}
@@ -1204,7 +1204,7 @@
 		"app/apiKeys": {
 			"helmet": "Clés API",
 			"title": "Clés API",
-			"description": "Gérer vos clés API Stump",
+			"description": "Gérer vos clés API Coppice",
 			"shared": {
 				"fields": {
 					"name": "Nom",
@@ -1314,11 +1314,11 @@
 		"app/desktop": {
 			"helmet": "Paramètres du bureau",
 			"title": "Paramètres du bureau",
-			"description": "Paramètres liés à l'application de bureau Stump",
+			"description": "Paramètres liés à l'application de bureau Coppice",
 			"sections": {
 				"configuredServers": {
 					"label": "Serveurs configurés",
-					"description": "La liste des serveurs Stump auxquels vous pouvez vous connecter",
+					"description": "La liste des serveurs Coppice auxquels vous pouvez vous connecter",
 					"getStarted": "Ajouter un serveur pour commencer",
 					"unreachableServer": {
 						"tooltip": "Serveur introuvable"
@@ -1339,7 +1339,7 @@
 								"placeholder": "Mon serveur"
 							},
 							"uri": {
-								"description": "L'URL du serveur Stump",
+								"description": "L'URL du serveur Coppice",
 								"placeholder": "https://stump.exemple.com"
 							}
 						}
@@ -1347,7 +1347,7 @@
 					"addServer": {
 						"trigger": "Ajouter un serveur",
 						"title": "Ajouter un nouveau serveur",
-						"description": "Ajouter un nouveau serveur Stump à l’application de bureau",
+						"description": "Ajouter un nouveau serveur Coppice à l’application de bureau",
 						"confirm": "Ajouter un serveur"
 					},
 					"editServer": {
@@ -1412,7 +1412,7 @@
 					},
 					"discordPresence": {
 						"label": "Activité Discord",
-						"description": "Afficher votre activité Stump dans Discord",
+						"description": "Afficher votre activité Coppice dans Discord",
 						"reconnect": "Se reconnecter à Discord"
 					}
 				}
@@ -1421,14 +1421,14 @@
 		"server/general": {
 			"helmet": "Paramètres généraux du serveur",
 			"title": "Paramètres généraux",
-			"description": "Paramètres généraux liés à l'instance de votre serveur Stump",
+			"description": "Paramètres généraux liés à l'instance de votre serveur Coppice",
 			"sections": {
 				"updateAvailable": {
 					"message": "Votre serveur n'est pas à jour. Veuillez le mettre à jour vers la dernière version !"
 				},
 				"serverInfo": {
 					"title": "Informations du serveur",
-					"description": "Détails de base sur l'instance de votre serveur Stump",
+					"description": "Détails de base sur l'instance de votre serveur Coppice",
 					"build": {
 						"label": "Version",
 						"description": "Détails à propos de la version",
@@ -1447,7 +1447,7 @@
 		"server/logs": {
 			"helmet": "Journaux",
 			"title": "Journaux",
-			"description": "Les journaux générés par votre instance de serveur Stump",
+			"description": "Les journaux générés par votre instance de serveur Coppice",
 			"sections": {
 				"persistedLogs": {
 					"title": "Journaux persistants",
@@ -1469,14 +1469,14 @@
 				},
 				"liveLogs": {
 					"title": "Flux des journaux en direct",
-					"description": "Diffusion directe depuis votre instance de serveur Stump en temps réel"
+					"description": "Diffusion directe depuis votre instance de serveur Coppice en temps réel"
 				}
 			}
 		},
 		"server/jobs": {
 			"helmet": "Tâches",
 			"title": "Tâches",
-			"description": "Tâches en arrière-plan qui s'exécutent sur l'instance de votre serveur Stump",
+			"description": "Tâches en arrière-plan qui s'exécutent sur l'instance de votre serveur Coppice",
 			"sections": {
 				"scheduling": {
 					"title": "Planification",
@@ -1484,7 +1484,7 @@
 				},
 				"history": {
 					"title": "Historique",
-					"description": "Un enregistrement des tâches qui ont été exécutées sur l'instance de votre serveur Stump",
+					"description": "Un enregistrement des tâches qui ont été exécutées sur l'instance de votre serveur Coppice",
 					"table": {
 						"columns": {
 							"status": "État",
@@ -1667,8 +1667,8 @@
 			"sections": {
 				"emailers": {
 					"title": "Expéditeurs SMTP",
-					"description": "Les clients que vous avez configurés pour l’envoi d’e-mails depuis votre serveur Stump",
-					"singleInstanceDisclaimer": "Bien que Stump prenne en charge plusieurs configurations SMTP en arrière-plan, une seule peut être configurée via l’interface utilisateur. Cela sera amélioré à l’avenir",
+					"description": "Les clients que vous avez configurés pour l’envoi d’e-mails depuis votre serveur Coppice",
+					"singleInstanceDisclaimer": "Bien que Coppice prenne en charge plusieurs configurations SMTP en arrière-plan, une seule peut être configurée via l’interface utilisateur. Cela sera amélioré à l’avenir",
 					"list": {
 						"emptyHeading": "Aucun expéditeur configuré",
 						"primaryEmailer": "Expéditeur principal",
@@ -1690,7 +1690,7 @@
 				},
 				"devices": {
 					"title": "Appareils de messagerie",
-					"description": "Les alias d’appareils que vous avez configurés pour recevoir des e-mails depuis votre instance de serveur Stump",
+					"description": "Les alias d’appareils que vous avez configurés pour recevoir des e-mails depuis votre instance de serveur Coppice",
 					"addDevice": "Ajouter un alias",
 					"addOrUpdateDevice": {
 						"title": {
@@ -1781,7 +1781,7 @@
 			"createEmailer": {
 				"helmet": "Créer l'expéditeur",
 				"title": "Créer l'expéditeur",
-				"description": "Créer un nouvel expéditeur SMTP pour votre instance de serveur Stump"
+				"description": "Créer un nouvel expéditeur SMTP pour votre instance de serveur Coppice"
 			},
 			"updateEmailer": {
 				"helmet": "Créer un expéditeur",
@@ -1869,10 +1869,10 @@
 	"serverSOS": {
 		"heading": "Serveur non disponible",
 		"desktop": {
-			"message": "Une erreur de réseau s'est produite indiquant que votre serveur Stump est actuellement indisponible. Veuillez vous assurer qu'il est en cours d'exécution et accessible depuis cet appareil.\nSi l'URL de votre serveur a changé, vous pouvez la mettre à jour à l'aide du formulaire ci-dessous"
+			"message": "Une erreur de réseau s'est produite indiquant que votre serveur Coppice est actuellement indisponible. Veuillez vous assurer qu'il est en cours d'exécution et accessible depuis cet appareil.\nSi l'URL de votre serveur a changé, vous pouvez la mettre à jour à l'aide du formulaire ci-dessous"
 		},
 		"web": {
-			"message": "Une erreur de réseau s'est produite indiquant que votre serveur Stump est actuellement indisponible. Veuillez vous assurer qu'il est en cours d'exécution et accessible depuis cet appareil"
+			"message": "Une erreur de réseau s'est produite indiquant que votre serveur Coppice est actuellement indisponible. Veuillez vous assurer qu'il est en cours d'exécution et accessible depuis cet appareil"
 		},
 		"reconnected": "Reconnecté au serveur ! Redirection...",
 		"reconnectionFailed": "Quelque chose s'est mal passé!"

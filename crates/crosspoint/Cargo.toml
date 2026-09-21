@@ -1,0 +1,20 @@
+[package]
+name = "stump_crosspoint"
+version.workspace = true
+edition = "2021"
+description = "Clean-room CrossPoint Reader transfer protocol client"
+
+[dependencies]
+base64.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1 = "0.10.6"
+sha2 = "0.10.9"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "net", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

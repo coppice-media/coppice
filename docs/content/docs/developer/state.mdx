@@ -1,181 +1,252 @@
 ---
 title: Current State
-description: Snapshot of what the Stump fork has landed as of 2026-09-07 (7de64602) — per area, with evidence, per-client verification, and known limitations.
+description: Current Coppice fork state, with evidence, compatibility boundaries, and known limitations.
 ---
 
 # Current State
 
-Snapshot of branch `headless-modular` at `7de64602` (2026-09-07, batch 9). Every
-claim names a path, symbol, or document; nothing here is a promise. Verification
-levels (**device** / **harness** / **source**) are defined in
-[Client verification](/docs/developer/client-verification); the gate and replay
-commands live in `.omp/PROJECT_STATE.md`. The one-table view of crates →
-features → profiles → clients is
-[Server architecture › Architecture map](/docs/developer/server-architecture#architecture-map).
+This page records the current Coppice integration worktree after the nightly
+merge. Every claim names a path, symbol, or document; nothing here is a promise.
+The labels are exact: **Shipped**, **Contract-tested**, **Device-tested**,
+**Source-only**, **Planned**, and **Blocked**. A replay or source inspection
+never becomes app/device proof. Details are defined in [Client
+verification](/docs/developer/client-verification), and ownership boundaries
+are defined in [Integration architecture](/docs/developer/integration-architecture).
+The gate and replay commands live in `.omp/PROJECT_STATE.md`. The one-table view
+of crates → features → profiles → clients is [Server architecture › Architecture
+map](/docs/developer/server-architecture#architecture-map).
 
 ## Protocols and clients
 
-| Area | Landed | Evidence |
+| Area | Current state | Evidence |
 | --- | --- | --- |
-| Komga profile (Komelia/Mihon/Liseur/Komf target) | `crates/komga` + `apps/server/src/routers/komga/`; Basic-auth cache, remember-me, SSE mutation events including `TaskQueueStatus`, library CRUD, collection and read-list `POST` (`crates/komga/src/routes/lists.rs:67,87`), virtual book URLs, nested `/komga` Grimmory alias | [Komga compatibility](/docs/developer/komga-compat) |
-| Mihon legacy catalog + built-in tracker | `GET /api/v1/{series,books,authors}`, `GET/PUT /api/v2/series/{id}/read-progress/tachiyomi` (+ readlist variant); Basic/API-key scope widened by `is_komga_basic_auth_path` (`apps/server/src/middleware/auth.rs`) | [Client verification](/docs/developer/client-verification) |
-| Kavita profile | `crates/kavita` + `apps/server/src/routers/kavita/`, `STUMP_ENABLE_KAVITA`; integer identity in `kavita_ids` (`m20260912`), `Plugin/authenticate` HS512 JWT, browse/reader/progress/download/metadata/chapter-info, search, bookmarks, collections, scan, stats, annotations, on-deck (`m20260922`), `Book/*` EPUB lane, `Formats` filter | [Kavita compatibility](/docs/developer/kavita-compat) |
-| Audiobookshelf profile | `crates/abs` (root-mounted routes, DTOs, HS256 tokens, `abs_ids`/`abs_sessions`) + `apps/server/src/routers/abs_backend.rs`; audiobook cover as page 1, per-file chapters + album tag, session tracks keep tags, `deviceInfo` echo; server feature `abs` (in `headless`) plus `STUMP_ENABLE_ABS` | [ABS compatibility](/docs/developer/abs-compat) |
-| OPDS 1.2 (+PSE) and OPDS 2.0 | Both catalogs, acquisition and page routes, progression; key-in-path auth on 1.2 only | [Server architecture](/docs/developer/server-architecture#current-compatibility-matrix) |
-| Kobo sync | Initialization, library sync, state GET/PUT, metadata, thumbnails, KEPUB and file delivery with `Range`; `stump_kepub` is byte-for-byte with kepubify on 35/35 books | [Kobo sync capabilities](/docs/developer/kobo-sync-capabilities) |
-| KOReader sync + first-party plugin | Three routes under `/koreader/{api_key}`; `stump.koplugin` lives in its own repository and adds exactly one server route, `GET /api/v2/reading/continue` (`apps/server/src/routers/api/v2/reading.rs:45,106-115`) | [KOReader plugin](/docs/developer/koreader-plugin) |
-| liseur-sync | Login/tokens, catalog, positions, heads, sessions, CAS annotations and the attachment lane; audiobooks are excluded from the catalog because Liseur pages documents (`apps/server/src/routers/liseur_sync/storage.rs:262-268`) | [liseur-sync integration](/docs/developer/liseur-sync-integration) |
-| Send to Kindle | `crates/kindle`: Amazon format policy, `boko` EPUB→AZW3, Amazon's 50 MB cap, `kindle_deliveries` history (`m20260940`); GraphQL `sendToKindle` (`crates/graphql/schema.graphql:3420`) and USB sideload `POST /api/v2/media/{id}/kindle-file` | [Platforms › Amazon Kindle](/docs/developer/platforms#amazon-kindle) |
+| Komga profile (Komelia/Mihon/Liseur/Komf target) | **Shipped:** `crates/komga` + `apps/server/src/routers/komga/`; Basic-auth cache, remember-me, SSE mutation events including `TaskQueueStatus`, library CRUD, collection and read-list `POST` (`crates/komga/src/routes/lists.rs:67,87`), virtual book URLs, nested `/komga` Grimmory alias | **Contract-tested**, with app scope in [Komga compatibility](/docs/developer/komga-compat) |
+| Mihon legacy catalog + built-in tracker | **Shipped:** `GET /api/v1/{series,books,authors}`, `GET/PUT /api/v2/series/{id}/read-progress/tachiyomi` (+ readlist variant); Basic/API-key scope widened by `is_komga_basic_auth_path` (`apps/server/src/middleware/auth.rs`) | **Device-tested**, **Contract-tested** — [Client verification](/docs/developer/client-verification) |
+| Kavita profile | **Shipped:** `crates/kavita` + `apps/server/src/routers/kavita/`, `STUMP_ENABLE_KAVITA`; integer identity in `kavita_ids` (`m20260912`), `Plugin/authenticate` HS512 JWT, browse/reader/progress/download/metadata/chapter-info, search, bookmarks, collections, scan, stats, annotations, on-deck (`m20260922`), `Book/*` EPUB lane, `Formats` filter | **Contract-tested**; **Device-tested** Turnleaf and Kamigura — [Kavita compatibility](/docs/developer/kavita-compat) |
+| Audiobookshelf profile | **Shipped:** `crates/abs` (root-mounted routes, DTOs, HS256 tokens, `abs_ids`/`abs_sessions`) + `apps/server/src/routers/abs_backend.rs`; audiobook cover as page 1, per-file chapters + album tag, session tracks keep tags, `deviceInfo` echo, and the Engine.IO v4 / Socket.IO v5 `/socket.io` lane | **Contract-tested** for the Lissen-shaped profile and socket frames; **Device-tested** official app scope; broader official-client/device parity **Pending** — [ABS compatibility](/docs/developer/abs-compat) |
+| OPDS 1.2 (+PSE) and OPDS 2.0 | **Shipped:** both catalogs, acquisition and page routes, progression; key-in-path auth on 1.2 only | **Contract-tested** — [Server architecture](/docs/developer/server-architecture#current-compatibility-matrix) |
+| Kobo sync | **Shipped:** initialization, library sync, state GET/PUT, metadata, thumbnails, KEPUB and file delivery with `Range`; `stump_kepub` is byte-for-byte with kepubify on 35/35 books | **Contract-tested**; physical device run **Blocked** — [Kobo sync capabilities](/docs/developer/kobo-sync-capabilities) |
+| KOReader sync + first-party plugin | **Shipped:** three routes under `/koreader/{api_key}`; `stump.koplugin` lives in its own repository and adds exactly one server route, `GET /api/v2/reading/continue` (`apps/server/src/routers/api/v2/reading.rs:45,106-115`) | **Contract-tested**; plugin device run **Blocked** — [KOReader plugin](/docs/developer/koreader-plugin) |
+| liseur-sync | **Shipped:** login/tokens, catalog, positions, heads, sessions, and CAS annotations; there is no attachment blob lane; audiobooks are excluded from the catalog because Liseur pages documents (`apps/server/src/routers/liseur_sync/storage.rs:262-268`) | **Contract-tested**, **Device-tested** — [liseur-sync integration](/docs/developer/liseur-sync-integration) |
+| Send to Kindle | **Shipped:** `crates/kindle` Amazon format policy, `boko` EPUB→AZW3, Amazon's 50 MB cap, `kindle_deliveries` history (`m20260940`); GraphQL `sendToKindle` (`crates/graphql/schema.graphql:3420`) and USB sideload `POST /api/v2/media/{id}/kindle-file` | **Contract-tested** route checks; delivery to a real address **Blocked** — [Platforms › Amazon Kindle](/docs/developer/platforms#amazon-kindle) |
 
 ## Audiobooks
 
-| Area | Landed | Evidence |
+| Area | Current state | Evidence |
 | --- | --- | --- |
-| Formats | `ContentType::{M4B,M4A,MP3,OPUS,OGG,FLAC}` and `is_audio` (`crates/media/src/content_type.rs:32-37,309-319`); pure-Rust probe in `crates/media/src/audio/probe.rs` | `crates/media` |
-| Model | `media_audio`, `media_audio_tracks`, `media_audio_chapters` (`m20260930`–`m20260932`), service in `crates/models/src/services/audio.rs` | `crates/models` |
-| Time-addressed positions | `reading_heads.position_ms` + `track_index`, `reading_sessions.end_position_ms` (`m20260933`), `bookmarks.position_ms` (`m20260934`) — a page ordinal cannot carry an audio position | `crates/migrations/src/m20260933_000000_add_time_positions.rs:1-24` |
-| Assemble and report | `stump_tools` `audio-assemble` (pure-Rust AAC remux over `mp4` 0.14, faststart, SLConfig repair; `ffmpeg` only for re-encode and only as a planned `ExternalTool`), `audio-chapters`, `audio-report` | `crates/tools/src/lib.rs:113-132` |
-| Quality checks | Seven audio checks in their own family, so a comic score and an audiobook score are not summed: `bitrate_sane`, `chapters_present`, `cover_embedded`, `duration_consistent`, `faststart`, `single_file`, `tags_complete` | `crates/ingest/src/quality/registry.rs:168-177` |
-| Metadata | `audible` (Audnexus) provider and `media_metadata.narrators` (`m20260942`) | [Provider status](/docs/developer/provider-status#metadata-providers) |
-| Settings, three layers | Library: `AudioPolicy` in `library_configs.metadata_policy` (`single_file_weight`, `auto_assemble`, `auto_chapters`, `keep_original`, `crates/ingest/src/policy.rs:140-161`). Server: `STUMP_AUDIO_{CANONICAL,AAC_BITRATE,FFMPEG}` validated at boot (`core/src/config/audio.rs`). Device: `AudioOutput::{Passthrough,Opus}` (`crates/media/src/transform/profile.rs:78-89`), default `Passthrough` for every preset but `phone-opus` | `apps/server/src/routers/audio_transform.rs:1-24` |
-| Player | Console reader lane `home/src/lib/components/reader/AudioReader.svelte` | [Home app](/docs/developer/home-app) |
+| Formats | **Shipped:** `ContentType::{M4B,M4A,MP3,OPUS,OGG,FLAC}` and `is_audio` (`crates/media/src/content_type.rs:32-37,309-319`); pure-Rust probe in `crates/media/src/audio/probe.rs` | **Contract-tested:** `crates/media` |
+| Model | **Shipped:** `media_audio`, `media_audio_tracks`, `media_audio_chapters` (`m20260930`–`m20260932`), service in `crates/models/src/services/audio.rs` | **Source-only:** `crates/models` |
+| Time-addressed positions | **Shipped:** `reading_heads.position_ms` + `track_index`, `reading_sessions.end_position_ms` (`m20260933`), `bookmarks.position_ms` (`m20260934`) — a page ordinal cannot carry an audio position | **Source-only:** `crates/migrations/src/m20260933_000000_add_time_positions.rs:1-24` |
+| Assemble and report | **Shipped:** `stump_tools` `audio-assemble` (pure-Rust AAC remux over `mp4` 0.14, faststart, SLConfig repair; `ffmpeg` only for re-encode and only as a planned `ExternalTool`), `audio-chapters`, `audio-report` | **Source-only:** `crates/tools/src/lib.rs:113-132` |
+| Quality checks | **Shipped:** seven audio checks in their own family, so a comic score and an audiobook score are not summed: `bitrate_sane`, `chapters_present`, `cover_embedded`, `duration_consistent`, `faststart`, `single_file`, `tags_complete` | **Source-only:** `crates/ingest/src/quality/registry.rs:168-177` |
+| Metadata | **Shipped:** `audible` (Audnexus) provider and `media_metadata.narrators` (`m20260942`) | [Provider status](/docs/developer/provider-status#metadata-providers) |
+| Settings, three layers | **Shipped:** library `AudioPolicy` in `library_configs.metadata_policy` (`single_file_weight`, `auto_assemble`, `auto_chapters`, `keep_original`, `crates/ingest/src/policy.rs:140-161`); server `STUMP_AUDIO_{CANONICAL,AAC_BITRATE,FFMPEG}` validated at boot (`core/src/config/audio.rs`); device `AudioOutput::{Passthrough,Opus}` (`crates/media/src/transform/profile.rs:78-89`), default `Passthrough` for every preset but `phone-opus` | **Source-only:** `apps/server/src/routers/audio_transform.rs:1-24` |
+| Player | **Shipped:** console reader lane `home/src/lib/components/reader/AudioReader.svelte` | [Home app](/docs/developer/home-app) |
 
-Not built: **ebook ↔ audiobook sync**. The head can now hold either a locator or
-a millisecond offset, but nothing converts between them. The design is accepted
-and written up — tier 1 chapter + percentage, tier 2 forced alignment on a
-remote worker, rendered as a Storyteller-compatible EPUB 3 Media Overlays
-publication on demand, plus the `crates/worker` / `worker_jobs` protocol and the
-requests model — in [Read-aloud, remote workers, and
-requests](/docs/developer/read-aloud); the measured gap analysis behind it is
-`docs/audiobook-study.md` §4. None of it exists in the tree.
+Ebook ↔ audiobook sync is partly shipped. **Shipped:** confirmed/suggested
+edition pairing, editable `media_chapter_map` rows, and read-time
+chapter/percentage conversion in `crates/library/src/editions.rs`
+(`pair_editions`, `build_chapter_map`, `confirm_edition_pair`), plus persisted
+`media_sync_maps` (`crates/models/src/entity/media_sync_map.rs`,
+`crates/migrations/src/m20260947_000000_add_media_sync_maps.rs`). The import,
+enqueue, cache-path, and result-validation paths are in
+`crates/library/src/sync_maps.rs`; GraphQL exposes `Media.pairedPosition`,
+`importSyncMap`, and `enqueueAlignment`. The generic remote-worker protocol,
+durable `worker_jobs`, and transcode/challenge runners also ship.
+
+`crates/worker/src/alignment.rs` supplies the typed alignment input, capability,
+`SyncMapV1`, identity check, and duration-aware validation contracts. The
+authenticated handlers in `apps/server/src/routers/api/v2/read_aloud.rs` are
+cache-only: they serve an accepted EPUB derivative and never enqueue alignment,
+call Storyteller, or render a fallback during a GET. Native CTC/Viterbi
+alignment, full synchronized playback, a user-facing synchronized-playback UI,
+and deployment/device evidence remain **Planned** or **Pending**. Ordinary EPUB
+playback and ordinary audiobook playback remain separate.
+
+The request backend/provider ledger is covered below. Its shipped server
+surface does not imply live MAM deployment, physical delivery, or complete
+read-aloud product playback.
 
 ## Ingest, metadata, and policy
 
-| Area | Landed | Evidence |
+| Area | Current state | Evidence |
 | --- | --- | --- |
-| Staged ingest | `crates/ingest` (`stump_ingest`): drop folder, staging store, coordinator, preprocess hook (`m20260927`), analysis queue with a durable cursored progress stream, quality checks, provider candidates, field-level apply. GraphQL `ingest*` + `ingestProgress` subscription + `GET /api/v2/ingest/events` | [Modular ingest](/docs/developer/modular-ingest) |
-| Per-field metadata policy | Implemented: per field an ordered provider list, a strategy (`FIRST`, `MERGE_UNION`, `LONGEST`, `PREFER_EXISTING`, `HIGHEST_RESOLUTION`) and `lock_respected`, server default in code, per-library override in `library_configs.metadata_policy` (`m20260929`), edited by the editor's Policy tab | [Provider status › policy](/docs/developer/provider-status#what-the-policy-layer-covers) |
-| Metadata providers | Twelve catalogued: `builtin:embedded`, `comic_vine`, `hardcover`, `anilist`, `mal`, `mangadex`, `mangaupdates`, `openlibrary`, `googlebooks`, `metron`, `audible`, `llm` | [Provider status](/docs/developer/provider-status#metadata-providers) |
-| Uploads and mutations | `stageIngestUploads` multipart with auto-analysis and re-upload dedup, `bulkApplyIngestMetadata` (no partial writes), `requeueIngestAnalysis`, `rejectIngestItem`, `discardIngestItem` | `crates/ingest/` |
-| Library maintenance tools | 17 `Tool` implementations behind one plan/apply contract driven by `stump tools list`/`plan`/`apply`; calibre is shell-out only | `crates/tools/src/lib.rs:113-132`, [Calibre tooling](/docs/developer/calibre-tooling) |
-| Editor and console apps | `editor/` (staged ingest, provider settings, API keys, policy) at `/editor`; `home/` (dashboard + heatmap, library/series/entity browsers, series reshape, foliate reader, annotation hub, notification and sink settings, devices, account) at `/app`; both share `packages/stump-ui` | `apps/server/src/routers/static_apps.rs`, [Home app](/docs/developer/home-app) |
+| Staged ingest | **Shipped:** `crates/ingest` (`stump_ingest`) drop folder, staging store, coordinator, preprocess hook (`m20260927`), analysis queue with a durable cursored progress stream, quality checks, provider candidates, field-level apply. GraphQL `ingest*` + `ingestProgress` subscription + `GET /api/v2/ingest/events` | [Modular ingest](/docs/developer/modular-ingest) |
+| Per-field metadata policy | **Shipped:** per field an ordered provider list, a strategy (`FIRST`, `MERGE_UNION`, `LONGEST`, `PREFER_EXISTING`, `HIGHEST_RESOLUTION`) and `lock_respected`, server default in code, per-library override in `library_configs.metadata_policy` (`m20260929`), edited by the editor's Policy tab | [Provider status › policy](/docs/developer/provider-status#what-the-policy-layer-covers) |
+| Metadata providers | **Shipped:** twelve catalogued: `builtin:embedded`, `comic_vine`, `hardcover`, `anilist`, `mal`, `mangadex`, `mangaupdates`, `openlibrary`, `googlebooks`, `metron`, `audible`, `llm` | **Contract-tested** offline payloads; Hardcover live credentials **Blocked** — [Provider status](/docs/developer/provider-status#metadata-providers) |
+| Uploads and mutations | **Shipped:** `stageIngestUploads` multipart with auto-analysis and re-upload dedup, `bulkApplyIngestMetadata` (no partial writes), `requeueIngestAnalysis`, `rejectIngestItem`, `discardIngestItem` | **Source-only:** `crates/ingest/` |
+| Library maintenance tools | **Shipped:** 17 `Tool` implementations behind one plan/apply contract driven by `stump tools list`/`plan`/`apply`; calibre is shell-out only | **Source-only:** `crates/tools/src/lib.rs:113-132`, [Calibre tooling](/docs/developer/calibre-tooling) |
+| Editor and console apps | **Shipped:** `editor/` (staged ingest, provider settings, API keys, policy) at `/editor`; `home/` (dashboard + heatmap, library/series/entity browsers, series reshape, foliate reader, annotation hub, notification and sink settings, devices, account) at `/app`; both share `packages/stump-ui` | **Source-only:** `apps/server/src/routers/static_apps.rs`, [Home app](/docs/developer/home-app) |
 
 ## Provider host and remote sources
 
-| Area | Landed | Evidence |
+| Area | Current state | Evidence |
 | --- | --- | --- |
-| Host | `crates/provider` (`stump_provider`): `Source` trait (popular, latest, search, details, chapters, pages, page bytes), `provider://` media paths, page cache with a byte budget, GC, rate limiting, materialisation | [Provider host](/docs/developer/provider-host) |
-| Sources | MangaDex ships as code (`crates/provider-mangadex`); every other site is data — four theme engines (`madara`, `madaralegacy`, `mangathemesia`, `mmrcms`) in `crates/provider-themes` over a jsoup-subset selector engine | [Provider host › theme engines](/docs/developer/provider-host#theme-engines-and-definitions) |
-| Source definitions | Schema v1 frozen; the `sources-import` tool derives definitions from a `keiyoushi/extensions-source` checkout into a separate data repository. No Kotlin, no Gradle, no APK is ever executed | [Source definitions](/docs/developer/source-definitions) |
-| Modes | Mode A materialises a remote series into ordinary `series`/`media` rows; Mode B serves virtual libraries live with a per-page TTL | [Provider host](/docs/developer/provider-host#mode-a-materialised-series-in-any-library) |
-| Health and dedupe | Source-health job with `DEGRADED`/`DEAD` transitions and event emission, plus cross-source dedupe/merge | [Provider host › source health](/docs/developer/provider-host#source-health) |
-| Cloudflare-challenged hosts | One classifier decides it (`crates/provider/src/http.rs::challenge_host`, `403`/`503` with `cf-mitigated: challenge` or any `cf-chl-*` header) → `SourceError::Challenged`; health records `DEGRADED` with `error: "cloudflare challenge"` and never escalates to `DEAD`. Recovery is a manually pasted `cf_clearance` cookie + User-Agent in `provider_sources.request_headers` (`m20260941`), redacted in logs. No headless browser, no FlareSolverr | [Provider host › challenged sources](/docs/developer/provider-host#challenged-sources) |
-| Enable is honest | Enabling a source persists only sources that actually build, and a boot repair re-checks stored rows | `2144f510`, `crates/provider/src/host.rs` |
+| Host | **Shipped:** `crates/provider` (`stump_provider`) `Source` trait (popular, latest, search, details, chapters, pages, page bytes), `provider://` media paths, page cache with a byte budget, GC, rate limiting, materialisation | **Contract-tested:** [Provider host](/docs/developer/provider-host) |
+| Sources | **Shipped:** MangaDex as code (`crates/provider-mangadex`); every other site is data — four theme engines (`madara`, `madaralegacy`, `mangathemesia`, `mmrcms`) in `crates/provider-themes` over a jsoup-subset selector engine | **Source-only:** [Provider host › theme engines](/docs/developer/provider-host#theme-engines-and-definitions) |
+| Source definitions | **Shipped:** schema v1 frozen; `sources-import` derives definitions from a `keiyoushi/extensions-source` checkout into a separate data repository. No Kotlin, no Gradle, no APK is ever executed | **Source-only:** [Source definitions](/docs/developer/source-definitions) |
+| Modes | **Shipped:** Mode A materialises a remote series into ordinary `series`/`media` rows; Mode B serves virtual libraries live with a per-page TTL | **Source-only:** [Provider host](/docs/developer/provider-host#mode-a-materialised-series-in-any-library) |
+| Health and dedupe | **Shipped:** source-health job with `DEGRADED`/`DEAD` transitions and event emission, plus cross-source dedupe/merge | **Source-only:** [Provider host › source health](/docs/developer/provider-host#source-health) |
+| Cloudflare-challenged hosts | **Shipped:** one classifier decides it (`crates/provider/src/http.rs::challenge_host`, `403`/`503` with `cf-mitigated: challenge` or any `cf-chl-*` header) → `SourceError::Challenged`; health records `DEGRADED` with `error: "cloudflare challenge"` and never escalates to `DEAD`. Recovery queues an automatic `challenge_solve` job from `crates/provider/src/challenge.rs::solve_challenges`, requiring a browser worker (`crates/worker/src/challenge.rs::ChallengeRunner`), then merges the solved Cookie + User-Agent with existing request headers. The browser cookie expiry is used; `DEFAULT_CLEARANCE_TTL` is a seven-day fallback only when expiry is absent. Some hosts still reject reqwest replay because its TLS fingerprint differs from a browser | **Source-only:** [Provider host › challenged sources](/docs/developer/provider-host#challenged-sources) |
+| Enable is honest | **Shipped:** enabling a source persists only sources that actually build, and a boot repair re-checks stored rows | `2144f510`, `crates/provider/src/host.rs` |
+
+Catalog/source providers are distinct from metadata providers: the former own
+popular/latest/search/details/chapters/pages and materialized or virtual source
+content; the latter identify and enrich local ingest candidates. Neither class
+is a fulfillment connector or a Storyteller backend. See [Integration
+architecture](/docs/developer/integration-architecture).
+
+## Request orchestration
+
+The requests/wanted ledger, request table, gateway settings, approval/release
+GraphQL mutations, automation defaults, and bounded polling processor are
+**Shipped**. The evidence is
+`crates/models/src/entity/book_request.rs`,
+`crates/graphql/src/query/book_request.rs`,
+`crates/graphql/src/mutation/book_request.rs`,
+`core/src/request_gateway.rs`,
+`core/src/request_gateway_automation.rs`, and
+`core/src/request_gateway_poll.rs`.
+
+The shipped backend does not claim a Requests page, live MAM download, or
+physical-device delivery. Its guarded flow is:
+
+```text
+internal media/work or external work reference
+  -> optional destination device/shelf
+  -> approval (automation defaults off)
+  -> Torznab caps/search through private mam-gateway
+  -> opaque release selection and grab
+  -> bounded download polling
+  -> existing ingest staging + source verification
+  -> destination queue
+```
+
+Shelfmark remains absent. `mam-gateway` is a narrow connector: MAM
+credentials/raw tracker URLs remain inside the Gluetun namespace, while Coppice
+stores only its private endpoint/token. Live MAM authentication, VPN-egress
+proof, qBittorrent download, ingest replay, and physical-device delivery are
+**Pending**. Coppice must not ship an arbitrary downloader or imply that a
+catalog result has acquired a file.
 
 ## Reading state, devices, and events
 
-| Area | Landed | Evidence |
+| Area | Current state | Evidence |
 | --- | --- | --- |
-| Canonical reading heads | Implemented, not design: `reading_heads` + append-only `reading_head_event` provenance (`m20260914`), carrying `source_protocol`, `source_device_id`, locator, page, percentage and `position_ms`; existing sessions were backfilled in place (`m20260923`, 6 sessions → 4 heads) | `crates/models/src/entity/reading_head.rs:14-49`, [Unified reading state](/docs/developer/unified-reading-state) |
-| Devices | One registry with per-device credentials and endpoints, `library_scope` virtual pathing (`m20260925`), `kindle_email` (`m20260928`), comic/audio `transform_profile` presets, pairing with code or QR, and live `deviceSeen`. Every protocol resolves visibility through `VisibilityScope` on the request user | [Devices](/docs/developer/devices), [Device pairing](/docs/developer/device-pairing) |
-| Event bus | One bus: `CoreEvent` on `Ctx`, producers call `emit_event`, sinks subscribe and translate (GraphQL subscriptions, Komga SSE, notification routing). `stump_ingest` and `stump_provider` emit their own vocabulary through sink traits the host installs | [Server architecture › event bus and sinks](/docs/developer/server-architecture#event-bus-and-sinks) |
-| Annotations | Native rows plus liseur CAS rows, markdown (Obsidian) and git export sinks (`m20260920`), attachment metadata (`m20260926`), and a cross-book annotation hub with kind/source/book/`since`/text filters | [Annotation sync](/docs/developer/annotation-sync), `docs/content/docs/developer/home-app.mdx:57` |
-| Shelves | Two canonical containers (collections, reading lists) projected to Komga, Kobo tags and native surfaces through one mutation path | [Shelves and collections](/docs/developer/shelves-and-collections) |
+| Canonical reading heads | **Shipped:** `reading_heads` + append-only `reading_head_event` provenance (`m20260914`), carrying `source_protocol`, `source_device_id`, locator, page, percentage and `position_ms`; existing sessions were backfilled in place (`m20260923`, 6 sessions → 4 heads) | **Source-only:** `crates/models/src/entity/reading_head.rs:14-49`, [Unified reading state](/docs/developer/unified-reading-state) |
+| Devices | **Shipped:** one registry with per-device credentials and endpoints, `library_scope` virtual pathing (`m20260925`), `kindle_email` (`m20260928`), comic/audio `transform_profile` presets, pairing with code or QR, and live `deviceSeen`. Every protocol resolves visibility through `VisibilityScope` on the request user | **Source-only:** [Devices](/docs/developer/devices), [Device pairing](/docs/developer/device-pairing) |
+| Event bus | **Shipped:** one bus: `CoreEvent` on `Ctx`, producers call `emit_event`, sinks subscribe and translate (GraphQL subscriptions, Komga SSE, notification routing). `stump_ingest` and `stump_provider` emit their own vocabulary through sink traits the host installs | **Source-only:** [Server architecture › event bus and sinks](/docs/developer/server-architecture#event-bus-and-sinks) |
+| Annotations | **Shipped:** native rows plus liseur CAS rows, markdown (Obsidian) and git export sinks (`m20260920`), attachment metadata (`m20260926`), and a cross-book annotation hub with kind/source/book/`since`/text filters | **Source-only:** [Annotation sync](/docs/developer/annotation-sync), `docs/content/docs/developer/home-app.mdx:57` |
+| Shelves | **Shipped:** two canonical containers (collections, reading lists) projected to Komga, Kobo tags, and native surfaces through one mutation path | **Source-only:** [Shelves and collections](/docs/developer/shelves-and-collections) |
 
 ## Media, scanner, and lifecycle crates
 
-| Crate | Landed | Evidence |
+| Crate | Current state | Evidence |
 | --- | --- | --- |
-| `stump_media` (`crates/media`) | Format processors, `ContentType`/`FileError`, hashing (incl. the KOReader hash), Readium, EPUB search, image primitives, DRM detection, transform profiles, `MediaConfig`; `pdf`/`rar` features default on; no dependency on core, jobs or the DB | `crates/media/README.md` |
-| `stump_scanner` / `stump_watcher` | Pure walker with mtime reconciliation and missing/recovered series sets (`crates/scanner/src/walk.rs:143-227`), consumed by `handle_missing_series`/`handle_recovered_series`; watcher owns `notify`, debounce and lifecycle behind `WatchedLibraries`/`ScanSubmitter` | `core/src/filesystem/scanner/library_scan_job.rs:50-53` |
-| `stump_jobs` | Job-type-agnostic runtime: lifecycle contract, `JobContext`, queue counters that publish `JobQueueStatus`, cancellation, cron scheduler; the host names the concrete jobs | [Server architecture › package seams](/docs/developer/server-architecture#package-seams) |
-| `stump_kepub` | 1:1 port of kepubify @9546034 — arena DOM, own ZIP writer, bounded rayon batches; kepubify shell-out and `KOBO_KEPUBIFY_PATH` removed | [Kobo sync capabilities](/docs/developer/kobo-sync-capabilities) |
-| PDF | PDFium verified live end-to-end (671 rendered pages); the launcher exports `PDFIUM_PATH`. PDFium is unconditional in core — there is no server-side `pdf-render` feature | [Server architecture](/docs/developer/server-architecture#metadata-and-pdf-caveats) |
+| `stump_media` (`crates/media`) | **Shipped:** format processors, `ContentType`/`FileError`, hashing (including the KOReader hash), Readium, EPUB search, image primitives, DRM detection, transform profiles, `MediaConfig`; `pdf`/`rar` features default on; no dependency on core, jobs, or the DB | **Source-only:** `crates/media/README.md` |
+| `stump_scanner` / `stump_watcher` | **Shipped:** pure walker with mtime reconciliation and missing/recovered series sets (`crates/scanner/src/walk.rs:143-227`), consumed by `handle_missing_series`/`handle_recovered_series`; watcher owns `notify`, debounce, and lifecycle behind `WatchedLibraries`/`ScanSubmitter` | **Source-only:** `core/src/filesystem/scanner/library_scan_job.rs:50-53` |
+| `stump_jobs` | **Shipped:** job-type-agnostic runtime: lifecycle contract, `JobContext`, queue counters that publish `JobQueueStatus`, cancellation, cron scheduler; the host names concrete jobs | **Source-only:** [Server architecture › package seams](/docs/developer/server-architecture#package-seams) |
+| `stump_kepub` | **Shipped:** 1:1 port of kepubify @9546034 — arena DOM, own ZIP writer, bounded rayon batches; kepubify shell-out and `KOBO_KEPUBIFY_PATH` removed | **Contract-tested:** [Kobo sync capabilities](/docs/developer/kobo-sync-capabilities) |
+| PDF | **Shipped:** PDFium verified live end-to-end (671 rendered pages); launcher exports `PDFIUM_PATH`. PDFium is unconditional in core — there is no server-side `pdf-render` feature | **Contract-tested:** [Server architecture](/docs/developer/server-architecture#metadata-and-pdf-caveats) |
 
-## Lifecycle, profiles, operations
+## Lifecycle, profiles, and operations
 
-- **Lazy lifecycle.** `Ctx` owns config, connection and events only; the job
-  runtime appears on first enqueue, the watcher only when needed, the scheduler
-  only for enabled rows; the server stops only what it created.
-  `/api/v2/health` reports `jobs`, `watcher` and `rate_limit`
+- **Lazy lifecycle — Shipped.** `Ctx` owns config, connection, and events only;
+  the job runtime appears on first enqueue, the watcher only when needed, the
+  scheduler only for enabled rows; the server stops only what it created.
+  `/api/v2/health` reports `jobs`, `watcher`, and `rate_limit`
   (`core/src/context.rs`, `apps/server/src/http_server.rs`).
-- **Profiles.** `full` (default) = `headless` + `webui`; `headless` carries every
-  backend route feature (`formats`, `graphql`, `opds`, `readium`, `kobo`,
-  `koreader`, `komga`, `kavita`, `abs`, `liseur-sync`, `providers`, `watcher`,
-  `qr`, `ingest`, `apalis`); `minimal` keeps REST/auth/database and links neither
-  `async-graphql`, `notify` nor `apalis` (`apps/server/Cargo.toml:7-51`).
-- **Inbound rate limiting.** Implemented as one outer layer with `auth`, `write`
-  and `stream` classes keyed on a credential fingerprint, `429` + `Retry-After`,
-  and counters on `/api/v2/health`
-  ([Server architecture › inbound rate limiting](/docs/developer/server-architecture#inbound-rate-limiting)).
-- **Writes.** Every write transaction goes through `models::txn::begin_write`
-  (SQLite `BEGIN IMMEDIATE`); migrations run on a dedicated one-connection pool
-  because `sea-orm-migration` does not transact SQLite DDL.
-- **Idle RSS.** Optimized headless vs pristine nightly: 29,924 vs 40,776 KiB,
-  5 vs 21 threads
+- **Profiles — Shipped:** `full` (default) = `headless` + `webui`;
+  `headless` carries every backend route feature (`formats`, `graphql`, `opds`,
+  `readium`, `kobo`, `koreader`, `komga`, `kavita`, `abs`, `liseur-sync`,
+  `providers`, `watcher`, `qr`, `ingest`, `apalis`). `minimal=["formats"]`.
+  The bare `--no-default-features` server is leaner than `minimal`; it keeps the
+  base REST/auth/database without the `formats` bundle. The WebUI feature is
+  `webui=["graphql", "graphql/web"]`, so WebUI implies GraphQL.
+- **KOReader-only composition — Shipped:** compile with
+  `cargo run -p stump_server --no-default-features --features koreader` and set
+  `ENABLE_KOREADER_SYNC=true`. No WebUI, GraphQL, provider host, ingest, or
+  other protocol feature is implied by this composition.
+- **Inbound rate limiting — Shipped.** One outer layer with `auth`, `write`, and
+  `stream` classes keyed on a credential fingerprint, `429` + `Retry-After`, and
+  counters on `/api/v2/health` ([Server architecture › inbound rate limiting](/docs/developer/server-architecture#inbound-rate-limiting)).
+- **Writes — Shipped.** Every write transaction goes through
+  `models::txn::begin_write` (SQLite `BEGIN IMMEDIATE`); migrations run on a
+  dedicated one-connection pool because `sea-orm-migration` does not transact
+  SQLite DDL.
+- **Idle RSS — Source-only historical measurement.** Optimized headless vs
+  pristine nightly: 29,924 vs 40,776 KiB, 5 vs 21 threads
   ([measurement gates](/docs/developer/server-architecture#measurement-gates)).
 
 ## Verification per client
 
-Only **device** counts as "works in the app". Dates are the run, not the commit.
+Only **Device-tested** counts as “works in the app.” Dates are the run, not the
+commit.
 
-| Client | Level | Date | Scope |
+| Client | Evidence | Date | Scope |
 | --- | --- | --- | --- |
-| Komelia 0.19.0 (Komga profile) | device | 2026-09-03/04 | Login, browse, read and offline download of CBZ + EPUB, read-progress, mark-read; `replay` 8/8 |
-| Mihon + Keiyoushi Komga ext. + built-in Komga tracker | device | 2026-09-04 | Browse, download, read, tracker GET/PUT; `replay-mihon` |
-| Liseur `31f8182d` | device | 2026-09-04 | Komga profile, OPDS 1.2, KOReader sync, native liseur-sync (positions, heads, annotations); no OPDS 2 parser in the app |
-| Grimmory `/komga` alias | device (login) + harness | 2026-09-04 | Login on the device; listing, file and thumbnail by `specs/grimmory.hurl` |
-| Komf `428dac6` | harness (live container) | 2026-09-04 | Identify, series PATCH 204, book PATCH 204, cover upload + previous-cover DELETE, `TaskQueueStatus` observed; `replay-komf` 16/16 |
-| Turnleaf `b54f1f71` (Kavita profile) | device | 2026-09-06 | Browse, read, download (after the `Download` route fix), progress landing in `reading_heads` with `source_protocol = kavita` |
-| Kamigura `f4baeff4` (Kavita profile) | device | 2026-09-06 | Browse, want-to-read add/remove, MangaDex virtual-library read including the chapter-info `pageDimensions` fix; the app ships no EPUB reader by design |
-| Lissen `1.11.22` (ABS profile) | device | 2026-09-07 | Browse, listen, byte-range download, session progress, bookmarks; the live session produced `3cff383e` |
-| Kavita profile wire contract | harness | 2026-09-05 | `replay-kavita` 1/1, DTO key-diff clean vs `kavita-ref` 0.9.1.4 |
-| Kobo sync | harness | — | `initialization`, `library/sync`, KEPUB with `Range`, `ReadingState` round-trip. **No physical Kobo has ever run against it** |
-| KOReader (app) | harness | — | Server probe of `users/auth` and progress PUT/GET; the app itself unverified except through Liseur's KOReader-sync client |
-| `stump.koplugin` | harness | — | Every route curl-verified, 9 `api_tests` for the continue route, 184 pure-Lua checks. **Never loaded by KOReader** (`koreader-plugin.mdx:29`) |
-| Send to Kindle | route-verified | — | 4 `api_tests` (pass-through, never-an-EPUB, CBZ refusal, unknown book). **No mail has been delivered to a real Kindle address** |
-| Inkita, Kover, Kamare, tach-extension, Mihon Kavita tracker | source | — | Pinned sources read, routes implemented, nothing run |
-| Official Audiobookshelf app | not recorded | — | No run of any kind; the profile targets Lissen and the `abs-ref` 2.36.0 captures |
+| Komelia 0.19.0 (Komga profile) | **Device-tested**, **Contract-tested** | 2026-09-03/04 | Login, browse, read and offline download of CBZ + EPUB, read-progress, mark-read; `replay` 8/8 |
+| Mihon + Keiyoushi Komga ext. + built-in Komga tracker | **Device-tested**, **Contract-tested** | 2026-09-04 | Browse, download, read, tracker GET/PUT; `replay-mihon` |
+| Liseur v0.16.0 `bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53` (**source-only**); device baseline `31f8182d` | **Device-tested**, **Contract-tested** | 2026-09-04 | The tested run remains on the older client: Komga profile, OPDS 1.2, KOReader sync, native liseur-sync (positions, heads, annotations); no OPDS 2 parser in the app |
+| Grimmory `/komga` alias | **Device-tested** (login) + **Contract-tested** | 2026-09-04 | Login on the device; listing, file, and thumbnail by `specs/grimmory.hurl` |
+| Komf `428dac6` | **Contract-tested** (live container) | 2026-09-04 | Identify, series PATCH 204, book PATCH 204, cover upload + previous-cover DELETE, `TaskQueueStatus`; `replay-komf` 16/16 |
+| Turnleaf `b54f1f71` (Kavita profile) | **Device-tested** | 2026-09-06 | Browse, read, download, progress landing in `reading_heads` with `source_protocol = kavita` |
+| Kamigura `f4baeff4` (Kavita profile) | **Device-tested** | 2026-09-06 | Browse, want-to-read add/remove, MangaDex virtual-library read including the chapter-info `pageDimensions` fix; app ships no EPUB reader by design |
+| Lissen `1.11.22` (ABS profile) | **Contract-tested**, **Source-only** | 2026-09-07 | Pinned source and chained replay: browse, listen, byte-range download, session progress, bookmarks; no Lissen device run claimed |
+| Official Audiobookshelf app | **Device-tested** (scoped) | 2026-09-07 | Android 35 `test_35` emulator: seek drag and one-track download against isolated full+RAR fixture; not complete ABS parity |
+| Kavita profile wire contract | **Contract-tested** | 2026-09-05 | `replay-kavita` 1/1, DTO key-diff clean vs `kavita-ref` 0.9.1.4 |
+| Kobo sync | **Contract-tested**; physical run **Blocked** | — | `initialization`, `library/sync`, KEPUB with `Range`, `ReadingState` round-trip |
+| KOReader (app) | **Contract-tested**; device run **Blocked** | — | Server probe of `users/auth` and progress PUT/GET; app itself unverified except through Liseur's KOReader-sync client |
+| `stump.koplugin` | **Contract-tested**; device run **Blocked** | — | Every route curl-verified, 9 `api_tests` for the continue route, 184 pure-Lua checks; never loaded by KOReader (`koreader-plugin.mdx:29`) |
+| Send to Kindle | **Contract-tested**; real-address run **Blocked** | — | 4 `api_tests` (pass-through, never-an-EPUB, CBZ refusal, unknown book); no mail delivered to a real Kindle address |
+| Inkita, Kover, Kamare, tach-extension, Mihon Kavita tracker | **Source-only** | — | Pinned sources read, routes implemented, nothing run |
 
 ## Known limitations
 
-- **ABS socket.io.** The Engine.IO v4 / Socket.IO v5 lane is not in this commit;
-  the protocol is analysed in `docs/audiobook-study.md` §2 and the crate says so
-  (`crates/abs/README.md:12`). The official ABS app needs it for bookmarks, so
-  "ABS-compatible" means Lissen-shaped REST at `7de64602`. Implementation is in
-  flight ([Roadmap › Open](/docs/developer/roadmap#open), item 4).
-- **No live keys** for Hardcover, Metron, Open Library or Google Books: those
-  mappers are unit-tested against recorded payloads, never against the vendor.
+- **ABS socket.io.** The Engine.IO v4 / Socket.IO v5 lane is implemented by `crates/abs/src/socket/mod.rs` and `crates/abs/src/socket/protocol.rs`; `apps/server/src/routers/abs_backend.rs::compose` mounts it alongside the REST router. `crates/abs/src/socket/tests.rs` covers authenticated websocket frames. The official ABS app's scoped run does not establish complete parity, so broader official-client/device verification remains **Pending** ([ABS compatibility](/docs/developer/abs-compat)).
+- **No live keys** for Hardcover, Metron, Open Library, or Google Books: those
+  mappers are **Contract-tested** against recorded payloads, never against the
+  vendor. Hardcover account/progress/journal sync is **Planned** and **Blocked**.
 - **Cover pick is decided but not written** — `HIGHEST_RESOLUTION` ranks
   candidates, yet `CoverUrl` is outside `STORABLE_FIELDS`, so the decision comes
   back `applied: false`. Title-language preference is still fixed per provider
   ([policy table](/docs/developer/provider-status#what-the-policy-layer-covers)).
-- **Komga is a target profile, not parity**: no persisted settings, no
+- **Komga is a target profile, not parity:** no persisted settings, no
   sidecar/artwork CRUD, narrower search operators; the filesystem browser is
   partial and owner-only (`crates/komga/src/routes/media.rs`).
-- **Kobo**: device tokens are dummy and non-persistent; tags/archive and other
+- **Kobo:** device tokens are dummy and non-persistent; tags/archive and other
   advertised routes remain catch-all no-ops.
-- **liseur-sync**: retention/compaction, insights, token administration,
-  upload/delete and series claims are deferred, and only the device `sync` scope
-  is enforced (`crates/liseur-sync/src/lib.rs:1025-1043`).
+- **liseur-sync:** retention/compaction, insights, token administration,
+  upload/delete, and series claims are **Planned**, and only the device `sync`
+  scope is enforced (`crates/liseur-sync/src/lib.rs:1025-1043`).
 - **Calibre-Web facade for Liseur** is absent — no `/opds/...` web-form
-  contract, no Calibre-Web login/token/delete lane
-  ([Liseur providers](/docs/developer/liseur-providers)).
-- **CBZ has no KOReader hash**: the branch is commented out
+  contract, no Calibre-Web login/token/delete lane ([Liseur providers](/docs/developer/liseur-providers)).
+- **CBZ has no KOReader hash:** the branch is commented out
   (`crates/media/src/media/format/zip.rs:61,68-75`), so fixture sync needs
   `generate_koreader_hashes` on a hashable format first.
-- **Modular extraction is partial**: core still links PDFium, unrar, apalis and
-  notify unconditionally; there are no processor-sized Cargo features.
-- **Operations**: no metrics endpoint, no backup/restore surface, and
+- **Modular extraction is partial and honest:** core still links PDFium, unrar,
+  apalis, and notify unconditionally; there are no processor-sized Cargo
+  features.
+- **Operations:** no metrics endpoint, no backup/restore surface, and
   `.github/workflows/ci.yaml` still has no profile matrix.
-- Known upstream lints untouched: `emailer/sender.rs` and
+- Known upstream lints are untouched: `emailer/sender.rs` and
   `tests/reading_progress/manual_progression_changes.rs` (`useless vec!`).
 
-## Gate at this commit
+## Post-merge verification
 
-`.omp/PROJECT_STATE.md` ("Only definition of green") is authoritative. At
-`7de64602` it was 1741 crate tests plus 317 `stump_server` tests, both the
-`headless,liseur-sync` and default profiles building, and 7/7 replays green on
-the fixture instance (`replay`, `replay-negative-auth`, `replay-mihon`,
-`replay-liseur-sync`, `replay-kavita`, `replay-library-management`,
-`replay-abs`). `replay-containers` is written but has not been run.
+The 2026-09-20 integration gate is **Contract-tested**: the non-server Rust
+workspace passed 1,897 tests (29 ignored), the headless server passed 366 tests,
+all-target workspace checking and the headless build passed, and GraphQL schema
+generation reported no drift. Web, Expo, Home, and Editor type/Svelte checks
+passed; the web, Home, Editor, and docs production builds passed. The docs build
+prerendered 199 pages.
+
+The deployed fixture then passed 15 Hurl files and 341 requests across the
+Komga, negative-auth, Mihon, native liseur-sync, Kavita, library-management,
+Audiobookshelf, and Komf profiles. An authenticated `/app/dashboard` and the
+public `/editor/` surface loaded in a browser against that server.
+
+This is not **Device-tested** evidence. Physical Kobo/KOReader/official-client
+runs, Expo native visual verification, and the pending containers replay remain
+outside the green claim. Exact commands and limitations are recorded in
+`.omp/PROJECT_STATE.md` (“Only definition of green”).

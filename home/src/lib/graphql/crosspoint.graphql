@@ -1,0 +1,101 @@
+fragment CrosspointTargetFields on CrosspointTarget {
+	deviceId
+	userId
+	hostOrIp
+	httpPort
+	wsPort
+	rootPath
+	discoveryMethod
+	verifiedAt
+	fingerprint {
+		model
+		serial
+	}
+	profile {
+		optimizerEnabled
+		targetModel
+		jpegQuality
+		grayscale
+		autoCrop
+		splitLargeParagraphs
+		removeFonts
+		chunkBytes
+		retryCount
+		retryDelaySeconds
+		timeoutSeconds
+		maxUploadBytes
+	}
+	revokedAt
+	profileJson
+	profileDigest
+}
+
+fragment CrosspointTargetVerificationFields on CrosspointTargetVerification {
+	hostOrIp
+	httpPort
+	wsPort
+	model
+	serial
+	verified
+}
+
+fragment CrosspointDeliveryFields on CrosspointDelivery {
+	id
+	userId
+	deviceId
+	mediaId
+	sourceRevision
+	profileDigest
+	profileJson
+	destinationPath
+	idempotencyKey
+	status
+	attempts
+	maxAttempts
+	nextAttemptAt
+	lastError
+	queuedAt
+	startedAt
+	completedAt
+}
+
+query CrosspointTarget($deviceId: ID!) {
+	crosspointTarget(deviceId: $deviceId) {
+		...CrosspointTargetFields
+	}
+}
+
+mutation VerifyCrosspointTarget($deviceId: ID!, $host: String!) {
+	verifyCrosspointTarget(deviceId: $deviceId, host: $host) {
+		...CrosspointTargetVerificationFields
+	}
+}
+mutation UpdateCrosspointTarget($deviceId: ID!, $input: CrosspointTargetInput!) {
+	updateCrosspointTarget(deviceId: $deviceId, input: $input) {
+		...CrosspointTargetFields
+	}
+}
+
+query CrosspointDeliveries($deviceId: ID!, $limit: Int) {
+	crosspointDeliveries(deviceId: $deviceId, limit: $limit) {
+		...CrosspointDeliveryFields
+	}
+}
+
+mutation QueueCrosspointDeliveries($deviceId: ID!, $mediaIds: [ID!]!, $targetPath: String!) {
+	queueCrosspointDeliveries(deviceId: $deviceId, mediaIds: $mediaIds, targetPath: $targetPath) {
+		...CrosspointDeliveryFields
+	}
+}
+
+mutation RetryCrosspointDelivery($id: ID!) {
+	retryCrosspointDelivery(id: $id) {
+		...CrosspointDeliveryFields
+	}
+}
+
+mutation CancelCrosspointDelivery($id: ID!) {
+	cancelCrosspointDelivery(id: $id) {
+		...CrosspointDeliveryFields
+	}
+}

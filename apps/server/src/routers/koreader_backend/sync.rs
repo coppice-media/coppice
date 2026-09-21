@@ -181,11 +181,32 @@ pub(crate) async fn put_progress(
 		progress,
 		percentage,
 		device,
-		device_id,
+		device_id: reported_device_id,
 	}): Json<PutProgressInput>,
 ) -> APIResult<Json<PutProgressResponse>> {
 	let conn = ctx.conn.as_ref();
 	let user = req.user();
+
+	let bound_crosspoint = if let Some(bound_id) = req.device_id.as_deref() {
+		device::Entity::find_by_id(bound_id.to_owned())
+			.filter(device::Column::UserId.eq(user.id.clone()))
+			.filter(device::Column::Kind.eq(DeviceKind::Crosspoint))
+			.filter(device::Column::RevokedAt.is_null())
+			.one(conn)
+			.await?
+	} else {
+		None
+	};
+	if let Some(bound) = &bound_crosspoint {
+		if reported_device_id != bound.id {
+			return Err(APIError::Forbidden(
+				"device_id does not match the credential-bound device".to_string(),
+			));
+		}
+	}
+	let device_id = bound_crosspoint
+		.as_ref()
+		.map_or_else(|| reported_device_id.clone(), |bound| bound.id.clone());
 
 	if !(0.0..=1.0).contains(&percentage) {
 		tracing::error!(
@@ -206,24 +227,27 @@ pub(crate) async fn put_progress(
 
 	let tx = begin_write(ctx.conn.as_ref()).await?;
 
-	// KOReader identifies itself by a device id + name on every push; register
-	// it as a device of the syncing user (name follows KOReader's setting).
-	let on_conflict = OnConflict::column(device::Column::Id)
-		.update_columns([device::Column::Name, device::Column::LastSeenAt])
-		.to_owned();
+	// A CrossPoint credential is already bound to a registry row. Never
+	// overwrite that row or create a second inferred KOReader device from the
+	// receiver's reported identity.
+	if bound_crosspoint.is_none() {
+		let on_conflict = OnConflict::column(device::Column::Id)
+			.update_columns([device::Column::Name, device::Column::LastSeenAt])
+			.to_owned();
 
-	let _device_record = device::Entity::insert(device::ActiveModel {
-		id: Set(device_id.clone()),
-		user_id: Set(user.id.clone()),
-		name: Set(device.clone()),
-		kind: Set(DeviceKind::Koreader),
-		last_seen_at: Set(Some(Utc::now().into())),
-		created_at: Set(Utc::now().into()),
-		..Default::default()
-	})
-	.on_conflict(on_conflict)
-	.exec(&tx)
-	.await?;
+		let _device_record = device::Entity::insert(device::ActiveModel {
+			id: Set(device_id.clone()),
+			user_id: Set(user.id.clone()),
+			name: Set(device.clone()),
+			kind: Set(DeviceKind::Koreader),
+			last_seen_at: Set(Some(Utc::now().into())),
+			created_at: Set(Utc::now().into()),
+			..Default::default()
+		})
+		.on_conflict(on_conflict)
+		.exec(&tx)
+		.await?;
+	}
 
 	let page = parse_progress(&progress);
 	if page.is_none() {

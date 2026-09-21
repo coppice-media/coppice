@@ -11,9 +11,9 @@ This guide is very young and so won't cover much ground yet. As I notice common 
 
 ## I keep getting `Incompatible server` errors
 
-The mobile app is alpha software and only available on TestFlight and Google Play Beta at the moment. In order to facilitate development, this means that those versions of the app are only compatible with more experimental versions of the Stump server.
+The mobile app is alpha software and only available on TestFlight and Google Play Beta at the moment. In order to facilitate development, this means that those versions of the app are only compatible with more experimental versions of the Coppice server.
 
-If you are running a stable version of the Stump server earlier than `0.1.0`, which at the time of writing doesn't exist yet, you will see this error. The version you are running is not compatible with the API that the mobile app expects. The solution is to migrate to or update an existing `nightly` server instance. I cannot guarantee the stability of these builds, this is the nature of alpha software.
+If you are running a stable version of the Coppice server earlier than `0.1.0`, which at the time of writing doesn't exist yet, you will see this error. The version you are running is not compatible with the API that the mobile app expects. The solution is to migrate to or update an existing `nightly` server instance. I cannot guarantee the stability of these builds, this is the nature of alpha software.
 
 ## I get validation errors when browsing my OPDS catalog
 
@@ -21,6 +21,6 @@ It's possible that either the app is being overly strict in its validation of a 
 
 ## None of the covers or images are loading in the app
 
-This is likely due to a misconfiguration of your Stump server. If you are running a reverse proxy, you need to instruct Stump to trust the [corresponding headers](/docs/guides/configuration/server-config#stump_trust_proxy_headers) that it may receive.
+This is likely due to a misconfiguration of your Coppice server. If you are running a reverse proxy, you need to instruct Coppice to trust the [corresponding headers](/docs/guides/configuration/server-config#stump_trust_proxy_headers) that it may receive.
 
 If you aren't running a reverse proxy, this is likely something else and should be reported as an issue on [GitHub](https://github.com/stumpapp/stump/issues/new/choose).

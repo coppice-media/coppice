@@ -1,5 +1,5 @@
 import { Heading } from '@stump/components'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 
 import MobileSheet from './MobileSheet'
 
@@ -21,7 +21,7 @@ export default function TopBar() {
 					<Link to="/" className="gap-2 flex shrink-0 items-center justify-start">
 						<img src="/assets/favicon.ico" className="h-6 w-6 object-scale-down" />
 						<Heading variant="gradient" size="xs">
-							Stump
+							Coppice
 						</Heading>
 					</Link>
 				</div>

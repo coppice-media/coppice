@@ -27,7 +27,7 @@
 </script>
 
 <svelte:head>
-	<title>Account · Stump</title>
+	<title>Account · Coppice</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">

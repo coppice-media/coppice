@@ -1,0 +1,48 @@
+{
+	"skill_name": "stump-audiobook-lab",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "I have a lawfully accessed private EPUB and M4B under input/audio. Make a roughly 10% fixture by selecting complete audio chapters, keep both sources byte-identical, truncate the derived OPF spine from the detected bodymatter start, and leave a deterministic JSON manifest for separate whisper and ctc mode directories.",
+			"expected_output": "A safe complete-chapter shared slice plan using the stdlib helper, with source/output hashes, explicit ffmetadata stream-copy provenance, and fail-closed narrative matching.",
+			"files": ["input/audio/experiments/three-body-10pct/fixture.json"],
+			"expectations": [
+				"Uses scripts/read-aloud-lab.py slice once with a target fraction to create one immutable shared fixture, then derives separate whisper and ctc mode outputs from that same slice.",
+				"States that source EPUB and M4B are never modified and existing outputs are refused without --force.",
+				"Requires whole embedded audio chapters; exact chapter-label matching or explicit narrative start/end bounds; and refusal of ambiguous, partial, or guessed physical-part-to-spine matching.",
+				"Requires a versioned manifest containing source/output SHA-256 values, selected boundaries, ffmetadata digest, and ffmpeg stream-copy provenance."
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "A Storyteller export is in a private whisper directory. Check its EPUB before comparing it with ctc output. I need proof that the OCF envelope, OPF media overlays, SMIL text/audio targets, duration bounds, and cue ordering are sound, but I do not want any transcript excerpts in the report.",
+			"expected_output": "A deterministic inspection gate that runs the helper, records stdout and exit status, and rejects malformed or ambiguous overlay/cue structures without leaking source text.",
+			"files": [
+				"input/audio/experiments/three-body-10pct/whisper/inspection.json",
+				"input/audio/experiments/three-body-10pct/ctc/inspection-unfiltered-invalid.json"
+			],
+			"expectations": [
+				"Runs the helper's inspect command, identifies stump-read-aloud-inspection/v1, and records its stdout and exit status.",
+				"Checks mimetype-first-and-stored, one OPF rootfile, unique manifest/spine identifiers, valid overlay references, and existing SMIL targets.",
+				"Requires exactly one text and one audio child per SMIL par plus one finite unrefined media:duration; checks positive duration-bounded monotonic non-overlapping cues and fails closed on target ambiguity.",
+				"Demonstrates the invalid-artifact path exits nonzero with a structured error instead of treating a prose plan as validation proof.",
+				"Keeps evidence to hashes, paths, counts, and errors rather than embedding text, audio, credentials, or covers."
+			]
+		},
+		{
+			"id": 3,
+			"prompt": "Compare the private Storyteller Whisper/fuzzy EPUB and the external current CTC/Viterbi EPUB produced from the same shared slice. Match common text targets and report timing differences, while treating missing targets or invalid SMIL as evidence rather than silently aligning by ordinal.",
+			"expected_output": "A validated mode comparison with common/matched counts, unmatched-target evidence, and median, p95, and max absolute begin/end deltas in milliseconds; repeated-target cardinality mismatches fail closed.",
+			"files": [
+				"input/audio/experiments/three-body-10pct/comparison.json",
+				"input/audio/experiments/three-body-10pct/ctc/inspection-unfiltered-invalid.json"
+			],
+			"expectations": [
+				"Validates both EPUBs before comparing; an invalid overlay produces the helper's nonzero exit and structured error schema.",
+				"Matches semantic targets by XHTML path plus normalized-text hash, not copyrighted excerpts, fragments alone, or arbitrary ordinal positions.",
+				"Emits the comparison schema with common target count, matched cue count, unmatched target counts, and begin/end median, p95, and max deltas; zero common targets remain a valid report with null timing metrics, while repeated-target cardinality mismatches are rejected.",
+				"Keeps Whisper/fuzzy and CTC/Viterbi as external reference modes and records provenance without presenting either as a Stump runtime dependency."
+			]
+		}
+	]
+}

@@ -16,8 +16,8 @@ pub struct StumpAuthor {
 impl Default for StumpAuthor {
 	fn default() -> Self {
 		Self {
-			name: "Stump".to_string(),
-			uri: Some("https://github.com/stumpapp/stump".to_string()),
+			name: "Coppice".to_string(),
+			uri: None,
 		}
 	}
 }
@@ -65,7 +65,7 @@ mod tests {
 
 	#[test]
 	fn test_author_with_only_name() {
-		let author = StumpAuthor::new("Stump".to_string(), None);
+		let author = StumpAuthor::new("Coppice".to_string(), None);
 
 		let mut writer = EventWriter::new(Vec::new());
 		author.write(&mut writer).unwrap();
@@ -75,7 +75,7 @@ mod tests {
 			r#"
 			<?xml version="1.0" encoding="UTF-8"?>
 			<author>
-				<name>Stump</name>
+				<name>Coppice</name>
 			</author>
 			"#,
 		);
@@ -86,7 +86,7 @@ mod tests {
 	#[test]
 	fn test_author_with_name_and_uri() {
 		let author = StumpAuthor::new(
-			"Stump".to_string(),
+			"Custom Author".to_string(),
 			Some("https://www.stumpapp.dev/".to_string()),
 		);
 
@@ -98,7 +98,7 @@ mod tests {
 			r#"
 			<?xml version="1.0" encoding="UTF-8"?>
 			<author>
-				<name>Stump</name>
+				<name>Custom Author</name>
 				<uri>https://www.stumpapp.dev/</uri>
 			</author>
 			"#,

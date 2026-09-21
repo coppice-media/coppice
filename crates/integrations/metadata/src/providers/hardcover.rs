@@ -466,10 +466,36 @@ impl MetadataProvider for HardcoverClient {
 	async fn verify_credentials(
 		&self,
 	) -> Result<ProviderCredentialVerification, MetadataProviderError> {
+		match self.verify_identity().await {
+			Ok(identity) => Ok(ProviderCredentialVerification {
+				response_status: 200,
+				is_valid: identity.remote_user_id.is_some(),
+				error: None,
+			}),
+			Err(error) => Ok(ProviderCredentialVerification {
+				response_status: 0,
+				is_valid: false,
+				error: Some(error.to_string()),
+			}),
+		}
+	}
+}
+
+/// The redacted identity returned by Hardcover's `me` capability probe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HardcoverIdentity {
+	pub remote_user_id: Option<String>,
+	pub username: Option<String>,
+}
+
+impl HardcoverClient {
+	/// Verifies this credential and returns only the remote identity. The PAT
+	/// never leaves this crate's request boundary.
+	pub async fn verify_identity(
+		&self,
+	) -> Result<HardcoverIdentity, MetadataProviderError> {
 		let token = self.token()?;
-
 		let body = serde_json::json!({ "query": "query { me { id username } }" });
-
 		let response = self
 			.client
 			.post(&self.api_url)
@@ -480,40 +506,156 @@ impl MetadataProvider for HardcoverClient {
 			.error_for_status()?
 			.json::<GraphQLResponse<MeResponse>>()
 			.await?;
-
 		if let Some(errors) = response.errors {
 			if !errors.is_empty() {
 				let messages: Vec<_> =
 					errors.iter().map(|e| e.message.as_str()).collect();
-				return Ok(ProviderCredentialVerification {
-					response_status: 200, // safe assumption since we got a valid resp
-					is_valid: false,
-					error: Some(messages.join("\n")),
-				});
+				return Err(MetadataProviderError::Other(messages.join("; ")));
 			}
 		}
+		let me = response
+			.data
+			.and_then(|data| data.me.into_iter().next())
+			.ok_or(MetadataProviderError::EmptyResponse)?;
+		let remote_user_id = (!me.id.is_null()).then(|| match me.id {
+			serde_json::Value::String(value) => value,
+			value => value.to_string(),
+		});
+		Ok(HardcoverIdentity {
+			remote_user_id,
+			username: me.username,
+		})
+	}
 
-		Ok(ProviderCredentialVerification {
-			response_status: 200,
-			is_valid: response
-				.data
-				.and_then(|d| d.me.into_iter().next())
-				.is_some(),
-			error: None,
+	/// Inspects the provider's public GraphQL schema without reading any
+	/// personal reading data. The result is only a list of advertised query
+	/// capabilities and is safe to persist as redacted account state.
+	pub async fn inspect_capabilities(
+		&self,
+	) -> Result<Vec<String>, MetadataProviderError> {
+		let value: serde_json::Value = self
+			.execute_graphql(
+				"query Capabilities { __schema { queryType { fields { name } } } }",
+			)
+			.await?;
+		Ok(value
+			.get("__schema")
+			.and_then(|schema| schema.get("queryType"))
+			.and_then(|query_type| query_type.get("fields"))
+			.and_then(serde_json::Value::as_array)
+			.map(|fields| {
+				fields
+					.iter()
+					.filter_map(|field| field.get("name").and_then(|name| name.as_str()))
+					.map(ToOwned::to_owned)
+					.collect()
+			})
+			.unwrap_or_default())
+	}
+
+	/// Reads the current user's journal/quote records when the provider
+	/// advertises the `user_books` query. Fields are intentionally optional:
+	/// an absent locator remains an unresolved provenance record instead of a
+	/// fabricated annotation.
+	pub async fn fetch_journal_entries(
+		&self,
+	) -> Result<Vec<HardcoverJournalEntry>, MetadataProviderError> {
+		let value: serde_json::Value = self
+			.execute_graphql(
+				"query Journal { me { user_books { id book_id title quote note notes page pages current_page progression } } }",
+			)
+			.await?;
+		let values = value
+			.get("me")
+			.and_then(serde_json::Value::as_array)
+			.and_then(|users| users.first())
+			.and_then(|user| user.get("user_books"))
+			.and_then(serde_json::Value::as_array)
+			.cloned()
+			.unwrap_or_default();
+		Ok(values
+			.into_iter()
+			.filter_map(HardcoverJournalEntry::from_value)
+			.collect())
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardcoverJournalEntry {
+	pub remote_entry_id: String,
+	pub remote_book_id: Option<String>,
+	pub quote: Option<String>,
+	pub note: Option<String>,
+	pub page: Option<i32>,
+	pub progression: Option<f64>,
+	pub raw: serde_json::Value,
+}
+
+impl HardcoverJournalEntry {
+	fn from_value(value: serde_json::Value) -> Option<Self> {
+		let remote_entry_id = value
+			.get("id")
+			.and_then(value_as_string)
+			.or_else(|| value.get("user_book_id").and_then(value_as_string))?;
+		let remote_book_id =
+			value.get("book_id").and_then(value_as_string).or_else(|| {
+				value
+					.get("book")
+					.and_then(|book| book.get("id"))
+					.and_then(value_as_string)
+			});
+		let quote = first_string(&value, &["quote", "highlight", "excerpt"]);
+		let note = first_string(&value, &["note", "notes", "review"]);
+		let page = first_i32(&value, &["page", "pages", "current_page"]);
+		let progression = value.get("progression").and_then(serde_json::Value::as_f64);
+		Some(Self {
+			remote_entry_id,
+			remote_book_id,
+			quote,
+			note,
+			page,
+			progression,
+			raw: value,
 		})
 	}
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Me {
-	// this is the valid structure but we don't need to use it, so dead code
-	#[allow(dead_code)]
-	pub username: String,
+fn value_as_string(value: &serde_json::Value) -> Option<String> {
+	match value {
+		serde_json::Value::String(value) if !value.trim().is_empty() => {
+			Some(value.clone())
+		},
+		serde_json::Value::Number(value) => Some(value.to_string()),
+		_ => None,
+	}
 }
 
+fn first_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+	keys.iter()
+		.find_map(|key| value.get(*key).and_then(value_as_string))
+}
+
+fn first_i32(value: &serde_json::Value, keys: &[&str]) -> Option<i32> {
+	keys.iter().find_map(|key| {
+		value.get(*key).and_then(|value| {
+			value
+				.as_i64()
+				.and_then(|number| i32::try_from(number).ok())
+				.or_else(|| value.as_str()?.parse().ok())
+		})
+	})
+}
 #[derive(Debug, Deserialize)]
 pub struct MeResponse {
 	pub me: Vec<Me>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Me {
+	#[serde(default)]
+	pub id: serde_json::Value,
+	#[serde(default)]
+	pub username: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

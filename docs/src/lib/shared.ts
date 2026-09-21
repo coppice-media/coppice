@@ -1,4 +1,4 @@
-export const appName = 'Stump'
+export const appName = 'Coppice'
 export const docsRoute = '/docs'
 export const docsImageRoute = '/og/docs'
 

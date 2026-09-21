@@ -7,7 +7,7 @@ export function baseOptions(): BaseLayoutProps {
 		nav: {
 			title: (
 				<div className="gap-2 flex items-center">
-					<img src="/favicon.png" alt="Stump logo" className="size-6" />
+					<img src="/favicon.png" alt="Coppice logo" className="size-6" />
 					<span>{appName}</span>
 				</div>
 			),

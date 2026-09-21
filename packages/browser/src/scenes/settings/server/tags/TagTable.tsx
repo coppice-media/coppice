@@ -21,6 +21,7 @@ const query = graphql(`
 		tags {
 			id
 			name
+			kind
 		}
 	}
 `)

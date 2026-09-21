@@ -34,6 +34,8 @@ pub struct SeriesFilterInput {
 	pub reading_status: Option<ConceptualFilter<ReadingStatus>>,
 	#[graphql(default)]
 	pub library_type: Option<ConceptualFilter<LibraryType>>,
+	#[graphql(default)]
+	pub is_oneshot: Option<bool>,
 
 	#[graphql(default)]
 	pub metadata: Option<SeriesMetadataFilterInput>,
@@ -134,7 +136,7 @@ fn apply_series_reading_status_filter(
 		ReadingStatus::Finished => finished_series_subquery(user_id),
 		ReadingStatus::NotStarted => not_started_series_subquery(user_id),
 		// a panic might feel heavy but it will remind me not to surface this until i add some kind of abandoned tracking
-		ReadingStatus::Abandoned => unimplemented!("Stump does not yet track abandoned status. This query should not have been possible yet"),
+		ReadingStatus::Abandoned => unimplemented!("Coppice does not yet track abandoned status. This query should not have been possible yet"),
 	};
 
 	let expr = Expr::col((series::Entity, series::Column::Id)).in_subquery(subquery);
@@ -270,6 +272,7 @@ impl SeriesFilterInput {
 				self.library_id
 					.map(|f| apply_string_filter(series::Column::LibraryId, f)),
 			)
+			.add_option(self.is_oneshot.map(|f| series::Column::IsOneshot.eq(f)))
 			.add_option(self.library_type.map(apply_library_type_filter))
 			.add_option(self.metadata.map(|f| f.into_filter()))
 			.add_option(self.library.map(|f| f.into_filter()))

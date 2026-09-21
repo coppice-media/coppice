@@ -18,7 +18,7 @@ export function ProviderLogo({ provider, className }: Props) {
 	)
 }
 
-const LOGOS: Record<MetadataProvider, string> = {
+const LOGOS: Partial<Record<MetadataProvider, string>> = {
 	[MetadataProvider.Hardcover]: '/assets/logos/hardcover.png',
 	[MetadataProvider.ComicVine]: '/assets/logos/comicvine.png',
 }

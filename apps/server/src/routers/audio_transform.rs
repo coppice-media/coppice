@@ -315,19 +315,6 @@ fn cache(ctx: &AppState) -> TransformCache {
 	)
 }
 
-/// The directory `ffmpeg` is looked for in, from `STUMP_AUDIO_FFMPEG`.
-///
-/// The config holds the binary's own path (validated at startup), and
-/// `ffmpeg::locate` searches a *directory*, so the parent is what it wants;
-/// empty means "search `PATH`".
-fn ffmpeg_bin_dir(ctx: &AppState) -> Option<PathBuf> {
-	let configured = ctx.config.audio.audio_ffmpeg.trim();
-	if configured.is_empty() {
-		return None;
-	}
-	Path::new(configured).parent().map(Path::to_path_buf)
-}
-
 async fn source_mtime_nanos(path: &str) -> std::io::Result<u128> {
 	let metadata = tokio::fs::metadata(path).await?;
 	Ok(metadata

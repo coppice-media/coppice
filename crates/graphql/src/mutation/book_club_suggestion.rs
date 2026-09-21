@@ -5,6 +5,7 @@ use models::{
 		book_club, book_club_book_suggestion, book_club_book_suggestion_like,
 		book_club_member, user::AuthUser,
 	},
+	services::social::visible_media,
 	shared::book_club::{BookClubMemberRole, BookClubSuggestionStatus},
 };
 use sea_orm::{prelude::*, ActiveValue::Set, ColumnTrait, IntoActiveModel, QueryFilter};
@@ -34,8 +35,13 @@ impl BookClubSuggestionMutation {
 			.one(conn)
 			.await?
 			.ok_or("Book club not found or you don't have access")?;
-
 		let member = get_member_for_user(book_club_id.as_ref(), user, conn).await?;
+
+		if let Some(book_id) = input.book_id.as_deref() {
+			visible_media(conn, user, book_id)
+				.await
+				.map_err(|_| "Book is not visible to you")?;
+		}
 
 		if input.book_id.is_none() && (input.title.is_none() || input.author.is_none()) {
 			return Err(
@@ -164,11 +170,16 @@ impl BookClubSuggestionMutation {
 				.one(conn)
 				.await?
 				.ok_or("Suggestion not found")?;
-
 		let member = get_member_for_user(&suggestion.book_club_id, user, conn).await?;
 
 		if member.role < BookClubMemberRole::Admin && !user.is_server_owner {
 			return Err("Only admins and above can update suggestion status".into());
+		}
+		if suggestion.status != BookClubSuggestionStatus::Pending {
+			return Err("Resolved suggestions cannot be reopened".into());
+		}
+		if status == BookClubSuggestionStatus::Pending {
+			return Err("A suggestion must transition to accepted or rejected".into());
 		}
 
 		let mut active_model = suggestion.into_active_model();

@@ -32,6 +32,8 @@ pub struct WalkerCtx {
 	pub library_id: String,
 	/// The series ID for this walk, if scoped to a specific series.
 	pub series_id: Option<String>,
+	/// Relative directory under the library root containing one-shot media.
+	pub oneshots_directory: Option<String>,
 }
 
 /// The output of walking a library.
@@ -51,6 +53,8 @@ pub struct WalkedLibrary {
 	pub missing_series: Vec<PathBuf>,
 	/// Whether the library itself is missing from the filesystem.
 	pub library_is_missing: bool,
+	/// One-shot directories discovered under the configured library directory.
+	pub oneshot_dirs_to_visit: Vec<PathBuf>,
 }
 
 impl WalkedLibrary {
@@ -70,6 +74,7 @@ pub async fn walk_library<S: ScanSource + ?Sized>(
 		ignore_rules,
 		max_depth,
 		library_id,
+		oneshots_directory,
 		..
 	}: WalkerCtx,
 ) -> ScanResult<WalkedLibrary> {
@@ -128,6 +133,23 @@ pub async fn walk_library<S: ScanSource + ?Sized>(
 	})
 	.await
 	.map_err(|error| ScanError::Internal(format!("Failed to walk library: {error}")))?;
+	let oneshot_name = oneshots_directory
+		.as_deref()
+		.filter(|directory| !directory.is_empty());
+	let (oneshot_entries, valid_entries): (Vec<DirEntry>, Vec<DirEntry>) =
+		valid_entries.into_iter().partition(|entry| {
+			oneshot_name.is_some_and(|name| {
+				entry
+					.path()
+					.file_name()
+					.map(|file_name| file_name.to_string_lossy())
+					.is_some_and(|file_name| file_name.eq_ignore_ascii_case(name))
+			})
+		});
+	let oneshot_dirs_to_visit = oneshot_entries
+		.into_iter()
+		.map(|entry| entry.into_path())
+		.collect::<Vec<_>>();
 
 	let ignored_directories = ignored_entries.len() as u64;
 	let seen_directories = valid_entries.len() as u64 + ignored_directories;
@@ -226,6 +248,7 @@ pub async fn walk_library<S: ScanSource + ?Sized>(
 		series_to_visit,
 		missing_series,
 		library_is_missing: false,
+		oneshot_dirs_to_visit,
 	})
 }
 
@@ -272,6 +295,7 @@ pub async fn walk_series<S: ScanSource + ?Sized>(
 		dir_mtimes,
 		library_id,
 		series_id,
+		..
 	}: WalkerCtx,
 ) -> ScanResult<WalkedSeries> {
 	if tokio::fs::metadata(path).await.is_err() {
@@ -556,6 +580,7 @@ mod tests {
 			dir_mtimes: Arc::new(HashMap::new()),
 			library_id: root.to_string_lossy().into_owned(),
 			series_id: Some(series_id.to_string()),
+			oneshots_directory: None,
 		}
 	}
 
@@ -629,6 +654,7 @@ mod tests {
 				dir_mtimes: Arc::new(HashMap::new()),
 				library_id: "library-id".to_string(),
 				series_id: None,
+				oneshots_directory: None,
 			},
 		)
 		.await
@@ -647,6 +673,7 @@ mod tests {
 				dir_mtimes: Arc::new(HashMap::new()),
 				library_id: "library-id".to_string(),
 				series_id: None,
+				oneshots_directory: None,
 			},
 		)
 		.await
@@ -745,6 +772,7 @@ mod tests {
 				dir_mtimes: Arc::new(HashMap::new()),
 				library_id: "library-id".to_string(),
 				series_id: None,
+				oneshots_directory: None,
 			},
 		)
 		.await

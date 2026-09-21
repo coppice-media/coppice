@@ -162,7 +162,6 @@ pub(crate) async fn progress(
 pub(crate) async fn delete_progress(
 	backend: Backend,
 	Extension(user): User,
-	events: Events,
 	Path(progress_id): Path<String>,
 ) -> AbsResult<Response> {
 	let prefix = format!("{}-", user.id);

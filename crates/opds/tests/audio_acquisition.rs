@@ -54,6 +54,7 @@ fn publication_entity(extension: &str) -> OPDSPublicationEntity {
 			source_provider: None,
 			remote_id: None,
 			remote_chapter_id: None,
+			is_oneshot: false,
 		},
 		metadata: None,
 		series: OPDSSeries {

@@ -10,9 +10,8 @@ use models::{
 	shared::analysis::MediaAnalysisData,
 };
 use sea_orm::{
-	entity::prelude::*,
-	sea_query::{ConditionType, Expr},
-	Condition, FromQueryResult, JoinType, QuerySelect, SelectModel, Selector,
+	entity::prelude::*, sea_query::Expr, Condition, FromQueryResult, JoinType,
+	QuerySelect, SelectModel, Selector,
 };
 
 #[derive(Clone, Debug)]

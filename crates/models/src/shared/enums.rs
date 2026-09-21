@@ -900,6 +900,10 @@ pub enum DeviceKind {
 	Kobo,
 	/// A KOReader install using the KOReader progress sync protocol
 	Koreader,
+	/// A Coppice Home/KOReader client managed through the unified device surface
+	Coppice,
+	/// A CrossPoint Reader using stock KOSync plus the keyed rich-sync lane
+	Crosspoint,
 	/// Mihon (Tachiyomi) using the Komga-compatible profile
 	Mihon,
 	/// Komelia using the Komga-compatible profile
@@ -918,6 +922,8 @@ pub enum DeviceKind {
 	/// the worker socket. Not a reading client: it holds no reading state and
 	/// is never offered a transformed stream.
 	Worker,
+	/// A Kavita-compatible reader using the native API with a download-only key
+	Kavita,
 }
 
 /// The wire protocol through which a device credential was exercised

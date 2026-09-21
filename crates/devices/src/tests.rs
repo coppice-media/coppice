@@ -19,7 +19,8 @@ use tests::{db::test_database, fake_data};
 
 use crate::{
 	credential::liseur, service::TOUCH_INTERVAL, CredentialRef, DeviceError, DeviceSeen,
-	DeviceService, Endpoint, KindleSendSummary, LibraryScope, KINDLE_EMAIL_PROTOCOL,
+	DeviceService, DeviceTelemetryCountersPatch, DeviceTelemetryPatch, Endpoint,
+	KindleSendSummary, LibraryScope, KINDLE_EMAIL_PROTOCOL,
 };
 
 async fn setup() -> (Arc<DatabaseConnection>, AuthUser) {
@@ -91,6 +92,71 @@ async fn create_device_mints_narrowed_api_key_and_default_name() {
 	assert_eq!(credential.credential_kind, DeviceCredentialKind::ApiKey);
 	assert_eq!(credential.protocol, DeviceProtocol::Kobo);
 	assert_eq!(credential.credential_ref, issued.credential_ref);
+}
+
+#[tokio::test]
+async fn kavita_device_mints_download_only_api_key_and_server_endpoint() {
+	let (conn, owner) = setup().await;
+	let service = DeviceService::new(conn.clone());
+
+	let missing_api_keys = reader(&owner.id, vec![UserPermission::DownloadFile]);
+	assert!(matches!(
+		service
+			.create_device(&missing_api_keys, DeviceKind::Kavita, None)
+			.await,
+		Err(DeviceError::Forbidden)
+	));
+
+	let missing_download = reader(&owner.id, vec![UserPermission::AccessApiKeys]);
+	assert!(matches!(
+		service
+			.create_device(&missing_download, DeviceKind::Kavita, None)
+			.await,
+		Err(DeviceError::Forbidden)
+	));
+
+	let allowed = reader(
+		&owner.id,
+		vec![UserPermission::AccessApiKeys, UserPermission::DownloadFile],
+	);
+	let (device, issued) = service
+		.create_device(&allowed, DeviceKind::Kavita, None)
+		.await
+		.expect("device");
+
+	assert_eq!(device.name, "reader's Kavita");
+	assert_eq!(issued.kind, DeviceCredentialKind::ApiKey);
+	assert_eq!(issued.protocol, DeviceProtocol::Api);
+	assert!(issued.secret.starts_with("stump_"));
+	let key = api_key::Entity::find()
+		.filter(api_key::Column::ShortToken.eq(&issued.credential_ref))
+		.one(conn.as_ref())
+		.await
+		.expect("query")
+		.expect("api key row");
+	assert_eq!(
+		key.permissions,
+		APIKeyPermissions::Custom(vec![UserPermission::DownloadFile])
+	);
+
+	let full = service
+		.endpoints_with_secret(&allowed, &device, &issued, &origin())
+		.await
+		.expect("endpoints");
+	assert_eq!(full.len(), 1);
+	assert_eq!(full[0].label, "Kavita server");
+	assert_eq!(full[0].url, "https://stump.test");
+	assert_eq!(full[0].username, None);
+	assert_eq!(full[0].secret_hint, issued.secret);
+
+	let redacted = service
+		.endpoints(&allowed, &device.id, &origin())
+		.await
+		.expect("redacted endpoints");
+	assert_eq!(
+		redacted[0].secret_hint,
+		format!("stump_{}_…", issued.credential_ref)
+	);
 }
 
 #[tokio::test]
@@ -201,6 +267,117 @@ async fn liseur_device_mints_bound_device_token() {
 	assert!(token.revoked_at.is_none());
 	let scopes: Vec<String> = serde_json::from_str(&token.scopes).expect("scopes json");
 	assert_eq!(scopes, ["sync", "read-insights", "library-read"]);
+}
+
+#[tokio::test]
+async fn coppice_mints_and_replaces_both_bound_credentials() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn.clone());
+	let (device, first) = service
+		.create_device(&user, DeviceKind::Coppice, None)
+		.await
+		.expect("device");
+
+	let first_credentials = first.credentials();
+	assert_eq!(first_credentials.len(), 2);
+	let first_api = first_credentials
+		.iter()
+		.find(|credential| {
+			credential.kind == DeviceCredentialKind::ApiKey
+				&& credential.protocol == DeviceProtocol::Koreader
+		})
+		.expect("Coppice API credential");
+	let first_liseur = first_credentials
+		.iter()
+		.find(|credential| {
+			credential.kind == DeviceCredentialKind::LiseurToken
+				&& credential.protocol == DeviceProtocol::Liseur
+		})
+		.expect("Coppice liseur credential");
+
+	let stored = service.credentials(&device.id).await.expect("credentials");
+	assert_eq!(stored.len(), 2);
+	assert!(stored.iter().any(|credential| {
+		credential.credential_kind == DeviceCredentialKind::ApiKey
+			&& credential.protocol == DeviceProtocol::Koreader
+			&& credential.credential_ref == first_api.credential_ref
+	}));
+	assert!(stored.iter().any(|credential| {
+		credential.credential_kind == DeviceCredentialKind::LiseurToken
+			&& credential.protocol == DeviceProtocol::Liseur
+			&& credential.credential_ref == first_liseur.credential_ref
+	}));
+
+	let api_key = api_key::Entity::find()
+		.filter(api_key::Column::ShortToken.eq(&first_api.credential_ref))
+		.one(conn.as_ref())
+		.await
+		.expect("query")
+		.expect("Coppice API key");
+	assert_eq!(
+		api_key.permissions,
+		APIKeyPermissions::Custom(vec![
+			UserPermission::AccessKoreaderSync,
+			UserPermission::DownloadFile
+		])
+	);
+
+	let token =
+		liseur_sync_token::Entity::find_by_id(first_liseur.credential_ref.clone())
+			.one(conn.as_ref())
+			.await
+			.expect("query")
+			.expect("Coppice liseur token");
+	assert_eq!(token.device_id, device.id);
+	assert_eq!(token.secret_hash, liseur::hash_secret(&first_liseur.secret));
+
+	let full = service
+		.endpoints_with_secret(&user, &device, &first, &origin())
+		.await
+		.expect("full endpoints");
+	assert!(full.iter().any(|endpoint| {
+		endpoint.url == format!("https://stump.test/v1")
+			&& endpoint.secret_hint == first_liseur.secret
+	}));
+	assert!(full.iter().any(|endpoint| {
+		endpoint.url == format!("https://stump.test/koreader/{}", first_api.secret)
+	}));
+
+	let second = service
+		.rotate_credential(&user, &device.id)
+		.await
+		.expect("rotate");
+	let second_credentials = second.credentials();
+	assert_eq!(second_credentials.len(), 2);
+	let second_api = second_credentials
+		.iter()
+		.find(|credential| {
+			credential.kind == DeviceCredentialKind::ApiKey
+				&& credential.protocol == DeviceProtocol::Koreader
+		})
+		.expect("rotated Coppice API credential");
+	assert_ne!(first_api.secret, second_api.secret);
+	assert!(api_key::Entity::find()
+		.filter(api_key::Column::ShortToken.eq(&first_api.credential_ref))
+		.one(conn.as_ref())
+		.await
+		.expect("old key query")
+		.is_none());
+	let old_token =
+		liseur_sync_token::Entity::find_by_id(first_liseur.credential_ref.clone())
+			.one(conn.as_ref())
+			.await
+			.expect("old token query")
+			.expect("old token retained");
+	assert!(old_token.revoked_at.is_some());
+	assert_eq!(
+		service
+			.credentials(&device.id)
+			.await
+			.expect("credentials")
+			.len(),
+		2
+	);
 }
 
 #[tokio::test]
@@ -1056,6 +1233,67 @@ async fn record_delivery_writes_a_sync_summary_without_a_sighting() {
 			"format": "azw3",
 		}))
 	);
+}
+#[tokio::test]
+async fn telemetry_merges_partial_scalars_and_monotonic_counters() {
+	let (conn, user) = setup().await;
+	let service = DeviceService::new(conn);
+	let (device, _) = service
+		.create_device(&user, DeviceKind::Kobo, None)
+		.await
+		.expect("device");
+
+	service
+		.update_telemetry(
+			&device.id,
+			DeviceTelemetryPatch {
+				battery_percent: Some(88),
+				battery_source: Some("device".to_owned()),
+				sync_status: Some("synced".to_owned()),
+				sync_protocol: Some(DeviceProtocol::Kobo),
+				counters: DeviceTelemetryCountersPatch {
+					progress: Some(10),
+					notes: Some(4),
+					items: Some(20),
+					..Default::default()
+				},
+				..Default::default()
+			},
+		)
+		.await
+		.expect("first telemetry");
+
+	service
+		.update_telemetry(
+			&device.id,
+			DeviceTelemetryPatch {
+				charging: Some(true),
+				sync_status: Some("syncing".to_owned()),
+				sync_protocol: Some(DeviceProtocol::Koreader),
+				counters: DeviceTelemetryCountersPatch {
+					progress: Some(3),
+					notes: Some(7),
+					..Default::default()
+				},
+				..Default::default()
+			},
+		)
+		.await
+		.expect("second telemetry");
+
+	let snapshot = service
+		.telemetry(&device.id)
+		.await
+		.expect("telemetry query")
+		.expect("telemetry snapshot");
+	assert_eq!(snapshot.battery_percent, Some(88));
+	assert_eq!(snapshot.battery_source.as_deref(), Some("device"));
+	assert_eq!(snapshot.charging, Some(true));
+	assert_eq!(snapshot.sync_status.as_deref(), Some("syncing"));
+	assert_eq!(snapshot.sync_protocol, Some(DeviceProtocol::Koreader));
+	assert_eq!(snapshot.counters.progress, Some(10));
+	assert_eq!(snapshot.counters.notes, Some(7));
+	assert_eq!(snapshot.counters.items, Some(20));
 }
 
 async fn book_in(conn: &DatabaseConnection, library_id: &str) -> String {

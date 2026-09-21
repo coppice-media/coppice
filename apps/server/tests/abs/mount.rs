@@ -46,17 +46,25 @@ async fn abs_probes_are_mounted_at_the_root() {
 	assert_eq!(ping.json::<Value>(), json!({ "success": true }));
 }
 
-/// `STUMP_ENABLE_ABS=false` removes the whole surface — the probes and the
-/// socket alike — rather than leaving an unauthenticated endpoint behind.
+/// `STUMP_ENABLE_ABS=false` keeps the compiled route surface behind the
+/// runtime component gate. This permits a HOT transition without rebuilding
+/// the Axum router while returning a stable, machine-readable 503.
 #[tokio::test]
-async fn abs_routes_are_absent_when_the_profile_is_disabled() {
+async fn abs_routes_are_gated_when_the_profile_is_disabled() {
 	let app = app_without_abs().await;
 
-	app.server.get("/status").await.assert_status_not_found();
-	app.server
-		.get("/socket.io/?EIO=4&transport=websocket")
-		.await
-		.assert_status_not_found();
+	for path in ["/status", "/socket.io/?EIO=4&transport=websocket"] {
+		let response = app.server.get(path).await;
+		assert_eq!(
+			response.status_code(),
+			axum::http::StatusCode::SERVICE_UNAVAILABLE,
+			"{path}"
+		);
+		assert_eq!(
+			response.json::<Value>(),
+			json!({"component": "abs", "error": "component_disabled"})
+		);
+	}
 }
 
 /// The socket endpoint exists and takes no credential on the upgrade: the

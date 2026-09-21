@@ -1,0 +1,174 @@
+---
+title: Devices
+description: Register and manage reader clients and integrations from the Coppice Home app
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# Devices
+
+A device is a named reader or integration that has its own Coppice credential.
+The Devices page is the signed-in user's own space: ordinary users see their
+own devices, while the server owner can see all devices. Each device is owned
+by a user and inherits at most that user's permissions. The Home app keeps the
+device kind, endpoint cards, credential hint, last-seen and last-sync activity,
+and optional delivery settings in one place. A device credential can be rotated
+or revoked without changing your Coppice password.
+
+## Open the Home app
+
+Open the Home app at `/app`. The server must have a built Home app directory
+configured with `STUMP_HOME_APP_DIR`; see the [modular deployment
+guide](/docs/guides/configuration/modular-deployment) for serving the static
+app.
+
+Open **Devices** and select **Add client**. The Home app offers these client
+kinds:
+
+| Kind | Home app label | Configure it on |
+| --- | --- | --- |
+| `KOBO` | Kobo | A Kobo eReader using the native Kobo sync protocol |
+| `KOREADER` | KOReader | A KOReader installation using progress sync |
+| `LISEUR` | Liseur | Liseur using the native liseur-sync protocol |
+| `MIHON` | Mihon | Mihon (Tachiyomi) through the Komga-compatible API |
+| `KOMELIA` | Komelia | Komelia through the Komga-compatible API |
+| `OPDS` | OPDS reader | Any OPDS reader, such as Panels, Chunky, or Librera |
+| `ABS` | Audiobookshelf client | Lissen or another Audiobookshelf client |
+| `API` | API client | A script or integration using the native API |
+
+The device registry also has labels for `Browser` and `Worker`. Those kinds are
+not options in the **Add client** dialog, but their cards can still be labelled
+when the server reports them.
+
+## Register a client
+
+<Steps>
+
+<Step>
+
+### Choose a kind and name it
+
+Select a client kind, optionally enter a name (up to 100 characters), and
+choose **Register client**. Coppice mints a credential for that device. An
+empty name receives a server-provided default.
+
+</Step>
+
+<Step>
+
+### Save the one-time secret
+
+The next dialog shows the secret only once. Copy it before closing the dialog;
+the Home app cannot show that full secret again. The dialog also shows the
+endpoint cards returned for that device. Each card includes a ready-to-use URL,
+an optional username, a secret hint, copy buttons, and a QR code for the URL.
+
+If the response has no fixed endpoint for a client kind, the dialog says to use
+the secret as an API key against the server's origin.
+
+</Step>
+
+<Step>
+
+### Configure the client
+
+Use the endpoint URL, username, and secret shown by the Home app. The endpoint
+shapes are:
+
+| Kind | Client configuration |
+| --- | --- |
+| Kobo | `{origin}/kobo/{key}` as the Kobo sync endpoint. |
+| KOReader | `{origin}/koreader/{key}`, with the username shown by the app. |
+| OPDS reader | `{origin}/opds/{key}/v1.2` for the URL-keyed OPDS 1.2 endpoint, or `{origin}/opds/v2.0` with Bearer authentication. |
+| Mihon | `{origin}` as a Komga server with the shown username and `X-API-Key`, or `{origin}/api` with Bearer authentication. |
+| Komelia | `{origin}` as a Komga server with the shown username and `X-API-Key`. |
+| Liseur | `{origin}` as the liseur-sync server with Bearer authentication. |
+| API client | `{origin}/api` with Bearer authentication. |
+
+The developer [device endpoint table](/docs/developer/devices#endpoints) is the
+protocol reference for these URLs. Audiobookshelf clients do not have a fixed
+endpoint in that table; follow the endpoint card (or the no-fixed-endpoint
+message) that the Home app returns for the selected client.
+
+</Step>
+
+</Steps>
+
+## Pair a device without a password
+
+Some clients can start device pairing instead of asking you to type a password.
+The device displays a six-digit code or a QR code, then waits while you approve
+the request in a signed-in user surface. The pairing code expires after a short
+window, so start again if it expires.
+
+On the Home app's **Devices** page:
+
+1. Wait for **Waiting for approval** to appear. Each pending request shows the
+   client kind, device name (or **Unnamed device**), remote IP address, and
+   expiry time.
+2. Type the six-digit code shown by the device and select **Approve**. Select
+   **Deny** if you do not recognize the request. On a QR-capable device, scan
+   its QR payload in the Home or mobile user surface to transfer the request;
+   approval still happens from the signed-in user surface.
+3. After approval, the device polls and receives its credential. The secret is
+   issued to that device once; it is not repeated on later polls.
+
+## Manage a registered device
+
+Each active device card shows its kind label, credential hint, registration time,
+last sync, and **Last seen** time. The Home app refreshes the last-seen display
+when a device authenticates and reports when live activity updates are
+unavailable.
+
+From an active card you can:
+
+- **Rename** the device.
+- **Rotate credential**. The current secret stops working, and the new secret
+  is shown once in the same kind of credential dialog. Reconfigure the client
+  before closing it.
+- **Revoke** the device. Its credential stops working immediately. Revoked
+  cards remain visible as revoked records but no longer offer active controls.
+
+## Limit visible libraries
+
+The **Libraries** selector defaults to **All (inherit)**, which means the device
+inherits the libraries its user can see. Select one or more libraries under
+**Restrict to** to give that device a narrower visible set. The scope only
+narrows access; it cannot grant a library the user cannot already open. An
+empty selection hides all libraries from that device.
+
+## Set a comic transform preset
+
+Kobo and KOReader cards have a **Comic transform preset** selector. **Server
+default** leaves delivery at the server default. The device-specific choices
+shown by the Home app are:
+
+- Kobo Clara, Libra, Sage, Elipsa, and Nia (grayscale)
+- Kobo Clara Colour, Libra Colour, and Sage Colour
+- KOReader (colour WebP CBZ)
+- Phone (colour WebP with tall pages split)
+- Phone + Opus audio (the phone preset with audiobooks transcoded to Opus 64k)
+
+These choices describe how comics are delivered to that device; they do not
+change the stored source file.
+
+## Add a Kindle address
+
+A device card can store a **Kindle address**. Enter the recipient address and
+select **Save**; leave the field empty and save to clear it. After an address is
+saved, the card offers **Send to Kindle**, and it shows recent deliveries. The
+sender address used for the delivery must be on Amazon's approved list.
+
+## Raw API-key fallback
+
+<Callout type="warn" title="Reader-device fallback">
+	Raw API keys still work, but the Devices page is the preferred path for
+	reader devices because it provides the registry bookkeeping described above.
+</Callout>
+
+You can still create a raw API key in the React web UI at
+`/settings/app/api-keys`. A raw key still obeys the owner's permissions and the
+permissions minted for that key. It works for clients that need a
+general-purpose Bearer key, but it does not create the Devices-page bookkeeping:
+there is no device kind label, endpoint card or QR code, last-seen or sync
+summary, per-device library scope, or device credential rotation.

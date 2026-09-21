@@ -15,6 +15,7 @@ use sea_orm::{prelude::*, FromQueryResult, QueryOrder, QuerySelect, QueryTrait};
 
 use crate::{
 	data::CoreContext,
+	guard::PermissionGuard,
 	object::{library::Library, missing_entity::MissingEntity, stats::LibraryStats},
 	pagination::{
 		CursorPaginationInfo, OffsetPaginationInfo, PaginatedResponse, Pagination,
@@ -22,6 +23,7 @@ use crate::{
 	},
 	utils::db_statement,
 };
+use models::shared::enums::UserPermission;
 
 #[derive(Default)]
 pub struct LibraryQuery;
@@ -205,6 +207,7 @@ impl LibraryQuery {
 		Ok(last_visited)
 	}
 
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
 	async fn library_missing_entities(
 		&self,
 		ctx: &Context<'_>,
@@ -214,6 +217,15 @@ impl LibraryQuery {
 	) -> Result<PaginatedResponse<MissingEntity>> {
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let library_id = library_id.to_string();
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		library::Entity::find_for_user(user)
+			.select_only()
+			.column(library::Column::Id)
+			.filter(library::Column::Id.eq(library_id.clone()))
+			.one(conn)
+			.await?
+			.ok_or("Library not found")?;
 
 		let offset_pagination = match pagination.resolve() {
 			Pagination::Offset(info) => info,

@@ -1,36 +1,36 @@
 <script lang="ts">
-	import CopyIcon from '@lucide/svelte/icons/copy';
 	import CheckIcon from '@lucide/svelte/icons/check';
-	import { toast } from 'svelte-sonner';
-	import { Button } from '@stump/ui/components/ui/button';
+	import CopyIcon from '@lucide/svelte/icons/copy';
+	import { Button, type ButtonSize } from '@stump/ui/components/ui/button';
+	import { cn } from '@stump/ui/utils.js';
+	import { copyText } from '$lib/clipboard';
 
-	let { value, what }: { value: string; what: string } = $props();
+	let {
+		value,
+		what,
+		size = 'icon-sm',
+		class: className
+	}: { value: string; what: string; size?: ButtonSize; class?: string } = $props();
 
 	let copied = $state(false);
 
 	async function copy(): Promise<void> {
-		try {
-			await navigator.clipboard.writeText(value);
-			copied = true;
-			setTimeout(() => (copied = false), 1500);
-		} catch {
-			// Clipboard access needs a secure context; plain-http LAN access falls back to a prompt.
-			window.prompt(`Copy the ${what}`, value);
-			toast.info(`Clipboard is unavailable over plain http; copy the ${what} from the prompt.`);
-		}
+		if (!(await copyText(value, what))) return;
+		copied = true;
+		setTimeout(() => (copied = false), 1500);
 	}
 </script>
 
 <Button
 	variant="ghost"
-	size="icon-sm"
-	class="shrink-0"
+	{size}
+	class={cn('shrink-0', className)}
 	onclick={copy}
 	aria-label={copied ? `${what} copied` : `Copy ${what}`}
 	title={`Copy ${what}`}
 >
 	{#if copied}
-		<CheckIcon class="text-emerald-600" />
+		<CheckIcon class="text-primary" />
 	{:else}
 		<CopyIcon />
 	{/if}

@@ -7,7 +7,7 @@ import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import { useEffect, useState } from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
 import { Helmet } from 'react-helmet'
-import { createSearchParams, useLocation, useNavigate } from 'react-router-dom'
+import { createSearchParams, useLocation, useNavigate } from 'react-router'
 
 import { ErrorFallback } from '@/components/ErrorFallback'
 
@@ -108,8 +108,8 @@ const RouterContainer = (props: StumpClientProps) => {
 		>
 			<SDKProvider baseURL={baseUrl || ''} authMethod={props.authMethod || 'session'}>
 				{showQueryTools && <ReactQueryDevtools position="right" />}
-				<Helmet defaultTitle="Stump">
-					<title>Stump</title>
+				<Helmet defaultTitle="Coppice">
+					<title>Coppice</title>
 				</Helmet>
 				<AppRouter />
 				<Toaster />

@@ -33,7 +33,7 @@ pub enum FileError {
 	#[cfg(feature = "pdf")]
 	#[error("{0}")]
 	PdfRendererError(#[from] pdfium_render::prelude::PdfiumError),
-	#[error("Stump is not properly configured to render PDFs")]
+	#[error("Coppice is not properly configured to render PDFs")]
 	PdfConfigurationError,
 	#[error("Failed to process PDF file: {0}")]
 	PdfProcessingError(String),

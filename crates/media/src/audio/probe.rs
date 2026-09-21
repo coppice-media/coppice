@@ -313,19 +313,17 @@ fn probe_track(path: &Path, content_type: ContentType) -> Result<ProbedTrack, Fi
 	})
 }
 
-/// The file's duration in milliseconds.
+/// The audible duration in milliseconds.
 ///
-/// A container states the media duration in its own timebase units; a
-/// container that does not is asked for its audio track's duration instead.
-/// A file whose duration cannot be established is 0, never an error: a book
-/// with one unreadable part should still be listed.
+/// MP4 exposes two useful clocks which bound the audio differently:
+///
+/// * the audio track duration can include encoder priming that an edit list
+///   trims from playback;
+/// * the movie duration can follow a chapter-text track past the end of AAC.
+///
+/// The shorter clock is therefore the playable timeline. For formats that
+/// expose only one, use the one available.
 fn duration_ms(format: &dyn FormatReader) -> i64 {
-	let media = format.media_info();
-	let from_media = media
-		.time_base
-		.zip(media.duration)
-		.and_then(|(time_base, duration)| time_base.calc_duration(duration));
-
 	let from_track = || {
 		let track = format.default_track(TrackType::Audio)?;
 		let time_base = track.time_base?;
@@ -335,9 +333,17 @@ fn duration_ms(format: &dyn FormatReader) -> i64 {
 		time_base.calc_duration(duration)
 	};
 
-	from_media
-		.or_else(from_track)
+	let media = format.media_info();
+	let from_media = media
+		.time_base
+		.zip(media.duration)
+		.and_then(|(time_base, duration)| time_base.calc_duration(duration));
+
+	[from_track(), from_media]
+		.into_iter()
+		.flatten()
 		.map(|time| i64::try_from(time.as_millis()).unwrap_or(i64::MAX))
+		.min()
 		.unwrap_or_default()
 }
 

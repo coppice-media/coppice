@@ -504,15 +504,6 @@ pub(crate) async fn update_book_state(
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
 
 	let transaction = begin_write(conn).await?;
-	persist_kobo_reading_state(
-		&transaction,
-		&user,
-		&book_id,
-		update,
-		raw_payload,
-		device_id,
-	)
-	.await?;
 	let applied = reading_state::apply(
 		&transaction,
 		&user.id,
@@ -520,6 +511,17 @@ pub(crate) async fn update_book_state(
 		head_update,
 	)
 	.await?;
+	if applied.accepted() {
+		persist_kobo_reading_state(
+			&transaction,
+			&user,
+			&book_id,
+			update,
+			raw_payload,
+			device_id,
+		)
+		.await?;
+	}
 	transaction.commit().await?;
 	reading_state::announce(&ctx, &book, &applied);
 

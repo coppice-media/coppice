@@ -15,10 +15,18 @@ pub struct Model {
 	pub id: String,
 	#[sea_orm(column_type = "Text")]
 	pub media_id: String,
-	#[sea_orm(column_type = "Text")]
-	pub device_id: String,
+	/// `Some` for legacy/device sends. Destination sends intentionally have no
+	/// device and keep their owner/target snapshot below instead.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub device_id: Option<String>,
+	#[sea_orm(column_type = "Text", nullable)]
+	pub user_id: Option<String>,
+	#[sea_orm(column_type = "Text", nullable)]
+	pub destination_id: Option<String>,
+	#[sea_orm(column_type = "Text", nullable)]
+	pub destination_name: Option<String>,
 	/// The Kindle address the book was mailed to, as it was registered on the
-	/// device at send time.
+	/// device/destination at send time.
 	#[sea_orm(column_type = "Text")]
 	pub recipient: String,
 	/// Extension of the attachment that went out: `azw3` when it was

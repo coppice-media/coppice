@@ -343,7 +343,7 @@
 	}
 </script>
 
-<svelte:head><title>Settings · Stump ingest</title></svelte:head>
+<svelte:head><title>Settings · Coppice ingest</title></svelte:head>
 
 <div class="flex flex-col gap-6">
 	<div>

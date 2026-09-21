@@ -1,6 +1,12 @@
 use axum::Router;
 
-use crate::config::state::AppState;
+use stump_core::component_runtime::{
+	ComponentDefinition, TransitionMode, COMPONENT_ABS, COMPONENT_API,
+	COMPONENT_CROSSPOINT, COMPONENT_KAVITA, COMPONENT_KOBO, COMPONENT_KOMGA,
+	COMPONENT_KOREADER, COMPONENT_LISEUR_SYNC, COMPONENT_OPDS, COMPONENT_WEBUI,
+};
+
+use crate::{config::state::AppState, middleware::component::gate};
 
 #[cfg(feature = "abs")]
 mod abs_backend;
@@ -31,48 +37,201 @@ mod spa;
 
 #[cfg(feature = "webui")]
 pub(crate) use spa::relative_favicon_path;
+fn server_component_definitions(state: &AppState) -> Vec<ComponentDefinition> {
+	vec![
+		ComponentDefinition::new(
+			COMPONENT_KOREADER,
+			"KOReader sync",
+			"integration",
+			cfg!(feature = "koreader"),
+			state.config.protocols.enable_koreader_sync,
+			TransitionMode::Hot,
+			Vec::<&str>::new(),
+		)
+		.with_activity_source("KOReader route requests"),
+		ComponentDefinition::new(
+			COMPONENT_KOBO,
+			"Kobo sync",
+			"integration",
+			cfg!(feature = "kobo"),
+			state.config.protocols.enable_kobo_sync,
+			TransitionMode::Hot,
+			Vec::<&str>::new(),
+		)
+		.with_activity_source("Kobo route requests"),
+		ComponentDefinition::new(
+			COMPONENT_CROSSPOINT,
+			"CrossPoint delivery",
+			"integration",
+			cfg!(all(feature = "crosspoint", feature = "koreader")),
+			true,
+			TransitionMode::Hot,
+			[COMPONENT_KOREADER],
+		)
+		.with_activity_source("CrossPoint route requests"),
+		ComponentDefinition::new(
+			COMPONENT_KOMGA,
+			"Komga compatibility",
+			"integration",
+			cfg!(feature = "komga"),
+			state.config.protocols.enable_komga,
+			TransitionMode::Hot,
+			Vec::<&str>::new(),
+		)
+		.with_activity_source("Komga route requests"),
+		ComponentDefinition::new(
+			COMPONENT_KAVITA,
+			"Kavita compatibility",
+			"integration",
+			cfg!(feature = "kavita"),
+			state.config.protocols.enable_kavita,
+			TransitionMode::Hot,
+			Vec::<&str>::new(),
+		)
+		.with_activity_source("Kavita route requests"),
+		ComponentDefinition::new(
+			COMPONENT_ABS,
+			"Audiobookshelf compatibility",
+			"integration",
+			cfg!(feature = "abs"),
+			state.config.protocols.enable_abs,
+			TransitionMode::Hot,
+			Vec::<&str>::new(),
+		)
+		.with_activity_source("Audiobookshelf route requests"),
+		ComponentDefinition::new(
+			COMPONENT_LISEUR_SYNC,
+			"Liseur sync",
+			"integration",
+			cfg!(feature = "liseur-sync"),
+			true,
+			TransitionMode::Hot,
+			Vec::<&str>::new(),
+		)
+		.with_activity_source("Liseur route requests"),
+		ComponentDefinition::new(
+			COMPONENT_OPDS,
+			"OPDS",
+			"integration",
+			cfg!(feature = "opds"),
+			true,
+			TransitionMode::Hot,
+			Vec::<&str>::new(),
+		)
+		.with_activity_source("OPDS route requests"),
+		ComponentDefinition::new(
+			COMPONENT_WEBUI,
+			"Web UI",
+			"presentation",
+			cfg!(feature = "webui"),
+			state.config.protocols.enable_webui,
+			TransitionMode::Restart,
+			Vec::<&str>::new(),
+		),
+		ComponentDefinition::new(
+			COMPONENT_API,
+			"Native API",
+			"api",
+			true,
+			true,
+			TransitionMode::Hot,
+			Vec::<&str>::new(),
+		)
+		.with_activity_source("native API route requests"),
+	]
+}
 
 #[cfg(not(feature = "webui"))]
 pub(crate) fn relative_favicon_path(_webui_enabled: bool) -> Option<String> {
 	None
 }
+pub(crate) fn install_worker_job_registry(app_state: &AppState) {
+	app_state.install_worker_registry(worker_job_registry(app_state));
+	#[cfg(feature = "readium")]
+	{
+		let jobs = app_state.worker_jobs();
+		if !jobs.has_result_validator() {
+			let validator = stump_library::sync_maps::alignment_result_validator(
+				app_state.conn.clone(),
+				app_state.config.get_transform_cache_dir(),
+			);
+			if !jobs.set_result_validator(validator) && !jobs.has_result_validator() {
+				panic!("read-aloud ALIGN result validator could not be installed");
+			}
+		}
+		if !jobs.has_result_validator() {
+			panic!("read-aloud ALIGN result validator is not installed");
+		}
+	}
+}
 
 pub async fn mount(app_state: AppState) -> Router<AppState> {
+	if let Err(error) = app_state
+		.register_components(server_component_definitions(&app_state))
+		.await
+	{
+		tracing::error!(?error, "Failed to register server runtime components");
+	}
+
 	// The job kinds' local implementations, installed before any route that
 	// can enqueue is mounted: without them a `transcode` on a server that has
 	// `ffmpeg` would answer `needs_worker`. Installed here rather than by the
 	// binary so the test harness and any other router owner get it too.
-	app_state.install_worker_registry(worker_job_registry(&app_state));
+	install_worker_job_registry(&app_state);
 	let mut app_router = Router::new();
 
 	#[cfg(feature = "koreader")]
-	if app_state.config.protocols.enable_koreader_sync {
-		app_router = app_router.merge(koreader_backend::mount(app_state.clone()));
+	{
+		app_router = app_router.merge(gate(
+			koreader_backend::mount(app_state.clone()),
+			app_state.clone(),
+			COMPONENT_KOREADER,
+		));
 	}
 
 	#[cfg(feature = "kobo")]
-	if app_state.config.protocols.enable_kobo_sync {
-		app_router = app_router.merge(kobo_backend::mount(app_state.clone()));
+	{
+		app_router = app_router.merge(gate(
+			kobo_backend::mount(app_state.clone()),
+			app_state.clone(),
+			COMPONENT_KOBO,
+		));
 	}
 
 	#[cfg(feature = "komga")]
-	if app_state.config.protocols.enable_komga {
-		app_router = app_router.merge(komga::mount(app_state.clone()));
+	{
+		app_router = app_router.merge(gate(
+			komga::mount(app_state.clone()),
+			app_state.clone(),
+			COMPONENT_KOMGA,
+		));
 	}
 
 	#[cfg(feature = "liseur-sync")]
 	{
-		app_router = app_router.merge(liseur_sync::mount(app_state.clone()));
+		app_router = app_router.merge(gate(
+			liseur_sync::mount(app_state.clone()),
+			app_state.clone(),
+			COMPONENT_LISEUR_SYNC,
+		));
 	}
 
 	#[cfg(feature = "kavita")]
-	if app_state.config.protocols.enable_kavita {
-		app_router = app_router.merge(kavita::mount(app_state.clone()));
+	{
+		app_router = app_router.merge(gate(
+			kavita::mount(app_state.clone()),
+			app_state.clone(),
+			COMPONENT_KAVITA,
+		));
 	}
 
 	#[cfg(feature = "abs")]
-	if app_state.config.protocols.enable_abs {
-		app_router = app_router.merge(abs_backend::mount(app_state.clone()));
+	{
+		app_router = app_router.merge(gate(
+			abs_backend::mount(app_state.clone()),
+			app_state.clone(),
+			COMPONENT_ABS,
+		));
 	}
 
 	#[cfg(not(feature = "abs"))]
@@ -89,13 +248,36 @@ pub async fn mount(app_state: AppState) -> Router<AppState> {
 		);
 	}
 
+	#[cfg(not(feature = "koreader"))]
+	if app_state.config.protocols.enable_koreader_sync {
+		tracing::warn!(
+			"ENABLE_KOREADER_SYNC is enabled, but this server was compiled without the `koreader` feature; serving native API routes without KOReader compatibility"
+		);
+	}
+
+	#[cfg(not(feature = "kobo"))]
+	if app_state.config.protocols.enable_kobo_sync {
+		tracing::warn!(
+			"ENABLE_KOBO_SYNC is enabled, but this server was compiled without the `kobo` feature; serving native API routes without Kobo compatibility"
+		);
+	}
+
 	// Mounted before the web UI so static app bases (`/editor`, `/app`) are
 	// not swallowed by the SPA fallback; they coexist with a full build.
 	app_router = app_router.merge(static_apps::mount(&app_state));
 
 	#[cfg(feature = "webui")]
-	if app_state.config.protocols.enable_webui {
-		app_router = app_router.merge(spa::mount(app_state.clone()));
+	let web_ui_owns_root = app_state.component_enabled(COMPONENT_WEBUI);
+	#[cfg(not(feature = "webui"))]
+	let web_ui_owns_root = false;
+
+	if web_ui_owns_root {
+		#[cfg(feature = "webui")]
+		{
+			app_router = app_router.merge(spa::mount(app_state.clone()));
+		}
+	} else {
+		app_router = app_router.merge(static_apps::home_landing(&app_state));
 	}
 
 	#[cfg(all(not(feature = "webui"), feature = "opds"))]
@@ -119,11 +301,19 @@ pub async fn mount(app_state: AppState) -> Router<AppState> {
 		);
 	}
 
-	app_router = app_router.merge(api::mount(app_state.clone()).await);
+	app_router = app_router.merge(gate(
+		api::mount(app_state.clone()).await,
+		app_state.clone(),
+		COMPONENT_API,
+	));
 
 	#[cfg(feature = "opds")]
 	{
-		app_router = app_router.merge(opds_backend::mount(app_state));
+		app_router = app_router.merge(gate(
+			opds_backend::mount(app_state.clone()),
+			app_state.clone(),
+			COMPONENT_OPDS,
+		));
 	}
 
 	app_router

@@ -1,0 +1,15 @@
+{
+	"results": [
+		{
+			"title": "Fixture Book & Edition",
+			"authors": ["Ada Lovelace", "Grace Hopper"],
+			"category": "ebooks",
+			"size_bytes": 4096,
+			"seeders": 12,
+			"leechers": 2,
+			"published_at": "2026-09-13T00:00:00Z",
+			"info_hash": "0123456789abcdef0123456789abcdef01234567",
+			"download_url": "/fixture.torrent?download_token=fixture-only"
+		}
+	]
+}

@@ -25,54 +25,50 @@ use models::{
 	entity::{
 		emailer,
 		emailer_send_record::{self, AttachmentMetaModel},
+		kindle_destination,
 		user::AuthUser,
 	},
 	shared::enums::UserPermission,
 };
-use sea_orm::{DatabaseConnection, NotSet, Set};
+
+use sea_orm::{
+	sea_query::Expr, ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait,
+	IntoActiveModel, NotSet, QueryFilter, Set,
+};
+
+use crate::{data::CoreContext, guard::PermissionGuard, mutation::emailer::sender};
 use stump_kindle::{
-	BokoConverter, Delivery, KindleDeliveryRow, KindleError, KindleMailer, KindleResult,
-	KindleSend,
+	BokoConverter, KindleDeliveryRow, KindleError, KindleMailer, KindleResult, KindleSend,
 };
 use stump_notify::EmailChannel;
 
-use crate::{data::CoreContext, guard::PermissionGuard, mutation::emailer::sender};
-
-/// What one send-to-Kindle delivery did: the stored `kindle_deliveries` row,
-/// plus the device's name so the caller can say "sent Dune.azw3 (412 KB) to
-/// Paperwhite" without a second query.
+/// What one legacy device send did: the stored row plus the resolved device
+/// name. This shape is intentionally unchanged: mobile clients rely on
+/// `deviceId: String!` for `kindleDeliveries` and `sendToKindle`.
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct KindleDelivery {
 	pub id: ID,
 	pub media_id: String,
 	pub device_id: String,
 	pub device_name: String,
-	/// The address the book was mailed to, as registered on the device when
-	/// the delivery happened.
 	pub recipient: String,
-	/// Extension of the attachment that went out: `azw3` when it was
-	/// converted for the Kindle, otherwise the book's own format.
 	pub format: String,
-	/// Size of that attachment.
 	pub bytes: u64,
-	/// Whether the book was converted before sending.
 	pub converted: bool,
-	/// Why the book was sent unconverted — usually that the operator has no
-	/// `boko` installed. `null` when it was converted, and never an error:
-	/// Amazon converts an EPUB itself.
 	pub note: Option<String>,
-	/// Why the delivery failed, when it did. A failed send is recorded, which
-	/// is what makes this a delivery history rather than a success list.
 	pub error: Option<String>,
 	pub sent_at: DateTime<FixedOffset>,
 }
 
 impl KindleDelivery {
-	pub fn new(row: KindleDeliveryRow, device_name: String) -> Self {
-		Self {
+	/// Legacy rows are guaranteed to have a device id by the legacy query and
+	/// mutation path. Returning `None` keeps the invariant explicit instead of
+	/// manufacturing an empty id for a destination row.
+	pub fn from_legacy(row: KindleDeliveryRow, device_name: String) -> Option<Self> {
+		Some(Self {
 			id: ID::from(row.id),
 			media_id: row.media_id,
-			device_id: row.device_id,
+			device_id: row.device_id?,
 			device_name,
 			recipient: row.recipient,
 			format: row.format,
@@ -81,13 +77,68 @@ impl KindleDelivery {
 			note: row.note,
 			error: row.error,
 			sent_at: row.sent_at,
-		}
+		})
 	}
 }
 
-impl From<Delivery> for KindleDelivery {
-	fn from(delivery: Delivery) -> Self {
-		Self::new(delivery.row, delivery.device_name)
+/// Destination-only delivery output. It deliberately does not reuse the
+/// legacy `KindleDelivery` shape: destination sends have no device id, while
+/// mobile clients must keep seeing `deviceId: String!` on the old type.
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct KindleDestinationDelivery {
+	pub id: ID,
+	pub media_id: String,
+	pub destination_id: ID,
+	pub destination_name: String,
+	pub destination_email: String,
+	pub recipient: String,
+	pub format: String,
+	pub bytes: u64,
+	pub converted: bool,
+	pub note: Option<String>,
+	pub error: Option<String>,
+	pub sent_at: DateTime<FixedOffset>,
+}
+
+impl KindleDestinationDelivery {
+	pub fn from_row(row: KindleDeliveryRow) -> Option<Self> {
+		Some(Self {
+			id: ID::from(row.id),
+			media_id: row.media_id,
+			destination_id: ID::from(row.destination_id?),
+			destination_name: row.destination_name?,
+			destination_email: row.recipient.clone(),
+			recipient: row.recipient,
+			format: row.format,
+			bytes: row.bytes.max(0) as u64,
+			converted: row.converted,
+			note: row.note,
+			error: row.error,
+			sent_at: row.sent_at,
+		})
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct KindleDestination {
+	pub id: ID,
+	pub name: String,
+	pub email: String,
+	pub is_default: bool,
+	pub created_at: DateTime<FixedOffset>,
+	pub updated_at: DateTime<FixedOffset>,
+}
+
+impl From<kindle_destination::Model> for KindleDestination {
+	fn from(model: kindle_destination::Model) -> Self {
+		Self {
+			id: ID::from(model.id),
+			name: model.name,
+			email: model.email,
+			is_default: model.is_default,
+			created_at: model.created_at,
+			updated_at: model.updated_at,
+		}
 	}
 }
 
@@ -145,7 +196,123 @@ impl KindleMutation {
 		.send_to_kindle(user, device_id.as_str(), media_id.as_str())
 		.await?;
 
-		Ok(delivery.into())
+		KindleDelivery::from_legacy(delivery.row, delivery.device_name)
+			.ok_or_else(|| "legacy Kindle delivery had no device id".into())
+	}
+	/// Creates or updates one destination owned by the current user. Amazon
+	/// only accepts mail from an approved sender configured in the server SMTP
+	/// emailer; this mutation validates the recipient syntax but cannot verify
+	/// Amazon's allowlist.
+	async fn upsert_kindle_destination(
+		&self,
+		ctx: &Context<'_>,
+		id: Option<ID>,
+		name: String,
+		email: String,
+		make_default: bool,
+	) -> Result<KindleDestination> {
+		let core_ctx = ctx.data::<CoreContext>()?;
+		let user = &ctx.data::<stump_auth::AuthContext>()?.user;
+		let conn = core_ctx.conn.as_ref();
+		let name = name.trim().to_owned();
+		if name.is_empty() {
+			return Err("Kindle destination name cannot be blank".into());
+		}
+		let email = stump_devices::normalize_kindle_email(&email)
+			.map_err(|error| async_graphql::Error::new(error.to_string()))?;
+		let now = chrono::Utc::now().into();
+
+		let creating = id.is_none();
+		let mut model = if let Some(id) = id {
+			kindle_destination::Entity::find_by_id(id.to_string())
+				.filter(kindle_destination::Column::UserId.eq(&user.id))
+				.one(conn)
+				.await?
+				.ok_or("Kindle destination not found")?
+				.into_active_model()
+		} else {
+			kindle_destination::ActiveModel {
+				id: Set(uuid::Uuid::new_v4().to_string()),
+				user_id: Set(user.id.clone()),
+				name: Set(name.clone()),
+				email: Set(email.clone()),
+				is_default: Set(make_default),
+				created_at: Set(now),
+				updated_at: Set(chrono::Utc::now().into()),
+			}
+		};
+		model.name = Set(name);
+		model.email = Set(email);
+		model.updated_at = Set(chrono::Utc::now().into());
+		if make_default || creating {
+			model.is_default = Set(make_default);
+		}
+		let destination = if creating {
+			model.insert(conn).await?
+		} else {
+			model.update(conn).await?
+		};
+		if destination.is_default {
+			kindle_destination::Entity::update_many()
+				.filter(kindle_destination::Column::UserId.eq(&user.id))
+				.filter(kindle_destination::Column::Id.ne(&destination.id))
+				.col_expr(kindle_destination::Column::IsDefault, Expr::value(false))
+				.exec(conn)
+				.await?;
+		}
+		Ok(destination.into())
+	}
+
+	async fn delete_kindle_destination(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
+		let core_ctx = ctx.data::<CoreContext>()?;
+		let user = &ctx.data::<stump_auth::AuthContext>()?.user;
+		let result = kindle_destination::Entity::delete_many()
+			.filter(kindle_destination::Column::Id.eq(id.to_string()))
+			.filter(kindle_destination::Column::UserId.eq(&user.id))
+			.exec(core_ctx.conn.as_ref())
+			.await?;
+		Ok(result.rows_affected > 0)
+	}
+
+	#[graphql(guard = "PermissionGuard::one(UserPermission::EmailSend)")]
+	async fn send_to_kindle_destination(
+		&self,
+		ctx: &Context<'_>,
+		media_id: ID,
+		destination_id: ID,
+	) -> Result<KindleDestinationDelivery> {
+		let core_ctx = ctx.data::<CoreContext>()?;
+		let user = &ctx.data::<stump_auth::AuthContext>()?.user;
+		let conn = core_ctx.conn.as_ref();
+		let encryption_key = core_ctx.get_encryption_key().await?;
+		let emailer = sender::get_emailer(conn).await?;
+		let config =
+			sender::build_emailer_client_config(encryption_key, emailer.clone())?;
+		let max_attachment_size_bytes = emailer.max_attachment_size_bytes;
+		let mailer = EmailChannelMailer {
+			channel: EmailChannel::new(config),
+			conn,
+			user,
+			emailer,
+			media_id: media_id.to_string(),
+		};
+		let work_dir = tempfile::Builder::new()
+			.prefix("send-to-kindle-")
+			.tempdir_in(core_ctx.config.get_cache_dir())?;
+		let devices = core_ctx.devices();
+		let delivery = KindleSend {
+			conn,
+			devices: &devices,
+			mailer: &mailer,
+			converter: &BokoConverter,
+			work_dir: work_dir.path(),
+			max_attachment_size_bytes,
+		}
+		.send_to_destination(user, destination_id.as_str(), media_id.as_str())
+		.await?;
+		KindleDestinationDelivery::from_row(delivery.row).ok_or_else(|| {
+			"destination Kindle delivery lacked destination snapshot".into()
+		})
 	}
 }
 

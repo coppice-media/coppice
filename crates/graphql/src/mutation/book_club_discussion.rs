@@ -235,13 +235,18 @@ impl BookClubDiscussionMutation {
 		let member = get_member_for_user(&discussion.book_club_id, user, conn).await?;
 
 		if let Some(ce_id) = custom_emoji_id {
-			let exists = custom_emoji::Entity::find_by_id(ce_id)
+			let emoji = custom_emoji::Entity::find_by_id(ce_id)
+				.one(conn)
+				.await?
+				.ok_or("Custom emoji not found")?;
+			let creator_is_member = book_club_member::Entity::find()
+				.filter(book_club_member::Column::BookClubId.eq(&discussion.book_club_id))
+				.filter(book_club_member::Column::UserId.eq(&emoji.created_by_id))
 				.one(conn)
 				.await?
 				.is_some();
-
-			if !exists {
-				return Err("Custom emoji not found".into());
+			if !creator_is_member && !user.is_server_owner {
+				return Err("Custom emoji is not part of this club's catalog".into());
 			}
 		}
 

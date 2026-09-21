@@ -1,0 +1,76 @@
+---
+title: CrossPoint rich sync
+description: Keyed CrossPoint Reader progress, annotation, metadata, and statistics sync
+---
+
+Coppice keeps the existing KOReader/KOSync contract unchanged and adds the
+CrossPoint rich lane below the credential-keyed path:
+
+```text
+/koreader/{api_key}/api/v1
+```
+
+There is deliberately no root `/api/v1` CrossPoint mount. That path belongs to
+an existing server API and must not become an unkeyed alias.
+
+## Authentication and ownership
+
+Every request passes the existing `api_key_middleware` and
+`AccessKoreaderSync` authorization. The API key is the one prefixed key minted
+for the registered `DeviceKind::Crosspoint` device. Middleware binds
+`AuthContext.device_id` to that credential's live registry row and narrows the
+user's library scope before the handler runs.
+
+A body `device_id` is diagnostic input only. If it is present and differs from
+the bound registry id, the request is rejected with `403`; handlers never select
+a device from the body. Browser/session requests have no device binding and
+cannot write this device-owned lane.
+
+## Routes
+
+| Method | Route | Contract |
+| --- | --- | --- |
+| `PUT` / `GET` | `/progress` | Rich progress write/list; list limit defaults to 100 and is capped at 500 |
+| `GET` | `/progress/{document}` | Per-device progress detail, newest first |
+| `GET` / `PUT` | `/bookmarks/{document}` | Cursor delta and batches of at most 50; tombstones are retained forever |
+| `GET` / `PUT` | `/clippings/{document}` | Cursor delta and batches of at most 50; tombstones are retained forever |
+| `PUT` / `GET` | `/stats/global` | Per-device replacing snapshot and raw device rows |
+| `PUT` | `/stats/books` | At most 20 per-device replacing book snapshots |
+| `GET` | `/stats/books/{document}` | Device snapshots for one document |
+| `GET` | `/stats/summary` | Read-time scalar/bucket aggregation, history union/re-anchor, and max streak |
+| `PUT` / `GET` | `/documents` | At most 50 metadata records; omitted fields preserve prior values |
+
+Document identifiers are opaque CrossPoint values matching
+`[A-Za-z0-9._-]{1,64}`. Rich position values are bounded (`pctQ` 0..1,000,000,
+`spine/page/pages` uint16, `anchor` at most 48 bytes, `xpath` at most 120 bytes).
+Malformed optional positions are ignored while a valid stock progress update is
+kept; an omitted position preserves the previous value.
+
+Bookmark and clipping delta cursors use server `updated_at` values and return
+oldest-first rows strictly newer than `since`; `more` indicates another page.
+Bookmark ids are the first 16 bytes of SHA-256(xpath), and clipping ids are the
+first 16 bytes of SHA-256(decimal `created_at` + text). A deleted row is a
+permanent tombstone, not a request to delete another user's data.
+
+Stats global writes replace only the authenticated device snapshot. Summary
+aggregation happens on reads, so retries and reconnects do not double count.
+The 92-byte/730-day history bitmap is re-anchored before device bitmaps are
+merged. Runtime and chapter facts remain local facts; CrossPoint sync does not
+invent abridged status or media structure.
+
+## Physical-client limitation
+
+The pinned firmware
+`c33a8b0e883816c22cb1304e51464a4a04fd16dd` currently sends only stock
+`/users/auth` and `/syncs/progress` requests. It has no custom rich `/api/v1`
+URL setting and does not call the rich bookmarks, clippings, stats, or document
+routes. The rich API is therefore ready for a future firmware/companion client;
+registering a CrossPoint device does not imply that this firmware can be
+configured to use the rich lane.
+
+## References
+
+- crosspoint-sync `d4cd96649dfcdded47ef40e939f994ebb923dbf6`, `docs/API.md`
+- CrossPoint firmware `c33a8b0e883816c22cb1304e51464a4a04fd16dd`,
+  `KOReaderSyncClient.cpp` and `KOReaderSyncActivity.cpp`
+- Calibre plugin `460c53088860a118c4f408cb4bc37d3e3dea74d6`

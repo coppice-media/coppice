@@ -37,7 +37,7 @@ impl Default for OPDSAuthenticationDocument {
 		Self {
 			id: String::from("/opds/v2.0/auth"),
 			authentication: vec![OPDSAuthenticationFlow::default()],
-			title: String::from("Stump OPDS V2 Auth"),
+			title: String::from("Coppice OPDS V2 Auth"),
 			description: None,
 			links: Some(vec![OPDSLink::help()]),
 		}
@@ -119,7 +119,7 @@ mod tests {
 		let auth_doc = OPDSAuthenticationDocument::default();
 		assert_eq!(auth_doc.id, "/opds/v2.0/auth");
 		assert_eq!(auth_doc.authentication.len(), 1);
-		assert_eq!(auth_doc.title, "Stump OPDS V2 Auth");
+		assert_eq!(auth_doc.title, "Coppice OPDS V2 Auth");
 		assert_eq!(auth_doc.description, None);
 		assert_eq!(auth_doc.links.unwrap().len(), 1);
 	}

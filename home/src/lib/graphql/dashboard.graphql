@@ -14,6 +14,10 @@ query DashboardViewer {
 	}
 }
 
+# `readProgress` is the head (`reading_heads`): `percentageCompleted` is the
+# whole-publication progression every lane writes, `page` is the better label
+# for a paged book, and `positionMs` (against `audio.durationMs`) is the
+# audiobook twin of both.
 fragment DashboardBookCard on Media {
 	id
 	resolvedName
@@ -28,8 +32,12 @@ fragment DashboardBookCard on Media {
 		id
 		resolvedName
 	}
+	audio {
+		durationMs
+	}
 	readProgress {
 		page
+		positionMs
 		percentageCompleted
 		elapsedSeconds
 		updatedAt
@@ -64,6 +72,62 @@ query DashboardJobs($pagination: Pagination!) {
 			completedAt
 		}
 	}
+}
+
+# The *Recent highlights* widget: the newest annotations across every book
+# and source. The hub (`/annotations`) reads the full `ConsoleAnnotationFields`
+# shape; the widget only needs what fits on one row.
+query DashboardRecentAnnotations($pageSize: Int!) {
+	annotations(pagination: { page: 1, pageSize: $pageSize }) {
+		total
+		items {
+			id
+			kind
+			source
+			sourceDeviceName
+			excerpt
+			note
+			chapterTitle
+			page
+			createdAt
+			book {
+				key
+				mediaId
+				title
+			}
+		}
+	}
+}
+
+# `/account`: the shared `Me` query (packages/stump-ui) carries what the shell
+# needs; the account screen wants the rest of the profile as well.
+query AccountProfile {
+	me {
+		id
+		username
+		isServerOwner
+		oidcEmail
+		createdAt
+		lastLogin
+		loginSessionsCount
+		maxSessionsAllowed
+		finishedReadingSessionsCount
+		permissions
+		avatar {
+			url
+		}
+		preferences {
+			appTheme
+			locale
+		}
+	}
+}
+
+# Server owners can end every session of an account, their own included; a
+# regular user has no self-service equivalent, so `/account` only offers it
+# to owners.
+mutation AccountSignOutEverywhere($id: ID!) {
+	deleteUserSessions(id: $id)
 }
 
 # The same stream the web UI's `useCoreEvent` hook reads, narrowed to what the

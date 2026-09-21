@@ -52,10 +52,12 @@ use stump_core::opds::v2_0::{
 use stump_devices::{CredentialRef, Protocol};
 use tower_sessions::Session;
 
+#[cfg(feature = "komga")]
+use crate::config::session::SESSION_NAME;
 use crate::{
 	config::{
 		jwt::extract_user_from_jwt,
-		session::{delete_cookie_header, SESSION_NAME, SESSION_USER_KEY},
+		session::{delete_cookie_header, SESSION_USER_KEY},
 		state::AppState,
 	},
 	errors::{api_error_message, APIError, APIResult},

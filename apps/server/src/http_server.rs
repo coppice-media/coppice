@@ -27,6 +27,11 @@ use stump_core::config::StumpConfig;
 
 pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	let core = StumpCore::new(config.clone()).await;
+	let server_ctx = core.get_context();
+	let app_state = server_ctx.arced();
+	// The scheduler and provider host both attach the worker queue, so install
+	// local job kinds before either can initialize that queue.
+	routers::install_worker_job_registry(&app_state);
 
 	// Server-only resources are started lazily or only when their configuration
 	// requires them; the context retains the shared lifecycle handles.
@@ -60,7 +65,7 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	// The scheduler and watcher are optional server-owned startup handles. The
 	// context can start either one later when a request changes configuration.
 	let _scheduler = if config.jobs.enable_background_jobs {
-		core.init_scheduler()
+		core.init_scheduler_with_maintenance()
 			.await
 			.map_err(|e| ServerError::ServerStartError(e.to_string()))?
 	} else {
@@ -85,8 +90,6 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 		}
 	};
 
-	let server_ctx = core.get_context();
-	let app_state = server_ctx.arced();
 	// The provider host (Mode B virtual libraries) starts only when
 	// `providers.enable_providers` is on; it registers the `provider://`
 	// media resolver for every protocol.
@@ -182,7 +185,7 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 		.await
 		.map_err(|e| ServerError::ServerStartError(e.to_string()))?;
 
-	tracing::info!("⚡️ Stump HTTP server starting on http://{}", addr);
+	tracing::info!("⚡️ Coppice HTTP server starting on http://{}", addr);
 
 	// TODO: Experiment with higher concurrency, YEARS ago at this point (before enforcing WAL even)
 	// I experienced multi-writer issues but perhaps with SeaORM + WAL we can have parallel scans.

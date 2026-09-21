@@ -1,5 +1,6 @@
-//! `meta-edit`: bulk-edit the metadata Stump reads out of comic archives and
-//! e-books, then rename the files from the values it just wrote.
+//! `meta-edit`: bulk-edit the metadata Stump reads out of comic archives,
+//! e-books and assembled M4B/M4A audiobooks, then rename the files from the
+//! values it just wrote.
 //!
 //! Behaviour provenance (read, never copied — MangaManager is GPL-3.0): the
 //! Kavita external-tools guide lists MangaManager as the GUI that edits
@@ -11,6 +12,13 @@
 //! (<https://www.w3.org/TR/epub-33/#sec-opf-dcmes-optional>); series and series
 //! index live in calibre's `<meta name="calibre:series">` pair, which is what
 //! `crate::calibre::parse_opf` already reads back.
+//!
+//! MP4 audiobook values use the iTunes item list that `mp4ameta` and
+//! `stump_media::audio` already read: title (`©nam`), author (`©ART`), narrator
+//! (`©wrt`/composer), series (`©alb`), year (`©day`), tags (`©gen`) and
+//! description (`©des`, the `desc` atom). The tagger is given only the
+//! metadata-item write flag, so media samples, artwork and both chapter
+//! mechanisms remain untouched.
 //!
 //! Values are set, never cleared, and they travel as strings so `3.5` and
 //! `007` survive a round trip; `volume`/`year` must still parse as integers
@@ -43,7 +51,7 @@ use std::{
 	borrow::Cow,
 	collections::BTreeSet,
 	fs::File,
-	io::Read,
+	io::{Read, Seek, SeekFrom},
 	path::{Path, PathBuf},
 };
 
@@ -76,6 +84,7 @@ const OPF_MEDIA_TYPE: &str = "application/oebps-package+xml";
 const DC_NAMESPACE: &str = "http://purl.org/dc/elements/1.1/";
 const CALIBRE_SERIES: &str = "calibre:series";
 const CALIBRE_SERIES_INDEX: &str = "calibre:series_index";
+const MP4_TAGS_ENTRY: &str = "moov/udta/meta/ilst";
 /// Widest zero-padding a placeholder may ask for.
 const MAX_PAD_WIDTH: usize = 16;
 
@@ -130,25 +139,29 @@ impl Default for MetaEditOptions {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "snake_case")]
 pub struct FieldSet {
-	/// `Series` / `<meta name="calibre:series">`.
+	/// `Series` / `<meta name="calibre:series">`; MP4 `©alb`.
 	pub series: Option<String>,
 	/// `Number` / `<meta name="calibre:series_index">`; may be a decimal.
 	pub number: Option<String>,
 	/// `Volume`; an integer, and a `ComicInfo.xml` field only.
 	pub volume: Option<String>,
-	/// `Title` / `dc:title`.
+	/// `Title` / `dc:title`; MP4 `©nam`.
 	pub title: Option<String>,
-	/// `Writer` / `dc:creator`.
+	/// `Writer` / `dc:creator`; MP4 `©ART`.
 	pub writer: Option<String>,
+	/// Narrator; MP4 `©wrt`/composer only.
+	pub narrator: Option<String>,
 	/// `Publisher` / `dc:publisher`.
 	pub publisher: Option<String>,
-	/// `Year` / the `YYYY` of `dc:date`; an integer.
+	/// `Year` / the `YYYY` of `dc:date`; an integer; MP4 `©day`.
 	pub year: Option<String>,
 	/// `LanguageISO` / `dc:language`.
 	pub language: Option<String>,
-	/// `Tags` / one `dc:subject` per tag. Replaces the file's tag list
-	/// wholesale; empty means "no opinion".
+	/// `Tags` / one `dc:subject` per tag; MP4 `©gen`.
+	/// Replaces the file's tag list wholesale; empty means "no opinion".
 	pub tags: Vec<String>,
+	/// Description; MP4 `desc`.
+	pub description: Option<String>,
 }
 
 impl FieldSet {
@@ -161,9 +174,11 @@ impl FieldSet {
 			(Field::Volume, self.volume.as_deref()),
 			(Field::Title, self.title.as_deref()),
 			(Field::Writer, self.writer.as_deref()),
+			(Field::Narrator, self.narrator.as_deref()),
 			(Field::Publisher, self.publisher.as_deref()),
 			(Field::Year, self.year.as_deref()),
 			(Field::Language, self.language.as_deref()),
+			(Field::Description, self.description.as_deref()),
 		] {
 			let Some(value) = value.map(str::trim) else {
 				continue;
@@ -245,12 +260,16 @@ pub enum Field {
 	Title,
 	/// Writer/author.
 	Writer,
+	/// Narrator; the MP4 composer tag.
+	Narrator,
 	/// Publisher.
 	Publisher,
 	/// Publication year.
 	Year,
 	/// Language tag.
 	Language,
+	/// Free-form description; the MP4 description tag.
+	Description,
 	/// Free-form tag list.
 	Tags,
 }
@@ -264,10 +283,12 @@ impl Field {
 			Field::Volume => "volume",
 			Field::Title => "title",
 			Field::Writer => "writer",
+			Field::Narrator => "narrator",
 			Field::Publisher => "publisher",
 			Field::Year => "year",
 			Field::Language => "language",
 			Field::Tags => "tags",
+			Field::Description => "description",
 		}
 	}
 }
@@ -280,6 +301,8 @@ pub enum Container {
 	ComicInfo,
 	/// An EPUB's package document.
 	Opf,
+	/// An M4B/M4A iTunes metadata item list.
+	Mp4Tags,
 }
 
 impl Container {
@@ -287,6 +310,7 @@ impl Container {
 		match self {
 			Container::ComicInfo => "ComicInfo.xml",
 			Container::Opf => "the package document",
+			Container::Mp4Tags => "the MP4-tags container",
 		}
 	}
 }
@@ -299,10 +323,12 @@ struct Values {
 	volume: Option<String>,
 	title: Option<String>,
 	writer: Option<String>,
+	narrator: Option<String>,
 	publisher: Option<String>,
 	year: Option<String>,
 	language: Option<String>,
 	tags: Option<String>,
+	description: Option<String>,
 }
 
 impl Values {
@@ -313,10 +339,12 @@ impl Values {
 			Field::Volume => &mut self.volume,
 			Field::Title => &mut self.title,
 			Field::Writer => &mut self.writer,
+			Field::Narrator => &mut self.narrator,
 			Field::Publisher => &mut self.publisher,
 			Field::Year => &mut self.year,
 			Field::Language => &mut self.language,
 			Field::Tags => &mut self.tags,
+			Field::Description => &mut self.description,
 		}
 	}
 
@@ -327,10 +355,12 @@ impl Values {
 			Field::Volume => self.volume.as_deref(),
 			Field::Title => self.title.as_deref(),
 			Field::Writer => self.writer.as_deref(),
+			Field::Narrator => self.narrator.as_deref(),
 			Field::Publisher => self.publisher.as_deref(),
 			Field::Year => self.year.as_deref(),
 			Field::Language => self.language.as_deref(),
 			Field::Tags => self.tags.as_deref(),
+			Field::Description => self.description.as_deref(),
 		}
 	}
 
@@ -350,16 +380,14 @@ impl Values {
 
 // ---------------------------------------------------------------------------
 // Plan detail
-// ---------------------------------------------------------------------------
-
 /// Everything `apply` needs for one file. A plan is self-contained by
-/// contract: `apply` never sees the options, so the container, the entry to
-/// rewrite, the exact per-field edits, the rename and the `overwrite` license
-/// all live here.
+/// contract: `apply` never sees the options, so the container, the entry or
+/// atom path to rewrite, the exact per-field edits, the rename and the
+/// `overwrite` license all live here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditDetail {
 	pub container: Container,
-	/// The archive entry the edit rewrites.
+	/// The metadata entry or MP4 atom path the edit rewrites.
 	pub entry: String,
 	/// Only the fields whose stored value actually differs, in [`Field`]
 	/// order.
@@ -394,7 +422,7 @@ impl Tool for MetaEdit {
 	}
 
 	fn describe(&self) -> &'static str {
-		"Bulk-edit ComicInfo.xml and EPUB package metadata, and rename files from it"
+		"Bulk-edit ComicInfo.xml, EPUB package metadata, and M4B/M4A MP4 tags; rename files from it"
 	}
 
 	fn plan(&self, input: &ToolInput) -> Result<Plan, ToolError> {
@@ -415,8 +443,11 @@ impl Tool for MetaEdit {
 		let targets = collect_targets(&input.paths, options.recursive, &mut plan)?;
 		if targets.is_empty() {
 			plan.warn(
-				Warning::new(codes::NO_BOOKS, "no CBZ or EPUB files in the given paths")
-					.with_severity(Severity::Error),
+				Warning::new(
+					codes::NO_BOOKS,
+					"no CBZ, EPUB, M4B or M4A files in the given paths",
+				)
+				.with_severity(Severity::Error),
 			);
 			return Ok(plan);
 		}
@@ -550,7 +581,7 @@ fn collect_targets(
 			plan.warn(
 				Warning::new(
 					codes::UNSUPPORTED_FORMAT,
-					format!("{} is not a CBZ or EPUB", path.display()),
+					format!("{} is not a CBZ, EPUB, M4B or M4A", path.display()),
 				)
 				.at(path),
 			);
@@ -569,13 +600,14 @@ fn container_of(path: &Path) -> Option<Container> {
 	match extension.as_str() {
 		"cbz" | "zip" => Some(Container::ComicInfo),
 		"epub" => Some(Container::Opf),
+		"m4b" | "m4a" => Some(Container::Mp4Tags),
 		_ => None,
 	}
 }
 
 /// What one file's metadata container holds right now.
 struct State {
-	/// The archive entry an edit rewrites.
+	/// The metadata entry or MP4 atom path an edit rewrites.
 	entry: String,
 	/// The stored value of every field.
 	values: Values,
@@ -612,6 +644,7 @@ fn plan_file(
 	let state = match container {
 		Container::ComicInfo => read_comic_info(path),
 		Container::Opf => read_opf(path),
+		Container::Mp4Tags => read_mp4_tags(path),
 	};
 	let state = match state {
 		Ok(state) => state,
@@ -750,7 +783,7 @@ fn read_comic_info(path: &Path) -> Result<State, Skip> {
 		return Ok(State {
 			entry,
 			values: Values::default(),
-			unsupported: &[],
+			unsupported: &[Field::Narrator, Field::Description],
 		});
 	};
 
@@ -760,7 +793,7 @@ fn read_comic_info(path: &Path) -> Result<State, Skip> {
 	if let Err(error) = readable {
 		return Err(Skip::new(
 			codes::UNREADABLE,
-			format!("ComicInfo.xml is not readable by Stump: {error}"),
+			format!("ComicInfo.xml is not readable by Coppice: {error}"),
 		));
 	}
 
@@ -799,7 +832,7 @@ fn read_comic_info(path: &Path) -> Result<State, Skip> {
 	Ok(State {
 		entry,
 		values,
-		unsupported: &[],
+		unsupported: &[Field::Narrator, Field::Description],
 	})
 }
 
@@ -883,8 +916,62 @@ fn read_opf(path: &Path) -> Result<State, Skip> {
 		entry,
 		values,
 		// A package document has no volume: EPUB series numbering is the
-		// calibre series index, which is `number`.
-		unsupported: &[Field::Volume],
+		// calibre series index, which is `number`. Narrator and description
+		// are audio-only fields in this tool.
+		unsupported: &[Field::Volume, Field::Narrator, Field::Description],
+	})
+}
+
+/// Read the iTunes metadata item list of an M4B/M4A.
+///
+/// The four fields with no MP4 mapping remain in `unsupported`, so a mixed
+/// request still writes its supported tags while emitting the same warning
+/// shape used by CBZ/EPUB.
+fn read_mp4_tags(path: &Path) -> Result<State, Skip> {
+	let read = mp4ameta::ReadConfig {
+		read_meta_items: true,
+		..mp4ameta::ReadConfig::NONE
+	};
+	let tag = mp4ameta::Tag::read_with_path(path, &read).map_err(|error| {
+		Skip::new(
+			codes::UNREADABLE,
+			format!("M4B/M4A MP4 tags are not readable: {error}"),
+		)
+	})?;
+
+	let mut values = Values::default();
+	if let Some(title) = tag.title() {
+		values.fill(Field::Title, title.to_string());
+	}
+	if let Some(writer) = tag.artist() {
+		values.fill(Field::Writer, writer.to_string());
+	}
+	if let Some(narrator) = tag.composer() {
+		values.fill(Field::Narrator, narrator.to_string());
+	}
+	if let Some(series) = tag.album() {
+		values.fill(Field::Series, series.to_string());
+	}
+	if let Some(year) = tag.year() {
+		values.fill(Field::Year, year.to_string());
+	}
+	let tags = tag.custom_genres().map(str::to_string).collect::<Vec<_>>();
+	if !tags.is_empty() {
+		values.fill(Field::Tags, tags.join(", "));
+	}
+	if let Some(description) = tag.description() {
+		values.fill(Field::Description, description.to_string());
+	}
+
+	Ok(State {
+		entry: MP4_TAGS_ENTRY.to_string(),
+		values,
+		unsupported: &[
+			Field::Number,
+			Field::Volume,
+			Field::Publisher,
+			Field::Language,
+		],
 	})
 }
 
@@ -923,7 +1010,6 @@ fn rootfile_path(xml: &str) -> Result<Option<String>, quick_xml::Error> {
 	}
 	Ok(fallback)
 }
-
 /// Collapse `.` and `..` so a `full-path` of `./OEBPS/content.opf` still names
 /// the archive member `OEBPS/content.opf`.
 fn normalize_entry(path: &str) -> String {
@@ -1107,7 +1193,71 @@ fn write_metadata(source: &Path, detail: &EditDetail) -> ToolResult<()> {
 				CompressionMethod::Deflated,
 			)
 		},
+		Container::Mp4Tags => write_mp4_tags(source, &detail.changes),
 	}
+}
+
+/// Rewrite only the MP4 item list through a sibling temp file.
+///
+/// `mp4ameta` copies untouched atoms, including the `mdat`, cover and chapter
+/// list/track, but it needs a read/write file because it patches offsets as the
+/// item list grows. Staging a copy means a parser or writer error drops the
+/// temp file and leaves the source untouched; the source mode is restored after
+/// the atomic rename.
+fn write_mp4_tags(source: &Path, changes: &[FieldChange]) -> ToolResult<()> {
+	let read = mp4ameta::ReadConfig {
+		read_meta_items: true,
+		read_image_data: true,
+		..mp4ameta::ReadConfig::NONE
+	};
+	let mut tag = mp4ameta::Tag::read_with_path(source, &read)?;
+	for change in changes {
+		match change.field {
+			Field::Title => tag.set_title(change.to.clone()),
+			Field::Writer => tag.set_artist(change.to.clone()),
+			Field::Narrator => tag.set_composer(change.to.clone()),
+			Field::Series => tag.set_album(change.to.clone()),
+			Field::Year => tag.set_year(change.to.clone()),
+			Field::Tags => tag.set_genres(split_tags(&change.to)),
+			Field::Description => tag.set_description(change.to.clone()),
+			Field::Number | Field::Volume | Field::Publisher | Field::Language => {
+				return Err(ToolError::Invalid(format!(
+					"the MP4-tags container cannot store {}; plan should have warned",
+					change.field.as_str()
+				)));
+			},
+		}
+	}
+
+	let write = mp4ameta::WriteConfig {
+		write_meta_items: true,
+		..mp4ameta::WriteConfig::NONE
+	};
+	edit_mp4_atomic(source, |file| Ok(tag.write_with(file, &write)?))
+}
+
+/// Run an in-place MP4 tagger against a sibling copy and rename it into place.
+fn edit_mp4_atomic<F>(target: &Path, edit: F) -> ToolResult<()>
+where
+	F: FnOnce(&mut File) -> ToolResult<()>,
+{
+	let permissions = std::fs::metadata(target)
+		.ok()
+		.map(|metadata| metadata.permissions());
+
+	util::write_atomic(target, |file| {
+		let mut original = File::open(target)?;
+		std::io::copy(&mut original, file)?;
+		file.seek(SeekFrom::Start(0))?;
+		edit(file)
+	})?;
+
+	// `write_atomic` stages through a 0600 temp file. Preserve the library
+	// file's original mode after the completed replacement.
+	if let Some(permissions) = permissions {
+		let _ = std::fs::set_permissions(target, permissions);
+	}
+	Ok(())
 }
 
 /// One element a rewrite owns: matched on `local`, written from `template`.
@@ -1165,6 +1315,8 @@ fn comic_info_edits(changes: &[FieldChange]) -> Vec<ElementEdit> {
 				alias.insert = false;
 				edits.push(alias);
 			},
+			// Audio-only fields are refused for ComicInfo at plan time.
+			Field::Narrator | Field::Description => {},
 		}
 	}
 	edits
@@ -1204,7 +1356,7 @@ fn opf_edits(
 				written: false,
 			}),
 			// Refused at plan time with a `field-unsupported` warning.
-			Field::Volume => {},
+			Field::Volume | Field::Narrator | Field::Description => {},
 		}
 	}
 	(edits, metas)
@@ -1226,6 +1378,8 @@ fn generated_comic_info(changes: &[FieldChange]) -> String {
 			Field::Year => info.year = value.parse().ok(),
 			Field::Language => info.language = Some(value),
 			Field::Tags => info.tags = split_tags(&value),
+			// Audio-only fields are refused at plan time for ComicInfo.
+			Field::Narrator | Field::Description => {},
 		}
 	}
 	info.to_xml()
@@ -1829,3 +1983,319 @@ fn is_whitespace(bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod audio_tests {
+	use std::{
+		fs,
+		path::{Path, PathBuf},
+	};
+
+	use crate::{NoopProgress, Tool, ToolInput};
+	use stump_media::audio::probe_file;
+	use tempfile::TempDir;
+
+	use super::*;
+
+	fn fixture(name: &str) -> PathBuf {
+		PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("../media/integration-tests/data/audio")
+			.join(name)
+	}
+
+	fn tag_for(path: &Path) -> mp4ameta::Tag {
+		let config = mp4ameta::ReadConfig {
+			read_meta_items: true,
+			read_image_data: true,
+			read_chapter_list: true,
+			read_chapter_track: true,
+			..mp4ameta::ReadConfig::NONE
+		};
+		mp4ameta::Tag::read_with_path(path, &config).expect("read MP4 tag")
+	}
+
+	/// Build a copy with both chapter mechanisms. The input fixtures
+	/// deliberately separate those cases so every mutation test uses real MP4
+	/// structures without modifying the shared files.
+	fn staged_chapters_with_both_chapters() -> (TempDir, PathBuf) {
+		let dir = TempDir::new().expect("temp dir");
+		let path = dir.path().join("chapters-chpl.m4b");
+		fs::copy(fixture("chapters-chpl.m4b"), &path).expect("copy chapters-chpl.m4b");
+
+		let source = tag_for(&path);
+		let chapters = source.chapter_list().to_vec();
+		assert!(!chapters.is_empty(), "the chapter fixture has a chpl list");
+
+		let mut target = tag_for(&path);
+		target.chapter_list_mut().clear();
+		target.chapter_track_mut().clear();
+		target.chapter_list_mut().extend(chapters.iter().cloned());
+		target.chapter_track_mut().extend(chapters);
+		let write = mp4ameta::WriteConfig {
+			write_meta_items: true,
+			write_chapter_list: true,
+			write_chapter_track: true,
+			..mp4ameta::WriteConfig::NONE
+		};
+		target
+			.write_with_path(&path, &write)
+			.expect("add both chapter mechanisms");
+		(dir, path)
+	}
+
+	fn artwork(tag: &mp4ameta::Tag) -> Option<(mp4ameta::ImgFmt, Vec<u8>)> {
+		tag.artwork()
+			.map(|image| (image.fmt.clone(), image.data.to_vec()))
+	}
+
+	/// Return the payload of the top-level `mdat`, ignoring the `moov` growth
+	/// that is expected when the item list receives longer values.
+	fn mdat_payload(bytes: &[u8]) -> Vec<u8> {
+		let mut offset = 0usize;
+		while offset + 8 <= bytes.len() {
+			let size32 =
+				u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap());
+			let kind = &bytes[offset + 4..offset + 8];
+			let (header, size) = match size32 {
+				1 if offset + 16 <= bytes.len() => (
+					16usize,
+					u64::from_be_bytes(
+						bytes[offset + 8..offset + 16].try_into().unwrap(),
+					),
+				),
+				0 => (8usize, (bytes.len() - offset) as u64),
+				size => (8usize, u64::from(size)),
+			};
+			let end = offset
+				.checked_add(usize::try_from(size).expect("box fits usize"))
+				.expect("box end");
+			assert!(end <= bytes.len(), "valid top-level MP4 box");
+			if kind == b"mdat" {
+				return bytes[offset + header..end].to_vec();
+			}
+			offset = end;
+		}
+		panic!("fixture has no top-level mdat");
+	}
+
+	#[test]
+	fn mp4_plan_apply_preserves_media_and_both_chapters() {
+		let (_dir, path) = staged_chapters_with_both_chapters();
+		let before_bytes = fs::read(&path).expect("read staged fixture");
+		let before_tag = tag_for(&path);
+		let before_cover = artwork(&before_tag);
+		let before_list = before_tag.chapter_list().to_vec();
+		let before_track = before_tag.chapter_track().to_vec();
+
+		let options = serde_json::json!({
+			"set": {
+				"title": "Edited audiobook",
+				"writer": "Edited author",
+				"narrator": "Edited narrator",
+				"series": "Edited series",
+				"year": "2026",
+				"tags": ["fiction", "audiobook"],
+				"description": "Edited description",
+			}
+		});
+		let plan = MetaEdit
+			.plan(&ToolInput::new(vec![path.clone()]).with_options(options))
+			.expect("plan MP4 metadata");
+		assert_eq!(
+			fs::read(&path).expect("read after plan"),
+			before_bytes,
+			"plan is pure"
+		);
+		let detail: EditDetail =
+			serde_json::from_value(plan.actions[0].detail.clone()).expect("edit detail");
+		assert_eq!(detail.container, Container::Mp4Tags);
+		assert_eq!(detail.entry, MP4_TAGS_ENTRY);
+		assert_eq!(
+			detail
+				.changes
+				.iter()
+				.map(|change| change.field)
+				.collect::<Vec<_>>(),
+			vec![
+				Field::Series,
+				Field::Title,
+				Field::Writer,
+				Field::Narrator,
+				Field::Year,
+				Field::Description,
+				Field::Tags,
+			]
+		);
+		assert_eq!(
+			detail
+				.changes
+				.iter()
+				.find(|change| change.field == Field::Series)
+				.and_then(|change| change.from.as_deref()),
+			before_tag.album()
+		);
+		assert_eq!(
+			detail
+				.changes
+				.iter()
+				.find(|change| change.field == Field::Title)
+				.and_then(|change| change.from.as_deref()),
+			before_tag.title()
+		);
+
+		let report = MetaEdit
+			.apply(&plan, &mut NoopProgress)
+			.expect("apply MP4 metadata");
+		assert_eq!(report.applied.len(), 1);
+		assert!(report.skipped.is_empty(), "{report:?}");
+
+		let after_bytes = fs::read(&path).expect("read edited fixture");
+		let after_tag = tag_for(&path);
+		assert_eq!(after_tag.title(), Some("Edited audiobook"));
+		assert_eq!(after_tag.artist(), Some("Edited author"));
+		assert_eq!(after_tag.composer(), Some("Edited narrator"));
+		assert_eq!(after_tag.album(), Some("Edited series"));
+		assert_eq!(after_tag.year(), Some("2026"));
+		assert_eq!(
+			after_tag.custom_genres().collect::<Vec<_>>(),
+			vec!["fiction", "audiobook"]
+		);
+		assert_eq!(after_tag.description(), Some("Edited description"));
+
+		let probed = probe_file(&path).expect("Stump audio probe");
+		assert_eq!(probed.title.as_deref(), Some("Edited audiobook"));
+		assert_eq!(probed.author.as_deref(), Some("Edited author"));
+		assert_eq!(probed.narrator.as_deref(), Some("Edited narrator"));
+		assert_eq!(probed.album.as_deref(), Some("Edited series"));
+		assert_eq!(probed.year, Some(2026));
+		assert_eq!(probed.genre.as_deref(), Some("fiction"));
+		assert_eq!(probed.description.as_deref(), Some("Edited description"));
+
+		assert_eq!(
+			mdat_payload(&after_bytes),
+			mdat_payload(&before_bytes),
+			"AAC mdat payload is byte-identical"
+		);
+		assert_eq!(artwork(&after_tag), before_cover, "cover survives");
+		assert_eq!(after_tag.chapter_list(), before_list.as_slice());
+		assert_eq!(after_tag.chapter_track(), before_track.as_slice());
+
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::PermissionsExt;
+			assert_eq!(
+				fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+				fs::metadata(&fixture("chapters-chpl.m4b"))
+					.unwrap()
+					.permissions()
+					.mode() & 0o777,
+				"source mode survives sibling staging"
+			);
+		}
+	}
+
+	#[test]
+	fn mp4_cover_survives_metadata_edit() {
+		let dir = TempDir::new().expect("temp dir");
+		let path = dir.path().join("plain.m4b");
+		fs::copy(fixture("plain.m4b"), &path).expect("copy plain.m4b");
+		let before_bytes = fs::read(&path).expect("read before edit");
+		let before_cover = artwork(&tag_for(&path)).expect("plain.m4b cover");
+
+		let plan = MetaEdit
+			.plan(
+				&ToolInput::new(vec![path.clone()]).with_options(serde_json::json!({
+					"set": { "title": "Edited cover book" }
+				})),
+			)
+			.expect("plan cover edit");
+		MetaEdit
+			.apply(&plan, &mut NoopProgress)
+			.expect("apply cover edit");
+
+		let after_bytes = fs::read(&path).expect("read after edit");
+		assert_eq!(artwork(&tag_for(&path)), Some(before_cover));
+		assert_eq!(mdat_payload(&after_bytes), mdat_payload(&before_bytes));
+	}
+	#[test]
+	fn mp4_unsupported_fields_warn_without_writing() {
+		let dir = TempDir::new().expect("temp dir");
+		let path = dir.path().join("plain.m4b");
+		fs::copy(fixture("plain.m4b"), &path).expect("copy plain.m4b");
+		let before = fs::read(&path).expect("read before plan");
+
+		let plan = MetaEdit
+			.plan(
+				&ToolInput::new(vec![path.clone()]).with_options(serde_json::json!({
+					"set": {
+						"title": "Edited title",
+						"number": "7",
+						"volume": "2",
+						"publisher": "Never written",
+						"language": "en",
+					}
+				})),
+			)
+			.expect("plan mixed supported and unsupported fields");
+		assert_eq!(
+			plan.warnings
+				.iter()
+				.map(|warning| warning.code.as_str())
+				.collect::<Vec<_>>(),
+			vec![
+				codes::FIELD_UNSUPPORTED,
+				codes::FIELD_UNSUPPORTED,
+				codes::FIELD_UNSUPPORTED,
+				codes::FIELD_UNSUPPORTED,
+			]
+		);
+		let detail: EditDetail =
+			serde_json::from_value(plan.actions[0].detail.clone()).expect("edit detail");
+		assert_eq!(
+			detail
+				.changes
+				.iter()
+				.map(|change| change.field)
+				.collect::<Vec<_>>(),
+			vec![Field::Title]
+		);
+		assert_eq!(fs::read(&path).unwrap(), before, "plan remains pure");
+
+		let report = MetaEdit
+			.apply(&plan, &mut NoopProgress)
+			.expect("apply mixed request");
+		assert_eq!(report.applied.len(), 1);
+		assert!(report.skipped.is_empty(), "{report:?}");
+		assert_eq!(tag_for(&path).title(), Some("Edited title"));
+	}
+
+	#[test]
+	fn mp4_write_failure_keeps_original_bytes() {
+		let dir = TempDir::new().expect("temp dir");
+		let path = dir.path().join("plain.m4b");
+		fs::copy(fixture("plain.m4b"), &path).expect("copy plain.m4b");
+		let before = fs::read(&path).expect("read before failed edit");
+
+		let error = edit_mp4_atomic(&path, |_file| {
+			Err(ToolError::Invalid("synthetic tagger failure".to_string()))
+		});
+		assert!(
+			matches!(error, Err(ToolError::Invalid(message)) if message == "synthetic tagger failure")
+		);
+		assert_eq!(
+			fs::read(&path).expect("read after failed edit"),
+			before,
+			"failed MP4 edit leaves source byte-identical"
+		);
+		assert!(
+			fs::read_dir(dir.path())
+				.unwrap()
+				.flatten()
+				.all(|entry| !entry
+					.file_name()
+					.to_string_lossy()
+					.starts_with(".stump-tools-")),
+			"failed edit cleans its sibling temp"
+		);
+	}
+}

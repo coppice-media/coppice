@@ -22,6 +22,7 @@
 	import { countLabel, countNoun, minutesLabel } from '$lib/format';
 	import { NO_FACETS, bookFilter, offsetPage } from '$lib/library';
 	import BookTable from '$lib/components/library/BookTable.svelte';
+	import CrossPointSendButton from '$lib/components/library/CrossPointSendButton.svelte';
 	import Pager from '$lib/components/library/Pager.svelte';
 	import SeriesReshapeSheet from '$lib/components/library/SeriesReshapeSheet.svelte';
 
@@ -88,7 +89,7 @@
 </script>
 
 <svelte:head>
-	<title>{series ? `${series.resolvedName} · Stump` : 'Series · Stump'}</title>
+	<title>{series ? `${series.resolvedName} · Coppice` : 'Series · Coppice'}</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">
@@ -177,9 +178,11 @@
 				<span class="self-center text-sm text-muted-foreground">
 					{countLabel(selected.length)} selected
 				</span>
+				<CrossPointSendButton mediaIds={selected} />
+				<Button type="button" variant="ghost" onclick={() => (selected = [])}>Clear selection</Button>
 			{/if}
-		</div>
 
+		</div>
 		{#if booksQuery.isPending}
 			<Skeleton class="h-96 rounded-xl" />
 		{:else if booksQuery.isError}
@@ -207,7 +210,7 @@
 			bind:open={reshapeOpen}
 			{series}
 			{selected}
-			onreshaped={(clearSelection) => {
+			onreshaped={(clearSelection: boolean) => {
 				if (clearSelection) selected = [];
 				refresh();
 			}}

@@ -1,0 +1,69 @@
+---
+title: CrossPoint LAN transfer
+description: Verified private-LAN delivery and durable CrossPoint queue behavior
+---
+
+CrossPoint delivery is server-initiated and intentionally separate from the
+credential-authenticated KOSync/rich-sync API. The receiver's HTTP/WebSocket
+surface has no authentication, so Stump never sends an API key to it.
+
+## Pairing and target verification
+
+A target is usable only after the operator confirms a private IPv4 literal,
+Stump probes the fixed HTTP port `80` at `/api/status`, and the returned model
+and serial match the supported CrossPoint identity (`X3` or `X4`). UDP hello
+discovery uses port `8134` only after that private-address policy passes. The
+WebSocket upload port is fixed at `81`; target rows store a safe root path and a
+canonical `{model,serial}` fingerprint.
+
+Hostnames, DNS names, public addresses, loopback, link-local, multicast, and
+unspecified addresses are rejected. Ports are not operator-controlled. A
+verified target can be revoked, which prevents new queue work and stops future
+attempts; existing history is retained.
+
+## Queue and transfer protocol
+
+One queue item is created for one `(device, media, source snapshot, profile,
+destination)` request. Single-book, bulk, and dedicated-device sends all use
+this same queue path. The durable row includes:
+
+- an immutable canonical source revision (`{path,hash,filename,bytes}`),
+- a canonical profile JSON snapshot and digest,
+- safe destination path, idempotency key, retry counters and next-attempt time,
+- terminal status and exact last error.
+
+Attempt audit rows are append-only. Work is serialized per device and runs in
+parallel across different devices. On restart, `QUEUED`, `PREPARING`, and
+`TRANSFERRING` rows are recovered without reusing a completed idempotency key.
+A local completion check makes duplicate retries harmless.
+
+The firmware sequence is:
+
+```text
+START:<single-component-filename>:<size>:<safe-path>
+READY
+masked binary chunks (2048 bytes)
+PROGRESS (optional)
+DONE or ERROR
+```
+
+A transfer is bounded to the configured application limit (512 MiB by default),
+uses a single active transfer per receiver, refuses overwrite, and never performs
+remote deletion or recursive discovery. The receiver has no checksum/receipt or
+resume protocol, so local source hashes, immutable queue snapshots, bounded
+retries, and attempt history are the available recovery evidence.
+
+## Profile vocabulary
+
+The queue stores the complete transform profile, not only its display label:
+`enabled`, target device/profile, JPEG quality, grayscale, auto-crop,
+split-text, remove-fonts, and any EPUB/audio options produced by the existing
+media transform pipeline. The send UI may offer only profiles implemented by
+the backend; `convertMedia` is not a CrossPoint action and must not be shown.
+
+## References
+
+- CrossPoint firmware `c33a8b0e883816c22cb1304e51464a4a04fd16dd`,
+  `docs/webserver-endpoints.md` and `CrossPointWebServer.cpp`
+- Calibre plugin `460c53088860a118c4f408cb4bc37d3e3dea74d6`, `ws_client.py`,
+  `driver.py`, and `optimizer.py`

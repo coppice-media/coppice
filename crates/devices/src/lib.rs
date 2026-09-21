@@ -1,12 +1,11 @@
 //! Unified device registry.
 //!
-//! A *device* is a registered client (Kobo, KOReader, Mihon, Komelia, Liseur,
-//! an OPDS reader, a script, a browser) owned by a user. The registry mints the
-//! credential a device authenticates with (a prefixed API key, or a liseur-sync
-//! token), tells the client which endpoints to configure, and records
-//! last-seen / last-sync state every time a credential authenticates a
-//! request.
-//!
+//! A *device* is a registered client (Kobo, KOReader, Coppice, Mihon,
+//! Komelia, Liseur, Kavita, an OPDS reader, a script, a browser) owned by a
+//! user. The registry credentials a device authenticates with (a prefixed API
+//! key, including Kavita's download-only key, a liseur-sync token, or both for
+//! Coppice) tell the client which endpoints to configure, and record last-seen
+//! / last-sync state every time a credential authenticates.
 //! The crate is persistence-only: it depends on the SeaORM entities in
 //! `models` and knows nothing about HTTP. The server calls
 //! [`DeviceService::touch`] from its protocol auth paths and forwards the
@@ -21,6 +20,7 @@ mod event;
 pub mod kindle;
 pub mod scope;
 pub mod service;
+pub mod telemetry;
 
 #[cfg(test)]
 mod tests;
@@ -39,7 +39,11 @@ pub use models::shared::enums::{
 	DeviceCredentialKind as CredentialKind, DeviceKind, DeviceProtocol as Protocol,
 };
 pub use scope::LibraryScope;
-pub use service::{DeviceAuth, DeviceService, SeenListener};
+pub use service::{secret_hint, DeviceAuth, DeviceService, SeenListener};
+pub use telemetry::{
+	DeviceTelemetryCounters, DeviceTelemetryCountersPatch, DeviceTelemetryPatch,
+	DeviceTelemetrySnapshot,
+};
 
 pub mod liseur_token {
 	//! Secret generation, hashing, and expiry shared with the liseur-sync storage.

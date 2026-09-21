@@ -5,6 +5,8 @@
 //! Komga profile) call into this module, so validation, persistence, watcher and
 //! scheduled-scan wiring, core-event emission, and post-commit side effects can
 //! never drift between surfaces.
+use std::path::Path;
+
 use models::txn::begin_write;
 use models::{
 	entity::{
@@ -77,6 +79,28 @@ pub struct UpdatedLibrary {
 	/// Enqueue a scan once the rows are committed.
 	pub scan_after_persist: bool,
 	pub watch: WatchUpdate,
+}
+/// Values for a partial update to an existing library.
+///
+/// The transport layer resolves nullable fields into active models before
+/// calling this service. Keeping that merge at the boundary lets every
+/// surface reuse the same validation, transaction, watcher, scan, and event
+/// semantics.
+pub struct PatchedLibrary {
+	pub library: library::ActiveModel,
+	pub config: Option<library_config::ActiveModel>,
+	pub name: String,
+	pub path: String,
+	pub tags: Option<Vec<String>>,
+	pub scan_after_persist: bool,
+	pub watch: WatchUpdate,
+}
+
+/// Values for a partial update to a library configuration row.
+pub struct PatchedLibraryConfig {
+	pub config: library_config::ActiveModel,
+	/// The final watcher setting when `watch` was included in the patch.
+	pub watch: Option<bool>,
 }
 
 /// Creates a library (config row + library row + tags) and, on success, wires
@@ -295,6 +319,198 @@ pub async fn update_library(
 	}));
 
 	Ok(updated_library)
+}
+/// Preserve the patch API's permissive oneshot-directory check. The directory may be
+/// created later, but filesystem errors still surface to the caller.
+async fn soft_check_oneshots_directory(
+	config: &library_config::ActiveModel,
+	library_path: &str,
+) -> CoreResult<()> {
+	let Some(directory) = (match &config.oneshots_directory {
+		Set(Some(directory)) => Some(directory),
+		_ => None,
+	}) else {
+		return Ok(());
+	};
+	let oneshots_path = Path::new(library_path).join(directory);
+	if !tokio::fs::try_exists(&oneshots_path)
+		.await
+		.map_err(|error| CoreError::InternalError(error.to_string()))?
+	{
+		tracing::warn!(?oneshots_path, "Oneshots directory does not exist yet");
+	}
+	Ok(())
+}
+
+/// Applies a partial library update while retaining the shared service
+/// invariants used by full updates.
+pub async fn patch_library(
+	ctx: &Ctx,
+	user: &AuthUser,
+	id: &str,
+	params: PatchedLibrary,
+) -> CoreResult<library::Model> {
+	let (existing_library, existing_config) = library::Entity::find_for_user(user)
+		.filter(library::Column::Id.eq(id.to_owned()))
+		.find_also_related(library_config::Entity)
+		.one(ctx.conn.as_ref())
+		.await?
+		.ok_or_else(|| CoreError::NotFound("Library not found".into()))?;
+	let existing_config = existing_config.ok_or_else(|| {
+		CoreError::InternalError("Library is missing associated config!".into())
+	})?;
+
+	if params.scan_after_persist {
+		ctx.require_background_jobs()?;
+	}
+
+	enforce_valid_library_path(
+		ctx.conn.as_ref(),
+		&params.path,
+		Some(&existing_library.path),
+		&ctx.config.server.library_roots,
+	)
+	.await?;
+	enforce_unique_library_name(
+		ctx.conn.as_ref(),
+		&params.name,
+		Some(existing_library.id.as_str()),
+	)
+	.await?;
+	if let Some(config) = &params.config {
+		validate_config(config)?;
+		soft_check_oneshots_directory(config, &params.path).await?;
+	}
+
+	let txn = begin_write(ctx.conn.as_ref()).await?;
+
+	if let Some(config) = params.config {
+		library_config::ActiveModel {
+			id: Set(existing_config.id),
+			library_id: Set(existing_config.library_id.clone()),
+			..config
+		}
+		.update(&txn)
+		.await?;
+	}
+
+	let updated_library = library::ActiveModel {
+		id: Set(existing_library.id.clone()),
+		..params.library
+	}
+	.update(&txn)
+	.await?;
+
+	if let Some(tags) = &params.tags {
+		let existing_tags = linked_tags(&txn, &existing_library.id).await?;
+		let (to_connect, to_disconnect) =
+			tag_service::sync_tags(&txn, tags, &existing_tags).await?;
+
+		if !to_disconnect.is_empty() {
+			library_tag::Entity::delete_many()
+				.filter(
+					library_tag::Column::TagId.is_in(to_disconnect).and(
+						library_tag::Column::LibraryId.eq(updated_library.id.clone()),
+					),
+				)
+				.exec(&txn)
+				.await?;
+		}
+
+		if !to_connect.is_empty() {
+			let library_id = updated_library.id.clone();
+			library_tag::Entity::insert_many(
+				to_connect
+					.into_iter()
+					.map(|tag_id| library_tag::ActiveModel {
+						library_id: Set(library_id.clone()),
+						tag_id: Set(tag_id),
+						..Default::default()
+					})
+					.collect::<Vec<library_tag::ActiveModel>>(),
+			)
+			.on_conflict_do_nothing()
+			.exec(&txn)
+			.await?;
+		}
+	}
+
+	txn.commit().await?;
+
+	if params.scan_after_persist {
+		ctx.enqueue(StumpJob::library_scan(
+			updated_library.id.clone(),
+			updated_library.path.clone(),
+			None,
+		))
+		.await?;
+	}
+
+	if ctx.background_jobs_enabled() {
+		match params.watch {
+			WatchUpdate::Add => {
+				ctx.add_watcher(updated_library.path.clone().into()).await?;
+			},
+			WatchUpdate::Remove => {
+				ctx.remove_watcher(existing_library.path.clone().into())
+					.await?;
+			},
+			WatchUpdate::Keep => {},
+		}
+	}
+
+	ctx.send_core_event(CoreEvent::LibraryUpdated(LibraryUpdated {
+		id: updated_library.id.clone(),
+		name: updated_library.name.clone(),
+		path: updated_library.path.clone(),
+	}));
+
+	Ok(updated_library)
+}
+
+/// Applies a partial configuration update and synchronises the watcher when
+/// the patch explicitly changes the `watch` flag.
+pub async fn patch_library_config(
+	ctx: &Ctx,
+	user: &AuthUser,
+	id: &str,
+	params: PatchedLibraryConfig,
+) -> CoreResult<library_config::Model> {
+	let (existing_library, existing_config) = library::Entity::find_for_user(user)
+		.filter(library::Column::Id.eq(id.to_owned()))
+		.find_also_related(library_config::Entity)
+		.one(ctx.conn.as_ref())
+		.await?
+		.ok_or_else(|| CoreError::NotFound("Library not found".into()))?;
+	let existing_config = existing_config.ok_or_else(|| {
+		CoreError::InternalError("Library is missing associated config!".into())
+	})?;
+	validate_config(&params.config)?;
+	soft_check_oneshots_directory(&params.config, &existing_library.path).await?;
+
+	let txn = begin_write(ctx.conn.as_ref()).await?;
+	let updated_config = library_config::ActiveModel {
+		id: Set(existing_config.id),
+		library_id: Set(existing_config.library_id.clone()),
+		..params.config
+	}
+	.update(&txn)
+	.await?;
+	txn.commit().await?;
+
+	if ctx.background_jobs_enabled() {
+		match params.watch {
+			Some(true) if !existing_config.watch => {
+				ctx.add_watcher(existing_library.path.into()).await?;
+			},
+			Some(false) if existing_config.watch => {
+				ctx.remove_watcher(existing_library.path.into()).await?;
+			},
+			_ => {},
+		}
+	}
+
+	Ok(updated_config)
 }
 
 /// Deletes a library together with its series/media list memberships, removes

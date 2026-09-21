@@ -920,11 +920,14 @@ mod tests {
 		// A single search request; results are mapped straight from the
 		// search response without a per-hit detail fetch.
 		assert_eq!(requests.len(), 1);
-		// The search POSTs a GraphQL query with variables and the stump UA.
+		// The search POSTs a GraphQL query with variables and the current package
+		// version in the Stump user agent.
 		assert!(requests[0].starts_with("POST /"));
-		assert!(requests[0]
-			.to_lowercase()
-			.contains("user-agent: stump/0.1.6 (+https://github.com/stumpapp/stump)"));
+		let expected_user_agent = format!(
+			"user-agent: stump/{} (+https://github.com/stumpapp/stump)",
+			env!("CARGO_PKG_VERSION")
+		);
+		assert!(requests[0].to_lowercase().contains(&expected_user_agent));
 		assert!(requests[0].contains("query Search"));
 		assert!(requests[0].contains("format_in"));
 		assert!(requests[0].contains(r#""formats":["MANGA","ONE_SHOT"]"#));

@@ -35,6 +35,12 @@ STUMP_HOME_APP_DIR=/path/to/stump/home/build stump_server
 # → http://<server>/app
 ```
 
+When the Home app is served and nothing else owns `/` — every headless build,
+or a `webui` build with `STUMP_ENABLE_WEBUI=false` — `static_apps::home_landing`
+answers `GET /` with a `303` to `/app`, so the Home app is the landing page. A
+`webui` build with the web UI enabled keeps the web SPA at `/` and the two
+coexist, as before.
+
 `paths.base` is `/app` (`svelte.config.js`; override with `HOME_BASE_PATH` at
 build time). In development `bun run dev` serves on port 5175 and proxies
 `/api` (including the `graphql-ws` socket) to `HOME_SERVER_URL`, default
@@ -47,24 +53,25 @@ Routes are relative to the base.
 | Route      | What it does                                                                                                                                                                                                                                                                                                                                              |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/dashboard` | The landing screen. `readingStats` for a selectable span (today, week, month, year, all time) as four cards; a 53-week activity heatmap over `readingStats(span: YEAR).days` with a minutes/pages toggle and the streak; a *Continue reading* shelf (`keepReading`) and a *Recently added* shelf (`recentlyAddedMedia`); a condensed per-device sync list (`devices`); and the job queue (`jobs`, gated on `READ_JOBS`) with live progress. Links to `/settings/notifications`. |
-| `/login`   | Cookie session via `POST /api/v2/auth/login`. Reads `GET /api/v2/auth/oidc/config`: when `enabled`, shows a *Sign in with single sign-on* button that opens `/api/v2/auth/oidc/authorize`; when `disableLocalAuth`, hides the password form. The OIDC callback creates the session and redirects to `/` (the server's choice), so the user re-opens `/app` afterwards. |
+| `/login`   | Cookie session via `POST /api/v2/auth/login`. Reads `GET /api/v2/auth/oidc/config`: when `enabled`, automatically starts OIDC sign-in unless the URL has `?error=` or (with local auth enabled) `?manual=1`; the *Sign in with single sign-on* button remains available. It preserves the 401 `returnTo` route through the validated OIDC `return_to` state (`home/src/routes/login/+page.svelte`; `apps/server/src/routers/api/v2/oidc.rs`) and falls back to `/`. When `disableLocalAuth`, hides the password form. |
 | `/devices` | Cards for every device from the `devices` query (kind, credential hint and protocol, last seen, last sync + summary, registered). *Add client* runs `createDevice` and reveals the one-time secret with an endpoint card per `DeviceEndpoint` (URL, username, secret, copy buttons, QR code of the URL). Rename (`renameDevice`), rotate (`rotateDeviceCredential`, same reveal), revoke (`revokeDevice`). Kobo and KOReader cards get a comic transform preset selector (`setDeviceTransformProfile`). Pending pairings (`pendingDevicePairings`, polled every 10 s) are approved with the device's code (`approveDevicePairing`) or denied. |
 | `/reading` | `readingStats` for a selectable span (7/30/90 days, year, all time): totals, streak, a per-day bar strip, and a per-device table.                                                                                                                                                                                                                          |
 | `/library` | Every library from `libraries` as a card with its `stats` (series, books, finished, bytes on disk), the last scan, and *Scan* / *Analyze* (`scanLibrary`, `analyzeLibrary`). *New library* posts `createLibrary` with the three choices the dialog exposes (type, layout, watch) on top of the defaults the web UI's form starts from — `LibraryConfigInput` has no optional flags. |
 | `/library/[id]` | The browser for one library (`prerender = false`). A *Series* tab (`series`, grid or table) and a *Books* tab (`media`, table with progress and mark read/unread), a grid/table toggle, and filters for read status, format, tag, publisher, author, and title. Every filter, the tab, the view, and the page live in the query string, so the entity grids can link straight into a filtered view and the back button works. `SeriesFilterInput` carries no book-level fields, so setting format, tag, publisher, or author switches to the *Books* tab instead of silently dropping the filter. |
 | `/series/[id]` | One series (`prerender = false`): cover, progress, tags, metadata, and its books with per-book *Mark read* / *Mark unread* (`finishMediaProgress`; `clearMediaProgress` + `deleteMediaReadingHistory`), plus `finishSeriesProgress` and `clearSeriesReadingHistory` for the whole series. *Reshape* opens the sheet described in [Series reshape](#series-reshape). |
 | `/entities/{authors,publishers,tags}` | Grids of the metadata behind the books, each tile linking into `/library/[id]` pre-filtered. Authors come from `authors(search, libraryId)` and count the books the query already carries; publishers from `libraryById.publishers`; tags from `tags`. Neither publishers nor tags have an aggregate on the server, so those tiles count their own books with one small `media` query each (bounded by the page size of 24). A library selector scopes the grid and the links. |
-| `/annotations` | The annotation hub: every highlight, note, and bookmark the user has from one `annotations(filter, pagination)` query, grouped by book with a kind badge, a source badge, and the chapter/page/percentage the anchor carries. Filters for kind, source, book, `since`, and a text search live in the query string; notes on native rows are edited in place (`updateAnnotation`) or removed (`deleteAnnotation`), and *Open in reader* deep-links into `/reader/[mediaId]`. *Export now* runs `runAnnotationSync`, next to a link to `/settings/annotations`. |
-| `/reader/[mediaId]` | The reader. EPUBs render with [foliate-js](https://github.com/johnfactotum/foliate-js) over the server's Readium routes; comics and PDFs render as paged images. Position is persisted through `updateMediaProgress`; stored annotations (`annotationsByMediaId`) are drawn as read-only highlights. See [Reader](#reader). |
+| `/annotations` | The annotation hub: every highlight, note, and bookmark the user has from one `annotations(filter, pagination)` query, grouped by book with a kind badge, a source badge, and the chapter/page/percentage the anchor carries. Filters for kind, source, book, `since`, and a text search live in the query string; notes on native rows are edited in place (`updateAnnotation`) or removed (`deleteAnnotation`), and *Open in reader* deep-links into `/reader/[mediaId]`. *Export now* runs `runAnnotationSync` and the settings route configures its sinks. |
+| `/reader/[mediaId]` | The reader. EPUBs render with [foliate-js](https://github.com/johnfactotum/foliate-js) over the server's Readium routes; comics and PDFs render as paged images. Position is persisted through `updateMediaProgress`; combined native and liseur annotations come from `annotations(filter: { mediaId })`. Readium-shaped liseur rows overlay beside native rows and carry their source device name; opaque device locators stay in a read-only side panel. See [Reader](#reader). |
 | `/settings/notifications` | The routing matrix (`notificationRules` × `notificationChannels`, one `setNotificationRule` per switch) and a settings form per channel built from the channel's `IngestSettingDefinition` schema (`notificationChannelSettings`, `setNotificationChannelSettings`, `testNotificationChannel`). Administrative kinds are owner-only, mirroring `NotificationKind::is_administrative`; a `*` rule is reported, not edited. |
 | `/settings/annotations` | The [annotation-sync](/docs/developer/annotation-sync) export sinks: one card per `annotationSinks` entry with a form built from its `IngestSettingDefinition` schema, the per-sink `annotationSyncStatus` (enabled, last run, last error), *Enable*/*Disable*/*Save settings* through `setAnnotationSinkSettings`, and *Export now* (`runAnnotationSync`). Stored values are never returned, so secret fields are write-only and an empty one keeps what is stored. |
 | `/account` | Profile from `me` (username, owner badge, OIDC email, last login, active sessions) and the user's own sign-in history from `loginActivityById(id: me.id)`.                                                                                                                                                                                                  |
 
-`/` redirects to `/dashboard`, which is also where `/login` lands. The nav is
-Dashboard, Library, Reading, Annotations, Devices, Account. The `(app)` layout loads `me`, exposes it through
+`/` redirects to `/dashboard`. The nav is Dashboard, Library, Reading,
+Annotations, Devices, Account. The `(app)` layout loads `me`, exposes it through
 a Svelte context (`src/lib/session.svelte.ts`), and logs out through
 `POST /api/v2/auth/logout`. A `401` from any GraphQL request redirects to
-`/login?returnTo=…` (shared client).
+`/login?returnTo=…` (shared client); successful OIDC sign-in returns to that
+requested route.
 
 ### Series reshape
 
@@ -103,6 +110,8 @@ reading-activity screen counts the session.
 | Positions | `GET /api/v2/epub/{id}/positions.json` | per-resource `position` and `totalProgression` |
 | Resource | `GET /api/v2/epub/{id}/resource/{*path}` | spine XHTML and every subresource |
 | Page | `GET /api/v2/media/{id}/page/{n}` | one **visible** comic/PDF page |
+
+On a confirmed ebook↔audiobook pair, the **Chapter map** editor (visible to users with `MANAGE_LIBRARY`) reviews `chapterMap` rows and writes corrections with `setChapterMapEntry` or removes them with `clearChapterMapEntry`.
 
 [foliate-js](https://github.com/johnfactotum/foliate-js) (MIT) is a bun
 dependency of `home/`, not a copy in the tree. It renders any object
@@ -145,13 +154,17 @@ with duplicate-page `SKIP` marks never offers a page that 404s — and pages
 with the arrow keys, `Home`/`End`, a swipe, or the toolbar, with fit
 height/width/actual modes.
 
-Highlights are read-only in this pass. A `MediaAnnotation` locator anchors to a
-resource plus a quote (or a CSS selector or fragment id), so it is re-anchored
-against the live section document: the quote is matched whitespace-insensitively
-and disambiguated with the stored `text.before`. Annotations that no longer
-match are counted as *unanchored* instead of being placed by guesswork. On a
-paged book an annotation is placed by `locations.position` (the page) and shown
-as a marker over the image.
+Reader annotations are read-only in this pass. The reader fetches the combined
+native and liseur rows through `annotations(filter: { mediaId })`. EPUB
+overlays accept a native Readium locator with an `href` plus its quote, CSS
+selector, or fragment, or a liseur Readium-shaped row with an `href` plus its
+excerpt or fragment; quotes are matched whitespace-insensitively and
+disambiguated with stored context. Paged overlays accept a Readium-shaped
+locator with `locations.position` as the visible page. A liseur row with an
+opaque Kobo/KOReader locator has no overlay, but remains visible in the
+reader's annotation side panel with its source device name; rows that no
+longer match an EPUB resource are counted as *unanchored* instead of being
+placed by guesswork.
 
 The annotation hub links into the reader with an opening override in the query
 string, so the same route serves both "continue reading" and "show me this
@@ -209,16 +222,17 @@ can use it directly. The server's own `GET /api/v2/devices/pair/{id}/qr.png`
 belongs to the [device-pairing](/docs/developer/device-pairing) flow, which
 starts on the device, not here.
 
-## Shared UI package
+## Shared UI package + shell
 
 `packages/stump-ui` holds what both companion apps need:
 
 | Path                            | Contents                                                                                             |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `src/graphql/client.ts`         | `graphQLClient`, `request` (typed, redirects on 401), `redirectToLogin`, `subscribe` (`graphql-ws`) |
-| `src/graphql/operations.graphql` | Operations used by more than one app (`Me`); generated into `src/graphql/generated/`                |
-| `src/components/ui/*`           | shadcn-svelte components (`bits-ui`, `vaul-svelte`, `@lucide/svelte`)                                |
-| `src/utils.ts`, `src/utils/uuid.ts` | `cn` and a secure-context-safe `uuid`                                                            |
+| `src/graphql/operations.graphql` | Operations used by more than one app (`Me`, which carries `permissions` so each shell can gate its own links); generated into `src/graphql/generated/` |
+| `src/components/ui/*`           | shadcn-svelte components (`bits-ui`, `vaul-svelte`, `@lucide/svelte`) plus the composites below      |
+| `src/theme.svelte.ts`, `src/styles/theme.css` | The theme store and the tokens both apps render with                               |
+| `src/utils.ts`, `src/utils/uuid.ts`, `src/utils/errors.ts` | `cn`, a secure-context-safe `uuid`, and `errorMessage`                |
 
 The package is **source-only**. Each app links `packages/stump-ui/src` into
 its tree as `src/lib/stump-ui` (a committed symlink) and aliases `@stump/ui`
@@ -244,6 +258,83 @@ and import generated documents from `$lib/graphql/generated/graphql`; shared
 ones come from `@stump/ui/graphql/generated/graphql`. New shadcn components are
 added from an app directory (`bunx shadcn-svelte@latest add <name>`); its
 `components.json` aliases point at the package through `@stump/ui`.
+
+Beside the components `shadcn-svelte add` writes verbatim, the package owns a
+few composites the two apps would otherwise each reinvent:
+
+| Import                                  | What it is                                                                                                                                                         |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@stump/ui/components/ui/page-header`   | `PageHeader` — the one `<h1>` a screen has, with `eyebrow`, `description` and an `actions` snippet.                                                                 |
+| `@stump/ui/components/ui/stat-card`     | `StatCard` — one figure as a `<dt>`/`<dd>` pair, with `hint`, `trend` (`up`/`down`/`flat`) and an `icon` snippet.                                                    |
+| `@stump/ui/components/ui/query-state`   | `QueryState` — pending → skeleton (`rows`, default 3), error → destructive alert with the message and *Retry*, `empty` → `EmptyState`, else the children. Reads `isPending`/`error`/`refetch` off a `query`, or takes `pending`/`error`/`onretry`. |
+| `@stump/ui/components/ui/stepper`       | `Stepper.Root` (`current`, 1-based) + `Stepper.Item` (`step`, `title`, `description`). Each item derives `data-state` complete/current/upcoming, marks the current one `aria-current="step"`, and shows a check once complete. |
+| `@stump/ui/components/ui/empty`         | The `Empty.*` parts plus `EmptyState` (`title`, `description`, `icon`/`illustration` snippets, actions as children).                                               |
+| `@stump/ui/components/ui/theme-switcher` | `ThemeSwitcher` — mode toggle group and preset swatches (real radios: one tab stop, arrow keys between presets).                                                   |
+| `@stump/ui/utils/errors.js`             | `errorMessage(err)` — the first GraphQL error of a `ClientError`, then its status, then `Error.message`. Never graphql-request's own message, which pastes the whole request and response into the toast. |
+
+### Theme
+
+Coppice is **dark first**. `@stump/ui/theme.svelte.js` owns the two knobs and
+persists them per origin, so a choice made in the Home app also themes the
+ingest editor — both are served from one origin (`/app`, `/editor`), and an
+open tab of the other app follows the `storage` event without a reload.
+
+| Export                                  | Meaning                                                                                       |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `theme.mode`                            | `dark` (default), `light` or `system`; assigning persists and applies.                          |
+| `theme.preset`                          | `neutral` (default), `zinc`, `slate`, `stone`, `gray`, `blue`, `green`, `orange`, `rose`, `violet`. |
+| `theme.resolved`                        | `dark`/`light`, with `system` already asked.                                                    |
+| `initTheme()`                           | Called once from each app's root `+layout.svelte`; follows the OS and the other app, returns a teardown. |
+| `themeBootScript`                       | The no-flash script each `app.html` inlines.                                                    |
+| `THEME_PRESETS`                         | `{ id, label, swatch }` for the switcher.                                                       |
+| `THEME_MODE_KEY`, `THEME_PRESET_KEY`    | `coppice.theme.mode`, `coppice.theme.preset`.                                                   |
+
+A preset is CSS variables only (`src/styles/theme.css`): `--tint-h`/`--tint-c`
+tint the neutral scale, `--brand-l`/`--brand-c`/`--brand-h`/`--brand-fg-l` set
+the accent, and every shadcn token is derived from those — so ten presets cost
+about 1.3 KB of CSS (0.3 KB gzipped), not ten copies of the palette. Both apps'
+`src/routes/layout.css` import that file and keep only their own Tailwind and
+`@source` lines.
+
+`<html>` ships dark, and the inline script corrects it for a stored choice
+before the first paint:
+
+```html
+<html lang="en" class="dark" data-theme="neutral">
+	<head>
+		<script>
+			(() => {
+				try {
+					var el = document.documentElement;
+					var mode = localStorage.getItem('coppice.theme.mode') || 'dark';
+					var preset = localStorage.getItem('coppice.theme.preset') || 'neutral';
+					var dark = mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+					el.classList.toggle('dark', dark);
+					el.dataset.theme = preset;
+					el.style.colorScheme = dark ? 'dark' : 'light';
+				} catch (error) {
+					// Storage can be unavailable; the markup default (dark) stands.
+				}
+			})();
+		</script>
+```
+
+Screens use shadcn tokens (`bg-background`, `bg-card`, `text-muted-foreground`,
+`border`, `ring`, …) and never a raw colour or a `dark:` override — that is what
+makes a preset a two-variable change instead of an audit.
+
+### Shell
+
+`home/src/routes/(app)/+layout.svelte` is the signed-in shell: a 16 rem rail
+from `lg` up, the same navigation in a `Sheet` below it, and a sticky top bar
+with the account block (avatar initial, username, *Sign out*). The active link
+carries `aria-current="page"`, a *Skip to content* link is the first tab stop,
+and the rail's footer holds the `ThemeSwitcher`. *Ingest editor* links out to
+`/editor` — outside this app's base — only for a server owner or someone with
+`MANAGE_LIBRARY`, the permission its mutations need. `<main>` is
+`@container/page`: with a rail eating 16 rem, the dashboard's grid has to size
+itself against the content column, not the viewport. The editor's header
+carries the same `ThemeSwitcher` inside a `Tooltip.Provider`.
 
 ## Verification
 

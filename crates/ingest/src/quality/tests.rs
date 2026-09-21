@@ -842,6 +842,18 @@ async fn drm_protected_gates_encrypted_files_without_scoring_them() {
 	let book = snapshot(plain.path(), IngestMediaKind::Pdf, 0);
 	assert_eq!(run(&check, &book).await.0, QualityStatus::Pass);
 
+	// A folder audiobook is one publication, not an archive to sniff. The DRM
+	// gate must not abort the whole quality report with EISDIR.
+	let folder_audio = tempfile::tempdir().unwrap();
+	let book = snapshot(folder_audio.path(), IngestMediaKind::Audio, 0);
+	let (status, score, evidence) = run(&check, &book).await;
+	assert_eq!(status, QualityStatus::Pass);
+	assert_eq!(score, 1.0);
+	assert_eq!(
+		evidence,
+		json!({ "protected": false, "container": "folder_audio" })
+	);
+
 	// Disabling the gate must never fail a file.
 	let book = snapshot(adept.path(), IngestMediaKind::Epub, 0);
 	run_disabled(&check, &book).await;

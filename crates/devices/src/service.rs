@@ -8,8 +8,8 @@ use chrono::Utc;
 use models::txn::begin_write;
 use models::{
 	entity::{
-		api_key, device, device_credential, device_entitlement_delta, library,
-		library_exclusion, media, series, session,
+		api_key, device, device_credential, device_entitlement_delta, device_telemetry,
+		library, library_exclusion, media, series, session,
 		user::{self, AuthUser},
 	},
 	shared::{
@@ -35,6 +35,7 @@ use crate::{
 	event::DeviceSeen,
 	kindle::{normalize_kindle_email, KindleSendSummary},
 	scope::LibraryScope,
+	telemetry::{DeviceTelemetryCounters, DeviceTelemetryPatch, DeviceTelemetrySnapshot},
 };
 
 /// Receives a [`DeviceSeen`] each time [`DeviceService::touch`] updates a device.
@@ -105,12 +106,27 @@ impl DeviceService {
 			.ok_or(DeviceError::NotFound)
 	}
 
-	/// The credential row of a device, if it still has one (revocation removes it).
+	/// The primary credential row of a device, if it still has one.
+	///
+	/// Coppice stores more than one credential, so this selects by the stable
+	/// credential-kind/protocol priority instead of relying on query order.
 	pub async fn credential(
 		&self,
 		device_id: &str,
 	) -> DeviceResult<Option<device_credential::Model>> {
-		find_credential(self.conn(), device_id).await
+		Ok(primary_credential(
+			find_credentials(self.conn(), device_id).await?,
+		))
+	}
+
+	/// Every credential row belonging to a device. Consumers that need a
+	/// particular lane must match its kind and protocol, never assume a list
+	/// position.
+	pub async fn credentials(
+		&self,
+		device_id: &str,
+	) -> DeviceResult<Vec<device_credential::Model>> {
+		find_credentials(self.conn(), device_id).await
 	}
 
 	/// Registers a device for `user` and mints its credential. The name defaults
@@ -216,7 +232,7 @@ impl DeviceService {
 		}
 
 		let txn = begin_write(&self.conn).await?;
-		if let Some(credential) = find_credential(&txn, &device.id).await? {
+		for credential in find_credentials(&txn, &device.id).await? {
 			match credential.credential_kind {
 				DeviceCredentialKind::ApiKey => {
 					api_key::Entity::update_many()
@@ -279,7 +295,8 @@ impl DeviceService {
 	/// `last_sync_summary` do, which is exactly what a protocol's completed
 	/// sync means, and the summary names the lane
 	/// ([`KINDLE_EMAIL_PROTOCOL`](crate::kindle::KINDLE_EMAIL_PROTOCOL))
-	/// because no `DeviceProtocol` describes it.
+	/// because no `DeviceProtocol` describes it. The typed telemetry row is
+	/// merged in the same transaction and never regresses cumulative counters.
 	pub async fn record_delivery(
 		&self,
 		device_id: &str,
@@ -287,12 +304,53 @@ impl DeviceService {
 	) -> DeviceResult<()> {
 		let now: DateTimeWithTimeZone = Utc::now().into();
 		let summary = JsonValue::from(summary);
+		let txn = begin_write(&self.conn).await?;
 		device::Entity::update_many()
 			.filter(device::Column::Id.eq(device_id))
-			.col_expr(device::Column::LastSyncAt, Expr::value(Some(now)))
-			.col_expr(device::Column::LastSyncSummary, Expr::value(Some(summary)))
-			.exec(self.conn())
+			.col_expr(device::Column::LastSyncAt, Expr::value(Some(now.clone())))
+			.col_expr(
+				device::Column::LastSyncSummary,
+				Expr::value(Some(summary.clone())),
+			)
+			.exec(&txn)
 			.await?;
+		let mut patch = DeviceTelemetryPatch::from_summary(
+			&summary,
+			DeviceProtocol::Api,
+			now.fixed_offset(),
+		);
+		// Kindle delivery is server-initiated and has no authenticated protocol
+		// lane; do not claim that an API request supplied this snapshot.
+		patch.sync_protocol = None;
+		patch.sync_status = Some("delivered".to_owned());
+		Self::merge_telemetry(&txn, device_id, patch).await?;
+		txn.commit().await?;
+		Ok(())
+	}
+	/// Returns the typed telemetry snapshot for a device, if one has been
+	/// reported by any protocol.
+	pub async fn telemetry(
+		&self,
+		device_id: &str,
+	) -> DeviceResult<Option<DeviceTelemetrySnapshot>> {
+		Ok(device_telemetry::Entity::find_by_id(device_id)
+			.one(self.conn())
+			.await?
+			.map(Self::snapshot_from_model))
+	}
+
+	/// Merges a partial typed telemetry update. Scalar fields replace only when
+	/// present; cumulative counters use the greatest observed value. This is
+	/// intended for protocol adapters that have a typed snapshot rather than a
+	/// legacy JSON summary.
+	pub async fn update_telemetry(
+		&self,
+		device_id: &str,
+		patch: DeviceTelemetryPatch,
+	) -> DeviceResult<()> {
+		let txn = begin_write(&self.conn).await?;
+		Self::merge_telemetry(&txn, device_id, patch).await?;
+		txn.commit().await?;
 		Ok(())
 	}
 
@@ -458,15 +516,27 @@ impl DeviceService {
 		summary: Option<JsonValue>,
 	) -> DeviceResult<DeviceSeen> {
 		let now: DateTimeWithTimeZone = Utc::now().into();
+		let telemetry = summary.as_ref().map(|summary| {
+			DeviceTelemetryPatch::from_summary(
+				summary,
+				protocol,
+				now.clone().fixed_offset(),
+			)
+		});
+		let txn = begin_write(&self.conn).await?;
 		let mut update = device::Entity::update_many()
 			.filter(device::Column::Id.eq(&device.id))
-			.col_expr(device::Column::LastSeenAt, Expr::value(Some(now)));
+			.col_expr(device::Column::LastSeenAt, Expr::value(Some(now.clone())));
 		if let Some(summary) = summary {
 			update = update
 				.col_expr(device::Column::LastSyncAt, Expr::value(Some(now)))
 				.col_expr(device::Column::LastSyncSummary, Expr::value(Some(summary)));
 		}
-		update.exec(self.conn()).await?;
+		update.exec(&txn).await?;
+		if let Some(telemetry) = telemetry {
+			Self::merge_telemetry(&txn, &device.id, telemetry).await?;
+		}
+		txn.commit().await?;
 		self.mark_seen(key);
 
 		let seen = DeviceSeen {
@@ -479,6 +549,121 @@ impl DeviceService {
 			listener(seen.clone());
 		}
 		Ok(seen)
+	}
+	fn merge_counter(current: Option<i64>, incoming: Option<i64>) -> Option<i64> {
+		match (current, incoming) {
+			(Some(current), Some(incoming)) => Some(current.max(incoming)),
+			(None, incoming) => incoming,
+			(current, None) => current,
+		}
+	}
+
+	async fn merge_telemetry<C: ConnectionTrait>(
+		conn: &C,
+		device_id: &str,
+		patch: DeviceTelemetryPatch,
+	) -> DeviceResult<()> {
+		let now: DateTimeWithTimeZone = Utc::now().into();
+		let existing = device_telemetry::Entity::find_by_id(device_id)
+			.one(conn)
+			.await?;
+		if let Some(existing) = existing {
+			let mut active: device_telemetry::ActiveModel = existing.clone().into();
+			if patch.battery_percent.is_some() {
+				active.battery_percent = Set(patch.battery_percent);
+			}
+			if patch.charging.is_some() {
+				active.charging = Set(patch.charging);
+			}
+			if patch.battery_source.is_some() {
+				active.battery_source = Set(patch.battery_source);
+			}
+			if patch.battery_observed_at.is_some() {
+				active.battery_observed_at = Set(patch.battery_observed_at);
+			}
+			if patch.sync_status.is_some() {
+				active.sync_status = Set(patch.sync_status);
+			}
+			if patch.sync_protocol.is_some() {
+				active.sync_protocol = Set(patch.sync_protocol);
+			}
+			if patch.synced_at.is_some() {
+				active.synced_at = Set(patch.synced_at);
+			}
+			active.progress = Set(Self::merge_counter(
+				existing.progress,
+				patch.counters.progress,
+			));
+			active.highlights = Set(Self::merge_counter(
+				existing.highlights,
+				patch.counters.highlights,
+			));
+			active.notes = Set(Self::merge_counter(existing.notes, patch.counters.notes));
+			active.bookmarks = Set(Self::merge_counter(
+				existing.bookmarks,
+				patch.counters.bookmarks,
+			));
+			active.sessions = Set(Self::merge_counter(
+				existing.sessions,
+				patch.counters.sessions,
+			));
+			active.items = Set(Self::merge_counter(existing.items, patch.counters.items));
+			active.updated_at = Set(now);
+			active.update(conn).await?;
+		} else {
+			device_telemetry::ActiveModel {
+				device_id: Set(device_id.to_owned()),
+				battery_percent: Set(patch.battery_percent),
+				charging: Set(patch.charging),
+				battery_source: Set(patch.battery_source),
+				battery_observed_at: Set(patch.battery_observed_at),
+				sync_status: Set(patch.sync_status),
+				sync_protocol: Set(patch.sync_protocol),
+				synced_at: Set(patch.synced_at),
+				progress: Set(patch.counters.progress),
+				highlights: Set(patch.counters.highlights),
+				notes: Set(patch.counters.notes),
+				bookmarks: Set(patch.counters.bookmarks),
+				sessions: Set(patch.counters.sessions),
+				items: Set(patch.counters.items),
+				updated_at: Set(now),
+			}
+			.insert(conn)
+			.await?;
+		}
+		Ok(())
+	}
+
+	fn snapshot_from_model(row: device_telemetry::Model) -> DeviceTelemetrySnapshot {
+		DeviceTelemetrySnapshot {
+			battery_percent: row.battery_percent,
+			charging: row.charging,
+			battery_source: row.battery_source,
+			battery_observed_at: row
+				.battery_observed_at
+				.map(|value| value.with_timezone(&Utc)),
+			sync_status: row.sync_status,
+			sync_protocol: row.sync_protocol,
+			synced_at: row.synced_at.map(|value| value.with_timezone(&Utc)),
+			counters: DeviceTelemetryCounters {
+				progress: row.progress,
+				highlights: row.highlights,
+				notes: row.notes,
+				bookmarks: row.bookmarks,
+				sessions: row.sessions,
+				items: row.items,
+			},
+		}
+	}
+
+	fn mark_seen(&self, key: SeenKey) {
+		self.lock_recently_seen().insert(key, Instant::now());
+	}
+
+	fn lock_recently_seen(&self) -> std::sync::MutexGuard<'_, HashMap<SeenKey, Instant>> {
+		self.recently_seen
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
 	}
 
 	/// Whether `key`'s sighting was written less than [`TOUCH_INTERVAL`] ago.
@@ -496,17 +681,8 @@ impl DeviceService {
 		}
 	}
 
-	fn mark_seen(&self, key: SeenKey) {
-		self.lock_recently_seen().insert(key, Instant::now());
-	}
-
-	fn lock_recently_seen(&self) -> std::sync::MutexGuard<'_, HashMap<SeenKey, Instant>> {
-		self.recently_seen
-			.lock()
-			.unwrap_or_else(|poisoned| poisoned.into_inner())
-	}
-
-	/// The endpoints to configure on a device, with the secret redacted to a hint.
+	/// The endpoints to configure on a device, with every secret redacted to a
+	/// hint. A Coppice device has one endpoint lane per credential.
 	pub async fn endpoints(
 		&self,
 		user: &AuthUser,
@@ -515,14 +691,30 @@ impl DeviceService {
 	) -> DeviceResult<Vec<Endpoint>> {
 		let device = self.get(user, device_id).await?;
 		let username = self.owner_username(user, &device).await?;
-		let hint = match self.credential(&device.id).await? {
-			Some(credential) => secret_hint(&credential),
-			None => "(no credential)".to_string(),
-		};
-		Ok(Endpoint::for_kind(device.kind, origin, &username, &hint))
+		let credentials = self.credentials(&device.id).await?;
+		if credentials.is_empty() {
+			return Ok(Endpoint::for_kind(
+				device.kind,
+				origin,
+				&username,
+				"(no credential)",
+			));
+		}
+
+		let mut endpoints = Vec::new();
+		for credential in credentials {
+			endpoints.extend(Endpoint::for_credential(
+				device.kind,
+				credential.protocol,
+				origin,
+				&username,
+				&secret_hint(&credential),
+			));
+		}
+		Ok(endpoints)
 	}
 
-	/// The endpoints for a credential that was just minted, secret included.
+	/// The endpoints for credentials that were just minted, secrets included.
 	pub async fn endpoints_with_secret(
 		&self,
 		user: &AuthUser,
@@ -531,12 +723,17 @@ impl DeviceService {
 		origin: &RequestOrigin,
 	) -> DeviceResult<Vec<Endpoint>> {
 		let username = self.owner_username(user, device).await?;
-		Ok(Endpoint::for_kind(
-			device.kind,
-			origin,
-			&username,
-			&issued.secret,
-		))
+		let mut endpoints = Vec::new();
+		for credential in issued.credentials() {
+			endpoints.extend(Endpoint::for_credential(
+				device.kind,
+				credential.protocol,
+				origin,
+				&username,
+				&credential.secret,
+			));
+		}
+		Ok(endpoints)
 	}
 
 	async fn owner_username(
@@ -708,11 +905,14 @@ fn kind_label(kind: DeviceKind) -> &'static str {
 	match kind {
 		DeviceKind::Kobo => "Kobo",
 		DeviceKind::Koreader => "KOReader",
-		DeviceKind::Mihon => "Mihon",
+		DeviceKind::Crosspoint => "CrossPoint",
+		DeviceKind::Coppice => "Coppice",
 		DeviceKind::Komelia => "Komelia",
+		DeviceKind::Mihon => "Mihon",
 		DeviceKind::Liseur => "Liseur",
 		DeviceKind::Opds => "OPDS reader",
 		DeviceKind::Abs => "Audiobookshelf client",
+		DeviceKind::Kavita => "Kavita",
 		DeviceKind::Api => "API client",
 		DeviceKind::Web => "Browser",
 		DeviceKind::Worker => "Worker",
@@ -756,15 +956,42 @@ fn authorize_creation(user: &AuthUser, kind: DeviceKind) -> DeviceResult<()> {
 	}
 	Ok(())
 }
-
-async fn find_credential<C: ConnectionTrait>(
+async fn find_credentials<C: ConnectionTrait>(
 	conn: &C,
 	device_id: &str,
-) -> DeviceResult<Option<device_credential::Model>> {
+) -> DeviceResult<Vec<device_credential::Model>> {
 	Ok(device_credential::Entity::find()
 		.filter(device_credential::Column::DeviceId.eq(device_id))
-		.one(conn)
+		.order_by_asc(device_credential::Column::Id)
+		.all(conn)
 		.await?)
+}
+
+fn primary_credential(
+	credentials: Vec<device_credential::Model>,
+) -> Option<device_credential::Model> {
+	credentials
+		.into_iter()
+		.min_by(|left, right| credential_order(left).cmp(&credential_order(right)))
+}
+
+fn credential_order(credential: &device_credential::Model) -> (u8, u8, &str) {
+	(
+		match credential.credential_kind {
+			DeviceCredentialKind::ApiKey => 0,
+			DeviceCredentialKind::LiseurToken => 1,
+			DeviceCredentialKind::Session => 2,
+		},
+		match credential.protocol {
+			DeviceProtocol::Kobo => 0,
+			DeviceProtocol::Koreader => 1,
+			DeviceProtocol::Komga => 2,
+			DeviceProtocol::Opds => 3,
+			DeviceProtocol::Liseur => 4,
+			DeviceProtocol::Api => 5,
+		},
+		credential.credential_ref.as_str(),
+	)
 }
 
 async fn existing_names<C: ConnectionTrait>(
@@ -782,49 +1009,69 @@ async fn existing_names<C: ConnectionTrait>(
 		.collect())
 }
 
-/// Mints the credential a device of its kind uses and records it on the device.
+fn credential_specs(kind: DeviceKind) -> Vec<(DeviceCredentialKind, DeviceProtocol)> {
+	match kind {
+		DeviceKind::Coppice => vec![
+			(DeviceCredentialKind::ApiKey, DeviceProtocol::Koreader),
+			(DeviceCredentialKind::LiseurToken, DeviceProtocol::Liseur),
+		],
+		_ => vec![(credential_kind_for(kind), protocol_for(kind))],
+	}
+}
+
+/// Mints every credential a device of its kind uses and records all rows on
+/// the same transaction supplied by the caller.
 async fn mint_credential<C: ConnectionTrait>(
 	conn: &C,
 	device: &device::Model,
 ) -> DeviceResult<IssuedCredential> {
-	let kind = credential_kind_for(device.kind);
-	let protocol = protocol_for(device.kind);
-	let (credential_ref, secret) = match kind {
-		DeviceCredentialKind::ApiKey => {
-			mint_api_key(
-				conn,
-				&device.user_id,
-				&device.name,
-				api_key_permissions_for(device.kind),
-			)
-			.await?
-		},
-		DeviceCredentialKind::LiseurToken => {
-			liseur::mint(conn, &device.user_id, &device.id, &device.name).await?
-		},
-		DeviceCredentialKind::Session => {
-			return Err(DeviceError::Credential(
-				"session credentials are bound by a login, not minted".to_string(),
-			))
-		},
-	};
+	let mut credentials = Vec::with_capacity(credential_specs(device.kind).len());
+	for (kind, protocol) in credential_specs(device.kind) {
+		let (credential_ref, secret) = match kind {
+			DeviceCredentialKind::ApiKey => {
+				mint_api_key(
+					conn,
+					&device.user_id,
+					&device.name,
+					api_key_permissions_for(device.kind),
+				)
+				.await?
+			},
+			DeviceCredentialKind::LiseurToken => {
+				liseur::mint(conn, &device.user_id, &device.id, &device.name).await?
+			},
+			DeviceCredentialKind::Session => {
+				return Err(DeviceError::Credential(
+					"session credentials are bound by a login, not minted".to_string(),
+				))
+			},
+		};
 
-	device_credential::ActiveModel {
-		device_id: Set(device.id.clone()),
-		protocol: Set(protocol),
-		credential_kind: Set(kind),
-		credential_ref: Set(credential_ref.clone()),
-		..Default::default()
+		device_credential::ActiveModel {
+			device_id: Set(device.id.clone()),
+			protocol: Set(protocol),
+			credential_kind: Set(kind),
+			credential_ref: Set(credential_ref.clone()),
+			..Default::default()
+		}
+		.insert(conn)
+		.await?;
+
+		credentials.push(IssuedCredential {
+			kind,
+			protocol,
+			credential_ref,
+			secret,
+			additional_credentials: Vec::new(),
+		});
 	}
-	.insert(conn)
-	.await?;
 
-	Ok(IssuedCredential {
-		kind,
-		protocol,
-		credential_ref,
-		secret,
-	})
+	let mut credentials = credentials.into_iter();
+	let mut primary = credentials.next().ok_or_else(|| {
+		DeviceError::Credential("device kind has no credential specification".to_string())
+	})?;
+	primary.additional_credentials = credentials.collect();
+	Ok(primary)
 }
 
 /// Invalidates every credential of the device at its source and drops the

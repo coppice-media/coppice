@@ -18,9 +18,15 @@
 
 pub mod cache;
 pub mod container;
+pub mod epub;
 pub mod error;
 pub mod pipeline;
 pub mod profile;
+
+pub use epub::{
+	EpubDeviceProfile, EpubDeviceTarget, EpubOptimizationError, EpubOptimizationSummary,
+	EpubOptimizer, EpubOptimizerOptions,
+};
 pub mod source;
 
 pub use cache::{CacheSweep, TransformCache};

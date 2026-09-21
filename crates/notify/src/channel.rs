@@ -41,6 +41,16 @@ pub enum NotificationKind {
 	ProviderMatchDone,
 	/// Sent by `testNotificationChannel`; never routed by rules
 	Test,
+	/// A social recommendation or explicit share was sent to this user.
+	RecommendationReceived,
+	/// A recipient accepted a recommendation or share grant.
+	RecommendationAccepted,
+	/// A recipient declined a recommendation or share grant.
+	RecommendationDeclined,
+	/// A sender or authorized owner revoked a recommendation or share grant.
+	RecommendationRevoked,
+	/// A recipient's request handoff changed state.
+	RequestStatusUpdated,
 }
 
 impl NotificationKind {
@@ -54,7 +64,14 @@ impl NotificationKind {
 	pub fn is_administrative(self) -> bool {
 		!matches!(
 			self,
-			Self::DevicePaired | Self::DeviceFirstSeen | Self::Test
+			Self::DevicePaired
+				| Self::DeviceFirstSeen
+				| Self::RecommendationReceived
+				| Self::RecommendationAccepted
+				| Self::RecommendationDeclined
+				| Self::RecommendationRevoked
+				| Self::RequestStatusUpdated
+				| Self::Test
 		)
 	}
 
@@ -69,6 +86,11 @@ impl NotificationKind {
 			Self::AnalysisJobFailed => "x",
 			Self::ProviderMatchDone => "mag",
 			Self::Test => "wave",
+			Self::RecommendationReceived => "mail",
+			Self::RecommendationAccepted => "white_check_mark",
+			Self::RecommendationDeclined => "no_entry_sign",
+			Self::RecommendationRevoked => "unlock",
+			Self::RequestStatusUpdated => "inbox_tray",
 		}
 	}
 }
@@ -187,7 +209,7 @@ impl Notification {
 	pub fn test(channel_label: &str) -> Self {
 		Self::new(
 			NotificationKind::Test,
-			"Stump test notification",
+			"Coppice test notification",
 			format!("Your {channel_label} channel is configured correctly."),
 		)
 	}

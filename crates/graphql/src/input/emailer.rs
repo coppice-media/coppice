@@ -18,18 +18,30 @@ pub struct EmailerInput {
 }
 
 impl EmailerInput {
-	/// Converts the input object into an active model for database operations
+	/// Converts input into an active model for creation. Creation always
+	/// requires a password because there is no existing secret to preserve.
 	pub async fn try_into_active_model(
 		self,
 		encryption_key: &String,
 	) -> Result<emailer::ActiveModel> {
-		let encrypted_password = encrypt_string(
-			&self.config.password.ok_or("Password is missing")?,
-			encryption_key,
-		)?;
+		self.try_into_active_model_preserving_password(encryption_key, None)
+			.await
+	}
 
+	/// Converts input into an active model while preserving an existing
+	/// encrypted password when an owner edits non-secret SMTP fields without
+	/// re-entering the secret.
+	pub async fn try_into_active_model_preserving_password(
+		self,
+		encryption_key: &String,
+		existing_encrypted_password: Option<String>,
+	) -> Result<emailer::ActiveModel> {
+		let encrypted_password = match self.config.password {
+			Some(password) => encrypt_string(&password, encryption_key)?,
+			None => existing_encrypted_password.ok_or("Password is missing")?,
+		};
 		Ok(emailer::ActiveModel {
-			id: NotSet, // auto-incremented
+			id: NotSet,
 			name: Set(self.name),
 			is_primary: Set(self.is_primary),
 			sender_email: Set(self.config.sender_email),

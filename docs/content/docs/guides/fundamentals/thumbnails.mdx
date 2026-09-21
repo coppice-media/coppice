@@ -2,7 +2,7 @@
 title: Thumbnails
 ---
 
-Stump uses thumbnails to display images of your media throughout the app. By default, Stump will pull the first image from a media file to use as a thumbnail. However, you can customize this behavior per-library by configuring the thumbnail generation settings
+Coppice uses thumbnails to display images of your media throughout the app. By default, Coppice will pull the first image from a media file to use as a thumbnail. However, you can customize this behavior per-library by configuring the thumbnail generation settings
 
 ## Thumbnail Generation
 
@@ -25,13 +25,13 @@ Please note that when thumbnail generation is enabled, you may not opt out of [p
 
 ### Image Candidacy
 
-When generating thumbnails, Stump will use the very first image it encounters in the media file as the thumbnail.
+When generating thumbnails, Coppice will use the very first image it encounters in the media file as the thumbnail.
 
 ## Supported Formats
 
 ### Generation
 
-Stump supports generating thumbnails to and from the following formats:
+Coppice supports generating thumbnails to and from the following formats:
 
 - JPEG
 - PNG
@@ -43,17 +43,17 @@ You should ensure that your browser supports the format you plan to use. You can
 
 ### Display
 
-Stump supports the following formats for displaying thumbnails, in addition to the above:
+Coppice supports the following formats for displaying thumbnails, in addition to the above:
 
 - [GIF](https://caniuse.com/gif)
 
-The reason for this separation is that while Stump supports rendering these on the UI, there is no process to convert them.
+The reason for this separation is that while Coppice supports rendering these on the UI, there is no process to convert them.
 
 ## Thumbnail Placeholder Colors
 
 The mobile app supports progressive loading of thumbnails by first displaying a placeholder based on the dominant colors of a thumbnail image. This is totally optional if you aren't opting into generating thumbnails, but can visually improve the look and feel of the app.
 
-If you choose to enable this feature, Stump will compute the dominant colors of each thumbnail image during generation and store them in the database. While the thumbnail is being loaded on the client, a placeholder will be displayed using these colors and presented in one of three supported styles:
+If you choose to enable this feature, Coppice will compute the dominant colors of each thumbnail image during generation and store them in the database. While the thumbnail is being loaded on the client, a placeholder will be displayed using these colors and presented in one of three supported styles:
 
 - Average Color: A single color placeholder based on the average color of the thumbnail image
 - Colorful: A tvOS-like placeholder using multiple dominant colors from the thumbnail image

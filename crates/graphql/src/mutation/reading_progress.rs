@@ -147,9 +147,6 @@ impl ReadProgressMutation {
 
 		let upsert_txn = begin_write(conn).await?;
 
-		let session = upsert_reading_session(&upsert_txn, user, id.as_ref(), progression)
-			.await
-			.map(ReadingSession::from)?;
 		let applied = reading_state::apply(
 			&upsert_txn,
 			&user.id,
@@ -162,6 +159,19 @@ impl ReadProgressMutation {
 		)
 		.await?;
 
+		let session = if applied.accepted() {
+			Some(
+				upsert_reading_session(&upsert_txn, user, id.as_ref(), progression)
+					.await
+					.map(ReadingSession::from)?,
+			)
+		} else {
+			reading_session::Entity::find_latest_for_user_and_media(user, id.as_ref())
+				.one(&upsert_txn)
+				.await?
+				.map(ReadingSession::from)
+		};
+
 		upsert_txn.commit().await?;
 		if applied.accepted() {
 			core.emit_reading_head_changed(reading_state::ReadingHeadChanged {
@@ -173,7 +183,7 @@ impl ReadProgressMutation {
 			});
 		}
 
-		Ok(session)
+		session.ok_or_else(|| "Rejected progress has no existing reading session".into())
 	}
 
 	/// a more focused version of `update_media_progress` that splices the history so that

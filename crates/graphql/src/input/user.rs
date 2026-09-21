@@ -70,3 +70,9 @@ pub struct UpdateUserPreferencesInput {
 pub struct NavigationArrangementInput {
 	pub sections: Vec<ArrangementSection>,
 }
+
+#[cfg(feature = "web")]
+#[derive(InputObject, Debug)]
+pub struct HomeArrangementInput {
+	pub sections: Vec<ArrangementSection>,
+}

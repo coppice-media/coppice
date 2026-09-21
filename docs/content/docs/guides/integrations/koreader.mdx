@@ -1,138 +1,160 @@
 ---
-title: KoReader Sync
+title: KOReader Sync
+description: Configure the Coppice KOReader-compatible sync API and its hash matching rules
 ---
 
-import { Step, Steps } from 'fumadocs-ui/components/steps'
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# KOReader Sync
+
+Coppice implements the KOReader-compatible sync API under
+`/koreader/{api_key}`. The server surface is **Shipped** and
+**Contract-tested**. Liseur's KOReader-sync flow is **Device-tested**, but the
+native KOReader app itself has not been loaded against Coppice. The first-party
+`stump.koplugin` remains **Source-only**; direct native-app verification is
+**Blocked**. See the [compatibility matrix](/docs/guides/integrations/compatibility)
+and [KOReader developer record](/docs/developer/koreader-plugin).
 
 <Callout title="Permission required">
-	This functionality is gated behind the `ACCESS_KOREADER_SYNC` and `ACCESS_API_KEYS` user
-	permissions. To learn more about permissions, see the
-	[permissions](/docs/guides/access-control/permissions) guide.
+	This functionality is gated behind the `ACCESS_KOREADER_SYNC` and `ACCESS_API_KEYS` user permissions. To learn more about permissions, see the [permissions](/docs/guides/access-control/permissions) guide.
 </Callout>
 
-KoReader is an open-source e-reader application that supports a variety of devices. Stump has a built-in implementation of the [sync API](https://github.com/koreader/koreader-sync-server) that enables KoReader to sync read progress with Stump.
+## What is synchronized
 
-## How it works
-
-KoReader sync works by sending read progress updates to Stump. When you open and progress through a book in KoReader, it will send a request to Stump with KoReader-specific information for tracking your progress:
-
-- A hash of the book, which is used to identify the book between KoReader and Stump
-- The progress string (x-pointer) that KoReader uses for tracking where you are in a book with more precision for DOM-based documents
-- A percentage of how far you are through the book
-- The ID of the device you are using
-
-Stump will store this information to perform various progress-related lookups when KoReader issues requests.
+KOReader sends a book hash, an x-pointer progress string, a percentage, and a
+device identifier. Coppice stores those values for KOReader lookups. The
+current adapter supports **hash-based matching only**; it does not fall back to
+matching by filename.
 
 ## Setup
-
-To set up KoReader sync with Stump, you need to:
 
 <Steps>
 
 <Step>
 
-### Install [KoReader](https://koreader.rocks/) on your device
+### Install KOReader
+
+Install [KOReader](https://koreader.rocks/) on the device you intend to use.
+The installation itself is outside Coppice.
 
 </Step>
 
 <Step>
-### Enable the KoReader routes on your Stump instance
 
-The KoReader router is disabled by default. To enable it, you need to set the `ENABLE_KOREADER_SYNC` environment variable to `true`, or directly set `enable_koreader_sync=true` in the `Stump.toml` configuration file.
+### Compile and enable the sync route
 
-See the [configuration guide](/docs/guides/configuration/server-config) for more information.
+The server must be compiled with the Cargo `koreader` feature. The default
+`full` and `headless` profiles include it. To prove a smaller composition, use
+the exact KOReader-only command from the [modular deployment
+guide](/docs/guides/configuration/modular-deployment):
 
-</Step>
+```sh
+ENABLE_KOREADER_SYNC=true cargo run -p stump_server --bin stump_server \
+  --no-default-features --features koreader
+```
 
-<Step>
-### Ensure your library generates KoReader-compatible book hashes
-
-KoReader supports two methods for matching books:
-
-1. A hash of the file
-2. The name of the file
-
-Stump **only supports hash-based book matching** at this time. This means you will need to ensure Stump generates KoReader-specific hashes for library content for the integration to work.
-
-To enable this feature, be sure the `KoReader-compatible hashes` setting is enabled for a library. For more information, see the [scanner configuration](/docs/guides/fundamentals/scanner) guide.
-
-<Callout>
-	To generate hashes on an existing library, you will need to configure a scan to recompute hashes.
-	You can do this in the library settings page for scanning-related options
-</Callout>
-</Step>
-
-<Step>
-### Generate an API key
-
-<Callout type="warn">This step requires the `ACCESS_API_KEYS` user permissions.</Callout>
-
-The API key should have at least the `ACCESS_KOREADER_SYNC` permission:
-
-1. Navigate to the app settings (`/settings/app`)
-2. Click the `API keys` tab (`/settings/app/api-keys`)
-3. Click the `Create API key` button
-4. Create your key and save the full value after creation
+For an existing full server, set `ENABLE_KOREADER_SYNC=true`, or set
+`enable_koreader_sync=true` in the `Stump.toml` configuration file. The runtime
+switch cannot add the route to a binary compiled without `koreader`.
 
 </Step>
 
 <Step>
-### Configure a sync server in KoReader
 
-1. Open KoReader on your device
-2. Navigate to `Progress sync` > `Custom sync server`
-3. Enter the following URL structure:
+### Generate KOReader-compatible hashes
 
-   ```bash
-   http(s)://your-server({port})(/{baseUrl})/koreader/{api_key}
-   ```
+Enable **KoReader-compatible hashes** for each library that will sync. The
+scanner must calculate the KOReader binary hash for the file; a missing hash
+causes the server lookup to return `404`.
+
+For an existing library, run a scan configured to recompute hashes. The
+[scanner guide](/docs/guides/fundamentals/scanner) explains the library setting
+and scan controls.
 
 </Step>
 
 <Step>
-### Register / Login
 
-KoReader requires you to login before it can sync progress. This is a bit unintuitive since you are using an API key, but the login step is necessary. You just need to enter any username and password (they are not validated).
+### Add the device in the Home app
 
-<Callout>
-	Stump does not currently support anything other than the API key authentication method. If you
-	would like to see support for the username/password method, please open a feature request
+Open the Home app at `/app`, choose **Devices** → **Add client**, and select
+**KOReader**. The [Devices guide](/docs/guides/features/devices) explains the
+one-time secret, endpoint URL, and username. Copy those values into KOReader's
+**Progress sync** → **Custom sync server** configuration before closing the
+dialog; the full secret is shown only once.
+
+</Step>
+
+<Step>
+
+### Fallback: Create an API key
+
+<Callout type="warn" title="API-key fallback">
+	This still works, but a raw API key does not provide a device kind, per-device
+	library scope, last-seen tracking, or device credential rotation. For reader
+	devices, the Home app flow above is the preferred path.
 </Callout>
 
+<Callout type="warn">This step requires the `ACCESS_API_KEYS` user permission.</Callout>
+
+In the Coppice web UI:
+
+1. Open app settings (`/settings/app`).
+2. Open **API keys** (`/settings/app/api-keys`).
+3. Select **Create API key**.
+4. Grant at least `ACCESS_KOREADER_SYNC`.
+5. Save the complete value when it is shown.
+
 </Step>
 
 <Step>
-### Ensure binary hash is enabled in KoReader
 
-KoReader might default to using a filename-based matching strategy for identifying books with the server. Stump only supports the binary hash method, so you need to ensure that KoReader is set to use this method:
+### Configure the sync server
 
-1. Navigate to `Progress sync` > `Document matching method`
-2. Select `Binary`
-3. Attempt to push progress again (if needed) to verify
+In KOReader, open **Progress sync** → **Custom sync server** and enter:
+
+```text
+http(s)://your-server(:port)(/baseUrl)/koreader/{api_key}
+```
+
+The `api_key` is the complete Coppice API key for the API-key fallback. With the
+Home app flow, use the complete endpoint URL and username shown by the app
+instead.
+
+</Step>
+
+<Step>
+
+### Register and choose binary matching
+
+KOReader asks for a username and password during registration even when the
+server URL carries an API key. Enter any values; Coppice currently accepts the
+API-key route only and does not validate those placeholder credentials.
+
+Then open **Progress sync** → **Document matching method** and select
+**Binary**. Filename matching is not supported by the current adapter.
 
 </Step>
 
 </Steps>
 
-## Troubleshooting
+## Troubleshooting 404 responses
 
-This section provides explanations for possible errors you may encounter while setting up or using KoReader sync
+A `404` on a progress `PUT` usually means the library item has no stored
+KOReader-compatible hash, or KOReader is using filename matching instead of
+binary matching. Enable the library hash setting, recompute hashes with a scan,
+and retry with **Binary** selected.
 
-### 404 Not Found
+## Evidence and limits
 
-If KoReader is recieving 404 errors from your Stump instance while trying to `PUT` progress data, it most likely means that the book hash was not generated for that book.
-
-KoReader uses a specific algorithm to generate hashes of books, and it uses this hash as the primary identifer when sending progress payloads to the sync API. So when the hash has not been generated in Stump, the lookup will fail. Follow the steps in the setup guide to generate hashes for your library.
-
-## Future improvements
-
-While the KoReader sync integration is functional, there are a few improvements that could be made:
-
-1. **Device management**: The devices are not surfaced on the UI yet. I'd like to add functions to attach friendly names to devices so you can easily identify them (e.g. `Aaron's Kobo Clara`)
-2. **Progress translation**: The progress data which gets stored is primarily for KoReader's use, with the exception of the percentage. I'd like to add a feature to translate the x-pointer into something useful for the Stump reader so it can pick up where you left off
-
-<Callout type="idea">
-	Have you set up KoReader sync with Stump? I'd love to hear about your experience! This is a very
-	new integration, so if you have any feedback or run into any issues, please let me know by opening
-	an [issue](https://github.com/stumpapp/stump/issues)
-</Callout>
+- **Shipped:** the API-key route, hash lookup, progress PUT/GET, and stored
+  KOReader progress fields.
+- **Contract-tested:** server probes cover `users/auth` and progress requests.
+- **Device-tested:** Liseur's KOReader-sync client path has run against the
+  server.
+- **Source-only:** the `stump.koplugin` source has been reviewed and its route
+  contract is documented, but it has not been loaded by KOReader.
+- **Blocked:** a direct KOReader app/device run and any device-specific UI or
+  firmware behavior remain unverified.
+- **Planned:** device management UI and richer translation of x-pointer data
+  into the native reader's position model are future work.

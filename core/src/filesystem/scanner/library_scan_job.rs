@@ -1,5 +1,5 @@
 use std::{
-	collections::{HashMap, VecDeque},
+	collections::{HashMap, HashSet, VecDeque},
 	path::{Path, PathBuf},
 	sync::{Arc, Mutex},
 };
@@ -28,8 +28,8 @@ use crate::{
 	event::{self, CreatedOrUpdatedManyMedia},
 	filesystem::{
 		image::{
-			PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope,
-			ThumbnailGenerationJobParams,
+			bump_media_thumbnail_fallbacks, PlaceholderGenerationJobConfig,
+			PlaceholderGenerationJobScope, ThumbnailGenerationJobParams,
 		},
 		metadata::MetadataFetchJobParams,
 		scanner::utils::safely_insert_series,
@@ -40,10 +40,16 @@ use crate::{
 };
 
 use stump_scanner::{
-	walk_library, walk_series, ScanOptions, WalkedLibrary, WalkedSeries, WalkerCtx,
+	walk_library, walk_series, BookVisitOperation, ScanOptions, WalkedLibrary,
+	WalkedSeries, WalkerCtx,
 };
 
 use super::{
+	oneshot::{
+		build_and_insert_oneshots, collect_previous_oneshot_entries,
+		convert_previous_oneshot_entries_to_series_media, convert_to_oneshot_series,
+		walk_oneshots,
+	},
 	series_scan_job::SeriesScanTask,
 	store::SeaOrmScanSource,
 	utils::{
@@ -59,6 +65,7 @@ use super::{
 pub enum LibraryScanTask {
 	Init(InitTaskInput),
 	WalkSeries(PathBuf),
+	WalkOneshotsDirectory(PathBuf),
 	SeriesTask {
 		id: String,
 		path: String,
@@ -106,6 +113,23 @@ impl LibraryScanJob {
 			pending_dir_mtimes: Arc::new(Mutex::new(vec![])),
 			series_id_by_path: Arc::new(Mutex::new(HashMap::new())),
 		}
+	}
+	async fn bump_thumbnail_fallbacks(
+		&self,
+		ctx: &JobContext<JobServices>,
+		series_id: &str,
+		changed_media: u64,
+	) -> Result<(), JobError> {
+		if changed_media > 0
+			&& self
+				.config
+				.as_ref()
+				.is_some_and(|config| config.thumbnail_config.is_none())
+		{
+			bump_media_thumbnail_fallbacks(ctx.conn(), Some(series_id)).await?;
+		}
+
+		Ok(())
 	}
 }
 
@@ -201,6 +225,7 @@ impl JobLifecycle for LibraryScanJob {
 			.ok_or(JobError::InitFailed(
 				"Library is missing configuration".to_string(),
 			))?;
+		let oneshots_directory = config.oneshots_directory.clone();
 		let is_collection_based = config.is_collection_based();
 		let ignore_rules = config.ignore_rules().build()?;
 
@@ -245,6 +270,7 @@ impl JobLifecycle for LibraryScanJob {
 			library_is_missing,
 			ignored_directories,
 			seen_directories,
+			oneshot_dirs_to_visit,
 		} = {
 			let scan_source = SeaOrmScanSource::new(ctx.services().conn.clone());
 			walk_library(
@@ -259,6 +285,7 @@ impl JobLifecycle for LibraryScanJob {
 					dir_mtimes: Arc::new(HashMap::new()),
 					library_id: self.id.clone(),
 					series_id: None,
+					oneshots_directory,
 				},
 			)
 			.await
@@ -303,6 +330,11 @@ impl JobLifecycle for LibraryScanJob {
 				series_to_create
 					.into_iter()
 					.map(LibraryScanTask::WalkSeries),
+			)
+			.chain(
+				oneshot_dirs_to_visit
+					.into_iter()
+					.map(LibraryScanTask::WalkOneshotsDirectory),
 			)
 			.collect::<Vec<LibraryScanTask>>();
 
@@ -349,7 +381,10 @@ impl JobLifecycle for LibraryScanJob {
 				tracing::trace!("Thumbnail generation job should be enqueued");
 				let params = ThumbnailGenerationJobParams::books_in_library(
 					self.id.clone(),
-					false,
+					matches!(
+						self.options.book_operation(),
+						Some(BookVisitOperation::Rebuild)
+					),
 				);
 				if let Err(e) = ctx
 					.enqueue(StumpJob::thumbnail_generation(options, params))
@@ -631,6 +666,52 @@ impl JobLifecycle for LibraryScanJob {
 					tracing::trace!("No series to create");
 				}
 			},
+			LibraryScanTask::WalkOneshotsDirectory(path_buf) => {
+				tracing::debug!(path = ?path_buf, "Executing one-shot directory walk");
+				let config = self.config.clone().ok_or_else(|| {
+					JobError::TaskFailed("Library config is missing".to_string())
+				})?;
+				let ignore_rules = config.ignore_rules().build().map_err(|error| {
+					JobError::TaskFailed(format!("Failed to build ignore rules: {error}"))
+				})?;
+				let walked =
+					walk_oneshots(&path_buf, &ignore_rules, self.options, ctx.conn())
+						.await
+						.map_err(|error| JobError::TaskFailed(error.to_string()))?;
+				output.total_files += walked.seen_files + walked.ignored_files;
+				output.ignored_files += walked.ignored_files;
+
+				for pending in walked.pending_oneshot_conversions {
+					let conversion = convert_to_oneshot_series(
+						&pending.series_id,
+						pending.media,
+						&self.id,
+						ctx,
+					)
+					.await?;
+					output.created_series += conversion.created_series;
+					output.created_media += conversion.created_media;
+					logs.extend(conversion.logs);
+				}
+
+				let inserted =
+					build_and_insert_oneshots(&self.id, walked.to_create, config, ctx)
+						.await?;
+				output.created_series += inserted.created_series;
+				output.created_media += inserted.created_media;
+				logs.extend(inserted.logs);
+
+				for operation in walked.book_operations {
+					subtasks.push(LibraryScanTask::SeriesTask {
+						id: operation.series_id,
+						path: operation.path.to_string_lossy().to_string(),
+						task: SeriesScanTask::VisitMedia(vec![(
+							operation.path,
+							operation.operation,
+						)]),
+					});
+				}
+			},
 			LibraryScanTask::WalkSeries(path_buf) => {
 				tracing::debug!("Executing the walk series task for library scan");
 				let filename = path_buf
@@ -692,14 +773,15 @@ impl JobLifecycle for LibraryScanJob {
 						dir_mtimes: self.dir_mtimes.clone(),
 						library_id: self.id.clone(),
 						series_id: series_id.clone(),
+						oneshots_directory: None,
 					},
 				)
 				.await;
 
 				let WalkedSeries {
 					series_is_missing,
-					media_to_create,
-					media_to_visit,
+					mut media_to_create,
+					mut media_to_visit,
 					recovered_media,
 					missing_media,
 					seen_files,
@@ -773,6 +855,37 @@ impl JobLifecycle for LibraryScanJob {
                         "An unexpected error occurred while attempting to scan the series. Check logs for details.".to_string(),
                     ));
 				};
+				let candidate_paths = media_to_create
+					.iter()
+					.map(|path| path.to_string_lossy().to_string())
+					.chain(
+						media_to_visit
+							.iter()
+							.map(|(path, _)| path.to_string_lossy().to_string()),
+					)
+					.collect::<Vec<_>>();
+				let previous_oneshots =
+					collect_previous_oneshot_entries(candidate_paths, ctx.conn()).await?;
+				if !previous_oneshots.is_empty() {
+					let converted_paths = previous_oneshots
+						.iter()
+						.map(|entry| entry.book_path.to_string_lossy().to_string())
+						.collect::<HashSet<_>>();
+					let conversion = convert_previous_oneshot_entries_to_series_media(
+						&series_id,
+						previous_oneshots,
+						ctx.conn(),
+					)
+					.await?;
+					output.updated_media += conversion.updated_media;
+					logs.extend(conversion.logs);
+					media_to_create.retain(|path| {
+						!converted_paths.contains(&path.to_string_lossy().to_string())
+					});
+					media_to_visit.retain(|(path, _)| {
+						!converted_paths.contains(&path.to_string_lossy().to_string())
+					});
+				}
 
 				subtasks = chain_optional_iter(
 					[],
@@ -814,6 +927,8 @@ impl JobLifecycle for LibraryScanJob {
 						logs: new_logs,
 						..
 					} = handle_restored_media(ctx.conn(), &series_id, ids).await;
+					self.bump_thumbnail_fallbacks(ctx, &series_id, updated_media)
+						.await?;
 
 					ctx.emit_event(CoreEvent::CreatedOrUpdatedManyMedia(
 						CreatedOrUpdatedManyMedia {
@@ -840,6 +955,8 @@ impl JobLifecycle for LibraryScanJob {
 						logs: new_logs,
 						..
 					} = handle_missing_media(ctx.conn(), &series_id, paths).await;
+					self.bump_thumbnail_fallbacks(ctx, &series_id, updated_media)
+						.await?;
 
 					ctx.emit_event(CoreEvent::CreatedOrUpdatedManyMedia(
 						CreatedOrUpdatedManyMedia {
@@ -878,6 +995,8 @@ impl JobLifecycle for LibraryScanJob {
 						paths,
 					)
 					.await?;
+					self.bump_thumbnail_fallbacks(ctx, &series_id, created_media)
+						.await?;
 
 					ctx.emit_event(CoreEvent::CreatedOrUpdatedManyMedia(
 						CreatedOrUpdatedManyMedia {
@@ -915,6 +1034,8 @@ impl JobLifecycle for LibraryScanJob {
 						params,
 					)
 					.await?;
+					self.bump_thumbnail_fallbacks(ctx, &series_id, updated_media)
+						.await?;
 
 					ctx.emit_event(CoreEvent::CreatedOrUpdatedManyMedia(
 						event::CreatedOrUpdatedManyMedia {

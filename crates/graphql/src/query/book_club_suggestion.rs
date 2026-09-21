@@ -1,6 +1,6 @@
 use async_graphql::{Context, Object, Result, ID};
 use models::{
-	entity::{book_club, book_club_book_suggestion},
+	entity::{book_club_book_suggestion, book_club_member},
 	shared::book_club::BookClubSuggestionStatus,
 };
 use sea_orm::{prelude::*, ColumnTrait, QueryFilter, QueryOrder, QueryTrait};
@@ -25,10 +25,10 @@ impl BookClubSuggestionQuery {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
-		book_club::Entity::find_by_id_and_user(book_club_id.as_ref(), user)
+		book_club_member::Entity::find_by_club_for_user(user, book_club_id.as_ref())
 			.one(conn)
 			.await?
-			.ok_or("Book club not found or you don't have access")?;
+			.ok_or("Book club not found or you are not a member")?;
 
 		let suggestions = book_club_book_suggestion::Entity::find()
 			.filter(
@@ -63,7 +63,7 @@ impl BookClubSuggestionQuery {
 				.await?
 				.ok_or("Suggestion not found")?;
 
-		book_club::Entity::find_by_id_and_user(&suggestion.book_club_id, user)
+		book_club_member::Entity::find_by_club_for_user(user, &suggestion.book_club_id)
 			.one(conn)
 			.await?
 			.ok_or("You don't have access to this book club")?;

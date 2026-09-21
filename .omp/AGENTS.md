@@ -37,6 +37,23 @@ Preserve normal/full behavior and mobile compatibility.
 - `apps/server/Cargo.toml` defines `minimal`, `headless` (GraphQL, OPDS, Readium, Kobo, KOReader, Komga, liseur-sync), and `full` (headless + webui).
 - `apps/server/src/middleware/auth.rs` owns Basic caching, remember-me,
   Komga 401 cookie-clear stripping, and `basic_auth_accepted`.
+- `home/` is the dark-first SvelteKit user surface mounted at `/app`; route
+  pages live in `home/src/routes/(app)/`, area operations in
+  `home/src/lib/graphql/`, and reader components in
+  `home/src/lib/components/reader/`.
+- `editor/` is the dark-first SvelteKit ingest surface mounted at `/editor`;
+  its workflow routes are `drop`, `queue`, `rework`, `bulk`, and `library`.
+  Both Svelte apps consume the source-linked `packages/stump-ui/`; theme
+  tokens and the preset switcher are owned there, not duplicated per app.
+- User/device security is owned by GraphQL plus
+  `apps/server/src/middleware/auth.rs`: device credentials inherit the owning
+  user's permissions and may only narrow access through `library_scope`.
+  `/app/devices` is the supported device setup surface; raw API keys are an
+  authenticated fallback, not a permission bypass.
+- Client integrations also include the sibling checkouts
+  `../koreader-stump/` (KOReader plugin) and `../nickelstump/` (Kobo
+  NickelMenu client). Their host tests are client evidence only; physical
+  reader verification remains a separate evidence tier.
 
 ## Evidence discipline
 

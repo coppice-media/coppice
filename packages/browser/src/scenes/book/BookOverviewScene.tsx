@@ -48,7 +48,7 @@ export default function BookOverviewScene() {
 		<SceneContainer className="gap-4">
 			<Suspense>
 				<Helmet>
-					<title>Stump | {media.resolvedName}</title>
+					<title>Coppice | {media.resolvedName}</title>
 				</Helmet>
 
 				<div className="gap-4 flex h-full w-full flex-col">

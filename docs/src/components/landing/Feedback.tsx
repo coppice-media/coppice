@@ -10,7 +10,7 @@ export default function Feedback() {
 				</div>
 
 				<p className="text-neutral-600 text-base sm:text-lg md:max-w-3xl md:text-xl dark:text-neutral-400">
-					Stump is a community-driven project. The best way to improve the software is to hear and
+					Coppice is a community-driven project. The best way to improve the software is to hear and
 					act on your feedback
 				</p>
 			</div>

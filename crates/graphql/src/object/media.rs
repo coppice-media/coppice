@@ -12,8 +12,9 @@ use models::{
 	shared::{analysis::MediaAnalysisData, image::ImageRef},
 };
 use num_traits::cast::ToPrimitive;
+use sea_orm::prelude::Decimal;
 use sea_orm::{prelude::*, sea_query::Query, FromQueryResult, QuerySelect};
-use stump_library::editions;
+use stump_library::{editions, sync_maps};
 
 use crate::{
 	data::CoreContext,
@@ -22,7 +23,7 @@ use crate::{
 		library_config::{LibraryConfigLoader, LibraryConfigLoaderKey},
 		media_analysis::{MediaAnalysisLoader, PageDimensionLoaderKey},
 		reading_session::{
-			ReadingSessionLoader, ReadthroughRecordLoaderKey,
+			ReadingHeadLoaderKey, ReadingSessionLoader, ReadthroughRecordLoaderKey,
 			ResumeReadingCursorLoaderKey,
 		},
 		series::SeriesLoader,
@@ -41,6 +42,7 @@ use super::{
 	readthrough_record::ReadthroughRecord,
 	resume_reading_cursor::ResumeReadingCursor,
 	series::Series,
+	sync_map::{AlignGranularity, ReadAloudArtifact, SyncMap},
 	tag::Tag,
 };
 
@@ -69,6 +71,38 @@ impl Media {
 		}
 	}
 }
+/// Merge canonical head position with the session history fields exposed by
+/// the existing GraphQL cursor type.
+pub(crate) fn merge_read_progress(
+	head: Option<&reading_head::Model>,
+	session: Option<ResumeReadingCursor>,
+) -> Option<ResumeReadingCursor> {
+	let session = session?;
+	if head.is_some_and(|head| head.completed) {
+		return None;
+	}
+
+	Some(ResumeReadingCursor {
+		readthrough_number: session.readthrough_number,
+		session_id: session.session_id,
+		page: head.and_then(|head| head.page).or(session.page),
+		locator: head
+			.and_then(|head| head.locator.clone())
+			.or(session.locator),
+		position_ms: head
+			.and_then(|head| head.position_ms)
+			.or(session.position_ms),
+		percentage_completed: head
+			.and_then(|head| Decimal::from_f64_retain(head.progression))
+			.or(session.percentage_completed),
+		elapsed_seconds: session.elapsed_seconds,
+		started_at: session.started_at,
+		updated_at: head
+			.map(|head| head.updated_at.clone())
+			.or(session.updated_at),
+		media_id: session.media_id,
+	})
+}
 
 #[ComplexObject]
 impl Media {
@@ -83,7 +117,11 @@ impl Media {
 			path: self.model.path.clone(),
 		};
 
-		Epub::try_from(model).map(Some)
+		let epub = tokio::task::spawn_blocking(move || Epub::try_from(model))
+			.await
+			.map_err(|error| async_graphql::Error::new(error.to_string()))??;
+
+		Ok(Some(epub))
 	}
 
 	/// Whether the media is marked as a favorite by the current user
@@ -230,6 +268,65 @@ impl Media {
 		editions_by_id(conn, user, links.iter().map(|link| link.media_id.clone())).await
 	}
 
+	/// The latest validated timing map where this media is either the ebook or
+	/// audiobook side. The stored artifact keeps its canonical ebook/audio
+	/// orientation even when the field is selected from an audiobook.
+	async fn sync_map(
+		&self,
+		ctx: &Context<'_>,
+		#[graphql(default)] granularity: AlignGranularity,
+	) -> Result<Option<SyncMap>> {
+		let auth = ctx.data::<stump_auth::AuthContext>()?;
+		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+		Ok(sync_maps::latest_sync_map_for_media_user(
+			conn,
+			&auth.user.id,
+			&self.model.id,
+			granularity.into(),
+		)
+		.await?
+		.map(SyncMap::from))
+	}
+
+	/// A cache-only read-aloud download. No map or cache means `null`; selecting
+	/// this field never schedules work or invokes an aligner.
+	async fn read_aloud(
+		&self,
+		ctx: &Context<'_>,
+		#[graphql(default)] granularity: AlignGranularity,
+	) -> Result<Option<ReadAloudArtifact>> {
+		let auth = ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+		let Some(map) = sync_maps::latest_sync_map_for_media_user(
+			core.conn.as_ref(),
+			&auth.user.id,
+			&self.model.id,
+			granularity.into(),
+		)
+		.await?
+		else {
+			return Ok(None);
+		};
+		let path =
+			sync_maps::read_aloud_cache_path(core.config.get_transform_cache_dir(), &map)
+				.map_err(|error| async_graphql::Error::new(error.to_string()))?;
+		if tokio::fs::metadata(&path).await.is_err() {
+			return Ok(None);
+		}
+		let origin = ctx.data::<stump_api_types::RequestOrigin>()?;
+		let cache_key = path
+			.file_stem()
+			.and_then(|stem| stem.to_str())
+			.unwrap_or_default()
+			.to_owned();
+		Ok(Some(ReadAloudArtifact {
+			url: origin
+				.format_url(format!("/api/v2/media/{}/read-aloud.epub", self.model.id)),
+			mime_type: "application/epub+zip".to_owned(),
+			cache_key,
+		}))
+	}
+
 	/// Unconfirmed pairings for this book, recomputed on demand.
 	///
 	/// This is the field a book page selects: it runs the three pairing rules
@@ -297,6 +394,7 @@ impl Media {
 	async fn thumbnail(&self, ctx: &Context<'_>) -> Result<ImageRef> {
 		let service = ctx.data::<stump_api_types::RequestOrigin>()?;
 		let loader = ctx.data::<DataLoader<MediaAnalysisLoader>>()?;
+		let last_modified = self.model.updated_at;
 
 		let dimensions = match self
 			.model
@@ -316,11 +414,14 @@ impl Media {
 		};
 
 		Ok(ImageRef {
-			url: service.format_url(format!("/api/v2/media/{}/thumbnail", self.model.id)),
+			url: service.cache_friendly_url(
+				format!("/api/v2/media/{}/thumbnail", self.model.id),
+				&last_modified,
+			),
 			height: dimensions.as_ref().map(|dim| dim.1),
 			width: dimensions.as_ref().map(|dim| dim.0),
 			metadata: self.model.thumbnail_meta.clone(),
-			..Default::default()
+			last_modified,
 		})
 	}
 
@@ -334,6 +435,11 @@ impl Media {
 			.to_string()
 	}
 
+	/// Canonical position fields (`page`, `locator`, `positionMs`,
+	/// `percentageCompleted`, and `updatedAt`) come from `reading_heads`.
+	/// Readthrough identity, elapsed time, and the start instant remain
+	/// `reading_sessions` history; their position fields are only fallbacks
+	/// when the head has no corresponding value.
 	async fn read_progress(
 		&self,
 		ctx: &Context<'_>,
@@ -342,14 +448,20 @@ impl Media {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let loader = ctx.data::<DataLoader<ReadingSessionLoader>>()?;
 
-		let progress = loader
+		let head = loader
+			.load_one(ReadingHeadLoaderKey {
+				user_id: user.id.clone(),
+				media_id: self.model.id.clone(),
+			})
+			.await?;
+		let session = loader
 			.load_one(ResumeReadingCursorLoaderKey {
 				user_id: user.id.clone(),
 				media_id: self.model.id.clone(),
 			})
 			.await?;
 
-		Ok(progress)
+		Ok(merge_read_progress(head.as_ref(), session))
 	}
 
 	// TODO(graphql): Create object to query for device used (e.g., KoReader device ID)
@@ -597,7 +709,10 @@ async fn mapped_position(
 		(&source, target)
 	};
 
-	let spine = editions::ebook_spine(&ebook.path)?;
+	let ebook_path = ebook.path.clone();
+	let spine = tokio::task::spawn_blocking(move || editions::ebook_spine(&ebook_path))
+		.await
+		.map_err(|error| async_graphql::Error::new(error.to_string()))??;
 	let chapters = editions::audio_chapter_spans(conn, &audio.id).await?;
 	let mappings: Vec<ChapterMapping> = editions::chapter_map(conn, &ebook.id, &audio.id)
 		.await?

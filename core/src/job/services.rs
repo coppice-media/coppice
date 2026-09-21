@@ -1,12 +1,17 @@
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
 use models::{
-	entity::{job, library, log, metadata_fetch_record, scheduled_job},
+	entity::{
+		book_request_grab, job, library, log, metadata_fetch_record, scheduled_job,
+	},
 	shared::enums::{JobStatus, MetadataFetchStatus, ScheduledJobKind},
 };
-use sea_orm::{prelude::*, sea_query::OnConflict, ActiveValue::Set, DatabaseConnection};
+use sea_orm::{
+	prelude::*, sea_query::OnConflict, ActiveValue::Set, DatabaseConnection,
+	IntoActiveModel, QueryOrder, QuerySelect,
+};
 use stump_jobs::{
 	run_job, JobContext, JobError, JobExecutionContext, JobOutcome, JobPayload,
 	JobRuntime, ScheduledJobDispatcher,
@@ -38,6 +43,9 @@ pub struct JobServices {
 	pub conn: Arc<DatabaseConnection>,
 	pub config: Arc<StumpConfig>,
 	event_tx: broadcast::Sender<CoreEvent>,
+	/// Weak owner handle for jobs that need full context APIs. A weak reference
+	/// avoids keeping the context alive through its own JobRuntime.
+	ctx: Weak<crate::Ctx>,
 	visible_pages: Arc<VisiblePagesCache>,
 	/// The provider host, shared with [`Ctx`](crate::Ctx) rather than built
 	/// here: it is installed once during startup and a job must see the same
@@ -51,12 +59,14 @@ impl JobServices {
 	pub(crate) fn new(
 		conn: Arc<DatabaseConnection>,
 		config: Arc<StumpConfig>,
+		ctx: Weak<crate::Ctx>,
 		event_tx: broadcast::Sender<CoreEvent>,
 		visible_pages: Arc<VisiblePagesCache>,
 	) -> Self {
 		Self {
 			conn,
 			config,
+			ctx,
 			event_tx,
 			visible_pages,
 			#[cfg(feature = "providers")]
@@ -91,6 +101,11 @@ impl JobServices {
 		if let Err(error) = self.event_tx.send(event) {
 			tracing::error!(?error, "Failed to emit core event");
 		}
+	}
+	pub(crate) fn context(&self) -> Result<Arc<crate::Ctx>, JobError> {
+		self.ctx
+			.upgrade()
+			.ok_or_else(|| JobError::Unknown("core context is shutting down".to_owned()))
 	}
 }
 
@@ -217,6 +232,24 @@ impl JobExecutionContext for JobServices {
 			StumpJob::AnnotationSync { user_id } => {
 				run_job(ctx, &mut AnnotationSyncJob::new(user_id)).await
 			},
+			StumpJob::BookRequestAutomation { request_id } => {
+				let context = self.context()?;
+				crate::request_gateway_automation::process_book_request(
+					context.as_ref(),
+					&request_id,
+				)
+				.await
+				.map_err(|error| JobError::Unknown(error.to_string()))
+			},
+			StumpJob::BookRequestPoll { grab_id } => {
+				let context = self.context()?;
+				crate::request_gateway_poll::poll_book_request_grab(
+					context.as_ref(),
+					&grab_id,
+				)
+				.await
+				.map_err(|error| JobError::Unknown(error.to_string()))
+			},
 			#[cfg(feature = "providers")]
 			StumpJob::ProviderGc => run_provider_gc(self).await,
 			#[cfg(feature = "providers")]
@@ -277,6 +310,38 @@ impl ScheduledJobDispatcher for JobServices {
 				dispatch_metadata_retry(job, runtime).await
 			},
 		}
+	}
+
+	async fn dispatch_due(&self, runtime: &JobRuntime<Self>) -> Result<(), JobError> {
+		if self.ctx.upgrade().is_some_and(|ctx| {
+			!ctx.component_enabled(crate::component_runtime::COMPONENT_BACKGROUND_JOBS)
+		}) {
+			return Ok(());
+		}
+
+		let now = Utc::now().fixed_offset();
+		let grabs = book_request_grab::Entity::find()
+			.filter(
+				book_request_grab::Column::NextPollAt
+					.is_null()
+					.or(book_request_grab::Column::NextPollAt.lte(now.clone())),
+			)
+			.filter(book_request_grab::Column::Status.is_not_in(["COMPLETED", "FAILED"]))
+			.order_by_asc(book_request_grab::Column::NextPollAt)
+			.limit(64)
+			.all(self.conn.as_ref())
+			.await?;
+
+		for grab in grabs {
+			let grab_id = grab.id.clone();
+			let mut active = grab.into_active_model();
+			active.next_poll_at = Set(Some(now.clone() + ChronoDuration::seconds(30)));
+			active.update(self.conn.as_ref()).await?;
+			runtime
+				.enqueue(StumpJob::book_request_poll(grab_id))
+				.await?;
+		}
+		Ok(())
 	}
 }
 

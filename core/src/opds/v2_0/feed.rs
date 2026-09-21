@@ -153,7 +153,7 @@ mod tests {
 				.unwrap()])
 			.metadata(
 				OPDSMetadataBuilder::default()
-					.title("Stump OPDS V2 Catalog".to_string())
+					.title("Coppice OPDS V2 Catalog".to_string())
 					.modified("2024-06-26".to_string())
 					.build()
 					.unwrap(),

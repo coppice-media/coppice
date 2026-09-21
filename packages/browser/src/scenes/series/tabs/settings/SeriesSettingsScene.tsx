@@ -9,7 +9,7 @@ import { SceneContainer } from '@/components/container'
 import { ResetMetadata } from '@/components/metadata/metadataEditor'
 import { SeriesMetadataEditor } from '@/components/series/metadata'
 import { useAppContext } from '@/context'
-import paths from '@/paths'
+import { usePaths } from '@/paths'
 
 import { useSeriesContext } from '../../context'
 import SeriesTagEditor from './SeriesTagEditor'
@@ -23,6 +23,7 @@ const query = graphql(`
 			tags {
 				id
 				name
+				kind
 			}
 			metadata {
 				...SeriesMetadataEditor
@@ -49,7 +50,7 @@ export default function SeriesSettingsScene() {
 	const { sdk } = useSDK()
 	const { series } = useSeriesContext()
 	const { checkPermission } = useAppContext()
-
+	const paths = usePaths()
 	const navigate = useNavigate()
 
 	const {
@@ -71,7 +72,7 @@ export default function SeriesSettingsScene() {
 		if (!seriesById) {
 			navigate(paths.notFound())
 		}
-	}, [seriesById, navigate])
+	}, [seriesById, navigate, paths])
 
 	if (!seriesById) {
 		return null

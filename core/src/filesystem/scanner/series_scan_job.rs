@@ -15,8 +15,8 @@ use stump_jobs::{
 use crate::{
 	event,
 	filesystem::image::{
-		PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope,
-		ThumbnailGenerationJobParams,
+		bump_media_thumbnail_fallbacks, PlaceholderGenerationJobConfig,
+		PlaceholderGenerationJobScope, ThumbnailGenerationJobParams,
 	},
 	job::{stump_job::StumpJob, CoreJobOutput, JobServices},
 	utils::chain_optional_iter,
@@ -177,6 +177,7 @@ impl JobLifecycle for SeriesScanJob {
 					dir_mtimes: Arc::new(HashMap::new()),
 					library_id: self.library_id().unwrap_or_default(),
 					series_id: Some(self.id.clone()),
+					oneshots_directory: None,
 				},
 			)
 			.await
@@ -237,11 +238,6 @@ impl JobLifecycle for SeriesScanJob {
 		ctx: &JobContext<JobServices>,
 		output: &Self::Output,
 	) -> Result<(), JobError> {
-		ctx.emit_event(CoreEvent::JobOutput(event::JobOutput {
-			id: ctx.job_id().to_owned(),
-			output: CoreJobOutput::SeriesScan(output.clone()),
-		}));
-
 		let did_create = output.created_media > 0;
 		let did_update = output.updated_media > 0;
 
@@ -249,6 +245,15 @@ impl JobLifecycle for SeriesScanJob {
 			.config
 			.as_ref()
 			.and_then(|o| o.thumbnail_config.clone());
+
+		if image_options.is_none() && (did_create || did_update) {
+			bump_media_thumbnail_fallbacks(ctx.conn(), Some(&self.id)).await?;
+		}
+
+		ctx.emit_event(CoreEvent::JobOutput(event::JobOutput {
+			id: ctx.job_id().to_owned(),
+			output: CoreJobOutput::SeriesScan(output.clone()),
+		}));
 
 		match image_options {
 			Some(options) if did_create || did_update => {

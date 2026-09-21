@@ -1,0 +1,98 @@
+---
+title: Compatibility and integration status
+description: Evidence-labelled compatibility for Coppice protocols, clients, devices, and providers
+---
+
+This is the human-facing status page for Coppice integrations. It separates
+what is implemented from what has been exercised in a real app or device. A
+route, DTO, or successful server replay is not by itself proof that every client
+works.
+
+For route-level details and pinned source references, see [client
+verification](/docs/developer/client-verification), [platform
+status](/docs/developer/platforms), and [protocol standards](/docs/developer/standards).
+
+## Evidence labels
+
+- **Shipped** — the implementation is present in this fork.
+- **Contract-tested** — a pinned fixture, replay, or server harness exercised a
+  protocol surface. It does not prove that a physical app works.
+- **Device-tested** — a real app or device ran the flow against Coppice.
+- **Source-only** — pinned client or protocol source was inspected without a
+  live run.
+- **Planned** — a future capability or design item.
+- **Blocked** — a prerequisite is missing, so the flow is not currently
+  claimable.
+
+## Client and protocol matrix
+
+| Surface or client | Implementation | Evidence | What the evidence means |
+| --- | --- | --- | --- |
+| Komga profile / Komelia 0.19.0 | Shipped | Device-tested; Contract-tested | Login, browse, CBZ/EPUB offline download, reading progress, and mark-read were exercised. The profile is not a promise of full Komga parity. |
+| Grimmory `/komga` alias | Shipped | Device-tested; Contract-tested | Device login was exercised; listing, file, and thumbnail routes were replayed. |
+| Mihon Komga extension and tracker | Shipped | Device-tested | Browse, download, read, and tracker GET/PUT were exercised. |
+| Kavita profile / Turnleaf and Kamigura | Shipped | Device-tested; Contract-tested | The recorded browse/read/download or want-to-read flows were exercised, and the wire profile has a replay. |
+| Other Kavita-shaped clients (Inkita, Kover, Kamare, Mihon tracker) | Shipped | Source-only | Pinned sources informed the profile; no device run is claimed. |
+| OPDS 1.2/PSE | Shipped | Device-tested; Contract-tested | Liseur exercised OPDS 1.2 and the server contract is covered. Generic OPDS readers are not blanket-certified. |
+| OPDS 2.0 | Shipped | Contract-tested | Auth and progression contracts are covered; universal OPDS 2.0 app support is not claimed. |
+| Kobo sync and KEPUB | Shipped | Contract-tested; Blocked | Initialization, library sync, KEPUB, range requests, and reading-state routes are replayed. No physical Kobo has run against Coppice. |
+| KOReader/KOSync | Shipped | Contract-tested; Device-tested; Source-only; Blocked | Server routes are probed. Liseur's KOReader-sync flow is device-tested. The native KOReader app and `stump.koplugin` have not been loaded; the plugin is source-only. |
+| liseur-sync | Shipped | Device-tested; Contract-tested | Positions, heads, and annotations were exercised through Liseur. |
+| Audiobookshelf-compatible REST / Lissen 1.11.22 | Shipped | Device-tested; Contract-tested | Lissen browse, listen, byte-range download, sessions, and bookmarks were exercised. |
+| Official Audiobookshelf app | Shipped profile | Blocked; Source-only | The profile is Lissen-shaped REST. The official app needs the Engine.IO/Socket.IO lane, which is not shipped, and no official-app run is claimed. |
+| Ordinary EPUB playback | Shipped | Device-tested | EPUB reading is an ordinary reading flow, separate from audiobook playback and alignment. |
+| Ordinary audiobook playback | Shipped | Device-tested | Audiobook playback is an ordinary audio flow, separate from EPUB reading and alignment. |
+
+The canonical dates, versions, route scopes, and caveats are maintained in the
+[developer verification record](/docs/developer/state). The table intentionally
+does not turn a harness result into a device result.
+
+## Provider status
+
+### Hardcover
+
+Hardcover metadata mapping is **Shipped** and **Contract-tested** against
+offline payload fixtures. Coppice has not been verified with a live Hardcover
+credential; live-credential verification is **Blocked** until a controlled
+credential run is available.
+
+Hardcover account, reading progress, and journal synchronization are
+**Planned** and currently **Blocked**. They are not implied by metadata lookup,
+and no OAuth or account-sync workflow is shipped. See the [Hardcover developer
+record](/docs/developer/hardcover-integration) for the exact boundary.
+
+### Storyteller and read-aloud
+
+Synchronized Storyteller read-aloud EPUB playback is **not shipped**. Storyteller
+is a future worker-side alignment backend, not a search provider, catalog
+provider, or bundled dependency. The current product keeps ordinary EPUB
+playback and ordinary audiobook playback separate.
+
+A future alignment flow starts only after an EPUB and audiobook pair has been
+confirmed. It can then import existing timing data, run a Storyteller worker,
+and use a native CTC fallback candidate. The worker and synchronized playback
+remain **Planned**; current app playback is therefore **Blocked**. See [read-aloud
+architecture](/docs/developer/read-aloud).
+
+## Setup guides
+
+- [Kobo sync](/docs/guides/integrations/kobo) — server route setup and the
+  physical-device limitation.
+- [KOReader sync](/docs/guides/integrations/koreader) — API-key setup,
+  hash-based matching, and the `ENABLE_KOREADER_SYNC` gate.
+- [Metadata fetching](/docs/guides/integrations/metadata-fetching) — provider
+  configuration and the offline-only Hardcover boundary.
+- [Shelfmark companion](/docs/guides/integrations/shelfmark) — external
+  fulfillment handoff and the planned request bridge.
+
+## Current, planned, and blocked at a glance
+
+| Area | Current | Planned | Blocked |
+| --- | --- | --- | --- |
+| Library access | OPDS, Komga-shaped, Kavita, Kobo, KOReader, liseur-sync, ABS-compatible REST, ordinary EPUB, and ordinary audiobook paths | — | A client/device not listed with **Device-tested** evidence |
+| Fulfillment | Shared-folder output can enter staged ingest and identifier matching | `requests`/wanted ledger; Shelfmark token-auth request bridge | Direct Shelfmark service integration before a stable token-auth API |
+| Read-aloud | Pairing and existing timing import boundaries | Storyteller worker-side alignment; native CTC fallback | Synchronized Storyteller EPUB playback |
+| Hardcover | Offline-tested metadata mapper | Account/progress/journal sync | Live credential verification and account-sync prerequisites |
+
+The [modular deployment guide](/docs/guides/configuration/modular-deployment)
+explains how to compile only the protocol features you intend to run.

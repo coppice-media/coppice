@@ -118,7 +118,7 @@ impl Entity {
 			Column::BookClubId.in_subquery(
 				Query::select()
 					.column(book_club::Column::Id)
-					.from(Self)
+					.from(book_club::Entity)
 					.and_where(book_club::Column::IsPrivate.eq(false))
 					.to_owned(),
 			),
@@ -170,7 +170,7 @@ mod tests {
 			select_no_cols_to_string(select),
 			(r#"SELECT  FROM "book_club_members" WHERE "#.to_string()
 				+ r#""book_club_members"."book_club_id" IN (SELECT "book_club_id" FROM "book_club_members" WHERE "book_club_members"."user_id" = '42') "#
-				+ r#"OR "book_club_members"."book_club_id" IN (SELECT "id" FROM "book_club_members" WHERE "book_clubs"."is_private" = FALSE)"#)
+				+ r#"OR "book_club_members"."book_club_id" IN (SELECT "id" FROM "book_clubs" WHERE "book_clubs"."is_private" = FALSE)"#)
 		);
 	}
 

@@ -7,7 +7,9 @@ title: API Keys
 	permissions, see the [permissions](/docs/guides/access-control/permissions) guide.
 </Callout>
 
-API keys are user-scoped, long-lived tokens that can be used to authenticate requests to the REST API. While originally developed to support third-party integrations, they are a useful tool for any user that wants to interact with Stump programmatically or develop their own integrations.
+API keys are user-scoped, long-lived tokens that can be used to authenticate requests to the REST API. While originally developed to support third-party integrations, they are a useful tool for any user that wants to interact with Coppice programmatically or develop their own integrations.
+
+For reader devices, create the device from the [Devices page](/docs/guides/features/devices) instead; it provides a device kind, endpoint details, library scope, last-seen tracking, and rotation.
 
 ## Generating an API Key
 
@@ -27,20 +29,20 @@ Once a key is generated, you will be presented with the full key. **This key wil
 
 ## Using an API Key
 
-You can authorize a request to your Stump instance by including the key value in the `Authorization` header of your requests. The header should look like this:
+You can authorize a request to your Coppice instance by including the key value in the `Authorization` header of your requests. The header should look like this:
 
 ```
 Authorization: Bearer <your_api_key>
 ```
 
-If you're using the Stump SDK, you can set it directly when you create the SDK instance:
+If you're using the Coppice SDK (`@stump/sdk`), you can set it directly when you create the SDK instance:
 
 ```js filename="example.ts" copy
 import { Api } from '@stump/sdk'
 
 // Create a new SDK instance, passing in your API key
 const sdk = new Api({
-	baseURL: 'https://my-stump.cloud',
+	baseURL: 'https://my-coppice.cloud',
 	authMethod: 'api-key',
 	apiKey: '<your_api_key>',
 })

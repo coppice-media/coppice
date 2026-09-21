@@ -12,9 +12,9 @@ pub struct DeviceMutation;
 
 #[Object]
 impl DeviceMutation {
-	/// Registers a device for the current user and mints its credential. The
+	/// Registers a device for the current user and mints its credential(s). The
 	/// registry enforces the permissions the kind needs (`ACCESS_API_KEYS` plus
-	/// the protocol permission for API-key kinds); the secret is returned once.
+	/// the protocol permission for API-key kinds); secrets are returned once.
 	async fn create_device(
 		&self,
 		ctx: &Context<'_>,
@@ -157,7 +157,7 @@ async fn with_credential(
 	let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
 	let core = ctx.data::<CoreContext>()?;
 	let origin = ctx.data::<stump_api_types::RequestOrigin>()?;
-
+	let credentials = credential.credentials();
 	let endpoints = core
 		.devices()
 		.endpoints_with_secret(user, &device, &credential, origin)
@@ -166,6 +166,7 @@ async fn with_credential(
 	Ok(DeviceWithCredential {
 		device: Device::from(device),
 		credential,
+		credentials,
 		endpoints,
 	})
 }

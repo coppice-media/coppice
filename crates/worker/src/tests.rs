@@ -33,8 +33,10 @@ use tokio::sync::Mutex;
 use crate::{
 	client::{self, Assignment, ClientConfig, JobRunner, Progress},
 	kind::{LocalJob, LocalRunner},
-	protocol::parse_worker_frame,
-	service::{JobOutcome, WorkerJobs, INTERACTIVE_PRIORITY},
+	protocol::{
+		encode, parse_server_frame, parse_worker_frame, ServerFrame, WorkerFrame,
+	},
+	service::{JobOutcome, WorkerJobs, CLAIM_DEADLINE, INTERACTIVE_PRIORITY},
 	KindRegistry, WorkerJobStatus,
 };
 
@@ -51,6 +53,13 @@ struct Harness {
 }
 
 async fn harness(registry: KindRegistry) -> Harness {
+	harness_with_claim_deadline(registry, CLAIM_DEADLINE).await
+}
+
+async fn harness_with_claim_deadline(
+	registry: KindRegistry,
+	claim_deadline: Duration,
+) -> Harness {
 	use migrations::MigratorTrait;
 
 	let conn = Arc::new(
@@ -63,8 +72,11 @@ async fn harness(registry: KindRegistry) -> Harness {
 		.expect("migrations");
 	let dir = tempfile::tempdir().expect("temp dir");
 	let service = Arc::new(
-		WorkerJobs::new(conn, dir.path().join("worker-output")).with_registry(registry),
+		WorkerJobs::new(conn, dir.path().join("worker-output"))
+			.with_registry(registry)
+			.with_claim_deadline(claim_deadline),
 	);
+	service.start_claim_sweep();
 
 	let app = Router::new()
 		.route("/api/v2/workers/socket", get(upgrade))
@@ -193,6 +205,63 @@ fn spawn_client(
 	tokio::spawn(async move {
 		let _ = client::run_once(&config, runner).await;
 	})
+}
+/// Connect a small protocol peer that records offers and optionally claims them.
+///
+/// This deliberately bypasses `client::run_once`: the no-claim case must leave
+/// the socket open while it ignores the offer.
+fn spawn_manual_worker(
+	base_url: &str,
+	api_key: &str,
+	capabilities: Value,
+	claim: bool,
+) -> (tokio::task::JoinHandle<()>, Arc<Mutex<Vec<String>>>) {
+	let seen = Arc::new(Mutex::new(Vec::new()));
+	let observed = seen.clone();
+	let socket_url = format!("{}/api/v2/workers/socket", base_url.trim_end_matches('/'))
+		.replace("http://", "ws://")
+		.replace("https://", "wss://");
+	let api_key = api_key.to_string();
+	let handle = tokio::spawn(async move {
+		use futures_util::{SinkExt, StreamExt};
+		use tokio_tungstenite::{
+			connect_async,
+			tungstenite::{client::IntoClientRequest, http::header, Message},
+		};
+
+		let mut request = socket_url.into_client_request().expect("worker URL");
+		request.headers_mut().insert(
+			header::AUTHORIZATION,
+			format!("Bearer {api_key}").parse().expect("auth header"),
+		);
+		let (mut socket, _) = connect_async(request).await.expect("connect worker");
+		socket
+			.send(Message::Text(
+				encode(&WorkerFrame::Hello {
+					capabilities,
+					name: Some("manual test worker".into()),
+					version: None,
+				})
+				.into(),
+			))
+			.await
+			.expect("send hello");
+		while let Some(Ok(Message::Text(text))) = socket.next().await {
+			let Ok(ServerFrame::Job { id, .. }) = parse_server_frame(text.as_ref())
+			else {
+				continue;
+			};
+			observed.lock().await.push(id.clone());
+			if claim {
+				let _ = socket
+					.send(Message::Text(
+						encode(&WorkerFrame::Claim { job_id: id }).into(),
+					))
+					.await;
+			}
+		}
+	});
+	(handle, seen)
 }
 
 /// Poll a job until `predicate` holds, or fail the test.
@@ -565,7 +634,7 @@ async fn a_worker_cannot_touch_a_job_it_does_not_hold() {
 		.service
 		.handle_frame(
 			"dev-b",
-			crate::WorkerFrame::Result {
+			crate::protocol::WorkerFrame::Result {
 				job_id: job.id.clone(),
 				output: json!({ "stolen": true }),
 			},
@@ -703,6 +772,109 @@ async fn an_offer_arriving_while_busy_is_queued_not_dropped() {
 	}
 
 	client.abort();
+}
+
+/// An offered job is released and offered again when a connected worker never
+/// answers its `job` frame.
+#[tokio::test]
+async fn an_unclaimed_offer_is_requeued_after_claim_deadline() {
+	let harness =
+		harness_with_claim_deadline(KindRegistry::new(), Duration::from_millis(100))
+			.await;
+	let (worker, seen) = spawn_manual_worker(
+		&harness.base_url,
+		"dev-worker",
+		json!({ "transcode": {} }),
+		false,
+	);
+	await_connected(&harness.service, "dev-worker").await;
+
+	let job = harness
+		.service
+		.enqueue(
+			crate::TRANSCODE,
+			json!({ "media_id": "m1" }),
+			crate::transcode_requires(),
+			INTERACTIVE_PRIORITY,
+		)
+		.await
+		.expect("enqueue");
+	await_job(
+		&harness.service,
+		&job.id,
+		|job| job.status == WorkerJobStatus::Queued && job.worker_id.is_some(),
+		"the initial offer",
+	)
+	.await;
+
+	let offers_deadline = tokio::time::Instant::now() + SETTLE;
+	while seen.lock().await.len() < 2 {
+		assert!(
+			tokio::time::Instant::now() < offers_deadline,
+			"the stale offer was not requeued and re-offered"
+		);
+		tokio::time::sleep(Duration::from_millis(20)).await;
+	}
+	assert_eq!(
+		seen.lock().await.as_slice(),
+		&[job.id.clone(), job.id.clone()]
+	);
+	let reoffered = harness
+		.service
+		.get(&job.id)
+		.await
+		.expect("query")
+		.expect("row");
+	assert_eq!(reoffered.status, WorkerJobStatus::Queued);
+	assert_eq!(reoffered.worker_id.as_deref(), Some("dev-worker"));
+
+	worker.abort();
+}
+
+/// A claim that arrives before the deadline wins the guarded sweep race.
+#[tokio::test]
+async fn a_claim_before_deadline_is_not_swept() {
+	let harness =
+		harness_with_claim_deadline(KindRegistry::new(), Duration::from_millis(100))
+			.await;
+	let (worker, _seen) = spawn_manual_worker(
+		&harness.base_url,
+		"dev-worker",
+		json!({ "transcode": {} }),
+		true,
+	);
+	await_connected(&harness.service, "dev-worker").await;
+
+	let job = harness
+		.service
+		.enqueue(
+			crate::TRANSCODE,
+			json!({ "media_id": "m1" }),
+			crate::transcode_requires(),
+			INTERACTIVE_PRIORITY,
+		)
+		.await
+		.expect("enqueue");
+	let claimed = await_job(
+		&harness.service,
+		&job.id,
+		|job| job.status == WorkerJobStatus::Claimed,
+		"the worker to claim the offer",
+	)
+	.await;
+	assert_eq!(claimed.worker_id.as_deref(), Some("dev-worker"));
+
+	tokio::time::sleep(Duration::from_millis(250)).await;
+	let still_claimed = harness
+		.service
+		.get(&job.id)
+		.await
+		.expect("query")
+		.expect("row");
+	assert_eq!(still_claimed.status, WorkerJobStatus::Claimed);
+	assert_eq!(still_claimed.worker_id.as_deref(), Some("dev-worker"));
+
+	worker.abort();
 }
 
 async fn runtime_ids(runner: &ScriptedRunner) -> Vec<String> {

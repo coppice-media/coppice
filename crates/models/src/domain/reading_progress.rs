@@ -8,19 +8,29 @@ pub fn calculate_logical_date(now: DateTime<Utc>, offset_hours: i32) -> NaiveDat
 }
 
 /// returns true if `session` was updated within the last `grace_period_secs` seconds
-fn is_within_grace_period(
+fn is_within_grace_period_at(
 	session: &reading_session::Model,
 	grace_period_secs: i64,
+	now: DateTime<Utc>,
 ) -> bool {
 	let secs_since_update = session
 		.updated_at
-		.map(|t| {
-			let now: DateTime<Utc> = Utc::now();
-			(now - t.with_timezone(&Utc)).num_seconds()
-		})
+		.map(|t| (now - t.with_timezone(&Utc)).num_seconds())
 		.unwrap_or(0);
 
 	secs_since_update <= grace_period_secs
+}
+
+fn should_extend_session_at(
+	session: &reading_session::Model,
+	grace_period_secs: i64,
+	now: DateTime<Utc>,
+) -> bool {
+	if session.status == ReadingStatus::Abandoned {
+		false
+	} else {
+		is_within_grace_period_at(session, grace_period_secs, now)
+	}
 }
 
 /// returns true if the given session should be extended rather than a new one created
@@ -34,11 +44,7 @@ pub fn should_extend_session(
 	session: &reading_session::Model,
 	grace_period_secs: i64,
 ) -> bool {
-	if session.status == ReadingStatus::Abandoned {
-		false
-	} else {
-		is_within_grace_period(session, grace_period_secs)
-	}
+	should_extend_session_at(session, grace_period_secs, Utc::now())
 }
 
 /// returns true if `session` was completed within `timeout_secs` of now
@@ -131,8 +137,9 @@ mod tests {
 			},
 			notes: None,
 			device_ids: None,
-			media_id: "m1".to_string(),
+			liseur_session_id: None,
 			user_id: "u1".to_string(),
+			media_id: "m1".to_string(),
 			created_at: Utc::now().fixed_offset(),
 			updated_at,
 		}
@@ -141,13 +148,13 @@ mod tests {
 	#[test]
 	fn test_is_within_grace_period_recent_update() {
 		let session = make_session(false, Some(10)); // within grace
-		assert!(is_within_grace_period(&session, 60));
+		assert!(is_within_grace_period_at(&session, 60, Utc::now()));
 	}
 
 	#[test]
 	fn test_is_within_grace_period_expired_update() {
 		let session = make_session(false, Some(700)); // past grace
-		assert!(!is_within_grace_period(&session, 60));
+		assert!(!is_within_grace_period_at(&session, 60, Utc::now()));
 	}
 
 	#[test]
@@ -172,6 +179,26 @@ mod tests {
 	fn test_should_not_extend_completed_session_after_grace() {
 		let session = make_session(true, Some(700)); // updated a while ago and complete
 		assert!(!should_extend_session(&session, 600));
+	}
+
+	#[test]
+	fn test_should_extend_at_grace_boundary_and_split_after() {
+		let now = Utc.with_ymd_and_hms(2026, 5, 17, 12, 0, 0).unwrap();
+		let mut session = make_session(false, None);
+		session.updated_at = Some((now - Duration::seconds(600)).fixed_offset());
+
+		assert!(is_within_grace_period_at(&session, 600, now));
+		assert!(should_extend_session_at(&session, 600, now));
+		assert!(!is_within_grace_period_at(
+			&session,
+			600,
+			now + Duration::seconds(1)
+		));
+		assert!(!should_extend_session_at(
+			&session,
+			600,
+			now + Duration::seconds(1)
+		));
 	}
 
 	#[test]

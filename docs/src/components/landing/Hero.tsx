@@ -1,10 +1,15 @@
 import { SiGithub } from '@icons-pack/react-simple-icons'
-import { motion } from 'framer-motion'
+import { motion, type MotionProps } from 'framer-motion'
 import Link from 'fumadocs-core/link'
 import { useTheme } from 'fumadocs-ui/provider/base'
-import { useEffect, useMemo } from 'react'
+import { type ComponentType, type HTMLAttributes, useEffect, useMemo } from 'react'
 
 import DownloadLinks from './DownloadLinks'
+
+type CompatibleMotionProps<T extends HTMLElement> = HTMLAttributes<T> & MotionProps
+
+const MotionDiv = motion.div as unknown as ComponentType<CompatibleMotionProps<HTMLDivElement>>
+const MotionSpan = motion.span as unknown as ComponentType<CompatibleMotionProps<HTMLSpanElement>>
 
 const wordVariants = {
 	hidden: {
@@ -103,7 +108,7 @@ export default function Hero() {
 					<div>
 						<h1 className="text-4xl font-medium tracking-tight text-black sm:text-6xl md:text-left dark:text-neutral-100 text-center">
 							{words.map((word, index) => (
-								<motion.span
+								<MotionSpan
 									key={index}
 									custom={index}
 									initial="hidden"
@@ -112,11 +117,11 @@ export default function Hero() {
 									className="last:mr-0 text-4xl sm:text-6xl mr-[0.25em] inline-block"
 								>
 									{word}
-								</motion.span>
+								</MotionSpan>
 							))}
 						</h1>
 
-						<motion.div
+						<MotionDiv
 							initial="hidden"
 							animate="visible"
 							variants={descriptionVariants}
@@ -124,11 +129,11 @@ export default function Hero() {
 						>
 							Designed to be fast, beautiful, and simple. Curate your digital libraries and stream
 							your media to any device.
-						</motion.div>
+						</MotionDiv>
 					</div>
 
 					<div className="space-x-2 md:mt-8 md:justify-start flex justify-center">
-						<motion.div
+						<MotionDiv
 							className="flex"
 							custom={1.1}
 							initial="hidden"
@@ -141,9 +146,9 @@ export default function Hero() {
 							>
 								<span>Documentation</span>
 							</Link>
-						</motion.div>
+						</MotionDiv>
 
-						<motion.div
+						<MotionDiv
 							className="flex"
 							custom={1.25}
 							initial="hidden"
@@ -158,9 +163,9 @@ export default function Hero() {
 								{/* @ts-expect-error: its fine */}
 								<SiGithub />
 
-								<span>See on Github</span>
+								<span>Upstream Stump</span>
 							</Link>
-						</motion.div>
+						</MotionDiv>
 					</div>
 
 					<div className="mt-5">
@@ -171,13 +176,13 @@ export default function Hero() {
 
 			<div className="mt-16 max-w-2xl sm:mt-20 lg:ml-10 lg:mr-0 lg:mt-0 lg:max-w-none lg:flex-none xl:ml-24 mx-auto">
 				<div className="max-w-3xl sm:max-w-5xl lg:max-w-none h-full">
-					<motion.div initial="hidden" animate="visible" variants={imageVariants}>
+					<MotionDiv initial="hidden" animate="visible" variants={imageVariants}>
 						<img
 							src={imageURL}
 							alt="Demo"
 							className="w-240 md:[filter:drop-shadow(0_0_30px_theme(colors.amber.400/0.15))] [filter:drop-shadow(0_0_30px_theme(colors.amber.400/0.18))] max-w-full"
 						/>
-					</motion.div>
+					</MotionDiv>
 				</div>
 			</div>
 		</div>

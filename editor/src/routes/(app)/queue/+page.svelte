@@ -72,7 +72,7 @@
 	}
 </script>
 
-<svelte:head><title>Analysis queue · Stump ingest</title></svelte:head>
+<svelte:head><title>Analysis queue · Coppice ingest</title></svelte:head>
 
 <div class="flex flex-col gap-6">
 	<div class="flex flex-wrap items-end justify-between gap-4">

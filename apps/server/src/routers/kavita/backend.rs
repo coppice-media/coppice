@@ -195,6 +195,23 @@ impl KavitaBackend for KavitaBackendAdapter {
 		}
 		Ok(AuthUser::from(user))
 	}
+	async fn record_sync(&self, auth: &AuthContext, summary: serde_json::Value) {
+		let Some(api_key) = auth.api_key.as_deref() else {
+			return;
+		};
+		if let Err(error) = self
+			.ctx
+			.devices()
+			.touch(
+				stump_devices::CredentialRef::ApiKey(api_key),
+				stump_devices::Protocol::Api,
+				Some(summary),
+			)
+			.await
+		{
+			tracing::warn!(?error, "Failed to record the Kavita sync on its device");
+		}
+	}
 
 	fn server_facts(&self) -> ServerFacts {
 		ServerFacts {

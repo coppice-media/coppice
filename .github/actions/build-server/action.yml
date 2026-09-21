@@ -1,5 +1,5 @@
-name: Build Stump server
-description: Compile the Stump Rust server
+name: Build Coppice server
+description: Compile the Coppice Rust server
 
 runs:
   using: composite

@@ -1,170 +1,152 @@
 ---
 title: Annotation sync
-description: Export highlights, notes, bookmarks, and reading summaries to a markdown vault or a git repository.
+description: Export highlights, notes, bookmarks, and reading summaries to safe Markdown or Git destinations.
 ---
 
 # Annotation sync
 
-Annotation sync projects everything a user annotated — Stump's native
-`media_annotations` and `bookmarks`, the liseur-sync CAS annotations, and
-the unified reading heads/sessions — into one canonical model per book and
-hands it to per-user export **sinks**. Two sinks ship: `markdown` (one
-Obsidian-friendly file per book) and `git` (the same files on a git work
-tree, committed and pushed).
+Annotation sync projects native annotations/bookmarks, liseur-sync CAS rows, and
+reading heads/sessions into one deterministic per-user export batch. Markdown
+and Git share the same writer; Git adds a commit/push lane.
 
 ```
 annotation / bookmark / reading-head change
-   ──▶ Ctx::note_annotation_activity(user)      (re)arms a per-user deadline
-   ──▶ debounce loop (1 s tick)                 deadline passed → enqueue
+   ──▶ Ctx::note_annotation_activity(user)      (re)arms a deadline
+   ──▶ debounce loop                            deadline passed → enqueue
    ──▶ StumpJob::AnnotationSync { user_id }     one task per enabled sink
-        init:        load enabled annotation_sink_configs rows,
-                     build_export_batch from the oldest liseur cursor
-        task (sink): decrypt settings → registry::sink → Sink::export
-                     persist state + last_run_at + last_error on the row
-        finalize:    fail the job when any sink failed (others still ran)
+        decrypt settings → build batch → Sink::export
+        persist state + last_run_at + last_error
 ```
 
 ## Config keys
 
 | Key | Env | Default | Meaning |
 | --- | --- | --- | --- |
-| `annotation_sync_root` | `STUMP_ANNOTATION_SYNC_ROOT` | `<config_dir>/annotations` | Root directory; each user exports into `<root>/<user_id>/` |
-| `annotation_sync_debounce_secs` | `STUMP_ANNOTATION_SYNC_DEBOUNCE_SECS` | `30` | Quiet period after the last change before a user's export runs |
+| `annotation_sync_root` | `STUMP_ANNOTATION_SYNC_ROOT` | `<config_dir>/annotations` | Admin-mounted export root; each user gets `<root>/<user_id>/` |
+| `annotation_sync_debounce_secs` | `STUMP_ANNOTATION_SYNC_DEBOUNCE_SECS` | `30` | Quiet period before a user's export runs |
 
-Both live in the `annotation_sync` group of `StumpConfig`
-(`core/src/config/annotation_sync.rs`) and are not exposed through GraphQL.
-Exports only run when background jobs are enabled.
+The root is server configuration, not a user-controlled path. A user may only
+choose a contained relative `destination` below their own directory. Existing
+sink rows without `format_version` remain on the legacy lane until explicitly
+upgraded.
 
-## Sinks and settings
+## Markdown and Git settings
 
-Sink settings are per user, stored as JSON in `annotation_sink_configs`
-(migration `m20260920`). Values flagged `secret` in the sink's
-`SettingDefinition` list are encrypted with the server encryption key before
-storage (`{"__stump_encrypted": "<base64>"}`) and decrypted only inside the
-job.
+| Setting | Required | Format-2 default | Purpose |
+| --- | --- | --- | --- |
+| `format_version` | no | `2` for new connections | Explicit opt-in; omission preserves UUID filenames and legacy bytes |
+| `preset` | no | `obsidian` | `obsidian`, `flat`, or `author` safe layout |
+| `destination` | no | empty | Bounded relative directory below the user directory |
+| `path_template` | no | `{{author}} - {{title}}/annotations.md` | Fixed variables only: `author`, `title`, `source`, `source_id`, `book_id` |
+| `body_template` | no | — | Optional fixed-variable template; `{{content}}` inserts the generated body |
+| `base_url` | no | — | Public server URL for native reader links |
+| Git `remote_url` | no | — | HTTPS or local remote outside the worktree; empty means local commit only |
+| Git `branch` | no | `main` | Branch to commit/push |
+| Git `token` | no | — | Secret access token, encrypted at rest and never returned |
+| Git `author_name` / `author_email` | no | `Coppice` / `annotations@stump.local` | Commit signature |
 
-| Sink | Setting | Required | Default | Purpose |
-| --- | --- | --- | --- | --- |
-| `markdown` | `base_url` | no | — | Public server URL; when set, native highlight positions link to `<base_url>/books/<media_id>/epub-reader` |
-| `git` | `remote_url` | no | — | Remote to push to (https URL or local path); empty = commit locally only |
-| `git` | `branch` | no | `main` | Branch committed and pushed |
-| `git` | `token` (secret) | no | — | Sent as `x-access-token` user/pass on fetch and push |
-| `git` | `author_name` / `author_email` | no | `Stump` / `annotations@stump.local` | Commit signature |
-| `git` | `base_url` | no | — | As for `markdown` |
+Templates are parsed, not evaluated. Root/absolute paths, `..`, empty or
+reserved components, control bytes, oversized segments, malformed/unknown
+variables, and symlinked root/parent/final paths are rejected. Book title and
+author components are NFC-normalized and sanitized without producing path
+separators.
 
-The git sink retries a rejected push once: it fetches the remote branch,
-rebases the local commits onto it, and pushes again. A rebase conflict
-aborts the rebase, leaves the local branch untouched, and records
-`git conflict while publishing …` as the row's `last_error`; the user resolves
-it in the work tree (`<root>/<user_id>/`) and the next run pushes.
+Both sinks serialize settings with the existing server encryption boundary.
+Object updates merge omitted keys, so leaving a secret out of an update keeps
+the encrypted value rather than deleting it.
 
-## Markdown format
+## Format 2 layout
 
-One file per book, named after the stable book key
-(`native-<media_id>.md`, `liseur-<work_id>.md`). Unchanged data renders the
-same bytes, and unchanged files are not rewritten.
+The default new Markdown connection writes exactly:
 
-```markdown
----
-title: "Dune"
-authors:
-  - "Frank Herbert"
-source: "native"
-media_id: "m1"
-identifiers:
-  isbn: "9780441172696"
-progression: 0.7512
-page: 300
-completed: false
-last_read: "2023-11-14T22:14:30Z"
-last_read_via: "liseur"
-sessions: 2
-reading_time_seconds: 5400
----
-
-# Dune
-
-## Highlights
-
-- > The spice must flow.
-
-  Opening line
-
-  ↗ [ch1.xhtml](https://stump.example.com/books/m1/epub-reader) · 25.00% · 2023-11-14T22:13:30Z ^a1
-
-- Re-read chapter two
-
-  ↗ 2023-11-14T22:13:50Z ^l2
-
-## Bookmarks
-
-- > A beginning is the time
-
-  ↗ [ch3.xhtml · page 42](https://stump.example.com/books/m1/epub-reader) · 2023-11-14T22:14:20Z ^b1
+```text
+<STUMP_ANNOTATION_SYNC_ROOT>/<user>/Author - Book/annotations.md
 ```
 
-- Frontmatter scalars are JSON-quoted strings (valid YAML double-quote
-  style); `finished: true` appears only when a session completed the book.
-- Each highlight/note/bookmark is one list item: blockquoted excerpt, note
-  paragraph, then a `↗` meta line — position (`href`/`cfi`/`position N`,
-  bookmarks add `page N`), progression `%`, liseur colour, created time —
-  ending in an Obsidian block id `^<row id>` so `[[file#^id]]` links work.
-- Liseur tombstones are kept in the model but never rendered.
+Duplicate normalized paths receive deterministic suffixes such as
+`Author - Book (2)/annotations.md`. A source-key → relative-path map is kept in
+`SinkState.data`; an existing source keeps its mapped path across title changes
+and never overwrites another source.
+
+Frontmatter is ordered structured YAML and contains no volatile generation time:
+
+```yaml
+schema: "coppice.annotation/v2"
+book:
+  key: "native:m1"
+  title: "Book"
+  authors:
+    - "Author"
+  identifiers: {}
+source:
+  kind: "native"
+  id: "m1"
+  media_id: "m1"
+  key: "native:m1"
+source_updated_at: "2023-11-14T22:14:30Z"
+reading:
+  progression: 0.5
+  page: 42
+  completed: false
+  finished: false
+  last_read_at: null
+  source_protocol: null
+  session_count: 0
+  total_seconds: null
+  last_session_at: null
+annotations:
+  - id: "a1"
+    kind: "highlight"
+    source: "native"
+    source_id: "m1"
+    provenance:
+      kind: "native"
+      source_id: "m1"
+    created_at: "2023-11-14T22:14:20Z"
+    updated_at: "2023-11-14T22:14:20Z"
+    deleted: false
+bookmarks: []
+```
+
+Rows remain ordered by canonical model order. Tombstones stay in frontmatter
+for provenance but are omitted from body sections. V2 body blocks use a source-
+aware id (`^native-m1-a1`); legacy files retain `^a1`. Files are compared
+before writing, so unchanged bytes retain their mtime. Writes use a per-user
+lock, a same-directory 0600 temporary file, `sync_all`, and an atomic rename.
+
+## Git safety
+
+Git stages only the managed relative paths returned by the shared writer; it
+never uses a wildcard that could include an unmanaged vault file. Local remote
+paths overlapping the worktree are rejected. A rejected push is rebased once;
+conflicts abort and leave the local branch intact.
 
 ## GraphQL
 
-| Operation | Auth | Purpose |
-| --- | --- | --- |
-| `annotationSinks: [AnnotationSink!]!` | any user | Compiled-in sinks with their `settings` schema (`IngestSettingDefinition` shape) |
-| `annotationSyncStatus(userId: ID): AnnotationSyncStatus!` | self; server owner for others | `pending` (debounced export scheduled) plus per-sink `enabled`, `lastRunAt`, `lastError` |
-| `setAnnotationSinkSettings(sinkId: String!, settings: JSON, enabled: Boolean): AnnotationSyncStatus!` | self | Replace a sink's settings (secrets encrypted at rest) and toggle it (default enabled) |
-| `runAnnotationSync(userId: ID): AnnotationSyncStatus!` | self; server owner for others | Enqueue an export now, bypassing the debounce |
-| `annotations(filter: AnnotationFilterInput, pagination: OffsetPagination): AnnotationPage!` | self | The [hub](#hub) read model: every annotation across every book and source |
+| Operation | Purpose |
+| --- | --- |
+| `annotationSinks: [AnnotationSink!]!` | Compiled sinks, setting schemas, and safe preset descriptors |
+| `annotationSyncStatus(userId: ID): AnnotationSyncStatus!` | Per-user sink state and debounce status |
+| `setAnnotationSinkSettings(...)` | Set/merge settings; secrets are encrypted at rest |
+| `runAnnotationSync(userId: ID): AnnotationSyncStatus!` | Enqueue an immediate export |
+| `annotations(filter: AnnotationFilterInput, pagination: OffsetPagination)` | Cross-source annotation hub; `sourceDeviceId` filters durable `devices.id` |
+
+`sourceDeviceId` resolves liseur rows through the durable device registry and
+not an active-credential predicate, so revoked-device history remains linkable.
+Native rows continue to report a null source device.
 
 ## Incremental model
 
-`build_export_batch(conn, user, BuildOptions { liseur_from_seq })` rebuilds
-every native book in full (native rows are hard-deleted, so deltas would miss
-removals) and folds all liseur works linked to that media into it. Only
-standalone liseur works are incremental: those with annotation `seq` above
-the cursor are rebuilt. The job builds one batch from the oldest sink cursor
-and advances every successful sink to the batch's high-water mark; a failed
-sink keeps its cursor and receives the delta again next run.
-
-## Hub
-
-The same three sources the export folds together are also readable directly,
-for the Home app's [annotation hub](/docs/developer/home-app) — a
-cross-book list of highlights, notes, and bookmarks with search, filters, and
-inline editing. `AnnotationPage::fetch`
-(`crates/graphql/src/object/annotation.rs`) is a read model beside
-`build_export_batch`, not a second copy of it: the export renders whole books
-for a sink, the hub answers one filtered, paginated screen.
-
-| Field | Native `media_annotations` / `bookmarks` | liseur-sync CAS record |
-| --- | --- | --- |
-| `kind` | `HIGHLIGHT` when `locator.text.highlight` is set, else `NOTE`; a `bookmarks` row is `BOOKMARK` | the wire `kind` |
-| `source` | `WEB` — the native lane has no per-row device | the `DeviceKind` of the device the pushing token belongs to (`KOBO` for NickelStump, `KOREADER`, `LISEUR`), `LISEUR` when that device is gone |
-| `editable` | `true` for `media_annotations` (`updateAnnotation`/`deleteAnnotation`); `false` for bookmarks, which have their own mutation and no note | `false` — the record is owned by its device and replicated with CAS revisions |
-| `excerpt` / `note` | `locator.text.highlight` / `annotation_text` | `excerpt` / `body` |
-| `href`, `fragment`, `page`, `chapterTitle` | from the Readium locator | only when the opaque locator happens to be Readium shaped; otherwise null |
-| `progression` | `locations.totalProgression`, falling back to `locations.progression` | the `progression` column |
-| `book` | `native:<media_id>` with the series/library the book lives in | the linked media's book, or `liseur:<work_id>` when the work is linked to nothing this user can see |
-
-Books are ordered by their most recent annotation and a book's own
-annotations by `(created_at, id)`, so a page is book-contiguous and the
-client groups it in one pass. Tombstones never appear. Book scoping
-(`mediaId`/`seriesId`/`libraryId`), the `since` bound on native rows, and
-library visibility are SQL-side; `source` and the text needle are applied to
-the assembled entries, because a liseur row's source is only known after its
-device is resolved and a native row's selected passage lives inside the
-locator JSON. A liseur record linked to a book the request may not see is
-dropped with that book.
+Native books rebuild in full because native rows are hard-deleted. Linked
+liseur works fold into their native book; standalone liseur works advance by CAS
+`seq`. The job builds from the oldest sink cursor and advances only successful
+sinks to the observed high-water mark.
 
 ## Verify
 
 ```bash
-cargo test -p stump_annotation_sync            # model, markdown golden + byte stability, git bare-repo publish/rebase/conflict
-cargo test -p stump_core --lib annotation      # debounce, secret round-trip
-cargo test -p graphql --lib object::annotation # hub read model: sources, filters, visibility, pagination
+cargo test -p stump_annotation_sync
+cargo check -p stump_annotation_sync --no-default-features
+cargo test -p stump_core --lib annotation
+cargo test -p graphql --lib object::annotation
 ```

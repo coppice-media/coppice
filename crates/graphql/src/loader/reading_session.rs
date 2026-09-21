@@ -1,6 +1,9 @@
 use async_graphql::dataloader::Loader;
 use itertools::Itertools;
-use models::{entity::reading_session, shared::enums::ReadingStatus};
+use models::{
+	entity::{reading_head, reading_session},
+	shared::enums::ReadingStatus,
+};
 use sea_orm::{prelude::*, DatabaseConnection, QueryOrder};
 use std::{cmp::Reverse, collections::HashMap, sync::Arc};
 
@@ -15,6 +18,55 @@ pub struct ReadingSessionLoader {
 impl ReadingSessionLoader {
 	pub fn new(conn: Arc<DatabaseConnection>) -> Self {
 		Self { conn }
+	}
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ReadingHeadLoaderKey {
+	pub user_id: String,
+	pub media_id: String,
+}
+
+impl Loader<ReadingHeadLoaderKey> for ReadingSessionLoader {
+	type Value = reading_head::Model;
+	type Error = Arc<sea_orm::error::DbErr>;
+
+	async fn load(
+		&self,
+		keys: &[ReadingHeadLoaderKey],
+	) -> Result<HashMap<ReadingHeadLoaderKey, Self::Value>, Self::Error> {
+		if keys.is_empty() {
+			return Ok(HashMap::new());
+		}
+
+		let heads = reading_head::Entity::find()
+			.filter(
+				reading_head::Column::UserId.is_in(
+					keys.iter()
+						.map(|key| key.user_id.clone())
+						.collect::<Vec<_>>(),
+				),
+			)
+			.filter(
+				reading_head::Column::MediaId.is_in(
+					keys.iter()
+						.map(|key| key.media_id.clone())
+						.collect::<Vec<_>>(),
+				),
+			)
+			.all(self.conn.as_ref())
+			.await?;
+
+		let mut result = HashMap::new();
+		for key in keys {
+			if let Some(head) = heads
+				.iter()
+				.find(|head| head.user_id == key.user_id && head.media_id == key.media_id)
+			{
+				result.insert(key.clone(), head.clone());
+			}
+		}
+		Ok(result)
 	}
 }
 
@@ -101,6 +153,7 @@ impl Loader<ResumeReadingCursorLoaderKey> for ReadingSessionLoader {
 							elapsed_seconds: total_elapsed,
 							started_at,
 							updated_at: s.updated_at,
+							media_id: key.media_id.clone(),
 						},
 					);
 				},

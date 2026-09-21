@@ -43,14 +43,14 @@
 </script>
 
 <svelte:head>
-	<title>Sign in · Stump ingest</title>
+	<title>Sign in · Coppice ingest</title>
 </svelte:head>
 
 <div class="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-12">
 	<Card class="w-full max-w-md">
 		<CardHeader>
-			<CardTitle>Sign in to Stump</CardTitle>
-			<CardDescription>Use your Stump account to review and commit staged books.</CardDescription>
+			<CardTitle>Sign in to Coppice</CardTitle>
+			<CardDescription>Use your Coppice account to review and commit staged books.</CardDescription>
 		</CardHeader>
 		<CardContent>
 			<form class="flex flex-col gap-5" onsubmit={submit}>

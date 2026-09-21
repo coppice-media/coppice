@@ -14,7 +14,7 @@ export const Route = createRootRoute({
 				content: 'width=device-width, initial-scale=1',
 			},
 			{
-				title: 'Stump Docs',
+				title: 'Coppice Docs',
 			},
 			{
 				name: 'robots',
@@ -23,66 +23,28 @@ export const Route = createRootRoute({
 			{
 				name: 'description',
 				content:
-					'"Free, open source, self-hosting for your comic books, manga and digital book collections',
+					'Free, open source, self-hosting for your comic books, manga and digital book collections.',
 			},
 			{
 				property: 'og:title',
-				content: 'Stump',
+				content: 'Coppice',
 			},
 			{
 				property: 'og:description',
 				content:
 					'Free, open source, self-hosting for your comic books, manga and digital book collections.',
-			},
-			{
-				property: 'og:url',
-				content: 'https://stumpapp.dev',
 			},
 			{
 				property: 'og:type',
 				content: 'website',
 			},
 			{
-				property: 'og:image',
-				content: 'https://stumpapp.dev/og.png',
-			},
-			{
-				property: 'og:image:alt',
-				content: 'Stump OG Image',
-			},
-			{
-				property: 'og:image:type',
-				content: 'image/png',
-			},
-			{
-				property: 'og:image:width',
-				content: '1332',
-			},
-			{
 				property: 'og:locale',
 				content: 'en_US',
 			},
 			{
-				property: 'og:image:height',
-				content: '699',
-			},
-			{
-				property: 'og:description',
-				content:
-					'Free, open source, self-hosting for your comic books, manga and digital book collections.',
-			},
-			{
-				property: 'og:image',
-				content: 'https://stumpapp.dev/og.png',
-			},
-			{ property: 'og:image:alt', content: 'Stump OG Image' },
-			{
 				property: 'og:site_name',
-				content: 'Stump',
-			},
-			{
-				rel: 'canonical',
-				href: 'https://stumpapp.dev',
+				content: 'Coppice',
 			},
 		],
 		links: [

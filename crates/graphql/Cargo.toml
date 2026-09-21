@@ -12,6 +12,9 @@ path = "bin/main.rs"
 # picks the set explicitly through its own `providers`/`webui` features.
 default = ["providers", "web"]
 providers = ["dep:stump_provider", "stump_core/providers"]
+# CrossPoint is linked only by server profiles that enable the protocol. The
+# GraphQL crate remains usable without the LAN transfer client.
+crosspoint = ["dep:stump_crosspoint", "stump_core/crosspoint"]
 # Resolvers no client other than the upstream React SPA (`packages/browser`)
 # and the Expo app reaches: book clubs, smart lists + smart-list views, custom
 # emoji, viewer preferences + navigation arrangement, and the multipart upload
@@ -76,6 +79,8 @@ tokio = { workspace = true, features = ["fs", "io-util"] }
 tracing.workspace = true
 zip.workspace = true
 bcrypt.workspace = true
+uuid.workspace = true
+stump_crosspoint = { path = "../crosspoint", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58.0", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }

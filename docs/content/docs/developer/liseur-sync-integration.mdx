@@ -27,7 +27,7 @@ remote liseur-sync service a prerequisite for local Stump annotations.
 | Scope boundary | **implemented (catalog + sync lanes)** | Login sessions can mint or revoke but cannot sync or catalog. Minted device tokens must carry `sync` for work/position/session/annotation routes and `library-read` for folders/books/covers/downloads/series/resolve. |
 | Work identity | **implemented (partial identifier coverage)** | User-scoped Work/Edition/Alias/media-link tables are created by the liseur migration; media-backed SHA-256 resolution computes a full-file digest when readable and retains Stump's sampled/Koreader hashes as evidence. |
 | Position sync | **implemented** | `POST /v1/ops`, `GET /v1/changes`, `GET /v1/heads`, and `GET /v1/works/{id}/positions` use per-user sequence counters and idempotent `op_id` writes. |
-| Sessions | **implemented** | `POST /v1/sessions` stores immutable, idempotent closed sessions. |
+| Sessions | **implemented** | `POST /v1/sessions` stores immutable, idempotent closed sessions. After a successful source write, a linked work is projected into `reading_sessions` in the same transaction with its Liseur session id and device; the nullable source-id/index migration is `crates/migrations/src/m20260949_000000_add_liseur_session_id.rs`. |
 | Annotations | **implemented (bridge only)** | Push, CAS delete, change feed, and live-work reads preserve revisions, sequences, opaque locators, and tombstones in adapter-owned tables; local `media_annotations`/`bookmarks` projection is deferred. |
 | Attachments | **implemented (Stump extension)** | `PUT /v1/annotations/{id}/attachments/{kind}` and `GET .../attachments` store markup/notebook bytes as side objects keyed by annotation id, idempotent on SHA-256; downloads go through an authenticated `/api/v2` route. Not part of the pinned OpenAPI. |
 | Catalog | **implemented (read-only)** | `GET /v1/folders`, folder books/search, book detail/cover/download/series, and `POST /v1/books/{id}/resolve` are mounted. Folder and book pages use bounded opaque cursors; uploads, deletes, and series-claim mutations remain deferred. |
@@ -56,9 +56,8 @@ The verified research baseline is the `liseur-sync` repository at commit
 `f8ce32b79aca0cddde84e9004fedde121fb77365`, whose OpenAPI document reports API
 version 1.0. The implementation and line references below point to that pinned
 source ([`docs/openapi.yaml`](https://github.com/chmouel/liseur-sync/blob/f8ce32b79aca0cddde84e9004fedde121fb77365/docs/openapi.yaml)).
-Liseur client references use commit
-`31f8182d524e3536cf9020594185e709a033094f`. The protocol's annotation ADR
-explicitly keeps annotations beside, rather than inside, the append-only
+Liseur client evidence is pinned to release [`v0.16.0`](https://github.com/chmouel/liseur/releases/tag/v0.16.0), commit [`bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53`](https://github.com/chmouel/liseur/commit/bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53). The release includes the note/highlight control and blank-note/timestamp fixes described below. This is source-only evidence; preserve the existing 2026-09-04 device-tested run separately.
+The protocol's annotation ADR explicitly keeps annotations beside, rather than inside, the append-only
 position-operation log and says that KOReader/KOSync adapters do not carry
 annotations ([`docs/adr/0028-annotation-sync.md`](https://github.com/chmouel/liseur-sync/blob/f8ce32b79aca0cddde84e9004fedde121fb77365/docs/adr/0028-annotation-sync.md)).
 
@@ -96,7 +95,7 @@ wired to one: neither end of the pinned contract can consume it.
   returning `high_water`/`has_more` cursors. Adding an event stream to
   Stump's `/v1/*` tree would be inventing a route the protocol does not
   define, which every other client would then have to ignore.
-- **Client.** Liseur `31f8182d` depends on plain `okhttp`: its
+- **Client.** Liseur v0.16.0 (`bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53`) depends on plain `okhttp`: its
   `gradle/libs.versions.toml` lists `okhttp`, `okhttp-tls`, `mockwebserver3-junit4`,
   and `coil-network-okhttp`, and does **not** list `okhttp-sse` or any
   WebSocket/ktor artifact. No file under
@@ -111,6 +110,7 @@ actually read them: the GraphQL subscriptions and Komga SSE.
 ### Annotation wire shape
 
 `AnnotationInput` requires `id`, `base_rev`, `work_id`, `kind`, and `client_ts`. `kind` is one of `highlight`, `note`, or `bookmark`; highlights and bookmarks require a locator, notes forbid one and require a body, and bookmarks forbid a body. Optional fields are `edition_sha`, `locator`, `progression` in `[0,1]`, `excerpt` (1 KiB default cap), `color` (the six lowercase palette tokens `yellow`, `green`, `blue`, `pink`, `purple`, and `orange`), and `body` (16 KiB default cap). The locator is arbitrary reader-native JSON, opaque to the server and replayed verbatim; the default locator cap is 16 KiB ([ResearchLiseurSync, liseur-sync `docs/openapi.yaml:2720-2794`; `internal/api/annotations.go:84-183`; `internal/config/config.go:105-151`).
+Liseur v0.16.0 maps the six persisted/sync colors to exact Android values: yellow `#FFD54F`, green `#9CCC65`, blue `#64B5F6`, pink `#F06292`, purple `#B39DDB`, and orange `#FFB74D`. The server continues to carry lowercase palette tokens on the wire; this hex mapping is client evidence, not a new liseur-sync server contract.
 
 A live wire record includes `id`, `rev`, `seq`, `work_id`, `edition_sha`, `kind`, `locator`, `progression`, `excerpt`, `color`, `body`, `device_id`, `client_ts`, `updated_at`, and deletion flags. A tombstone carries only `id`, `rev`, `seq`, `updated_at`, `deleted`, and `deleted_at` ([ResearchLiseurSync, `docs/openapi.yaml:2766-2788`; `internal/api/annotations.go:1-80`).
 

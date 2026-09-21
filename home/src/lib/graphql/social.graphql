@@ -1,0 +1,368 @@
+# Social reading operations intentionally request only fields that are safe for the
+# current viewer. Recommendation rows omit sender identity; overlays never expose
+# locators or device/session timing.
+
+query IncomingSocialRecommendations {
+	socialRecommendations(direction: INCOMING) {
+		id
+		direction
+		state
+		targetKind
+		title
+		authors
+		sourceProvider
+		remoteId
+		externalKey
+		coverUrl
+		message
+		createdAt
+		expiresAt
+		acceptedAt
+		handoffState
+		requestId
+		destinationShelfId
+	}
+}
+
+query OutgoingSocialRecommendations {
+	socialRecommendations(direction: OUTGOING) {
+		id
+		direction
+		state
+		targetKind
+		title
+		authors
+		sourceProvider
+		remoteId
+		externalKey
+		coverUrl
+		message
+		createdAt
+		expiresAt
+		acceptedAt
+		handoffState
+		requestId
+		destinationShelfId
+	}
+}
+
+query AdaptiveRecommendations($limit: Int = 20) {
+	adaptiveRecommendations(limit: $limit) {
+		targetKey
+		title
+		authors
+		coverUrl
+		reasonCode
+		score
+	}
+}
+
+query SocialShareGrants($incoming: Boolean = true) {
+	socialShareGrants(incoming: $incoming) {
+		id
+		targetKey
+		title
+		authors
+		scopes
+		state
+		expiresAt
+		sourceProvider
+		remoteId
+		externalKey
+	}
+}
+
+query SocialOverlays($targetKey: String) {
+	socialOverlays(targetKeyFilter: $targetKey) {
+		id
+		targetKey
+		kind
+		excerpt
+		body
+		progression
+		percentage
+		color
+		capturedAt
+		hidden
+	}
+}
+
+query SocialUserSearch($query: String!) {
+	socialUserSearch(query: $query) {
+		id
+		username
+	}
+}
+
+query SocialPreferences {
+	socialPreferences {
+		recommendationsOptOut
+		sharingOptOut
+		updatedAt
+	}
+}
+
+mutation SendRecommendation($input: SendRecommendationInput!) {
+	sendRecommendation(input: $input) {
+		id
+		direction
+		state
+		targetKind
+		title
+		authors
+		sourceProvider
+		remoteId
+		externalKey
+		coverUrl
+		message
+		createdAt
+		expiresAt
+		handoffState
+		requestId
+		destinationShelfId
+	}
+}
+
+mutation RespondToRecommendation($id: ID!, $response: RecommendationResponseInput!) {
+	respondToRecommendation(id: $id, response: $response) {
+		id
+		direction
+		state
+		targetKind
+		title
+		authors
+		sourceProvider
+		remoteId
+		externalKey
+		coverUrl
+		message
+		createdAt
+		expiresAt
+		acceptedAt
+		handoffState
+		requestId
+		destinationShelfId
+	}
+}
+
+mutation RevokeRecommendation($id: ID!) {
+	revokeRecommendation(id: $id) {
+		direction
+		id
+		state
+		targetKind
+		title
+		authors
+		createdAt
+	}
+}
+
+mutation DismissRecommendation($id: ID!) {
+	dismissRecommendation(id: $id) {
+		direction
+		id
+		state
+		title
+	}
+}
+
+mutation RequestRecommendation($id: ID!, $destination: RequestDestinationInput) {
+	requestRecommendation(id: $id, destination: $destination) {
+		id
+		direction
+		state
+		targetKind
+		title
+		authors
+		sourceProvider
+		remoteId
+		externalKey
+		coverUrl
+		message
+		createdAt
+		expiresAt
+		acceptedAt
+		handoffState
+		requestId
+		destinationShelfId
+	}
+}
+
+mutation SetRecommendationOptOut($optOut: Boolean!) {
+	setRecommendationOptOut(optOut: $optOut) {
+		recommendationsOptOut
+		sharingOptOut
+		updatedAt
+	}
+}
+
+mutation CreateShareGrant($input: CreateShareGrantInput!) {
+	createShareGrant(input: $input) {
+		id
+		targetKey
+		title
+		authors
+		scopes
+		state
+		expiresAt
+		sourceProvider
+		remoteId
+		externalKey
+	}
+}
+
+mutation RespondToShareGrant($id: ID!, $accept: Boolean!) {
+	respondToShareGrant(id: $id, accept: $accept) {
+		id
+		targetKey
+		title
+		authors
+		scopes
+		state
+		expiresAt
+	}
+}
+
+mutation RevokeShareGrant($id: ID!) {
+	revokeShareGrant(id: $id) {
+		id
+		targetKey
+		state
+	}
+}
+
+mutation SetOverlayVisibility($overlayId: ID!, $hidden: Boolean!) {
+	setOverlayVisibility(overlayId: $overlayId, hidden: $hidden) {
+		id
+		targetKey
+		kind
+		excerpt
+		body
+		progression
+		percentage
+		color
+		capturedAt
+		hidden
+	}
+}
+
+query SocialRequestDestinations {
+	devices {
+		id
+		name
+		revokedAt
+	}
+	readingLists {
+		nodes {
+			id
+			name
+		}
+	}
+}
+
+query SocialBookClubs($all: Boolean = false) {
+	bookClubs(all: $all) {
+		id
+		name
+		slug
+		description
+		isPrivate
+		createdAt
+		emoji
+		membersCount
+		membership {
+			id
+			userId
+			username
+			displayName
+			avatarUrl
+			role
+			hideProgress
+			joinedAt
+			isCreator
+		}
+		members {
+			id
+			userId
+			username
+			displayName
+			avatarUrl
+			role
+			hideProgress
+			joinedAt
+			isCreator
+		}
+		invitations {
+			id
+			role
+			userId
+			bookClubId
+			user { id username }
+		}
+	}
+}
+
+query MyBookClubInvitations {
+	myBookClubInvitations {
+		id
+		role
+		userId
+		bookClubId
+		user { id username }
+		bookClub { id name slug }
+	}
+}
+
+mutation CreateBookClubInvitation($id: ID!, $input: BookClubInvitationInput!) {
+	createBookClubInvitation(id: $id, input: $input) {
+		id
+		role
+		userId
+		bookClubId
+		user { id username }
+	}
+}
+
+mutation RespondToBookClubInvitation($id: ID!, $input: BookClubInvitationResponseInput!) {
+	respondToBookClubInvitation(id: $id, input: $input) {
+		id
+		role
+		userId
+		bookClubId
+	}
+}
+
+mutation RemoveBookClubMember($bookClubId: ID!, $memberId: ID!) {
+	removeBookClubMember(bookClubId: $bookClubId, memberId: $memberId) {
+		id
+		userId
+		username
+		displayName
+		avatarUrl
+		role
+		hideProgress
+		joinedAt
+		isCreator
+	}
+}
+
+mutation LeaveBookClub($bookClubId: ID!) {
+	leaveBookClub(bookClubId: $bookClubId) {
+		id
+		userId
+		bookClubId
+		role
+	}
+}
+
+mutation CreateBookClub($input: CreateBookClubInput!) {
+	createBookClub(input: $input) {
+		id
+		name
+		slug
+		description
+		isPrivate
+		emoji
+		membersCount
+	}
+}

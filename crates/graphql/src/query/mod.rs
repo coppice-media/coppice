@@ -12,7 +12,11 @@ mod book_club_discussion;
 mod book_club_invitation;
 #[cfg(feature = "web")]
 mod book_club_suggestion;
+mod book_detail;
+mod book_request;
 mod config;
+#[cfg(feature = "crosspoint")]
+pub(crate) mod crosspoint;
 #[cfg(feature = "web")]
 mod custom_emoji;
 mod device;
@@ -23,6 +27,7 @@ mod email_device;
 mod emailer;
 mod epub;
 mod filesystem;
+mod hardcover;
 mod ingest;
 mod job;
 mod kindle;
@@ -37,6 +42,7 @@ mod notifier;
 mod provider;
 pub(crate) mod reading_list;
 mod reading_stats;
+mod runtime_component;
 mod series;
 mod server_config;
 #[cfg(feature = "web")]
@@ -49,6 +55,7 @@ mod tag;
 pub(crate) mod user;
 mod worker;
 
+use crate::social::SocialQuery;
 use annotation::AnnotationQuery;
 use annotation_attachment::AnnotationAttachmentQuery;
 use api_key::APIKeyQuery;
@@ -63,7 +70,11 @@ use book_club_discussion::BookClubDiscussionQuery;
 use book_club_invitation::BookClubInvitationQuery;
 #[cfg(feature = "web")]
 use book_club_suggestion::BookClubSuggestionQuery;
+use book_detail::BookDetailQuery;
+use book_request::BookRequestQuery;
 use config::ConfigQuery;
+#[cfg(feature = "crosspoint")]
+use crosspoint::CrosspointQuery;
 #[cfg(feature = "web")]
 use custom_emoji::CustomEmojiQuery;
 use device::DeviceQuery;
@@ -74,6 +85,7 @@ use email_device::EmailDeviceQuery;
 use emailer::EmailerQuery;
 use epub::EpubQuery;
 use filesystem::FilesystemQuery;
+use hardcover::HardcoverQuery;
 use ingest::IngestQuery;
 use kindle::KindleQuery;
 use library::LibraryQuery;
@@ -87,6 +99,7 @@ use notifier::NotifierQuery;
 use provider::ProviderQuery;
 use reading_list::ReadingListQuery;
 use reading_stats::ReadingStatsQuery;
+use runtime_component::RuntimeComponentQuery;
 use series::SeriesQuery;
 use server_config::ServerConfigQuery;
 #[cfg(feature = "web")]
@@ -124,20 +137,22 @@ struct ContentQueries(
 	MediaMetadataOverviewQuery,
 	DuplicatePageQuery,
 	EditionPairQuery,
+	BookDetailQuery,
 );
-
 #[derive(async_graphql::MergedObject, Default)]
 struct UserAndNotifsQueries(
 	UserQuery,
 	EmailerQuery,
 	EmailDeviceQuery,
 	NotifierQuery,
+	SocialQuery,
 	NotificationQuery,
+	HardcoverQuery,
 );
-
 #[derive(async_graphql::MergedObject, Default)]
 struct SystemQueries(
 	APIKeyQuery,
+	BookRequestQuery,
 	JobQuery,
 	LogQuery,
 	ConfigQuery,
@@ -147,6 +162,7 @@ struct SystemQueries(
 	IngestQuery,
 	DevicePairingQuery,
 	WorkerQuery,
+	RuntimeComponentQuery,
 	#[cfg(feature = "providers")] ProviderQuery,
 );
 
@@ -161,6 +177,7 @@ struct ListQueries(
 #[derive(async_graphql::MergedObject, Default)]
 struct DeviceQueries(
 	DeviceQuery,
+	#[cfg(feature = "crosspoint")] CrosspointQuery,
 	KindleQuery,
 	ReadingStatsQuery,
 	AnnotationQuery,

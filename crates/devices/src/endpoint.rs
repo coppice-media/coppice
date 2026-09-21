@@ -1,4 +1,4 @@
-use models::shared::enums::DeviceKind;
+use models::shared::enums::{DeviceKind, DeviceProtocol};
 use serde::Serialize;
 use stump_api_types::RequestOrigin;
 
@@ -41,6 +41,13 @@ impl Endpoint {
 		};
 
 		match kind {
+			DeviceKind::Coppice => Self::for_credential(
+				DeviceKind::Coppice,
+				DeviceProtocol::Koreader,
+				origin,
+				username,
+				secret,
+			),
 			DeviceKind::Kobo => vec![keyed(
 				"Kobo sync (api_endpoint)",
 				format!("{base}/kobo/{secret}"),
@@ -49,15 +56,20 @@ impl Endpoint {
 				"KOReader progress sync server",
 				format!("{base}/koreader/{secret}"),
 			)],
+			DeviceKind::Crosspoint => vec![with_user(
+				"CrossPoint KOSync + rich sync",
+				format!("{base}/koreader/{secret}"),
+			)],
 			DeviceKind::Opds => vec![
 				keyed("OPDS 1.2 catalog", format!("{base}/opds/{secret}/v1.2")),
 				with_user("OPDS 2.0 catalog (Bearer)", format!("{base}/opds/v2.0")),
 			],
 			DeviceKind::Mihon => vec![
 				with_user("Komga server (X-API-Key)", base.clone()),
-				keyed("Stump API (Bearer)", format!("{base}/api")),
+				keyed("Coppice API (Bearer)", format!("{base}/api")),
 			],
 			DeviceKind::Komelia => vec![with_user("Komga server (X-API-Key)", base)],
+			DeviceKind::Kavita => vec![keyed("Kavita server", base)],
 			DeviceKind::Liseur => vec![with_user("liseur-sync server", base)],
 			// An Audiobookshelf client is pointed at the server root and
 			// logs in with a username and password; the API key works as a
@@ -66,12 +78,64 @@ impl Endpoint {
 			// The worker binary is handed the server root and its key; it
 			// derives the socket and upload paths itself, so one entry is the
 			// whole `stump-worker --server URL --api-key KEY` invocation.
-			DeviceKind::Worker => {
-				vec![keyed("stump-worker --server", base)]
-			},
+			DeviceKind::Worker => vec![keyed("stump-worker --server", base)],
 			DeviceKind::Api | DeviceKind::Web => {
-				vec![keyed("Stump API (Bearer)", format!("{base}/api"))]
+				vec![keyed("Coppice API (Bearer)", format!("{base}/api"))]
 			},
+		}
+	}
+
+	/// Returns the endpoint set for one explicit Coppice credential.
+	///
+	/// Coppice deliberately has separate API/KOSync and liseur-sync lanes. The
+	/// credential metadata chooses the lane, so callers never have to infer it
+	/// from the order of a credential list.
+	pub fn for_credential(
+		kind: DeviceKind,
+		protocol: DeviceProtocol,
+		origin: &RequestOrigin,
+		username: &str,
+		secret: &str,
+	) -> Vec<Endpoint> {
+		if kind != DeviceKind::Coppice {
+			return Self::for_kind(kind, origin, username, secret);
+		}
+
+		let base = origin.url();
+		match protocol {
+			DeviceProtocol::Koreader => vec![
+				Endpoint {
+					label: "Coppice KOReader progress sync".to_string(),
+					url: format!("{base}/koreader/{secret}"),
+					username: Some(username.to_string()),
+					secret_hint: secret.to_string(),
+				},
+				Endpoint {
+					label: "Coppice API (Bearer)".to_string(),
+					url: format!("{base}/api"),
+					username: None,
+					secret_hint: secret.to_string(),
+				},
+				Endpoint {
+					label: "Coppice OPDS 1.2 catalog".to_string(),
+					url: format!("{base}/opds/{secret}/v1.2"),
+					username: None,
+					secret_hint: secret.to_string(),
+				},
+				Endpoint {
+					label: "Coppice OPDS 2.0 catalog (Basic)".to_string(),
+					url: format!("{base}/opds/v2.0"),
+					username: Some(username.to_string()),
+					secret_hint: secret.to_string(),
+				},
+			],
+			DeviceProtocol::Liseur => vec![Endpoint {
+				label: "Coppice annotations/read-state (liseur-sync)".to_string(),
+				url: format!("{base}/v1"),
+				username: None,
+				secret_hint: secret.to_string(),
+			}],
+			_ => Vec::new(),
 		}
 	}
 }
@@ -126,5 +190,35 @@ mod tests {
 		let api = Endpoint::for_kind(DeviceKind::Api, &origin(), "al", "k");
 		assert_eq!(api[0].url, "https://stump.example/api");
 		assert_eq!(api[0].username, None);
+	}
+
+	#[test]
+	fn coppice_credentials_select_their_endpoint_lane() {
+		let api = Endpoint::for_credential(
+			DeviceKind::Coppice,
+			DeviceProtocol::Koreader,
+			&origin(),
+			"al",
+			"stump_api",
+		);
+		assert!(api.iter().any(|endpoint| {
+			endpoint.url == "https://stump.example/koreader/stump_api"
+				&& endpoint.username.as_deref() == Some("al")
+		}));
+		assert!(api.iter().any(|endpoint| {
+			endpoint.url == "https://stump.example/api" && endpoint.username.is_none()
+		}));
+
+		let liseur = Endpoint::for_credential(
+			DeviceKind::Coppice,
+			DeviceProtocol::Liseur,
+			&origin(),
+			"al",
+			"liseur_token",
+		);
+		assert_eq!(liseur.len(), 1);
+		assert_eq!(liseur[0].url, "https://stump.example/v1");
+		assert_eq!(liseur[0].username, None);
+		assert_eq!(liseur[0].secret_hint, "liseur_token");
 	}
 }

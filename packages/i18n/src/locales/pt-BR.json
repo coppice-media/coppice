@@ -163,7 +163,7 @@
 						"confirmation": {
 							"trigger": "Clear authentication",
 							"title": "Clear authentication",
-							"description": "This will remove all securely-stored access tokens for your servers",
+							"description": "Tem certeza de que deseja apagar todos os tokens armazenados?",
 							"confirm": "Clear authentication"
 						}
 					}
@@ -198,7 +198,7 @@
 					},
 					"smartlist": {
 						"read": {
-							"description": "Allows the user to access smart lists features"
+							"description": "Permite ao usuário acessar os recursos de listas inteligentes. Como as permissões detalhadas ainda não foram implementadas, esta função inclui permissões para ler, criar e atualizar suas próprias listas."
 						}
 					}
 				}
@@ -259,10 +259,10 @@
 	"serverSOS": {
 		"heading": "Servidor indisponível",
 		"desktop": {
-			"message": "Ocorreu um erro de rede que sugere que seu servidor Stump está indisponível. Por favor, verifique se ele está sendo executado e acessível a partir deste dispositivo.\nSe a URL do seu servidor mudou, você pode atualizá-la usando o formulário abaixo"
+			"message": "Ocorreu um erro de rede que sugere que seu servidor Coppice está indisponível. Por favor, verifique se ele está sendo executado e acessível a partir deste dispositivo.\nSe a URL do seu servidor mudou, você pode atualizá-la usando o formulário abaixo"
 		},
 		"web": {
-			"message": "Ocorreu um erro de rede que sugere que seu servidor Stump está indisponível no momento. Por favor, verifique se ele está sendo executado e acessível a partir deste dispositivo"
+			"message": "Ocorreu um erro de rede que sugere que seu servidor Coppice está indisponível no momento. Por favor, verifique se ele está sendo executado e acessível a partir deste dispositivo"
 		},
 		"reconnected": "Reconectado ao servidor! Redirecionando...",
 		"reconnectionFailed": "Algo deu errado!"

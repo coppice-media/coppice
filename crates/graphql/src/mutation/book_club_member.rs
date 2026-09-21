@@ -45,6 +45,7 @@ impl BookClubMemberMutation {
 	) -> Result<BookClubMember> {
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 		let member = book_club_member::Entity::find_by_id(member_id.as_ref())
+			.filter(book_club_member::Column::BookClubId.eq(book_club_id.as_ref()))
 			.one(conn)
 			.await?
 			.ok_or("Member not found")?;

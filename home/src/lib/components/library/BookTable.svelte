@@ -16,6 +16,7 @@
 	import { bytesLabel, countLabel, relativeTime } from '$lib/format';
 	import { READING_STATUS_LABELS, bookProgress, progressPercent } from '$lib/library';
 	import SendToKindleButton from './SendToKindleButton.svelte';
+	import CrossPointSendButton from './CrossPointSendButton.svelte';
 
 	let {
 		books,
@@ -101,7 +102,7 @@
 					<Table.Cell>
 						<a
 							class="font-medium hover:underline"
-							href={resolve('/(app)/reader/[mediaId]', { mediaId: book.id })}
+							href={resolve('/(app)/book/[mediaId]', { mediaId: book.id })}
 						>
 							{book.resolvedName}
 						</a>
@@ -149,7 +150,15 @@
 							>
 								Read
 							</Button>
+							<Button
+								size="xs"
+								variant="ghost"
+								href={resolve('/(app)/book/[mediaId]', { mediaId: book.id })}
+							>
+								Details
+							</Button>
 							<SendToKindleButton mediaId={book.id} />
+							<CrossPointSendButton mediaId={book.id} />
 							{#if progress.status === 'FINISHED'}
 								<Button
 									size="xs"

@@ -97,15 +97,13 @@ const DEFAULT_BITRATE: &str = "64k";
 /// Cover file stems looked for beside a folder book, in order.
 const COVER_STEMS: [&str; 4] = ["cover", "folder", "front", "cover_art"];
 
-/// How far the assembled book's measured duration may differ from the sum of
-/// its parts before the output is rejected.
+/// Maximum assembled-duration drift in milliseconds.
 ///
-/// A remux is sample-exact and a transcode differs only by the encoder's
-/// priming samples — a few tens of milliseconds per part. One percent is
-/// therefore not a tolerance for sloppiness: it is the point at which a part
-/// was silently dropped, which is the one failure mode that would otherwise
-/// produce a plausible-looking book that ends early.
-const DURATION_TOLERANCE: f64 = 0.01;
+/// A remux is sample-exact and a whole-book transcode adds at most one AAC
+/// encoder delay, so 250 ms leaves ample codec/container rounding headroom
+/// without accepting a chapter timeline that is visibly wrong. The former 1%
+/// allowance hid minutes of cumulative MP3 duration-estimation error.
+const DURATION_TOLERANCE_MS: u64 = 250;
 
 /// Assembles an audiobook into one canonical M4B.
 pub struct AudioAssemble;
@@ -433,6 +431,45 @@ fn plan_publication(
 		return Ok(());
 	}
 
+	if shape.is_none() && !options.allow_transcode {
+		plan.warn(
+			Warning::new(
+				"transcode-refused",
+				format!(
+					"{} parts are {} and would have to be re-encoded, but allow_transcode is off",
+					probed.tracks.len(),
+					probed.codec
+				),
+			)
+			.at(source)
+			.with_severity(Severity::Error),
+		);
+		return Ok(());
+	}
+
+	let ffmpeg_install = shape.is_none().then(|| ffmpeg::locate(bin_dir));
+	// A remux appends packet durations directly. A transcode must instead use
+	// libavformat's own duration for each concat input, because that is the
+	// clock ffmpeg uses to place the next part.
+	let exact = match ffmpeg_install.as_ref() {
+		Some(Ok(install)) => {
+			exact_for_assembly(probed, |path| ffmpeg::probe_duration_ms(install, path))
+		},
+		_ => exact_for_assembly(probed, mux::exact_audio_duration_ms),
+	};
+	let probed = match exact {
+		Ok(probed) => probed,
+		Err(error) => {
+			plan.warn(
+				Warning::new("duration-probe-failed", error.to_string())
+					.at(source)
+					.with_severity(Severity::Error),
+			);
+			return Ok(());
+		},
+	};
+	let probed = &probed;
+
 	let (chapter_source, marks) = resolve_marks(source, probed, options);
 	let cover = resolve_cover(source, probed);
 	let detail = AssembleDetail {
@@ -479,29 +516,13 @@ fn plan_publication(
 		return Ok(());
 	}
 
-	if !options.allow_transcode {
-		plan.warn(
-			Warning::new(
-				"transcode-refused",
-				format!(
-					"{} parts are {} and would have to be re-encoded, but allow_transcode is off",
-					probed.tracks.len(),
-					probed.codec
-				),
-			)
-			.at(source)
-			.with_severity(Severity::Error),
-		);
-		return Ok(());
-	}
-
 	let mut detail = AssembleDetail {
 		bitrate: Some(options.bitrate().to_string()),
 		..detail
 	};
 	detail.ffmpeg = printed_argv(&detail, &output);
 
-	match ffmpeg::locate(bin_dir) {
+	match ffmpeg_install.expect("a transcode has an ffmpeg result") {
 		Ok(_) => plan.push(
 			Action::new(KIND_TRANSCODE)
 				.with_source(source)
@@ -524,6 +545,49 @@ fn plan_publication(
 	}
 
 	Ok(())
+}
+
+/// Replace cheap container estimates with the exact assembly clock.
+///
+/// This is intentionally tool-local: a normal library probe must not turn
+/// metadata discovery into a full audiobook read or dozens of subprocesses.
+/// Assembly will read every source anyway, and its chapter marks become a
+/// permanent cross-player contract. `duration_of` is packet timing for a
+/// remux and ffmpeg/libavformat timing for a transcode.
+fn exact_for_assembly(
+	probed: &ProbedAudio,
+	mut duration_of: impl FnMut(&Path) -> ToolResult<i64>,
+) -> ToolResult<ProbedAudio> {
+	let mut exact = probed.clone();
+	let mut duration_ms = 0_i64;
+	for track in &mut exact.tracks {
+		track.duration_ms = duration_of(&track.path)?;
+		duration_ms = duration_ms.saturating_add(track.duration_ms);
+	}
+	exact.duration_ms = duration_ms;
+
+	// Folder probing already shifted authored marks by the cheap per-track
+	// estimates. Re-read the local marks and shift them by the exact offsets.
+	if exact.tracks.len() > 1 && is_authored(exact.chapter_source) {
+		let mut chapters = Vec::new();
+		let mut offset = 0_i64;
+		for track in &exact.tracks {
+			let local = audio::probe_file(&track.path)?;
+			if is_authored(local.chapter_source) {
+				chapters.extend(local.chapters.into_iter().map(|chapter| {
+					stump_media::audio::ProbedChapter {
+						title: chapter.title,
+						start_ms: chapter.start_ms.saturating_add(offset),
+						end_ms: chapter.end_ms.map(|end| end.saturating_add(offset)),
+					}
+				}));
+			}
+			offset = offset.saturating_add(track.duration_ms);
+		}
+		exact.chapters = chapters;
+	}
+
+	Ok(exact)
 }
 
 fn marks_are_empty(detail: &AssembleDetail) -> bool {
@@ -793,7 +857,13 @@ fn remux_parts(target: &Path, detail: &AssembleDetail) -> ToolResult<()> {
 
 fn transcode_parts(target: &Path, detail: &AssembleDetail) -> ToolResult<()> {
 	let install = ffmpeg::locate(None)?;
-	let scratch = tempfile::tempdir()?;
+	let parent = target
+		.parent()
+		.filter(|parent| !parent.as_os_str().is_empty())
+		.unwrap_or_else(|| Path::new("."));
+	let scratch = tempfile::Builder::new()
+		.prefix(".stump-audio-assemble-")
+		.tempdir_in(parent)?;
 
 	let metadata_path = scratch.path().join("metadata.ffmeta");
 	let chapters: Vec<MetadataChapter> = detail
@@ -845,9 +915,9 @@ fn transcode_parts(target: &Path, detail: &AssembleDetail) -> ToolResult<()> {
 		)));
 	}
 
-	// ffmpeg wrote into the scratch directory, which may be on another
-	// filesystem, so the bytes are copied through the same atomic staging
-	// every other tool writes with.
+	// Both scratch and `write_atomic` live beside the target, so this copy
+	// stays on the library filesystem and the final persist is one atomic
+	// rename.
 	write_atomic(target, |file| {
 		let mut source = std::fs::File::open(&staged)?;
 		std::io::copy(&mut source, file)?;
@@ -914,11 +984,10 @@ fn read_cover(source: Option<&CoverSource>) -> Option<(ContentType, Vec<u8>)> {
 fn verify(target: &Path, detail: &AssembleDetail) -> ToolResult<()> {
 	let probed = audio::probe_file(target)?;
 
-	let expected = detail.duration_ms.max(0) as f64;
-	let actual = probed.duration_ms.max(0) as f64;
-	if expected > 0.0 && (actual - expected).abs() / expected > DURATION_TOLERANCE {
+	let drift_ms = probed.duration_ms.abs_diff(detail.duration_ms);
+	if detail.duration_ms > 0 && drift_ms > DURATION_TOLERANCE_MS {
 		return Err(ToolError::Invalid(format!(
-			"the assembled book is {} but its parts are {}",
+			"the assembled book is {} but its parts are {} ({drift_ms} ms difference)",
 			human_duration(probed.duration_ms),
 			detail.duration
 		)));

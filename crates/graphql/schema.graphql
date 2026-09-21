@@ -8,6 +8,18 @@ enum AccessRole {
 	CO_CREATOR
 }
 
+type AdaptiveRecommendation {
+	targetKey: String!
+	title: String!
+	authors: String!
+	sourceProvider: String
+	remoteId: String
+	externalKey: String
+	coverUrl: String
+	score: Int!
+	reasonCode: String!
+}
+
 input AddBookToClubInput {
 	book: BookClubBookInput!
 }
@@ -30,6 +42,12 @@ type AggregatedReaction {
 	customEmojiUrl: String
 	count: Int!
 	reactedByMe: Boolean!
+}
+
+"Granularity of cues in a sync map or alignment request."
+enum AlignGranularity {
+	SENTENCE
+	WORD
 }
 
 "A staged analysis job failed."
@@ -163,6 +181,12 @@ input AnnotationFilterInput {
 	"""
 	source: [DeviceKind!]
 	"""
+	Durable registered device id that pushed the annotation. This is
+	independent of whether the device's current credential is active, so
+	revoked-device history remains filterable.
+	"""
+	sourceDeviceId: ID
+	"""
 	Case-insensitive substring match over the selected passage, the note,
 	and the book title
 	"""
@@ -206,6 +230,16 @@ type AnnotationSink {
 	name: String!
 	description: String!
 	settings: [IngestSettingDefinition!]!
+	presets: [AnnotationSinkPreset!]!
+}
+
+"A built-in safe layout choice for an annotation sink."
+type AnnotationSinkPreset {
+	id: String!
+	name: String!
+	description: String!
+	pathTemplate: String!
+	bodyTemplate: String
 }
 
 type AnnotationSinkRun {
@@ -282,11 +316,12 @@ type Arrangement {
 	sections: [ArrangementSection!]!
 }
 
-union ArrangementConfig = SystemArrangementConfig | InProgressBooks | RecentlyAdded | CustomArrangementConfig
+union ArrangementConfig = SystemArrangementConfig | InProgressBooks | OnDeckBooks | RecentlyAdded | CustomArrangementConfig
 
 input ArrangementConfigInput @oneOf {
 	system: SystemArrangementConfigInput
 	inProgressBooks: InProgressBooksInput
+	onDeckBooks: OnDeckBooksInput
 	recentlyAdded: RecentlyAddedInput
 	custom: FilterableArrangementEntityLinkInput
 }
@@ -386,6 +421,24 @@ type AuthorSeries {
 	authors: [Author!]!
 }
 
+type BookAudioChapter {
+	id: ID!
+	index: Int!
+	title: String
+	startMs: Int!
+	endMs: Int
+}
+
+type BookAudioFacts {
+	durationMs: Int!
+	codec: String!
+	sampleRate: Int
+	channels: Int
+	bitrate: Int
+	chapterSource: String!
+	chapters: [BookAudioChapter!]!
+}
+
 type BookClub {
 	id: String!
 	name: String!
@@ -449,14 +502,12 @@ type BookClubBookSuggestion {
 	bookId: String
 	"Get the member who suggested this book"
 	suggestedBy: BookClubMember!
-	"Get the member who resolved this suggestion"
 	resolvedBy: BookClubMember
 	"""
 	Get the count of likes (votes) on this suggestion
 	TODO(dataloader): Create dataloader
 	"""
 	likeCount: Int!
-	"Check if the current user has liked this suggestion"
 	isLikedByMe: Boolean!
 }
 
@@ -474,10 +525,7 @@ type BookClubDiscussion {
 	book: BookClubBook
 	"A display name for the discussion"
 	displayName: String!
-	"""
-	Get the count of messages in this discussion (excluding deleted messages)
-	TODO(dataloader): Create dataloader
-	"""
+	"Get the count of messages in this discussion (excluding deleted messages)"
 	messageCount: Int!
 }
 
@@ -501,10 +549,6 @@ type BookClubDiscussionMessage {
 	bookClubId: String!
 	"Get the member who posted this message"
 	member: BookClubMember
-	"""
-	Get aggregated reactions for this message, grouped by emoji, sorted by count desc
-	TODO(dataloader): Create dataloader
-	"""
 	reactions: [AggregatedReaction!]!
 	"Get the message this message is an inline reply to (if any)"
 	replyTo: BookClubDiscussionMessage
@@ -536,6 +580,15 @@ type BookClubInvitation {
 	role: BookClubMemberRole!
 	userId: String!
 	bookClubId: String!
+	status: String!
+	createdAt: DateTime!
+	expiresAt: DateTime
+	createdByUserId: String
+	acceptedAt: DateTime
+	declinedAt: DateTime
+	revokedAt: DateTime
+	revokedByUserId: String
+	auditNote: String
 	"The book club that the user was invited to"
 	bookClub: BookClub!
 	"The user who was invited to the book club"
@@ -585,6 +638,311 @@ enum BookClubSuggestionStatus {
 	PENDING
 	ACCEPTED
 	REJECTED
+}
+
+type BookDetail {
+	mediaId: ID!
+	workId: ID
+	title: String!
+	authors: [String!]!
+	workMetadata: BookWorkMetadata
+	editions: [BookEdition!]!
+	mismatches: [BookMetadataMismatch!]!
+	review: BookReview
+	readAloud: BookReadAloud!
+}
+
+type BookEdition {
+	mediaId: ID!
+	kind: BookEditionKind!
+	title: String!
+	media: Media!
+	metadata: MediaMetadata
+	file: BookFile!
+	audio: BookAudioFacts
+	pairEvidence: PairEvidence
+}
+
+"Distinct lanes in a merged work view."
+enum BookEditionKind {
+	EBOOK
+	AUDIOBOOK
+	OTHER
+}
+
+type BookFile {
+	path: String!
+	size: Int!
+	extension: String!
+	hash: String
+	koreaderHash: String
+	status: FileStatus!
+	modifiedAt: String
+}
+
+input BookMetadataApplyInput {
+	scope: BookMetadataScope!
+	selectedFields: [MetadataField!]!
+	metadata: MediaMetadataInput!
+}
+
+type BookMetadataMismatch {
+	field: MetadataField!
+	ebookValue: String
+	audiobookValue: String
+	workValue: String
+	resolved: Boolean!
+}
+
+"The explicit metadata destination selected by a book-detail operation."
+enum BookMetadataScope {
+	WORK
+	EBOOK
+	AUDIOBOOK
+	BOTH
+}
+
+type BookReadAloud {
+	status: BookReadAloudStatus!
+	reason: String
+	ebookMediaId: ID
+	audioMediaId: ID
+	chapterMap: [ChapterMapEntry!]!
+	syncMap: SyncMap
+	artifact: ReadAloudArtifact
+}
+
+"Cache/readiness states for an accepted read-aloud artifact."
+enum BookReadAloudStatus {
+	NO_AUDIOBOOK_PAIRED
+	UNAVAILABLE
+	CHAPTER_MAP_UNAVAILABLE
+	SYNC_MAP_UNAVAILABLE
+	CACHE_MISSING
+	READY
+	FAILED
+}
+
+type BookReadingDevice {
+	id: ID!
+	name: String
+	kind: DeviceKind
+	revoked: Boolean!
+}
+
+type BookReadingEdition {
+	mediaId: ID!
+	kind: BookEditionKind!
+	head: BookReadingHead
+	sessions: [BookReadingSession!]!
+}
+
+type BookReadingHead {
+	locator: ReadiumLocator
+	progression: Float!
+	page: Int
+	positionMs: Int
+	trackIndex: Int
+	completed: Boolean!
+	updatedAt: String!
+	sourceProtocol: String!
+	sourceDeviceId: ID
+	sourceDevice: BookReadingDevice
+	revision: Int!
+}
+
+type BookReadingLog {
+	mediaId: ID!
+	workId: ID
+	editions: [BookReadingEdition!]!
+}
+
+type BookReadingSession {
+	id: ID!
+	sessionDate: String!
+	status: String!
+	readthroughNumber: Int!
+	startLocator: ReadiumLocator
+	endLocator: ReadiumLocator
+	startPage: Int
+	endPage: Int
+	endPositionMs: Int
+	startPercentage: Float
+	endPercentage: Float
+	elapsedSeconds: Int
+	notes: String
+	sourceProtocol: String!
+	sourceDeviceIds: [ID!]!
+	sourceDevices: [BookReadingDevice!]!
+	liseurSessionId: ID
+	createdAt: String!
+	updatedAt: String
+}
+
+type BookRequest {
+	id: String!
+	requesterId: String!
+	internalMediaId: String
+	internalWorkId: String
+	sourceProvider: String
+	remoteId: String
+	externalKey: String
+	title: String!
+	authors: String
+	coverUrl: String
+	destinationShelfId: String
+	destinationDeviceId: String
+	status: BookRequestStatus!
+	approvalPolicy: String!
+	automationEnabled: Boolean!
+	scoringFloor: Int!
+	verificationThreshold: Int!
+	maxRetries: Int!
+	retries: Int!
+	approvedBy: String
+	rejectedBy: String
+	failureCode: String
+	failureMessage: String
+	createdAt: DateTime!
+	updatedAt: DateTime!
+	approvedAt: DateTime
+	completedAt: DateTime
+}
+
+input BookRequestGatewayInput {
+	endpoint: String!
+	token: String!
+	enabled: Boolean! = false
+	requireApproval: Boolean! = true
+	automationEnabled: Boolean! = false
+	scoringFloor: Int! = 80
+	verificationThreshold: Int! = 70
+	maxRetries: Int! = 3
+	handoffRoot: String
+}
+
+type BookRequestGatewaySettings {
+	id: String!
+	endpoint: String!
+	enabled: Boolean!
+	requireApproval: Boolean!
+	automationEnabled: Boolean!
+	scoringFloor: Int!
+	verificationThreshold: Int!
+	maxRetries: Int!
+	handoffRoot: String
+	hasToken: Boolean!
+	tokenRedacted: String!
+	updatedBy: String
+	updatedAt: DateTime!
+}
+
+type BookRequestGrab {
+	id: String!
+	requestId: String!
+	releaseId: String!
+	"Opaque sidecar handle; it is not a tracker URL or a download URL."
+	opaqueId: String!
+	status: String!
+	attempts: Int!
+	maxAttempts: Int!
+	failureCode: String
+	failureMessage: String
+	startedAt: DateTime
+	finishedAt: DateTime
+	lastPolledAt: DateTime
+	nextPollAt: DateTime
+	createdAt: DateTime!
+	updatedAt: DateTime!
+}
+
+type BookRequestHandoff {
+	id: String!
+	requestId: String!
+	grabId: String!
+	libraryId: String!
+	relativePath: String!
+	sha256: String!
+	byteSize: Int!
+	status: String!
+	dropItemId: String
+	shelfId: String
+	deviceId: String
+	errorCode: String
+	errorMessage: String
+}
+
+type BookRequestRelease {
+	id: String!
+	searchId: String!
+	requestId: String!
+	sourceProvider: String!
+	remoteId: String!
+	externalKey: String
+	title: String!
+	authors: String
+	format: String
+	language: String
+	edition: String
+	quality: String
+	sizeBytes: Int
+	seeders: Int
+	previewName: String
+	previewMime: String
+	previewBytes: Int
+	score: Int!
+	scoreComponents: JSON!
+	rank: Int!
+	selected: Boolean!
+}
+
+enum BookRequestStatus {
+	PENDING
+	SEARCHING
+	AWAITING_APPROVAL
+	NEEDS_SELECTION
+	APPROVED
+	GRABBED
+	IMPORTING
+	QUEUED
+	COMPLETED
+	REJECTED
+	FAILED
+}
+
+type BookReview {
+	id: ID!
+	workId: ID
+	mediaId: ID
+	rating: Int!
+	content: String
+	isPrivate: Boolean!
+	createdAt: String!
+	updatedAt: String!
+}
+
+input BookReviewInput {
+	"Zero means unrated; values above five are rejected."
+	rating: Int!
+	content: String
+	isPrivate: Boolean!
+}
+
+type BookSearchResult {
+	mediaId: ID!
+	workId: ID
+	title: String!
+	authors: [String!]!
+	kind: BookEditionKind!
+	score: Float!
+}
+
+type BookWorkMetadata {
+	workId: ID!
+	title: String
+	author: String
+	metadata: JSON!
+	lockedFields: [MetadataField!]!
 }
 
 type Bookmark {
@@ -736,6 +1094,18 @@ input CreateBookClubMemberInput {
 	role: BookClubMemberRole!
 }
 
+input CreateBookRequestInput {
+	mediaId: ID
+	workId: ID
+	external: ExternalWorkReferenceInput
+	title: String
+	authors: String
+	coverUrl: String
+	destinationShelfId: ID
+	destinationDeviceId: ID
+	automationEnabled: Boolean! = false
+}
+
 input CreateCustomEmojiInput {
 	name: String!
 	isAnimated: Boolean!
@@ -778,6 +1148,32 @@ input CreateScheduledJobInput {
 	enabled: Boolean
 }
 
+input CreateShareGrantInput {
+	recipientUserId: ID!
+	targetKey: String!
+	title: String!
+	authors: String!
+	scopes: [ShareScope!]!
+	sourceProvider: String
+	remoteId: String
+	externalKey: String
+	coverUrl: String
+	targetMediaId: ID
+	targetWorkId: ID
+	recommendationId: ID
+	expiresAt: DateTime
+}
+
+input CreateShareOverlayInput {
+	grantId: ID!
+	kind: ShareOverlayKind!
+	locator: JSON
+	progression: Float
+	percentage: Int
+	excerpt: String
+	body: String
+}
+
 input CreateUserInput {
 	username: String!
 	password: String!
@@ -806,6 +1202,125 @@ type CreatedOrUpdatedManyMedia {
 	count: Int!
 	seriesId: String!
 	libraryId: String!
+}
+
+type CrosspointDelivery {
+	id: ID!
+	userId: ID!
+	deviceId: ID!
+	mediaId: ID!
+	sourceRevision: String!
+	profileDigest: String!
+	profileJson: String!
+	destinationPath: String!
+	idempotencyKey: String!
+	status: CrosspointDeliveryStatus!
+	attempts: Int!
+	maxAttempts: Int!
+	nextAttemptAt: String
+	lastError: String
+	queuedAt: String!
+	startedAt: String
+	completedAt: String
+	updatedAt: String!
+}
+
+enum CrosspointDeliveryStatus {
+	QUEUED
+	PREPARING
+	TRANSFERRING
+	COMPLETED
+	FAILED
+	CANCELLED
+}
+
+type CrosspointTarget {
+	deviceId: ID!
+	userId: ID!
+	hostOrIp: String!
+	httpPort: Int!
+	wsPort: Int!
+	rootPath: String!
+	discoveryMethod: String!
+	verifiedAt: String
+	fingerprint: CrosspointTargetFingerprint
+	profile: CrosspointTransferProfile!
+	profileJson: JSON!
+	profileDigest: String!
+	revokedAt: String
+}
+
+type CrosspointTargetFingerprint {
+	model: String!
+	serial: String!
+}
+
+"""
+Verified CrossPoint endpoint settings and an optional typed profile patch.
+
+HTTP/WebSocket ports are accepted for the existing Home client contract but
+are policy inputs, not routing inputs: mutations require exactly firmware
+ports 80 and 81 and persist those constants rather than trusting a caller.
+"""
+input CrosspointTargetInput {
+	hostOrIp: String!
+	httpPort: Int!
+	wsPort: Int!
+	rootPath: String!
+	profile: CrosspointTransferProfileInput
+}
+
+enum CrosspointTargetModel {
+	AUTO
+	X3
+	X4
+}
+
+type CrosspointTargetVerification {
+	deviceId: ID!
+	hostOrIp: String!
+	httpPort: Int!
+	wsPort: Int!
+	model: String!
+	serial: String!
+	verified: Boolean!
+}
+
+type CrosspointTransferProfile {
+	optimizerEnabled: Boolean!
+	targetModel: CrosspointTargetModel!
+	jpegQuality: Int!
+	grayscale: Boolean!
+	autoCrop: Boolean!
+	splitLargeParagraphs: Boolean!
+	removeFonts: Boolean!
+	chunkBytes: Int!
+	retryCount: Int!
+	retryDelaySeconds: Int!
+	timeoutSeconds: Int!
+	maxUploadBytes: Int!
+}
+
+"""
+A bounded, nullable patch for a CrossPoint transfer profile.
+
+The protocol crate owns defaults and validation. This type only bridges
+GraphQL's `Int` scalar to the protocol's unsigned fields; callers must run
+[`Self::into_protocol`] before persisting or queueing the profile.
+"""
+input CrosspointTransferProfileInput {
+	optimizerEnabled: Boolean
+	targetModel: CrosspointTargetModel
+	jpegQuality: Int
+	grayscale: Boolean
+	autoCrop: Boolean
+	splitLargeParagraphs: Boolean
+	removeFonts: Boolean
+	chunkBytes: Int
+	retryCount: Int
+	retryDelaySeconds: Int
+	timeoutSeconds: Int
+	maxUploadBytes: Int
 }
 
 type CursorPaginatedBookClubDiscussionMessageResponse {
@@ -872,8 +1387,8 @@ type DeleteJobHistory {
 }
 
 """
-A registered client (Kobo, KOReader, Mihon, Komelia, Liseur, an OPDS
-reader, a script, or a browser) owned by a user.
+A registered client (Kobo, KOReader, Coppice, Mihon, Komelia, Liseur, an
+OPDS reader, a script, or a browser) owned by a user.
 """
 type Device {
 	id: String!
@@ -901,16 +1416,38 @@ type Device {
 	lastSyncSummary: JSON
 	revokedAt: DateTime
 	"""
-	The device's credential, or `null` once it has been revoked or when the
-	device was registered by a protocol (KOReader, OPDS) and never minted one.
+	The device's primary credential, or `null` once it has been revoked or
+	when the device was registered by a protocol and never minted one.
 	"""
 	credential: DeviceCredentialSummary
+	"""
+	Every credential currently attached to the device, redacted. Clients
+	must select by `kind` and `protocol`; list order is not a contract.
+	"""
+	credentials: [DeviceCredentialSummary!]!
 	"""
 	The libraries this device may see, or `null` when the device inherits
 	its user's visibility. The scope is intersected with that visibility,
 	so it only ever narrows; an empty list is a device that sees nothing.
 	"""
 	libraryScope: [String!]
+	"""
+	Typed battery, sync and cumulative activity fields. It is nullable until
+	a protocol reports its first summary.
+	"""
+	telemetry: DeviceTelemetry
+}
+
+"Availability of a client/protocol registration kind in this server build."
+type DeviceCapability {
+	kind: DeviceKind!
+	protocol: DeviceProtocol!
+	componentKey: String!
+	compiled: Boolean!
+	"Effective runtime state, not the persisted desired state."
+	enabled: Boolean!
+	available: Boolean!
+	reason: String
 }
 
 "The storage a device credential references"
@@ -956,6 +1493,10 @@ enum DeviceKind {
 	KOBO
 	"A KOReader install using the KOReader progress sync protocol"
 	KOREADER
+	"A Coppice Home/KOReader client managed through the unified device surface"
+	COPPICE
+	"A CrossPoint Reader using stock KOSync plus the keyed rich-sync lane"
+	CROSSPOINT
 	"Mihon (Tachiyomi) using the Komga-compatible profile"
 	MIHON
 	"Komelia using the Komga-compatible profile"
@@ -976,6 +1517,8 @@ enum DeviceKind {
 	is never offered a transformed stream.
 	"""
 	WORKER
+	"A Kavita-compatible reader using the native API with a download-only key"
+	KAVITA
 }
 
 "A device pairing completed and its credential was minted for `user_id`."
@@ -1062,13 +1605,37 @@ type DeviceSeen {
 	firstSeen: Boolean!
 }
 
+"Typed, merge-safe device activity and battery telemetry."
+type DeviceTelemetry {
+	batteryPercent: Int
+	charging: Boolean
+	batterySource: String
+	batteryObservedAt: DateTime
+	syncStatus: String
+	syncProtocol: DeviceProtocol
+	syncedAt: DateTime
+	counters: DeviceTelemetryCounters!
+}
+
+type DeviceTelemetryCounters {
+	progress: Int
+	highlights: Int
+	notes: Int
+	bookmarks: Int
+	sessions: Int
+	items: Int
+}
+
 """
-A device together with a freshly minted credential. The secret inside
-`credential` and the endpoints is shown exactly once.
+A device together with freshly minted credentials. The secrets inside
+`credential`, `credentials`, and the endpoint URLs are shown exactly once.
 """
 type DeviceWithCredential {
 	device: Device!
+	"The primary credential retained for existing clients."
 	credential: IssuedDeviceCredential!
+	"Every credential minted in this operation, including `credential`."
+	credentials: [IssuedDeviceCredential!]!
 	endpoints: [DeviceEndpoint!]!
 }
 
@@ -1402,6 +1969,19 @@ type ExternalSeriesMetadata {
 	volumeCount: Int
 }
 
+"""
+A catalog/work identity outside the Coppice library. The gateway only sees
+normalized metadata and an opaque candidate id later returned by search.
+"""
+input ExternalWorkReferenceInput {
+	sourceProvider: String!
+	remoteId: String!
+	externalKey: String
+	title: String!
+	authors: String
+	coverUrl: String
+}
+
 input FieldFilterFileStatus @oneOf {
 	eq: FileStatus
 	neq: FileStatus
@@ -1484,6 +2064,65 @@ input FitWithinResizeInput {
 	width: Int!
 	"The maximum height (in pixels) of the resulting image"
 	height: Int!
+}
+
+"""
+Redacted personal Hardcover status. No PAT or provider response payload is
+ever part of this object.
+"""
+type HardcoverConnection {
+	connected: Boolean!
+	remoteUserId: String
+	remoteUsername: String
+	scopes: [String!]!
+	capabilities: [String!]!
+	useForMetadata: Boolean!
+	importJournals: Boolean!
+	syncProgress: Boolean!
+	connectedAt: DateTime
+	verifiedAt: DateTime
+	lastSyncAt: DateTime
+	lastError: String
+}
+
+type HardcoverMediaLink {
+	id: ID!
+	mediaId: ID!
+	remoteId: String!
+	remoteTitle: String
+	linkedAt: DateTime!
+	updatedAt: DateTime!
+}
+
+type HardcoverMetadataLookup {
+	provider: String!
+	remoteId: String!
+	title: String
+	summary: String
+	writers: [String!]!
+	year: Int
+	pageCount: Int
+	coverUrl: String
+	providerUrl: String
+}
+
+type HardcoverSyncResult {
+	status: String!
+	imported: Int!
+	unresolved: Int!
+	projected: Int!
+	skipped: Int!
+	lastSyncAt: DateTime
+	error: String
+}
+
+"The sections displayed on a user's home page."
+type HomeArrangement {
+	sections: [ArrangementSection!]!
+}
+
+input HomeArrangementInput {
+	sections: [ArrangementSectionInput!]!
 }
 
 type ImageColor {
@@ -2095,6 +2734,10 @@ enum InterfaceRoundness {
 """
 A freshly minted credential. `secret` is the plaintext and is returned
 exactly once; only its hash is stored.
+
+A Coppice device has two credentials. The API key remains the primary
+credential for compatibility with the original singular create/rotate
+return type; [`Self::credentials`] exposes the complete one-time result.
 """
 type IssuedDeviceCredential {
 	kind: DeviceCredentialKind!
@@ -2171,39 +2814,49 @@ type JobUpdate {
 }
 
 """
-What one send-to-Kindle delivery did: the stored `kindle_deliveries` row,
-plus the device's name so the caller can say "sent Dune.azw3 (412 KB) to
-Paperwhite" without a second query.
+What one legacy device send did: the stored row plus the resolved device
+name. This shape is intentionally unchanged: mobile clients rely on
+`deviceId: String!` for `kindleDeliveries` and `sendToKindle`.
 """
 type KindleDelivery {
 	id: ID!
 	mediaId: String!
 	deviceId: String!
 	deviceName: String!
-	"""
-	The address the book was mailed to, as registered on the device when
-	the delivery happened.
-	"""
 	recipient: String!
-	"""
-	Extension of the attachment that went out: `azw3` when it was
-	converted for the Kindle, otherwise the book's own format.
-	"""
 	format: String!
-	"Size of that attachment."
 	bytes: Int!
-	"Whether the book was converted before sending."
 	converted: Boolean!
-	"""
-	Why the book was sent unconverted — usually that the operator has no
-	`boko` installed. `null` when it was converted, and never an error:
-	Amazon converts an EPUB itself.
-	"""
 	note: String
-	"""
-	Why the delivery failed, when it did. A failed send is recorded, which
-	is what makes this a delivery history rather than a success list.
-	"""
+	error: String
+	sentAt: DateTime!
+}
+
+type KindleDestination {
+	id: ID!
+	name: String!
+	email: String!
+	isDefault: Boolean!
+	createdAt: DateTime!
+	updatedAt: DateTime!
+}
+
+"""
+Destination-only delivery output. It deliberately does not reuse the
+legacy `KindleDelivery` shape: destination sends have no device id, while
+mobile clients must keep seeing `deviceId: String!` on the old type.
+"""
+type KindleDestinationDelivery {
+	id: ID!
+	mediaId: String!
+	destinationId: ID!
+	destinationName: String!
+	destinationEmail: String!
+	recipient: String!
+	format: String!
+	bytes: Int!
+	converted: Boolean!
+	note: String
 	error: String
 	sentAt: DateTime!
 }
@@ -2280,6 +2933,11 @@ type LibraryConfig {
 	skipBookOverview: Boolean!
 	processThumbnailColorsEvenWithoutConfig: Boolean!
 	libraryId: String
+	"""
+	the **relative path** to the directory where oneshots are stored,
+	relative to the library path. this is **not** a fully qualified path
+	"""
+	oneshotsDirectory: String
 	thumbnailConfig: ImageProcessorOptions
 	ignoreRules: [String!]
 }
@@ -2302,6 +2960,7 @@ input LibraryConfigInput {
 	defaultReadingMode: ReadingMode!
 	defaultReadingImageScaleFit: ReadingImageScaleFit!
 	ignoreRules: [String!]
+	oneshotsDirectory: String
 }
 
 """
@@ -2548,15 +3207,7 @@ type Media {
 	extension: String!
 	"The number of pages in the media, if applicable. Will be -1 for certain media types"
 	pages: Int!
-	"The timestamp of the last time the media was updated. This will be set during creation, as well"
-	updatedAt: DateTime
-	"The timestamp of the creation of the media"
-	createdAt: DateTime!
-	"""
-	The timestamp of when the underlying file was last modified on disk. This will only be set if
-	a timestamp can be retrieved from the filesystem
-	"""
-	modifiedAt: DateTime
+	isOneshot: Boolean!
 	"""
 	A Stump-specific hash of the media file. This is used as a secondary identifier for the media, primarily
 	in aiding in the identification of duplicate media files
@@ -2583,6 +3234,15 @@ type Media {
 	expected that all media will belong to a series
 	"""
 	seriesId: String
+	"The timestamp of the last time the media was updated. This will be set during creation, as well"
+	updatedAt: DateTime
+	"The timestamp of the creation of the media"
+	createdAt: DateTime!
+	"""
+	The timestamp of when the underlying file was last modified on disk. This will only be set if
+	a timestamp can be retrieved from the filesystem
+	"""
+	modifiedAt: DateTime
 	"The timestamp of when the media was **soft** deleted. This will act like a trash bin."
 	deletedAt: DateTime
 	"""
@@ -2626,6 +3286,17 @@ type Media {
 	"""
 	editions: [Media!]!
 	"""
+	The latest validated timing map where this media is either the ebook or
+	audiobook side. The stored artifact keeps its canonical ebook/audio
+	orientation even when the field is selected from an audiobook.
+	"""
+	syncMap(granularity: AlignGranularity! = SENTENCE): SyncMap
+	"""
+	A cache-only read-aloud download. No map or cache means `null`; selecting
+	this field never schedules work or invokes an aligner.
+	"""
+	readAloud(granularity: AlignGranularity! = SENTENCE): ReadAloudArtifact
+	"""
 	Unconfirmed pairings for this book, recomputed on demand.
 	
 	This is the field a book page selects: it runs the three pairing rules
@@ -2657,6 +3328,13 @@ type Media {
 	metatadata, if available, and fallback to the name derived from the file name
 	"""
 	resolvedName: String!
+	"""
+	Canonical position fields (`page`, `locator`, `positionMs`,
+	`percentageCompleted`, and `updatedAt`) come from `reading_heads`.
+	Readthrough identity, elapsed time, and the start instant remain
+	`reading_sessions` history; their position fields are only fallbacks
+	when the head has no corresponding value.
+	"""
 	readProgress: ResumeReadingCursor
 	readHistory: [ReadthroughRecord!]!
 	seriesPosition: Int
@@ -3006,9 +3684,7 @@ enum MediaModelOrdering {
 	SIZE
 	EXTENSION
 	PAGES
-	UPDATED_AT
-	CREATED_AT
-	MODIFIED_AT
+	IS_ONESHOT
 	HASH
 	KOREADER_HASH
 	PATH
@@ -3016,6 +3692,9 @@ enum MediaModelOrdering {
 	THUMBNAIL_META
 	THUMBNAIL_PATH
 	SERIES_ID
+	UPDATED_AT
+	CREATED_AT
+	MODIFIED_AT
 	DELETED_AT
 	SOURCE_PROVIDER
 	REMOTE_ID
@@ -3428,6 +4107,7 @@ type Mutation {
 	archiveDiscussion(discussionId: ID!, archived: Boolean!): Boolean!
 	createBookClubInvitation(id: ID!, input: BookClubInvitationInput!): BookClubInvitation!
 	respondToBookClubInvitation(id: ID!, input: BookClubInvitationResponseInput!): BookClubInvitation!
+	revokeBookClubInvitation(id: ID!): BookClubInvitation!
 	"Creates a new member in the book club"
 	createBookClubMember(bookClubId: ID!, input: CreateBookClubMemberInput!): BookClubMember!
 	"Removes a member from the book club"
@@ -3506,7 +4186,9 @@ type Mutation {
 	Update an existing library with the provided configuration. If `scan_after_persist` is `true`,
 	the library will be scanned immediately after updating.
 	"""
-	updateLibrary(id: ID!, input: CreateOrUpdateLibraryInput!): Library!
+	updateLibrary(id: ID!, input: CreateOrUpdateLibraryInput!): Library! @deprecated(reason: "Use `patchLibrary` instead")
+	patchLibrary(id: ID!, input: PatchLibraryInput!): Library!
+	patchLibraryConfig(id: ID!, input: PatchLibraryConfigInput!): LibraryConfig!
 	"Update the emoji for a library"
 	updateLibraryEmoji(id: ID!, emoji: String): Library!
 	"""
@@ -3682,6 +4364,30 @@ type Mutation {
 	counterpart. Returns `false` when there was nothing to drop.
 	"""
 	clearChapterMapEntry(ebookMediaId: ID!, audioMediaId: ID!, ebookSpineIndex: Int!): Boolean!
+	"""
+	Validate and persist an operator-supplied `SyncMapV1` for a confirmed
+	ebook↔audiobook pair.
+	"""
+	importSyncMap(ebookMediaId: ID!, audioMediaId: ID!, map: JSON!): SyncMap!
+	"""
+	Enqueue alignment for a confirmed pair, reusing any active identical
+	request rather than creating a second worker job.
+	"""
+	enqueueAlignment(ebookMediaId: ID!, audioMediaId: ID!, granularity: AlignGranularity! = SENTENCE): WorkerJob!
+	"Create or replace the current user's review for this work/edition."
+	upsertBookReview(mediaId: ID!, input: BookReviewInput!): BookReview!
+	"Delete only the current user's explicit work/edition review."
+	deleteBookReview(mediaId: ID!): Boolean!
+	"""
+	Apply selected metadata fields to the explicitly selected work or
+	edition destination. Unselected fields and other editions are untouched.
+	"""
+	applyBookMetadata(mediaId: ID!, input: BookMetadataApplyInput!): BookDetail!
+	"""
+	Apply selected fields from one persisted provider candidate. Provider
+	credentials are never returned and no unselected field is copied.
+	"""
+	applyBookMetadataCandidate(mediaId: ID!, candidateIndex: Int!, scope: BookMetadataScope!, selectedFields: [MetadataField!]!): BookDetail!
 	deleteLoginActivity: Int!
 	"""
 	Delete the avatar for the authenticated viewer, or for any user if
@@ -3695,6 +4401,8 @@ type Mutation {
 	deleteUser(id: ID!, hardDelete: Boolean): User!
 	deleteUserSessions(id: ID!): Int!
 	updateUserLockStatus(id: ID!, lock: Boolean!): User!
+	"Replace the authenticated user's home sections"
+	updateHomeArrangement(input: HomeArrangementInput!): HomeArrangement!
 	updateNavigationArrangementLock(locked: Boolean!): Arrangement!
 	updateNavigationArrangement(input: NavigationArrangementInput!): Arrangement!
 	createEmailer(input: EmailerInput!): Emailer!
@@ -3707,6 +4415,17 @@ type Mutation {
 	updateEmailDevice(id: Int!, input: EmailDeviceInput!): RegisteredEmailDevice!
 	patchEmailDevice(id: Int!, input: PatchEmailDeviceInput!): RegisteredEmailDevice!
 	deleteEmailDevice(id: Int!): RegisteredEmailDevice!
+	sendRecommendation(input: SendRecommendationInput!): SocialRecommendation!
+	respondToRecommendation(id: ID!, response: RecommendationResponseInput!): SocialRecommendation!
+	revokeRecommendation(id: ID!): SocialRecommendation!
+	dismissRecommendation(id: ID!): SocialRecommendation!
+	requestRecommendation(id: ID!, destination: RequestDestinationInput): SocialRecommendation!
+	setRecommendationOptOut(optOut: Boolean!): SocialPreferences!
+	createShareGrant(input: CreateShareGrantInput!): SocialShareGrant!
+	respondToShareGrant(id: ID!, accept: Boolean!): SocialShareGrant!
+	revokeShareGrant(id: ID!): SocialShareGrant!
+	createShareOverlay(input: CreateShareOverlayInput!): SocialOverlay!
+	setOverlayVisibility(overlayId: ID!, hidden: Boolean!): SocialOverlay!
 	"""
 	Mails `media_id` to the Kindle address registered on `device_id`,
 	converting an EPUB to AZW3 first when the operator has `boko`
@@ -3716,6 +4435,38 @@ type Mutation {
 	which is the same SMTP path this uses.
 	"""
 	sendToKindle(mediaId: ID!, deviceId: ID!): KindleDelivery!
+	"""
+	Creates or updates one destination owned by the current user. Amazon
+	only accepts mail from an approved sender configured in the server SMTP
+	emailer; this mutation validates the recipient syntax but cannot verify
+	Amazon's allowlist.
+	"""
+	upsertKindleDestination(id: ID, name: String!, email: String!, makeDefault: Boolean!): KindleDestination!
+	deleteKindleDestination(id: ID!): Boolean!
+	sendToKindleDestination(mediaId: ID!, destinationId: ID!): KindleDestinationDelivery!
+	"""
+	Verifies a personal PAT with `me` before storing it encrypted. The token
+	is never returned or included in a job payload.
+	"""
+	connectHardcover(apiToken: String!, useForMetadata: Boolean, importJournals: Boolean, syncProgress: Boolean): HardcoverConnection!
+	updateHardcoverConnection(useForMetadata: Boolean!, importJournals: Boolean!, syncProgress: Boolean!): HardcoverConnection!
+	disconnectHardcover: Boolean!
+	linkHardcoverMedia(mediaId: ID!, remoteId: String!): HardcoverMediaLink!
+	unlinkHardcoverMedia(mediaId: ID!): Boolean!
+	"""
+	Looks up public metadata through the current user's Hardcover PAT only
+	when that user enabled the interactive metadata toggle. The persistent
+	cache contains public payloads keyed by provider/query/schema/TTL and
+	never stores account, journal, or progress responses.
+	"""
+	lookupHardcoverMetadata(mediaId: ID!): HardcoverMetadataLookup
+	"""
+	Runs one explicit, user-scoped synchronization. No scheduler calls this
+	continuously: the caller opts in through the manual mutation and the
+	connection toggles. Quotes are imported only with an exact local link and
+	page locator; all other records remain unresolved provenance.
+	"""
+	syncHardcoverNow: HardcoverSyncResult!
 	"""
 	Upsert the current user's settings for one channel. Unknown keys are
 	rejected; secret values are stored encrypted and never returned.
@@ -3736,6 +4487,43 @@ type Mutation {
 	createApiKey(input: ApikeyInput!): CreatedAPIKey!
 	updateApiKey(id: Int!, input: ApikeyInput!): Apikey!
 	deleteApiKey(id: Int!): Apikey!
+	createBookRequest(input: CreateBookRequestInput!): BookRequest!
+	approveBookRequest(requestId: ID!, reason: String): BookRequest!
+	rejectBookRequest(requestId: ID!, reason: String): BookRequest!
+	searchBookRequest(requestId: ID!): BookRequest!
+	selectBookRequestRelease(requestId: ID!, releaseId: ID!): BookRequest!
+	grabBookRequest(requestId: ID!): BookRequestGrab!
+	pollBookRequestGrab(grabId: ID!): BookRequestGrab!
+	retryBookRequest(requestId: ID!): BookRequest!
+	updateBookRequestGateway(input: BookRequestGatewayInput!): BookRequestGatewaySettings!
+	"""
+	Probe a private IPv4 address using CrossPoint's fixed HTTP port. The
+	returned identity is deliberately not persisted until the user submits
+	[`Self::update_crosspoint_target`].
+	"""
+	verifyCrosspointTarget(deviceId: ID!, host: String!): CrosspointTargetVerification!
+	"""
+	Verify and persist a CrossPoint target plus its canonical typed profile.
+	The status probe is repeated here so a client cannot forge a prior
+	verification result between the two mutations.
+	"""
+	updateCrosspointTarget(deviceId: ID!, input: CrosspointTargetInput!): CrosspointTarget!
+	"""
+	Queue one or more visible media items using the target's immutable
+	profile snapshot. Duplicate media ids are collapsed before enqueueing;
+	the service's idempotency key handles repeated requests safely.
+	"""
+	queueCrosspointDeliveries(deviceId: ID!, mediaIds: [ID!]!, targetPath: String!): [CrosspointDelivery!]!
+	"""
+	Requeue a failed delivery without changing its immutable source/profile
+	snapshot. Cancelled, active, and completed rows cannot be resurrected.
+	"""
+	retryCrosspointDelivery(id: ID!): CrosspointDelivery!
+	"""
+	Cancel only queued local work. No remote cancellation request is sent;
+	active transfers remain owned by the worker and terminal history stays.
+	"""
+	cancelCrosspointDelivery(id: ID!): CrosspointDelivery!
 	cancelJob(id: ID!): Boolean!
 	deleteJob(id: ID!, force: Boolean! = false): Boolean!
 	deleteJobHistory: DeleteJobHistory!
@@ -3897,6 +4685,12 @@ type Mutation {
 	Cancelling a finished job is a no-op that returns the row unchanged.
 	"""
 	cancelWorkerJob(id: String!): WorkerJob!
+	"""
+	Requests a component transition. HOT components change their effective
+	route state immediately; RESTART components persist the desired value and
+	report `restartRequired` until the next process start.
+	"""
+	setRuntimeComponentEnabled(key: String!, enabled: Boolean!): RuntimeComponent!
 	createSmartList(input: SaveSmartListInput!): SmartList!
 	updateSmartList(id: ID!, input: SaveSmartListInput!): SmartList!
 	deleteSmartList(id: ID!): SmartList!
@@ -3966,9 +4760,9 @@ type Mutation {
 	"""
 	clearSeriesReadingHistory(id: ID!): Int!
 	"""
-	Registers a device for the current user and mints its credential. The
+	Registers a device for the current user and mints its credential(s). The
 	registry enforces the permissions the kind needs (`ACCESS_API_KEYS` plus
-	the protocol permission for API-key kinds); the secret is returned once.
+	the protocol permission for API-key kinds); secrets are returned once.
 	"""
 	createDevice(kind: DeviceKind!, name: String): DeviceWithCredential!
 	renameDevice(id: String!, name: String!): Device!
@@ -4086,6 +4880,16 @@ enum NotificationKind {
 	PROVIDER_MATCH_DONE
 	"Sent by `testNotificationChannel`; never routed by rules"
 	TEST
+	"A social recommendation or explicit share was sent to this user."
+	RECOMMENDATION_RECEIVED
+	"A recipient accepted a recommendation or share grant."
+	RECOMMENDATION_ACCEPTED
+	"A recipient declined a recommendation or share grant."
+	RECOMMENDATION_DECLINED
+	"A sender or authorized owner revoked a recommendation or share grant."
+	RECOMMENDATION_REVOKED
+	"A recipient's request handoff changed state."
+	REQUEST_STATUS_UPDATED
 }
 
 "One routing rule: which channel receives which notification kind."
@@ -4195,6 +4999,14 @@ type OffsetPaginationInfo {
 	pageOffset: Int!
 	"Whether or not the page is zero-indexed."
 	zeroBased: Boolean!
+}
+
+type OnDeckBooks {
+	name: String
+}
+
+input OnDeckBooksInput {
+	name: String
 }
 
 enum OrderDirection {
@@ -4373,6 +5185,37 @@ input PatchEmailDeviceInput {
 	name: String
 	email: String
 	forbidden: Boolean
+}
+
+input PatchLibraryConfigInput {
+	convertRarToZip: Boolean
+	hardDeleteConversions: Boolean
+	generateFileHashes: Boolean
+	generateKoreaderHashes: Boolean
+	processMetadata: Boolean
+	watch: Boolean
+	libraryPattern: LibraryPattern
+	libraryType: LibraryType
+	defaultLibraryViewMode: LibraryViewMode
+	hideSeriesView: Boolean
+	skipBookOverview: Boolean
+	thumbnailConfig: ImageProcessorOptionsInput
+	processThumbnailColorsEvenWithoutConfig: Boolean
+	defaultReadingDir: ReadingDirection
+	defaultReadingMode: ReadingMode
+	defaultReadingImageScaleFit: ReadingImageScaleFit
+	ignoreRules: [String!]
+	oneshotsDirectory: String
+}
+
+input PatchLibraryInput {
+	name: String
+	path: String
+	description: String
+	emoji: String
+	tags: [String!]
+	config: PatchLibraryConfigInput
+	scanAfterPersist: Boolean! = true
 }
 
 "A patch equivalent of [CreateMetadataProviderConfigInput], i.e. just with optional fields."
@@ -4755,7 +5598,7 @@ type Query {
 	numberOfLibraries: Int!
 	lastVisitedLibrary: Library
 	libraryMissingEntities(libraryId: ID!, pagination: Pagination! = {offset: {page: 1, pageSize: 20, zeroBased: false}}): PaginatedMissingEntityResponse!
-	series(filter: SeriesFilterInput! = {name: null, path: null, libraryId: null, readingStatus: null, libraryType: null, metadata: null, library: null, _and: null, _not: null, _or: null}, orderBy: [SeriesOrderBy!]! = [{series: {field: NAME, direction: ASC}}], pagination: Pagination! = {offset: {page: 1, pageSize: 20, zeroBased: false}}): PaginatedSeriesResponse!
+	series(filter: SeriesFilterInput! = {name: null, path: null, libraryId: null, readingStatus: null, libraryType: null, isOneshot: null, metadata: null, library: null, _and: null, _not: null, _or: null}, orderBy: [SeriesOrderBy!]! = [{series: {field: NAME, direction: ASC}}], pagination: Pagination! = {offset: {page: 1, pageSize: 20, zeroBased: false}}): PaginatedSeriesResponse!
 	seriesById(id: ID!): Series
 	"Returns the available alphabet for all series in the server"
 	seriesAlphabet: JSONObject!
@@ -4801,6 +5644,31 @@ type Query {
 		"The audio edition; it owns the chapter index"
 		audioMediaId: ID!
 	): [ChapterMapEntry!]!
+	"""
+	Resolve a visible media id into one merged work view. Work identity is
+	internal: the route and this query remain anchored by media id.
+	"""
+	bookDetail(mediaId: ID!): BookDetail
+	"Raw reading heads and sessions grouped by the detail's edition rows."
+	bookReadingLog(mediaId: ID!): BookReadingLog
+	"""
+	Search only the current user's visible library. This intentionally does
+	not invoke a metadata provider; provider search is an editor operation.
+	"""
+	searchBooks(query: String!, limit: Int! = 20): [BookSearchResult!]!
+	"""
+	Rank similar books using only visible local metadata. Confirmed editions
+	of the current work are excluded, as are duplicate editions of another
+	work already represented by a higher-ranked row.
+	"""
+	similarBooks(mediaId: ID!, limit: Int! = 20): [BookSearchResult!]!
+	"Return the persisted provider candidates without making another request."
+	bookMetadataCandidates(mediaId: ID!): MetadataFetchRecord
+	"""
+	Search external metadata providers for the full metadata editor. The
+	result is persisted and returned for review; no fields are auto-applied.
+	"""
+	searchBookMetadata(mediaId: ID!, search: MediaMetadataSearchInput): MetadataFetchRecord!
 	me: User!
 	userCount: Int!
 	topReaders(take: Int): [User!]!
@@ -4810,10 +5678,17 @@ type Query {
 	loginActivityById(id: ID!): [UserLoginActivity!]!
 	emailers: [Emailer!]!
 	emailerById(id: Int!): Emailer
+	smtpSettings: SmtpSettings!
 	emailDevices: [RegisteredEmailDevice!]!
 	emailDeviceById(id: Int!): RegisteredEmailDevice
 	getNotifiers: [Notifier!]!
 	getNotifierById(id: Int!): Notifier!
+	socialRecommendations(recipientOnly: Boolean! = false, direction: RecommendationDirection, state: RecommendationState): [SocialRecommendation!]!
+	adaptiveRecommendations(limit: Int! = 20): [AdaptiveRecommendation!]!
+	socialShareGrants(incoming: Boolean! = true): [SocialShareGrant!]!
+	socialOverlays(targetKeyFilter: String): [SocialOverlay!]!
+	socialUserSearch(query: String!): [SocialUser!]!
+	socialPreferences: SocialPreferences!
 	"""
 	The notification channels this server offers, with the settings schema
 	each user can configure.
@@ -4829,8 +5704,22 @@ type Query {
 	values redacted.
 	"""
 	notificationChannelSettings: [NotificationChannelSettingsValue!]!
+	"Redacted status for the current user's own Hardcover connection."
+	hardcoverConnection: HardcoverConnection
+	"""
+	Explicit media links are personal and therefore always scoped to the
+	authenticated owner, even when a server owner is viewing the UI.
+	"""
+	hardcoverMediaLinks(mediaId: ID): [HardcoverMediaLink!]!
+	annotationSyncRoot: String
 	apiKeys: [Apikey!]!
 	apiKeyById(id: Int!): Apikey!
+	bookRequest(id: ID!): BookRequest
+	bookRequests(status: BookRequestStatus, mineOnly: Boolean! = false, limit: Int! = 50, offset: Int! = 0): [BookRequest!]!
+	bookRequestReleases(requestId: ID!): [BookRequestRelease!]!
+	bookRequestGrabs(requestId: ID!): [BookRequestGrab!]!
+	bookRequestHandoffs(requestId: ID!): [BookRequestHandoff!]!
+	bookRequestGateway: BookRequestGatewaySettings
 	jobs(pagination: Pagination! = {offset: {page: 1, pageSize: 20, zeroBased: false}}): PaginatedJobResponse!
 	jobById(id: ID!): Job
 	scheduledJobs: [ScheduledJob!]!
@@ -4900,6 +5789,22 @@ type Query {
 	status exists.
 	"""
 	workerJobs(status: WorkerJobStatus, limit: Int): [WorkerJob!]!
+	"""
+	Every code-inventoried component, including uncompiled integrations, with
+	persisted desired/effective state and truthful restart information.
+	"""
+	runtimeComponents: [RuntimeComponent!]!
+	"""
+	Process RSS and Linux PSS/private-dirty fields are independent,
+	process-wide measurements. They are never attributed to a component.
+	"""
+	runtimeMemory: RuntimeMemory!
+	"""
+	Client/protocol registrations filtered from the same effective component
+	state used by HTTP route guards. All rows are returned so an admin UI can
+	explain an unavailable compiled integration rather than silently guessing.
+	"""
+	deviceCapabilities: [DeviceCapability!]!
 	"All registered provider source instances."
 	providerSources: [ProviderSource!]!
 	"""
@@ -4957,15 +5862,26 @@ type Query {
 	credential is minted.
 	"""
 	deviceEndpoints(id: String!): [DeviceEndpoint!]!
+	"Return the verified CrossPoint target owned by this authenticated user."
+	crosspointTarget(deviceId: ID!): CrosspointTarget
+	"Return durable delivery history for one owned CrossPoint device."
+	crosspointDeliveries(deviceId: ID!, limit: Int): [CrosspointDelivery!]!
 	"""
-	Books mailed to a Kindle, newest first.
-	
-	Scoped to the devices the caller can see: their own, or every device
-	for the server owner. `deviceId` narrows it to one device and
-	`mediaId` to one book; a device the caller cannot see resolves to no
-	rows rather than to an error, exactly like the registry's own lookups.
+	User-owned destinations. Email is shown because it is not a secret and
+	is the address Amazon uses; server SMTP credentials are never returned.
+	"""
+	kindleDestinations: [KindleDestination!]!
+	"""
+	Legacy/device delivery history. This intentionally excludes
+	destination-only rows so existing clients keep their device-scoped
+	non-null semantics; use `kindleDestinationDeliveries` for the new lane.
 	"""
 	kindleDeliveries(deviceId: ID, mediaId: ID, limit: Int): [KindleDelivery!]!
+	"""
+	Destination delivery history, scoped by the durable owner snapshot so
+	deleting a destination retains and continues to expose its history.
+	"""
+	kindleDestinationDeliveries(mediaId: ID, limit: Int): [KindleDestinationDelivery!]!
 	"""
 	Reading activity over `span`, for the current user's sessions. With a
 	`deviceId` the stats cover the sessions that device contributed to, for
@@ -4997,6 +5913,16 @@ type Query {
 	empty list rather than an error.
 	"""
 	annotationAttachments(annotationId: ID!): [AnnotationAttachment!]!
+}
+
+"""
+A ready-to-download derivative. This object is returned only when the
+accepted map's deterministic cache file exists.
+"""
+type ReadAloudArtifact {
+	url: String!
+	mimeType: String!
+	cacheKey: String!
 }
 
 type ReadListAdded {
@@ -5277,6 +6203,37 @@ input RecentlyAddedInput {
 	links: [FilterableArrangementEntityLink!]! = []
 }
 
+enum RecommendationDirection {
+	INCOMING
+	OUTGOING
+}
+
+enum RecommendationHandoffState {
+	NONE
+	REQUESTED
+	LINKED
+	FAILED
+}
+
+input RecommendationResponseInput {
+	accept: Boolean!
+}
+
+enum RecommendationState {
+	PENDING
+	ACCEPTED
+	DECLINED
+	REVOKED
+	EXPIRED
+	DISMISSED
+}
+
+enum RecommendationTargetKind {
+	INTERNAL_MEDIA
+	INTERNAL_WORK
+	EXTERNAL_WORK
+}
+
 type RegisteredEmailDevice {
 	id: Int!
 	name: String!
@@ -5285,9 +6242,15 @@ type RegisteredEmailDevice {
 	sendHistory: [EmailerSendRecord!]!
 }
 
+input RequestDestinationInput {
+	shelfId: ID
+	deviceId: ID
+}
+
 """
-the current reading position for a book, derived from the latest session
-with the highest `readthrough_number`
+The current reading position for a book: canonical position fields come
+from `reading_heads`, while readthrough identity and activity history come
+from the latest non-finalized `reading_sessions` row.
 """
 type ResumeReadingCursor {
 	readthroughNumber: Int!
@@ -5307,7 +6270,13 @@ type ResumeReadingCursor {
 	elapsedSeconds: Int!
 	"when the very first session in the current readthrough started"
 	startedAt: DateTime
+	"the last time the latest session in the current readthrough was updated"
 	updatedAt: DateTime
+	"""
+	A page number computed from the current locator's `total_progression` relative
+	to the computed positions list for the book.
+	"""
+	positionAwarePage: Int
 }
 
 "Which finding to repair, on which staged item."
@@ -5319,6 +6288,72 @@ input RunIngestQualityFixInput {
 	names a command line.
 	"""
 	checkId: String!
+}
+
+"A code-owned runtime descriptor together with persisted lifecycle state."
+type RuntimeComponent {
+	key: String!
+	label: String!
+	description: String!
+	category: String!
+	compiled: Boolean!
+	desiredEnabled: Boolean!
+	effectiveEnabled: Boolean!
+	transitionMode: RuntimeTransitionMode!
+	transitionReason: String!
+	dependencies: [String!]!
+	health: String!
+	restartRequired: Boolean!
+	usageStatus: RuntimeUsageStatus!
+	usageEvidence: String
+	activityCount: Int
+	lastActivityAt: DateTime
+	lastTransitionAt: DateTime
+	lastError: String
+	ownedGauges: [RuntimeGauge!]!
+}
+
+type RuntimeGauge {
+	name: String!
+	kind: RuntimeGaugeKind!
+	value: Int!
+}
+
+"""
+The kind of an owned resource gauge. Total process RSS is not a component
+gauge and is exposed separately through [`RuntimeMemory`].
+"""
+enum RuntimeGaugeKind {
+	BYTES
+	COUNT
+}
+
+"""
+Process-wide RSS and Linux PSS breakdown are measured independently from
+component-owned gauges. The breakdown never attributes pages to a component.
+"""
+type RuntimeMemory {
+	totalProcessRssBytes: Int
+	rssAvailable: Boolean!
+	rssUnavailableReason: String
+	anonymousPssBytes: Int
+	fileBackedPssBytes: Int
+	privateDirtyBytes: Int
+	memoryBreakdownAvailable: Boolean!
+	memoryBreakdownUnavailableReason: String
+}
+
+"Whether a component toggle takes effect immediately or at process restart."
+enum RuntimeTransitionMode {
+	HOT
+	RESTART
+}
+
+"Evidence-backed activity state for a compiled component."
+enum RuntimeUsageStatus {
+	USED
+	UNUSED
+	UNKNOWN
 }
 
 input SaveSmartListInput {
@@ -5422,6 +6457,20 @@ input SendMessageInput {
 	replyToMessageId: String
 }
 
+input SendRecommendationInput {
+	recipientUserId: ID!
+	targetKind: RecommendationTargetKind!
+	mediaId: ID
+	workId: ID
+	title: String!
+	authors: String!
+	message: String
+	sourceProvider: String
+	remoteId: String
+	externalKey: String
+	coverUrl: String
+}
+
 input SendToDevice {
 	id: Int!
 }
@@ -5434,11 +6483,9 @@ type Series {
 	id: String!
 	name: String!
 	description: String
-	createdAt: DateTime!
-	updatedAt: DateTime
-	deletedAt: DateTime
 	path: String!
 	status: FileStatus!
+	isOneshot: Boolean!
 	thumbnailMeta: ImageMetadata
 	thumbnailPath: String
 	libraryId: String
@@ -5449,11 +6496,15 @@ type Series {
 	sourceProvider: String
 	"The remote series identifier on the provider source"
 	remoteId: String
+	createdAt: DateTime!
+	updatedAt: DateTime
+	deletedAt: DateTime
 	metadata: SeriesMetadata
 	isFavorite: Boolean!
 	resolvedName: String!
 	resolvedDescription: String
 	library: Library!
+	oneshotBook: Media
 	"Get media in this series"
 	media(take: Int = null, skip: Int = null): [Media!]!
 	mediaCount: Int!
@@ -5483,6 +6534,7 @@ input SeriesFilterInput {
 	libraryId: FieldFilterString = null
 	readingStatus: ComputedFilterReadingStatus = null
 	libraryType: ComputedFilterLibraryType = null
+	isOneshot: Boolean = null
 	metadata: SeriesMetadataFilterInput = null
 	library: LibraryFilterInput = null
 	_and: [SeriesFilterInput!] = null
@@ -5655,11 +6707,9 @@ type SeriesModel {
 	id: String!
 	name: String!
 	description: String
-	createdAt: DateTime!
-	updatedAt: DateTime
-	deletedAt: DateTime
 	path: String!
 	status: FileStatus!
+	isOneshot: Boolean!
 	thumbnailMeta: ImageMetadata
 	thumbnailPath: String
 	libraryId: String
@@ -5670,22 +6720,26 @@ type SeriesModel {
 	sourceProvider: String
 	"The remote series identifier on the provider source"
 	remoteId: String
+	createdAt: DateTime!
+	updatedAt: DateTime
+	deletedAt: DateTime
 }
 
 enum SeriesModelOrdering {
 	ID
 	NAME
 	DESCRIPTION
-	CREATED_AT
-	UPDATED_AT
-	DELETED_AT
 	PATH
 	STATUS
+	IS_ONESHOT
 	THUMBNAIL_META
 	THUMBNAIL_PATH
 	LIBRARY_ID
 	SOURCE_PROVIDER
 	REMOTE_ID
+	CREATED_AT
+	UPDATED_AT
+	DELETED_AT
 }
 
 input SeriesOrderBy @oneOf {
@@ -5750,6 +6804,29 @@ input SetNotificationChannelSettingsInput {
 	previously stored (encrypted) value.
 	"""
 	settings: JSON!
+}
+
+enum ShareOverlayKind {
+	HIGHLIGHT
+	NOTE
+	BOOKMARK
+}
+
+enum ShareScope {
+	METADATA
+	RATING
+	REVIEW_TEXT
+	COMPLETION
+	PERCENTAGE
+	ANNOTATIONS
+}
+
+enum ShareState {
+	PENDING
+	ACTIVE
+	DECLINED
+	REVOKED
+	EXPIRED
 }
 
 """
@@ -5873,6 +6950,80 @@ input SmartListsInput {
 	all: Boolean
 	mine: Boolean
 	search: String
+}
+
+"""
+Server SMTP metadata. Passwords are intentionally absent; this object is
+only readable by server owners/ManageServer.
+"""
+type SmtpSettings {
+	configured: Boolean!
+	senderEmail: String
+	senderDisplayName: String
+	smtpHost: String
+	smtpPort: Int
+	tlsEnabled: Boolean
+	lastUsedAt: DateTime
+}
+
+type SocialOverlay {
+	id: ID!
+	targetKey: String!
+	kind: ShareOverlayKind!
+	locator: JSON
+	progression: Float
+	percentage: Int
+	excerpt: String
+	body: String
+	color: String
+	capturedAt: DateTime!
+	hidden: Boolean!
+}
+
+type SocialPreferences {
+	recommendationsOptOut: Boolean!
+	sharingOptOut: Boolean!
+	updatedAt: DateTime!
+}
+
+type SocialRecommendation {
+	id: ID!
+	direction: RecommendationDirection!
+	state: RecommendationState!
+	targetKind: RecommendationTargetKind!
+	title: String!
+	authors: String!
+	sourceProvider: String
+	remoteId: String
+	externalKey: String
+	coverUrl: String
+	message: String
+	handoffState: RecommendationHandoffState!
+	requestId: String
+	destinationShelfId: String
+	createdAt: DateTime!
+	expiresAt: DateTime
+	acceptedAt: DateTime
+}
+
+type SocialShareGrant {
+	id: ID!
+	targetKey: String!
+	title: String!
+	authors: String!
+	sourceProvider: String
+	remoteId: String
+	externalKey: String
+	coverUrl: String
+	scopes: [ShareScope!]!
+	state: ShareState!
+	expiresAt: DateTime
+	acceptedAt: DateTime
+}
+
+type SocialUser {
+	id: ID!
+	username: String!
 }
 
 type SpineItem {
@@ -6116,6 +7267,24 @@ enum SupportedImageFormat {
 	WEBP
 	JPEG
 	PNG
+}
+
+"One persisted, validated `SyncMapV1` artifact."
+type SyncMap {
+	id: ID!
+	ebookMediaId: ID!
+	audioMediaId: ID!
+	granularity: AlignGranularity!
+	generator: String!
+	generatorVersion: String!
+	algorithm: String
+	model: String
+	cueCount: Int!
+	coverage: Float
+	source: String!
+	jobId: ID
+	createdAt: String!
+	map: JSON!
 }
 
 enum SystemArrangement {

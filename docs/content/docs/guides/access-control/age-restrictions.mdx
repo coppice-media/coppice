@@ -11,9 +11,9 @@ Age restrictions are set on a per-user basis, and are used to determine whether 
 
 ### Supported age restrictions representations
 
-The way age restrictions can be represented vary, but Stump aims to support as many as possible and convert it to a common format to be used internally.
+The way age restrictions can be represented vary, but Coppice aims to support as many as possible and convert it to a common format to be used internally.
 
-Stump treats the age restriction as a **minimum age**. This means that if a user has an age restriction set to `13`,and a given book is rated at `17`, the user will not be able to access the book.
+Coppice treats the age restriction as a **minimum age**. This means that if a user has an age restriction set to `13`,and a given book is rated at `17`, the user will not be able to access the book.
 
 The following source formats are supported:
 
@@ -33,29 +33,29 @@ The following source formats are supported:
 - `{number}-{number}` - A range of numbers, maps to the first number in the range. E.g., `13-17` maps to `13`.
 - `{number}` - Just a number, maps to the number itself. E.g., `13` maps to `13`.
 
-### Where does Stump get the age restrictions from?
+### Where does Coppice get the age restrictions from?
 
-The age restriction is located directly within the metadata for a book itself, or on a book's series' metadata. Stump will attempt to parse this value from the metadata and store it internally as a number (see above).
+The age restriction is located directly within the metadata for a book itself, or on a book's series' metadata. Coppice will attempt to parse this value from the metadata and store it internally as a number (see above).
 
-This means that **without metadata, Stump cannot determine whether or not a book is age-allowed**. There are fallback options described below.
+This means that **without metadata, Coppice cannot determine whether or not a book is age-allowed**. There are fallback options described below.
 
 #### EPUB
 
-Stump will attempt to parse one of the following from an EPUB file's metadata:
+Coppice will attempt to parse one of the following from an EPUB file's metadata:
 
 - `typicalAgeRange`: Generally in the format of `[number]-[number]`
 - `contentRating`: Subject to the publisher, but generally similar to that you'd find on a movie or TV show
 
-### How does Stump determine whether or not a book is age-allowed?
+### How does Coppice determine whether or not a book is age-allowed?
 
-If a book or a book's series has an age restriction set, Stump will use that age restriction to determine whether or not a user can access it. The comparison done internally is `less than or equal to X number`, meaning that if a user has an age restriction set to `13` and a book is rated to `17`, the user will not be able to access the book. If a user has an age restriction set to `17` and a book is rated to `13`, the user will be able to access the book. In other words, **the age restriction set on the user must be greater than or equal to the age restriction number set on the book or series in order to have access**.
+If a book or a book's series has an age restriction set, Coppice will use that age restriction to determine whether or not a user can access it. The comparison done internally is `less than or equal to X number`, meaning that if a user has an age restriction set to `13` and a book is rated to `17`, the user will not be able to access the book. If a user has an age restriction set to `17` and a book is rated to `13`, the user will be able to access the book. In other words, **the age restriction set on the user is the maximum age rating they can access**.
 
-If a book doesn't have an age restriction set, but a user with an age restriction attempts to access it, Stump will use the following logic to determine whether or not the book is allowed:
+If a book doesn't have an age restriction set, but a user with an age restriction attempts to access it, Coppice will use the following logic to determine whether or not the book is allowed:
 
 - If the book is part of a series, and that series has an age restriction set, that age restriction will be used
 - If neither the book nor the series has an age restriction set, the book will be considered allowed **unless** a user has an age restriction configuration with the `restrict_on_unset` option set to `true`.
 
-Stump doesn't currently support editing metadata directly, but it is planned for the future! For now, if you need to set age restrictions on your books, you'll need to use a third-party tool to edit the metadata, then re-scan your library. The updated timestamp on the file should trigger an update of the metadata in Stump.
+Coppice doesn't currently support editing metadata directly, but it is planned for the future! For now, if you need to set age restrictions on your books, you'll need to use a third-party tool to edit the metadata, then re-scan your library. The updated timestamp on the file should trigger an update of the metadata in Coppice.
 
 ### Other considerations
 

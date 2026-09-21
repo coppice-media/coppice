@@ -14,7 +14,7 @@ pub use telegram_client::TelegramClient;
 
 use self::error::NotificationResult;
 
-pub const NOTIFIER_ID: &str = "Stump Notifier";
+pub const NOTIFIER_ID: &str = "Coppice Notifier";
 pub const FAVICON_URL: &str = "https://stumpapp.dev/favicon.png";
 
 #[async_trait::async_trait]

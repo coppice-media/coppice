@@ -18,6 +18,7 @@ use stump_provider::event::{ProviderEvent, ProviderEventSink};
 use tokio::sync::broadcast::Sender;
 
 use crate::{
+	component_runtime::COMPONENT_PROVIDERS,
 	config::StumpConfig,
 	event::{
 		CoreEvent, ProviderCatalogRefreshed, ProviderSeriesMaterialized,
@@ -93,12 +94,11 @@ pub fn is_enabled(config: &StumpConfig) -> bool {
 /// Instantiate the provider host from the context's database and config,
 /// install it as the `provider://` media resolver, and start the GC
 /// scheduler. Returns `None` when providers are disabled
-/// (`STUMP_ENABLE_PROVIDERS=false`).
 pub async fn init(
 	ctx: &Ctx,
 ) -> crate::error::CoreResult<Option<Arc<stump_provider::ProviderHost>>> {
-	if !is_enabled(&ctx.config) {
-		tracing::info!("Provider host disabled (providers.enable_providers=false)");
+	if !ctx.component_enabled(COMPONENT_PROVIDERS) {
+		tracing::info!("Provider host disabled by runtime component state");
 		return Ok(None);
 	}
 	let factories = default_factories();
@@ -182,7 +182,7 @@ fn spawn_gc_scheduler(ctx: Arc<Ctx>) {
 	tokio::spawn(async move {
 		tokio::time::sleep(GC_INITIAL_DELAY).await;
 		loop {
-			if is_enabled(&ctx.config) {
+			if ctx.component_enabled(COMPONENT_PROVIDERS) {
 				if let Err(error) = ctx
 					.enqueue(crate::job::stump_job::StumpJob::ProviderGc)
 					.await
@@ -206,7 +206,7 @@ fn spawn_health_scheduler(ctx: Arc<Ctx>) {
 	tokio::spawn(async move {
 		tokio::time::sleep(HEALTH_INITIAL_DELAY).await;
 		loop {
-			if is_enabled(&ctx.config) {
+			if ctx.component_enabled(COMPONENT_PROVIDERS) {
 				if let Err(error) = ctx
 					.enqueue(crate::job::stump_job::StumpJob::ProviderSourceHealth)
 					.await

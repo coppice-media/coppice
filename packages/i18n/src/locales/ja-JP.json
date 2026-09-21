@@ -7,7 +7,7 @@
 	},
 	"authScene": {
 		"claimHeading": "サーバーを初期化",
-		"claimText": "このStumpサーバーは初期化されていません。以下のフォームを使用してアカウントを作成してください。作成するとすべてのサーバー機能に完全にアクセスできるようになります。",
+		"claimText": "このCoppiceサーバーは初期化されていません。以下のフォームを使用してアカウントを作成してください。作成するとすべてのサーバー機能に完全にアクセスできるようになります。",
 		"form": {
 			"validation": {
 				"missingUsername": "ユーザ名が必要です",
@@ -315,7 +315,7 @@
 			"convertOptions": {
 				"section": {
 					"heading": "ファイルの変換",
-					"description": "Stumpは特定のファイル形式をより互換性のある形式に変換することができます"
+					"description": "Coppiceは特定のファイル形式をより互換性のある形式に変換することができます"
 				},
 				"rarToZip": {
 					"label": "RARをZIPに変換",
@@ -359,7 +359,7 @@
 				},
 				"options": {
 					"label": "ライブラリのパターン",
-					"description": "Stumpがライブラリをどのように整理するかを決定する設定",
+					"description": "Coppiceがライブラリをどのように整理するかを決定する設定",
 					"collectionPriority": {
 						"label": "コレクションの優先順位",
 						"description": "ライブラリルートの最上位にある各フォルダは単一のシリーズです"
@@ -396,12 +396,12 @@
 				{
 					"label": "スキャン中",
 					"heading": "Scanning",
-					"description": "Stumpがこのライブラリをスキャンする方法に関する設定"
+					"description": "Coppiceがこのライブラリをスキャンする方法に関する設定"
 				},
 				{
 					"label": "サムネイル",
 					"heading": "サムネイル",
-					"description": "Stumpがこのライブラリのサムネイルを生成するかどうか、また生成方法のオプション"
+					"description": "Coppiceがこのライブラリのサムネイルを生成するかどうか、また生成方法のオプション"
 				},
 				{
 					"label": "レビュー",
@@ -494,7 +494,7 @@
 			"description": "このライブラリの書籍に使用するデフォルトのリーダー設定。どの書籍でもこれらの設定を上書きできます"
 		},
 		"options/scanning": {
-			"description": "Stumpがこのライブラリをスキャンする方法に関する設定"
+			"description": "Coppiceがこのライブラリをスキャンする方法に関する設定"
 		},
 		"options/thumbnails": {
 			"title": "サムネイル",
@@ -961,7 +961,7 @@
 					"description": "この表示セッションのフィルターを変更する",
 					"rawData": {
 						"heading": "生のフィルターデータ",
-						"description": "Stumpがフィルターを処理する方法"
+						"description": "Coppiceがフィルターを処理する方法"
 					},
 					"buttons": {
 						"save": "保存",
@@ -1051,8 +1051,8 @@
 					},
 					"heading": "言語とロケール",
 					"subtitle": [
-						"Stumpは複数の言語とロケールをサポートしています。以下の設定を行ってください。品質向上のためにご検討ください",
-						"Stumpの翻訳",
+						"Coppiceは複数の言語とロケールをサポートしています。以下の設定を行ってください。品質向上のためにご検討ください",
+						"Coppiceの翻訳",
 						"できれば！"
 					]
 				}
@@ -1105,7 +1105,7 @@
 		"app/apiKeys": {
 			"helmet": "APIキー",
 			"title": "APIキー",
-			"description": "生成されたStump APIキーを管理します",
+			"description": "生成されたCoppice APIキーを管理します",
 			"shared": {
 				"fields": {
 					"name": "名前",
@@ -1181,11 +1181,11 @@
 		"app/desktop": {
 			"helmet": "デスクトップの設定",
 			"title": "デスクトップの設定",
-			"description": "Stumpデスクトップアプリケーションに関連する設定",
+			"description": "Coppiceデスクトップアプリケーションに関連する設定",
 			"sections": {
 				"configuredServers": {
 					"label": "サーバーの設定",
-					"description": "接続できるStumpサーバーのリスト",
+					"description": "接続できるCoppiceサーバーのリスト",
 					"getStarted": "開始するサーバーを追加します",
 					"resetTokens": {
 						"label": "Clear authentication",

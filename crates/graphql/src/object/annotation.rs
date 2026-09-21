@@ -3,7 +3,9 @@ use std::collections::{BTreeSet, HashMap};
 use async_graphql::{Enum, Result, SimpleObject, ID};
 use chrono::{DateTime, Utc};
 use models::{
-	entity::{bookmark, media, media_annotation, media_metadata, series, user::AuthUser},
+	entity::{
+		bookmark, device, media, media_annotation, media_metadata, series, user::AuthUser,
+	},
 	shared::{
 		enums::{DeviceCredentialKind, DeviceKind},
 		readium::ReadiumLocator,
@@ -11,13 +13,35 @@ use models::{
 };
 use num_traits::cast::ToPrimitive;
 use sea_orm::{prelude::*, DatabaseConnection, FromQueryResult, QuerySelect};
-use stump_annotation_sync::SinkDescriptor;
+use stump_annotation_sync::{SinkDescriptor, SinkPresetDescriptor};
 use stump_core::annotation_sync::SinkStatusRow;
 
 use crate::{
 	input::annotation::AnnotationFilterInput, object::ingest::IngestSettingDefinition,
 	pagination::OffsetPagination, utils::db_statement,
 };
+
+/// A built-in safe layout choice for an annotation sink.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct AnnotationSinkPreset {
+	pub id: String,
+	pub name: String,
+	pub description: String,
+	pub path_template: String,
+	pub body_template: Option<String>,
+}
+
+impl From<SinkPresetDescriptor> for AnnotationSinkPreset {
+	fn from(preset: SinkPresetDescriptor) -> Self {
+		Self {
+			id: preset.id.to_owned(),
+			name: preset.name.to_owned(),
+			description: preset.description.to_owned(),
+			path_template: preset.path_template.to_owned(),
+			body_template: preset.body_template.map(str::to_owned),
+		}
+	}
+}
 
 /// A compiled-in annotation export sink and its setting schema.
 #[derive(Debug, Clone, SimpleObject)]
@@ -26,6 +50,7 @@ pub struct AnnotationSink {
 	pub name: String,
 	pub description: String,
 	pub settings: Vec<IngestSettingDefinition>,
+	pub presets: Vec<AnnotationSinkPreset>,
 }
 
 impl From<SinkDescriptor> for AnnotationSink {
@@ -35,6 +60,7 @@ impl From<SinkDescriptor> for AnnotationSink {
 			name: descriptor.name.to_owned(),
 			description: descriptor.description.to_owned(),
 			settings: descriptor.settings.into_iter().map(Into::into).collect(),
+			presets: descriptor.presets.into_iter().map(Into::into).collect(),
 		}
 	}
 }
@@ -491,6 +517,14 @@ impl AnnotationPage {
 			});
 		}
 
+		if let Some(source_device_id) = filter.source_device_id.as_ref() {
+			entries.retain(|entry| {
+				entry
+					.source_device_id
+					.as_ref()
+					.is_some_and(|id| id.as_str() == source_device_id.as_str())
+			});
+		}
 		if let Some(sources) = filter.sources() {
 			entries.retain(|entry| sources.contains(&entry.source));
 		}
@@ -639,14 +673,16 @@ async fn load_liseur_rows(
 		.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-/// The registered device behind every liseur token of `user_id`, keyed by the
-/// liseur device id that stamps a pushed annotation. A login-session token is
-/// bound to no device and simply does not appear.
+/// The durable registered device behind every liseur annotation. Historical
+/// rows keep resolving after a token/credential is revoked: the token mapping
+/// intentionally has no `revoked_at` predicate, and direct `devices.id`
+/// entries are also accepted for newer protocol rows.
 async fn load_liseur_devices(
 	conn: &DatabaseConnection,
 	user_id: &str,
 ) -> Result<HashMap<String, SourceDevice>> {
-	Ok(conn
+	let mut devices = HashMap::new();
+	let rows = conn
 		.query_all(db_statement(
 			conn,
 			"SELECT t.device_id AS liseur_device_id, d.id AS device_id,
@@ -661,21 +697,34 @@ async fn load_liseur_devices(
 				DeviceCredentialKind::LiseurToken.to_string().into(),
 			],
 		))
+		.await?;
+	for row in rows {
+		let row = LiseurDeviceRow::from_query_result(&row, "")?;
+		devices.insert(
+			row.liseur_device_id,
+			SourceDevice {
+				id: row.device_id,
+				name: row.name,
+				kind: row.kind,
+			},
+		);
+	}
+
+	// Newer protocol storage stamps the durable registry id directly. Keep
+	// this map independent of active credentials so revoked-device history
+	// remains linkable and filterable.
+	for row in device::Entity::find()
+		.filter(device::Column::UserId.eq(user_id))
+		.all(conn)
 		.await?
-		.iter()
-		.map(|row| {
-			LiseurDeviceRow::from_query_result(row, "").map(|row| {
-				(
-					row.liseur_device_id,
-					SourceDevice {
-						id: row.device_id,
-						name: row.name,
-						kind: row.kind,
-					},
-				)
-			})
-		})
-		.collect::<std::result::Result<HashMap<_, _>, _>>()?)
+	{
+		devices.entry(row.id.clone()).or_insert(SourceDevice {
+			id: row.id,
+			name: row.name,
+			kind: row.kind,
+		});
+	}
+	Ok(devices)
 }
 
 #[cfg(test)]
@@ -1066,6 +1115,41 @@ mod tests {
 		)
 		.await;
 		assert_eq!(ids(&from_kobo), ["l-kobo"]);
+		let by_device = fetch(
+			&conn,
+			&user,
+			AnnotationFilterInput {
+				source_device_id: Some(ID("dev-kobo".to_owned())),
+				..Default::default()
+			},
+		)
+		.await;
+		assert_eq!(ids(&by_device), ["l-kobo"]);
+		assert_eq!(
+			by_device.items[0]
+				.source_device_id
+				.as_ref()
+				.map(|id| id.as_str()),
+			Some("dev-kobo")
+		);
+
+		// Revoking the liseur token does not erase historical device linkage.
+		exec(
+			&conn,
+			"UPDATE liseur_sync_tokens SET revoked_at = $1 WHERE id = 'tok-1'",
+			[ts(100).to_rfc3339().into()],
+		)
+		.await;
+		let after_revoke = fetch(
+			&conn,
+			&user,
+			AnnotationFilterInput {
+				source_device_id: Some(ID("dev-kobo".to_owned())),
+				..Default::default()
+			},
+		)
+		.await;
+		assert_eq!(ids(&after_revoke), ["l-kobo"]);
 
 		let one_book = fetch(
 			&conn,

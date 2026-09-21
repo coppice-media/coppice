@@ -81,16 +81,19 @@ impl CustomEmojiMutation {
 	/// Delete a custom emoji
 	#[graphql(guard = "PermissionGuard::new(&[UserPermission::UploadFile])")]
 	async fn delete_custom_emoji(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
-		let _ = ctx.data::<stump_auth::AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
 		let emoji_id = id.as_ref().parse::<i32>().map_err(|_| "Invalid emoji ID")?;
-
 		let emoji = custom_emoji::Entity::find_by_id(emoji_id)
 			.one(conn)
 			.await?
 			.ok_or("Custom emoji not found")?;
+		if emoji.created_by_id != user.id && !user.is_server_owner {
+			return Err("Only the uploader or server owner can delete this emoji".into());
+		}
 
 		let config = core.config.as_ref();
 		let emoji_path = config
@@ -102,10 +105,8 @@ impl CustomEmojiMutation {
 		}
 
 		emoji.delete(conn).await?;
-
 		Ok(true)
 	}
-
 	/// Rename a custom emoji
 	#[graphql(guard = "PermissionGuard::new(&[UserPermission::UploadFile])")]
 	async fn update_custom_emoji(
@@ -114,15 +115,18 @@ impl CustomEmojiMutation {
 		id: ID,
 		input: UpdateCustomEmojiInput,
 	) -> Result<CustomEmoji> {
-		let _ = ctx.data::<stump_auth::AuthContext>()?;
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
 		let emoji_id = id.as_ref().parse::<i32>().map_err(|_| "Invalid emoji ID")?;
-
 		let emoji = custom_emoji::Entity::find_by_id(emoji_id)
 			.one(conn)
 			.await?
 			.ok_or("Custom emoji not found")?;
+		if emoji.created_by_id != user.id && !user.is_server_owner {
+			return Err("Only the uploader or server owner can rename this emoji".into());
+		}
 
 		let conflict = custom_emoji::Entity::find()
 			.filter(custom_emoji::Column::Name.eq(&input.name))
@@ -140,7 +144,6 @@ impl CustomEmojiMutation {
 		active_model.name = Set(input.name);
 
 		let updated = active_model.update(conn).await?;
-
 		Ok(updated.into())
 	}
 }

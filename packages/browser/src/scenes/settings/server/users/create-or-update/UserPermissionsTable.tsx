@@ -5,11 +5,12 @@ import { createColumnHelper, getCoreRowModel, useReactTable } from '@tanstack/re
 import { useCallback, useEffect, useMemo } from 'react'
 import { useFormContext, useWatch } from 'react-hook-form'
 
-import paths from '@/paths'
+import { usePaths } from '@/paths'
 
 import { CreateOrUpdateUserSchema } from './schema'
 
 export default function UserPermissionsTable() {
+	const paths = usePaths()
 	const { t } = useLocaleContext()
 
 	const form = useFormContext<CreateOrUpdateUserSchema>()
@@ -302,6 +303,7 @@ export const associatedPermissions: Record<UserPermission, UserPermission[]> = {
 	[UserPermission.AccessApiKeys]: [],
 	[UserPermission.AccessKoreaderSync]: [],
 	[UserPermission.AccessKoboSync]: [],
+	[UserPermission.AccessWorker]: [UserPermission.AccessApiKeys, UserPermission.DownloadFile],
 	[UserPermission.AccessSmartList]: [],
 	[UserPermission.DownloadFile]: [],
 	[UserPermission.FileExplorer]: [],

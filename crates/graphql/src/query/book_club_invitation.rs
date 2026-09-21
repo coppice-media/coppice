@@ -17,7 +17,7 @@ impl BookClubInvitationQuery {
 			ctx.data::<stump_auth::AuthContext>()?;
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
-		let invitations = book_club_invitation::Entity::find_for_user(user)
+		let invitations = book_club_invitation::Entity::find_pending_for_user(user)
 			.all(conn)
 			.await?;
 

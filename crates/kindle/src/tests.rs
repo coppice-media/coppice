@@ -125,7 +125,7 @@ impl KindleMailer for StubMailer {
 			.build_message(
 				subject,
 				recipient,
-				"You have a new attachment from Stump!".to_string(),
+				"You have a new attachment from Coppice!".to_string(),
 				vec![payload],
 			)
 			.map_err(|error| KindleError::Refused(error.to_string()))?;
@@ -400,7 +400,7 @@ async fn records_the_delivery_and_the_device_sync_summary() {
 	assert_eq!(rows.len(), 1);
 	assert_eq!(rows[0].id, delivery.row.id);
 	assert_eq!(rows[0].media_id, fixture.book.id);
-	assert_eq!(rows[0].device_id, fixture.device.id);
+	assert_eq!(rows[0].device_id, Some(fixture.device.id.clone()));
 	assert_eq!(rows[0].recipient, "al@kindle.com");
 	assert_eq!(rows[0].format, "azw3");
 	assert_eq!(rows[0].error, None);
@@ -674,10 +674,10 @@ async fn deliveries_are_listed_newest_first_per_device() {
 	assert!(other_device.is_empty());
 }
 
-/// `Convert` is Amazon's magic subject: Stump never asks the service to
+/// `Convert` is Amazon's magic subject: Coppice never asks the service to
 /// reflow a PDF on the operator's behalf, so a book called that is qualified.
 #[test]
 fn the_subject_never_reads_as_the_convert_keyword() {
 	assert_eq!(subject("Dune"), "Dune");
-	assert_eq!(subject(" convert "), " convert  (sent by Stump)");
+	assert_eq!(subject(" convert "), " convert  (sent by Coppice)");
 }

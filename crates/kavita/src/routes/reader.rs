@@ -12,7 +12,7 @@ use axum::{
 use models::txn::begin_write;
 use models::{
 	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
-	entity::{bookmark, media_analysis, reading_session, user::AuthUser},
+	entity::{bookmark, media_analysis, reading_head, reading_session, user::AuthUser},
 	services::{reading_progress::upsert_reading_session, reading_state},
 };
 use sea_orm::{prelude::*, QueryOrder};
@@ -282,20 +282,35 @@ async fn continue_point(
 fn progress_dto(
 	input: &SeriesInput,
 	media: &MediaInput,
+	head: &reading_head::Model,
 	scroll_id: Option<String>,
 ) -> ProgressDto {
+	let pages = media.pages().max(0);
+	let page_num = if head.completed {
+		pages
+	} else {
+		head.page
+			.map(|page| page.saturating_sub(1).clamp(0, pages))
+			.unwrap_or_else(|| {
+				(f64::from(pages) * head.progression)
+					.round()
+					.clamp(0.0, f64::from(pages)) as i32
+			})
+	};
 	ProgressDto {
 		volume_id: media.id,
 		chapter_id: media.id,
-		page_num: media.pages_read(),
+		page_num,
 		series_id: input.id,
 		library_id: input.library_id,
 		book_scroll_id: scroll_id,
-		last_modified_utc: KavitaDateTime::from(last_progress_at(media.session.as_ref())),
+		last_modified_utc: KavitaDateTime::from(head.updated_at.to_utc()),
 	}
 }
 
-/// Always `200`; an unknown chapter or no progress yields the empty record.
+/// Always `200`; an unknown chapter or no canonical head yields the empty
+/// record. Position and timestamp are projected from `reading_heads`, while
+/// the Kavita scroll id remains in its protocol side table.
 async fn get_progress(
 	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
 	Extension(auth): Extension<AuthContext>,
@@ -307,12 +322,13 @@ async fn get_progress(
 		return Ok(Json(ProgressDto::empty(chapter_id)));
 	};
 	let media = &input.media[index];
-	if media.session.is_none() {
+	let Some(head) = reading_state::head(ctx.conn(), &user.id, &media.media.id).await?
+	else {
 		return Ok(Json(ProgressDto::empty(chapter_id)));
-	}
+	};
 	let scroll_id =
 		KavitaProgress::scroll_id(ctx.conn(), &user.id, &media.media.id).await?;
-	Ok(Json(progress_dto(&input, media, scroll_id)))
+	Ok(Json(progress_dto(&input, media, &head, scroll_id)))
 }
 
 /// `ReaderService.SaveReadingProgress`.
@@ -322,18 +338,27 @@ async fn save_progress(
 	Json(progress): Json<ProgressDto>,
 ) -> APIResult<StatusCode> {
 	let user = auth.user();
-	save_progress_for(ctx.as_ref(), &user, &progress).await
+	save_progress_for_with_auth(ctx.as_ref(), Some(&auth), &user, &progress).await
 }
 
-/// The write behind `POST /api/Reader/progress`: the chapter's media gets the
-/// user's reading session (shared with every other protocol), the Kavita
-/// `bookScrollId` and a unified reading-head update.
+/// Tests that already have only an [`AuthUser`] retain the same write
+/// behavior without a device sighting context.
+#[cfg(test)]
 pub(crate) async fn save_progress_for(
 	ctx: &dyn KavitaBackend,
 	user: &AuthUser,
 	progress: &ProgressDto,
 ) -> APIResult<StatusCode> {
-	let (input, index) = find_media(ctx, user, progress.chapter_id)
+	save_progress_for_with_auth(ctx, None, user, progress).await
+}
+
+async fn save_progress_for_with_auth(
+	ctx: &dyn KavitaBackend,
+	auth: Option<&AuthContext>,
+	user: &AuthUser,
+	progress: &ProgressDto,
+) -> APIResult<StatusCode> {
+	let (input, index) = find_media(ctx, &user, progress.chapter_id)
 		.await?
 		.ok_or_else(|| APIError::BadRequest("Could not save progress".to_owned()))?;
 	let media = &input.media[index];
@@ -356,16 +381,9 @@ pub(crate) async fn save_progress_for(
 	{
 		return Ok(StatusCode::OK);
 	}
+	let completed = pages > 0 && page_num >= pages;
 	let txn = begin_write(ctx.conn()).await?;
-	upsert_reading_session(
-		&txn,
-		user,
-		&media.media.id,
-		progression_for_page(page_num, pages),
-	)
-	.await?;
-	KavitaProgress::set_scroll_id(&txn, &user.id, &media.media.id, scroll_id).await?;
-	reading_state::apply(
+	let applied = reading_state::apply(
 		&txn,
 		&user.id,
 		Publication::from(&media.media),
@@ -379,15 +397,42 @@ pub(crate) async fn save_progress_for(
 				Position::None
 			},
 			progression: None,
-			completed: (pages > 0 && page_num >= pages).then_some(true),
+			completed: completed.then_some(true),
 			raw_payload: serde_json::to_value(progress)?,
 		},
 	)
 	.await?;
+	if applied.accepted() {
+		KavitaProgress::set_scroll_id(&txn, &user.id, &media.media.id, scroll_id).await?;
+		upsert_reading_session(
+			&txn,
+			&user,
+			&media.media.id,
+			progression_for_page(page_num, pages),
+		)
+		.await?;
+	}
 	txn.commit().await?;
-	// `ReaderService.SaveReadingProgress`: a read event puts the series back
-	// on deck.
-	clear_on_deck_removal(ctx, &user.id, &input.key()).await?;
+	if applied.accepted() {
+		if let Some(auth) = auth {
+			ctx.record_sync(
+				auth,
+				serde_json::json!({
+					"protocol": "kavita",
+					"profile": "kavita",
+					"media_id": media.media.id.clone(),
+					"page": page_num,
+					"completed": completed,
+				}),
+			)
+			.await;
+		}
+	}
+	if applied.accepted() {
+		// `ReaderService.SaveReadingProgress`: a read event puts the series back
+		// on deck.
+		clear_on_deck_removal(ctx, &user.id, &input.key()).await?;
+	}
 	Ok(StatusCode::OK)
 }
 

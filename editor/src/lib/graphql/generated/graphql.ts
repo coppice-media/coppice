@@ -1,284 +1,586 @@
 /* eslint-disable */
 /** Internal type. DO NOT USE DIRECTLY. */
-type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
+type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] }
 /** Internal type. DO NOT USE DIRECTLY. */
-export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
-import type { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-node/core';
+export type Incremental<T> =
+	| T
+	| { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never }
+import type { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-node/core'
 /**
  * Exactly one of `drop_item_id` (staged item) or `media_id` (library-wide
  * rework target) must be provided.
  */
 export type ApplyIngestMetadataInput = {
-  dropItemId?: string | number | null | undefined;
-  mediaId?: string | number | null | undefined;
-  selections: Array<IngestMetadataFieldSelectionInput>;
-  strategy?: MergeStrategy | null | undefined;
-};
+	dropItemId?: string | number | null | undefined
+	mediaId?: string | number | null | undefined
+	selections: Array<IngestMetadataFieldSelectionInput>
+	strategy?: MergeStrategy | null | undefined
+}
+
+/**
+ * How an audiobook's chapter marks were obtained.
+ *
+ * This is provenance, never a preference: a list synthesized one-chapter-
+ * per-file ([`Self::PerTrack`]) must not be presented as if the publisher
+ * shipped it, and a client that wants to hide synthetic chapters can only do
+ * that if the mechanism survives the probe. The variants name the concrete
+ * container mechanism rather than a quality tier so a new container format
+ * adds a variant instead of silently widening an existing one.
+ */
+export type AudioChapterSource =
+	/** ID3v2 `CHAP`/`CTOC` frames. */
+	| 'ID_3_CHAP'
+	/**
+	 * A QuickTime text chapter track, linked from the audio track by a
+	 * `tref`/`chap` reference.
+	 */
+	| 'MP_4_CHAPTER_TRACK'
+	/** The Nero `chpl` atom in `moov/udta` of an MP4/M4B container. */
+	| 'MP_4_CHPL'
+	/** The publication has no chapters. */
+	| 'NONE'
+	/**
+	 * Synthesized: one chapter per file of a folder audiobook. The publisher
+	 * shipped no chapter marks at all.
+	 */
+	| 'PER_TRACK'
+	/** `CHAPTERxxx`/`CHAPTERxxxNAME` Vorbis comments (Ogg, Opus, FLAC). */
+	| 'VORBIS_COMMENT'
 
 export type BulkApplyIngestMetadataInput = {
-  dropItemIds: Array<string | number>;
-  selections: Array<IngestMetadataFieldSelectionInput>;
-  strategy?: MergeStrategy | null | undefined;
-};
+	dropItemIds: Array<string | number>
+	selections: Array<IngestMetadataFieldSelectionInput>
+	strategy?: MergeStrategy | null | undefined
+}
 
 export type ComputedFilterLibraryType =
-  {   is: LibraryType; isAnyOf?: never; isNoneOf?: never; isNot?: never; }
-  |  { is?: never;   isAnyOf: Array<LibraryType>; isNoneOf?: never; isNot?: never; }
-  |  { is?: never; isAnyOf?: never;   isNoneOf: Array<LibraryType>; isNot?: never; }
-  |  { is?: never; isAnyOf?: never; isNoneOf?: never;   isNot: LibraryType; };
+	| { is: LibraryType; isAnyOf?: never; isNoneOf?: never; isNot?: never }
+	| { is?: never; isAnyOf: Array<LibraryType>; isNoneOf?: never; isNot?: never }
+	| { is?: never; isAnyOf?: never; isNoneOf: Array<LibraryType>; isNot?: never }
+	| { is?: never; isAnyOf?: never; isNoneOf?: never; isNot: LibraryType }
 
 export type ComputedFilterReadingStatus =
-  {   is: ReadingStatus; isAnyOf?: never; isNoneOf?: never; isNot?: never; }
-  |  { is?: never;   isAnyOf: Array<ReadingStatus>; isNoneOf?: never; isNot?: never; }
-  |  { is?: never; isAnyOf?: never;   isNoneOf: Array<ReadingStatus>; isNot?: never; }
-  |  { is?: never; isAnyOf?: never; isNoneOf?: never;   isNot: ReadingStatus; };
+	| { is: ReadingStatus; isAnyOf?: never; isNoneOf?: never; isNot?: never }
+	| { is?: never; isAnyOf: Array<ReadingStatus>; isNoneOf?: never; isNot?: never }
+	| { is?: never; isAnyOf?: never; isNoneOf: Array<ReadingStatus>; isNot?: never }
+	| { is?: never; isAnyOf?: never; isNoneOf?: never; isNot: ReadingStatus }
 
 /** Input object for creating a metadata provider configuration */
 export type CreateMetadataProviderConfigInput = {
-  /** The API token for authenticating with the provider */
-  apiToken: string;
-  /**
-   * Optional expiration date for the API key. This is exclusively a QOL thing,
-   * since the creds don't live within the management domain of Stump
-   */
-  apiTokenExpiresAt?: string | null | undefined;
-  /** Auto-apply configuration */
-  autoApplyConfig?: unknown;
-  /** Whether the provider is enabled */
-  enabled?: boolean | null | undefined;
-  /** The provider type */
-  providerType: MetadataProvider;
-};
+	/** The API token for authenticating with the provider */
+	apiToken: string
+	/**
+	 * Optional expiration date for the API key. This is exclusively a QOL thing,
+	 * since the creds don't live within the management domain of Stump
+	 */
+	apiTokenExpiresAt?: string | null | undefined
+	/** Auto-apply configuration */
+	autoApplyConfig?: unknown
+	/** Whether the provider is enabled */
+	enabled?: boolean | null | undefined
+	/** The provider type */
+	providerType: MetadataProvider
+}
 
 /** A simple cursor-based pagination input object */
 export type CursorPagination = {
-  after?: string | null | undefined;
-  limit?: number;
-};
+	after?: string | null | undefined
+	limit?: number
+}
 
 /** A librarian decision about a recurring page hash inside a library */
 export type DuplicatePageAction =
-  /** The page was reviewed and stays visible; stop reporting it */
-  | 'KEEP'
-  /** Hide pages with this hash from every page-serving route */
-  | 'SKIP';
+	/** The page was reviewed and stays visible; stop reporting it */
+	| 'KEEP'
+	/** Hide pages with this hash from every page-serving route */
+	| 'SKIP'
 
 export type EnqueueIngestAnalysisInput = {
-  dropItemIds: Array<string | number>;
-  force?: boolean;
-};
+	dropItemIds: Array<string | number>
+	force?: boolean
+}
 
 export type FieldFilterFileStatus =
-  {   anyOf: Array<FileStatus>; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never;   contains: FileStatus; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never;   endsWith: FileStatus; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never;   eq: FileStatus; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never;   excludes: FileStatus; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never;   like: FileStatus; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never;   likeAnyOf: Array<FileStatus>; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never;   likeNoneOf: Array<FileStatus>; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never;   neq: FileStatus; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never;   noneOf: Array<FileStatus>; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never;   startsWith: FileStatus; };
+	| {
+			anyOf: Array<FileStatus>
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains: FileStatus
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith: FileStatus
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq: FileStatus
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes: FileStatus
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like: FileStatus
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf: Array<FileStatus>
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf: Array<FileStatus>
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq: FileStatus
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf: Array<FileStatus>
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith: FileStatus
+	  }
 
 export type FieldFilterString =
-  {   anyOf: Array<string>; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never;   contains: string; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never;   endsWith: string; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never;   eq: string; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never;   excludes: string; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never;   like: string; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never;   likeAnyOf: Array<string>; likeNoneOf?: never; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never;   likeNoneOf: Array<string>; neq?: never; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never;   neq: string; noneOf?: never; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never;   noneOf: Array<string>; startsWith?: never; }
-  |  { anyOf?: never; contains?: never; endsWith?: never; eq?: never; excludes?: never; like?: never; likeAnyOf?: never; likeNoneOf?: never; neq?: never; noneOf?: never;   startsWith: string; };
+	| {
+			anyOf: Array<string>
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains: string
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith: string
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq: string
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes: string
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like: string
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf: Array<string>
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf: Array<string>
+			neq?: never
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq: string
+			noneOf?: never
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf: Array<string>
+			startsWith?: never
+	  }
+	| {
+			anyOf?: never
+			contains?: never
+			endsWith?: never
+			eq?: never
+			excludes?: never
+			like?: never
+			likeAnyOf?: never
+			likeNoneOf?: never
+			neq?: never
+			noneOf?: never
+			startsWith: string
+	  }
 
 /** The different statuses a file reference can have */
-export type FileStatus =
-  | 'ERROR'
-  | 'MISSING'
-  | 'READY'
-  | 'UNKNOWN'
-  | 'UNSUPPORTED';
+export type FileStatus = 'ERROR' | 'MISSING' | 'READY' | 'UNKNOWN' | 'UNSUPPORTED'
 
 export type IngestAnalysisPhase =
-  | 'ANALYSIS'
-  | 'COMMIT'
-  | 'DONE'
-  | 'IDENTIFY'
-  | 'LOOKUP'
-  | 'QUALITY'
-  | 'REVIEW'
-  | 'STAGING';
+	| 'ANALYSIS'
+	| 'COMMIT'
+	| 'DONE'
+	| 'IDENTIFY'
+	| 'LOOKUP'
+	| 'QUALITY'
+	| 'REVIEW'
+	| 'STAGING'
 
-export type IngestCandidateStatus =
-  | 'ACCEPTED'
-  | 'PENDING'
-  | 'REJECTED';
+export type IngestCandidateStatus = 'ACCEPTED' | 'PENDING' | 'REJECTED'
 
 export type IngestDropItemStatus =
-  | 'ANALYZING'
-  | 'AWAITING_REVIEW'
-  | 'COMMITTED'
-  | 'FAILED'
-  | 'READY'
-  | 'RECEIVED'
-  | 'REJECTED'
-  | 'STAGED';
+	| 'ANALYZING'
+	| 'AWAITING_REVIEW'
+	| 'COMMITTED'
+	| 'FAILED'
+	| 'READY'
+	| 'RECEIVED'
+	| 'REJECTED'
+	| 'STAGED'
 
 /** How far along the edition pairing of two items of one drop group is. */
 export type IngestEditionPairState =
-  /** The user accepted it, or the liseur lane already asserted the work. */
-  | 'CONFIRMED'
-  /**
-   * The two kinds do not pair: two ebooks are a format duplicate, and two
-   * audiobooks are two books.
-   */
-  | 'NOT_A_PAIR'
-  /**
-   * A pair once both sides are in the library. A suggestion needs two
-   * media rows, and a staged item has none.
-   */
-  | 'PENDING_COMMIT'
-  /**
-   * The user declined it. Kept, because pairing is recomputed on every
-   * book-page query.
-   */
-  | 'REJECTED'
-  /** The suggestion exists and is waiting for the user. */
-  | 'SUGGESTED';
+	/** The user accepted it, or the liseur lane already asserted the work. */
+	| 'CONFIRMED'
+	/**
+	 * The two kinds do not pair: two ebooks are a format duplicate, and two
+	 * audiobooks are two books.
+	 */
+	| 'NOT_A_PAIR'
+	/**
+	 * A pair once both sides are in the library. A suggestion needs two
+	 * media rows, and a staged item has none.
+	 */
+	| 'PENDING_COMMIT'
+	/**
+	 * The user declined it. Kept, because pairing is recomputed on every
+	 * book-page query.
+	 */
+	| 'REJECTED'
+	/** The suggestion exists and is waiting for the user. */
+	| 'SUGGESTED'
 
 export type IngestMediaKind =
-  /** An audiobook: one container, or one folder of parts. */
-  | 'AUDIO'
-  | 'COMIC_ARCHIVE'
-  | 'COMIC_RAR_ARCHIVE'
-  | 'EPUB'
-  | 'PDF'
-  | 'UNKNOWN';
+	/** An audiobook: one container, or one folder of parts. */
+	'AUDIO' | 'COMIC_ARCHIVE' | 'COMIC_RAR_ARCHIVE' | 'EPUB' | 'PDF' | 'UNKNOWN'
 
-export type IngestMetadataFieldMode =
-  | 'CANDIDATE'
-  | 'CLEAR'
-  | 'KEEP_EXISTING'
-  | 'MANUAL';
+export type IngestMetadataFieldMode = 'CANDIDATE' | 'CLEAR' | 'KEEP_EXISTING' | 'MANUAL'
 
 export type IngestMetadataFieldSelectionInput = {
-  candidateId?: string | number | null | undefined;
-  field: MetadataField;
-  mode: IngestMetadataFieldMode;
-  value?: unknown;
-};
+	candidateId?: string | number | null | undefined
+	field: MetadataField
+	mode: IngestMetadataFieldMode
+	value?: unknown
+}
 
-export type IngestProviderCapability =
-  | 'AI_ENRICHMENT'
-  | 'IDENTIFY'
-  | 'LOOKUP'
-  | 'SEARCH'
-  | 'TAGS';
+export type IngestProviderCapability = 'AI_ENRICHMENT' | 'IDENTIFY' | 'LOOKUP' | 'SEARCH' | 'TAGS'
 
-export type IngestQualityStatus =
-  | 'FAIL'
-  | 'NOT_APPLICABLE'
-  | 'PASS'
-  | 'WARN';
+export type IngestQualityStatus = 'FAIL' | 'NOT_APPLICABLE' | 'PASS' | 'WARN'
 
-export type IngestSettingValueType =
-  | 'BOOLEAN'
-  | 'INTEGER'
-  | 'JSON'
-  | 'NUMBER'
-  | 'STRING';
+export type IngestSettingValueType = 'BOOLEAN' | 'INTEGER' | 'JSON' | 'NUMBER' | 'STRING'
 
 export type IngestUploadFileInput = {
-  file: File;
-  relativePath?: string | null | undefined;
-};
+	file: File
+	relativePath?: string | null | undefined
+}
 
-export type JobStatus =
-  | 'CANCELLED'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'PAUSED'
-  | 'QUEUED'
-  | 'RUNNING';
+export type JobStatus = 'CANCELLED' | 'COMPLETED' | 'FAILED' | 'PAUSED' | 'QUEUED' | 'RUNNING'
 
 export type LibraryFilterInput = {
-  _and?: Array<LibraryFilterInput> | null | undefined;
-  _not?: Array<LibraryFilterInput> | null | undefined;
-  _or?: Array<LibraryFilterInput> | null | undefined;
-  id?: FieldFilterString | null | undefined;
-  name?: FieldFilterString | null | undefined;
-  path?: FieldFilterString | null | undefined;
-};
+	_and?: Array<LibraryFilterInput> | null | undefined
+	_not?: Array<LibraryFilterInput> | null | undefined
+	_or?: Array<LibraryFilterInput> | null | undefined
+	id?: FieldFilterString | null | undefined
+	name?: FieldFilterString | null | undefined
+	path?: FieldFilterString | null | undefined
+}
 
 /** The type of content a library contains */
 export type LibraryType =
-  | 'BOOK'
-  | 'COMIC'
-  | 'LIGHT_NOVEL'
-  | 'MANGA'
-  | 'MANHWA'
-  | 'MIXED'
-  | 'WEBTOON'
-  | 'WEB_NOVEL';
+	| 'BOOK'
+	| 'COMIC'
+	| 'LIGHT_NOVEL'
+	| 'MANGA'
+	| 'MANHWA'
+	| 'MIXED'
+	| 'WEBTOON'
+	| 'WEB_NOVEL'
 
 export type MediaFilterInput = {
-  _and?: Array<MediaFilterInput> | null | undefined;
-  _not?: Array<MediaFilterInput> | null | undefined;
-  _or?: Array<MediaFilterInput> | null | undefined;
-  createdAt?: NumericFilterDateTime | null | undefined;
-  extension?: FieldFilterString | null | undefined;
-  id?: FieldFilterString | null | undefined;
-  metadata?: MediaMetadataFilterInput | null | undefined;
-  name?: FieldFilterString | null | undefined;
-  pages?: NumericFilterI32 | null | undefined;
-  path?: FieldFilterString | null | undefined;
-  readingStatus?: ComputedFilterReadingStatus | null | undefined;
-  series?: SeriesFilterInput | null | undefined;
-  seriesId?: FieldFilterString | null | undefined;
-  size?: NumericFilterI64 | null | undefined;
-  status?: FieldFilterFileStatus | null | undefined;
-  tags?: FieldFilterString | null | undefined;
-  updatedAt?: NumericFilterDateTime | null | undefined;
-};
+	_and?: Array<MediaFilterInput> | null | undefined
+	_not?: Array<MediaFilterInput> | null | undefined
+	_or?: Array<MediaFilterInput> | null | undefined
+	createdAt?: NumericFilterDateTime | null | undefined
+	extension?: FieldFilterString | null | undefined
+	id?: FieldFilterString | null | undefined
+	metadata?: MediaMetadataFilterInput | null | undefined
+	name?: FieldFilterString | null | undefined
+	pages?: NumericFilterI32 | null | undefined
+	path?: FieldFilterString | null | undefined
+	readingStatus?: ComputedFilterReadingStatus | null | undefined
+	series?: SeriesFilterInput | null | undefined
+	seriesId?: FieldFilterString | null | undefined
+	size?: NumericFilterI64 | null | undefined
+	status?: FieldFilterFileStatus | null | undefined
+	tags?: FieldFilterString | null | undefined
+	updatedAt?: NumericFilterDateTime | null | undefined
+}
 
 export type MediaMetadataFilterInput = {
-  _and?: Array<MediaMetadataFilterInput> | null | undefined;
-  _not?: Array<MediaMetadataFilterInput> | null | undefined;
-  _or?: Array<MediaMetadataFilterInput> | null | undefined;
-  ageRating?: NumericFilterI32 | null | undefined;
-  characters?: FieldFilterString | null | undefined;
-  colorists?: FieldFilterString | null | undefined;
-  coverArtists?: FieldFilterString | null | undefined;
-  day?: NumericFilterI32 | null | undefined;
-  editors?: FieldFilterString | null | undefined;
-  genres?: FieldFilterString | null | undefined;
-  inkers?: FieldFilterString | null | undefined;
-  letterers?: FieldFilterString | null | undefined;
-  links?: FieldFilterString | null | undefined;
-  month?: NumericFilterI32 | null | undefined;
-  pencillers?: FieldFilterString | null | undefined;
-  publisher?: FieldFilterString | null | undefined;
-  series?: FieldFilterString | null | undefined;
-  summary?: FieldFilterString | null | undefined;
-  teams?: FieldFilterString | null | undefined;
-  title?: FieldFilterString | null | undefined;
-  writers?: FieldFilterString | null | undefined;
-  year?: NumericFilterI32 | null | undefined;
-};
+	_and?: Array<MediaMetadataFilterInput> | null | undefined
+	_not?: Array<MediaMetadataFilterInput> | null | undefined
+	_or?: Array<MediaMetadataFilterInput> | null | undefined
+	ageRating?: NumericFilterI32 | null | undefined
+	characters?: FieldFilterString | null | undefined
+	colorists?: FieldFilterString | null | undefined
+	coverArtists?: FieldFilterString | null | undefined
+	day?: NumericFilterI32 | null | undefined
+	editors?: FieldFilterString | null | undefined
+	genres?: FieldFilterString | null | undefined
+	inkers?: FieldFilterString | null | undefined
+	letterers?: FieldFilterString | null | undefined
+	links?: FieldFilterString | null | undefined
+	month?: NumericFilterI32 | null | undefined
+	pencillers?: FieldFilterString | null | undefined
+	publisher?: FieldFilterString | null | undefined
+	series?: FieldFilterString | null | undefined
+	summary?: FieldFilterString | null | undefined
+	teams?: FieldFilterString | null | undefined
+	title?: FieldFilterString | null | undefined
+	writers?: FieldFilterString | null | undefined
+	year?: NumericFilterI32 | null | undefined
+}
+
+export type MediaMetadataInput = {
+	ageRating?: number | null | undefined
+	characters?: Array<string> | null | undefined
+	colorists?: Array<string> | null | undefined
+	coverArtists?: Array<string> | null | undefined
+	day?: number | null | undefined
+	editors?: Array<string> | null | undefined
+	format?: string | null | undefined
+	genres?: Array<string> | null | undefined
+	identifierAmazon?: string | null | undefined
+	identifierCalibre?: string | null | undefined
+	identifierGoogle?: string | null | undefined
+	identifierIsbn?: string | null | undefined
+	identifierMobiAsin?: string | null | undefined
+	identifierUuid?: string | null | undefined
+	inkers?: Array<string> | null | undefined
+	language?: string | null | undefined
+	letterers?: Array<string> | null | undefined
+	links?: Array<string> | null | undefined
+	month?: number | null | undefined
+	/**
+	 * The audiobook's readers. A separate credit from `writers`: an
+	 * audiobook's author wrote it and its narrator did not.
+	 */
+	narrators?: Array<string> | null | undefined
+	notes?: string | null | undefined
+	number?: unknown
+	pageCount?: number | null | undefined
+	pencillers?: Array<string> | null | undefined
+	publisher?: string | null | undefined
+	series?: string | null | undefined
+	seriesGroup?: string | null | undefined
+	storyArc?: string | null | undefined
+	storyArcNumber?: unknown
+	summary?: string | null | undefined
+	teams?: Array<string> | null | undefined
+	title?: string | null | undefined
+	titleSort?: string | null | undefined
+	volume?: number | null | undefined
+	writers?: Array<string> | null | undefined
+	year?: number | null | undefined
+}
 
 /** How to merge external metadata values onto existing entity metadata */
 export type MergeStrategy =
-  /** FillGaps and merge/dedupe for array fields */
-  | 'FILL_AND_MERGE_LISTS'
-  /** Only populate fields that are currently nullish */
-  | 'FILL_GAPS'
-  /** Overwrite existing values with (truthy) external data */
-  | 'PREFER_EXTERNAL'
-  /** PreferExternal for scalars, merge/dedupe for array fields */
-  | 'PREFER_EXTERNAL_AND_MERGE_LISTS';
+	/** FillGaps and merge/dedupe for array fields */
+	| 'FILL_AND_MERGE_LISTS'
+	/** Only populate fields that are currently nullish */
+	| 'FILL_GAPS'
+	/** Overwrite existing values with (truthy) external data */
+	| 'PREFER_EXTERNAL'
+	/** PreferExternal for scalars, merge/dedupe for array fields */
+	| 'PREFER_EXTERNAL_AND_MERGE_LISTS'
 
 /**
  * The audio section of an override. Every key has the server default as its
@@ -286,211 +588,476 @@ export type MergeStrategy =
  * key rather than restating the section.
  */
 export type MetadataAudioPolicyInput = {
-  autoAssemble?: boolean;
-  autoChapters?: boolean;
-  /**
-   * Turning this off is refused unless `autoAssemble` is on: there would
-   * be nothing to replace the source files with.
-   */
-  keepOriginal?: boolean;
-  singleFileWeight?: number;
-};
+	autoAssemble?: boolean
+	autoChapters?: boolean
+	/**
+	 * Turning this off is refused unless `autoAssemble` is on: there would
+	 * be nothing to replace the source files with.
+	 */
+	keepOriginal?: boolean
+	singleFileWeight?: number
+}
 
 /**
  * Represents a specific metadata field that can be locked or configured
  * for per-field merge strategies
  */
 export type MetadataField =
-  | 'AGE_RATING'
-  | 'ARTISTS'
-  | 'BOOK_TYPE'
-  | 'CHARACTERS'
-  | 'COLORISTS'
-  | 'COMIC_ID'
-  | 'COMIC_IMAGE'
-  | 'COVER'
-  | 'COVER_ARTISTS'
-  | 'DESCRIPTION_FORMATTED'
-  | 'EDITORS'
-  | 'FORMAT'
-  | 'GENRES'
-  | 'IDENTIFIER_AMAZON'
-  | 'IDENTIFIER_CALIBRE'
-  | 'IDENTIFIER_GOOGLE'
-  | 'IDENTIFIER_MOBI_ASIN'
-  | 'IDENTIFIER_UUID'
-  | 'IMPRINT'
-  | 'INKERS'
-  | 'ISBN'
-  | 'LANGUAGE'
-  | 'LETTERERS'
-  | 'LINKS'
-  | 'META_TYPE'
-  /**
-   * The readers of an audiobook edition, carried by
-   * [`crate::types::ExternalMediaMetadata::narrators`]. Distinct from
-   * [`Self::Writers`] on purpose -- a narrator is not an author.
-   */
-  | 'NARRATORS'
-  | 'NOTES'
-  | 'NUMBER'
-  | 'PAGE_COUNT'
-  | 'PENCILLERS'
-  | 'PUBLICATION_RUN'
-  | 'PUBLISHER'
-  | 'RELEASE_DATE'
-  | 'SERIES'
-  | 'SERIES_GROUP'
-  | 'STATUS'
-  | 'STORY_ARC'
-  | 'STORY_ARC_NUMBER'
-  /**
-   * An edition's secondary title, carried by
-   * [`crate::types::ExternalMediaMetadata::subtitle`].
-   */
-  | 'SUBTITLE'
-  | 'SUMMARY'
-  | 'TAGS'
-  | 'TEAMS'
-  | 'TITLE'
-  | 'TITLE_SORT'
-  | 'VOLUME_COUNT'
-  | 'WRITERS'
-  | 'YEAR';
+	| 'AGE_RATING'
+	| 'ARTISTS'
+	| 'BOOK_TYPE'
+	| 'CHARACTERS'
+	| 'COLORISTS'
+	| 'COMIC_ID'
+	| 'COMIC_IMAGE'
+	| 'COVER'
+	| 'COVER_ARTISTS'
+	| 'DESCRIPTION_FORMATTED'
+	| 'EDITORS'
+	| 'FORMAT'
+	| 'GENRES'
+	| 'IDENTIFIER_AMAZON'
+	| 'IDENTIFIER_CALIBRE'
+	| 'IDENTIFIER_GOOGLE'
+	| 'IDENTIFIER_MOBI_ASIN'
+	| 'IDENTIFIER_UUID'
+	| 'IMPRINT'
+	| 'INKERS'
+	| 'ISBN'
+	| 'LANGUAGE'
+	| 'LETTERERS'
+	| 'LINKS'
+	| 'META_TYPE'
+	/**
+	 * The readers of an audiobook edition, carried by
+	 * [`crate::types::ExternalMediaMetadata::narrators`]. Distinct from
+	 * [`Self::Writers`] on purpose -- a narrator is not an author.
+	 */
+	| 'NARRATORS'
+	| 'NOTES'
+	| 'NUMBER'
+	| 'PAGE_COUNT'
+	| 'PENCILLERS'
+	| 'PUBLICATION_RUN'
+	| 'PUBLISHER'
+	| 'RELEASE_DATE'
+	| 'SERIES'
+	| 'SERIES_GROUP'
+	| 'STATUS'
+	| 'STORY_ARC'
+	| 'STORY_ARC_NUMBER'
+	/**
+	 * An edition's secondary title, carried by
+	 * [`crate::types::ExternalMediaMetadata::subtitle`].
+	 */
+	| 'SUBTITLE'
+	| 'SUMMARY'
+	| 'TAGS'
+	| 'TEAMS'
+	| 'TITLE'
+	| 'TITLE_SORT'
+	| 'VOLUME_COUNT'
+	| 'WRITERS'
+	| 'YEAR'
 
 export type MetadataFieldPolicyInput = {
-  field: MetadataField;
-  /**
-   * Leave a user-locked field alone. Defaults to `true`; turning it off is
-   * how a library says "the policy outranks my locks for this field".
-   */
-  lockRespected?: boolean;
-  /**
-   * Provider ids in priority order. An empty list means no provider may
-   * fill this field.
-   */
-  providers: Array<string>;
-  strategy: MetadataPolicyStrategy;
-};
+	field: MetadataField
+	/**
+	 * Leave a user-locked field alone. Defaults to `true`; turning it off is
+	 * how a library says "the policy outranks my locks for this field".
+	 */
+	lockRespected?: boolean
+	/**
+	 * Provider ids in priority order. An empty list means no provider may
+	 * fill this field.
+	 */
+	providers: Array<string>
+	strategy: MetadataPolicyStrategy
+}
 
 export type MetadataPolicyInput = {
-  /**
-   * The audio section. Omitted leaves the library inheriting the server
-   * default audio rules, exactly as an unmentioned field does.
-   */
-  audio?: MetadataAudioPolicyInput | null | undefined;
-  /**
-   * The complete override. Empty, with no `audio`, clears the library
-   * override.
-   */
-  fields: Array<MetadataFieldPolicyInput>;
-};
+	/**
+	 * The audio section. Omitted leaves the library inheriting the server
+	 * default audio rules, exactly as an unmentioned field does.
+	 */
+	audio?: MetadataAudioPolicyInput | null | undefined
+	/**
+	 * The complete override. Empty, with no `audio`, clears the library
+	 * override.
+	 */
+	fields: Array<MetadataFieldPolicyInput>
+}
 
 /** What the policy decided for one field of one book. */
-export type MetadataPolicyOutcome =
-  | 'CANDIDATE'
-  | 'KEPT'
-  | 'LOCKED'
-  | 'MERGED'
-  | 'UNMATCHED';
+export type MetadataPolicyOutcome = 'CANDIDATE' | 'KEPT' | 'LOCKED' | 'MERGED' | 'UNMATCHED'
 
 /** How the offers of the allowed providers for one field combine. */
 export type MetadataPolicyStrategy =
-  | 'FIRST'
-  | 'HIGHEST_RESOLUTION'
-  | 'LONGEST'
-  | 'MERGE_UNION'
-  | 'PREFER_EXISTING';
+	| 'FIRST'
+	| 'HIGHEST_RESOLUTION'
+	| 'LONGEST'
+	| 'MERGE_UNION'
+	| 'PREFER_EXISTING'
 
 /** The supported external metadata providers */
 export type MetadataProvider =
-  /** AniList (https://anilist.co) */
-  | 'ANI_LIST'
-  /**
-   * Audible, through the community Audnexus enrichment API
-   * (https://api.audnex.us) plus the unauthenticated Audible catalogue.
-   */
-  | 'AUDIBLE'
-  /** ComicVine (https://comicvine.gamespot.com/api/) */
-  | 'COMIC_VINE'
-  /** Google Books (https://www.googleapis.com/books/v1) */
-  | 'GOOGLE_BOOKS'
-  /** Hardcover (https://hardcover.app) */
-  | 'HARDCOVER'
-  /** MyAnimeList (https://myanimelist.net/apiconfig/references/api/v2) */
-  | 'MAL'
-  /** MangaDex (https://api.mangadex.org) */
-  | 'MANGA_DEX'
-  /** MangaUpdates (https://api.mangaupdates.com/v1) */
-  | 'MANGA_UPDATES'
-  /** Metron (https://metron.cloud/api/) */
-  | 'METRON'
-  /** Open Library (https://openlibrary.org) */
-  | 'OPEN_LIBRARY';
+	/** AniList (https://anilist.co) */
+	| 'ANI_LIST'
+	/**
+	 * Audible, through the community Audnexus enrichment API
+	 * (https://api.audnex.us) plus the unauthenticated Audible catalogue.
+	 */
+	| 'AUDIBLE'
+	/** ComicVine (https://comicvine.gamespot.com/api/) */
+	| 'COMIC_VINE'
+	/** Google Books (https://www.googleapis.com/books/v1) */
+	| 'GOOGLE_BOOKS'
+	/** Hardcover (https://hardcover.app) */
+	| 'HARDCOVER'
+	/** MyAnimeList (https://myanimelist.net/apiconfig/references/api/v2) */
+	| 'MAL'
+	/** MangaDex (https://api.mangadex.org) */
+	| 'MANGA_DEX'
+	/** MangaUpdates (https://api.mangaupdates.com/v1) */
+	| 'MANGA_UPDATES'
+	/** Metron (https://metron.cloud/api/) */
+	| 'METRON'
+	/** Open Library (https://openlibrary.org) */
+	| 'OPEN_LIBRARY'
 
 export type NumericFilterDateTime =
-  {   anyOf: Array<string>; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never;   eq: string; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never;   gt: string; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never;   gte: string; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never;   lt: string; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never;   lte: string; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never;   neq: string; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never;   noneOf: Array<string>; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never;   range: NumericRangeDateTime; };
+	| {
+			anyOf: Array<string>
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq: string
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt: string
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte: string
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt: string
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte: string
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq: string
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf: Array<string>
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range: NumericRangeDateTime
+	  }
 
 export type NumericFilterI32 =
-  {   anyOf: Array<number>; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never;   eq: number; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never;   gt: number; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never;   gte: number; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never;   lt: number; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never;   lte: number; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never;   neq: number; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never;   noneOf: Array<number>; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never;   range: NumericRangeI32; };
+	| {
+			anyOf: Array<number>
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq: number
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt: number
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte: number
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt: number
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte: number
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq: number
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf: Array<number>
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range: NumericRangeI32
+	  }
 
 export type NumericFilterI64 =
-  {   anyOf: Array<number>; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never;   eq: number; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never;   gt: number; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never;   gte: number; lt?: never; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never;   lt: number; lte?: never; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never;   lte: number; neq?: never; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never;   neq: number; noneOf?: never; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never;   noneOf: Array<number>; range?: never; }
-  |  { anyOf?: never; eq?: never; gt?: never; gte?: never; lt?: never; lte?: never; neq?: never; noneOf?: never;   range: NumericRangeI64; };
+	| {
+			anyOf: Array<number>
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq: number
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt: number
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte: number
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt: number
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte: number
+			neq?: never
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq: number
+			noneOf?: never
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf: Array<number>
+			range?: never
+	  }
+	| {
+			anyOf?: never
+			eq?: never
+			gt?: never
+			gte?: never
+			lt?: never
+			lte?: never
+			neq?: never
+			noneOf?: never
+			range: NumericRangeI64
+	  }
 
 export type NumericRangeDateTime = {
-  from: string;
-  inclusive: boolean;
-  to: string;
-};
+	from: string
+	inclusive: boolean
+	to: string
+}
 
 export type NumericRangeI32 = {
-  from: number;
-  inclusive: boolean;
-  to: number;
-};
+	from: number
+	inclusive: boolean
+	to: number
+}
 
 export type NumericRangeI64 = {
-  from: number;
-  inclusive: boolean;
-  to: number;
-};
+	from: number
+	inclusive: boolean
+	to: number
+}
 
 /** A simple offset-based pagination input object */
 export type OffsetPagination = {
-  /**
-   * The page to start from. This is 1-based by default, but can be
-   * changed to 0-based by setting the `zero_based` field to true.
-   */
-  page: number;
-  /** The number of items to return per page. This is 20 by default. */
-  pageSize?: number | null | undefined;
-  /** Whether or not the page is zero-based. This is false by default. */
-  zeroBased?: boolean | null | undefined;
-};
+	/**
+	 * The page to start from. This is 1-based by default, but can be
+	 * changed to 0-based by setting the `zero_based` field to true.
+	 */
+	page: number
+	/** The number of items to return per page. This is 20 by default. */
+	pageSize?: number | null | undefined
+	/** Whether or not the page is zero-based. This is false by default. */
+	zeroBased?: boolean | null | undefined
+}
 
 /**
  * A union of the supported pagination flavors which Stump supports. The resulting
@@ -517,119 +1084,120 @@ export type OffsetPagination = {
  * to ensure that the pagination object is in a valid state.
  */
 export type Pagination =
-  {   cursor: CursorPagination; none?: never; offset?: never; }
-  |  { cursor?: never;   none: Unpaginated; offset?: never; }
-  |  { cursor?: never; none?: never;   offset: OffsetPagination; };
+	| { cursor: CursorPagination; none?: never; offset?: never }
+	| { cursor?: never; none: Unpaginated; offset?: never }
+	| { cursor?: never; none?: never; offset: OffsetPagination }
 
 /** A patch equivalent of [CreateMetadataProviderConfigInput], i.e. just with optional fields. */
 export type PatchMetadataProviderConfigInput = {
-  /** The API token for authenticating with the provider */
-  apiToken?: string | null | undefined;
-  /**
-   * Optional expiration date for the API key. This is exclusively a QOL thing,
-   * since the creds don't live within the management domain of Stump
-   */
-  apiTokenExpiresAt?: string | null | undefined;
-  /** Auto-apply configuration */
-  autoApplyConfig?: unknown;
-  /** Whether the provider is enabled */
-  enabled?: boolean | null | undefined;
-};
+	/** The API token for authenticating with the provider */
+	apiToken?: string | null | undefined
+	/**
+	 * Optional expiration date for the API key. This is exclusively a QOL thing,
+	 * since the creds don't live within the management domain of Stump
+	 */
+	apiTokenExpiresAt?: string | null | undefined
+	/** Auto-apply configuration */
+	autoApplyConfig?: unknown
+	/** Whether the provider is enabled */
+	enabled?: boolean | null | undefined
+}
 
 /** What routing did with a `solveSourceChallenge` request. */
 export type ProviderChallengeSolveState =
-  /** A solve for this instance was already in flight. */
-  | 'ALREADY_QUEUED'
-  /**
-   * A solve that had already finished was applied on the spot; nothing was
-   * queued.
-   */
-  | 'APPLIED'
-  /**
-   * Queued and parked: no connected worker advertises `browser`. It runs
-   * the moment one does — start `stump-worker --chrome …`.
-   */
-  | 'NEEDS_WORKER'
-  /** Queued, and a browser worker is connected to take it. */
-  | 'QUEUED';
+	/** A solve for this instance was already in flight. */
+	| 'ALREADY_QUEUED'
+	/**
+	 * A solve that had already finished was applied on the spot; nothing was
+	 * queued.
+	 */
+	| 'APPLIED'
+	/**
+	 * Queued and parked: no connected worker advertises `browser`. It runs
+	 * the moment one does — start `stump-worker --chrome …`.
+	 */
+	| 'NEEDS_WORKER'
+	/** Queued, and a browser worker is connected to take it. */
+	| 'QUEUED'
 
 /**
  * the different reading statuses a book can be categorized as based on a user's
  * reading sessions
  */
 export type ReadingStatus =
-  /** a user actively started reading a book but decided not to finish it (i.e., dnf-ing a book) */
-  | 'ABANDONED'
-  /** there is at least one completed readthrough for this book */
-  | 'FINISHED'
-  /** no sessions have been recorded for this book */
-  | 'NOT_STARTED'
-  /**
-   * there is an active reading session for this book. it may or may not have been completed in
-   * the past, this is strictly about the presence of an active session
-   */
-  | 'READING';
+	/** a user actively started reading a book but decided not to finish it (i.e., dnf-ing a book) */
+	| 'ABANDONED'
+	/** there is at least one completed readthrough for this book */
+	| 'FINISHED'
+	/** no sessions have been recorded for this book */
+	| 'NOT_STARTED'
+	/**
+	 * there is an active reading session for this book. it may or may not have been completed in
+	 * the past, this is strictly about the presence of an active session
+	 */
+	| 'READING'
 
 /** Which finding to repair, on which staged item. */
 export type RunIngestQualityFixInput = {
-  /**
-   * The failing check's id, e.g. `single_file` or `chapters_present`. The
-   * tool and its options come from the check registry, so a client never
-   * names a command line.
-   */
-  checkId: string;
-  dropItemId: string | number;
-};
+	/**
+	 * The failing check's id, e.g. `single_file` or `chapters_present`. The
+	 * tool and its options come from the check registry, so a client never
+	 * names a command line.
+	 */
+	checkId: string
+	dropItemId: string | number
+}
 
 export type SeriesFilterInput = {
-  _and?: Array<SeriesFilterInput> | null | undefined;
-  _not?: Array<SeriesFilterInput> | null | undefined;
-  _or?: Array<SeriesFilterInput> | null | undefined;
-  library?: LibraryFilterInput | null | undefined;
-  libraryId?: FieldFilterString | null | undefined;
-  libraryType?: ComputedFilterLibraryType | null | undefined;
-  metadata?: SeriesMetadataFilterInput | null | undefined;
-  name?: FieldFilterString | null | undefined;
-  path?: FieldFilterString | null | undefined;
-  readingStatus?: ComputedFilterReadingStatus | null | undefined;
-};
+	_and?: Array<SeriesFilterInput> | null | undefined
+	_not?: Array<SeriesFilterInput> | null | undefined
+	_or?: Array<SeriesFilterInput> | null | undefined
+	isOneshot?: boolean | null | undefined
+	library?: LibraryFilterInput | null | undefined
+	libraryId?: FieldFilterString | null | undefined
+	libraryType?: ComputedFilterLibraryType | null | undefined
+	metadata?: SeriesMetadataFilterInput | null | undefined
+	name?: FieldFilterString | null | undefined
+	path?: FieldFilterString | null | undefined
+	readingStatus?: ComputedFilterReadingStatus | null | undefined
+}
 
 export type SeriesMetadataFilterInput = {
-  _and?: Array<SeriesMetadataFilterInput> | null | undefined;
-  _not?: Array<SeriesMetadataFilterInput> | null | undefined;
-  _or?: Array<SeriesMetadataFilterInput> | null | undefined;
-  ageRating?: NumericFilterI32 | null | undefined;
-  booktype?: FieldFilterString | null | undefined;
-  comicid?: NumericFilterI32 | null | undefined;
-  imprint?: FieldFilterString | null | undefined;
-  metaType?: FieldFilterString | null | undefined;
-  publisher?: FieldFilterString | null | undefined;
-  status?: FieldFilterString | null | undefined;
-  summary?: FieldFilterString | null | undefined;
-  title?: FieldFilterString | null | undefined;
-  volume?: NumericFilterI32 | null | undefined;
-  year?: NumericFilterI32 | null | undefined;
-};
+	_and?: Array<SeriesMetadataFilterInput> | null | undefined
+	_not?: Array<SeriesMetadataFilterInput> | null | undefined
+	_or?: Array<SeriesMetadataFilterInput> | null | undefined
+	ageRating?: NumericFilterI32 | null | undefined
+	booktype?: FieldFilterString | null | undefined
+	comicid?: NumericFilterI32 | null | undefined
+	imprint?: FieldFilterString | null | undefined
+	metaType?: FieldFilterString | null | undefined
+	publisher?: FieldFilterString | null | undefined
+	status?: FieldFilterString | null | undefined
+	summary?: FieldFilterString | null | undefined
+	title?: FieldFilterString | null | undefined
+	volume?: NumericFilterI32 | null | undefined
+	year?: NumericFilterI32 | null | undefined
+}
 
 export type SetIngestProviderSettingsInput = {
-  enabled?: boolean | null | undefined;
-  optedIn?: boolean | null | undefined;
-  providerId: string;
-  settings?: unknown;
-};
+	enabled?: boolean | null | undefined
+	optedIn?: boolean | null | undefined
+	providerId: string
+	settings?: unknown
+}
 
 export type SetIngestQualityCheckSettingsInput = {
-  checkId: string;
-  enabled?: boolean | null | undefined;
-  settings?: unknown;
-};
+	checkId: string
+	enabled?: boolean | null | undefined
+	settings?: unknown
+}
 
 export type StageIngestUploadsInput = {
-  files: Array<IngestUploadFileInput>;
-  idempotencyKey?: string | null | undefined;
-  libraryId: string | number;
-  startAnalysis?: boolean;
-};
+	files: Array<IngestUploadFileInput>
+	idempotencyKey?: string | null | undefined
+	libraryId: string | number
+	startAnalysis?: boolean
+}
 
 /**
  * A simple pagination input object which does not paginate. An explicit struct is
@@ -637,505 +1205,7783 @@ export type StageIngestUploadsInput = {
  * for empty variants.
  */
 export type Unpaginated = {
-  unpaginated: boolean;
-};
+	unpaginated: boolean
+}
+
+/** The permissions a user may be granted */
+export type UserPermission =
+	/** Grant access to read/create their own API keys */
+	| 'ACCESS_API_KEYS'
+	/**
+	 * TODO: Expand permissions for bookclub + smartlist
+	 * Grant access to the book club feature
+	 */
+	| 'ACCESS_BOOK_CLUB'
+	/** Grant access to the kobo sync feature */
+	| 'ACCESS_KOBO_SYNC'
+	/** Grant access to the koreader sync feature */
+	| 'ACCESS_KOREADER_SYNC'
+	/** Grant access to access the smart list feature. This includes the ability to create and edit smart lists */
+	| 'ACCESS_SMART_LIST'
+	/**
+	 * Grant a device the right to act as a remote worker: open the worker
+	 * socket, claim `worker_jobs`, and upload their outputs
+	 */
+	| 'ACCESS_WORKER'
+	/** Grant user access to change **their own** avatar */
+	| 'CHANGE_AVATAR'
+	/** Grant user access to change **their own** password */
+	| 'CHANGE_PASSWORD'
+	/** Grant user access to change **their own** username */
+	| 'CHANGE_USERNAME'
+	/** Grant access to create a book club (access book club) */
+	| 'CREATE_BOOK_CLUB'
+	/** Grant access to create a library */
+	| 'CREATE_LIBRARY'
+	/** Grant access to create a notifier */
+	| 'CREATE_NOTIFIER'
+	/** Grant access to delete the library (manage library) */
+	| 'DELETE_LIBRARY'
+	/** Grant access to delete a notifier */
+	| 'DELETE_NOTIFIER'
+	/** Grant access to download files from a library */
+	| 'DOWNLOAD_FILE'
+	/** Grant access to edit basic details about the library */
+	| 'EDIT_LIBRARY'
+	/**
+	 * Grants access to edit any existing metadata for media/series. This will only
+	 * be applied to the database-level metadata.
+	 */
+	| 'EDIT_METADATA'
+	/** Grant access to edit thumbnails for media/series */
+	| 'EDIT_THUMBNAILS'
+	/** Grant access to create an emailer */
+	| 'EMAILER_CREATE'
+	/** Grant access to manage an emailer */
+	| 'EMAILER_MANAGE'
+	/** Grant access to read any emailers in the system */
+	| 'EMAILER_READ'
+	/** Grant access to send an arbitrary email, bypassing any registered device requirements */
+	| 'EMAIL_ARBITRARY_SEND'
+	/** Grant access to send an email */
+	| 'EMAIL_SEND'
+	/** Grant access to access the file explorer */
+	| 'FILE_EXPLORER'
+	/** Grant access to manage jobs, like pausing, resuming, deleting, or cancelling them */
+	| 'MANAGE_JOBS'
+	/** Grant access to manage the library (scan,edit,manage relations) */
+	| 'MANAGE_LIBRARY'
+	/** Grant access to manage a notifier */
+	| 'MANAGE_NOTIFIER'
+	/** Grant access to manage the server. This is effectively a step below server owner */
+	| 'MANAGE_SERVER'
+	/** Grant access to manage users (create,edit,delete) */
+	| 'MANAGE_USERS'
+	/** Grant access to manage metadata fetch statuses (accept matches, etc) */
+	| 'METADATA_FETCH_RECORD_MANAGE'
+	/** Grant access to read metadata fetch statuses */
+	| 'METADATA_FETCH_RECORD_READ'
+	/** Grant access to manage metadata provider configurations (create, update, delete) */
+	| 'METADATA_PROVIDER_MANAGE'
+	/** Grant access to read metadata provider configurations */
+	| 'METADATA_PROVIDER_READ'
+	/** Grant access to read jobs */
+	| 'READ_JOBS'
+	/** Grant access to read notifiers */
+	| 'READ_NOTIFIER'
+	/** Grant access to read application-level logs, e.g. job logs */
+	| 'READ_PERSISTED_LOGS'
+	/** Grant access to read system logs */
+	| 'READ_SYSTEM_LOGS'
+	/**
+	 * Grant access to read users.
+	 *
+	 * Note that this is explicitly for querying users via user-specific endpoints.
+	 * This would not affect relational queries, such as members in a common book club.
+	 */
+	| 'READ_USERS'
+	/** Grant access to scan the library for new files */
+	| 'SCAN_LIBRARY'
+	/** Grant access to upload files to a library */
+	| 'UPLOAD_FILE'
+	/**
+	 * Grants access to write back the database-level metadata for media/series.
+	 * This should be treated with caution, as technically it would allow for
+	 * overwriting existing metadata at the file-level
+	 */
+	| 'WRITE_BACK_METADATA'
 
 export type DuplicatePageCandidatesQueryVariables = Exact<{
-  libraryId: string | number;
-  minBooks?: number | null | undefined;
-  limit?: number | null | undefined;
-}>;
+	libraryId: string | number
+	minBooks?: number | null | undefined
+	limit?: number | null | undefined
+}>
 
-
-export type DuplicatePageCandidatesQuery = { duplicatePageCandidates: Array<{ dhash: string, bookCount: number, pageCount: number, occurrences: Array<{ mediaId: string, mediaName: string, page: number, visiblePage: number | null, dhash: string }> }> };
+export type DuplicatePageCandidatesQuery = {
+	duplicatePageCandidates: Array<{
+		dhash: string
+		bookCount: number
+		pageCount: number
+		occurrences: Array<{
+			mediaId: string
+			mediaName: string
+			page: number
+			visiblePage: number | null
+			dhash: string
+		}>
+	}>
+}
 
 export type KnownDuplicatePagesQueryVariables = Exact<{
-  libraryId: string | number;
-}>;
+	libraryId: string | number
+}>
 
-
-export type KnownDuplicatePagesQuery = { knownDuplicatePages: Array<{ libraryId: string, dhash: string, action: DuplicatePageAction, createdBy: string | null, createdAt: string }> };
+export type KnownDuplicatePagesQuery = {
+	knownDuplicatePages: Array<{
+		libraryId: string
+		dhash: string
+		action: DuplicatePageAction
+		createdBy: string | null
+		createdAt: string
+	}>
+}
 
 export type MarkDuplicatePageMutationVariables = Exact<{
-  libraryId: string | number;
-  dhash: string;
-  action: DuplicatePageAction;
-}>;
+	libraryId: string | number
+	dhash: string
+	action: DuplicatePageAction
+}>
 
-
-export type MarkDuplicatePageMutation = { markDuplicatePage: { libraryId: string, dhash: string, action: DuplicatePageAction, createdAt: string } };
+export type MarkDuplicatePageMutation = {
+	markDuplicatePage: {
+		libraryId: string
+		dhash: string
+		action: DuplicatePageAction
+		createdAt: string
+	}
+}
 
 export type UnmarkDuplicatePageMutationVariables = Exact<{
-  libraryId: string | number;
-  dhash: string;
-}>;
+	libraryId: string | number
+	dhash: string
+}>
 
+export type UnmarkDuplicatePageMutation = { unmarkDuplicatePage: boolean }
 
-export type UnmarkDuplicatePageMutation = { unmarkDuplicatePage: boolean };
+export type EditorViewerQueryVariables = Exact<{ [key: string]: never }>
+
+export type EditorViewerQuery = {
+	me: { id: string; username: string; isServerOwner: boolean; permissions: Array<UserPermission> }
+}
+
+export type EditorMediaMetadataFieldsFragment = {
+	id: number
+	title: string | null
+	titleSort: string | null
+	series: string | null
+	seriesGroup: string | null
+	storyArc: string | null
+	storyArcNumber: unknown
+	number: unknown
+	volume: number | null
+	summary: string | null
+	notes: string | null
+	genres: Array<string>
+	format: string | null
+	year: number | null
+	month: number | null
+	day: number | null
+	writers: Array<string>
+	pencillers: Array<string>
+	inkers: Array<string>
+	colorists: Array<string>
+	letterers: Array<string>
+	coverArtists: Array<string>
+	editors: Array<string>
+	narrators: Array<string>
+	publisher: string | null
+	links: Array<string>
+	characters: Array<string>
+	teams: Array<string>
+	pageCount: number | null
+	ageRating: number | null
+	identifierAmazon: string | null
+	identifierCalibre: string | null
+	identifierGoogle: string | null
+	identifierIsbn: string | null
+	identifierMobiAsin: string | null
+	identifierUuid: string | null
+	language: string | null
+	metadataSource: string | null
+	metadataExternalId: string | null
+	lockedFields: Array<MetadataField>
+}
+
+export type EditorMediaQueryVariables = Exact<{
+	id: string | number
+}>
+
+export type EditorMediaQuery = {
+	mediaById: {
+		id: string
+		name: string
+		resolvedName: string
+		extension: string
+		pages: number
+		size: number
+		path: string
+		libraryId: string
+		thumbnail: { url: string }
+		series: { id: string; name: string; resolvedName: string }
+		tags: Array<{ id: number; name: string; kind: string }>
+		metadata: {
+			id: number
+			title: string | null
+			titleSort: string | null
+			series: string | null
+			seriesGroup: string | null
+			storyArc: string | null
+			storyArcNumber: unknown
+			number: unknown
+			volume: number | null
+			summary: string | null
+			notes: string | null
+			genres: Array<string>
+			format: string | null
+			year: number | null
+			month: number | null
+			day: number | null
+			writers: Array<string>
+			pencillers: Array<string>
+			inkers: Array<string>
+			colorists: Array<string>
+			letterers: Array<string>
+			coverArtists: Array<string>
+			editors: Array<string>
+			narrators: Array<string>
+			publisher: string | null
+			links: Array<string>
+			characters: Array<string>
+			teams: Array<string>
+			pageCount: number | null
+			ageRating: number | null
+			identifierAmazon: string | null
+			identifierCalibre: string | null
+			identifierGoogle: string | null
+			identifierIsbn: string | null
+			identifierMobiAsin: string | null
+			identifierUuid: string | null
+			language: string | null
+			metadataSource: string | null
+			metadataExternalId: string | null
+			lockedFields: Array<MetadataField>
+		} | null
+		audio: {
+			durationMs: number
+			codec: string
+			sampleRate: number | null
+			channels: number | null
+			bitrate: number | null
+			chapterSource: AudioChapterSource
+			tracks: Array<{
+				index: number
+				mime: string
+				durationMs: number
+				startOffsetMs: number
+				byteSize: number
+				url: string
+			}>
+			chapters: Array<{
+				index: number
+				title: string | null
+				startMs: number
+				endMs: number | null
+			}>
+		} | null
+	} | null
+}
+
+export type UpdateEditorMediaMetadataMutationVariables = Exact<{
+	id: string | number
+	input: MediaMetadataInput
+}>
+
+export type UpdateEditorMediaMetadataMutation = {
+	updateMediaMetadata: {
+		id: string
+		resolvedName: string
+		metadata: {
+			id: number
+			title: string | null
+			titleSort: string | null
+			series: string | null
+			seriesGroup: string | null
+			storyArc: string | null
+			storyArcNumber: unknown
+			number: unknown
+			volume: number | null
+			summary: string | null
+			notes: string | null
+			genres: Array<string>
+			format: string | null
+			year: number | null
+			month: number | null
+			day: number | null
+			writers: Array<string>
+			pencillers: Array<string>
+			inkers: Array<string>
+			colorists: Array<string>
+			letterers: Array<string>
+			coverArtists: Array<string>
+			editors: Array<string>
+			narrators: Array<string>
+			publisher: string | null
+			links: Array<string>
+			characters: Array<string>
+			teams: Array<string>
+			pageCount: number | null
+			ageRating: number | null
+			identifierAmazon: string | null
+			identifierCalibre: string | null
+			identifierGoogle: string | null
+			identifierIsbn: string | null
+			identifierMobiAsin: string | null
+			identifierUuid: string | null
+			language: string | null
+			metadataSource: string | null
+			metadataExternalId: string | null
+			lockedFields: Array<MetadataField>
+		} | null
+	}
+}
+
+export type SetEditorMediaTagsMutationVariables = Exact<{
+	id: string | number
+	tags: Array<string> | string
+}>
+
+export type SetEditorMediaTagsMutation = {
+	setMediaTags: { id: string; tags: Array<{ id: number; name: string; kind: string }> }
+}
+
+export type SetEditorMediaLockedFieldsMutationVariables = Exact<{
+	mediaId: string | number
+	lockedFields: Array<MetadataField> | MetadataField
+}>
+
+export type SetEditorMediaLockedFieldsMutation = {
+	setMediaLockedFields: {
+		id: string
+		metadata: { id: number; lockedFields: Array<MetadataField> } | null
+	}
+}
 
 export type IngestItemEventsSubscriptionVariables = Exact<{
-  libraryId?: string | number | null | undefined;
-}>;
+	libraryId?: string | number | null | undefined
+}>
 
-
-export type IngestItemEventsSubscription = { ingestEvents: { libraryId: string, itemId: string, status: string, revision: number } };
+export type IngestItemEventsSubscription = {
+	ingestEvents: { libraryId: string; itemId: string; status: string; revision: number }
+}
 
 export type LibraryMediaQueryVariables = Exact<{
-  filter: MediaFilterInput;
-  pagination: Pagination;
-}>;
+	filter: MediaFilterInput
+	pagination: Pagination
+}>
 
-
-export type LibraryMediaQuery = { media: { nodes: Array<{ id: string, name: string, resolvedName: string, path: string, pages: number, libraryId: string, thumbnail: { url: string }, series: { id: string, name: string } }>, pageInfo:
-      | { currentCursor: string | null, nextCursor: string | null, limit: number }
-      | { totalPages: number, totalItems: number, currentPage: number, pageSize: number }
-     } };
+export type LibraryMediaQuery = {
+	media: {
+		nodes: Array<{
+			id: string
+			name: string
+			resolvedName: string
+			path: string
+			pages: number
+			libraryId: string
+			thumbnail: { url: string }
+			series: { id: string; name: string }
+		}>
+		pageInfo:
+			| { currentCursor: string | null; nextCursor: string | null; limit: number }
+			| { totalPages: number; totalItems: number; currentPage: number; pageSize: number }
+	}
+}
 
 export type IngestMediaQualityScoreQueryVariables = Exact<{
-  mediaId: string | number;
-}>;
+	mediaId: string | number
+}>
 
-
-export type IngestMediaQualityScoreQuery = { ingestMediaQualityReport: { id: string, score: number } | null };
+export type IngestMediaQualityScoreQuery = {
+	ingestMediaQualityReport: { id: string; score: number } | null
+}
 
 export type IngestMediaQualityReportQueryVariables = Exact<{
-  mediaId: string | number;
-}>;
+	mediaId: string | number
+}>
 
-
-export type IngestMediaQualityReportQuery = { ingestMediaQualityReport: { id: string, score: number, algorithmVersion: string, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, contribution: number, normalizedScore: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null };
+export type IngestMediaQualityReportQuery = {
+	ingestMediaQualityReport: {
+		id: string
+		score: number
+		algorithmVersion: string
+		generatedAt: string
+		checks: Array<{
+			checkId: string
+			label: string
+			status: IngestQualityStatus
+			weight: number
+			contribution: number
+			normalizedScore: number
+			evidence: unknown
+			fix: { tool: string; summary: string; options: unknown } | null
+		}>
+	} | null
+}
 
 export type IngestMediaMetadataCandidatesQueryVariables = Exact<{
-  mediaId: string | number;
-}>;
+	mediaId: string | number
+}>
 
-
-export type IngestMediaMetadataCandidatesQuery = { ingestMediaMetadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }> };
+export type IngestMediaMetadataCandidatesQuery = {
+	ingestMediaMetadataCandidates: Array<{
+		id: string
+		dropItemId: string | null
+		provider: string
+		providerVersion: string
+		model: string | null
+		confidence: number
+		fields: unknown
+		fieldConfidences: unknown
+		sourceSha256: string
+		provenance: unknown
+		status: IngestCandidateStatus
+		createdAt: string
+	}>
+}
 
 export type LibraryAnalysisJobQueryVariables = Exact<{
-  id: string | number;
-}>;
+	id: string | number
+}>
 
-
-export type LibraryAnalysisJobQuery = { ingestAnalysisJob: { id: string, status: JobStatus, phase: IngestAnalysisPhase, error: string | null } | null };
+export type LibraryAnalysisJobQuery = {
+	ingestAnalysisJob: {
+		id: string
+		status: JobStatus
+		phase: IngestAnalysisPhase
+		error: string | null
+	} | null
+}
 
 export type RunLibraryQualityMutationVariables = Exact<{
-  mediaIds: Array<string | number> | string | number;
-}>;
+	mediaIds: Array<string | number> | string | number
+}>
 
-
-export type RunLibraryQualityMutation = { runLibraryQuality: { id: string, status: JobStatus, phase: IngestAnalysisPhase } };
+export type RunLibraryQualityMutation = {
+	runLibraryQuality: { id: string; status: JobStatus; phase: IngestAnalysisPhase }
+}
 
 export type MatchLibraryMediaMutationVariables = Exact<{
-  mediaIds: Array<string | number> | string | number;
-  providers?: Array<string> | string | null | undefined;
-}>;
+	mediaIds: Array<string | number> | string | number
+	providers?: Array<string> | string | null | undefined
+}>
 
-
-export type MatchLibraryMediaMutation = { matchLibraryMedia: { id: string, status: JobStatus, phase: IngestAnalysisPhase } };
+export type MatchLibraryMediaMutation = {
+	matchLibraryMedia: { id: string; status: JobStatus; phase: IngestAnalysisPhase }
+}
 
 export type ApplyBestIngestMetadataMutationVariables = Exact<{
-  mediaId: string | number;
-}>;
+	mediaId: string | number
+}>
 
+export type ApplyBestIngestMetadataMutation = {
+	applyBestIngestMetadata: {
+		media: { id: string } | null
+		decisions: Array<{
+			field: MetadataField
+			strategy: MetadataPolicyStrategy
+			outcome: MetadataPolicyOutcome
+			providers: Array<string>
+			applied: boolean
+		}>
+	}
+}
 
-export type ApplyBestIngestMetadataMutation = { applyBestIngestMetadata: { media: { id: string } | null, decisions: Array<{ field: MetadataField, strategy: MetadataPolicyStrategy, outcome: MetadataPolicyOutcome, providers: Array<string>, applied: boolean }> } };
+export type EditorKindleTargetsQueryVariables = Exact<{ [key: string]: never }>
 
-export type EditorKindleTargetsQueryVariables = Exact<{ [key: string]: never; }>;
-
-
-export type EditorKindleTargetsQuery = { devices: Array<{ id: string, name: string, kindleEmail: string | null, revokedAt: string | null }> };
+export type EditorKindleTargetsQuery = {
+	devices: Array<{ id: string; name: string; kindleEmail: string | null; revokedAt: string | null }>
+}
 
 export type EditorSendToKindleMutationVariables = Exact<{
-  mediaId: string | number;
-  deviceId: string | number;
-}>;
+	mediaId: string | number
+	deviceId: string | number
+}>
 
+export type EditorSendToKindleMutation = {
+	sendToKindle: {
+		deviceId: string
+		deviceName: string
+		recipient: string
+		format: string
+		bytes: number
+		converted: boolean
+		note: string | null
+	}
+}
 
-export type EditorSendToKindleMutation = { sendToKindle: { deviceId: string, deviceName: string, recipient: string, format: string, bytes: number, converted: boolean, note: string | null } };
+export type IngestDropItemFieldsFragment = {
+	id: string
+	libraryId: string
+	createdBy: string
+	filename: string
+	relativePath: string | null
+	sizeBytes: number
+	sourceSha256: string
+	mediaType: string
+	status: IngestDropItemStatus
+	revision: number
+	pendingFields: unknown
+	error: string | null
+	createdAt: string
+	updatedAt: string
+	analysisJob: {
+		id: string
+		dropItemId: string | null
+		jobId: string | null
+		status: JobStatus
+		phase: IngestAnalysisPhase
+		priorityScore: number
+		attempt: number
+		queuedAt: string
+		startedAt: string | null
+		completedAt: string | null
+		error: string | null
+	} | null
+	qualityReport: {
+		id: string
+		dropItemId: string | null
+		sourceSha256: string
+		algorithmVersion: string
+		score: number
+		generatedAt: string
+		checks: Array<{
+			checkId: string
+			label: string
+			status: IngestQualityStatus
+			weight: number
+			normalizedScore: number
+			contribution: number
+			evidence: unknown
+			fix: { tool: string; summary: string; options: unknown } | null
+		}>
+	} | null
+	metadataCandidates: Array<{
+		id: string
+		dropItemId: string | null
+		provider: string
+		providerVersion: string
+		model: string | null
+		confidence: number
+		fields: unknown
+		fieldConfidences: unknown
+		sourceSha256: string
+		provenance: unknown
+		status: IngestCandidateStatus
+		createdAt: string
+	}>
+	media: { id: string; name: string } | null
+	series: { id: string; name: string } | null
+}
 
-export type IngestDropItemFieldsFragment = { id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null };
+type IngestPageInfoFields_CursorPaginationInfo_Fragment = {
+	currentCursor: string | null
+	nextCursor: string | null
+	limit: number
+}
 
-type IngestPageInfoFields_CursorPaginationInfo_Fragment = { currentCursor: string | null, nextCursor: string | null, limit: number };
-
-type IngestPageInfoFields_OffsetPaginationInfo_Fragment = { totalPages: number, totalItems: number, currentPage: number, pageSize: number };
+type IngestPageInfoFields_OffsetPaginationInfo_Fragment = {
+	totalPages: number
+	totalItems: number
+	currentPage: number
+	pageSize: number
+}
 
 export type IngestPageInfoFieldsFragment =
-  | IngestPageInfoFields_CursorPaginationInfo_Fragment
-  | IngestPageInfoFields_OffsetPaginationInfo_Fragment
-;
+	| IngestPageInfoFields_CursorPaginationInfo_Fragment
+	| IngestPageInfoFields_OffsetPaginationInfo_Fragment
 
 export type LibrariesQueryVariables = Exact<{
-  pagination: Pagination;
-}>;
+	pagination: Pagination
+}>
 
-
-export type LibrariesQuery = { libraries: { nodes: Array<{ id: string, name: string, emoji: string | null }>, pageInfo:
-      | { currentCursor: string | null, nextCursor: string | null, limit: number }
-      | { totalPages: number, totalItems: number, currentPage: number, pageSize: number }
-     } };
+export type LibrariesQuery = {
+	libraries: {
+		nodes: Array<{ id: string; name: string; emoji: string | null }>
+		pageInfo:
+			| { currentCursor: string | null; nextCursor: string | null; limit: number }
+			| { totalPages: number; totalItems: number; currentPage: number; pageSize: number }
+	}
+}
 
 export type IngestDropFolderAndItemsQueryVariables = Exact<{
-  libraryId: string | number;
-  status?: IngestDropItemStatus | null | undefined;
-  pagination: Pagination;
-}>;
+	libraryId: string | number
+	status?: IngestDropItemStatus | null | undefined
+	pagination: Pagination
+}>
 
-
-export type IngestDropFolderAndItemsQuery = { ingestDropFolder: { libraryId: string, displayPath: string, enabled: boolean, pendingCount: number, lastDiscoveredAt: string | null } | null, ingestDropItems: { nodes: Array<{ id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null }>, pageInfo:
-      | { currentCursor: string | null, nextCursor: string | null, limit: number }
-      | { totalPages: number, totalItems: number, currentPage: number, pageSize: number }
-     } };
+export type IngestDropFolderAndItemsQuery = {
+	ingestDropFolder: {
+		libraryId: string
+		displayPath: string
+		enabled: boolean
+		pendingCount: number
+		lastDiscoveredAt: string | null
+	} | null
+	ingestDropItems: {
+		nodes: Array<{
+			id: string
+			libraryId: string
+			createdBy: string
+			filename: string
+			relativePath: string | null
+			sizeBytes: number
+			sourceSha256: string
+			mediaType: string
+			status: IngestDropItemStatus
+			revision: number
+			pendingFields: unknown
+			error: string | null
+			createdAt: string
+			updatedAt: string
+			analysisJob: {
+				id: string
+				dropItemId: string | null
+				jobId: string | null
+				status: JobStatus
+				phase: IngestAnalysisPhase
+				priorityScore: number
+				attempt: number
+				queuedAt: string
+				startedAt: string | null
+				completedAt: string | null
+				error: string | null
+			} | null
+			qualityReport: {
+				id: string
+				dropItemId: string | null
+				sourceSha256: string
+				algorithmVersion: string
+				score: number
+				generatedAt: string
+				checks: Array<{
+					checkId: string
+					label: string
+					status: IngestQualityStatus
+					weight: number
+					normalizedScore: number
+					contribution: number
+					evidence: unknown
+					fix: { tool: string; summary: string; options: unknown } | null
+				}>
+			} | null
+			metadataCandidates: Array<{
+				id: string
+				dropItemId: string | null
+				provider: string
+				providerVersion: string
+				model: string | null
+				confidence: number
+				fields: unknown
+				fieldConfidences: unknown
+				sourceSha256: string
+				provenance: unknown
+				status: IngestCandidateStatus
+				createdAt: string
+			}>
+			media: { id: string; name: string } | null
+			series: { id: string; name: string } | null
+		}>
+		pageInfo:
+			| { currentCursor: string | null; nextCursor: string | null; limit: number }
+			| { totalPages: number; totalItems: number; currentPage: number; pageSize: number }
+	}
+}
 
 export type IngestItemQueryVariables = Exact<{
-  id: string | number;
-}>;
+	id: string | number
+}>
 
-
-export type IngestItemQuery = { ingestItem: { dropGroupId: string | null, sidecars: Array<string>, id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, dropGroupSiblings: Array<{ id: string, filename: string, mediaType: string, status: IngestDropItemStatus, qualityScore: number | null, mediaId: string | null, editionPairCandidate: boolean, pairState: IngestEditionPairState }>, audio: { durationMs: number, duration: string, codec: string, sampleRate: number | null, channels: number | null, bitrate: number | null, chapterSource: string, coverContentType: string | null, coverByteSize: number | null, title: string | null, author: string | null, narrator: string | null, album: string | null, description: string | null, genre: string | null, year: number | null, tracks: Array<{ filename: string, duration: string, durationMs: number, startOffsetMs: number, byteSize: number, codec: string, bitrate: number | null, title: string | null, trackNumber: number | null }>, chapters: Array<{ title: string | null, startMs: number, start: string, endMs: number | null }>, assembled: { filename: string, byteSize: number, durationMs: number, duration: string, chapters: number, faststart: boolean, partsKept: boolean, method: string } | null } | null, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null } | null };
+export type IngestItemQuery = {
+	ingestItem: {
+		dropGroupId: string | null
+		sidecars: Array<string>
+		id: string
+		libraryId: string
+		createdBy: string
+		filename: string
+		relativePath: string | null
+		sizeBytes: number
+		sourceSha256: string
+		mediaType: string
+		status: IngestDropItemStatus
+		revision: number
+		pendingFields: unknown
+		error: string | null
+		createdAt: string
+		updatedAt: string
+		dropGroupSiblings: Array<{
+			id: string
+			filename: string
+			mediaType: string
+			status: IngestDropItemStatus
+			qualityScore: number | null
+			mediaId: string | null
+			editionPairCandidate: boolean
+			pairState: IngestEditionPairState
+		}>
+		audio: {
+			durationMs: number
+			duration: string
+			codec: string
+			sampleRate: number | null
+			channels: number | null
+			bitrate: number | null
+			chapterSource: string
+			coverContentType: string | null
+			coverByteSize: number | null
+			title: string | null
+			author: string | null
+			narrator: string | null
+			album: string | null
+			description: string | null
+			genre: string | null
+			year: number | null
+			tracks: Array<{
+				filename: string
+				duration: string
+				durationMs: number
+				startOffsetMs: number
+				byteSize: number
+				codec: string
+				bitrate: number | null
+				title: string | null
+				trackNumber: number | null
+			}>
+			chapters: Array<{
+				title: string | null
+				startMs: number
+				start: string
+				endMs: number | null
+			}>
+			assembled: {
+				filename: string
+				byteSize: number
+				durationMs: number
+				duration: string
+				chapters: number
+				faststart: boolean
+				partsKept: boolean
+				method: string
+			} | null
+		} | null
+		analysisJob: {
+			id: string
+			dropItemId: string | null
+			jobId: string | null
+			status: JobStatus
+			phase: IngestAnalysisPhase
+			priorityScore: number
+			attempt: number
+			queuedAt: string
+			startedAt: string | null
+			completedAt: string | null
+			error: string | null
+		} | null
+		qualityReport: {
+			id: string
+			dropItemId: string | null
+			sourceSha256: string
+			algorithmVersion: string
+			score: number
+			generatedAt: string
+			checks: Array<{
+				checkId: string
+				label: string
+				status: IngestQualityStatus
+				weight: number
+				normalizedScore: number
+				contribution: number
+				evidence: unknown
+				fix: { tool: string; summary: string; options: unknown } | null
+			}>
+		} | null
+		metadataCandidates: Array<{
+			id: string
+			dropItemId: string | null
+			provider: string
+			providerVersion: string
+			model: string | null
+			confidence: number
+			fields: unknown
+			fieldConfidences: unknown
+			sourceSha256: string
+			provenance: unknown
+			status: IngestCandidateStatus
+			createdAt: string
+		}>
+		media: { id: string; name: string } | null
+		series: { id: string; name: string } | null
+	} | null
+}
 
 export type IngestAnalysisQueueQueryVariables = Exact<{
-  status?: JobStatus | null | undefined;
-  pagination: Pagination;
-}>;
+	status?: JobStatus | null | undefined
+	pagination: Pagination
+}>
 
-
-export type IngestAnalysisQueueQuery = { ingestAnalysisQueue: { nodes: Array<{ id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null }>, pageInfo:
-      | { currentCursor: string | null, nextCursor: string | null, limit: number }
-      | { totalPages: number, totalItems: number, currentPage: number, pageSize: number }
-     } };
+export type IngestAnalysisQueueQuery = {
+	ingestAnalysisQueue: {
+		nodes: Array<{
+			id: string
+			dropItemId: string | null
+			jobId: string | null
+			status: JobStatus
+			phase: IngestAnalysisPhase
+			priorityScore: number
+			attempt: number
+			queuedAt: string
+			startedAt: string | null
+			completedAt: string | null
+			error: string | null
+		}>
+		pageInfo:
+			| { currentCursor: string | null; nextCursor: string | null; limit: number }
+			| { totalPages: number; totalItems: number; currentPage: number; pageSize: number }
+	}
+}
 
 export type IngestAnalysisJobQueryVariables = Exact<{
-  id: string | number;
-}>;
+	id: string | number
+}>
 
-
-export type IngestAnalysisJobQuery = { ingestAnalysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null };
+export type IngestAnalysisJobQuery = {
+	ingestAnalysisJob: {
+		id: string
+		dropItemId: string | null
+		jobId: string | null
+		status: JobStatus
+		phase: IngestAnalysisPhase
+		priorityScore: number
+		attempt: number
+		queuedAt: string
+		startedAt: string | null
+		completedAt: string | null
+		error: string | null
+	} | null
+}
 
 export type IngestReworkItemsQueryVariables = Exact<{
-  minScore?: number | null | undefined;
-  pagination: Pagination;
-}>;
+	minScore?: number | null | undefined
+	pagination: Pagination
+}>
 
-
-export type IngestReworkItemsQuery = { ingestReworkItems: { nodes: Array<{ item: { id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null }, reasons: Array<{ checkId: string, status: IngestQualityStatus, message: string }> }>, pageInfo:
-      | { currentCursor: string | null, nextCursor: string | null, limit: number }
-      | { totalPages: number, totalItems: number, currentPage: number, pageSize: number }
-     } };
+export type IngestReworkItemsQuery = {
+	ingestReworkItems: {
+		nodes: Array<{
+			item: {
+				id: string
+				libraryId: string
+				createdBy: string
+				filename: string
+				relativePath: string | null
+				sizeBytes: number
+				sourceSha256: string
+				mediaType: string
+				status: IngestDropItemStatus
+				revision: number
+				pendingFields: unknown
+				error: string | null
+				createdAt: string
+				updatedAt: string
+				analysisJob: {
+					id: string
+					dropItemId: string | null
+					jobId: string | null
+					status: JobStatus
+					phase: IngestAnalysisPhase
+					priorityScore: number
+					attempt: number
+					queuedAt: string
+					startedAt: string | null
+					completedAt: string | null
+					error: string | null
+				} | null
+				qualityReport: {
+					id: string
+					dropItemId: string | null
+					sourceSha256: string
+					algorithmVersion: string
+					score: number
+					generatedAt: string
+					checks: Array<{
+						checkId: string
+						label: string
+						status: IngestQualityStatus
+						weight: number
+						normalizedScore: number
+						contribution: number
+						evidence: unknown
+						fix: { tool: string; summary: string; options: unknown } | null
+					}>
+				} | null
+				metadataCandidates: Array<{
+					id: string
+					dropItemId: string | null
+					provider: string
+					providerVersion: string
+					model: string | null
+					confidence: number
+					fields: unknown
+					fieldConfidences: unknown
+					sourceSha256: string
+					provenance: unknown
+					status: IngestCandidateStatus
+					createdAt: string
+				}>
+				media: { id: string; name: string } | null
+				series: { id: string; name: string } | null
+			}
+			reasons: Array<{ checkId: string; status: IngestQualityStatus; message: string }>
+		}>
+		pageInfo:
+			| { currentCursor: string | null; nextCursor: string | null; limit: number }
+			| { totalPages: number; totalItems: number; currentPage: number; pageSize: number }
+	}
+}
 
 export type IngestBulkItemsQueryVariables = Exact<{
-  ids: Array<string | number> | string | number;
-}>;
+	ids: Array<string | number> | string | number
+}>
 
-
-export type IngestBulkItemsQuery = { ingestBulkItems: Array<{ id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null }> };
+export type IngestBulkItemsQuery = {
+	ingestBulkItems: Array<{
+		id: string
+		libraryId: string
+		createdBy: string
+		filename: string
+		relativePath: string | null
+		sizeBytes: number
+		sourceSha256: string
+		mediaType: string
+		status: IngestDropItemStatus
+		revision: number
+		pendingFields: unknown
+		error: string | null
+		createdAt: string
+		updatedAt: string
+		analysisJob: {
+			id: string
+			dropItemId: string | null
+			jobId: string | null
+			status: JobStatus
+			phase: IngestAnalysisPhase
+			priorityScore: number
+			attempt: number
+			queuedAt: string
+			startedAt: string | null
+			completedAt: string | null
+			error: string | null
+		} | null
+		qualityReport: {
+			id: string
+			dropItemId: string | null
+			sourceSha256: string
+			algorithmVersion: string
+			score: number
+			generatedAt: string
+			checks: Array<{
+				checkId: string
+				label: string
+				status: IngestQualityStatus
+				weight: number
+				normalizedScore: number
+				contribution: number
+				evidence: unknown
+				fix: { tool: string; summary: string; options: unknown } | null
+			}>
+		} | null
+		metadataCandidates: Array<{
+			id: string
+			dropItemId: string | null
+			provider: string
+			providerVersion: string
+			model: string | null
+			confidence: number
+			fields: unknown
+			fieldConfidences: unknown
+			sourceSha256: string
+			provenance: unknown
+			status: IngestCandidateStatus
+			createdAt: string
+		}>
+		media: { id: string; name: string } | null
+		series: { id: string; name: string } | null
+	}>
+}
 
 export type IngestProviderCatalogQueryVariables = Exact<{
-  includeDisabled: boolean;
-}>;
+	includeDisabled: boolean
+}>
 
-
-export type IngestProviderCatalogQuery = { ingestProviderCatalog: Array<{ id: string, name: string, version: string, configured: boolean, capabilities: Array<IngestProviderCapability>, supportedMediaTypes: Array<string>, enabledByDefault: boolean, requiresApiToken: boolean, helpUrl: string | null, settings: Array<{ key: string, label: string, valueType: IngestSettingValueType, required: boolean, secret: boolean, defaultValue: unknown, description: string | null, helpUrl: string | null }> }> };
+export type IngestProviderCatalogQuery = {
+	ingestProviderCatalog: Array<{
+		id: string
+		name: string
+		version: string
+		configured: boolean
+		capabilities: Array<IngestProviderCapability>
+		supportedMediaTypes: Array<string>
+		enabledByDefault: boolean
+		requiresApiToken: boolean
+		helpUrl: string | null
+		settings: Array<{
+			key: string
+			label: string
+			valueType: IngestSettingValueType
+			required: boolean
+			secret: boolean
+			defaultValue: unknown
+			description: string | null
+			helpUrl: string | null
+		}>
+	}>
+}
 
 export type IngestProviderSettingsQueryVariables = Exact<{
-  providerId: string;
-}>;
+	providerId: string
+}>
 
-
-export type IngestProviderSettingsQuery = { ingestProviderSettings: { enabled: boolean, optedIn: boolean, updatedAt: string | null, provider: { id: string, name: string, version: string, configured: boolean, capabilities: Array<IngestProviderCapability>, supportedMediaTypes: Array<string>, enabledByDefault: boolean, requiresApiToken: boolean, helpUrl: string | null, settings: Array<{ key: string, label: string, valueType: IngestSettingValueType, required: boolean, secret: boolean, defaultValue: unknown, description: string | null, helpUrl: string | null }> }, settings: Array<{ key: string, configured: boolean, secret: boolean, value: unknown }> } | null };
+export type IngestProviderSettingsQuery = {
+	ingestProviderSettings: {
+		enabled: boolean
+		optedIn: boolean
+		updatedAt: string | null
+		provider: {
+			id: string
+			name: string
+			version: string
+			configured: boolean
+			capabilities: Array<IngestProviderCapability>
+			supportedMediaTypes: Array<string>
+			enabledByDefault: boolean
+			requiresApiToken: boolean
+			helpUrl: string | null
+			settings: Array<{
+				key: string
+				label: string
+				valueType: IngestSettingValueType
+				required: boolean
+				secret: boolean
+				defaultValue: unknown
+				description: string | null
+				helpUrl: string | null
+			}>
+		}
+		settings: Array<{ key: string; configured: boolean; secret: boolean; value: unknown }>
+	} | null
+}
 
 export type IngestQualityCheckCatalogQueryVariables = Exact<{
-  includeDisabled: boolean;
-}>;
+	includeDisabled: boolean
+}>
 
-
-export type IngestQualityCheckCatalogQuery = { ingestQualityCheckCatalog: Array<{ id: string, name: string, version: string, available: boolean, weight: number, enabled: boolean, supportedMediaTypes: Array<string>, settings: Array<{ key: string, label: string, valueType: IngestSettingValueType, required: boolean, secret: boolean, defaultValue: unknown, description: string | null }> }> };
+export type IngestQualityCheckCatalogQuery = {
+	ingestQualityCheckCatalog: Array<{
+		id: string
+		name: string
+		version: string
+		available: boolean
+		weight: number
+		enabled: boolean
+		supportedMediaTypes: Array<string>
+		settings: Array<{
+			key: string
+			label: string
+			valueType: IngestSettingValueType
+			required: boolean
+			secret: boolean
+			defaultValue: unknown
+			description: string | null
+		}>
+	}>
+}
 
 export type IngestQualityCheckSettingsQueryVariables = Exact<{
-  checkId: string;
-}>;
+	checkId: string
+}>
 
+export type IngestQualityCheckSettingsQuery = {
+	ingestQualityCheckSettings: {
+		checkId: string
+		enabled: boolean
+		updatedAt: string | null
+		settings: Array<{ key: string; configured: boolean; secret: boolean; value: unknown }>
+	} | null
+}
 
-export type IngestQualityCheckSettingsQuery = { ingestQualityCheckSettings: { checkId: string, enabled: boolean, updatedAt: string | null, settings: Array<{ key: string, configured: boolean, secret: boolean, value: unknown }> } | null };
-
-export type MetadataPolicyFieldsFragment = { libraryId: string, hasLibraryOverride: boolean, fields: Array<{ field: MetadataField, providers: Array<string>, strategy: MetadataPolicyStrategy, lockRespected: boolean, overridden: boolean, storable: boolean }>, audio: { singleFileWeight: number, autoAssemble: boolean, autoChapters: boolean, keepOriginal: boolean, overridden: boolean } };
+export type MetadataPolicyFieldsFragment = {
+	libraryId: string
+	hasLibraryOverride: boolean
+	fields: Array<{
+		field: MetadataField
+		providers: Array<string>
+		strategy: MetadataPolicyStrategy
+		lockRespected: boolean
+		overridden: boolean
+		storable: boolean
+	}>
+	audio: {
+		singleFileWeight: number
+		autoAssemble: boolean
+		autoChapters: boolean
+		keepOriginal: boolean
+		overridden: boolean
+	}
+}
 
 export type MetadataPolicyQueryVariables = Exact<{
-  libraryId: string | number;
-}>;
+	libraryId: string | number
+}>
 
-
-export type MetadataPolicyQuery = { metadataPolicy: { libraryId: string, hasLibraryOverride: boolean, fields: Array<{ field: MetadataField, providers: Array<string>, strategy: MetadataPolicyStrategy, lockRespected: boolean, overridden: boolean, storable: boolean }>, audio: { singleFileWeight: number, autoAssemble: boolean, autoChapters: boolean, keepOriginal: boolean, overridden: boolean } } };
+export type MetadataPolicyQuery = {
+	metadataPolicy: {
+		libraryId: string
+		hasLibraryOverride: boolean
+		fields: Array<{
+			field: MetadataField
+			providers: Array<string>
+			strategy: MetadataPolicyStrategy
+			lockRespected: boolean
+			overridden: boolean
+			storable: boolean
+		}>
+		audio: {
+			singleFileWeight: number
+			autoAssemble: boolean
+			autoChapters: boolean
+			keepOriginal: boolean
+			overridden: boolean
+		}
+	}
+}
 
 export type SetMetadataPolicyMutationVariables = Exact<{
-  libraryId: string | number;
-  input: MetadataPolicyInput;
-}>;
+	libraryId: string | number
+	input: MetadataPolicyInput
+}>
 
-
-export type SetMetadataPolicyMutation = { setMetadataPolicy: { libraryId: string, hasLibraryOverride: boolean, fields: Array<{ field: MetadataField, providers: Array<string>, strategy: MetadataPolicyStrategy, lockRespected: boolean, overridden: boolean, storable: boolean }>, audio: { singleFileWeight: number, autoAssemble: boolean, autoChapters: boolean, keepOriginal: boolean, overridden: boolean } } };
+export type SetMetadataPolicyMutation = {
+	setMetadataPolicy: {
+		libraryId: string
+		hasLibraryOverride: boolean
+		fields: Array<{
+			field: MetadataField
+			providers: Array<string>
+			strategy: MetadataPolicyStrategy
+			lockRespected: boolean
+			overridden: boolean
+			storable: boolean
+		}>
+		audio: {
+			singleFileWeight: number
+			autoAssemble: boolean
+			autoChapters: boolean
+			keepOriginal: boolean
+			overridden: boolean
+		}
+	}
+}
 
 export type StageIngestUploadsMutationVariables = Exact<{
-  input: StageIngestUploadsInput;
-}>;
+	input: StageIngestUploadsInput
+}>
 
-
-export type StageIngestUploadsMutation = { stageIngestUploads: { deduplicated: number, items: Array<{ id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null }> } };
+export type StageIngestUploadsMutation = {
+	stageIngestUploads: {
+		deduplicated: number
+		items: Array<{
+			id: string
+			libraryId: string
+			createdBy: string
+			filename: string
+			relativePath: string | null
+			sizeBytes: number
+			sourceSha256: string
+			mediaType: string
+			status: IngestDropItemStatus
+			revision: number
+			pendingFields: unknown
+			error: string | null
+			createdAt: string
+			updatedAt: string
+			analysisJob: {
+				id: string
+				dropItemId: string | null
+				jobId: string | null
+				status: JobStatus
+				phase: IngestAnalysisPhase
+				priorityScore: number
+				attempt: number
+				queuedAt: string
+				startedAt: string | null
+				completedAt: string | null
+				error: string | null
+			} | null
+			qualityReport: {
+				id: string
+				dropItemId: string | null
+				sourceSha256: string
+				algorithmVersion: string
+				score: number
+				generatedAt: string
+				checks: Array<{
+					checkId: string
+					label: string
+					status: IngestQualityStatus
+					weight: number
+					normalizedScore: number
+					contribution: number
+					evidence: unknown
+					fix: { tool: string; summary: string; options: unknown } | null
+				}>
+			} | null
+			metadataCandidates: Array<{
+				id: string
+				dropItemId: string | null
+				provider: string
+				providerVersion: string
+				model: string | null
+				confidence: number
+				fields: unknown
+				fieldConfidences: unknown
+				sourceSha256: string
+				provenance: unknown
+				status: IngestCandidateStatus
+				createdAt: string
+			}>
+			media: { id: string; name: string } | null
+			series: { id: string; name: string } | null
+		}>
+	}
+}
 
 export type ScanIngestDropFolderMutationVariables = Exact<{
-  libraryId: string | number;
-}>;
+	libraryId: string | number
+}>
 
-
-export type ScanIngestDropFolderMutation = { scanIngestDropFolder: { libraryId: string, displayPath: string, enabled: boolean, pendingCount: number, lastDiscoveredAt: string | null } };
+export type ScanIngestDropFolderMutation = {
+	scanIngestDropFolder: {
+		libraryId: string
+		displayPath: string
+		enabled: boolean
+		pendingCount: number
+		lastDiscoveredAt: string | null
+	}
+}
 
 export type EnqueueIngestAnalysisMutationVariables = Exact<{
-  input: EnqueueIngestAnalysisInput;
-}>;
+	input: EnqueueIngestAnalysisInput
+}>
 
-
-export type EnqueueIngestAnalysisMutation = { enqueueIngestAnalysis: Array<{ id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null }> };
+export type EnqueueIngestAnalysisMutation = {
+	enqueueIngestAnalysis: Array<{
+		id: string
+		dropItemId: string | null
+		jobId: string | null
+		status: JobStatus
+		phase: IngestAnalysisPhase
+		priorityScore: number
+		attempt: number
+		queuedAt: string
+		startedAt: string | null
+		completedAt: string | null
+		error: string | null
+	}>
+}
 
 export type RequeueIngestAnalysisMutationVariables = Exact<{
-  dropItemId: string | number;
-  force: boolean;
-}>;
+	dropItemId: string | number
+	force: boolean
+}>
 
-
-export type RequeueIngestAnalysisMutation = { requeueIngestAnalysis: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } };
+export type RequeueIngestAnalysisMutation = {
+	requeueIngestAnalysis: {
+		id: string
+		dropItemId: string | null
+		jobId: string | null
+		status: JobStatus
+		phase: IngestAnalysisPhase
+		priorityScore: number
+		attempt: number
+		queuedAt: string
+		startedAt: string | null
+		completedAt: string | null
+		error: string | null
+	}
+}
 
 export type PauseIngestAnalysisMutationVariables = Exact<{
-  jobId: string | number;
-}>;
+	jobId: string | number
+}>
 
-
-export type PauseIngestAnalysisMutation = { pauseIngestAnalysis: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } };
+export type PauseIngestAnalysisMutation = {
+	pauseIngestAnalysis: {
+		id: string
+		dropItemId: string | null
+		jobId: string | null
+		status: JobStatus
+		phase: IngestAnalysisPhase
+		priorityScore: number
+		attempt: number
+		queuedAt: string
+		startedAt: string | null
+		completedAt: string | null
+		error: string | null
+	}
+}
 
 export type ResumeIngestAnalysisMutationVariables = Exact<{
-  jobId: string | number;
-}>;
+	jobId: string | number
+}>
 
-
-export type ResumeIngestAnalysisMutation = { resumeIngestAnalysis: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } };
+export type ResumeIngestAnalysisMutation = {
+	resumeIngestAnalysis: {
+		id: string
+		dropItemId: string | null
+		jobId: string | null
+		status: JobStatus
+		phase: IngestAnalysisPhase
+		priorityScore: number
+		attempt: number
+		queuedAt: string
+		startedAt: string | null
+		completedAt: string | null
+		error: string | null
+	}
+}
 
 export type RetryIngestAnalysisMutationVariables = Exact<{
-  jobId: string | number;
-}>;
+	jobId: string | number
+}>
 
-
-export type RetryIngestAnalysisMutation = { retryIngestAnalysis: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } };
+export type RetryIngestAnalysisMutation = {
+	retryIngestAnalysis: {
+		id: string
+		dropItemId: string | null
+		jobId: string | null
+		status: JobStatus
+		phase: IngestAnalysisPhase
+		priorityScore: number
+		attempt: number
+		queuedAt: string
+		startedAt: string | null
+		completedAt: string | null
+		error: string | null
+	}
+}
 
 export type CancelIngestAnalysisMutationVariables = Exact<{
-  jobId: string | number;
-}>;
+	jobId: string | number
+}>
 
-
-export type CancelIngestAnalysisMutation = { cancelIngestAnalysis: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } };
+export type CancelIngestAnalysisMutation = {
+	cancelIngestAnalysis: {
+		id: string
+		dropItemId: string | null
+		jobId: string | null
+		status: JobStatus
+		phase: IngestAnalysisPhase
+		priorityScore: number
+		attempt: number
+		queuedAt: string
+		startedAt: string | null
+		completedAt: string | null
+		error: string | null
+	}
+}
 
 export type DiscardIngestItemMutationVariables = Exact<{
-  dropItemId: string | number;
-  reason?: string | null | undefined;
-}>;
+	dropItemId: string | number
+	reason?: string | null | undefined
+}>
 
-
-export type DiscardIngestItemMutation = { discardIngestItem: { id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null } };
+export type DiscardIngestItemMutation = {
+	discardIngestItem: {
+		id: string
+		libraryId: string
+		createdBy: string
+		filename: string
+		relativePath: string | null
+		sizeBytes: number
+		sourceSha256: string
+		mediaType: string
+		status: IngestDropItemStatus
+		revision: number
+		pendingFields: unknown
+		error: string | null
+		createdAt: string
+		updatedAt: string
+		analysisJob: {
+			id: string
+			dropItemId: string | null
+			jobId: string | null
+			status: JobStatus
+			phase: IngestAnalysisPhase
+			priorityScore: number
+			attempt: number
+			queuedAt: string
+			startedAt: string | null
+			completedAt: string | null
+			error: string | null
+		} | null
+		qualityReport: {
+			id: string
+			dropItemId: string | null
+			sourceSha256: string
+			algorithmVersion: string
+			score: number
+			generatedAt: string
+			checks: Array<{
+				checkId: string
+				label: string
+				status: IngestQualityStatus
+				weight: number
+				normalizedScore: number
+				contribution: number
+				evidence: unknown
+				fix: { tool: string; summary: string; options: unknown } | null
+			}>
+		} | null
+		metadataCandidates: Array<{
+			id: string
+			dropItemId: string | null
+			provider: string
+			providerVersion: string
+			model: string | null
+			confidence: number
+			fields: unknown
+			fieldConfidences: unknown
+			sourceSha256: string
+			provenance: unknown
+			status: IngestCandidateStatus
+			createdAt: string
+		}>
+		media: { id: string; name: string } | null
+		series: { id: string; name: string } | null
+	}
+}
 
 export type ApplyIngestMetadataMutationVariables = Exact<{
-  input: ApplyIngestMetadataInput;
-}>;
+	input: ApplyIngestMetadataInput
+}>
 
-
-export type ApplyIngestMetadataMutation = { applyIngestMetadata: { dropItem: { id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null } | null, media: { id: string, name: string, resolvedName: string } | null } };
+export type ApplyIngestMetadataMutation = {
+	applyIngestMetadata: {
+		dropItem: {
+			id: string
+			libraryId: string
+			createdBy: string
+			filename: string
+			relativePath: string | null
+			sizeBytes: number
+			sourceSha256: string
+			mediaType: string
+			status: IngestDropItemStatus
+			revision: number
+			pendingFields: unknown
+			error: string | null
+			createdAt: string
+			updatedAt: string
+			analysisJob: {
+				id: string
+				dropItemId: string | null
+				jobId: string | null
+				status: JobStatus
+				phase: IngestAnalysisPhase
+				priorityScore: number
+				attempt: number
+				queuedAt: string
+				startedAt: string | null
+				completedAt: string | null
+				error: string | null
+			} | null
+			qualityReport: {
+				id: string
+				dropItemId: string | null
+				sourceSha256: string
+				algorithmVersion: string
+				score: number
+				generatedAt: string
+				checks: Array<{
+					checkId: string
+					label: string
+					status: IngestQualityStatus
+					weight: number
+					normalizedScore: number
+					contribution: number
+					evidence: unknown
+					fix: { tool: string; summary: string; options: unknown } | null
+				}>
+			} | null
+			metadataCandidates: Array<{
+				id: string
+				dropItemId: string | null
+				provider: string
+				providerVersion: string
+				model: string | null
+				confidence: number
+				fields: unknown
+				fieldConfidences: unknown
+				sourceSha256: string
+				provenance: unknown
+				status: IngestCandidateStatus
+				createdAt: string
+			}>
+			media: { id: string; name: string } | null
+			series: { id: string; name: string } | null
+		} | null
+		media: { id: string; name: string; resolvedName: string } | null
+	}
+}
 
 export type BulkApplyIngestMetadataMutationVariables = Exact<{
-  input: BulkApplyIngestMetadataInput;
-}>;
+	input: BulkApplyIngestMetadataInput
+}>
 
-
-export type BulkApplyIngestMetadataMutation = { bulkApplyIngestMetadata: { applied: Array<{ id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null }>, failures: Array<{ dropItemId: string, message: string }> } };
+export type BulkApplyIngestMetadataMutation = {
+	bulkApplyIngestMetadata: {
+		applied: Array<{
+			id: string
+			libraryId: string
+			createdBy: string
+			filename: string
+			relativePath: string | null
+			sizeBytes: number
+			sourceSha256: string
+			mediaType: string
+			status: IngestDropItemStatus
+			revision: number
+			pendingFields: unknown
+			error: string | null
+			createdAt: string
+			updatedAt: string
+			analysisJob: {
+				id: string
+				dropItemId: string | null
+				jobId: string | null
+				status: JobStatus
+				phase: IngestAnalysisPhase
+				priorityScore: number
+				attempt: number
+				queuedAt: string
+				startedAt: string | null
+				completedAt: string | null
+				error: string | null
+			} | null
+			qualityReport: {
+				id: string
+				dropItemId: string | null
+				sourceSha256: string
+				algorithmVersion: string
+				score: number
+				generatedAt: string
+				checks: Array<{
+					checkId: string
+					label: string
+					status: IngestQualityStatus
+					weight: number
+					normalizedScore: number
+					contribution: number
+					evidence: unknown
+					fix: { tool: string; summary: string; options: unknown } | null
+				}>
+			} | null
+			metadataCandidates: Array<{
+				id: string
+				dropItemId: string | null
+				provider: string
+				providerVersion: string
+				model: string | null
+				confidence: number
+				fields: unknown
+				fieldConfidences: unknown
+				sourceSha256: string
+				provenance: unknown
+				status: IngestCandidateStatus
+				createdAt: string
+			}>
+			media: { id: string; name: string } | null
+			series: { id: string; name: string } | null
+		}>
+		failures: Array<{ dropItemId: string; message: string }>
+	}
+}
 
 export type ApproveIngestItemMutationVariables = Exact<{
-  dropItemId: string | number;
-  strategy?: MergeStrategy | null | undefined;
-}>;
+	dropItemId: string | number
+	strategy?: MergeStrategy | null | undefined
+}>
 
-
-export type ApproveIngestItemMutation = { approveIngestItem: { id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null } };
+export type ApproveIngestItemMutation = {
+	approveIngestItem: {
+		id: string
+		libraryId: string
+		createdBy: string
+		filename: string
+		relativePath: string | null
+		sizeBytes: number
+		sourceSha256: string
+		mediaType: string
+		status: IngestDropItemStatus
+		revision: number
+		pendingFields: unknown
+		error: string | null
+		createdAt: string
+		updatedAt: string
+		analysisJob: {
+			id: string
+			dropItemId: string | null
+			jobId: string | null
+			status: JobStatus
+			phase: IngestAnalysisPhase
+			priorityScore: number
+			attempt: number
+			queuedAt: string
+			startedAt: string | null
+			completedAt: string | null
+			error: string | null
+		} | null
+		qualityReport: {
+			id: string
+			dropItemId: string | null
+			sourceSha256: string
+			algorithmVersion: string
+			score: number
+			generatedAt: string
+			checks: Array<{
+				checkId: string
+				label: string
+				status: IngestQualityStatus
+				weight: number
+				normalizedScore: number
+				contribution: number
+				evidence: unknown
+				fix: { tool: string; summary: string; options: unknown } | null
+			}>
+		} | null
+		metadataCandidates: Array<{
+			id: string
+			dropItemId: string | null
+			provider: string
+			providerVersion: string
+			model: string | null
+			confidence: number
+			fields: unknown
+			fieldConfidences: unknown
+			sourceSha256: string
+			provenance: unknown
+			status: IngestCandidateStatus
+			createdAt: string
+		}>
+		media: { id: string; name: string } | null
+		series: { id: string; name: string } | null
+	}
+}
 
 export type RejectIngestItemMutationVariables = Exact<{
-  dropItemId: string | number;
-  reason?: string | null | undefined;
-}>;
+	dropItemId: string | number
+	reason?: string | null | undefined
+}>
 
-
-export type RejectIngestItemMutation = { rejectIngestItem: { id: string, libraryId: string, createdBy: string, filename: string, relativePath: string | null, sizeBytes: number, sourceSha256: string, mediaType: string, status: IngestDropItemStatus, revision: number, pendingFields: unknown, error: string | null, createdAt: string, updatedAt: string, analysisJob: { id: string, dropItemId: string | null, jobId: string | null, status: JobStatus, phase: IngestAnalysisPhase, priorityScore: number, attempt: number, queuedAt: string, startedAt: string | null, completedAt: string | null, error: string | null } | null, qualityReport: { id: string, dropItemId: string | null, sourceSha256: string, algorithmVersion: string, score: number, generatedAt: string, checks: Array<{ checkId: string, label: string, status: IngestQualityStatus, weight: number, normalizedScore: number, contribution: number, evidence: unknown, fix: { tool: string, summary: string, options: unknown } | null }> } | null, metadataCandidates: Array<{ id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string }>, media: { id: string, name: string } | null, series: { id: string, name: string } | null } };
+export type RejectIngestItemMutation = {
+	rejectIngestItem: {
+		id: string
+		libraryId: string
+		createdBy: string
+		filename: string
+		relativePath: string | null
+		sizeBytes: number
+		sourceSha256: string
+		mediaType: string
+		status: IngestDropItemStatus
+		revision: number
+		pendingFields: unknown
+		error: string | null
+		createdAt: string
+		updatedAt: string
+		analysisJob: {
+			id: string
+			dropItemId: string | null
+			jobId: string | null
+			status: JobStatus
+			phase: IngestAnalysisPhase
+			priorityScore: number
+			attempt: number
+			queuedAt: string
+			startedAt: string | null
+			completedAt: string | null
+			error: string | null
+		} | null
+		qualityReport: {
+			id: string
+			dropItemId: string | null
+			sourceSha256: string
+			algorithmVersion: string
+			score: number
+			generatedAt: string
+			checks: Array<{
+				checkId: string
+				label: string
+				status: IngestQualityStatus
+				weight: number
+				normalizedScore: number
+				contribution: number
+				evidence: unknown
+				fix: { tool: string; summary: string; options: unknown } | null
+			}>
+		} | null
+		metadataCandidates: Array<{
+			id: string
+			dropItemId: string | null
+			provider: string
+			providerVersion: string
+			model: string | null
+			confidence: number
+			fields: unknown
+			fieldConfidences: unknown
+			sourceSha256: string
+			provenance: unknown
+			status: IngestCandidateStatus
+			createdAt: string
+		}>
+		media: { id: string; name: string } | null
+		series: { id: string; name: string } | null
+	}
+}
 
 export type RunIngestQualityFixMutationVariables = Exact<{
-  input: RunIngestQualityFixInput;
-}>;
+	input: RunIngestQualityFixInput
+}>
 
-
-export type RunIngestQualityFixMutation = { runIngestQualityFix: { id: string, revision: number, status: IngestDropItemStatus, error: string | null } };
+export type RunIngestQualityFixMutation = {
+	runIngestQualityFix: {
+		id: string
+		revision: number
+		status: IngestDropItemStatus
+		error: string | null
+	}
+}
 
 export type SetIngestProviderSettingsMutationVariables = Exact<{
-  input: SetIngestProviderSettingsInput;
-}>;
+	input: SetIngestProviderSettingsInput
+}>
 
-
-export type SetIngestProviderSettingsMutation = { setIngestProviderSettings: { enabled: boolean, optedIn: boolean, updatedAt: string | null, provider: { id: string, name: string, version: string, configured: boolean, capabilities: Array<IngestProviderCapability>, supportedMediaTypes: Array<string>, enabledByDefault: boolean, requiresApiToken: boolean, helpUrl: string | null, settings: Array<{ key: string, label: string, valueType: IngestSettingValueType, required: boolean, secret: boolean, defaultValue: unknown, description: string | null, helpUrl: string | null }> }, settings: Array<{ key: string, configured: boolean, secret: boolean, value: unknown }> } };
+export type SetIngestProviderSettingsMutation = {
+	setIngestProviderSettings: {
+		enabled: boolean
+		optedIn: boolean
+		updatedAt: string | null
+		provider: {
+			id: string
+			name: string
+			version: string
+			configured: boolean
+			capabilities: Array<IngestProviderCapability>
+			supportedMediaTypes: Array<string>
+			enabledByDefault: boolean
+			requiresApiToken: boolean
+			helpUrl: string | null
+			settings: Array<{
+				key: string
+				label: string
+				valueType: IngestSettingValueType
+				required: boolean
+				secret: boolean
+				defaultValue: unknown
+				description: string | null
+				helpUrl: string | null
+			}>
+		}
+		settings: Array<{ key: string; configured: boolean; secret: boolean; value: unknown }>
+	}
+}
 
 export type VerifyIngestProviderMutationVariables = Exact<{
-  providerId: string;
-  settings?: unknown;
-}>;
+	providerId: string
+	settings?: unknown
+}>
 
+export type VerifyIngestProviderMutation = {
+	verifyIngestProvider: { responseStatus: number; isValid: boolean; error: string | null }
+}
 
-export type VerifyIngestProviderMutation = { verifyIngestProvider: { responseStatus: number, isValid: boolean, error: string | null } };
+export type MetadataProviderConfigsQueryVariables = Exact<{ [key: string]: never }>
 
-export type MetadataProviderConfigsQueryVariables = Exact<{ [key: string]: never; }>;
-
-
-export type MetadataProviderConfigsQuery = { metadataProviderConfigs: Array<{ id: number, providerType: MetadataProvider, enabled: boolean, createdAt: string, updatedAt: string | null }> };
+export type MetadataProviderConfigsQuery = {
+	metadataProviderConfigs: Array<{
+		id: number
+		providerType: MetadataProvider
+		enabled: boolean
+		createdAt: string
+		updatedAt: string | null
+	}>
+}
 
 export type CreateMetadataProviderMutationVariables = Exact<{
-  input: CreateMetadataProviderConfigInput;
-}>;
+	input: CreateMetadataProviderConfigInput
+}>
 
-
-export type CreateMetadataProviderMutation = { createMetadataProvider: { id: number, providerType: MetadataProvider, enabled: boolean } };
+export type CreateMetadataProviderMutation = {
+	createMetadataProvider: { id: number; providerType: MetadataProvider; enabled: boolean }
+}
 
 export type UpdateMetadataProviderMutationVariables = Exact<{
-  id: number;
-  input: PatchMetadataProviderConfigInput;
-}>;
+	id: number
+	input: PatchMetadataProviderConfigInput
+}>
 
-
-export type UpdateMetadataProviderMutation = { updateMetadataProvider: { id: number, providerType: MetadataProvider, enabled: boolean } };
+export type UpdateMetadataProviderMutation = {
+	updateMetadataProvider: { id: number; providerType: MetadataProvider; enabled: boolean }
+}
 
 export type DeleteMetadataProviderMutationVariables = Exact<{
-  id: number;
-}>;
+	id: number
+}>
 
-
-export type DeleteMetadataProviderMutation = { deleteMetadataProvider: { id: number } };
+export type DeleteMetadataProviderMutation = { deleteMetadataProvider: { id: number } }
 
 export type SetIngestQualityCheckSettingsMutationVariables = Exact<{
-  input: SetIngestQualityCheckSettingsInput;
-}>;
+	input: SetIngestQualityCheckSettingsInput
+}>
 
-
-export type SetIngestQualityCheckSettingsMutation = { setIngestQualityCheckSettings: { checkId: string, enabled: boolean, updatedAt: string | null, settings: Array<{ key: string, configured: boolean, secret: boolean, value: unknown }> } };
+export type SetIngestQualityCheckSettingsMutation = {
+	setIngestQualityCheckSettings: {
+		checkId: string
+		enabled: boolean
+		updatedAt: string | null
+		settings: Array<{ key: string; configured: boolean; secret: boolean; value: unknown }>
+	}
+}
 
 export type IngestProgressSubscriptionVariables = Exact<{
-  libraryId?: string | number | null | undefined;
-  dropItemId?: string | number | null | undefined;
-  analysisJobId?: string | number | null | undefined;
-  afterEventId?: string | number | null | undefined;
-}>;
+	libraryId?: string | number | null | undefined
+	dropItemId?: string | number | null | undefined
+	analysisJobId?: string | number | null | undefined
+	afterEventId?: string | number | null | undefined
+}>
 
-
-export type IngestProgressSubscription = { ingestProgress: { eventId: string, emittedAt: string, libraryId: string, dropItemId: string, analysisJobId: string | null, status: IngestDropItemStatus, phase: IngestAnalysisPhase, completed: number, total: number, score: number | null, message: string | null } };
+export type IngestProgressSubscription = {
+	ingestProgress: {
+		eventId: string
+		emittedAt: string
+		libraryId: string
+		dropItemId: string
+		analysisJobId: string | null
+		status: IngestDropItemStatus
+		phase: IngestAnalysisPhase
+		completed: number
+		total: number
+		score: number | null
+		message: string | null
+	}
+}
 
 export type IngestProviderSearchQueryVariables = Exact<{
-  query: string;
-  mediaKind?: IngestMediaKind | null | undefined;
-  providers?: Array<string> | string | null | undefined;
-  limit?: number | null | undefined;
-}>;
+	query: string
+	mediaKind?: IngestMediaKind | null | undefined
+	providers?: Array<string> | string | null | undefined
+	limit?: number | null | undefined
+}>
 
-
-export type IngestProviderSearchQuery = { ingestProviderSearch: Array<{ providerId: string, externalId: string, title: string, year: number | null, coverUrl: string | null, summary: string | null, score: number }> };
+export type IngestProviderSearchQuery = {
+	ingestProviderSearch: Array<{
+		providerId: string
+		externalId: string
+		title: string
+		year: number | null
+		coverUrl: string | null
+		summary: string | null
+		score: number
+	}>
+}
 
 export type LookupIngestCandidateMutationVariables = Exact<{
-  dropItemId: string | number;
-  providerId: string;
-  externalId: string;
-}>;
+	dropItemId: string | number
+	providerId: string
+	externalId: string
+}>
 
+export type LookupIngestCandidateMutation = {
+	lookupIngestCandidate: {
+		id: string
+		dropItemId: string | null
+		provider: string
+		providerVersion: string
+		model: string | null
+		confidence: number
+		fields: unknown
+		fieldConfidences: unknown
+		sourceSha256: string
+		provenance: unknown
+		status: IngestCandidateStatus
+		createdAt: string
+	}
+}
 
-export type LookupIngestCandidateMutation = { lookupIngestCandidate: { id: string, dropItemId: string | null, provider: string, providerVersion: string, model: string | null, confidence: number, fields: unknown, fieldConfidences: unknown, sourceSha256: string, provenance: unknown, status: IngestCandidateStatus, createdAt: string } };
+export type ProviderSourcesQueryVariables = Exact<{ [key: string]: never }>
 
-export type ProviderSourcesQueryVariables = Exact<{ [key: string]: never; }>;
+export type ProviderSourcesQuery = {
+	providerSources: Array<{
+		id: string
+		implementation: string
+		name: string
+		lang: string
+		baseUrl: string
+		enabled: boolean
+		requestHeaders: Array<{ name: string; preview: string; length: number }>
+	}>
+}
 
+export type ProviderSourceHealthRowsQueryVariables = Exact<{ [key: string]: never }>
 
-export type ProviderSourcesQuery = { providerSources: Array<{ id: string, implementation: string, name: string, lang: string, baseUrl: string, enabled: boolean, requestHeaders: Array<{ name: string, preview: string, length: number }> }> };
-
-export type ProviderSourceHealthRowsQueryVariables = Exact<{ [key: string]: never; }>;
-
-
-export type ProviderSourceHealthRowsQuery = { providerSourceHealth: Array<{ sourceId: string, name: string, baseUrl: string, status: string, error: string | null, challenged: boolean, httpStatus: number | null, consecutiveFailures: number, lastCheckedAt: string | null }> };
+export type ProviderSourceHealthRowsQuery = {
+	providerSourceHealth: Array<{
+		sourceId: string
+		name: string
+		baseUrl: string
+		status: string
+		error: string | null
+		challenged: boolean
+		httpStatus: number | null
+		consecutiveFailures: number
+		lastCheckedAt: string | null
+	}>
+}
 
 export type SetProviderSourceHeadersMutationVariables = Exact<{
-  instanceId: string;
-  headers: unknown;
-}>;
+	instanceId: string
+	headers: unknown
+}>
 
-
-export type SetProviderSourceHeadersMutation = { setProviderSourceHeaders: Array<{ name: string, preview: string, length: number }> };
+export type SetProviderSourceHeadersMutation = {
+	setProviderSourceHeaders: Array<{ name: string; preview: string; length: number }>
+}
 
 export type SolveSourceChallengeMutationVariables = Exact<{
-  instanceId: string;
-}>;
+	instanceId: string
+}>
 
+export type SolveSourceChallengeMutation = {
+	solveSourceChallenge: { state: ProviderChallengeSolveState; message: string; challenged: boolean }
+}
 
-export type SolveSourceChallengeMutation = { solveSourceChallenge: { state: ProviderChallengeSolveState, message: string, challenged: boolean } };
-
-export const IngestDropItemFieldsFragmentDoc = {"kind":"Document","definitions":[{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]} as unknown as DocumentNode<IngestDropItemFieldsFragment, unknown>;
-export const IngestPageInfoFieldsFragmentDoc = {"kind":"Document","definitions":[{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestPageInfoFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"PaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"OffsetPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"totalPages"}},{"kind":"Field","name":{"kind":"Name","value":"totalItems"}},{"kind":"Field","name":{"kind":"Name","value":"currentPage"}},{"kind":"Field","name":{"kind":"Name","value":"pageSize"}}]}},{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"CursorPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"currentCursor"}},{"kind":"Field","name":{"kind":"Name","value":"nextCursor"}},{"kind":"Field","name":{"kind":"Name","value":"limit"}}]}}]}}]} as unknown as DocumentNode<IngestPageInfoFieldsFragment, unknown>;
-export const MetadataPolicyFieldsFragmentDoc = {"kind":"Document","definitions":[{"kind":"FragmentDefinition","name":{"kind":"Name","value":"MetadataPolicyFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"MetadataPolicy"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"hasLibraryOverride"}},{"kind":"Field","name":{"kind":"Name","value":"fields"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"field"}},{"kind":"Field","name":{"kind":"Name","value":"providers"}},{"kind":"Field","name":{"kind":"Name","value":"strategy"}},{"kind":"Field","name":{"kind":"Name","value":"lockRespected"}},{"kind":"Field","name":{"kind":"Name","value":"overridden"}},{"kind":"Field","name":{"kind":"Name","value":"storable"}}]}},{"kind":"Field","name":{"kind":"Name","value":"audio"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"singleFileWeight"}},{"kind":"Field","name":{"kind":"Name","value":"autoAssemble"}},{"kind":"Field","name":{"kind":"Name","value":"autoChapters"}},{"kind":"Field","name":{"kind":"Name","value":"keepOriginal"}},{"kind":"Field","name":{"kind":"Name","value":"overridden"}}]}}]}}]} as unknown as DocumentNode<MetadataPolicyFieldsFragment, unknown>;
-export const DuplicatePageCandidatesDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"DuplicatePageCandidates"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"minBooks"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"Int"}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"limit"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"Int"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"duplicatePageCandidates"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}},{"kind":"Argument","name":{"kind":"Name","value":"minBooks"},"value":{"kind":"Variable","name":{"kind":"Name","value":"minBooks"}}},{"kind":"Argument","name":{"kind":"Name","value":"limit"},"value":{"kind":"Variable","name":{"kind":"Name","value":"limit"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"dhash"}},{"kind":"Field","name":{"kind":"Name","value":"bookCount"}},{"kind":"Field","name":{"kind":"Name","value":"pageCount"}},{"kind":"Field","name":{"kind":"Name","value":"occurrences"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"mediaId"}},{"kind":"Field","name":{"kind":"Name","value":"mediaName"}},{"kind":"Field","name":{"kind":"Name","value":"page"}},{"kind":"Field","name":{"kind":"Name","value":"visiblePage"}},{"kind":"Field","name":{"kind":"Name","value":"dhash"}}]}}]}}]}}]} as unknown as DocumentNode<DuplicatePageCandidatesQuery, DuplicatePageCandidatesQueryVariables>;
-export const KnownDuplicatePagesDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"KnownDuplicatePages"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"knownDuplicatePages"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"dhash"}},{"kind":"Field","name":{"kind":"Name","value":"action"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}}]}}]} as unknown as DocumentNode<KnownDuplicatePagesQuery, KnownDuplicatePagesQueryVariables>;
-export const MarkDuplicatePageDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"MarkDuplicatePage"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"dhash"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"action"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"DuplicatePageAction"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"markDuplicatePage"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}},{"kind":"Argument","name":{"kind":"Name","value":"dhash"},"value":{"kind":"Variable","name":{"kind":"Name","value":"dhash"}}},{"kind":"Argument","name":{"kind":"Name","value":"action"},"value":{"kind":"Variable","name":{"kind":"Name","value":"action"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"dhash"}},{"kind":"Field","name":{"kind":"Name","value":"action"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}}]}}]} as unknown as DocumentNode<MarkDuplicatePageMutation, MarkDuplicatePageMutationVariables>;
-export const UnmarkDuplicatePageDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"UnmarkDuplicatePage"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"dhash"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"unmarkDuplicatePage"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}},{"kind":"Argument","name":{"kind":"Name","value":"dhash"},"value":{"kind":"Variable","name":{"kind":"Name","value":"dhash"}}}]}]}}]} as unknown as DocumentNode<UnmarkDuplicatePageMutation, UnmarkDuplicatePageMutationVariables>;
-export const IngestItemEventsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"subscription","name":{"kind":"Name","value":"IngestItemEvents"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestEvents"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"itemId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}}]}}]}}]} as unknown as DocumentNode<IngestItemEventsSubscription, IngestItemEventsSubscriptionVariables>;
-export const LibraryMediaDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"LibraryMedia"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"filter"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"MediaFilterInput"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"pagination"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"Pagination"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"media"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"filter"},"value":{"kind":"Variable","name":{"kind":"Name","value":"filter"}}},{"kind":"Argument","name":{"kind":"Name","value":"pagination"},"value":{"kind":"Variable","name":{"kind":"Name","value":"pagination"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"nodes"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"resolvedName"}},{"kind":"Field","name":{"kind":"Name","value":"path"}},{"kind":"Field","name":{"kind":"Name","value":"pages"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"thumbnail"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"url"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"pageInfo"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestPageInfoFields"}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestPageInfoFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"PaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"OffsetPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"totalPages"}},{"kind":"Field","name":{"kind":"Name","value":"totalItems"}},{"kind":"Field","name":{"kind":"Name","value":"currentPage"}},{"kind":"Field","name":{"kind":"Name","value":"pageSize"}}]}},{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"CursorPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"currentCursor"}},{"kind":"Field","name":{"kind":"Name","value":"nextCursor"}},{"kind":"Field","name":{"kind":"Name","value":"limit"}}]}}]}}]} as unknown as DocumentNode<LibraryMediaQuery, LibraryMediaQueryVariables>;
-export const IngestMediaQualityScoreDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestMediaQualityScore"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"mediaId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestMediaQualityReport"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"mediaId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"mediaId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"score"}}]}}]}}]} as unknown as DocumentNode<IngestMediaQualityScoreQuery, IngestMediaQualityScoreQueryVariables>;
-export const IngestMediaQualityReportDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestMediaQualityReport"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"mediaId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestMediaQualityReport"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"mediaId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"mediaId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}}]}}]} as unknown as DocumentNode<IngestMediaQualityReportQuery, IngestMediaQualityReportQueryVariables>;
-export const IngestMediaMetadataCandidatesDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestMediaMetadataCandidates"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"mediaId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestMediaMetadataCandidates"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"mediaId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"mediaId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}}]}}]} as unknown as DocumentNode<IngestMediaMetadataCandidatesQuery, IngestMediaMetadataCandidatesQueryVariables>;
-export const LibraryAnalysisJobDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"LibraryAnalysisJob"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestAnalysisJob"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}}]}}]} as unknown as DocumentNode<LibraryAnalysisJobQuery, LibraryAnalysisJobQueryVariables>;
-export const RunLibraryQualityDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"RunLibraryQuality"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"mediaIds"}},"type":{"kind":"NonNullType","type":{"kind":"ListType","type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"runLibraryQuality"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"mediaIds"},"value":{"kind":"Variable","name":{"kind":"Name","value":"mediaIds"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}}]}}]}}]} as unknown as DocumentNode<RunLibraryQualityMutation, RunLibraryQualityMutationVariables>;
-export const MatchLibraryMediaDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"MatchLibraryMedia"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"mediaIds"}},"type":{"kind":"NonNullType","type":{"kind":"ListType","type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"providers"}},"type":{"kind":"ListType","type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"matchLibraryMedia"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"mediaIds"},"value":{"kind":"Variable","name":{"kind":"Name","value":"mediaIds"}}},{"kind":"Argument","name":{"kind":"Name","value":"providers"},"value":{"kind":"Variable","name":{"kind":"Name","value":"providers"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}}]}}]}}]} as unknown as DocumentNode<MatchLibraryMediaMutation, MatchLibraryMediaMutationVariables>;
-export const ApplyBestIngestMetadataDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"ApplyBestIngestMetadata"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"mediaId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"applyBestIngestMetadata"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"mediaId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"mediaId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}}]}},{"kind":"Field","name":{"kind":"Name","value":"decisions"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"field"}},{"kind":"Field","name":{"kind":"Name","value":"strategy"}},{"kind":"Field","name":{"kind":"Name","value":"outcome"}},{"kind":"Field","name":{"kind":"Name","value":"providers"}},{"kind":"Field","name":{"kind":"Name","value":"applied"}}]}}]}}]}}]} as unknown as DocumentNode<ApplyBestIngestMetadataMutation, ApplyBestIngestMetadataMutationVariables>;
-export const EditorKindleTargetsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"EditorKindleTargets"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"devices"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"kindleEmail"}},{"kind":"Field","name":{"kind":"Name","value":"revokedAt"}}]}}]}}]} as unknown as DocumentNode<EditorKindleTargetsQuery, EditorKindleTargetsQueryVariables>;
-export const EditorSendToKindleDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"EditorSendToKindle"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"mediaId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"deviceId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"sendToKindle"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"mediaId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"mediaId"}}},{"kind":"Argument","name":{"kind":"Name","value":"deviceId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"deviceId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"deviceId"}},{"kind":"Field","name":{"kind":"Name","value":"deviceName"}},{"kind":"Field","name":{"kind":"Name","value":"recipient"}},{"kind":"Field","name":{"kind":"Name","value":"format"}},{"kind":"Field","name":{"kind":"Name","value":"bytes"}},{"kind":"Field","name":{"kind":"Name","value":"converted"}},{"kind":"Field","name":{"kind":"Name","value":"note"}}]}}]}}]} as unknown as DocumentNode<EditorSendToKindleMutation, EditorSendToKindleMutationVariables>;
-export const LibrariesDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"Libraries"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"pagination"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"Pagination"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"libraries"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"pagination"},"value":{"kind":"Variable","name":{"kind":"Name","value":"pagination"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"nodes"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"emoji"}}]}},{"kind":"Field","name":{"kind":"Name","value":"pageInfo"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestPageInfoFields"}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestPageInfoFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"PaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"OffsetPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"totalPages"}},{"kind":"Field","name":{"kind":"Name","value":"totalItems"}},{"kind":"Field","name":{"kind":"Name","value":"currentPage"}},{"kind":"Field","name":{"kind":"Name","value":"pageSize"}}]}},{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"CursorPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"currentCursor"}},{"kind":"Field","name":{"kind":"Name","value":"nextCursor"}},{"kind":"Field","name":{"kind":"Name","value":"limit"}}]}}]}}]} as unknown as DocumentNode<LibrariesQuery, LibrariesQueryVariables>;
-export const IngestDropFolderAndItemsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestDropFolderAndItems"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"status"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItemStatus"}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"pagination"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"Pagination"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestDropFolder"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"displayPath"}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}},{"kind":"Field","name":{"kind":"Name","value":"pendingCount"}},{"kind":"Field","name":{"kind":"Name","value":"lastDiscoveredAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"ingestDropItems"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}},{"kind":"Argument","name":{"kind":"Name","value":"status"},"value":{"kind":"Variable","name":{"kind":"Name","value":"status"}}},{"kind":"Argument","name":{"kind":"Name","value":"pagination"},"value":{"kind":"Variable","name":{"kind":"Name","value":"pagination"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"nodes"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestDropItemFields"}}]}},{"kind":"Field","name":{"kind":"Name","value":"pageInfo"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestPageInfoFields"}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestPageInfoFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"PaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"OffsetPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"totalPages"}},{"kind":"Field","name":{"kind":"Name","value":"totalItems"}},{"kind":"Field","name":{"kind":"Name","value":"currentPage"}},{"kind":"Field","name":{"kind":"Name","value":"pageSize"}}]}},{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"CursorPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"currentCursor"}},{"kind":"Field","name":{"kind":"Name","value":"nextCursor"}},{"kind":"Field","name":{"kind":"Name","value":"limit"}}]}}]}}]} as unknown as DocumentNode<IngestDropFolderAndItemsQuery, IngestDropFolderAndItemsQueryVariables>;
-export const IngestItemDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestItem"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestItem"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestDropItemFields"}},{"kind":"Field","name":{"kind":"Name","value":"dropGroupId"}},{"kind":"Field","name":{"kind":"Name","value":"sidecars"}},{"kind":"Field","name":{"kind":"Name","value":"dropGroupSiblings"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"qualityScore"}},{"kind":"Field","name":{"kind":"Name","value":"mediaId"}},{"kind":"Field","name":{"kind":"Name","value":"editionPairCandidate"}},{"kind":"Field","name":{"kind":"Name","value":"pairState"}}]}},{"kind":"Field","name":{"kind":"Name","value":"audio"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"durationMs"}},{"kind":"Field","name":{"kind":"Name","value":"duration"}},{"kind":"Field","name":{"kind":"Name","value":"codec"}},{"kind":"Field","name":{"kind":"Name","value":"sampleRate"}},{"kind":"Field","name":{"kind":"Name","value":"channels"}},{"kind":"Field","name":{"kind":"Name","value":"bitrate"}},{"kind":"Field","name":{"kind":"Name","value":"chapterSource"}},{"kind":"Field","name":{"kind":"Name","value":"coverContentType"}},{"kind":"Field","name":{"kind":"Name","value":"coverByteSize"}},{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"Field","name":{"kind":"Name","value":"author"}},{"kind":"Field","name":{"kind":"Name","value":"narrator"}},{"kind":"Field","name":{"kind":"Name","value":"album"}},{"kind":"Field","name":{"kind":"Name","value":"description"}},{"kind":"Field","name":{"kind":"Name","value":"genre"}},{"kind":"Field","name":{"kind":"Name","value":"year"}},{"kind":"Field","name":{"kind":"Name","value":"tracks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"duration"}},{"kind":"Field","name":{"kind":"Name","value":"durationMs"}},{"kind":"Field","name":{"kind":"Name","value":"startOffsetMs"}},{"kind":"Field","name":{"kind":"Name","value":"byteSize"}},{"kind":"Field","name":{"kind":"Name","value":"codec"}},{"kind":"Field","name":{"kind":"Name","value":"bitrate"}},{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"Field","name":{"kind":"Name","value":"trackNumber"}}]}},{"kind":"Field","name":{"kind":"Name","value":"chapters"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"Field","name":{"kind":"Name","value":"startMs"}},{"kind":"Field","name":{"kind":"Name","value":"start"}},{"kind":"Field","name":{"kind":"Name","value":"endMs"}}]}},{"kind":"Field","name":{"kind":"Name","value":"assembled"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"byteSize"}},{"kind":"Field","name":{"kind":"Name","value":"durationMs"}},{"kind":"Field","name":{"kind":"Name","value":"duration"}},{"kind":"Field","name":{"kind":"Name","value":"chapters"}},{"kind":"Field","name":{"kind":"Name","value":"faststart"}},{"kind":"Field","name":{"kind":"Name","value":"partsKept"}},{"kind":"Field","name":{"kind":"Name","value":"method"}}]}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]} as unknown as DocumentNode<IngestItemQuery, IngestItemQueryVariables>;
-export const IngestAnalysisQueueDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestAnalysisQueue"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"status"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"JobStatus"}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"pagination"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"Pagination"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestAnalysisQueue"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"status"},"value":{"kind":"Variable","name":{"kind":"Name","value":"status"}}},{"kind":"Argument","name":{"kind":"Name","value":"pagination"},"value":{"kind":"Variable","name":{"kind":"Name","value":"pagination"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"nodes"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"pageInfo"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestPageInfoFields"}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestPageInfoFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"PaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"OffsetPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"totalPages"}},{"kind":"Field","name":{"kind":"Name","value":"totalItems"}},{"kind":"Field","name":{"kind":"Name","value":"currentPage"}},{"kind":"Field","name":{"kind":"Name","value":"pageSize"}}]}},{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"CursorPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"currentCursor"}},{"kind":"Field","name":{"kind":"Name","value":"nextCursor"}},{"kind":"Field","name":{"kind":"Name","value":"limit"}}]}}]}}]} as unknown as DocumentNode<IngestAnalysisQueueQuery, IngestAnalysisQueueQueryVariables>;
-export const IngestAnalysisJobDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestAnalysisJob"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestAnalysisJob"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}}]}}]} as unknown as DocumentNode<IngestAnalysisJobQuery, IngestAnalysisJobQueryVariables>;
-export const IngestReworkItemsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestReworkItems"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"minScore"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"Float"}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"pagination"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"Pagination"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestReworkItems"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"minScore"},"value":{"kind":"Variable","name":{"kind":"Name","value":"minScore"}}},{"kind":"Argument","name":{"kind":"Name","value":"pagination"},"value":{"kind":"Variable","name":{"kind":"Name","value":"pagination"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"nodes"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"item"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestDropItemFields"}}]}},{"kind":"Field","name":{"kind":"Name","value":"reasons"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"message"}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"pageInfo"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestPageInfoFields"}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestPageInfoFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"PaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"OffsetPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"totalPages"}},{"kind":"Field","name":{"kind":"Name","value":"totalItems"}},{"kind":"Field","name":{"kind":"Name","value":"currentPage"}},{"kind":"Field","name":{"kind":"Name","value":"pageSize"}}]}},{"kind":"InlineFragment","typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"CursorPaginationInfo"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"currentCursor"}},{"kind":"Field","name":{"kind":"Name","value":"nextCursor"}},{"kind":"Field","name":{"kind":"Name","value":"limit"}}]}}]}}]} as unknown as DocumentNode<IngestReworkItemsQuery, IngestReworkItemsQueryVariables>;
-export const IngestBulkItemsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestBulkItems"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"ids"}},"type":{"kind":"NonNullType","type":{"kind":"ListType","type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestBulkItems"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"ids"},"value":{"kind":"Variable","name":{"kind":"Name","value":"ids"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestDropItemFields"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]} as unknown as DocumentNode<IngestBulkItemsQuery, IngestBulkItemsQueryVariables>;
-export const IngestProviderCatalogDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestProviderCatalog"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"includeDisabled"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"Boolean"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestProviderCatalog"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"includeDisabled"},"value":{"kind":"Variable","name":{"kind":"Name","value":"includeDisabled"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"version"}},{"kind":"Field","name":{"kind":"Name","value":"configured"}},{"kind":"Field","name":{"kind":"Name","value":"capabilities"}},{"kind":"Field","name":{"kind":"Name","value":"supportedMediaTypes"}},{"kind":"Field","name":{"kind":"Name","value":"enabledByDefault"}},{"kind":"Field","name":{"kind":"Name","value":"requiresApiToken"}},{"kind":"Field","name":{"kind":"Name","value":"helpUrl"}},{"kind":"Field","name":{"kind":"Name","value":"settings"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"key"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"valueType"}},{"kind":"Field","name":{"kind":"Name","value":"required"}},{"kind":"Field","name":{"kind":"Name","value":"secret"}},{"kind":"Field","name":{"kind":"Name","value":"defaultValue"}},{"kind":"Field","name":{"kind":"Name","value":"description"}},{"kind":"Field","name":{"kind":"Name","value":"helpUrl"}}]}}]}}]}}]} as unknown as DocumentNode<IngestProviderCatalogQuery, IngestProviderCatalogQueryVariables>;
-export const IngestProviderSettingsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestProviderSettings"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"providerId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestProviderSettings"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"providerId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"providerId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"provider"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"version"}},{"kind":"Field","name":{"kind":"Name","value":"configured"}},{"kind":"Field","name":{"kind":"Name","value":"capabilities"}},{"kind":"Field","name":{"kind":"Name","value":"supportedMediaTypes"}},{"kind":"Field","name":{"kind":"Name","value":"enabledByDefault"}},{"kind":"Field","name":{"kind":"Name","value":"requiresApiToken"}},{"kind":"Field","name":{"kind":"Name","value":"helpUrl"}},{"kind":"Field","name":{"kind":"Name","value":"settings"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"key"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"valueType"}},{"kind":"Field","name":{"kind":"Name","value":"required"}},{"kind":"Field","name":{"kind":"Name","value":"secret"}},{"kind":"Field","name":{"kind":"Name","value":"defaultValue"}},{"kind":"Field","name":{"kind":"Name","value":"description"}},{"kind":"Field","name":{"kind":"Name","value":"helpUrl"}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}},{"kind":"Field","name":{"kind":"Name","value":"optedIn"}},{"kind":"Field","name":{"kind":"Name","value":"settings"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"key"}},{"kind":"Field","name":{"kind":"Name","value":"configured"}},{"kind":"Field","name":{"kind":"Name","value":"secret"}},{"kind":"Field","name":{"kind":"Name","value":"value"}}]}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}}]}}]}}]} as unknown as DocumentNode<IngestProviderSettingsQuery, IngestProviderSettingsQueryVariables>;
-export const IngestQualityCheckCatalogDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestQualityCheckCatalog"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"includeDisabled"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"Boolean"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestQualityCheckCatalog"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"includeDisabled"},"value":{"kind":"Variable","name":{"kind":"Name","value":"includeDisabled"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"version"}},{"kind":"Field","name":{"kind":"Name","value":"available"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}},{"kind":"Field","name":{"kind":"Name","value":"supportedMediaTypes"}},{"kind":"Field","name":{"kind":"Name","value":"settings"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"key"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"valueType"}},{"kind":"Field","name":{"kind":"Name","value":"required"}},{"kind":"Field","name":{"kind":"Name","value":"secret"}},{"kind":"Field","name":{"kind":"Name","value":"defaultValue"}},{"kind":"Field","name":{"kind":"Name","value":"description"}}]}}]}}]}}]} as unknown as DocumentNode<IngestQualityCheckCatalogQuery, IngestQualityCheckCatalogQueryVariables>;
-export const IngestQualityCheckSettingsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestQualityCheckSettings"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"checkId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestQualityCheckSettings"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"checkId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"checkId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}},{"kind":"Field","name":{"kind":"Name","value":"settings"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"key"}},{"kind":"Field","name":{"kind":"Name","value":"configured"}},{"kind":"Field","name":{"kind":"Name","value":"secret"}},{"kind":"Field","name":{"kind":"Name","value":"value"}}]}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}}]}}]}}]} as unknown as DocumentNode<IngestQualityCheckSettingsQuery, IngestQualityCheckSettingsQueryVariables>;
-export const MetadataPolicyDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"MetadataPolicy"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"metadataPolicy"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"MetadataPolicyFields"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"MetadataPolicyFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"MetadataPolicy"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"hasLibraryOverride"}},{"kind":"Field","name":{"kind":"Name","value":"fields"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"field"}},{"kind":"Field","name":{"kind":"Name","value":"providers"}},{"kind":"Field","name":{"kind":"Name","value":"strategy"}},{"kind":"Field","name":{"kind":"Name","value":"lockRespected"}},{"kind":"Field","name":{"kind":"Name","value":"overridden"}},{"kind":"Field","name":{"kind":"Name","value":"storable"}}]}},{"kind":"Field","name":{"kind":"Name","value":"audio"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"singleFileWeight"}},{"kind":"Field","name":{"kind":"Name","value":"autoAssemble"}},{"kind":"Field","name":{"kind":"Name","value":"autoChapters"}},{"kind":"Field","name":{"kind":"Name","value":"keepOriginal"}},{"kind":"Field","name":{"kind":"Name","value":"overridden"}}]}}]}}]} as unknown as DocumentNode<MetadataPolicyQuery, MetadataPolicyQueryVariables>;
-export const SetMetadataPolicyDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"SetMetadataPolicy"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"MetadataPolicyInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"setMetadataPolicy"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}},{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"MetadataPolicyFields"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"MetadataPolicyFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"MetadataPolicy"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"hasLibraryOverride"}},{"kind":"Field","name":{"kind":"Name","value":"fields"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"field"}},{"kind":"Field","name":{"kind":"Name","value":"providers"}},{"kind":"Field","name":{"kind":"Name","value":"strategy"}},{"kind":"Field","name":{"kind":"Name","value":"lockRespected"}},{"kind":"Field","name":{"kind":"Name","value":"overridden"}},{"kind":"Field","name":{"kind":"Name","value":"storable"}}]}},{"kind":"Field","name":{"kind":"Name","value":"audio"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"singleFileWeight"}},{"kind":"Field","name":{"kind":"Name","value":"autoAssemble"}},{"kind":"Field","name":{"kind":"Name","value":"autoChapters"}},{"kind":"Field","name":{"kind":"Name","value":"keepOriginal"}},{"kind":"Field","name":{"kind":"Name","value":"overridden"}}]}}]}}]} as unknown as DocumentNode<SetMetadataPolicyMutation, SetMetadataPolicyMutationVariables>;
-export const StageIngestUploadsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"StageIngestUploads"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"StageIngestUploadsInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"stageIngestUploads"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"items"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestDropItemFields"}}]}},{"kind":"Field","name":{"kind":"Name","value":"deduplicated"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]} as unknown as DocumentNode<StageIngestUploadsMutation, StageIngestUploadsMutationVariables>;
-export const ScanIngestDropFolderDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"ScanIngestDropFolder"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"scanIngestDropFolder"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"displayPath"}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}},{"kind":"Field","name":{"kind":"Name","value":"pendingCount"}},{"kind":"Field","name":{"kind":"Name","value":"lastDiscoveredAt"}}]}}]}}]} as unknown as DocumentNode<ScanIngestDropFolderMutation, ScanIngestDropFolderMutationVariables>;
-export const EnqueueIngestAnalysisDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"EnqueueIngestAnalysis"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"EnqueueIngestAnalysisInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"enqueueIngestAnalysis"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}}]}}]} as unknown as DocumentNode<EnqueueIngestAnalysisMutation, EnqueueIngestAnalysisMutationVariables>;
-export const RequeueIngestAnalysisDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"RequeueIngestAnalysis"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"force"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"Boolean"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"requeueIngestAnalysis"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"dropItemId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}}},{"kind":"Argument","name":{"kind":"Name","value":"force"},"value":{"kind":"Variable","name":{"kind":"Name","value":"force"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}}]}}]} as unknown as DocumentNode<RequeueIngestAnalysisMutation, RequeueIngestAnalysisMutationVariables>;
-export const PauseIngestAnalysisDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"PauseIngestAnalysis"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"jobId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"pauseIngestAnalysis"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"jobId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"jobId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}}]}}]} as unknown as DocumentNode<PauseIngestAnalysisMutation, PauseIngestAnalysisMutationVariables>;
-export const ResumeIngestAnalysisDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"ResumeIngestAnalysis"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"jobId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"resumeIngestAnalysis"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"jobId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"jobId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}}]}}]} as unknown as DocumentNode<ResumeIngestAnalysisMutation, ResumeIngestAnalysisMutationVariables>;
-export const RetryIngestAnalysisDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"RetryIngestAnalysis"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"jobId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"retryIngestAnalysis"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"jobId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"jobId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}}]}}]} as unknown as DocumentNode<RetryIngestAnalysisMutation, RetryIngestAnalysisMutationVariables>;
-export const CancelIngestAnalysisDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"CancelIngestAnalysis"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"jobId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"cancelIngestAnalysis"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"jobId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"jobId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}}]}}]} as unknown as DocumentNode<CancelIngestAnalysisMutation, CancelIngestAnalysisMutationVariables>;
-export const DiscardIngestItemDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"DiscardIngestItem"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"reason"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"discardIngestItem"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"dropItemId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}}},{"kind":"Argument","name":{"kind":"Name","value":"reason"},"value":{"kind":"Variable","name":{"kind":"Name","value":"reason"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestDropItemFields"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]} as unknown as DocumentNode<DiscardIngestItemMutation, DiscardIngestItemMutationVariables>;
-export const ApplyIngestMetadataDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"ApplyIngestMetadata"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ApplyIngestMetadataInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"applyIngestMetadata"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"dropItem"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestDropItemFields"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"resolvedName"}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]} as unknown as DocumentNode<ApplyIngestMetadataMutation, ApplyIngestMetadataMutationVariables>;
-export const BulkApplyIngestMetadataDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"BulkApplyIngestMetadata"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"BulkApplyIngestMetadataInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"bulkApplyIngestMetadata"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"applied"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestDropItemFields"}}]}},{"kind":"Field","name":{"kind":"Name","value":"failures"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"message"}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]} as unknown as DocumentNode<BulkApplyIngestMetadataMutation, BulkApplyIngestMetadataMutationVariables>;
-export const ApproveIngestItemDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"ApproveIngestItem"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"strategy"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"MergeStrategy"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"approveIngestItem"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"dropItemId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}}},{"kind":"Argument","name":{"kind":"Name","value":"strategy"},"value":{"kind":"Variable","name":{"kind":"Name","value":"strategy"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestDropItemFields"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]} as unknown as DocumentNode<ApproveIngestItemMutation, ApproveIngestItemMutationVariables>;
-export const RejectIngestItemDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"RejectIngestItem"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"reason"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"rejectIngestItem"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"dropItemId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}}},{"kind":"Argument","name":{"kind":"Name","value":"reason"},"value":{"kind":"Variable","name":{"kind":"Name","value":"reason"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"IngestDropItemFields"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"IngestDropItemFields"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"IngestDropItem"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"createdBy"}},{"kind":"Field","name":{"kind":"Name","value":"filename"}},{"kind":"Field","name":{"kind":"Name","value":"relativePath"}},{"kind":"Field","name":{"kind":"Name","value":"sizeBytes"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"mediaType"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"pendingFields"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJob"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"jobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"priorityScore"}},{"kind":"Field","name":{"kind":"Name","value":"attempt"}},{"kind":"Field","name":{"kind":"Name","value":"queuedAt"}},{"kind":"Field","name":{"kind":"Name","value":"startedAt"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}},{"kind":"Field","name":{"kind":"Name","value":"qualityReport"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"algorithmVersion"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"generatedAt"}},{"kind":"Field","name":{"kind":"Name","value":"checks"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"weight"}},{"kind":"Field","name":{"kind":"Name","value":"normalizedScore"}},{"kind":"Field","name":{"kind":"Name","value":"contribution"}},{"kind":"Field","name":{"kind":"Name","value":"evidence"}},{"kind":"Field","name":{"kind":"Name","value":"fix"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tool"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"options"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"metadataCandidates"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}},{"kind":"Field","name":{"kind":"Name","value":"media"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"series"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]} as unknown as DocumentNode<RejectIngestItemMutation, RejectIngestItemMutationVariables>;
-export const RunIngestQualityFixDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"RunIngestQualityFix"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"RunIngestQualityFixInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"runIngestQualityFix"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"revision"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}}]}}]} as unknown as DocumentNode<RunIngestQualityFixMutation, RunIngestQualityFixMutationVariables>;
-export const SetIngestProviderSettingsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"SetIngestProviderSettings"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"SetIngestProviderSettingsInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"setIngestProviderSettings"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"provider"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"version"}},{"kind":"Field","name":{"kind":"Name","value":"configured"}},{"kind":"Field","name":{"kind":"Name","value":"capabilities"}},{"kind":"Field","name":{"kind":"Name","value":"supportedMediaTypes"}},{"kind":"Field","name":{"kind":"Name","value":"enabledByDefault"}},{"kind":"Field","name":{"kind":"Name","value":"requiresApiToken"}},{"kind":"Field","name":{"kind":"Name","value":"helpUrl"}},{"kind":"Field","name":{"kind":"Name","value":"settings"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"key"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"valueType"}},{"kind":"Field","name":{"kind":"Name","value":"required"}},{"kind":"Field","name":{"kind":"Name","value":"secret"}},{"kind":"Field","name":{"kind":"Name","value":"defaultValue"}},{"kind":"Field","name":{"kind":"Name","value":"description"}},{"kind":"Field","name":{"kind":"Name","value":"helpUrl"}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}},{"kind":"Field","name":{"kind":"Name","value":"optedIn"}},{"kind":"Field","name":{"kind":"Name","value":"settings"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"key"}},{"kind":"Field","name":{"kind":"Name","value":"configured"}},{"kind":"Field","name":{"kind":"Name","value":"secret"}},{"kind":"Field","name":{"kind":"Name","value":"value"}}]}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}}]}}]}}]} as unknown as DocumentNode<SetIngestProviderSettingsMutation, SetIngestProviderSettingsMutationVariables>;
-export const VerifyIngestProviderDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"VerifyIngestProvider"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"providerId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"settings"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"JSON"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"verifyIngestProvider"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"providerId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"providerId"}}},{"kind":"Argument","name":{"kind":"Name","value":"settings"},"value":{"kind":"Variable","name":{"kind":"Name","value":"settings"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"responseStatus"}},{"kind":"Field","name":{"kind":"Name","value":"isValid"}},{"kind":"Field","name":{"kind":"Name","value":"error"}}]}}]}}]} as unknown as DocumentNode<VerifyIngestProviderMutation, VerifyIngestProviderMutationVariables>;
-export const MetadataProviderConfigsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"MetadataProviderConfigs"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"metadataProviderConfigs"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"providerType"}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}}]}}]}}]} as unknown as DocumentNode<MetadataProviderConfigsQuery, MetadataProviderConfigsQueryVariables>;
-export const CreateMetadataProviderDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"CreateMetadataProvider"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"CreateMetadataProviderConfigInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"createMetadataProvider"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"providerType"}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}}]}}]}}]} as unknown as DocumentNode<CreateMetadataProviderMutation, CreateMetadataProviderMutationVariables>;
-export const UpdateMetadataProviderDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"UpdateMetadataProvider"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"Int"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"PatchMetadataProviderConfigInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"updateMetadataProvider"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}},{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"providerType"}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}}]}}]}}]} as unknown as DocumentNode<UpdateMetadataProviderMutation, UpdateMetadataProviderMutationVariables>;
-export const DeleteMetadataProviderDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"DeleteMetadataProvider"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"Int"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"deleteMetadataProvider"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}}]}}]}}]} as unknown as DocumentNode<DeleteMetadataProviderMutation, DeleteMetadataProviderMutationVariables>;
-export const SetIngestQualityCheckSettingsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"SetIngestQualityCheckSettings"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"SetIngestQualityCheckSettingsInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"setIngestQualityCheckSettings"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"checkId"}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}},{"kind":"Field","name":{"kind":"Name","value":"settings"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"key"}},{"kind":"Field","name":{"kind":"Name","value":"configured"}},{"kind":"Field","name":{"kind":"Name","value":"secret"}},{"kind":"Field","name":{"kind":"Name","value":"value"}}]}},{"kind":"Field","name":{"kind":"Name","value":"updatedAt"}}]}}]}}]} as unknown as DocumentNode<SetIngestQualityCheckSettingsMutation, SetIngestQualityCheckSettingsMutationVariables>;
-export const IngestProgressDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"subscription","name":{"kind":"Name","value":"IngestProgress"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"analysisJobId"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"afterEventId"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestProgress"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"libraryId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"libraryId"}}},{"kind":"Argument","name":{"kind":"Name","value":"dropItemId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}}},{"kind":"Argument","name":{"kind":"Name","value":"analysisJobId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"analysisJobId"}}},{"kind":"Argument","name":{"kind":"Name","value":"afterEventId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"afterEventId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"eventId"}},{"kind":"Field","name":{"kind":"Name","value":"emittedAt"}},{"kind":"Field","name":{"kind":"Name","value":"libraryId"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"analysisJobId"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"phase"}},{"kind":"Field","name":{"kind":"Name","value":"completed"}},{"kind":"Field","name":{"kind":"Name","value":"total"}},{"kind":"Field","name":{"kind":"Name","value":"score"}},{"kind":"Field","name":{"kind":"Name","value":"message"}}]}}]}}]} as unknown as DocumentNode<IngestProgressSubscription, IngestProgressSubscriptionVariables>;
-export const IngestProviderSearchDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"IngestProviderSearch"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"query"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"mediaKind"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"IngestMediaKind"}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"providers"}},"type":{"kind":"ListType","type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"limit"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"Int"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"ingestProviderSearch"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"query"},"value":{"kind":"Variable","name":{"kind":"Name","value":"query"}}},{"kind":"Argument","name":{"kind":"Name","value":"mediaKind"},"value":{"kind":"Variable","name":{"kind":"Name","value":"mediaKind"}}},{"kind":"Argument","name":{"kind":"Name","value":"providers"},"value":{"kind":"Variable","name":{"kind":"Name","value":"providers"}}},{"kind":"Argument","name":{"kind":"Name","value":"limit"},"value":{"kind":"Variable","name":{"kind":"Name","value":"limit"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"providerId"}},{"kind":"Field","name":{"kind":"Name","value":"externalId"}},{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"Field","name":{"kind":"Name","value":"year"}},{"kind":"Field","name":{"kind":"Name","value":"coverUrl"}},{"kind":"Field","name":{"kind":"Name","value":"summary"}},{"kind":"Field","name":{"kind":"Name","value":"score"}}]}}]}}]} as unknown as DocumentNode<IngestProviderSearchQuery, IngestProviderSearchQueryVariables>;
-export const LookupIngestCandidateDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"LookupIngestCandidate"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"providerId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"externalId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"lookupIngestCandidate"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"dropItemId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"dropItemId"}}},{"kind":"Argument","name":{"kind":"Name","value":"providerId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"providerId"}}},{"kind":"Argument","name":{"kind":"Name","value":"externalId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"externalId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"dropItemId"}},{"kind":"Field","name":{"kind":"Name","value":"provider"}},{"kind":"Field","name":{"kind":"Name","value":"providerVersion"}},{"kind":"Field","name":{"kind":"Name","value":"model"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"fields"}},{"kind":"Field","name":{"kind":"Name","value":"fieldConfidences"}},{"kind":"Field","name":{"kind":"Name","value":"sourceSha256"}},{"kind":"Field","name":{"kind":"Name","value":"provenance"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}}]}}]}}]} as unknown as DocumentNode<LookupIngestCandidateMutation, LookupIngestCandidateMutationVariables>;
-export const ProviderSourcesDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"ProviderSources"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"providerSources"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"implementation"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"lang"}},{"kind":"Field","name":{"kind":"Name","value":"baseUrl"}},{"kind":"Field","name":{"kind":"Name","value":"enabled"}},{"kind":"Field","name":{"kind":"Name","value":"requestHeaders"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"preview"}},{"kind":"Field","name":{"kind":"Name","value":"length"}}]}}]}}]}}]} as unknown as DocumentNode<ProviderSourcesQuery, ProviderSourcesQueryVariables>;
-export const ProviderSourceHealthRowsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"ProviderSourceHealthRows"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"providerSourceHealth"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"includeDead"},"value":{"kind":"BooleanValue","value":true}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"sourceId"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"baseUrl"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"error"}},{"kind":"Field","name":{"kind":"Name","value":"challenged"}},{"kind":"Field","name":{"kind":"Name","value":"httpStatus"}},{"kind":"Field","name":{"kind":"Name","value":"consecutiveFailures"}},{"kind":"Field","name":{"kind":"Name","value":"lastCheckedAt"}}]}}]}}]} as unknown as DocumentNode<ProviderSourceHealthRowsQuery, ProviderSourceHealthRowsQueryVariables>;
-export const SetProviderSourceHeadersDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"SetProviderSourceHeaders"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"instanceId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"headers"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"JSON"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"setProviderSourceHeaders"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"instanceId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"instanceId"}}},{"kind":"Argument","name":{"kind":"Name","value":"headers"},"value":{"kind":"Variable","name":{"kind":"Name","value":"headers"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"preview"}},{"kind":"Field","name":{"kind":"Name","value":"length"}}]}}]}}]} as unknown as DocumentNode<SetProviderSourceHeadersMutation, SetProviderSourceHeadersMutationVariables>;
-export const SolveSourceChallengeDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"SolveSourceChallenge"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"instanceId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"solveSourceChallenge"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"instanceId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"instanceId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"state"}},{"kind":"Field","name":{"kind":"Name","value":"message"}},{"kind":"Field","name":{"kind":"Name","value":"challenged"}}]}}]}}]} as unknown as DocumentNode<SolveSourceChallengeMutation, SolveSourceChallengeMutationVariables>;
+export const EditorMediaMetadataFieldsFragmentDoc = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'EditorMediaMetadataFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'MediaMetadata' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'title' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'titleSort' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'series' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'seriesGroup' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'storyArc' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'storyArcNumber' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'number' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'volume' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'notes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'genres' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'format' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'year' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'month' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'day' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'writers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pencillers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'inkers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'colorists' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'letterers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'coverArtists' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'editors' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'narrators' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'publisher' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'links' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'characters' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'teams' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pageCount' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'ageRating' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierAmazon' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierCalibre' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierGoogle' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierIsbn' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierMobiAsin' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierUuid' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'language' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'metadataSource' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'metadataExternalId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'lockedFields' } },
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<EditorMediaMetadataFieldsFragment, unknown>
+export const IngestDropItemFieldsFragmentDoc = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestDropItemFieldsFragment, unknown>
+export const IngestPageInfoFieldsFragmentDoc = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestPageInfoFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'PaginationInfo' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'OffsetPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalPages' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalItems' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentPage' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'pageSize' } },
+							],
+						},
+					},
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'CursorPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'nextCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'limit' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestPageInfoFieldsFragment, unknown>
+export const MetadataPolicyFieldsFragmentDoc = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'MetadataPolicyFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'MetadataPolicy' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'hasLibraryOverride' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'fields' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'field' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providers' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'strategy' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'lockRespected' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'overridden' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'storable' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'audio' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'singleFileWeight' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'autoAssemble' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'autoChapters' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'keepOriginal' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'overridden' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<MetadataPolicyFieldsFragment, unknown>
+export const DuplicatePageCandidatesDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'DuplicatePageCandidates' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'minBooks' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'limit' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'duplicatePageCandidates' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'minBooks' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'minBooks' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'limit' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'limit' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'dhash' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'bookCount' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'pageCount' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'occurrences' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'mediaId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'mediaName' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'page' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'visiblePage' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'dhash' } },
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<DuplicatePageCandidatesQuery, DuplicatePageCandidatesQueryVariables>
+export const KnownDuplicatePagesDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'KnownDuplicatePages' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'knownDuplicatePages' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dhash' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'action' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<KnownDuplicatePagesQuery, KnownDuplicatePagesQueryVariables>
+export const MarkDuplicatePageDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'MarkDuplicatePage' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'dhash' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'action' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'DuplicatePageAction' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'markDuplicatePage' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'dhash' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'dhash' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'action' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'action' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dhash' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'action' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<MarkDuplicatePageMutation, MarkDuplicatePageMutationVariables>
+export const UnmarkDuplicatePageDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'UnmarkDuplicatePage' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'dhash' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'unmarkDuplicatePage' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'dhash' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'dhash' } },
+							},
+						],
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<UnmarkDuplicatePageMutation, UnmarkDuplicatePageMutationVariables>
+export const EditorViewerDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'EditorViewer' },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'me' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'username' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'isServerOwner' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'permissions' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<EditorViewerQuery, EditorViewerQueryVariables>
+export const EditorMediaDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'EditorMedia' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'mediaById' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'id' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'resolvedName' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'extension' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'pages' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'size' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'path' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'thumbnail' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [{ kind: 'Field', name: { kind: 'Name', value: 'url' } }],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'series' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'resolvedName' } },
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'tags' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'kind' } },
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'metadata' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'EditorMediaMetadataFields' },
+											},
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'audio' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'durationMs' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'codec' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'sampleRate' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'channels' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'bitrate' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'chapterSource' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'tracks' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'index' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'mime' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'durationMs' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'startOffsetMs' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'byteSize' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'url' } },
+													],
+												},
+											},
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'chapters' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'index' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'title' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'startMs' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'endMs' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'EditorMediaMetadataFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'MediaMetadata' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'title' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'titleSort' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'series' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'seriesGroup' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'storyArc' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'storyArcNumber' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'number' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'volume' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'notes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'genres' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'format' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'year' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'month' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'day' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'writers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pencillers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'inkers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'colorists' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'letterers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'coverArtists' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'editors' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'narrators' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'publisher' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'links' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'characters' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'teams' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pageCount' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'ageRating' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierAmazon' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierCalibre' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierGoogle' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierIsbn' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierMobiAsin' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierUuid' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'language' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'metadataSource' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'metadataExternalId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'lockedFields' } },
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<EditorMediaQuery, EditorMediaQueryVariables>
+export const UpdateEditorMediaMetadataDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'UpdateEditorMediaMetadata' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'MediaMetadataInput' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'updateMediaMetadata' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'id' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'resolvedName' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'metadata' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'EditorMediaMetadataFields' },
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'EditorMediaMetadataFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'MediaMetadata' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'title' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'titleSort' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'series' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'seriesGroup' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'storyArc' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'storyArcNumber' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'number' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'volume' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'notes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'genres' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'format' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'year' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'month' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'day' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'writers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pencillers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'inkers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'colorists' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'letterers' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'coverArtists' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'editors' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'narrators' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'publisher' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'links' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'characters' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'teams' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pageCount' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'ageRating' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierAmazon' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierCalibre' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierGoogle' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierIsbn' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierMobiAsin' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'identifierUuid' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'language' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'metadataSource' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'metadataExternalId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'lockedFields' } },
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	UpdateEditorMediaMetadataMutation,
+	UpdateEditorMediaMetadataMutationVariables
+>
+export const SetEditorMediaTagsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'SetEditorMediaTags' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'tags' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'ListType',
+							type: {
+								kind: 'NonNullType',
+								type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+							},
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'setMediaTags' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'id' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'tags' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'tags' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'tags' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'kind' } },
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<SetEditorMediaTagsMutation, SetEditorMediaTagsMutationVariables>
+export const SetEditorMediaLockedFieldsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'SetEditorMediaLockedFields' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'lockedFields' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'ListType',
+							type: {
+								kind: 'NonNullType',
+								type: { kind: 'NamedType', name: { kind: 'Name', value: 'MetadataField' } },
+							},
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'setMediaLockedFields' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'mediaId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'lockedFields' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'lockedFields' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'metadata' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'lockedFields' } },
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	SetEditorMediaLockedFieldsMutation,
+	SetEditorMediaLockedFieldsMutationVariables
+>
+export const IngestItemEventsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'subscription',
+			name: { kind: 'Name', value: 'IngestItemEvents' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestEvents' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'itemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestItemEventsSubscription, IngestItemEventsSubscriptionVariables>
+export const LibraryMediaDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'LibraryMedia' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'filter' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'MediaFilterInput' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'pagination' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'Pagination' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'filter' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'filter' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'pagination' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'pagination' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'nodes' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'resolvedName' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'path' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'pages' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'thumbnail' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [{ kind: 'Field', name: { kind: 'Name', value: 'url' } }],
+												},
+											},
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'series' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+													],
+												},
+											},
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'pageInfo' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'IngestPageInfoFields' },
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestPageInfoFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'PaginationInfo' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'OffsetPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalPages' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalItems' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentPage' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'pageSize' } },
+							],
+						},
+					},
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'CursorPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'nextCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'limit' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<LibraryMediaQuery, LibraryMediaQueryVariables>
+export const IngestMediaQualityScoreDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestMediaQualityScore' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestMediaQualityReport' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'mediaId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestMediaQualityScoreQuery, IngestMediaQualityScoreQueryVariables>
+export const IngestMediaQualityReportDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestMediaQualityReport' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestMediaQualityReport' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'mediaId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestMediaQualityReportQuery, IngestMediaQualityReportQueryVariables>
+export const IngestMediaMetadataCandidatesDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestMediaMetadataCandidates' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestMediaMetadataCandidates' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'mediaId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	IngestMediaMetadataCandidatesQuery,
+	IngestMediaMetadataCandidatesQueryVariables
+>
+export const LibraryAnalysisJobDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'LibraryAnalysisJob' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestAnalysisJob' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'id' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<LibraryAnalysisJobQuery, LibraryAnalysisJobQueryVariables>
+export const RunLibraryQualityDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'RunLibraryQuality' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'mediaIds' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'ListType',
+							type: {
+								kind: 'NonNullType',
+								type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+							},
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'runLibraryQuality' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'mediaIds' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'mediaIds' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<RunLibraryQualityMutation, RunLibraryQualityMutationVariables>
+export const MatchLibraryMediaDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'MatchLibraryMedia' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'mediaIds' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'ListType',
+							type: {
+								kind: 'NonNullType',
+								type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+							},
+						},
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'providers' } },
+					type: {
+						kind: 'ListType',
+						type: {
+							kind: 'NonNullType',
+							type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'matchLibraryMedia' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'mediaIds' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'mediaIds' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'providers' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'providers' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<MatchLibraryMediaMutation, MatchLibraryMediaMutationVariables>
+export const ApplyBestIngestMetadataDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'ApplyBestIngestMetadata' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'applyBestIngestMetadata' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'mediaId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'media' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [{ kind: 'Field', name: { kind: 'Name', value: 'id' } }],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'decisions' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'field' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'strategy' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'outcome' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'providers' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'applied' } },
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	ApplyBestIngestMetadataMutation,
+	ApplyBestIngestMetadataMutationVariables
+>
+export const EditorKindleTargetsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'EditorKindleTargets' },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'devices' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'kindleEmail' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'revokedAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<EditorKindleTargetsQuery, EditorKindleTargetsQueryVariables>
+export const EditorSendToKindleDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'EditorSendToKindle' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'deviceId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'sendToKindle' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'mediaId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'mediaId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'deviceId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'deviceId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'deviceId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'deviceName' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'recipient' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'format' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'bytes' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'converted' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'note' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<EditorSendToKindleMutation, EditorSendToKindleMutationVariables>
+export const LibrariesDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'Libraries' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'pagination' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'Pagination' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'libraries' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'pagination' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'pagination' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'nodes' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'emoji' } },
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'pageInfo' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'IngestPageInfoFields' },
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestPageInfoFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'PaginationInfo' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'OffsetPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalPages' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalItems' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentPage' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'pageSize' } },
+							],
+						},
+					},
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'CursorPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'nextCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'limit' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<LibrariesQuery, LibrariesQueryVariables>
+export const IngestDropFolderAndItemsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestDropFolderAndItems' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'status' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItemStatus' } },
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'pagination' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'Pagination' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestDropFolder' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'displayPath' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'pendingCount' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'lastDiscoveredAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestDropItems' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'status' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'status' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'pagination' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'pagination' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'nodes' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'IngestDropItemFields' },
+											},
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'pageInfo' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'IngestPageInfoFields' },
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestPageInfoFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'PaginationInfo' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'OffsetPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalPages' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalItems' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentPage' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'pageSize' } },
+							],
+						},
+					},
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'CursorPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'nextCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'limit' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestDropFolderAndItemsQuery, IngestDropFolderAndItemsQueryVariables>
+export const IngestItemDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestItem' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestItem' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'id' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'FragmentSpread', name: { kind: 'Name', value: 'IngestDropItemFields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropGroupId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sidecars' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'dropGroupSiblings' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'qualityScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'mediaId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'editionPairCandidate' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'pairState' } },
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'audio' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'durationMs' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'duration' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'codec' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'sampleRate' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'channels' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'bitrate' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'chapterSource' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'coverContentType' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'coverByteSize' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'title' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'author' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'narrator' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'album' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'description' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'genre' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'year' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'tracks' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'duration' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'durationMs' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'startOffsetMs' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'byteSize' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'codec' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'bitrate' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'title' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'trackNumber' } },
+													],
+												},
+											},
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'chapters' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'title' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'startMs' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'start' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'endMs' } },
+													],
+												},
+											},
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'assembled' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'byteSize' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'durationMs' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'duration' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'chapters' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'faststart' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'partsKept' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'method' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestItemQuery, IngestItemQueryVariables>
+export const IngestAnalysisQueueDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestAnalysisQueue' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'status' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'JobStatus' } },
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'pagination' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'Pagination' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestAnalysisQueue' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'status' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'status' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'pagination' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'pagination' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'nodes' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'pageInfo' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'IngestPageInfoFields' },
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestPageInfoFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'PaginationInfo' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'OffsetPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalPages' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalItems' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentPage' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'pageSize' } },
+							],
+						},
+					},
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'CursorPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'nextCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'limit' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestAnalysisQueueQuery, IngestAnalysisQueueQueryVariables>
+export const IngestAnalysisJobDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestAnalysisJob' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestAnalysisJob' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'id' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestAnalysisJobQuery, IngestAnalysisJobQueryVariables>
+export const IngestReworkItemsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestReworkItems' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'minScore' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'Float' } },
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'pagination' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'Pagination' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestReworkItems' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'minScore' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'minScore' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'pagination' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'pagination' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'nodes' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'item' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{
+															kind: 'FragmentSpread',
+															name: { kind: 'Name', value: 'IngestDropItemFields' },
+														},
+													],
+												},
+											},
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'reasons' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'message' } },
+													],
+												},
+											},
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'pageInfo' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'IngestPageInfoFields' },
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestPageInfoFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'PaginationInfo' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'OffsetPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalPages' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'totalItems' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentPage' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'pageSize' } },
+							],
+						},
+					},
+					{
+						kind: 'InlineFragment',
+						typeCondition: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'CursorPaginationInfo' },
+						},
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'currentCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'nextCursor' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'limit' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestReworkItemsQuery, IngestReworkItemsQueryVariables>
+export const IngestBulkItemsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestBulkItems' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'ids' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'ListType',
+							type: {
+								kind: 'NonNullType',
+								type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+							},
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestBulkItems' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'ids' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'ids' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'FragmentSpread', name: { kind: 'Name', value: 'IngestDropItemFields' } },
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestBulkItemsQuery, IngestBulkItemsQueryVariables>
+export const IngestProviderCatalogDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestProviderCatalog' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'includeDisabled' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'Boolean' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestProviderCatalog' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'includeDisabled' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'includeDisabled' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'version' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'configured' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'capabilities' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'supportedMediaTypes' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabledByDefault' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'requiresApiToken' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'helpUrl' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'settings' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'key' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'valueType' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'required' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'secret' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'defaultValue' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'description' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'helpUrl' } },
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestProviderCatalogQuery, IngestProviderCatalogQueryVariables>
+export const IngestProviderSettingsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestProviderSettings' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'providerId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestProviderSettings' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'providerId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'providerId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'provider' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'version' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'configured' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'capabilities' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'supportedMediaTypes' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'enabledByDefault' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'requiresApiToken' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'helpUrl' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'settings' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'key' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'valueType' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'required' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'secret' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'defaultValue' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'description' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'helpUrl' } },
+													],
+												},
+											},
+										],
+									},
+								},
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'optedIn' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'settings' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'key' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'configured' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'secret' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'value' } },
+										],
+									},
+								},
+								{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestProviderSettingsQuery, IngestProviderSettingsQueryVariables>
+export const IngestQualityCheckCatalogDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestQualityCheckCatalog' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'includeDisabled' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'Boolean' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestQualityCheckCatalog' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'includeDisabled' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'includeDisabled' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'version' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'available' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'supportedMediaTypes' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'settings' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'key' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'valueType' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'required' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'secret' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'defaultValue' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'description' } },
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	IngestQualityCheckCatalogQuery,
+	IngestQualityCheckCatalogQueryVariables
+>
+export const IngestQualityCheckSettingsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestQualityCheckSettings' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'checkId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestQualityCheckSettings' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'checkId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'checkId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'settings' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'key' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'configured' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'secret' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'value' } },
+										],
+									},
+								},
+								{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	IngestQualityCheckSettingsQuery,
+	IngestQualityCheckSettingsQueryVariables
+>
+export const MetadataPolicyDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'MetadataPolicy' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataPolicy' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'FragmentSpread', name: { kind: 'Name', value: 'MetadataPolicyFields' } },
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'MetadataPolicyFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'MetadataPolicy' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'hasLibraryOverride' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'fields' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'field' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providers' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'strategy' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'lockRespected' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'overridden' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'storable' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'audio' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'singleFileWeight' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'autoAssemble' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'autoChapters' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'keepOriginal' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'overridden' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<MetadataPolicyQuery, MetadataPolicyQueryVariables>
+export const SetMetadataPolicyDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'SetMetadataPolicy' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'MetadataPolicyInput' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'setMetadataPolicy' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'FragmentSpread', name: { kind: 'Name', value: 'MetadataPolicyFields' } },
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'MetadataPolicyFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'MetadataPolicy' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'hasLibraryOverride' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'fields' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'field' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providers' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'strategy' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'lockRespected' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'overridden' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'storable' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'audio' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'singleFileWeight' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'autoAssemble' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'autoChapters' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'keepOriginal' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'overridden' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<SetMetadataPolicyMutation, SetMetadataPolicyMutationVariables>
+export const StageIngestUploadsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'StageIngestUploads' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'StageIngestUploadsInput' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'stageIngestUploads' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'items' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'IngestDropItemFields' },
+											},
+										],
+									},
+								},
+								{ kind: 'Field', name: { kind: 'Name', value: 'deduplicated' } },
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<StageIngestUploadsMutation, StageIngestUploadsMutationVariables>
+export const ScanIngestDropFolderDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'ScanIngestDropFolder' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'scanIngestDropFolder' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'displayPath' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'pendingCount' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'lastDiscoveredAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<ScanIngestDropFolderMutation, ScanIngestDropFolderMutationVariables>
+export const EnqueueIngestAnalysisDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'EnqueueIngestAnalysis' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'EnqueueIngestAnalysisInput' },
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'enqueueIngestAnalysis' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<EnqueueIngestAnalysisMutation, EnqueueIngestAnalysisMutationVariables>
+export const RequeueIngestAnalysisDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'RequeueIngestAnalysis' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'force' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'Boolean' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'requeueIngestAnalysis' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'dropItemId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'force' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'force' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<RequeueIngestAnalysisMutation, RequeueIngestAnalysisMutationVariables>
+export const PauseIngestAnalysisDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'PauseIngestAnalysis' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'jobId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'pauseIngestAnalysis' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'jobId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'jobId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<PauseIngestAnalysisMutation, PauseIngestAnalysisMutationVariables>
+export const ResumeIngestAnalysisDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'ResumeIngestAnalysis' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'jobId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'resumeIngestAnalysis' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'jobId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'jobId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<ResumeIngestAnalysisMutation, ResumeIngestAnalysisMutationVariables>
+export const RetryIngestAnalysisDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'RetryIngestAnalysis' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'jobId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'retryIngestAnalysis' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'jobId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'jobId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<RetryIngestAnalysisMutation, RetryIngestAnalysisMutationVariables>
+export const CancelIngestAnalysisDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'CancelIngestAnalysis' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'jobId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'cancelIngestAnalysis' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'jobId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'jobId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<CancelIngestAnalysisMutation, CancelIngestAnalysisMutationVariables>
+export const DiscardIngestItemDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'DiscardIngestItem' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'reason' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'discardIngestItem' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'dropItemId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'reason' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'reason' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'FragmentSpread', name: { kind: 'Name', value: 'IngestDropItemFields' } },
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<DiscardIngestItemMutation, DiscardIngestItemMutationVariables>
+export const ApplyIngestMetadataDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'ApplyIngestMetadata' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ApplyIngestMetadataInput' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'applyIngestMetadata' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'dropItem' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'IngestDropItemFields' },
+											},
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'media' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'resolvedName' } },
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<ApplyIngestMetadataMutation, ApplyIngestMetadataMutationVariables>
+export const BulkApplyIngestMetadataDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'BulkApplyIngestMetadata' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'BulkApplyIngestMetadataInput' },
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'bulkApplyIngestMetadata' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'applied' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{
+												kind: 'FragmentSpread',
+												name: { kind: 'Name', value: 'IngestDropItemFields' },
+											},
+										],
+									},
+								},
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'failures' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'message' } },
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	BulkApplyIngestMetadataMutation,
+	BulkApplyIngestMetadataMutationVariables
+>
+export const ApproveIngestItemDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'ApproveIngestItem' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'strategy' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'MergeStrategy' } },
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'approveIngestItem' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'dropItemId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'strategy' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'strategy' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'FragmentSpread', name: { kind: 'Name', value: 'IngestDropItemFields' } },
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<ApproveIngestItemMutation, ApproveIngestItemMutationVariables>
+export const RejectIngestItemDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'RejectIngestItem' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'reason' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'rejectIngestItem' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'dropItemId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'reason' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'reason' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'FragmentSpread', name: { kind: 'Name', value: 'IngestDropItemFields' } },
+							],
+						},
+					},
+				],
+			},
+		},
+		{
+			kind: 'FragmentDefinition',
+			name: { kind: 'Name', value: 'IngestDropItemFields' },
+			typeCondition: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestDropItem' } },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdBy' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'filename' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'relativePath' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sizeBytes' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'mediaType' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'pendingFields' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+					{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'analysisJob' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'jobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'priorityScore' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'attempt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'queuedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'startedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'qualityReport' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'algorithmVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'generatedAt' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'checks' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'weight' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'normalizedScore' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'contribution' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'evidence' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'fix' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'tool' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'options' } },
+													],
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataCandidates' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'media' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'series' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<RejectIngestItemMutation, RejectIngestItemMutationVariables>
+export const RunIngestQualityFixDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'RunIngestQualityFix' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'RunIngestQualityFixInput' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'runIngestQualityFix' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'revision' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<RunIngestQualityFixMutation, RunIngestQualityFixMutationVariables>
+export const SetIngestProviderSettingsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'SetIngestProviderSettings' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'SetIngestProviderSettingsInput' },
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'setIngestProviderSettings' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'provider' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'version' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'configured' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'capabilities' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'supportedMediaTypes' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'enabledByDefault' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'requiresApiToken' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'helpUrl' } },
+											{
+												kind: 'Field',
+												name: { kind: 'Name', value: 'settings' },
+												selectionSet: {
+													kind: 'SelectionSet',
+													selections: [
+														{ kind: 'Field', name: { kind: 'Name', value: 'key' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'label' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'valueType' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'required' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'secret' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'defaultValue' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'description' } },
+														{ kind: 'Field', name: { kind: 'Name', value: 'helpUrl' } },
+													],
+												},
+											},
+										],
+									},
+								},
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'optedIn' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'settings' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'key' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'configured' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'secret' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'value' } },
+										],
+									},
+								},
+								{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	SetIngestProviderSettingsMutation,
+	SetIngestProviderSettingsMutationVariables
+>
+export const VerifyIngestProviderDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'VerifyIngestProvider' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'providerId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'settings' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'JSON' } },
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'verifyIngestProvider' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'providerId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'providerId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'settings' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'settings' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'responseStatus' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'isValid' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<VerifyIngestProviderMutation, VerifyIngestProviderMutationVariables>
+export const MetadataProviderConfigsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'MetadataProviderConfigs' },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'metadataProviderConfigs' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerType' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<MetadataProviderConfigsQuery, MetadataProviderConfigsQueryVariables>
+export const CreateMetadataProviderDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'CreateMetadataProvider' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'CreateMetadataProviderConfigInput' },
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'createMetadataProvider' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerType' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	CreateMetadataProviderMutation,
+	CreateMetadataProviderMutationVariables
+>
+export const UpdateMetadataProviderDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'UpdateMetadataProvider' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'PatchMetadataProviderConfigInput' },
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'updateMetadataProvider' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'id' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerType' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	UpdateMetadataProviderMutation,
+	UpdateMetadataProviderMutationVariables
+>
+export const DeleteMetadataProviderDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'DeleteMetadataProvider' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'deleteMetadataProvider' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'id' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'id' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [{ kind: 'Field', name: { kind: 'Name', value: 'id' } }],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	DeleteMetadataProviderMutation,
+	DeleteMetadataProviderMutationVariables
+>
+export const SetIngestQualityCheckSettingsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'SetIngestQualityCheckSettings' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+					type: {
+						kind: 'NonNullType',
+						type: {
+							kind: 'NamedType',
+							name: { kind: 'Name', value: 'SetIngestQualityCheckSettingsInput' },
+						},
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'setIngestQualityCheckSettings' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'input' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'input' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'checkId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'settings' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'key' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'configured' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'secret' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'value' } },
+										],
+									},
+								},
+								{ kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	SetIngestQualityCheckSettingsMutation,
+	SetIngestQualityCheckSettingsMutationVariables
+>
+export const IngestProgressDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'subscription',
+			name: { kind: 'Name', value: 'IngestProgress' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'analysisJobId' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'afterEventId' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestProgress' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'libraryId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'libraryId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'dropItemId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'analysisJobId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'analysisJobId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'afterEventId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'afterEventId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'eventId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'emittedAt' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'libraryId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'analysisJobId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'phase' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'completed' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'total' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'message' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestProgressSubscription, IngestProgressSubscriptionVariables>
+export const IngestProviderSearchDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'IngestProviderSearch' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'query' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'mediaKind' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'IngestMediaKind' } },
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'providers' } },
+					type: {
+						kind: 'ListType',
+						type: {
+							kind: 'NonNullType',
+							type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+						},
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'limit' } },
+					type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'ingestProviderSearch' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'query' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'query' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'mediaKind' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'mediaKind' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'providers' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'providers' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'limit' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'limit' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'externalId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'title' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'year' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'coverUrl' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'summary' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'score' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<IngestProviderSearchQuery, IngestProviderSearchQueryVariables>
+export const LookupIngestCandidateDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'LookupIngestCandidate' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'ID' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'providerId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'externalId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'lookupIngestCandidate' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'dropItemId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'dropItemId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'providerId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'providerId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'externalId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'externalId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'dropItemId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provider' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'providerVersion' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'model' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'confidence' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fields' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'fieldConfidences' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceSha256' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'provenance' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<LookupIngestCandidateMutation, LookupIngestCandidateMutationVariables>
+export const ProviderSourcesDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'ProviderSources' },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'providerSources' },
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'id' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'implementation' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'lang' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'baseUrl' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'enabled' } },
+								{
+									kind: 'Field',
+									name: { kind: 'Name', value: 'requestHeaders' },
+									selectionSet: {
+										kind: 'SelectionSet',
+										selections: [
+											{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'preview' } },
+											{ kind: 'Field', name: { kind: 'Name', value: 'length' } },
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<ProviderSourcesQuery, ProviderSourcesQueryVariables>
+export const ProviderSourceHealthRowsDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'query',
+			name: { kind: 'Name', value: 'ProviderSourceHealthRows' },
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'providerSourceHealth' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'includeDead' },
+								value: { kind: 'BooleanValue', value: true },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'sourceId' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'baseUrl' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'status' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'error' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'challenged' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'httpStatus' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'consecutiveFailures' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'lastCheckedAt' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<ProviderSourceHealthRowsQuery, ProviderSourceHealthRowsQueryVariables>
+export const SetProviderSourceHeadersDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'SetProviderSourceHeaders' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'instanceId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+					},
+				},
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'headers' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'JSON' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'setProviderSourceHeaders' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'instanceId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'instanceId' } },
+							},
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'headers' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'headers' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'name' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'preview' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'length' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<
+	SetProviderSourceHeadersMutation,
+	SetProviderSourceHeadersMutationVariables
+>
+export const SolveSourceChallengeDocument = {
+	kind: 'Document',
+	definitions: [
+		{
+			kind: 'OperationDefinition',
+			operation: 'mutation',
+			name: { kind: 'Name', value: 'SolveSourceChallenge' },
+			variableDefinitions: [
+				{
+					kind: 'VariableDefinition',
+					variable: { kind: 'Variable', name: { kind: 'Name', value: 'instanceId' } },
+					type: {
+						kind: 'NonNullType',
+						type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+					},
+				},
+			],
+			selectionSet: {
+				kind: 'SelectionSet',
+				selections: [
+					{
+						kind: 'Field',
+						name: { kind: 'Name', value: 'solveSourceChallenge' },
+						arguments: [
+							{
+								kind: 'Argument',
+								name: { kind: 'Name', value: 'instanceId' },
+								value: { kind: 'Variable', name: { kind: 'Name', value: 'instanceId' } },
+							},
+						],
+						selectionSet: {
+							kind: 'SelectionSet',
+							selections: [
+								{ kind: 'Field', name: { kind: 'Name', value: 'state' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'message' } },
+								{ kind: 'Field', name: { kind: 'Name', value: 'challenged' } },
+							],
+						},
+					},
+				],
+			},
+		},
+	],
+} as unknown as DocumentNode<SolveSourceChallengeMutation, SolveSourceChallengeMutationVariables>

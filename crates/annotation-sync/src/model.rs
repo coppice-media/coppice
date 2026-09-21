@@ -17,8 +17,10 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use models::{
+	domain::edition_pair::PairStatus,
 	entity::{
-		bookmark, media, media_annotation, media_metadata, reading_head, reading_session,
+		book_review, bookmark, liseur_sync_media_link, media, media_annotation,
+		media_metadata, reading_head, reading_session,
 	},
 	shared::readium::ReadiumLocator,
 };
@@ -50,6 +52,18 @@ pub enum BookSource {
 	LiseurWork { work_id: String },
 }
 
+/// One explicit review included in a book export.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportReview {
+	pub work_id: Option<String>,
+	pub media_id: Option<String>,
+	pub rating: i32,
+	pub content: Option<String>,
+	pub is_private: bool,
+	pub created_at: DateTime<Utc>,
+	pub updated_at: DateTime<Utc>,
+}
+
 /// One book's canonical export state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportBook {
@@ -68,6 +82,8 @@ pub struct ExportBook {
 	pub bookmarks: Vec<ExportBookmark>,
 	/// Reading-head and session summary, present when the book has one.
 	pub reading: Option<ReadingSummary>,
+	/// The current user's explicit work/edition review, if one exists.
+	pub review: Option<ExportReview>,
 }
 
 impl ExportBook {
@@ -81,6 +97,7 @@ impl ExportBook {
 			annotations: Vec::new(),
 			bookmarks: Vec::new(),
 			reading: None,
+			review: None,
 		}
 	}
 }
@@ -210,23 +227,52 @@ pub async fn build_export_batch(
 		.all(conn)
 		.await?;
 
+	let review_media_ids: Vec<String> = book_review::Entity::find()
+		.filter(book_review::Column::UserId.eq(user_id))
+		.filter(book_review::Column::MediaId.is_not_null())
+		.select_only()
+		.distinct()
+		.column(book_review::Column::MediaId)
+		.into_tuple::<Option<String>>()
+		.all(conn)
+		.await?
+		.into_iter()
+		.flatten()
+		.collect();
+	let review_work_ids: Vec<String> = book_review::Entity::find()
+		.filter(book_review::Column::UserId.eq(user_id))
+		.filter(book_review::Column::WorkId.is_not_null())
+		.select_only()
+		.distinct()
+		.column(book_review::Column::WorkId)
+		.into_tuple::<Option<String>>()
+		.all(conn)
+		.await?
+		.into_iter()
+		.flatten()
+		.collect();
+
 	let mut native_media_ids: BTreeSet<String> = BTreeSet::new();
 	native_media_ids.extend(annotation_media_ids);
 	native_media_ids.extend(bookmark_media_ids);
+	native_media_ids.extend(review_media_ids);
 
 	// ---- liseur CAS works ------------------------------------------------
 	let (changed_work_ids, high_water) =
 		liseur_changed_works(conn, user_id, options.liseur_from_seq).await?;
 
-	// A changed linked work surfaces its media's book even when the user has
-	// no native annotations for it; standalone works get their own book.
-	let mut standalone_work_ids: Vec<String> = Vec::new();
-	for work_id in changed_work_ids {
+	// A changed/reviewed linked work surfaces its media's book even when the
+	// user has no native annotations for it; standalone works get their own
+	// book. BTreeSet keeps review-only additions deterministic.
+	let mut standalone_work_ids: BTreeSet<String> = BTreeSet::new();
+	for work_id in changed_work_ids.into_iter().chain(review_work_ids) {
 		match liseur_linked_media(conn, user_id, &work_id).await? {
 			Some(media_id) => {
 				native_media_ids.insert(media_id);
 			},
-			None => standalone_work_ids.push(work_id),
+			None => {
+				standalone_work_ids.insert(work_id);
+			},
 		}
 	}
 
@@ -359,12 +405,63 @@ async fn build_native_book(
 		.collect::<Result<Vec<_>, serde_json::Error>>()?;
 
 	book.reading = build_reading_summary(conn, user_id, media_id).await?;
+	book.review = review_for_native(conn, user_id, media_id).await?;
 
 	for work_id in liseur_works_for_media(conn, user_id, media_id).await? {
 		fold_liseur_work(conn, user_id, &work_id, &mut book).await?;
 	}
 
 	Ok(Some(book))
+}
+
+/// Resolve the one review that belongs in a native book export. A confirmed
+/// work review wins over a legacy media review; suggestions are not work
+/// identity and therefore cannot move a review between editions.
+async fn review_for_native(
+	conn: &DatabaseConnection,
+	user_id: &str,
+	media_id: &str,
+) -> Result<Option<ExportReview>, AnnotationSyncError> {
+	let links = liseur_sync_media_link::Entity::find()
+		.filter(liseur_sync_media_link::Column::UserId.eq(user_id))
+		.filter(liseur_sync_media_link::Column::MediaId.eq(media_id))
+		.order_by_asc(liseur_sync_media_link::Column::CreatedAt)
+		.order_by_asc(liseur_sync_media_link::Column::Id)
+		.all(conn)
+		.await?;
+	for link in links {
+		if PairStatus::from_stored(&link.pair_status) != PairStatus::Confirmed {
+			continue;
+		}
+		if let Some(review) = book_review::Entity::find_for_work(user_id, &link.work_id)
+			.one(conn)
+			.await?
+		{
+			return Ok(Some(review.into()));
+		}
+	}
+	Ok(book_review::Entity::find_for_media(user_id, media_id)
+		.one(conn)
+		.await?
+		.map(Into::into))
+}
+
+fn review_from_model(model: book_review::Model) -> ExportReview {
+	ExportReview {
+		work_id: model.work_id,
+		media_id: model.media_id,
+		rating: model.rating,
+		content: model.content,
+		is_private: model.is_private,
+		created_at: model.created_at.with_timezone(&Utc),
+		updated_at: model.updated_at.with_timezone(&Utc),
+	}
+}
+
+impl From<book_review::Model> for ExportReview {
+	fn from(model: book_review::Model) -> Self {
+		review_from_model(model)
+	}
 }
 
 async fn build_reading_summary(
@@ -432,7 +529,10 @@ async fn build_liseur_work_book(
 	if let Some(author) = author.filter(|author| !author.is_empty()) {
 		book.authors.push(author);
 	}
-	book.identifiers = liseur_work_identifiers(conn, user_id, work_id).await?;
+	book.review = book_review::Entity::find_for_work(user_id, work_id)
+		.one(conn)
+		.await?
+		.map(Into::into);
 	merge_annotations(conn, user_id, work_id, &mut book).await?;
 	Ok(book)
 }
@@ -718,7 +818,8 @@ mod tests {
 		"CREATE TABLE liseur_sync_counters (user_id TEXT PRIMARY KEY, op_seq BIGINT NOT NULL DEFAULT 0, annotation_seq BIGINT NOT NULL DEFAULT 0)",
 		"CREATE TABLE liseur_sync_works (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, author TEXT NOT NULL)",
 		"CREATE TABLE liseur_sync_aliases (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, work_id TEXT NOT NULL)",
-		"CREATE TABLE liseur_sync_media_links (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, media_id TEXT NOT NULL, work_id TEXT NOT NULL, edition_sha TEXT NOT NULL, resolution_status TEXT NOT NULL, created_at TEXT NOT NULL)",
+		"CREATE TABLE liseur_sync_media_links (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, media_id TEXT NOT NULL, work_id TEXT NOT NULL, edition_sha TEXT NOT NULL, resolution_status TEXT NOT NULL, created_at TEXT NOT NULL, pair_status TEXT NOT NULL DEFAULT 'confirmed', pair_evidence TEXT)",
+		"CREATE TABLE book_reviews (id TEXT PRIMARY KEY, work_id TEXT, media_id TEXT, user_id TEXT NOT NULL, rating INTEGER NOT NULL, content TEXT, is_private BOOLEAN NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
 		"CREATE TABLE liseur_sync_annotations (
 			row_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, annotation_id TEXT NOT NULL,
 			rev BIGINT NOT NULL, seq BIGINT NOT NULL, work_id TEXT NOT NULL, edition_sha TEXT, kind TEXT NOT NULL,

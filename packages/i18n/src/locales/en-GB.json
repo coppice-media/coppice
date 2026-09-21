@@ -1,7 +1,7 @@
 {
 	"authScene": {
 		"claimHeading": "Initialise your server",
-		"claimText": "This Stump server is not initialised. Fill in the form below to create your account. Once created, you will have full access to all server features.",
+		"claimText": "This Coppice server is not initialised. Fill in the form below to create your account. Once created, you will have full access to all server features.",
 		"form": {
 			"validation": {
 				"missingUsername": "Username is required",
@@ -182,7 +182,7 @@
 					"disabled": "You cannot change this setting"
 				},
 				"options": {
-					"description": "The setting which determines how Stump will organise your library",
+					"description": "The setting which determines how Coppice will organise your library",
 					"label": "Library pattern",
 					"collectionPriority": {
 						"label": "Collection priority",
@@ -352,7 +352,7 @@
 			"convertOptions": {
 				"section": {
 					"heading": "File conversion",
-					"description": "Stump is capable of converting certain file formats to more compatible ones"
+					"description": "Coppice is capable of converting certain file formats to more compatible ones"
 				},
 				"rarToZip": {
 					"label": "Convert RAR to ZIP",
@@ -385,6 +385,11 @@
 					"label": "KoReader-compatible hashes",
 					"description": "If using KoReader, generate additional hashes in the format it expects"
 				}
+			},
+			"oneshotsDirectory": {
+				"label": "Oneshots directory",
+				"description": "The name of the directory where oneshots are stored, relative to the library path. If empty, oneshots will not be processed",
+				"placeholder": "_oneshots"
 			}
 		},
 		"scan": {
@@ -422,7 +427,8 @@
 					"generateKoreaderHashes": "Generate KoReader hashes",
 					"scaleEvenlyByFactor": "Evenly Scale",
 					"exact": "Exact Size",
-					"scaleDimension": "Explicitly Sized"
+					"scaleDimension": "Explicitly Sized",
+					"oneshotsDirectory": "Oneshots directory"
 				},
 				"yes": "Yes",
 				"no": "No",
@@ -438,12 +444,12 @@
 				{
 					"label": "Scanning",
 					"heading": "Scanning",
-					"description": "Settings related to how Stump scans this library"
+					"description": "Settings related to how Coppice scans this library"
 				},
 				{
 					"label": "Thumbnails",
 					"heading": "Thumbnails",
-					"description": "The options for if and how Stump generates thumbnails for this library"
+					"description": "The options for if and how Coppice generates thumbnails for this library"
 				},
 				{
 					"label": "Review",
@@ -526,7 +532,7 @@
 				}
 			},
 			"title": "Scanning",
-			"description": "Settings related to how Stump scans this library"
+			"description": "Settings related to how Coppice scans this library"
 		},
 		"integrations/analysis": {
 			"description": "Analyse the contents of this library to identify potential issues or improvements",
@@ -966,8 +972,8 @@
 			"sections": {
 				"locale": {
 					"subtitle": [
-						"Stump supports multiple languages and locales; set your preferences below. Please consider helping to improve the quality of",
-						"Stump's translations",
+						"Coppice supports multiple languages and locales; set your preferences below. Please consider helping to improve the quality of",
+						"Coppice's translations",
 						"if you're able to!"
 					],
 					"localeSelector": {
@@ -996,7 +1002,7 @@
 					"avatarPicker": {
 						"label": "Avatar",
 						"heading": "Upload avatar",
-						"subtitle": "You can upload any image to use as your avatar for social features in Stump",
+						"subtitle": "You can upload any image to use as your avatar for social features in Coppice",
 						"dropzone": "Drop an image or click to select",
 						"changeImage": "Change Image",
 						"removeImage": "Remove Image",
@@ -1007,6 +1013,12 @@
 					"buttons": {
 						"confirm": "Save Changes"
 					}
+				},
+				"language": {
+					"label": "Language",
+					"contributeIfAble": "Please consider contributing to Stump's translations if you're able to!",
+					"noThanks": "No thanks",
+					"contribute": "Contribute"
 				}
 			},
 			"helmet": "Account settings",
@@ -1035,16 +1047,16 @@
 					"title": "Navigation"
 				},
 				"layoutAndArrangement": {
-					"description": "Customise how Stump displays information and organises content",
+					"description": "Customise how Coppice displays information and organises content",
 					"label": "Layout and arrangement"
 				},
 				"additionalPreferences": {
-					"description": "Customise the appearance and behaviour of Stump with these additional settings",
+					"description": "Customise the appearance and behaviour of Coppice with these additional settings",
 					"label": "Additional preferences"
 				},
 				"themeAndAppearance": {
 					"label": "Theme and appearance",
-					"description": "The basic look and feel options for Stump"
+					"description": "The basic look and feel options for Coppice"
 				},
 				"interface": {
 					"title": "Interface",
@@ -1162,7 +1174,7 @@
 				},
 				"maxWidthPreference": {
 					"label": "Adjusted width",
-					"description": "Stump applies a max-width to the viewport. This setting allows you to adjust or remove this limit",
+					"description": "Coppice applies a max-width to the viewport. This setting allows you to adjust or remove this limit",
 					"tooltip": "This setting is not currently supported when the primary navigation is set to sidebar",
 					"options": {
 						"noLimit": "No limit"
@@ -1278,7 +1290,7 @@
 			},
 			"helmet": "API keys",
 			"title": "API keys",
-			"description": "Manage your generated Stump API keys"
+			"description": "Manage your generated Coppice API keys"
 		},
 		"app/desktop": {
 			"sections": {
@@ -1308,7 +1320,7 @@
 						]
 					},
 					"label": "Configured servers",
-					"description": "The list of Stump servers you can connect to",
+					"description": "The list of Coppice servers you can connect to",
 					"getStarted": "Add a server to get started",
 					"unreachableServer": {
 						"tooltip": "Server unreachable"
@@ -1330,7 +1342,7 @@
 							},
 							"uri": {
 								"label": "URI",
-								"description": "The URL of the Stump server",
+								"description": "The URL of the Coppice server",
 								"placeholder": "https://stump.example.com"
 							}
 						}
@@ -1338,7 +1350,7 @@
 					"addServer": {
 						"trigger": "Add server",
 						"title": "Add a new server",
-						"description": "Add a new Stump server to the desktop application",
+						"description": "Add a new Coppice server to the desktop application",
 						"confirm": "Add server"
 					},
 					"editServer": {
@@ -1380,14 +1392,14 @@
 					},
 					"discordPresence": {
 						"label": "Discord Presence",
-						"description": "Display your Stump activity in Discord using Discord Rich Presence",
+						"description": "Display your Coppice activity in Discord using Discord Rich Presence",
 						"reconnect": "Reconnect to Discord"
 					}
 				}
 			},
 			"helmet": "Desktop settings",
 			"title": "Desktop settings",
-			"description": "Settings related to the Stump desktop application"
+			"description": "Settings related to the Coppice desktop application"
 		},
 		"server/jobs": {
 			"sections": {
@@ -1464,11 +1476,12 @@
 					},
 					"errors": {
 						"invalidCron": "Schedule must be a valid cron expression"
-					}
+					},
+					"createScheduledJob": "Create scheduled job"
 				},
 				"history": {
 					"title": "History",
-					"description": "A record of jobs that have been run on your Stump server instance",
+					"description": "A record of jobs that have been run on your Coppice server instance",
 					"table": {
 						"columns": {
 							"name": "Type",
@@ -1488,12 +1501,17 @@
 						"confirmText": "Are you sure you want to delete all job history?",
 						"confirm": "Delete",
 						"emptyState": "No jobs to clear"
+					},
+					"inspector": {
+						"title": "Job details",
+						"description": "The raw output of this job and any associated logs",
+						"associatedLogs": "Associated logs"
 					}
 				}
 			},
 			"helmet": "Jobs",
 			"title": "Jobs",
-			"description": "Background jobs that run on your Stump server instance"
+			"description": "Background jobs that run on your Coppice server instance"
 		},
 		"server/metadataIntegrations": {
 			"providerForm": {
@@ -1599,7 +1617,9 @@
 							"label": "Reading direction",
 							"description": "The direction in which the reader will progress through pages"
 						}
-					}
+					},
+					"label": "Universal",
+					"description": "Settings which apply to all types of books"
 				},
 				"imageBasedBooks": {
 					"label": "Image-based books",
@@ -1641,40 +1661,43 @@
 							"button": "Clear preferences"
 						}
 					}
+				},
+				"formats": {
+					"label": "Formats",
+					"description": "Configure reader default settings independently"
 				}
 			}
 		},
 		"server/general": {
 			"helmet": "Server settings",
 			"title": "Server settings",
-			"description": "General settings related to your Stump server instance",
+			"description": "General settings related to your Coppice server instance",
 			"sections": {
 				"updateAvailable": {
 					"message": "Your server is not up to date. Please update to the latest version!"
 				},
 				"serverInfo": {
 					"title": "Server information",
-					"description": "Basic details about your Stump server instance",
-					"build": {
-						"label": "Build",
-						"description": "Details about the version and build",
-						"version": {
-							"semver": "Version",
-							"commitHash": "Exact commit",
-							"date": "Build date"
-						}
-					},
+					"description": "Basic details about your Coppice server instance",
+					"build": "Build",
 					"nonStableChannel": {
-						"title": "You are running a non-stable build of Stump",
+						"title": "You are running a non-stable build of Coppice",
 						"description": [
 							"It looks like you are running the",
 							"build channel"
 						]
-					}
+					},
+					"exactCommit": "Exact commit",
+					"debugInfo": {
+						"label": "Debug information",
+						"description": "Copy and paste when reporting issues on GitHub",
+						"copyDebugInfoFailed": "Failed to copy debug information"
+					},
+					"version": "Version"
 				},
 				"helpfulLinks": {
 					"title": "Helpful links",
-					"description": "Links to resources that may be helpful for managing your Stump server instance",
+					"description": "Links to resources that may be helpful for managing your Coppice server instance",
 					"links": {
 						"documentation": "Documentation",
 						"changelog": "Changelog"
@@ -1685,8 +1708,8 @@
 					"description": "The URL that your server is accessible from outside your network, if applicable. This will enable invite links and other features"
 				},
 				"customEmojis": {
-					"title": "Custom emojis",
-					"description": "Upload and manage custom image emojis for your server",
+					"title": "Emojis",
+					"description": "See and manage custom image emojis for your server",
 					"dropzone": "Drop an image or click to select",
 					"input": {
 						"label": "Emoji name",
@@ -1704,13 +1727,26 @@
 					"renameError": "Failed to rename emoji",
 					"deleteSuccess": "Emoji deleted",
 					"deleteError": "Failed to delete emoji"
+				},
+				"changelog": {
+					"label": "Changelog",
+					"description": "See what has changed in the latest versions of Stump"
+				},
+				"serverConfig": {
+					"label": "Server configuration",
+					"description": "A subset of configuration options available for management here",
+					"publicUrl": {
+						"label": "Public URL",
+						"description": "The URL that your server is accessible from outside your network",
+						"updateFailed": "Failed to update the URL"
+					}
 				}
 			}
 		},
 		"server/logs": {
 			"helmet": "Logs",
 			"title": "Logs",
-			"description": "The logs generated by your Stump server instance",
+			"description": "The logs generated by your Coppice server instance",
 			"sections": {
 				"persistedLogs": {
 					"title": "Persisted logs",
@@ -1733,7 +1769,7 @@
 				},
 				"liveLogs": {
 					"title": "Live logs feed",
-					"description": "Streamed directly from your Stump server instance in real-time"
+					"description": "Streamed directly from your Coppice server instance in real-time"
 				}
 			}
 		},
@@ -1917,17 +1953,23 @@
 					"description": "All records of login activity will be permanently deleted from the database",
 					"confirm": "Delete"
 				}
+			},
+			"userStats": {
+				"users": "Users",
+				"booksCompleted": "Books completed",
+				"booksInProgress": "Books in progress",
+				"topReader": "Top reader"
 			}
 		},
 		"server/email": {
 			"helmet": "Email settings",
 			"title": "Email",
-			"description": "Settings related to configuring an SMTP emailer for your Stump server instance",
+			"description": "Settings related to configuring an SMTP emailer for your Coppice server instance",
 			"sections": {
 				"emailers": {
 					"title": "SMTP emailers",
-					"description": "The clients you have configured for sending emails from your Stump server instance",
-					"singleInstanceDisclaimer": "While Stump supports multiple SMTP configurations in the backend, only one can be configured on the UI. This will be improved in the future",
+					"description": "The clients you have configured for sending emails from your Coppice server instance",
+					"singleInstanceDisclaimer": "While Coppice supports multiple SMTP configurations in the backend, only one can be configured on the UI. This will be improved in the future",
 					"list": {
 						"emptyHeading": "No SMTP emailers configured",
 						"primaryEmailer": "Primary emailer",
@@ -1949,7 +1991,7 @@
 				},
 				"devices": {
 					"title": "Email devices",
-					"description": "The device aliases you have configured for receiving emails from your Stump server instance",
+					"description": "The device aliases you have configured for receiving emails from your Coppice server instance",
 					"addDevice": "Add device alias",
 					"addOrUpdateDevice": {
 						"title": {
@@ -2050,7 +2092,7 @@
 			"createEmailer": {
 				"helmet": "Create emailer",
 				"title": "Create emailer",
-				"description": "Create a new SMTP emailer for your Stump server instance"
+				"description": "Create a new SMTP emailer for your Coppice server instance"
 			},
 			"updateEmailer": {
 				"helmet": "Update emailer",
@@ -2139,7 +2181,9 @@
 					"label": "Token",
 					"placeholder": "Raw Token"
 				},
-				"basic": "Basic"
+				"basic": "Basic",
+				"section": "Authentication",
+				"method": "Method"
 			},
 			"serverNamePlaceholder": "My Server",
 			"failedToConnect": "Failed to connect to server",
@@ -2149,7 +2193,14 @@
 			"validation": {
 				"nameAlreadyExists": "Name already exists",
 				"cannotSetAuthorizationHeader": "Cannot set Authorization header"
-			}
+			},
+			"createServer": "Create Server",
+			"updateServer": "Update Server",
+			"basicInfo": "Basic Info",
+			"primaryUrl": "Primary URL",
+			"optionalSettings": "Optional Settings",
+			"networking": "Networking",
+			"advancedOptions": "Advanced Options"
 		},
 		"bookMetadata": {
 			"colorists": "Colourists",
@@ -2169,7 +2220,8 @@
 			"links": "Links",
 			"year": "Year",
 			"identifier": "Identifier",
-			"identifiers": "Identifiers"
+			"identifiers": "Identifiers",
+			"issue": "Issue"
 		},
 		"common": {
 			"favorite": "Favourite",
@@ -2227,7 +2279,13 @@
 			"value": "Value",
 			"version": "Version",
 			"accessOpdsV2": "Access OPDS v2.0",
-			"accessOpdsV1": "Access OPDS v1.2"
+			"accessOpdsV1": "Access OPDS v1.2",
+			"xBooks_one": "{{count}} Book",
+			"xBooks_other": "{{count}} Books",
+			"exit": "Exit",
+			"notConfigured": "Not configured",
+			"test": "Test",
+			"view": "View"
 		},
 		"settings": {
 			"preferences": {
@@ -2271,7 +2329,7 @@
 							"pink": "Pink",
 							"rose": "Rose",
 							"slate": "Slate",
-							"gray": "Gray",
+							"gray": "Grey",
 							"zinc": "Zinc",
 							"neutral": "Neutral",
 							"stone": "Stone"
@@ -2305,8 +2363,8 @@
 				}
 			},
 			"stump": {
-				"label": "Stump",
-				"description": "Stump features are optional and can be turned off if you do not need them",
+				"label": "Coppice",
+				"description": "Coppice features are optional and can be turned off if you do not need them",
 				"bookClubsEnabled": "Book Club Features"
 			},
 			"autoSyncLocalData": "Auto-Sync Local Data",
@@ -2323,7 +2381,7 @@
 				"label": "Management",
 				"dataUsage": {
 					"label": "Data Usage",
-					"nonStumpData": "Non-Stump Data",
+					"nonStumpData": "Non-Coppice Data",
 					"serversTotal": "Servers Total",
 					"totalFiles": "Total Files",
 					"totalSize": "Total Size",
@@ -2340,7 +2398,8 @@
 						"label": "Stored Preferences",
 						"description": "Miscellaneous data like book preferences, reading timers, etc"
 					},
-					"clearPreferences": "Clear Preferences"
+					"clearPreferences": "Clear Preferences",
+					"noServersAdded": "No Servers Added"
 				}
 			},
 			"debug": {
@@ -2380,7 +2439,8 @@
 				"debugAnalytics": {
 					"label": "Debug Analytics",
 					"description": "Send additional debug-related events to help troubleshoot issues"
-				}
+				},
+				"maskUrls": "Mask URLs"
 			},
 			"contactInfo": {
 				"label": "Contact",
@@ -2421,7 +2481,7 @@
 			}
 		},
 		"readerSettings": {
-			"title": "Reader Settings",
+			"title": "Image Reader Settings",
 			"overrideGlobalSettings": "Override Global Settings",
 			"sections": {
 				"mode": "Mode",
@@ -2613,7 +2673,7 @@
 			"unknownSeriesName": "series"
 		},
 		"emptyState": {
-			"noStumpServers": "No Stump servers added",
+			"noStumpServers": "No Coppice servers added",
 			"noOPDSServers": "No OPDS servers added",
 			"noServers": "No Servers Configured",
 			"cta": "Get started by adding a server to access your book collections",
@@ -2813,6 +2873,57 @@
 			"readingNow": {
 				"nothingInProgress": "Nothing in Progress"
 			}
+		},
+		"serverSettingsSheet": {
+			"configuration": {
+				"label": "Configuration",
+				"networkSettings": "Network Settings"
+			}
+		},
+		"serverNetworkSettings": {
+			"activeProfile": {
+				"label": "Active Profile",
+				"localIsActive": "Local profile is active",
+				"primaryIsActive": "Primary profile is active",
+				"autoSwitchToLocalDidNotWork": "The app was unable to switch to the active profile. Please check your network connection"
+			},
+			"localProfile": "Local Profile",
+			"primaryUrl": "Primary URL",
+			"autoSwitchToLocal": {
+				"label": "Auto-switch to local profile",
+				"description": "Switch to the local profile when able"
+			},
+			"localUrl": "Local URL",
+			"saveUrlChanges": "Save URL Changes",
+			"swapUrls": {
+				"label": "Swap URLs",
+				"swap": "Swap",
+				"confirmationText": "Are you sure you want to swap the remote and local URLs? This will take effect immediately",
+				"noLocalUrlSet": {
+					"title": "No local URL set",
+					"description": "You need to set a local URL before you can swap it to the remote URL"
+				}
+			},
+			"wifiNetwork": {
+				"label": "Wifi Network",
+				"noAssociatedNetwork": "No Associated Wifi Network",
+				"notConnectedToWifi": "You are not connected to wifi. Please connect to a local network to finish setting up the local profile",
+				"connectedTip": "If the current network is not listed, you might need to give Stump permission to access your location",
+				"addNetwork": "Add \"{{ssid}}\"",
+				"permissionNotGranted": {
+					"label": "Permissions Not Granted",
+					"description": "You need to grant location permission to access the active wifi network"
+				},
+				"permissionFailedToBeGranted": {
+					"title": "Location Permission Failed",
+					"description": "The app failed to get permissions to access your location. Please check your device settings and try again"
+				},
+				"requestPermission": "Request Location Permission",
+				"removeWifi": {
+					"label": "Remove",
+					"confirmationText": "Are you sure you want to remove the '{{ssid}}' network from the local profile?"
+				}
+			}
 		}
 	},
 	"underConstruction": {
@@ -2952,7 +3063,8 @@
 		"tabs": {
 			"books": "Books",
 			"series": "Series",
-			"files": "Files"
+			"files": "Files",
+			"oneshots": "Oneshots"
 		}
 	},
 	"errorScene": {
@@ -3213,7 +3325,7 @@
 					"description": "Change the filters for this viewing session",
 					"rawData": {
 						"heading": "Raw filter data",
-						"description": "This is how Stump will process the filters"
+						"description": "This is how Coppice will process the filters"
 					},
 					"buttons": {
 						"save": "Save",
@@ -3338,10 +3450,10 @@
 	"serverSOS": {
 		"heading": "Server Unavailable",
 		"desktop": {
-			"message": "A network error occurred that suggests your Stump server is currently unavailable. Please ensure that it is running and accessible from this device.\nIf your server URL has changed, you can update it using the form below"
+			"message": "A network error occurred that suggests your Coppice server is currently unavailable. Please ensure that it is running and accessible from this device.\nIf your server URL has changed, you can update it using the form below"
 		},
 		"web": {
-			"message": "A network error occurred that suggests your Stump server is currently unavailable. Please ensure that it is running and accessible from this device"
+			"message": "A network error occurred that suggests your Coppice server is currently unavailable. Please ensure that it is running and accessible from this device"
 		},
 		"reconnected": "Reconnected to server! Redirecting...",
 		"reconnectionFailed": "Something went wrong!"
@@ -3456,7 +3568,15 @@
 			"tooManyFiles": "You have selected too many files",
 			"noValidFiles": "No valid files were selected"
 		},
-		"unknownError": "An unknown error occurred"
+		"unknownError": "An unknown error occurred",
+		"xBooks_one": "{{count}} Book",
+		"xBooks_other": "{{count}} Books",
+		"copy": "Copy",
+		"notConfigured": "Not configured",
+		"open": "Open",
+		"none": "None",
+		"seeMore": "See more",
+		"view": "View"
 	},
 	"userPermissions": {
 		"ACCESS_API_KEYS": {
@@ -3697,7 +3817,55 @@
 					"horizontalScroll": "Horizontal scroll",
 					"paged": "Paged"
 				}
+			},
+			"readerSettings": {
+				"sections": {
+					"mode": "Mode",
+					"imageOptions": "Image Options",
+					"preferences": "Preferences",
+					"controls": "Controls"
+				},
+				"preferences": {
+					"separateSecondPage": "Separate second page",
+					"panZoomWithoutCtrl": "Pan and zoom without Ctrl / Cmd",
+					"tapSidesToNavigate": "Tap sides to navigate",
+					"readingTimer": "Reading timer"
+				}
+			},
+			"doublePageBehavior": {
+				"label": "Double Paged",
+				"options": {
+					"auto": "Auto",
+					"always": "Always",
+					"off": "Off"
+				}
 			}
+		},
+		"header": {
+			"goToMediaOverview": "Go to media overview"
+		},
+		"settingsDialog": {
+			"scopes": {
+				"book": "Book",
+				"global": "Global"
+			}
+		},
+		"timerMenu": {
+			"start": "Start Timer",
+			"stop": "Stop Timer",
+			"reset": "Reset Timer"
+		},
+		"footer": {
+			"readingTime": "Reading time: {{time}}",
+			"pageOf": "{{current}} of {{total}}"
+		},
+		"goToPage": {
+			"label": "Go to page",
+			"submit": "Go"
+		},
+		"nextInSeries": {
+			"title": "Next Up:",
+			"read": "Read"
 		}
 	}
 }

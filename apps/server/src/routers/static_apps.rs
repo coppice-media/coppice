@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use axum::{
 	http::{header, HeaderValue},
+	response::Redirect,
+	routing::get,
 	Router,
 };
 use tower::ServiceBuilder;
@@ -28,11 +30,9 @@ pub const EDITOR_BASE: &str = "/editor";
 /// URL prefix the Home app is built for (`paths.base` in `home/svelte.config.js`).
 pub const APP_BASE: &str = "/app";
 
-/// A built single-page app: its URL prefix, a human label for logs, and the
-/// directory holding its build.
+/// A built single-page app: its URL prefix and build directory.
 struct StaticApp {
 	base: &'static str,
-	label: &'static str,
 	dir: PathBuf,
 }
 
@@ -47,7 +47,6 @@ fn configured_apps(app_state: &AppState) -> Vec<StaticApp> {
 	) {
 		apps.push(StaticApp {
 			base: EDITOR_BASE,
-			label: "ingest editor",
 			dir,
 		});
 	}
@@ -59,7 +58,6 @@ fn configured_apps(app_state: &AppState) -> Vec<StaticApp> {
 	) {
 		apps.push(StaticApp {
 			base: APP_BASE,
-			label: "Home app",
 			dir,
 		});
 	}
@@ -91,6 +89,22 @@ pub(crate) fn mount(app_state: &AppState) -> Router<AppState> {
 		router = router.merge(mount_app(&app));
 	}
 	router
+}
+
+/// Make the Home app the landing page: `/` redirects to `/app/` when the app
+/// is served and nothing else owns the root. The caller decides the second
+/// half — a `webui` build with the web UI enabled mounts its own SPA
+/// fallback at `/`, and merging a second root route would panic at router
+/// build — so this is only ever merged when that fallback is absent.
+pub(crate) fn home_landing(app_state: &AppState) -> Router<AppState> {
+	let served = configured_apps(app_state)
+		.iter()
+		.any(|app| app.base == APP_BASE);
+	if !served {
+		return Router::new();
+	}
+	tracing::info!(base = APP_BASE, "Home app is the landing page for /");
+	Router::new().route("/", get(|| async { Redirect::to(APP_BASE) }))
 }
 
 fn mount_app(app: &StaticApp) -> Router<AppState> {

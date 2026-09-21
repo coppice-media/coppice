@@ -9,5 +9,7 @@ declare global {
 		// interface Platform {}
 	}
 }
-
-export {};
+declare module '*.graphql?raw' {
+	const source: string
+	export default source
+}

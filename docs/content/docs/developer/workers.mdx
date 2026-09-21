@@ -151,6 +151,13 @@ finished_at)`.
 | `failed` | did not; `error` says why |
 | `needs_worker` | nobody advertises what it needs and the kind has no local implementation |
 
+An offer that remains `queued` with a `worker_id` is swept after the
+`CLAIM_DEADLINE` (30 seconds) even when the worker socket stays connected but
+never answers. The sweep uses `updated_at` as the offer timestamp and releases
+the row with a conditional `queued` + matching-`worker_id` update, so a racing
+`claim` wins; it then re-dispatches the job, preferring another capable worker
+when one is available.
+
 `needs_worker` is **shown, not hidden**: the console says *"no worker advertises
 `align` right now"* instead of queueing forever. It is a resting state — the
 moment a capable worker says `hello`, parked jobs are re-dispatched with no
@@ -174,8 +181,9 @@ Priority is an integer, higher first. `INTERACTIVE_PRIORITY` (0) is work a
 request is blocked on; `BACKGROUND_PRIORITY` (−10) is the default for everything
 else, so an alignment never competes with a scan.
 
-Every transition is one conditional `UPDATE` guarded by the status it leaves, so
-two frames that cross on the wire cannot both win.
+Every transition is one conditional `UPDATE` guarded by the status it leaves,
+and claims additionally guard the assigned `worker_id`, so two frames that
+cross on the wire cannot both win.
 
 ## 6. Data path
 
@@ -284,11 +292,58 @@ verdict**: a clearance that does not actually get through leaves the health row
 where it was and the next run asks again. Full rules:
 [Challenged sources](/docs/developer/provider-host#challenged-sources).
 
-### `align` (reserved)
+### `align`
 
-Tier 2 read-aloud forced alignment. Registered with **no** local implementation,
-so a server with no aligner worker parks the job in `needs_worker` and says so.
-Lands with step 3 of the read-aloud order.
+Tier 2 read-aloud forced alignment. The shared Rust wire contract, explicit
+enqueue mutation, server-side result gate, deterministic cache publication,
+GraphQL readiness, and authenticated cache-only download route are shipped.
+The worker runner is optional and implementation-neutral: `algorithm` and
+`model` select a configured external Storyteller profile today or a later
+native CTC runner.
+
+```jsonc
+// input
+{ "text_media_id": "ebook-id", "text_digest": "<sha256>",
+  "audio_media_id": "audio-id", "audio_manifest_digest": "<sha256>",
+  "algorithm": "storyteller", "model": "worker-profile-id",
+  "model_revision": "<immutable profile fingerprint>", "language": "en",
+  "granularity": "sentence", "execution_provider": "cuda",
+  "precision": "fp16", "options": {} }
+// requires
+{ "align": { "device": "cuda", "models": ["worker-profile-id"],
+             "algorithms": ["storyteller"], "precisions": ["fp16"] } }
+// result metadata for the uploaded map
+{ "bytes": 123456, "sha256": "<sha256>",
+  "mime": "application/vnd.stump.sync-map+json" }
+```
+
+`SyncMapV1` retains both media ids, exact input digests, generator/model/runtime
+provenance and compact cues
+`{spine_index, ordinal, element_id, track_index, begin_ms, end_ms, confidence}`.
+The server-side validator requires numeric text order, unique targets,
+non-overlapping track-local integer-millisecond intervals, confidence in
+`0..=1`, and ends within caller-supplied probed track durations. It also
+recomputes the canonical prepared EPUB targets and rejects stale requester,
+pair, digest, output, or cache inputs.
+
+#### Optional worker-local Storyteller backend
+
+Run Storyteller beside the worker, or give only that worker network access to
+an operator-managed instance. The worker keeps the Storyteller URL and
+credentials locally; they never enter `worker_jobs` or Stump's database.
+
+The shipped delegate path downloads the exact paired EPUB and single-file M4B,
+prepares the EPUB with Coppice's deterministic target contract, uploads both
+through Storyteller's TUS endpoint, triggers processing, polls with a bounded
+budget, downloads the synced artifact, and normalizes only its timing to
+`SyncMapV1`. Verified reuse of an existing remote UUID remains planned.
+Folder audiobooks are rejected rather than concatenated. The worker never
+returns Storyteller's full EPUB or embedded audio to Stump.
+
+The adapter advertises its configured implementation/profile under `align`.
+Storyteller credentials stay worker-local, are not serialized into job input,
+and are never embedded in a downloadable KOReader/Kobo/archive artifact.
+Native CTC/Viterbi remains a later backend behind the same `align` contract.
 
 ## 8. Browser workers
 

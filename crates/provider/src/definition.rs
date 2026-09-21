@@ -17,7 +17,7 @@
 //! ```
 //!
 //! `index.json` is loaded eagerly (it is small and drives the "which catalog
-//! entries can Stump actually drive" answer); individual definitions are
+//! entries can Coppice actually drive" answer); individual definitions are
 //! fetched on demand when a source is enabled or reloaded, so a repository with
 //! a thousand entries costs one request at boot.
 

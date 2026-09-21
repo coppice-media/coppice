@@ -45,7 +45,7 @@
 </script>
 
 <svelte:head>
-	<title>Tags · Stump</title>
+	<title>Tags · Coppice</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">

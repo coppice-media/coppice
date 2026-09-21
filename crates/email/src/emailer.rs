@@ -62,11 +62,11 @@ impl EmailerClient {
 	/// use email::{EmailerClient, EmailerClientConfig};
 	///
 	/// let config = EmailerClientConfig {
-	///     sender_email: "aaron@stumpapp.dev".to_string(),
-	///     sender_display_name: "Aaron's Stump Instance".to_string(),
-	///     username: "aaron@stumpapp.dev".to_string(),
+	///     sender_email: "coppice@example.test".to_string(),
+	///     sender_display_name: "Coppice".to_string(),
+	///     username: "coppice@example.test".to_string(),
 	///     password: Some("decrypted_password".to_string()),
-	///     host: "smtp.stumpapp.dev".to_string(),
+	///     host: "smtp.example.test".to_string(),
 	///     port: 587,
 	///     tls_enabled: true,
 	///     max_attachment_size_bytes: Some(10_000_000),
@@ -81,12 +81,12 @@ impl EmailerClient {
 	/// Send a test email with a small TXT attachment to verify the SMTP configuration is working.
 	pub async fn send_test_email(&self, recipient: &str) -> EmailResult<()> {
 		self.send_attachment(
-			"Test Email from Stump",
+			"Test Email from Coppice",
 			recipient,
 			AttachmentPayload {
-				name: "stump-test.txt".to_string(),
+				name: "coppice-test.txt".to_string(),
 				content:
-					b"Hello from Stump! Your email configuration is working correctly."
+					b"Hello from Coppice! Your email configuration is working correctly."
 						.to_vec(),
 				content_type: ContentType::parse("text/plain; charset=utf-8")
 					.unwrap_or(ContentType::TEXT_PLAIN),
@@ -105,11 +105,11 @@ impl EmailerClient {
 	///
 	/// async fn test() {
 	///     let config = EmailerClientConfig {
-	///         sender_email: "aaron@stumpapp.dev".to_string(),
-	///         sender_display_name: "Aaron's Stump Instance".to_string(),
-	///         username: "aaron@stumpapp.dev".to_string(),
+	///         sender_email: "coppice@example.test".to_string(),
+	///         sender_display_name: "Coppice".to_string(),
+	///         username: "coppice@example.test".to_string(),
 	///         password: Some("decrypted_password".to_string()),
-	///         host: "smtp.stumpapp.dev".to_string(),
+	///         host: "smtp.example.test".to_string(),
 	///         port: 587,
 	///         tls_enabled: true,
 	///         max_attachment_size_bytes: Some(10_000_000),
@@ -257,11 +257,11 @@ impl EmailerClient {
 	///
 	/// async fn test() {
 	///     let config = EmailerClientConfig {
-	///         sender_email: "aaron@stumpapp.dev".to_string(),
-	///         sender_display_name: "Aaron's Stump Instance".to_string(),
-	///         username: "aaron@stumpapp.dev".to_string(),
+	///         sender_email: "coppice@example.test".to_string(),
+	///         sender_display_name: "Coppice".to_string(),
+	///         username: "coppice@example.test".to_string(),
 	///         password: Some("decrypted_password".to_string()),
-	///         host: "smtp.stumpapp.dev".to_string(),
+	///         host: "smtp.example.test".to_string(),
 	///         port: 587,
 	///         tls_enabled: true,
 	///         max_attachment_size_bytes: Some(10_000_000),

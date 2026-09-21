@@ -1,6 +1,7 @@
 use std::{
 	str::FromStr,
 	sync::{Arc, Mutex},
+	time::Duration,
 };
 
 use async_trait::async_trait;
@@ -19,6 +20,12 @@ pub trait ScheduledJobDispatcher: JobExecutionContext {
 		job: &scheduled_job::Model,
 		runtime: &JobRuntime<Self>,
 	) -> Result<(), JobError>;
+
+	/// Performs one host-owned durable maintenance scan. The default is a
+	/// no-op so existing scheduler hosts need not opt into a scan.
+	async fn dispatch_due(&self, _runtime: &JobRuntime<Self>) -> Result<(), JobError> {
+		Ok(())
+	}
 }
 
 /// A scheduler that loads cron-based jobs and spawns them accordingly.
@@ -33,6 +40,7 @@ pub struct JobScheduler {
 
 struct JobSchedulerInner {
 	handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+	maintenance: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl JobScheduler {
@@ -46,8 +54,25 @@ impl JobScheduler {
 		X: ScheduledJobDispatcher,
 		F: FnOnce() -> Result<Arc<JobRuntime<X>>, JobError>,
 	{
-		let handles = load_handles(conn, runtime).await?;
-		if handles.is_empty() {
+		Self::init_with_maintenance(conn, runtime, false).await
+	}
+
+	/// Loads cron rows and, when requested, starts one durable maintenance scan
+	/// alongside them. The scan is host-defined through [`dispatch_due`] and is
+	/// useful for persisted work whose next attempt is time-based rather than a
+	/// user-authored cron expression.
+	pub async fn init_with_maintenance<X, F>(
+		conn: &DatabaseConnection,
+		runtime: F,
+		with_maintenance: bool,
+	) -> Result<Option<Self>, JobError>
+	where
+		X: ScheduledJobDispatcher,
+		F: FnOnce() -> Result<Arc<JobRuntime<X>>, JobError>,
+	{
+		let (handles, maintenance) =
+			load_handles(conn, runtime, with_maintenance).await?;
+		if handles.is_empty() && maintenance.is_none() {
 			tracing::info!("No enabled scheduled jobs; scheduler remains idle");
 			return Ok(None);
 		}
@@ -55,6 +80,7 @@ impl JobScheduler {
 		let scheduler = Self {
 			inner: Arc::new(JobSchedulerInner {
 				handles: Mutex::new(handles),
+				maintenance: Mutex::new(maintenance),
 			}),
 		};
 		tracing::info!(job_count = scheduler.job_count(), "Scheduler initialized");
@@ -71,13 +97,45 @@ impl JobScheduler {
 		X: ScheduledJobDispatcher,
 		F: FnOnce() -> Result<Arc<JobRuntime<X>>, JobError>,
 	{
-		let handles = load_handles(conn, runtime).await?;
-		let has_jobs = !handles.is_empty();
+		let with_maintenance = self
+			.inner
+			.maintenance
+			.lock()
+			.expect("scheduler mutex poisoned")
+			.is_some();
+		self.reload_with_maintenance(conn, runtime, with_maintenance)
+			.await
+	}
+
+	/// Replaces cron loops and explicitly enables or disables the host-owned
+	/// maintenance scan.
+	pub async fn reload_with_maintenance<X, F>(
+		&self,
+		conn: &DatabaseConnection,
+		runtime: F,
+		with_maintenance: bool,
+	) -> Result<bool, JobError>
+	where
+		X: ScheduledJobDispatcher,
+		F: FnOnce() -> Result<Arc<JobRuntime<X>>, JobError>,
+	{
+		let (handles, maintenance) =
+			load_handles(conn, runtime, with_maintenance).await?;
+		let has_jobs = !handles.is_empty() || maintenance.is_some();
 		let mut current = self.inner.handles.lock().expect("scheduler mutex poisoned");
 		for handle in current.drain(..) {
 			handle.abort();
 		}
 		*current = handles;
+		let mut current_maintenance = self
+			.inner
+			.maintenance
+			.lock()
+			.expect("scheduler mutex poisoned");
+		if let Some(handle) = current_maintenance.take() {
+			handle.abort();
+		}
+		*current_maintenance = maintenance;
 		tracing::info!(job_count = current.len(), "Scheduler reloaded");
 		Ok(has_jobs)
 	}
@@ -90,10 +148,27 @@ impl JobScheduler {
 			.len()
 	}
 
+	pub fn maintenance_enabled(&self) -> bool {
+		self.inner
+			.maintenance
+			.lock()
+			.expect("scheduler mutex poisoned")
+			.is_some()
+	}
+
 	/// Aborts all scheduled loops immediately.
 	pub fn stop(&self) {
 		let mut handles = self.inner.handles.lock().expect("scheduler mutex poisoned");
 		for handle in handles.drain(..) {
+			handle.abort();
+		}
+		if let Some(handle) = self
+			.inner
+			.maintenance
+			.lock()
+			.expect("scheduler mutex poisoned")
+			.take()
+		{
 			handle.abort();
 		}
 	}
@@ -109,13 +184,27 @@ impl Drop for JobSchedulerInner {
 		{
 			handle.abort();
 		}
+		if let Some(handle) = self
+			.maintenance
+			.get_mut()
+			.expect("scheduler mutex poisoned")
+			.take()
+		{
+			handle.abort();
+		}
 	}
 }
-
 async fn load_handles<X, F>(
 	conn: &DatabaseConnection,
 	runtime: F,
-) -> Result<Vec<tokio::task::JoinHandle<()>>, JobError>
+	with_maintenance: bool,
+) -> Result<
+	(
+		Vec<tokio::task::JoinHandle<()>>,
+		Option<tokio::task::JoinHandle<()>>,
+	),
+	JobError,
+>
 where
 	X: ScheduledJobDispatcher,
 	F: FnOnce() -> Result<Arc<JobRuntime<X>>, JobError>,
@@ -141,8 +230,8 @@ where
 			},
 		}
 	}
-	if schedules.is_empty() {
-		return Ok(Vec::new());
+	if schedules.is_empty() && !with_maintenance {
+		return Ok((Vec::new(), None));
 	}
 
 	let runtime = runtime()?;
@@ -159,8 +248,25 @@ where
 			tokio::spawn(cron_loop(job, cron, Arc::clone(&runtime)))
 		})
 		.collect();
+	let maintenance =
+		with_maintenance.then(|| tokio::spawn(maintenance_loop(Arc::clone(&runtime))));
 
-	Ok(handles)
+	Ok((handles, maintenance))
+}
+
+const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Periodically asks the host to enqueue durable work whose persisted
+/// next-attempt timestamp has arrived. This loop never performs the work
+/// itself, so it cannot consume an executor permit while waiting.
+async fn maintenance_loop<X: ScheduledJobDispatcher>(runtime: Arc<JobRuntime<X>>) {
+	let mut interval = tokio::time::interval(MAINTENANCE_INTERVAL);
+	loop {
+		interval.tick().await;
+		if let Err(error) = runtime.services().dispatch_due(&runtime).await {
+			tracing::error!(?error, "Scheduled maintenance dispatch failed");
+		}
+	}
 }
 
 /// The main loop for a single scheduled job based on its cron expression

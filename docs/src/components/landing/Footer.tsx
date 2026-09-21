@@ -13,19 +13,19 @@ const navigation = {
 			href: 'https://opencollective.com/stump',
 			icon: SiOpencollective,
 			isExternal: true,
-			name: 'Open Collective',
+			name: 'Upstream Stump Open Collective',
 		},
 		{
 			href: 'https://github.com/stumpapp/stump',
 			icon: SiGithub,
 			isExternal: true,
-			name: 'GitHub',
+			name: 'Upstream Stump GitHub',
 		},
 		{
 			href: 'https://discord.gg/63Ybb7J3as',
 			icon: SiDiscord,
 			isExternal: true,
-			name: 'Discord',
+			name: 'Upstream Stump Discord',
 		},
 	],
 }
@@ -70,10 +70,13 @@ export default function Footer() {
 				</div>
 
 				<div className="space-x-4 flex items-center">
-					<img className="h-8 w-8 object-scale-down" src="/favicon.ico" alt="Stump" />
+					<img className="h-8 w-8 object-scale-down" src="/favicon.ico" alt="Coppice reader icon" />
 
 					<p className="text-sm text-gray-700 dark:text-gray-200">
-						&copy; Copyright {new Date().getFullYear()} Aaron Leopold
+						Coppice, based on{' '}
+						<a className="underline" href="https://github.com/stumpapp/stump">
+							Stump by Aaron Leopold
+						</a>
 					</p>
 				</div>
 			</div>

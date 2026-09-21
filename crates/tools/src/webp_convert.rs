@@ -171,7 +171,7 @@ impl Tool for WebpConvert {
 	}
 
 	fn describe(&self) -> &'static str {
-		"Re-encode CBZ pages as WebP with Stump's own page pipeline"
+		"Re-encode CBZ pages as WebP with Coppice's own page pipeline"
 	}
 
 	fn plan(&self, input: &ToolInput) -> Result<Plan, ToolError> {

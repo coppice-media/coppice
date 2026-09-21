@@ -1,15 +1,15 @@
 ---
 title: Database
-description: Learn about the database configurations supported by Stump
+description: Learn about the database configurations supported by Coppice
 ---
 
-Stump supports both [SQLite](https://sqlite.org/) and [PostgreSQL](https://www.postgresql.org/) databases. The main difference being that SQLite is a file-based (and the default) option, while PostgreSQL is a server-based option which requires additional setup.
+Coppice supports both [SQLite](https://sqlite.org/) and [PostgreSQL](https://www.postgresql.org/) databases. The main difference being that SQLite is a file-based (and the default) option, while PostgreSQL is a server-based option which requires additional setup.
 
 ## SQLite
 
-A SQLite database is the default option for Stump. If you do not specify a configuration, Stump will create a SQLite database file in your config directory (e.g., `~/.stump/stump.db`).
+A SQLite database is the default option for Coppice. If you do not specify a configuration, Coppice will create a SQLite database file in your config directory (e.g., `~/.stump/stump.db`).
 
-You can override this by manually specifying a path to a SQLite database file using either the `STUMP_DATABASE_PATH` or `STUMP_DATABASE_URL` environment variables.
+You can override this by setting `STUMP_DB_PATH` to a SQLite database path, or by providing a full SQLite connection URL through `STUMP_DATABASE_URL`. The legacy `STUMP_DB_URL` alias is also accepted.
 
 ## PostgreSQL
 
@@ -18,11 +18,11 @@ You can override this by manually specifying a path to a SQLite database file us
 	please report them on GitHub
 </Callout>
 
-If you want to use PostgreSQL, you will need to ensure you have a PostgreSQL server running and accessible to Stump. Once you have that, you have two mechanisms for pointing Stump to your database:
+If you want to use PostgreSQL, you will need to ensure you have a PostgreSQL server running and accessible to Coppice. Once you have that, you have two mechanisms for pointing Coppice to your database:
 
 1. A fully-qualified connection string (e.g. `postgresql://user:password@host:port/database`)
 
-   This is a single value set to the `STUMP_DATABASE_URL` environment variable. It is convenient, and more similar to how you would connect to a SQLite database, however less secure as it exposes your database credentials in plaintext
+   This is a single value set to the `STUMP_DATABASE_URL` environment variable (the legacy `STUMP_DB_URL` alias is also accepted). It is convenient, and more similar to how you would connect to a SQLite database, however less secure as it exposes your database credentials in plaintext.
 
 2. Individual environment variables for each component of the connection string:
 

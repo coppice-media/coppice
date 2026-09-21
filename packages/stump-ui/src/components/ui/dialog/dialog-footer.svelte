@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Dialog as DialogPrimitive } from "bits-ui";
-	import { Button } from "../button/index.js";
+	import { Button } from "@stump/ui/components/ui/button/index.js";
 	import { cn, type WithElementRef } from "@stump/ui/utils.js";
 	import type { HTMLAttributes } from "svelte/elements";
 

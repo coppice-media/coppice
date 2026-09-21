@@ -219,9 +219,10 @@ pub async fn sink_status_rows(
 		.collect())
 }
 
-/// Upserts one sink config row for a user, replacing its settings and
-/// enabled flag. Values must already be encrypted; the export state and
-/// last-run bookkeeping are preserved.
+/// Upserts one sink config row for a user. Object settings are merged with
+/// the existing row so omitting an encrypted secret does not erase it; values
+/// must already be encrypted. Export state and last-run bookkeeping are
+/// preserved.
 pub async fn upsert_sink_config(
 	conn: &DatabaseConnection,
 	user_id: &str,
@@ -238,8 +239,9 @@ pub async fn upsert_sink_config(
 	let now = chrono::Utc::now().fixed_offset();
 	match existing {
 		Some(row) => {
+			let merged = merge_sink_settings(row.settings.clone(), settings);
 			let mut active: annotation_sink_config::ActiveModel = row.into();
-			active.settings = Set(settings);
+			active.settings = Set(merged);
 			active.enabled = Set(enabled);
 			active.updated_at = Set(now);
 			active.update(conn).await?;
@@ -261,6 +263,22 @@ pub async fn upsert_sink_config(
 	}
 
 	Ok(())
+}
+
+fn merge_sink_settings(
+	existing: Option<Value>,
+	incoming: Option<Value>,
+) -> Option<Value> {
+	match (existing, incoming) {
+		(Some(Value::Object(mut existing)), Some(Value::Object(incoming))) => {
+			for (key, value) in incoming {
+				existing.insert(key, value);
+			}
+			Some(Value::Object(existing))
+		},
+		(_existing, Some(incoming)) => Some(incoming),
+		(existing, None) => existing,
+	}
 }
 
 #[cfg(test)]
@@ -336,5 +354,19 @@ mod tests {
 			Err(CoreError::EncryptionKeyNotSet)
 		));
 		assert_eq!(decrypt_sink_values(&values, None).unwrap(), values);
+	}
+	#[test]
+	fn omitted_sink_settings_are_merged_instead_of_erasing_secrets() {
+		let encrypted = serde_json::json!({
+			"token": { ENCRYPTED_MARKER: "ciphertext" },
+			"branch": "main",
+		});
+		let updated = merge_sink_settings(
+			Some(encrypted),
+			Some(serde_json::json!({ "branch": "release" })),
+		)
+		.unwrap();
+		assert_eq!(updated["token"][ENCRYPTED_MARKER], "ciphertext");
+		assert_eq!(updated["branch"], "release");
 	}
 }

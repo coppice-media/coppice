@@ -22,7 +22,7 @@ pub struct SendAttachmentEmailOutput {
 
 #[Object]
 impl EmailerMutation {
-	#[graphql(guard = "PermissionGuard::one(UserPermission::EmailerCreate)")]
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageServer)")]
 	async fn create_emailer(
 		&self,
 		ctx: &Context<'_>,
@@ -38,7 +38,7 @@ impl EmailerMutation {
 		Ok(Emailer::from(result))
 	}
 
-	#[graphql(guard = "PermissionGuard::one(UserPermission::EmailerCreate)")]
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageServer)")]
 	async fn update_emailer(
 		&self,
 		ctx: &Context<'_>,
@@ -49,14 +49,23 @@ impl EmailerMutation {
 		let conn = core_ctx.conn.as_ref();
 		let encryption_key = core_ctx.get_encryption_key().await?;
 
-		let mut emailer = input.try_into_active_model(&encryption_key).await?;
+		let existing = emailer::Entity::find_by_id(id)
+			.one(conn)
+			.await?
+			.ok_or("Emailer not found")?;
+		let mut emailer = input
+			.try_into_active_model_preserving_password(
+				&encryption_key,
+				Some(existing.encrypted_password),
+			)
+			.await?;
 		emailer.id = Set(id);
 		let result = emailer.save(conn).await?.try_into_model()?;
 
 		Ok(Emailer::from(result))
 	}
 
-	#[graphql(guard = "PermissionGuard::one(UserPermission::EmailerManage)")]
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageServer)")]
 	async fn delete_emailer(&self, ctx: &Context<'_>, id: i32) -> Result<Emailer> {
 		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
 
@@ -92,7 +101,7 @@ impl EmailerMutation {
 	}
 
 	/// Send a test email to verify the SMTP configuration is working
-	#[graphql(guard = "PermissionGuard::one(UserPermission::EmailerCreate)")]
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageServer)")]
 	async fn test_emailer(
 		&self,
 		config: EmailerClientConfig,

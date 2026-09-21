@@ -13,8 +13,12 @@
 	});
 </script>
 
+<!--
+	Deliberately white in every theme: a QR code is dark modules on a light
+	quiet zone, and phone scanners are unreliable on inverted codes.
+-->
 <div
-	class="rounded-md border bg-white p-1 [&>svg]:h-full [&>svg]:w-full"
+	class="shrink-0 self-start rounded-lg border bg-white p-1 [&>svg]:h-full [&>svg]:w-full"
 	style="width: {size}px; height: {size}px"
 	role="img"
 	aria-label={label}

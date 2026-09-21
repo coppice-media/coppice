@@ -46,6 +46,7 @@ rust_decimal.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 serde_with.workspace = true
 # Audiobook probing: the one demuxer for duration, codec, sample rate,
 # channels, tags, cover art, and ID3v2/Vorbis chapter marks.

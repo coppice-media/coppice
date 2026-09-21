@@ -1,46 +1,107 @@
 ---
-title: Overview
+title: Coppice human wiki
+description: Install, configure, and understand the Coppice fork of the Stump media server
 ---
 
-## What is Stump?
+# Coppice
 
-Stump is an open source, self hostable, media server for digital books (ebooks, comic books, manga, etc). It is designed to be _easy to use_ and _easy to deploy_.
+Coppice is a self-hosted library for your own ebooks, comics, manga, and
+audiobooks. It is the product-facing name of this fork of the open-source
+[Stump](https://github.com/stumpapp/stump) media server.
 
-The short on how it works:
+This site is the **human wiki**: it explains the supported setup paths and
+links to the developer pages that hold route matrices, source references, and
+verification evidence. Technical identifiers remain unchanged where clients or
+distributions depend on them (`stump_server`, `Stump.toml`, `STUMP_*`, and
+related package names).
 
-- Install and run Stump on a computer or NAS (Network Attached Storage).
-- Configure your libraries
-- Read your media using the web interface or any compatible client
+## Choose a path
 
-Stump **is not** a tool used for fetching or downloading any kind of media. It is a tool used to host and access **your own media**. Think of it like a personal Netflix for comic books/manga/etc that lives on a computer in your home.
+- **[Install Coppice](/docs/getting-started/installation)** — Run the server
+  from a container, binary, or source checkout.
+- **[Check compatibility](/docs/guides/integrations/compatibility)** — See what
+  has shipped and which apps or devices have actually been verified.
+- **[Configure a profile](/docs/guides/configuration/modular-deployment)** —
+  Choose full, headless, minimal, KOReader-only, or Kavita-only composition.
+- **[Understand fulfillment](/docs/guides/integrations/shelfmark)** — Follow the
+  current shared-folder handoff and the planned request boundary.
 
-## Motivations
+## What Coppice does today
 
-There are some really solid, self-hostable, OPDS media servers out there. I started out using [Komga](https://komga.org) and started developing Stump because I thought it would be cool to learn what goes into making something like Komga myself. I chose Rust to get more experience with the language.
+- Hosts media from libraries you control; it is not a search or download
+  service.
+- Serves the native API plus protocol adapters for OPDS, Komga-shaped clients,
+  Kobo, KOReader, Kavita, Audiobookshelf-compatible clients, and liseur-sync.
+- Supports ordinary EPUB reading and ordinary audiobook playback as separate
+  flows.
+- Provides staged ingest and identifier matching so an allowed external file
+  handoff can become a library item.
+- Provides Hardcover metadata mapping with offline fixture coverage. Live
+  Hardcover credentials have not been verified.
 
-When I started, I had a few goals in mind:
+An implemented route is not automatically an app or device guarantee. Read the
+[compatibility and integration status](/docs/guides/integrations/compatibility)
+for the evidence label attached to each claim.
 
-- Small footprint and low resource usage
-- Efficiency and performance, even on less powerful hardware (e.g., Raspberry Pi)
-  - Personally, I don't need it to be the fastest out there. I mostly care about not _noticing_, if that makes sense 
-- Intuitive, pretty, and easy to use interface
-- Wide format support (e.g., PDF, EPUB, CBZ/CBR)
+## Evidence labels
 
-Stump has grown [quite a bit since then](https://www.star-history.com/?repos=stumpapp%2Fstump&type=date&logscale=&legend=bottom-right) and there are a lot of surfaces to it now to juggle in my spare time. A lot of the decisions made are a combination of my own personal needs and community feedback. So if you have any ideas or suggestions, please don't hesitate to share them by opening an issue.
+The wiki uses these labels consistently:
 
-## Compatibility
+- **Shipped** — implementation exists in this fork.
+- **Contract-tested** — a pinned fixture, replay, or server harness exercised a
+  protocol surface; this does not prove a physical app works.
+- **Device-tested** — a real app or device ran the flow against the server.
+- **Source-only** — pinned source was inspected without a live run.
+- **Planned** — a future capability or design item.
+- **Blocked** — a prerequisite is missing, so the flow is not currently
+  claimable.
 
-Stump should work on all major browsers and operating systems. Generally speaking, 1GB of RAM and disk space is enough. Stump also runs well on low-powered ARM-based single board computers, such as a Raspberry Pi.
+## Current, planned, and blocked
 
-## Roadmap
+### Current
 
-If you're interested in tracking the active or planned development of features, you can take a look at [GitHub issues](https://github.com/stumpapp/stump/issues).
+The default `full` server is the compatibility baseline. The `headless` profile
+keeps backend protocols without the web SPA, while leaf features allow a
+smaller deployment. The [modular deployment guide](/docs/guides/configuration/modular-deployment)
+distinguishes compile-time Cargo features from runtime `STUMP_*` and
+`ENABLE_*` switches.
 
-## Similar Projects
+### Planned
 
-There are a number of other projects that are similar to Stump. It certainly isn't the first or only digital book media server out there. If Stump isn't for you, or you want to check out similar projects in the rust and/or self hosting spaces, I encourage you to check out these other great open source projects:
+The `requests`/wanted ledger, a stable token-auth request bridge, and worker-side
+read-aloud alignment are future work. An alignment request starts only after a
+confirmed EPUB and audiobook pair and can then use existing timing import,
+a future Storyteller worker, and a native CTC fallback candidate.
 
-- [audiobookshelf](https://github.com/advplyr/audiobookshelf) (_Audio books, Podcasts_)
-- [Codex](https://github.com/ajslater/codex)
-- [Kavita](https://github.com/Kareadita/Kavita)
-- [Komga](https://github.com/gotson/komga)
+### Blocked
+
+Synchronized Storyteller read-aloud EPUB playback is not shipped. Storyteller
+is a future worker-side alignment backend, never a search/catalog provider or a
+bundled dependency. Hardcover account, progress, and journal sync are not
+implemented and remain blocked on their live-credential and API prerequisites.
+The official Audiobookshelf app also remains blocked by the missing
+Engine.IO/Socket.IO lane; the Lissen-shaped REST profile is a narrower,
+separately evidenced path.
+
+## Source-of-truth pages
+
+Use the human guides for setup and the developer pages for implementation detail:
+
+- [Server architecture](/docs/developer/server-architecture) — process seams,
+  Cargo profiles, lifecycle, static apps, and measurement gates.
+- [Client verification](/docs/developer/client-verification) and [platform
+  status](/docs/developer/platforms) — pinned app/device and harness evidence.
+- [Protocol standards](/docs/developer/standards) — route and payload
+  boundaries for clients.
+- [Read-aloud status](/docs/developer/read-aloud) — pairing, timing imports,
+  and the Storyteller boundary.
+- [Hardcover integration](/docs/developer/hardcover-integration) — metadata
+  implementation and the unimplemented account-sync boundary.
+
+## Upstream and licensing
+
+Coppice follows the upstream [Stump project](https://github.com/stumpapp/stump)
+where the protocol or distribution contract requires it. The repository root is
+MIT. The nested Expo application retains its GPL-3.0 license; see
+[`apps/expo/LICENSE`](https://github.com/stumpapp/stump/blob/main/apps/expo/LICENSE)
+and the [attribution notes](/docs/developer/contributing).

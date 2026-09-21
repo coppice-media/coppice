@@ -744,25 +744,41 @@ impl AbsBackend for AbsBackendAdapter {
 		)
 		.await?;
 
-		// The listening session is what turns "positions arrived" into time
+		// The listening session is what turns accepted positions into time
 		// spent listening, which the reading-session history reports.
-		reading_progress::upsert_reading_session(
-			&txn,
-			user,
-			media_id,
-			reading_progress::NormalizedProgression {
-				percentage: progression
-					.and_then(|value| sea_orm::prelude::Decimal::from_f64_retain(value)),
-				elapsed_seconds_delta: Some(update.elapsed_ms / 1000),
-				did_complete: applied.head.completed,
-				..Default::default()
-			},
-		)
-		.await?;
+		if applied.accepted() {
+			reading_progress::upsert_reading_session(
+				&txn,
+				user,
+				media_id,
+				reading_progress::NormalizedProgression {
+					percentage: progression.and_then(|value| {
+						sea_orm::prelude::Decimal::from_f64_retain(value)
+					}),
+					elapsed_seconds_delta: Some(update.elapsed_ms / 1000),
+					did_complete: applied.head.completed,
+					..Default::default()
+				},
+			)
+			.await?;
+		}
 		txn.commit().await?;
 
 		stump_core::reading_state::announce(self.ctx.as_ref(), &book, &applied);
 		Ok(applied.accepted())
+	}
+	async fn record_sync(&self, auth: &AuthContext, summary: serde_json::Value) {
+		let Some(api_key) = auth.api_key.as_deref() else {
+			return;
+		};
+		if let Err(error) = self
+			.ctx
+			.devices()
+			.touch(CredentialRef::ApiKey(api_key), Protocol::Api, Some(summary))
+			.await
+		{
+			tracing::warn!(?error, "Failed to record the ABS sync on its device");
+		}
 	}
 
 	async fn bookmarks(

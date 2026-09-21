@@ -28,6 +28,19 @@ pub struct SinkState {
 	pub data: Value,
 }
 
+/// A safe, built-in export preset exposed to UI-neutral clients.
+///
+/// Presets contain no host paths and only use the constrained template
+/// variables understood by the markdown sink.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SinkPresetDescriptor {
+	pub id: &'static str,
+	pub name: &'static str,
+	pub description: &'static str,
+	pub path_template: &'static str,
+	pub body_template: Option<&'static str>,
+}
+
 /// A static description of a sink for catalogs and editors.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SinkDescriptor {
@@ -35,6 +48,8 @@ pub struct SinkDescriptor {
 	pub name: &'static str,
 	pub description: &'static str,
 	pub settings: Vec<SettingDefinition>,
+	/// Safe, compiled-in choices for path/body templates.
+	pub presets: Vec<SinkPresetDescriptor>,
 }
 
 /// A destination for canonical annotation exports.

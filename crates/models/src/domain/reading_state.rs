@@ -328,8 +328,12 @@ pub fn project(update: &ProtocolUpdate, publication: &Publication<'_>) -> Projec
 
 /// Apply the conflict rule: the newest update wins unless it is older than the
 /// head by more than [`STALE_TOLERANCE`] *and* reports lower progression, in
-/// which case it is provenance only. Completion is sticky: only an explicit
-/// un-read (`completed == Some(false)`) clears it.
+/// which case it is provenance only.
+///
+/// Completion is sticky across position updates and heartbeats. Once any
+/// client marks a publication complete, ordinary progress from a re-read does
+/// not silently un-finish it; only `completed == Some(false)` is an explicit
+/// un-read.
 pub fn resolve(
 	head: Option<HeadState>,
 	projection: &Projection,
@@ -360,10 +364,12 @@ pub fn resolve(
 		};
 	}
 
+	let completed = projection.completed.unwrap_or(head.completed);
+
 	Resolved {
 		outcome: Outcome::Accepted,
 		progression,
-		completed: projection.completed.unwrap_or(head.completed),
+		completed,
 	}
 }
 

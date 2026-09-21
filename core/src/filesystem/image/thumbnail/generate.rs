@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use chrono::Utc;
 
 use futures::{stream::FuturesUnordered, StreamExt};
 use models::{
@@ -9,8 +11,8 @@ use models::{
 	},
 };
 use sea_orm::{
-	prelude::*, sea_query::Query, EntityTrait, Order, QueryFilter, QueryOrder,
-	QuerySelect,
+	prelude::*, sea_query::Query, ConnectionTrait, EntityTrait, Order, QueryFilter,
+	QueryOrder, QuerySelect,
 };
 use tokio::{fs, sync::oneshot, task::spawn_blocking};
 
@@ -69,6 +71,82 @@ pub type DidGenerate = bool;
 /// The output of a thumbnail generation operation
 pub type GenerateOutput = (Vec<u8>, PathBuf, DidGenerate);
 
+/// Mark the parent series and library as changed so a generated thumbnail
+/// fallback is invalidated for clients that cache those entities.
+pub async fn bump_media_thumbnail_fallbacks<C>(
+	conn: &C,
+	series_id: Option<&str>,
+) -> Result<(), DbErr>
+where
+	C: ConnectionTrait,
+{
+	let Some(series_id) = series_id else {
+		return Ok(());
+	};
+	let updated_at = Some(DateTimeWithTimeZone::from(Utc::now()));
+
+	series::Entity::update_many()
+		.filter(series::Column::Id.eq(series_id))
+		.col_expr(series::Column::UpdatedAt, Expr::value(updated_at))
+		.exec(conn)
+		.await?;
+
+	library::Entity::update_many()
+		.filter(
+			library::Column::Id.in_subquery(
+				Query::select()
+					.column(series::Column::LibraryId)
+					.from(series::Entity)
+					.and_where(series::Column::Id.eq(series_id))
+					.to_owned(),
+			),
+		)
+		.col_expr(library::Column::UpdatedAt, Expr::value(updated_at))
+		.exec(conn)
+		.await?;
+
+	Ok(())
+}
+
+/// Mark libraries containing the supplied series as changed after thumbnail
+/// generation or replacement.
+pub async fn bump_series_thumbnail_fallbacks<C>(
+	conn: &C,
+	series_ids: &[String],
+) -> Result<(), DbErr>
+where
+	C: ConnectionTrait,
+{
+	if series_ids.is_empty() {
+		return Ok(());
+	}
+
+	library::Entity::update_many()
+		.filter(
+			library::Column::Id.in_subquery(
+				Query::select()
+					.column(series::Column::LibraryId)
+					.from(series::Entity)
+					.and_where(series::Column::Id.is_in(series_ids.iter().cloned()))
+					.to_owned(),
+			),
+		)
+		.col_expr(
+			library::Column::UpdatedAt,
+			Expr::value(Some(DateTimeWithTimeZone::from(Utc::now()))),
+		)
+		.exec(conn)
+		.await?;
+
+	Ok(())
+}
+
+fn is_generated_thumbnail(path: &Path) -> bool {
+	path.file_stem()
+		.and_then(|stem| stem.to_str())
+		.is_some_and(|stem| stem.ends_with(".generated"))
+}
+
 /// The main function for generating a thumbnail for a book. This should be called from within the
 /// scope of a blocking task in the [`generate_book_thumbnail`] function.
 fn do_generate_book_thumbnail(
@@ -97,7 +175,8 @@ fn do_generate_book_thumbnail(
 
 /// Generate a thumbnail for a book, returning the thumbnail data, the path to the thumbnail file,
 /// and a boolean indicating whether the thumbnail was generated or not. If the thumbnail already
-/// exists and `force_regen` is false, the function will return the existing thumbnail data.
+/// exists and `force_regen` is false, or the stored thumbnail is explicitly selected/uploaded,
+/// the function will return the existing thumbnail data.
 #[tracing::instrument(skip_all)]
 pub async fn generate_book_thumbnail(
 	book: &media::MediaThumbSelect,
@@ -122,12 +201,18 @@ pub async fn generate_book_thumbnail(
 		))
 	};
 
+	let preserve_existing = !force_regen
+		|| book
+			.thumbnail_path
+			.as_deref()
+			.is_some_and(|path| !is_generated_thumbnail(Path::new(path)));
+
 	if let Err(e) = fs::metadata(&file_path).await {
 		// A `NotFound` error is expected here, but anything else is unexpected
 		if e.kind() != std::io::ErrorKind::NotFound {
 			tracing::error!(error = ?e, "IO error while checking for file existence?");
 		}
-	} else if !force_regen {
+	} else if preserve_existing {
 		match fs::read(&file_path).await {
 			Ok(thumbnail) => return Ok((thumbnail, PathBuf::from(&file_path), false)),
 			Err(e) => {

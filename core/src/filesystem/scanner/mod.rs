@@ -1,4 +1,5 @@
 mod library_scan_job;
+mod oneshot;
 mod series_scan_job;
 mod store;
 mod utils;

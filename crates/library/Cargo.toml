@@ -9,9 +9,12 @@ metadata_integrations = { path = "../integrations/metadata", default-features = 
 models = { path = "../models", default-features = false }
 sea-orm.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 stump_core = { path = "../../core", default-features = false }
 stump_media = { path = "../media", default-features = false }
-tokio = { workspace = true, features = ["fs"] }
+stump_worker = { path = "../worker", default-features = false, features = ["server"] }
+thiserror.workspace = true
+tokio = { workspace = true }
 tracing.workspace = true
 uuid.workspace = true
 

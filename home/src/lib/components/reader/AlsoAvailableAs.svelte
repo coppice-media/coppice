@@ -22,11 +22,13 @@
 	import { Button } from '@stump/ui/components/ui/button';
 	import { request } from '@stump/ui/graphql/client';
 	import {
+		DashboardViewerDocument,
 		ReaderConfirmEditionPairDocument,
 		ReaderEditionsDocument,
 		ReaderRejectEditionPairDocument,
 		type PairEvidence
 	} from '$lib/graphql/generated/graphql';
+	import ChapterMapDialog from './ChapterMapDialog.svelte';
 
 	let { mediaId }: { mediaId: string } = $props();
 
@@ -37,8 +39,43 @@
 		queryFn: () => request(ReaderEditionsDocument, { id: mediaId }),
 		enabled: browser && mediaId.length > 0
 	}));
+	const viewerQuery = createQuery(() => ({
+		queryKey: ['dashboard-viewer'],
+		queryFn: () => request(DashboardViewerDocument, {}),
+		enabled: browser
+	}));
 	const editions = $derived(editionsQuery.data?.mediaById?.editions ?? []);
 	const suggestions = $derived(editionsQuery.data?.mediaById?.editionSuggestions ?? []);
+	const currentMedia = $derived(editionsQuery.data?.mediaById);
+
+	type ChapterMapPair = {
+		ebookMediaId: string;
+		audioMediaId: string;
+	};
+
+	let chapterMapOpen = $state(false);
+	let chapterMapPair = $state<ChapterMapPair | null>(null);
+	const currentIsAudio = $derived(Boolean(currentMedia?.audio));
+	// The server owner bypasses permission guards, matching the jobs panel.
+	const canManageLibrary = $derived(
+		Boolean(
+			viewerQuery.data?.me.isServerOwner ||
+				viewerQuery.data?.me.permissions.includes('MANAGE_LIBRARY')
+		)
+	);
+	const activePair = $derived(chapterMapPair);
+
+	type Edition = (typeof editions)[number];
+
+	function openChapterMap(edition: Edition): void {
+		if (Boolean(edition.audio) === currentIsAudio) return;
+
+		chapterMapPair = {
+			ebookMediaId: currentIsAudio ? edition.id : mediaId,
+			audioMediaId: currentIsAudio ? mediaId : edition.id
+		};
+		chapterMapOpen = true;
+	}
 
 	/** Why pairing believes a suggestion, in words an operator can act on. */
 	const EVIDENCE_LABELS: Record<PairEvidence, string> = {
@@ -83,7 +120,6 @@
 			toast.error(error instanceof Error ? error.message : 'Unable to dismiss the suggestion.')
 	}));
 
-	type Edition = (typeof editions)[number];
 
 	/**
 	 * Where "Open here" goes. The converted position travels as the same deep
@@ -150,6 +186,11 @@
 				<Button size="xs" variant="secondary" href={openHereHref(edition)}>
 					{edition.pairedPosition ? 'Open here' : 'Open'}
 				</Button>
+				{#if canManageLibrary && currentMedia && Boolean(edition.audio) !== currentIsAudio}
+					<Button size="xs" variant="outline" onclick={() => openChapterMap(edition)}>
+						Chapter map
+					</Button>
+				{/if}
 			</div>
 		{/each}
 
@@ -181,3 +222,8 @@
 		{/each}
 	</section>
 {/if}
+<ChapterMapDialog
+	bind:open={chapterMapOpen}
+	ebookMediaId={activePair?.ebookMediaId ?? ''}
+	audioMediaId={activePair?.audioMediaId ?? ''}
+/>

@@ -22,8 +22,8 @@ gap list, and they feed [Roadmap › Future](/docs/developer/roadmap#future).
   adapted. Grimmory is AGPL-3.0 too and is treated the same way, except that we
   impersonate its published `/komga` alias as a compatibility target
   (`dev/komga-compat.mdx`).
-- Snapshot date 2026-09-07 (`7de64602`). Competitor docs move; the links are the
-  evidence.
+- This page is a working-tree comparison; competitor docs move, so the links are
+  the evidence.
 
 ## Formats and readers
 
@@ -41,7 +41,7 @@ gap list, and they feed [Roadmap › Future](/docs/developer/roadmap#future).
 | Web comic reader | yes `docs/content/docs/apps/web/readers.mdx:13-28` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
 | Web PDF reader | yes `docs/content/docs/apps/web/readers.mdx:35` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
 | Web audio player | yes — console reader audio lane `dev/state.mdx:41`, `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [yes][abs-readme] |
-| Read-aloud (ebook ↔ audiobook position sync) | **missing** — design accepted, nothing implemented `dev/read-aloud.mdx:6` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [n/e][abs-readme] |
+| Read-aloud (ebook ↔ audiobook position sync) | **partial** — edition pairing, editable chapter maps, persisted sync maps, import/enqueue, deterministic cache delivery, and worker validation substrate ship (`crates/library/src/editions.rs`, `crates/library/src/sync_maps.rs`, `crates/graphql/src/mutation/sync_map.rs`, `crates/worker/src/alignment.rs`); native alignment, full synchronized playback/UI, and deployment/device evidence remain open | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [n/e][abs-readme] |
 
 ## Protocols, sync, delivery
 
@@ -52,13 +52,13 @@ gap list, and they feed [Roadmap › Future](/docs/developer/roadmap#future).
 | Komga API served | yes (Komelia/Mihon profile subset) `dev/state.mdx:20` | [n/e][bo-what] | [partial: in development][gr-komga] | [n/e][kav-readme] | native [yes][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
 | Kavita API served | yes — device-verified client profile `dev/state.mdx:22` | [n/e][bo-what] | [n/e][gr-readme] | native [yes][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
 | Audiobookshelf API served | yes — root-mounted profile, HS256 tokens, sessions `dev/state.mdx:23` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | native [yes][abs-intro] |
-| ABS socket.io / websocket lane | **missing** — design only, in flight `dev/roadmap.mdx:74` | n/a | n/a | n/a | n/a | n/a | [required by the server][abs-readme] |
+| ABS socket.io / websocket lane | **implemented; verification partial** — hand-rolled Engine.IO v4 / Socket.IO v5 route and authenticated frame tests (`crates/abs/src/socket/mod.rs`, `crates/abs/src/socket/protocol.rs`, `crates/abs/src/socket/tests.rs`, `apps/server/src/routers/abs_backend.rs::compose`); broader official-client/device verification remains open | n/a | n/a | n/a | n/a | n/a | [required by the server][abs-readme] |
 | Kobo sync | yes `dev/provider-status.mdx:153-159` | [yes][bo-kobo] | [yes][gr-readme] | [n/e][kav-readme] | [yes][komga-readme] | [yes][cwa-readme] | [n/e][abs-intro] |
 | KOReader sync server | yes `dev/provider-status.mdx:174-180` | [yes][bo-kor] | [yes][gr-readme] | [yes][kav-kor] | [yes][komga-readme] | [yes][cwa-readme] | [n/e][abs-intro] |
 | First-party KOReader plugin | yes — `stump.koplugin`: continue-reading dashboard, OPDS 2.0 catalogue, downloads, two-way progress, annotation export; **never run inside KOReader** `dev/koreader-plugin.mdx:6-14,29` | [yes][bo-korp] | [n/e][gr-readme] | [no — third-party Kamare][kav-kor] | [n/e][komga-readme] | [yes — served at `/kosync`][cwa-readme] | [n/e][abs-intro] |
 | Kindle / e-mail send | yes — `crates/kindle`: format policy, `boko` EPUB→AZW3, 50 MB cap, delivery history, plus a USB sideload route; **never mailed to a real Kindle** `dev/state.mdx:28`, `dev/platforms.mdx:98-99` | [yes][bo-email] | [yes][gr-readme] | [yes][kav-email] | [n/e][komga-readme] | [yes][cwa-readme] | [yes][abs-readme] |
-| Device pairing + QR | yes `dev/device-pairing.mdx:6-17`, `dev/state.mdx:80` | [partial: token pairing, no QR][bo-kobo] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
-| Per-device library scope | yes — `devices.library_scope` narrows every protocol `dev/state.mdx:80` | [n/e][bo-home] | [n/e][gr-readme] | [n/e][kav-readme] | [partial: per-library user access][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Device pairing + QR | yes `dev/device-pairing.mdx:6-17`, `dev/state.mdx#reading-state-devices-and-events` | [partial: token pairing, no QR][bo-kobo] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Per-device library scope | yes — `devices.library_scope` narrows every protocol `dev/state.mdx#reading-state-devices-and-events` | [n/e][bo-home] | [n/e][gr-readme] | [n/e][kav-readme] | [partial: per-library user access][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
 | Comics transform for e-ink | yes `dev/comics-transform.mdx:8-12,27-36` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [no — CBR→CBZ only][komga-lib] | [n/e][cwa-readme] | [n/e][abs-intro] |
 
 ## Remote sources
@@ -72,7 +72,7 @@ capability, so the cells are mostly `n/e` by construction.
 | Themed site engines | yes — four `lib-multisrc` theme engines over a jsoup-subset selector engine `dev/state.mdx:68` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
 | Declarative source definitions | yes — frozen schema v1, generated from a `keiyoushi/extensions-source` checkout; no Kotlin, Gradle, or APK ever runs `dev/source-definitions.mdx:14-23` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
 | Source health + cross-source dedupe | yes — probe job with `DEGRADED`/`DEAD` transitions, event-emitting, and a merge pass `dev/state.mdx:71` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
-| Cloudflare-challenged hosts | **partial**: classified as its own error, `DEGRADED` never `DEAD`, recovered by a pasted `cf_clearance` cookie in `provider_sources.request_headers`; no headless browser, no FlareSolverr, and the cookie expires within the hour `dev/state.mdx:72`, `dev/provider-host.mdx:139-167,222-225` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Cloudflare-challenged hosts | **partial**: classified as its own error and `DEGRADED` never `DEAD`; automatic `challenge_solve` uses a browser worker and merges the solved Cookie + User-Agent with existing request headers (`crates/provider/src/challenge.rs`, `crates/worker/src/challenge.rs`); browser cookie expiry is authoritative, with a seven-day fallback only when expiry is absent, and some hosts still reject reqwest replay because of TLS fingerprint differences | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
 
 ## Metadata and ingest
 
@@ -111,7 +111,7 @@ capability, so the cells are mostly `n/e` by construction.
 | Inbound rate limiting | yes — `auth`/`write`/`stream` classes keyed on a credential fingerprint, `429` + `Retry-After`, counters on `/api/v2/health` `dev/server-architecture.mdx:295-311` | [n/e][bo-inst] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
 | Multi-user + permissions | yes — enumerated permissions, age and tag restrictions `docs/content/docs/guides/access-control/permissions.mdx:9-14`, `age-restrictions.mdx:10-16` | [yes — per-library access + RBAC][bo-what] | [yes][gr-readme] | [yes — roles + age restrictions][kav-readme] | [yes — per-library, age, labels][komga-readme] | [yes][cwa-readme] | [yes][abs-readme] |
 | OIDC / SSO | yes `docs/content/docs/guides/access-control/oidc.mdx:7`, `dev/home-app.mdx:50` | [yes — multi-provider][bo-what] | [yes][gr-readme] | [yes][kav-oidc] | [yes — OAuth2/OIDC][komga-oauth] | [yes — auto-discovery][cwa-readme] | [yes][abs-oidc] |
-| Backup / restore | **missing** `dev/state.mdx:169` | [n/e][bo-inst] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [yes — metadata backups + automated daily][abs-readme] |
+| Backup / restore | **missing** `dev/state.mdx#known-limitations` | [n/e][bo-inst] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [yes — metadata backups + automated daily][abs-readme] |
 
 ## Distribution
 
@@ -120,39 +120,42 @@ capability, so the cells are mostly `n/e` by construction.
 | Docker | yes — `full` and `headless` targets `dev/server-architecture.mdx:85-96` | [yes][bo-inst] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-intro] | [yes][cwa-readme] | [yes][abs-intro] |
 | Single binary | yes `docs/content/docs/getting-started/installation/binaries.mdx:45,80` | [no — Docker-native][bo-what] | [no — Compose + MariaDB][gr-readme] | [yes — native install][kav-readme] | [yes — Java or Docker][komga-intro] | [n/e — Docker][cwa-readme] | [n/e][abs-intro] |
 | Runs without a separate database server | yes — SQLite default, PostgreSQL optional `dev/server-architecture.mdx:83` | [no — PostgreSQL backend][bo-what] | [no — MariaDB][gr-readme] | [yes][kav-readme] | [yes][komga-intro] | [n/e][cwa-readme] | [n/e][abs-intro] |
-| Idle memory (measured) | 29,924 KiB RSS / 5 threads, optimized headless, SQLite; 40,776 KiB / 21 threads for pristine upstream `dev/state.mdx:114-116` | [n/e][bo-inst] | [n/e — JVM + MariaDB][gr-readme] | [n/e][kav-readme] | [n/e — JVM][komga-intro] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Idle memory (measured) | 29,924 KiB RSS / 5 threads, optimized headless, SQLite; 40,776 KiB / 21 threads for pristine upstream `dev/state.mdx#lifecycle-profiles-and-operations` | [n/e][bo-inst] | [n/e — JVM + MariaDB][gr-readme] | [n/e][kav-readme] | [n/e — JVM][komga-intro] | [n/e][cwa-readme] | [n/e][abs-intro] |
 | License | MIT `LICENSE:1` | [AGPL-3.0][bo-repo] | [AGPL-3.0][gr-lic] | [GPL-3.0][kav-lic] | [MIT][komga-lic] | [GPL-3.0][cwa-lic] | [GPL-3.0][abs-lic] |
 
 ## Where this fork is behind
 
-Four rows are outright **missing**:
+Four rows remain the highest-priority gaps:
 
-1. **Read-aloud** — ebook ↔ audiobook position sync. The design is accepted
-   (`dev/read-aloud.mdx:6`) and nothing is built. No peer in this set documents
-   it either, so this is a lead we have not taken rather than a deficit.
+1. **Read-aloud** — pairing, chapter maps, persisted sync maps, import/enqueue,
+   cache delivery, and worker validation now ship; native alignment, full
+   synchronized playback/UI, and deployment/device evidence remain open. No
+   peer in this table documents that complete path, so finishing it remains a
+   lead rather than parity work.
 2. **ABS socket.io lane** — Audiobookshelf's own server "requires a websocket
-   connection" ([README][abs-readme]); our profile is REST-only, which is enough
-   for Lissen and not enough for the official app (`dev/roadmap.mdx:74`).
+   connection" ([README][abs-readme]); our Engine.IO v4 / Socket.IO v5 lane is
+   implemented for the profile and covered by authenticated frame tests, but
+   broader official-client/device verification remains open.
 3. **Achievements** — the console has statistics, not goals or streak
    gamification (`dev/home-app.mdx:64`). BookOrbit ships reading goals, a daily
    streak and a diversity score.
-4. **Backup / restore** — no surface at all (`dev/state.mdx:169`); ABS ships
+4. **Backup / restore** — no surface at all (`dev/state.mdx#known-limitations`); ABS ships
    metadata backups with an automated daily schedule.
 
 Five rows are **partial**, i.e. something real exists but a peer does more: the
 annotations model (two stores, never reconciled), cover selection (decided but
 not written), bulk metadata edit (staged items only), dashboards (fixed
-composition), and Cloudflare-challenged sources (a pasted cookie that expires
-within the hour). Each is carried in
+composition), and Cloudflare-challenged sources (automatic browser-worker
+solve, with reqwest TLS fingerprint limits on some hosts). Each is carried in
 [Roadmap › Future](/docs/developer/roadmap#future).
 
 Rows where nothing in this list matches us: OPDS 2.0 alongside Komga *and*
 Kavita *and* Audiobookshelf profiles on one server, the provider host with
 data-driven theme engines and a frozen definition schema, the e-ink comics
-transform, per-device library scope and per-device audio delivery, device
-pairing with QR, built-in ntfy/webhook notifications, one documented event bus
-with pluggable sinks, inbound rate limiting, an audiobook quality report, and a
-measured idle RSS number.
+transform, per-device library scope and per-device audio delivery,
+built-in ntfy/webhook notifications, one documented event bus with pluggable
+sinks, inbound rate limiting, an audiobook quality report, and a measured idle
+RSS number.
 
 [bo-home]: https://bookorbit.app/
 [bo-what]: https://bookorbit.app/what-is-bookorbit/

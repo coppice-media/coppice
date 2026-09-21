@@ -1,0 +1,42 @@
+[
+	{
+		"query": "Why does Stump Media.pairedPosition return null for an opening-credits chapter, and should the mapped position be written to reading_heads?",
+		"should_trigger": true
+	},
+	{
+		"query": "Plan the unshipped Stump align worker: how should a confirmed EPUB/audio pair produce a validated SyncMap and what happens when no worker advertises align?",
+		"should_trigger": true
+	},
+	{
+		"query": "Our future Stump read-aloud.epub GET is starting Whisper. Make it cache-first, deduplicate alignment enqueue requests, and explain the SMIL derivative boundary.",
+		"should_trigger": true
+	},
+	{
+		"query": "Compare Storyteller's web Whisper/fuzzy route with its CLI --ctc CTC/Viterbi route before we use either in Stump.",
+		"should_trigger": true
+	},
+	{
+		"query": "Rank Stump's local SyncMap, exact-edition manifest, native SMIL, and Storyteller timing as zero-GPU candidates and define the fallback gates.",
+		"should_trigger": true
+	},
+	{
+		"query": "Add generic EPUB chapter navigation and Readium positions to a Svelte reader; there is no audiobook or Stump pairing involved.",
+		"should_trigger": false
+	},
+	{
+		"query": "Fix Stump's phone-opus audio transform so a worker fallback preserves Range requests and the stored MIME type.",
+		"should_trigger": false
+	},
+	{
+		"query": "Compare two generic Whisper transcription models for a podcast that has no ebook edition or read-aloud target.",
+		"should_trigger": false
+	},
+	{
+		"query": "Make a generic EPUB parser consume SMIL clipBegin and clipEnd values; this is unrelated to Stump's internal map.",
+		"should_trigger": false
+	},
+	{
+		"query": "Install the GPL ghost-story CLI for a personal audiobook project and configure its container.",
+		"should_trigger": false
+	}
+]

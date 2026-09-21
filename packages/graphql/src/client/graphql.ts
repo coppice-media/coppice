@@ -49,6 +49,19 @@ export enum AccessRole {
   Writer = 'WRITER'
 }
 
+export type AdaptiveRecommendation = {
+  __typename?: 'AdaptiveRecommendation';
+  authors: Scalars['String']['output'];
+  coverUrl?: Maybe<Scalars['String']['output']>;
+  externalKey?: Maybe<Scalars['String']['output']>;
+  reasonCode: Scalars['String']['output'];
+  remoteId?: Maybe<Scalars['String']['output']>;
+  score: Scalars['Int']['output'];
+  sourceProvider?: Maybe<Scalars['String']['output']>;
+  targetKey: Scalars['String']['output'];
+  title: Scalars['String']['output'];
+};
+
 export type AddBookToClubInput = {
   book: BookClubBookInput;
 };
@@ -75,12 +88,244 @@ export type AggregatedReaction = {
   reactedByMe: Scalars['Boolean']['output'];
 };
 
+/** Granularity of cues in a sync map or alignment request. */
+export enum AlignGranularity {
+  Sentence = 'SENTENCE',
+  Word = 'WORD'
+}
+
+/** A staged analysis job failed. */
+export type AnalysisJobFailed = {
+  __typename?: 'AnalysisJobFailed';
+  analysisJobId: Scalars['String']['output'];
+  error: Scalars['String']['output'];
+};
+
 export type AnalyzeMediaOutput = {
   __typename?: 'AnalyzeMediaOutput';
   /** The number of media item updates performed */
   mediaUpdated: Scalars['Int']['output'];
   /** The number of pages in total that were analyzed to some extent */
   pagesAnalyzed: Scalars['Int']['output'];
+};
+
+/**
+ * A binary side object of a liseur-sync annotation.
+ *
+ * Attachments are keyed by annotation id and never take part in the
+ * annotation's compare-and-set revision: uploading one does not change the
+ * record a device replicates. Bytes are fetched from
+ * `GET /api/v2/annotations/{annotationId}/attachments/{id}` with the caller's
+ * session or its liseur device credential.
+ */
+export type AnnotationAttachment = {
+  __typename?: 'AnnotationAttachment';
+  /**
+   * The liseur-sync annotation this hangs off, not a native
+   * `media_annotations` id.
+   */
+  annotationId: Scalars['ID']['output'];
+  byteSize: Scalars['Int']['output'];
+  createdAt: Scalars['String']['output'];
+  /**
+   * The filename extension the bytes are stored under, so a client can
+   * name a download without parsing the media type.
+   */
+  extension: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  /**
+   * `markup-svg` (handwritten strokes), `markup-page` (the page snapshot
+   * they were drawn on), or `notebook` (a device notebook export).
+   */
+  kind: Scalars['String']['output'];
+  mediaType: Scalars['String']['output'];
+  /** Lowercase hex SHA-256 of the bytes; also the upload idempotency key. */
+  sha256: Scalars['String']['output'];
+};
+
+/** The book an annotation belongs to. */
+export type AnnotationBook = {
+  __typename?: 'AnnotationBook';
+  authors: Array<Scalars['String']['output']>;
+  /** The book's file extension, so a client can pick a reader lane */
+  extension?: Maybe<Scalars['String']['output']>;
+  /**
+   * Stable grouping key — `native:<media_id>` or `liseur:<work_id>`, the
+   * same key the annotation-sync export uses for its per-book file.
+   */
+  key: Scalars['String']['output'];
+  libraryId?: Maybe<Scalars['ID']['output']>;
+  /**
+   * The Stump book, when the annotation anchors to one. `null` for a
+   * liseur work with no link to a book this user can see; those
+   * annotations are listed but cannot be opened in a reader.
+   */
+  mediaId?: Maybe<Scalars['ID']['output']>;
+  seriesId?: Maybe<Scalars['ID']['output']>;
+  seriesName?: Maybe<Scalars['String']['output']>;
+  title: Scalars['String']['output'];
+};
+
+/** One highlight, note, or bookmark, wherever it came from. */
+export type AnnotationEntry = {
+  __typename?: 'AnnotationEntry';
+  book: AnnotationBook;
+  /** The chapter the anchor names, when the locator carries one */
+  chapterTitle?: Maybe<Scalars['String']['output']>;
+  /** Liseur palette token (`yellow`, `green`, …); native rows have no colour */
+  color?: Maybe<Scalars['String']['output']>;
+  createdAt?: Maybe<Scalars['DateTime']['output']>;
+  /**
+   * Whether `updateAnnotation`/`deleteAnnotation` accept this row. Only
+   * native rows are editable here: a liseur CAS record is owned by its
+   * device and replicated with compare-and-set revisions.
+   */
+  editable: Scalars['Boolean']['output'];
+  /**
+   * The selected passage: the locator's `text.highlight`, the liseur
+   * `excerpt`, or a bookmark's preview text
+   */
+  excerpt?: Maybe<Scalars['String']['output']>;
+  /** The in-resource fragment id, when the anchor carries one */
+  fragment?: Maybe<Scalars['String']['output']>;
+  /** The publication-relative resource the anchor points into */
+  href?: Maybe<Scalars['String']['output']>;
+  id: Scalars['ID']['output'];
+  kind: AnnotationKind;
+  /** The user's own note, distinct from the selected passage */
+  note?: Maybe<Scalars['String']['output']>;
+  /** The page, for a paged book's bookmark or a positioned locator */
+  page?: Maybe<Scalars['Int']['output']>;
+  /** Whole-publication progression in `0..=1`, when known */
+  progression?: Maybe<Scalars['Float']['output']>;
+  /**
+   * Where the annotation came from. Native rows carry no per-row device,
+   * so they report `WEB` — the native lane, i.e. this server's readers and
+   * GraphQL API. A liseur-sync CAS record reports the kind of the device
+   * that pushed it (`KOBO` for NickelStump on a Kobo, `KOREADER`,
+   * `LISEUR`), falling back to `LISEUR` when that device is no longer
+   * registered.
+   */
+  source: DeviceKind;
+  sourceDeviceId?: Maybe<Scalars['ID']['output']>;
+  sourceDeviceName?: Maybe<Scalars['String']['output']>;
+  updatedAt?: Maybe<Scalars['DateTime']['output']>;
+};
+
+/**
+ * Narrows the cross-book annotation hub. Every field is a conjunction; an
+ * empty list is the same as omitting it.
+ */
+export type AnnotationFilterInput = {
+  kind?: InputMaybe<Array<AnnotationKind>>;
+  /** Every book of one library */
+  libraryId?: InputMaybe<Scalars['ID']['input']>;
+  /** One book, by its Stump media id */
+  mediaId?: InputMaybe<Scalars['ID']['input']>;
+  /**
+   * Case-insensitive substring match over the selected passage, the note,
+   * and the book title
+   */
+  query?: InputMaybe<Scalars['String']['input']>;
+  /** Every book of one series */
+  seriesId?: InputMaybe<Scalars['ID']['input']>;
+  /** Only annotations created at or after this instant */
+  since?: InputMaybe<Scalars['DateTime']['input']>;
+  /**
+   * Where the annotation came from, as reported by
+   * [`AnnotationEntry::source`](crate::object::annotation::AnnotationEntry)
+   */
+  source?: InputMaybe<Array<DeviceKind>>;
+  /**
+   * Durable registered device id that pushed the annotation. This is
+   * independent of whether the device's current credential is active, so
+   * revoked-device history remains filterable.
+   */
+  sourceDeviceId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+/**
+ * What an annotation is.
+ *
+ * A native `media_annotations` row always carries a Readium locator, so the
+ * kind follows the locator's `text.highlight`: a row with that selected
+ * passage is a `HIGHLIGHT`, a row carrying only the user's text is a `NOTE`.
+ * Native `bookmarks` rows and liseur `bookmark` records are `BOOKMARK`.
+ */
+export enum AnnotationKind {
+  Bookmark = 'BOOKMARK',
+  Highlight = 'HIGHLIGHT',
+  Note = 'NOTE'
+}
+
+/** One page of the cross-book annotation hub. */
+export type AnnotationPage = {
+  __typename?: 'AnnotationPage';
+  /** Distinct books among the matches */
+  bookCount: Scalars['Int']['output'];
+  hasNext: Scalars['Boolean']['output'];
+  /**
+   * Book-contiguous: books ordered by their most recent annotation
+   * (newest first), annotations inside a book by `(createdAt, id)`
+   * ascending, so a page can be grouped by `book.key` as it arrives.
+   */
+  items: Array<AnnotationEntry>;
+  /** Matching annotations across every book, before pagination */
+  total: Scalars['Int']['output'];
+};
+
+/** A compiled-in annotation export sink and its setting schema. */
+export type AnnotationSink = {
+  __typename?: 'AnnotationSink';
+  description: Scalars['String']['output'];
+  id: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  presets: Array<AnnotationSinkPreset>;
+  settings: Array<IngestSettingDefinition>;
+};
+
+/** A built-in safe layout choice for an annotation sink. */
+export type AnnotationSinkPreset = {
+  __typename?: 'AnnotationSinkPreset';
+  bodyTemplate?: Maybe<Scalars['String']['output']>;
+  description: Scalars['String']['output'];
+  id: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  pathTemplate: Scalars['String']['output'];
+};
+
+export type AnnotationSinkRun = {
+  __typename?: 'AnnotationSinkRun';
+  /** The sink's error message when it failed; the row's `last_error`. */
+  error?: Maybe<Scalars['String']['output']>;
+  sinkId: Scalars['String']['output'];
+};
+
+/** Per-sink configuration state for one user. */
+export type AnnotationSinkStatus = {
+  __typename?: 'AnnotationSinkStatus';
+  enabled: Scalars['Boolean']['output'];
+  lastError?: Maybe<Scalars['String']['output']>;
+  lastRunAt?: Maybe<Scalars['DateTime']['output']>;
+  sinkId: Scalars['String']['output'];
+};
+
+/** Output persisted with the job record when the run completes. */
+export type AnnotationSyncOutput = {
+  __typename?: 'AnnotationSyncOutput';
+  /** Books in the batch handed to every sink. */
+  books: Scalars['Int']['output'];
+  sinks: Array<AnnotationSinkRun>;
+  userId: Scalars['String']['output'];
+};
+
+/** The annotation sync state for one user. */
+export type AnnotationSyncStatus = {
+  __typename?: 'AnnotationSyncStatus';
+  /** A debounced export is scheduled for this user. */
+  pending: Scalars['Boolean']['output'];
+  sinks: Array<AnnotationSinkStatus>;
+  userId: Scalars['String']['output'];
 };
 
 export type Apikey = {
@@ -111,19 +356,31 @@ export type ApikeyPermissions =
 
 export type ApikeyPermissionsOutput = InheritPermissionStruct | UserPermissionStruct;
 
+/**
+ * Exactly one of `drop_item_id` (staged item) or `media_id` (library-wide
+ * rework target) must be provided.
+ */
+export type ApplyIngestMetadataInput = {
+  dropItemId?: InputMaybe<Scalars['ID']['input']>;
+  mediaId?: InputMaybe<Scalars['ID']['input']>;
+  selections: Array<IngestMetadataFieldSelectionInput>;
+  strategy?: InputMaybe<MergeStrategy>;
+};
+
 export type Arrangement = {
   __typename?: 'Arrangement';
   locked: Scalars['Boolean']['output'];
   sections: Array<ArrangementSection>;
 };
 
-export type ArrangementConfig = CustomArrangementConfig | InProgressBooks | RecentlyAdded | SystemArrangementConfig;
+export type ArrangementConfig = CustomArrangementConfig | InProgressBooks | OnDeckBooks | RecentlyAdded | SystemArrangementConfig;
 
 export type ArrangementConfigInput =
-  { custom: FilterableArrangementEntityLinkInput; inProgressBooks?: never; recentlyAdded?: never; system?: never; }
-  |  { custom?: never; inProgressBooks: InProgressBooksInput; recentlyAdded?: never; system?: never; }
-  |  { custom?: never; inProgressBooks?: never; recentlyAdded: RecentlyAddedInput; system?: never; }
-  |  { custom?: never; inProgressBooks?: never; recentlyAdded?: never; system: SystemArrangementConfigInput; };
+  { custom: FilterableArrangementEntityLinkInput; inProgressBooks?: never; onDeckBooks?: never; recentlyAdded?: never; system?: never; }
+  |  { custom?: never; inProgressBooks: InProgressBooksInput; onDeckBooks?: never; recentlyAdded?: never; system?: never; }
+  |  { custom?: never; inProgressBooks?: never; onDeckBooks: OnDeckBooksInput; recentlyAdded?: never; system?: never; }
+  |  { custom?: never; inProgressBooks?: never; onDeckBooks?: never; recentlyAdded: RecentlyAddedInput; system?: never; }
+  |  { custom?: never; inProgressBooks?: never; onDeckBooks?: never; recentlyAdded?: never; system: SystemArrangementConfigInput; };
 
 export type ArrangementSection = {
   __typename?: 'ArrangementSection';
@@ -145,6 +402,52 @@ export type AttachmentMeta = {
   mediaId?: Maybe<Scalars['String']['output']>;
   /** The size of the attachment in bytes */
   size: Scalars['Int']['output'];
+};
+
+/**
+ * How an audiobook's chapter marks were obtained.
+ *
+ * This is provenance, never a preference: a list synthesized one-chapter-
+ * per-file ([`Self::PerTrack`]) must not be presented as if the publisher
+ * shipped it, and a client that wants to hide synthetic chapters can only do
+ * that if the mechanism survives the probe. The variants name the concrete
+ * container mechanism rather than a quality tier so a new container format
+ * adds a variant instead of silently widening an existing one.
+ */
+export enum AudioChapterSource {
+  /** ID3v2 `CHAP`/`CTOC` frames. */
+  Id_3Chap = 'ID_3_CHAP',
+  /**
+   * A QuickTime text chapter track, linked from the audio track by a
+   * `tref`/`chap` reference.
+   */
+  Mp_4ChapterTrack = 'MP_4_CHAPTER_TRACK',
+  /** The Nero `chpl` atom in `moov/udta` of an MP4/M4B container. */
+  Mp_4Chpl = 'MP_4_CHPL',
+  /** The publication has no chapters. */
+  None = 'NONE',
+  /**
+   * Synthesized: one chapter per file of a folder audiobook. The publisher
+   * shipped no chapter marks at all.
+   */
+  PerTrack = 'PER_TRACK',
+  /** `CHAPTERxxx`/`CHAPTERxxxNAME` Vorbis comments (Ogg, Opus, FLAC). */
+  VorbisComment = 'VORBIS_COMMENT'
+}
+
+/**
+ * A listening position: milliseconds from the start of the publication,
+ * plus the file the client was in for a multi-file audiobook. A recording
+ * has no pages, so this carries neither a page nor a locator.
+ */
+export type AudioProgressInput = {
+  deviceId?: InputMaybe<Scalars['String']['input']>;
+  elapsedSecondsDelta?: InputMaybe<Scalars['Int']['input']>;
+  isComplete?: InputMaybe<Scalars['Boolean']['input']>;
+  positionMs: Scalars['Int']['input'];
+  resetElapsedSeconds?: InputMaybe<Scalars['Boolean']['input']>;
+  /** The 0-based `mediaAudioTracks.index` the position fell in. */
+  trackIndex?: InputMaybe<Scalars['Int']['input']>;
 };
 
 export type Author = {
@@ -176,6 +479,26 @@ export type AuthorSeries = {
   authors: Array<Author>;
   books: Array<Media>;
   title: Scalars['String']['output'];
+};
+
+export type BookAudioChapter = {
+  __typename?: 'BookAudioChapter';
+  endMs?: Maybe<Scalars['Int']['output']>;
+  id: Scalars['ID']['output'];
+  index: Scalars['Int']['output'];
+  startMs: Scalars['Int']['output'];
+  title?: Maybe<Scalars['String']['output']>;
+};
+
+export type BookAudioFacts = {
+  __typename?: 'BookAudioFacts';
+  bitrate?: Maybe<Scalars['Int']['output']>;
+  channels?: Maybe<Scalars['Int']['output']>;
+  chapterSource: Scalars['String']['output'];
+  chapters: Array<BookAudioChapter>;
+  codec: Scalars['String']['output'];
+  durationMs: Scalars['Int']['output'];
+  sampleRate?: Maybe<Scalars['Int']['output']>;
 };
 
 export type BookClub = {
@@ -234,7 +557,6 @@ export type BookClubBookSuggestion = {
   bookId?: Maybe<Scalars['String']['output']>;
   createdAt: Scalars['DateTime']['output'];
   id: Scalars['String']['output'];
-  /** Check if the current user has liked this suggestion */
   isLikedByMe: Scalars['Boolean']['output'];
   /**
    * Get the count of likes (votes) on this suggestion
@@ -243,7 +565,6 @@ export type BookClubBookSuggestion = {
   likeCount: Scalars['Int']['output'];
   notes?: Maybe<Scalars['String']['output']>;
   resolvedAt?: Maybe<Scalars['DateTime']['output']>;
-  /** Get the member who resolved this suggestion */
   resolvedBy?: Maybe<BookClubMember>;
   resolvedById?: Maybe<Scalars['String']['output']>;
   status: BookClubSuggestionStatus;
@@ -268,10 +589,7 @@ export type BookClubDiscussion = {
   isArchived: Scalars['Boolean']['output'];
   isLocked: Scalars['Boolean']['output'];
   isPinned: Scalars['Boolean']['output'];
-  /**
-   * Get the count of messages in this discussion (excluding deleted messages)
-   * TODO(dataloader): Create dataloader
-   */
+  /** Get the count of messages in this discussion (excluding deleted messages) */
   messageCount: Scalars['Int']['output'];
   title?: Maybe<Scalars['String']['output']>;
 };
@@ -295,10 +613,6 @@ export type BookClubDiscussionMessage = {
   member?: Maybe<BookClubMember>;
   memberId?: Maybe<Scalars['String']['output']>;
   parentMessageId?: Maybe<Scalars['String']['output']>;
-  /**
-   * Get aggregated reactions for this message, grouped by emoji, sorted by count desc
-   * TODO(dataloader): Create dataloader
-   */
   reactions: Array<AggregatedReaction>;
   /** Get the message this message is an inline reply to (if any) */
   replyTo?: Maybe<BookClubDiscussionMessage>;
@@ -329,11 +643,20 @@ export type BookClubInternalBookInput = {
 
 export type BookClubInvitation = {
   __typename?: 'BookClubInvitation';
+  acceptedAt?: Maybe<Scalars['DateTime']['output']>;
+  auditNote?: Maybe<Scalars['String']['output']>;
   /** The book club that the user was invited to */
   bookClub: BookClub;
   bookClubId: Scalars['String']['output'];
+  createdAt: Scalars['DateTime']['output'];
+  createdByUserId?: Maybe<Scalars['String']['output']>;
+  declinedAt?: Maybe<Scalars['DateTime']['output']>;
+  expiresAt?: Maybe<Scalars['DateTime']['output']>;
   id: Scalars['String']['output'];
+  revokedAt?: Maybe<Scalars['DateTime']['output']>;
+  revokedByUserId?: Maybe<Scalars['String']['output']>;
   role: BookClubMemberRole;
+  status: Scalars['String']['output'];
   /** The user who was invited to the book club */
   user: User;
   userId: Scalars['String']['output'];
@@ -385,6 +708,329 @@ export enum BookClubSuggestionStatus {
   Rejected = 'REJECTED'
 }
 
+export type BookDetail = {
+  __typename?: 'BookDetail';
+  authors: Array<Scalars['String']['output']>;
+  editions: Array<BookEdition>;
+  mediaId: Scalars['ID']['output'];
+  mismatches: Array<BookMetadataMismatch>;
+  readAloud: BookReadAloud;
+  review?: Maybe<BookReview>;
+  title: Scalars['String']['output'];
+  workId?: Maybe<Scalars['ID']['output']>;
+  workMetadata?: Maybe<BookWorkMetadata>;
+};
+
+export type BookEdition = {
+  __typename?: 'BookEdition';
+  audio?: Maybe<BookAudioFacts>;
+  file: BookFile;
+  kind: BookEditionKind;
+  media: Media;
+  mediaId: Scalars['ID']['output'];
+  metadata?: Maybe<MediaMetadata>;
+  pairEvidence?: Maybe<PairEvidence>;
+  title: Scalars['String']['output'];
+};
+
+/** Distinct lanes in a merged work view. */
+export enum BookEditionKind {
+  Audiobook = 'AUDIOBOOK',
+  Ebook = 'EBOOK',
+  Other = 'OTHER'
+}
+
+export type BookFile = {
+  __typename?: 'BookFile';
+  extension: Scalars['String']['output'];
+  hash?: Maybe<Scalars['String']['output']>;
+  koreaderHash?: Maybe<Scalars['String']['output']>;
+  modifiedAt?: Maybe<Scalars['String']['output']>;
+  path: Scalars['String']['output'];
+  size: Scalars['Int']['output'];
+  status: FileStatus;
+};
+
+export type BookMetadataApplyInput = {
+  metadata: MediaMetadataInput;
+  scope: BookMetadataScope;
+  selectedFields: Array<MetadataField>;
+};
+
+export type BookMetadataMismatch = {
+  __typename?: 'BookMetadataMismatch';
+  audiobookValue?: Maybe<Scalars['String']['output']>;
+  ebookValue?: Maybe<Scalars['String']['output']>;
+  field: MetadataField;
+  resolved: Scalars['Boolean']['output'];
+  workValue?: Maybe<Scalars['String']['output']>;
+};
+
+/** The explicit metadata destination selected by a book-detail operation. */
+export enum BookMetadataScope {
+  Audiobook = 'AUDIOBOOK',
+  Both = 'BOTH',
+  Ebook = 'EBOOK',
+  Work = 'WORK'
+}
+
+export type BookReadAloud = {
+  __typename?: 'BookReadAloud';
+  artifact?: Maybe<ReadAloudArtifact>;
+  audioMediaId?: Maybe<Scalars['ID']['output']>;
+  chapterMap: Array<ChapterMapEntry>;
+  ebookMediaId?: Maybe<Scalars['ID']['output']>;
+  reason?: Maybe<Scalars['String']['output']>;
+  status: BookReadAloudStatus;
+  syncMap?: Maybe<SyncMap>;
+};
+
+/** Cache/readiness states for an accepted read-aloud artifact. */
+export enum BookReadAloudStatus {
+  CacheMissing = 'CACHE_MISSING',
+  ChapterMapUnavailable = 'CHAPTER_MAP_UNAVAILABLE',
+  Failed = 'FAILED',
+  NoAudiobookPaired = 'NO_AUDIOBOOK_PAIRED',
+  Ready = 'READY',
+  SyncMapUnavailable = 'SYNC_MAP_UNAVAILABLE',
+  Unavailable = 'UNAVAILABLE'
+}
+
+export type BookReadingDevice = {
+  __typename?: 'BookReadingDevice';
+  id: Scalars['ID']['output'];
+  kind?: Maybe<DeviceKind>;
+  name?: Maybe<Scalars['String']['output']>;
+  revoked: Scalars['Boolean']['output'];
+};
+
+export type BookReadingEdition = {
+  __typename?: 'BookReadingEdition';
+  head?: Maybe<BookReadingHead>;
+  kind: BookEditionKind;
+  mediaId: Scalars['ID']['output'];
+  sessions: Array<BookReadingSession>;
+};
+
+export type BookReadingHead = {
+  __typename?: 'BookReadingHead';
+  completed: Scalars['Boolean']['output'];
+  locator?: Maybe<ReadiumLocator>;
+  page?: Maybe<Scalars['Int']['output']>;
+  positionMs?: Maybe<Scalars['Int']['output']>;
+  progression: Scalars['Float']['output'];
+  revision: Scalars['Int']['output'];
+  sourceDevice?: Maybe<BookReadingDevice>;
+  sourceDeviceId?: Maybe<Scalars['ID']['output']>;
+  sourceProtocol: Scalars['String']['output'];
+  trackIndex?: Maybe<Scalars['Int']['output']>;
+  updatedAt: Scalars['String']['output'];
+};
+
+export type BookReadingLog = {
+  __typename?: 'BookReadingLog';
+  editions: Array<BookReadingEdition>;
+  mediaId: Scalars['ID']['output'];
+  workId?: Maybe<Scalars['ID']['output']>;
+};
+
+export type BookReadingSession = {
+  __typename?: 'BookReadingSession';
+  createdAt: Scalars['String']['output'];
+  elapsedSeconds?: Maybe<Scalars['Int']['output']>;
+  endLocator?: Maybe<ReadiumLocator>;
+  endPage?: Maybe<Scalars['Int']['output']>;
+  endPercentage?: Maybe<Scalars['Float']['output']>;
+  endPositionMs?: Maybe<Scalars['Int']['output']>;
+  id: Scalars['ID']['output'];
+  liseurSessionId?: Maybe<Scalars['ID']['output']>;
+  notes?: Maybe<Scalars['String']['output']>;
+  readthroughNumber: Scalars['Int']['output'];
+  sessionDate: Scalars['String']['output'];
+  sourceDeviceIds: Array<Scalars['ID']['output']>;
+  sourceDevices: Array<BookReadingDevice>;
+  sourceProtocol: Scalars['String']['output'];
+  startLocator?: Maybe<ReadiumLocator>;
+  startPage?: Maybe<Scalars['Int']['output']>;
+  startPercentage?: Maybe<Scalars['Float']['output']>;
+  status: Scalars['String']['output'];
+  updatedAt?: Maybe<Scalars['String']['output']>;
+};
+
+export type BookRequest = {
+  __typename?: 'BookRequest';
+  approvalPolicy: Scalars['String']['output'];
+  approvedAt?: Maybe<Scalars['DateTime']['output']>;
+  approvedBy?: Maybe<Scalars['String']['output']>;
+  authors?: Maybe<Scalars['String']['output']>;
+  automationEnabled: Scalars['Boolean']['output'];
+  completedAt?: Maybe<Scalars['DateTime']['output']>;
+  coverUrl?: Maybe<Scalars['String']['output']>;
+  createdAt: Scalars['DateTime']['output'];
+  destinationDeviceId?: Maybe<Scalars['String']['output']>;
+  destinationShelfId?: Maybe<Scalars['String']['output']>;
+  externalKey?: Maybe<Scalars['String']['output']>;
+  failureCode?: Maybe<Scalars['String']['output']>;
+  failureMessage?: Maybe<Scalars['String']['output']>;
+  id: Scalars['String']['output'];
+  internalMediaId?: Maybe<Scalars['String']['output']>;
+  internalWorkId?: Maybe<Scalars['String']['output']>;
+  maxRetries: Scalars['Int']['output'];
+  rejectedBy?: Maybe<Scalars['String']['output']>;
+  remoteId?: Maybe<Scalars['String']['output']>;
+  requesterId: Scalars['String']['output'];
+  retries: Scalars['Int']['output'];
+  scoringFloor: Scalars['Int']['output'];
+  sourceProvider?: Maybe<Scalars['String']['output']>;
+  status: BookRequestStatus;
+  title: Scalars['String']['output'];
+  updatedAt: Scalars['DateTime']['output'];
+  verificationThreshold: Scalars['Int']['output'];
+};
+
+export type BookRequestGatewayInput = {
+  automationEnabled?: Scalars['Boolean']['input'];
+  enabled?: Scalars['Boolean']['input'];
+  endpoint: Scalars['String']['input'];
+  handoffRoot?: InputMaybe<Scalars['String']['input']>;
+  maxRetries?: Scalars['Int']['input'];
+  requireApproval?: Scalars['Boolean']['input'];
+  scoringFloor?: Scalars['Int']['input'];
+  token: Scalars['String']['input'];
+  verificationThreshold?: Scalars['Int']['input'];
+};
+
+export type BookRequestGatewaySettings = {
+  __typename?: 'BookRequestGatewaySettings';
+  automationEnabled: Scalars['Boolean']['output'];
+  enabled: Scalars['Boolean']['output'];
+  endpoint: Scalars['String']['output'];
+  handoffRoot?: Maybe<Scalars['String']['output']>;
+  hasToken: Scalars['Boolean']['output'];
+  id: Scalars['String']['output'];
+  maxRetries: Scalars['Int']['output'];
+  requireApproval: Scalars['Boolean']['output'];
+  scoringFloor: Scalars['Int']['output'];
+  tokenRedacted: Scalars['String']['output'];
+  updatedAt: Scalars['DateTime']['output'];
+  updatedBy?: Maybe<Scalars['String']['output']>;
+  verificationThreshold: Scalars['Int']['output'];
+};
+
+export type BookRequestGrab = {
+  __typename?: 'BookRequestGrab';
+  attempts: Scalars['Int']['output'];
+  createdAt: Scalars['DateTime']['output'];
+  failureCode?: Maybe<Scalars['String']['output']>;
+  failureMessage?: Maybe<Scalars['String']['output']>;
+  finishedAt?: Maybe<Scalars['DateTime']['output']>;
+  id: Scalars['String']['output'];
+  lastPolledAt?: Maybe<Scalars['DateTime']['output']>;
+  maxAttempts: Scalars['Int']['output'];
+  nextPollAt?: Maybe<Scalars['DateTime']['output']>;
+  /** Opaque sidecar handle; it is not a tracker URL or a download URL. */
+  opaqueId: Scalars['String']['output'];
+  releaseId: Scalars['String']['output'];
+  requestId: Scalars['String']['output'];
+  startedAt?: Maybe<Scalars['DateTime']['output']>;
+  status: Scalars['String']['output'];
+  updatedAt: Scalars['DateTime']['output'];
+};
+
+export type BookRequestHandoff = {
+  __typename?: 'BookRequestHandoff';
+  byteSize: Scalars['Int']['output'];
+  deviceId?: Maybe<Scalars['String']['output']>;
+  dropItemId?: Maybe<Scalars['String']['output']>;
+  errorCode?: Maybe<Scalars['String']['output']>;
+  errorMessage?: Maybe<Scalars['String']['output']>;
+  grabId: Scalars['String']['output'];
+  id: Scalars['String']['output'];
+  libraryId: Scalars['String']['output'];
+  relativePath: Scalars['String']['output'];
+  requestId: Scalars['String']['output'];
+  sha256: Scalars['String']['output'];
+  shelfId?: Maybe<Scalars['String']['output']>;
+  status: Scalars['String']['output'];
+};
+
+export type BookRequestRelease = {
+  __typename?: 'BookRequestRelease';
+  authors?: Maybe<Scalars['String']['output']>;
+  edition?: Maybe<Scalars['String']['output']>;
+  externalKey?: Maybe<Scalars['String']['output']>;
+  format?: Maybe<Scalars['String']['output']>;
+  id: Scalars['String']['output'];
+  language?: Maybe<Scalars['String']['output']>;
+  previewBytes?: Maybe<Scalars['Int']['output']>;
+  previewMime?: Maybe<Scalars['String']['output']>;
+  previewName?: Maybe<Scalars['String']['output']>;
+  quality?: Maybe<Scalars['String']['output']>;
+  rank: Scalars['Int']['output'];
+  remoteId: Scalars['String']['output'];
+  requestId: Scalars['String']['output'];
+  score: Scalars['Int']['output'];
+  scoreComponents: Scalars['JSON']['output'];
+  searchId: Scalars['String']['output'];
+  seeders?: Maybe<Scalars['Int']['output']>;
+  selected: Scalars['Boolean']['output'];
+  sizeBytes?: Maybe<Scalars['Int']['output']>;
+  sourceProvider: Scalars['String']['output'];
+  title: Scalars['String']['output'];
+};
+
+export enum BookRequestStatus {
+  Approved = 'APPROVED',
+  AwaitingApproval = 'AWAITING_APPROVAL',
+  Completed = 'COMPLETED',
+  Failed = 'FAILED',
+  Grabbed = 'GRABBED',
+  Importing = 'IMPORTING',
+  NeedsSelection = 'NEEDS_SELECTION',
+  Pending = 'PENDING',
+  Queued = 'QUEUED',
+  Rejected = 'REJECTED',
+  Searching = 'SEARCHING'
+}
+
+export type BookReview = {
+  __typename?: 'BookReview';
+  content?: Maybe<Scalars['String']['output']>;
+  createdAt: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  isPrivate: Scalars['Boolean']['output'];
+  mediaId?: Maybe<Scalars['ID']['output']>;
+  rating: Scalars['Int']['output'];
+  updatedAt: Scalars['String']['output'];
+  workId?: Maybe<Scalars['ID']['output']>;
+};
+
+export type BookReviewInput = {
+  content?: InputMaybe<Scalars['String']['input']>;
+  isPrivate: Scalars['Boolean']['input'];
+  /** Zero means unrated; values above five are rejected. */
+  rating: Scalars['Int']['input'];
+};
+
+export type BookSearchResult = {
+  __typename?: 'BookSearchResult';
+  authors: Array<Scalars['String']['output']>;
+  kind: BookEditionKind;
+  mediaId: Scalars['ID']['output'];
+  score: Scalars['Float']['output'];
+  title: Scalars['String']['output'];
+  workId?: Maybe<Scalars['ID']['output']>;
+};
+
+export type BookWorkMetadata = {
+  __typename?: 'BookWorkMetadata';
+  author?: Maybe<Scalars['String']['output']>;
+  lockedFields: Array<MetadataField>;
+  metadata: Scalars['JSON']['output'];
+  title?: Maybe<Scalars['String']['output']>;
+  workId: Scalars['ID']['output'];
+};
+
 export type Bookmark = {
   __typename?: 'Bookmark';
   createdAt: Scalars['DateTime']['output'];
@@ -392,6 +1038,11 @@ export type Bookmark = {
   locator?: Maybe<ReadiumLocator>;
   mediaId: Scalars['String']['output'];
   page?: Maybe<Scalars['Int']['output']>;
+  /**
+   * A bookmark in an audiobook: milliseconds from the start of the
+   * publication, the same unit as `reading_heads.position_ms`.
+   */
+  positionMs?: Maybe<Scalars['Int']['output']>;
   previewContent?: Maybe<Scalars['String']['output']>;
   userId: Scalars['String']['output'];
 };
@@ -400,6 +1051,28 @@ export type BookmarkInput = {
   locator: ReadiumLocatorInput;
   mediaId: Scalars['String']['input'];
   previewContent?: InputMaybe<Scalars['String']['input']>;
+};
+
+export type BulkApplyIngestMetadataInput = {
+  dropItemIds: Array<Scalars['ID']['input']>;
+  selections: Array<IngestMetadataFieldSelectionInput>;
+  strategy?: InputMaybe<MergeStrategy>;
+};
+
+/** One entry of a pair's chapter map: this spine item is that audio chapter. */
+export type ChapterMapEntry = {
+  __typename?: 'ChapterMapEntry';
+  /** 0-based `mediaAudioChapter.index`. */
+  audioChapterIndex: Scalars['Int']['output'];
+  audioMediaId: Scalars['ID']['output'];
+  /**
+   * `1.0` for a normalised-title match, `0.85` for an ordinal match, and
+   * lower for a positional fallback. The console reviews the low ones.
+   */
+  confidence: Scalars['Float']['output'];
+  ebookMediaId: Scalars['ID']['output'];
+  /** 0-based index into the ebook's linear spine. */
+  ebookSpineIndex: Scalars['Int']['output'];
 };
 
 export type CleanLibraryResponse = {
@@ -440,6 +1113,29 @@ export type CollectedItemInput = {
   series?: InputMaybe<Scalars['String']['input']>;
 };
 
+/**
+ * Container events share one payload shape per container kind: the id plus
+ * the visible member ids, so protocol adapters can gate visibility and echo
+ * the Komga wire events without re-querying.
+ */
+export type CollectionAdded = {
+  __typename?: 'CollectionAdded';
+  id: Scalars['String']['output'];
+  seriesIds: Array<Scalars['String']['output']>;
+};
+
+export type CollectionChanged = {
+  __typename?: 'CollectionChanged';
+  id: Scalars['String']['output'];
+  seriesIds: Array<Scalars['String']['output']>;
+};
+
+export type CollectionDeleted = {
+  __typename?: 'CollectionDeleted';
+  id: Scalars['String']['output'];
+  seriesIds: Array<Scalars['String']['output']>;
+};
+
 export type ComputedFilterLibraryType =
   { is: LibraryType; isAnyOf?: never; isNoneOf?: never; isNot?: never; }
   |  { is?: never; isAnyOf: Array<LibraryType>; isNoneOf?: never; isNot?: never; }
@@ -464,9 +1160,9 @@ export type ConfidenceFactor = {
 };
 
 /** An event that is emitted by the core and consumed by a client */
-export type CoreEvent = CreatedManySeries | CreatedMedia | CreatedOrUpdatedManyMedia | DiscoveredMissingLibrary | JobOutput | JobStarted | JobUpdate;
+export type CoreEvent = AnalysisJobFailed | CollectionAdded | CollectionChanged | CollectionDeleted | CreatedManySeries | CreatedMedia | CreatedOrUpdatedManyMedia | DevicePaired | DevicePairingRequested | DeviceSeen | DiscoveredMissingLibrary | IngestAwaitingReview | IngestItemChanged | JobOutput | JobQueueStatus | JobStarted | JobUpdate | LibraryCreated | LibraryDeleted | LibraryUpdated | MediaDeleted | ProviderCatalogRefreshed | ProviderMatchDone | ProviderSeriesMaterialized | ProviderSourceHealthChanged | QualityFailed | ReadListAdded | ReadListChanged | ReadListDeleted | SeriesDeleted | WorkerJobChanged;
 
-export type CoreJobOutput = AnalyzeMediaOutput | LibraryScanOutput | MetadataFetchJobOutput | PlaceholderGenerationOutput | SeriesScanOutput | ThumbnailGenerationOutput;
+export type CoreJobOutput = AnalyzeMediaOutput | AnnotationSyncOutput | LibraryScanOutput | MetadataFetchJobOutput | NotificationDispatchOutput | PlaceholderGenerationOutput | ProviderSourceHealthOutput | SeriesScanOutput | ThumbnailGenerationOutput;
 
 export type CreateAnnotationInput = {
   annotationText?: InputMaybe<Scalars['String']['input']>;
@@ -488,6 +1184,18 @@ export type CreateBookClubMemberInput = {
   displayName?: InputMaybe<Scalars['String']['input']>;
   role: BookClubMemberRole;
   userId: Scalars['String']['input'];
+};
+
+export type CreateBookRequestInput = {
+  authors?: InputMaybe<Scalars['String']['input']>;
+  automationEnabled?: Scalars['Boolean']['input'];
+  coverUrl?: InputMaybe<Scalars['String']['input']>;
+  destinationDeviceId?: InputMaybe<Scalars['ID']['input']>;
+  destinationShelfId?: InputMaybe<Scalars['ID']['input']>;
+  external?: InputMaybe<ExternalWorkReferenceInput>;
+  mediaId?: InputMaybe<Scalars['ID']['input']>;
+  title?: InputMaybe<Scalars['String']['input']>;
+  workId?: InputMaybe<Scalars['ID']['input']>;
 };
 
 export type CreateCustomEmojiInput = {
@@ -532,6 +1240,32 @@ export type CreateScheduledJobInput = {
   schedule: Scalars['String']['input'];
 };
 
+export type CreateShareGrantInput = {
+  authors: Scalars['String']['input'];
+  coverUrl?: InputMaybe<Scalars['String']['input']>;
+  expiresAt?: InputMaybe<Scalars['DateTime']['input']>;
+  externalKey?: InputMaybe<Scalars['String']['input']>;
+  recipientUserId: Scalars['ID']['input'];
+  recommendationId?: InputMaybe<Scalars['ID']['input']>;
+  remoteId?: InputMaybe<Scalars['String']['input']>;
+  scopes: Array<ShareScope>;
+  sourceProvider?: InputMaybe<Scalars['String']['input']>;
+  targetKey: Scalars['String']['input'];
+  targetMediaId?: InputMaybe<Scalars['ID']['input']>;
+  targetWorkId?: InputMaybe<Scalars['ID']['input']>;
+  title: Scalars['String']['input'];
+};
+
+export type CreateShareOverlayInput = {
+  body?: InputMaybe<Scalars['String']['input']>;
+  excerpt?: InputMaybe<Scalars['String']['input']>;
+  grantId: Scalars['ID']['input'];
+  kind: ShareOverlayKind;
+  locator?: InputMaybe<Scalars['JSON']['input']>;
+  percentage?: InputMaybe<Scalars['Int']['input']>;
+  progression?: InputMaybe<Scalars['Float']['input']>;
+};
+
 export type CreateUserInput = {
   ageRestriction?: InputMaybe<AgeRestrictionInput>;
   maxSessionsAllowed?: InputMaybe<Scalars['Int']['input']>;
@@ -564,6 +1298,130 @@ export type CreatedOrUpdatedManyMedia = {
   count: Scalars['Int']['output'];
   libraryId: Scalars['String']['output'];
   seriesId: Scalars['String']['output'];
+};
+
+export type CrosspointDelivery = {
+  __typename?: 'CrosspointDelivery';
+  attempts: Scalars['Int']['output'];
+  completedAt?: Maybe<Scalars['String']['output']>;
+  destinationPath: Scalars['String']['output'];
+  deviceId: Scalars['ID']['output'];
+  id: Scalars['ID']['output'];
+  idempotencyKey: Scalars['String']['output'];
+  lastError?: Maybe<Scalars['String']['output']>;
+  maxAttempts: Scalars['Int']['output'];
+  mediaId: Scalars['ID']['output'];
+  nextAttemptAt?: Maybe<Scalars['String']['output']>;
+  profileDigest: Scalars['String']['output'];
+  profileJson: Scalars['String']['output'];
+  queuedAt: Scalars['String']['output'];
+  sourceRevision: Scalars['String']['output'];
+  startedAt?: Maybe<Scalars['String']['output']>;
+  status: CrosspointDeliveryStatus;
+  updatedAt: Scalars['String']['output'];
+  userId: Scalars['ID']['output'];
+};
+
+export enum CrosspointDeliveryStatus {
+  Cancelled = 'CANCELLED',
+  Completed = 'COMPLETED',
+  Failed = 'FAILED',
+  Preparing = 'PREPARING',
+  Queued = 'QUEUED',
+  Transferring = 'TRANSFERRING'
+}
+
+export type CrosspointTarget = {
+  __typename?: 'CrosspointTarget';
+  deviceId: Scalars['ID']['output'];
+  discoveryMethod: Scalars['String']['output'];
+  fingerprint?: Maybe<CrosspointTargetFingerprint>;
+  hostOrIp: Scalars['String']['output'];
+  httpPort: Scalars['Int']['output'];
+  profile: CrosspointTransferProfile;
+  profileDigest: Scalars['String']['output'];
+  profileJson: Scalars['JSON']['output'];
+  revokedAt?: Maybe<Scalars['String']['output']>;
+  rootPath: Scalars['String']['output'];
+  userId: Scalars['ID']['output'];
+  verifiedAt?: Maybe<Scalars['String']['output']>;
+  wsPort: Scalars['Int']['output'];
+};
+
+export type CrosspointTargetFingerprint = {
+  __typename?: 'CrosspointTargetFingerprint';
+  model: Scalars['String']['output'];
+  serial: Scalars['String']['output'];
+};
+
+/**
+ * Verified CrossPoint endpoint settings and an optional typed profile patch.
+ *
+ * HTTP/WebSocket ports are accepted for the existing Home client contract but
+ * are policy inputs, not routing inputs: mutations require exactly firmware
+ * ports 80 and 81 and persist those constants rather than trusting a caller.
+ */
+export type CrosspointTargetInput = {
+  hostOrIp: Scalars['String']['input'];
+  httpPort: Scalars['Int']['input'];
+  profile?: InputMaybe<CrosspointTransferProfileInput>;
+  rootPath: Scalars['String']['input'];
+  wsPort: Scalars['Int']['input'];
+};
+
+export enum CrosspointTargetModel {
+  Auto = 'AUTO',
+  X3 = 'X3',
+  X4 = 'X4'
+}
+
+export type CrosspointTargetVerification = {
+  __typename?: 'CrosspointTargetVerification';
+  deviceId: Scalars['ID']['output'];
+  hostOrIp: Scalars['String']['output'];
+  httpPort: Scalars['Int']['output'];
+  model: Scalars['String']['output'];
+  serial: Scalars['String']['output'];
+  verified: Scalars['Boolean']['output'];
+  wsPort: Scalars['Int']['output'];
+};
+
+export type CrosspointTransferProfile = {
+  __typename?: 'CrosspointTransferProfile';
+  autoCrop: Scalars['Boolean']['output'];
+  chunkBytes: Scalars['Int']['output'];
+  grayscale: Scalars['Boolean']['output'];
+  jpegQuality: Scalars['Int']['output'];
+  maxUploadBytes: Scalars['Int']['output'];
+  optimizerEnabled: Scalars['Boolean']['output'];
+  removeFonts: Scalars['Boolean']['output'];
+  retryCount: Scalars['Int']['output'];
+  retryDelaySeconds: Scalars['Int']['output'];
+  splitLargeParagraphs: Scalars['Boolean']['output'];
+  targetModel: CrosspointTargetModel;
+  timeoutSeconds: Scalars['Int']['output'];
+};
+
+/**
+ * A bounded, nullable patch for a CrossPoint transfer profile.
+ *
+ * The protocol crate owns defaults and validation. This type only bridges
+ * GraphQL's `Int` scalar to the protocol's unsigned fields; callers must run
+ * [`Self::into_protocol`] before persisting or queueing the profile.
+ */
+export type CrosspointTransferProfileInput = {
+  autoCrop?: InputMaybe<Scalars['Boolean']['input']>;
+  chunkBytes?: InputMaybe<Scalars['Int']['input']>;
+  grayscale?: InputMaybe<Scalars['Boolean']['input']>;
+  jpegQuality?: InputMaybe<Scalars['Int']['input']>;
+  maxUploadBytes?: InputMaybe<Scalars['Int']['input']>;
+  optimizerEnabled?: InputMaybe<Scalars['Boolean']['input']>;
+  removeFonts?: InputMaybe<Scalars['Boolean']['input']>;
+  retryCount?: InputMaybe<Scalars['Int']['input']>;
+  retryDelaySeconds?: InputMaybe<Scalars['Int']['input']>;
+  splitLargeParagraphs?: InputMaybe<Scalars['Boolean']['input']>;
+  targetModel?: InputMaybe<CrosspointTargetModel>;
+  timeoutSeconds?: InputMaybe<Scalars['Int']['input']>;
 };
 
 export type CursorPaginatedBookClubDiscussionMessageResponse = {
@@ -626,6 +1484,270 @@ export type DeleteJobHistory = {
   affectedRows: Scalars['Int']['output'];
 };
 
+/**
+ * A registered client (Kobo, KOReader, Coppice, Mihon, Komelia, Liseur, an
+ * OPDS reader, a script, or a browser) owned by a user.
+ */
+export type Device = {
+  __typename?: 'Device';
+  createdAt: Scalars['DateTime']['output'];
+  /**
+   * The device's primary credential, or `null` once it has been revoked or
+   * when the device was registered by a protocol and never minted one.
+   */
+  credential?: Maybe<DeviceCredentialSummary>;
+  /**
+   * Every credential currently attached to the device, redacted. Clients
+   * must select by `kind` and `protocol`; list order is not a contract.
+   */
+  credentials: Array<DeviceCredentialSummary>;
+  id: Scalars['String']['output'];
+  kind: DeviceKind;
+  /**
+   * The Amazon *Send to Kindle* address of this device, or `NULL` when it
+   * has none. Only a Kindle is reachable this way: Amazon delivers what an
+   * approved sender mails to the address, so this is the whole transport
+   * for a device that speaks no sync protocol.
+   */
+  kindleEmail?: Maybe<Scalars['String']['output']>;
+  /** The last time any credential of this device authenticated a request */
+  lastSeenAt?: Maybe<Scalars['DateTime']['output']>;
+  /** The last time a protocol reported a completed sync for this device */
+  lastSyncAt?: Maybe<Scalars['DateTime']['output']>;
+  /** The protocol-specific summary of the last sync, stored verbatim */
+  lastSyncSummary?: Maybe<Scalars['JSON']['output']>;
+  /**
+   * The libraries this device may see, or `null` when the device inherits
+   * its user's visibility. The scope is intersected with that visibility,
+   * so it only ever narrows; an empty list is a device that sees nothing.
+   */
+  libraryScope?: Maybe<Array<Scalars['String']['output']>>;
+  name: Scalars['String']['output'];
+  revokedAt?: Maybe<Scalars['DateTime']['output']>;
+  /**
+   * Typed battery, sync and cumulative activity fields. It is nullable until
+   * a protocol reports its first summary.
+   */
+  telemetry?: Maybe<DeviceTelemetry>;
+  /**
+   * A free-form, client-specific transform profile (e.g. KEPUB options for a
+   * Kobo, image sizing for a phone). Interpreted by the protocol adapters.
+   */
+  transformProfile?: Maybe<Scalars['JSON']['output']>;
+  userId: Scalars['String']['output'];
+};
+
+/** Availability of a client/protocol registration kind in this server build. */
+export type DeviceCapability = {
+  __typename?: 'DeviceCapability';
+  available: Scalars['Boolean']['output'];
+  compiled: Scalars['Boolean']['output'];
+  componentKey: Scalars['String']['output'];
+  /** Effective runtime state, not the persisted desired state. */
+  enabled: Scalars['Boolean']['output'];
+  kind: DeviceKind;
+  protocol: DeviceProtocol;
+  reason?: Maybe<Scalars['String']['output']>;
+};
+
+/** The storage a device credential references */
+export enum DeviceCredentialKind {
+  /** `credential_ref` is an `api_keys.short_token` */
+  ApiKey = 'API_KEY',
+  /** `credential_ref` is a `liseur_sync_tokens.id` */
+  LiseurToken = 'LISEUR_TOKEN',
+  /** `credential_ref` is a `sessions.session_id` */
+  Session = 'SESSION'
+}
+
+/** The credential a device authenticates with, redacted. */
+export type DeviceCredentialSummary = {
+  __typename?: 'DeviceCredentialSummary';
+  kind: DeviceCredentialKind;
+  /** The protocol the credential was minted for */
+  protocol: DeviceProtocol;
+  /** The visible part of the secret, e.g. `stump_abcdefgh_…` */
+  secretHint: Scalars['String']['output'];
+};
+
+/**
+ * One thing a client has to be configured with: a URL plus, when the protocol
+ * wants them, a username and the device secret.
+ */
+export type DeviceEndpoint = {
+  __typename?: 'DeviceEndpoint';
+  label: Scalars['String']['output'];
+  /**
+   * The device secret when it is known (right after minting), otherwise a
+   * redacted hint such as `stump_abcdefgh_…`.
+   */
+  secretHint: Scalars['String']['output'];
+  url: Scalars['String']['output'];
+  username?: Maybe<Scalars['String']['output']>;
+};
+
+/**
+ * The client family a registered device belongs to. The kind decides which
+ * credential is minted for the device and which endpoints it is handed.
+ */
+export enum DeviceKind {
+  /** An Audiobookshelf client using the ABS-compatible profile */
+  Abs = 'ABS',
+  /** A script or integration using the native API */
+  Api = 'API',
+  /** A Coppice Home/KOReader client managed through the unified device surface */
+  Coppice = 'COPPICE',
+  /** A CrossPoint Reader using stock KOSync plus the keyed rich-sync lane */
+  Crosspoint = 'CROSSPOINT',
+  /** A Kavita-compatible reader using the native API with a download-only key */
+  Kavita = 'KAVITA',
+  /** A Kobo eReader using the native Kobo sync protocol */
+  Kobo = 'KOBO',
+  /** Komelia using the Komga-compatible profile */
+  Komelia = 'KOMELIA',
+  /** A KOReader install using the KOReader progress sync protocol */
+  Koreader = 'KOREADER',
+  /** Liseur using the native liseur-sync protocol */
+  Liseur = 'LISEUR',
+  /** Mihon (Tachiyomi) using the Komga-compatible profile */
+  Mihon = 'MIHON',
+  /** A generic OPDS reader */
+  Opds = 'OPDS',
+  /** A browser session */
+  Web = 'WEB',
+  /**
+   * A remote worker process (`stump-worker`) that claims `worker_jobs` over
+   * the worker socket. Not a reading client: it holds no reading state and
+   * is never offered a transformed stream.
+   */
+  Worker = 'WORKER'
+}
+
+/** A device pairing completed and its credential was minted for `user_id`. */
+export type DevicePaired = {
+  __typename?: 'DevicePaired';
+  deviceId: Scalars['String']['output'];
+  deviceName: Scalars['String']['output'];
+  userId: Scalars['String']['output'];
+};
+
+/**
+ * A device-pairing request as seen by a signed-in user. The code hash and the
+ * device's poll nonce are deliberately not exposed: knowing either would let a
+ * user approve (or hijack the credential of) somebody else's device.
+ */
+export type DevicePairing = {
+  __typename?: 'DevicePairing';
+  approvedAt?: Maybe<Scalars['DateTime']['output']>;
+  createdAt: Scalars['DateTime']['output'];
+  credentialIssued: Scalars['Boolean']['output'];
+  expiresAt: Scalars['DateTime']['output'];
+  failedAttempts: Scalars['Int']['output'];
+  id: Scalars['String']['output'];
+  kind: DeviceKind;
+  /** The name the device asked for; the devices service picks a default otherwise */
+  name?: Maybe<Scalars['String']['output']>;
+  /** Remote address the device started the pairing from */
+  remoteIp: Scalars['String']['output'];
+  /** Effective status at read time; pending rows past `expires_at` read as `EXPIRED` */
+  status: DevicePairingStatus;
+  /** The user who approved or denied the pairing */
+  userId?: Maybe<Scalars['String']['output']>;
+};
+
+/**
+ * An unauthenticated device asked to be paired; a signed-in user has until
+ * `expires_at` to approve it with the code shown on the device (or its QR).
+ */
+export type DevicePairingRequested = {
+  __typename?: 'DevicePairingRequested';
+  expiresAt: Scalars['DateTime']['output'];
+  kind: DeviceKind;
+  name?: Maybe<Scalars['String']['output']>;
+  pairingId: Scalars['String']['output'];
+  remoteIp: Scalars['String']['output'];
+};
+
+/**
+ * The lifecycle state of a device-pairing request. `Expired` is derived from
+ * `expires_at` for pending rows and persisted lazily once observed, so a row's
+ * stored status may still read `Pending` after the deadline; always go through
+ * [`Model::effective_status`].
+ */
+export enum DevicePairingStatus {
+  Approved = 'APPROVED',
+  Denied = 'DENIED',
+  Expired = 'EXPIRED',
+  Pending = 'PENDING'
+}
+
+/** The wire protocol through which a device credential was exercised */
+export enum DeviceProtocol {
+  Api = 'API',
+  Kobo = 'KOBO',
+  Komga = 'KOMGA',
+  Koreader = 'KOREADER',
+  Liseur = 'LISEUR',
+  Opds = 'OPDS'
+}
+
+/**
+ * Emitted when a device credential authenticates a request and the device's
+ * last-seen state was updated.
+ */
+export type DeviceSeen = {
+  __typename?: 'DeviceSeen';
+  deviceId: Scalars['String']['output'];
+  /**
+   * `true` for the first request the device ever authenticated: its
+   * `last_seen_at` was unset before this sighting was written.
+   */
+  firstSeen: Scalars['Boolean']['output'];
+  /**
+   * The protocol the request arrived on, which may differ from the protocol
+   * the credential was minted for (one key works on every path).
+   */
+  protocol: DeviceProtocol;
+  userId: Scalars['String']['output'];
+};
+
+/** Typed, merge-safe device activity and battery telemetry. */
+export type DeviceTelemetry = {
+  __typename?: 'DeviceTelemetry';
+  batteryObservedAt?: Maybe<Scalars['DateTime']['output']>;
+  batteryPercent?: Maybe<Scalars['Int']['output']>;
+  batterySource?: Maybe<Scalars['String']['output']>;
+  charging?: Maybe<Scalars['Boolean']['output']>;
+  counters: DeviceTelemetryCounters;
+  syncProtocol?: Maybe<DeviceProtocol>;
+  syncStatus?: Maybe<Scalars['String']['output']>;
+  syncedAt?: Maybe<Scalars['DateTime']['output']>;
+};
+
+export type DeviceTelemetryCounters = {
+  __typename?: 'DeviceTelemetryCounters';
+  bookmarks?: Maybe<Scalars['Int']['output']>;
+  highlights?: Maybe<Scalars['Int']['output']>;
+  items?: Maybe<Scalars['Int']['output']>;
+  notes?: Maybe<Scalars['Int']['output']>;
+  progress?: Maybe<Scalars['Int']['output']>;
+  sessions?: Maybe<Scalars['Int']['output']>;
+};
+
+/**
+ * A device together with freshly minted credentials. The secrets inside
+ * `credential`, `credentials`, and the endpoint URLs are shown exactly once.
+ */
+export type DeviceWithCredential = {
+  __typename?: 'DeviceWithCredential';
+  /** The primary credential retained for existing clients. */
+  credential: IssuedDeviceCredential;
+  /** Every credential minted in this operation, including `credential`. */
+  credentials: Array<IssuedDeviceCredential>;
+  device: Device;
+  endpoints: Array<DeviceEndpoint>;
+};
+
 export enum Dimension {
   Height = 'HEIGHT',
   Width = 'WIDTH'
@@ -666,8 +1788,88 @@ export type DiscoveredMissingLibrary = {
   id: Scalars['String']['output'];
 };
 
+/** A librarian decision about a recurring page hash inside a library */
+export enum DuplicatePageAction {
+  /** The page was reviewed and stays visible; stop reporting it */
+  Keep = 'KEEP',
+  /** Hide pages with this hash from every page-serving route */
+  Skip = 'SKIP'
+}
+
+/**
+ * A page hash that recurs across several books of one library and has not
+ * been reviewed yet.
+ */
+export type DuplicatePageCandidate = {
+  __typename?: 'DuplicatePageCandidate';
+  /** Distinct books containing a page from this group. */
+  bookCount: Scalars['Int']['output'];
+  /** Representative hash of the group (the most frequent member). */
+  dhash: Scalars['String']['output'];
+  occurrences: Array<DuplicatePageOccurrence>;
+  /** Total pages across those books. */
+  pageCount: Scalars['Int']['output'];
+};
+
+/** One physical page carrying a candidate duplicate hash. */
+export type DuplicatePageOccurrence = {
+  __typename?: 'DuplicatePageOccurrence';
+  /**
+   * The exact hash of this page; near-duplicates inside a candidate group
+   * may differ from the group's representative hash by a few bits.
+   */
+  dhash: Scalars['String']['output'];
+  mediaId: Scalars['ID']['output'];
+  mediaName: Scalars['String']['output'];
+  /** Physical 1-based page inside the file. */
+  page: Scalars['Int']['output'];
+  /**
+   * The 1-based page number clients currently see for this physical page
+   * once duplicate-page skipping is applied, or `null` when the page is
+   * hidden.
+   */
+  visiblePage?: Maybe<Scalars['Int']['output']>;
+};
+
 export type EditMessageInput = {
   content: Scalars['String']['input'];
+};
+
+/**
+ * What a pairing mutation did. `changed == false` with a `status` is a
+ * no-op the client should not treat as an error: re-confirming a confirmed
+ * pair, or re-suggesting a rejected one.
+ */
+export type EditionPairResult = {
+  __typename?: 'EditionPairResult';
+  changed: Scalars['Boolean']['output'];
+  /**
+   * Entries written into the pair's chapter map, when the mutation built
+   * one.
+   */
+  chapterMapEntries: Scalars['Int']['output'];
+  /** Human-readable reason a write was a no-op. */
+  message?: Maybe<Scalars['String']['output']>;
+  status?: Maybe<PairStatus>;
+  /** `null` when nothing was written and there was no pair to write about. */
+  workId?: Maybe<Scalars['ID']['output']>;
+};
+
+/**
+ * An edition of the same work as the book being viewed, with why pairing
+ * believes it.
+ */
+export type EditionSuggestion = {
+  __typename?: 'EditionSuggestion';
+  /**
+   * `null` only for a link the native liseur lane created before pairing
+   * existed; every suggestion this server makes records its evidence.
+   */
+  evidence?: Maybe<PairEvidence>;
+  media: Media;
+  status: PairStatus;
+  /** The work both editions link to. */
+  workId: Scalars['ID']['output'];
 };
 
 /** Input object for creating or updating an email device */
@@ -748,6 +1950,11 @@ export type EmailerSendTo =
   { anonymous: SendToEmail; device?: never; }
   |  { anonymous?: never; device: SendToDevice; };
 
+export type EnqueueIngestAnalysisInput = {
+  dropItemIds: Array<Scalars['ID']['input']>;
+  force?: Scalars['Boolean']['input'];
+};
+
 /** The visibility of a shareable entity */
 export enum EntityVisibility {
   Private = 'PRIVATE',
@@ -816,12 +2023,44 @@ export type ExternalMediaMetadata = {
   isbn13?: Maybe<Scalars['String']['output']>;
   letterers?: Maybe<Array<Scalars['String']['output']>>;
   month?: Maybe<Scalars['Int']['output']>;
+  /**
+   * The readers of an audiobook edition. Deliberately *not* folded into
+   * `writers` or `artists`: a narrator is not an author, and merging the
+   * two would file a performer in the author column of every audiobook,
+   * where no later edit could tell them apart again.
+   */
+  narrators?: Maybe<Array<Scalars['String']['output']>>;
   number?: Maybe<Scalars['Float']['output']>;
   pageCount?: Maybe<Scalars['Int']['output']>;
   provider: Scalars['String']['output'];
   providerUrl?: Maybe<Scalars['String']['output']>;
+  /**
+   * The publisher of *this edition*. [`ExternalSeriesMetadata`] has one
+   * because a series has a publisher; a media item never did. An
+   * audiobook's publisher is a per-edition fact -- the same book is
+   * issued by a different studio in every market, often years apart -- so
+   * it cannot be inherited from the series it sits in.
+   */
+  publisher?: Maybe<Scalars['String']['output']>;
+  /**
+   * The runtime the provider advertises, in whole minutes.
+   *
+   * This is *candidate evidence for the operator*, not a value to store:
+   * it is what tells an abridged edition from an unabridged one at a
+   * glance while picking a match. The authoritative duration is the one
+   * measured from the file itself (`media_audio.duration_ms`), which this
+   * never overwrites.
+   */
+  runtimeMinutes?: Maybe<Scalars['Int']['output']>;
   seriesExternalId?: Maybe<Scalars['String']['output']>;
   seriesName?: Maybe<Scalars['String']['output']>;
+  /**
+   * The edition's secondary title, as an audiobook's "A Novel" or
+   * "Special Edition" line. Kept out of `title` because a subtitle is not
+   * part of the name anyone searches for: folding it in would drag the
+   * title score of every later match down with it.
+   */
+  subtitle?: Maybe<Scalars['String']['output']>;
   summary?: Maybe<Scalars['String']['output']>;
   tags?: Maybe<Array<Scalars['String']['output']>>;
   title?: Maybe<Scalars['String']['output']>;
@@ -850,6 +2089,19 @@ export type ExternalSeriesMetadata = {
   title: Scalars['String']['output'];
   volumeCount?: Maybe<Scalars['Int']['output']>;
   year?: Maybe<Scalars['Int']['output']>;
+};
+
+/**
+ * A catalog/work identity outside the Coppice library. The gateway only sees
+ * normalized metadata and an opaque candidate id later returned by search.
+ */
+export type ExternalWorkReferenceInput = {
+  authors?: InputMaybe<Scalars['String']['input']>;
+  coverUrl?: InputMaybe<Scalars['String']['input']>;
+  externalKey?: InputMaybe<Scalars['String']['input']>;
+  remoteId: Scalars['String']['input'];
+  sourceProvider: Scalars['String']['input'];
+  title: Scalars['String']['input'];
 };
 
 export type FieldFilterFileStatus =
@@ -935,6 +2187,70 @@ export type FitWithinResizeInput = {
   width: Scalars['Int']['input'];
 };
 
+/**
+ * Redacted personal Hardcover status. No PAT or provider response payload is
+ * ever part of this object.
+ */
+export type HardcoverConnection = {
+  __typename?: 'HardcoverConnection';
+  capabilities: Array<Scalars['String']['output']>;
+  connected: Scalars['Boolean']['output'];
+  connectedAt?: Maybe<Scalars['DateTime']['output']>;
+  importJournals: Scalars['Boolean']['output'];
+  lastError?: Maybe<Scalars['String']['output']>;
+  lastSyncAt?: Maybe<Scalars['DateTime']['output']>;
+  remoteUserId?: Maybe<Scalars['String']['output']>;
+  remoteUsername?: Maybe<Scalars['String']['output']>;
+  scopes: Array<Scalars['String']['output']>;
+  syncProgress: Scalars['Boolean']['output'];
+  useForMetadata: Scalars['Boolean']['output'];
+  verifiedAt?: Maybe<Scalars['DateTime']['output']>;
+};
+
+export type HardcoverMediaLink = {
+  __typename?: 'HardcoverMediaLink';
+  id: Scalars['ID']['output'];
+  linkedAt: Scalars['DateTime']['output'];
+  mediaId: Scalars['ID']['output'];
+  remoteId: Scalars['String']['output'];
+  remoteTitle?: Maybe<Scalars['String']['output']>;
+  updatedAt: Scalars['DateTime']['output'];
+};
+
+export type HardcoverMetadataLookup = {
+  __typename?: 'HardcoverMetadataLookup';
+  coverUrl?: Maybe<Scalars['String']['output']>;
+  pageCount?: Maybe<Scalars['Int']['output']>;
+  provider: Scalars['String']['output'];
+  providerUrl?: Maybe<Scalars['String']['output']>;
+  remoteId: Scalars['String']['output'];
+  summary?: Maybe<Scalars['String']['output']>;
+  title?: Maybe<Scalars['String']['output']>;
+  writers: Array<Scalars['String']['output']>;
+  year?: Maybe<Scalars['Int']['output']>;
+};
+
+export type HardcoverSyncResult = {
+  __typename?: 'HardcoverSyncResult';
+  error?: Maybe<Scalars['String']['output']>;
+  imported: Scalars['Int']['output'];
+  lastSyncAt?: Maybe<Scalars['DateTime']['output']>;
+  projected: Scalars['Int']['output'];
+  skipped: Scalars['Int']['output'];
+  status: Scalars['String']['output'];
+  unresolved: Scalars['Int']['output'];
+};
+
+/** The sections displayed on a user's home page. */
+export type HomeArrangement = {
+  __typename?: 'HomeArrangement';
+  sections: Array<ArrangementSection>;
+};
+
+export type HomeArrangementInput = {
+  sections: Array<ArrangementSectionInput>;
+};
+
 export type ImageColor = {
   __typename?: 'ImageColor';
   color: Scalars['String']['output'];
@@ -1018,6 +2334,537 @@ export type InProgressBooksInput = {
   name?: InputMaybe<Scalars['String']['input']>;
 };
 
+export type IngestAnalysisJob = {
+  __typename?: 'IngestAnalysisJob';
+  attempt: Scalars['Int']['output'];
+  completedAt?: Maybe<Scalars['DateTime']['output']>;
+  dropItemId?: Maybe<Scalars['ID']['output']>;
+  error?: Maybe<Scalars['String']['output']>;
+  id: Scalars['ID']['output'];
+  jobId?: Maybe<Scalars['String']['output']>;
+  /**
+   * Media targets of a library rework job; empty for staged drop-item
+   * jobs.
+   */
+  mediaIds: Array<Scalars['ID']['output']>;
+  phase: IngestAnalysisPhase;
+  priorityScore: Scalars['Float']['output'];
+  queuedAt: Scalars['DateTime']['output'];
+  startedAt?: Maybe<Scalars['DateTime']['output']>;
+  status: JobStatus;
+};
+
+export enum IngestAnalysisPhase {
+  Analysis = 'ANALYSIS',
+  Commit = 'COMMIT',
+  Done = 'DONE',
+  Identify = 'IDENTIFY',
+  Lookup = 'LOOKUP',
+  Quality = 'QUALITY',
+  Review = 'REVIEW',
+  Staging = 'STAGING'
+}
+
+/**
+ * Result of applying a library's policy to one target: the same payload the
+ * hand-picked apply returns, plus the per-field explanation.
+ */
+export type IngestApplyBestPayload = {
+  __typename?: 'IngestApplyBestPayload';
+  decisions: Array<MetadataPolicyDecision>;
+  dropItem?: Maybe<IngestDropItem>;
+  media?: Maybe<Media>;
+};
+
+/**
+ * Result of `applyIngestMetadata`: exactly one side is set, depending on
+ * whether the input targeted a drop item or a library media row.
+ */
+export type IngestApplyPayload = {
+  __typename?: 'IngestApplyPayload';
+  dropItem?: Maybe<IngestDropItem>;
+  media?: Maybe<Media>;
+};
+
+export type IngestAssembledAudio = {
+  __typename?: 'IngestAssembledAudio';
+  byteSize: Scalars['Int']['output'];
+  chapters: Scalars['Int']['output'];
+  duration: Scalars['String']['output'];
+  durationMs: Scalars['Int']['output'];
+  /**
+   * Whether `moov` precedes `mdat`, so playback starts without
+   * downloading the whole file.
+   */
+  faststart: Scalars['Boolean']['output'];
+  filename: Scalars['String']['output'];
+  /** `assemble-remux` (lossless) or `assemble-transcode` (re-encoded). */
+  method: Scalars['String']['output'];
+  /** Whether the source parts were kept beside the output. */
+  partsKept: Scalars['Boolean']['output'];
+};
+
+export type IngestAudioChapter = {
+  __typename?: 'IngestAudioChapter';
+  endMs?: Maybe<Scalars['Int']['output']>;
+  start: Scalars['String']['output'];
+  startMs: Scalars['Int']['output'];
+  title?: Maybe<Scalars['String']['output']>;
+};
+
+export type IngestAudioTrack = {
+  __typename?: 'IngestAudioTrack';
+  bitrate?: Maybe<Scalars['Int']['output']>;
+  byteSize: Scalars['Int']['output'];
+  codec: Scalars['String']['output'];
+  duration: Scalars['String']['output'];
+  durationMs: Scalars['Int']['output'];
+  /**
+   * File name of the part. The staging layout is server-owned, so no path
+   * is exposed.
+   */
+  filename: Scalars['String']['output'];
+  /**
+   * Offset of this part's first sample within the publication, which is
+   * the unit a reading position is expressed in.
+   */
+  startOffsetMs: Scalars['Int']['output'];
+  title?: Maybe<Scalars['String']['output']>;
+  trackNumber?: Maybe<Scalars['Int']['output']>;
+};
+
+/** A staged ingest item finished analysis and is waiting for a decision. */
+export type IngestAwaitingReview = {
+  __typename?: 'IngestAwaitingReview';
+  createdBy?: Maybe<Scalars['String']['output']>;
+  dropItemId: Scalars['String']['output'];
+  libraryId: Scalars['String']['output'];
+  sourceFilename: Scalars['String']['output'];
+};
+
+export type IngestBulkApplyFailure = {
+  __typename?: 'IngestBulkApplyFailure';
+  dropItemId: Scalars['ID']['output'];
+  message: Scalars['String']['output'];
+};
+
+export type IngestBulkApplyPayload = {
+  __typename?: 'IngestBulkApplyPayload';
+  applied: Array<IngestDropItem>;
+  failures: Array<IngestBulkApplyFailure>;
+};
+
+export enum IngestCandidateStatus {
+  Accepted = 'ACCEPTED',
+  Pending = 'PENDING',
+  Rejected = 'REJECTED'
+}
+
+export type IngestDropFolder = {
+  __typename?: 'IngestDropFolder';
+  displayPath: Scalars['String']['output'];
+  enabled: Scalars['Boolean']['output'];
+  lastDiscoveredAt?: Maybe<Scalars['DateTime']['output']>;
+  libraryId: Scalars['ID']['output'];
+  pendingCount: Scalars['Int']['output'];
+};
+
+/** One other item of the same archive drop. */
+export type IngestDropGroupSibling = {
+  __typename?: 'IngestDropGroupSibling';
+  /**
+   * Whether this sibling and the item are an audio/text edition pair, so
+   * committing both records a same-drop pair suggestion.
+   */
+  editionPairCandidate: Scalars['Boolean']['output'];
+  filename: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  /** Set once this sibling committed into the library. */
+  mediaId?: Maybe<Scalars['ID']['output']>;
+  mediaType: Scalars['String']['output'];
+  pairState: IngestEditionPairState;
+  qualityScore?: Maybe<Scalars['Int']['output']>;
+  status: IngestDropItemStatus;
+};
+
+export type IngestDropItem = {
+  __typename?: 'IngestDropItem';
+  analysisJob?: Maybe<IngestAnalysisJob>;
+  /**
+   * The audio probe's result. `null` for every non-audio item and for an
+   * audio item whose analysis has not run yet.
+   */
+  audio?: Maybe<IngestDropItemAudio>;
+  createdAt: Scalars['DateTime']['output'];
+  createdBy: Scalars['ID']['output'];
+  /**
+   * The delivery this item arrived in, when one dropped archive produced
+   * several items. `null` for a drop of one file.
+   */
+  dropGroupId?: Maybe<Scalars['ID']['output']>;
+  /**
+   * The other items of the same delivery, oldest first.
+   *
+   * Empty for an item that arrived on its own, which is most of them, so a
+   * client may render the strip unconditionally.
+   */
+  dropGroupSiblings: Array<IngestDropGroupSibling>;
+  error?: Maybe<Scalars['String']['output']>;
+  filename: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  libraryId: Scalars['ID']['output'];
+  media?: Maybe<Media>;
+  mediaType: Scalars['String']['output'];
+  metadataCandidates: Array<IngestMetadataCandidate>;
+  pendingFields: Scalars['JSON']['output'];
+  qualityReport?: Maybe<IngestQualityReport>;
+  relativePath?: Maybe<Scalars['String']['output']>;
+  revision: Scalars['Int']['output'];
+  series?: Maybe<Series>;
+  /**
+   * Staged files this item owns without being them: cover art, notes, and
+   * the source parts kept beside an assembled M4B.
+   */
+  sidecars: Array<Scalars['String']['output']>;
+  sizeBytes: Scalars['Int']['output'];
+  sourceSha256: Scalars['String']['output'];
+  status: IngestDropItemStatus;
+  updatedAt: Scalars['DateTime']['output'];
+};
+
+/**
+ * The audio probe's result for one staged publication.
+ *
+ * A projection of the persisted `ingest_drop_items.audio_analysis`, never a
+ * fresh probe: demuxing a 62-part folder book is 62 container walks, and a
+ * screen that renders a chapter list must not cost that.
+ */
+export type IngestDropItemAudio = {
+  __typename?: 'IngestDropItemAudio';
+  album?: Maybe<Scalars['String']['output']>;
+  /** The M4B an assemble produced, when one has run for this item. */
+  assembled?: Maybe<IngestAssembledAudio>;
+  author?: Maybe<Scalars['String']['output']>;
+  bitrate?: Maybe<Scalars['Int']['output']>;
+  channels?: Maybe<Scalars['Int']['output']>;
+  /**
+   * Where the chapter marks came from: `mp4_chpl`, `mp4_chapter_track`,
+   * `id3_chap`, `vorbis_comment`, `per_track` (synthesized from file
+   * boundaries), or `none`. Provenance, never a quality tier.
+   */
+  chapterSource: Scalars['String']['output'];
+  chapters: Array<IngestAudioChapter>;
+  /** The publication codec, or `mixed` when a folder book's parts disagree. */
+  codec: Scalars['String']['output'];
+  coverByteSize?: Maybe<Scalars['Int']['output']>;
+  /**
+   * Set when a part carries embedded artwork. The bytes are not served
+   * here: a cover on every row would make listing a drop folder a
+   * multi-megabyte query.
+   */
+  coverContentType?: Maybe<Scalars['String']['output']>;
+  description?: Maybe<Scalars['String']['output']>;
+  /** `h:mm:ss`, the field a librarian actually reads. */
+  duration: Scalars['String']['output'];
+  durationMs: Scalars['Int']['output'];
+  genre?: Maybe<Scalars['String']['output']>;
+  narrator?: Maybe<Scalars['String']['output']>;
+  sampleRate?: Maybe<Scalars['Int']['output']>;
+  title?: Maybe<Scalars['String']['output']>;
+  tracks: Array<IngestAudioTrack>;
+  year?: Maybe<Scalars['Int']['output']>;
+};
+
+export enum IngestDropItemStatus {
+  Analyzing = 'ANALYZING',
+  AwaitingReview = 'AWAITING_REVIEW',
+  Committed = 'COMMITTED',
+  Failed = 'FAILED',
+  Ready = 'READY',
+  Received = 'RECEIVED',
+  Rejected = 'REJECTED',
+  Staged = 'STAGED'
+}
+
+/** How far along the edition pairing of two items of one drop group is. */
+export enum IngestEditionPairState {
+  /** The user accepted it, or the liseur lane already asserted the work. */
+  Confirmed = 'CONFIRMED',
+  /**
+   * The two kinds do not pair: two ebooks are a format duplicate, and two
+   * audiobooks are two books.
+   */
+  NotAPair = 'NOT_A_PAIR',
+  /**
+   * A pair once both sides are in the library. A suggestion needs two
+   * media rows, and a staged item has none.
+   */
+  PendingCommit = 'PENDING_COMMIT',
+  /**
+   * The user declined it. Kept, because pairing is recomputed on every
+   * book-page query.
+   */
+  Rejected = 'REJECTED',
+  /** The suggestion exists and is waiting for the user. */
+  Suggested = 'SUGGESTED'
+}
+
+/**
+ * A staged ingest item's row changed.
+ *
+ * Emitted on every persisted `revision` bump, which is exactly the set of
+ * writes the pipeline makes to a drop item: a status transition, an attached
+ * quality report, a preprocess rewrite. A client can therefore treat one
+ * event as "this item is stale, refetch it" without knowing which column
+ * moved. Discarding an item deletes its row and is announced by no event —
+ * the client that issued the discard already knows.
+ */
+export type IngestItemChanged = {
+  __typename?: 'IngestItemChanged';
+  itemId: Scalars['String']['output'];
+  libraryId: Scalars['String']['output'];
+  revision: Scalars['Int']['output'];
+  /**
+   * The wire value of `stump_ingest::contract::DropItemStatus`, as stored
+   * in `ingest_drop_item.status` (`STAGED`, `AWAITING_REVIEW`, ...).
+   */
+  status: Scalars['String']['output'];
+};
+
+export enum IngestMediaKind {
+  /** An audiobook: one container, or one folder of parts. */
+  Audio = 'AUDIO',
+  ComicArchive = 'COMIC_ARCHIVE',
+  ComicRarArchive = 'COMIC_RAR_ARCHIVE',
+  Epub = 'EPUB',
+  Pdf = 'PDF',
+  Unknown = 'UNKNOWN'
+}
+
+export type IngestMetadataCandidate = {
+  __typename?: 'IngestMetadataCandidate';
+  confidence: Scalars['Float']['output'];
+  createdAt: Scalars['DateTime']['output'];
+  dropItemId?: Maybe<Scalars['ID']['output']>;
+  fieldConfidences?: Maybe<Scalars['JSON']['output']>;
+  fields: Scalars['JSON']['output'];
+  id: Scalars['ID']['output'];
+  /** Set when the candidate was produced by a library rework run. */
+  mediaId?: Maybe<Scalars['ID']['output']>;
+  model?: Maybe<Scalars['String']['output']>;
+  provenance: Scalars['JSON']['output'];
+  provider: Scalars['String']['output'];
+  providerVersion: Scalars['String']['output'];
+  sourceSha256: Scalars['String']['output'];
+  status: IngestCandidateStatus;
+};
+
+export enum IngestMetadataFieldMode {
+  Candidate = 'CANDIDATE',
+  Clear = 'CLEAR',
+  KeepExisting = 'KEEP_EXISTING',
+  Manual = 'MANUAL'
+}
+
+export type IngestMetadataFieldSelectionInput = {
+  candidateId?: InputMaybe<Scalars['ID']['input']>;
+  field: MetadataField;
+  mode: IngestMetadataFieldMode;
+  value?: InputMaybe<Scalars['JSON']['input']>;
+};
+
+export type IngestProgressEvent = {
+  __typename?: 'IngestProgressEvent';
+  analysisJobId?: Maybe<Scalars['ID']['output']>;
+  completed: Scalars['Int']['output'];
+  dropItemId: Scalars['ID']['output'];
+  emittedAt: Scalars['DateTime']['output'];
+  eventId: Scalars['ID']['output'];
+  libraryId: Scalars['ID']['output'];
+  message?: Maybe<Scalars['String']['output']>;
+  phase: IngestAnalysisPhase;
+  score?: Maybe<Scalars['Float']['output']>;
+  status: IngestDropItemStatus;
+  total: Scalars['Int']['output'];
+};
+
+export enum IngestProviderCapability {
+  AiEnrichment = 'AI_ENRICHMENT',
+  Identify = 'IDENTIFY',
+  Lookup = 'LOOKUP',
+  Search = 'SEARCH',
+  Tags = 'TAGS'
+}
+
+export type IngestProviderDescriptor = {
+  __typename?: 'IngestProviderDescriptor';
+  capabilities: Array<IngestProviderCapability>;
+  configured: Scalars['Boolean']['output'];
+  enabledByDefault: Scalars['Boolean']['output'];
+  helpUrl?: Maybe<Scalars['String']['output']>;
+  id: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  /**
+   * Whether this provider needs an API credential; keyless providers can
+   * be enabled without one.
+   */
+  requiresApiToken: Scalars['Boolean']['output'];
+  settings: Array<IngestSettingDefinition>;
+  supportedMediaTypes: Array<Scalars['String']['output']>;
+  version: Scalars['String']['output'];
+};
+
+export type IngestProviderSetting = {
+  __typename?: 'IngestProviderSetting';
+  configured: Scalars['Boolean']['output'];
+  key: Scalars['String']['output'];
+  secret: Scalars['Boolean']['output'];
+  value?: Maybe<Scalars['JSON']['output']>;
+};
+
+export type IngestProviderSettings = {
+  __typename?: 'IngestProviderSettings';
+  enabled: Scalars['Boolean']['output'];
+  optedIn: Scalars['Boolean']['output'];
+  provider: IngestProviderDescriptor;
+  settings: Array<IngestProviderSetting>;
+  updatedAt?: Maybe<Scalars['DateTime']['output']>;
+};
+
+export type IngestQualityCheckDescriptor = {
+  __typename?: 'IngestQualityCheckDescriptor';
+  available: Scalars['Boolean']['output'];
+  enabled: Scalars['Boolean']['output'];
+  /**
+   * The tool that repairs a failing outcome, when one exists in this
+   * build. `null` for a finding whose decision is the librarian's, such as
+   * a duplicate or an unparseable filename.
+   */
+  fix?: Maybe<IngestQualityFixAction>;
+  id: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  settings: Array<IngestSettingDefinition>;
+  supportedMediaTypes: Array<Scalars['String']['output']>;
+  version: Scalars['String']['output'];
+  weight: Scalars['Int']['output'];
+};
+
+export type IngestQualityCheckResult = {
+  __typename?: 'IngestQualityCheckResult';
+  checkId: Scalars['String']['output'];
+  contribution: Scalars['Float']['output'];
+  evidence: Scalars['JSON']['output'];
+  /**
+   * The tool that repairs this finding, when one exists in this build.
+   *
+   * Resolved from the check *registry* rather than stored on the report: a
+   * check declares its repair once, so a persisted report can never offer
+   * a fix naming a tool this build does not have.
+   */
+  fix?: Maybe<IngestQualityFixAction>;
+  label: Scalars['String']['output'];
+  normalizedScore: Scalars['Float']['output'];
+  status: IngestQualityStatus;
+  weight: Scalars['Int']['output'];
+};
+
+export type IngestQualityCheckSettings = {
+  __typename?: 'IngestQualityCheckSettings';
+  checkId: Scalars['String']['output'];
+  enabled: Scalars['Boolean']['output'];
+  settings: Array<IngestProviderSetting>;
+  updatedAt?: Maybe<Scalars['DateTime']['output']>;
+};
+
+/**
+ * One repair a failing quality check points at.
+ *
+ * A finding a librarian cannot act on is a complaint, not a check: the id is
+ * a `stump_tools` tool and `options` is the option blob that addresses this
+ * finding, so a client can offer "fix it" beside the row.
+ */
+export type IngestQualityFixAction = {
+  __typename?: 'IngestQualityFixAction';
+  /** The tool's JSON options, or `null` for its defaults. */
+  options?: Maybe<Scalars['JSON']['output']>;
+  summary: Scalars['String']['output'];
+  /** A `stump_tools` tool id, e.g. `audio-assemble`. */
+  tool: Scalars['String']['output'];
+};
+
+export type IngestQualityReport = {
+  __typename?: 'IngestQualityReport';
+  algorithmVersion: Scalars['String']['output'];
+  checks: Array<IngestQualityCheckResult>;
+  dropItemId?: Maybe<Scalars['ID']['output']>;
+  generatedAt: Scalars['DateTime']['output'];
+  id: Scalars['ID']['output'];
+  /** Set when the report was produced by a library rework run. */
+  mediaId?: Maybe<Scalars['ID']['output']>;
+  score: Scalars['Int']['output'];
+  sourceSha256: Scalars['String']['output'];
+};
+
+export enum IngestQualityStatus {
+  Fail = 'FAIL',
+  NotApplicable = 'NOT_APPLICABLE',
+  Pass = 'PASS',
+  Warn = 'WARN'
+}
+
+export type IngestReworkItem = {
+  __typename?: 'IngestReworkItem';
+  item: IngestDropItem;
+  reasons: Array<IngestReworkReason>;
+};
+
+export type IngestReworkReason = {
+  __typename?: 'IngestReworkReason';
+  checkId: Scalars['String']['output'];
+  message: Scalars['String']['output'];
+  status: IngestQualityStatus;
+};
+
+/**
+ * One flattened result of a provider search.  Evidence only: the editor
+ * turns a chosen hit into a persisted candidate via `lookupIngestCandidate`.
+ */
+export type IngestSearchHit = {
+  __typename?: 'IngestSearchHit';
+  coverUrl?: Maybe<Scalars['String']['output']>;
+  externalId: Scalars['String']['output'];
+  providerId: Scalars['String']['output'];
+  score: Scalars['Float']['output'];
+  summary?: Maybe<Scalars['String']['output']>;
+  title: Scalars['String']['output'];
+  year?: Maybe<Scalars['Int']['output']>;
+};
+
+export type IngestSettingDefinition = {
+  __typename?: 'IngestSettingDefinition';
+  defaultValue?: Maybe<Scalars['JSON']['output']>;
+  description?: Maybe<Scalars['String']['output']>;
+  helpUrl?: Maybe<Scalars['String']['output']>;
+  key: Scalars['String']['output'];
+  label: Scalars['String']['output'];
+  required: Scalars['Boolean']['output'];
+  secret: Scalars['Boolean']['output'];
+  valueType: IngestSettingValueType;
+};
+
+export enum IngestSettingValueType {
+  Boolean = 'BOOLEAN',
+  Integer = 'INTEGER',
+  Json = 'JSON',
+  Number = 'NUMBER',
+  String = 'STRING'
+}
+
+export type IngestUploadFileInput = {
+  file: Scalars['Upload']['input'];
+  relativePath?: InputMaybe<Scalars['String']['input']>;
+};
+
 export type InheritPermissionStruct = {
   __typename?: 'InheritPermissionStruct';
   value: InheritPermissionValue;
@@ -1044,6 +2891,23 @@ export enum InterfaceRoundness {
   Rounded = 'ROUNDED'
 }
 
+/**
+ * A freshly minted credential. `secret` is the plaintext and is returned
+ * exactly once; only its hash is stored.
+ *
+ * A Coppice device has two credentials. The API key remains the primary
+ * credential for compatibility with the original singular create/rotate
+ * return type; [`Self::credentials`] exposes the complete one-time result.
+ */
+export type IssuedDeviceCredential = {
+  __typename?: 'IssuedDeviceCredential';
+  /** The stored reference: the API key's short token, or the liseur token id */
+  credentialRef: Scalars['String']['output'];
+  kind: DeviceCredentialKind;
+  protocol: DeviceProtocol;
+  secret: Scalars['String']['output'];
+};
+
 export type Job = {
   __typename?: 'Job';
   completedAt?: Maybe<Scalars['DateTime']['output']>;
@@ -1063,6 +2927,13 @@ export type JobOutput = {
   __typename?: 'JobOutput';
   id: Scalars['String']['output'];
   output: CoreJobOutput;
+};
+
+/** Queued plus running jobs bucketed by [`JobPayload::kind`](crate::JobPayload::kind) */
+export type JobQueueStatus = {
+  __typename?: 'JobQueueStatus';
+  count: Scalars['Int']['output'];
+  countByType: Scalars['JSONObject']['output'];
 };
 
 export type JobStarted = {
@@ -1102,6 +2973,68 @@ export type JobUpdate = {
   totalSubtasks?: Maybe<Scalars['Int']['output']>;
 };
 
+/**
+ * What one legacy device send did: the stored row plus the resolved device
+ * name. This shape is intentionally unchanged: mobile clients rely on
+ * `deviceId: String!` for `kindleDeliveries` and `sendToKindle`.
+ */
+export type KindleDelivery = {
+  __typename?: 'KindleDelivery';
+  bytes: Scalars['Int']['output'];
+  converted: Scalars['Boolean']['output'];
+  deviceId: Scalars['String']['output'];
+  deviceName: Scalars['String']['output'];
+  error?: Maybe<Scalars['String']['output']>;
+  format: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  mediaId: Scalars['String']['output'];
+  note?: Maybe<Scalars['String']['output']>;
+  recipient: Scalars['String']['output'];
+  sentAt: Scalars['DateTime']['output'];
+};
+
+export type KindleDestination = {
+  __typename?: 'KindleDestination';
+  createdAt: Scalars['DateTime']['output'];
+  email: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  isDefault: Scalars['Boolean']['output'];
+  name: Scalars['String']['output'];
+  updatedAt: Scalars['DateTime']['output'];
+};
+
+/**
+ * Destination-only delivery output. It deliberately does not reuse the
+ * legacy `KindleDelivery` shape: destination sends have no device id, while
+ * mobile clients must keep seeing `deviceId: String!` on the old type.
+ */
+export type KindleDestinationDelivery = {
+  __typename?: 'KindleDestinationDelivery';
+  bytes: Scalars['Int']['output'];
+  converted: Scalars['Boolean']['output'];
+  destinationEmail: Scalars['String']['output'];
+  destinationId: Scalars['ID']['output'];
+  destinationName: Scalars['String']['output'];
+  error?: Maybe<Scalars['String']['output']>;
+  format: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  mediaId: Scalars['String']['output'];
+  note?: Maybe<Scalars['String']['output']>;
+  recipient: Scalars['String']['output'];
+  sentAt: Scalars['DateTime']['output'];
+};
+
+/** A librarian decision about one recurring page hash inside a library. */
+export type KnownDuplicatePage = {
+  __typename?: 'KnownDuplicatePage';
+  action: DuplicatePageAction;
+  createdAt: Scalars['DateTime']['output'];
+  createdBy?: Maybe<Scalars['String']['output']>;
+  /** The 64-bit dHash as 16 lowercase hexadecimal digits. */
+  dhash: Scalars['String']['output'];
+  libraryId: Scalars['ID']['output'];
+};
+
 export type Library = {
   __typename?: 'Library';
   authors: Array<Author>;
@@ -1128,6 +3061,12 @@ export type Library = {
   /** Get series in this library */
   series: Array<Series>;
   seriesAlphabet: Scalars['JSONObject']['output'];
+  /**
+   * The provider source instance (`provider_sources.id`) backing a virtual
+   * library. Set only for provider libraries, whose `path` is a `provider://`
+   * URI and which the filesystem scanner skips.
+   */
+  sourceProvider?: Maybe<Scalars['String']['output']>;
   stats: LibraryStats;
   status: FileStatus;
   tags: Array<Tag>;
@@ -1183,6 +3122,11 @@ export type LibraryConfig = {
   libraryId?: Maybe<Scalars['String']['output']>;
   libraryPattern: LibraryPattern;
   libraryType: LibraryType;
+  /**
+   * the **relative path** to the directory where oneshots are stored,
+   * relative to the library path. this is **not** a fully qualified path
+   */
+  oneshotsDirectory?: Maybe<Scalars['String']['output']>;
   processMetadata: Scalars['Boolean']['output'];
   processThumbnailColorsEvenWithoutConfig: Scalars['Boolean']['output'];
   skipBookOverview: Scalars['Boolean']['output'];
@@ -1203,11 +3147,31 @@ export type LibraryConfigInput = {
   ignoreRules?: InputMaybe<Array<Scalars['String']['input']>>;
   libraryPattern: LibraryPattern;
   libraryType: LibraryType;
+  oneshotsDirectory?: InputMaybe<Scalars['String']['input']>;
   processMetadata: Scalars['Boolean']['input'];
   processThumbnailColorsEvenWithoutConfig: Scalars['Boolean']['input'];
   skipBookOverview: Scalars['Boolean']['input'];
   thumbnailConfig?: InputMaybe<ImageProcessorOptionsInput>;
   watch: Scalars['Boolean']['input'];
+};
+
+/**
+ * Library lifecycle events carry the identity triple the Komga SSE surface
+ * needs to announce changes (payload keeps the root path so protocol adapters
+ * can log or resolve the library without re-querying).
+ */
+export type LibraryCreated = {
+  __typename?: 'LibraryCreated';
+  id: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  path: Scalars['String']['output'];
+};
+
+export type LibraryDeleted = {
+  __typename?: 'LibraryDeleted';
+  id: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  path: Scalars['String']['output'];
 };
 
 export type LibraryFilterInput = {
@@ -1217,6 +3181,28 @@ export type LibraryFilterInput = {
   id?: InputMaybe<FieldFilterString>;
   name?: InputMaybe<FieldFilterString>;
   path?: InputMaybe<FieldFilterString>;
+};
+
+export type LibraryModel = {
+  __typename?: 'LibraryModel';
+  configId: Scalars['Int']['output'];
+  createdAt: Scalars['DateTime']['output'];
+  description?: Maybe<Scalars['String']['output']>;
+  emoji?: Maybe<Scalars['String']['output']>;
+  id: Scalars['String']['output'];
+  lastScannedAt?: Maybe<Scalars['DateTime']['output']>;
+  name: Scalars['String']['output'];
+  path: Scalars['String']['output'];
+  /**
+   * The provider source instance (`provider_sources.id`) backing a virtual
+   * library. Set only for provider libraries, whose `path` is a `provider://`
+   * URI and which the filesystem scanner skips.
+   */
+  sourceProvider?: Maybe<Scalars['String']['output']>;
+  status: FileStatus;
+  thumbnailMeta?: Maybe<ImageMetadata>;
+  thumbnailPath?: Maybe<Scalars['String']['output']>;
+  updatedAt?: Maybe<Scalars['DateTime']['output']>;
 };
 
 export type LibraryModelOrderBy = {
@@ -1233,6 +3219,7 @@ export enum LibraryModelOrdering {
   LastScannedAt = 'LAST_SCANNED_AT',
   Name = 'NAME',
   Path = 'PATH',
+  SourceProvider = 'SOURCE_PROVIDER',
   Status = 'STATUS',
   ThumbnailMeta = 'THUMBNAIL_META',
   ThumbnailPath = 'THUMBNAIL_PATH',
@@ -1261,6 +3248,8 @@ export type LibraryScanOutput = {
   ignoredDirectories: Scalars['Int']['output'];
   /** The number of files that were ignored during the scan */
   ignoredFiles: Scalars['Int']['output'];
+  /** The library whose scan produced this output. */
+  libraryId: Scalars['String']['output'];
   /**
    * The number of files that were deemed to be skipped during the scan, e.g. it
    * exists in the database but has not been modified since the last scan
@@ -1306,6 +3295,13 @@ export enum LibraryType {
   Webtoon = 'WEBTOON',
   WebNovel = 'WEB_NOVEL'
 }
+
+export type LibraryUpdated = {
+  __typename?: 'LibraryUpdated';
+  id: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  path: Scalars['String']['output'];
+};
 
 export enum LibraryViewMode {
   Books = 'BOOKS',
@@ -1363,6 +3359,33 @@ export enum LogModelOrdering {
   Timestamp = 'TIMESTAMP'
 }
 
+/** A reading position derived from the *other* edition of the same work. */
+export type MappedPosition = {
+  __typename?: 'MappedPosition';
+  /**
+   * Always `true` for a chapter-map conversion: it is worth ±1-3 minutes
+   * on a 30-minute chapter. Clients must label it, and must not write it
+   * back as a real position.
+   */
+  approximate: Scalars['Boolean']['output'];
+  /** The confidence of the chapter-map entry the conversion went through. */
+  confidence: Scalars['Float']['output'];
+  /**
+   * Set when this edition is the ebook: a locator inside the mapped spine
+   * item.
+   */
+  locator?: Maybe<ReadiumLocator>;
+  /**
+   * Set when this edition is the audiobook: milliseconds from the start of
+   * the publication.
+   */
+  positionMs?: Maybe<Scalars['Int']['output']>;
+  /** Whole-publication progression in *this* edition. */
+  progression: Scalars['Float']['output'];
+  /** The edition the position was read from. */
+  sourceMediaId: Scalars['ID']['output'];
+};
+
 /** A potential match from an external provider */
 export type MatchCandidate = {
   __typename?: 'MatchCandidate';
@@ -1380,12 +3403,41 @@ export type MatchCandidate = {
 export type Media = {
   __typename?: 'Media';
   analysisData?: Maybe<MediaAnalysisData>;
+  /**
+   * The audio shape of the book, or `null` when it is not an audiobook.
+   *
+   * `null` and "an audiobook with no tracks" are different states, and only
+   * one of them is a real publication, so this is `Option` rather than an
+   * empty [`MediaAudio`].
+   */
+  audio?: Maybe<MediaAudio>;
   /** The timestamp of the creation of the media */
   createdAt: Scalars['DateTime']['output'];
   /** The timestamp of when the media was **soft** deleted. This will act like a trash bin. */
   deletedAt?: Maybe<Scalars['DateTime']['output']>;
   /** If the media is an epub, this will return the parsed epub data from the file */
   ebook?: Maybe<Epub>;
+  /**
+   * Unconfirmed pairings for this book, recomputed on demand.
+   *
+   * This is the field a book page selects: it runs the three pairing rules
+   * (shared work, identifier through a provider's edition list, normalised
+   * title and author) and caches every verdict as a link row, so a
+   * rejection sticks and a second load is a read. Provider lookups are
+   * best-effort — an upstream that is down costs the *evidence* of a
+   * suggestion, never the page.
+   */
+  editionSuggestions: Array<EditionSuggestion>;
+  /**
+   * Other editions of the same work: the audiobook of this ebook, or the
+   * ebook of this audiobook.
+   *
+   * Confirmed pairs only, and a plain read — a confirmed pair is two link
+   * rows, so this costs one indexed query and is safe to select on a grid.
+   * Unconfirmed guesses are [`Media::edition_suggestions`], which is what
+   * actually runs the heuristics.
+   */
+  editions: Array<Media>;
   /** The extension of the media file, excluding the leading period */
   extension: Scalars['String']['output'];
   /**
@@ -1397,6 +3449,7 @@ export type Media = {
   id: Scalars['String']['output'];
   /** Whether the media is marked as a favorite by the current user */
   isFavorite: Scalars['Boolean']['output'];
+  isOneshot: Scalars['Boolean']['output'];
   /**
    * A hash of the media file that adheres to the KoReader hash algorithm. This is used to identify
    * books from the KoReader application so progress can be synced between the two applications
@@ -1417,9 +3470,32 @@ export type Media = {
   nextInSeries: PaginatedMediaResponse;
   /** The number of pages in the media, if applicable. Will be -1 for certain media types */
   pages: Scalars['Int']['output'];
+  /**
+   * This book's position, derived from the reader's real position in
+   * `fromMediaId` — the other edition of the same work.
+   *
+   * `null` when the two are not a confirmed pair, when there is no reading
+   * head to convert, or when the position falls in front or back matter
+   * that has no counterpart: guessing there would land a listener on the
+   * copyright page. The result is always
+   * [`MappedPosition::approximate`] and is never written to a head.
+   */
+  pairedPosition?: Maybe<MappedPosition>;
   /** The path of the underlying media file on disk */
   path: Scalars['String']['output'];
+  /**
+   * A cache-only read-aloud download. No map or cache means `null`; selecting
+   * this field never schedules work or invokes an aligner.
+   */
+  readAloud?: Maybe<ReadAloudArtifact>;
   readHistory: Array<ReadthroughRecord>;
+  /**
+   * Canonical position fields (`page`, `locator`, `positionMs`,
+   * `percentageCompleted`, and `updatedAt`) come from `reading_heads`.
+   * Readthrough identity, elapsed time, and the start instant remain
+   * `reading_sessions` history; their position fields are only fallbacks
+   * when the head has no corresponding value.
+   */
   readProgress?: Maybe<ResumeReadingCursor>;
   /**
    * The path to the media file **relative** to the library path. This is only useful for
@@ -1427,6 +3503,10 @@ export type Media = {
    * on a mobile device.
    */
   relativeLibraryPath: Scalars['String']['output'];
+  /** The remote chapter identifier on the provider source */
+  remoteChapterId?: Maybe<Scalars['String']['output']>;
+  /** The remote series identifier on the provider source */
+  remoteId?: Maybe<Scalars['String']['output']>;
   /**
    * The resolved name of the media, which will prioritize the title pulled from
    * metatadata, if available, and fallback to the name derived from the file name
@@ -1443,10 +3523,21 @@ export type Media = {
   /** The size of the media file in bytes */
   size: Scalars['Int']['output'];
   /**
+   * The provider source instance (`provider_sources.id`) this media was materialised
+   * from. Set only for remote chapters, whose `path` is a `provider://` URI.
+   */
+  sourceProvider?: Maybe<Scalars['String']['output']>;
+  /**
    * The status of the media. This is used to determine if the media is available for reading (i.e.,
    * if it is available on disk)
    */
   status: FileStatus;
+  /**
+   * The latest validated timing map where this media is either the ebook or
+   * audiobook side. The stored artifact keeps its canonical ebook/audio
+   * orientation even when the field is selected from an audiobook.
+   */
+  syncMap?: Maybe<SyncMap>;
   /** The tags associated with the media */
   tags: Array<Tag>;
   /**
@@ -1465,6 +3556,21 @@ export type Media = {
 
 export type MediaNextInSeriesArgs = {
   pagination?: Pagination;
+};
+
+
+export type MediaPairedPositionArgs = {
+  fromMediaId: Scalars['ID']['input'];
+};
+
+
+export type MediaReadAloudArgs = {
+  granularity?: AlignGranularity;
+};
+
+
+export type MediaSyncMapArgs = {
+  granularity?: AlignGranularity;
 };
 
 export type MediaAnalysisData = {
@@ -1494,6 +3600,87 @@ export type MediaAnnotationModel = {
   mediaId: Scalars['String']['output'];
   updatedAt: Scalars['DateTime']['output'];
   userId: Scalars['String']['output'];
+};
+
+export type MediaAudio = {
+  __typename?: 'MediaAudio';
+  /**
+   * Bits per second: the container's stated average where it has one, and
+   * derived from size over duration otherwise.
+   */
+  bitrate?: Maybe<Scalars['Int']['output']>;
+  channels?: Maybe<Scalars['Int']['output']>;
+  /**
+   * How the chapter marks were obtained. This is provenance, never a
+   * preference: `PER_TRACK` means Stump synthesized one chapter per file
+   * and the publisher shipped no marks at all, so a client that only wants
+   * to show real chapters can tell the difference.
+   */
+  chapterSource: AudioChapterSource;
+  /**
+   * The chapter marks, ascending by `startMs`. Empty exactly when
+   * `chapterSource` is `NONE`.
+   */
+  chapters: Array<MediaAudioChapter>;
+  /**
+   * Short lowercase codec name (`aac`, `mp3`, `opus`, `flac`), or `mixed`
+   * for a folder book whose files do not agree.
+   */
+  codec: Scalars['String']['output'];
+  /** The whole-publication duration; the sum of the track durations. */
+  durationMs: Scalars['Int']['output'];
+  /**
+   * The playback manifest route, for a client that would rather fetch the
+   * whole shape over HTTP than through GraphQL:
+   * `/api/v2/media/{mediaId}/audio/manifest`.
+   */
+  manifestUrl: Scalars['String']['output'];
+  sampleRate?: Maybe<Scalars['Int']['output']>;
+  /** The files, in playback order, contiguous from index 0. */
+  tracks: Array<MediaAudioTrack>;
+};
+
+/** One chapter mark of an audiobook. */
+export type MediaAudioChapter = {
+  __typename?: 'MediaAudioChapter';
+  /** The last chapter ends at the publication duration. */
+  endMs?: Maybe<Scalars['Int']['output']>;
+  /** 0-based ordinal of the chapter. */
+  index: Scalars['Int']['output'];
+  startMs: Scalars['Int']['output'];
+  title?: Maybe<Scalars['String']['output']>;
+};
+
+/** One file of an audiobook. */
+export type MediaAudioTrack = {
+  __typename?: 'MediaAudioTrack';
+  byteSize: Scalars['Int']['output'];
+  durationMs: Scalars['Int']['output'];
+  /** 0-based position in playback order. */
+  index: Scalars['Int']['output'];
+  /**
+   * The MIME type the track is served with; exact per file, so a
+   * mixed-codec folder book still plays.
+   */
+  mime: Scalars['String']['output'];
+  /**
+   * Milliseconds from the start of the publication to the start of this
+   * file. A publication offset belongs to the last track whose
+   * `startOffsetMs` is at or below it.
+   */
+  startOffsetMs: Scalars['Int']['output'];
+  /**
+   * Where to fetch the bytes:
+   * `/api/v2/media/{mediaId}/audio/track/{index}`.
+   */
+  url: Scalars['String']['output'];
+};
+
+export type MediaDeleted = {
+  __typename?: 'MediaDeleted';
+  id: Scalars['String']['output'];
+  libraryId: Scalars['String']['output'];
+  seriesId: Scalars['String']['output'];
 };
 
 export type MediaFilterInput = {
@@ -1544,6 +3731,11 @@ export type MediaMetadata = {
   /** The external metadata provider that supplied this metadata (e.g., "HARDCOVER") */
   metadataSource?: Maybe<Scalars['String']['output']>;
   month?: Maybe<Scalars['Int']['output']>;
+  /**
+   * The audiobook's readers. Empty for every other kind of book, so a
+   * client can show the credit unconditionally.
+   */
+  narrators: Array<Scalars['String']['output']>;
   notes?: Maybe<Scalars['String']['output']>;
   number?: Maybe<Scalars['Decimal']['output']>;
   pageCount?: Maybe<Scalars['Int']['output']>;
@@ -1607,6 +3799,11 @@ export type MediaMetadataInput = {
   letterers?: InputMaybe<Array<Scalars['String']['input']>>;
   links?: InputMaybe<Array<Scalars['String']['input']>>;
   month?: InputMaybe<Scalars['Int']['input']>;
+  /**
+   * The audiobook's readers. A separate credit from `writers`: an
+   * audiobook's author wrote it and its narrator did not.
+   */
+  narrators?: InputMaybe<Array<Scalars['String']['input']>>;
   notes?: InputMaybe<Scalars['String']['input']>;
   number?: InputMaybe<Scalars['Decimal']['input']>;
   pageCount?: InputMaybe<Scalars['Int']['input']>;
@@ -1650,6 +3847,7 @@ export enum MediaMetadataModelOrdering {
   MetadataExternalId = 'METADATA_EXTERNAL_ID',
   MetadataSource = 'METADATA_SOURCE',
   Month = 'MONTH',
+  Narrators = 'NARRATORS',
   Notes = 'NOTES',
   Number = 'NUMBER',
   PageCount = 'PAGE_COUNT',
@@ -1720,13 +3918,17 @@ export enum MediaModelOrdering {
   Extension = 'EXTENSION',
   Hash = 'HASH',
   Id = 'ID',
+  IsOneshot = 'IS_ONESHOT',
   KoreaderHash = 'KOREADER_HASH',
   ModifiedAt = 'MODIFIED_AT',
   Name = 'NAME',
   Pages = 'PAGES',
   Path = 'PATH',
+  RemoteChapterId = 'REMOTE_CHAPTER_ID',
+  RemoteId = 'REMOTE_ID',
   SeriesId = 'SERIES_ID',
   Size = 'SIZE',
+  SourceProvider = 'SOURCE_PROVIDER',
   Status = 'STATUS',
   ThumbnailMeta = 'THUMBNAIL_META',
   ThumbnailPath = 'THUMBNAIL_PATH',
@@ -1743,8 +3945,9 @@ export type MediaOrderByField = {
 };
 
 export type MediaProgressInput =
-  { epub: EpubProgressInput; paged?: never; }
-  |  { epub?: never; paged: PagedProgressInput; };
+  { audio: AudioProgressInput; epub?: never; paged?: never; }
+  |  { audio?: never; epub: EpubProgressInput; paged?: never; }
+  |  { audio?: never; epub?: never; paged: PagedProgressInput; };
 
 /** How to merge external metadata values onto existing entity metadata */
 export enum MergeStrategy {
@@ -1757,6 +3960,55 @@ export enum MergeStrategy {
   /** PreferExternal for scalars, merge/dedupe for array fields */
   PreferExternalAndMergeLists = 'PREFER_EXTERNAL_AND_MERGE_LISTS'
 }
+
+/**
+ * The audio half of a library's effective policy: the one configurable
+ * quality-check weight and the auto-fix toggles.
+ *
+ * A section, not per-field rows: unlike a metadata field, these four values
+ * only make sense together — `keepOriginal` is meaningless without
+ * `autoAssemble` — so a library stores or inherits the whole section, and
+ * `overridden` is therefore one flag rather than four.
+ */
+export type MetadataAudioPolicy = {
+  __typename?: 'MetadataAudioPolicy';
+  /**
+   * Assemble a split audiobook into the canonical single file during
+   * ingest.
+   */
+  autoAssemble: Scalars['Boolean']['output'];
+  /** Derive and write chapter marks for an audiobook that has none. */
+  autoChapters: Scalars['Boolean']['output'];
+  /** Keep the source files after an assemble. */
+  keepOriginal: Scalars['Boolean']['output'];
+  /**
+   * `true` when the section comes from the library's override rather than
+   * the server default.
+   */
+  overridden: Scalars['Boolean']['output'];
+  /**
+   * Weight of the `single_file` quality check on the 0..=100 scale every
+   * check's weight uses. `0` keeps the finding advisory without moving
+   * the score.
+   */
+  singleFileWeight: Scalars['Int']['output'];
+};
+
+/**
+ * The audio section of an override. Every key has the server default as its
+ * GraphQL default, so a client that wants to change one toggle sends one
+ * key rather than restating the section.
+ */
+export type MetadataAudioPolicyInput = {
+  autoAssemble?: Scalars['Boolean']['input'];
+  autoChapters?: Scalars['Boolean']['input'];
+  /**
+   * Turning this off is refused unless `autoAssemble` is on: there would
+   * be nothing to replace the source files with.
+   */
+  keepOriginal?: Scalars['Boolean']['input'];
+  singleFileWeight?: Scalars['Int']['input'];
+};
 
 export type MetadataFetchJobOutput = {
   __typename?: 'MetadataFetchJobOutput';
@@ -1847,6 +4099,12 @@ export enum MetadataField {
   Letterers = 'LETTERERS',
   Links = 'LINKS',
   MetaType = 'META_TYPE',
+  /**
+   * The readers of an audiobook edition, carried by
+   * [`crate::types::ExternalMediaMetadata::narrators`]. Distinct from
+   * [`Self::Writers`] on purpose -- a narrator is not an author.
+   */
+  Narrators = 'NARRATORS',
   Notes = 'NOTES',
   Number = 'NUMBER',
   PageCount = 'PAGE_COUNT',
@@ -1859,6 +4117,11 @@ export enum MetadataField {
   Status = 'STATUS',
   StoryArc = 'STORY_ARC',
   StoryArcNumber = 'STORY_ARC_NUMBER',
+  /**
+   * An edition's secondary title, carried by
+   * [`crate::types::ExternalMediaMetadata::subtitle`].
+   */
+  Subtitle = 'SUBTITLE',
   Summary = 'SUMMARY',
   Tags = 'TAGS',
   Teams = 'TEAMS',
@@ -1877,12 +4140,128 @@ export type MetadataFieldOverride = {
   value: Scalars['JSON']['input'];
 };
 
+/** One field's effective rule. */
+export type MetadataFieldPolicy = {
+  __typename?: 'MetadataFieldPolicy';
+  field: MetadataField;
+  /** Whether a field the user locked is left alone. */
+  lockRespected: Scalars['Boolean']['output'];
+  /**
+   * `true` when this rule comes from the library's override rather than
+   * the server default.
+   */
+  overridden: Scalars['Boolean']['output'];
+  /**
+   * Provider ids in priority order. Empty means no provider may fill this
+   * field.
+   */
+  providers: Array<Scalars['String']['output']>;
+  /**
+   * `false` for the candidate-only fields the staged apply path has no
+   * column for (`COVER`, `LINKS`, `STATUS`): the policy still resolves
+   * them, and the editor shows the winner, but applying writes nothing.
+   */
+  storable: Scalars['Boolean']['output'];
+  strategy: MetadataPolicyStrategy;
+};
+
+export type MetadataFieldPolicyInput = {
+  field: MetadataField;
+  /**
+   * Leave a user-locked field alone. Defaults to `true`; turning it off is
+   * how a library says "the policy outranks my locks for this field".
+   */
+  lockRespected?: Scalars['Boolean']['input'];
+  /**
+   * Provider ids in priority order. An empty list means no provider may
+   * fill this field.
+   */
+  providers: Array<Scalars['String']['input']>;
+  strategy: MetadataPolicyStrategy;
+};
+
+/**
+ * The effective policy of one library: the server default with the library's
+ * override applied, one row per field the policy vocabulary has, plus the
+ * audio section.
+ */
+export type MetadataPolicy = {
+  __typename?: 'MetadataPolicy';
+  audio: MetadataAudioPolicy;
+  fields: Array<MetadataFieldPolicy>;
+  /** `true` when the library stores its own override document. */
+  hasLibraryOverride: Scalars['Boolean']['output'];
+  libraryId: Scalars['ID']['output'];
+};
+
+/** One field's resolution during an "apply best" run. */
+export type MetadataPolicyDecision = {
+  __typename?: 'MetadataPolicyDecision';
+  /** Whether this decision wrote anything. */
+  applied: Scalars['Boolean']['output'];
+  field: MetadataField;
+  outcome: MetadataPolicyOutcome;
+  /** Providers that contributed, in the order they were used. */
+  providers: Array<Scalars['String']['output']>;
+  strategy: MetadataPolicyStrategy;
+};
+
+export type MetadataPolicyInput = {
+  /**
+   * The audio section. Omitted leaves the library inheriting the server
+   * default audio rules, exactly as an unmentioned field does.
+   */
+  audio?: InputMaybe<MetadataAudioPolicyInput>;
+  /**
+   * The complete override. Empty, with no `audio`, clears the library
+   * override.
+   */
+  fields: Array<MetadataFieldPolicyInput>;
+};
+
+/** What the policy decided for one field of one book. */
+export enum MetadataPolicyOutcome {
+  Candidate = 'CANDIDATE',
+  Kept = 'KEPT',
+  Locked = 'LOCKED',
+  Merged = 'MERGED',
+  Unmatched = 'UNMATCHED'
+}
+
+/** How the offers of the allowed providers for one field combine. */
+export enum MetadataPolicyStrategy {
+  First = 'FIRST',
+  HighestResolution = 'HIGHEST_RESOLUTION',
+  Longest = 'LONGEST',
+  MergeUnion = 'MERGE_UNION',
+  PreferExisting = 'PREFER_EXISTING'
+}
+
 /** The supported external metadata providers */
 export enum MetadataProvider {
+  /** AniList (https://anilist.co) */
+  AniList = 'ANI_LIST',
+  /**
+   * Audible, through the community Audnexus enrichment API
+   * (https://api.audnex.us) plus the unauthenticated Audible catalogue.
+   */
+  Audible = 'AUDIBLE',
   /** ComicVine (https://comicvine.gamespot.com/api/) */
   ComicVine = 'COMIC_VINE',
+  /** Google Books (https://www.googleapis.com/books/v1) */
+  GoogleBooks = 'GOOGLE_BOOKS',
   /** Hardcover (https://hardcover.app) */
-  Hardcover = 'HARDCOVER'
+  Hardcover = 'HARDCOVER',
+  /** MyAnimeList (https://myanimelist.net/apiconfig/references/api/v2) */
+  Mal = 'MAL',
+  /** MangaDex (https://api.mangadex.org) */
+  MangaDex = 'MANGA_DEX',
+  /** MangaUpdates (https://api.mangaupdates.com/v1) */
+  MangaUpdates = 'MANGA_UPDATES',
+  /** Metron (https://metron.cloud/api/) */
+  Metron = 'METRON',
+  /** Open Library (https://openlibrary.org) */
+  OpenLibrary = 'OPEN_LIBRARY'
 }
 
 export type MetadataProviderConfigModel = {
@@ -1959,12 +4338,61 @@ export type Mutation = {
   acceptSeriesMatch: MetadataFetchRecord;
   /** Add a book to the club's queue */
   addBookToClub: BookClub;
+  /**
+   * Add (materialise) a remote series into a virtual library under its
+   * deterministic id.
+   */
+  addProviderSeries: SeriesModel;
   analyzeLibrary: Scalars['Boolean']['output'];
   analyzeMedia: Scalars['Boolean']['output'];
   analyzeSeries: Scalars['Boolean']['output'];
+  /**
+   * Apply the library's metadata policy to one target: the same resolver
+   * auto-apply uses, exposed for the editor's "apply best" action. Every
+   * field the user locked is left alone, and the per-field explanation
+   * comes back with the payload.
+   */
+  applyBestIngestMetadata: IngestApplyBestPayload;
+  /**
+   * Apply selected metadata fields to the explicitly selected work or
+   * edition destination. Unselected fields and other editions are untouched.
+   */
+  applyBookMetadata: BookDetail;
+  /**
+   * Apply selected fields from one persisted provider candidate. Provider
+   * credentials are never returned and no unselected field is copied.
+   */
+  applyBookMetadataCandidate: BookDetail;
+  applyIngestMetadata: IngestApplyPayload;
+  approveBookRequest: BookRequest;
+  /**
+   * Approve a pending pairing and bind it to the calling user. Proof of
+   * possession is either the 6-digit `code` shown on the device or the `nonce`
+   * carried by its QR payload; exactly one must be given. After
+   * `MAX_FAILED_ATTEMPTS` wrong proofs the pairing is denied.
+   */
+  approveDevicePairing: DevicePairing;
+  approveIngestItem: IngestDropItem;
   /** Archive or unarchive a discussion (Moderator+) */
   archiveDiscussion: Scalars['Boolean']['output'];
+  bulkApplyIngestMetadata: IngestBulkApplyPayload;
+  /**
+   * Cancel only queued local work. No remote cancellation request is sent;
+   * active transfers remain owned by the worker and terminal history stays.
+   */
+  cancelCrosspointDelivery: CrosspointDelivery;
+  cancelIngestAnalysis: IngestAnalysisJob;
   cancelJob: Scalars['Boolean']['output'];
+  /**
+   * Stop a worker job.
+   *
+   * The holder is told to stop and the row lands `FAILED` with the
+   * canceller's name in `error` — cancellation is a terminal failure, not a
+   * seventh status, because the status set is the protocol's contract and a
+   * cancelled job is exactly a job that will not produce its output.
+   * Cancelling a finished job is a no-op that returns the row unchanged.
+   */
+  cancelWorkerJob: WorkerJob;
   /**
    * Delete media and series from a library that match one of the following conditions:
    *
@@ -1975,6 +4403,11 @@ export type Mutation = {
    * This operation will also remove any associated thumbnails of the deleted media and series.
    */
   cleanLibrary: CleanLibraryResponse;
+  /**
+   * Drop one entry, for a spine item that turns out to have no
+   * counterpart. Returns `false` when there was nothing to drop.
+   */
+  clearChapterMapEntry: Scalars['Boolean']['output'];
   /** trashes current readthrough, if there is one */
   clearMediaProgress: Scalars['Boolean']['output'];
   /** Clear the scan history for a specific library */
@@ -1986,6 +4419,22 @@ export type Mutation = {
   clearSeriesReadingHistory: Scalars['Int']['output'];
   /** Mark the current book as completed */
   completeBook: BookClub;
+  /**
+   * Confirm that two books are editions of the same work, and build their
+   * chapter map.
+   *
+   * Works with or without a prior suggestion: an operator who knows the
+   * pair can create it directly, which also mints the work row when
+   * neither book has one. Re-confirming is a no-op, and a book that is
+   * already a confirmed edition of a *different* work is refused rather
+   * than re-homed — the liseur lane owns those links.
+   */
+  confirmEditionPair: EditionPairResult;
+  /**
+   * Verifies a personal PAT with `me` before storing it encrypted. The token
+   * is never returned or included in a job payload.
+   */
+  connectHardcover: HardcoverConnection;
   convertMedia: Scalars['Boolean']['output'];
   /** Create an annotation (highlight/note) */
   createAnnotation: MediaAnnotation;
@@ -1994,8 +4443,15 @@ export type Mutation = {
   createBookClubInvitation: BookClubInvitation;
   /** Creates a new member in the book club */
   createBookClubMember: BookClubMember;
+  createBookRequest: BookRequest;
   /** Create a bookmark for a user */
   createBookmark: Bookmark;
+  /**
+   * Registers a device for the current user and mints its credential(s). The
+   * registry enforces the permissions the kind needs (`ACCESS_API_KEYS` plus
+   * the protocol permission for API-key kinds); secrets are returned once.
+   */
+  createDevice: DeviceWithCredential;
   /** Manually create a discussion for a book */
   createDiscussion: BookClubDiscussion;
   createEmailDevice: RegisteredEmailDevice;
@@ -2016,6 +4472,8 @@ export type Mutation = {
    */
   createReadingList: ReadingList;
   createScheduledJob: ScheduledJob;
+  createShareGrant: SocialShareGrant;
+  createShareOverlay: SocialOverlay;
   createSmartList: SmartList;
   createSmartListView: SmartListView;
   /**
@@ -2027,10 +4485,18 @@ export type Mutation = {
    */
   createTags: Array<Tag>;
   createUser: User;
+  /**
+   * Create (or fetch) the virtual library backing a provider source.
+   * Browsing it goes to the source live; nothing is materialised until a
+   * series' books are opened.
+   */
+  createVirtualLibrary: LibraryModel;
   /** Delete an annotation by ID */
   deleteAnnotation: MediaAnnotation;
   deleteApiKey: Apikey;
   deleteBookClub: BookClub;
+  /** Delete only the current user's explicit work/edition review. */
+  deleteBookReview: Scalars['Boolean']['output'];
   /** Delete a bookmark by ID, only if the user created it */
   deleteBookmark: Bookmark;
   /** Delete a custom emoji */
@@ -2040,6 +4506,7 @@ export type Mutation = {
   deleteJob: Scalars['Boolean']['output'];
   deleteJobHistory: DeleteJobHistory;
   deleteJobLogs: DeleteJobAssociatedLogs;
+  deleteKindleDestination: Scalars['Boolean']['output'];
   /**
    * Delete a library, including all associated media and series via cascading deletes. This
    * operation cannot be undone.
@@ -2059,6 +4526,10 @@ export type Mutation = {
   deleteNotifier: Notifier;
   /**
    * Deletes a reading list by ID.
+   *
+   * Goes through the canonical container service so a list projected to
+   * Kobo devices leaves a shelf tombstone (the device's next incremental
+   * sync emits `DeletedTag`) and Komga clients receive `ReadListDeleted`.
    *
    * # Returns
    *
@@ -2081,8 +4552,32 @@ export type Mutation = {
    */
   deleteUserAvatar: User;
   deleteUserSessions: Scalars['Int']['output'];
+  /**
+   * Deny a pending pairing. Any user allowed to approve may deny, so a
+   * suspicious request can be shut down by whoever sees it first.
+   */
+  denyDevicePairing: DevicePairing;
+  /**
+   * Disable a source instance. Materialised rows remain, but pages stop
+   * resolving and live browse is rejected.
+   */
+  disableProviderSource: Scalars['Boolean']['output'];
+  discardIngestItem: IngestDropItem;
+  disconnectHardcover: Scalars['Boolean']['output'];
+  dismissRecommendation: SocialRecommendation;
   /** Edit your own message */
   editMessage: BookClubDiscussionMessage;
+  /**
+   * Enable a catalog source by Keiyoushi id (`providerCatalog` result),
+   * or directly by implementation + language for embedded sources.
+   */
+  enableProviderSource: ProviderSource;
+  /**
+   * Enqueue alignment for a confirmed pair, reusing any active identical
+   * request rather than creating a second worker job.
+   */
+  enqueueAlignment: WorkerJob;
+  enqueueIngestAnalysis: Array<IngestAnalysisJob>;
   favoriteMedia: Media;
   favoriteSeries: Series;
   /** Start a job which will search external metadata providers */
@@ -2106,16 +4601,88 @@ export type Mutation = {
   /** marks all books in the series as finished */
   finishSeriesProgress: Scalars['Int']['output'];
   generateLibraryThumbnails: Scalars['Boolean']['output'];
+  grabBookRequest: BookRequestGrab;
+  /**
+   * Validate and persist an operator-supplied `SyncMapV1` for a confirmed
+   * ebook↔audiobook pair.
+   */
+  importSyncMap: SyncMap;
   /** Deletes the membership of the caller to the target book club */
   leaveBookClub: BookClubMember;
+  linkHardcoverMedia: HardcoverMediaLink;
   /** Lock or unlock a discussion (Moderator+) */
   lockDiscussion: Scalars['Boolean']['output'];
+  /**
+   * Looks up public metadata through the current user's Hardcover PAT only
+   * when that user enabled the interactive metadata toggle. The persistent
+   * cache contains public payloads keyed by provider/query/schema/TTL and
+   * never stores account, journal, or progress responses.
+   */
+  lookupHardcoverMetadata?: Maybe<HardcoverMetadataLookup>;
+  lookupIngestCandidate: IngestMetadataCandidate;
+  /**
+   * Record a decision about a recurring page hash. `SKIP` hides every page
+   * within the duplicate tolerance of `dhash` from all page-serving routes
+   * of the library's books (files are never modified); `KEEP` marks it as
+   * reviewed so it stops appearing as a candidate. Marking again replaces
+   * the previous decision.
+   */
+  markDuplicatePage: KnownDuplicatePage;
+  /**
+   * Run provider identify/lookup over existing library media rows,
+   * optionally restricted to the given provider ids. Candidates persist
+   * against the media ids and stay pending until applied.
+   */
+  matchLibraryMedia: IngestAnalysisJob;
+  /**
+   * Merge two materialised provider series: reading progress on `drop` is
+   * repointed onto the matching chapters of `keep`, then `drop` and its
+   * media rows are deleted. Both must be provider-backed; a locally
+   * scanned series is never touched.
+   */
+  mergeProviderSeries: ProviderMergeResult;
+  /**
+   * Merge `drop` into `keep`: every book of `drop` moves into the kept
+   * series' directory, then the emptied series (and its directory) is
+   * removed. Reading progress follows the books.
+   */
+  mergeSeries: SeriesMergeResult;
+  /**
+   * Move books into another series of the same library.
+   *
+   * The files move with them, into the target series' directory, so the next
+   * scan sees the new grouping instead of undoing it. Provider-backed series
+   * have no files and are rejected.
+   */
+  moveMediaToSeries: Series;
   patchEmailDevice: RegisteredEmailDevice;
+  patchLibrary: Library;
+  patchLibraryConfig: LibraryConfig;
+  pauseIngestAnalysis: IngestAnalysisJob;
   /** Pin or unpin a message (Moderator+) */
   pinMessage: Scalars['Boolean']['output'];
+  pollBookRequestGrab: BookRequestGrab;
   processLibraryThumbnails: Scalars['Boolean']['output'];
+  /**
+   * Queue one or more visible media items using the target's immutable
+   * profile snapshot. Duplicate media ids are collapsed before enqueueing;
+   * the service's idempotency key handles repeated requests safely.
+   */
+  queueCrosspointDeliveries: Array<CrosspointDelivery>;
+  /** Fetch (or refresh) the Keiyoushi catalog snapshot. */
+  refreshProviderCatalog: Scalars['Boolean']['output'];
+  /** Re-fetch details and chapters for a materialised provider series. */
+  refreshProviderSeries: SeriesModel;
   /** Reject all pending metadata matches, setting their status to NoMatch */
   rejectAllPendingMatches: Scalars['Int']['output'];
+  rejectBookRequest: BookRequest;
+  /**
+   * Refuse a suggested pair. The refusal is a row, not a deletion:
+   * suggestions are recomputed on every book-page query, so a forgotten
+   * refusal comes straight back.
+   */
+  rejectEditionPair: EditionPairResult;
+  rejectIngestItem: IngestDropItem;
   /** Reject the current match candidates for a media item */
   rejectMediaMatch: MetadataFetchRecord;
   /** Reject the current match candidates for a series */
@@ -2124,6 +4691,7 @@ export type Mutation = {
   removeBookClubMember: BookClubMember;
   /** Remove your own suggestion (only before it's resolved) */
   removeSuggestion: BookClubBookSuggestion;
+  renameDevice: Device;
   /**
    * Rename a tag. Returns the updated tag, or an error if the tag was not found or the new
    * name already exists.
@@ -2131,20 +4699,128 @@ export type Mutation = {
   renameTag: Tag;
   /** Reorder uncompleted books in the club's queue. Completed books cannot be reordered since they are effectively archived */
   reorderBooks: BookClub;
+  requestRecommendation: SocialRecommendation;
+  requeueIngestAnalysis: IngestAnalysisJob;
   /** resets the elapsed seconds for all reading sessions in the current readthrough, if there is one */
   resetElapsedSeconds: Scalars['Boolean']['output'];
   resetLibraryMetadata: Library;
   resetSeriesMetadata: Series;
   respondToBookClubInvitation: BookClubInvitation;
+  respondToRecommendation: SocialRecommendation;
+  respondToShareGrant: SocialShareGrant;
+  resumeIngestAnalysis: IngestAnalysisJob;
+  retryBookRequest: BookRequest;
+  /**
+   * Requeue a failed delivery without changing its immutable source/profile
+   * snapshot. Cancelled, active, and completed rows cannot be resurrected.
+   */
+  retryCrosspointDelivery: CrosspointDelivery;
+  retryIngestAnalysis: IngestAnalysisJob;
+  revokeBookClubInvitation: BookClubInvitation;
+  /** Invalidates the device's credential; the device stays listed as revoked. */
+  revokeDevice: Device;
+  revokeRecommendation: SocialRecommendation;
+  revokeShareGrant: SocialShareGrant;
+  /**
+   * Discards the device's credential and mints a replacement; the new secret
+   * is returned once.
+   */
+  rotateDeviceCredential: DeviceWithCredential;
+  /**
+   * Enqueues an immediate annotation export for a user (self by default;
+   * other users require the server owner), bypassing the debounce.
+   */
+  runAnnotationSync: AnnotationSyncStatus;
+  /**
+   * Run a quality finding's named repair tool against a staged drop item,
+   * then re-run its checks.
+   *
+   * The re-run is the point of the button: a repair that worked must show
+   * as a passing check without a manual requeue, and one that did not must
+   * show as the same finding rather than as a green report. Providers are
+   * not re-queried — a repaired container is the same book, and a fix must
+   * not spend an operator's API quota.
+   *
+   * A tool that produced nothing returns the item unchanged; the finding
+   * simply persists in the next report.
+   */
+  runIngestQualityFix: IngestDropItem;
+  /**
+   * Run the staged quality checks over existing library media rows. One
+   * analysis job processes the whole batch; reports persist against the
+   * media ids.
+   */
+  runLibraryQuality: IngestAnalysisJob;
+  /**
+   * Probe every catalog source now. The work runs as
+   * `StumpJob::ProviderSourceHealth`, the same job the scheduler enqueues
+   * every `provider_health_interval_secs`; the mutation returns once it is
+   * queued.
+   */
+  runProviderHealth: Scalars['Boolean']['output'];
+  scanIngestDropFolder: IngestDropFolder;
   /**
    * Enqueue a scan job for a library. This will index the filesystem from the library's root path
    * and update the database accordingly.
    */
   scanLibrary: Scalars['Boolean']['output'];
   scanSeries: Scalars['Boolean']['output'];
+  searchBookRequest: BookRequest;
+  selectBookRequestRelease: BookRequest;
   sendAttachmentEmail: SendAttachmentEmailOutput;
   /** Send a message in a discussion */
   sendMessage: BookClubDiscussionMessage;
+  sendRecommendation: SocialRecommendation;
+  /**
+   * Mails `media_id` to the Kindle address registered on `device_id`,
+   * converting an EPUB to AZW3 first when the operator has `boko`
+   * installed.
+   *
+   * Requires the same `EMAIL_SEND` permission as `sendAttachmentEmail`,
+   * which is the same SMTP path this uses.
+   */
+  sendToKindle: KindleDelivery;
+  sendToKindleDestination: KindleDestinationDelivery;
+  /**
+   * Configures one annotation export sink for the current user: replaces
+   * the settings map (secret values are encrypted at rest) and sets
+   * whether the sink runs (enabled by default).
+   */
+  setAnnotationSinkSettings: AnnotationSyncStatus;
+  /**
+   * Point one ebook spine item at a different audio chapter, or add an
+   * entry the heuristics did not produce. A hand-set entry has confidence
+   * `1.0` unless one is given: a person looked at it.
+   */
+  setChapterMapEntry: ChapterMapEntry;
+  /**
+   * Sets the device's Amazon *Send to Kindle* address, or clears it when
+   * `email` is null. A device with an address is a `sendToKindle` target;
+   * one without cannot be sent to. The address is validated syntactically
+   * before it is stored, but never verified with Amazon — only a delivery
+   * can do that.
+   */
+  setDeviceKindleEmail: Device;
+  /**
+   * Restricts the device to `library_ids`, or clears the restriction when
+   * `library_ids` is null so the device inherits its user's visibility. The
+   * scope is intersected with that visibility, so it can only narrow what
+   * the device sees and never reveal a library the user cannot see; an
+   * empty list is a device that sees nothing.
+   */
+  setDeviceLibraryScope: Device;
+  /**
+   * Replaces the device's transform profile (`null` clears it).
+   *
+   * The document is interpreted before it is stored — a preset name, a
+   * `{"preset": …}` selector, or a full/partial profile object including
+   * the `audio` section — so an unknown preset or an unusable Opus
+   * bitrate is a mutation error here rather than a warning logged once
+   * per delivery request for the rest of the device's life.
+   */
+  setDeviceTransformProfile: Device;
+  setIngestProviderSettings: IngestProviderSettings;
+  setIngestQualityCheckSettings: IngestQualityCheckSettings;
   /** Bulk-set locked metadata fields for all media metadata in a library */
   setLibraryMediaLockedFields: Scalars['Int']['output'];
   /** Bulk-set locked metadata fields for all series metadata in a library */
@@ -2156,6 +4832,41 @@ export type Mutation = {
    * and unlinks removed ones. Returns the updated media item.
    */
   setMediaTags: Media;
+  /**
+   * Replace (or, with an empty field list, clear) a library's per-field
+   * metadata policy override and return the resulting effective policy.
+   */
+  setMetadataPolicy: MetadataPolicy;
+  /**
+   * Upsert the current user's settings for one channel. Unknown keys are
+   * rejected; secret values are stored encrypted and never returned.
+   */
+  setNotificationChannelSettings: NotificationChannelSettingsValue;
+  /**
+   * Create or update the current user's routing rule for one
+   * (event kind, channel) pair. Only the server owner may subscribe to
+   * administrative kinds (scans, ingest, metadata, analysis).
+   */
+  setNotificationRule: NotificationRuleModel;
+  setOverlayVisibility: SocialOverlay;
+  /**
+   * Replace the request headers one source instance sends with every
+   * request, e.g. the `cf_clearance` cookie and matching `User-Agent`
+   * copied out of a browser for a source behind a Cloudflare challenge.
+   *
+   * The map replaces whatever was configured: an empty map clears it, and
+   * an empty value drops that header. The response describes the stored
+   * headers by name with a masked value — the values themselves are never
+   * returned or logged, because they are live credentials.
+   */
+  setProviderSourceHeaders: Array<ProviderSourceHeader>;
+  setRecommendationOptOut: SocialPreferences;
+  /**
+   * Requests a component transition. HOT components change their effective
+   * route state immediately; RESTART components persist the desired value and
+   * report `restartRequired` until the next process start.
+   */
+  setRuntimeComponentEnabled: RuntimeComponent;
   /** Set the locked metadata fields for a series */
   setSeriesLockedFields: Series;
   /**
@@ -2163,10 +4874,41 @@ export type Mutation = {
    * and unlinks removed ones. Returns the updated series.
    */
   setSeriesTags: Series;
+  /**
+   * Ask a browser worker to earn a Cloudflare clearance for one gated
+   * source instance, and apply it when it lands.
+   *
+   * This is the manual form of what a health run does by itself: it exists
+   * because an operator who has just started a browser worker should not
+   * have to wait for the next six-hourly probe. It returns as soon as
+   * routing is decided — the solve then runs on the worker, where a human
+   * may have to click a checkbox in the window that opens, and the result
+   * is applied by the server without another call.
+   */
+  solveSourceChallenge: ProviderChallengeSolve;
+  /**
+   * Split books out into a new series, created as a directory of their
+   * library so the next scan finds it where it is.
+   */
+  splitSeries: Series;
+  stageIngestUploads: StageIngestUploadsPayload;
   /** Suggest a book for the book club */
   suggestBook: BookClubBookSuggestion;
+  /**
+   * Runs one explicit, user-scoped synchronization. No scheduler calls this
+   * continuously: the caller opts in through the manual mutation and the
+   * connection toggles. Quotes are imported only with an exact local link and
+   * page locator; all other records remain unresolved provenance.
+   */
+  syncHardcoverNow: HardcoverSyncResult;
   /** Send a test email to verify the SMTP configuration is working */
   testEmailer: Scalars['Boolean']['output'];
+  /**
+   * Deliver a test notification through one of the current user's channels.
+   * Resolves to `true` once the channel accepted the message; a missing
+   * setting or a delivery failure is returned as an error.
+   */
+  testNotificationChannel: Scalars['Boolean']['output'];
   /**
    * Toggle a reaction on a message
    *
@@ -2175,17 +4917,34 @@ export type Mutation = {
   toggleReaction: Scalars['Boolean']['output'];
   /** Toggle like on a suggestion */
   toggleSuggestionLike: Scalars['Boolean']['output'];
+  unlinkHardcoverMedia: Scalars['Boolean']['output'];
+  /**
+   * Forget a decision so the hash is reported as a candidate again and, for
+   * a former `SKIP`, its pages become visible again.
+   */
+  unmarkDuplicatePage: Scalars['Boolean']['output'];
   /** Update an annotation's note text */
   updateAnnotation: MediaAnnotation;
   updateApiKey: Apikey;
   updateBookClub: BookClub;
+  updateBookRequestGateway: BookRequestGatewaySettings;
+  /**
+   * Verify and persist a CrossPoint target plus its canonical typed profile.
+   * The status probe is repeated here so a client cannot forge a prior
+   * verification result between the two mutations.
+   */
+  updateCrosspointTarget: CrosspointTarget;
   /** Rename a custom emoji */
   updateCustomEmoji: CustomEmoji;
   updateEmailDevice: RegisteredEmailDevice;
   updateEmailer: Emailer;
+  updateHardcoverConnection: HardcoverConnection;
+  /** Replace the authenticated user's home sections */
+  updateHomeArrangement: HomeArrangement;
   /**
    * Update an existing library with the provided configuration. If `scan_after_persist` is `true`,
    * the library will be scanned immediately after updating.
+   * @deprecated Use `patchLibrary` instead
    */
   updateLibrary: Library;
   /** Update the emoji for a library */
@@ -2266,8 +5025,24 @@ export type Mutation = {
    * called by a server owner
    */
   uploadUserAvatar: User;
+  /** Create or replace the current user's review for this work/edition. */
+  upsertBookReview: BookReview;
+  /**
+   * Creates or updates one destination owned by the current user. Amazon
+   * only accepts mail from an approved sender configured in the server SMTP
+   * emailer; this mutation validates the recipient syntax but cannot verify
+   * Amazon's allowlist.
+   */
+  upsertKindleDestination: KindleDestination;
   /** Validate the provided API token by making a test request using a client instance */
   validateProviderConfig: ProviderCredentialVerification;
+  /**
+   * Probe a private IPv4 address using CrossPoint's fixed HTTP port. The
+   * returned identity is deliberately not persisted until the user submits
+   * [`Self::update_crosspoint_target`].
+   */
+  verifyCrosspointTarget: CrosspointTargetVerification;
+  verifyIngestProvider: ProviderCredentialVerification;
   /**
    * "Visit" a library, which will upsert a record of the user's last visit to the library.
    * This is used to inform the UI of the last library which was visited by the user
@@ -2313,6 +5088,13 @@ export type MutationAddBookToClubArgs = {
 };
 
 
+export type MutationAddProviderSeriesArgs = {
+  libraryId: Scalars['String']['input'];
+  remoteId: Scalars['String']['input'];
+  sourceId: Scalars['String']['input'];
+};
+
+
 export type MutationAnalyzeLibraryArgs = {
   forceReanalysis?: Scalars['Boolean']['input'];
   id: Scalars['ID']['input'];
@@ -2331,9 +5113,68 @@ export type MutationAnalyzeSeriesArgs = {
 };
 
 
+export type MutationApplyBestIngestMetadataArgs = {
+  dropItemId?: InputMaybe<Scalars['ID']['input']>;
+  mediaId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
+export type MutationApplyBookMetadataArgs = {
+  input: BookMetadataApplyInput;
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type MutationApplyBookMetadataCandidateArgs = {
+  candidateIndex: Scalars['Int']['input'];
+  mediaId: Scalars['ID']['input'];
+  scope: BookMetadataScope;
+  selectedFields: Array<MetadataField>;
+};
+
+
+export type MutationApplyIngestMetadataArgs = {
+  input: ApplyIngestMetadataInput;
+};
+
+
+export type MutationApproveBookRequestArgs = {
+  reason?: InputMaybe<Scalars['String']['input']>;
+  requestId: Scalars['ID']['input'];
+};
+
+
+export type MutationApproveDevicePairingArgs = {
+  code?: InputMaybe<Scalars['String']['input']>;
+  nonce?: InputMaybe<Scalars['String']['input']>;
+  pairingId: Scalars['ID']['input'];
+};
+
+
+export type MutationApproveIngestItemArgs = {
+  dropItemId: Scalars['ID']['input'];
+  strategy?: InputMaybe<MergeStrategy>;
+};
+
+
 export type MutationArchiveDiscussionArgs = {
   archived: Scalars['Boolean']['input'];
   discussionId: Scalars['ID']['input'];
+};
+
+
+export type MutationBulkApplyIngestMetadataArgs = {
+  input: BulkApplyIngestMetadataInput;
+};
+
+
+export type MutationCancelCrosspointDeliveryArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type MutationCancelIngestAnalysisArgs = {
+  jobId: Scalars['ID']['input'];
 };
 
 
@@ -2342,8 +5183,20 @@ export type MutationCancelJobArgs = {
 };
 
 
+export type MutationCancelWorkerJobArgs = {
+  id: Scalars['String']['input'];
+};
+
+
 export type MutationCleanLibraryArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type MutationClearChapterMapEntryArgs = {
+  audioMediaId: Scalars['ID']['input'];
+  ebookMediaId: Scalars['ID']['input'];
+  ebookSpineIndex: Scalars['Int']['input'];
 };
 
 
@@ -2364,6 +5217,20 @@ export type MutationClearSeriesReadingHistoryArgs = {
 
 export type MutationCompleteBookArgs = {
   bookClubBookId: Scalars['ID']['input'];
+};
+
+
+export type MutationConfirmEditionPairArgs = {
+  mediaIdA: Scalars['ID']['input'];
+  mediaIdB: Scalars['ID']['input'];
+};
+
+
+export type MutationConnectHardcoverArgs = {
+  apiToken: Scalars['String']['input'];
+  importJournals?: InputMaybe<Scalars['Boolean']['input']>;
+  syncProgress?: InputMaybe<Scalars['Boolean']['input']>;
+  useForMetadata?: InputMaybe<Scalars['Boolean']['input']>;
 };
 
 
@@ -2399,8 +5266,19 @@ export type MutationCreateBookClubMemberArgs = {
 };
 
 
+export type MutationCreateBookRequestArgs = {
+  input: CreateBookRequestInput;
+};
+
+
 export type MutationCreateBookmarkArgs = {
   input: BookmarkInput;
+};
+
+
+export type MutationCreateDeviceArgs = {
+  kind: DeviceKind;
+  name?: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -2445,6 +5323,16 @@ export type MutationCreateScheduledJobArgs = {
 };
 
 
+export type MutationCreateShareGrantArgs = {
+  input: CreateShareGrantInput;
+};
+
+
+export type MutationCreateShareOverlayArgs = {
+  input: CreateShareOverlayInput;
+};
+
+
 export type MutationCreateSmartListArgs = {
   input: SaveSmartListInput;
 };
@@ -2465,6 +5353,12 @@ export type MutationCreateUserArgs = {
 };
 
 
+export type MutationCreateVirtualLibraryArgs = {
+  name?: InputMaybe<Scalars['String']['input']>;
+  sourceId: Scalars['String']['input'];
+};
+
+
 export type MutationDeleteAnnotationArgs = {
   id: Scalars['String']['input'];
 };
@@ -2477,6 +5371,11 @@ export type MutationDeleteApiKeyArgs = {
 
 export type MutationDeleteBookClubArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type MutationDeleteBookReviewArgs = {
+  mediaId: Scalars['ID']['input'];
 };
 
 
@@ -2507,6 +5406,11 @@ export type MutationDeleteJobArgs = {
 
 
 export type MutationDeleteJobLogsArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type MutationDeleteKindleDestinationArgs = {
   id: Scalars['ID']['input'];
 };
 
@@ -2598,9 +5502,49 @@ export type MutationDeleteUserSessionsArgs = {
 };
 
 
+export type MutationDenyDevicePairingArgs = {
+  pairingId: Scalars['ID']['input'];
+};
+
+
+export type MutationDisableProviderSourceArgs = {
+  id: Scalars['String']['input'];
+};
+
+
+export type MutationDiscardIngestItemArgs = {
+  dropItemId: Scalars['ID']['input'];
+  reason?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type MutationDismissRecommendationArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
 export type MutationEditMessageArgs = {
   input: EditMessageInput;
   messageId: Scalars['ID']['input'];
+};
+
+
+export type MutationEnableProviderSourceArgs = {
+  catalogId?: InputMaybe<Scalars['String']['input']>;
+  implementation?: InputMaybe<Scalars['String']['input']>;
+  lang?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type MutationEnqueueAlignmentArgs = {
+  audioMediaId: Scalars['ID']['input'];
+  ebookMediaId: Scalars['ID']['input'];
+  granularity?: AlignGranularity;
+};
+
+
+export type MutationEnqueueIngestAnalysisArgs = {
+  input: EnqueueIngestAnalysisInput;
 };
 
 
@@ -2650,8 +5594,26 @@ export type MutationGenerateLibraryThumbnailsArgs = {
 };
 
 
+export type MutationGrabBookRequestArgs = {
+  requestId: Scalars['ID']['input'];
+};
+
+
+export type MutationImportSyncMapArgs = {
+  audioMediaId: Scalars['ID']['input'];
+  ebookMediaId: Scalars['ID']['input'];
+  map: Scalars['JSON']['input'];
+};
+
+
 export type MutationLeaveBookClubArgs = {
   bookClubId: Scalars['ID']['input'];
+};
+
+
+export type MutationLinkHardcoverMediaArgs = {
+  mediaId: Scalars['ID']['input'];
+  remoteId: Scalars['String']['input'];
 };
 
 
@@ -2661,9 +5623,69 @@ export type MutationLockDiscussionArgs = {
 };
 
 
+export type MutationLookupHardcoverMetadataArgs = {
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type MutationLookupIngestCandidateArgs = {
+  dropItemId: Scalars['ID']['input'];
+  externalId: Scalars['String']['input'];
+  providerId: Scalars['String']['input'];
+};
+
+
+export type MutationMarkDuplicatePageArgs = {
+  action: DuplicatePageAction;
+  dhash: Scalars['String']['input'];
+  libraryId: Scalars['ID']['input'];
+};
+
+
+export type MutationMatchLibraryMediaArgs = {
+  mediaIds: Array<Scalars['ID']['input']>;
+  providers?: InputMaybe<Array<Scalars['String']['input']>>;
+};
+
+
+export type MutationMergeProviderSeriesArgs = {
+  drop: Scalars['String']['input'];
+  keep: Scalars['String']['input'];
+};
+
+
+export type MutationMergeSeriesArgs = {
+  drop: Scalars['ID']['input'];
+  keep: Scalars['ID']['input'];
+};
+
+
+export type MutationMoveMediaToSeriesArgs = {
+  mediaIds: Array<Scalars['ID']['input']>;
+  seriesId: Scalars['ID']['input'];
+};
+
+
 export type MutationPatchEmailDeviceArgs = {
   id: Scalars['Int']['input'];
   input: PatchEmailDeviceInput;
+};
+
+
+export type MutationPatchLibraryArgs = {
+  id: Scalars['ID']['input'];
+  input: PatchLibraryInput;
+};
+
+
+export type MutationPatchLibraryConfigArgs = {
+  id: Scalars['ID']['input'];
+  input: PatchLibraryConfigInput;
+};
+
+
+export type MutationPauseIngestAnalysisArgs = {
+  jobId: Scalars['ID']['input'];
 };
 
 
@@ -2673,9 +5695,44 @@ export type MutationPinMessageArgs = {
 };
 
 
+export type MutationPollBookRequestGrabArgs = {
+  grabId: Scalars['ID']['input'];
+};
+
+
 export type MutationProcessLibraryThumbnailsArgs = {
   forceRegenerate?: Scalars['Boolean']['input'];
   id: Scalars['ID']['input'];
+};
+
+
+export type MutationQueueCrosspointDeliveriesArgs = {
+  deviceId: Scalars['ID']['input'];
+  mediaIds: Array<Scalars['ID']['input']>;
+  targetPath: Scalars['String']['input'];
+};
+
+
+export type MutationRefreshProviderSeriesArgs = {
+  seriesId: Scalars['String']['input'];
+};
+
+
+export type MutationRejectBookRequestArgs = {
+  reason?: InputMaybe<Scalars['String']['input']>;
+  requestId: Scalars['ID']['input'];
+};
+
+
+export type MutationRejectEditionPairArgs = {
+  mediaIdA: Scalars['ID']['input'];
+  mediaIdB: Scalars['ID']['input'];
+};
+
+
+export type MutationRejectIngestItemArgs = {
+  dropItemId: Scalars['ID']['input'];
+  reason?: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -2702,6 +5759,12 @@ export type MutationRemoveSuggestionArgs = {
 };
 
 
+export type MutationRenameDeviceArgs = {
+  id: Scalars['String']['input'];
+  name: Scalars['String']['input'];
+};
+
+
 export type MutationRenameTagArgs = {
   id: Scalars['Int']['input'];
   name: Scalars['String']['input'];
@@ -2711,6 +5774,18 @@ export type MutationRenameTagArgs = {
 export type MutationReorderBooksArgs = {
   bookClubId: Scalars['ID']['input'];
   bookIds: Array<Scalars['String']['input']>;
+};
+
+
+export type MutationRequestRecommendationArgs = {
+  destination?: InputMaybe<RequestDestinationInput>;
+  id: Scalars['ID']['input'];
+};
+
+
+export type MutationRequeueIngestAnalysisArgs = {
+  dropItemId: Scalars['ID']['input'];
+  force?: Scalars['Boolean']['input'];
 };
 
 
@@ -2737,6 +5812,83 @@ export type MutationRespondToBookClubInvitationArgs = {
 };
 
 
+export type MutationRespondToRecommendationArgs = {
+  id: Scalars['ID']['input'];
+  response: RecommendationResponseInput;
+};
+
+
+export type MutationRespondToShareGrantArgs = {
+  accept: Scalars['Boolean']['input'];
+  id: Scalars['ID']['input'];
+};
+
+
+export type MutationResumeIngestAnalysisArgs = {
+  jobId: Scalars['ID']['input'];
+};
+
+
+export type MutationRetryBookRequestArgs = {
+  requestId: Scalars['ID']['input'];
+};
+
+
+export type MutationRetryCrosspointDeliveryArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type MutationRetryIngestAnalysisArgs = {
+  jobId: Scalars['ID']['input'];
+};
+
+
+export type MutationRevokeBookClubInvitationArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type MutationRevokeDeviceArgs = {
+  id: Scalars['String']['input'];
+};
+
+
+export type MutationRevokeRecommendationArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type MutationRevokeShareGrantArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type MutationRotateDeviceCredentialArgs = {
+  id: Scalars['String']['input'];
+};
+
+
+export type MutationRunAnnotationSyncArgs = {
+  userId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
+export type MutationRunIngestQualityFixArgs = {
+  input: RunIngestQualityFixInput;
+};
+
+
+export type MutationRunLibraryQualityArgs = {
+  mediaIds: Array<Scalars['ID']['input']>;
+};
+
+
+export type MutationScanIngestDropFolderArgs = {
+  libraryId: Scalars['ID']['input'];
+};
+
+
 export type MutationScanLibraryArgs = {
   id: Scalars['ID']['input'];
   options?: InputMaybe<Scalars['JSON']['input']>;
@@ -2748,6 +5900,17 @@ export type MutationScanSeriesArgs = {
 };
 
 
+export type MutationSearchBookRequestArgs = {
+  requestId: Scalars['ID']['input'];
+};
+
+
+export type MutationSelectBookRequestReleaseArgs = {
+  releaseId: Scalars['ID']['input'];
+  requestId: Scalars['ID']['input'];
+};
+
+
 export type MutationSendAttachmentEmailArgs = {
   input: SendAttachmentEmailsInput;
 };
@@ -2756,6 +5919,67 @@ export type MutationSendAttachmentEmailArgs = {
 export type MutationSendMessageArgs = {
   discussionId: Scalars['ID']['input'];
   input: SendMessageInput;
+};
+
+
+export type MutationSendRecommendationArgs = {
+  input: SendRecommendationInput;
+};
+
+
+export type MutationSendToKindleArgs = {
+  deviceId: Scalars['ID']['input'];
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type MutationSendToKindleDestinationArgs = {
+  destinationId: Scalars['ID']['input'];
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type MutationSetAnnotationSinkSettingsArgs = {
+  enabled?: InputMaybe<Scalars['Boolean']['input']>;
+  settings?: InputMaybe<Scalars['JSON']['input']>;
+  sinkId: Scalars['String']['input'];
+};
+
+
+export type MutationSetChapterMapEntryArgs = {
+  audioChapterIndex: Scalars['Int']['input'];
+  audioMediaId: Scalars['ID']['input'];
+  confidence?: InputMaybe<Scalars['Float']['input']>;
+  ebookMediaId: Scalars['ID']['input'];
+  ebookSpineIndex: Scalars['Int']['input'];
+};
+
+
+export type MutationSetDeviceKindleEmailArgs = {
+  email?: InputMaybe<Scalars['String']['input']>;
+  id: Scalars['String']['input'];
+};
+
+
+export type MutationSetDeviceLibraryScopeArgs = {
+  id: Scalars['String']['input'];
+  libraryIds?: InputMaybe<Array<Scalars['ID']['input']>>;
+};
+
+
+export type MutationSetDeviceTransformProfileArgs = {
+  id: Scalars['String']['input'];
+  profile?: InputMaybe<Scalars['JSON']['input']>;
+};
+
+
+export type MutationSetIngestProviderSettingsArgs = {
+  input: SetIngestProviderSettingsInput;
+};
+
+
+export type MutationSetIngestQualityCheckSettingsArgs = {
+  input: SetIngestQualityCheckSettingsInput;
 };
 
 
@@ -2783,6 +6007,47 @@ export type MutationSetMediaTagsArgs = {
 };
 
 
+export type MutationSetMetadataPolicyArgs = {
+  input: MetadataPolicyInput;
+  libraryId: Scalars['ID']['input'];
+};
+
+
+export type MutationSetNotificationChannelSettingsArgs = {
+  input: SetNotificationChannelSettingsInput;
+};
+
+
+export type MutationSetNotificationRuleArgs = {
+  channelId: Scalars['String']['input'];
+  enabled: Scalars['Boolean']['input'];
+  eventKind: NotificationKind;
+};
+
+
+export type MutationSetOverlayVisibilityArgs = {
+  hidden: Scalars['Boolean']['input'];
+  overlayId: Scalars['ID']['input'];
+};
+
+
+export type MutationSetProviderSourceHeadersArgs = {
+  headers: Scalars['JSON']['input'];
+  instanceId: Scalars['String']['input'];
+};
+
+
+export type MutationSetRecommendationOptOutArgs = {
+  optOut: Scalars['Boolean']['input'];
+};
+
+
+export type MutationSetRuntimeComponentEnabledArgs = {
+  enabled: Scalars['Boolean']['input'];
+  key: Scalars['String']['input'];
+};
+
+
 export type MutationSetSeriesLockedFieldsArgs = {
   lockedFields: Array<MetadataField>;
   seriesId: Scalars['ID']['input'];
@@ -2792,6 +6057,22 @@ export type MutationSetSeriesLockedFieldsArgs = {
 export type MutationSetSeriesTagsArgs = {
   id: Scalars['ID']['input'];
   tags: Array<Scalars['String']['input']>;
+};
+
+
+export type MutationSolveSourceChallengeArgs = {
+  instanceId: Scalars['String']['input'];
+};
+
+
+export type MutationSplitSeriesArgs = {
+  mediaIds: Array<Scalars['ID']['input']>;
+  name: Scalars['String']['input'];
+};
+
+
+export type MutationStageIngestUploadsArgs = {
+  input: StageIngestUploadsInput;
 };
 
 
@@ -2807,6 +6088,11 @@ export type MutationTestEmailerArgs = {
 };
 
 
+export type MutationTestNotificationChannelArgs = {
+  channelId: Scalars['String']['input'];
+};
+
+
 export type MutationToggleReactionArgs = {
   customEmojiId?: InputMaybe<Scalars['Int']['input']>;
   emoji?: InputMaybe<Scalars['String']['input']>;
@@ -2816,6 +6102,17 @@ export type MutationToggleReactionArgs = {
 
 export type MutationToggleSuggestionLikeArgs = {
   suggestionId: Scalars['ID']['input'];
+};
+
+
+export type MutationUnlinkHardcoverMediaArgs = {
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type MutationUnmarkDuplicatePageArgs = {
+  dhash: Scalars['String']['input'];
+  libraryId: Scalars['ID']['input'];
 };
 
 
@@ -2836,6 +6133,17 @@ export type MutationUpdateBookClubArgs = {
 };
 
 
+export type MutationUpdateBookRequestGatewayArgs = {
+  input: BookRequestGatewayInput;
+};
+
+
+export type MutationUpdateCrosspointTargetArgs = {
+  deviceId: Scalars['ID']['input'];
+  input: CrosspointTargetInput;
+};
+
+
 export type MutationUpdateCustomEmojiArgs = {
   id: Scalars['ID']['input'];
   input: UpdateCustomEmojiInput;
@@ -2851,6 +6159,18 @@ export type MutationUpdateEmailDeviceArgs = {
 export type MutationUpdateEmailerArgs = {
   id: Scalars['Int']['input'];
   input: EmailerInput;
+};
+
+
+export type MutationUpdateHardcoverConnectionArgs = {
+  importJournals: Scalars['Boolean']['input'];
+  syncProgress: Scalars['Boolean']['input'];
+  useForMetadata: Scalars['Boolean']['input'];
+};
+
+
+export type MutationUpdateHomeArrangementArgs = {
+  input: HomeArrangementInput;
 };
 
 
@@ -3039,8 +6359,34 @@ export type MutationUploadUserAvatarArgs = {
 };
 
 
+export type MutationUpsertBookReviewArgs = {
+  input: BookReviewInput;
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type MutationUpsertKindleDestinationArgs = {
+  email: Scalars['String']['input'];
+  id?: InputMaybe<Scalars['ID']['input']>;
+  makeDefault: Scalars['Boolean']['input'];
+  name: Scalars['String']['input'];
+};
+
+
 export type MutationValidateProviderConfigArgs = {
   config: ValidateMetadataProviderConfigInput;
+};
+
+
+export type MutationVerifyCrosspointTargetArgs = {
+  deviceId: Scalars['ID']['input'];
+  host: Scalars['String']['input'];
+};
+
+
+export type MutationVerifyIngestProviderArgs = {
+  providerId: Scalars['String']['input'];
+  settings?: InputMaybe<Scalars['JSON']['input']>;
 };
 
 
@@ -3050,6 +6396,84 @@ export type MutationVisitLibraryArgs = {
 
 export type NavigationArrangementInput = {
   sections: Array<ArrangementSectionInput>;
+};
+
+/**
+ * A channel the current user can route notifications to, with its settings
+ * schema.
+ */
+export type NotificationChannel = {
+  __typename?: 'NotificationChannel';
+  id: Scalars['String']['output'];
+  label: Scalars['String']['output'];
+  settings: Array<IngestSettingDefinition>;
+};
+
+/**
+ * The current user's effective settings for one channel, with secret values
+ * redacted.
+ */
+export type NotificationChannelSettingsValue = {
+  __typename?: 'NotificationChannelSettingsValue';
+  channelId: Scalars['String']['output'];
+  /**
+   * Merged defaults and stored values keyed by setting key; secrets are
+   * omitted entirely.
+   */
+  values: Scalars['JSON']['output'];
+};
+
+/** Summary of one notification dispatch job's deliveries. */
+export type NotificationDispatchOutput = {
+  __typename?: 'NotificationDispatchOutput';
+  /** Deliveries that exhausted their attempts and were dropped. */
+  failed: Scalars['Int']['output'];
+  /** Deliveries that succeeded (possibly after retries). */
+  sent: Scalars['Int']['output'];
+};
+
+/**
+ * The events a user can route to a channel. Persisted by name in
+ * `notification_rules.event_kind` and in queued dispatch jobs, so variants are
+ * append-only.
+ */
+export enum NotificationKind {
+  /** A staged analysis job failed */
+  AnalysisJobFailed = 'ANALYSIS_JOB_FAILED',
+  /** A registered device authenticated for the first time */
+  DeviceFirstSeen = 'DEVICE_FIRST_SEEN',
+  /** A pairing was approved and the device received its credential */
+  DevicePaired = 'DEVICE_PAIRED',
+  /** A staged ingest item finished analysis and needs a human decision */
+  IngestAwaitingReview = 'INGEST_AWAITING_REVIEW',
+  /** Provider lookup finished for a staged item */
+  ProviderMatchDone = 'PROVIDER_MATCH_DONE',
+  /** A quality report contains at least one failed check */
+  QualityFailed = 'QUALITY_FAILED',
+  /** A recipient accepted a recommendation or share grant. */
+  RecommendationAccepted = 'RECOMMENDATION_ACCEPTED',
+  /** A recipient declined a recommendation or share grant. */
+  RecommendationDeclined = 'RECOMMENDATION_DECLINED',
+  /** A social recommendation or explicit share was sent to this user. */
+  RecommendationReceived = 'RECOMMENDATION_RECEIVED',
+  /** A sender or authorized owner revoked a recommendation or share grant. */
+  RecommendationRevoked = 'RECOMMENDATION_REVOKED',
+  /** A recipient's request handoff changed state. */
+  RequestStatusUpdated = 'REQUEST_STATUS_UPDATED',
+  /** A library scan completed */
+  ScanFinished = 'SCAN_FINISHED',
+  /** Sent by `testNotificationChannel`; never routed by rules */
+  Test = 'TEST'
+}
+
+/** One routing rule: which channel receives which notification kind. */
+export type NotificationRuleModel = {
+  __typename?: 'NotificationRuleModel';
+  channelId: Scalars['String']['output'];
+  enabled: Scalars['Boolean']['output'];
+  /** A `NotificationKind` name, or `*` for every routable kind. */
+  eventKind: Scalars['String']['output'];
+  id: Scalars['Int']['output'];
 };
 
 export type Notifier = {
@@ -3150,6 +6574,15 @@ export type OffsetPaginationInfo = {
   zeroBased: Scalars['Boolean']['output'];
 };
 
+export type OnDeckBooks = {
+  __typename?: 'OnDeckBooks';
+  name?: Maybe<Scalars['String']['output']>;
+};
+
+export type OnDeckBooksInput = {
+  name?: InputMaybe<Scalars['String']['input']>;
+};
+
 export enum OrderDirection {
   Asc = 'ASC',
   Desc = 'DESC'
@@ -3188,6 +6621,24 @@ export type PaginatedAuthorResponse = {
 export type PaginatedDirectoryListingResponse = {
   __typename?: 'PaginatedDirectoryListingResponse';
   nodes: Array<DirectoryListing>;
+  pageInfo: PaginationInfo;
+};
+
+export type PaginatedIngestAnalysisJobResponse = {
+  __typename?: 'PaginatedIngestAnalysisJobResponse';
+  nodes: Array<IngestAnalysisJob>;
+  pageInfo: PaginationInfo;
+};
+
+export type PaginatedIngestDropItemResponse = {
+  __typename?: 'PaginatedIngestDropItemResponse';
+  nodes: Array<IngestDropItem>;
+  pageInfo: PaginationInfo;
+};
+
+export type PaginatedIngestReworkResponse = {
+  __typename?: 'PaginatedIngestReworkResponse';
+  nodes: Array<IngestReworkItem>;
   pageInfo: PaginationInfo;
 };
 
@@ -3270,10 +6721,88 @@ export type Pagination =
 
 export type PaginationInfo = CursorPaginationInfo | OffsetPaginationInfo;
 
+/**
+ * Why pairing believes two media rows are the same work.
+ *
+ * Ordered by strength through [`PairEvidence::rank`], which is what keeps a
+ * title guess from overwriting an identifier match on the same link.
+ */
+export enum PairEvidence {
+  /** An operator paired them by hand. */
+  Manual = 'MANUAL',
+  /**
+   * An identifier of one matched an identifier of the other through a
+   * provider's edition list (Audnexus `/books/{asin}`, Open Library
+   * works→editions).
+   */
+  ProviderEditionList = 'PROVIDER_EDITION_LIST',
+  /** Both files arrived in one ingest drop group. */
+  SameDrop = 'SAME_DROP',
+  /**
+   * Normalised `title + first author` matched. The weakest signal, and the
+   * reason confirmation exists at all.
+   */
+  TitleAuthor = 'TITLE_AUTHOR',
+  /** Both media rows already linked to the same work. */
+  WorkId = 'WORK_ID'
+}
+
+/**
+ * Whether a link is an asserted edition of the work, a guess, or a guess the
+ * user refused.
+ */
+export enum PairStatus {
+  /**
+   * An edition of the work. The schema default, so every link the liseur
+   * lane wrote — a client asserting a work for a file whose edition digest
+   * it computed — keeps meaning what it always did. This is what
+   * `Media.editions` returns.
+   */
+  Confirmed = 'CONFIRMED',
+  /**
+   * The user said no. Kept as a row rather than deleted, because the
+   * suggestion is recomputed on every book-page query.
+   */
+  Rejected = 'REJECTED',
+  /** A heuristic match awaiting confirmation. Never presented as an edition. */
+  Suggested = 'SUGGESTED'
+}
+
 export type PatchEmailDeviceInput = {
   email?: InputMaybe<Scalars['String']['input']>;
   forbidden?: InputMaybe<Scalars['Boolean']['input']>;
   name?: InputMaybe<Scalars['String']['input']>;
+};
+
+export type PatchLibraryConfigInput = {
+  convertRarToZip?: InputMaybe<Scalars['Boolean']['input']>;
+  defaultLibraryViewMode?: InputMaybe<LibraryViewMode>;
+  defaultReadingDir?: InputMaybe<ReadingDirection>;
+  defaultReadingImageScaleFit?: InputMaybe<ReadingImageScaleFit>;
+  defaultReadingMode?: InputMaybe<ReadingMode>;
+  generateFileHashes?: InputMaybe<Scalars['Boolean']['input']>;
+  generateKoreaderHashes?: InputMaybe<Scalars['Boolean']['input']>;
+  hardDeleteConversions?: InputMaybe<Scalars['Boolean']['input']>;
+  hideSeriesView?: InputMaybe<Scalars['Boolean']['input']>;
+  ignoreRules?: InputMaybe<Array<Scalars['String']['input']>>;
+  libraryPattern?: InputMaybe<LibraryPattern>;
+  libraryType?: InputMaybe<LibraryType>;
+  oneshotsDirectory?: InputMaybe<Scalars['String']['input']>;
+  processMetadata?: InputMaybe<Scalars['Boolean']['input']>;
+  processThumbnailColorsEvenWithoutConfig?: InputMaybe<Scalars['Boolean']['input']>;
+  skipBookOverview?: InputMaybe<Scalars['Boolean']['input']>;
+  thumbnailConfig?: InputMaybe<ImageProcessorOptionsInput>;
+  watch?: InputMaybe<Scalars['Boolean']['input']>;
+};
+
+export type PatchLibraryInput = {
+  config?: InputMaybe<PatchLibraryConfigInput>;
+  description?: InputMaybe<Scalars['String']['input']>;
+  emoji?: InputMaybe<Scalars['String']['input']>;
+  name?: InputMaybe<Scalars['String']['input']>;
+  path?: InputMaybe<Scalars['String']['input']>;
+  scanAfterPersist?: Scalars['Boolean']['input'];
+  tags?: InputMaybe<Array<Scalars['String']['input']>>;
 };
 
 /** A patch equivalent of [CreateMetadataProviderConfigInput], i.e. just with optional fields. */
@@ -3301,11 +6830,293 @@ export type PlaceholderGenerationOutput = {
   visitedEntities: Scalars['Int']['output'];
 };
 
+/**
+ * A Keiyoushi catalog entry flattened to one source, annotated with
+ * whether this server can actually run it.
+ */
+export type ProviderCatalogEntry = {
+  __typename?: 'ProviderCatalogEntry';
+  baseUrl: Scalars['String']['output'];
+  /**
+   * Whether this server can actually run this entry — a compiled
+   * implementation *or* a source definition for its package; entries
+   * without either cannot be enabled.
+   */
+  hasImplementation: Scalars['Boolean']['output'];
+  /**
+   * The latest health observation for this source, when it has been
+   * probed: the badge a client shows next to the entry. `dead` entries
+   * are only listed when `includeDead` was set.
+   */
+  health?: Maybe<ProviderSourceHealth>;
+  /** The catalog source id to pass to `enableProviderSource`. */
+  id: Scalars['String']['output'];
+  /**
+   * The instance id that will be created on enable: `<implementation>-<lang>`
+   * for a compiled source, the definition id for a definition-backed one.
+   */
+  instanceId?: Maybe<Scalars['String']['output']>;
+  lang: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  /**
+   * Whether `contentWarning` on the Keiyoushi extension is anything but
+   * `SAFE`, i.e. the flag a client badges an adult source with and the
+   * one the materialised series' age rating is derived from.
+   */
+  nsfw: Scalars['Boolean']['output'];
+  /** The Keiyoushi extension package backing the source. */
+  pkg: Scalars['String']['output'];
+};
+
+/** The source catalog index was re-fetched from its upstream URL. */
+export type ProviderCatalogRefreshed = {
+  __typename?: 'ProviderCatalogRefreshed';
+  /** Catalog sources in the new snapshot. */
+  count: Scalars['Int']['output'];
+};
+
+/** What one `solveSourceChallenge` call set in motion. */
+export type ProviderChallengeSolve = {
+  __typename?: 'ProviderChallengeSolve';
+  /**
+   * Whether the source is still gated *now*. Only meaningful for
+   * `APPLIED`, which re-probes before answering; a queued solve has not
+   * happened yet.
+   */
+  challenged: Scalars['Boolean']['output'];
+  /** Ready to show an operator; the states are not self-explanatory. */
+  message: Scalars['String']['output'];
+  state: ProviderChallengeSolveState;
+};
+
+/** What routing did with a `solveSourceChallenge` request. */
+export enum ProviderChallengeSolveState {
+  /** A solve for this instance was already in flight. */
+  AlreadyQueued = 'ALREADY_QUEUED',
+  /**
+   * A solve that had already finished was applied on the spot; nothing was
+   * queued.
+   */
+  Applied = 'APPLIED',
+  /**
+   * Queued and parked: no connected worker advertises `browser`. It runs
+   * the moment one does — start `stump-worker --chrome …`.
+   */
+  NeedsWorker = 'NEEDS_WORKER',
+  /** Queued, and a browser worker is connected to take it. */
+  Queued = 'QUEUED'
+}
+
 export type ProviderCredentialVerification = {
   __typename?: 'ProviderCredentialVerification';
   error?: Maybe<Scalars['String']['output']>;
   isValid: Scalars['Boolean']['output'];
   responseStatus: Scalars['Int']['output'];
+};
+
+/**
+ * The provider lane of [`CoreEvent`], as one union a client can exhaust.
+ *
+ * The members are the same object types `readEvents` yields, so the schema
+ * registers each exactly once and a client's `... on` selections are portable
+ * between the two subscriptions.
+ */
+export type ProviderEvent = ProviderCatalogRefreshed | ProviderSeriesMaterialized | ProviderSourceHealthChanged;
+
+/**
+ * Provider identify/lookup finished for a staged item and candidates were
+ * stored.
+ */
+export type ProviderMatchDone = {
+  __typename?: 'ProviderMatchDone';
+  candidateCount: Scalars['Int']['output'];
+  createdBy?: Maybe<Scalars['String']['output']>;
+  dropItemId: Scalars['String']['output'];
+  libraryId: Scalars['String']['output'];
+};
+
+/** What one `mergeProviderSeries` call did. */
+export type ProviderMergeResult = {
+  __typename?: 'ProviderMergeResult';
+  droppedSeriesId: Scalars['String']['output'];
+  /** Reading heads moved onto a chapter of the kept series. */
+  headsRepointed: Scalars['Int']['output'];
+  /**
+   * Heads whose chapter has no counterpart in the kept series; those are
+   * deleted with their media row.
+   */
+  headsUnmatched: Scalars['Int']['output'];
+  keptSeriesId: Scalars['String']['output'];
+  mediaDeleted: Scalars['Int']['output'];
+};
+
+/** One page of a live provider search. */
+export type ProviderSearchPage = {
+  __typename?: 'ProviderSearchPage';
+  hasNext: Scalars['Boolean']['output'];
+  items: Array<ProviderSeriesSummary>;
+};
+
+/**
+ * One recorded cross-source duplicate: `series` is the same work as
+ * `canonical`, which materialised first from another source.
+ */
+export type ProviderSeriesDuplicate = {
+  __typename?: 'ProviderSeriesDuplicate';
+  canonicalSeriesId: Scalars['String']['output'];
+  canonicalSeriesName: Scalars['String']['output'];
+  canonicalSourceId?: Maybe<Scalars['String']['output']>;
+  createdAt: Scalars['DateTime']['output'];
+  /**
+   * `EXTERNAL_KEY` when a cross-source id matched, `TITLE` when only the
+   * normalised titles did.
+   */
+  reason: Scalars['String']['output'];
+  seriesId: Scalars['String']['output'];
+  seriesName: Scalars['String']['output'];
+  /** The source instance `series` was materialised from. */
+  sourceId?: Maybe<Scalars['String']['output']>;
+};
+
+/**
+ * A remote series finished materialising into a library: the `series` and
+ * `media` rows exist under the deterministic ids the browse surface reported
+ * ([`stump_provider::add_series`]).
+ */
+export type ProviderSeriesMaterialized = {
+  __typename?: 'ProviderSeriesMaterialized';
+  /**
+   * Carried like every other library-scoped event so an adapter can gate
+   * visibility without re-querying the series row.
+   */
+  libraryId: Scalars['String']['output'];
+  seriesId: Scalars['String']['output'];
+  /** The `provider_sources` instance the series was materialised from. */
+  source: Scalars['String']['output'];
+};
+
+/**
+ * A remote series surfaced by a live provider search, identified by its
+ * deterministic Stump id.
+ */
+export type ProviderSeriesSummary = {
+  __typename?: 'ProviderSeriesSummary';
+  artists: Array<Scalars['String']['output']>;
+  authors: Array<Scalars['String']['output']>;
+  coverUrl?: Maybe<Scalars['String']['output']>;
+  description?: Maybe<Scalars['String']['output']>;
+  genres: Array<Scalars['String']['output']>;
+  nsfw: Scalars['Boolean']['output'];
+  remoteId: Scalars['String']['output'];
+  sourceId: Scalars['String']['output'];
+  status: Scalars['String']['output'];
+  /** The deterministic Stump series id (`uuid5(source, remote_id)`). */
+  stumpId: Scalars['String']['output'];
+  title: Scalars['String']['output'];
+};
+
+export type ProviderSource = {
+  __typename?: 'ProviderSource';
+  baseUrl: Scalars['String']['output'];
+  catalogId?: Maybe<Scalars['String']['output']>;
+  enabled: Scalars['Boolean']['output'];
+  id: Scalars['String']['output'];
+  /** The compiled implementation backing this instance, e.g. `mangadex`. */
+  implementation: Scalars['String']['output'];
+  lang: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  /**
+   * The operator-configured request headers this instance sends with every
+   * request. Names in full, values only as a fingerprint: a `cf_clearance`
+   * cookie is a live credential and is never returned or logged.
+   */
+  requestHeaders: Array<ProviderSourceHeader>;
+};
+
+/** One configured request header as the API is allowed to describe it. */
+export type ProviderSourceHeader = {
+  __typename?: 'ProviderSourceHeader';
+  /** Characters in the configured value. */
+  length: Scalars['Int']['output'];
+  /** The header name, lower-cased (HTTP/2 permits nothing else). */
+  name: Scalars['String']['output'];
+  /**
+   * `cf_c…mnop` for a value long enough that its ends identify it, `…`
+   * for a short one. Never the value.
+   */
+  preview: Scalars['String']['output'];
+};
+
+export type ProviderSourceHealth = {
+  __typename?: 'ProviderSourceHealth';
+  baseUrl: Scalars['String']['output'];
+  /**
+   * Whether the last probe hit a Cloudflare managed challenge: the host is
+   * up and refuses clients without a clearance cookie, which is why such a
+   * source stays `DEGRADED` and never becomes `dead`. Configure the cookie
+   * with `setProviderSourceHeaders`.
+   */
+  challenged: Scalars['Boolean']['output'];
+  /** Failed runs in a row; reset by one reachable run. */
+  consecutiveFailures: Scalars['Int']['output'];
+  /**
+   * Whether the source reached `provider_health_dead_after` failures and
+   * is hidden from the catalog by default.
+   */
+  dead: Scalars['Boolean']['output'];
+  error?: Maybe<Scalars['String']['output']>;
+  /** HTTP status of the last probe of the source's base URL. */
+  httpStatus?: Maybe<Scalars['Int']['output']>;
+  /** When the source was last probed. */
+  lastCheckedAt?: Maybe<Scalars['DateTime']['output']>;
+  latencyMs?: Maybe<Scalars['Int']['output']>;
+  /** Whether the theme's latest-updates path answered. */
+  latestPathOk?: Maybe<Scalars['Boolean']['output']>;
+  name: Scalars['String']['output'];
+  /** Where the base URL redirected to, when it moved. */
+  redirectUrl?: Maybe<Scalars['String']['output']>;
+  sourceId: Scalars['String']['output'];
+  /** `UNKNOWN`, `OK`, `DEGRADED` or `DEAD`. */
+  status: Scalars['String']['output'];
+};
+
+/**
+ * A catalog source's health status changed between two probe runs
+ * ([`stump_provider::health::probe_target`]).
+ *
+ * Only a *transition* is announced: the first observation of a source writes
+ * its `source_health` row without an event, so one cold run over a full
+ * catalog cannot flood the bus with a thousand "now OK" events.
+ */
+export type ProviderSourceHealthChanged = {
+  __typename?: 'ProviderSourceHealthChanged';
+  /** The catalog name, so a client can name the source without re-querying. */
+  name: Scalars['String']['output'];
+  /**
+   * The catalog source id (`source_health.source_id`), a Keiyoushi decimal
+   * string. Not a `provider_sources` instance id: health is per catalog
+   * source, and several instances can share one.
+   */
+  sourceId: Scalars['String']['output'];
+  /**
+   * `OK`, `DEGRADED`, or `DEAD` — the wire value of
+   * `stump_provider::health::HealthStatus`, as stored in
+   * `source_health.status`. `OK` after a change *is* the recovery signal.
+   */
+  status: Scalars['String']['output'];
+};
+
+/** Summary of one provider source-health run. */
+export type ProviderSourceHealthOutput = {
+  __typename?: 'ProviderSourceHealthOutput';
+  /** Sources that reached `provider_health_dead_after` failures. */
+  dead: Scalars['Int']['output'];
+  degraded: Scalars['Int']['output'];
+  ok: Scalars['Int']['output'];
+  /** Base URLs probed (one per host, not per source). */
+  probedUrls: Scalars['Int']['output'];
+  /** `source_health` rows written. */
+  updatedSources: Scalars['Int']['output'];
 };
 
 export enum PublicationStatus {
@@ -3316,9 +7127,49 @@ export enum PublicationStatus {
   Upcoming = 'UPCOMING'
 }
 
+/** A quality report contains at least one failed check. */
+export type QualityFailed = {
+  __typename?: 'QualityFailed';
+  createdBy?: Maybe<Scalars['String']['output']>;
+  /** Set for staged items; media-rework reports carry `media_id` instead. */
+  dropItemId?: Maybe<Scalars['String']['output']>;
+  /** The check ids that returned [`QualityStatus::Fail`](crate::ingest::contract::QualityStatus). */
+  failedChecks: Array<Scalars['String']['output']>;
+  libraryId: Scalars['String']['output'];
+  mediaId?: Maybe<Scalars['String']['output']>;
+  score: Scalars['Int']['output'];
+};
+
 export type Query = {
   __typename?: 'Query';
   activeReadingSessionCount: Scalars['Int']['output'];
+  adaptiveRecommendations: Array<AdaptiveRecommendation>;
+  /**
+   * The attachments of one liseur-sync annotation, oldest first.
+   *
+   * Always the caller's own: a liseur annotation id is chosen by the client
+   * and is therefore unique per user, so there is no server-wide annotation
+   * to target. An unknown annotation has no attachments and returns an
+   * empty list rather than an error.
+   */
+  annotationAttachments: Array<AnnotationAttachment>;
+  /** The compiled-in annotation export sinks and their setting schemas. */
+  annotationSinks: Array<AnnotationSink>;
+  annotationSyncRoot?: Maybe<Scalars['String']['output']>;
+  /**
+   * The annotation sync state for a user: configured sinks, last runs,
+   * errors, and whether a debounced export is pending. Defaults to the
+   * calling user; other users require the server owner.
+   */
+  annotationSyncStatus: AnnotationSyncStatus;
+  /**
+   * Every highlight, note, and bookmark the current user has, across every
+   * book and every source: the native `media_annotations`/`bookmarks` rows
+   * and the liseur-sync CAS records pushed by their devices (NickelStump
+   * on a Kobo, KOReader, Liseur). Results are book-contiguous so a page
+   * can be grouped as it arrives.
+   */
+  annotations: AnnotationPage;
   /** Get all annotations (highlights/notes) for a single book */
   annotationsByMediaId: Array<MediaAnnotation>;
   apiKeyById: Apikey;
@@ -3348,11 +7199,58 @@ export type Query = {
   /** Get all suggestions for a book club */
   bookClubSuggestions: Array<BookClubBookSuggestion>;
   bookClubs: Array<BookClub>;
+  /**
+   * Resolve a visible media id into one merged work view. Work identity is
+   * internal: the route and this query remain anchored by media id.
+   */
+  bookDetail?: Maybe<BookDetail>;
+  /** Return the persisted provider candidates without making another request. */
+  bookMetadataCandidates?: Maybe<MetadataFetchRecord>;
+  /** Raw reading heads and sessions grouped by the detail's edition rows. */
+  bookReadingLog?: Maybe<BookReadingLog>;
+  bookRequest?: Maybe<BookRequest>;
+  bookRequestGateway?: Maybe<BookRequestGatewaySettings>;
+  bookRequestGrabs: Array<BookRequestGrab>;
+  bookRequestHandoffs: Array<BookRequestHandoff>;
+  bookRequestReleases: Array<BookRequestRelease>;
+  bookRequests: Array<BookRequest>;
   /** Get all bookmarks for a single epub by its media ID */
   bookmarksByMediaId: Array<Bookmark>;
+  /**
+   * The tier-1 chapter map of one ebook↔audiobook pair, in spine order.
+   *
+   * Empty when the pair has no map yet, which is also what the readiness
+   * checks read to say a book is not ready for read-aloud.
+   */
+  chapterMap: Array<ChapterMapEntry>;
+  /** Return durable delivery history for one owned CrossPoint device. */
+  crosspointDeliveries: Array<CrosspointDelivery>;
+  /** Return the verified CrossPoint target owned by this authenticated user. */
+  crosspointTarget?: Maybe<CrosspointTarget>;
   /** List the custom emojis available on this server */
   customEmojis: Array<CustomEmoji>;
+  device: Device;
+  /**
+   * Client/protocol registrations filtered from the same effective component
+   * state used by HTTP route guards. All rows are returned so an admin UI can
+   * explain an unavailable compiled integration rather than silently guessing.
+   */
+  deviceCapabilities: Array<DeviceCapability>;
+  /**
+   * What to configure on the device for the server the request arrived at,
+   * with the secret redacted; the full secret is only returned when a
+   * credential is minted.
+   */
+  deviceEndpoints: Array<DeviceEndpoint>;
+  /** The devices registered to the current user; every device for the server owner. */
+  devices: Array<Device>;
   duplicateMedia: Array<Media>;
+  /**
+   * Page hashes that recur in at least `minBooks` distinct books of the
+   * library and have not been reviewed yet, most widespread first.
+   * Hashes within the duplicate tolerance of each other are grouped.
+   */
+  duplicatePageCandidates: Array<DuplicatePageCandidate>;
   emailDeviceById?: Maybe<RegisteredEmailDevice>;
   emailDevices: Array<RegisteredEmailDevice>;
   emailerById?: Maybe<Emailer>;
@@ -3362,9 +7260,57 @@ export type Query = {
   finishedReadingSessionCount: Scalars['Int']['output'];
   getNotifierById: Notifier;
   getNotifiers: Array<Notifier>;
+  /** Redacted status for the current user's own Hardcover connection. */
+  hardcoverConnection?: Maybe<HardcoverConnection>;
+  /**
+   * Explicit media links are personal and therefore always scoped to the
+   * authenticated owner, even when a server owner is viewing the UI.
+   */
+  hardcoverMediaLinks: Array<HardcoverMediaLink>;
+  ingestAnalysisJob?: Maybe<IngestAnalysisJob>;
+  ingestAnalysisQueue: PaginatedIngestAnalysisJobResponse;
+  ingestBulkItems: Array<IngestDropItem>;
+  ingestDropFolder?: Maybe<IngestDropFolder>;
+  ingestDropItems: PaginatedIngestDropItemResponse;
+  ingestItem?: Maybe<IngestDropItem>;
+  /**
+   * Metadata candidates stored against a library media row by a
+   * `matchLibraryMedia` run.
+   */
+  ingestMediaMetadataCandidates: Array<IngestMetadataCandidate>;
+  /**
+   * Latest quality report stored against a library media row (library-wide
+   * rework). Batch a table column with GraphQL aliases: one field per
+   * media id in a single document.
+   */
+  ingestMediaQualityReport?: Maybe<IngestQualityReport>;
+  ingestProviderCatalog: Array<IngestProviderDescriptor>;
+  ingestProviderSearch: Array<IngestSearchHit>;
+  ingestProviderSettings?: Maybe<IngestProviderSettings>;
+  ingestQualityCheckCatalog: Array<IngestQualityCheckDescriptor>;
+  ingestQualityCheckSettings?: Maybe<IngestQualityCheckSettings>;
+  ingestReworkItems: PaginatedIngestReworkResponse;
   jobById?: Maybe<Job>;
   jobs: PaginatedJobResponse;
   keepReading: PaginatedMediaResponse;
+  /**
+   * Legacy/device delivery history. This intentionally excludes
+   * destination-only rows so existing clients keep their device-scoped
+   * non-null semantics; use `kindleDestinationDeliveries` for the new lane.
+   */
+  kindleDeliveries: Array<KindleDelivery>;
+  /**
+   * Destination delivery history, scoped by the durable owner snapshot so
+   * deleting a destination retains and continues to expose its history.
+   */
+  kindleDestinationDeliveries: Array<KindleDestinationDelivery>;
+  /**
+   * User-owned destinations. Email is shown because it is not a secret and
+   * is the address Amazon uses; server SMTP credentials are never returned.
+   */
+  kindleDestinations: Array<KindleDestination>;
+  /** Every reviewed page hash (`SKIP`/`KEEP`) of a library, newest first. */
+  knownDuplicatePages: Array<KnownDuplicatePage>;
   lastVisitedLibrary?: Maybe<Library>;
   libraries: PaginatedLibraryResponse;
   /** Returns the available alphabet for all libraries in the server */
@@ -3390,17 +7336,76 @@ export type Query = {
   mediaCount: Scalars['Int']['output'];
   mediaDiskUsage: Scalars['Int']['output'];
   mediaMetadataOverview: MediaMetadataOverview;
+  /**
+   * The physical 1-based pages of a book that remain visible once the
+   * library's `SKIP` marks are applied; index `n - 1` is the physical page
+   * served for visible page `n`.
+   */
+  mediaVisiblePages: Array<Scalars['Int']['output']>;
   metadataFetchRecord?: Maybe<MetadataFetchRecord>;
+  /**
+   * The effective per-field metadata policy for one library: the server
+   * default with the library's stored override applied, one row per field
+   * the policy vocabulary covers.
+   */
+  metadataPolicy: MetadataPolicy;
   metadataProviderConfigById?: Maybe<MetadataProviderConfigModel>;
   metadataProviderConfigs: Array<MetadataProviderConfigModel>;
   /** Get all pending invitations for the current user */
   myBookClubInvitations: Array<BookClubInvitation>;
+  /**
+   * The current user's effective settings for every channel, with secret
+   * values redacted.
+   */
+  notificationChannelSettings: Array<NotificationChannelSettingsValue>;
+  /**
+   * The notification channels this server offers, with the settings schema
+   * each user can configure.
+   */
+  notificationChannels: Array<NotificationChannel>;
+  /**
+   * The current user's routing rules. `eventKind` is a `NotificationKind`
+   * name or `*`, which matches every routable kind.
+   */
+  notificationRules: Array<NotificationRuleModel>;
   numberOfLibraries: Scalars['Int']['output'];
   numberOfSeries: Scalars['Int']['output'];
   onDeck: PaginatedMediaResponse;
+  /**
+   * Pairings waiting for approval, oldest first. Pending pairings are not yet
+   * owned by anyone, so every user allowed to create device credentials sees
+   * them; approving binds the pairing to the approver.
+   */
+  pendingDevicePairings: Array<DevicePairing>;
   /** Return all metadata fetch records that are awaiting user review. */
   pendingMetadataMatches: Array<MetadataFetchRecord>;
   previousBookClubDiscussions: Array<BookClubDiscussion>;
+  /**
+   * The Keiyoushi extension catalog, filtered by language and name.
+   * `has_implementation` marks entries this server can actually run, and
+   * `health` is the latest probe for the entry (its badge). Sources the
+   * health job marked dead are hidden unless `include_dead` is set.
+   */
+  providerCatalog: Array<ProviderCatalogEntry>;
+  /**
+   * Live search on one provider source, without materialising anything.
+   * Results carry deterministic Stump ids and can be added to a virtual
+   * library with `addProviderSeries`.
+   */
+  providerSearch: ProviderSearchPage;
+  /**
+   * Cross-source duplicates recorded when a series materialised from a
+   * second source (`provider_series_links`). Advisory: nothing is merged
+   * until `mergeProviderSeries` is called.
+   */
+  providerSeriesDuplicates: Array<ProviderSeriesDuplicate>;
+  /**
+   * The latest health observations for catalog sources. Dead sources are
+   * included only when `include_dead` is set, matching `providerCatalog`.
+   */
+  providerSourceHealth: Array<ProviderSourceHealth>;
+  /** All registered provider source instances. */
+  providerSources: Array<ProviderSource>;
   /**
    * Retrieves a reading list by ID for the current user.
    *
@@ -3417,19 +7422,57 @@ export type Query = {
    */
   readingLists: PaginatedReadingListResponse;
   readingSessionConflictView: ReadingSessionConflictResolutionView;
+  /**
+   * Reading activity over `span`, for the current user's sessions. With a
+   * `deviceId` the stats cover the sessions that device contributed to, for
+   * the device's owner (the server owner may name any device).
+   */
+  readingStats: ReadingStats;
   recentlyAddedMedia: PaginatedMediaResponse;
   recentlyAddedSeries: PaginatedSeriesResponse;
+  /**
+   * Every code-inventoried component, including uncompiled integrations, with
+   * persisted desired/effective state and truthful restart information.
+   */
+  runtimeComponents: Array<RuntimeComponent>;
+  /**
+   * Process RSS and Linux PSS/private-dirty fields are independent,
+   * process-wide measurements. They are never attributed to a component.
+   */
+  runtimeMemory: RuntimeMemory;
   scheduledJobs: Array<ScheduledJob>;
+  /**
+   * Search external metadata providers for the full metadata editor. The
+   * result is persisted and returned for review; no fields are auto-applied.
+   */
+  searchBookMetadata: MetadataFetchRecord;
+  /**
+   * Search only the current user's visible library. This intentionally does
+   * not invoke a metadata provider; provider search is an editor operation.
+   */
+  searchBooks: Array<BookSearchResult>;
   series: PaginatedSeriesResponse;
   /** Returns the available alphabet for all series in the server */
   seriesAlphabet: Scalars['JSONObject']['output'];
   seriesById?: Maybe<Series>;
   serverConfig: ServerConfigModel;
+  /**
+   * Rank similar books using only visible local metadata. Confirmed editions
+   * of the current work are excluded, as are duplicate editions of another
+   * work already represented by a higher-ranked row.
+   */
+  similarBooks: Array<BookSearchResult>;
   smartListById?: Maybe<SmartList>;
   smartListItems: SmartListItems;
   smartListMeta?: Maybe<SmartListMeta>;
   smartListViews: Array<SmartListView>;
   smartLists: Array<SmartList>;
+  smtpSettings: SmtpSettings;
+  socialOverlays: Array<SocialOverlay>;
+  socialPreferences: SocialPreferences;
+  socialRecommendations: Array<SocialRecommendation>;
+  socialShareGrants: Array<SocialShareGrant>;
+  socialUserSearch: Array<SocialUser>;
   stumpConfig: StumpConfig;
   /** Returns a list of all tags. */
   tags: Array<Tag>;
@@ -3438,6 +7481,43 @@ export type Query = {
   userById: User;
   userCount: Scalars['Int']['output'];
   users: PaginatedUserResponse;
+  /**
+   * Worker jobs, newest first, optionally narrowed to one status.
+   *
+   * `NEEDS_WORKER` is the interesting filter: it is the list of work this
+   * server has been asked for and cannot do, which is the whole reason the
+   * status exists.
+   */
+  workerJobs: Array<WorkerJob>;
+  /**
+   * The workers currently holding a socket, with what each advertises.
+   *
+   * Read from the hub, not the database: "connected" is a property of this
+   * process, and a `devices` row cannot answer it. A worker that is paired
+   * but offline is a device, and the Devices page is where it shows.
+   */
+  workers: Array<Worker>;
+};
+
+
+export type QueryAdaptiveRecommendationsArgs = {
+  limit?: Scalars['Int']['input'];
+};
+
+
+export type QueryAnnotationAttachmentsArgs = {
+  annotationId: Scalars['ID']['input'];
+};
+
+
+export type QueryAnnotationSyncStatusArgs = {
+  userId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
+export type QueryAnnotationsArgs = {
+  filter?: InputMaybe<AnnotationFilterInput>;
+  pagination?: InputMaybe<OffsetPagination>;
 };
 
 
@@ -3528,8 +7608,85 @@ export type QueryBookClubsArgs = {
 };
 
 
+export type QueryBookDetailArgs = {
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type QueryBookMetadataCandidatesArgs = {
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type QueryBookReadingLogArgs = {
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type QueryBookRequestArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type QueryBookRequestGrabsArgs = {
+  requestId: Scalars['ID']['input'];
+};
+
+
+export type QueryBookRequestHandoffsArgs = {
+  requestId: Scalars['ID']['input'];
+};
+
+
+export type QueryBookRequestReleasesArgs = {
+  requestId: Scalars['ID']['input'];
+};
+
+
+export type QueryBookRequestsArgs = {
+  limit?: Scalars['Int']['input'];
+  mineOnly?: Scalars['Boolean']['input'];
+  offset?: Scalars['Int']['input'];
+  status?: InputMaybe<BookRequestStatus>;
+};
+
+
 export type QueryBookmarksByMediaIdArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type QueryChapterMapArgs = {
+  audioMediaId: Scalars['ID']['input'];
+  ebookMediaId: Scalars['ID']['input'];
+};
+
+
+export type QueryCrosspointDeliveriesArgs = {
+  deviceId: Scalars['ID']['input'];
+  limit?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
+export type QueryCrosspointTargetArgs = {
+  deviceId: Scalars['ID']['input'];
+};
+
+
+export type QueryDeviceArgs = {
+  id: Scalars['String']['input'];
+};
+
+
+export type QueryDeviceEndpointsArgs = {
+  id: Scalars['String']['input'];
+};
+
+
+export type QueryDuplicatePageCandidatesArgs = {
+  libraryId: Scalars['ID']['input'];
+  limit?: InputMaybe<Scalars['Int']['input']>;
+  minBooks?: InputMaybe<Scalars['Int']['input']>;
 };
 
 
@@ -3553,6 +7710,88 @@ export type QueryGetNotifierByIdArgs = {
 };
 
 
+export type QueryHardcoverMediaLinksArgs = {
+  mediaId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
+export type QueryIngestAnalysisJobArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type QueryIngestAnalysisQueueArgs = {
+  pagination?: Pagination;
+  status?: InputMaybe<JobStatus>;
+};
+
+
+export type QueryIngestBulkItemsArgs = {
+  ids: Array<Scalars['ID']['input']>;
+};
+
+
+export type QueryIngestDropFolderArgs = {
+  libraryId: Scalars['ID']['input'];
+};
+
+
+export type QueryIngestDropItemsArgs = {
+  libraryId?: InputMaybe<Scalars['ID']['input']>;
+  pagination?: Pagination;
+  status?: InputMaybe<IngestDropItemStatus>;
+};
+
+
+export type QueryIngestItemArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type QueryIngestMediaMetadataCandidatesArgs = {
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type QueryIngestMediaQualityReportArgs = {
+  mediaId: Scalars['ID']['input'];
+};
+
+
+export type QueryIngestProviderCatalogArgs = {
+  includeDisabled?: Scalars['Boolean']['input'];
+};
+
+
+export type QueryIngestProviderSearchArgs = {
+  limit?: InputMaybe<Scalars['Int']['input']>;
+  mediaKind?: InputMaybe<IngestMediaKind>;
+  providers?: InputMaybe<Array<Scalars['String']['input']>>;
+  query: Scalars['String']['input'];
+};
+
+
+export type QueryIngestProviderSettingsArgs = {
+  providerId: Scalars['String']['input'];
+};
+
+
+export type QueryIngestQualityCheckCatalogArgs = {
+  includeDisabled?: Scalars['Boolean']['input'];
+};
+
+
+export type QueryIngestQualityCheckSettingsArgs = {
+  checkId: Scalars['String']['input'];
+};
+
+
+export type QueryIngestReworkItemsArgs = {
+  minScore?: InputMaybe<Scalars['Float']['input']>;
+  pagination?: Pagination;
+};
+
+
 export type QueryJobByIdArgs = {
   id: Scalars['ID']['input'];
 };
@@ -3565,6 +7804,24 @@ export type QueryJobsArgs = {
 
 export type QueryKeepReadingArgs = {
   pagination?: Pagination;
+};
+
+
+export type QueryKindleDeliveriesArgs = {
+  deviceId?: InputMaybe<Scalars['ID']['input']>;
+  limit?: InputMaybe<Scalars['Int']['input']>;
+  mediaId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
+export type QueryKindleDestinationDeliveriesArgs = {
+  limit?: InputMaybe<Scalars['Int']['input']>;
+  mediaId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
+export type QueryKnownDuplicatePagesArgs = {
+  libraryId: Scalars['ID']['input'];
 };
 
 
@@ -3626,8 +7883,18 @@ export type QueryMediaMetadataOverviewArgs = {
 };
 
 
+export type QueryMediaVisiblePagesArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
 export type QueryMetadataFetchRecordArgs = {
   id: MetadataFetchRecordId;
+};
+
+
+export type QueryMetadataPolicyArgs = {
+  libraryId: Scalars['ID']['input'];
 };
 
 
@@ -3643,6 +7910,25 @@ export type QueryOnDeckArgs = {
 
 export type QueryPreviousBookClubDiscussionsArgs = {
   bookClubId: Scalars['ID']['input'];
+};
+
+
+export type QueryProviderCatalogArgs = {
+  includeDead?: InputMaybe<Scalars['Boolean']['input']>;
+  lang?: InputMaybe<Scalars['String']['input']>;
+  query?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type QueryProviderSearchArgs = {
+  page?: InputMaybe<Scalars['Int']['input']>;
+  query: Scalars['String']['input'];
+  sourceId: Scalars['String']['input'];
+};
+
+
+export type QueryProviderSourceHealthArgs = {
+  includeDead?: InputMaybe<Scalars['Boolean']['input']>;
 };
 
 
@@ -3662,6 +7948,12 @@ export type QueryReadingSessionConflictViewArgs = {
 };
 
 
+export type QueryReadingStatsArgs = {
+  deviceId?: InputMaybe<Scalars['String']['input']>;
+  span: ReadingStatsSpan;
+};
+
+
 export type QueryRecentlyAddedMediaArgs = {
   pagination?: Pagination;
 };
@@ -3669,6 +7961,18 @@ export type QueryRecentlyAddedMediaArgs = {
 
 export type QueryRecentlyAddedSeriesArgs = {
   pagination?: Pagination;
+};
+
+
+export type QuerySearchBookMetadataArgs = {
+  mediaId: Scalars['ID']['input'];
+  search?: InputMaybe<MediaMetadataSearchInput>;
+};
+
+
+export type QuerySearchBooksArgs = {
+  limit?: Scalars['Int']['input'];
+  query: Scalars['String']['input'];
 };
 
 
@@ -3681,6 +7985,12 @@ export type QuerySeriesArgs = {
 
 export type QuerySeriesByIdArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type QuerySimilarBooksArgs = {
+  limit?: Scalars['Int']['input'];
+  mediaId: Scalars['ID']['input'];
 };
 
 
@@ -3705,6 +8015,28 @@ export type QuerySmartListsArgs = {
 };
 
 
+export type QuerySocialOverlaysArgs = {
+  targetKeyFilter?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type QuerySocialRecommendationsArgs = {
+  direction?: InputMaybe<RecommendationDirection>;
+  recipientOnly?: Scalars['Boolean']['input'];
+  state?: InputMaybe<RecommendationState>;
+};
+
+
+export type QuerySocialShareGrantsArgs = {
+  incoming?: Scalars['Boolean']['input'];
+};
+
+
+export type QuerySocialUserSearchArgs = {
+  query: Scalars['String']['input'];
+};
+
+
 export type QueryTopReadersArgs = {
   take?: InputMaybe<Scalars['Int']['input']>;
 };
@@ -3717,6 +8049,41 @@ export type QueryUserByIdArgs = {
 
 export type QueryUsersArgs = {
   pagination?: Pagination;
+};
+
+
+export type QueryWorkerJobsArgs = {
+  limit?: InputMaybe<Scalars['Int']['input']>;
+  status?: InputMaybe<WorkerJobStatus>;
+};
+
+/**
+ * A ready-to-download derivative. This object is returned only when the
+ * accepted map's deterministic cache file exists.
+ */
+export type ReadAloudArtifact = {
+  __typename?: 'ReadAloudArtifact';
+  cacheKey: Scalars['String']['output'];
+  mimeType: Scalars['String']['output'];
+  url: Scalars['String']['output'];
+};
+
+export type ReadListAdded = {
+  __typename?: 'ReadListAdded';
+  bookIds: Array<Scalars['String']['output']>;
+  id: Scalars['String']['output'];
+};
+
+export type ReadListChanged = {
+  __typename?: 'ReadListChanged';
+  bookIds: Array<Scalars['String']['output']>;
+  id: Scalars['String']['output'];
+};
+
+export type ReadListDeleted = {
+  __typename?: 'ReadListDeleted';
+  bookIds: Array<Scalars['String']['output']>;
+  id: Scalars['String']['output'];
 };
 
 /** The different reading directions supported by any Stump reader */
@@ -3738,8 +8105,15 @@ export type ReadingList = {
   creatingUserId: Scalars['String']['output'];
   description?: Maybe<Scalars['String']['output']>;
   id: Scalars['String']['output'];
+  /** Whether this reading list is projected to Kobo devices as a shelf `Tag`. */
+  koboShelf: Scalars['Boolean']['output'];
   name: Scalars['String']['output'];
   ordering: Scalars['String']['output'];
+  /**
+   * Device that last wrote this reading list through the Kobo `tags`
+   * write-back endpoints; `None` for native/Komga writes.
+   */
+  sourceDevice?: Maybe<Scalars['String']['output']>;
   updatedAt: Scalars['DateTime']['output'];
   visibility: Scalars['String']['output'];
 };
@@ -3767,7 +8141,21 @@ export type ReadingSession = {
   endLocator?: Maybe<ReadiumLocator>;
   endPage?: Maybe<Scalars['Int']['output']>;
   endPercentage?: Maybe<Scalars['Decimal']['output']>;
+  /**
+   * Where a listening session stopped, in milliseconds from the start of
+   * the publication. The time-addressed twin of `end_page`/`end_locator`.
+   */
+  endPositionMs?: Maybe<Scalars['Int']['output']>;
   id: Scalars['Int']['output'];
+  /**
+   * The latest native Kobo ReadingState request for this session.
+   *
+   * Kobo's wire payload contains location fields and statistics that do not
+   * have a native column in the unified reading-session model. Keeping the
+   * request here lets the Kobo adapter replay those fields without treating
+   * the normalized Readium locator as lossless.
+   */
+  koboState?: Maybe<Scalars['JSON']['output']>;
   koreaderProgress?: Maybe<Scalars['String']['output']>;
   mediaId: Scalars['String']['output'];
   notes?: Maybe<Scalars['String']['output']>;
@@ -3805,6 +8193,75 @@ export type ReadingSessionConflictResolutionView = {
    */
   remoteSessions: Array<ReadingSession>;
 };
+
+export type ReadingStats = {
+  __typename?: 'ReadingStats';
+  /** Sessions inside the span that finished a book */
+  booksFinished: Scalars['Int']['output'];
+  /**
+   * Days with activity inside the span, ascending; days without sessions
+   * are omitted
+   */
+  days: Array<ReadingStatsDay>;
+  /**
+   * Activity per contributing device inside the span, most sessions first.
+   * A session that several devices contributed to counts toward each.
+   */
+  devices: Array<ReadingStatsDevice>;
+  /** The first logical day counted; `null` for an unbounded span with no sessions */
+  from?: Maybe<Scalars['NaiveDate']['output']>;
+  /** Accumulated reading time inside the span */
+  minutes: Scalars['Int']['output'];
+  /** Pages turned inside the span (end page minus start page per session) */
+  pages: Scalars['Int']['output'];
+  /** Reading sessions inside the span */
+  sessions: Scalars['Int']['output'];
+  span: ReadingStatsSpan;
+  /**
+   * Consecutive logical days with at least one session, ending today or
+   * yesterday. Not bounded by the span.
+   */
+  streakDays: Scalars['Int']['output'];
+  /** The last logical day counted (today) */
+  to: Scalars['NaiveDate']['output'];
+};
+
+export type ReadingStatsDay = {
+  __typename?: 'ReadingStatsDay';
+  date: Scalars['NaiveDate']['output'];
+  minutes: Scalars['Int']['output'];
+  pages: Scalars['Int']['output'];
+  sessions: Scalars['Int']['output'];
+};
+
+export type ReadingStatsDevice = {
+  __typename?: 'ReadingStatsDevice';
+  deviceId: Scalars['String']['output'];
+  kind?: Maybe<DeviceKind>;
+  minutes: Scalars['Int']['output'];
+  /** `null` when the id no longer resolves to a registered device */
+  name?: Maybe<Scalars['String']['output']>;
+  pages: Scalars['Int']['output'];
+  sessions: Scalars['Int']['output'];
+};
+
+/**
+ * How far back reading statistics reach, counted in logical reading days
+ * ending today.
+ */
+export enum ReadingStatsSpan {
+  AllTime = 'ALL_TIME',
+  /** Today only */
+  Day = 'DAY',
+  /** The last 30 days */
+  Month = 'MONTH',
+  /** The last 90 days */
+  Quarter = 'QUARTER',
+  /** The last 7 days */
+  Week = 'WEEK',
+  /** The last 365 days */
+  Year = 'YEAR'
+}
 
 /**
  * the different reading statuses a book can be categorized as based on a user's
@@ -3847,6 +8304,7 @@ export type ReadiumLocator = {
   __typename?: 'ReadiumLocator';
   chapterTitle: Scalars['String']['output'];
   href: Scalars['String']['output'];
+  koboSpan?: Maybe<Scalars['String']['output']>;
   locations?: Maybe<ReadiumLocation>;
   text?: Maybe<ReadiumText>;
   title?: Maybe<Scalars['String']['output']>;
@@ -3856,6 +8314,7 @@ export type ReadiumLocator = {
 export type ReadiumLocatorInput = {
   chapterTitle?: Scalars['String']['input'];
   href: Scalars['String']['input'];
+  koboSpan?: InputMaybe<Scalars['String']['input']>;
   locations?: InputMaybe<ReadiumLocationInput>;
   text?: InputMaybe<ReadiumTextInput>;
   title?: InputMaybe<Scalars['String']['input']>;
@@ -3901,6 +8360,37 @@ export type RecentlyAddedInput = {
   name?: InputMaybe<Scalars['String']['input']>;
 };
 
+export enum RecommendationDirection {
+  Incoming = 'INCOMING',
+  Outgoing = 'OUTGOING'
+}
+
+export enum RecommendationHandoffState {
+  Failed = 'FAILED',
+  Linked = 'LINKED',
+  None = 'NONE',
+  Requested = 'REQUESTED'
+}
+
+export type RecommendationResponseInput = {
+  accept: Scalars['Boolean']['input'];
+};
+
+export enum RecommendationState {
+  Accepted = 'ACCEPTED',
+  Declined = 'DECLINED',
+  Dismissed = 'DISMISSED',
+  Expired = 'EXPIRED',
+  Pending = 'PENDING',
+  Revoked = 'REVOKED'
+}
+
+export enum RecommendationTargetKind {
+  ExternalWork = 'EXTERNAL_WORK',
+  InternalMedia = 'INTERNAL_MEDIA',
+  InternalWork = 'INTERNAL_WORK'
+}
+
 export type RegisteredEmailDevice = {
   __typename?: 'RegisteredEmailDevice';
   email: Scalars['String']['output'];
@@ -3910,9 +8400,15 @@ export type RegisteredEmailDevice = {
   sendHistory: Array<EmailerSendRecord>;
 };
 
+export type RequestDestinationInput = {
+  deviceId?: InputMaybe<Scalars['ID']['input']>;
+  shelfId?: InputMaybe<Scalars['ID']['input']>;
+};
+
 /**
- * the current reading position for a book, derived from the latest session
- * with the highest `readthrough_number`
+ * The current reading position for a book: canonical position fields come
+ * from `reading_heads`, while readthrough identity and activity history come
+ * from the latest non-finalized `reading_sessions` row.
  */
 export type ResumeReadingCursor = {
   __typename?: 'ResumeReadingCursor';
@@ -3921,13 +8417,106 @@ export type ResumeReadingCursor = {
   locator?: Maybe<ReadiumLocator>;
   page?: Maybe<Scalars['Int']['output']>;
   percentageCompleted?: Maybe<Scalars['Decimal']['output']>;
+  /**
+   * A page number computed from the current locator's `total_progression` relative
+   * to the computed positions list for the book.
+   */
+  positionAwarePage?: Maybe<Scalars['Int']['output']>;
+  /**
+   * Milliseconds from the start of the publication for a time-addressed
+   * book: the twin of `page`/`locator` for an audiobook, which has neither
+   * a page nor a resource to anchor in. `None` for every paged or
+   * reflowable book, so the three addressing modes stay mutually exclusive.
+   */
+  positionMs?: Maybe<Scalars['Int']['output']>;
   readthroughNumber: Scalars['Int']['output'];
   /** the id of the session this cursor is derived from */
   sessionId: Scalars['Int']['output'];
   /** when the very first session in the current readthrough started */
   startedAt?: Maybe<Scalars['DateTime']['output']>;
+  /** the last time the latest session in the current readthrough was updated */
   updatedAt?: Maybe<Scalars['DateTime']['output']>;
 };
+
+/** Which finding to repair, on which staged item. */
+export type RunIngestQualityFixInput = {
+  /**
+   * The failing check's id, e.g. `single_file` or `chapters_present`. The
+   * tool and its options come from the check registry, so a client never
+   * names a command line.
+   */
+  checkId: Scalars['String']['input'];
+  dropItemId: Scalars['ID']['input'];
+};
+
+/** A code-owned runtime descriptor together with persisted lifecycle state. */
+export type RuntimeComponent = {
+  __typename?: 'RuntimeComponent';
+  activityCount?: Maybe<Scalars['Int']['output']>;
+  category: Scalars['String']['output'];
+  compiled: Scalars['Boolean']['output'];
+  dependencies: Array<Scalars['String']['output']>;
+  description: Scalars['String']['output'];
+  desiredEnabled: Scalars['Boolean']['output'];
+  effectiveEnabled: Scalars['Boolean']['output'];
+  health: Scalars['String']['output'];
+  key: Scalars['String']['output'];
+  label: Scalars['String']['output'];
+  lastActivityAt?: Maybe<Scalars['DateTime']['output']>;
+  lastError?: Maybe<Scalars['String']['output']>;
+  lastTransitionAt?: Maybe<Scalars['DateTime']['output']>;
+  ownedGauges: Array<RuntimeGauge>;
+  restartRequired: Scalars['Boolean']['output'];
+  transitionMode: RuntimeTransitionMode;
+  transitionReason: Scalars['String']['output'];
+  usageEvidence?: Maybe<Scalars['String']['output']>;
+  usageStatus: RuntimeUsageStatus;
+};
+
+export type RuntimeGauge = {
+  __typename?: 'RuntimeGauge';
+  kind: RuntimeGaugeKind;
+  name: Scalars['String']['output'];
+  value: Scalars['Int']['output'];
+};
+
+/**
+ * The kind of an owned resource gauge. Total process RSS is not a component
+ * gauge and is exposed separately through [`RuntimeMemory`].
+ */
+export enum RuntimeGaugeKind {
+  Bytes = 'BYTES',
+  Count = 'COUNT'
+}
+
+/**
+ * Process-wide RSS and Linux PSS breakdown are measured independently from
+ * component-owned gauges. The breakdown never attributes pages to a component.
+ */
+export type RuntimeMemory = {
+  __typename?: 'RuntimeMemory';
+  anonymousPssBytes?: Maybe<Scalars['Int']['output']>;
+  fileBackedPssBytes?: Maybe<Scalars['Int']['output']>;
+  memoryBreakdownAvailable: Scalars['Boolean']['output'];
+  memoryBreakdownUnavailableReason?: Maybe<Scalars['String']['output']>;
+  privateDirtyBytes?: Maybe<Scalars['Int']['output']>;
+  rssAvailable: Scalars['Boolean']['output'];
+  rssUnavailableReason?: Maybe<Scalars['String']['output']>;
+  totalProcessRssBytes?: Maybe<Scalars['Int']['output']>;
+};
+
+/** Whether a component toggle takes effect immediately or at process restart. */
+export enum RuntimeTransitionMode {
+  Hot = 'HOT',
+  Restart = 'RESTART'
+}
+
+/** Evidence-backed activity state for a compiled component. */
+export enum RuntimeUsageStatus {
+  Unknown = 'UNKNOWN',
+  Unused = 'UNUSED',
+  Used = 'USED'
+}
 
 export type SaveSmartListInput = {
   defaultGrouping: SmartListGrouping;
@@ -4033,6 +8622,20 @@ export type SendMessageInput = {
   replyToMessageId?: InputMaybe<Scalars['String']['input']>;
 };
 
+export type SendRecommendationInput = {
+  authors: Scalars['String']['input'];
+  coverUrl?: InputMaybe<Scalars['String']['input']>;
+  externalKey?: InputMaybe<Scalars['String']['input']>;
+  mediaId?: InputMaybe<Scalars['ID']['input']>;
+  message?: InputMaybe<Scalars['String']['input']>;
+  recipientUserId: Scalars['ID']['input'];
+  remoteId?: InputMaybe<Scalars['String']['input']>;
+  sourceProvider?: InputMaybe<Scalars['String']['input']>;
+  targetKind: RecommendationTargetKind;
+  title: Scalars['String']['input'];
+  workId?: InputMaybe<Scalars['ID']['input']>;
+};
+
 export type SendToDevice = {
   id: Scalars['Int']['input'];
 };
@@ -4049,6 +8652,7 @@ export type Series = {
   id: Scalars['String']['output'];
   isComplete: Scalars['Boolean']['output'];
   isFavorite: Scalars['Boolean']['output'];
+  isOneshot: Scalars['Boolean']['output'];
   library: Library;
   libraryId?: Maybe<Scalars['String']['output']>;
   /** Get media in this series */
@@ -4057,11 +8661,19 @@ export type Series = {
   mediaCount: Scalars['Int']['output'];
   metadata?: Maybe<SeriesMetadata>;
   name: Scalars['String']['output'];
+  oneshotBook?: Maybe<Media>;
   path: Scalars['String']['output'];
   percentageCompleted: Scalars['Float']['output'];
   readCount: Scalars['Int']['output'];
+  /** The remote series identifier on the provider source */
+  remoteId?: Maybe<Scalars['String']['output']>;
   resolvedDescription?: Maybe<Scalars['String']['output']>;
   resolvedName: Scalars['String']['output'];
+  /**
+   * The provider source instance (`provider_sources.id`) this series was materialised
+   * from. Set only for remote series, whose `path` is a `provider://` URI.
+   */
+  sourceProvider?: Maybe<Scalars['String']['output']>;
   stats: SeriesStats;
   status: FileStatus;
   tags: Array<Tag>;
@@ -4094,10 +8706,17 @@ export type SeriesUpNextArgs = {
   take?: Scalars['Int']['input'];
 };
 
+export type SeriesDeleted = {
+  __typename?: 'SeriesDeleted';
+  id: Scalars['String']['output'];
+  libraryId: Scalars['String']['output'];
+};
+
 export type SeriesFilterInput = {
   _and?: InputMaybe<Array<SeriesFilterInput>>;
   _not?: InputMaybe<Array<SeriesFilterInput>>;
   _or?: InputMaybe<Array<SeriesFilterInput>>;
+  isOneshot?: InputMaybe<Scalars['Boolean']['input']>;
   library?: InputMaybe<LibraryFilterInput>;
   libraryId?: InputMaybe<FieldFilterString>;
   libraryType?: InputMaybe<ComputedFilterLibraryType>;
@@ -4107,10 +8726,33 @@ export type SeriesFilterInput = {
   readingStatus?: InputMaybe<ComputedFilterReadingStatus>;
 };
 
+/** What one `mergeSeries` call did. */
+export type SeriesMergeResult = {
+  __typename?: 'SeriesMergeResult';
+  /**
+   * The emptied series directory was removed from disk. It is left in place
+   * when it still holds files the scanner ignored.
+   */
+  droppedDirectory: Scalars['Boolean']['output'];
+  droppedSeriesId: Scalars['String']['output'];
+  /** The series the books belong to now. */
+  kept: Series;
+  /**
+   * Books that were regrouped without moving a file, because the file is
+   * not on disk. They keep the status the scanner gave them.
+   */
+  missingFiles: Scalars['Int']['output'];
+  /** Books whose file moved into the kept series' directory. */
+  moved: Scalars['Int']['output'];
+};
+
 export type SeriesMetadata = {
   __typename?: 'SeriesMetadata';
   /** Age rating of the series */
   ageRating?: Maybe<Scalars['Int']['output']>;
+  /** JSON array of `{label,title}` alternate titles from Komga. */
+  alternateTitles?: Maybe<Scalars['String']['output']>;
+  alternateTitlesLock: Scalars['Boolean']['output'];
   /** Booktype of the series (Print, OneShot, TPB or GN) */
   booktype?: Maybe<Scalars['String']['output']>;
   characters: Array<Scalars['String']['output']>;
@@ -4124,6 +8766,9 @@ export type SeriesMetadata = {
   genres: Array<Scalars['String']['output']>;
   /** Name of imprint while under publisher */
   imprint?: Maybe<Scalars['String']['output']>;
+  /** BCP-47 language tag supplied by the metadata provider. */
+  language?: Maybe<Scalars['String']['output']>;
+  languageLock: Scalars['Boolean']['output'];
   links: Array<Scalars['String']['output']>;
   lockedFields: Array<MetadataField>;
   /** Type of series (e.g. "comicSeries") */
@@ -4136,6 +8781,9 @@ export type SeriesMetadata = {
   publicationRun?: Maybe<Scalars['String']['output']>;
   /** Publisher name */
   publisher?: Maybe<Scalars['String']['output']>;
+  /** Komga reading-direction enum name (for example, `LEFT_TO_RIGHT`). */
+  readingDirection?: Maybe<Scalars['String']['output']>;
+  readingDirectionLock: Scalars['Boolean']['output'];
   seriesId: Scalars['String']['output'];
   /** Either "Continuing" or "Ended" */
   status?: Maybe<Scalars['String']['output']>;
@@ -4146,6 +8794,12 @@ export type SeriesMetadata = {
   summary?: Maybe<Scalars['String']['output']>;
   /** Title of series */
   title?: Maybe<Scalars['String']['output']>;
+  /**
+   * Title used for Komga metadata sorting. The Komga adapter falls back to
+   * the series title when this value is unset.
+   */
+  titleSort?: Maybe<Scalars['String']['output']>;
+  titleSortLock: Scalars['Boolean']['output'];
   /** Total issues in the series up until this point in time */
   totalIssues?: Maybe<Scalars['Int']['output']>;
   /** Volume of the series in relation to other titles (this can be either numerical or the series year) */
@@ -4197,6 +8851,8 @@ export type SeriesMetadataInput = {
 
 export enum SeriesMetadataModelOrdering {
   AgeRating = 'AGE_RATING',
+  AlternateTitles = 'ALTERNATE_TITLES',
+  AlternateTitlesLock = 'ALTERNATE_TITLES_LOCK',
   Booktype = 'BOOKTYPE',
   Characters = 'CHARACTERS',
   Collects = 'COLLECTS',
@@ -4205,6 +8861,8 @@ export enum SeriesMetadataModelOrdering {
   DescriptionFormatted = 'DESCRIPTION_FORMATTED',
   Genres = 'GENRES',
   Imprint = 'IMPRINT',
+  Language = 'LANGUAGE',
+  LanguageLock = 'LANGUAGE_LOCK',
   Links = 'LINKS',
   LockedFields = 'LOCKED_FIELDS',
   MetadataExternalId = 'METADATA_EXTERNAL_ID',
@@ -4212,10 +8870,14 @@ export enum SeriesMetadataModelOrdering {
   MetaType = 'META_TYPE',
   PublicationRun = 'PUBLICATION_RUN',
   Publisher = 'PUBLISHER',
+  ReadingDirection = 'READING_DIRECTION',
+  ReadingDirectionLock = 'READING_DIRECTION_LOCK',
   SeriesId = 'SERIES_ID',
   Status = 'STATUS',
   Summary = 'SUMMARY',
   Title = 'TITLE',
+  TitleSort = 'TITLE_SORT',
+  TitleSortLock = 'TITLE_SORT_LOCK',
   TotalIssues = 'TOTAL_ISSUES',
   Volume = 'VOLUME',
   Writers = 'WRITERS',
@@ -4227,14 +8889,40 @@ export type SeriesMetadataOrderByField = {
   field: SeriesMetadataModelOrdering;
 };
 
+export type SeriesModel = {
+  __typename?: 'SeriesModel';
+  createdAt: Scalars['DateTime']['output'];
+  deletedAt?: Maybe<Scalars['DateTime']['output']>;
+  description?: Maybe<Scalars['String']['output']>;
+  id: Scalars['String']['output'];
+  isOneshot: Scalars['Boolean']['output'];
+  libraryId?: Maybe<Scalars['String']['output']>;
+  name: Scalars['String']['output'];
+  path: Scalars['String']['output'];
+  /** The remote series identifier on the provider source */
+  remoteId?: Maybe<Scalars['String']['output']>;
+  /**
+   * The provider source instance (`provider_sources.id`) this series was materialised
+   * from. Set only for remote series, whose `path` is a `provider://` URI.
+   */
+  sourceProvider?: Maybe<Scalars['String']['output']>;
+  status: FileStatus;
+  thumbnailMeta?: Maybe<ImageMetadata>;
+  thumbnailPath?: Maybe<Scalars['String']['output']>;
+  updatedAt?: Maybe<Scalars['DateTime']['output']>;
+};
+
 export enum SeriesModelOrdering {
   CreatedAt = 'CREATED_AT',
   DeletedAt = 'DELETED_AT',
   Description = 'DESCRIPTION',
   Id = 'ID',
+  IsOneshot = 'IS_ONESHOT',
   LibraryId = 'LIBRARY_ID',
   Name = 'NAME',
   Path = 'PATH',
+  RemoteId = 'REMOTE_ID',
+  SourceProvider = 'SOURCE_PROVIDER',
   Status = 'STATUS',
   ThumbnailMeta = 'THUMBNAIL_META',
   ThumbnailPath = 'THUMBNAIL_PATH',
@@ -4282,6 +8970,53 @@ export type ServerConfigModel = {
   initialWalSetupComplete: Scalars['Boolean']['output'];
   publicUrl?: Maybe<Scalars['String']['output']>;
 };
+
+export type SetIngestProviderSettingsInput = {
+  enabled?: InputMaybe<Scalars['Boolean']['input']>;
+  optedIn?: InputMaybe<Scalars['Boolean']['input']>;
+  providerId: Scalars['String']['input'];
+  settings?: InputMaybe<Scalars['JSON']['input']>;
+};
+
+export type SetIngestQualityCheckSettingsInput = {
+  checkId: Scalars['String']['input'];
+  enabled?: InputMaybe<Scalars['Boolean']['input']>;
+  settings?: InputMaybe<Scalars['JSON']['input']>;
+};
+
+export type SetNotificationChannelSettingsInput = {
+  /** The channel whose per-user settings are written. */
+  channelId: Scalars['String']['input'];
+  /**
+   * Values keyed by the channel's settings definition keys. Stored values
+   * are merged over the channel defaults; omitted secret keys keep their
+   * previously stored (encrypted) value.
+   */
+  settings: Scalars['JSON']['input'];
+};
+
+export enum ShareOverlayKind {
+  Bookmark = 'BOOKMARK',
+  Highlight = 'HIGHLIGHT',
+  Note = 'NOTE'
+}
+
+export enum ShareScope {
+  Annotations = 'ANNOTATIONS',
+  Completion = 'COMPLETION',
+  Metadata = 'METADATA',
+  Percentage = 'PERCENTAGE',
+  Rating = 'RATING',
+  ReviewText = 'REVIEW_TEXT'
+}
+
+export enum ShareState {
+  Active = 'ACTIVE',
+  Declined = 'DECLINED',
+  Expired = 'EXPIRED',
+  Pending = 'PENDING',
+  Revoked = 'REVOKED'
+}
 
 /**
  * A work that has multiple authors (co-authored). This wrapper allows querying
@@ -4424,6 +9159,86 @@ export type SmartListsInput = {
   search?: InputMaybe<Scalars['String']['input']>;
 };
 
+/**
+ * Server SMTP metadata. Passwords are intentionally absent; this object is
+ * only readable by server owners/ManageServer.
+ */
+export type SmtpSettings = {
+  __typename?: 'SmtpSettings';
+  configured: Scalars['Boolean']['output'];
+  lastUsedAt?: Maybe<Scalars['DateTime']['output']>;
+  senderDisplayName?: Maybe<Scalars['String']['output']>;
+  senderEmail?: Maybe<Scalars['String']['output']>;
+  smtpHost?: Maybe<Scalars['String']['output']>;
+  smtpPort?: Maybe<Scalars['Int']['output']>;
+  tlsEnabled?: Maybe<Scalars['Boolean']['output']>;
+};
+
+export type SocialOverlay = {
+  __typename?: 'SocialOverlay';
+  body?: Maybe<Scalars['String']['output']>;
+  capturedAt: Scalars['DateTime']['output'];
+  color?: Maybe<Scalars['String']['output']>;
+  excerpt?: Maybe<Scalars['String']['output']>;
+  hidden: Scalars['Boolean']['output'];
+  id: Scalars['ID']['output'];
+  kind: ShareOverlayKind;
+  locator?: Maybe<Scalars['JSON']['output']>;
+  percentage?: Maybe<Scalars['Int']['output']>;
+  progression?: Maybe<Scalars['Float']['output']>;
+  targetKey: Scalars['String']['output'];
+};
+
+export type SocialPreferences = {
+  __typename?: 'SocialPreferences';
+  recommendationsOptOut: Scalars['Boolean']['output'];
+  sharingOptOut: Scalars['Boolean']['output'];
+  updatedAt: Scalars['DateTime']['output'];
+};
+
+export type SocialRecommendation = {
+  __typename?: 'SocialRecommendation';
+  acceptedAt?: Maybe<Scalars['DateTime']['output']>;
+  authors: Scalars['String']['output'];
+  coverUrl?: Maybe<Scalars['String']['output']>;
+  createdAt: Scalars['DateTime']['output'];
+  destinationShelfId?: Maybe<Scalars['String']['output']>;
+  direction: RecommendationDirection;
+  expiresAt?: Maybe<Scalars['DateTime']['output']>;
+  externalKey?: Maybe<Scalars['String']['output']>;
+  handoffState: RecommendationHandoffState;
+  id: Scalars['ID']['output'];
+  message?: Maybe<Scalars['String']['output']>;
+  remoteId?: Maybe<Scalars['String']['output']>;
+  requestId?: Maybe<Scalars['String']['output']>;
+  sourceProvider?: Maybe<Scalars['String']['output']>;
+  state: RecommendationState;
+  targetKind: RecommendationTargetKind;
+  title: Scalars['String']['output'];
+};
+
+export type SocialShareGrant = {
+  __typename?: 'SocialShareGrant';
+  acceptedAt?: Maybe<Scalars['DateTime']['output']>;
+  authors: Scalars['String']['output'];
+  coverUrl?: Maybe<Scalars['String']['output']>;
+  expiresAt?: Maybe<Scalars['DateTime']['output']>;
+  externalKey?: Maybe<Scalars['String']['output']>;
+  id: Scalars['ID']['output'];
+  remoteId?: Maybe<Scalars['String']['output']>;
+  scopes: Array<ShareScope>;
+  sourceProvider?: Maybe<Scalars['String']['output']>;
+  state: ShareState;
+  targetKey: Scalars['String']['output'];
+  title: Scalars['String']['output'];
+};
+
+export type SocialUser = {
+  __typename?: 'SocialUser';
+  id: Scalars['ID']['output'];
+  username: Scalars['String']['output'];
+};
+
 export type SpineItem = {
   __typename?: 'SpineItem';
   id?: Maybe<Scalars['String']['output']>;
@@ -4432,13 +9247,31 @@ export type SpineItem = {
   properties?: Maybe<Scalars['String']['output']>;
 };
 
+export type StageIngestUploadsInput = {
+  files: Array<IngestUploadFileInput>;
+  idempotencyKey?: InputMaybe<Scalars['String']['input']>;
+  libraryId: Scalars['ID']['input'];
+  startAnalysis?: Scalars['Boolean']['input'];
+};
+
+export type StageIngestUploadsPayload = {
+  __typename?: 'StageIngestUploadsPayload';
+  deduplicated: Scalars['Int']['output'];
+  items: Array<IngestDropItem>;
+};
+
 /**
  * Represents the configuration of a Stump application. This struct is generated at startup
  * using a TOML file, environment variables, or both and is input when creating a `StumpCore`
  * instance.
  *
- * Example:
- * ```
+ * The settings are grouped into sub-structs (`server`, `database`, `jobs`, `protocols`,
+ * `ingest`, `providers`, `auth`, `pdf`) that are flattened for serialization, so `Stump.toml` and the
+ * environment keep their flat key set.
+ *
+ * Example (boots a real core against the configured directory, so it is
+ * not executed as a doctest):
+ * ```no_run
  * use stump_core::{config::{self, StumpConfig}, StumpCore};
  *
  * #[tokio::main]
@@ -4465,6 +9298,40 @@ export type StumpConfig = {
   accessTokenTtl: Scalars['Int']['output'];
   /** A list of origins for CORS. */
   allowedOrigins: Array<Scalars['String']['output']>;
+  /**
+   * The maximum size, in bytes, of a single annotation attachment accepted
+   * by `PUT /v1/annotations/{id}/attachments/{kind}`.
+   */
+  attachmentMaxBytes: Scalars['Int']['output'];
+  /**
+   * AAC bitrate used when an assemble has to re-encode, as an `ffmpeg`
+   * `-b:a` argument. Only lossy inputs that are not already AAC are
+   * re-encoded; an AAC input is stream-copied, so this value does not
+   * degrade a book that was already in the canonical codec.
+   */
+  audioAacBitrate: Scalars['String']['output'];
+  /**
+   * Container an assembled audiobook is written as. `m4b` is the only
+   * accepted value: it is the one container that carries a `chpl` atom, a
+   * chapter track, iTunes tags and a cover in a single file, which is what
+   * every audiobook player expects to find.
+   *
+   * Opus is deliberately *not* accepted here. It is a first-class input and
+   * an opt-in per-device delivery preset
+   * (`stump_media::transform::AudioOutput::Opus`), never a stored form, so
+   * that turning it on for one phone cannot change what the library holds.
+   */
+  audioCanonical: Scalars['String']['output'];
+  /**
+   * Absolute path to the `ffmpeg` binary. Empty searches `PATH`, which is
+   * the normal case; a path is for an operator whose `ffmpeg` is not on the
+   * server's `PATH` (a container sidecar mount, a Nix store path).
+   *
+   * `ffmpeg` is the one external tool the audio lane needs, and only for
+   * encoding: probing, tagging and chapter writing are pure Rust. It is
+   * never a build dependency.
+   */
+  audioFfmpeg: Scalars['String']['output'];
   /** The client directory. */
   clientDir: Scalars['String']['output'];
   /** Whether or not to include ANSI color codes in log files. */
@@ -4489,8 +9356,27 @@ export type StumpConfig = {
   enableUpload: Scalars['Boolean']['output'];
   /** The interval at which automatic deleted session cleanup is performed. */
   expiredSessionCleanupInterval: Scalars['Int']['output'];
+  /**
+   * Directory holding the built Home app (`home/build`). When set and it
+   * contains `index.html`, the app is served under `/app`.
+   */
+  homeAppDir?: Maybe<Scalars['String']['output']>;
   /** The IP address on which to listen on (default: "0.0.0.0"). */
   ip: Scalars['String']['output'];
+  /** Number of days an unused KEPUB cache entry is retained. */
+  koboKepubCacheMaxAgeDays: Scalars['Int']['output'];
+  /** Whether Kobo downloads should be converted to KEPUB with deterministic Kobo spans. */
+  koboKepubConversion: Scalars['Boolean']['output'];
+  /** Deflate level used for generated KEPUB files. */
+  koboKepubDeflateLevel: Scalars['Int']['output'];
+  /** Whether EPUB files should be converted to KEPUB after a library scan. */
+  koboKepubPreconvert: Scalars['Boolean']['output'];
+  /**
+   * Optional allowlist of filesystem roots for library creation and the
+   * filesystem browser (comma-separated, e.g. `/data/books,/data/comics`).
+   * When empty, no root constraint is applied.
+   */
+  libraryRoots: Array<Scalars['String']['output']>;
   /** The directory where the applicaiton logs will be stored */
   logDir?: Maybe<Scalars['String']['output']>;
   /** The maximum size, in bytes, of files that can be uploaded to be included in libraries. */
@@ -4530,6 +9416,18 @@ export type StumpConfig = {
   refreshTokenTtl: Scalars['Int']['output'];
   /** The time in seconds that a login session will be valid for. */
   sessionTtl: Scalars['Int']['output'];
+  /**
+   * Byte budget for the transform cache; least-recently-used entries are
+   * removed until the directory fits.
+   */
+  transformCacheMaxBytes: Scalars['Int']['output'];
+  /** Enable comic transform delivery for Kobo devices (CBZ/CBR/PDF → KEPUB). */
+  transformEnabled: Scalars['Boolean']['output'];
+  /**
+   * Named `stump_media::transform::TransformProfile` preset used for Kobo
+   * devices that have no `transform_profile` of their own.
+   */
+  transformKoboProfile: Scalars['String']['output'];
   /** Whether to trust proxy headers for determining client IP and scheme (e.g., X-Forwarded-For) */
   trustProxyHeaders: Scalars['Boolean']['output'];
   /** The verbosity with which system logs are visible (default: 1). */
@@ -4538,8 +9436,45 @@ export type StumpConfig = {
 
 export type Subscription = {
   __typename?: 'Subscription';
+  /**
+   * Sightings of the current user's devices (every device for the server
+   * owner), optionally narrowed to one device.
+   */
+  deviceSeen: DeviceSeen;
+  /**
+   * Drop-item row changes, optionally narrowed to one library. One event
+   * per persisted `revision` bump, which is what lets a client hold a drop
+   * queue live instead of refetching it on a timer. Ungated, like
+   * `readEvents`, which carries the same events unfiltered.
+   */
+  ingestEvents: IngestItemChanged;
+  ingestProgress: IngestProgressEvent;
+  /**
+   * Provider host activity: source health transitions, materialised
+   * series, and catalog refreshes. Ungated, like `readEvents`, which
+   * carries the same events unfiltered.
+   */
+  providerEvents: ProviderEvent;
   readEvents: CoreEvent;
   tailLogFile: Scalars['String']['output'];
+};
+
+
+export type SubscriptionDeviceSeenArgs = {
+  deviceId?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type SubscriptionIngestEventsArgs = {
+  libraryId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
+export type SubscriptionIngestProgressArgs = {
+  afterEventId?: InputMaybe<Scalars['ID']['input']>;
+  analysisJobId?: InputMaybe<Scalars['ID']['input']>;
+  dropItemId?: InputMaybe<Scalars['ID']['input']>;
+  libraryId?: InputMaybe<Scalars['ID']['input']>;
 };
 
 export type SuggestBookInput = {
@@ -4569,6 +9504,25 @@ export enum SupportedImageFormat {
   Webp = 'WEBP'
 }
 
+/** One persisted, validated `SyncMapV1` artifact. */
+export type SyncMap = {
+  __typename?: 'SyncMap';
+  algorithm?: Maybe<Scalars['String']['output']>;
+  audioMediaId: Scalars['ID']['output'];
+  coverage?: Maybe<Scalars['Float']['output']>;
+  createdAt: Scalars['String']['output'];
+  cueCount: Scalars['Int']['output'];
+  ebookMediaId: Scalars['ID']['output'];
+  generator: Scalars['String']['output'];
+  generatorVersion: Scalars['String']['output'];
+  granularity: AlignGranularity;
+  id: Scalars['ID']['output'];
+  jobId?: Maybe<Scalars['ID']['output']>;
+  map: Scalars['JSON']['output'];
+  model?: Maybe<Scalars['String']['output']>;
+  source: Scalars['String']['output'];
+};
+
 export enum SystemArrangement {
   BookClubs = 'BOOK_CLUBS',
   Explore = 'EXPLORE',
@@ -4591,6 +9545,8 @@ export type SystemArrangementConfigInput = {
 export type Tag = {
   __typename?: 'Tag';
   id: Scalars['Int']['output'];
+  /** Distinguishes Komga `genres` from `tags` so round trips preserve both. */
+  kind: Scalars['String']['output'];
   name: Scalars['String']['output'];
 };
 
@@ -4781,6 +9737,11 @@ export enum UserPermission {
   AccessKoreaderSync = 'ACCESS_KOREADER_SYNC',
   /** Grant access to access the smart list feature. This includes the ability to create and edit smart lists */
   AccessSmartList = 'ACCESS_SMART_LIST',
+  /**
+   * Grant a device the right to act as a remote worker: open the worker
+   * socket, claim `worker_jobs`, and upload their outputs
+   */
+  AccessWorker = 'ACCESS_WORKER',
   /** Grant user access to change **their own** avatar */
   ChangeAvatar = 'CHANGE_AVATAR',
   /** Grant user access to change **their own** password */
@@ -4913,6 +9874,108 @@ export type ValidateMetadataProviderConfigInput = {
   /** The provider type */
   providerType: MetadataProvider;
 };
+
+export type Worker = {
+  __typename?: 'Worker';
+  /**
+   * The `hello` payload verbatim, e.g.
+   * `{"transcode":{"ffmpeg":"7.1.0","hwaccel":["vaapi"]}}`. Free-form: the
+   * vocabulary is per job kind and a schema here would have to change every
+   * time a kind does.
+   */
+  capabilities: Scalars['JSON']['output'];
+  connectedAt: Scalars['String']['output'];
+  /**
+   * The `devices.id` of the paired worker device, so the console can link
+   * straight to its card (and its revoke button).
+   */
+  id: Scalars['ID']['output'];
+  /**
+   * The job kinds this worker advertises, for a page that wants a chip row
+   * rather than a JSON blob.
+   */
+  kinds: Array<Scalars['String']['output']>;
+  /**
+   * When this worker last said anything. A worker mid-encode reports
+   * progress, so this is also "is it still working".
+   */
+  lastSeenAt: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  /** The `stump-worker` version this host is running, when it reported one. */
+  version?: Maybe<Scalars['String']['output']>;
+};
+
+/** One `worker_jobs` row. */
+export type WorkerJob = {
+  __typename?: 'WorkerJob';
+  createdAt: Scalars['String']['output'];
+  error?: Maybe<Scalars['String']['output']>;
+  finishedAt?: Maybe<Scalars['String']['output']>;
+  id: Scalars['ID']['output'];
+  input: Scalars['JSON']['output'];
+  /** The registry id of the work: `transcode` today. */
+  kind: Scalars['String']['output'];
+  /** The runner's last human-readable line. */
+  message?: Maybe<Scalars['String']['output']>;
+  priority: Scalars['Int']['output'];
+  /** `0.0..=1.0`. */
+  progress: Scalars['Float']['output'];
+  requires: Scalars['JSON']['output'];
+  result?: Maybe<Scalars['JSON']['output']>;
+  startedAt?: Maybe<Scalars['String']['output']>;
+  status: WorkerJobStatus;
+  updatedAt: Scalars['String']['output'];
+  /**
+   * The worker holding (or that ran) the job. `null` on a job the server ran
+   * itself with its local implementation, which is how the console tells
+   * "served by the GPU box" from "the server did it".
+   */
+  workerId?: Maybe<Scalars['ID']['output']>;
+};
+
+/** A `worker_jobs` row changed. */
+export type WorkerJobChanged = {
+  __typename?: 'WorkerJobChanged';
+  error?: Maybe<Scalars['String']['output']>;
+  id: Scalars['String']['output'];
+  kind: Scalars['String']['output'];
+  message?: Maybe<Scalars['String']['output']>;
+  progress: Scalars['Float']['output'];
+  status: WorkerJobStatus;
+  /**
+   * The worker holding the job, or `None` for an unassigned or locally-run
+   * job — the console distinguishes "served by the GPU box" from "the
+   * server did it itself".
+   */
+  workerId?: Maybe<Scalars['String']['output']>;
+};
+
+/**
+ * Where a [`crate::entity::worker_job`] row is in its life.
+ *
+ * `needs_worker` is a resting state, not an error: the job is well-formed and
+ * nobody who can run it is connected. It becomes `queued` again the moment a
+ * capable worker says `hello`. There is deliberately no `cancelled`: the
+ * protocol's status set is its contract, and a cancelled job is exactly a job
+ * that will not produce its output, so it is `failed` with a reason.
+ */
+export enum WorkerJobStatus {
+  /** A worker answered the offer with `claim`. */
+  Claimed = 'CLAIMED',
+  /** The job produced its output. */
+  Done = 'DONE',
+  /** The job did not produce its output; `error` says why. */
+  Failed = 'FAILED',
+  /**
+   * No connected worker advertises what this job needs and the kind has no
+   * local implementation. Shown, never hidden.
+   */
+  NeedsWorker = 'NEEDS_WORKER',
+  /** Created, and either not yet offered or offered and not yet claimed. */
+  Queued = 'QUEUED',
+  /** The job is executing — remotely (first `progress` frame) or locally. */
+  Running = 'RUNNING'
+}
 
 export type CreateBookClubMobileMutationVariables = Exact<{
   input: CreateBookClubInput;
@@ -5833,7 +10896,7 @@ export type SetSeriesLockedFieldsMutation = { __typename?: 'Mutation', setSeries
 export type SideBarQueryQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type SideBarQueryQuery = { __typename?: 'Query', me: { __typename?: 'User', id: string, preferences: { __typename?: 'UserPreferences', navigationArrangement: { __typename?: 'Arrangement', locked: boolean, sections: Array<{ __typename?: 'ArrangementSection', visible: boolean, config: { __typename: 'CustomArrangementConfig' } | { __typename: 'InProgressBooks' } | { __typename: 'RecentlyAdded' } | { __typename: 'SystemArrangementConfig', variant: SystemArrangement, links: Array<FilterableArrangementEntityLink> } }> } } } };
+export type SideBarQueryQuery = { __typename?: 'Query', me: { __typename?: 'User', id: string, preferences: { __typename?: 'UserPreferences', navigationArrangement: { __typename?: 'Arrangement', locked: boolean, sections: Array<{ __typename?: 'ArrangementSection', visible: boolean, config: { __typename: 'CustomArrangementConfig' } | { __typename: 'InProgressBooks' } | { __typename: 'OnDeckBooks' } | { __typename: 'RecentlyAdded' } | { __typename: 'SystemArrangementConfig', variant: SystemArrangement, links: Array<FilterableArrangementEntityLink> } }> } } } };
 
 export type BookClubSideBarSectionQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -5868,7 +10931,7 @@ export type SmartListSideBarSectionQuery = { __typename?: 'Query', smartLists: A
 export type TopNavigationQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TopNavigationQuery = { __typename?: 'Query', me: { __typename?: 'User', id: string, preferences: { __typename?: 'UserPreferences', navigationArrangement: { __typename?: 'Arrangement', locked: boolean, sections: Array<{ __typename?: 'ArrangementSection', visible: boolean, config: { __typename: 'CustomArrangementConfig' } | { __typename: 'InProgressBooks' } | { __typename: 'RecentlyAdded' } | { __typename: 'SystemArrangementConfig', variant: SystemArrangement, links: Array<FilterableArrangementEntityLink> } }> } } } };
+export type TopNavigationQuery = { __typename?: 'Query', me: { __typename?: 'User', id: string, preferences: { __typename?: 'UserPreferences', navigationArrangement: { __typename?: 'Arrangement', locked: boolean, sections: Array<{ __typename?: 'ArrangementSection', visible: boolean, config: { __typename: 'CustomArrangementConfig' } | { __typename: 'InProgressBooks' } | { __typename: 'OnDeckBooks' } | { __typename: 'RecentlyAdded' } | { __typename: 'SystemArrangementConfig', variant: SystemArrangement, links: Array<FilterableArrangementEntityLink> } }> } } } };
 
 export type BookClubNavigationItemQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -5884,6 +10947,15 @@ export type SmartListNavigationItemQueryVariables = Exact<{ [key: string]: never
 
 
 export type SmartListNavigationItemQuery = { __typename?: 'Query', smartLists: Array<{ __typename?: 'SmartList', id: string, name: string }> };
+
+export type NavigationEntityLibraryQueryVariables = Exact<{
+  id: Scalars['ID']['input'];
+  isSeries: Scalars['Boolean']['input'];
+  isBook: Scalars['Boolean']['input'];
+}>;
+
+
+export type NavigationEntityLibraryQuery = { __typename?: 'Query', seriesById?: { __typename?: 'Series', libraryId?: string | null } | null, mediaById?: { __typename?: 'Media', libraryId: string } | null };
 
 export type CreateEpubAnnotationMutationVariables = Exact<{
   input: CreateAnnotationInput;
@@ -5966,7 +11038,7 @@ export type SeriesEditorSetLockedFieldsMutation = { __typename?: 'Mutation', set
 export type UseCoreEventSubscriptionVariables = Exact<{ [key: string]: never; }>;
 
 
-export type UseCoreEventSubscription = { __typename?: 'Subscription', readEvents: { __typename: 'CreatedManySeries', count: number, libraryId: string } | { __typename: 'CreatedMedia', id: string, seriesId: string } | { __typename: 'CreatedOrUpdatedManyMedia', count: number, seriesId: string } | { __typename: 'DiscoveredMissingLibrary', id: string } | { __typename: 'JobOutput', id: string, output: { __typename: 'AnalyzeMediaOutput' } | { __typename: 'LibraryScanOutput', createdMedia: number, createdSeries: number, updatedMedia: number, updatedSeries: number } | { __typename: 'MetadataFetchJobOutput' } | { __typename: 'PlaceholderGenerationOutput' } | { __typename: 'SeriesScanOutput', createdMedia: number, updatedMedia: number } | { __typename: 'ThumbnailGenerationOutput' } } | { __typename: 'JobStarted', id: string } | { __typename: 'JobUpdate', id: string, status?: JobStatus | null, message?: string | null, completedTasks?: number | null, remainingTasks?: number | null, completedSubtasks?: number | null, totalSubtasks?: number | null, subtitle?: string | null } };
+export type UseCoreEventSubscription = { __typename?: 'Subscription', readEvents: { __typename: 'AnalysisJobFailed' } | { __typename: 'CollectionAdded' } | { __typename: 'CollectionChanged' } | { __typename: 'CollectionDeleted' } | { __typename: 'CreatedManySeries', count: number, libraryId: string } | { __typename: 'CreatedMedia', id: string, seriesId: string } | { __typename: 'CreatedOrUpdatedManyMedia', count: number, seriesId: string } | { __typename: 'DevicePaired' } | { __typename: 'DevicePairingRequested' } | { __typename: 'DeviceSeen' } | { __typename: 'DiscoveredMissingLibrary', id: string } | { __typename: 'IngestAwaitingReview' } | { __typename: 'IngestItemChanged' } | { __typename: 'JobOutput', id: string, output: { __typename: 'AnalyzeMediaOutput' } | { __typename: 'AnnotationSyncOutput' } | { __typename: 'LibraryScanOutput', createdMedia: number, createdSeries: number, updatedMedia: number, updatedSeries: number } | { __typename: 'MetadataFetchJobOutput' } | { __typename: 'NotificationDispatchOutput' } | { __typename: 'PlaceholderGenerationOutput' } | { __typename: 'ProviderSourceHealthOutput' } | { __typename: 'SeriesScanOutput', createdMedia: number, updatedMedia: number } | { __typename: 'ThumbnailGenerationOutput' } } | { __typename: 'JobQueueStatus' } | { __typename: 'JobStarted', id: string } | { __typename: 'JobUpdate', id: string, status?: JobStatus | null, message?: string | null, completedTasks?: number | null, remainingTasks?: number | null, completedSubtasks?: number | null, totalSubtasks?: number | null, subtitle?: string | null } | { __typename: 'LibraryCreated' } | { __typename: 'LibraryDeleted' } | { __typename: 'LibraryUpdated' } | { __typename: 'MediaDeleted' } | { __typename: 'ProviderCatalogRefreshed' } | { __typename: 'ProviderMatchDone' } | { __typename: 'ProviderSeriesMaterialized' } | { __typename: 'ProviderSourceHealthChanged' } | { __typename: 'QualityFailed' } | { __typename: 'ReadListAdded' } | { __typename: 'ReadListChanged' } | { __typename: 'ReadListDeleted' } | { __typename: 'SeriesDeleted' } | { __typename: 'WorkerJobChanged' } };
 
 export type UsePreferencesMutationVariables = Exact<{
   input: UpdateUserPreferencesInput;
@@ -6057,7 +11129,7 @@ export type BookManagementSceneQueryVariables = Exact<{
 
 
 export type BookManagementSceneQuery = { __typename?: 'Query', mediaById?: (
-    { __typename?: 'Media', id: string, resolvedName: string, library: { __typename?: 'Library', id: string, name: string }, series: { __typename?: 'Series', id: string, resolvedName: string }, tags: Array<{ __typename?: 'Tag', id: number, name: string }> }
+    { __typename?: 'Media', id: string, resolvedName: string, library: { __typename?: 'Library', id: string, name: string }, series: { __typename?: 'Series', id: string, resolvedName: string }, tags: Array<{ __typename?: 'Tag', id: number, name: string, kind: string }> }
     & { ' $fragmentRefs'?: { 'BookThumbnailSelectorFragment': BookThumbnailSelectorFragment } }
   ) | null };
 
@@ -6254,7 +11326,19 @@ export type RecentlyAddedSeriesQueryVariables = Exact<{
 }>;
 
 
-export type RecentlyAddedSeriesQuery = { __typename?: 'Query', recentlyAddedSeries: { __typename?: 'PaginatedSeriesResponse', nodes: Array<{ __typename?: 'Series', id: string, resolvedName: string, mediaCount: number, percentageCompleted: number, status: FileStatus, createdAt: any, media: Array<{ __typename?: 'Media', id: string, resolvedName: string, thumbnail: { __typename?: 'ImageRef', url: string, metadata?: { __typename?: 'ImageMetadata', averageColor?: string | null, thumbhash?: string | null, colors: Array<{ __typename?: 'ImageColor', color: string, percentage: any }> } | null } }>, thumbnail: { __typename?: 'ImageRef', url: string, metadata?: { __typename?: 'ImageMetadata', averageColor?: string | null, thumbhash?: string | null, colors: Array<{ __typename?: 'ImageColor', color: string, percentage: any }> } | null } }>, pageInfo: { __typename: 'CursorPaginationInfo', currentCursor?: string | null, nextCursor?: string | null, limit: number } | { __typename: 'OffsetPaginationInfo' } } };
+export type RecentlyAddedSeriesQuery = { __typename?: 'Query', recentlyAddedSeries: { __typename?: 'PaginatedSeriesResponse', nodes: Array<{ __typename?: 'Series', id: string, resolvedName: string, mediaCount: number, percentageCompleted: number, status: FileStatus, createdAt: any, oneshotBook?: { __typename?: 'Media', id: string } | null, media: Array<{ __typename?: 'Media', id: string, resolvedName: string, thumbnail: { __typename?: 'ImageRef', url: string, metadata?: { __typename?: 'ImageMetadata', averageColor?: string | null, thumbhash?: string | null, colors: Array<{ __typename?: 'ImageColor', color: string, percentage: any }> } | null } }>, thumbnail: { __typename?: 'ImageRef', url: string, metadata?: { __typename?: 'ImageMetadata', averageColor?: string | null, thumbhash?: string | null, colors: Array<{ __typename?: 'ImageColor', color: string, percentage: any }> } | null } }>, pageInfo: { __typename: 'CursorPaginationInfo', currentCursor?: string | null, nextCursor?: string | null, limit: number } | { __typename: 'OffsetPaginationInfo' } } };
+
+export type HomeArrangementPreferencesQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type HomeArrangementPreferencesQuery = { __typename?: 'Query', me: { __typename?: 'User', preferences: { __typename?: 'UserPreferences', homeArrangement: { __typename?: 'Arrangement', sections: Array<{ __typename?: 'ArrangementSection', visible: boolean, config: { __typename: 'CustomArrangementConfig' } | { __typename: 'InProgressBooks', name?: string | null } | { __typename: 'OnDeckBooks', name?: string | null } | { __typename: 'RecentlyAdded', entity: FilterableArrangementEntity, name?: string | null } | { __typename: 'SystemArrangementConfig' } }> } } } };
+
+export type UpdateHomeArrangementMutationVariables = Exact<{
+  input: HomeArrangementInput;
+}>;
+
+
+export type UpdateHomeArrangementMutation = { __typename?: 'Mutation', updateHomeArrangement: { __typename?: 'HomeArrangement', sections: Array<{ __typename?: 'ArrangementSection', visible: boolean, config: { __typename: 'CustomArrangementConfig' } | { __typename: 'InProgressBooks', name?: string | null } | { __typename: 'OnDeckBooks', name?: string | null } | { __typename: 'RecentlyAdded', entity: FilterableArrangementEntity, name?: string | null } | { __typename: 'SystemArrangementConfig' } }> } };
 
 export type LibraryLayoutQueryVariables = Exact<{
   id: Scalars['ID']['input'];
@@ -6262,7 +11346,7 @@ export type LibraryLayoutQueryVariables = Exact<{
 
 
 export type LibraryLayoutQuery = { __typename?: 'Query', libraryById?: (
-    { __typename?: 'Library', id: string, name: string, description?: string | null, path: string, stats: { __typename?: 'LibraryStats', seriesCount: number, bookCount: number, completedBooks: number, inProgressBooks: number, totalBytes: number, totalReadingTimeSeconds: number }, tags: Array<{ __typename?: 'Tag', id: number, name: string }>, thumbnail: { __typename?: 'ImageRef', url: string, metadata?: { __typename?: 'ImageMetadata', averageColor?: string | null, thumbhash?: string | null, colors: Array<{ __typename?: 'ImageColor', color: string, percentage: any }> } | null }, config: { __typename?: 'LibraryConfig', defaultLibraryViewMode: LibraryViewMode, hideSeriesView: boolean } }
+    { __typename?: 'Library', id: string, name: string, description?: string | null, path: string, stats: { __typename?: 'LibraryStats', seriesCount: number, bookCount: number, completedBooks: number, inProgressBooks: number, totalBytes: number, totalReadingTimeSeconds: number }, tags: Array<{ __typename?: 'Tag', id: number, name: string }>, thumbnail: { __typename?: 'ImageRef', url: string, metadata?: { __typename?: 'ImageMetadata', averageColor?: string | null, thumbhash?: string | null, colors: Array<{ __typename?: 'ImageColor', color: string, percentage: any }> } | null }, config: { __typename?: 'LibraryConfig', defaultLibraryViewMode: LibraryViewMode, hideSeriesView: boolean, oneshotsDirectory?: string | null } }
     & { ' $fragmentRefs'?: { 'LibrarySettingsConfigFragment': LibrarySettingsConfigFragment } }
   ) | null };
 
@@ -6292,7 +11376,7 @@ export type LibrarySeriesQueryVariables = Exact<{
 }>;
 
 
-export type LibrarySeriesQuery = { __typename?: 'Query', series: { __typename?: 'PaginatedSeriesResponse', nodes: Array<{ __typename?: 'Series', id: string, resolvedName: string, mediaCount: number, percentageCompleted: number, status: FileStatus, media: Array<{ __typename?: 'Media', id: string, thumbnail: { __typename?: 'ImageRef', url: string, metadata?: { __typename?: 'ImageMetadata', averageColor?: string | null, thumbhash?: string | null, colors: Array<{ __typename?: 'ImageColor', color: string, percentage: any }> } | null } }>, thumbnail: { __typename?: 'ImageRef', url: string, metadata?: { __typename?: 'ImageMetadata', averageColor?: string | null, thumbhash?: string | null, colors: Array<{ __typename?: 'ImageColor', color: string, percentage: any }> } | null } }>, pageInfo: { __typename: 'CursorPaginationInfo' } | { __typename: 'OffsetPaginationInfo', totalPages: number, currentPage: number, pageSize: number, pageOffset: number, zeroBased: boolean } } };
+export type LibrarySeriesQuery = { __typename?: 'Query', series: { __typename?: 'PaginatedSeriesResponse', nodes: Array<{ __typename?: 'Series', id: string, resolvedName: string, mediaCount: number, percentageCompleted: number, status: FileStatus, media: Array<{ __typename?: 'Media', id: string, thumbnail: { __typename?: 'ImageRef', url: string, metadata?: { __typename?: 'ImageMetadata', averageColor?: string | null, thumbhash?: string | null, colors: Array<{ __typename?: 'ImageColor', color: string, percentage: any }> } | null } }>, oneshotBook?: { __typename?: 'Media', id: string } | null, thumbnail: { __typename?: 'ImageRef', url: string, metadata?: { __typename?: 'ImageMetadata', averageColor?: string | null, thumbhash?: string | null, colors: Array<{ __typename?: 'ImageColor', color: string, percentage: any }> } | null } }>, pageInfo: { __typename: 'CursorPaginationInfo' } | { __typename: 'OffsetPaginationInfo', totalPages: number, currentPage: number, pageSize: number, pageOffset: number, zeroBased: boolean } } };
 
 export type LibrarySeriesGridQueryVariables = Exact<{
   id: Scalars['String']['input'];
@@ -6302,7 +11386,7 @@ export type LibrarySeriesGridQueryVariables = Exact<{
 
 export type LibrarySeriesGridQuery = { __typename?: 'Query', series: { __typename?: 'PaginatedSeriesResponse', nodes: Array<{ __typename?: 'Series', id: string, thumbnail: { __typename?: 'ImageRef', url: string } }>, pageInfo: { __typename: 'CursorPaginationInfo', currentCursor?: string | null, nextCursor?: string | null, limit: number } | { __typename: 'OffsetPaginationInfo' } } };
 
-export type LibrarySettingsConfigFragment = { __typename?: 'Library', config: { __typename?: 'LibraryConfig', id: number, convertRarToZip: boolean, hardDeleteConversions: boolean, defaultReadingDir: ReadingDirection, defaultReadingMode: ReadingMode, defaultReadingImageScaleFit: ReadingImageScaleFit, defaultLibraryViewMode: LibraryViewMode, hideSeriesView: boolean, skipBookOverview: boolean, generateFileHashes: boolean, generateKoreaderHashes: boolean, processMetadata: boolean, watch: boolean, libraryPattern: LibraryPattern, libraryType: LibraryType, processThumbnailColorsEvenWithoutConfig: boolean, ignoreRules?: Array<string> | null, thumbnailConfig?: { __typename: 'ImageProcessorOptions', format: SupportedImageFormat, quality?: number | null, page?: number | null, resizeMethod?: { __typename: 'ExactDimensionResize', width: number, height: number } | { __typename: 'FitWithinResize' } | { __typename: 'ScaleEvenlyByFactor', factor: any } | { __typename: 'ScaledDimensionResize', dimension: Dimension, size: number } | null } | null } } & { ' $fragmentName'?: 'LibrarySettingsConfigFragment' };
+export type LibrarySettingsConfigFragment = { __typename?: 'Library', config: { __typename?: 'LibraryConfig', id: number, convertRarToZip: boolean, hardDeleteConversions: boolean, defaultReadingDir: ReadingDirection, defaultReadingMode: ReadingMode, defaultReadingImageScaleFit: ReadingImageScaleFit, defaultLibraryViewMode: LibraryViewMode, hideSeriesView: boolean, skipBookOverview: boolean, generateFileHashes: boolean, generateKoreaderHashes: boolean, processMetadata: boolean, watch: boolean, libraryPattern: LibraryPattern, libraryType: LibraryType, processThumbnailColorsEvenWithoutConfig: boolean, ignoreRules?: Array<string> | null, oneshotsDirectory?: string | null, thumbnailConfig?: { __typename: 'ImageProcessorOptions', format: SupportedImageFormat, quality?: number | null, page?: number | null, resizeMethod?: { __typename: 'ExactDimensionResize', width: number, height: number } | { __typename: 'FitWithinResize' } | { __typename: 'ScaleEvenlyByFactor', factor: any } | { __typename: 'ScaledDimensionResize', dimension: Dimension, size: number } | null } | null } } & { ' $fragmentName'?: 'LibrarySettingsConfigFragment' };
 
 export type LibrarySettingsRouterEditLibraryMutationMutationVariables = Exact<{
   id: Scalars['ID']['input'];
@@ -6399,7 +11483,7 @@ export type ScanRecordInspectorJobsQueryVariables = Exact<{
 }>;
 
 
-export type ScanRecordInspectorJobsQuery = { __typename?: 'Query', jobById?: { __typename?: 'Job', id: string, outputData?: { __typename: 'AnalyzeMediaOutput' } | { __typename: 'LibraryScanOutput', totalFiles: number, totalDirectories: number, ignoredFiles: number, skippedFiles: number, ignoredDirectories: number, createdMedia: number, updatedMedia: number, createdSeries: number, updatedSeries: number } | { __typename: 'MetadataFetchJobOutput' } | { __typename: 'PlaceholderGenerationOutput' } | { __typename: 'SeriesScanOutput' } | { __typename: 'ThumbnailGenerationOutput' } | null, logs?: Array<{ __typename?: 'Log', id: number }> } | null };
+export type ScanRecordInspectorJobsQuery = { __typename?: 'Query', jobById?: { __typename?: 'Job', id: string, outputData?: { __typename: 'AnalyzeMediaOutput' } | { __typename: 'AnnotationSyncOutput' } | { __typename: 'LibraryScanOutput', totalFiles: number, totalDirectories: number, ignoredFiles: number, skippedFiles: number, ignoredDirectories: number, createdMedia: number, updatedMedia: number, createdSeries: number, updatedSeries: number } | { __typename: 'MetadataFetchJobOutput' } | { __typename: 'NotificationDispatchOutput' } | { __typename: 'PlaceholderGenerationOutput' } | { __typename: 'ProviderSourceHealthOutput' } | { __typename: 'SeriesScanOutput' } | { __typename: 'ThumbnailGenerationOutput' } | null, logs?: Array<{ __typename?: 'Log', id: number }> } | null };
 
 export type DeleteLibraryThumbnailsMutationVariables = Exact<{
   id: Scalars['ID']['input'];
@@ -6497,7 +11581,7 @@ export type SeriesSettingsSceneQueryVariables = Exact<{
 
 
 export type SeriesSettingsSceneQuery = { __typename?: 'Query', seriesById?: (
-    { __typename?: 'Series', id: string, tags: Array<{ __typename?: 'Tag', id: number, name: string }>, metadata?: (
+    { __typename?: 'Series', id: string, tags: Array<{ __typename?: 'Tag', id: number, name: string, kind: string }>, metadata?: (
       { __typename?: 'SeriesMetadata' }
       & { ' $fragmentRefs'?: { 'SeriesMetadataEditorFragment': SeriesMetadataEditorFragment } }
     ) | null }
@@ -6586,7 +11670,7 @@ export type UpdateUserProfileFormMutation = { __typename?: 'Mutation', updateVie
 export type NavigationArrangementQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type NavigationArrangementQuery = { __typename?: 'Query', me: { __typename?: 'User', preferences: { __typename?: 'UserPreferences', navigationArrangement: { __typename?: 'Arrangement', locked: boolean, sections: Array<{ __typename: 'ArrangementSection', visible: boolean, config: { __typename: 'CustomArrangementConfig' } | { __typename: 'InProgressBooks' } | { __typename: 'RecentlyAdded' } | { __typename: 'SystemArrangementConfig', variant: SystemArrangement, links: Array<FilterableArrangementEntityLink> } }> } } } };
+export type NavigationArrangementQuery = { __typename?: 'Query', me: { __typename?: 'User', preferences: { __typename?: 'UserPreferences', navigationArrangement: { __typename?: 'Arrangement', locked: boolean, sections: Array<{ __typename: 'ArrangementSection', visible: boolean, config: { __typename: 'CustomArrangementConfig' } | { __typename: 'InProgressBooks' } | { __typename: 'OnDeckBooks' } | { __typename: 'RecentlyAdded' } | { __typename: 'SystemArrangementConfig', variant: SystemArrangement, links: Array<FilterableArrangementEntityLink> } }> } } } };
 
 export type NavigationArrangementUpdateMutationVariables = Exact<{
   input: NavigationArrangementInput;
@@ -6783,17 +11867,30 @@ export type JobActionMenuDeleteLogsMutation = { __typename?: 'Mutation', deleteJ
 
 type JobDataInspector_AnalyzeMediaOutput_Fragment = { __typename: 'AnalyzeMediaOutput' } & { ' $fragmentName'?: 'JobDataInspector_AnalyzeMediaOutput_Fragment' };
 
+type JobDataInspector_AnnotationSyncOutput_Fragment = { __typename: 'AnnotationSyncOutput' } & { ' $fragmentName'?: 'JobDataInspector_AnnotationSyncOutput_Fragment' };
+
 type JobDataInspector_LibraryScanOutput_Fragment = { __typename: 'LibraryScanOutput', totalFiles: number, totalDirectories: number, ignoredFiles: number, skippedFiles: number, ignoredDirectories: number, createdMedia: number, updatedMedia: number, createdSeries: number, updatedSeries: number } & { ' $fragmentName'?: 'JobDataInspector_LibraryScanOutput_Fragment' };
 
 type JobDataInspector_MetadataFetchJobOutput_Fragment = { __typename: 'MetadataFetchJobOutput' } & { ' $fragmentName'?: 'JobDataInspector_MetadataFetchJobOutput_Fragment' };
 
+type JobDataInspector_NotificationDispatchOutput_Fragment = { __typename: 'NotificationDispatchOutput' } & { ' $fragmentName'?: 'JobDataInspector_NotificationDispatchOutput_Fragment' };
+
 type JobDataInspector_PlaceholderGenerationOutput_Fragment = { __typename: 'PlaceholderGenerationOutput' } & { ' $fragmentName'?: 'JobDataInspector_PlaceholderGenerationOutput_Fragment' };
+
+type JobDataInspector_ProviderSourceHealthOutput_Fragment = { __typename: 'ProviderSourceHealthOutput' } & { ' $fragmentName'?: 'JobDataInspector_ProviderSourceHealthOutput_Fragment' };
 
 type JobDataInspector_SeriesScanOutput_Fragment = { __typename: 'SeriesScanOutput', totalFiles: number, ignoredFiles: number, skippedFiles: number, createdMedia: number, updatedMedia: number } & { ' $fragmentName'?: 'JobDataInspector_SeriesScanOutput_Fragment' };
 
 type JobDataInspector_ThumbnailGenerationOutput_Fragment = { __typename: 'ThumbnailGenerationOutput', visitedFiles: number, skippedFiles: number, generatedThumbnails: number, removedThumbnails: number } & { ' $fragmentName'?: 'JobDataInspector_ThumbnailGenerationOutput_Fragment' };
 
-export type JobDataInspectorFragment = JobDataInspector_AnalyzeMediaOutput_Fragment | JobDataInspector_LibraryScanOutput_Fragment | JobDataInspector_MetadataFetchJobOutput_Fragment | JobDataInspector_PlaceholderGenerationOutput_Fragment | JobDataInspector_SeriesScanOutput_Fragment | JobDataInspector_ThumbnailGenerationOutput_Fragment;
+export type JobDataInspectorFragment = JobDataInspector_AnalyzeMediaOutput_Fragment | JobDataInspector_AnnotationSyncOutput_Fragment | JobDataInspector_LibraryScanOutput_Fragment | JobDataInspector_MetadataFetchJobOutput_Fragment | JobDataInspector_NotificationDispatchOutput_Fragment | JobDataInspector_PlaceholderGenerationOutput_Fragment | JobDataInspector_ProviderSourceHealthOutput_Fragment | JobDataInspector_SeriesScanOutput_Fragment | JobDataInspector_ThumbnailGenerationOutput_Fragment;
+
+export type JobDataInspectorLogsQueryVariables = Exact<{
+  id: Scalars['String']['input'];
+}>;
+
+
+export type JobDataInspectorLogsQuery = { __typename?: 'Query', logs: { __typename?: 'PaginatedLogResponse', nodes: Array<{ __typename?: 'Log', id: number, level: LogLevel, message: string, timestamp: any }> } };
 
 export type ScheduledJobsQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -6819,14 +11916,23 @@ export type JobTableQuery = { __typename?: 'Query', jobs: { __typename?: 'Pagina
         { __typename?: 'AnalyzeMediaOutput' }
         & { ' $fragmentRefs'?: { 'JobDataInspector_AnalyzeMediaOutput_Fragment': JobDataInspector_AnalyzeMediaOutput_Fragment } }
       ) | (
+        { __typename?: 'AnnotationSyncOutput' }
+        & { ' $fragmentRefs'?: { 'JobDataInspector_AnnotationSyncOutput_Fragment': JobDataInspector_AnnotationSyncOutput_Fragment } }
+      ) | (
         { __typename?: 'LibraryScanOutput' }
         & { ' $fragmentRefs'?: { 'JobDataInspector_LibraryScanOutput_Fragment': JobDataInspector_LibraryScanOutput_Fragment } }
       ) | (
         { __typename?: 'MetadataFetchJobOutput' }
         & { ' $fragmentRefs'?: { 'JobDataInspector_MetadataFetchJobOutput_Fragment': JobDataInspector_MetadataFetchJobOutput_Fragment } }
       ) | (
+        { __typename?: 'NotificationDispatchOutput' }
+        & { ' $fragmentRefs'?: { 'JobDataInspector_NotificationDispatchOutput_Fragment': JobDataInspector_NotificationDispatchOutput_Fragment } }
+      ) | (
         { __typename?: 'PlaceholderGenerationOutput' }
         & { ' $fragmentRefs'?: { 'JobDataInspector_PlaceholderGenerationOutput_Fragment': JobDataInspector_PlaceholderGenerationOutput_Fragment } }
+      ) | (
+        { __typename?: 'ProviderSourceHealthOutput' }
+        & { ' $fragmentRefs'?: { 'JobDataInspector_ProviderSourceHealthOutput_Fragment': JobDataInspector_ProviderSourceHealthOutput_Fragment } }
       ) | (
         { __typename?: 'SeriesScanOutput' }
         & { ' $fragmentRefs'?: { 'JobDataInspector_SeriesScanOutput_Fragment': JobDataInspector_SeriesScanOutput_Fragment } }
@@ -6923,7 +12029,7 @@ export type RenameTagModalMutation = { __typename?: 'Mutation', renameTag: { __t
 export type TagTableQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TagTableQuery = { __typename?: 'Query', tags: Array<{ __typename?: 'Tag', id: number, name: string }> };
+export type TagTableQuery = { __typename?: 'Query', tags: Array<{ __typename?: 'Tag', id: number, name: string, kind: string }> };
 
 export type UserStatsQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -7979,6 +13085,7 @@ export const LibrarySettingsConfigFragmentDoc = new TypedDocumentString(`
     }
     processThumbnailColorsEvenWithoutConfig
     ignoreRules
+    oneshotsDirectory
   }
 }
     `, {"fragmentName":"LibrarySettingsConfig"}) as unknown as TypedDocumentString<LibrarySettingsConfigFragment, unknown>;
@@ -11211,6 +16318,16 @@ export const SmartListNavigationItemDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<SmartListNavigationItemQuery, SmartListNavigationItemQueryVariables>;
+export const NavigationEntityLibraryDocument = new TypedDocumentString(`
+    query NavigationEntityLibrary($id: ID!, $isSeries: Boolean!, $isBook: Boolean!) {
+  seriesById(id: $id) @include(if: $isSeries) {
+    libraryId
+  }
+  mediaById(id: $id) @include(if: $isBook) {
+    libraryId
+  }
+}
+    `) as unknown as TypedDocumentString<NavigationEntityLibraryQuery, NavigationEntityLibraryQueryVariables>;
 export const CreateEpubAnnotationDocument = new TypedDocumentString(`
     mutation CreateEpubAnnotation($input: CreateAnnotationInput!) {
   createAnnotation(input: $input) {
@@ -11651,6 +16768,7 @@ export const BookManagementSceneDocument = new TypedDocumentString(`
     tags {
       id
       name
+      kind
     }
     ...BookThumbnailSelector
   }
@@ -12203,6 +17321,9 @@ export const RecentlyAddedSeriesDocument = new TypedDocumentString(`
       percentageCompleted
       status
       createdAt
+      oneshotBook {
+        id
+      }
       media(take: 2, skip: 1) {
         id
         resolvedName
@@ -12241,6 +17362,54 @@ export const RecentlyAddedSeriesDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<RecentlyAddedSeriesQuery, RecentlyAddedSeriesQueryVariables>;
+export const HomeArrangementPreferencesDocument = new TypedDocumentString(`
+    query HomeArrangementPreferences {
+  me {
+    preferences {
+      homeArrangement {
+        sections {
+          visible
+          config {
+            __typename
+            ... on InProgressBooks {
+              name
+            }
+            ... on OnDeckBooks {
+              name
+            }
+            ... on RecentlyAdded {
+              entity
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<HomeArrangementPreferencesQuery, HomeArrangementPreferencesQueryVariables>;
+export const UpdateHomeArrangementDocument = new TypedDocumentString(`
+    mutation UpdateHomeArrangement($input: HomeArrangementInput!) {
+  updateHomeArrangement(input: $input) {
+    sections {
+      visible
+      config {
+        __typename
+        ... on InProgressBooks {
+          name
+        }
+        ... on OnDeckBooks {
+          name
+        }
+        ... on RecentlyAdded {
+          entity
+          name
+        }
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateHomeArrangementMutation, UpdateHomeArrangementMutationVariables>;
 export const LibraryLayoutDocument = new TypedDocumentString(`
     query LibraryLayout($id: ID!) {
   libraryById(id: $id) {
@@ -12276,6 +17445,9 @@ export const LibraryLayoutDocument = new TypedDocumentString(`
       hideSeriesView
     }
     ...LibrarySettingsConfig
+    config {
+      oneshotsDirectory
+    }
   }
 }
     fragment LibrarySettingsConfig on Library {
@@ -12317,6 +17489,7 @@ export const LibraryLayoutDocument = new TypedDocumentString(`
     }
     processThumbnailColorsEvenWithoutConfig
     ignoreRules
+    oneshotsDirectory
   }
 }`) as unknown as TypedDocumentString<LibraryLayoutQuery, LibraryLayoutQueryVariables>;
 export const VisitLibraryDocument = new TypedDocumentString(`
@@ -12427,6 +17600,9 @@ export const LibrarySeriesDocument = new TypedDocumentString(`
             thumbhash
           }
         }
+      }
+      oneshotBook {
+        id
       }
       thumbnail {
         url
@@ -12844,6 +18020,7 @@ export const SeriesSettingsSceneDocument = new TypedDocumentString(`
     tags {
       id
       name
+      kind
     }
     metadata {
       ...SeriesMetadataEditor
@@ -13268,6 +18445,18 @@ export const JobActionMenuDeleteLogsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<JobActionMenuDeleteLogsMutation, JobActionMenuDeleteLogsMutationVariables>;
+export const JobDataInspectorLogsDocument = new TypedDocumentString(`
+    query JobDataInspectorLogs($id: String!) {
+  logs(filter: {jobId: {eq: $id}}, pagination: {none: {unpaginated: true}}) {
+    nodes {
+      id
+      level
+      message
+      timestamp
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<JobDataInspectorLogsQuery, JobDataInspectorLogsQueryVariables>;
 export const ScheduledJobsDocument = new TypedDocumentString(`
     query ScheduledJobs {
   libraries(pagination: {none: {unpaginated: true}}) {
@@ -13476,6 +18665,7 @@ export const TagTableDocument = new TypedDocumentString(`
   tags {
     id
     name
+    kind
   }
 }
     `) as unknown as TypedDocumentString<TagTableQuery, TagTableQueryVariables>;

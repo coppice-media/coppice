@@ -7,24 +7,20 @@ import App from './App'
 function registerServiceWorkerWhenIdle() {
 	if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return
 
-	const doRegister = () => registerSW()
+	const scheduleRegistration = () => {
+		if ('requestIdleCallback' in globalThis) {
+			globalThis.requestIdleCallback(registerSW)
+		} else {
+			globalThis.setTimeout(registerSW, 0)
+		}
+	}
 
 	if (document.readyState === 'complete') {
-		'requestIdleCallback' in globalThis
-			? globalThis.requestIdleCallback(doRegister)
-			: globalThis.setTimeout(doRegister, 0)
+		scheduleRegistration()
 		return
 	}
 
-	globalThis.addEventListener(
-		'load',
-		() => {
-			'requestIdleCallback' in globalThis
-				? globalThis.requestIdleCallback(doRegister)
-				: globalThis.setTimeout(doRegister, 0)
-		},
-		{ once: true },
-	)
+	globalThis.addEventListener('load', scheduleRegistration, { once: true })
 }
 
 const rootElement = document.getElementById('root')

@@ -1,10 +1,28 @@
 ---
 title: Metadata Fetching
+description: Configure metadata providers in Coppice and understand live-credential limits
 ---
 
-<Callout type="warn">
-	This integration is highly experimental. Please use with caution and report any issues you
-	encounter.
-</Callout>
+# Metadata fetching
 
-Stump can fetch metadata for your media from external providers such as Hardcover, Open Library, Anilist, and ComicVine
+Coppice can map metadata from selected external providers onto media in your
+library. Metadata lookup is separate from fulfillment: Coppice does not search
+for or download media on your behalf.
+
+The [provider status](/docs/developer/provider-status) and [Hardcover developer
+record](/docs/developer/hardcover-integration) are the source of truth for
+provider capabilities and evidence.
+
+## Current status
+
+- **Hardcover metadata — Shipped; Contract-tested:** mapper behavior is covered
+  by offline payload fixtures.
+- **Hardcover live credentials — Blocked:** no live credential run has been
+  recorded.
+- **Hardcover account, progress, and journal sync — Planned; Blocked:** these
+  are not implied by metadata lookup and are not implemented.
+
+Provider support, credentials, rate limits, and response fields can change. Use
+the [providers guide](/docs/guides/integrations/metadata-fetching/providers) for
+the current setup boundary rather than assuming that a provider listed in an
+older configuration is live-verified.

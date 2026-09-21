@@ -21,16 +21,18 @@ use std::sync::Arc;
 
 use clap::Parser;
 use serde_json::Value;
-use stump_worker::client::{self, Assignment, ClientConfig, JobRunner, Progress};
-use stump_worker::transcode::TranscodeRunner;
+use stump_worker::storyteller::{StorytellerConfig, StorytellerRunner};
+use stump_worker::{
+	client, Assignment, ClientConfig, JobRunner, Progress, TranscodeRunner,
+};
 
 #[derive(Debug, Parser)]
 #[command(
 	name = "stump-worker",
-	about = "Run Stump jobs (transcode, challenge_solve) on this machine for a remote Stump server"
+	about = "Run Coppice jobs (transcode, challenge_solve) on this machine for a remote Coppice server"
 )]
 struct Args {
-	/// The Stump server's base URL, e.g. `https://stump.example`.
+	/// The Coppice server's base URL, e.g. `https://stump.example`.
 	#[arg(long)]
 	server: String,
 	/// The API key of a paired device of kind `Worker`.
@@ -59,6 +61,14 @@ struct Args {
 	#[cfg(feature = "browser")]
 	#[arg(long, default_value_t = stump_worker::SOLVE_BUDGET.as_secs())]
 	solve_budget: u64,
+	/// Optional worker-local Storyteller URL. Credentials are read only by
+	/// this process and are never included in the server job input/archive.
+	#[arg(long, env = "STUMP_STORYTELLER_URL")]
+	storyteller_url: Option<String>,
+	#[arg(long, env = "STUMP_STORYTELLER_USERNAME", requires = "storyteller_url")]
+	storyteller_username: Option<String>,
+	#[arg(long, env = "STUMP_STORYTELLER_PASSWORD", requires = "storyteller_url")]
+	storyteller_password: Option<String>,
 	/// The name reported to the server's Workers page. Defaults to the
 	/// hostname, which is what an operator recognises the box by.
 	#[arg(long)]
@@ -138,6 +148,7 @@ async fn main() -> std::process::ExitCode {
 			);
 			runners.push((stump_worker::TRANSCODE, Arc::new(runner)));
 		},
+
 		Err(error) => {
 			// Not fatal any more: a browser worker is a legitimate deployment
 			// with no `ffmpeg` on it at all. Advertising `transcode` anyway
@@ -145,6 +156,23 @@ async fn main() -> std::process::ExitCode {
 			// its own fallback.
 			tracing::warn!(%error, "No usable ffmpeg; not advertising transcode");
 		},
+	}
+	if let Some(url) = args.storyteller_url.clone() {
+		let username = args.storyteller_username.clone().unwrap_or_default();
+		let password = args.storyteller_password.clone().unwrap_or_default();
+		match StorytellerRunner::new(
+			config.clone(),
+			StorytellerConfig::new(url, username, password),
+		) {
+			Ok(runner) => {
+				tracing::info!("Advertising Storyteller ALIGN");
+				runners.push((stump_worker::ALIGN, Arc::new(runner)));
+			},
+			Err(error) => {
+				tracing::error!(%error, "Storyteller configuration is unusable");
+				return std::process::ExitCode::FAILURE;
+			},
+		}
 	}
 
 	#[cfg(feature = "browser")]

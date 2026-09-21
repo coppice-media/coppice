@@ -1458,8 +1458,8 @@ async fn a_local_session_older_than_the_head_is_provenance_only() {
 	// less progress does not rewind a listener.
 	assert_eq!(current_time(&fixture).await, 9.0);
 
-	// It still reached the reading state as provenance, and it is still a
-	// listening-history row: the listening happened.
+	// It reached the reading state as provenance, but did not create or extend
+	// listening history because the head rejected the stale position.
 	let applied = fixture.backend.applied_updates();
 	assert_eq!(
 		applied.last().expect("an applied update").1.position_ms,
@@ -1473,9 +1473,7 @@ async fn a_local_session_older_than_the_head_is_provenance_only() {
 		None,
 	)
 	.await;
-	assert_eq!(sessions["total"], 1);
-	assert_eq!(sessions["sessions"][0]["id"], "local-2");
-	assert_eq!(sessions["sessions"][0]["playMethod"], 3);
+	assert_eq!(sessions["total"], 0);
 }
 
 #[tokio::test]
@@ -1526,8 +1524,8 @@ async fn local_all_reports_per_session_whether_the_head_moved() {
 	)
 	.await;
 	assert_eq!(
-		sessions["total"], 2,
-		"both merged sessions are history rows"
+		sessions["total"], 1,
+		"only the accepted merged session is a history row"
 	);
 }
 

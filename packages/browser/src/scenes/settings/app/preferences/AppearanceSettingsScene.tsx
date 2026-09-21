@@ -13,6 +13,7 @@ import EnableJobOverlayToggle from './EnableJobOverlayToggle'
 import FontSelect from './FontSelect'
 import GradientToggle from './GradientToggle'
 import HideScrollbarToggle from './HideScrollbarToggle'
+import HomeArrangementPreference from './HomeArrangementPreference'
 import InterfaceRoundnessPreference from './InterfaceRoundnessPreference'
 import LiveRefetchToggle from './LiveRefetchToggle'
 import MaxWidthPreference from './MaxWidthPreference'
@@ -31,7 +32,7 @@ export default function AppearanceSettingsScene() {
 	return (
 		<Container>
 			<Helmet>
-				<title>Stump | {t('settingsScene.app/preferences.helmet')}</title>
+				<title>Coppice | {t('settingsScene.app/preferences.helmet')}</title>
 			</Helmet>
 
 			<ContentContainer>
@@ -86,6 +87,10 @@ export default function AppearanceSettingsScene() {
 							<NavigationArrangement />
 						</Suspense>
 					</NewCard>
+
+					<Suspense>
+						<HomeArrangementPreference />
+					</Suspense>
 
 					<NewCard
 						label={t(getKey('displayAndSpacing.label'))}

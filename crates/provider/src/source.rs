@@ -599,7 +599,7 @@ mod tests {
 			assert_eq!(
 				header("user-agent"),
 				Some("Mozilla/5.0 (operator)"),
-				"the configured user agent must replace the Stump default"
+				"the configured user agent must replace the Coppice default"
 			);
 		}
 		// A per-request header the engine needs is still sent.

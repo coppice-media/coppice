@@ -34,8 +34,8 @@ use crate::{
 use stump_jobs::{JobContext, JobError, JobExecuteLog, JobProgress};
 use stump_scanner::{BookVisitOperation, CustomVisitResult, TagCache};
 
-const MAX_INSERT_CHUNK_SIZE: usize = 250;
-async fn build_tag_cache(
+pub(crate) const MAX_INSERT_CHUNK_SIZE: usize = 250;
+pub(crate) async fn build_tag_cache(
 	conn: &DatabaseConnection,
 	all_tag_names: HashSet<String>,
 ) -> CoreResult<TagCache> {
@@ -105,7 +105,7 @@ impl BookVisitResult {
 }
 
 /// build the `media_tag` lookup record for given book pulling from cache
-fn build_tag_link_rows(
+pub(crate) fn build_tag_link_rows(
 	media_id: &str,
 	tag_names: &[String],
 	cache: &TagCache,
@@ -120,6 +120,57 @@ fn build_tag_link_rows(
 			..Default::default()
 		})
 		.collect()
+}
+/// Inserts one batch of already-built media inside an open transaction.
+///
+/// The caller owns the transaction lifecycle; this helper keeps one-shot insertion on the same
+/// media/tag/audio persistence path as regular scans.
+pub(crate) async fn insert_media_in_txn(
+	txn: &DatabaseTransaction,
+	media_models: Vec<media::ActiveModel>,
+	meta_models: Vec<media_metadata::ActiveModel>,
+	tags_by_media: Vec<(String, Vec<String>)>,
+	audio_by_media: Vec<(String, AudioFacts)>,
+	tag_cache: &TagCache,
+) -> CoreResult<()> {
+	let media_batch_size = get_insert_batch_size(media::Column::iter().count());
+	for batch in media_models.chunks(media_batch_size) {
+		media::Entity::insert_many(batch.to_vec())
+			.exec(txn)
+			.await
+			.map_err(CoreError::from)?;
+	}
+
+	let metadata_batch_size =
+		get_insert_batch_size(media_metadata::Column::iter().count());
+	for batch in meta_models.chunks(metadata_batch_size) {
+		media_metadata::Entity::insert_many(batch.to_vec())
+			.exec(txn)
+			.await
+			.map_err(CoreError::from)?;
+	}
+
+	for (media_id, facts) in audio_by_media {
+		audio_service::replace_in(txn, &media_id, &facts)
+			.await
+			.map_err(CoreError::from)?;
+	}
+
+	let tag_links = tags_by_media
+		.iter()
+		.flat_map(|(media_id, tag_names)| {
+			build_tag_link_rows(media_id, tag_names, tag_cache)
+		})
+		.collect::<Vec<_>>();
+	let tag_batch_size = get_insert_batch_size(media_tag::Column::iter().count());
+	for batch in tag_links.chunks(tag_batch_size) {
+		media_tag::Entity::insert_many(batch.to_vec())
+			.exec(txn)
+			.await
+			.map_err(CoreError::from)?;
+	}
+
+	Ok(())
 }
 
 pub(crate) async fn update_media(
@@ -567,7 +618,7 @@ async fn build_series(for_library: &str, path: &Path) -> CoreResult<BuiltSeries>
 
 /// a type alias for the unordered stream of futures returned by concurernt builds of
 /// managed entities
-type BuiltEntityFutures<T, R = PathBuf> =
+pub(crate) type BuiltEntityFutures<T, R = PathBuf> =
 	FuturesUnordered<BoxFuture<'static, Result<T, (CoreError, R)>>>;
 
 /// Safely builds a series from a list of paths concurrently, with a maximum concurrency limit
@@ -1348,6 +1399,7 @@ mod missing_series_lifecycle {
 			dir_mtimes: Arc::new(HashMap::new()),
 			library_id: LIBRARY_ID.to_string(),
 			series_id: series_id.map(str::to_string),
+			oneshots_directory: None,
 		}
 	}
 

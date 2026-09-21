@@ -1,6 +1,13 @@
+use chrono::Utc;
 use sea_orm::{entity::prelude::*, prelude::async_trait::async_trait, ActiveValue};
 
 use crate::{entity::user::AuthUser, shared::book_club::BookClubMemberRole};
+
+pub const PENDING: &str = "PENDING";
+pub const ACCEPTED: &str = "ACCEPTED";
+pub const DECLINED: &str = "DECLINED";
+pub const REVOKED: &str = "REVOKED";
+pub const EXPIRED: &str = "EXPIRED";
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
@@ -14,6 +21,24 @@ pub struct Model {
 	pub user_id: String,
 	#[sea_orm(column_type = "Text")]
 	pub book_club_id: String,
+	#[sea_orm(column_type = "Text")]
+	pub status: String,
+	#[sea_orm(column_type = "custom(\"DATETIME\")")]
+	pub created_at: DateTimeWithTimeZone,
+	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
+	pub expires_at: Option<DateTimeWithTimeZone>,
+	#[sea_orm(column_type = "Text", nullable)]
+	pub created_by_user_id: Option<String>,
+	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
+	pub accepted_at: Option<DateTimeWithTimeZone>,
+	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
+	pub declined_at: Option<DateTimeWithTimeZone>,
+	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
+	pub revoked_at: Option<DateTimeWithTimeZone>,
+	#[sea_orm(column_type = "Text", nullable)]
+	pub revoked_by_user_id: Option<String>,
+	#[sea_orm(column_type = "Text", nullable)]
+	pub audit_note: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -54,8 +79,16 @@ impl ActiveModelBehavior for ActiveModel {
 	where
 		C: ConnectionTrait,
 	{
-		if insert && self.id.is_not_set() {
-			self.id = ActiveValue::Set(Uuid::new_v4().to_string());
+		if insert {
+			if self.id.is_not_set() {
+				self.id = ActiveValue::Set(Uuid::new_v4().to_string());
+			}
+			if self.status.is_not_set() {
+				self.status = ActiveValue::Set(PENDING.to_owned());
+			}
+			if self.created_at.is_not_set() {
+				self.created_at = ActiveValue::Set(Utc::now().into());
+			}
 		}
 
 		Ok(self)
@@ -67,8 +100,28 @@ impl Entity {
 		Self::find().filter(Column::BookClubId.eq(book_club_id))
 	}
 
+	pub fn find_live_for_user_and_id(user: &AuthUser, id: &str) -> Select<Entity> {
+		Self::find_for_user_and_id(user, id).filter(
+			Column::Status.eq(PENDING).and(
+				Column::ExpiresAt
+					.is_null()
+					.or(Column::ExpiresAt.gt(DateTimeWithTimeZone::from(Utc::now()))),
+			),
+		)
+	}
+
 	pub fn find_for_user(user: &AuthUser) -> Select<Entity> {
 		Self::find().filter(Column::UserId.eq(&user.id))
+	}
+
+	pub fn find_pending_for_user(user: &AuthUser) -> Select<Entity> {
+		Self::find_for_user(user).filter(
+			Column::Status.eq(PENDING).and(
+				Column::ExpiresAt
+					.is_null()
+					.or(Column::ExpiresAt.gt(DateTimeWithTimeZone::from(Utc::now()))),
+			),
+		)
 	}
 
 	pub fn find_for_user_and_id(user: &AuthUser, id: &str) -> Select<Entity> {
@@ -123,6 +176,15 @@ mod tests {
 			role: Set(BookClubMemberRole::Member),
 			user_id: Set("456".to_owned()),
 			book_club_id: Set("789".to_owned()),
+			status: Set(PENDING.to_owned()),
+			created_at: Set(Utc::now().into()),
+			expires_at: Set(None),
+			created_by_user_id: Set(None),
+			accepted_at: Set(None),
+			declined_at: Set(None),
+			revoked_at: Set(None),
+			revoked_by_user_id: Set(None),
+			audit_note: Set(None),
 		};
 
 		let model = tokio_test::block_on(model.before_save(&conn, true)).unwrap();

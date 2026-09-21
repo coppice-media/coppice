@@ -14,6 +14,10 @@ use crate::error::{DeviceError, DeviceResult};
 
 /// A freshly minted credential. `secret` is the plaintext and is returned
 /// exactly once; only its hash is stored.
+///
+/// A Coppice device has two credentials. The API key remains the primary
+/// credential for compatibility with the original singular create/rotate
+/// return type; [`Self::credentials`] exposes the complete one-time result.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[cfg_attr(feature = "graphql", graphql(name = "IssuedDeviceCredential"))]
@@ -23,6 +27,32 @@ pub struct IssuedCredential {
 	/// The stored reference: the API key's short token, or the liseur token id
 	pub credential_ref: String,
 	pub secret: String,
+	/// Additional secrets minted atomically for the same device. This is kept
+	/// out of the item wire shape; callers should use [`Self::credentials`].
+	#[serde(skip)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub(crate) additional_credentials: Vec<Self>,
+}
+
+impl IssuedCredential {
+	/// Returns the primary credential followed by every companion credential
+	/// minted in the same transaction.
+	///
+	/// The primary item is intentionally retained first for compatibility;
+	/// callers that need a particular credential must inspect `kind` and
+	/// `protocol`, never rely on this ordering.
+	pub fn credentials(&self) -> Vec<Self> {
+		let mut credentials = Vec::with_capacity(1 + self.additional_credentials.len());
+		credentials.push(Self {
+			kind: self.kind,
+			protocol: self.protocol,
+			credential_ref: self.credential_ref.clone(),
+			secret: self.secret.clone(),
+			additional_credentials: Vec::new(),
+		});
+		credentials.extend(self.additional_credentials.iter().cloned());
+		credentials
+	}
 }
 
 /// How an authenticated request identifies its credential.
@@ -54,13 +84,15 @@ impl CredentialRef<'_> {
 pub fn protocol_for(kind: DeviceKind) -> DeviceProtocol {
 	match kind {
 		DeviceKind::Kobo => DeviceProtocol::Kobo,
-		DeviceKind::Koreader => DeviceProtocol::Koreader,
+		DeviceKind::Koreader | DeviceKind::Coppice | DeviceKind::Crosspoint => {
+			DeviceProtocol::Koreader
+		},
 		DeviceKind::Mihon | DeviceKind::Komelia => DeviceProtocol::Komga,
 		DeviceKind::Opds => DeviceProtocol::Opds,
-		// Audiobookshelf is a compatibility surface rather than a protocol
-		// the registry mints credentials for, so it buckets with the native
-		// API, as the Kavita surface does.
-		DeviceKind::Abs => DeviceProtocol::Api,
+		// Audiobookshelf and Kavita are compatibility surfaces rather than
+		// protocols the registry mints credentials for, so they use the native
+		// API protocol.
+		DeviceKind::Abs | DeviceKind::Kavita => DeviceProtocol::Api,
 		DeviceKind::Liseur => DeviceProtocol::Liseur,
 		DeviceKind::Api | DeviceKind::Web => DeviceProtocol::Api,
 		// A worker authenticates with a prefixed API key on the native API,
@@ -86,12 +118,18 @@ pub fn api_key_permissions_for(kind: DeviceKind) -> APIKeyPermissions {
 			UserPermission::AccessKoboSync,
 			UserPermission::DownloadFile,
 		]),
-		DeviceKind::Koreader => {
+		DeviceKind::Crosspoint => {
 			APIKeyPermissions::Custom(vec![UserPermission::AccessKoreaderSync])
 		},
-		DeviceKind::Mihon | DeviceKind::Komelia | DeviceKind::Opds | DeviceKind::Abs => {
-			APIKeyPermissions::Custom(vec![UserPermission::DownloadFile])
-		},
+		DeviceKind::Koreader | DeviceKind::Coppice => APIKeyPermissions::Custom(vec![
+			UserPermission::AccessKoreaderSync,
+			UserPermission::DownloadFile,
+		]),
+		DeviceKind::Mihon
+		| DeviceKind::Komelia
+		| DeviceKind::Opds
+		| DeviceKind::Abs
+		| DeviceKind::Kavita => APIKeyPermissions::Custom(vec![UserPermission::DownloadFile]),
 		// A worker opens the socket and downloads the inputs of the jobs it
 		// claims; it never acts as the user, so its key is narrowed to those
 		// two rights and nothing else.

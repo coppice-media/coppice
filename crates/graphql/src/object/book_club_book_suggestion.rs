@@ -24,22 +24,24 @@ impl From<book_club_book_suggestion::Model> for BookClubBookSuggestion {
 impl BookClubBookSuggestion {
 	/// Get the member who suggested this book
 	async fn suggested_by(&self, ctx: &Context<'_>) -> Result<BookClubMember> {
+		ensure_membership(ctx, &self.model.book_club_id).await?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let member = book_club_member::Entity::find_by_id(&self.model.suggested_by_id)
+			.filter(book_club_member::Column::BookClubId.eq(&self.model.book_club_id))
 			.one(core.conn.as_ref())
 			.await?
 			.ok_or("Member not found")?;
 
 		Ok(BookClubMember::from(member))
 	}
-
-	/// Get the member who resolved this suggestion
 	async fn resolved_by(&self, ctx: &Context<'_>) -> Result<Option<BookClubMember>> {
+		ensure_membership(ctx, &self.model.book_club_id).await?;
 		let core = ctx.data::<CoreContext>()?;
 
 		if let Some(ref resolved_by_id) = self.model.resolved_by_id {
 			let member = book_club_member::Entity::find_by_id(resolved_by_id)
+				.filter(book_club_member::Column::BookClubId.eq(&self.model.book_club_id))
 				.one(core.conn.as_ref())
 				.await?;
 
@@ -52,6 +54,7 @@ impl BookClubBookSuggestion {
 	/// Get the count of likes (votes) on this suggestion
 	/// TODO(dataloader): Create dataloader
 	async fn like_count(&self, ctx: &Context<'_>) -> Result<i64> {
+		ensure_membership(ctx, &self.model.book_club_id).await?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let count = book_club_book_suggestion_like::Entity::find()
@@ -64,8 +67,8 @@ impl BookClubBookSuggestion {
 		Ok(count as i64)
 	}
 
-	/// Check if the current user has liked this suggestion
 	async fn is_liked_by_me(&self, ctx: &Context<'_>) -> Result<bool> {
+		ensure_membership(ctx, &self.model.book_club_id).await?;
 		let core = ctx.data::<CoreContext>()?;
 		let auth_ctx = ctx.data::<stump_auth::AuthContext>()?;
 
@@ -90,5 +93,22 @@ impl BookClubBookSuggestion {
 		} else {
 			Ok(false)
 		}
+	}
+}
+
+async fn ensure_membership(ctx: &Context<'_>, book_club_id: &str) -> Result<()> {
+	let stump_auth::AuthContext { user, .. } = ctx.data::<stump_auth::AuthContext>()?;
+	if user.is_server_owner {
+		return Ok(());
+	}
+	let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+	if book_club_member::Entity::find_by_club_for_user(user, book_club_id)
+		.one(conn)
+		.await?
+		.is_some()
+	{
+		Ok(())
+	} else {
+		Err("You must be a member of the book club to access this field".into())
 	}
 }

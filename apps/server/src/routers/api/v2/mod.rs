@@ -9,6 +9,8 @@ pub(crate) mod ingest_events;
 pub(crate) mod library;
 pub(crate) mod media;
 mod oidc;
+#[cfg(feature = "readium")]
+pub(crate) mod read_aloud;
 pub(crate) mod reading;
 pub(crate) mod series;
 pub(crate) mod transcode_job;
@@ -51,6 +53,8 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 	#[cfg(feature = "readium")]
 	let router = router.merge(epub::mount(app_state.clone()));
 
+	#[cfg(feature = "readium")]
+	let router = router.merge(read_aloud::mount(app_state.clone()));
 	router
 		.merge(series::mount(app_state.clone()))
 		.merge(library::mount(app_state.clone()))

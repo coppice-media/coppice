@@ -4,7 +4,7 @@ title: Layout
 
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
-Stump has a flexible layout system that allows you to customize the layout of the app to your liking. There are more options planned, but for now the two main options are navigation placement
+Coppice has a flexible layout system that allows you to customize the layout of the app to your liking. There are more options planned, but for now the two main options are navigation placement
 
 ## Navigation Placement
 
@@ -47,7 +47,7 @@ The topbar is a horizontal navigation, top-aligned and fixed to the viewport wid
 The topbar has a special feature that allows you to quickly access the last library you visited. This is a convenience feature with no real equivalent in the sidebar, and might be useful for users who have many libraries but frequently visit the same one.
 
 <Callout>
-	Stump tracks the timestamp for each library you visit, but only exposes the most recent one in the
+	Coppice tracks the timestamp for each library you visit, but only exposes the most recent one in the
 	UI. If you feel like this feature could be improved to utilize a history of visited libraries,
 	please let us know!
 </Callout>
@@ -92,6 +92,23 @@ To make any changes, you need to click the lock icon to unlock the arrangement. 
 </Step>
 
 </Steps>
+
+## Home Page Sections
+
+In appearance settings, find **Home page** and select **Edit** next to **Home sections**.
+You can show or hide Continue reading, Your next read, Recently added books, and
+Recently added series. Use the eye button to show or hide a section, and drag its
+label to change its position. To reorder with the keyboard, focus a section label,
+press Space to pick it up, use the arrow keys to move it, and press Space again to drop it.
+
+Use the **Reset**, **Cancel**, and **Save** buttons at the top of the editor.
+Select **Save** to apply your changes. These preferences are stored on the server
+for your account and are restored when you return to the web app. **Cancel** leaves
+the saved layout unchanged. **Reset**, followed by **Save**, restores
+all four sections in their original order.
+
+You can hide every section. The home page will then show a link back to appearance
+settings so you can enable them again.
 
 ## Future Plans
 

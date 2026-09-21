@@ -1,0 +1,115 @@
+---
+title: Shelfmark and fulfillment boundaries
+description: How external fulfillment output can enter Coppice, and what remains planned
+---
+
+[Shelfmark](https://github.com/calibrain/shelfmark) is a separate self-hosted
+book/audiobook search and request/download application. It is **not currently
+integrated into Coppice**. Treat it as an external fulfillment companion: it
+may obtain an allowed file through its own workflow, but Coppice does not search
+Shelfmark, host a Shelfmark service, or bundle a Shelfmark dependency.
+
+The immediate boundary is deliberately boring and reliable: Shelfmark can write
+folder output to the same mounted handoff directory that Coppice watches as an
+ingest drop. Both components exist, but this combined deployment is
+**Source-only** until an end-to-end replay is recorded. A future request bridge
+must wait for a stable, token-authenticated Shelfmark service API. Do not build a
+production client against Shelfmark's browser-session endpoints.
+
+## Status
+
+| Area | Status | Evidence or boundary |
+| --- | --- | --- |
+| Shared-folder output into staged ingest | Shipped components; Source-only composition | Coppice staged ingest and Shelfmark folder output exist independently; their combined handoff has not been replayed. |
+| Shelfmark as a bundled provider | Blocked | No Shelfmark connector or service is present in this repository. |
+| `requests`/wanted ledger | Planned | The ledger is a future product capability; it is not an existing database table, queue, or API. |
+| Token-auth request bridge | Planned; Blocked | It waits for a stable Shelfmark service API and an agreed token-auth contract. |
+| Search or catalog provider inside Coppice | Blocked | Coppice is a host and ingest boundary, not a media search/download service. |
+
+
+## Configure the shared-folder boundary
+
+Shelfmark's documented folder mode uses these settings:
+
+```bash
+BOOKS_OUTPUT_MODE=folder
+INGEST_DIR=/handoff
+DESTINATION_AUDIOBOOK=/handoff
+HARDLINK_TORRENTS_AUDIOBOOK=false
+```
+
+Mount `/handoff` at Coppice's `INGEST_DROP_DIR`. Coppice expects one
+subdirectory per destination library, named by that library's ID, so point the
+Shelfmark output at `/handoff/<library-id>` rather than the drop root when the
+Shelfmark deployment permits a per-user or per-output destination.
+
+Do not enable Shelfmark's hardlink mode or its “Rename and Organize” mode when
+the destination is Coppice's ingest folder; Shelfmark's own volume guidance
+warns against both combinations for library-ingest destinations. Align the
+container UID/GID and mount permissions so Shelfmark can write and Coppice can
+read. Keep each service's Hardcover credential separate.
+
+## Current handoff: shared folder to ingest
+
+1. Use Shelfmark, a manual workflow, or another provider host **where lawful**
+   to produce a file you are allowed to store.
+2. Export or copy that file into the shared folder configured for Coppice's
+   staged ingest.
+3. Let ingest preserve the uploaded bytes, analyze the container and metadata,
+   and report quality or metadata candidates.
+4. Confirm the identifier match before treating the file as a fulfilled library
+   item.
+
+The [staged ingest developer page](/docs/developer/modular-ingest) is the source
+of truth for the ingest lifecycle and its evidence. Ingest does not silently
+turn a wanted item into a fulfilled item: matching and operator confirmation
+remain explicit boundaries.
+
+## Future request flow
+
+The intended future orchestration is:
+
+```text
+search
+  -> wanted request
+  -> fulfillment connector
+     (Shelfmark / manual / lawful provider host)
+  -> ingest
+  -> identifier match
+  -> fulfilled
+```
+
+The `wanted request` step is **Planned** until a requests/wanted ledger exists.
+The connector step is an interface boundary, not permission to add an
+unlawful source or a hidden downloader. A future Shelfmark bridge should only
+be documented as **Shipped** after its token-auth service contract and an
+end-to-end fulfillment replay are both available.
+
+## Alignment is separate
+
+Read-aloud alignment is not a fulfillment provider. It starts only after the
+EPUB and audiobook pair has been confirmed:
+
+```text
+confirmed EPUB + audiobook pair
+  -> existing timing import
+  -> Storyteller worker (future)
+  -> native CTC fallback (future)
+```
+
+Storyteller remains a future worker-side alignment backend. It is never a search
+or catalog provider and is not a bundled dependency. Synchronized Storyteller
+read-aloud EPUB playback is **Planned** and currently **Blocked**; ordinary EPUB
+and ordinary audiobook playback remain separate shipped flows.
+
+## What to configure today
+
+Configure the Coppice ingest drop folder using the [server configuration
+guide](/docs/guides/configuration/server-config), then follow the [modular
+deployment guide](/docs/guides/configuration/modular-deployment) if you want a
+headless server without the web UI. Keep the shared folder on a boundary where
+both the external workflow and Coppice have the intended read/write access.
+
+Do not set up a purported Shelfmark API URL from this page: there is no stable
+service contract to configure yet. Track the request bridge as **Planned** until
+the external service publishes a token-auth API that can be pinned and replayed.

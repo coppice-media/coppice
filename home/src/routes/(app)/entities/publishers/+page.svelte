@@ -46,7 +46,7 @@
 </script>
 
 <svelte:head>
-	<title>Publishers · Stump</title>
+	<title>Publishers · Coppice</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6">

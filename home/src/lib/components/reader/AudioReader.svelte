@@ -196,7 +196,7 @@
 
 	const chapterNote = $derived(
 		audio.chapterSource === 'PER_TRACK'
-			? 'One per file — this publication ships no chapter marks, so Stump synthesized these from the track list.'
+			? 'One per file — this publication ships no chapter marks, so Coppice synthesized these from the track list.'
 			: null
 	);
 

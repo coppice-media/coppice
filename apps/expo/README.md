@@ -1,12 +1,12 @@
-# Stump Mobile App
+# Coppice mobile app
 
-This is the expo mobile app for Stump. The app runs on both iOS and Android.
+This is the Expo mobile app for Coppice. It runs on iOS and Android.
 
-## Getting Started
+## Getting started
 
 To get started with local development, the biggest barrier is setting up the native modules. The app uses the Swift and Kotlin [Readium](https://github.com/readium/mobile) toolkit for native EPUB parsing/rendering.
 
-### Native Development
+### Native development
 
 The process differs slightly between iOS and Android.
 
@@ -56,6 +56,6 @@ To generate an APK for the app, just use the `apk` profile:
 eas build --profile apk --platform android --local
 ```
 
-## License 📝
+## License
 
 The `expo` app is licensed under [GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html)

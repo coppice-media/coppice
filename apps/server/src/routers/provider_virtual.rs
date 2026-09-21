@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use models::entity::{library, series, user::AuthUser};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use stump_core::component_runtime::COMPONENT_PROVIDERS;
 use stump_core::Ctx;
 use stump_komga::{
 	KomgaAuthor, KomgaLibraryId, KomgaSeries, KomgaSeriesBookMetadata, KomgaSeriesId,
@@ -21,9 +22,11 @@ use stump_komga::{
 use stump_media::ContentType;
 use stump_provider::virtual_path;
 use stump_provider::{BrowseKind, ProviderHost, RemoteSeries, SeriesStatus};
-
 /// The host, when providers are compiled in and enabled at runtime.
 pub fn provider_host(ctx: &Ctx) -> Option<Arc<ProviderHost>> {
+	if !ctx.component_enabled(COMPONENT_PROVIDERS) {
+		return None;
+	}
 	ctx.provider_host()
 }
 

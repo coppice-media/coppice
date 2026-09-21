@@ -123,20 +123,22 @@ async fn compute_visible_counts(
 	})
 }
 
-fn build_publication_entries(
+async fn build_publication_entries(
 	books: Vec<OPDSPublicationEntity>,
 	visible_counts: &std::collections::HashMap<String, i32>,
 	api_key: Option<String>,
 ) -> Vec<OpdsEntry> {
-	books
-		.into_iter()
-		.map(|book| {
-			let visible_page_count = visible_counts.get(&book.media.id).copied();
+	let mut entries = Vec::with_capacity(books.len());
+	for book in books {
+		let visible_page_count = visible_counts.get(&book.media.id).copied();
+		entries.push(
 			OPDSEntryBuilder::<OPDSPublicationEntity>::new(book, api_key.clone())
 				.with_visible_page_count(visible_page_count)
 				.into_opds_entry()
-		})
-		.collect()
+				.await,
+		);
+	}
+	entries
 }
 
 pub(crate) async fn catalog(Extension(req): Extension<AuthContext>) -> APIResult<Xml> {
@@ -247,7 +249,7 @@ pub(crate) async fn catalog(Extension(req): Extension<AuthContext>) -> APIResult
 
 	let feed = OpdsFeed::new(
 		"root".to_string(),
-		"Stump OPDS catalog".to_string(),
+		"Coppice OPDS catalog".to_string(),
 		Some(links),
 		entries,
 	);
@@ -275,7 +277,7 @@ pub(crate) async fn keep_reading(
 		.await?;
 
 	let visible_counts = compute_visible_counts(&ctx, &books).await;
-	let entries = build_publication_entries(books, &visible_counts, req.api_key());
+	let entries = build_publication_entries(books, &visible_counts, req.api_key()).await;
 
 	let feed = OpdsFeed::new(
 		"keepReading".to_string(),
@@ -313,12 +315,14 @@ pub(crate) async fn get_libraries(
 		.order_by_asc(library::Column::Name)
 		.all(ctx.conn.as_ref())
 		.await?;
-	let entries = libraries
-		.into_iter()
-		.map(|l| {
-			OPDSEntryBuilder::<library::Model>::new(l, req.api_key()).into_opds_entry()
-		})
-		.collect::<Vec<OpdsEntry>>();
+	let mut entries = Vec::with_capacity(libraries.len());
+	for library in libraries {
+		entries.push(
+			OPDSEntryBuilder::<library::Model>::new(library, req.api_key())
+				.into_opds_entry()
+				.await,
+		);
+	}
 
 	let feed = OpdsFeed::new(
 		"allLibraries".to_string(),
@@ -386,12 +390,14 @@ pub(crate) async fn get_library_by_id(
 		.count(ctx.conn.as_ref())
 		.await?;
 
-	let entries = series
-		.into_iter()
-		.map(|s| {
-			OPDSEntryBuilder::<series::Model>::new(s, req.api_key()).into_opds_entry()
-		})
-		.collect::<Vec<OpdsEntry>>();
+	let mut entries = Vec::with_capacity(series.len());
+	for series in series {
+		entries.push(
+			OPDSEntryBuilder::<series::Model>::new(series, req.api_key())
+				.into_opds_entry()
+				.await,
+		);
+	}
 
 	let feed = OPDSFeedBuilder::new(req.api_key()).paginated(OPDSFeedBuilderParams {
 		id,
@@ -585,12 +591,14 @@ pub(crate) async fn get_series(
 		.count(ctx.conn.as_ref())
 		.await?;
 
-	let entries = series
-		.into_iter()
-		.map(|s| {
-			OPDSEntryBuilder::<series::Model>::new(s, req.api_key()).into_opds_entry()
-		})
-		.collect::<Vec<OpdsEntry>>();
+	let mut entries = Vec::with_capacity(series.len());
+	for series in series {
+		entries.push(
+			OPDSEntryBuilder::<series::Model>::new(series, req.api_key())
+				.into_opds_entry()
+				.await,
+		);
+	}
 
 	let feed = OPDSFeedBuilder::new(req.api_key()).paginated(OPDSFeedBuilderParams {
 		id: "allSeries".to_string(),
@@ -623,12 +631,14 @@ pub(crate) async fn get_latest_series(
 		.count(ctx.conn.as_ref())
 		.await?;
 
-	let entries = series
-		.into_iter()
-		.map(|s| {
-			OPDSEntryBuilder::<series::Model>::new(s, req.api_key()).into_opds_entry()
-		})
-		.collect::<Vec<OpdsEntry>>();
+	let mut entries = Vec::with_capacity(series.len());
+	for series in series {
+		entries.push(
+			OPDSEntryBuilder::<series::Model>::new(series, req.api_key())
+				.into_opds_entry()
+				.await,
+		);
+	}
 
 	let feed = OPDSFeedBuilder::new(req.api_key()).paginated(OPDSFeedBuilderParams {
 		id: "latestSeries".to_string(),
@@ -684,7 +694,7 @@ pub(crate) async fn get_series_by_id(
 		.await?;
 
 	let visible_counts = compute_visible_counts(&ctx, &books).await;
-	let entries = build_publication_entries(books, &visible_counts, req.api_key());
+	let entries = build_publication_entries(books, &visible_counts, req.api_key()).await;
 
 	let title = metadata
 		.and_then(|m| m.title.clone())
@@ -744,7 +754,9 @@ pub(crate) async fn search_feed(
 		.await?;
 	for lib in libraries {
 		entries.push(
-			OPDSEntryBuilder::<library::Model>::new(lib, req.api_key()).into_opds_entry(),
+			OPDSEntryBuilder::<library::Model>::new(lib, req.api_key())
+				.into_opds_entry()
+				.await,
 		);
 	}
 
@@ -761,7 +773,9 @@ pub(crate) async fn search_feed(
 		.await?;
 	for s in series {
 		entries.push(
-			OPDSEntryBuilder::<series::Model>::new(s, req.api_key()).into_opds_entry(),
+			OPDSEntryBuilder::<series::Model>::new(s, req.api_key())
+				.into_opds_entry()
+				.await,
 		);
 	}
 
@@ -784,7 +798,8 @@ pub(crate) async fn search_feed(
 		entries.push(
 			OPDSEntryBuilder::<OPDSPublicationEntity>::new(book, req.api_key())
 				.with_visible_page_count(visible_page_count)
-				.into_opds_entry(),
+				.into_opds_entry()
+				.await,
 		);
 	}
 
@@ -851,7 +866,7 @@ pub(crate) async fn get_books(
 		.await?;
 
 	let visible_counts = compute_visible_counts(&ctx, &books).await;
-	let entries = build_publication_entries(books, &visible_counts, req.api_key());
+	let entries = build_publication_entries(books, &visible_counts, req.api_key()).await;
 
 	let feed = OPDSFeedBuilder::new(req.api_key()).paginated(OPDSFeedBuilderParams {
 		id: "allBooks".to_string(),
@@ -889,7 +904,7 @@ pub(crate) async fn get_latest_books(
 		.await?;
 
 	let visible_counts = compute_visible_counts(&ctx, &books).await;
-	let entries = build_publication_entries(books, &visible_counts, req.api_key());
+	let entries = build_publication_entries(books, &visible_counts, req.api_key()).await;
 
 	let feed = OPDSFeedBuilder::new(req.api_key()).paginated(OPDSFeedBuilderParams {
 		id: "latestBooks".to_string(),

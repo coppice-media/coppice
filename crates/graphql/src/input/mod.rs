@@ -2,6 +2,10 @@ pub mod annotation;
 pub mod api_key;
 #[cfg(feature = "web")]
 pub mod book_club;
+pub mod book_detail;
+pub mod book_request;
+#[cfg(feature = "crosspoint")]
+pub mod crosspoint;
 pub mod email_device;
 pub mod emailer;
 pub mod filesystem;

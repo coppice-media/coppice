@@ -625,7 +625,7 @@ static UNRAR: ExternalTool = ExternalTool {
 	min: MinVersion::MajorMinor(5, 0),
 	extra_dirs: no_extra_dirs,
 	searched: "PATH",
-	hint: "install `unrar` (or build Stump with the `rar` feature), or extract the archive yourself and drop its contents",
+	hint: "install `unrar` (or build Coppice with the `rar` feature), or extract the archive yourself and drop its contents",
 };
 
 /// `7z`, the only reader for a 7-Zip container.

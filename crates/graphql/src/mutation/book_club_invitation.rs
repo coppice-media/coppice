@@ -1,9 +1,12 @@
 use async_graphql::{Context, Object, Result, ID};
+use chrono::{Duration, Utc};
 use models::{
-	entity::{book_club_invitation, book_club_member, user::AuthUser},
+	entity::{book_club_invitation, book_club_member, user, user::AuthUser},
 	shared::book_club::BookClubMemberRole,
+	txn::begin_write,
 };
-use sea_orm::{prelude::*, Set};
+use sea_orm::{prelude::*, ConnectionTrait, IntoActiveModel, Set};
+use uuid::Uuid;
 
 use crate::{
 	data::CoreContext,
@@ -32,9 +35,9 @@ impl BookClubInvitationMutation {
 
 		validate_book_club_invitation_input(user, &id, &input, conn).await?;
 
-		let created_invitation = create_invitation_active_model(&id, &input)
-			.insert(conn)
-			.await?;
+		let mut active_model = create_invitation_active_model(&id, &input);
+		active_model.created_by_user_id = Set(Some(user.id.clone()));
+		let created_invitation = active_model.insert(conn).await?;
 
 		Ok(created_invitation.into())
 	}
@@ -53,6 +56,46 @@ impl BookClubInvitationMutation {
 		Ok(handle_book_club_invitation(user, &id, input, conn)
 			.await?
 			.into())
+	}
+	async fn revoke_book_club_invitation(
+		&self,
+		ctx: &Context<'_>,
+		id: ID,
+	) -> Result<BookClubInvitation> {
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+		let invitation = book_club_invitation::Entity::find_by_id(id.as_ref())
+			.one(conn)
+			.await?
+			.ok_or("Invitation not found")?;
+		let is_admin = get_book_club_for_admin(
+			user,
+			&ID::from(invitation.book_club_id.clone()),
+			conn,
+		)
+		.await?
+		.is_some();
+		if invitation.created_by_user_id.as_deref() != Some(&user.id)
+			&& !is_admin
+			&& !user.is_server_owner
+		{
+			return Err(
+				"Only the sender or a club administrator can revoke this invitation"
+					.into(),
+			);
+		}
+		if invitation.status != book_club_invitation::PENDING
+			|| invitation.expires_at.is_some_and(|deadline| {
+				deadline <= DateTimeWithTimeZone::from(Utc::now())
+			}) {
+			return Err("Invitation is no longer pending".into());
+		}
+		let mut active = invitation.into_active_model();
+		active.status = Set(book_club_invitation::REVOKED.to_owned());
+		active.revoked_at = Set(Some(Utc::now().into()));
+		active.revoked_by_user_id = Set(Some(user.id.clone()));
+		Ok(active.update(conn).await?.into())
 	}
 }
 
@@ -79,62 +122,97 @@ async fn validate_book_club_invitation_input(
 		return Err("Cannot create an invitation for yourself".into());
 	}
 
+	if user::Entity::find_by_id(&input.user_id)
+		.filter(user::Column::DeletedAt.is_null())
+		.filter(user::Column::IsLocked.eq(false))
+		.one(conn)
+		.await?
+		.is_none()
+	{
+		return Err("Cannot invite a locked, deleted, or unknown user".into());
+	}
+
 	Ok(())
 }
-
 async fn handle_book_club_invitation(
 	user: &AuthUser,
 	id: &ID,
 	input: BookClubInvitationResponseInput,
 	conn: &DatabaseConnection,
 ) -> Result<book_club_invitation::Model> {
-	let invitation = get_book_club_invitation(user, id, conn).await?;
+	let txn = begin_write(conn).await?;
+	let invitation = get_book_club_invitation(user, id, &txn).await?;
 
-	Ok(if !input.accept {
-		decline_invitation(invitation, conn).await?
+	let updated = if !input.accept {
+		decline_invitation(invitation, &txn).await?
 	} else {
-		accept_invitation(user, invitation, input.member, conn).await?
-	})
+		accept_invitation(user, invitation, input.member, &txn).await?
+	};
+	txn.commit().await?;
+	Ok(updated)
 }
 
-async fn get_book_club_invitation(
+async fn get_book_club_invitation<C>(
 	user: &AuthUser,
 	id: &ID,
-	conn: &DatabaseConnection,
-) -> Result<book_club_invitation::Model> {
-	Ok(
-		book_club_invitation::Entity::find_for_user_and_id(user, id.as_ref())
-			.one(conn)
-			.await?
-			.ok_or("Invitation not found")?,
-	)
+	conn: &C,
+) -> Result<book_club_invitation::Model>
+where
+	C: ConnectionTrait,
+{
+	book_club_invitation::Entity::find_live_for_user_and_id(user, id.as_ref())
+		.one(conn)
+		.await?
+		.ok_or("Invitation not found, expired, or already resolved".into())
 }
 
-async fn decline_invitation(
+async fn decline_invitation<C>(
 	invitation: book_club_invitation::Model,
-	conn: &DatabaseConnection,
-) -> Result<book_club_invitation::Model> {
-	// TODO: soft delete?
-	invitation.clone().delete(conn).await?;
-	Ok(invitation)
+	conn: &C,
+) -> Result<book_club_invitation::Model>
+where
+	C: ConnectionTrait,
+{
+	if invitation.status != book_club_invitation::PENDING {
+		return Err("Invitation is no longer pending".into());
+	}
+	let mut active = invitation.into_active_model();
+	active.status = Set(book_club_invitation::DECLINED.to_owned());
+	active.declined_at = Set(Some(Utc::now().into()));
+	Ok(active.update(conn).await?)
 }
 
-async fn accept_invitation(
+async fn accept_invitation<C>(
 	user: &AuthUser,
 	invitation: book_club_invitation::Model,
 	input: Option<BookClubMemberInput>,
-	conn: &DatabaseConnection,
-) -> Result<book_club_invitation::Model> {
-	// Note: We should never hit this branch because the validator should catch this.
-	// Otherwise, the delete branch above would require another invite to be sent.
+	conn: &C,
+) -> Result<book_club_invitation::Model>
+where
+	C: ConnectionTrait,
+{
+	if invitation.status != book_club_invitation::PENDING {
+		return Err("Invitation is no longer pending".into());
+	}
 	let member_input = input.ok_or("Accepting an invitation requires a member object")?;
+	let already_member = book_club_member::Entity::find()
+		.filter(book_club_member::Column::BookClubId.eq(&invitation.book_club_id))
+		.filter(book_club_member::Column::UserId.eq(&user.id))
+		.one(conn)
+		.await?
+		.is_some();
+	if already_member {
+		return Err("You are already a member of this book club".into());
+	}
 
-	let member = create_member_active_model(user, &invitation, member_input);
-	let _created_member = member.insert(conn).await?;
-	// TODO: soft delete?
-	invitation.clone().delete(conn).await?;
+	create_member_active_model(user, &invitation, member_input)
+		.insert(conn)
+		.await?;
 
-	Ok(invitation)
+	let mut active = invitation.into_active_model();
+	active.status = Set(book_club_invitation::ACCEPTED.to_owned());
+	active.accepted_at = Set(Some(Utc::now().into()));
+	Ok(active.update(conn).await?)
 }
 
 fn create_invitation_active_model(
@@ -145,6 +223,9 @@ fn create_invitation_active_model(
 		role: Set(input.role.unwrap_or(BookClubMemberRole::Member)),
 		user_id: Set(input.user_id.clone()),
 		book_club_id: Set(id.to_string()),
+		status: Set(book_club_invitation::PENDING.to_owned()),
+		created_at: Set(Utc::now().into()),
+		expires_at: Set(Some((Utc::now() + Duration::days(7)).into())),
 		..Default::default()
 	}
 }
@@ -162,18 +243,15 @@ fn create_member_active_model(
 		role: Set(invitation.role),
 		hide_progress: Set(false),
 		bio: Set(None),
-		joined_at: Set(chrono::Utc::now().into()),
+		joined_at: Set(Utc::now().into()),
 	}
 }
-
 #[cfg(test)]
 mod tests {
-	use crate::tests::common::*;
-
 	use super::*;
-	use models::entity::book_club;
+	use crate::tests::common::*;
+	use models::entity::{book_club, user};
 	use pretty_assertions::assert_eq;
-	use sea_orm::TryIntoModel;
 
 	fn get_default_book_club() -> book_club::Model {
 		book_club::Model {
@@ -187,6 +265,25 @@ mod tests {
 			emoji: None,
 		}
 	}
+	fn get_default_invitee() -> user::Model {
+		user::Model {
+			id: "456".to_owned(),
+			username: "invitee".to_owned(),
+			hashed_password: "hash".to_owned(),
+			is_server_owner: false,
+			avatar_path: None,
+			avatar_meta: None,
+			avatar_updated_at: None,
+			created_at: chrono::Utc::now().into(),
+			deleted_at: None,
+			is_locked: false,
+			max_sessions_allowed: None,
+			permissions: None,
+			user_preferences_id: None,
+			oidc_issuer_id: None,
+			oidc_email: None,
+		}
+	}
 
 	fn get_default_book_club_invitation() -> book_club_invitation::Model {
 		book_club_invitation::Model {
@@ -194,6 +291,15 @@ mod tests {
 			role: BookClubMemberRole::Admin,
 			user_id: "42".to_string(),
 			book_club_id: "123".to_string(),
+			status: book_club_invitation::PENDING.to_string(),
+			created_at: chrono::Utc::now().into(),
+			expires_at: Some((chrono::Utc::now() + chrono::Duration::days(7)).into()),
+			created_by_user_id: Some("7".to_string()),
+			accepted_at: None,
+			declined_at: None,
+			revoked_at: None,
+			revoked_by_user_id: None,
+			audit_note: None,
 		}
 	}
 
@@ -210,15 +316,18 @@ mod tests {
 			member: Some(member),
 		};
 
-		let book_club_invitation = get_default_book_club_invitation();
-		let mock_db = get_mock_db_for_model(vec![book_club_invitation.clone()])
-			.append_exec_results(vec![sea_orm::MockExecResult {
-				last_insert_id: 0,
-				rows_affected: 1,
-			}])
+		let invitation = get_default_book_club_invitation();
+		let mut declined = invitation.clone();
+		declined.status = book_club_invitation::DECLINED.to_owned();
+		declined.declined_at = Some(Utc::now().into());
+		let mock_db = get_mock_db_for_model(vec![invitation])
+			.append_query_results(vec![vec![declined.clone()]])
 			.into_connection();
-		let result = handle_book_club_invitation(&user, &id, input, &mock_db).await;
-		assert!(result.is_ok());
+		let result = handle_book_club_invitation(&user, &id, input, &mock_db)
+			.await
+			.unwrap();
+		assert_eq!(result.status, book_club_invitation::DECLINED);
+		assert!(result.declined_at.is_some());
 	}
 
 	#[tokio::test]
@@ -236,17 +345,29 @@ mod tests {
 		};
 
 		let invitation = get_default_book_club_invitation();
-		let member_active_model = create_member_active_model(&user, &invitation, member);
-		let member_model = member_active_model.try_into_model().unwrap();
-		let mock_db = get_mock_db_for_model(vec![invitation.clone()])
-			.append_query_results(vec![vec![member_model]])
-			.append_exec_results(vec![sea_orm::MockExecResult {
-				last_insert_id: 1,
-				rows_affected: 1,
-			}])
+		let inserted_member = book_club_member::Model {
+			id: Uuid::new_v4().to_string(),
+			display_name: member.display_name.clone(),
+			bio: None,
+			hide_progress: false,
+			role: invitation.role,
+			joined_at: Utc::now().into(),
+			user_id: user.id.clone(),
+			book_club_id: invitation.book_club_id.clone(),
+		};
+		let mut accepted = invitation.clone();
+		accepted.status = book_club_invitation::ACCEPTED.to_owned();
+		accepted.accepted_at = Some(Utc::now().into());
+		let mock_db = get_mock_db_for_model(vec![invitation])
+			.append_query_results(vec![Vec::<book_club_member::Model>::new()])
+			.append_query_results(vec![vec![inserted_member]])
+			.append_query_results(vec![vec![accepted.clone()]])
 			.into_connection();
-		let result = handle_book_club_invitation(&user, &id, input, &mock_db).await;
-		assert!(result.is_ok());
+		let result = handle_book_club_invitation(&user, &id, input, &mock_db)
+			.await
+			.unwrap();
+		assert_eq!(result.status, book_club_invitation::ACCEPTED);
+		assert!(result.accepted_at.is_some());
 	}
 
 	#[tokio::test]
@@ -271,8 +392,9 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_validate_book_club_invitation_input_valid() {
-		let mock_db =
-			get_mock_db_for_model(vec![get_default_book_club()]).into_connection();
+		let mock_db = get_mock_db_for_model(vec![get_default_book_club()])
+			.append_query_results(vec![vec![get_default_invitee()]])
+			.into_connection();
 
 		let input = BookClubInvitationInput {
 			role: Some(BookClubMemberRole::Admin),
@@ -311,8 +433,9 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_validate_book_club_invitation_input_missing_role() {
-		let mock_db: DatabaseConnection =
-			get_mock_db_for_model(vec![get_default_book_club()]).into_connection();
+		let mock_db = get_mock_db_for_model(vec![get_default_book_club()])
+			.append_query_results(vec![vec![get_default_invitee()]])
+			.into_connection();
 		let input: BookClubInvitationInput = BookClubInvitationInput {
 			role: None,
 			user_id: "456".to_string(),

@@ -5,10 +5,10 @@ use crate::shared::enums::DeviceKind;
 
 use super::user::AuthUser;
 
-/// A registered client: a Kobo, a KOReader install, Mihon, Komelia, Liseur, an
-/// OPDS reader, a script, or a browser. A device owns credentials (see
-/// [`super::device_credential`]) and accumulates last-seen / last-sync state
-/// each time one of those credentials authenticates a request.
+/// A registered client: a Kobo, a KOReader install, Coppice, Mihon, Komelia,
+/// Liseur, an OPDS reader, a script, or a browser. A device owns credentials
+/// (see [`super::device_credential`]) and accumulates last-seen / last-sync
+/// state each time one of those credentials authenticates a request.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[cfg_attr(feature = "graphql", graphql(name = "DeviceModel"))]

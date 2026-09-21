@@ -12,7 +12,7 @@ pub use anilist::AniListClient;
 pub use audible::AudibleClient;
 pub use comic_vine::ComicVineClient;
 pub use googlebooks::GoogleBooksClient;
-pub use hardcover::HardcoverClient;
+pub use hardcover::{HardcoverClient, HardcoverIdentity, HardcoverJournalEntry};
 pub use mal::MalClient;
 pub use mangadex::MangaDexClient;
 pub use metron::MetronClient;

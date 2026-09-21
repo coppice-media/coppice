@@ -4,7 +4,7 @@ title: Audiobooks
 
 import { File, Folder, Files } from 'fumadocs-ui/components/files';
 
-An audiobook is a book like any other in Stump: it lives in a [series](/docs/guides/fundamentals/series) inside a [library](/docs/guides/fundamentals/libraries), it gets a thumbnail, and it tracks [progress](/docs/guides/fundamentals/progress). What makes it different is that its content is time rather than pages, so Stump probes it for a duration, a track list and a chapter list instead of a page count.
+An audiobook is a book like any other in Coppice: it lives in a [series](/docs/guides/fundamentals/series) inside a [library](/docs/guides/fundamentals/libraries), it gets a thumbnail, and it tracks [progress](/docs/guides/fundamentals/progress). What makes it different is that its content is time rather than pages, so Coppice probes it for a duration, a track list and a chapter list instead of a page count.
 
 ## Supported formats
 
@@ -17,11 +17,11 @@ An audiobook is a book like any other in Stump: it lives in a [series](/docs/gui
 | Ogg | `.ogg` | `audio/ogg` |
 | FLAC | `.flac` | `audio/flac` |
 
-Stump does not transcode, so the format you store is the format your client receives. See [limitations](#limitations).
+Coppice does not transcode, so the format you store is the format your client receives. See [limitations](#limitations).
 
 ## The two layouts
 
-An audiobook reaches Stump in one of two shapes, and both become the same thing: one book with one duration, an ordered list of tracks, and a list of chapters.
+An audiobook reaches Coppice in one of two shapes, and both become the same thing: one book with one duration, an ordered list of tracks, and a list of chapters.
 
 **One container.** A single `.m4b`, `.m4a`, `.mp3`, `.opus`, `.ogg` or `.flac` file. Its chapters, if it has any, are embedded in the file. This book has exactly one track.
 
@@ -73,7 +73,7 @@ A partial or duplicated numbering — three files where only two have a `TRCK`, 
 
 Chapters are time marks on the publication, not files. A single `.m4b` can carry four chapters inside one file, and a folder book can have marks that do not line up with its file boundaries at all.
 
-Stump records **where the marks came from** alongside them, in a `chapter_source` value. This is provenance, not a preference:
+Coppice records **where the marks came from** alongside them, in a `chapter_source` value. This is provenance, not a preference:
 
 | `chapter_source` | What it means |
 | ---------------- | ------------- |
@@ -81,10 +81,10 @@ Stump records **where the marks came from** alongside them, in a `chapter_source
 | `mp4_chapter_track` | A QuickTime text chapter **track** inside the MP4, linked to the audio track. A different mechanism to `chpl`, and the one Apple Books reads. |
 | `id3_chap` | ID3v2 `CHAP` frames with a `CTOC` table of contents, in an `.mp3`. |
 | `vorbis_comment` | `CHAPTERxxx` / `CHAPTERxxxNAME` Vorbis comments, in an `.opus`, `.ogg` or `.flac`. |
-| `per_track` | **Stump synthesized these.** No file in the book carried a single mark, so the file list *is* the chapter list: one chapter per file, named after the file's title tag or its filename. |
+| `per_track` | **Coppice synthesized these.** No file in the book carried a single mark, so the file list *is* the chapter list: one chapter per file, named after the file's title tag or its filename. |
 | `none` | The book has no chapters at all — a single container with no marks in it. |
 
-The distinction that matters is `per_track`. A `per_track` chapter list is Stump's arithmetic over file durations; the publisher shipped no chapter marks whatsoever. It must never be presented as if the publisher had authored those chapters, which is exactly why the source is stored rather than thrown away once the marks are read.
+The distinction that matters is `per_track`. A `per_track` chapter list is Coppice's arithmetic over file durations; the publisher shipped no chapter marks whatsoever. It must never be presented as if the publisher had authored those chapters, which is exactly why the source is stored rather than thrown away once the marks are read.
 
 Two details of the read:
 
@@ -168,7 +168,7 @@ Everything a player needs to start: the publication facts, the ordered tracks wi
 | ----- | ----- |
 | `mediaId` | The book's id. |
 | `durationMs` | The whole publication's duration. |
-| `codec` | `aac`, `mp3`, `opus`, `flac` or `vorbis`; `mixed` for a folder book whose parts disagree, `unknown` for a container Stump could not identify. |
+| `codec` | `aac`, `mp3`, `opus`, `flac` or `vorbis`; `mixed` for a folder book whose parts disagree, `unknown` for a container Coppice could not identify. |
 | `sampleRate`, `channels`, `bitrate` | May be absent when the container states none. |
 | `chapterSource` | The provenance value from the [table above](#chapters). |
 | `tracks[]` | `index`, `mime`, `durationMs`, `startOffsetMs`, `byteSize`, `url`. |
@@ -243,7 +243,7 @@ RAR needs either a build with the `rar` feature or an `unrar` (or `7z`, or
 An audio item is probed once during analysis, and the drop-item page renders
 that probe: total duration, codec and bitrate, the track list with each part's
 name and publication-relative start offset, the chapter list with its
-[provenance](#chapters) (a `per_track` list is Stump's synthesis from file
+[provenance](#chapters) (a `per_track` list is Coppice's synthesis from file
 boundaries, not a publisher's chapter list), the embedded cover, and the
 editable narrator/title/authors/series/year fields. The
 [quality checks](#quality-checks) run beside it, and each failing check offers
@@ -271,7 +271,7 @@ something to decline.
 
 ## Tools
 
-Three library tools operate on audiobooks, run through the [CLI](/docs/developer/cli)'s `tools` subcommand. Like every other Stump tool they plan first and apply second, so a run always shows what it would do before anything is written:
+Three library tools operate on audiobooks, run through the [CLI](/docs/developer/cli)'s `tools` subcommand. Like every other Coppice tool they plan first and apply second, so a run always shows what it would do before anything is written:
 
 ```bash copy
 ./stump tools plan audio-report "/books/Audiobooks"
@@ -314,7 +314,7 @@ Turns a publication into one canonical M4B. See [Assembling](#assembling) for wh
 
 ## Assembling
 
-A folder audiobook works in Stump, and works badly everywhere else. Stump stitches the parts into one publication and synthesizes a chapter per file, but that book only exists in Stump's database: copy the folder to a phone and it is 43 songs, open it in another client and the chapter list is gone, lose the database and the reading position means nothing.
+A folder audiobook works in Coppice, and works badly everywhere else. Coppice stitches the parts into one publication and synthesizes a chapter per file, but that book only exists in Coppice's database: copy the folder to a phone and it is 43 songs, open it in another client and the chapter list is gone, lose the database and the reading position means nothing.
 
 `audio-assemble` produces the shape that carries its own structure:
 
@@ -361,7 +361,7 @@ Seven [ingest quality checks](/docs/developer/modular-ingest) grade an audiobook
 | Check | Weight | Fails when | Fix |
 | --- | --- | --- | --- |
 | `single_file` | 30 | the publication is a folder of parts | `audio-assemble` |
-| `chapters_present` | 15 | no marks at all; warns at 0.5 when Stump synthesized them per file | `audio-chapters` |
+| `chapters_present` | 15 | no marks at all; warns at 0.5 when Coppice synthesized them per file | `audio-chapters` |
 | `tags_complete` | 15 | any of title, author, narrator, series, year is missing (scored fractionally) | `meta-edit` |
 | `cover_embedded` | 10 | the container carries no artwork | `meta-edit` |
 | `faststart` | 10 | `moov` follows `mdat`; not applicable to MP3/Ogg | `audio-assemble` |
@@ -405,7 +405,7 @@ Positions are written through the one unified reading-state mutation, `updateMed
 
 ## Limitations
 
-- **Transcoding is opt-in and never silent.** Stump stores AAC-in-MP4 and serves the bytes it stores. Two lanes may re-encode, both through an operator-installed `ffmpeg` that is never a build dependency: `audio-assemble` converts non-AAC parts while building a canonical M4B, and a device [transform preset](#device-preset) may deliver Opus. Neither replaces the stored copy, and there is no HLS lane.
+- **Transcoding is opt-in and never silent.** Coppice stores AAC-in-MP4 and serves the bytes it stores. Two lanes may re-encode, both through an operator-installed `ffmpeg` that is never a build dependency: `audio-assemble` converts non-AAC parts while building a canonical M4B, and a device [transform preset](#device-preset) may deliver Opus. Neither replaces the stored copy, and there is no HLS lane.
 - **Ogg, Opus and FLAC chapter marks are read but not written.** `CHAPTERxxx` Vorbis comments are honoured on the way in; `audio-chapters` writes only `.m4b`, `.m4a` and `.mp3`. `audio-assemble` reads all of them and writes the canonical M4B instead.
 - **A book that would need 64-bit chunk offsets cannot be remuxed.** The pure-Rust path refuses rather than wrapping an offset, and says so; the `ffmpeg` path handles it. It takes roughly 4 GB of AAC — around 140 hours at 64 kbit/s — to reach.
 - **A BMP embedded cover is ignored.** The thumbnail pipeline cannot decode BMP, so such a cover is treated as if the book had none — extract it and drop a `cover.jpg` beside the book instead. See [thumbnails](/docs/guides/fundamentals/thumbnails).

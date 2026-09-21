@@ -278,7 +278,7 @@ mod tests {
 	fn test_progression_input_deserializes_from_json() {
 		let json = r#"{
         "modified": "2026-01-28T08:17:11.986000-07:00",
-        "device": { "id": "device-123", "name": "Stump App - iOS" },
+        "device": { "id": "device-123", "name": "Coppice App - iOS" },
         "locator": {
             "href": "/opds/v2.0/books/1/pages/5",
             "type": "image/jpeg",

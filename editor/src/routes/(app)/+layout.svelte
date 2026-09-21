@@ -6,6 +6,8 @@
 	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Separator } from '@stump/ui/components/ui/separator';
+	import { ThemeSwitcher } from '@stump/ui/components/ui/theme-switcher';
+	import * as Tooltip from '@stump/ui/components/ui/tooltip';
 	import { createEditorSession, setEditorSession } from '$lib/editor/session.svelte';
 	import { LibrariesDocument } from '$lib/graphql/generated/graphql';
 	import { MeDocument } from '@stump/ui/graphql/generated/graphql';
@@ -105,18 +107,19 @@
 </script>
 
 <svelte:head>
-	<title>Stump · Ingest editor</title>
+	<title>Coppice · Ingest editor</title>
 	<meta
 		name="description"
-		content="Review staged books, quality evidence, and metadata before adding them to Stump."
+		content="Review staged books, quality evidence, and metadata before adding them to Coppice."
 	/>
 </svelte:head>
 
+<Tooltip.Provider>
 	<div class="min-h-screen bg-muted/30">
 		<header class="border-b bg-background">
 			<div class="mx-auto flex max-w-[1600px] flex-wrap items-center gap-4 px-4 py-4 lg:px-8">
-				<a href={resolve('/drop')} class="mr-auto text-lg font-semibold tracking-tight">Stump ingest</a>
-				<nav aria-label="Primary navigation" class="flex flex-wrap items-center gap-1 text-sm">
+				<a href={resolve('/drop')} class="mr-auto text-lg font-semibold tracking-tight">Coppice ingest</a>
+				<nav aria-label="Primary navigation" class="order-last flex w-full flex-wrap items-center gap-1 text-sm 2xl:order-none 2xl:w-auto">
 					<a class="rounded-md px-3 py-2 hover:bg-muted" href={resolve('/drop')}>Drop folder</a>
 					<a class="rounded-md px-3 py-2 hover:bg-muted" href={resolve('/queue')}>Queue</a>
 					<a class="rounded-md px-3 py-2 hover:bg-muted" href={resolve('/rework')}>Rework</a>
@@ -138,6 +141,7 @@
 						</select>
 					</label>
 				{/if}
+				<ThemeSwitcher class="flex-row items-center gap-2" />
 				{#if session.user}
 					<span class="hidden text-sm text-muted-foreground md:inline">{session.user.username}</span>
 					<Button variant="ghost" size="sm" onclick={logout}>Log out</Button>
@@ -155,4 +159,5 @@
 		{/if}
 		<main class="mx-auto max-w-[1600px] px-4 py-8 lg:px-8">{@render children()}</main>
 	</div>
-	<Toaster position="bottom-right" />
+</Tooltip.Provider>
+<Toaster position="bottom-right" />

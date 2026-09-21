@@ -13,7 +13,7 @@ use xml::{writer::XmlEvent, EventWriter};
 use crate::error::CoreResult;
 use crate::opds::v1_2::link::OpdsStreamLink;
 use crate::opds::v2_0::entity::OPDSPublicationEntity;
-use stump_media::media::get_content_types_for_pages;
+use stump_media::media::get_content_types_for_pages_async;
 use stump_media::{ContentType, FileParts, PathUtils};
 
 use super::{
@@ -109,8 +109,9 @@ impl OpdsEntry {
 	}
 }
 
+#[async_trait::async_trait]
 pub trait IntoOPDSEntry {
-	fn into_opds_entry(self) -> OpdsEntry;
+	async fn into_opds_entry(self) -> OpdsEntry;
 }
 
 pub struct OPDSEntryBuilder<T> {
@@ -146,8 +147,9 @@ impl<T> OPDSEntryBuilder<T> {
 	}
 }
 
+#[async_trait::async_trait]
 impl IntoOPDSEntry for OPDSEntryBuilder<library::Model> {
-	fn into_opds_entry(self) -> OpdsEntry {
+	async fn into_opds_entry(self) -> OpdsEntry {
 		let mut links = Vec::new();
 
 		let nav_link = OpdsLink::new(
@@ -171,8 +173,9 @@ impl IntoOPDSEntry for OPDSEntryBuilder<library::Model> {
 	}
 }
 
+#[async_trait::async_trait]
 impl IntoOPDSEntry for OPDSEntryBuilder<series::Model> {
-	fn into_opds_entry(self) -> OpdsEntry {
+	async fn into_opds_entry(self) -> OpdsEntry {
 		let mut links = Vec::new();
 
 		let nav_link = OpdsLink::new(
@@ -196,8 +199,9 @@ impl IntoOPDSEntry for OPDSEntryBuilder<series::Model> {
 	}
 }
 
+#[async_trait::async_trait]
 impl IntoOPDSEntry for OPDSEntryBuilder<OPDSPublicationEntity> {
-	fn into_opds_entry(self) -> OpdsEntry {
+	async fn into_opds_entry(self) -> OpdsEntry {
 		let base_url = self.format_url(&format!("books/{}", self.data.media.id));
 
 		let path_buf = PathBuf::from(self.data.media.path.as_str());
@@ -216,7 +220,8 @@ impl IntoOPDSEntry for OPDSEntryBuilder<OPDSPublicationEntity> {
 		};
 
 		let page_content_types =
-			get_content_types_for_pages(&self.data.media.path, target_pages)
+			get_content_types_for_pages_async(&self.data.media.path, target_pages)
+				.await
 				.unwrap_or_else(|error| {
 					tracing::error!(error = ?error, "Failed to get content types for pages");
 					HashMap::default()
@@ -425,17 +430,17 @@ mod tests {
 		}
 	}
 
-	#[test]
-	fn test_builder_url_format_with_api_key() {
+	#[tokio::test]
+	async fn test_builder_url_format_with_api_key() {
 		let builder = OPDSEntryBuilder::new(library(), Some("api_key".to_string()));
-		let entry = builder.into_opds_entry();
+		let entry = builder.into_opds_entry().await;
 		assert_eq!(entry.links[0].href, "/opds/api_key/v1.2/libraries/123");
 	}
 
-	#[test]
-	fn test_builder_url_format_without_api_key() {
+	#[tokio::test]
+	async fn test_builder_url_format_without_api_key() {
 		let builder = OPDSEntryBuilder::new(library(), None);
-		let entry = builder.into_opds_entry();
+		let entry = builder.into_opds_entry().await;
 		assert_eq!(entry.links[0].href, "/opds/v1.2/libraries/123");
 	}
 }

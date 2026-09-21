@@ -1,0 +1,221 @@
+# Personal destinations and provider connections used by `/connections`.
+# Secrets are write-only: connection queries intentionally select status and
+# capabilities, never PATs or SMTP passwords.
+
+fragment ConnectionKindleDestinationFields on KindleDestination {
+	id
+	name
+	email
+	isDefault
+	createdAt
+	updatedAt
+}
+
+fragment ConnectionKindleDestinationDeliveryFields on KindleDestinationDelivery {
+	id
+	mediaId
+	destinationId
+	destinationName
+	destinationEmail
+	recipient
+	format
+	bytes
+	converted
+	note
+	error
+	sentAt
+}
+
+query ConnectionKindleDestinations {
+	kindleDestinations {
+		...ConnectionKindleDestinationFields
+	}
+}
+
+mutation ConnectionUpsertKindleDestination(
+	$id: ID
+	$name: String!
+	$email: String!
+	$makeDefault: Boolean!
+) {
+	upsertKindleDestination(id: $id, name: $name, email: $email, makeDefault: $makeDefault) {
+		...ConnectionKindleDestinationFields
+	}
+}
+
+mutation ConnectionDeleteKindleDestination($id: ID!) {
+	deleteKindleDestination(id: $id)
+}
+
+query ConnectionKindleDestinationDeliveries($mediaId: ID, $limit: Int) {
+	kindleDestinationDeliveries(mediaId: $mediaId, limit: $limit) {
+		...ConnectionKindleDestinationDeliveryFields
+	}
+}
+
+mutation ConnectionSendToKindleDestination($mediaId: ID!, $destinationId: ID!) {
+	sendToKindleDestination(mediaId: $mediaId, destinationId: $destinationId) {
+		...ConnectionKindleDestinationDeliveryFields
+	}
+}
+
+fragment ConnectionHardcoverFields on HardcoverConnection {
+	connected
+	remoteUserId
+	remoteUsername
+	scopes
+	capabilities
+	useForMetadata
+	importJournals
+	syncProgress
+	connectedAt
+	verifiedAt
+	lastSyncAt
+	lastError
+}
+query ConnectionHardcover {
+	hardcoverConnection {
+		...ConnectionHardcoverFields
+	}
+}
+
+mutation ConnectionConnectHardcover(
+	$apiToken: String!
+	$useForMetadata: Boolean = true
+	$importJournals: Boolean = false
+	$syncProgress: Boolean = false
+) {
+	connectHardcover(
+		apiToken: $apiToken
+		useForMetadata: $useForMetadata
+		importJournals: $importJournals
+		syncProgress: $syncProgress
+	) {
+		...ConnectionHardcoverFields
+	}
+}
+
+mutation ConnectionUpdateHardcover(
+	$useForMetadata: Boolean!
+	$importJournals: Boolean!
+	$syncProgress: Boolean!
+) {
+	updateHardcoverConnection(
+		useForMetadata: $useForMetadata
+		importJournals: $importJournals
+		syncProgress: $syncProgress
+	) {
+		...ConnectionHardcoverFields
+	}
+}
+
+mutation ConnectionDisconnectHardcover {
+	disconnectHardcover
+}
+
+query ConnectionAdminEmailers {
+	emailers {
+		id
+		name
+		isPrimary
+		senderEmail
+		senderDisplayName
+		username
+		smtpHost
+		smtpPort
+		tlsEnabled
+		lastUsedAt
+	}
+}
+
+mutation ConnectionCreateAdminEmailer($input: EmailerInput!) {
+	createEmailer(input: $input) {
+		id
+		name
+		isPrimary
+		senderEmail
+		senderDisplayName
+		username
+		smtpHost
+		smtpPort
+		tlsEnabled
+		lastUsedAt
+	}
+}
+
+mutation ConnectionUpdateAdminEmailer($id: Int!, $input: EmailerInput!) {
+	updateEmailer(id: $id, input: $input) {
+		id
+		name
+		isPrimary
+		senderEmail
+		senderDisplayName
+		username
+		smtpHost
+		smtpPort
+		tlsEnabled
+		lastUsedAt
+	}
+}
+
+mutation ConnectionTestAdminEmailer($config: EmailerClientConfig!, $recipient: String!) {
+	testEmailer(config: $config, recipient: $recipient)
+}
+
+fragment ConnectionHardcoverLinkFields on HardcoverMediaLink {
+	id
+	mediaId
+	remoteId
+	remoteTitle
+	linkedAt
+	updatedAt
+}
+
+query ConnectionHardcoverLinks($mediaId: ID) {
+	hardcoverMediaLinks(mediaId: $mediaId) {
+		...ConnectionHardcoverLinkFields
+	}
+}
+
+mutation ConnectionLinkHardcoverMedia($mediaId: ID!, $remoteId: String!) {
+	linkHardcoverMedia(mediaId: $mediaId, remoteId: $remoteId) {
+		...ConnectionHardcoverLinkFields
+	}
+}
+
+mutation ConnectionUnlinkHardcoverMedia($mediaId: ID!) {
+	unlinkHardcoverMedia(mediaId: $mediaId)
+}
+
+fragment ConnectionSmtpFields on SmtpSettings {
+	configured
+	senderEmail
+	senderDisplayName
+	smtpHost
+	smtpPort
+	tlsEnabled
+	lastUsedAt
+}
+
+query ConnectionSmtp {
+	smtpSettings {
+		...ConnectionSmtpFields
+	}
+}
+
+query ConnectionAdminBoundary {
+	annotationSyncRoot
+}
+
+
+mutation ConnectionSyncHardcoverNow {
+	syncHardcoverNow {
+		status
+		imported
+		unresolved
+		projected
+		skipped
+		lastSyncAt
+		error
+	}
+}

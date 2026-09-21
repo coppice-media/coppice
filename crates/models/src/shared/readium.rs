@@ -2,6 +2,28 @@ use derive_builder::Builder;
 use sea_orm::{prelude::Decimal, FromJsonQueryResult};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
+fn deserialize_decimal_option<'de, D>(
+	deserializer: D,
+) -> Result<Option<Decimal>, D::Error>
+where
+	D: serde::Deserializer<'de>,
+{
+	#[derive(Deserialize)]
+	#[serde(untagged)]
+	enum DecimalRepresentation {
+		Number(f64),
+		String(String),
+	}
+
+	let value = Option::<DecimalRepresentation>::deserialize(deserializer)?;
+	value
+		.map(|value| match value {
+			DecimalRepresentation::Number(value) => value.to_string().parse(),
+			DecimalRepresentation::String(value) => value.parse(),
+		})
+		.transpose()
+		.map_err(serde::de::Error::custom)
+}
 
 pub const RWPM_CONTEXT: &str = "https://readium.org/webpub-manifest/context.jsonld";
 
@@ -107,7 +129,7 @@ pub struct RWPMPositionLocations {
 }
 
 /// A Readium positions list.
-#[derive(Serialize, Builder)]
+#[derive(Serialize, Default, Builder)]
 #[builder(setter(into, strip_option))]
 #[serde(rename_all = "camelCase")]
 pub struct RWPMPositions {
@@ -124,8 +146,18 @@ pub struct RWPMPositions {
 #[serde(rename_all = "camelCase")]
 pub struct ReadiumLocation {
 	pub fragments: Option<Vec<String>>,
+	#[serde(
+		default,
+		serialize_with = "rust_decimal::serde::float_option::serialize",
+		deserialize_with = "deserialize_decimal_option"
+	)]
 	pub progression: Option<Decimal>,
 	pub position: Option<i32>,
+	#[serde(
+		default,
+		serialize_with = "rust_decimal::serde::float_option::serialize",
+		deserialize_with = "deserialize_decimal_option"
+	)]
 	pub total_progression: Option<Decimal>,
 	pub css_selector: Option<String>,
 	pub partial_cfi: Option<String>,
@@ -173,4 +205,31 @@ pub struct ReadiumLocator {
 	)]
 	#[serde(default = "default_type")]
 	pub r#type: String,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn readium_location_accepts_numeric_and_string_progression() {
+		let numeric: ReadiumLocation = serde_json::from_value(serde_json::json!({
+			"progression": 0.5,
+			"totalProgression": 0.25
+		}))
+		.expect("numeric progression");
+		let string: ReadiumLocation = serde_json::from_value(serde_json::json!({
+			"progression": "0.5",
+			"totalProgression": "0.25"
+		}))
+		.expect("string progression");
+
+		assert_eq!(numeric.progression, Some(Decimal::new(5, 1)));
+		assert_eq!(numeric.total_progression, Some(Decimal::new(25, 2)));
+		assert_eq!(numeric, string);
+
+		let serialized = serde_json::to_value(numeric).expect("serialize location");
+		assert_eq!(serialized["progression"], serde_json::json!(0.5));
+		assert_eq!(serialized["totalProgression"], serde_json::json!(0.25));
+	}
 }

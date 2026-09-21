@@ -308,11 +308,67 @@ impl OpdsBackend for OpdsBackendImpl {
 		auth: AuthContext,
 		host: ProviderHost,
 		query: Option<String>,
+		pagination: stump_api_types::OffsetPagination,
 	) -> Result<Response, Self::Error> {
 		Ok(v2_0::search(
 			State(self.0.clone()),
 			host_details(host),
 			Query(v2_0::OPDSSearchQuery { query }),
+			Query(pagination),
+			Extension(auth),
+		)
+		.await?
+		.into_response())
+	}
+
+	async fn v2_search_libraries(
+		&self,
+		auth: AuthContext,
+		host: ProviderHost,
+		query: Option<String>,
+		pagination: stump_api_types::OffsetPagination,
+	) -> Result<Response, Self::Error> {
+		Ok(v2_0::search_libraries(
+			State(self.0.clone()),
+			host_details(host),
+			Query(v2_0::OPDSSearchQuery { query }),
+			Query(pagination),
+			Extension(auth),
+		)
+		.await?
+		.into_response())
+	}
+
+	async fn v2_search_series(
+		&self,
+		auth: AuthContext,
+		host: ProviderHost,
+		query: Option<String>,
+		pagination: stump_api_types::OffsetPagination,
+	) -> Result<Response, Self::Error> {
+		Ok(v2_0::search_series(
+			State(self.0.clone()),
+			host_details(host),
+			Query(v2_0::OPDSSearchQuery { query }),
+			Query(pagination),
+			Extension(auth),
+		)
+		.await?
+		.into_response())
+	}
+
+	async fn v2_search_books(
+		&self,
+		auth: AuthContext,
+		host: ProviderHost,
+		query: Option<String>,
+		pagination: stump_api_types::OffsetPagination,
+	) -> Result<Response, Self::Error> {
+		Ok(v2_0::search_books(
+			State(self.0.clone()),
+			host_details(host),
+			Query(v2_0::OPDSSearchQuery { query }),
+			Query(pagination),
 			Extension(auth),
 		)
 		.await?
@@ -427,8 +483,8 @@ impl OpdsBackend for OpdsBackendImpl {
 		host: ProviderHost,
 		params: BrowseParams,
 	) -> Result<Response, Self::Error> {
+		let pagination = params.pagination();
 		let BrowseParams {
-			pagination,
 			author,
 			penciler,
 			colorist,
@@ -439,6 +495,7 @@ impl OpdsBackend for OpdsBackendImpl {
 			subject,
 			characters,
 			teams,
+			..
 		} = params;
 		Ok(v2_0::browse_books(
 			State(self.0.clone()),

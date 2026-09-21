@@ -182,22 +182,22 @@
 	}
 </script>
 
-<svelte:head><title>Library · Stump ingest</title></svelte:head>
+<svelte:head><title>Library · Coppice ingest</title></svelte:head>
 
 <div class="flex flex-col gap-6">
 	<div>
 		<p class="text-sm font-medium text-primary">Library-wide rework</p>
 		<h1 class="text-3xl font-semibold tracking-tight">Library</h1>
-		<p class="mt-1 max-w-2xl text-muted-foreground">Run quality checks and provider matching against books already in this library, then review and apply metadata without a drop folder.</p>
+		<p class="mt-1 max-w-2xl text-muted-foreground">Run quality checks and provider matching against media already in this library, then review and apply book or audiobook metadata without a drop folder.</p>
 	</div>
 
 	<Tabs.Root bind:value={tab}>
-		<Tabs.List class="h-auto w-fit"><Tabs.Trigger value="books">Books</Tabs.Trigger><Tabs.Trigger value="duplicates">Duplicate pages</Tabs.Trigger></Tabs.List>
+		<Tabs.List class="h-auto w-fit"><Tabs.Trigger value="books">Media</Tabs.Trigger><Tabs.Trigger value="duplicates">Duplicate pages</Tabs.Trigger></Tabs.List>
 		<Tabs.Content value="books">
 	<Card>
 		<CardHeader>
-			<CardTitle>Library books</CardTitle>
-			<CardDescription>{totalItems} book{totalItems === 1 ? '' : 's'} · page {currentPage} of {totalPages}{selected.length ? ` · ${selected.length} selected` : ''}</CardDescription>
+			<CardTitle>Library media</CardTitle>
+			<CardDescription>{totalItems} item{totalItems === 1 ? '' : 's'} · page {currentPage} of {totalPages}{selected.length ? ` · ${selected.length} selected` : ''}</CardDescription>
 		</CardHeader>
 		<CardContent class="flex flex-col gap-4">
 			{#if selected.length || matchableProviders.length}
@@ -236,20 +236,20 @@
 			{/if}
 
 			{#if !libraryId}
-				<div class="p-6"><Empty><EmptyHeader><EmptyTitle>Select a library</EmptyTitle><EmptyDescription>Choose a library in the header to browse its books.</EmptyDescription></EmptyHeader></Empty></div>
+				<div class="p-6"><Empty><EmptyHeader><EmptyTitle>Select a library</EmptyTitle><EmptyDescription>Choose a library in the header to browse its media.</EmptyDescription></EmptyHeader></Empty></div>
 			{:else if mediaQuery.isPending}
 				<div class="flex flex-col gap-3">{#each Array(5) as _, index (index)}<Skeleton class="h-14 w-full" />{/each}</div>
 			{:else if mediaQuery.isError}
-				<Alert variant="destructive"><AlertTitle>Unable to load library books</AlertTitle><AlertDescription>{mediaQuery.error instanceof Error ? mediaQuery.error.message : 'The server did not return library books.'}</AlertDescription></Alert>
+				<Alert variant="destructive"><AlertTitle>Unable to load library media</AlertTitle><AlertDescription>{mediaQuery.error instanceof Error ? mediaQuery.error.message : 'The server did not return library media.'}</AlertDescription></Alert>
 			{:else if !nodes.length}
-				<div class="p-6"><Empty><EmptyHeader><EmptyTitle>No books in this library</EmptyTitle><EmptyDescription>Scan or stage books into the library to review them here.</EmptyDescription></EmptyHeader></Empty></div>
+				<div class="p-6"><Empty><EmptyHeader><EmptyTitle>No media in this library</EmptyTitle><EmptyDescription>Scan or stage books and audiobooks into the library to review them here.</EmptyDescription></EmptyHeader></Empty></div>
 			{:else}
 				<div class="overflow-x-auto">
 					<Table>
 						<TableHeader>
 							<TableRow>
-								<TableHead class="w-12"><Checkbox checked={allSelected} aria-label="Select all books on this page" onCheckedChange={() => toggleAll()} /></TableHead>
-								<TableHead>Book</TableHead>
+								<TableHead class="w-12"><Checkbox checked={allSelected} aria-label="Select all media on this page" onCheckedChange={() => toggleAll()} /></TableHead>
+								<TableHead>Media</TableHead>
 								<TableHead>Path</TableHead>
 								<TableHead>Pages</TableHead>
 								<TableHead>Quality score</TableHead>
@@ -270,7 +270,7 @@
 										</div>
 									</TableCell>
 									<TableCell class="max-w-[20rem]"><div class="truncate text-xs text-muted-foreground">{book.path}</div></TableCell>
-									<TableCell class="tabular-nums">{book.pages}</TableCell>
+									<TableCell class="tabular-nums">{book.pages >= 0 ? book.pages : '—'}</TableCell>
 									<TableCell>
 										{#if scoreById.get(book.id) === null || scoreById.get(book.id) === undefined}
 											<span class="text-muted-foreground">—</span>

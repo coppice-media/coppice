@@ -60,7 +60,7 @@
 				·
 				<a
 					class="font-mono hover:underline"
-					href={resolve('/(app)/settings/annotations')}
+					href={`${resolve('/connections')}#exports`}
 					title="The file the annotation-sync sinks write this book to"
 				>
 					{exportFile}

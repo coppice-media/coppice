@@ -12,7 +12,7 @@ use models::{
 	entity::{
 		age_restriction, session,
 		user::{self, AuthUser},
-		user_login_activity,
+		user_login_activity, user_preferences,
 	},
 	shared::{enums::UserPermission, permission_set::PermissionSet},
 };
@@ -24,12 +24,14 @@ use stump_core::config::StumpConfig;
 
 #[cfg(feature = "web")]
 use crate::{
-	input::user::{NavigationArrangementInput, UpdateUserPreferencesInput},
+	input::user::{
+		HomeArrangementInput, NavigationArrangementInput, UpdateUserPreferencesInput,
+	},
 	object::user_preferences::UserPreferences,
 	utils::save_user_session,
 };
 #[cfg(feature = "web")]
-use models::{entity::user_preferences, shared::arrangement::Arrangement};
+use models::shared::arrangement::{Arrangement, HomeArrangement};
 #[cfg(feature = "web")]
 use tower_sessions::Session;
 
@@ -240,17 +242,31 @@ impl UserMutation {
 		let config = core_ctx.config.as_ref();
 		let conn = core_ctx.conn.as_ref();
 
-		if user.id != id.to_string() && !user.is_server_owner {
+		let is_self = user.id == id.to_string();
+		let can_manage_users =
+			user.is_server_owner || user.has_permission(UserPermission::ManageUsers);
+
+		if !is_self && !can_manage_users {
 			return Err(FORBIDDEN_ACTION.into());
+		}
+
+		// TODO(permissions): server owner goes away
+		// nobody can update the server owner
+		if !is_self && !user.is_server_owner {
+			let target = user::Entity::find_by_id(id.to_string())
+				.one(conn)
+				.await?
+				.ok_or("User not found")?;
+			if target.is_server_owner {
+				return Err(FORBIDDEN_ACTION.into());
+			}
 		}
 
 		let updated_user =
 			update_user(user, id.to_string(), conn, config, &input).await?;
 		tracing::debug!(?updated_user, "Updated user");
 
-		if user.id != id.to_string() {
-			// When a server owner updates another user, we need to delete all sessions for that user
-			// because the user's permissions may have changed. This is a bit lazy but it works.
+		if !is_self {
 			remove_all_session_for_user(id.to_string(), conn).await?;
 		}
 
@@ -346,6 +362,30 @@ impl UserMutation {
 	}
 
 	#[cfg(feature = "web")]
+	/// Replace the authenticated user's home sections
+	async fn update_home_arrangement(
+		&self,
+		ctx: &Context<'_>,
+		input: HomeArrangementInput,
+	) -> Result<HomeArrangement> {
+		let conn = ctx.data::<CoreContext>()?.conn.as_ref();
+		let stump_auth::AuthContext { user, .. } =
+			ctx.data::<stump_auth::AuthContext>()?;
+		let arrangement = HomeArrangement::new(input.sections);
+
+		let preferences = user_preferences::Entity::find()
+			.filter(user_preferences::Column::UserId.eq(&user.id))
+			.one(conn)
+			.await?
+			.ok_or("User preferences not found")?;
+
+		let mut active_model = preferences.into_active_model();
+		active_model.home_arrangement = Set(Some(arrangement.clone().into()));
+		active_model.update(conn).await?;
+
+		Ok(arrangement)
+	}
+	#[cfg(feature = "web")]
 	async fn update_navigation_arrangement_lock(
 		&self,
 		ctx: &Context<'_>,
@@ -361,15 +401,12 @@ impl UserMutation {
 			.await?
 			.ok_or("User preferences not found")?;
 
-		let updated_arrangement = match preferences.navigation_arrangement {
-			Some(ref arrangement) => Arrangement {
-				locked,
-				..arrangement.clone()
-			},
-			None => Arrangement {
-				locked,
-				..Arrangement::default_navigation()
-			},
+		let updated_arrangement = Arrangement {
+			locked,
+			..preferences
+				.navigation_arrangement
+				.clone()
+				.unwrap_or_else(Arrangement::default_navigation)
 		};
 
 		let mut active_model = preferences.into_active_model();
@@ -500,20 +537,24 @@ async fn update_user(
 		_ => {},
 	}
 
+	let is_self_update = by_user.id == for_user_id;
+
 	let is_different_username = input.username != by_user.username;
-	if is_different_username && !by_user.has_permission(UserPermission::ChangeUsername) {
+	if is_self_update
+		&& is_different_username
+		&& !by_user.has_permission(UserPermission::ChangeUsername)
+	{
 		return Err("You do not have permission to change the username".into());
 	}
 
 	let mut update_user = user::ActiveModel {
 		id: Set(for_user_id.clone()),
 		username: Set(input.username.clone()),
-		max_sessions_allowed: Set(input.max_sessions_allowed),
 		..Default::default()
 	};
 
 	if let Some(password) = input.password.clone() {
-		if !by_user.has_permission(UserPermission::ChangePassword) {
+		if is_self_update && !by_user.has_permission(UserPermission::ChangePassword) {
 			return Err("You do not have permission to change the password".into());
 		}
 		let hashed_password = bcrypt::hash(password, config.auth.password_hash_cost)?;
@@ -522,10 +563,15 @@ async fn update_user(
 
 	let txn = begin_write(conn).await?;
 
-	let is_updating_server_owner = by_user.is_server_owner && by_user.id == for_user_id;
-	if !is_updating_server_owner {
+	// TODO(permissions): server owner goes away
+	// only a server owner or a user with ManageUsers may set another user's
+	// permissions, age restriction, and session cap.
+	let can_manage_privileged_fields = (by_user.is_server_owner
+		|| by_user.has_permission(UserPermission::ManageUsers))
+		&& !is_self_update;
+	if can_manage_privileged_fields {
+		update_user.max_sessions_allowed = Set(input.max_sessions_allowed);
 		update_user_age_restriction(&for_user_id, &input.age_restriction, &txn).await?;
-
 		let permissions = PermissionSet::new(input.permissions.clone());
 		update_user.permissions = Set(permissions.resolve_into_string());
 	}

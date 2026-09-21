@@ -65,6 +65,7 @@ const VERIFIED_TTL: Duration = Duration::from_secs(60);
 const VERIFIED_CAPACITY: usize = 1024;
 /// How long a READ/STREAM request waits for an in-flight slot before `429`.
 const STREAM_WAIT: Duration = Duration::from_secs(10);
+#[cfg(feature = "graphql")]
 /// Largest GraphQL JSON body inspected for an operation type; larger bodies
 /// (and non-JSON multipart uploads) are treated as mutations.
 const GRAPHQL_SNIFF_LIMIT: usize = 1024 * 1024;
@@ -137,10 +138,6 @@ impl RateLimiter {
 			counters: Default::default(),
 			checks: AtomicU64::new(0),
 		}
-	}
-
-	pub fn enabled(&self) -> bool {
-		self.config.enabled
 	}
 
 	/// The `rate_limit` member of the `/api/v2/health` payload.

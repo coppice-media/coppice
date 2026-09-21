@@ -5,7 +5,7 @@
 		"types": ["vite/client"],
 		"jsx": "preserve",
 		"module": "es2022",
-		"moduleResolution": "Node",
+		"moduleResolution": "Bundler",
 		"composite": true,
 		"declaration": true,
 		"emitDeclarationOnly": true,

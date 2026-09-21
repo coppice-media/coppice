@@ -7,7 +7,7 @@
 	},
 	"authScene": {
 		"claimHeading": "Inicializovat váš server",
-		"claimText": "Tento server Stump není inicializovaný. Pro vytvoření účtu použijte níže uvedený formulář. Po vytvoření budete mít plný přístup ke všem funkcím serveru.",
+		"claimText": "Tento server Coppice není inicializovaný. Pro vytvoření účtu použijte níže uvedený formulář. Po vytvoření budete mít plný přístup ke všem funkcím serveru.",
 		"form": {
 			"validation": {
 				"missingUsername": "Jméno uživatele je vyžadováno",
@@ -317,7 +317,7 @@
 			"convertOptions": {
 				"section": {
 					"heading": "Konverze souboru",
-					"description": "Stump je schopný převádět určité formáty souborů do více kompatibilních"
+					"description": "Coppice je schopný převádět určité formáty souborů do více kompatibilních"
 				},
 				"rarToZip": {
 					"label": "Převést RAR na ZIP",
@@ -365,7 +365,7 @@
 				},
 				"options": {
 					"label": "Vzor knihovny",
-					"description": "Nastavení, které určuje, jak bude Stump organizovat vaši knihovnu",
+					"description": "Nastavení, které určuje, jak bude Coppice organizovat vaši knihovnu",
 					"collectionPriority": {
 						"label": "Priorita sbírky",
 						"description": "Každá složka na nejvyšší úrovni kořene knihovny je jedna série"
@@ -1013,7 +1013,7 @@
 					"description": "Změnit filtry pro tuto relaci zobrazení",
 					"rawData": {
 						"heading": "Syrová data filtru",
-						"description": "Stump zpracuje filtry takto"
+						"description": "Coppice zpracuje filtry takto"
 					},
 					"buttons": {
 						"save": "Uložit",
@@ -1101,8 +1101,8 @@
 					},
 					"heading": "Jazyk a lokalizace",
 					"subtitle": [
-						"Stump podporuje více jazyků a místních jazykových mutací, nastavte si je níže. Prosím, zvažte pomoc při zlepšování kvality",
-						"Přeložte Stump",
+						"Coppice podporuje více jazyků a místních jazykových mutací, nastavte si je níže. Prosím, zvažte pomoc při zlepšování kvality",
+						"Přeložte Coppice",
 						"pokud můžete!"
 					]
 				}
@@ -1161,7 +1161,7 @@
 		"app/apiKeys": {
 			"helmet": "API klíče",
 			"title": "API klíče",
-			"description": "Spravujte vygenerované API klíče Stump",
+			"description": "Spravujte vygenerované API klíče Coppice",
 			"shared": {
 				"fields": {
 					"name": "Název",
@@ -1272,11 +1272,11 @@
 		"app/desktop": {
 			"helmet": "Nastavení plochy",
 			"title": "Nastavení plochy",
-			"description": "Nastavení vztahující se k aplikaci Stump",
+			"description": "Nastavení vztahující se k aplikaci Coppice",
 			"sections": {
 				"configuredServers": {
 					"label": "Nastavené servery",
-					"description": "Seznam serverů Stump, ke kterým se můžete připojit",
+					"description": "Seznam serverů Coppice, ke kterým se můžete připojit",
 					"getStarted": "Přidejte server pro začátek",
 					"unreachableServer": {
 						"tooltip": "Server je nedostupný"
@@ -1297,14 +1297,14 @@
 								"placeholder": "Můj server"
 							},
 							"uri": {
-								"description": "URL serveru Stump"
+								"description": "URL serveru Coppice"
 							}
 						}
 					},
 					"addServer": {
 						"trigger": "Přidat server",
 						"title": "Přidat nový server",
-						"description": "Přidat nový server Stump do aplikace",
+						"description": "Přidat nový server Coppice do aplikace",
 						"confirm": "Přidat server"
 					},
 					"editServer": {
@@ -1376,14 +1376,14 @@
 		"server/general": {
 			"helmet": "Obecné nastavení serveru",
 			"title": "Obecná nastavení",
-			"description": "Obecná nastavení týkající se instance serveru Stump",
+			"description": "Obecná nastavení týkající se instance serveru Coppice",
 			"sections": {
 				"updateAvailable": {
 					"message": "Váš server není aktualizován. Aktualizujte prosím na nejnovější verzi!"
 				},
 				"serverInfo": {
 					"title": "Informace o serveru",
-					"description": "Základní podrobnosti o instanci serveru Stump",
+					"description": "Základní podrobnosti o instanci serveru Coppice",
 					"build": {
 						"label": "Sestavení",
 						"description": "Podrobnosti o verzi a sestavení",
@@ -1426,7 +1426,7 @@
 				},
 				"liveLogs": {
 					"title": "Kanál živých logů",
-					"description": "Streamováno přímo z instance vašeho serveru Stump v reálném čase"
+					"description": "Streamováno přímo z instance vašeho serveru Coppice v reálném čase"
 				}
 			}
 		},
@@ -1441,7 +1441,7 @@
 				},
 				"history": {
 					"title": "Historie",
-					"description": "Záznam úloh, které byly spuštěny na instanci serveru Stump",
+					"description": "Záznam úloh, které byly spuštěny na instanci serveru Coppice",
 					"table": {
 						"columns": {
 							"name": "Název",
@@ -1627,8 +1627,8 @@
 			"sections": {
 				"emailers": {
 					"title": "SMTP e-mailery",
-					"description": "Klienti, které jste nakonfigurovali pro odesílání e-mailů z instance serveru Stump",
-					"singleInstanceDisclaimer": "Zatímco Stump podporuje více SMTP konfigurací v pozadí, pouze jedna může být nakonfigurována v uživatelském rozhraní. To bude v budoucnu vylepšeno",
+					"description": "Klienti, které jste nakonfigurovali pro odesílání e-mailů z instance serveru Coppice",
+					"singleInstanceDisclaimer": "Zatímco Coppice podporuje více SMTP konfigurací v pozadí, pouze jedna může být nakonfigurována v uživatelském rozhraní. To bude v budoucnu vylepšeno",
 					"list": {
 						"emptyHeading": "Nejsou nakonfigurovány žádné SMTP e-mailery",
 						"primaryEmailer": "Primární e-mailer",
@@ -1650,7 +1650,7 @@
 				},
 				"devices": {
 					"title": "E-mailová zařízení",
-					"description": "Aliasy zařízení, které jste nakonfigurovali pro příjem e-mailů z instance serveru Stump",
+					"description": "Aliasy zařízení, které jste nakonfigurovali pro příjem e-mailů z instance serveru Coppice",
 					"addDevice": "Přidat alias zařízení",
 					"addOrUpdateDevice": {
 						"title": {
@@ -1740,7 +1740,7 @@
 			"createEmailer": {
 				"helmet": "Vytvořit e-mailer",
 				"title": "Vytvořit e-mailer",
-				"description": "Vytvořit nový SMTP e-mailer pro instanci vašeho serveru Stump"
+				"description": "Vytvořit nový SMTP e-mailer pro instanci vašeho serveru Coppice"
 			},
 			"updateEmailer": {
 				"helmet": "Upravit e-mailer",

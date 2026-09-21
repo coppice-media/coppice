@@ -289,8 +289,7 @@ mod tests {
 				<title>Feed Title</title>
 				<updated>{{{INSERT}}}</updated>
 				<author>
-					<name>Stump</name>
-					<uri>https://github.com/stumpapp/stump</uri>
+					<name>Coppice</name>
 				</author>
 				<entry>
 					<title>Modern Online Philately</title>

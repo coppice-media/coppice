@@ -121,6 +121,7 @@ pub(crate) fn fixture_book() -> ExportBook {
 			last_session_at: Some(at(70)),
 			finished: false,
 		}),
+		review: None,
 	}
 }
 

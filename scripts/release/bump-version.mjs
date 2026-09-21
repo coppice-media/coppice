@@ -47,7 +47,7 @@ const main = defineCommand({
 		},
 	},
 	async run({ args }) {
-		p.intro('Stump version bump tool')
+		p.intro('Coppice version bump tool')
 
 		if (args.bump && !VALID_BUMPS.includes(args.bump)) {
 			p.log.error(`invalid --bump value "${args.bump}"`)

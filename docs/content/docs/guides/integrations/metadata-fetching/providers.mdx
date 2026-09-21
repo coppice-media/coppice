@@ -1,39 +1,36 @@
 ---
 title: Providers
+description: Provider availability and evidence for Coppice metadata fetching
 ---
 
-<Callout title="Work in progress">
-	This integration is highly experimental and not fully implemented. Some information may be missing, and some features may not work as expected. Please report any issues you encounter.
-</Callout>
+# Metadata providers
 
-While Stump does not support every external metadata provider, it currently integrates with the following providers:
+Metadata providers enrich media that is already in a Coppice library. They are
+not fulfillment connectors and do not turn Coppice into a media search or
+download service.
 
-- Hardcover
-- Open Library
-- Anilist
-- ComicVine
+| Provider surface | Status | Evidence | Boundary |
+| --- | --- | --- | --- |
+| Hardcover metadata | Shipped | Contract-tested | Mapper and recorded payload fixtures are covered offline. |
+| Hardcover live credential | Blocked | — | No live credential run is recorded. Do not treat offline fixtures as vendor verification. |
+| Hardcover account/progress/journal sync | Planned | Planned; Blocked | No account-sync or OAuth workflow is shipped. |
+| Other provider mappers | Source-only or Planned | Source-only | Check [provider status](/docs/developer/provider-status) before enabling a provider; a mapper or source reference is not a live integration claim. |
 
 ## Hardcover
 
-> Not yet documented
+Hardcover metadata lookup is the one provider path documented as **Shipped** in
+this fork. It is **Contract-tested** against offline fixtures and does not
+require or verify a live account credential on this page.
 
-## Open Library
+Hardcover account, reading progress, and journal synchronization are
+**Planned** and **Blocked**. They need a separate account contract and a
+controlled live-credential verification pass. They are not available merely
+because metadata lookup succeeds.
 
-> Not yet implemented
+## Responsible provider use
 
-## Anilist
-
-> Not yet implemented
-
-## ComicVine
-
-> Not yet implemented
-
-## Other Providers
-
-You are welcome to request support for additional metadata providers by opening an issue on our [GitHub repository](https://github.com/stumpapp/stump/issues). That said, I will not consider requests for certain providers:
-
-- Amazon / Goodreads
-- Google Books
-
-I am opposed to supporting these entities even by extension, such as providing native integrations with their APIs.
+Only fetch metadata for media and accounts you are authorized to process. Keep
+credentials out of checked-in configuration, and respect provider terms,
+quotas, and rate limits. For a new provider request, consult the [developer
+provider record](/docs/developer/provider-status) and open an issue only after
+checking whether the required API and license permit the integration.

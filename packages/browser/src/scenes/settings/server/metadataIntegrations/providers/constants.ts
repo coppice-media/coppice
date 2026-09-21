@@ -1,6 +1,6 @@
 import { MetadataProvider } from '@stump/graphql'
 
-export const PROVIDER_LABELS: Record<MetadataProvider, string> = {
+export const PROVIDER_LABELS: Partial<Record<MetadataProvider, string>> = {
 	[MetadataProvider.Hardcover]: 'Hardcover',
 	[MetadataProvider.ComicVine]: 'Comic Vine',
 }

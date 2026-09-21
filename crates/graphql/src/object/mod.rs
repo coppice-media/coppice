@@ -17,7 +17,12 @@ pub mod book_club_discussion_message;
 pub mod book_club_invitation;
 #[cfg(feature = "web")]
 pub mod book_club_member;
+pub mod book_detail;
+pub mod book_request;
+pub mod book_review;
 pub mod bookmark;
+#[cfg(feature = "crosspoint")]
+pub mod crosspoint;
 #[cfg(feature = "web")]
 pub mod custom_emoji;
 pub mod device;
@@ -29,6 +34,7 @@ pub mod email_device;
 pub mod emailer;
 pub mod emailer_send_record;
 pub mod epub;
+pub mod hardcover;
 pub mod ingest;
 pub mod job;
 pub mod job_schedule_config;
@@ -53,6 +59,7 @@ pub mod reading_session;
 pub mod reading_stats;
 pub mod readthrough_record;
 pub mod resume_reading_cursor;
+pub mod runtime_component;
 pub mod series;
 pub mod series_metadata;
 #[cfg(feature = "web")]
@@ -62,6 +69,7 @@ pub mod smart_list_view;
 #[cfg(feature = "web")]
 pub mod smart_lists;
 pub mod stats;
+pub mod sync_map;
 pub mod tag;
 pub mod user;
 pub mod user_login_activity;

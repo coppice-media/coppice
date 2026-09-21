@@ -18,6 +18,10 @@ pub struct AnnotationFilterInput {
 	/// Where the annotation came from, as reported by
 	/// [`AnnotationEntry::source`](crate::object::annotation::AnnotationEntry)
 	pub source: Option<Vec<DeviceKind>>,
+	/// Durable registered device id that pushed the annotation. This is
+	/// independent of whether the device's current credential is active, so
+	/// revoked-device history remains filterable.
+	pub source_device_id: Option<ID>,
 	/// Case-insensitive substring match over the selected passage, the note,
 	/// and the book title
 	pub query: Option<String>,

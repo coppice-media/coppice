@@ -189,7 +189,7 @@ async fn test_keep_reading_filters_finished_and_prior_readthroughs() {
 		vec![
 			book_ids[3].clone(),
 			book_ids[2].clone(),
-			book_ids[1].clone()
+			book_ids[1].clone(),
 		]
 	);
 	assert!(!ids.contains(&book_ids[0]));

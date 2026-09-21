@@ -23,7 +23,7 @@ use stump_media::{
 		generate_image_metadata_from_bytes, replace_thumbnail, GenericImageProcessor,
 		ImageProcessor,
 	},
-	media::{get_content_types_for_pages, get_page_async, get_page_count_async},
+	media::{get_content_types_for_pages_async, get_page_async, get_page_count_async},
 	ContentType, EpubProcessor,
 };
 use tokio::sync::broadcast::{self, Receiver, Sender};
@@ -392,8 +392,10 @@ impl KomgaBackend for KomgaBackendAdapter {
 		}
 		let count = count.min(4096);
 		let numbers = (1..=count).map(|number| number as i32).collect::<Vec<_>>();
-		let content_types = get_content_types_for_pages(&book.path, numbers.clone())
-			.map_err(map_core_error)?;
+		let content_types =
+			get_content_types_for_pages_async(&book.path, numbers.clone())
+				.await
+				.map_err(map_core_error)?;
 		Ok(numbers
 			.into_iter()
 			.map(|number| {
@@ -614,7 +616,7 @@ impl KomgaBackend for KomgaBackendAdapter {
 	) -> stump_komga::errors::APIResult<stump_komga::KomgaBookThumbnail> {
 		if !selected {
 			return Err(stump_komga::errors::APIError::BadRequest(
-				"Stump only supports selected thumbnail uploads".to_owned(),
+				"Coppice only supports selected thumbnail uploads".to_owned(),
 			));
 		}
 		if bytes.is_empty() {
@@ -878,7 +880,7 @@ impl KomgaBackend for KomgaBackendAdapter {
 	) -> stump_komga::errors::APIResult<stump_komga::KomgaSeriesThumbnail> {
 		if !selected {
 			return Err(stump_komga::errors::APIError::BadRequest(
-				"Stump only supports selected thumbnail uploads".to_owned(),
+				"Coppice only supports selected thumbnail uploads".to_owned(),
 			));
 		}
 		if bytes.is_empty() {
@@ -1006,9 +1008,12 @@ impl KomgaBackend for KomgaBackendAdapter {
 		path: String,
 		base_url: String,
 	) -> stump_komga::errors::APIResult<serde_json::Value> {
-		let manifest = stump_media::ReadiumManifestGenerator::new(path, base_url)
-			.generate_manifest()
-			.map_err(map_core_error)?;
+		let manifest = tokio::task::spawn_blocking(move || {
+			stump_media::ReadiumManifestGenerator::new(path, base_url).generate_manifest()
+		})
+		.await
+		.map_err(map_core_error)?
+		.map_err(map_core_error)?;
 		serde_json::to_value(manifest).map_err(map_core_error)
 	}
 
@@ -1017,9 +1022,13 @@ impl KomgaBackend for KomgaBackendAdapter {
 		path: String,
 		base_url: String,
 	) -> stump_komga::errors::APIResult<serde_json::Value> {
-		let positions = stump_media::ReadiumManifestGenerator::new(path, base_url)
-			.generate_positions()
-			.map_err(map_core_error)?;
+		let positions = tokio::task::spawn_blocking(move || {
+			stump_media::ReadiumManifestGenerator::new(path, base_url)
+				.generate_positions()
+		})
+		.await
+		.map_err(map_core_error)?
+		.map_err(map_core_error)?;
 		serde_json::to_value(positions).map_err(map_core_error)
 	}
 
@@ -1028,9 +1037,12 @@ impl KomgaBackend for KomgaBackendAdapter {
 		path: String,
 		resource_path: PathBuf,
 	) -> stump_komga::errors::APIResult<KomgaImage> {
-		let (content_type, data) =
+		let (content_type, data) = tokio::task::spawn_blocking(move || {
 			EpubProcessor::get_resource_by_path(&path, "", resource_path)
-				.map_err(|error| map_server_error(APIError::from(error)))?;
+		})
+		.await
+		.map_err(map_core_error)?
+		.map_err(|error| map_server_error(APIError::from(error)))?;
 		Ok(KomgaImage::new(content_type.to_string(), data))
 	}
 

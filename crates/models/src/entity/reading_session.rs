@@ -2,9 +2,9 @@ use chrono::Utc;
 use sea_orm::{
 	entity::prelude::*,
 	prelude::async_trait::async_trait,
-	sea_query::{Alias, ConditionType, Query, SelectStatement},
+	sea_query::{Alias, Query, SelectStatement},
 	ActiveValue, Condition, DeriveEntityModel, FromJsonQueryResult, FromQueryResult,
-	JoinType, QueryOrder, QuerySelect,
+	Identity, JoinType, QueryOrder, QuerySelect, RelationDef,
 };
 use serde::{Deserialize, Serialize};
 
@@ -77,6 +77,12 @@ pub struct Model {
 	#[sea_orm(column_type = "Json", nullable)]
 	pub device_ids: Option<DeviceIds>,
 
+	/// Liseur's immutable closed-session id when this row was projected from
+	/// `liseur_sync_sessions`; native sessions leave it unset.
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	#[sea_orm(column_type = "Text", nullable)]
+	pub liseur_session_id: Option<String>,
+
 	#[sea_orm(column_type = "Text")]
 	pub media_id: String,
 	#[sea_orm(column_type = "Text")]
@@ -101,10 +107,10 @@ impl Model {
 	}
 }
 
-// TODO(devices): sessions now store multiple devices, so not sure how to approach this.
-// we don't use it for now, so it's fine, but should be revisited. i also don't know if some of the integrations
-// which this is meant to support (e.g. koreader) care about multiple devices. maybe i just add e.g.
-// find_with_kind("koreader") or something
+/// A reading-session/device pair returned by [`ModelWithDevice::find`].
+///
+/// `find().into_model::<ModelWithDevice>().all(...)` returns one row per
+/// registered device in `model.device_ids`.
 #[derive(Debug, Clone)]
 pub struct ModelWithDevice {
 	pub model: Model,
@@ -117,27 +123,26 @@ impl ModelWithDevice {
 			.add_columns(Entity)
 			.add_columns(device::Entity)
 			.selector
-			// TODO(devices): this is a bit scuffed. it will generated roughly:
-			/*
-				left join devices on reading_sessions.device_ids = devices.id OR (
-					json_extract(reading_sessions.device_ids, '$[0]') = devices.id
-				)
-			*/
-			// which _works_ but the former condition is redundant and will never actually match anything,
-			// but sea-orm seems to always imbue the join with that default predicate...
+			// `json_each` turns every stored device id into a join candidate instead
+			// of resolving only the first array element.
 			.join(
 				JoinType::LeftJoin,
-				Entity::belongs_to(device::Entity)
-					.from(Column::DeviceIds)
-					.to(device::Column::Id)
-					.condition_type(ConditionType::Any)
-					// https://sqlite.org/json1.html#the_json_extract_function
-					.on_condition(|_left, _right| {
-						Condition::all().add(Expr::cust(
-							"json_extract(reading_sessions.device_ids, '$[0]') = devices.id",
-						))
-					})
-					.into(),
+				{
+					let mut relation: RelationDef = Entity::belongs_to(device::Entity)
+						.from(Column::Id)
+						.to(device::Column::Id)
+						.on_condition(|_left, _right| {
+							Condition::all().add(Expr::cust(
+								"EXISTS (SELECT 1 FROM json_each(reading_sessions.device_ids) WHERE json_each.value = devices.id)",
+							))
+						})
+						.into();
+					// Empty key identities suppress the generated equality; the
+					// JSON membership predicate above is the complete join.
+					relation.from_col = Identity::Many(Vec::new());
+					relation.to_col = Identity::Many(Vec::new());
+					relation
+				},
 			)
 	}
 }
@@ -153,8 +158,8 @@ impl FromQueryResult for ModelWithDevice {
 	}
 }
 
-// note: because DeviceIds is a JSON col we can't derive the relation, to do that we'd
-// need a junction table instead, but i don't wanna deal with that rn so it's fine
+// The JSON array cannot be represented by a SeaORM relation. The custom
+// `json_each` join above expands it without requiring a junction table.
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
 	#[sea_orm(
@@ -281,5 +286,101 @@ impl ActiveModelBehavior for ActiveModel {
 		self.updated_at = ActiveValue::Set(Some(DateTimeWithTimeZone::from(now)));
 
 		Ok(self)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::shared::enums::{DeviceKind, ReadingStatus};
+	use chrono::NaiveDate;
+	use sea_orm::{
+		ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, Database,
+		DbBackend, QueryFilter, QueryOrder, Schema, Statement,
+	};
+
+	#[tokio::test]
+	async fn model_with_device_expands_every_stored_device_id() {
+		let db = Database::connect("sqlite::memory:").await.unwrap();
+		let schema = Schema::new(DbBackend::Sqlite);
+		for sql in [
+			"CREATE TABLE users (id TEXT PRIMARY KEY)",
+			"CREATE TABLE media (id TEXT PRIMARY KEY)",
+		] {
+			db.execute(Statement::from_string(DbBackend::Sqlite, sql))
+				.await
+				.unwrap();
+		}
+		db.execute(Statement::from_string(
+			DbBackend::Sqlite,
+			"INSERT INTO users (id) VALUES ('user-1')",
+		))
+		.await
+		.unwrap();
+		db.execute(Statement::from_string(
+			DbBackend::Sqlite,
+			"INSERT INTO media (id) VALUES ('media-1')",
+		))
+		.await
+		.unwrap();
+		for statement in [
+			schema
+				.create_table_from_entity(crate::entity::device::Entity)
+				.if_not_exists()
+				.to_owned(),
+			schema
+				.create_table_from_entity(Entity)
+				.if_not_exists()
+				.to_owned(),
+		] {
+			db.execute(db.get_database_backend().build(&statement))
+				.await
+				.unwrap();
+		}
+
+		for (id, name) in [("device-a", "Kobo"), ("device-b", "Phone")] {
+			crate::entity::device::ActiveModel {
+				id: Set(id.to_owned()),
+				user_id: Set("user-1".to_owned()),
+				name: Set(name.to_owned()),
+				kind: Set(DeviceKind::Kobo),
+				..Default::default()
+			}
+			.insert(&db)
+			.await
+			.unwrap();
+		}
+
+		let session = ActiveModel {
+			session_date: Set(NaiveDate::from_ymd_opt(2026, 9, 11).unwrap()),
+			readthrough_number: Set(1),
+			status: Set(ReadingStatus::Reading),
+			device_ids: Set(Some(DeviceIds(vec![
+				"device-a".to_owned(),
+				"device-b".to_owned(),
+			]))),
+			media_id: Set("media-1".to_owned()),
+			user_id: Set("user-1".to_owned()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+
+		let rows = ModelWithDevice::find()
+			.filter(Column::Id.eq(session.id))
+			.order_by_asc(crate::entity::device::Column::Id)
+			.into_model::<ModelWithDevice>()
+			.all(&db)
+			.await
+			.unwrap();
+
+		assert_eq!(rows.len(), 2);
+		assert_eq!(
+			rows.iter()
+				.map(|row| row.device.as_ref().unwrap().id.as_str())
+				.collect::<Vec<_>>(),
+			vec!["device-a", "device-b"]
+		);
 	}
 }

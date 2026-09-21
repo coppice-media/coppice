@@ -1,6 +1,6 @@
-//! Device pairing: the unauthenticated half of the flow that lets a reader app
-//! (Kobo plugin, Mihon extension, ...) obtain a Stump credential without ever
-//! seeing the user's password.
+//! Device pairing: the unauthenticated half of the flow that lets a companion
+//! app (Coppice KOReader/Kobo plugins, Mihon, ...) obtain device credential(s)
+//! without ever seeing the user's password.
 //!
 //! 1. `POST /devices/pair/start` creates a pending pairing and hands the device a
 //!    6-digit code plus a random nonce (also embedded in the `stump://pair` QR
@@ -9,18 +9,21 @@
 //!    (`approveDevicePairing`) by entering the code or by scanning the QR, which
 //!    binds the pairing to that user.
 //! 3. `GET /devices/pair/{id}/status?nonce=` reports the state; the first poll
-//!    after approval mints the device credential through the devices service and
-//!    returns it exactly once.
+//!    after approval mints the device credential set through the devices service
+//!    and returns every secret exactly once.
 //!
 //! See `docs/content/docs/developer/device-pairing.mdx` for the sequence diagram
 //! and threat model.
 
 use axum::{
 	extract::{Path, Query, State},
-	http::{header, HeaderValue, StatusCode},
-	response::IntoResponse,
 	routing::{get, post},
 	Json, Router,
+};
+#[cfg(feature = "qr")]
+use axum::{
+	http::{header, HeaderValue, StatusCode},
+	response::IntoResponse,
 };
 use chrono::{SecondsFormat, Utc};
 use models::{
@@ -128,8 +131,8 @@ pub struct PairedCredential {
 	pub secret: String,
 }
 
-impl From<IssuedCredential> for PairedCredential {
-	fn from(issued: IssuedCredential) -> Self {
+impl From<&IssuedCredential> for PairedCredential {
+	fn from(issued: &IssuedCredential) -> Self {
 		Self {
 			kind: match issued.kind {
 				CredentialKind::ApiKey => "api_key",
@@ -137,9 +140,15 @@ impl From<IssuedCredential> for PairedCredential {
 				CredentialKind::Session => "session",
 			},
 			protocol: issued.protocol,
-			credential_ref: issued.credential_ref,
-			secret: issued.secret,
+			credential_ref: issued.credential_ref.clone(),
+			secret: issued.secret.clone(),
 		}
+	}
+}
+
+impl From<IssuedCredential> for PairedCredential {
+	fn from(issued: IssuedCredential) -> Self {
+		Self::from(&issued)
 	}
 }
 
@@ -147,16 +156,25 @@ impl From<IssuedCredential> for PairedCredential {
 pub struct PairingStatusResponse {
 	pub status: WirePairingStatus,
 	/// Present once approved. `true` on every approved response, since the
-	/// credential is minted by (and returned from) the first approved poll.
+	/// credentials are minted by (and returned from) the first approved poll.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub credential_issued: Option<bool>,
-	/// Only on the poll that mints the credential
+	/// Only on the poll that mints the credentials.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub device: Option<PairedDevice>,
-	/// Only on the poll that mints the credential; never repeated
+	/// The approved account name, returned with one-time credentials so
+	/// clients can configure Basic/KOSync lanes without a password flow.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub username: Option<String>,
+	/// Every credential minted in this approval, returned only once. Clients
+	/// select by kind and protocol rather than list position.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub credentials: Option<Vec<PairedCredential>>,
+	/// The primary credential, retained for older clients that only understand
+	/// the singular field.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub credential: Option<PairedCredential>,
-	/// Only on the poll that mints the credential
+	/// Only on the poll that mints the credentials.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub endpoints: Option<Vec<Endpoint>>,
 }
@@ -168,6 +186,8 @@ impl PairingStatusResponse {
 				.then_some(true),
 			status: status.into(),
 			device: None,
+			username: None,
+			credentials: None,
 			credential: None,
 			endpoints: None,
 		}
@@ -444,6 +464,12 @@ async fn issue_credential(
 		device_name: device.name.clone(),
 	}));
 
+	let credentials = credential
+		.credentials()
+		.iter()
+		.map(PairedCredential::from)
+		.collect();
+	let primary = PairedCredential::from(&credential);
 	Ok(PairingStatusResponse {
 		status: WirePairingStatus::Approved,
 		credential_issued: Some(true),
@@ -452,7 +478,9 @@ async fn issue_credential(
 			name: device.name,
 			kind: device.kind,
 		}),
-		credential: Some(credential.into()),
+		username: Some(approver.username.clone()),
+		credentials: Some(credentials),
+		credential: Some(primary),
 		endpoints: Some(endpoints),
 	})
 }

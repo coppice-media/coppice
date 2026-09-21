@@ -27,7 +27,7 @@ export default function UsersScene() {
 	return (
 		<SceneContainer>
 			<Helmet>
-				<title>Stump | {t('settingsScene.server/users.helmet')}</title>
+				<title>Coppice | {t('settingsScene.server/users.helmet')}</title>
 			</Helmet>
 
 			<ContentContainer>

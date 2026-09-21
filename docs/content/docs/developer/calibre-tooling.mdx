@@ -413,7 +413,7 @@ answer that does not involve this project.
 ### Ingest detection: the `drm_protected` quality check
 
 The detector is `stump_media::drm` (`crates/media/src/drm.rs`); the ingest
-check that consumes it is `core/src/ingest/quality/drm_protected.rs`, with its
+check that consumes it is `crates/ingest/src/quality/drm_protected.rs`, with its
 weight row in [Modular ingest](/docs/developer/modular-ingest). The check has
 **weight 0** and is a blocking gate: a protected file is not a low-quality
 book, it is a file the server cannot decode, so it fails with a named scheme,

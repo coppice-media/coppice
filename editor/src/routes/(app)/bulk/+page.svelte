@@ -142,7 +142,7 @@
 	}
 </script>
 
-<svelte:head><title>Bulk metadata · Stump ingest</title></svelte:head>
+<svelte:head><title>Bulk metadata · Coppice ingest</title></svelte:head>
 
 <div class="flex flex-col gap-6">
 	<div>

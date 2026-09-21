@@ -1,15 +1,17 @@
 ---
 title: Client apps
-description: Which apps talk to Stump, over which protocol, with what setup, and what actually works
+description: Which apps talk to Coppice, over which protocol, with what setup, and what actually works
 ---
 
-One section per known client. Every claim traces to a linked source page; a
-cell is only as strong as its evidence. Verification levels follow
-[client verification](/docs/developer/client-verification): **device** = run on
-a real app against the fixture server, **harness** = replayed Hurl spec or
-server-side probe (proves the server contract, not the app), **source** =
-implemented against pinned client source, no run yet. Hardware, device-side
-tools, and the servers we impersonate are on [platforms](/docs/developer/platforms).
+One section per known client. Every claim traces to a linked source page; a cell
+is only as strong as its evidence. The labels are exact:
+**Device-tested** means a real app or device ran against the fixture server;
+**Contract-tested** means an external Hurl replay or server probe exercised the
+wire contract; **Source-only** means pinned client source was inspected without a
+run. See [Client verification](/docs/developer/client-verification) and the
+[integration architecture](/docs/developer/integration-architecture). Hardware,
+device-side tools, and impersonated reference servers are on
+[platforms](/docs/developer/platforms).
 
 ## Komelia (Android)
 
@@ -18,7 +20,7 @@ tools, and the servers we impersonate are on [platforms](/docs/developer/platfor
 - **Setup:** server URL + Komga-shaped credentials; Basic or `X-API-Key`, with
   `remember-me=true` issuing a 14-day `komga-remember-me` cookie for the
   background download worker.
-- **Works (device, 2026-09-03/04, Komelia 0.19.0):** login, library/series/book
+- **Device-tested (2026-09-03/04, Komelia 0.19.0):** login, library/series/book
   browsing with filters, CBZ and EPUB reading via Readium, read-progress and
   mark-read, metadata editing with SSE-driven refresh, collections, offline
   downloads.
@@ -35,43 +37,39 @@ tools, and the servers we impersonate are on [platforms](/docs/developer/platfor
   uses `/api/v2/series/{id}/read-progress/tachiyomi` and the read-list
   equivalent under `/api/v1/readlists`.
 - **Setup:** server URL + user/password (Basic) or API key
-  (`X-API-Key`). The tracker path sends only Basic or `X-API-Key`
-  ([client verification](/docs/developer/client-verification)).
-- **Works:** browse, download + read — device (2026-09-04) plus
-  `replay-mihon` harness. Progress sync — device (Komga enhanced tracker,
-  retested 2026-09-04) plus harness (series tracker GET → PUT → GET, cold
-  Basic first). Tracker calls were observed 401 before the Basic/API-key
-  scope was widened to that path; fixed and retested on device.
-- **Known gaps:** no download column in the verification matrix (not
-  exercised); coverage is the Mihon/Keiyoushi-observed profile only.
-  Evidence: [Komga adapter](/docs/developer/komga-compat),
-  [client verification](/docs/developer/client-verification).
+  (`X-API-Key`). The tracker path sends only Basic or `X-API-Key`.
+- **Device-tested (2026-09-04):** browse, download + read, and progress sync
+  (Komga enhanced tracker, retested). The same behavior is
+  **Contract-tested** by `replay-mihon` (series tracker GET → PUT → GET, cold
+  Basic first).
+- **Known gaps:** no download column in the verification matrix (not separately
+  exercised); coverage is the Mihon/Keiyoushi-observed profile only. Tracker
+  calls were 401 before the Basic/API-key scope included that path; the widened
+  scope was retested on device.
 
 ## Liseur (Android)
 
-Five profiles against Stump; evidence is
-[Liseur provider surface](/docs/developer/liseur-providers) (pinned Liseur
-`31f8182d`) and [client verification](/docs/developer/client-verification)
-(device reports 2026-09-04).
+Five profiles are recorded against Coppice. Current source-only client evidence is Liseur v0.16.0 ([`bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53`](https://github.com/chmouel/liseur/commit/bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53)); the existing device verification remains scoped to its dated run.
 
-| Profile | Protocol / URL to enter | Credentials | Verified | Known gaps |
+| Profile | Protocol / URL to enter | Credentials | Evidence | Known gaps |
 | --- | --- | --- | --- | --- |
-| Komga | Komga REST profile; server base URL | API key only (`X-API-Key`) | Device: login, browse, read, progress (incl. Readium locator `PUT /progression`, mark-read) | No annotation/note/bookmark client in the Komga provider |
-| OPDS 1.2 | `/opds/v1.2` | Basic (OPDS user) | Device: browse (merged library, covers), read, download; progress via KOReader-sync pairing | Stump's OPDS paths/pagination are not Calibre-Web's; Liseur's Calibre web-form login, Kobo-token provisioning, and delete lanes are absent |
-| OPDS 2.0 | `/opds/v2.0` | — | **Not supported by the app** | Liseur `OpdsHttp.kt:93` only accepts `application/atom+xml;profile=opds-catalog`; it has no OPDS 2 (`application/opds+json`) parser. Stump serves a valid 2.0 catalog |
-| KOReader sync | `/koreader/{api_key}` | KOReader pairing (`x-auth-user` + MD5-derived `x-auth-key`) | Device: progress sync; server probe `users/auth` 200 | Liseur uses KOSync roots, not Stump's API-key middleware shape — see below |
-| liseur-sync | Native `/v1/*` | Bearer device token (login → token mint) | Device: login, token mint, folders/books/covers, download, positions/heads; harness (`replay-liseur-sync`): positions, heads, changes, annotations, catalog chain | Upload, delete, series claims, insights, token administration deferred; local `media_annotations` projection deferred ([liseur-sync integration](/docs/developer/liseur-sync-integration)) |
+| Komga | Komga REST profile; server base URL | API key only (`X-API-Key`) | **Device-tested:** login, browse, read, progress (including Readium locator `PUT /progression`, mark-read) | No annotation/note/bookmark client in the Komga provider |
+| OPDS 1.2 | `/opds/v1.2` | Basic (OPDS user) | **Device-tested:** browse (merged library, covers), read, download; progress via KOReader sync pairing | Coppice OPDS paths/pagination are not Calibre-Web's; Liseur's Calibre web-form login, Kobo-token provisioning, and delete lanes are absent |
+| OPDS 2.0 | `/opds/v2.0` | — | **Blocked:** the app has no OPDS 2 parser | Liseur `OpdsHttp.kt:93` only accepts `application/atom+xml;profile=opds-catalog`; it has no OPDS 2 (`application/opds+json`) parser. Coppice serves a valid 2.0 catalog |
+| KOReader sync | `/koreader/{api_key}` | KOReader pairing (`x-auth-user` + MD5-derived `x-auth-key`) | **Device-tested:** progress sync; **Contract-tested:** server probe `users/auth` 200 | Liseur uses KOSync roots, not Coppice's API-key middleware shape — see [sync platforms](/docs/developer/sync-platforms) |
+| liseur-sync | Native `/v1/*` | Bearer device token (login → token mint) | **Device-tested:** login, token mint, folders/books/covers, download, positions/heads; **Contract-tested:** `replay-liseur-sync` positions, heads, changes, annotations, catalog chain | Upload, delete, series claims, insights, token administration, and local `media_annotations` projection are **Planned** ([liseur-sync integration](/docs/developer/liseur-sync-integration)) |
 
 ## KOReader
 
-- **Protocol:** KOReader sync under `/koreader/{api_key}` — only
-  `GET users/auth`, `PUT syncs/progress`, `GET syncs/progress/{document}`.
-- **Setup:** configure KOReader's custom sync server to the Stump URL with a
-  full Stump API key embedded in the path (the key replaces header auth
-  because KOReader's MD5 password form does not match Stump's scheme). The
+- **Protocol:** KOReader sync under `/koreader/{api_key}` — only `GET
+  users/auth`, `PUT syncs/progress`, and `GET syncs/progress/{document}`.
+- **Setup:** configure KOReader's custom sync server to the Coppice URL with a
+  full Coppice API key embedded in the path (the key replaces header auth
+  because KOReader's MD5 password form does not match Coppice's scheme). The
   key's owner needs `AccessKoreaderSync`.
-- **Works:** progress round-trip against `media.koreader_hash` (EPUB/PDF
-  processors generate it). Evidence: [sync platforms](/docs/developer/sync-platforms).
+- **Shipped; Contract-tested; Device-tested:** progress round-trip against
+  `media.koreader_hash` (EPUB/PDF processors generate it). Evidence: [sync
+  platforms](/docs/developer/sync-platforms).
 - **Known gaps:** no annotation/highlight/bookmark surface in the protocol;
   ZIP/RAR media get no `koreader_hash` so they cannot match.
 
@@ -81,141 +79,150 @@ Five profiles against Stump; evidence is
   sync, metadata, thumbnails, device-auth stub, EPUB/KEPUB download, and
   `library/{id}/state` GET/PUT.
 - **Setup:** point the device at the server (Kobo store-proxy style) with an
-  API key in the path; owner needs `AccessKoboSync`. Optional KEPUB
-  conversion via `KOBO_KEPUB_CONVERSION=true`.
-- **Works:** **harness only** (`initialization` 200, `library/sync`,
-  KEPUB delivery with `Range`, `ReadingState` round-trip). KEPUB output is
-  byte-identical to kepubify on 35/35 real books. No physical Kobo has been
-  tested yet. Evidence: [client verification](/docs/developer/client-verification),
-  [sync platforms](/docs/developer/sync-platforms),
-  [Kobo capabilities](/docs/developer/kobo-sync-capabilities).
-- **Device format limit:** stock Kobo firmware renders JPEG, PNG, GIF, BMP and TIFF only — no WebP in CBZ or KEPUB ([Kobo supported formats](https://help.kobo.com/hc/en-us/articles/360017763713-File-formats-your-Kobo-eReader-and-Kobo-Books-app-support)); WebP pages show blank or the book is hidden. Stump's PDF renderer defaults to WebP output and most Mihon sources serve WebP, so Kobo delivery of comics needs a JPEG re-encode step (see the comics-for-Kobo phase in the [roadmap](/docs/developer/roadmap)). KOReader renders WebP in CBZ ([koreader#3016](https://github.com/koreader/koreader/issues/3016), closed 2022.08).
-- **Models, device-side tools, and the on-device data model** (per-model panel
-  and stylus table, stock Nickel vs KOReader vs NickelStump, `KoboReader.sqlite`
-  tables) are on [platforms](/docs/developer/platforms). Two facts matter for
-  annotations: stylus markups live outside the database as
-  `.kobo/markups/*.svg` (strokes) + `*.jpg` (page snapshot) with opaque file
-  stems attributed through `KoboReader.sqlite`
-  ([composite markup tool](https://github.com/leldr/Unofficial-Chrome-Based-Kobo-Composite-Markup-Generator)),
-  and Kobo states that handwritten notes in EPUB/KEPUB stay on the device and
-  cannot be exported, while PDF markups are written into the PDF
-  ([Kobo help](https://help.kobo.com/hc/en-us/articles/1500001927562)). No
-  Stump component reads either today.
+  API key in the path; owner needs `AccessKoboSync`. Optional KEPUB conversion
+  via `KOBO_KEPUB_CONVERSION=true`.
+- **Contract-tested:** `initialization` 200, `library/sync`, KEPUB delivery with
+  `Range`, and `ReadingState` round-trip. KEPUB output is byte-identical to
+  kepubify on 35/35 real books. **Blocked:** no physical Kobo has been tested
+  yet. Evidence: [client verification](/docs/developer/client-verification),
+  [sync platforms](/docs/developer/sync-platforms), [Kobo capabilities](/docs/developer/kobo-sync-capabilities).
+- **Device format limit:** stock Kobo firmware renders JPEG, PNG, GIF, BMP and
+  TIFF only — no WebP in CBZ or KEPUB ([Kobo supported formats](https://help.kobo.com/hc/en-us/articles/360017763713-File-formats-your-Kobo-eReader-and-Kobo-Books-app-support));
+  WebP pages show blank or the book is hidden. Coppice's PDF renderer defaults
+  to WebP output and most Mihon sources serve WebP, so comic delivery needs a
+  JPEG re-encode step (see the comics-for-Kobo phase in the [roadmap](/docs/developer/roadmap)).
+  KOReader renders WebP in CBZ ([koreader#3016](https://github.com/koreader/koreader/issues/3016),
+  closed 2022.08).
 - **Known gaps:** shelf/tag endpoints are empty-`{}` stubs — no tags/collections
   sync; `auth/device` returns dummy tokens; no annotations over the sync API.
+  Kobo stylus markups remain device-local; see [platforms](/docs/developer/platforms).
 
 ## Grimmory (as a consumer of our alias)
 
-- **Protocol:** Grimmory connects to Stump's Komga-shaped shim under
-  `/komga`: `GET /komga/api/v2/users/me`, `GET /komga/api/v1/books`
-  (GET, not Komga's `POST /books/list`), `/komga/api/v1/books/{id}/file`,
+- **Protocol:** Grimmory connects to Coppice's Komga-shaped shim under
+  `/komga`: `GET /komga/api/v2/users/me`, `GET /komga/api/v1/books` (GET, not
+  Komga's `POST /books/list`), `/komga/api/v1/books/{id}/file`, and
   `/komga/api/v1/books/{id}/thumbnail`.
-- **Setup:** Grimmory server URL field pointed at the Stump host; Basic
+- **Setup:** Grimmory server URL field pointed at the Coppice host; Basic
   credentials of an OPDS user.
-- **Works:** login is device-verified (via Liseur's Grimmory provider);
-  listing, file, and thumbnail are harness (`specs/grimmory.hurl`).
+- **Device-tested:** login (via Liseur's Grimmory provider).
+  **Contract-tested:** listing, file, and thumbnail (`specs/grimmory.hurl`).
   Evidence: [Komga adapter](/docs/developer/komga-compat).
 - **Known gaps:** no progression route is implied by the shim; Liseur's
   Grimmory provider therefore pairs KOReader sync separately for positions.
 
-## Komf (server-side, live-verified)
+## Komf (server-side)
 
-Komf treats Stump as Komga (`STUMP_ENABLE_KOMGA=true`, Basic auth, SSE).
-Pinned Komf master `428dac6` (komga-client 0.10.3) in the `sndxr/komf:latest`
-container against the fixture, 2026-09-04: manual identify → series `PATCH`
-204, book `PATCH` 204, cover upload + previous-cover `DELETE`, and
-`TaskQueueStatus` observed on `/sse/v1/events`; `replay-komf` 16/16. The
-first run rejected the author role `COVER` (Komga's role name is `cover`);
-fixed the same day. Automatic mode on a real `BookAdded` burst has not been
-exercised. Evidence: [client verification](/docs/developer/client-verification),
-`local://komf-compat-study.md`, [roadmap phase 1](/docs/developer/roadmap).
+- **Contract-tested:** Komf master `428dac6` (`komga-client` 0.10.3) in the
+  `sndxr/komf:latest` container against the fixture on 2026-09-04: manual
+  identify → series `PATCH` 204, book `PATCH` 204, cover upload + previous-cover
+  `DELETE`, and `TaskQueueStatus` on `/sse/v1/events`; `replay-komf` 16/16.
+- The first run rejected author role `COVER` (Komga's role is `cover`); this was
+  fixed the same day. Automatic mode on a real `BookAdded` burst is
+  **Blocked**. Evidence: [client verification](/docs/developer/client-verification),
+  `local://komf-compat-study.md`, [roadmap](/docs/developer/roadmap).
 
-## Kavita clients (Inkita, Kover, Turnleaf, Kamigura, Kamare, tach-extension, Mihon Kavita tracker)
+## Kavita clients
 
-Not yet verifiable. The Kavita profile is being implemented against Kavita
-`d77d956b` with a reference instance (`kavita-ref`, Kavita 0.9.1.4,
-`jvmilazz0/kavita@sha256:31181a32…`, port 25620) and a Playwright capture of
-its own web UI (858 `/api/*` requests, 90 unique endpoints) in
-`../komga-compat/kavita/`. Seven clients are pinned in
-`local://kavita-clients-inventory.md`: Inkita `67c1f4a`, Kover `0bd8d08`,
-Turnleaf `b54f1f7`, Kamigura `f4baeff`, Kamare `b85ab0a`, Kareadita
-tach-extension `5f3c068`, Mihon tracker `5fadea6`. Wave 1 (API-key +
-`Plugin/authenticate` JWT, libraries, series, progress, images) is in progress;
-none of the seven has run against Stump. Per-client rows: [platforms](/docs/developer/platforms).
+The Kavita profile is **Contract-tested** against Kavita 0.9.1.4 and
+`kavita-ref`; source inventory covers Inkita `67c1f4a`, Kover `0bd8d08`, Turnleaf
+`b54f1f7`, Kamigura `f4baeff`, Kamare `b85ab0a`, Kareadita tach-extension
+`5f3c068`, and Mihon tracker `5fadea6`. Per-client details are on
+[platforms](/docs/developer/platforms).
+
+- **Device-tested — Turnleaf:** browse, read, download, and progress on the
+  pinned fixture run (2026-09-06).
+- **Device-tested — Kamigura:** browse, want-to-read, and MangaDex virtual read
+  on 2026-09-06. Its EPUB image lane returning 404 is expected: Kamigura is an
+  image reader, not an EPUB reader.
+- **Source-only — Inkita, Kover, Kamare, Kareadita, and Mihon Kavita tracker:**
+  source is pinned, but no device run is claimed here.
+- **Contract-tested — Kavita profile:** `replay-kavita` covers the profile and
+  `kavita-ref` DTO key diff is clean for series, volumes, chapters, and progress.
 
 ## Lissen (Android)
 
-- **Protocol:** Audiobookshelf compatibility profile — 28 routes at the server
-  root (`/status`, `/login`, `/auth/refresh`, `/api/libraries/{id}/items`,
+- **Protocol:** Audiobookshelf compatibility profile — server-root routes
+  (`/status`, `/login`, `/auth/refresh`, `/api/libraries/{id}/items`,
   `/api/items/{id}` with `/play` and `/file/{ino}`, `/api/session/{id}/sync`,
   `/api/me` with progress and bookmarks). Pinned client: Lissen
   `1.11.22-release` (`f30bf9be`); wire shapes pinned by an `abs-ref`
-  Audiobookshelf 2.36.0 container in `../komga-compat/abs/`. Evidence:
-  [Audiobookshelf profile](/docs/developer/abs-compat).
-- **Setup:** server URL plus Stump username and password. The login mints the
+  Audiobookshelf 2.36.0 container. Evidence: [Audiobookshelf profile](/docs/developer/abs-compat).
+- **Setup:** server URL plus Coppice username and password. Login mints the
   Audiobookshelf token trio (legacy `token` with no expiry, 1 h `accessToken`,
-  30 d `refreshToken`) and registers a `devices` row of kind `ABS`, so
-  per-device library scope applies to the whole session; an API key, Basic, or
-  `?token=` are accepted as well. Requires the `abs` feature (`headless`,
-  `full`) and `STUMP_ENABLE_ABS=true`.
-- **What the profile serves (source, no run yet):** libraries and paged items
-  with Lissen's four sorts and its base64 `progress`/`series` filters, item
-  detail with audio files, tracks and chapters, covers, `Range`-capable track
-  bytes, play sessions with `playMethod: 0` (Stump never transcodes), progress
-  sync onto the unified reading state, and bookmarks.
-- **Known gaps:** podcast libraries are not served at all (Stump has no podcast
-  model), only audio-container media appear so a Stump ebook is invisible to
-  this client, and `GET /api/authors/{id}/image` is always `404`. Full list:
+  30 d `refreshToken`) and registers an `ABS` device row, so per-device library
+  scope applies. Requires the `abs` feature (`headless`, `full`) and
+  `STUMP_ENABLE_ABS=true`.
+- **Contract-tested / Source-only:** the profile serves libraries and paged
+  items, item detail with audio files/tracks/chapters, covers, `Range`-capable
+  track bytes, play sessions with `playMethod: 0` (Coppice never transcodes),
+  progress sync onto unified reading state, and bookmarks. The chained Lissen
+  replay is the contract evidence; no Lissen device run is claimed.
+- **Known gaps:** podcast libraries are not served, only audio-container media
+  appear (an ebook is invisible to this client), and
+  `GET /api/authors/{id}/image` is always `404`. Full list:
   [deviations](/docs/developer/abs-compat#known-deviations).
+
+## Official Audiobookshelf app (Android)
+
+- **Device-tested (v0.14.0-beta, 2026-09-07):** the release APK ran on the
+  Android 35 `test_35` emulator against an isolated full+RAR fixture. A seek
+  drag moved playback from `0:31` to `0:49`; a clean one-track download reached
+  the local-library view at `367.7 KB` (`376,525` bytes) with its cover.
+- The tap-only seek and a stale/duplicate download queue entry are documented
+  as client-side interaction states in [Audiobookshelf profile](/docs/developer/abs-compat);
+  no Coppice JSON, byte, or header change was required. This is scoped app
+  evidence, not a claim of complete Audiobookshelf compatibility.
 
 ## Generic OPDS readers (Panels, Moon+ Reader, Librera)
 
-Only what [the OPDS guide](/docs/guides/features/opds) claims; nothing here is
-from this fork's own verification.
-
+- **Source-only:** only what the [OPDS guide](/docs/guides/features/opds) claims;
+  no Coppice device run is claimed here.
 - **URL:** `http(s)://your-server(:10801)(/baseUrl)/opds/v1.2/catalog` or
   `/opds/v2.0/catalog`; an API-key variant
   `/opds/(api_key)/v1.2/catalog` exists for clients that cannot send headers.
-- **Panels (iOS):** works against OPDS 1.2, with page streaming.
-- **Moon+ Reader (Android):** users report an OK experience; no page
-  streaming in the guide's table.
+- **Panels (iOS):** the upstream guide records OPDS 1.2 with page streaming.
+- **Moon+ Reader (Android):** the upstream guide records an OK experience; no
+  page streaming in that table.
 - **Librera (Android):** OPDS 1.2 shows covers/categories/downloads but file
   names instead of book titles; OPDS 2.0 does not work (likely no OPDS 2.0
   support).
-- Stump OPDS 2.0 is experimental and has no facets support.
+- Coppice OPDS 2.0 is experimental and has no facets support.
 
 ## Capability matrix
 
-✅ device-verified · 🧪 harness/server-contract only · ❌ not supported by the
-combination. Cells cite the row's section above.
+Cells use the same exact evidence labels as the sections above. A `—` means the
+capability is not part of the client's protocol or was not exercised.
 
 | Client | Browse | Read | Download | Progress | Annotations |
 | --- | --- | --- | --- | --- | --- |
-| Komelia | ✅ | ✅ (CBZ + EPUB) | ✅ (offline) | ✅ | ❌ |
-| Mihon / Tachiyomi | ✅ | ✅ | ✅ | ✅ (tracker) | ❌ |
-| Liseur — Komga profile | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Liseur — OPDS 1.2 | ✅ | ✅ | ✅ | ✅ (via KOReader pairing) | ❌ |
-| Liseur — OPDS 2.0 | ❌ (app has no OPDS 2 parser) | ❌ | ❌ | ❌ | ❌ |
-| Liseur — liseur-sync | ✅ | ✅ (download) | ✅ | ✅ | ✅ (CAS bridge) |
-| KOReader | ❌ (no catalog protocol) | n/a | ❌ | ✅ | ❌ (protocol limit) |
-| Kobo (stock) | 🧪 (`library/sync`) | 🧪 (KEPUB delivery) | 🧪 | 🧪 (`state` PUT/GET round-trip) | ❌ |
-| Grimmory alias | 🧪 | n/a | 🧪 | ❌ (no shim route) | ❌ |
-| Komf (server-side) | 🧪 (libraries/series/books, live) | n/a | n/a | n/a | n/a — writes: metadata PATCH, cover upload/delete (live) |
-| Kavita clients (7 pinned) | not verified | not verified | not verified | not verified | not verified |
-| Lissen `1.11.22-release` (ABS profile) | not verified | not verified (listen) | not verified | not verified | not verified (bookmarks) |
-| Panels | ✅ (upstream guide) | ✅ | ✅ | ❌ | ❌ |
-| Moon+ Reader | ✅ (upstream guide) | ✅ | ✅ | ❌ | ❌ |
-| Librera | ⚠️ file names, not titles | ✅ | ✅ | ❌ | ❌ |
+| Komelia | Device-tested | Device-tested (CBZ + EPUB) | Device-tested (offline) | Device-tested | — |
+| Mihon / Tachiyomi | Device-tested; Contract-tested | Device-tested | Device-tested | Device-tested; Contract-tested | — |
+| Liseur — Komga profile | Device-tested | Device-tested | Device-tested | Device-tested | — |
+| Liseur — OPDS 1.2 | Device-tested | Device-tested | Device-tested | Device-tested (KOReader pairing) | — |
+| Liseur — OPDS 2.0 | Blocked (app has no parser) | Blocked | Blocked | Blocked | Blocked |
+| Liseur — liseur-sync | Device-tested | Device-tested (download) | Device-tested | Device-tested; Contract-tested | Device-tested; Contract-tested (CAS bridge) |
+| KOReader | — (no catalog protocol) | — | — | Device-tested; Contract-tested | — (protocol limit) |
+| Kobo (stock) | Contract-tested | Contract-tested (KEPUB delivery) | Contract-tested | Contract-tested (`state` PUT/GET) | — |
+| Grimmory alias | Contract-tested; Device-tested (login) | — | Contract-tested | — (no shim route) | — |
+| Komf (server-side) | Contract-tested (live) | — | — | — | Contract-tested (metadata writes) |
+| Turnleaf (Kavita) | Device-tested | Device-tested | Device-tested | Device-tested | — |
+| Kamigura (Kavita) | Device-tested | Device-tested (image lane) | Device-tested | Device-tested (want-to-read) | — |
+| Other five Kavita clients | Source-only | Source-only | Source-only | Source-only | Source-only |
+| Lissen `1.11.22-release` | Contract-tested | Contract-tested (listen) | Contract-tested | Contract-tested | Contract-tested (bookmarks) |
+| Official Audiobookshelf app | Device-tested (scoped) | Device-tested (scoped) | Device-tested (scoped) | Source-only | Source-only |
+| Panels | Source-only (upstream guide) | Source-only | Source-only | — | — |
+| Moon+ Reader | Source-only (upstream guide) | Source-only | Source-only | — | — |
+| Librera | Source-only (upstream guide) | Source-only | Source-only | — | — |
 
-Notes on the matrix:
+Notes:
 
-- Komelia/Mihon annotations: neither client exposes an annotation endpoint in
-  its observed profile ([Komga adapter](/docs/developer/komga-compat)).
-- The liseur-sync annotation bridge stores revisions/sequences/tombstones in
-  adapter tables; projection into Stump's native `media_annotations` is
-  deferred ([liseur-sync integration](/docs/developer/liseur-sync-integration)).
-- KOReader and Kobo annotation gaps are protocol limits, not unimplemented
-  client features ([sync platforms](/docs/developer/sync-platforms)).
+- Komelia/Mihon expose no annotation endpoint in their observed Komga profile;
+  this is a protocol limit ([Komga adapter](/docs/developer/komga-compat)).
+- The liseur-sync annotation bridge stores revisions, sequences, and tombstones
+  in adapter tables; projection into Coppice's native `media_annotations` is
+  **Planned** ([liseur-sync integration](/docs/developer/liseur-sync-integration)).
+- KOReader and Kobo annotation gaps are protocol limits, not missing client
+  features ([sync platforms](/docs/developer/sync-platforms)).
 - Liseur's KOReader-sync pairing is a separate peer used alongside its catalog
-  providers, not a catalog protocol
-  ([Liseur providers](/docs/developer/liseur-providers)).
+  providers, not a catalog protocol ([Liseur providers](/docs/developer/liseur-providers)).

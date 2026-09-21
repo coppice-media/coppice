@@ -41,6 +41,7 @@
 		"@graphql-typed-document-node/core": "^3.2.0",
 		"@tanstack/svelte-query": "^6.1.48",
 		"bits-ui": "^2.19.0",
+		"fflate": "^0.8.2",
 		"foliate-js": "1.0.1",
 		"graphql": "^17.0.2",
 		"graphql-request": "^7.4.0",

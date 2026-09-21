@@ -11,7 +11,7 @@ use crate::rate_limit::RateLimiter;
 
 /// User agent sent to every remote source, catalog, and health probe.
 pub const USER_AGENT: &str = concat!(
-	"Stump/",
+	"Coppice/",
 	env!("CARGO_PKG_VERSION"),
 	" (+https://github.com/stumpapp/stump)"
 );
@@ -27,7 +27,7 @@ pub const CF_MITIGATED_HEADER: &str = "cf-mitigated";
 /// (`cf-chl-bypass`, `cf-chl-out`, …).
 pub const CF_CHALLENGE_PREFIX: &str = "cf-chl";
 
-/// Build a reqwest client with the Stump user agent.
+/// Build a reqwest client with the Coppice user agent.
 ///
 /// `user_agent` overrides the default for sources that must impersonate a
 /// specific client (MangaDex only requires a descriptive one).

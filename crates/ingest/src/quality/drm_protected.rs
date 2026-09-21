@@ -65,6 +65,21 @@ impl QualityCheck for DrmProtectedCheck {
 			return Ok(disabled_outcome(self.id(), self.name()));
 		}
 
+		// A folder audiobook is one publication, but there is no container at
+		// the directory path for the DRM detector to sniff. Its supported audio
+		// members (MP3/MP4/Ogg/FLAC) are not DRM-bearing publication formats;
+		// Audible AAX is not an accepted audio input. Keep the blocking gate
+		// successful rather than aborting the entire quality report on EISDIR.
+		if book.staged_path.is_dir() {
+			return Ok(outcome(
+				self.id(),
+				self.name(),
+				QualityStatus::Pass,
+				1.0,
+				json!({ "protected": false, "container": "folder_audio" }),
+			));
+		}
+
 		// The detector sniffs the container, so a mislabelled file (a MOBI
 		// named `.epub`) is still classified; no media-kind gate here.
 		let report = detect_drm(&book.staged_path).map_err(|error| {

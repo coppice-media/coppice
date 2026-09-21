@@ -1,0 +1,34 @@
+[
+	{
+		"query": "Komelia gets a stale-cookie 401 on the Komga fixture; which replay and evidence should I use?",
+		"should_trigger": true
+	},
+	{
+		"query": "Help me choose the Kavita Hurl replay for x-api-key versus Plugin/authenticate JWT behavior.",
+		"should_trigger": true
+	},
+	{
+		"query": "I need an ABS/Lissen replay and a safe key-path diff against the local abs-ref oracle.",
+		"should_trigger": true
+	},
+	{
+		"query": "How do I check Kobo initialization and KOReader KOSync progress against the Stump fixture without leaking the endpoint sheet?",
+		"should_trigger": true
+	},
+	{
+		"query": "Add a new Komga route and DTO to the Rust adapter for a client we have not inventoried.",
+		"should_trigger": false
+	},
+	{
+		"query": "Run the complete Cargo workspace test gate and tell me whether the build is green.",
+		"should_trigger": false
+	},
+	{
+		"query": "Design a generic audiobook database schema for a new application; no Stump replay is involved.",
+		"should_trigger": false
+	},
+	{
+		"query": "Convert this EPUB to a Kobo KEPUB and benchmark the converter; do not contact a fixture server.",
+		"should_trigger": false
+	}
+]

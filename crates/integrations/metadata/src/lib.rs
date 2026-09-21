@@ -27,17 +27,17 @@ pub use error::{MetadataProviderError, MetadataResult};
 pub use mangaupdates::MangaUpdatesClient;
 pub use merge::{AutoApplyConfig, FieldMerger, MergeStrategy, MetadataFieldOverride};
 pub use provider::{MetadataProvider, ProviderCredentialVerification};
+use providers::{
+	AniListClient, AudibleClient, ComicVineClient, GoogleBooksClient, MalClient,
+	MangaDexClient, MetronClient, OpenLibraryClient,
+};
+pub use providers::{HardcoverClient, HardcoverIdentity, HardcoverJournalEntry};
 pub use rate_limit::RateLimiter;
 pub use scoring::{title_similarity, MatchScorer};
 pub use types::{
 	ConfidenceFactor, ExternalMediaMetadata, ExternalMetadata, ExternalSeriesMetadata,
 	MatchCandidate, MediaType, MetadataField, PublicationStatus, SearchOutcome,
 	SearchQuery,
-};
-
-use providers::{
-	AniListClient, AudibleClient, ComicVineClient, GoogleBooksClient, HardcoverClient,
-	MalClient, MangaDexClient, MetronClient, OpenLibraryClient,
 };
 
 pub fn create_provider(

@@ -1,5 +1,5 @@
-name: 'Build Stump desktop app'
-description: 'Compile the Stump desktop app'
+name: 'Build Coppice desktop app'
+description: 'Compile the Coppice desktop app'
 
 inputs:
   platform:

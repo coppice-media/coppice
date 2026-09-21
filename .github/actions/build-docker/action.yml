@@ -1,5 +1,5 @@
 name: 'Build docker image'
-description: 'Build and load or push a tagged docker image for stump'
+description: 'Build and load or push a tagged docker image for Coppice'
 
 inputs:
   username:

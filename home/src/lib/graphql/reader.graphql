@@ -78,10 +78,26 @@ query ReaderVisiblePages($id: ID!) {
 }
 
 query ReaderAnnotations($id: ID!) {
+	annotations(filter: { mediaId: $id }, pagination: { page: 1, pageSize: 1000 }) {
+		items {
+			id
+			kind
+			source
+			sourceDeviceName
+			editable
+			chapterTitle
+			href
+			fragment
+			page
+			progression
+			excerpt
+			note
+			color
+		}
+	}
 	annotationsByMediaId(id: $id) {
 		id
 		annotationText
-		createdAt
 		locator {
 			...ReaderLocatorFields
 		}
@@ -105,7 +121,9 @@ mutation ReaderUpdateProgress($id: ID!, $input: MediaProgressInput!) {
 # `editions` is the cheap half — a confirmed pair is two link rows.
 query ReaderEditions($id: ID!) {
 	mediaById(id: $id) {
-		id
+		audio {
+			durationMs
+		}
 		editions {
 			id
 			resolvedName
@@ -159,4 +177,66 @@ mutation ReaderRejectEditionPair($mediaIdA: ID!, $mediaIdB: ID!) {
 		changed
 		message
 	}
+}
+
+query ReaderChapterMapMedia($id: ID!) {
+	mediaById(id: $id) {
+		ebook {
+			spine {
+				idref
+				id
+				linear
+			}
+		}
+		audio {
+			chapters {
+				index
+				title
+			}
+		}
+	}
+}
+
+query ReaderChapterMap($ebookMediaId: ID!, $audioMediaId: ID!) {
+	chapterMap(ebookMediaId: $ebookMediaId, audioMediaId: $audioMediaId) {
+		ebookMediaId
+		audioMediaId
+		ebookSpineIndex
+		audioChapterIndex
+		confidence
+	}
+}
+
+mutation ReaderSetChapterMapEntry(
+	$ebookMediaId: ID!
+	$audioMediaId: ID!
+	$ebookSpineIndex: Int!
+	$audioChapterIndex: Int!
+	$confidence: Float
+) {
+	setChapterMapEntry(
+		ebookMediaId: $ebookMediaId
+		audioMediaId: $audioMediaId
+		ebookSpineIndex: $ebookSpineIndex
+		audioChapterIndex: $audioChapterIndex
+		confidence: $confidence
+	) {
+		ebookMediaId
+		audioMediaId
+		ebookSpineIndex
+		audioChapterIndex
+		confidence
+	}
+}
+
+mutation ReaderClearChapterMapEntry(
+	$ebookMediaId: ID!
+	$audioMediaId: ID!
+	$ebookSpineIndex: Int!
+) {
+	clearChapterMapEntry(
+		ebookMediaId: $ebookMediaId
+		audioMediaId: $audioMediaId
+		ebookSpineIndex: $ebookSpineIndex
+	)
 }

@@ -13,8 +13,8 @@ export default function MobileApp() {
 					</div>
 
 					<p className="text-neutral-600 mt-5! max-w-md text-base sm:text-lg md:max-w-3xl md:text-xl dark:text-neutral-400 mx-auto">
-						An app for both iOS and Android is in the works, tailored for mobile-first and on-the-go
-						usage
+						The mobile client is in beta. Current public test builds are maintained by upstream
+						Stump and remain protocol-compatible with Coppice.
 					</p>
 
 					<div className="mt-5 gap-2 flex flex-wrap items-center justify-center">
@@ -29,7 +29,7 @@ export default function MobileApp() {
 							className="dark:active:border-neutral-650 dark:active:bg-neutral-650 space-x-2 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:border-neutral-200 hover:bg-neutral-50 hover:text-neutral-900 active:border-neutral-200 active:bg-neutral-50 active:text-neutral-600 dark:bg-opacity-90 dark:text-neutral-200 dark:shadow-sm dark:hover:border-neutral-500 dark:hover:bg-neutral-700 dark:hover:bg-opacity-100 dark:hover:text-white dark:active:text-white flex cursor-pointer items-center rounded-full border border-transparent bg-transparent transition-all duration-300 focus:outline-none dark:active:opacity-90"
 							href="https://play.google.com/store/apps/details?id=com.stumpapp.stump"
 						>
-							<span>Google Beta</span>
+							<span>Upstream Google beta</span>
 							<ExternalLink className="ml-2 h-4 w-4" />
 						</Link>
 
@@ -38,7 +38,7 @@ export default function MobileApp() {
 							href="https://testflight.apple.com/join/a4srR634"
 							target="_blank"
 						>
-							<span>TestFlight</span>
+							<span>Upstream TestFlight</span>
 							<ExternalLink className="ml-2 h-4 w-4" />
 						</Link>
 					</div>
@@ -84,7 +84,7 @@ const features = [
 	{
 		title: 'Progress sync',
 		description:
-			'Automatically sync your reading progress to your Stump server and across all your devices',
+			'Automatically sync your reading progress to your Coppice server and across all your devices',
 		icon: Router,
 	},
 	{

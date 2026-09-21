@@ -3,39 +3,49 @@
 	 * The hub's filter bar. Every facet lives in the page's query string, so
 	 * this component only reports patches and renders what it is given.
 	 */
+	import SearchIcon from '@lucide/svelte/icons/search';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Input } from '@stump/ui/components/ui/input';
 	import { Label } from '@stump/ui/components/ui/label';
 	import * as Select from '@stump/ui/components/ui/select';
+	import * as Tabs from '@stump/ui/components/ui/tabs';
 	import type { AnnotationKind, DeviceKind } from '$lib/graphql/generated/graphql';
 	import {
 		ANY_OPTION,
 		KIND_LABELS,
 		KIND_OPTIONS,
+		LANE_OPTIONS,
 		SINCE_OPTIONS,
 		SOURCE_LABELS,
 		SOURCE_OPTIONS,
 		activeFacets,
-		type AnnotationFacets
+		activeLane,
+		type AnnotationFacets,
+		type AnnotationLane
 	} from '$lib/annotations';
 
 	let {
 		facets,
 		books = [],
+		deviceLabel = (deviceId: string) => deviceId,
 		onfacets
 	}: {
 		facets: AnnotationFacets;
 		/** Every book the user has annotated, for the book selector. */
 		books?: { mediaId: string; title: string }[];
+		/** Friendly name for a durable device filter, when available. */
+		deviceLabel?: (deviceId: string) => string;
 		onfacets: (patch: Partial<AnnotationFacets>) => void;
 	} = $props();
 
+	const lane = $derived(activeLane(facets));
 	const chips = $derived(
 		activeFacets(
 			facets,
-			(mediaId) => books.find((book) => book.mediaId === mediaId)?.title ?? mediaId
+			(mediaId) => books.find((book) => book.mediaId === mediaId)?.title ?? mediaId,
+			deviceLabel
 		)
 	);
 	const bookLabel = $derived(
@@ -61,21 +71,39 @@
 	}
 </script>
 
-<div class="flex flex-col gap-3">
-	<div class="flex flex-wrap items-end gap-3">
-		<form class="flex items-end gap-2" onsubmit={submitSearch}>
-			<div class="flex flex-col gap-1">
-				<Label class="text-xs text-muted-foreground" for="annotation-search">Text contains</Label>
+<div class="flex flex-col gap-4">
+	<div class="flex flex-wrap items-center gap-3">
+		<Tabs.Root
+			value={lane}
+			onValueChange={(value) =>
+				onfacets({ lane: value === 'all' ? null : (value as AnnotationLane), source: null })}
+		>
+			<Tabs.List aria-label="Annotation source lane">
+				{#each LANE_OPTIONS as option (option.value)}
+					<Tabs.Trigger value={option.value}>{option.label}</Tabs.Trigger>
+				{/each}
+			</Tabs.List>
+		</Tabs.Root>
+		<form class="flex items-center gap-2 sm:ml-auto" onsubmit={submitSearch}>
+			<Label class="sr-only" for="annotation-search">Search passages, notes, and titles</Label>
+			<div class="relative">
+				<SearchIcon
+					class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+					aria-hidden="true"
+				/>
 				<Input
 					id="annotation-search"
-					class="w-52"
+					class="w-56 pl-8 sm:w-64"
+					type="search"
 					bind:value={search}
-					placeholder="spice must flow"
+					placeholder="Search passages and notes"
 				/>
 			</div>
 			<Button size="sm" variant="outline" type="submit">Search</Button>
 		</form>
+	</div>
 
+	<div class="flex flex-wrap items-end gap-3">
 		<div class="flex flex-col gap-1">
 			<Label class="text-xs text-muted-foreground" for="annotation-kind">Kind</Label>
 			<Select.Root
@@ -102,7 +130,7 @@
 				type="single"
 				value={facets.source ?? ANY_OPTION}
 				onValueChange={(value) =>
-					onfacets({ source: value === ANY_OPTION ? null : (value as DeviceKind) })}
+					onfacets({ source: value === ANY_OPTION ? null : (value as DeviceKind), lane: null })}
 			>
 				<Select.Trigger id="annotation-source" class="w-44">
 					{facets.source ? SOURCE_LABELS[facets.source] : 'Any source'}

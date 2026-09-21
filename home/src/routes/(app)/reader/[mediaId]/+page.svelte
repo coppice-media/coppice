@@ -17,7 +17,9 @@
 	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
 	import { onDestroy } from 'svelte';
 	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
+	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
+	import { Card, CardContent, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
 	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import { request } from '@stump/ui/graphql/client';
@@ -26,13 +28,60 @@
 		ReaderBookDocument,
 		ReaderUpdateProgressDocument,
 		ReaderVisiblePagesDocument,
+		type AnnotationKind,
+		type DeviceKind,
 		type MediaProgressInput
 	} from '$lib/graphql/generated/graphql';
 	import AlsoAvailableAs from '$lib/components/reader/AlsoAvailableAs.svelte';
 	import AudioReader from '$lib/components/reader/AudioReader.svelte';
 	import EpubReader from '$lib/components/reader/EpubReader.svelte';
 	import PagedReader from '$lib/components/reader/PagedReader.svelte';
+	import { KIND_LABELS, SOURCE_LABELS } from '$lib/annotations';
 	import { decimal, type ReaderLocator } from '$lib/components/reader/locator';
+
+	type ReaderAnnotationRecord = {
+		id: string;
+		kind: AnnotationKind;
+		source: DeviceKind;
+		sourceDeviceName: string | null;
+		editable: boolean;
+		chapterTitle: string | null;
+		locator: ReaderLocator | null;
+		href: string | null;
+		fragment: string | null;
+		page: number | null;
+		progression: number | null;
+		excerpt: string | null;
+		note: string | null;
+		color: string | null;
+	};
+
+	type PositionedAnnotation = ReaderAnnotationRecord & {
+		annotationText: string | null;
+		locator: ReaderLocator;
+	};
+
+	function locatorFor(annotation: ReaderAnnotationRecord): ReaderLocator | null {
+		if (annotation.locator) return annotation.locator;
+		if (!annotation.href && annotation.page === null) return null;
+		return {
+			chapterTitle: annotation.chapterTitle ?? '',
+			href: annotation.href ?? '',
+			title: null,
+			type: 'application/xhtml+xml',
+			locations: {
+				fragments: annotation.fragment ? [annotation.fragment] : null,
+				progression: null,
+				position: annotation.page,
+				totalProgression: annotation.progression,
+				cssSelector: null,
+				partialCfi: null
+			},
+			text: annotation.excerpt
+				? { before: null, highlight: annotation.excerpt, after: null }
+				: null
+		};
+	}
 
 	const mediaId = $derived(pageState.params.mediaId ?? '');
 
@@ -114,7 +163,44 @@
 		queryFn: () => request(ReaderAnnotationsDocument, { id: mediaId }),
 		enabled: browser && mediaId.length > 0
 	}));
-	const annotations = $derived(annotationsQuery.data?.annotationsByMediaId ?? []);
+	const nativeLocators = $derived(
+		new Map(
+			(annotationsQuery.data?.annotationsByMediaId ?? []).map((annotation) => [
+				annotation.id,
+				annotation.locator
+			])
+		)
+	);
+	const annotationRows = $derived(
+		(annotationsQuery.data?.annotations.items ?? []).map((annotation) => ({
+			...annotation,
+			locator: nativeLocators.get(annotation.id) ?? null
+		})) as ReaderAnnotationRecord[]
+	);
+	const positionedAnnotations = $derived.by((): PositionedAnnotation[] => {
+		if (!book || isAudiobook) return [];
+		return annotationRows.flatMap((annotation) => {
+			const locator = locatorFor(annotation);
+			const canPosition = isEpub
+				? Boolean(locator?.href)
+				: locator?.locations?.position !== null && locator?.locations?.position !== undefined;
+			return canPosition && locator
+				? [
+						{
+							...annotation,
+							annotationText: annotation.excerpt ?? annotation.note,
+							locator
+						}
+					]
+				: [];
+		});
+	});
+	const positionedIds = $derived(new Set(positionedAnnotations.map((annotation) => annotation.id)));
+	const panelAnnotations = $derived(
+		annotationRows.filter(
+			(annotation) => annotation.source !== 'WEB' || !positionedIds.has(annotation.id)
+		)
+	);
 
 	// Duplicate-page marks renumber a book's pages; the visible list's length
 	// is the page count the streaming route accepts. Neither an EPUB nor a
@@ -214,7 +300,7 @@
 </script>
 
 <svelte:head>
-	<title>{book?.resolvedName ?? 'Reader'} · Stump</title>
+	<title>{book?.resolvedName ?? 'Reader'} · Coppice</title>
 </svelte:head>
 
 <div class="flex flex-col gap-4">
@@ -293,7 +379,7 @@
 				storedLocator={deepLink?.locator ?? book.readProgress?.locator ?? null}
 				storedPercentage={deepLink?.percentage ??
 					decimal(book.readProgress?.percentageCompleted)}
-				{annotations}
+				annotations={positionedAnnotations}
 				onLocator={({ locator, percentage, isComplete }) =>
 					schedule({ epub: { locator, percentage, isComplete } })}
 			/>
@@ -324,9 +410,48 @@
 				{mediaId}
 				{pageCount}
 				startPage={deepLink?.page ?? book.readProgress?.page ?? 1}
-				{annotations}
+				annotations={positionedAnnotations}
 				onPage={(value) => schedule({ paged: { page: value } })}
 			/>
 		{/key}
+	{/if}
+	{#if panelAnnotations.length}
+		<Card>
+			<CardHeader>
+				<CardTitle class="text-base">Reader annotations</CardTitle>
+				<p class="text-sm text-muted-foreground">
+					Device annotations are shown here with their source. Opaque locators cannot be placed
+					over the page, but Readium-shaped rows may also appear as overlays above.
+				</p>
+			</CardHeader>
+			<CardContent class="px-0">
+				<ul class="flex flex-col">
+					{#each panelAnnotations as annotation (annotation.id)}
+						<li class="flex flex-col gap-2 border-t px-4 py-3 first:border-t-0">
+							<div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+								<Badge variant="secondary">{KIND_LABELS[annotation.kind]}</Badge>
+								<Badge
+									variant="outline"
+									title={annotation.sourceDeviceName ?? SOURCE_LABELS[annotation.source]}
+								>
+									{annotation.sourceDeviceName ?? SOURCE_LABELS[annotation.source]}
+								</Badge>
+								<span class="ml-auto">Read-only</span>
+							</div>
+							{#if annotation.excerpt}
+								<blockquote class="border-l-2 pl-3 text-sm italic">
+									{annotation.excerpt}
+								</blockquote>
+							{/if}
+							{#if annotation.note}
+								<p class="text-sm whitespace-pre-wrap">{annotation.note}</p>
+							{:else if !annotation.excerpt}
+								<p class="text-sm text-muted-foreground">No text — this is a place marker.</p>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			</CardContent>
+		</Card>
 	{/if}
 </div>
