@@ -23,7 +23,6 @@
 	import MenuIcon from '@lucide/svelte/icons/menu';
 	import PencilRulerIcon from '@lucide/svelte/icons/pencil-ruler';
 	import ServerCogIcon from '@lucide/svelte/icons/server-cog';
-	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import SmartphoneIcon from '@lucide/svelte/icons/smartphone';
 	import UserIcon from '@lucide/svelte/icons/user';
 	import UsersIcon from '@lucide/svelte/icons/users';
@@ -70,10 +69,7 @@
 		Boolean(session.user?.isServerOwner || session.user?.permissions.includes('MANAGE_LIBRARY'))
 	);
 	const canManageComponents = $derived(Boolean(session.user?.isServerOwner));
-	const canManageRequestPolicy = $derived(
-		Boolean(session.user?.isServerOwner || session.user?.permissions.includes('MANAGE_SERVER'))
-	);
-	const canUseManage = $derived(canUseEditor || canManageComponents || canManageRequestPolicy);
+	const canUseManage = $derived(canUseEditor || canManageComponents);
 	const initial = $derived(session.user?.username.trim().charAt(0).toUpperCase() || '?');
 
 	let navOpen = $state(false);
@@ -160,23 +156,6 @@
 										>
 											<ServerCogIcon aria-hidden="true" />
 											<span>Components</span>
-										</a>
-									{/snippet}
-								</Sidebar.MenuButton>
-							</Sidebar.MenuItem>
-						{/if}
-						{#if canManageRequestPolicy}
-							<Sidebar.MenuItem>
-								<Sidebar.MenuButton isActive={isCurrent(resolve('/settings/requests'))}>
-									{#snippet child({ props })}
-										<a
-											{...props}
-											href={resolve('/settings/requests')}
-											aria-current={isCurrent(resolve('/settings/requests')) ? 'page' : undefined}
-											onclick={() => (navOpen = false)}
-										>
-											<SettingsIcon aria-hidden="true" />
-											<span>Request policy</span>
 										</a>
 									{/snippet}
 								</Sidebar.MenuButton>

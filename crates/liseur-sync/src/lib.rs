@@ -1259,7 +1259,7 @@ struct OpsResponse {
 #[derive(Debug, Deserialize, Default)]
 struct CursorQuery {
 	since: Option<i64>,
-	limit: Option<usize>,
+	limit: Option<i64>,
 }
 
 fn cursor_params(query: &CursorQuery) -> Result<(i64, usize), LiseurSyncError> {
@@ -1267,7 +1267,10 @@ fn cursor_params(query: &CursorQuery) -> Result<(i64, usize), LiseurSyncError> {
 	if since < 0 {
 		return Err(LiseurSyncError::BadRequest("since must be >= 0".into()));
 	}
-	let limit = query.limit.unwrap_or(500).clamp(1, 500);
+	let limit = match query.limit {
+		Some(limit) if (1..=500).contains(&limit) => limit as usize,
+		_ => 500,
+	};
 	Ok((since, limit))
 }
 
@@ -1305,7 +1308,14 @@ where
 
 #[derive(Debug, Deserialize, Default)]
 struct PositionQuery {
-	limit: Option<usize>,
+	limit: Option<i64>,
+}
+
+fn position_limit(limit: Option<i64>) -> usize {
+	match limit {
+		Some(limit) if (1..=200).contains(&limit) => limit as usize,
+		_ => 50,
+	}
 }
 
 async fn positions<B>(
@@ -1319,7 +1329,7 @@ where
 	B: LiseurSyncBackend,
 {
 	require_sync(&token).map_err(error_response)?;
-	let limit = query.limit.unwrap_or(50).clamp(1, 200);
+	let limit = position_limit(query.limit);
 	let ops = backend
 		.positions(&auth.id(), &work_id, limit)
 		.await
@@ -2011,6 +2021,41 @@ mod tests {
 		assert_eq!(value["deleted"], true);
 		assert!(value.get("work_id").is_none());
 		assert!(value.get("kind").is_none());
+	}
+
+	#[test]
+	fn invalid_query_limits_use_reference_client_defaults() {
+		assert_eq!(
+			cursor_params(&CursorQuery {
+				since: None,
+				limit: None,
+			})
+			.unwrap(),
+			(0, 500)
+		);
+		for limit in [-1, 0, 501] {
+			assert_eq!(
+				cursor_params(&CursorQuery {
+					since: Some(7),
+					limit: Some(limit),
+				})
+				.unwrap(),
+				(7, 500)
+			);
+		}
+		assert_eq!(
+			cursor_params(&CursorQuery {
+				since: Some(7),
+				limit: Some(200),
+			})
+			.unwrap(),
+			(7, 200)
+		);
+		assert_eq!(position_limit(None), 50);
+		for limit in [-1, 0, 201] {
+			assert_eq!(position_limit(Some(limit)), 50);
+		}
+		assert_eq!(position_limit(Some(200)), 200);
 	}
 
 	#[test]

@@ -1,0 +1,325 @@
+---
+title: Remote worker libraries
+description: Home-worker discovery, verified ingest, and server-proxied direct or outbound-tunnel reads
+---
+
+> **Evidence: Contract-tested.** Catalog-mode inventory, verified
+> full-object staging, digest-bound match proposals, explicit approval/rejection,
+> location linking, and both server-proxied range transports are implemented.
+> Candidate-only privacy, automatic publication, placement reconciliation,
+> durable byte caching, and replication remain planned.
+
+Coppice may use a worker on an operator-controlled home machine to discover and
+serve media from configured local roots. This is a Coppice worker capability,
+not an acquisition feature. A provider sidecar such as the planned MAM service
+may deliver files into a configured root, but it never owns Coppice identity,
+matching, publication, storage policy, or reader access.
+
+The worker is a **remote source agent**, not a mounted VPS filesystem. Absolute
+paths, arbitrary file reads, and a second library database never cross the
+boundary.
+
+## Ownership
+
+| Owner | Responsibilities |
+| --- | --- |
+| Worker | Configure allowlisted roots; scan read-only filesystem or Calibre catalogs; retain the absolute-path map locally; extract bounded local metadata; compute requested fingerprints/digests; report versioned observations; transfer a full authorized object; and serve exact authorized byte ranges over direct or outbound-tunnel connections. Source-root access is never inherited by compute jobs. |
+| Coppice server | Authenticate and scope the worker; store inventory revisions; verify full objects; build digest-bound match proposals; persist explicit import decisions; enforce library/user permissions; stage bytes; link verified locations; own reader URLs and health projections; and proxy authorized reads. Automatic publication, placement, caching, replication, and placement audit history remain planned. |
+| Acquisition sidecar | Search/select a release and ask qBittorrent to acquire it. Its output may appear under a worker root; it has no remote-library or publication authority. |
+
+Do not reuse the compute-worker socket or `WORKER` device credential as implicit
+permission to expose roots. A source worker uses a revocable source-role
+credential; its roots are separately allowlisted in local worker configuration.
+The same binary may implement compute and source roles, but authorization and
+protocol messages remain separate.
+
+## Roots and privacy
+
+Each local root has a stable opaque `root_id`, a human label, a declared purpose
+(`completed_downloads`, `audiobooks`, `ebooks`, or another configured kind), a
+read-only access policy, and a privacy mode. Its absolute path remains in local
+worker configuration. The first four phases never write, rename, move, or delete
+source-root bytes. Any later mutation requires a new, separately scoped signed
+operation; enabling a compute job does not grant that job source-root access.
+An acquisition sidecar or torrent client may write its own configured download
+directory as an external producer; that does not grant the source-worker
+protocol any mutation authority.
+
+Privacy modes:
+
+- **Catalog** is implemented for a dedicated library root. The worker reports
+  every bounded item manifest because the operator explicitly designated the
+  root as library content.
+- **Candidate only** remains planned for mixed download folders. The current
+  worker rejects `candidate_only` configuration rather than leaking unrelated
+  filenames. A future bounded interest-set protocol may enable it.
+
+A manifest uses opaque worker/root/item IDs. A sanitized root-relative display
+path is optional and is never accepted as an access path. Reject `..`, absolute
+paths, symlink escapes, device files, sockets, and files outside the configured
+root. Tracker URLs, passkeys, torrent files, and torrent-client credentials are
+never inventory fields. A worker may report a bounded retention fact such as
+`actively_seeding` when it affects move/delete policy.
+
+## Identity and inventory
+
+Location identity and byte identity are different:
+
+- `worker_item_id` is a stable random ID maintained in the worker's local
+  catalog. A rename may preserve this local observation identity, but the server
+  does not trust it as proof of byte continuity.
+- `worker_content_version` is an untrusted local observation-lineage token. It
+  cannot create, replace, or rewire a canonical Coppice content version.
+- A versioned quick fingerprint may combine size and sampled bytes to shortlist
+  likely matches. It is not a security or deduplication identity.
+- Full SHA-256 is Coppice's canonical byte identity and is computed only when a
+  likely candidate, explicit inspection, transfer, or publication requires it.
+- Coppice assigns an immutable verified content version from its recomputed
+  digest and, for derivatives, the exact source/dependency set. Changed bytes
+  create a new verified version and never silently mutate an existing location.
+
+Inventory updates are chunked and idempotent. Every root scan has a monotonically
+increasing revision and cursor. Coppice marks an observation missing only after
+a completed reconciliation revision omits it; a dropped connection is not a
+tombstone. A grace period separates `missing` from an operator-visible
+`tombstoned` observation.
+
+A compact observation may include:
+
+```text
+worker_id, root_id, worker_item_id, worker_content_version
+sanitized relative display path (optional)
+size, mtime, detected media type
+versioned quick fingerprint (optional)
+extracted bounded metadata (optional candidate evidence)
+full SHA-256 (only when requested/available)
+capabilities and safe retention facts
+scan revision and observed timestamp
+```
+
+Worker metadata is evidence, not authority. Coppice recomputes the full digest
+while staging bytes and validates type and bounded format invariants before
+commit.
+
+Successful whole-object verification is memoized only against the opened
+file's exact local identity plus the expected digest. Replacement, rewrite,
+inode, size, or timestamp changes force a new hash before any later range is
+served.
+
+A root declared with `kind=calibre` reads that root's `metadata.db` in
+read-only mode. The adapter validates the Calibre application/schema version
+and publishes only catalogued `data` rows whose path resolves below the
+non-symlink root. Calibre `data.name` is a basename; the on-disk format suffix
+comes from the lower-case `data.format`.
+
+## State is not one lifecycle enum
+
+`discovered -> matched -> approved -> processed -> published` is useful product
+language but is not one persisted state machine. These dimensions are
+orthogonal:
+
+| Axis | Example states |
+| --- | --- |
+| Observation | `observed`, `stale`, `missing`, `tombstoned` |
+| Identity | `unmatched`, `candidate`, `matched`; retain confidence and provenance |
+| Authorization | `not_requested`, `import_approved`, `rejected`; this is explicit operator import authorization, never request-ledger approval |
+| Ingest | `not_requested`, `staging`, `source_verified`, `committed`, `failed` |
+| Visibility | `unpublished`, `published`, `withdrawn` |
+| Source health | `online`, `offline`, `stale`, `dead`; `online` requires a fresh root/item lease and verified read capability, not merely a connected worker socket |
+| Placement | `remote_source`, `server_cache`, `server_source_canonical`, `published_derivative`, `replica` |
+| Readability | `readable`, `temporarily_unavailable`; derived from healthy authorized locations rather than persisted as placement |
+| Derivative | `absent`, `queued`, `running`, `ready`, `failed`, `stale` |
+
+A published item may be remote-offline while its canonical copy remains readable.
+A matched candidate may remain unpublished. Processing may retry without
+changing authorization. Worker disconnects never delete media metadata,
+progress, annotations, covers, matching decisions, or provenance.
+
+## Match, approval, and publication
+
+Discovery never creates a reader-visible media item. Matching accepts only a
+source item with a verified full SHA-256. It compares verified locations,
+typed identifiers (`isbn`, `asin`/`amazon`, `mobi_asin`, `calibre`, `google`,
+`uuid`), and then exact normalized title plus author; unknown identifiers are
+not collapsed into one namespace and ambiguous evidence fails closed. Each
+candidate becomes a durable proposal bound to the source/item lineage, digest,
+size, target media, and evidence. Request-ledger intent or approval is only a
+candidate/matching signal: it never authorizes import, publication, acquisition,
+or media access.
+
+The server-owned flow is:
+
+```text
+local observation
+  -> reported candidate
+  -> server identity candidate
+  -> explicit operator import authorization
+  -> staging
+  -> source_verified
+  -> committed media/location
+  -> optional publication
+```
+
+No remote observation, match, or authorization is itself a `Media` row. No
+reader listing or byte route becomes visible until verified ingest is committed
+and the server separately publishes either the verified source or an explicitly
+accepted, digest-bound derivative under normal ACLs.
+
+This extends the existing uploader-prepared ingest contract: the server receives
+an idempotency key, filename, size, full SHA-256, media type, producer identity
+and version; stages the untouched original; recomputes its digest; validates
+bounded invariants; and commits atomically. Worker-prepared artifacts are
+accepted only when each artifact names its own digest, exact source digest,
+processor/version, profile/options, and dependency chain.
+
+## Locations and storage policy
+
+Do not overload `media.path` with a worker filesystem path. Model observed byte
+locations separately from media identity. Desired placement policy and actual
+locations are also separate.
+
+The placement model distinguishes four targets. Only explicit remote-only
+linking is implemented:
+
+- **Remote only — implemented:** after full verification and explicit
+  administrative linking, an approved source location may become reader-visible
+  through the server proxy. No durable VPS copy is promised, and an offline
+  worker produces a temporary-unavailable response rather than a missing-media
+  result.
+- **Cache on demand — planned:** a future cache must complete and verify the
+  whole-object fill before serving cached bytes and retain them under a bounded,
+  evictable policy. Eviction is safe only when the exact digest/content version
+  has an authorized, verified re-fetch path or another durable verified copy.
+  An unavailable re-fetch path yields temporary unavailability rather than 404.
+- **Canonical VPS — planned:** Coppice stores the immutable verified source as
+  source-canonical bytes. An explicitly published derivative may become that
+  presentation's canonical bytes, but never replaces or obscures the immutable
+  source relation.
+- **Replicated — planned:** placement policy requires verified copies in at
+  least two named failure domains, normally worker plus server.
+
+Internally these are placement policies over location records, not four mutually
+exclusive media states. Track each location's digest, server-verified content
+version, health, last verification, durability role, and eviction eligibility.
+Never evict the sole verified copy of an exact digest. Server canonical bytes
+are not cache entries.
+
+Store completed transformed files, not binary deltas. A reproducible job manifest
+is valuable provenance but is not a substitute for bytes unless every exact
+source and dependency is guaranteed. Expensive merged M4Bs and publication-ready
+EPUBs normally become canonical published-derivative files while retaining the
+immutable source digest, source location/relation, processor/version,
+profile/options, and dependency chain. A derivative never silently substitutes
+for the original.
+
+## Serving remote bytes
+
+The server remains the reader-facing HTTP and authorization boundary. Clients use
+ordinary Coppice media URLs; they never receive filesystem paths or long-lived
+worker credentials. Coppice preserves HTTP range semantics for PDFs, M4Bs, and
+other seekable formats.
+
+Remote serving is implemented after explicit verification and location linking:
+
+1. **Direct mode** uses a private WireGuard/Tailscale/LAN origin when the server
+   can reach the worker. The advertised value must be an HTTP(S) origin with no
+   credentials, query, fragment, or path; the server appends only the fixed
+   opaque-grant route.
+2. **Tunnel mode** keeps the worker inbound-closed. The server sends a read grant
+   over the source control socket, then the worker opens a separate authenticated
+   outbound binary WebSocket for that grant.
+3. Both modes use the same short-lived, one-use grant bound to worker, root,
+   item lineage, exact offset/length, byte ceiling, transport, expiry, and—after
+   verification—the server-computed whole-object SHA-256. The worker rehashes
+   the opened file before serving a verified grant.
+4. The server validates the reader ACL and single range, proxies the response,
+   and returns `503` for a known location whose worker is unavailable. Media
+   bytes never use the JSON control socket.
+
+Direct browser-to-worker signed URLs are not the first implementation: they
+require inbound reachability, public TLS/CORS policy, and duplicate reader
+security. Start with server proxying. A known remote location with an offline
+worker returns an explicit temporary-unavailable response (normally 503), not
+404, and is not tombstoned merely because its worker lease expired.
+
+Start cache-on-demand with verified whole-object caching. Sparse range caching is
+additional complexity and should be added only after measured demand.
+
+## Security invariants
+
+- Source API-key plaintext, acquisition credentials, and absolute root paths
+  remain worker-local; Coppice stores only the normal credential hash.
+- The credential is revocable and grants only the source role. Each read grant
+  is further bound to one device, root, opaque item, lineage token, byte
+  interval, byte ceiling, transport, expiry, and an optional server-verified
+  whole-object digest. Library and reader access stay server decisions.
+- The worker can report observations and satisfy explicit read grants. It cannot
+  publish, alter canonical metadata, choose a library, or grant user access.
+- The server treats every manifest, metadata field, size, type, and digest claim
+  as untrusted until it has streamed and hashed the complete object.
+- Grants have byte and admission-expiry bounds, and transfers have separate
+  concurrency bounds. Logs redact tokens; absolute paths never cross the worker
+  protocol boundary.
+- The worker exposes inventory and exact-grant reads only. There is no arbitrary
+  command, URL, or network-supplied filesystem-path capability.
+
+The protocol contract sets limits in code before application reconciliation.
+Manifest chunks carry a unique batch ID, root scan revision, sequence, item
+count, encoded-byte limit, and terminal marker. The server acknowledges each
+committed sequence; deterministic
+replay of the same worker/root/revision/sequence is idempotent, while gaps,
+duplicate items, and conflicts are rejected. Transfer grants carry a unique
+grant ID, worker content lineage, optional server-verified SHA-256, full-object
+or range mode, exact offset/length, maximum bytes, transport, and expiry. The
+hub and worker bound concurrency separately. A consumed, expired, wrong-device,
+digest-mismatched, or conflicting grant cannot be replayed.
+
+## Delivery phases
+
+| Phase | Status | Deliverable / remaining exit condition |
+| --- | --- | --- |
+| 1. Inventory | Implemented | Separate source credential and socket, explicit catalog roots, private local catalog, bounded revisioned manifests, deterministic replay, gap/conflict rejection, online/offline health, and omission reconciliation. |
+| 2. Verified materialization | Implemented | Explicit verify recomputes SHA-256; match writes digest/lineage-bound proposals; approve/reject records the operator decision and approval rechecks current source identity before an idempotent link or materialization; direct link and materialize operations remain available. |
+| 3. Processing and placement | Planned | Digest-bound worker artifacts, source-canonical/cache/published-derivative roles, quota reconciliation, and safe eviction. |
+| 4. Remote ranged serving | Implemented | Private-origin direct reads and separate outbound tunnel reads use the same bounded one-use grants; native media serving preserves ACL and single-range semantics with explicit offline failure. |
+| 5. Replication | Planned | Placement reconciler, named failure domains, repair, verification schedule, and durable policy status. |
+
+Remote-only publication remains an explicit administrative link after full
+verification; inventory never creates `Media`. Whole-object caching and
+replication are not implied by proxy serving.
+
+## Implemented interfaces
+
+- Device kind and permission: `source_worker` / `ACCESS_REMOTE_SOURCE`.
+- Control socket: `GET /api/v2/source-workers/socket`.
+- Tunnel data socket: `GET /api/v2/source-workers/streams/{grant_id}`.
+- Administration: source/item listing plus explicit `verify`, `match`, `link`,
+  and `materialize` operations under `/api/v2/remote-*`; proposal listing and
+  explicit approval/rejection under `/api/v2/remote-source-imports`.
+- Worker CLI: `--source-api-key`, repeatable `--source-root` (including
+  `kind=calibre`), `--source-state-dir`, `--source-scan-interval`,
+  `--source-transport`, `--source-listen`, and `--source-base-url`.
+- Reader path: the native media-file route proxies verified linked remote
+  locations through Coppice; clients never receive worker credentials or URLs.
+
+Tunnel mode needs only outbound access:
+
+```sh
+STUMP_SOURCE_API_KEY=stump_… cargo run -p stump_worker --bin stump-worker -- \
+  --server https://coppice.example \
+  --source-root 'books=/srv/books;label=Books;kind=ebooks;privacy=catalog' \
+  --source-transport tunnel
+```
+
+Direct mode binds a private listener and advertises the origin reachable by the
+server. The advertised value is an origin only; the worker owns the fixed grant
+path:
+
+```sh
+STUMP_SOURCE_API_KEY=stump_… cargo run -p stump_worker --bin stump-worker -- \
+  --server https://coppice.example \
+  --source-root 'books=/srv/books;label=Books;kind=ebooks;privacy=catalog' \
+  --source-transport direct \
+  --source-listen 0.0.0.0:9417 \
+  --source-base-url http://100.64.0.2:9417
+```

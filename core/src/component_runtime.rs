@@ -146,7 +146,7 @@ fn component_description(key: &str) -> &'static str {
 	match key {
 		COMPONENT_BACKGROUND_JOBS => "Runs durable background work on the server.",
 		COMPONENT_WATCHER => "Watches configured libraries and queues scans.",
-		COMPONENT_SCHEDULER => "Schedules durable jobs and maintenance scans.",
+		COMPONENT_SCHEDULER => "Schedules durable jobs from persisted cron rows.",
 		COMPONENT_PROVIDERS => {
 			"Fetches metadata and materializes remote provider sources."
 		},
@@ -188,7 +188,7 @@ fn component_transition_reason(key: &str, mode: TransitionMode) -> &'static str 
 			"Restart rebuilds filesystem watcher registrations owned by the background lifecycle."
 		},
 		COMPONENT_SCHEDULER => {
-			"Restart rebuilds scheduler tasks and their durable maintenance scan."
+			"Restart rebuilds scheduler tasks from persisted configuration."
 		},
 		COMPONENT_PROVIDERS => {
 			"Restart rebuilds the provider host, source registry, and provider-owned workers."
@@ -1212,7 +1212,7 @@ pub fn builtin_definitions(config: &StumpConfig) -> Vec<ComponentDefinition> {
 			TransitionMode::Restart,
 			[COMPONENT_BACKGROUND_JOBS],
 		)
-		.with_activity_source("scheduler initialization and maintenance"),
+		.with_activity_source("scheduled-job initialization and dispatch"),
 		ComponentDefinition::new(
 			COMPONENT_PROVIDERS,
 			"Metadata providers",

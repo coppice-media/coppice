@@ -1152,6 +1152,13 @@ async fn read_aloud_ready_books(
 		else {
 			continue;
 		};
+		if map.ebook_media_id != book.media.id
+			|| !sync_maps::map_matches_current_sources(ctx.conn.as_ref(), &map)
+				.await
+				.map_err(|error| APIError::InternalServerError(error.to_string()))?
+		{
+			continue;
+		}
 		let path =
 			sync_maps::read_aloud_cache_path(ctx.config.get_transform_cache_dir(), &map)
 				.map_err(|error| APIError::InternalServerError(error.to_string()))?;
@@ -1420,11 +1427,19 @@ pub(crate) async fn get_book_by_id(
 	.await
 	.map_err(|error| APIError::InternalServerError(error.to_string()))?
 	{
-		let path =
-			sync_maps::read_aloud_cache_path(ctx.config.get_transform_cache_dir(), &map)
-				.map_err(|error| APIError::InternalServerError(error.to_string()))?;
-		if tokio::fs::metadata(path).await.is_ok() {
-			publication.add_read_aloud_link(&book.media.id, &link_finalizer)?;
+		if map.ebook_media_id == book.media.id
+			&& sync_maps::map_matches_current_sources(ctx.conn.as_ref(), &map)
+				.await
+				.map_err(|error| APIError::InternalServerError(error.to_string()))?
+		{
+			let path = sync_maps::read_aloud_cache_path(
+				ctx.config.get_transform_cache_dir(),
+				&map,
+			)
+			.map_err(|error| APIError::InternalServerError(error.to_string()))?;
+			if tokio::fs::metadata(path).await.is_ok() {
+				publication.add_read_aloud_link(&book.media.id, &link_finalizer)?;
+			}
 		}
 	}
 	Ok(Json(publication))

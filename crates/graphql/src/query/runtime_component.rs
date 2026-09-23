@@ -70,6 +70,7 @@ fn capability_rows(runtime: &ComponentRuntime) -> Vec<DeviceCapability> {
 		(DeviceKind::Api, DeviceProtocol::Api, "api"),
 		(DeviceKind::Web, DeviceProtocol::Api, "webui"),
 		(DeviceKind::Worker, DeviceProtocol::Api, "worker"),
+		(DeviceKind::SourceWorker, DeviceProtocol::Api, "worker"),
 	]
 	.into_iter()
 	.map(|(kind, protocol, key)| {

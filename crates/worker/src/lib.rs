@@ -1,5 +1,4 @@
-//! Remote workers: the `worker_jobs` queue, the socket protocol, and the
-//! `stump-worker` client.
+//! Remote compute workers plus root-scoped source inventory and byte serving.
 //!
 //! The server stays one Rust process. Work that is heavy or hardware-bound is a
 //! row in `worker_jobs` that a process somewhere else may claim, and workers
@@ -10,10 +9,10 @@
 //!
 //! | Feature | Who links it | What it is |
 //! | --- | --- | --- |
-//! | `server` | `stump_core` → `apps/server`, `graphql` | [`WorkerJobs`] (the queue and dispatcher), [`WorkerHub`] (who is connected), the `worker_jobs` entity |
-//! | `client` | the `stump-worker` binary | [`client`] (the protocol client), [`transcode`] (its `ffmpeg` runner), and the optional worker-local [`storyteller`] adapter |
+//! | `server` | `stump_core` → `apps/server`, `graphql` | [`WorkerJobs`] / [`WorkerHub`] for compute and [`SourceHub`] for separately authenticated source connections and read grants |
+//! | `client` | the `stump-worker` binary | Compute runners plus source catalog/scanner/direct/tunnel clients selected by separate CLI credentials |
 //! | `browser` | the same binary, opted in | [`challenge`]: `challenge_solve` in a real, visible Chrome. Default off — a CDP stack is a lot to compile for an operator who only wants Opus |
-//! | — | both | [`protocol`] (the frames), [`kind`] (job inputs and capability matching), and [`alignment`] (tier-2 align/SyncMap contracts) |
+//! | — | both | Compute [`protocol`] and source [`source_protocol`] frames remain separate; [`kind`] and [`alignment`] own compute-job contracts |
 //!
 //! The server half deliberately links no HTTP stack. The hub is fed frames and
 //! hands back an outbound channel, so the axum `ws` glue lives in
@@ -22,11 +21,13 @@
 //! linking axum.
 //!
 //! Decisions, layout, and verification commands: `crates/worker/README.md`.
-//! Protocol reference: `docs/content/docs/developer/workers.mdx`.
+//! Protocol references: `docs/content/docs/developer/workers.mdx` and
+//! `docs/content/docs/developer/remote-worker-libraries.mdx`.
 
 pub mod alignment;
 pub mod kind;
 pub mod protocol;
+pub mod source_protocol;
 
 /// Alignment job and SyncMap contracts are shared by server and workers.
 pub use alignment::{
@@ -48,18 +49,33 @@ pub mod event;
 pub mod hub;
 #[cfg(feature = "server")]
 pub mod service;
+#[cfg(feature = "server")]
+pub mod source_hub;
 
 #[cfg(feature = "browser")]
 pub mod challenge;
 #[cfg(feature = "client")]
 pub mod client;
 #[cfg(feature = "client")]
-pub mod storyteller;
+pub mod native_align;
 #[cfg(feature = "client")]
-pub mod transcode;
-
+pub mod source_calibre;
+#[cfg(feature = "client")]
+pub mod source_catalog;
+#[cfg(feature = "client")]
+pub mod source_client;
+#[cfg(feature = "client")]
+pub mod source_direct;
+#[cfg(feature = "client")]
+pub mod source_scanner;
+#[cfg(feature = "client")]
+pub mod source_tunnel;
+#[cfg(feature = "client")]
+pub mod storyteller;
 #[cfg(all(test, feature = "server", feature = "client"))]
 mod tests;
+#[cfg(feature = "client")]
+pub mod transcode;
 
 pub use kind::{
 	align_requires, challenge_solve_requires, satisfies, transcode_requires,
@@ -84,9 +100,43 @@ pub use service::{
 	JobOutcome, ResultValidator, WorkerJobs, BACKGROUND_PRIORITY, CLAIM_DEADLINE,
 	INTERACTIVE_PRIORITY,
 };
+#[cfg(feature = "server")]
+pub use source_hub::{
+	ConnectedSourceWorker, SharedSourceHub, SourceHub, SourceHubError, SourceOutbound,
+	SourceReadStatus, TunnelReceiver, MAX_SOURCE_TUNNEL_CHUNK_BYTES,
+	SOURCE_OUTBOUND_CAPACITY, SOURCE_TUNNEL_CAPACITY,
+};
+pub use source_protocol::{
+	encode_source_frame, expires_at_millis, parse_source_server_frame,
+	parse_source_worker_frame, SourceManifestChunk, SourceManifestItem,
+	SourceProtocolError, SourceReadGrant, SourceReadMode, SourceReadRequest,
+	SourceRootHello, SourceServerFrame, SourceTransport, SourceWorkerFrame,
+	SourceWorkerHello, MAX_MANIFEST_FRAME_BYTES, MAX_MANIFEST_ITEMS,
+	MAX_SOURCE_MANIFEST_FRAME_BYTES, MAX_SOURCE_MANIFEST_ITEMS,
+};
 
 #[cfg(feature = "client")]
 pub use client::{Assignment, ClientConfig, JobRunner, Progress};
+#[cfg(feature = "client")]
+pub use native_align::{NativeAlignConfig, NativeAlignRunner};
+#[cfg(feature = "client")]
+pub use source_calibre::{
+	discover as discover_calibre, CalibreBook, CalibreFormat, CalibreSourceError,
+	CALIBRE_APPLICATION_ID, CALIBRE_ROOT_KIND, SUPPORTED_SCHEMA_VERSION,
+};
+#[cfg(feature = "client")]
+pub use source_catalog::{
+	parse_source_root_config, parse_source_root_spec, sanitize_relative_path,
+	CatalogEntry, CatalogSnapshot, ResolvedSourceItem, SourceCatalog, SourceRootConfig,
+};
+#[cfg(feature = "client")]
+pub use source_client::{run_source, SourceClientConfig};
+#[cfg(feature = "client")]
+pub use source_direct::{start_direct_server, DirectGrantStore};
+#[cfg(feature = "client")]
+pub use source_scanner::SourceScanner;
+#[cfg(feature = "client")]
+pub use source_tunnel::handle_tunnel_grant;
 #[cfg(feature = "client")]
 pub use storyteller::{StorytellerConfig, StorytellerRunner};
 #[cfg(feature = "client")]

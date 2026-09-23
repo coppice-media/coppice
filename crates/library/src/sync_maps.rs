@@ -8,6 +8,7 @@
 
 use std::{
 	collections::BTreeMap,
+	io::{BufReader, Read},
 	path::{Path, PathBuf},
 	sync::Arc,
 };
@@ -30,8 +31,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use stump_worker::{
 	align_requires, AlignExecutionProvider, AlignGranularity, AlignInput, AlignPrecision,
-	AlignResult, ResultValidator, SyncMapV1, SyncMapValidationContext,
-	SyncMapValidationError, WorkerJob, WorkerJobs, ALIGN, BACKGROUND_PRIORITY,
+	AlignResult, AudioClip, ResultValidator, SyncCue, SyncMapProvenance, SyncMapV1,
+	SyncMapValidationContext, SyncMapValidationError, TextFragment, WorkerJob,
+	WorkerJobs, ALIGN, BACKGROUND_PRIORITY,
 };
 use thiserror::Error;
 
@@ -216,135 +218,6 @@ pub async fn latest_sync_map_for_media<C: ConnectionTrait>(
 		.await?)
 }
 
-/// Build and route one explicit alignment job.
-///
-/// The default profile is deliberately stable (`ctc`/`default`/CPU/fp32), so
-/// the capability requirement is deterministic until a future profile-selection
-/// input is added to the public action. A worker advertising that exact `align`
-/// capability is eligible; without one the queue parks the row as
-/// `needs_worker` through the normal dispatcher.
-pub async fn enqueue_alignment(
-	conn: &DatabaseConnection,
-	jobs: &WorkerJobs,
-	ebook_media_id: &str,
-	audio_media_id: &str,
-	granularity: AlignGranularity,
-) -> Result<worker_job::Model, SyncMapError> {
-	if !confirmed_pair(conn, ebook_media_id, audio_media_id).await? {
-		return Err(SyncMapError::PairNotConfirmed);
-	}
-
-	let requested_granularity = granularity_name(granularity);
-	for job in jobs.active_of_kind(ALIGN).await? {
-		if same_alignment_target(
-			&job.input,
-			ebook_media_id,
-			audio_media_id,
-			requested_granularity,
-		) {
-			return Ok(job);
-		}
-	}
-
-	let input =
-		alignment_input(conn, ebook_media_id, audio_media_id, granularity).await?;
-	let input_json = serde_json::to_value(&input)?;
-	let requires = align_requires(&input);
-	Ok(jobs
-		.enqueue(ALIGN, input_json, requires, BACKGROUND_PRIORITY)
-		.await?)
-}
-
-fn same_alignment_target(
-	input: &Value,
-	ebook_media_id: &str,
-	audio_media_id: &str,
-	granularity: &str,
-) -> bool {
-	input.get("text_media_id").and_then(Value::as_str) == Some(ebook_media_id)
-		&& input.get("audio_media_id").and_then(Value::as_str) == Some(audio_media_id)
-		&& input.get("granularity").and_then(Value::as_str) == Some(granularity)
-}
-
-async fn alignment_input(
-	conn: &DatabaseConnection,
-	ebook_media_id: &str,
-	audio_media_id: &str,
-	granularity: AlignGranularity,
-) -> Result<AlignInput, SyncMapError> {
-	let ebook = media::Entity::find_by_id(ebook_media_id.to_owned())
-		.one(conn)
-		.await?
-		.ok_or_else(|| SyncMapError::MediaNotFound {
-			media_id: ebook_media_id.to_owned(),
-		})?;
-	media::Entity::find_by_id(audio_media_id.to_owned())
-		.one(conn)
-		.await?
-		.ok_or_else(|| SyncMapError::MediaNotFound {
-			media_id: audio_media_id.to_owned(),
-		})?;
-
-	let text_digest = text_digest(&ebook)?;
-	let audio_manifest_digest = audio_manifest_digest(conn, audio_media_id).await?;
-	Ok(AlignInput {
-		text_media_id: ebook_media_id.to_owned(),
-		text_digest,
-		audio_media_id: audio_media_id.to_owned(),
-		audio_manifest_digest,
-		algorithm: DEFAULT_ALIGNMENT_ALGORITHM.to_owned(),
-		model: DEFAULT_ALIGNMENT_MODEL.to_owned(),
-		model_revision: DEFAULT_ALIGNMENT_MODEL_REVISION.to_owned(),
-		language: DEFAULT_ALIGNMENT_LANGUAGE.to_owned(),
-		granularity,
-		execution_provider: AlignExecutionProvider::Cpu,
-		precision: AlignPrecision::Fp32,
-		options: BTreeMap::new(),
-	})
-}
-
-fn text_digest(media: &media::Model) -> Result<String, SyncMapError> {
-	if let Some(hash) = media.hash.as_deref().filter(|hash| is_sha256(hash)) {
-		return Ok(hash.to_owned());
-	}
-	let bytes = std::fs::metadata(&media.path)
-		.map_err(|source| SyncMapError::Digest {
-			media_id: media.id.clone(),
-			source,
-		})?
-		.len();
-	stump_media::hash::generate(&media.path, bytes).map_err(|source| {
-		SyncMapError::Digest {
-			media_id: media.id.clone(),
-			source,
-		}
-	})
-}
-
-async fn audio_manifest_digest(
-	conn: &DatabaseConnection,
-	audio_media_id: &str,
-) -> Result<String, SyncMapError> {
-	let tracks = media_audio_track::Entity::find()
-		.filter(media_audio_track::Column::MediaId.eq(audio_media_id))
-		.order_by_asc(media_audio_track::Column::Index)
-		.all(conn)
-		.await?;
-	let manifest = tracks
-		.into_iter()
-		.map(|track| {
-			json!({
-				"index": track.index,
-				"duration_ms": track.duration_ms,
-				"start_offset_ms": track.start_offset_ms,
-				"byte_size": track.byte_size,
-				"mime": track.mime,
-			})
-		})
-		.collect::<Vec<_>>();
-	hex_sha256(&serde_json::to_vec(&manifest)?)
-}
-
 fn hex_sha256(bytes: &[u8]) -> Result<String, SyncMapError> {
 	let mut hasher = Sha256::new();
 	hasher.update(bytes);
@@ -353,13 +226,6 @@ fn hex_sha256(bytes: &[u8]) -> Result<String, SyncMapError> {
 		.iter()
 		.map(|byte| format!("{byte:02x}"))
 		.collect())
-}
-
-fn is_sha256(value: &str) -> bool {
-	value.len() == 64
-		&& value
-			.bytes()
-			.all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn granularity_name(granularity: AlignGranularity) -> &'static str {
@@ -461,6 +327,102 @@ pub async fn import_sync_map_for_user(
 	validate_map_targets(&prepared, &map)?;
 	persist_map(conn, &map, IMPORT_SOURCE, None).await
 }
+/// Import a native EPUB Media Overlay without creating an alignment job.
+///
+/// The overlay is accepted only after the server has prepared the source EPUB,
+/// recomputed the exact audio manifest digest, validated every target and
+/// checked the confirmed user-scoped edition pair. The resulting map carries
+/// the same immutable source binding as worker-produced maps.
+pub async fn import_native_smil_for_user(
+	conn: &DatabaseConnection,
+	user_id: &str,
+	ebook_media_id: &str,
+	audio_media_id: &str,
+) -> Result<media_sync_map::Model, SyncMapError> {
+	if !confirmed_pair_for_user(conn, user_id, ebook_media_id, audio_media_id).await? {
+		return Err(SyncMapError::PairNotConfirmed);
+	}
+	let ebook = media::Entity::find_by_id(ebook_media_id.to_owned())
+		.one(conn)
+		.await?
+		.ok_or_else(|| SyncMapError::MediaNotFound {
+			media_id: ebook_media_id.to_owned(),
+		})?;
+	let audio = media::Entity::find_by_id(audio_media_id.to_owned())
+		.one(conn)
+		.await?
+		.ok_or_else(|| SyncMapError::MediaNotFound {
+			media_id: audio_media_id.to_owned(),
+		})?;
+	let tracks = media_audio_track::Entity::find()
+		.filter(media_audio_track::Column::MediaId.eq(audio_media_id))
+		.order_by_asc(media_audio_track::Column::Index)
+		.all(conn)
+		.await?;
+	if tracks.len() != 1 || !audio.extension.eq_ignore_ascii_case("m4b") {
+		return Err(SyncMapError::UnsupportedAudio);
+	}
+	let prepared = stump_media::read_aloud::prepare_epub(&ebook.path)?;
+	let smil_cues = stump_media::read_aloud::extract_smil_cues(&prepared)?;
+	let audio_src = smil_cues
+		.first()
+		.map(|cue| cue.audio_src.as_str())
+		.unwrap_or_default();
+	if audio_src.is_empty() || smil_cues.iter().any(|cue| cue.audio_src != audio_src) {
+		return Err(SyncMapError::Validation(
+			SyncMapValidationError::InputMismatch {
+				field: "smil.audio_src",
+			},
+		));
+	}
+	let track_digest = stream_file_sha256(Path::new(&tracks[0].path), audio_media_id)?;
+	validate_native_audio_source(&prepared, audio_src, &track_digest)?;
+	let audio_manifest_digest =
+		strict_audio_manifest_digest_from_digests(&tracks, &[track_digest])?;
+	let cues = smil_cues
+		.into_iter()
+		.map(|cue| SyncCue {
+			text: TextFragment {
+				spine_index: cue.cue.spine_index,
+				ordinal: cue.cue.ordinal,
+				element_id: cue.cue.element_id,
+			},
+			audio: AudioClip {
+				track_index: cue.cue.track_index,
+				begin_ms: cue.cue.begin_ms,
+				end_ms: cue.cue.end_ms,
+			},
+			confidence: Some(1.0),
+		})
+		.collect::<Vec<_>>();
+	let map = SyncMapV1 {
+		schema: stump_worker::SYNC_MAP_SCHEMA_VERSION,
+		text_media_id: ebook_media_id.to_owned(),
+		audio_media_id: audio_media_id.to_owned(),
+		provenance: SyncMapProvenance {
+			text_digest: prepared.canonical_text_digest.clone(),
+			audio_manifest_digest,
+			implementation: "epub-smil".to_owned(),
+			version: "coppice-epub-smil-v1".to_owned(),
+			algorithm: "smil".to_owned(),
+			model: "none".to_owned(),
+			model_revision: "native".to_owned(),
+			language: DEFAULT_ALIGNMENT_LANGUAGE.to_owned(),
+			granularity: AlignGranularity::Sentence,
+			execution_provider: AlignExecutionProvider::Cpu,
+			precision: AlignPrecision::Fp32,
+			options: BTreeMap::new(),
+		},
+		cues,
+	};
+	let context = tracks
+		.iter()
+		.map(|track| (track.index, track.duration_ms))
+		.collect::<BTreeMap<_, _>>();
+	map.validate(&context)?;
+	validate_map_targets(&prepared, &map)?;
+	persist_map(conn, &map, IMPORT_SOURCE, None).await
+}
 
 /// Return the newest map for a pair visible to `user_id`.
 pub async fn latest_sync_map_for_user<C: ConnectionTrait>(
@@ -553,6 +515,143 @@ pub async fn enqueue_alignment_for_user(
 			BACKGROUND_PRIORITY,
 		)
 		.await?)
+}
+/// Verify that a persisted map still binds to the current EPUB and audiobook
+/// bytes. A source replacement therefore makes an old derivative ineligible
+/// without relying on media-row mtimes or the cache filename alone.
+pub async fn map_matches_current_sources<C: ConnectionTrait>(
+	conn: &C,
+	map: &media_sync_map::Model,
+) -> Result<bool, SyncMapError> {
+	let typed: SyncMapV1 = serde_json::from_value(map.map.clone())?;
+	if typed.text_media_id != map.ebook_media_id
+		|| typed.audio_media_id != map.audio_media_id
+		|| typed.provenance.text_digest != map.text_digest
+		|| typed.provenance.audio_manifest_digest != map.audio_manifest_digest
+	{
+		return Ok(false);
+	}
+	let Some(ebook) = media::Entity::find_by_id(map.ebook_media_id.clone())
+		.one(conn)
+		.await?
+	else {
+		return Ok(false);
+	};
+	let Some(audio) = media::Entity::find_by_id(map.audio_media_id.clone())
+		.one(conn)
+		.await?
+	else {
+		return Ok(false);
+	};
+	let tracks = media_audio_track::Entity::find()
+		.filter(media_audio_track::Column::MediaId.eq(&audio.id))
+		.order_by_asc(media_audio_track::Column::Index)
+		.all(conn)
+		.await?;
+	if tracks.len() != 1 || !audio.extension.eq_ignore_ascii_case("m4b") {
+		return Ok(false);
+	}
+	let prepared = stump_media::read_aloud::prepare_epub(&ebook.path)?;
+	if typed.provenance.text_digest != prepared.canonical_text_digest {
+		return Ok(false);
+	}
+	if typed.provenance.audio_manifest_digest
+		!= strict_audio_manifest_digest_from_tracks(&tracks)?
+	{
+		return Ok(false);
+	}
+	let context = tracks
+		.iter()
+		.map(|track| (track.index, track.duration_ms))
+		.collect::<BTreeMap<_, _>>();
+	if typed.validate(&context).is_err()
+		|| validate_map_targets(&prepared, &typed).is_err()
+	{
+		return Ok(false);
+	}
+	Ok(true)
+}
+
+/// Render and publish the deterministic derivative for a validated map.
+///
+/// GET playback remains cache-only; explicit imports and worker completion call
+/// this helper before publishing readiness.
+pub async fn render_sync_map_cache(
+	conn: &DatabaseConnection,
+	cache_dir: impl Into<PathBuf>,
+	map: &media_sync_map::Model,
+) -> Result<PathBuf, SyncMapError> {
+	if !map_matches_current_sources(conn, map).await? {
+		return Err(SyncMapError::Validation(
+			SyncMapValidationError::InputMismatch {
+				field: "source identity",
+			},
+		));
+	}
+	let typed: SyncMapV1 = serde_json::from_value(map.map.clone())?;
+	let ebook = media::Entity::find_by_id(map.ebook_media_id.clone())
+		.one(conn)
+		.await?
+		.ok_or_else(|| SyncMapError::MediaNotFound {
+			media_id: map.ebook_media_id.clone(),
+		})?;
+	let audio = media::Entity::find_by_id(map.audio_media_id.clone())
+		.one(conn)
+		.await?
+		.ok_or_else(|| SyncMapError::MediaNotFound {
+			media_id: map.audio_media_id.clone(),
+		})?;
+	let track = media_audio_track::Entity::find()
+		.filter(media_audio_track::Column::MediaId.eq(&audio.id))
+		.order_by_asc(media_audio_track::Column::Index)
+		.one(conn)
+		.await?
+		.ok_or_else(|| SyncMapError::UnsupportedAudio)?;
+	let prepared = stump_media::read_aloud::prepare_epub(&ebook.path)?;
+	let cues = typed
+		.cues
+		.iter()
+		.map(|cue| stump_media::read_aloud::RenderCue {
+			spine_index: cue.text.spine_index,
+			ordinal: cue.text.ordinal,
+			element_id: cue.text.element_id.clone(),
+			track_index: cue.audio.track_index,
+			begin_ms: cue.audio.begin_ms,
+			end_ms: cue.audio.end_ms,
+		})
+		.collect::<Vec<_>>();
+	let cache_dir = cache_dir.into();
+	let cache_path = read_aloud_cache_path(&cache_dir, map)?;
+	if tokio::fs::metadata(&cache_path).await.is_ok() {
+		return Ok(cache_path);
+	}
+	let parent = cache_path
+		.parent()
+		.ok_or_else(|| {
+			SyncMapError::ReadAloud(stump_media::ReadAloudError::Invalid(
+				"read-aloud cache path has no parent".into(),
+			))
+		})?
+		.to_path_buf();
+	tokio::fs::create_dir_all(&parent).await.map_err(|error| {
+		SyncMapError::ReadAloud(stump_media::ReadAloudError::Io(error))
+	})?;
+	let destination = cache_path.clone();
+	tokio::task::spawn_blocking(move || {
+		stump_media::read_aloud::render_to_path(
+			&prepared,
+			&track.path,
+			&cues,
+			&destination,
+		)
+	})
+	.await
+	.map_err(|error| {
+		SyncMapError::ReadAloud(stump_media::ReadAloudError::Invalid(format!(
+			"read-aloud renderer task failed: {error}"
+		)))
+	})??;
+	Ok(cache_path)
 }
 
 /// Derive the path used by the accepted deterministic derivative.
@@ -909,19 +1008,102 @@ async fn strict_audio_manifest_digest(
 		.await?;
 	strict_audio_manifest_digest_from_tracks(&tracks)
 }
+fn validate_native_audio_source(
+	prepared: &stump_media::read_aloud::PreparedEpub,
+	audio_src: &str,
+	track_digest: &(String, u64),
+) -> Result<(), SyncMapError> {
+	let Some(embedded) = prepared.entries.get(audio_src) else {
+		return Err(SyncMapError::Validation(
+			SyncMapValidationError::InputMismatch {
+				field: "smil.audio_src",
+			},
+		));
+	};
+	let embedded_digest = sha256_hex_bytes(embedded);
+	if track_digest.1 != embedded.len() as u64 || track_digest.0 != embedded_digest {
+		return Err(SyncMapError::Validation(
+			SyncMapValidationError::InputMismatch {
+				field: "smil.audio_src",
+			},
+		));
+	}
+	Ok(())
+}
+
+fn stream_file_sha256(
+	path: &Path,
+	media_id: &str,
+) -> Result<(String, u64), SyncMapError> {
+	let file = std::fs::File::open(path).map_err(|source| SyncMapError::Digest {
+		media_id: media_id.to_owned(),
+		source,
+	})?;
+	let mut reader = BufReader::new(file);
+	let mut hasher = Sha256::new();
+	let mut buffer = [0_u8; 128 * 1024];
+	let mut bytes = 0_u64;
+	loop {
+		let read = reader
+			.read(&mut buffer)
+			.map_err(|source| SyncMapError::Digest {
+				media_id: media_id.to_owned(),
+				source,
+			})?;
+		if read == 0 {
+			break;
+		}
+		hasher.update(&buffer[..read]);
+		bytes = bytes
+			.checked_add(read as u64)
+			.ok_or_else(|| SyncMapError::Digest {
+				media_id: media_id.to_owned(),
+				source: std::io::Error::new(
+					std::io::ErrorKind::InvalidData,
+					"audio track is too large to count",
+				),
+			})?;
+	}
+	Ok((
+		hasher
+			.finalize()
+			.iter()
+			.map(|byte| format!("{byte:02x}"))
+			.collect(),
+		bytes,
+	))
+}
 
 fn strict_audio_manifest_digest_from_tracks(
 	tracks: &[media_audio_track::Model],
 ) -> Result<String, SyncMapError> {
+	let digests = tracks
+		.iter()
+		.map(|track| stream_file_sha256(Path::new(&track.path), &track.media_id))
+		.collect::<Result<Vec<_>, _>>()?;
+	strict_audio_manifest_digest_from_digests(tracks, &digests)
+}
+
+fn strict_audio_manifest_digest_from_digests(
+	tracks: &[media_audio_track::Model],
+	digests: &[(String, u64)],
+) -> Result<String, SyncMapError> {
+	if tracks.len() != digests.len() {
+		return Err(SyncMapError::Digest {
+			media_id: tracks
+				.first()
+				.map(|track| track.media_id.clone())
+				.unwrap_or_default(),
+			source: std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				"audio track digest count does not match manifest",
+			),
+		});
+	}
 	let mut manifest = Vec::with_capacity(tracks.len());
-	for track in tracks {
-		let bytes =
-			std::fs::read(&track.path).map_err(|source| SyncMapError::Digest {
-				media_id: track.media_id.clone(),
-				source,
-			})?;
-		let content_sha256 = sha256_hex_bytes(&bytes);
-		if track.byte_size > 0 && track.byte_size != bytes.len() as i64 {
+	for (track, (content_sha256, byte_count)) in tracks.iter().zip(digests) {
+		if track.byte_size > 0 && u64::try_from(track.byte_size).ok() != Some(*byte_count)
+		{
 			return Err(SyncMapError::Digest {
 				media_id: track.media_id.clone(),
 				source: std::io::Error::new(
@@ -1013,16 +1195,15 @@ fn job_input_matches(input: &Value, expected: &AlignInput) -> bool {
 
 #[cfg(test)]
 mod tests {
-	use std::{collections::BTreeMap, sync::Arc};
+	use std::collections::BTreeMap;
 
 	use chrono::Utc;
 	use models::{
 		domain::edition_pair::PairStatus,
 		entity::{
 			liseur_sync_media_link, liseur_sync_work, media, media_audio,
-			media_audio_track, media_sync_map, worker_job,
+			media_audio_track, media_sync_map,
 		},
-		shared::enums::{FileStatus, WorkerJobStatus},
 	};
 	use sea_orm::{
 		ActiveModelTrait, ActiveValue::Set, ConnectionTrait, DbBackend, DbConn,
@@ -1030,9 +1211,8 @@ mod tests {
 	};
 	use stump_worker::{
 		AlignExecutionProvider, AlignGranularity, AlignPrecision, AudioClip, SyncCue,
-		SyncMapProvenance, SyncMapV1, TextFragment, WorkerJobs, ALIGN,
+		SyncMapProvenance, SyncMapV1, TextFragment,
 	};
-	use tempfile::TempDir;
 	use uuid::Uuid;
 
 	use super::*;
@@ -1248,119 +1428,32 @@ mod tests {
 		);
 	}
 
-	async fn set_ebook_file(conn: &DbConn, ebook: &media::Model, dir: &TempDir) {
-		let path = dir.path().join("book.epub");
-		std::fs::write(&path, b"ebook bytes").expect("write ebook");
-		let mut model: media::ActiveModel = ebook.clone().into();
-		model.path = Set(path.to_string_lossy().into_owned());
-		model.status = Set(FileStatus::Ready);
-		model.update(conn).await.expect("update ebook path");
-	}
-
-	fn worker_jobs(conn: &Arc<DbConn>, dir: &TempDir) -> WorkerJobs {
-		WorkerJobs::new(conn.clone(), dir.path().join("worker-output"))
-	}
-
-	#[tokio::test]
-	async fn enqueue_reuses_an_active_identical_job() {
-		let conn = Arc::new(database().await);
-		let pair = pair(&conn, PairStatus::Confirmed).await;
-		let dir = tempfile::tempdir().expect("tempdir");
-		let input = serde_json::json!({
-			"text_media_id": pair.ebook.id,
-			"audio_media_id": pair.audio.id,
-			"granularity": "sentence"
-		});
-		let active = worker_job::ActiveModel {
-			id: Set("active".to_owned()),
-			kind: Set(ALIGN.to_owned()),
-			input: Set(input),
-			requires: Set(json!({ "align": { "device": "cpu" } })),
-			status: Set(WorkerJobStatus::Claimed),
-			worker_id: Set(Some("worker".to_owned())),
-			priority: Set(-10),
-			progress: Set(0.0),
-			progress_message: Set(None),
-			result: Set(None),
-			error: Set(None),
-			created_at: Set(Utc::now().fixed_offset()),
-			updated_at: Set(Utc::now().fixed_offset()),
-			started_at: Set(None),
-			finished_at: Set(None),
-		}
-		.insert(conn.as_ref())
-		.await
-		.expect("insert active job");
-		let found = enqueue_alignment(
-			&conn,
-			&worker_jobs(&conn, &dir),
-			&pair.ebook.id,
-			&pair.audio.id,
-			AlignGranularity::Sentence,
-		)
-		.await
-		.expect("dedupe active job");
-		assert_eq!(found.id, active.id);
-		assert_eq!(
-			worker_job::Entity::find()
-				.all(conn.as_ref())
-				.await
-				.unwrap()
-				.len(),
-			1
+	#[test]
+	fn native_smil_audio_binding_requires_exact_embedded_bytes() {
+		let dir = tempfile::tempdir().unwrap();
+		let track = dir.path().join("audio.m4b");
+		std::fs::write(&track, b"audio bytes").unwrap();
+		let mut entries = BTreeMap::new();
+		entries.insert("OEBPS/audio.m4b".to_owned(), b"audio bytes".to_vec());
+		let prepared = stump_media::read_aloud::PreparedEpub {
+			opf_path: "OEBPS/package.opf".to_owned(),
+			entries,
+			spines: Vec::new(),
+			canonical_text_digest: "a".repeat(64),
+		};
+		let digest = stream_file_sha256(&track, "audio").unwrap();
+		assert!(
+			validate_native_audio_source(&prepared, "OEBPS/audio.m4b", &digest).is_ok()
 		);
-	}
-
-	#[tokio::test]
-	async fn enqueue_does_not_reuse_done_or_failed_jobs() {
-		for terminal in [WorkerJobStatus::Done, WorkerJobStatus::Failed] {
-			let conn = Arc::new(database().await);
-			let pair = pair(&conn, PairStatus::Confirmed).await;
-			let dir = tempfile::tempdir().expect("tempdir");
-			set_ebook_file(&conn, &pair.ebook, &dir).await;
-			let input = serde_json::json!({
-				"text_media_id": pair.ebook.id,
-				"audio_media_id": pair.audio.id,
-				"granularity": "sentence"
-			});
-			worker_job::ActiveModel {
-				id: Set(Uuid::new_v4().to_string()),
-				kind: Set(ALIGN.to_owned()),
-				input: Set(input),
-				requires: Set(json!({ "align": { "device": "cpu" } })),
-				status: Set(terminal),
-				worker_id: Set(None),
-				priority: Set(-10),
-				progress: Set(0.0),
-				progress_message: Set(None),
-				result: Set(None),
-				error: Set(None),
-				created_at: Set(Utc::now().fixed_offset()),
-				updated_at: Set(Utc::now().fixed_offset()),
-				started_at: Set(None),
-				finished_at: Set(Some(Utc::now().fixed_offset())),
-			}
-			.insert(conn.as_ref())
-			.await
-			.expect("insert terminal job");
-			let created = enqueue_alignment(
-				&conn,
-				&worker_jobs(&conn, &dir),
-				&pair.ebook.id,
-				&pair.audio.id,
-				AlignGranularity::Sentence,
-			)
-			.await
-			.expect("enqueue after terminal job");
-			assert_eq!(created.kind, ALIGN);
-			assert_eq!(
-				worker_job::Entity::find()
-					.all(conn.as_ref())
-					.await
-					.unwrap()
-					.len(),
-				2
-			);
-		}
+		std::fs::write(&track, b"different bytes").unwrap();
+		let changed_digest = stream_file_sha256(&track, "audio").unwrap();
+		assert!(matches!(
+			validate_native_audio_source(&prepared, "OEBPS/audio.m4b", &changed_digest),
+			Err(SyncMapError::Validation(
+				SyncMapValidationError::InputMismatch {
+					field: "smil.audio_src"
+				}
+			))
+		));
 	}
 }

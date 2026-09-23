@@ -535,14 +535,17 @@ its rule has `lock_respected`, whatever the strategy says, and the plan reports
 the locks it enforced so the apply path enforces the same set. Turning
 `lock_respected` off for a field is the one way a policy outranks a lock.
 
-Every field is resolved, including the three the staged apply path has no
-column for (`COVER`, `LINKS`, `STATUS`): their decision comes back with
-`applied: false`, so the editor can show who would win without anything being
-written. `STATUS` exists as a candidate field because provider series records
-carry a publication status; `series_fields` in the façade emits it with the
-same spelling the legacy series apply path writes into
-`series_metadata.status`, alongside the publisher, genres, and tags it was
-already discarding.
+`COVER` is now a persisted side effect rather than a preview-only decision.
+The selected provider URL stays in the audit/pending projection, while the
+apply path downloads exactly that winner through a bounded HTTP(S)-only client.
+Every redirect is revalidated and DNS-pinned to a public address; credentials,
+loopback/private/reserved targets, oversized bodies, invalid MIME, and
+undecodable images fail before a media row changes. The decoded image is staged
+under a content-addressed thumbnail path before the SQLite write transaction;
+rollback removes only the new file and commit removes only superseded in-tree
+artwork. `LINKS` and `STATUS` still have no direct media column and return
+`applied: false`; `STATUS` remains available as provider series evidence and
+the legacy series apply path writes it to `series_metadata.status`.
 
 ## Progress transport
 

@@ -140,8 +140,9 @@ The current host and source definitions live in `crates/provider`,
 `crates/provider-mangadex`, and `crates/provider-themes`; their source contract
 is documented in [Provider host](/docs/developer/provider-host) and [Source
 definitions](/docs/developer/source-definitions). Storyteller is not a catalog or
-metadata provider. Shelfmark is a future external fulfillment connector, not a
-provider in this registry. See [Integration architecture](/docs/developer/integration-architecture).
+metadata provider. Acquisition is deferred and outside this registry; any future
+integration must use a separate authenticated provider sidecar. See [Integration
+architecture](/docs/developer/integration-architecture).
 
 ## Common feature gates and settings
 

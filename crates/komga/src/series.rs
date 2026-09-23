@@ -7,7 +7,7 @@ use crate::library::KomgaLibraryId;
 
 use crate::search::SeriesCondition;
 use chrono::{DateTime, NaiveDate, Utc};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
@@ -70,13 +70,17 @@ pub struct KomgaSeriesMetadata {
 	pub title_sort_lock: bool,
 	pub summary: String,
 	pub summary_lock: bool,
-	#[serde(deserialize_with = "deserialize_reading_direction")]
+	#[serde(
+		serialize_with = "serialize_reading_direction",
+		deserialize_with = "deserialize_reading_direction"
+	)]
 	pub reading_direction: Option<KomgaReadingDirection>,
 	pub reading_direction_lock: bool,
 	pub publisher: String,
 	pub publisher_lock: bool,
 	pub age_rating: Option<i32>,
 	pub age_rating_lock: bool,
+	#[serde(serialize_with = "serialize_optional_string_as_empty")]
 	pub language: Option<String>,
 	pub language_lock: bool,
 	pub genres: Vec<String>,
@@ -89,6 +93,29 @@ pub struct KomgaSeriesMetadata {
 	pub sharing_labels_lock: bool,
 	pub links: Vec<KomgaWebLink>,
 	pub links_lock: bool,
+}
+
+fn serialize_reading_direction<S>(
+	value: &Option<KomgaReadingDirection>,
+	serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+	S: Serializer,
+{
+	match value {
+		Some(direction) => direction.serialize(serializer),
+		None => serializer.serialize_str(""),
+	}
+}
+
+fn serialize_optional_string_as_empty<S>(
+	value: &Option<String>,
+	serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+	S: Serializer,
+{
+	serializer.serialize_str(value.as_deref().unwrap_or_default())
 }
 
 fn deserialize_reading_direction<'de, D>(
@@ -309,7 +336,7 @@ mod tests {
 	use serde_json::json;
 
 	#[test]
-	fn blank_reading_direction_decodes_to_none() {
+	fn nullable_series_strings_serialize_as_empty_strings() {
 		let metadata: KomgaSeriesMetadata = serde_json::from_value(json!({
 			"status": "ONGOING",
 			"statusLock": false,
@@ -327,7 +354,7 @@ mod tests {
 			"publisherLock": false,
 			"ageRating": null,
 			"ageRatingLock": false,
-			"language": "en",
+			"language": null,
 			"languageLock": false,
 			"genres": [],
 			"genresLock": false,
@@ -343,5 +370,9 @@ mod tests {
 		.unwrap();
 		assert_eq!(metadata.status, KomgaSeriesStatus::Ongoing);
 		assert!(metadata.reading_direction.is_none());
+		assert!(metadata.language.is_none());
+		let encoded = serde_json::to_value(metadata).unwrap();
+		assert_eq!(encoded["readingDirection"], "");
+		assert_eq!(encoded["language"], "");
 	}
 }

@@ -10,7 +10,7 @@ use crate::{config::state::AppState, middleware::component::gate};
 
 #[cfg(feature = "abs")]
 mod abs_backend;
-mod api;
+pub(crate) mod api;
 mod audio_transform;
 #[cfg(feature = "kavita")]
 mod kavita;

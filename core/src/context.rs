@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, OnceLock};
 
 use chrono::Utc;
 use models::{entity::job, shared::enums::JobStatus};
@@ -7,7 +7,7 @@ use stump_devices::DeviceService;
 use stump_jobs::{JobError, JobRuntime, JobScheduler};
 #[cfg(feature = "watcher")]
 use stump_watcher::{Watcher, DEFAULT_DEBOUNCE};
-use stump_worker::{KindRegistry, WorkerJobs};
+use stump_worker::{KindRegistry, SourceHub, WorkerJobs};
 use tokio::sync::{
 	broadcast::{channel, Receiver, Sender},
 	Mutex,
@@ -57,9 +57,6 @@ pub struct Ctx {
 	pub conn: Arc<DatabaseConnection>,
 	pub event_channel: Arc<EventChannel>,
 	component_runtime: Arc<ComponentRuntime>,
-	/// Weak owner handle passed to jobs that need the full context without
-	/// creating a Ctx ↔ JobRuntime strong-reference cycle.
-	self_weak: Arc<OnceLock<Weak<Ctx>>>,
 	job_runtime: Arc<OnceLock<Arc<JobRuntime<JobServices>>>>,
 	#[cfg(feature = "watcher")]
 	library_watcher: Arc<OnceLock<Arc<Watcher>>>,
@@ -90,6 +87,8 @@ pub struct Ctx {
 	/// and the media rows, neither of which the core owns.
 	worker_jobs: Arc<OnceLock<Arc<WorkerJobs>>>,
 	worker_registry: Arc<OnceLock<KindRegistry>>,
+	/// Connected source-worker control sockets and their bounded read grants.
+	source_hub: Arc<OnceLock<Arc<SourceHub>>>,
 }
 
 impl Ctx {
@@ -134,7 +133,6 @@ impl Ctx {
 			conn,
 			event_channel: Arc::new(channel::<CoreEvent>(1024)),
 			component_runtime,
-			self_weak: Arc::new(OnceLock::new()),
 			job_runtime: Arc::new(OnceLock::new()),
 			#[cfg(feature = "watcher")]
 			library_watcher: Arc::new(OnceLock::new()),
@@ -151,6 +149,7 @@ impl Ctx {
 			provider_host: Arc::new(OnceLock::new()),
 			worker_jobs: Arc::new(OnceLock::new()),
 			worker_registry: Arc::new(OnceLock::new()),
+			source_hub: Arc::new(OnceLock::new()),
 		}
 	}
 
@@ -193,9 +192,7 @@ impl Ctx {
 	/// }
 	/// ```
 	pub fn arced(&self) -> Arc<Ctx> {
-		let context = Arc::new(self.clone());
-		let _ = context.self_weak.set(Arc::downgrade(&context));
-		context
+		Arc::new(self.clone())
 	}
 
 	/// Returns whether the job runtime has already been initialized.
@@ -272,10 +269,6 @@ impl Ctx {
 				let services = JobServices::new(
 					self.conn.clone(),
 					self.config.clone(),
-					self.self_weak
-						.get()
-						.cloned()
-						.unwrap_or_else(|| Arc::downgrade(&self.arced())),
 					self.event_channel.0.clone(),
 					self.visible_pages.clone(),
 				);
@@ -452,21 +445,6 @@ impl Ctx {
 	///
 	/// The job runtime is only created once a valid scheduled row needs it.
 	pub async fn start_scheduler(&self) -> CoreResult<Option<JobScheduler>> {
-		self.start_scheduler_inner(false).await
-	}
-
-	/// Starts or refreshes the scheduler and its host-owned durable maintenance
-	/// scan. The scan enqueues persisted due work without waiting in a worker.
-	pub async fn start_scheduler_with_maintenance(
-		&self,
-	) -> CoreResult<Option<JobScheduler>> {
-		self.start_scheduler_inner(true).await
-	}
-
-	async fn start_scheduler_inner(
-		&self,
-		with_maintenance: bool,
-	) -> CoreResult<Option<JobScheduler>> {
 		self.require_background_jobs()?;
 		if !self.component_enabled(crate::component_runtime::COMPONENT_SCHEDULER) {
 			return Ok(None);
@@ -475,18 +453,7 @@ impl Ctx {
 		let runtime = || self.job_runtime().map_err(JobError::from);
 
 		if let Some(existing) = scheduler.clone() {
-			if with_maintenance && existing.maintenance_enabled() {
-				self.component_runtime.record_activity(COMPONENT_SCHEDULER);
-				return Ok(Some(existing));
-			}
-			let reload_result = if with_maintenance {
-				existing
-					.reload_with_maintenance(self.conn.as_ref(), runtime, true)
-					.await?
-			} else {
-				existing.reload(self.conn.as_ref(), runtime).await?
-			};
-			if reload_result {
+			if existing.reload(self.conn.as_ref(), runtime).await? {
 				self.component_runtime.record_activity(COMPONENT_SCHEDULER);
 				return Ok(Some(existing));
 			}
@@ -494,13 +461,7 @@ impl Ctx {
 			return Ok(None);
 		}
 
-		let Some(created) = JobScheduler::init_with_maintenance(
-			self.conn.as_ref(),
-			runtime,
-			with_maintenance,
-		)
-		.await?
-		else {
+		let Some(created) = JobScheduler::init(self.conn.as_ref(), runtime).await? else {
 			return Ok(None);
 		};
 		scheduler.replace(created.clone());
@@ -603,6 +564,15 @@ impl Ctx {
 			.clone();
 		self.component_runtime.record_activity(COMPONENT_WORKER);
 		service
+	}
+
+	/// Connected source-worker control sockets and bounded transfer grants.
+	/// This registry is independent from the compute-worker queue and is
+	/// constructed only when a source route or remote location is used.
+	pub fn source_hub(&self) -> Arc<SourceHub> {
+		self.source_hub
+			.get_or_init(|| Arc::new(SourceHub::new()))
+			.clone()
 	}
 	/// Returns the receiver for the `CoreEvent` channel. See [`emit_event`]
 	/// for more information and an example usage.

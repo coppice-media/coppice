@@ -134,7 +134,10 @@ fn mount_app(app: &StaticApp) -> Router<AppState> {
 			ServeDir::new(dir)
 				.precompressed_br()
 				.precompressed_gzip()
-				// Client-side routes (e.g. `/app/devices`) fall back to the shell.
+				// ServeDir's directory redirect drops the outer Axum nest
+				// prefix (`/app/requests` became `/requests/`). Let the SPA
+				// fallback answer extensionless client-side routes instead.
+				.append_index_html_on_directories(false)
 				.fallback(ServeFile::new(dir.join("index.html"))),
 		);
 	Router::new()

@@ -9,29 +9,47 @@ The evidence snapshot lives in
 `docs/content/docs/developer/roadmap.mdx` (+ `## Gaps vs peers`). Integration
 taxonomy and request orchestration live in
 `docs/content/docs/developer/integration-architecture.mdx`.
+The contract-tested home-library source-worker foundation and its remaining
+phased plan live in
+`docs/content/docs/developer/remote-worker-libraries.mdx`.
+
 
 Evidence labels are exact: Shipped, Contract-tested, Device-tested, Source-only,
 Planned, Blocked. Harness/source evidence never becomes app/device proof.
 
 ## Working tree
 
-- Branch `coppice/nightly`; an active no-commit merge of upstream security
-  release v0.1.10 at `44e1de12dd058bc27d40323cf495fe751088b364` is in
-  progress. `HEAD`/`ORIG_HEAD` is
-  `5f0eec8bca01424cc0731a8ab2fb50eaa13dc31f`; `MERGE_HEAD` is the release
-  commit. The merge applied cleanly, the complete gate and protocol replay are
-  green, and all intended changes are staged for the user-owned commit/push.
+- Branch `coppice/nightly`; baseline commit
+  `30d251886fe614053ea43ec9d50a8ab4cb0b2753` is pushed and matched
+  `origin/coppice/nightly` before the current working tree. The upstream v0.1.10
+  security merge is complete. The current uncommitted tree removes the private
+  in-process MAM acquisition path, retains the generic request ledger, and now
+  adds source-import matching/approval, a read-only Calibre source, exact-file
+  verification caching, persisted metadata covers, native SMIL import,
+  external native CTC alignment, deterministic read-aloud delivery, and Liseur
+  contract fixes. Its 2026-09-22 Rust, Bun, schema, and production-build gate is
+  green.
 - The dirty tree was preserved before the merge:
   - `/home/al/Code/.stump-integration-backup/headless-modular-2026-09-20.patch`
     (sha256 `c2e57571c02727b5f476f7b462297e39bf0612c1051d82514e562edf782fb3a0`)
   - `/home/al/Code/.stump-integration-backup/headless-modular-untracked-2026-09-20.tar.gz`
     (sha256 `9aaf6d0236f0f90911f3978fb3af54d0d7d8ebc8c6742c40b2ba1155b3ea6c3b`)
     Keep these recovery artifacts unchanged.
+- On 2026-09-23 the archived HEAD `0526084b` was confirmed reachable from
+  this checkout; the recovery patch byte-matched `git diff --binary HEAD`, and
+  all 319 untracked paths byte-matched the tarball. Archived `target/`,
+  root and nested `node_modules/`, and `services/mam-gateway/target/` were
+  removed; the backed-up 1.2 GB session HTML was removed too. The 127 archived
+  `input/` files (2,133,075,620 bytes) were copied to
+  `/mnt/als/Coppice-archive-input-2026-09-22/` and verified with rsync checksums.
+  About 31 MB of root-owned `input/audio/experiments/` remains; sudo requires
+  user authentication. The retained source checkout is about 472 MB; Kate has
+  its working directory inside its `docs/`, so do not remove the checkout yet.
 - The working umbrella is `/home/al/Code/coppice/`: `stump/` is this main
-  repository; `nickelstump/`, `koreader-stump/`, and
-  `stump-mihon-extension/` are independent Git repositories awaiting
-  user-owned remotes/commits; `komga-compat/` is private local evidence, not a
-  publishable repository.
+  repository. `nickelstump/`, `koreader-stump/`, and
+  `stump-mihon-extension/` are independent Git repositories; create/publish
+  each only after repository-specific user confirmation. `komga-compat/` is
+  private local evidence, not a publishable repository.
 - `stump-sources/` stays local-only with no remote. Do not publish or link its
   derived site list. Remote source definitions and Cloudflare-challenged sites
   are deferred until a browser-worker authentication design and a
@@ -41,13 +59,12 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
   progress/session fixes, liseur annotation projection, persistent read-aloud
   sync maps plus alignment enqueue, worker claim expiry, OPDS/client
   compatibility fixes, migrations, generated GraphQL, and docs.
-- `git config core.hooksPath /dev/null` is set on purpose: upstream's husky hook
-  runs prettier/cargo-fmt on every commit and aborts on generated files; the
-  gate replaces it.
-- Upstream drift is checked without mutating Git refs by `yarn check:upstreams`.
-  `scripts/upstreams.json` records reviewed commits or releases plus the
-  licence/source policy; `scripts/check-upstreams.mjs` uses authenticated
-  `gh api` calls and prints compare/release links.
+- `git config core.hooksPath /dev/null` remains local configuration from the
+  earlier integration; the active Bun workspace no longer ships Husky hooks.
+- Upstream drift is checked without mutating Git refs by
+  `bun run check:upstreams`. `scripts/upstreams.json` records reviewed commits
+  or releases plus the licence/source policy; `scripts/check-upstreams.mjs`
+  uses authenticated `gh api` calls and prints compare/release links.
 - Scanner implementation belongs to `crates/scanner`, and watcher
   implementation belongs to `crates/watcher`. The removed upstream
   `core/src/scan` duplicates are not an ownership location.
@@ -58,6 +75,57 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
   Cargo nor rustc is running. Never delete `deps`, `build`, or `.fingerprint`
   just to make space. Root disk exhaustion may surface as a linker failure
   rather than a direct ENOSPC report.
+
+## Active JavaScript tooling
+
+- Bun 1.4.1 owns the active workspace, lockfile, scripts, CI, and production
+  builds. The Expo tree is a frozen compatibility source snapshot outside the
+  workspace; do not run native Gradle, Xcode, CocoaPods, or EAS lanes.
+- Keep Bun's isolated linker. Home and Editor must use Vite's default realpath
+  resolution with `resolve.dedupe = ['svelte']`; `preserveSymlinks` makes
+  source-linked workspace packages resolve transitive dependencies from the
+  wrong package boundary and fails on `esm-env`, `devalue`, query-core,
+  `runed`, or `svelte-toolbelt`.
+
+## Home-library source workers
+
+- **Contract-tested foundation.** The implementation applies only to Coppice
+  source workers. MouseSearch/acquisition remains separate and does not serve
+  media.
+- Source workers use `DeviceKind::SourceWorker`,
+  `UserPermission::AccessRemoteSource`, a separately scoped API key, and the
+  dedicated `/api/v2/source-workers/socket` control path. Compute credentials
+  do not inherit source-root visibility.
+- Append-only migration `m20260956_000000_add_remote_sources` adds logical
+  `remote_source`, `remote_source_item`, and `media_location` records without
+  overloading `media.path`; `m20260957_000000_add_remote_source_imports` adds
+  the durable proposal/decision ledger.
+- `stump-worker` accepts explicit read-only filesystem roots and
+  `kind=calibre` roots. Calibre discovery opens `metadata.db` read-only,
+  validates its application/schema identity, and publishes only catalogued
+  format paths that resolve below the non-symlink root. Absolute paths remain
+  in the worker's private catalog. `candidate_only` still fails closed because
+  no interest-set protocol exists.
+- Explicit verification streams the whole object and recomputes SHA-256.
+  Successful checks enter a 128-entry LRU keyed by exact local file identity
+  plus expected digest; replacement/rewrite metadata invalidates reuse before
+  a later range. Materialization still rechecks the digest and enters existing
+  ingest staging.
+- `POST /api/v2/remote-sources/{id}/match` creates only digest/lineage-bound
+  proposals. Matching uses verified locations, typed identifiers, then exact
+  normalized title/author, with ambiguous evidence rejected. Proposal listing
+  plus explicit approve/reject routes persist the actor and recheck current
+  source identity before idempotent linking or materialization. Inventory and
+  matching never publish media automatically.
+- Native media serving keeps Coppice as the reader-facing ACL and HTTP range
+  boundary. Direct and outbound-tunnel reads use one-use exact-byte grants and
+  require the worker to bind the opened file to the server-verified SHA-256.
+  Invalid/multiple ranges return `416`; a known offline location returns `503`.
+- Focused evidence: 51 worker tests, four source-worker server tests, and the
+  remote-source migration test passed; the complete gate is recorded below.
+  Source of record:
+  `docs/content/docs/developer/remote-worker-libraries.mdx`
+  (**Contract-tested**).
 
 ## Absorbed upstream security fixes
 
@@ -86,16 +154,16 @@ STUMP_ENABLE_PROVIDERS=false`; Komga, Kobo, and KOReader default on. `/editor`
   `$FIXTURE_ROOT/ENDPOINTS.md` (0600) with every URL and credential; never
   quote that sheet. The DB was upgraded in place through `m20260949` on
   2026-09-12.
-- Komf replay mutates fixture metadata (the current synthetic series title is
-  `Komf replay title`); restore the series before a later Mihon replay, or run
-  Mihon before Komf as this verification pass did.
-- Reference containers: `kavita-ref` 25620 (admin / see
-  `../komga-compat/kavita/README.md`), `komf-stump` 8085. The Komf Hurl profile
-  itself targets the Stump fixture through `KOMF_BASE_URL`.
+- Komf direct replay mutates synthetic fixture metadata; use disposable IDs
+  and restore the series before a later Mihon replay. The unpinned
+  `komf-stump` container is stopped. The pinned `komf-komga` and
+  `komf-kavita` profiles use separate data volumes and ports 25607/25608;
+  both were stopped after their respective smoke checks. Never attach both
+  adapters to the same library.
 
 ## Replay commands
 
-The 2026-09-21 v0.1.10 security-refresh replay passed every currently required
+The 2026-09-21 MAM-removal/Bun-cutover replay passed every currently required
 server contract. These are server-contract results, not physical-client proof:
 
 - `make replay`: 8 files, 36 requests.
@@ -125,54 +193,84 @@ make replay-liseur-sync
 make replay-kavita
 make replay-library-management LIBRARY_ROOT=<disposable-dir>
 make replay-abs
-make replay-komf KOMF_BASE_URL=$BASE_URL
+make replay-komf
+make replay-komf-kavita
+make smoke-komf-komga
+make smoke-komf-kavita
 ```
 
 ## Only definition of green
 
-The 2026-09-21 v0.1.10 security-refresh gate is green:
+The 2026-09-22 source/read-aloud/metadata/Liseur integration tree is green:
 
 ```text
-cargo fmt --all
+cargo fmt --all -- --check
 cargo check --workspace --all-targets
 cargo test --workspace --exclude stump_server
 cargo test -p stump_server --no-default-features --features headless,liseur-sync
 cargo build -p stump_server --no-default-features --features headless,liseur-sync
+cargo dump-schema -- --check
+bun install --frozen-lockfile --ignore-scripts
+bun run check-types
+bun run test
+bun run web build
+bun run home build
+bun run editor build
+bun run docs build
 ```
 
-The non-server workspace run passed 1,899 tests (29 ignored across 93 suites);
-the headless server run passed 369 tests across four suites. Schema generation
-and drift checking passed (`cargo dump-schema` and
-`cargo dump-schema -- --check`). Root `yarn check-types`, Expo `check-types`,
-Home and Editor Bun/Svelte checks, and the web, Home, Editor, and docs builds
-passed. The authenticated `/app/dashboard` and `/app/devices` surfaces and the
-public `/editor/` surface loaded in a real browser against the fixture server.
-Expo native visual/device verification did not run, and native
-`ktlint`/`swiftformat` remain outside this workstation's gate.
+Observed results: 1,922 non-server Rust tests passed (29 ignored across 94
+suites), 377 headless server tests passed across 4 suites, and all 302 active
+Bun tests passed (24 SDK, 273 browser, 5 desktop). GraphQL schema/client drift
+checks passed after regenerating the changed schema. Web, Home, Editor, and
+docs production builds passed; docs prerendered 198 pages.
 
-After deploying the refreshed headless build, the replay set above passed 341
-requests with no failures. `make replay-containers` remains explicitly unrun.
+Focused proof also passed for the worker (51), read-aloud media (4), sync-map
+library (4), ingest (134), remote-source migration (1), source-worker server
+(4), and Liseur invalid-limit regression (1) paths. The private real-input
+archive ingest smoke passed end-to-end. Live provider probes passed for AniList,
+MangaDex, MangaUpdates, OpenLibrary, and Audible; Google Books returned an
+external HTTP 429, while MAL, Hardcover, Comic Vine, and Metron credentials
+were unavailable.
+
+On 2026-09-23 the integration gate above passed: 1,926 non-server Rust tests
+(29 ignored across 94 suites), 377 headless server tests, schema check,
+format/check, frozen Bun install, type check, Bun tests, and all four production
+builds. The pinned Komf source manifest was generated then checked. Direct
+Komga replay passed 38 requests; direct Kavita replay passed 37. Pinned
+sidecar connection/library smoke passed two requests per profile. The baseline
+`make replay` passed 36 requests using a clean single-book fixture, and
+`make replay-kavita` passed 170 requests. These are contract/runtime tiers,
+not physical-client evidence; the older 341-request aggregate was not rerun.
+The official ABS phone retest also remains external and blocked on a physical
+device. Expo remains a frozen compatibility snapshot outside the active
+Bun/native-tooling gate.
 
 `apps/server/src/{lib,main}.rs` carry `#![recursion_limit = "256"]` because
 the merged GraphQL schema overflows rustc's query depth.
 
 ## Upstream contribution strategy
 
-- Keep `coppice/nightly` as the long-lived branch only after this merge's
-  post-merge full gate and replay set pass.
-- Claim or open the issue first. Reconstruct each candidate PR branch fresh from
-  `origin/nightly` rather than cherry-picking the current 41-commit integration
-  block; target `nightly`, keep each change to its narrow code/tests/docs scope,
-  and run the upstream-required Prettier/rustfmt checks for that PR.
-- Disclose LLM assistance in the PR body, never use an LLM-signed commit, and
-  never submit `integrate/upstream-nightly-2026-09-20` as a PR branch.
+- `coppice/nightly` is the long-lived verified fork branch. The assistant may
+  commit/push it only under the turn-specific authorization in `.omp/AGENTS.md`.
+- GitHub `origin` currently advertises `main` (`42a9918c`, the Stump-derived
+  default) while the published Coppice work is `coppice/nightly`
+  (`30d25188`). Change the GitHub default to `coppice/nightly` only after
+  explicit user confirmation; do not push to or rewrite `main`. Every commit,
+  push, remote creation, and separate-repository publication requires the
+  confirmation gate in `.omp/AGENTS.md`.
+- Claim or open an upstream issue first. Reconstruct each candidate PR branch
+  from an immutable commit on `stumpapp/stump`'s then-current `nightly`, not
+  from the Coppice fork history; target upstream `nightly`, keep each change
+  narrow, and run the required Prettier/rustfmt checks.
+- Disclose LLM assistance in the PR body and never use an LLM-signed commit.
 
-Ordered branch map after the integration merge is committed locally:
+Candidate upstream extraction order:
 
-1. `coppice/nightly` — long-lived verified fork line; contains the complete
-   upstream merge plus Coppice-only product/protocol work.
-2. `upstream/fix-case-insensitive-extensions` — fresh from `origin/nightly`;
-   narrow fix for upstream issue #1422.
+1. `coppice/nightly` — long-lived verified fork line; contains upstream plus
+   Coppice-only product/protocol work.
+2. `upstream/fix-case-insensitive-extensions` — reconstruct from the pinned
+   `stumpapp/stump` `nightly` base; narrow fix for upstream issue #1422.
 3. `upstream/scanner-mtime-arc` — immutable scanner mtime snapshot sharing.
 4. `upstream/watcher-lazy-lifecycle` — lazy `notify` construction without
    changing public watcher behavior.
@@ -194,8 +292,9 @@ Ordered branch map after the integration merge is committed locally:
     Kavita) — only after an upstream issue/discussion accepts the compatibility
     surface and evidence scope.
 
-Each `upstream/*` branch is reconstructed from the then-current
-`origin/nightly`; none is cut from or merges `coppice/nightly`.
+Each `upstream/*` branch is reconstructed from the then-current immutable
+`stumpapp/stump` `nightly` commit; none is cut from or merges
+`coppice/nightly`.
 
 ## Batch-coordination rules learned
 
@@ -247,28 +346,40 @@ IMMEDIATE`; plain `begin()` only for read-only work). Migrations run on a
   `local://drm-study.md`; removal stays out of tree by decision.
 
 - Read-aloud delivery: persistent validated `SyncMapV1` import, explicit
-  active-input-deduplicating alignment enqueue, and authenticated cache-only
-  status/download endpoints are shipped. The server finalizer recomputes
-  canonical prepared-EPUB targets and strict audio identity, validates the
-  requester/pair, worker output bytes/hash, durations and target IDs, then
-  persists the map and publishes a deterministic cached read-aloud EPUB before
-  the worker job becomes `done`.
-- An optional worker-local Storyteller delegate is shipped behind the worker
-  client feature. It uses its own URL/username/password, uploads the exact
-  prepared EPUB plus single-file M4B, polls a bounded process, and returns only
-  validated `SyncMapV1`; credentials and source content never enter the server
-  job payload. Native CTC remains a later backend.
+  active-input-deduplicating alignment enqueue, strict source-EPUB SMIL import,
+  and authenticated cache-only status/download endpoints are shipped. Native
+  SMIL is accepted only when its embedded audio bytes equal the sole paired
+  external M4B. Preparation preserves source XHTML IDs and assigns
+  deterministic targets only where absent.
+- The server finalizer rechecks requester/pair, canonical source digests,
+  prepared targets, durations, worker output bytes/hash, and strict audio
+  identity. Its deterministic mimetype-first EPUB renderer streams the original
+  M4B into the derivative rather than buffering it.
+- Optional worker-local Storyteller and external native CTC backends are
+  shipped. The native backend invokes only an operator-configured executable
+  and model for the typed CPU/fp32/CTC profile; both backends stream authorized
+  sources to temporary files and return only `SyncMapV1`. Credentials, model
+  paths, and source content never enter the server job payload.
 - GraphQL, authenticated API status/download, and OPDS acquisition links are
   cache-only and current-user/pair scoped. GET/status paths never enqueue or
   run ML. Folder audiobooks remain unsupported/not-ready. Virtual composite
-  delivery, readiness quality checks, manifest federation, and a complete
-  Storyteller/SMIL playback flow remain planned.
-- The request workflow is present: request ledger and UI, approval/release
-  selection, automation defaults, core processing, download polling, and the
-  private `mam-gateway` implementation are shipped. Mocked protocol-contract
-  evidence and all post-merge verification are pending; real MAM/VPN/qBittorrent
-  deployment and physical-device delivery remain untested. Ordinary EPUB and
-  audiobook playback remain separate.
+  delivery, readiness quality checks, manifest federation, Storyteller UUID
+  reuse, and synchronized physical-reader playback remain planned.
+- Metadata cover application now persists the selected provider artwork through
+  a bounded, redirect-revalidated, DNS-pinned public HTTP(S) fetch. The decoded
+  content-addressed file is staged before the SQLite write transaction; rollback
+  and superseded-art cleanup preserve DB/filesystem consistency.
+- Liseur catalog listings no longer label sampled `media.hash` values as
+  SHA-256. Explicit resolution hashes the readable file and binds it to stable
+  `source` identity; invalid signed query limits use the pinned client defaults
+  (`500` changes/annotations, `50` positions).
+- The request ledger and Home Requests UI are shipped: users create
+  metadata-backed intent with destination/visibility and managers approve or
+  reject it. The former release search/selection, automation, grab/poll/retry,
+  acquisition ORM, scheduler jobs, and private `mam-gateway` runtime have been
+  removed in the current tree. A future independent authenticated sidecar may
+  implement acquisition; shared-folder or equivalent output enters through
+  staged ingest. Ordinary EPUB and audiobook playback remain separate.
 
 ## Standing rules
 
@@ -282,4 +393,6 @@ IMMEDIATE`; plain `begin()` only for read-only work). Migrations run on a
 - The Komga mount test in `apps/server/src/routers/komga/mod.rs` and the
   Kavita `kavita_router_composes_without_route_collisions` test must remain.
 - No GPL/AGPL code (calibre, DeDRM, BookOrbit, Grimmory, MangaManager, Sigil,
-  cbzit) in this MIT tree; behaviour/specs only; calibre is shell-out only.
+  cbzit) is copied or linked into this MIT tree. Calibre conversion remains a
+  shell-out; the source adapter independently reads the documented SQLite
+  catalog contract in read-only mode.

@@ -50,7 +50,7 @@ pub(crate) async fn get_media_file(
 	Extension(req): Extension<AuthContext>,
 	headers: HeaderMap,
 ) -> APIResult<impl IntoResponse> {
-	serve_media::serve_media_file(req, headers, ctx.conn.as_ref(), id).await
+	serve_media::serve_media_file_with_ctx(req, headers, &ctx, id).await
 }
 
 /// The **USB** send-to-Kindle path: download the book as a file a Kindle

@@ -753,6 +753,9 @@ pub enum UserPermission {
 	AccessKoreaderSync,
 	/// Grant access to the kobo sync feature
 	AccessKoboSync,
+	/// Grant access to act as a source worker: advertise configured roots and
+	/// serve only explicitly authorized remote-source reads.
+	AccessRemoteSource,
 	/// Grant a device the right to act as a remote worker: open the worker
 	/// socket, claim `worker_jobs`, and upload their outputs
 	AccessWorker,
@@ -922,6 +925,9 @@ pub enum DeviceKind {
 	/// the worker socket. Not a reading client: it holds no reading state and
 	/// is never offered a transformed stream.
 	Worker,
+	/// A source worker process that advertises configured home-library roots
+	/// over its separately authorized source socket.
+	SourceWorker,
 	/// A Kavita-compatible reader using the native API with a download-only key
 	Kavita,
 }

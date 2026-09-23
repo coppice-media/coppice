@@ -6,9 +6,11 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
+		"preview": "vite preview",
 		"codegen": "graphql-codegen --config codegen.ts",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check-types": "bun run check",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
 	},
 	"devDependencies": {
@@ -43,7 +45,6 @@
 		"@tanstack/svelte-query": "^6.1.48",
 		"@tanstack/svelte-table": "^9.2.4",
 		"@tanstack/table-core": "^9.2.4",
-		"bits-ui": "^2.19.0",
 		"graphql": "^17.0.2",
 		"graphql-request": "^7.4.0",
 		"graphql-ws": "^6.2.1",

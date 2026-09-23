@@ -75,10 +75,12 @@ impl Endpoint {
 			// logs in with a username and password; the API key works as a
 			// bearer token for clients that skip the login.
 			DeviceKind::Abs => vec![with_user("Audiobookshelf server", base)],
-			// The worker binary is handed the server root and its key; it
-			// derives the socket and upload paths itself, so one entry is the
-			// whole `stump-worker --server URL --api-key KEY` invocation.
+			// The compute and source roles use separate keys and sockets even
+			// though the same worker binary may implement both.
 			DeviceKind::Worker => vec![keyed("stump-worker --server", base)],
+			DeviceKind::SourceWorker => {
+				vec![keyed("stump-worker --server --source-api-key", base)]
+			},
 			DeviceKind::Api | DeviceKind::Web => {
 				vec![keyed("Coppice API (Bearer)", format!("{base}/api"))]
 			},
@@ -220,5 +222,15 @@ mod tests {
 		assert_eq!(liseur[0].url, "https://stump.example/v1");
 		assert_eq!(liseur[0].username, None);
 		assert_eq!(liseur[0].secret_hint, "liseur_token");
+	}
+	#[test]
+	fn source_worker_endpoint_is_keyed_and_separate() {
+		let endpoints =
+			Endpoint::for_kind(DeviceKind::SourceWorker, &origin(), "al", "stump_source");
+		assert_eq!(endpoints.len(), 1);
+		assert_eq!(endpoints[0].url, "https://stump.example");
+		assert_eq!(endpoints[0].username, None);
+		assert_eq!(endpoints[0].secret_hint, "stump_source");
+		assert!(endpoints[0].label.contains("source-api-key"));
 	}
 }

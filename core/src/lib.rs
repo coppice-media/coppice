@@ -26,9 +26,6 @@ pub mod opds;
 #[cfg(feature = "providers")]
 pub mod providers;
 pub mod reading_state;
-pub mod request_gateway;
-pub mod request_gateway_automation;
-pub mod request_gateway_poll;
 pub mod utils;
 
 use config::logging::STUMP_SHADOW_TEXT;
@@ -332,12 +329,6 @@ impl StumpCore {
 
 	pub async fn init_scheduler(&self) -> Result<Option<JobScheduler>, CoreError> {
 		self.ctx.start_scheduler().await
-	}
-
-	pub async fn init_scheduler_with_maintenance(
-		&self,
-	) -> Result<Option<JobScheduler>, CoreError> {
-		self.ctx.start_scheduler_with_maintenance().await
 	}
 
 	/// Refreshes the scheduler after a scheduled-job configuration change.

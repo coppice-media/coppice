@@ -488,8 +488,8 @@ impl MetadataPolicy {
 				});
 				continue;
 			}
-			// A field the staged apply path has no column for is still
-			// resolved: the editor shows who would win, nothing is written.
+			// Storable fields are resolved into an explicit pick so the
+			// apply path can validate and persist the selected value.
 			let storable = STORABLE_FIELDS.contains(&field);
 			let strategy = if rule.strategy.applies_to(field) {
 				rule.strategy
@@ -830,9 +830,8 @@ pub struct FieldDecision {
 	/// Providers that contributed, in the order they were used.
 	pub providers: Vec<String>,
 	/// Whether this decision produced a pick. `false` for a lock, a kept
-	/// value, an unmatched field, and for the candidate-only fields the
-	/// staged apply path has no column for (`COVER_URL`, `IDENTIFIERS`,
-	/// `STATUS`).
+	/// value, an unmatched field, and for candidate-only fields the
+	/// (`IDENTIFIERS`, `STATUS`) fields that have no staged apply storage.
 	pub applied: bool,
 }
 
@@ -1409,10 +1408,14 @@ mod tests {
 		let decision = plan.decision(MetadataField::CoverUrl).unwrap();
 		assert_eq!(decision.providers, vec!["anilist".to_string()]);
 		assert_eq!(decision.outcome, FieldOutcome::Candidate);
-		// `COVER_URL` has no column in the staged apply path: the winner is
-		// reported, nothing is written.
-		assert!(!decision.applied);
-		assert!(plan.picks.is_empty());
+		assert!(decision.applied);
+		assert_eq!(
+			plan.picks,
+			vec![FieldPick::Candidate {
+				field: MetadataField::CoverUrl,
+				candidate_id: "anilist-1".to_string(),
+			}]
+		);
 	}
 
 	#[test]

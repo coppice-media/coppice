@@ -20,12 +20,14 @@ Migration `m20260910_000000_add_devices` (`crates/migrations/src/m20260910_00000
 | `device_credentials` | `id`, `device_id` (FK `devices`, cascade), `protocol`, `credential_kind`, `credential_ref`; unique on `(credential_kind, credential_ref)`                                                               |
 
 `kind` is one of `kobo | koreader | crosspoint | coppice | mihon | komelia |
-`liseur | opds | abs | api | web | worker | kavita`; `protocol`is`kobo |
-`koreader | komga | opds | liseur | api`; `credential_kind` is `api_key |
-`liseur_token | session`
-(`models::shared::enums::DeviceKind`, `DeviceProtocol`, and `DeviceCredentialKind`).
-`credential_ref`is polymorphic and therefore has no foreign key: the`api_keys.short_token`for an API key, the`liseur_sync_tokens.id`for a liseur
-token, the`sessions.session_id` for a session.
+`liseur | opds | abs | api | web | worker | source_worker | kavita`;
+`protocol` is `kobo | koreader | komga | opds | liseur | api`;
+`credential_kind` is `api_key | liseur_token | session`
+(`models::shared::enums::DeviceKind`, `DeviceProtocol`, and
+`DeviceCredentialKind`). `credential_ref` is polymorphic and therefore has no
+foreign key: `api_keys.short_token` for an API key,
+`liseur_sync_tokens.id` for a liseur token, or `sessions.session_id` for a
+session.
 
 The old `reading_devices` rows (KOReader and OPDS progression clients
 registering themselves by id + name) become `devices` rows owned by the user
@@ -51,6 +53,7 @@ credential and must be matched by kind and protocol.
 | `api`, `web`    | prefixed API key                                                                                                   | inherit the user's permissions                                                                    |
 | `abs`, `kavita` | prefixed API key                                                                                                   | `DOWNLOAD_FILE`                                                                                   |
 | `worker`        | prefixed API key                                                                                                   | `ACCESS_WORKER`, `DOWNLOAD_FILE`                                                                  |
+| `source_worker` | prefixed API key                                                                                                   | `ACCESS_REMOTE_SOURCE`                                                                            |
 | `liseur`        | liseur-sync device token (`liseur-<uuid>`, scopes `sync`, `read-insights`, `library-read`, bound to the device id) | n/a                                                                                               |
 
 A key never grants what its owner does not hold, and an API key only

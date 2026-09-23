@@ -863,7 +863,6 @@ export type BookRequest = {
   approvedAt?: Maybe<Scalars['DateTime']['output']>;
   approvedBy?: Maybe<Scalars['String']['output']>;
   authors?: Maybe<Scalars['String']['output']>;
-  automationEnabled: Scalars['Boolean']['output'];
   completedAt?: Maybe<Scalars['DateTime']['output']>;
   coverUrl?: Maybe<Scalars['String']['output']>;
   createdAt: Scalars['DateTime']['output'];
@@ -875,121 +874,34 @@ export type BookRequest = {
   id: Scalars['String']['output'];
   internalMediaId?: Maybe<Scalars['String']['output']>;
   internalWorkId?: Maybe<Scalars['String']['output']>;
-  maxRetries: Scalars['Int']['output'];
   rejectedBy?: Maybe<Scalars['String']['output']>;
   remoteId?: Maybe<Scalars['String']['output']>;
   requesterId: Scalars['String']['output'];
-  retries: Scalars['Int']['output'];
-  scoringFloor: Scalars['Int']['output'];
   sourceProvider?: Maybe<Scalars['String']['output']>;
   status: BookRequestStatus;
   title: Scalars['String']['output'];
   updatedAt: Scalars['DateTime']['output'];
-  verificationThreshold: Scalars['Int']['output'];
-};
-
-export type BookRequestGatewayInput = {
-  automationEnabled?: Scalars['Boolean']['input'];
-  enabled?: Scalars['Boolean']['input'];
-  endpoint: Scalars['String']['input'];
-  handoffRoot?: InputMaybe<Scalars['String']['input']>;
-  maxRetries?: Scalars['Int']['input'];
-  requireApproval?: Scalars['Boolean']['input'];
-  scoringFloor?: Scalars['Int']['input'];
-  token: Scalars['String']['input'];
-  verificationThreshold?: Scalars['Int']['input'];
-};
-
-export type BookRequestGatewaySettings = {
-  __typename?: 'BookRequestGatewaySettings';
-  automationEnabled: Scalars['Boolean']['output'];
-  enabled: Scalars['Boolean']['output'];
-  endpoint: Scalars['String']['output'];
-  handoffRoot?: Maybe<Scalars['String']['output']>;
-  hasToken: Scalars['Boolean']['output'];
-  id: Scalars['String']['output'];
-  maxRetries: Scalars['Int']['output'];
-  requireApproval: Scalars['Boolean']['output'];
-  scoringFloor: Scalars['Int']['output'];
-  tokenRedacted: Scalars['String']['output'];
-  updatedAt: Scalars['DateTime']['output'];
-  updatedBy?: Maybe<Scalars['String']['output']>;
-  verificationThreshold: Scalars['Int']['output'];
-};
-
-export type BookRequestGrab = {
-  __typename?: 'BookRequestGrab';
-  attempts: Scalars['Int']['output'];
-  createdAt: Scalars['DateTime']['output'];
-  failureCode?: Maybe<Scalars['String']['output']>;
-  failureMessage?: Maybe<Scalars['String']['output']>;
-  finishedAt?: Maybe<Scalars['DateTime']['output']>;
-  id: Scalars['String']['output'];
-  lastPolledAt?: Maybe<Scalars['DateTime']['output']>;
-  maxAttempts: Scalars['Int']['output'];
-  nextPollAt?: Maybe<Scalars['DateTime']['output']>;
-  /** Opaque sidecar handle; it is not a tracker URL or a download URL. */
-  opaqueId: Scalars['String']['output'];
-  releaseId: Scalars['String']['output'];
-  requestId: Scalars['String']['output'];
-  startedAt?: Maybe<Scalars['DateTime']['output']>;
-  status: Scalars['String']['output'];
-  updatedAt: Scalars['DateTime']['output'];
-};
-
-export type BookRequestHandoff = {
-  __typename?: 'BookRequestHandoff';
-  byteSize: Scalars['Int']['output'];
-  deviceId?: Maybe<Scalars['String']['output']>;
-  dropItemId?: Maybe<Scalars['String']['output']>;
-  errorCode?: Maybe<Scalars['String']['output']>;
-  errorMessage?: Maybe<Scalars['String']['output']>;
-  grabId: Scalars['String']['output'];
-  id: Scalars['String']['output'];
-  libraryId: Scalars['String']['output'];
-  relativePath: Scalars['String']['output'];
-  requestId: Scalars['String']['output'];
-  sha256: Scalars['String']['output'];
-  shelfId?: Maybe<Scalars['String']['output']>;
-  status: Scalars['String']['output'];
-};
-
-export type BookRequestRelease = {
-  __typename?: 'BookRequestRelease';
-  authors?: Maybe<Scalars['String']['output']>;
-  edition?: Maybe<Scalars['String']['output']>;
-  externalKey?: Maybe<Scalars['String']['output']>;
-  format?: Maybe<Scalars['String']['output']>;
-  id: Scalars['String']['output'];
-  language?: Maybe<Scalars['String']['output']>;
-  previewBytes?: Maybe<Scalars['Int']['output']>;
-  previewMime?: Maybe<Scalars['String']['output']>;
-  previewName?: Maybe<Scalars['String']['output']>;
-  quality?: Maybe<Scalars['String']['output']>;
-  rank: Scalars['Int']['output'];
-  remoteId: Scalars['String']['output'];
-  requestId: Scalars['String']['output'];
-  score: Scalars['Int']['output'];
-  scoreComponents: Scalars['JSON']['output'];
-  searchId: Scalars['String']['output'];
-  seeders?: Maybe<Scalars['Int']['output']>;
-  selected: Scalars['Boolean']['output'];
-  sizeBytes?: Maybe<Scalars['Int']['output']>;
-  sourceProvider: Scalars['String']['output'];
-  title: Scalars['String']['output'];
 };
 
 export enum BookRequestStatus {
   Approved = 'APPROVED',
+  /** Historical request state retained so existing rows remain readable. */
   AwaitingApproval = 'AWAITING_APPROVAL',
+  /** Historical acquisition state retained so existing rows remain readable. */
   Completed = 'COMPLETED',
+  /** Historical acquisition state retained so existing rows remain readable. */
   Failed = 'FAILED',
+  /** Historical acquisition state retained so existing rows remain readable. */
   Grabbed = 'GRABBED',
+  /** Historical acquisition state retained so existing rows remain readable. */
   Importing = 'IMPORTING',
+  /** Historical acquisition state retained so existing rows remain readable. */
   NeedsSelection = 'NEEDS_SELECTION',
   Pending = 'PENDING',
+  /** Historical acquisition state retained so existing rows remain readable. */
   Queued = 'QUEUED',
   Rejected = 'REJECTED',
+  /** Historical acquisition state retained so existing rows remain readable. */
   Searching = 'SEARCHING'
 }
 
@@ -1188,7 +1100,6 @@ export type CreateBookClubMemberInput = {
 
 export type CreateBookRequestInput = {
   authors?: InputMaybe<Scalars['String']['input']>;
-  automationEnabled?: Scalars['Boolean']['input'];
   coverUrl?: InputMaybe<Scalars['String']['input']>;
   destinationDeviceId?: InputMaybe<Scalars['ID']['input']>;
   destinationShelfId?: InputMaybe<Scalars['ID']['input']>;
@@ -2092,8 +2003,8 @@ export type ExternalSeriesMetadata = {
 };
 
 /**
- * A catalog/work identity outside the Coppice library. The gateway only sees
- * normalized metadata and an opaque candidate id later returned by search.
+ * A catalog/work identity outside the Coppice library, stored as an immutable
+ * metadata snapshot on the user's request.
  */
 export type ExternalWorkReferenceInput = {
   authors?: InputMaybe<Scalars['String']['input']>;
@@ -4601,7 +4512,6 @@ export type Mutation = {
   /** marks all books in the series as finished */
   finishSeriesProgress: Scalars['Int']['output'];
   generateLibraryThumbnails: Scalars['Boolean']['output'];
-  grabBookRequest: BookRequestGrab;
   /**
    * Validate and persist an operator-supplied `SyncMapV1` for a confirmed
    * ebook↔audiobook pair.
@@ -4661,7 +4571,6 @@ export type Mutation = {
   pauseIngestAnalysis: IngestAnalysisJob;
   /** Pin or unpin a message (Moderator+) */
   pinMessage: Scalars['Boolean']['output'];
-  pollBookRequestGrab: BookRequestGrab;
   processLibraryThumbnails: Scalars['Boolean']['output'];
   /**
    * Queue one or more visible media items using the target's immutable
@@ -4709,7 +4618,6 @@ export type Mutation = {
   respondToRecommendation: SocialRecommendation;
   respondToShareGrant: SocialShareGrant;
   resumeIngestAnalysis: IngestAnalysisJob;
-  retryBookRequest: BookRequest;
   /**
    * Requeue a failed delivery without changing its immutable source/profile
    * snapshot. Cancelled, active, and completed rows cannot be resurrected.
@@ -4765,8 +4673,6 @@ export type Mutation = {
    */
   scanLibrary: Scalars['Boolean']['output'];
   scanSeries: Scalars['Boolean']['output'];
-  searchBookRequest: BookRequest;
-  selectBookRequestRelease: BookRequest;
   sendAttachmentEmail: SendAttachmentEmailOutput;
   /** Send a message in a discussion */
   sendMessage: BookClubDiscussionMessage;
@@ -4927,7 +4833,6 @@ export type Mutation = {
   updateAnnotation: MediaAnnotation;
   updateApiKey: Apikey;
   updateBookClub: BookClub;
-  updateBookRequestGateway: BookRequestGatewaySettings;
   /**
    * Verify and persist a CrossPoint target plus its canonical typed profile.
    * The status probe is repeated here so a client cannot forge a prior
@@ -5594,11 +5499,6 @@ export type MutationGenerateLibraryThumbnailsArgs = {
 };
 
 
-export type MutationGrabBookRequestArgs = {
-  requestId: Scalars['ID']['input'];
-};
-
-
 export type MutationImportSyncMapArgs = {
   audioMediaId: Scalars['ID']['input'];
   ebookMediaId: Scalars['ID']['input'];
@@ -5692,11 +5592,6 @@ export type MutationPauseIngestAnalysisArgs = {
 export type MutationPinMessageArgs = {
   messageId: Scalars['ID']['input'];
   pinned: Scalars['Boolean']['input'];
-};
-
-
-export type MutationPollBookRequestGrabArgs = {
-  grabId: Scalars['ID']['input'];
 };
 
 
@@ -5829,11 +5724,6 @@ export type MutationResumeIngestAnalysisArgs = {
 };
 
 
-export type MutationRetryBookRequestArgs = {
-  requestId: Scalars['ID']['input'];
-};
-
-
 export type MutationRetryCrosspointDeliveryArgs = {
   id: Scalars['ID']['input'];
 };
@@ -5897,17 +5787,6 @@ export type MutationScanLibraryArgs = {
 
 export type MutationScanSeriesArgs = {
   id: Scalars['ID']['input'];
-};
-
-
-export type MutationSearchBookRequestArgs = {
-  requestId: Scalars['ID']['input'];
-};
-
-
-export type MutationSelectBookRequestReleaseArgs = {
-  releaseId: Scalars['ID']['input'];
-  requestId: Scalars['ID']['input'];
 };
 
 
@@ -6130,11 +6009,6 @@ export type MutationUpdateApiKeyArgs = {
 export type MutationUpdateBookClubArgs = {
   id: Scalars['ID']['input'];
   input: UpdateBookClubInput;
-};
-
-
-export type MutationUpdateBookRequestGatewayArgs = {
-  input: BookRequestGatewayInput;
 };
 
 
@@ -7209,10 +7083,6 @@ export type Query = {
   /** Raw reading heads and sessions grouped by the detail's edition rows. */
   bookReadingLog?: Maybe<BookReadingLog>;
   bookRequest?: Maybe<BookRequest>;
-  bookRequestGateway?: Maybe<BookRequestGatewaySettings>;
-  bookRequestGrabs: Array<BookRequestGrab>;
-  bookRequestHandoffs: Array<BookRequestHandoff>;
-  bookRequestReleases: Array<BookRequestRelease>;
   bookRequests: Array<BookRequest>;
   /** Get all bookmarks for a single epub by its media ID */
   bookmarksByMediaId: Array<Bookmark>;
@@ -7625,21 +7495,6 @@ export type QueryBookReadingLogArgs = {
 
 export type QueryBookRequestArgs = {
   id: Scalars['ID']['input'];
-};
-
-
-export type QueryBookRequestGrabsArgs = {
-  requestId: Scalars['ID']['input'];
-};
-
-
-export type QueryBookRequestHandoffsArgs = {
-  requestId: Scalars['ID']['input'];
-};
-
-
-export type QueryBookRequestReleasesArgs = {
-  requestId: Scalars['ID']['input'];
 };
 
 

@@ -111,16 +111,27 @@ Five profiles are recorded against Coppice. Current source-only client evidence 
 - **Known gaps:** no progression route is implied by the shim; Liseur's
   Grimmory provider therefore pairs KOReader sync separately for positions.
 
-## Komf (server-side)
+## Komf (external server-side workflow)
 
-- **Contract-tested:** Komf master `428dac6` (`komga-client` 0.10.3) in the
-  `sndxr/komf:latest` container against the fixture on 2026-09-04: manual
-  identify → series `PATCH` 204, book `PATCH` 204, cover upload + previous-cover
-  `DELETE`, and `TaskQueueStatus` on `/sse/v1/events`; `replay-komf` 16/16.
-- The first run rejected author role `COVER` (Komga's role is `cover`); this was
-  fixed the same day. Automatic mode on a real `BookAdded` burst is
-  **Blocked**. Evidence: [client verification](/docs/developer/client-verification),
-  `local://komf-compat-study.md`, [roadmap](/docs/developer/roadmap).
+- **Source-derived pin:** Komf 2.0.1 at
+  [`5ad67370c5da6d94372e7c51bff62dd75053ac64`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64),
+  release JAR SHA-256
+  `f5e01a06938cf1e13a4e9d8211db0569e89e09256072d1bbdf5b04291e809cb9`, and
+  `sndxr/komf:2.0.1@sha256:e48652eb32b06cafce4680c229bdbdb682eb1066e3bdeb2872e9dc99255a5cf6`;
+  its upstream `komga-client` dependency is 0.10.3.
+- Coppice supplies the media-server adapter surface; it does not embed, compile,
+  or execute Komf's Kotlin. Komga is the default complete lane; Kavita is an
+  independent API-mode adapter with SignalR event mode disabled unless current
+  repository evidence proves compatibility. Komf metadata providers are not
+  automatically part of Coppice's HTTP compatibility surface.
+- **Contract-tested historical evidence:** direct Stump `/api/v1` Hurl requests
+  cover the Komga write/event contract. This is not sidecar smoke. The pinned
+  container wiring check is separately scoped to
+  `GET /api/komga/media-server/connected` and `/api/komga/media-server/libraries`.
+- **Workflow:** exact pin → `coppice/komf-media-server-contract-v1` extractor
+  manifest → reviewed diff → Hurl replay → pinned-container smoke. `latest` is
+  observation-only for drift and never canonical. Automatic mode on a real
+  `BookAdded` burst remains **Blocked**.
 
 ## Kavita clients
 

@@ -24,6 +24,7 @@ use models::{
 	},
 	shared::{enums::LibraryType as StumpLibraryType, readium::ReadiumLocator},
 };
+use rust_decimal::prelude::ToPrimitive;
 
 use crate::{
 	dto::{
@@ -489,7 +490,12 @@ pub fn map_chapter(input: &MediaInput) -> ChapterDto {
 		number: DEFAULT_CHAPTER.to_owned(),
 		min_number: KavitaFloat(DEFAULT_CHAPTER_NUMBER),
 		max_number: KavitaFloat(DEFAULT_CHAPTER_NUMBER),
-		sort_order: KavitaFloat(number as f32),
+		sort_order: KavitaFloat(
+			metadata
+				.and_then(|metadata| metadata.number)
+				.and_then(|number| number.to_f32())
+				.unwrap_or(number as f32),
+		),
 		pages,
 		is_special: input.book,
 		title: input.display_name(),
@@ -502,7 +508,7 @@ pub fn map_chapter(input: &MediaInput) -> ChapterDto {
 			.unwrap_or(0),
 		last_reading_progress_utc: last_progress,
 		last_reading_progress: last_progress,
-		cover_image_locked: false,
+		cover_image_locked: lock_names.contains("COVER"),
 		volume_id: input.id,
 		created_utc: input.created(),
 		last_modified_utc: input.modified(),
@@ -717,12 +723,40 @@ impl SeriesInput {
 	}
 }
 
+fn localized_series_title(alternate_titles: Option<&str>) -> Option<String> {
+	serde_json::from_str::<Vec<serde_json::Value>>(alternate_titles?)
+		.ok()?
+		.into_iter()
+		.find(|title| {
+			title
+				.get("label")
+				.and_then(serde_json::Value::as_str)
+				.is_some_and(|label| label.eq_ignore_ascii_case("localized"))
+		})
+		.and_then(|title| {
+			title
+				.get("title")
+				.and_then(serde_json::Value::as_str)
+				.map(str::to_owned)
+		})
+}
+
 pub fn map_series(input: &SeriesInput) -> SeriesDto {
 	let name = input.name();
 	let cover_id = input.first_media_id();
 	let book = input.book();
-	// A book series is created and scanned with its file; a grouped series
-	// carries its own timestamps.
+	let locked_fields = match book {
+		Some(book) => book
+			.metadata
+			.as_ref()
+			.and_then(|metadata| metadata.locked_fields.as_ref()),
+		None => input
+			.metadata
+			.as_ref()
+			.and_then(|metadata| metadata.locked_fields.as_ref()),
+	};
+	let lock_names = locked_field_names(locked_fields);
+	let has_explicit_lock_state = locked_fields.is_some();
 	let created = book
 		.map(|book| book.media.created_at)
 		.unwrap_or(input.series.created_at);
@@ -738,13 +772,24 @@ pub fn map_series(input: &SeriesInput) -> SeriesDto {
 			Some(_) => name,
 			None => input.series.name.clone(),
 		},
-		localized_name: String::new(),
+		localized_name: match book {
+			Some(_) => String::new(),
+			None => input
+				.metadata
+				.as_ref()
+				.and_then(|metadata| {
+					localized_series_title(metadata.alternate_titles.as_deref())
+				})
+				.unwrap_or_default(),
+		},
 		sort_name: input.sort_name(),
 		pages: input.pages(),
-		cover_image_locked: match book {
-			Some(book) => book.media.thumbnail_path.is_some(),
-			None => input.series.thumbnail_path.is_some(),
-		},
+		cover_image_locked: lock_names.contains("COVER")
+			|| (!has_explicit_lock_state
+				&& match book {
+					Some(book) => book.media.thumbnail_path.is_some(),
+					None => input.series.thumbnail_path.is_some(),
+				}),
 		last_chapter_added: input.last_chapter_added(),
 		last_chapter_added_utc: input.last_chapter_added(),
 		user_rating: KavitaFloat(0.0),
@@ -754,12 +799,18 @@ pub fn map_series(input: &SeriesInput) -> SeriesDto {
 		latest_read_date: input.latest_read(),
 		format: input.format(),
 		created: created.into(),
-		sort_name_locked: book.is_none()
-			&& input
+		sort_name_locked: match book {
+			Some(_) => lock_names.contains("TITLE_SORT"),
+			None => input
 				.metadata
 				.as_ref()
 				.is_some_and(|metadata| metadata.title_sort_lock),
-		localized_name_locked: false,
+		},
+		localized_name_locked: book.is_none()
+			&& input
+				.metadata
+				.as_ref()
+				.is_some_and(|metadata| metadata.alternate_titles_lock),
 		name_locked: false,
 		word_count: 0,
 		library_id: input.library_id,

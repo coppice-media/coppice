@@ -2,9 +2,18 @@
 
 This is the Expo mobile app for Coppice. It runs on iOS and Android.
 
-## Getting started
+> [!IMPORTANT]
+> This directory is a frozen compatibility snapshot and is excluded from the
+> active root Bun workspace. Its source, manifest, native modules, and patches
+> under `apps/expo/patches/` are retained rather than deleted. The legacy Yarn
+> commands below are historical upstream notes, not supported project setup or
+> release paths.
 
-To get started with local development, the biggest barrier is setting up the native modules. The app uses the Swift and Kotlin [Readium](https://github.com/readium/mobile) toolkit for native EPUB parsing/rendering.
+## Historical upstream development notes
+
+The preserved upstream notes document the native Swift and Kotlin
+[Readium](https://github.com/readium/mobile) setup as it existed when the
+snapshot was frozen.
 
 ### Native development
 

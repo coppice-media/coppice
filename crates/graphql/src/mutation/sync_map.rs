@@ -41,6 +41,41 @@ impl SyncMapMutation {
 		)
 		.await
 		.map_err(|error| Error::new(error.to_string()))?;
+		sync_maps::render_sync_map_cache(
+			conn,
+			ctx.data::<CoreContext>()?.config.get_transform_cache_dir(),
+			&model,
+		)
+		.await
+		.map_err(|error| Error::new(error.to_string()))?;
+		Ok(SyncMap::from(model))
+	}
+	/// Import the EPUB's existing native Media Overlay and publish its
+	/// deterministic read-aloud derivative without enqueueing a worker job.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
+	async fn import_smil(
+		&self,
+		ctx: &Context<'_>,
+		ebook_media_id: ID,
+		audio_media_id: ID,
+	) -> Result<SyncMap> {
+		let auth = ctx.data::<stump_auth::AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+		let model = sync_maps::import_native_smil_for_user(
+			core.conn.as_ref(),
+			&auth.user.id,
+			ebook_media_id.as_str(),
+			audio_media_id.as_str(),
+		)
+		.await
+		.map_err(|error| Error::new(error.to_string()))?;
+		sync_maps::render_sync_map_cache(
+			core.conn.as_ref(),
+			core.config.get_transform_cache_dir(),
+			&model,
+		)
+		.await
+		.map_err(|error| Error::new(error.to_string()))?;
 		Ok(SyncMap::from(model))
 	}
 

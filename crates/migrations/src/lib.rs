@@ -84,6 +84,8 @@ mod m20260952_000000_add_book_detail;
 mod m20260953_000000_add_component_runtime;
 mod m20260954_000000_social_recommendations;
 mod m20260955_000000_add_book_requests;
+mod m20260956_000000_add_remote_sources;
+mod m20260957_000000_add_remote_source_imports;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -173,6 +175,8 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260953_000000_add_component_runtime::Migration),
 			Box::new(m20260954_000000_social_recommendations::Migration),
 			Box::new(m20260955_000000_add_book_requests::Migration),
+			Box::new(m20260956_000000_add_remote_sources::Migration),
+			Box::new(m20260957_000000_add_remote_source_imports::Migration),
 		]
 	}
 }

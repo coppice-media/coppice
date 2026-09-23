@@ -130,6 +130,29 @@ pub enum MediaProfile {
 	Epub,
 }
 
+/// File extensions that the Komga API can expose as readable books.
+pub const SUPPORTED_MEDIA_EXTENSIONS: &[&str] =
+	&["epub", "pdf", "cbz", "cbr", "zip", "rar"];
+
+/// Extensions that map to each Komga media profile.
+pub fn extensions_for_media_profile(profile: MediaProfile) -> &'static [&'static str] {
+	match profile {
+		MediaProfile::Epub => &["epub"],
+		MediaProfile::Pdf => &["pdf"],
+		MediaProfile::Divina => &["cbz", "cbr", "zip", "rar"],
+	}
+}
+
+/// Resolve a persisted extension to the Komga reader profile that can open it.
+pub fn media_profile_for_extension(extension: &str) -> Option<MediaProfile> {
+	let extension = extension.trim().to_ascii_lowercase();
+	[MediaProfile::Epub, MediaProfile::Pdf, MediaProfile::Divina]
+		.into_iter()
+		.find(|profile| {
+			extensions_for_media_profile(*profile).contains(&extension.as_str())
+		})
+}
+
 fn deserialize_media_profile<'de, D>(
 	deserializer: D,
 ) -> Result<Option<MediaProfile>, D::Error>

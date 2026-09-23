@@ -24,24 +24,29 @@ If you're completely new to rust and/or web development, I put together a small 
 	[Rosetta](https://support.apple.com/en-us/>HT211861).
 </Callout>
 
-You need to install [yarn](https://yarnpkg.com), [rust](https://www.rust-lang.org/tools/install), and [node](https://nodejs.org/en/download/). Additionally, if you want to run any of the dev scripts on the rust side of things, you'll need to install [bacon](https://crates.io/crates/bacon). Afterwards, run the following:
+You need [Bun 1.4.1](https://bun.sh), [Rust](https://www.rust-lang.org/tools/install), and [Node.js](https://nodejs.org/en/download/). Node remains available for tools that require it, while Bun is the repository's package manager and workspace runner. Additionally, if you want to run any of the dev scripts on the Rust side of things, install [Bacon](https://crates.io/crates/bacon). Afterwards, run:
 
 ```bash
-yarn run setup
+bun run setup
 ```
 
 ### Running Stump
 
-I use [yarn workspaces](https://yarnpkg.com/features/workspaces) and [cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html):
+The active JavaScript packages use one [Bun workspace](https://bun.sh/docs/install/workspaces), alongside the [Cargo workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html):
 
 ```bash
 # run the webapp + server
-yarn dev:web
+bun run dev:web
 # run the desktop app + server
-yarn start:desktop
+bun run start:desktop
 # run the docs website
-yarn docs dev
+bun run docs dev
 ```
+
+The Expo source under `apps/expo` is a frozen compatibility snapshot. It is
+excluded from the active workspace and is not installed, built, or tested by
+the root Bun commands; its manifest and native patches are retained for
+reference.
 
 Or `cargo` for the server:
 
@@ -81,7 +86,7 @@ docker rm -f stump-postgres-dev
 If you plan to update or add any GraphQL queries or mutations, you'll likely want to keep a process running to watch for changes and automatically generate the TypeScript types. You can do this by running the following in the `packages/graphql` directory:
 
 ```bash
-yarn graphql-codegen --watch
+bun run codegen --watch
 ```
 
 ## Notes and Tips
@@ -104,7 +109,7 @@ In general, some good places to start might be:
 
 Stump is developed using primarily [Rust](https://www.rust-lang.org/) and [TypeScript](https://www.typescriptlang.org/).
 
-For Rust, I use [rustfmt](https://github.com/rust-lang/rustfmt) for formatting, and [clippy](https://github.com/rust-lang/clippy) for linting. For TypeScript, I use [Prettier](https://prettier.io/) for formatting, and [ESLint](https://eslint.org/) for linting. While I definitely recommend using these tools as you develop, there is a pre-commit hook that will lint and format your code before committing.
+For Rust, I use [rustfmt](https://github.com/rust-lang/rustfmt) for formatting, and [clippy](https://github.com/rust-lang/rust-clippy) for linting. For TypeScript, I use [Prettier](https://prettier.io/) for formatting, and [ESLint](https://eslint.org/) for linting. Run the relevant checks before committing; CI is the authoritative shared gate.
 
 I also want to point out that this repository uses 4 tab spaces for indentation. This is primarily for accessibility, as well as to be consistent with the Rust codebase. If you'd like, you can configure your editor to render whatever indentation you prefer, even though the raw code will be as described above. I personally maintain the 4 tab space rendering on the Rust side and shorten it to only render 2 on the frontend side.
 
@@ -113,7 +118,7 @@ I also want to point out that this repository uses 4 tab spaces for indentation.
 Stump has a custom component library used throughout the `browser` package (the web UI and desktop app). This library can be found at `packages/components`, and was developed with Storybook in mind. For getting started building out designs and components in Stump, I highly recommend going through the stories available in the Storybook UI:
 
 ```bash
-yarn storybook
+bun run --filter @stump/components storybook
 ```
 
 This will give you a good idea of what components are available and how they can be used.
@@ -127,15 +132,14 @@ This is an area that I would like to improve and is very challenging to action o
 The majority of the frontend packages/apps use [Vitest](https://vitest.dev/) for unit and component tests. Run them from each package:
 
 ```bash
-yarn workspace @stump/browser test
-yarn workspace @stump/sdk test
-yarn workspace @stump/expo test
+bun run --filter @stump/browser test
+bun run --filter @stump/sdk test
 ```
 
 Or just run all of them at once:
 
 ```bash
-yarn test
+bun run test
 ```
 
 These tests are meant to be more isolated and focused on testing the logic of a single component or function. So if something requires 100s of lines of mocking code to set up or requires a running server, it is likely not a good candidate for this suite
@@ -146,9 +150,9 @@ Browser end-to-end tests live in `apps/web/tests/` and run against a live Stump 
 
 ```bash
 # one-time browser install
-yarn workspace @stump/web e2e:install
+bun run --filter @stump/web e2e:install
 # run tests (requires a running server on port 10801)
-yarn workspace @stump/web e2e
+bun run --filter @stump/web e2e
 ```
 
 This suite uses two different types of test users:

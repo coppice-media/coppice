@@ -65,7 +65,7 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	// The scheduler and watcher are optional server-owned startup handles. The
 	// context can start either one later when a request changes configuration.
 	let _scheduler = if config.jobs.enable_background_jobs {
-		core.init_scheduler_with_maintenance()
+		core.init_scheduler()
 			.await
 			.map_err(|e| ServerError::ServerStartError(e.to_string()))?
 	} else {

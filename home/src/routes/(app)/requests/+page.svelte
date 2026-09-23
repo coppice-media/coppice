@@ -47,7 +47,7 @@
 
 <svelte:head>
 	<title>Requests · Coppice</title>
-	<meta name="description" content="Request books, choose verified releases, and follow private gateway imports." />
+	<meta name="description" content="Submit book requests and follow their review status." />
 </svelte:head>
 
 <div class="flex flex-col gap-6">
@@ -55,7 +55,7 @@
 		<div class="mr-auto">
 			<h1 class="text-2xl font-semibold tracking-tight">Requests</h1>
 			<p class="mt-1 max-w-2xl text-sm text-muted-foreground">
-				Follow approval, source search, release selection, download, and import from one place.
+				Submit metadata, follow review decisions, and manage requests you are permitted to see.
 			</p>
 		</div>
 		<Button href={resolve('/requests/new')}>

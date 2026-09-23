@@ -60,6 +60,7 @@ pub(crate) fn ingest_settings(config: &StumpConfig) -> IngestSettings {
 		progress_retention: config.ingest.ingest_progress_retention,
 		preprocess_command: config.ingest.ingest_preprocess_command.clone(),
 		preprocess_timeout_secs: config.ingest.ingest_preprocess_timeout_secs,
+		max_image_upload_size: config.protocols.max_image_upload_size,
 		media: config.media.clone(),
 	}
 }

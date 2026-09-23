@@ -1,17 +1,16 @@
 # Coppice Next Steps
 
-Agent-facing resume file for the active no-commit merge on branch
-`integrate/upstream-nightly-2026-09-20` (merge target
-`origin/nightly` `766c7347dbc0a2fc8c93d04a8f922db3b5a41ba8`).
-The remaining workstreams are hardware/account verification, live provider
-credentials, upstream PR extraction, and read-aloud execution.
-Audiobook sync has shipped tier 1, persistent sync maps,
-explicit deduplicated alignment enqueue, and the worker substrate, but no
-complete alignment playback flow. Ordering, rationale, and non-goals:
-`docs/content/docs/developer/roadmap.mdx`. Evidence for what already landed:
-`docs/content/docs/developer/state.mdx`. Working-tree, gate, and disk rules:
-`.omp/PROJECT_STATE.md` — that file is authoritative and this one never
-restates its command list.
+Agent-facing resume file for branch `coppice/nightly`. Baseline commit
+`30d251886fe614053ea43ec9d50a8ab4cb0b2753` is pushed; the current uncommitted,
+fully gated tree removes private in-process MAM acquisition, retains the generic
+request ledger, and adds source-import approval, read-only Calibre discovery,
+metadata-cover persistence, native read-aloud paths, and Liseur fixes.
+Remaining workstreams are physical-device verification, deferred placement and
+readiness features, credentialed provider probes, and upstream submission.
+Product roadmap: `docs/content/docs/developer/roadmap.mdx`. Evidence for what
+already landed: `docs/content/docs/developer/state.mdx`. Working-tree, gate,
+and disk rules: `.omp/PROJECT_STATE.md` — that file is authoritative and this
+one never restates its command list.
 
 A design page or replay fixture is evidence for a contract, not proof that a
 feature is shipped. Integration ownership and evidence labels are defined in
@@ -21,7 +20,7 @@ feature is shipped. Integration ownership and evidence labels are defined in
 
 1. **Read state.** `.omp/PROJECT_STATE.md` (working tree, disk discipline,
    "Only definition of green"), then `git log --oneline -3`.
-   Run `yarn check:upstreams` before choosing integration work. It reads
+   Run `bun run check:upstreams` before choosing integration work. It reads
    `scripts/upstreams.json`, queries GitHub through authenticated `gh api`, and
    reports commit/release drift without fetching or changing local refs.
 2. **Launch the instance.** One instance, every profile on — a supervised `hub`
@@ -38,8 +37,9 @@ feature is shipped. Integration ownership and evidence labels are defined in
    `STUMP_ENABLE_ABS`, `KOBO_KEPUB_CONVERSION`, `STUMP_ENABLE_UPLOAD`,
    `PDFIUM_PATH`, `INGEST_EDITOR_DIR`, `STUMP_HOME_APP_DIR`
    (`scripts/dev-fixture-server.sh:108-118`). Add
-   `STUMP_ENABLE_KAVITA=true STUMP_ENABLE_BACKGROUND_JOBS=true
-STUMP_ENABLE_PROVIDERS=true` for the Kavita, jobs, and provider lanes.
+   `STUMP_ENABLE_KAVITA=true STUMP_ENABLE_BACKGROUND_JOBS=true` for the Kavita
+   and jobs lanes. Keep remote providers disabled with
+   `STUMP_ENABLE_PROVIDERS=false`.
    Fixture root `$HOME/.local/share/stump-komga-test`; the launcher regenerates
    `$FIXTURE_ROOT/ENDPOINTS.md` (0600) with every URL and credential — never
    quote that sheet into a commit, doc, or message.
@@ -50,7 +50,7 @@ STUMP_ENABLE_PROVIDERS=true` for the Kavita, jobs, and provider lanes.
    `--no-default-features --features koreader` plus
    `ENABLE_KOREADER_SYNC=true`. `webui=["graphql", "graphql/web"]`, so WebUI
    implies GraphQL.
-4. **Replay.** The 2026-09-20 server-contract pass is green: 15 Hurl files,
+4. **Replay.** The 2026-09-21 server-contract pass is green: 15 Hurl files,
    341 requests, 0 failures. From the user-owned sibling harness
    `../komga-compat/`, use `LD_LIBRARY_PATH=/tmp` and
    `PATH=$HOME/.cargo/bin:$PATH`; inject runtime credentials and IDs from the
@@ -114,26 +114,18 @@ User-gated.
 
 ### 3. Upstream integration and split
 
-The active no-commit merge is on
-`integrate/upstream-nightly-2026-09-20`: `ORIG_HEAD` is
-`0526084b62dc012069a2d1f47a12dde605004010` and `MERGE_HEAD` targets
-`origin/nightly` at `766c7347dbc0a2fc8c93d04a8f922db3b5a41ba8`. GitHub's
-compare counted 87 upstream commits; local ancestry counts 88 because one
-merged release parent is included. The preserved dirty-tree recovery artifacts
-and hashes are recorded in `.omp/PROJECT_STATE.md`.
+The v0.1.10 security merge is committed on `coppice/nightly`; its full gate and
+341-request replay passed before this current MAM-removal/Bun-cutover tree. The
+security fixes block self-permission escalation, guard
+`libraryMissingEntities`, scope `mediaMetadataOverview`, and enforce book-club
+read access.
 
-The upstream security commit
-`3d5854228d8f314f36ed6aeb9a4714cc4c30ed50` is absorbed: self-permission
-escalation is blocked, `libraryMissingEntities` is management-guarded,
-`mediaMetadataOverview` is user-scoped, and book-club reads enforce access.
-The post-merge full gate and replay set are still pending.
-
-After verification, keep `coppice/nightly` as the long-lived branch. For an
-upstream PR, claim or open the issue first, reconstruct a fresh branch from
-`origin/nightly` (not a cherry-picked 41-commit integration block), target
-`nightly`, and keep the PR narrow with focused tests/docs plus the required
-Prettier/rustfmt checks. Disclose LLM assistance in the PR body, do not use an
-LLM-signed commit, and never submit the integration branch.
+Keep `coppice/nightly` as the long-lived fork line. For an upstream PR, claim
+or open the issue first, reconstruct a fresh branch from an immutable commit on
+`stumpapp/stump`'s then-current `nightly` (not Coppice history), target upstream
+`nightly`, and keep the PR narrow with focused tests/docs plus required
+Prettier/rustfmt checks. Disclose LLM assistance in the PR body and do not use
+an LLM-signed commit.
 
 ### 4. ABS socket.io lane — shipped; broader device run pending
 
@@ -180,27 +172,29 @@ Next moves, in order:
 
 ## Request workflow and planned external fulfillment
 
-The request ledger and Requests UI, approval/release selection, automation
-defaults, core processing, download polling, and private `mam-gateway`
-implementation are **Shipped**. Mocked protocol-contract evidence and the
-post-merge gate/replays remain pending; live MAM/VPN/qBittorrent deployment is
-untested.
+The metadata-backed request ledger and Home Requests UI are **Shipped**: users
+create intent with destination and visibility; managers approve or reject it;
+permissions, notifications, recommendations/social handoff, and historical
+status decoding remain Coppice-owned.
 
-The future external flow remains:
+The former release search/selection, automation, grab/poll/retry operations,
+acquisition ORM, scheduler jobs, and private `mam-gateway` implementation are
+removed in the current tree. Future acquisition remains:
 
 ```text
-search -> wanted request -> fulfillment connector
-       -> shared-folder export or other ingest input
-       -> ingest + identifier match -> fulfilled
+metadata search -> request -> manager approval
+                -> authenticated provider sidecar
+                -> shared-folder or equivalent ingest input
+                -> staged ingest + identifier match -> fulfilled
 ```
 
-Shelfmark is not bundled. A shared-folder export from an external Shelfmark
-instance into Coppice ingest is the first **Planned** integration. A future
-request bridge is **Blocked** until Shelfmark exposes a stable
-token-authenticated service API. Manual fulfillment or another lawful provider
-host may be a connector; Coppice must not ship a downloader or imply that
-search acquired a file. See
-`docs/content/docs/developer/integration-architecture.mdx`.
+Shelfmark's release-source/download-handler split is design inspiration, not a
+1:1 subsystem or runtime dependency. MouseSearch is the current candidate for a
+separate operator-only sidecar after it exposes a stable token-authenticated
+JSON service API; Coppice must not scrape its HTML UI, store tracker cookies,
+control VPN/qBittorrent, or imply metadata search acquired a file. See
+`docs/content/docs/developer/integration-architecture.mdx` and
+`docs/content/docs/guides/integrations/acquisition.mdx`.
 
 ## Standing reminders
 
@@ -224,42 +218,47 @@ search acquired a file. See
   client/device claim; bytes are content-addressed and retention sweeping is
   deferred.
 
-## Resume point (updated 2026-09-20)
+## Resume point (updated 2026-09-22)
 
-Not yet done from the user's live test with `input/`:
+Completed in the current uncommitted tree:
 
-1. **Real-data ingest run on 25600** (IngestArchives fixed the `unrar l` 4
-   KB-truncation bug but was cut off before re-running): copy `input/audio/*.rar`
-   - `input/audio/The Three-Body Problem - Cixin Liu.epub` into 25600's drop
-     folder, scan from the editor, report per item kind/title/tracks/chapters/
-     duration/quality score, the pair suggestion (Three-Body EPUB <-> audiobook),
-     and assembled M4Bs (Three-Body 37 MP3, Dark Eden 62 MP3; MP3->AAC via
-     `/usr/bin/ffmpeg`, minutes). Env-gated harness:
-     `STUMP_LIVE_INPUT=/home/al/Code/stump/input cargo test -p stump_ingest explode_tests::live_archive_drop_of_the_real_input`.
-2. **Broader official ABS app retest on a phone** (the scoped emulator evidence
-   and socket.io-client fixture proof are recorded): play retry loop, covers,
-   download, playlists, ebooks tab, and live bookmark updates.
-3. **Deferred Mihon-derived remote sources:** keep `STUMP_ENABLE_PROVIDERS=false`
-   (the default) and keep the sibling `stump-sources` repository local-only;
-   do not publish its site list. Revisit only after the browser-worker
-   Cloudflare authentication model is solved and every candidate source has
-   been curated for public linkage.
-4. **Read-aloud next:** import exact Storyteller/SMIL timing, then complete the
-   worker-side alignment/playback acceptance. The pairing, SyncMap validation,
-   alignment enqueue, and authenticated cache-only status/download path are
-   present; render the read-aloud EPUB and run the virtual source-M4B ZIP
-   experiment before choosing the long-term derivative cache. Then readiness
-   and editions provenance.
-5. **Post-merge compatibility verification:** the upstream security fixes are
-   absorbed, but the full gate and replay set still need to run. Record only
-   post-merge evidence, then review remaining Liseur/liseur-sync contracts and
-   reconstruct any upstream PR branches from `origin/nightly`.
-6. **Calibre library source:** Stump has neither a native WebDAV source nor a
-   `metadata.db`-aware Calibre source. Implement the local, read-only Calibre
-   source first: treat `metadata.db` as catalog authority and serve discovered
-   files through existing Coppice routes/OPDS. Defer native WebDAV credentials,
-   cache validation, and ETag handling until a real remote-source need is
-   confirmed; an externally mounted WebDAV directory remains the interim path.
-   The repository has 36 root EPUB inputs but no Calibre `metadata.db`, and
-   Calibre is not installed on this workstation. Build a small public-domain or
-   synthetic Calibre fixture instead of committing personal books.
+- The private real-input archive ingest smoke passed end-to-end.
+- Source workers now cache successful full-digest checks by exact local file
+  identity, scan `kind=calibre` roots read-only, create typed digest/lineage-bound
+  match proposals, and persist explicit approve/reject decisions before
+  idempotent link/materialize effects.
+- Metadata policy application persists its selected cover through a bounded,
+  SSRF-hardened, staged filesystem/SQLite commit path.
+- Native EPUB SMIL import, deterministic streamed-M4B read-aloud rendering, and
+  an operator-configured external CPU/fp32 CTC worker backend are implemented.
+- Liseur invalid query defaults and full-SHA/stable-source catalog resolution
+  match the pinned client contract. Narrow reversible upstream patch artifacts
+  were prepared in `/tmp` for the limit and SHA changes; reconstruct them from
+  the current diff if the temporary files are gone.
+- The exact Rust/Bun/schema/build gate in `.omp/PROJECT_STATE.md` is green.
+
+Still actionable:
+
+1. **Official ABS app phone retest:** physical-device proof remains required for
+   the play retry loop, covers, download, playlists, ebooks tab, and live
+   bookmark updates. Automated server evidence is not a substitute.
+2. **Source-worker later phases:** keep `candidate_only` disabled until an
+   interest-set protocol exists. Automatic publication, desired-placement
+   reconciliation, durable byte caching/eviction, verification scheduling, and
+   replication remain planned; do not merge them into acquisition authority.
+3. **Read-aloud later phases:** add readiness quality checks, verified
+   Storyteller UUID reuse, exact-edition manifest export, gap-only repair,
+   optional virtual-composite delivery, and physical-reader playback evidence.
+   The shipped external native runner does not require an in-process Rust model.
+4. **Provider evidence:** Google Books is externally rate-limited (HTTP 429).
+   Re-run only after quota recovery. MAL, Hardcover, Comic Vine, and Metron
+   live probes require credentials; do not fabricate green results.
+5. **Upstream preparation:** open/confirm the relevant upstream issue before
+   reconstructing narrow PR branches from immutable `stumpapp/stump` `nightly`.
+   Follow `.github/CONTRIBUTING.md`, include behavior-focused tests/docs, and
+   disclose LLM assistance. Do not push from this tree without fresh explicit
+   authorization.
+6. **Deferred remote definitions:** keep `STUMP_ENABLE_PROVIDERS=false` and the
+   sibling `stump-sources` repository local-only. Revisit only after the
+   browser-worker Cloudflare authentication model and source-by-source public
+   linkage review exist.

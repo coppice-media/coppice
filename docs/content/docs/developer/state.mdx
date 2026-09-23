@@ -20,7 +20,8 @@ map](/docs/developer/server-architecture#architecture-map).
 
 | Area                                             | Current state                                                                                                                                                                                                                                                                                                                                          | Evidence                                                                                                                                                                                                       |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Komga profile (Komelia/Mihon/Liseur/Komf target) | **Shipped:** `crates/komga` + `apps/server/src/routers/komga/`; Basic-auth cache, remember-me, SSE mutation events including `TaskQueueStatus`, library CRUD, collection and read-list `POST` (`crates/komga/src/routes/lists.rs:67,87`), virtual book URLs, nested `/komga` Grimmory alias                                                            | **Contract-tested**, with app scope in [Komga compatibility](/docs/developer/komga-compat)                                                                                                                     |
+| Komga profile (Komelia/Mihon/Liseur)             | **Shipped:** `crates/komga` + `apps/server/src/routers/komga/`; Basic-auth cache, remember-me, SSE mutation events including `TaskQueueStatus`, library CRUD, collection and read-list `POST` (`crates/komga/src/routes/lists.rs:67,87`), virtual book URLs, nested `/komga` Grimmory alias                                                            | **Contract-tested**, with app scope in [Komga compatibility](/docs/developer/komga-compat)                                                                                                                     |
+| Komf 2.0.1 external workflow                    | **Outbound media-server adapter only:** Komga is the default complete lane; Kavita is an independent API-mode lane. Komf metadata providers are not automatically Coppice HTTP endpoints; no Kotlin is embedded. Exact source commit [`5ad67370c5da6d94372e7c51bff62dd75053ac64`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64), release JAR SHA-256 `f5e01a06938cf1e13a4e9d8211db0569e89e09256072d1bbdf5b04291e809cb9`, image `sndxr/komf:2.0.1@sha256:e48652eb32b06cafce4680c229bdbdb682eb1066e3bdeb2872e9dc99255a5cf6`, `komga-client` 0.10.3 | **Source-derived** pin; **Contract-tested** historical direct `/api/v1` Hurl; pinned sidecar wiring smoke is separately scoped to `/api/komga/media-server/connected` + `/libraries`                                                                                                      |
 | Mihon legacy catalog + built-in tracker          | **Shipped:** `GET /api/v1/{series,books,authors}`, `GET/PUT /api/v2/series/{id}/read-progress/tachiyomi` (+ readlist variant); Basic/API-key scope widened by `is_komga_basic_auth_path` (`apps/server/src/middleware/auth.rs`)                                                                                                                        | **Device-tested**, **Contract-tested** — [Client verification](/docs/developer/client-verification)                                                                                                            |
 | Kavita profile                                   | **Shipped:** `crates/kavita` + `apps/server/src/routers/kavita/`, `STUMP_ENABLE_KAVITA`; integer identity in `kavita_ids` (`m20260912`), `Plugin/authenticate` HS512 JWT, browse/reader/progress/download/metadata/chapter-info, search, bookmarks, collections, scan, stats, annotations, on-deck (`m20260922`), `Book/*` EPUB lane, `Formats` filter | **Contract-tested**; **Device-tested** Turnleaf and Kamigura — [Kavita compatibility](/docs/developer/kavita-compat)                                                                                           |
 | Audiobookshelf profile                           | **Shipped:** `crates/abs` (root-mounted routes, DTOs, HS256 tokens, `abs_ids`/`abs_sessions`) + `apps/server/src/routers/abs_backend.rs`; audiobook cover as page 1, per-file chapters + album tag, session tracks keep tags, `deviceInfo` echo, and the Engine.IO v4 / Socket.IO v5 `/socket.io` lane                                                 | **Contract-tested** for the Lissen-shaped profile and socket frames; **Device-tested** official app scope; broader official-client/device parity **Pending** — [ABS compatibility](/docs/developer/abs-compat) |
@@ -29,6 +30,7 @@ map](/docs/developer/server-architecture#architecture-map).
 | KOReader sync + first-party plugin               | **Shipped:** three routes under `/koreader/{api_key}`; `stump.koplugin` lives in its own repository and adds exactly one server route, `GET /api/v2/reading/continue` (`apps/server/src/routers/api/v2/reading.rs:45,106-115`)                                                                                                                         | **Contract-tested**; plugin device run **Blocked** — [KOReader plugin](/docs/developer/koreader-plugin)                                                                                                        |
 | liseur-sync                                      | **Shipped:** login/tokens, catalog, positions, heads, sessions, and CAS annotations; there is no attachment blob lane; audiobooks are excluded from the catalog because Liseur pages documents (`apps/server/src/routers/liseur_sync/storage.rs:262-268`)                                                                                              | **Contract-tested**, **Device-tested** — [liseur-sync integration](/docs/developer/liseur-sync-integration)                                                                                                    |
 | Send to Kindle                                   | **Shipped:** `crates/kindle` Amazon format policy, `boko` EPUB→AZW3, Amazon's 50 MB cap, `kindle_deliveries` history (`m20260940`); GraphQL `sendToKindle` (`crates/graphql/schema.graphql:3420`) and USB sideload `POST /api/v2/media/{id}/kindle-file`                                                                                               | **Contract-tested** route checks; delivery to a real address **Blocked** — [Platforms › Amazon Kindle](/docs/developer/platforms#amazon-kindle)                                                                |
+| **Home-library source workers** | **Contract-tested.** `DeviceKind::SourceWorker` credentials, bounded catalog manifests, explicit verification/link/materialization, and server-proxied direct plus outbound-tunnel reads are implemented. The native media route preserves ACL and single-range semantics; linked reads are bound to a server-verified SHA-256 that the worker rechecks. Candidate-only privacy, automatic matching/publication, placement, caching, and replication remain planned. | `crates/worker/src/source_protocol.rs`, `source_catalog.rs`, `source_direct.rs`, `source_tunnel.rs`; `apps/server/src/routers/api/v2/source_workers.rs`; `crates/migrations/src/m20260956_000000_add_remote_sources.rs`; [Remote worker libraries](/docs/developer/remote-worker-libraries) |
 
 ## Audiobooks
 
@@ -96,38 +98,26 @@ content; the latter identify and enrich local ingest candidates. Neither class
 is a fulfillment connector or a Storyteller backend. See [Integration
 architecture](/docs/developer/integration-architecture).
 
-## Request orchestration
+## Request ledger and acquisition boundary
 
-The requests/wanted ledger, request table, gateway settings, approval/release
-GraphQL mutations, automation defaults, and bounded polling processor are
-**Shipped**. The evidence is
-`crates/models/src/entity/book_request.rs`,
-`crates/graphql/src/query/book_request.rs`,
-`crates/graphql/src/mutation/book_request.rs`,
-`core/src/request_gateway.rs`,
-`core/src/request_gateway_automation.rs`, and
-`core/src/request_gateway_poll.rs`.
-
-The shipped backend does not claim a Requests page, live MAM download, or
-physical-device delivery. Its guarded flow is:
+The metadata-backed request ledger, GraphQL create/list/detail and
+approve/reject operations, Home request UI, permissions, per-user visibility,
+notifications, and social handoff are **Shipped**.
 
 ```text
-internal media/work or external work reference
-  -> optional destination device/shelf
-  -> approval (automation defaults off)
-  -> Torznab caps/search through private mam-gateway
-  -> opaque release selection and grab
-  -> bounded download polling
-  -> existing ingest staging + source verification
-  -> destination queue
+Universal-style metadata search or recommendation
+  -> request metadata + optional destination intent
+  -> permission and visibility checks
+  -> operator approval or rejection
+  -> notifications and audit history
 ```
 
-Shelfmark remains absent. `mam-gateway` is a narrow connector: MAM
-credentials/raw tracker URLs remain inside the Gluetun namespace, while Coppice
-stores only its private endpoint/token. Live MAM authentication, VPN-egress
-proof, qBittorrent download, ingest replay, and physical-device delivery are
-**Pending**. Coppice must not ship an arbitrary downloader or imply that a
-catalog result has acquired a file.
+Approval does not acquire a file or enqueue ingest. MAM acquisition is deferred;
+Coppice ships no release search/selection, grab, polling, retry, downloader, or
+gateway settings. If acquisition is added later, it must run as a separate
+authenticated provider sidecar that owns provider credentials and transport
+state. This is an architecture boundary, not an implementation or delivery
+promise.
 
 ## Reading state, devices, and events
 
@@ -189,7 +179,7 @@ commit.
 | Mihon + Keiyoushi Komga ext. + built-in Komga tracker                                                   | **Device-tested**, **Contract-tested**            | 2026-09-04    | Browse, download, read, tracker GET/PUT; `replay-mihon`                                                                                                             |
 | Liseur v0.16.0 `bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53` (**source-only**); device baseline `31f8182d` | **Device-tested**, **Contract-tested**            | 2026-09-04    | The tested run remains on the older client: Komga profile, OPDS 1.2, KOReader sync, native liseur-sync (positions, heads, annotations); no OPDS 2 parser in the app |
 | Grimmory `/komga` alias                                                                                 | **Device-tested** (login) + **Contract-tested**   | 2026-09-04    | Login on the device; listing, file, and thumbnail by `specs/grimmory.hurl`                                                                                          |
-| Komf `428dac6`                                                                                          | **Contract-tested** (live container)              | 2026-09-04    | Identify, series PATCH 204, book PATCH 204, cover upload + previous-cover DELETE, `TaskQueueStatus`; `replay-komf` 16/16                                            |
+| Komf 2.0.1                                                                                             | **Contract-tested** historical direct `/api/v1`; sidecar wiring smoke separately scoped | —             | Exact source pin and evidence tiers; pinned `/api/komga/media-server/connected` + `/libraries` routes — [Komga compatibility](/docs/developer/komga-compat) |
 | Turnleaf `b54f1f71` (Kavita profile)                                                                    | **Device-tested**                                 | 2026-09-06    | Browse, read, download, progress landing in `reading_heads` with `source_protocol = kavita`                                                                         |
 | Kamigura `f4baeff4` (Kavita profile)                                                                    | **Device-tested**                                 | 2026-09-06    | Browse, want-to-read add/remove, MangaDex virtual-library read including the chapter-info `pageDimensions` fix; app ships no EPUB reader by design                  |
 | Lissen `1.11.22` (ABS profile)                                                                          | **Contract-tested**, **Source-only**              | 2026-09-07    | Pinned source and chained replay: browse, listen, byte-range download, session progress, bookmarks; no Lissen device run claimed                                    |
@@ -232,19 +222,21 @@ commit.
 - Known upstream lints are untouched: `emailer/sender.rs` and
   `tests/reading_progress/manual_progression_changes.rs` (`useless vec!`).
 
-## Post-merge verification
+## Current-tree verification
 
-The 2026-09-20 integration gate is **Contract-tested**: the non-server Rust
-workspace passed 1,897 tests (29 ignored), the headless server passed 366 tests,
-all-target workspace checking and the headless build passed, and GraphQL schema
-generation reported no drift. Web, Expo, Home, and Editor type/Svelte checks
-passed; the web, Home, Editor, and docs production builds passed. The docs build
-prerendered 199 pages.
+The 2026-09-21 MAM-removal/Bun-cutover gate is **Contract-tested**: the
+non-server Rust workspace passed 1,894 tests (29 ignored across 93 suites), the
+headless server passed 369 tests across 4 suites, all-target workspace checking
+and the headless build passed, and GraphQL schema/client drift checks passed.
+All 302 active Bun tests and the Web, Home, Editor, and docs production builds
+passed; the docs build prerendered 197 pages. Expo is a frozen compatibility
+snapshot outside the active workspace and native-tooling gate.
 
-The deployed fixture then passed 15 Hurl files and 341 requests across the
+The current headless fixture passed 15 Hurl files and 341 requests across the
 Komga, negative-auth, Mihon, native liseur-sync, Kavita, library-management,
-Audiobookshelf, and Komf profiles. An authenticated `/app/dashboard` and the
-public `/editor/` surface loaded in a browser against that server.
+Audiobookshelf, and Komf profiles. Authenticated direct loads of
+`/app/requests`, `/app/requests/new`, and `/editor` rendered without the removed
+MAM/gateway controls or visible layout defects.
 
 This is not **Device-tested** evidence. Physical Kobo/KOReader/official-client
 runs, Expo native visual verification, and the pending containers replay remain

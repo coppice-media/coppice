@@ -9,16 +9,18 @@
 	"scripts": {
 		"check-types": "tsc -b tsconfig.json",
 		"format": "eslint --fix . && prettier --config ../../prettier.config.js --ignore-path ../../.prettierignore --write .",
-		"clean": "yarn exec rimraf node_modules"
+		"clean": "rimraf node_modules"
 	},
 	"dependencies": {
+		"@stump/graphql": "*",
 		"@stump/sdk": "*",
 		"@tanstack/react-query": "^5.101.0",
 		"axios": "^1.16.1",
+		"colorjs.io": "^0.5.2",
 		"deep-equal": "^2.2.3",
 		"immer": "^10.0.4",
 		"react-use-websocket": "^4.8.1",
-		"ts-pattern": "^5.7.0",
+		"zod": "^3.23.8",
 		"zustand": "^5.0.12"
 	},
 	"devDependencies": {

@@ -32,10 +32,11 @@ pub use announcements::{
 	KomgaExtension as KomgaAnnouncementExtension, KomgaJsonFeed,
 };
 pub use book::{
-	CopyMode, KomgaBook, KomgaBookId, KomgaBookMetadata, KomgaBookMetadataUpdateRequest,
-	KomgaBookPage, KomgaBookQuery, KomgaBookReadProgressUpdateRequest, KomgaBookSearch,
+	extensions_for_media_profile, media_profile_for_extension, CopyMode, KomgaBook,
+	KomgaBookId, KomgaBookMetadata, KomgaBookMetadataUpdateRequest, KomgaBookPage,
+	KomgaBookQuery, KomgaBookReadProgressUpdateRequest, KomgaBookSearch,
 	KomgaBookThumbnail, KomgaMediaStatus, KomgaReadStatus, Media, MediaProfile,
-	ReadProgress,
+	ReadProgress, SUPPORTED_MEDIA_EXTENSIONS,
 };
 pub use collection::{
 	KomgaCollection, KomgaCollectionCreateRequest, KomgaCollectionId,

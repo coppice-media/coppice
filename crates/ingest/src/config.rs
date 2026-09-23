@@ -24,6 +24,9 @@ pub struct IngestSettings {
 	/// Wall-clock budget for one preprocess hook run. Zero is a
 	/// configuration error when a command is set, not "no timeout".
 	pub preprocess_timeout_secs: u64,
+	/// Maximum number of bytes accepted for a provider cover download. The
+	/// host maps this to its normal image-upload limit.
+	pub max_image_upload_size: usize,
 	/// Media processing options, needed for the page counts of formats whose
 	/// pages are not archive entries (PDF, RAR).
 	pub media: MediaConfig,
@@ -41,6 +44,7 @@ impl IngestSettings {
 			progress_retention: 500,
 			preprocess_command: None,
 			preprocess_timeout_secs: 300,
+			max_image_upload_size: 20 * 1024 * 1024,
 			media: MediaConfig::default(),
 		}
 	}

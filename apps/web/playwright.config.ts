@@ -33,7 +33,7 @@ export default defineConfig({
 	webServer: process.env.STUMP_BASE_URL
 		? undefined
 		: {
-				command: 'yarn dev',
+				command: 'bun run dev',
 				url: 'http://localhost:3000',
 				reuseExistingServer: true,
 			},

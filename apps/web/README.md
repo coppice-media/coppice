@@ -12,8 +12,8 @@ See [tests](./tests) for the playwright suite for the web app. A quick start inc
 
 ```bash
 # this assumes you have a Coppice server running on port 10801
-yarn install
-# optional install step if you need to install playwright browsers
-yarn e2e:install
-yarn e2e
+bun install --frozen-lockfile
+# optional install step if you need to install Playwright browsers
+bun run --filter @stump/web e2e:install
+bun run --filter @stump/web e2e
 ```

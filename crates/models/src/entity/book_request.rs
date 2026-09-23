@@ -28,15 +28,12 @@ pub struct Model {
 	pub destination_shelf_id: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub destination_device_id: Option<String>,
+	/// May contain historical acquisition states; active request writes use
+	/// `PENDING`, `APPROVED`, and `REJECTED`.
 	#[sea_orm(column_type = "Text")]
 	pub status: String,
 	#[sea_orm(column_type = "Text")]
 	pub approval_policy: String,
-	pub automation_enabled: bool,
-	pub scoring_floor: i32,
-	pub verification_threshold: i32,
-	pub max_retries: i32,
-	pub retries: i32,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub approved_by: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]

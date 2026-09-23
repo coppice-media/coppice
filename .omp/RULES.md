@@ -11,6 +11,8 @@
 - Preserve default/full behavior and mobile compatibility. Runtime switches are for dormant work; Cargo features remove code/dependencies only after tracing all consumers.
 - Treat Axum routes, auth, SQLite/SeaORM, GraphQL, OPDS, KOReader, Kobo, Komga, liseur-sync, media, and mobile clients as public contracts; trace callers before changing APIs, features, env keys, routes, schemas, or payloads.
 - Prefer lazy ownership and clean cutovers over speculative rewrites, aliases, compatibility shims, or dead fallback paths.
+- Root JavaScript tooling is Bun 1.4.1 with one `bun.lock`; `apps/expo/` is frozen compatibility source outside the active workspace and native-tooling gate.
+- Coppice owns metadata-backed request intent, permissions, visibility, approvals, notifications, and staged ingest. Release search, acquisition, retries, credentials, and transport belong to a future independent authenticated provider sidecar, not the Rust server or browser.
 
 ## Defect guardrails
 
@@ -25,7 +27,7 @@
 ## Evidence, upstream, and validation
 
 - Local working-tree docs need no pins until this fork is committed; external client/repository pins are immutable. Use pinned clients, not Komga OpenAPI alone, for client-facing contracts.
-- Follow `.github/CONTRIBUTING.md`; do not commit or push from this bootstrap.
+- Follow `.github/CONTRIBUTING.md` for upstream contributions. The assistant MAY commit and push only branches under `coppice/*` to this fork's existing `origin` when the user explicitly authorizes that commit and push in the current conversation. Never force-push, rewrite published history, change remotes, push secrets, or push directly to upstream/protected branches.
 - The only definition of green is the exact gate and post-build replay in `.omp/PROJECT_STATE.md`; never claim an unrun command or smoke result.
 
 ## Crate documentation

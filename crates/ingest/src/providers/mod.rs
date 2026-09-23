@@ -10,9 +10,11 @@ mod facade;
 pub mod llm;
 mod registry;
 pub use apply::{
-	apply_to_media, apply_to_media_txn, apply_to_media_txn_with_context, resolve_picks,
+	apply_to_media, apply_to_media_txn, apply_to_media_txn_with_context,
+	apply_to_media_txn_with_context_and_cover, apply_to_media_with_cover,
+	prepare_cover_for_media, prepare_cover_for_new_media, resolve_picks,
 	resolve_picks_for_context, validate_picks, ApplyError, CandidateModel,
-	ResolvedFields, STORABLE_FIELDS,
+	CoverApplyConfig, CoverWrite, ResolvedFields, STORABLE_FIELDS,
 };
 pub use builtin_embedded::EmbeddedProvider;
 pub use facade::IntegrationProvider;

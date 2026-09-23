@@ -639,6 +639,148 @@ pub struct TagDto {
 	pub id: i32,
 	pub title: String,
 }
+/// The minimal author shape used by Komf's Kavita write requests.
+///
+/// Kavita's read-side `PersonDto` carries many presentation fields, while
+/// `KavitaAuthor` in the pinned Komf client is only `{id, name}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct KavitaAuthorDto {
+	pub id: i32,
+	pub name: String,
+}
+
+/// `POST /api/Series/update` from Komf 2.0.1.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesUpdateDto {
+	pub id: i32,
+	pub localized_name: Option<String>,
+	pub sort_name: String,
+	pub cover_image_locked: bool,
+	pub sort_name_locked: bool,
+	pub localized_name_locked: bool,
+}
+
+/// `POST /api/Series/metadata` from Komf 2.0.1.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesMetadataUpdateDto {
+	pub id: i32,
+	pub series_id: i32,
+	pub summary: Option<String>,
+	pub genres: Vec<GenreTagDto>,
+	pub tags: Vec<TagDto>,
+	pub writers: Vec<KavitaAuthorDto>,
+	pub cover_artists: Vec<KavitaAuthorDto>,
+	pub publishers: Vec<KavitaAuthorDto>,
+	pub characters: Vec<KavitaAuthorDto>,
+	pub pencillers: Vec<KavitaAuthorDto>,
+	pub inkers: Vec<KavitaAuthorDto>,
+	pub imprints: Vec<KavitaAuthorDto>,
+	pub colorists: Vec<KavitaAuthorDto>,
+	pub letterers: Vec<KavitaAuthorDto>,
+	pub editors: Vec<KavitaAuthorDto>,
+	pub translators: Vec<KavitaAuthorDto>,
+	pub teams: Vec<KavitaAuthorDto>,
+	pub locations: Vec<KavitaAuthorDto>,
+	pub age_rating: AgeRating,
+	pub release_year: i32,
+	pub language: Option<String>,
+	pub max_count: i32,
+	pub total_count: i32,
+	pub publication_status: PublicationStatus,
+	pub web_links: Option<String>,
+	pub language_locked: bool,
+	pub summary_locked: bool,
+	pub age_rating_locked: bool,
+	pub publication_status_locked: bool,
+	pub genres_locked: bool,
+	pub tags_locked: bool,
+	pub writer_locked: bool,
+	pub character_locked: bool,
+	pub colorist_locked: bool,
+	pub editor_locked: bool,
+	pub inker_locked: bool,
+	pub imprint_locked: bool,
+	pub letterer_locked: bool,
+	pub penciller_locked: bool,
+	pub publisher_locked: bool,
+	pub translator_locked: bool,
+	pub team_locked: bool,
+	pub location_locked: bool,
+	pub cover_artist_locked: bool,
+	pub release_year_locked: bool,
+}
+
+/// The wrapper used by `KavitaSeriesMetadataUpdateRequest`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesMetadataUpdateRequestDto {
+	pub series_metadata: SeriesMetadataUpdateDto,
+}
+
+/// `POST /api/Chapter/update` from Komf 2.0.1.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterMetadataUpdateDto {
+	pub id: i32,
+	pub summary: Option<String>,
+	pub genres: Vec<GenreTagDto>,
+	pub tags: Vec<TagDto>,
+	pub age_rating: AgeRating,
+	pub language: Option<String>,
+	#[serde(rename = "weblinks")]
+	pub web_links: String,
+	pub isbn: String,
+	pub release_date: String,
+	pub title_name: String,
+	pub sort_order: f64,
+	pub writers: Vec<KavitaAuthorDto>,
+	pub cover_artists: Vec<KavitaAuthorDto>,
+	pub publishers: Vec<KavitaAuthorDto>,
+	pub characters: Vec<KavitaAuthorDto>,
+	pub pencillers: Vec<KavitaAuthorDto>,
+	pub inkers: Vec<KavitaAuthorDto>,
+	pub imprints: Vec<KavitaAuthorDto>,
+	pub colorists: Vec<KavitaAuthorDto>,
+	pub letterers: Vec<KavitaAuthorDto>,
+	pub editors: Vec<KavitaAuthorDto>,
+	pub translators: Vec<KavitaAuthorDto>,
+	pub teams: Vec<KavitaAuthorDto>,
+	pub locations: Vec<KavitaAuthorDto>,
+	pub age_rating_locked: bool,
+	pub title_name_locked: bool,
+	pub genres_locked: bool,
+	pub tags_locked: bool,
+	pub writer_locked: bool,
+	pub character_locked: bool,
+	pub colorist_locked: bool,
+	pub editor_locked: bool,
+	pub inker_locked: bool,
+	pub imprint_locked: bool,
+	pub letterer_locked: bool,
+	pub penciller_locked: bool,
+	pub publisher_locked: bool,
+	pub translator_locked: bool,
+	pub team_locked: bool,
+	pub location_locked: bool,
+	pub cover_artist_locked: bool,
+	pub language_locked: bool,
+	pub summary_locked: bool,
+	pub isbn_locked: bool,
+	pub release_date_locked: bool,
+	pub sort_order_locked: bool,
+}
+
+/// `POST /api/upload/{series,volume,chapter}` from Komf 2.0.1.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverUploadDto {
+	pub id: i32,
+	pub url: String,
+	pub lock_cover: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

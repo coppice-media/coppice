@@ -20,7 +20,7 @@ in [Integration architecture](/docs/developer/integration-architecture).
 
 | Phase | Derived from | Outcome | Evidence |
 | --- | --- | --- | --- |
-| 1 — Komf compatibility | `local://komf-compat-study.md`, [Provider status](/docs/developer/provider-status) | **Shipped.** Series/book metadata PATCH coverage, thumbnail upload and delete (`crates/komga/src/routes/media.rs:60,64,72,76`), and SSE `TaskQueueStatus` so Komf's buffered automatic pass flushes | **Contract-tested:** live Komf `428dac6` container 2026-09-04; identify → series PATCH 204, book PATCH 204, cover upload + previous-cover DELETE; `replay-komf` 16/16 |
+| 1 — Komf compatibility | `local://komf-compat-study.md`, [Komga compatibility](/docs/developer/komga-compat) | **Shipped.** The external Komf workflow uses the independent Komga media-server adapter for series/book metadata PATCH coverage, thumbnail upload/delete (`crates/komga/src/routes/media.rs:60,64,72,76`), and SSE `TaskQueueStatus`; Komf metadata providers are not automatically Coppice HTTP endpoints | **Source-derived:** Komf 2.0.1 commit [`5ad67370c5da6d94372e7c51bff62dd75053ac64`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64), release JAR SHA-256 `f5e01a06938cf1e13a4e9d8211db0569e89e09256072d1bbdf5b04291e809cb9`, image `sndxr/komf:2.0.1@sha256:e48652eb32b06cafce4680c229bdbdb682eb1066e3bdeb2872e9dc99255a5cf6`, `komga-client` 0.10.3; **Contract-tested:** historical direct `/api/v1` Hurl; pinned sidecar wiring is a separate `/api/komga/media-server/connected` + `/libraries` smoke |
 | 2 — Remaining crate split | `local://scanner-split-plan.md` | **Shipped in the extracted seams; Planned debt remains.** `stump_scanner`, `stump_watcher`, and `stump_jobs` see no `JobContext`, `StumpJob`, `CoreEvent`, or `MemoryStorage`; `watcher` and `apalis` are real Cargo features that drop `notify` and `apalis` from `minimal`. Metadata and email remain linked unconditionally, and processor-sized features do not exist | **Source-only:** `core/Cargo.toml` features `pdf, rar, watcher, apalis, ingest, graphql, providers`; [package seams](/docs/developer/server-architecture#package-seams) |
 | 3 — Provider host | [Server architecture](/docs/developer/server-architecture), `local://feature-gaps.md` | **Shipped for the trait and catalog.** `Source` trait, MangaDex as code, four data-driven theme engines, frozen definition schema v1 with the `sources-import` generator, Mode A materialisation, Mode B virtual libraries, page cache, GC, source health, and cross-source dedupe. The Komga/Kavita federation provider and wasmtime sandbox remain **Planned** | **Contract-tested:** [Provider host](/docs/developer/provider-host), [Source definitions](/docs/developer/source-definitions) |
 | 4 — Comics-for-Kobo transform | [Kobo capabilities](/docs/developer/kobo-sync-capabilities), [Kobo device DB](/docs/developer/kobo-device-database) | **Shipped.** Per-device transform profiles (grayscale, resolution, re-encode) are applied on delivery, cached under a byte budget, and selectable per device in the console | **Contract-tested:** [Comics transform](/docs/developer/comics-transform), [Home app › transform presets](/docs/developer/home-app#transform-presets) |
@@ -113,44 +113,45 @@ Implementation order, from [§9 of Read-aloud](/docs/developer/read-aloud#9-impl
 5. Add native known-text CTC/Viterbi and portable manifest import/export.
 6. Add full synchronized playback and read-aloud EPUB delivery after the
    virtual source-M4B ZIP experiment has evidence.
-7. The request ledger and backend approval/release/polling path are **Shipped**;
-   live MAM deployment, physical-device delivery, and post-merge verification
-   remain **Pending**.
+7. The metadata-backed request ledger, permissions, manager decisions,
+   notifications, social handoff, and Home UI are **Shipped**. Acquisition is
+   deferred.
 
-## Request orchestration status
+## Request ledger and acquisition boundary
 
-The requests/wanted ledger, request table, gateway settings, approval/release
-GraphQL mutations, automation defaults, and bounded download polling processor
-are **Shipped**. The source surfaces are
-`crates/models/src/entity/book_request.rs`,
-`crates/graphql/src/query/book_request.rs`,
-`crates/graphql/src/mutation/book_request.rs`,
-`core/src/request_gateway.rs`,
-`core/src/request_gateway_automation.rs`, and
-`core/src/request_gateway_poll.rs`.
-
-The backend does not claim a Requests page, live MAM download, or
-physical-device delivery. The implemented flow is:
+Coppice owns request metadata, optional destination intent, requester
+permissions, per-user visibility, manager approval/rejection, notifications,
+and the social recommendation-to-request handoff. Its retained GraphQL contract
+is `bookRequest`, `bookRequests`, `createBookRequest`,
+`approveBookRequest`, and `rejectBookRequest`.
 
 ```text
-internal media/work or external work reference
-  -> optional destination device/shelf
-  -> approval (automation defaults off)
-  -> Torznab caps/search through private mam-gateway
-  -> opaque release selection and grab
-  -> bounded download polling
-  -> existing ingest staging + source verification
-  -> destination queue
+Universal-style metadata search or recommendation
+  -> request
+  -> permission and visibility checks
+  -> operator approval or rejection
+  -> notifications and audit history
 ```
 
-Shelfmark remains absent. The implemented `mam-gateway` is a narrow connector:
-MAM credentials/raw tracker URLs remain inside the Gluetun namespace, while
-Coppice stores only its private endpoint/token. Live MAM authentication,
-VPN-egress proof, qBittorrent download, ingest replay, and physical-device
-delivery are **Pending**. The post-merge gate and fixture replay set are also
-**Pending**; `.omp/PROJECT_STATE.md` is authoritative. Coppice must not ship an
-arbitrary downloader or imply that a catalog result has acquired a file. See
-[Integration architecture](/docs/developer/integration-architecture).
+
+### Phase 10 — Home-library source workers
+
+- Separate source-worker device authority, private durable catalog roots, and
+  bounded revisioned manifests.
+- Explicit whole-object verification, remote-location linking, and ingest
+  materialization.
+- Server-proxied native media reads over private direct origins or separate
+  worker-opened outbound tunnels, with one-use digest-bound grants and explicit
+  offline failure.
+- Evidence and remaining phases:
+  [Remote worker libraries](/docs/developer/remote-worker-libraries).
+
+Approval does not start acquisition. MAM acquisition is deferred, and Coppice
+ships no release selection, grab, polling, retry, downloader, or gateway
+configuration. If acquisition is added later, it must run as a separate
+authenticated provider sidecar. This boundary does not promise a provider,
+implementation, or schedule. See [Integration
+architecture](/docs/developer/integration-architecture).
 
 ## Future
 
@@ -200,6 +201,11 @@ Every cell behind them is cited in [Feature comparison](/docs/developer/comparis
 - **A liseur-sync attachment blob route:** Kobo markup snapshots and notebooks
   are described (id, anchor, sha256) but not transported, which is a protocol
   change to design rather than an omission to fix.
+- **Home-library source policy:** automatic candidate matching and import
+  approval, candidate-only interest sets, placement/cache policy, non-folder
+  adapters, and replication/repair. The catalog, verification, explicit link,
+  materialization, and native direct/tunnel serving foundation is already
+  contract-tested.
 
 ## Non-goals
 

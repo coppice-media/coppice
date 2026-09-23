@@ -5,12 +5,13 @@ use std::{
 
 use crate::{
 	book::{KomgaMediaStatus, KomgaReadStatus},
+	extensions_for_media_profile,
 	search::{
 		AuthorMatch, BookCondition, BooleanOperator, DateOperator, Equality,
 		EqualityNullable, SeriesCondition,
 	},
 	KomgaAuthor, KomgaBook, KomgaBookSearch, KomgaLibrary, KomgaSeries,
-	KomgaSeriesSearch, KomgaSeriesStatus, Page,
+	KomgaSeriesSearch, KomgaSeriesStatus, Page, SUPPORTED_MEDIA_EXTENSIONS,
 };
 use axum::{
 	body::Body,
@@ -574,6 +575,9 @@ fn visible_media_ids_for_series_ids_subquery(
 ) -> SelectStatement {
 	let mut query = media::Entity::find_for_user(user)
 		.filter(media::Column::DeletedAt.is_null())
+		.filter(
+			media::Column::Extension.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+		)
 		.select_only()
 		.column(media::Column::Id);
 	if let Some(library_ids) = library_ids.filter(|ids| !ids.is_empty()) {
@@ -611,7 +615,16 @@ fn visible_series_ids_for_series_ids_subquery(
 	library_ids: Option<&[String]>,
 	series_ids: Option<&[String]>,
 ) -> SelectStatement {
+	let supported_series = media::Entity::find()
+		.filter(
+			media::Column::Extension.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+		)
+		.filter(media::Column::SeriesId.is_not_null())
+		.select_only()
+		.column(media::Column::SeriesId)
+		.into_query();
 	let mut query = series::Entity::find_for_user(user)
+		.filter(series::Column::Id.in_subquery(supported_series))
 		.select_only()
 		.column(series::Column::Id);
 	if let Some(library_ids) = library_ids.filter(|ids| !ids.is_empty()) {
@@ -923,11 +936,7 @@ fn book_condition_filter(
 					media::Entity,
 					media::Column::Extension,
 				))))
-				.is_in(
-					super::mapper::extensions_for_media_profile(*value)
-						.iter()
-						.copied(),
-				),
+				.is_in(extensions_for_media_profile(*value).iter().copied()),
 			),
 		)),
 		BookCondition::ReleaseDate {
@@ -1383,6 +1392,9 @@ async fn list_books_page(
 	order_by_number: bool,
 ) -> APIResult<Page<KomgaBook>> {
 	let mut query = media::ModelWithMetadata::find_for_user(user);
+	query = query.filter(
+		media::Column::Extension.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+	);
 	query = query.filter(if deleted {
 		media::Column::DeletedAt.is_not_null()
 	} else {
@@ -1436,6 +1448,8 @@ async fn list_series_page(
 	deleted: bool,
 ) -> APIResult<Page<KomgaSeries>> {
 	let mut query = series::ModelWithMetadata::find_for_user(user);
+	query = query
+		.filter(series::Column::Id.in_subquery(visible_series_ids_subquery(user, None)));
 	query = query.filter(if deleted {
 		series::Column::DeletedAt.is_not_null()
 	} else {
@@ -2097,6 +2111,9 @@ async fn get_book(
 	let user = auth.user();
 	let Some(model) = media::ModelWithMetadata::find_by_id_for_user(id, &user)
 		.filter(media::Column::DeletedAt.is_null())
+		.filter(
+			media::Column::Extension.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+		)
 		.into_model::<media::ModelWithMetadata>()
 		.one(ctx.conn())
 		.await?
@@ -2123,6 +2140,7 @@ async fn get_series_by_id(
 		return cached_json(&headers, &live?);
 	}
 	let Some(model) = series::ModelWithMetadata::find_by_id_for_user(id, &user)
+		.filter(series::Column::Id.in_subquery(visible_series_ids_subquery(&user, None)))
 		.into_model::<series::ModelWithMetadata>()
 		.one(ctx.conn())
 		.await?
@@ -2184,6 +2202,9 @@ async fn sibling(
 ) -> APIResult<KomgaBook> {
 	let Some(current) = media::ModelWithMetadata::find_by_id_for_user(id.clone(), user)
 		.filter(media::Column::DeletedAt.is_null())
+		.filter(
+			media::Column::Extension.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+		)
 		.into_model::<media::ModelWithMetadata>()
 		.one(backend.conn())
 		.await?
@@ -2197,6 +2218,9 @@ async fn sibling(
 		.ok_or_else(|| APIError::NotFound("Book not found".to_owned()))?;
 	let mut models = media::ModelWithMetadata::find_for_user(user)
 		.filter(media::Column::DeletedAt.is_null())
+		.filter(
+			media::Column::Extension.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+		)
 		.filter(media::Column::SeriesId.eq(series_id))
 		.into_model::<media::ModelWithMetadata>()
 		.all(backend.conn())

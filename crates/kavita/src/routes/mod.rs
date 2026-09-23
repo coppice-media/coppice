@@ -10,11 +10,14 @@ use axum::{
 	Extension, Router,
 };
 use chrono::{DateTime, Utc};
-use models::entity::user::AuthUser;
+use models::{entity::user::AuthUser, shared::image::ImageMetadata};
 use sea_orm::DatabaseConnection;
 use stump_auth::AuthContext;
 
-use crate::errors::APIResult;
+use crate::{
+	dto::{ChapterMetadataUpdateDto, SeriesMetadataUpdateRequestDto, SeriesUpdateDto},
+	errors::APIResult,
+};
 
 mod account;
 mod annotation;
@@ -25,6 +28,7 @@ mod filter;
 mod image;
 mod library;
 mod metadata;
+mod mutations;
 mod query;
 mod reader;
 mod reading_list;
@@ -35,6 +39,7 @@ mod series_filter;
 mod server;
 mod stats;
 mod tachiyomi;
+mod upload;
 mod users;
 mod want_to_read;
 pub use account::LoginOutcome;
@@ -50,6 +55,15 @@ const PROVIDER_SCHEME: &str = "provider://";
 /// ([`download`]) nor a page analysis to report ([`reader`]).
 pub(crate) fn is_provider_media(media: &models::entity::media::Model) -> bool {
 	media.path.starts_with(PROVIDER_SCHEME)
+}
+
+/// The Stump entity behind a Kavita `seriesId`. Book/LightNovel libraries
+/// expose each media row as a series, while every other library exposes the
+/// ordinary Stump series row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KavitaSeriesTarget {
+	Series(String),
+	Book(String),
 }
 
 /// Image bytes with their MIME type, as served by cover and page routes.
@@ -190,6 +204,112 @@ pub trait KavitaBackend: Send + Sync {
 		user: &AuthUser,
 		series_id: &str,
 	) -> APIResult<KavitaImage>;
+
+	/// Apply Komf's read-modify-write series title/lock payload to native
+	/// series or media metadata.
+	async fn update_series(
+		&self,
+		user: &AuthUser,
+		target: KavitaSeriesTarget,
+		update: SeriesUpdateDto,
+	) -> APIResult<()> {
+		mutations::update_series(self.conn(), user, target, update).await
+	}
+
+	/// Apply a complete Komf series metadata payload to native metadata rows
+	/// and native tag links.
+	async fn update_series_metadata(
+		&self,
+		user: &AuthUser,
+		target: KavitaSeriesTarget,
+		update: SeriesMetadataUpdateRequestDto,
+	) -> APIResult<()> {
+		mutations::update_series_metadata(
+			self.conn(),
+			user,
+			target,
+			update.series_metadata,
+		)
+		.await
+	}
+
+	/// Apply a complete Komf chapter metadata payload to the visible media row.
+	async fn update_chapter_metadata(
+		&self,
+		user: &AuthUser,
+		media_id: String,
+		update: ChapterMetadataUpdateDto,
+	) -> APIResult<()> {
+		mutations::update_chapter_metadata(self.conn(), user, media_id, update).await
+	}
+
+	/// Store a native series/media cover and persist the Kavita cover-lock
+	/// intent when the native metadata row supports it.
+	async fn upload_series_cover(
+		&self,
+		user: &AuthUser,
+		target: KavitaSeriesTarget,
+		bytes: Vec<u8>,
+		lock_cover: bool,
+	) -> APIResult<()>;
+
+	async fn upload_media_cover(
+		&self,
+		user: &AuthUser,
+		media_id: String,
+		bytes: Vec<u8>,
+		lock_cover: bool,
+	) -> APIResult<()>;
+	/// Persist the thumbnail pointer and cover lock as one native metadata
+	/// transaction after the adapter has safely written the image file.
+	async fn persist_series_cover(
+		&self,
+		user: &AuthUser,
+		target: KavitaSeriesTarget,
+		path: String,
+		metadata: ImageMetadata,
+		lock_cover: bool,
+	) -> APIResult<()> {
+		mutations::persist_series_cover(
+			self.conn(),
+			user,
+			target,
+			path,
+			metadata,
+			lock_cover,
+		)
+		.await
+	}
+
+	/// Persist a media thumbnail pointer and its cover lock.
+	async fn persist_media_cover(
+		&self,
+		user: &AuthUser,
+		media_id: String,
+		path: String,
+		metadata: ImageMetadata,
+		lock_cover: bool,
+	) -> APIResult<()> {
+		mutations::persist_media_cover(
+			self.conn(),
+			user,
+			media_id,
+			path,
+			metadata,
+			lock_cover,
+		)
+		.await
+	}
+
+	/// Komf sends an empty chapter upload to clear the cover lock. It does
+	/// not replace the native cover bytes.
+	async fn reset_media_cover_lock(
+		&self,
+		user: &AuthUser,
+		media_id: String,
+	) -> APIResult<()> {
+		mutations::reset_media_cover_lock(self.conn(), user, &media_id).await
+	}
 
 	/// Stream the media file itself (`GET /api/Reader/pdf`), honouring range
 	/// requests from `headers`.
@@ -356,6 +476,7 @@ where
 		.merge(server::routes::<S>())
 		.merge(library::routes::<S>())
 		.merge(series::routes::<S>())
+		.merge(upload::routes::<S>())
 		.merge(image::routes::<S>())
 		.merge(reader::routes::<S>())
 		.merge(book::routes::<S>())
@@ -405,7 +526,6 @@ where
 		"/api/Recommended",
 		"/api/Review",
 		"/api/Theme",
-		"/api/Upload",
 		"/api/Cbl",
 		"/api/Locale",
 		"/api/Manage",

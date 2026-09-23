@@ -3,7 +3,47 @@ title: Kavita compatibility profile
 description: The client-derived Kavita API profile (wave 1) served for Kavita readers and trackers
 ---
 
+
 This page is the authoritative specification for Stump's Kavita compatibility profile. It describes the **implemented profile**, not the full Kavita API: the routes and DTOs that the inventoried Kavita clients call, reproduced against Kavita **0.9.1.4** (`develop` `d77d956b9551227d8be2ee488b08f14aa3a341e5`, `openapi.json` captured from the `kavita-ref` container). An endpoint or field not listed here is not implied to be supported.
+
+## Independent Komf Kavita API-mode lane
+
+Kavita is a separate media-server adapter, not a Komga alias. It is an
+API-mode lane for the external Komf 2.0.1 workflow, pinned to source commit
+[`5ad67370c5da6d94372e7c51bff62dd75053ac64`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64),
+release JAR SHA-256
+`f5e01a06938cf1e13a4e9d8211db0569e89e09256072d1bbdf5b04291e809cb9`, and
+container
+`sndxr/komf:2.0.1@sha256:e48652eb32b06cafce4680c229bdbdb682eb1066e3bdeb2872e9dc99255a5cf6`;
+the upstream `komga-client` dependency is 0.10.3. Reads and scans use the
+existing Kavita surface, while metadata and upload writes target Kavita's
+native series, media, and cover schemas. The sidecar wiring surface is
+`/api/kavita/media-server/connected` and `/api/kavita/media-server/libraries`.
+Coppice does not embed, compile, or execute Komf's Kotlin; Komf metadata
+providers are not automatically exposed as Coppice HTTP endpoints.
+
+The write contract adds case-insensitive registrations for `POST
+/api/Series/update`, `/api/Series/metadata`, `/api/Chapter/update`,
+`/api/Upload/series`, `/api/Upload/volume`, and `/api/Upload/chapter`.
+Metadata writes update native records rather than a shadow store. An empty
+chapter upload resets/unlocks the chapter; non-empty series and volume uploads
+write the selected native cover and honor lock intent where the native schema
+supports it. Automatic Kavita SignalR event mode is unsupported without
+current-repository compatibility evidence, so the event listener is disabled.
+
+This lane is independent of the default complete Komga lane. Its evidence must
+be labeled separately as source-derived, contract-tested, or runtime-smoked;
+Komga `/api/v1` Hurl history does not prove Kavita adapter behavior.
+
+On 2026-09-23 the source-derived manifest at
+`scripts/contracts/komf-media-server.json` matched its pinned Kotlin sources.
+The direct Kavita Komf Hurl lane passed 37 read, metadata, cover, reset, and
+scan requests; the pinned Kavita sidecar separately passed two
+connection/library smoke requests. The native route regression
+`komf_metadata_and_cover_writes_round_trip_through_native_read_routes`
+passed. Stump has no media-level localized-name, imprint, translator, or
+location fields; those Kavita write fields are not persisted. Physical Kavita
+client and automatic SignalR verification remain separate.
 
 ## Scope and evidence
 
@@ -222,6 +262,9 @@ A provider-backed (`provider://`) media item has no file to stream, so its downl
 | GET | `/api/Account`, `/api/Account/roles` | Kamigura, Inkita | `routes/account.rs` |
 | GET | `/api/Users/has-library-access?libraryId` | Inkita | `routes/users.rs` |
 | GET | `/api/Series/{id}`, `/volumes`, `/volume`, `/metadata`, `/series-detail`, `/chapter` | all | `routes/series.rs` |
+| POST | `/api/Series/update`, `/api/Series/metadata` | external Komf Kavita adapter | Kavita adapter |
+| POST | `/api/Chapter/update` | external Komf Kavita adapter | Kavita adapter |
+| POST | `/api/Upload/series`, `/api/Upload/volume`, `/api/Upload/chapter` | external Komf Kavita adapter | Kavita adapter |
 | POST | `/api/Series/series-by-ids` | Kamigura | `routes/series.rs` |
 | GET | `/api/Volume?volumeId`, `/api/Volume/{id}`, `/api/Chapter?chapterId` | extension, Kamare, Inkita | `routes/series.rs` |
 | GET | `/api/Image/series-cover`, `/volume-cover`, `/chapter-cover` | all | `routes/image.rs` |

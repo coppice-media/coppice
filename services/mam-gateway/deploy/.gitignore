@@ -1,6 +1,0 @@
-.env
-!.env.example
-secrets/*
-!secrets/.gitkeep
-downloads/*
-!downloads/.gitkeep

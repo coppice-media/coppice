@@ -1,32 +1,36 @@
 ---
 title: Read-aloud, remote workers, and requests
-description: "Ebook↔audiobook synchronisation design and implementation state: shipped edition pairing/chapter mapping, validated alignment jobs, an optional worker-local Storyteller adapter, and deterministic cache-only EPUB 3 Media Overlays."
+description: "Ebook↔audiobook synchronisation implementation: shipped pairing/chapter mapping, native SMIL reuse, Storyteller and external native CTC workers, and deterministic cache-only EPUB 3 Media Overlays."
 ---
 
 **Shipped:** edition pairing, the free
 chapter/percentage map, the generic worker protocol, strict pair-scoped
-`SyncMapV1` import/enqueue, the optional worker-local Storyteller delegate, and
-server-finalized deterministic read-aloud EPUB delivery. The `align` wire
-contract and `SyncMapV1` validator live in `crates/worker`; the host validator
-checks the exact requester, pair, source digests, durations, output bytes, and
-prepared EPUB targets before persisting a map and publishing its cache.
-`Media.syncMap`, `Media.readAloud`, the authenticated status/download routes,
-and cache-only OPDS acquisition links never enqueue work or run ML.
-Native CTC/Viterbi, virtual composite delivery, and readiness quality checks
-remain **Planned**. The requests ledger, approval/release processor, automation
-defaults, and download polling backend are **Shipped**; real MAM/VPN/qBittorrent
-and physical-device delivery remain untested. Storyteller credentials stay in
-the worker process and never enter the server or job payload.
+`SyncMapV1` import/enqueue, source-EPUB native SMIL import, the optional
+worker-local Storyteller delegate, an operator-configured external native
+CPU/fp32 CTC runner, and server-finalized deterministic read-aloud EPUB
+delivery. The `align` wire contract and `SyncMapV1` validator live in
+`crates/worker`; the host validator checks the exact requester, pair, source
+digests, durations, output bytes, and prepared EPUB targets before persisting a
+map and publishing its cache. `Media.syncMap`, `Media.readAloud`, the
+authenticated status/download routes, and cache-only OPDS acquisition links
+never enqueue work or run ML. An in-process Rust model runtime, virtual
+composite delivery, and readiness quality checks remain **Planned**. The
+metadata-backed request ledger, permissions, per-user visibility,
+approval/rejection decisions, notifications, and social handoff are
+**Shipped**. Acquisition is deferred and is not part of the read-aloud worker
+contract. Storyteller and native model paths stay in the worker process and
+never enter the server or job payload.
 
-**Integration status:** The rows below describe the merged implementation at
-source level. The post-merge full gate and protocol replay remain pending; they
-must not be read as a green verification result.
+**Integration status:** The implementation and its focused read-aloud tests are
+green in the 2026-09-22 full Rust/Bun/build gate. This is source and automated
+contract evidence, not physical-reader playback proof.
 
-The three rows below are **cost/input tiers, not three shipped alignment
-engines**. Today Coppice ships the deterministic first tier plus an optional
-worker-local external delegate; it has no in-process ML alignment engine. Tier 2
-is one product capability with replaceable worker backends; tier 3 is
-audiobook-only ASR and remains out of scope.
+The three rows below are **cost/input tiers, not three independent product
+features**. Coppice ships the deterministic first tier, strict native SMIL
+reuse, and optional Storyteller or external native CTC worker backends; it has
+no in-process ML alignment engine. Tier 2 remains one product capability with
+replaceable worker backends; tier 3 is audiobook-only ASR and remains out of
+scope.
 
 ## 1. The problem in one table
 
@@ -143,9 +147,10 @@ or default server backend.
 the runner remains outside the server):
 
 ```text
-paired EPUB ──► deterministic preparation (per-spine stable ids:
-                 coppice-{spine_index}-{ordinal})
-single-file M4B ─► worker-local aligner (Storyteller delegate)
+paired EPUB ──► deterministic preparation (preserve source fragment ids;
+                 assign deterministic ids only to missing targets)
+single-file M4B ─► worker-local aligner (Storyteller delegate or configured
+                   external native CPU/fp32 CTC executable)
                  └──► SyncMapV1 {
                         provenance: { exact input digests, implementation/model/runtime },
                         cues: [{ text: { spine_index, ordinal, element_id },
@@ -161,8 +166,9 @@ media, granularity and immutable generator/input identity; there is no
 `pair_id` row. `importSyncMap` validates the typed map against the confirmed
 pair and real track durations before upserting it, while `enqueueAlignment`
 reuses an active job for the same exact pair/input and granularity. The
-original EPUB and M4B are never modified. Sentence-id-injected XHTML is
-regenerated deterministically for the worker and export.
+original EPUB and M4B are never modified. Preparation preserves existing source
+XHTML fragment IDs and adds deterministic IDs only where needed, so native
+overlays and worker output share one target contract.
 
 Fallback interpolation is bounded inside one confirmed chapter and marked with
 `confidence`; never interpolate across front matter, an unmatched chapter or a
@@ -301,11 +307,11 @@ Calibre-Web Automated, BookFusion, Readest, and trackers. Snapshot:
 | --- | --- | --- |
 | Primary job | bridge positions, sessions, annotations, and books among existing services | own the library, media model, serving protocols, readers, and conversions |
 | Pairing | dashboard, suggestions, queue, same-folder matching, per-user links | work/edition pairing and editable chapter maps are shipped |
-| Alignment source order | regular worker and automatic Forge completion try an existing Storyteller word timeline, then EPUB SMIL, then local/cloud Whisper; Forge can also drive Storyteller processing | chapter map plus explicit `SyncMapV1` import/enqueue and Storyteller delegate are shipped; native CTC remains planned |
+| Alignment source order | regular worker and automatic Forge completion try an existing Storyteller word timeline, then EPUB SMIL, then local/cloud Whisper; Forge can also drive Storyteller processing | chapter map, strict native SMIL import, explicit `SyncMapV1` import/enqueue, Storyteller delegate, and external native CPU/fp32 CTC runner are shipped |
 | Storyteller reuse | can reuse an existing Storyteller artifact or upload source files, trigger processing, poll, download the read-aloud EPUB, and re-anchor its timing to the local EPUB | worker-local delegate uploads the exact prepared EPUB and single-file M4B, processes/polls/downloads, and returns only `SyncMapV1`; verified UUID reuse remains planned |
-| SMIL reuse | accepts overlays only after ≥85 % coverage and, by default, ≥60 % token overlap | server renders deterministic SMIL from accepted `SyncMapV1`; arbitrary external element IDs are rejected |
-| Compute fallback | `faster-whisper` with optional CUDA, Whisper.cpp server, Deepgram, or other providers; durable per-install transcript cache | native known-text CTC is the preferred future backend; audiobook-only ASR remains tier 3 |
-| Exact known-text CTC | not shipped; [issue #426](https://github.com/cporcellijr/bookbridge/issues/426) tracks it | planned after the Storyteller worker adapter |
+| SMIL reuse | accepts overlays only after ≥85 % coverage and, by default, ≥60 % token overlap | source-EPUB SMIL import is shipped only when its embedded audio bytes equal the sole paired external M4B; preserved XHTML ids, monotonic cues, durations, and source digests are validated before persistence |
+| Compute fallback | `faster-whisper` with optional CUDA, Whisper.cpp server, Deepgram, or other providers; durable per-install transcript cache | an operator-provided external known-text CTC executable/model is shipped for the exact CPU/fp32 profile; audiobook-only ASR remains tier 3 |
+| Exact known-text CTC | not shipped; [issue #426](https://github.com/cporcellijr/bookbridge/issues/426) tracks it | shipped as the typed external `native-ctc` worker backend; an in-process Rust/ONNX runtime remains optional future work |
 | Edition variance | lexical anchoring, optional Ollama similarity guard, then linear fallback; the guard is not applied to every Storyteller path | confirmed edition pairing plus deterministic target IDs; strict source identity is mandatory |
 | Provenance/cache | persists `transcript_source`, `align_method`, maps, Storyteller manifests, and reusable Whisper progress; v7.6 strips embedded narration from cached Storyteller EPUBs | `media_sync_maps` stores validated provenance and the server publishes an immutable deterministic cached derivative |
 | Portable output | consumes Storyteller/SMIL and translates positions; its adapter uses TUS upload, `POST /api/v2/books/{uuid}/process`, polling, and read-aloud EPUB download | shipped materialized EPUB 3 Media Overlays plus the smaller internal `SyncMapV1` |
@@ -435,12 +441,14 @@ legal, privacy, and abuse review.
 
 ## 5. Output: Storyteller-compatible EPUB from an accepted map
 
-**Shipped:** the read-aloud EPUB is a ZIP of XHTML with deterministic sentence
-ids, one SMIL per spine item, `package.opf` `media-overlay` references and
-`media:duration`, and the original single-file M4B at `audio/book.m4b`. The
-accepted `SyncMapV1` is the source of truth; the EPUB is a replaceable delivery
-derivative. Synchronized Storyteller read-aloud playback is not shipped;
-ordinary EPUB playback and ordinary audiobook playback remain separate.
+**Shipped:** preparation preserves source XHTML ids and assigns deterministic
+ids only to otherwise-unaddressable text. The read-aloud EPUB is a mimetype-first
+deterministic ZIP with one SMIL per spine item, `package.opf` `media-overlay`
+references and `media:duration`, and the original single-file M4B streamed to
+`audio/book.m4b`. The accepted `SyncMapV1` is the source of truth; the EPUB is
+a replaceable delivery derivative. Synchronized Storyteller read-aloud playback
+is not shipped; ordinary EPUB playback and ordinary audiobook playback remain
+separate.
 
 Two immutable cache identities stay separate:
 
@@ -523,12 +531,15 @@ VPS never needs to reach the PC), so NAT and dynamic IPs are not a concern.
 | Routing | a job kind declares `local: Option<fn>`; if a capable worker is connected it is offered first, else the local implementation runs (transcode has one: the `ffmpeg` ExternalTool), else the job waits. Priority is low by default: alignment never competes with a scan |
 | Data path | input by authenticated download (`/api/v2/media/{id}/file`, `/audio/track/{i}`); output uploaded as raw bytes to `PUT /api/v2/workers/jobs/{id}/output` with a required SHA-256, then atomically published only after result validation |
 | Events | job transitions are `CoreEvent::WorkerJobChanged` on the bus (*exists* as a pattern) → console live status, ntfy on completion |
-| Worker binary | `crates/worker` (`stump_worker`): protocol client, transcode/browser runners, and the optional worker-local Storyteller `align` runner; the server-side `AlignInput`, `AlignResult` and `SyncMapV1` contract remains shared |
+| Worker binary | `crates/worker` (`stump_worker`): protocol client, transcode/browser runners, optional worker-local Storyteller delegate, and optional external native CTC runner; the server-side `AlignInput`, `AlignResult` and `SyncMapV1` contract remains shared |
 
-Current executable kinds are `transcode` and `challenge_solve`; an
-`align` runner is registered when the worker has a configured Storyteller
-endpoint. `align` has a typed wire/capability contract and explicit enqueue
-action; without a capable worker, the row parks in `needs_worker`.
+An `align` runner is registered when the worker has either a configured
+Storyteller endpoint or both `--native-aligner` and `--native-align-model`.
+The native executable receives only local `--epub`, `--audio`, `--model`, and
+`--output` paths and must emit typed `SyncMapV1`; its model identifier/revision,
+implementation, version, CPU provider, fp32 precision, and CTC algorithm must
+match the job profile. Both runners stream authorized source media to temporary
+files. Without a capable worker, the row parks in `needs_worker`.
 Audiobook-only `asr` remains later/out of scope.
 
 ### Optional Storyteller align backend
@@ -560,32 +571,25 @@ embeds them in an EPUB/archive.
 
 ## 7. Requests - asking for what is missing
 
-**Shipped (backend):** the `requests`/wanted ledger, request table, approval and
-release-selection mutations, automation defaults, and bounded download polling
-processor now exist. A catalog search result is still not a request, and the
-backend does not by itself claim a Requests page, real MAM download, or physical
-device delivery.
+Coppice ships its own metadata-backed request ledger and Home surface. The
+server owns request creation, mine/all visibility, permissions, optional
+destination intent, manager approval/rejection, notifications, and social
+recommendation handoff.
 
-The implemented orchestration is:
+Universal-style metadata search can seed a request, but approval ends the
+Coppice request flow:
 
 ```text
-internal media/work or external work reference
-  -> optional destination device/shelf
-  -> approval (automation defaults off)
-  -> Torznab caps/search through private mam-gateway
-  -> opaque release selection and grab
-  -> bounded download polling
-  -> existing ingest staging + source verification
-  -> destination queue
+metadata search or recommendation
+  -> request
+  -> permission and visibility checks
+  -> operator approval or rejection
 ```
 
-The implemented `mam-gateway` is a narrow boundary with **mocked protocol-contract
-evidence pending Main validation**: MAM cookies, raw tracker URLs, and qBittorrent
-access stay inside the Gluetun namespace, while Coppice stores only the private
-gateway endpoint/token. Real MAM authentication, VPN-egress proof, qBittorrent
-download, ingest replay, and physical-device delivery are untested. Shelfmark is
-currently absent; its shared-folder export remains a separate future connector,
-and Coppice ships no arbitrary downloader or provider-host auto-fulfillment.
+MAM acquisition is deferred. There is no active release selection, grab,
+download polling, retry, or gateway configuration. If acquisition is added
+later, it must run as a separate authenticated provider sidecar. This boundary
+does not promise a provider, implementation, or schedule.
 
 Alignment is a separate explicit path: a user confirms an ebook + audiobook
 pair, then imports a validated map or enqueues an alignment job. The optional
@@ -614,22 +618,22 @@ search/catalog provider.
 2. Worker protocol + `crates/worker` + `worker_jobs` + console Workers page,
    with `transcode` as the first job kind — **Shipped**.
 3. `AlignInput`/capability requirements + `SyncMapV1` validation —
-   **Shipped**; `media_sync_maps`, `Media.syncMap`, the explicit enqueue action,
-   and the optional Storyteller delegate are **Shipped**. Native CTC remains
-   **Planned**.
-4. Add verified Storyteller UUID reuse, exact-edition local manifest
-   import/export, and gap-only repair after the delegate path has evidence.
-5. Add the native known-text CTC/Viterbi runner as an independent backend.
-6. Read-aloud EPUB delivery, the OPDS acquisition link, and GraphQL readiness —
+   **Shipped**; `media_sync_maps`, `Media.syncMap`, explicit enqueue/import,
+   strict native SMIL import, the Storyteller delegate, and the external native
+   CTC runner are **Shipped**. An in-process Rust model runtime remains optional
+   future work.
+4. Add verified Storyteller UUID reuse, exact-edition manifest export, and
+   gap-only repair after the delegate path has evidence.
+5. Read-aloud EPUB delivery, the OPDS acquisition link, and GraphQL readiness —
    the authenticated cache-only route, OPDS link, GraphQL map/artifact fields,
    and materialized deterministic ZIP are **Shipped**. Readiness quality
    checks and the virtual composite EPUB remain **Planned**.
-7. Add the `requests`/wanted ledger and fulfillment connectors. Shelfmark's
-   shared-folder export into ingest is first; a token-auth request bridge is
-   **Blocked** until Shelfmark has a stable service API. Do not auto-fulfill
-   provider-host search results.
-8. Public manifest federation only after legal/privacy review and abuse controls.
-9. Optional Storyteller app serving profile (`crates/storyteller`), independent
+6. Keep the request ledger, permissions, decisions, notifications, and social
+   handoff separate from provider search and alignment. Acquisition remains
+   deferred; any future integration must use a separate authenticated provider
+   sidecar.
+7. Public manifest federation only after legal/privacy review and abuse controls.
+8. Optional Storyteller app serving profile (`crates/storyteller`), independent
    of the worker align backend.
 
 ## 10. Project-local operator tooling

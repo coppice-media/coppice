@@ -1,44 +1,60 @@
 import type { Locale } from 'date-fns'
 import { formatDuration, setDefaultOptions } from 'date-fns'
-import { enUS } from 'date-fns/locale/en-US'
+import { enUS } from 'date-fns/locale'
 
 import type { AllowedLocale } from './config'
 
+function resolveLocale(module: unknown): Locale {
+	if (!module || typeof module !== 'object') {
+		throw new Error('date-fns locale module did not export a locale')
+	}
+
+	const locale = Object.values(module).find(
+		(value): value is Locale =>
+			!!value && typeof value === 'object' && 'code' in value && typeof value.code === 'string',
+	)
+	if (!locale) {
+		throw new Error('date-fns locale module did not export a locale')
+	}
+
+	return locale
+}
+
 // Note: lazy loading as to not bloat initial bundle with all the locales
 const dateFnsLocaleLoaders: Record<AllowedLocale, () => Promise<Locale>> = {
-	bs: () => import('date-fns/locale/bs').then((m) => m.bs),
-	'af-ZA': () => import('date-fns/locale/af').then((m) => m.af),
-	'ar-SA': () => import('date-fns/locale/ar-SA').then((m) => m.arSA),
-	'ca-ES': () => import('date-fns/locale/ca').then((m) => m.ca),
-	'cs-CZ': () => import('date-fns/locale/cs').then((m) => m.cs),
-	'da-DK': () => import('date-fns/locale/da').then((m) => m.da),
-	'de-DE': () => import('date-fns/locale/de').then((m) => m.de),
-	'el-GR': () => import('date-fns/locale/el').then((m) => m.el),
-	'en-GB': () => import('date-fns/locale/en-GB').then((m) => m.enGB),
+	bs: () => import('date-fns/locale/bs').then(resolveLocale),
+	'af-ZA': () => import('date-fns/locale/af').then(resolveLocale),
+	'ar-SA': () => import('date-fns/locale/ar-SA').then(resolveLocale),
+	'ca-ES': () => import('date-fns/locale/ca').then(resolveLocale),
+	'cs-CZ': () => import('date-fns/locale/cs').then(resolveLocale),
+	'da-DK': () => import('date-fns/locale/da').then(resolveLocale),
+	'de-DE': () => import('date-fns/locale/de').then(resolveLocale),
+	'el-GR': () => import('date-fns/locale/el').then(resolveLocale),
+	'en-GB': () => import('date-fns/locale/en-GB').then(resolveLocale),
 	'en-US': () => Promise.resolve(enUS),
-	'es-ES': () => import('date-fns/locale/es').then((m) => m.es),
-	'fa-IR': () => import('date-fns/locale/fa-IR').then((m) => m.faIR),
-	'fi-FI': () => import('date-fns/locale/fi').then((m) => m.fi),
-	'fr-FR': () => import('date-fns/locale/fr').then((m) => m.fr),
-	'he-IL': () => import('date-fns/locale/he').then((m) => m.he),
-	'hu-HU': () => import('date-fns/locale/hu').then((m) => m.hu),
-	'it-IT': () => import('date-fns/locale/it').then((m) => m.it),
-	'ja-JP': () => import('date-fns/locale/ja').then((m) => m.ja),
-	'ko-KR': () => import('date-fns/locale/ko').then((m) => m.ko),
-	'nl-NL': () => import('date-fns/locale/nl').then((m) => m.nl),
-	'no-NO': () => import('date-fns/locale/nb').then((m) => m.nb), // Norwegian Bokmål
-	'pl-PL': () => import('date-fns/locale/pl').then((m) => m.pl),
-	'pt-BR': () => import('date-fns/locale/pt-BR').then((m) => m.ptBR),
-	'pt-PT': () => import('date-fns/locale/pt').then((m) => m.pt),
-	'ro-RO': () => import('date-fns/locale/ro').then((m) => m.ro),
-	'ru-RU': () => import('date-fns/locale/ru').then((m) => m.ru),
-	'sr-SP': () => import('date-fns/locale/sr').then((m) => m.sr),
-	'sv-SE': () => import('date-fns/locale/sv').then((m) => m.sv),
-	'tr-TR': () => import('date-fns/locale/tr').then((m) => m.tr),
-	'uk-UA': () => import('date-fns/locale/uk').then((m) => m.uk),
-	'vi-VN': () => import('date-fns/locale/vi').then((m) => m.vi),
-	'zh-CN': () => import('date-fns/locale/zh-CN').then((m) => m.zhCN),
-	'zh-TW': () => import('date-fns/locale/zh-TW').then((m) => m.zhTW),
+	'es-ES': () => import('date-fns/locale/es').then(resolveLocale),
+	'fa-IR': () => import('date-fns/locale/fa-IR').then(resolveLocale),
+	'fi-FI': () => import('date-fns/locale/fi').then(resolveLocale),
+	'fr-FR': () => import('date-fns/locale/fr').then(resolveLocale),
+	'he-IL': () => import('date-fns/locale/he').then(resolveLocale),
+	'hu-HU': () => import('date-fns/locale/hu').then(resolveLocale),
+	'it-IT': () => import('date-fns/locale/it').then(resolveLocale),
+	'ja-JP': () => import('date-fns/locale/ja').then(resolveLocale),
+	'ko-KR': () => import('date-fns/locale/ko').then(resolveLocale),
+	'nl-NL': () => import('date-fns/locale/nl').then(resolveLocale),
+	'no-NO': () => import('date-fns/locale/nb').then(resolveLocale), // Norwegian Bokmål
+	'pl-PL': () => import('date-fns/locale/pl').then(resolveLocale),
+	'pt-BR': () => import('date-fns/locale/pt-BR').then(resolveLocale),
+	'pt-PT': () => import('date-fns/locale/pt').then(resolveLocale),
+	'ro-RO': () => import('date-fns/locale/ro').then(resolveLocale),
+	'ru-RU': () => import('date-fns/locale/ru').then(resolveLocale),
+	'sr-SP': () => import('date-fns/locale/sr').then(resolveLocale),
+	'sv-SE': () => import('date-fns/locale/sv').then(resolveLocale),
+	'tr-TR': () => import('date-fns/locale/tr').then(resolveLocale),
+	'uk-UA': () => import('date-fns/locale/uk').then(resolveLocale),
+	'vi-VN': () => import('date-fns/locale/vi').then(resolveLocale),
+	'zh-CN': () => import('date-fns/locale/zh-CN').then(resolveLocale),
+	'zh-TW': () => import('date-fns/locale/zh-TW').then(resolveLocale),
 }
 
 const localeCache = new Map<AllowedLocale, Locale>()

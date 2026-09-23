@@ -13,6 +13,7 @@ mod oidc;
 pub(crate) mod read_aloud;
 pub(crate) mod reading;
 pub(crate) mod series;
+pub(crate) mod source_workers;
 pub(crate) mod transcode_job;
 mod user;
 pub(crate) mod workers;
@@ -59,6 +60,7 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 		.merge(series::mount(app_state.clone()))
 		.merge(library::mount(app_state.clone()))
 		.merge(user::mount(app_state.clone()))
+		.merge(source_workers::mount(app_state.clone()))
 		.merge(workers::mount(app_state))
 		.route("/claim", get(claim))
 		.route("/health", get(health))

@@ -63,7 +63,7 @@
 		{
 			"name": "Komelia",
 			"repo": "Snd-R/Komelia",
-			"baseline": { "kind": "commit", "value": "65f92fde60b7b7b62b85a55ceb80b92adf50eec8" },
+			"baseline": { "kind": "commit", "value": "3c5f501ef24b3acc239302adcab28efe0772c513" },
 			"sourcePolicy": "inspect-contract-only"
 		},
 		{
@@ -75,7 +75,15 @@
 		{
 			"name": "Komf",
 			"repo": "Snd-R/komf",
-			"sourcePolicy": "inspect-contract-only"
+			"baseline": { "kind": "commit", "value": "5ad67370c5da6d94372e7c51bff62dd75053ac64" },
+			"reviewedRelease": "2.0.1",
+			"sourcePolicy": "inspect-contract-only",
+			"dependencies": {
+				"komga-client": {
+					"baseline": { "kind": "commit", "value": "d6cfcb3b625b113b181529b335d2c2b11ad08076" },
+					"version": "0.10.3"
+				}
+			}
 		},
 		{
 			"name": "KOReader",

@@ -117,6 +117,15 @@ async fn accepted_cache(
 	else {
 		return Ok(None);
 	};
+	if map.ebook_media_id != media_id {
+		return Ok(None);
+	}
+	if !sync_maps::map_matches_current_sources(conn, &map)
+		.await
+		.map_err(|error| APIError::InternalServerError(error.to_string()))?
+	{
+		return Ok(None);
+	}
 	let path = sync_maps::read_aloud_cache_path(config.get_transform_cache_dir(), &map)
 		.map_err(|error| APIError::InternalServerError(error.to_string()))?;
 	if tokio::fs::metadata(&path).await.is_err() {

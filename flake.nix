@@ -34,11 +34,40 @@
           extensions = [ "rust-src" "rust-analyzer" ];
         };
 
+        bunVersion = "1.4.1";
+        bunSources = {
+          aarch64-darwin = pkgs.fetchurl {
+            url = "https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-darwin-aarch64.zip";
+            hash = "sha256-2Jc86DX6eGflzHmv7m/G8a4BF6pL1fwlRv0AxRL3E4Y=";
+          };
+          x86_64-darwin = pkgs.fetchurl {
+            url = "https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-darwin-x64.zip";
+            hash = "sha256-jzQjnydqPw0nv80f/s/l0hJ+dPsKpMCXGgzex7IlyWU=";
+          };
+          aarch64-linux = pkgs.fetchurl {
+            url = "https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-linux-aarch64.zip";
+            hash = "sha256-WAzndTMQjcaxC+wXITl+T1qkTpCXJtokUdSD38XlgdY=";
+          };
+          x86_64-linux = pkgs.fetchurl {
+            url = "https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-linux-x64.zip";
+            hash = "sha256-dMHDvufNmYUAyPlpzYlyNVrGoHIH6Uo57s4ZmbVv+r8=";
+          };
+        };
+        bunToolchain = pkgs.bun.overrideAttrs (previousAttrs: {
+          version = bunVersion;
+          src = bunSources.${system} or
+            (throw "Bun ${bunVersion} is not available for ${system}");
+          passthru = previousAttrs.passthru // { sources = bunSources; };
+          meta = previousAttrs.meta // {
+            platforms = builtins.attrNames bunSources;
+          };
+        });
+
         packages = with pkgs; [
           git
 
-          # node
-          (yarn.override { withNode = false; })
+          # JavaScript toolchain
+          bunToolchain
           nodejs_22
 
           # rust
@@ -71,7 +100,7 @@
           '';
         };
 
-        # android setup
+        # Frozen Expo compatibility environment; not part of the active Bun workspace.
         pinnedJDK = androidPkgs.jdk17;
         androidComposition = androidPkgs.androidenv.composeAndroidPackages {
           buildToolsVersions = [ "35.0.0" "36.0.0" ];

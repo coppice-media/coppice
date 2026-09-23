@@ -23,13 +23,13 @@ related package names).
   has shipped and which apps or devices have actually been verified.
 - **[Configure a profile](/docs/guides/configuration/modular-deployment)** —
   Choose full, headless, minimal, KOReader-only, or Kavita-only composition.
-- **[Understand fulfillment](/docs/guides/integrations/shelfmark)** — Follow the
-  current shared-folder handoff and the planned request boundary.
+- **[Understand requests and acquisition](/docs/guides/integrations/acquisition)** —
+  See what Coppice owns today and where acquisition stops.
 
 ## What Coppice does today
 
-- Hosts media from libraries you control; it is not a search or download
-  service.
+- Hosts media from libraries you control. Universal-style search discovers
+  metadata; it does not acquire or download media.
 - Serves the native API plus protocol adapters for OPDS, Komga-shaped clients,
   Kobo, KOReader, Kavita, Audiobookshelf-compatible clients, and liseur-sync.
 - Supports ordinary EPUB reading and ordinary audiobook playback as separate
@@ -38,6 +38,8 @@ related package names).
   handoff can become a library item.
 - Provides Hardcover metadata mapping with offline fixture coverage. Live
   Hardcover credentials have not been verified.
+- Keeps its own request ledger, permissions, per-user visibility, operator
+  approval/rejection decisions, notifications, and social handoff.
 
 An implemented route is not automatically an app or device guarantee. Read the
 [compatibility and integration status](/docs/guides/integrations/compatibility)
@@ -68,10 +70,10 @@ distinguishes compile-time Cargo features from runtime `STUMP_*` and
 
 ### Planned
 
-The `requests`/wanted ledger, a stable token-auth request bridge, and worker-side
-read-aloud alignment are future work. An alignment request starts only after a
-confirmed EPUB and audiobook pair and can then use existing timing import,
-a future Storyteller worker, and a native CTC fallback candidate.
+Any future acquisition integration must run as a separate authenticated
+provider sidecar; no provider, implementation, or delivery date is promised.
+Worker-side read-aloud alignment remains future work after an ebook and
+audiobook pair has been confirmed.
 
 ### Blocked
 

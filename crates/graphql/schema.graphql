@@ -794,11 +794,6 @@ type BookRequest {
 	destinationDeviceId: String
 	status: BookRequestStatus!
 	approvalPolicy: String!
-	automationEnabled: Boolean!
-	scoringFloor: Int!
-	verificationThreshold: Int!
-	maxRetries: Int!
-	retries: Int!
 	approvedBy: String
 	rejectedBy: String
 	failureCode: String
@@ -809,104 +804,25 @@ type BookRequest {
 	completedAt: DateTime
 }
 
-input BookRequestGatewayInput {
-	endpoint: String!
-	token: String!
-	enabled: Boolean! = false
-	requireApproval: Boolean! = true
-	automationEnabled: Boolean! = false
-	scoringFloor: Int! = 80
-	verificationThreshold: Int! = 70
-	maxRetries: Int! = 3
-	handoffRoot: String
-}
-
-type BookRequestGatewaySettings {
-	id: String!
-	endpoint: String!
-	enabled: Boolean!
-	requireApproval: Boolean!
-	automationEnabled: Boolean!
-	scoringFloor: Int!
-	verificationThreshold: Int!
-	maxRetries: Int!
-	handoffRoot: String
-	hasToken: Boolean!
-	tokenRedacted: String!
-	updatedBy: String
-	updatedAt: DateTime!
-}
-
-type BookRequestGrab {
-	id: String!
-	requestId: String!
-	releaseId: String!
-	"Opaque sidecar handle; it is not a tracker URL or a download URL."
-	opaqueId: String!
-	status: String!
-	attempts: Int!
-	maxAttempts: Int!
-	failureCode: String
-	failureMessage: String
-	startedAt: DateTime
-	finishedAt: DateTime
-	lastPolledAt: DateTime
-	nextPollAt: DateTime
-	createdAt: DateTime!
-	updatedAt: DateTime!
-}
-
-type BookRequestHandoff {
-	id: String!
-	requestId: String!
-	grabId: String!
-	libraryId: String!
-	relativePath: String!
-	sha256: String!
-	byteSize: Int!
-	status: String!
-	dropItemId: String
-	shelfId: String
-	deviceId: String
-	errorCode: String
-	errorMessage: String
-}
-
-type BookRequestRelease {
-	id: String!
-	searchId: String!
-	requestId: String!
-	sourceProvider: String!
-	remoteId: String!
-	externalKey: String
-	title: String!
-	authors: String
-	format: String
-	language: String
-	edition: String
-	quality: String
-	sizeBytes: Int
-	seeders: Int
-	previewName: String
-	previewMime: String
-	previewBytes: Int
-	score: Int!
-	scoreComponents: JSON!
-	rank: Int!
-	selected: Boolean!
-}
-
 enum BookRequestStatus {
 	PENDING
+	"Historical acquisition state retained so existing rows remain readable."
 	SEARCHING
+	"Historical request state retained so existing rows remain readable."
 	AWAITING_APPROVAL
+	"Historical acquisition state retained so existing rows remain readable."
 	NEEDS_SELECTION
 	APPROVED
+	"Historical acquisition state retained so existing rows remain readable."
 	GRABBED
+	"Historical acquisition state retained so existing rows remain readable."
 	IMPORTING
+	"Historical acquisition state retained so existing rows remain readable."
 	QUEUED
+	"Historical acquisition state retained so existing rows remain readable."
 	COMPLETED
 	REJECTED
+	"Historical acquisition state retained so existing rows remain readable."
 	FAILED
 }
 
@@ -1103,7 +1019,6 @@ input CreateBookRequestInput {
 	coverUrl: String
 	destinationShelfId: ID
 	destinationDeviceId: ID
-	automationEnabled: Boolean! = false
 }
 
 input CreateCustomEmojiInput {
@@ -1517,6 +1432,11 @@ enum DeviceKind {
 	is never offered a transformed stream.
 	"""
 	WORKER
+	"""
+	A source worker process that advertises configured home-library roots
+	over its separately authorized source socket.
+	"""
+	SOURCE_WORKER
 	"A Kavita-compatible reader using the native API with a download-only key"
 	KAVITA
 }
@@ -1970,8 +1890,8 @@ type ExternalSeriesMetadata {
 }
 
 """
-A catalog/work identity outside the Coppice library. The gateway only sees
-normalized metadata and an opaque candidate id later returned by search.
+A catalog/work identity outside the Coppice library, stored as an immutable
+metadata snapshot on the user's request.
 """
 input ExternalWorkReferenceInput {
 	sourceProvider: String!
@@ -4370,6 +4290,11 @@ type Mutation {
 	"""
 	importSyncMap(ebookMediaId: ID!, audioMediaId: ID!, map: JSON!): SyncMap!
 	"""
+	Import the EPUB's existing native Media Overlay and publish its
+	deterministic read-aloud derivative without enqueueing a worker job.
+	"""
+	importSmil(ebookMediaId: ID!, audioMediaId: ID!): SyncMap!
+	"""
 	Enqueue alignment for a confirmed pair, reusing any active identical
 	request rather than creating a second worker job.
 	"""
@@ -4490,12 +4415,6 @@ type Mutation {
 	createBookRequest(input: CreateBookRequestInput!): BookRequest!
 	approveBookRequest(requestId: ID!, reason: String): BookRequest!
 	rejectBookRequest(requestId: ID!, reason: String): BookRequest!
-	searchBookRequest(requestId: ID!): BookRequest!
-	selectBookRequestRelease(requestId: ID!, releaseId: ID!): BookRequest!
-	grabBookRequest(requestId: ID!): BookRequestGrab!
-	pollBookRequestGrab(grabId: ID!): BookRequestGrab!
-	retryBookRequest(requestId: ID!): BookRequest!
-	updateBookRequestGateway(input: BookRequestGatewayInput!): BookRequestGatewaySettings!
 	"""
 	Probe a private IPv4 address using CrossPoint's fixed HTTP port. The
 	returned identity is deliberately not persisted until the user submits
@@ -5716,10 +5635,6 @@ type Query {
 	apiKeyById(id: Int!): Apikey!
 	bookRequest(id: ID!): BookRequest
 	bookRequests(status: BookRequestStatus, mineOnly: Boolean! = false, limit: Int! = 50, offset: Int! = 0): [BookRequest!]!
-	bookRequestReleases(requestId: ID!): [BookRequestRelease!]!
-	bookRequestGrabs(requestId: ID!): [BookRequestGrab!]!
-	bookRequestHandoffs(requestId: ID!): [BookRequestHandoff!]!
-	bookRequestGateway: BookRequestGatewaySettings
 	jobs(pagination: Pagination! = {offset: {page: 1, pageSize: 20, zeroBased: false}}): PaginatedJobResponse!
 	jobById(id: ID!): Job
 	scheduledJobs: [ScheduledJob!]!
@@ -7484,6 +7399,11 @@ enum UserPermission {
 	ACCESS_KOREADER_SYNC
 	"Grant access to the kobo sync feature"
 	ACCESS_KOBO_SYNC
+	"""
+	Grant access to act as a source worker: advertise configured roots and
+	serve only explicitly authorized remote-source reads.
+	"""
+	ACCESS_REMOTE_SOURCE
 	"""
 	Grant a device the right to act as a remote worker: open the worker
 	socket, claim `worker_jobs`, and upload their outputs

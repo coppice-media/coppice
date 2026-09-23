@@ -2,13 +2,11 @@
 	import BookOpenIcon from '@lucide/svelte/icons/book-open';
 	import Globe2Icon from '@lucide/svelte/icons/globe-2';
 	import LinkIcon from '@lucide/svelte/icons/link';
-	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
 	import { Input } from '@stump/ui/components/ui/input';
 	import { Label } from '@stump/ui/components/ui/label';
-	import { Switch } from '@stump/ui/components/ui/switch';
 	import { safeCoverUrl, safeText, type ExternalWorkReference } from '$lib/requests';
 
 	type Destination = { id: string; name: string };
@@ -23,7 +21,6 @@
 		coverUrl?: string;
 		destinationShelfId?: string;
 		destinationDeviceId?: string;
-		automationEnabled: boolean;
 	};
 
 	let {
@@ -80,7 +77,6 @@
 	let coverUrl = $state('');
 	let destinationShelfId = $state('');
 	let destinationDeviceId = $state('');
-	let automationEnabled = $state(false);
 
 	function initializeFormState(): void {
 		mode = initialMode;
@@ -114,7 +110,6 @@
 			coverUrl: safeCover,
 			destinationShelfId: destinationShelfId || undefined,
 			destinationDeviceId: destinationDeviceId || undefined,
-			automationEnabled
 		};
 		if (mode === 'internal') {
 			input.mediaId = mediaId.trim() || undefined;
@@ -143,7 +138,7 @@
 			<Alert class="mt-3">
 				<AlertTitle>Recommendation handoff</AlertTitle>
 				<AlertDescription>
-					Review the provider and title below before submitting. The opaque recommendation reference is retained by the social flow; no tracker URL or cookie is accepted here.
+					Review the provider and title below before submitting. The opaque recommendation reference stays with the social flow; this form accepts metadata and destination choices only.
 				</AlertDescription>
 			</Alert>
 		{/if}
@@ -176,7 +171,7 @@
 					class="flex items-start gap-3 rounded-lg border p-3 text-left transition-colors {mode === 'external' ? 'border-primary bg-primary/5' : 'bg-background/40'}"
 				>
 					<Globe2Icon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-					<span><strong class="block text-sm font-medium">External work</strong><span class="text-xs text-muted-foreground">Metadata only; the gateway resolves availability.</span></span>
+					<span><strong class="block text-sm font-medium">External work</strong><span class="text-xs text-muted-foreground">Metadata from a trusted catalog or recommendation.</span></span>
 				</button>
 			</div>
 
@@ -228,7 +223,7 @@
 				{#if safeCover}
 					<div class="flex items-center gap-3 sm:col-span-2">
 						<img src={safeCover} alt="" class="size-14 rounded border object-cover" />
-						<span class="text-xs text-muted-foreground">Cover preview only; it is not used as a download source.</span>
+						<span class="text-xs text-muted-foreground">Cover preview saved with the request metadata.</span>
 					</div>
 				{/if}
 			</div>
@@ -254,19 +249,8 @@
 				</div>
 			</div>
 
-			<div class="flex items-start justify-between gap-4 rounded-lg border bg-muted/20 px-3 py-3">
-				<div class="flex items-start gap-2">
-					<ShieldCheckIcon class="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-					<div>
-						<Label for="request-automation" class="font-medium">Enable automation for this request</Label>
-						<p class="mt-1 text-xs text-muted-foreground">Off by default. Server policy and approval still control whether it can run.</p>
-					</div>
-				</div>
-				<Switch id="request-automation" bind:checked={automationEnabled} />
-			</div>
-
 			<div class="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-				<p class="flex items-center gap-1.5 text-xs text-muted-foreground"><LinkIcon class="size-3.5" aria-hidden="true" /> Only metadata and opaque ids leave this screen.</p>
+				<p class="flex items-center gap-1.5 text-xs text-muted-foreground"><LinkIcon class="size-3.5" aria-hidden="true" /> Coppice records metadata, destinations, and the approval decision.</p>
 				<Button type="submit" disabled={!valid || busy}>{busy ? 'Submitting…' : 'Submit request'}</Button>
 			</div>
 		</form>

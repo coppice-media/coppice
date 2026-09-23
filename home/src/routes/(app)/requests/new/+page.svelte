@@ -5,18 +5,12 @@
 	import { page } from '$app/state';
 	import { createMutation, createQuery } from '@tanstack/svelte-query';
 	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
-	import CheckCircle2Icon from '@lucide/svelte/icons/check-circle-2';
-	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
-	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import { request } from '@stump/ui/graphql/client';
-	import { BookRequestGatewayDocument, CreateBookRequestDocument, RequestDestinationsDocument } from '$lib/graphql/generated/graphql';
-	import { getHomeSession } from '$lib/session.svelte';
+	import { CreateBookRequestDocument, RequestDestinationsDocument } from '$lib/graphql/generated/graphql';
 	import { externalReferenceFromParams, safeCoverUrl } from '$lib/requests';
 	import RequestCreateForm from '$lib/components/requests/RequestCreateForm.svelte';
-	const session = getHomeSession();
-	const canManage = $derived(Boolean(session.user?.isServerOwner || session.user?.permissions.includes('MANAGE_SERVER')));
 	const params = $derived(page.url.searchParams);
 	const recommendationId = $derived(params.get('recommendationId') ?? '');
 	const targetId = $derived(params.get('targetId') ?? '');
@@ -32,17 +26,10 @@
 		queryFn: () => request(RequestDestinationsDocument, {}),
 		enabled: browser
 	}));
-	const gatewayQuery = createQuery(() => ({
-		queryKey: ['request-gateway'],
-		queryFn: () => request(BookRequestGatewayDocument, {}),
-		enabled: browser && canManage
-	}));
 	const devices = $derived(
 		(destinationsQuery.data?.devices ?? []).filter((device) => !device.revokedAt).map((device) => ({ id: device.id, name: device.name }))
 	);
 	const shelves = $derived((destinationsQuery.data?.readingLists?.nodes ?? []).map((shelf) => ({ id: shelf.id, name: shelf.name })));
-	const gateway = $derived(gatewayQuery.data?.bookRequestGateway ?? null);
-	const gatewayReady = $derived(Boolean(gateway?.enabled && gateway.hasToken));
 
 	const createRequest = createMutation(() => ({
 		mutationFn: (input: unknown) => request(CreateBookRequestDocument, { input } as never),
@@ -69,30 +56,9 @@
 				All requests
 			</Button>
 			<h1 class="mt-3 text-2xl font-semibold tracking-tight">New book request</h1>
-			<p class="mt-1 max-w-2xl text-sm text-muted-foreground">Submit metadata first. Approval, source search, release selection, and private import happen on the request detail page.</p>
+			<p class="mt-1 max-w-2xl text-sm text-muted-foreground">Submit metadata and an optional destination for review. Coppice keeps the request and its approval history.</p>
 		</div>
 	</div>
-
-	{#if gatewayQuery.isError}
-		<Alert variant="destructive">
-			<AlertTitle>Gateway status unavailable</AlertTitle>
-			<AlertDescription>{gatewayQuery.error instanceof Error ? gatewayQuery.error.message : 'The server could not report gateway configuration.'} You can still submit a request for an operator to review.</AlertDescription>
-		</Alert>
-	{:else if gateway && !gatewayReady}
-		<Alert>
-			<CircleAlertIcon class="size-4" aria-hidden="true" />
-			<AlertTitle>Private gateway is not ready</AlertTitle>
-			<AlertDescription>
-				Requests can be submitted, but search and download will wait until an owner enables the gateway and stores its token. Secrets remain hidden.
-			</AlertDescription>
-		</Alert>
-	{:else if gatewayReady}
-		<Alert>
-			<CheckCircle2Icon class="size-4 text-emerald-500" aria-hidden="true" />
-			<AlertTitle>Gateway configured</AlertTitle>
-			<AlertDescription>Source health is verified when an approved request runs search; this screen never handles tracker credentials.</AlertDescription>
-		</Alert>
-	{/if}
 
 	{#if destinationsQuery.isPending}
 		<Skeleton class="h-[38rem] rounded-xl" />

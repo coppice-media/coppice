@@ -16,7 +16,7 @@ use crate::{
 	},
 	series::KomgaSeriesId,
 	sse::KomgaEvent,
-	Page,
+	Page, SUPPORTED_MEDIA_EXTENSIONS,
 };
 use axum::{
 	body::Body,
@@ -35,7 +35,7 @@ use models::entity::{
 use models::txn::begin_write;
 use sea_orm::{
 	prelude::*,
-	sea_query::{Condition, SelectStatement},
+	sea_query::{Condition, Order, SelectStatement},
 	QueryOrder, QuerySelect, QueryTrait,
 };
 use serde::Deserialize;
@@ -167,6 +167,8 @@ struct PaginationQuery {
 	size: i32,
 	#[serde(default)]
 	unpaged: bool,
+	#[serde(default)]
+	sort: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -216,6 +218,110 @@ fn unsupported_filter(name: &str) -> APIError {
 	APIError::BadRequest(format!(
 		"filter {name} is not supported by this Komga profile"
 	))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortDirection {
+	Asc,
+	Desc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SortSpec {
+	field: String,
+	direction: SortDirection,
+}
+
+fn invalid_sort(value: &str) -> APIError {
+	APIError::BadRequest(format!(
+		"sort '{value}' is not supported; expected field(,asc|desc)"
+	))
+}
+
+fn parse_sort_specs(values: &[String]) -> APIResult<Vec<SortSpec>> {
+	let mut specs = Vec::with_capacity(values.len());
+	for value in values {
+		let mut parts = value.split(',');
+		let field = parts.next().unwrap_or_default().trim();
+		let direction = parts.next().unwrap_or("asc").trim();
+		if field.is_empty() || parts.next().is_some() {
+			return Err(invalid_sort(value));
+		}
+
+		let field = field.to_ascii_lowercase();
+		if !matches!(field.as_str(), "name" | "createddate" | "lastmodifieddate") {
+			return Err(invalid_sort(value));
+		}
+
+		let direction = match direction.to_ascii_lowercase().as_str() {
+			"asc" => SortDirection::Asc,
+			"desc" => SortDirection::Desc,
+			_ => return Err(invalid_sort(value)),
+		};
+		specs.push(SortSpec { field, direction });
+	}
+	Ok(specs)
+}
+
+fn order_for(direction: SortDirection) -> Order {
+	match direction {
+		SortDirection::Asc => Order::Asc,
+		SortDirection::Desc => Order::Desc,
+	}
+}
+
+fn apply_read_list_order(
+	mut query: Select<reading_list::Entity>,
+	sorts: &[SortSpec],
+	search_present: bool,
+) -> Select<reading_list::Entity> {
+	// Upstream uses relevance for an un-sorted search. This profile preserves
+	// the existing search order (the RBAC query's stable ID order) because it
+	// has no relevance index; the default name order applies when no search is
+	// present.
+	if sorts.is_empty() && search_present {
+		return query;
+	}
+	// `find_for_user` supplies an ID order for callers that do not add one.
+	// Replace it here so an explicit Komga sort is the primary ordering.
+	QueryTrait::query(&mut query).clear_order_by();
+	if sorts.is_empty() {
+		query = query.order_by_asc(reading_list::Column::Name);
+	} else {
+		for sort in sorts {
+			query = match sort.field.as_str() {
+				"name" => {
+					query.order_by(reading_list::Column::Name, order_for(sort.direction))
+				},
+				"createddate" | "lastmodifieddate" => query
+					.order_by(reading_list::Column::UpdatedAt, order_for(sort.direction)),
+				_ => unreachable!("read-list sort passed validation"),
+			};
+		}
+	}
+	query.order_by_asc(reading_list::Column::Id)
+}
+
+fn apply_collection_order(
+	mut query: Select<collection::Entity>,
+	sorts: &[SortSpec],
+) -> Select<collection::Entity> {
+	QueryTrait::query(&mut query).clear_order_by();
+	if sorts.is_empty() {
+		query = query.order_by_asc(collection::Column::Name);
+	} else {
+		for sort in sorts {
+			query = match sort.field.as_str() {
+				"name" => {
+					query.order_by(collection::Column::Name, order_for(sort.direction))
+				},
+				"createddate" | "lastmodifieddate" => query
+					.order_by(collection::Column::UpdatedAt, order_for(sort.direction)),
+				_ => unreachable!("collection sort passed validation"),
+			};
+		}
+	}
+	query.order_by_asc(collection::Column::Id)
 }
 
 fn validate_read_list_filters(query: &KomgaReadListQuery) -> APIResult<()> {
@@ -323,6 +429,9 @@ fn visible_media_ids_subquery(
 	library_ids: Option<&[String]>,
 ) -> SelectStatement {
 	let mut query = media::Entity::find_for_user(user)
+		.filter(
+			media::Column::Extension.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+		)
 		.select_only()
 		.column(media::Column::Id);
 	if let Some(library_ids) = library_ids {
@@ -335,7 +444,16 @@ fn visible_series_ids_subquery(
 	user: &AuthUser,
 	library_ids: Option<&[String]>,
 ) -> SelectStatement {
+	let supported_series = media::Entity::find()
+		.filter(
+			media::Column::Extension.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+		)
+		.filter(media::Column::SeriesId.is_not_null())
+		.select_only()
+		.column(media::Column::SeriesId)
+		.into_query();
 	let mut query = series::Entity::find_for_user(user)
+		.filter(series::Column::Id.in_subquery(supported_series))
 		.select_only()
 		.column(series::Column::Id);
 	if let Some(library_ids) = library_ids {
@@ -522,6 +640,7 @@ async fn get_readlists(
 	Query(library_filter): Query<LibraryFilterQuery>,
 	headers: HeaderMap,
 ) -> APIResult<Response<Body>> {
+	let sorts = parse_sort_specs(&pagination.sort)?;
 	let pagination = pagination.validate()?;
 	let mut filters_to_validate = filters.clone();
 	if filters_to_validate.deleted == Some(false) {
@@ -543,11 +662,11 @@ async fn get_readlists(
 		.map(str::trim)
 		.filter(|term| !term.is_empty())
 		.map(ToOwned::to_owned);
+	let search_present = search.is_some();
 	let library_ids = library_filter.ids();
 
-	let mut query = reading_list::Entity::find_for_user(&user, READING_LIST_READER_ROLE)
-		.distinct()
-		.order_by_asc(reading_list::Column::Id);
+	let mut query =
+		reading_list::Entity::find_for_user(&user, READING_LIST_READER_ROLE).distinct();
 	if let Some(term) = search {
 		query = query.filter(
 			Condition::any()
@@ -566,6 +685,7 @@ async fn get_readlists(
 			.into_query();
 		query = query.filter(reading_list::Column::Id.in_subquery(list_ids));
 	}
+	query = apply_read_list_order(query, &sorts, search_present);
 
 	let total = total_as_i32(query.clone().count(ctx.conn()).await?)?;
 	let query = if pagination.unpaged {
@@ -919,12 +1039,13 @@ async fn get_collections(
 	Query(library_filter): Query<LibraryFilterQuery>,
 	headers: HeaderMap,
 ) -> APIResult<Response<Body>> {
+	let sorts = parse_sort_specs(&pagination.sort)?;
 	let pagination = pagination.validate()?;
 	validate_search(&search)?;
 	validate_collection_filters(&filters)?;
 	let user = auth.user();
 	let library_ids = library_filter.ids();
-	let mut query = collection::Entity::find().order_by_asc(collection::Column::Id);
+	let mut query = collection::Entity::find();
 	if let Some(library_ids) = library_ids.as_deref() {
 		let collection_ids = collection_series::Entity::find()
 			.filter(
@@ -936,6 +1057,7 @@ async fn get_collections(
 			.into_query();
 		query = query.filter(collection::Column::Id.in_subquery(collection_ids));
 	}
+	query = apply_collection_order(query, &sorts);
 
 	let total = total_as_i32(query.clone().count(ctx.conn()).await?)?;
 	let query = if pagination.unpaged {
@@ -1236,6 +1358,7 @@ mod tests {
 			page: 0,
 			size: default_page_size(),
 			unpaged: false,
+			sort: Vec::new(),
 		}
 		.validate()
 		.unwrap();
@@ -1251,6 +1374,7 @@ mod tests {
 				page,
 				size,
 				unpaged: false,
+				sort: Vec::new(),
 			}
 			.validate()
 			.is_err());
@@ -1260,6 +1384,7 @@ mod tests {
 			page: 0,
 			size: 0,
 			unpaged: false,
+			sort: Vec::new(),
 		}
 		.validate()
 		.expect("count-only size is valid");
@@ -1269,10 +1394,47 @@ mod tests {
 			page: 0,
 			size: 201,
 			unpaged: false,
+			sort: Vec::new(),
 		}
 		.validate()
 		.expect("oversized size clamps");
 		assert_eq!(pagination.size, MAX_PAGE_SIZE);
+	}
+
+	#[test]
+	fn list_sort_parser_accepts_repeated_fields_and_default_direction() {
+		assert_eq!(
+			parse_sort_specs(&[
+				"name".to_owned(),
+				"createdDate,desc".to_owned(),
+				"lastModifiedDate".to_owned(),
+			])
+			.unwrap(),
+			vec![
+				SortSpec {
+					field: "name".to_owned(),
+					direction: SortDirection::Asc,
+				},
+				SortSpec {
+					field: "createddate".to_owned(),
+					direction: SortDirection::Desc,
+				},
+				SortSpec {
+					field: "lastmodifieddate".to_owned(),
+					direction: SortDirection::Asc,
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn list_sort_parser_rejects_unknown_fields_directions_and_shapes() {
+		for value in ["rank,asc", "name,sideways", "name,asc,extra", ",asc"] {
+			assert!(matches!(
+				parse_sort_specs(&[value.to_owned()]),
+				Err(APIError::BadRequest(message)) if message.contains("sort")
+			));
+		}
 	}
 
 	#[test]

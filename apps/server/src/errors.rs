@@ -122,6 +122,8 @@ pub enum APIError {
 	#[error("This functionality is not supported")]
 	NotSupported,
 	#[error("{0}")]
+	RangeNotSatisfiable(String),
+	#[error("{0}")]
 	ServiceUnavailable(String),
 	#[error("{0}")]
 	BadGateway(String),
@@ -171,6 +173,7 @@ impl APIError {
 			APIError::Forbidden(_) => StatusCode::FORBIDDEN,
 			APIError::Conflict(_) => StatusCode::CONFLICT,
 			APIError::NotImplemented => StatusCode::NOT_IMPLEMENTED,
+			APIError::RangeNotSatisfiable(_) => StatusCode::RANGE_NOT_SATISFIABLE,
 			APIError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
 			APIError::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
 			APIError::BadGateway(_) => StatusCode::BAD_GATEWAY,

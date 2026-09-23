@@ -2,10 +2,11 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
 
 use crate::{
-	KomgaAuthor, KomgaBook, KomgaBookId, KomgaBookMetadata, KomgaLibrary, KomgaLibraryId,
-	KomgaMediaStatus, KomgaReadingDirection, KomgaSeries, KomgaSeriesBookMetadata,
-	KomgaSeriesId, KomgaSeriesMetadata, KomgaSeriesStatus, KomgaWebLink, Media,
-	MediaProfile, ReadProgress, ScanInterval, SeriesCover,
+	media_profile_for_extension, KomgaAuthor, KomgaBook, KomgaBookId, KomgaBookMetadata,
+	KomgaLibrary, KomgaLibraryId, KomgaMediaStatus, KomgaReadingDirection, KomgaSeries,
+	KomgaSeriesBookMetadata, KomgaSeriesId, KomgaSeriesMetadata, KomgaSeriesStatus,
+	KomgaWebLink, Media, ReadProgress, ScanInterval, SeriesCover,
+	SUPPORTED_MEDIA_EXTENSIONS,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use models::{
@@ -159,6 +160,10 @@ pub(crate) async fn map_series(
 	} else {
 		media::ModelWithMetadata::find_for_user(user)
 			.filter(media::Column::SeriesId.is_in(series_ids.clone()))
+			.filter(
+				media::Column::Extension
+					.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+			)
 			.filter(media::Column::DeletedAt.is_null())
 			.into_model::<media::ModelWithMetadata>()
 			.all(conn)
@@ -285,7 +290,8 @@ fn map_book_metadata(
 		title: non_empty(metadata.and_then(|metadata| metadata.title.clone()))
 			.unwrap_or_else(|| fallback_title.to_owned()),
 		summary: metadata
-			.and_then(|metadata| metadata.summary.clone())
+			.and_then(|metadata| metadata.summary.as_deref())
+			.map(html_to_text)
 			.unwrap_or_default(),
 		number: number_text,
 		number_sort,
@@ -344,8 +350,9 @@ fn map_series_row(
 		&title,
 	);
 	let summary = metadata
-		.and_then(|metadata| metadata.summary.clone())
-		.or_else(|| series.description.clone())
+		.and_then(|metadata| metadata.summary.as_deref())
+		.or(series.description.as_deref())
+		.map(html_to_text)
 		.unwrap_or_default();
 	let created = to_utc(&series.created_at);
 	let last_modified = updated_or_created(series.updated_at.as_ref(), created);
@@ -463,7 +470,11 @@ fn map_series_books_metadata(
 				authors.insert((author.name, author.role));
 			}
 			if summary.is_empty() {
-				summary = metadata.summary.clone().unwrap_or_default();
+				summary = metadata
+					.summary
+					.as_deref()
+					.map(html_to_text)
+					.unwrap_or_default();
 			}
 			if summary_number.is_empty() {
 				summary_number = metadata
@@ -706,27 +717,6 @@ fn media_type_for_extension(extension: &str) -> Option<String> {
 	}
 }
 
-/// Extensions that map to each Komga media profile; the inverse of
-/// `media_profile_for_extension` and shared with catalog filtering.
-pub(crate) fn extensions_for_media_profile(
-	profile: MediaProfile,
-) -> &'static [&'static str] {
-	match profile {
-		MediaProfile::Epub => &["epub"],
-		MediaProfile::Pdf => &["pdf"],
-		MediaProfile::Divina => &["cbz", "cbr", "zip", "rar"],
-	}
-}
-
-fn media_profile_for_extension(extension: &str) -> Option<MediaProfile> {
-	let extension = extension.trim().to_ascii_lowercase();
-	[MediaProfile::Epub, MediaProfile::Pdf, MediaProfile::Divina]
-		.into_iter()
-		.find(|profile| {
-			extensions_for_media_profile(*profile).contains(&extension.as_str())
-		})
-}
-
 fn map_reading_direction(value: Option<&str>) -> Option<KomgaReadingDirection> {
 	match value.map(str::trim) {
 		Some("LEFT_TO_RIGHT") => Some(KomgaReadingDirection::LeftToRight),
@@ -806,6 +796,120 @@ fn normalize_token(value: &str) -> String {
 			}
 		})
 		.collect()
+}
+
+/// Match Komga's EPUB metadata projection: descriptions are plain text even
+/// when the source OPF contains embedded HTML.
+fn html_to_text(input: &str) -> String {
+	let mut output = String::with_capacity(input.len());
+	let mut chars = input.chars().peekable();
+	let mut pending_space = false;
+
+	while let Some(character) = chars.next() {
+		match character {
+			'<' => {
+				let mut tag_name = String::new();
+				let mut collecting_name = false;
+				let mut name_done = false;
+				for skipped in chars.by_ref() {
+					if skipped == '>' {
+						break;
+					}
+					if name_done {
+						continue;
+					}
+					if !collecting_name && (skipped == '/' || skipped.is_whitespace()) {
+						continue;
+					}
+					if skipped.is_ascii_alphanumeric() {
+						collecting_name = true;
+						tag_name.push(skipped.to_ascii_lowercase());
+					} else if collecting_name {
+						// Attributes and the remainder of the tag do not affect
+						// whether its text boundary needs a separator.
+						name_done = true;
+					}
+				}
+				if matches!(
+					tag_name.as_str(),
+					"br" | "p"
+						| "div" | "li" | "ul"
+						| "ol" | "pre" | "blockquote"
+						| "section" | "article"
+						| "table" | "tr" | "td"
+						| "th" | "hr" | "h1"
+						| "h2" | "h3" | "h4"
+						| "h5" | "h6"
+				) {
+					pending_space = !output.is_empty();
+				}
+			},
+			'&' => {
+				let lookahead: String = chars.clone().take(12).collect();
+				if let Some((decoded, consumed)) = decode_html_entity(&lookahead) {
+					for _ in 0..consumed {
+						chars.next();
+					}
+					push_plain_text_character(&mut output, &mut pending_space, decoded);
+				} else {
+					push_plain_text_character(&mut output, &mut pending_space, '&');
+				}
+			},
+			character => {
+				push_plain_text_character(&mut output, &mut pending_space, character);
+			},
+		}
+	}
+
+	output
+}
+
+fn push_plain_text_character(
+	output: &mut String,
+	pending_space: &mut bool,
+	character: char,
+) {
+	if character.is_whitespace() {
+		*pending_space = !output.is_empty();
+		return;
+	}
+	if *pending_space {
+		output.push(' ');
+		*pending_space = false;
+	}
+	output.push(character);
+}
+
+fn decode_html_entity(rest: &str) -> Option<(char, usize)> {
+	let end = rest.find(';')?;
+	let name = &rest[..end];
+	let decoded = match name {
+		"amp" => '&',
+		"lt" => '<',
+		"gt" => '>',
+		"quot" => '"',
+		"apos" => '\'',
+		"nbsp" => '\u{00a0}',
+		"ndash" => '\u{2013}',
+		"mdash" => '\u{2014}',
+		"hellip" => '\u{2026}',
+		"lsquo" => '\u{2018}',
+		"rsquo" => '\u{2019}',
+		"ldquo" => '\u{201c}',
+		"rdquo" => '\u{201d}',
+		other => {
+			let code = if let Some(hex) = other
+				.strip_prefix("#x")
+				.or_else(|| other.strip_prefix("#X"))
+			{
+				u32::from_str_radix(hex, 16).ok()?
+			} else {
+				u32::from_str_radix(other.strip_prefix('#')?, 10).ok()?
+			};
+			char::from_u32(code)?
+		},
+	};
+	Some((decoded, end + 1))
 }
 
 fn is_one_shot(booktype: Option<&str>) -> bool {
@@ -913,6 +1017,7 @@ fn is_locked(fields: Option<&serde_json::Value>, names: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::MediaProfile;
 
 	#[test]
 	fn komga_urls_keep_only_last_path_components() {
@@ -951,6 +1056,7 @@ mod tests {
 			Some(MediaProfile::Epub)
 		);
 		assert_eq!(media_profile_for_extension("txt"), None);
+		assert_eq!(media_profile_for_extension("mp3"), None);
 		assert_eq!(
 			media_type_for_extension("CBZ"),
 			Some("application/vnd.comicbook+zip".to_owned())
@@ -1049,5 +1155,20 @@ mod tests {
 			series_title_sort(Some("Sort title".to_owned()), "Series title"),
 			"Sort title"
 		);
+	}
+
+	#[test]
+	fn summaries_match_komga_plain_text_projection() {
+		assert_eq!(
+			html_to_text(
+				r#"<p class="description">SUMMARY:<br>Winner &amp; finalist --&quot;Booklist&quot;</p>"#
+			),
+			r#"SUMMARY: Winner & finalist --"Booklist""#
+		);
+		assert_eq!(
+			html_to_text("<div>First paragraph.</div><p>Second&nbsp;paragraph.</p>"),
+			"First paragraph. Second paragraph."
+		);
+		assert_eq!(html_to_text("Plain text"), "Plain text");
 	}
 }

@@ -10,9 +10,8 @@ const config = {
 	},
 	kit: {
 		// The shared UI foundation (packages/stump-ui/src) is linked into the
-		// tree at src/lib/stump-ui; `preserveSymlinks` in tsconfig/vite keeps
-		// its files inside this project so they typecheck as first-class
-		// sources and resolve their dependencies from this app's node_modules.
+		// tree at src/lib/stump-ui; Vite realpaths that source while deduping
+		// Svelte, so isolated Bun installs retain package dependency ownership.
 		alias: {
 			'@stump/ui': 'src/lib/stump-ui'
 		},

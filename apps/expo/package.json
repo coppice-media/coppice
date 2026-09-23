@@ -1,5 +1,6 @@
 {
 	"name": "@stump/expo",
+	"description": "Frozen compatibility snapshot; excluded from the active Bun workspace.",
 	"main": "index.js",
 	"version": "0.1.5",
 	"license": "GPL-3.0-only",

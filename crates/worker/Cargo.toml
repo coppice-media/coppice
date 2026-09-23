@@ -20,6 +20,7 @@ client = [
 	"dep:clap",
 	"dep:futures-util",
 	"dep:reqwest",
+	"dep:sea-orm",
 	"dep:sha2",
 	"dep:stump_media",
 	"dep:stump_tools",
@@ -27,6 +28,7 @@ client = [
 	"dep:tokio-tungstenite",
 	"dep:tracing-subscriber",
 	"dep:quick-xml",
+	"dep:uuid",
 	"dep:zip",
 ]
 # The `challenge_solve` runner: drives a real, visible Chrome over CDP. Off by
@@ -49,7 +51,7 @@ thiserror.workspace = true
 tracing.workspace = true
 # `sync`: the hub's per-worker outbound channels and the enqueue-and-await
 # waiters; `time`: dispatch timeouts and the client's reconnect backoff.
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "net", "rt", "sync", "time"] }
 
 # --- server half -------------------------------------------------------
 async-graphql = { workspace = true, optional = true }
@@ -64,7 +66,7 @@ base64 = { workspace = true, optional = true }
 # `ps` to every user on the worker's machine.
 clap = { workspace = true, features = ["env"], optional = true }
 futures-util = { workspace = true, optional = true }
-reqwest = { workspace = true, features = ["form"], optional = true }
+reqwest = { workspace = true, features = ["form", "stream"], optional = true }
 sha2 = { version = "0.10", optional = true }
 # The worker uses the same deterministic EPUB preparation contract as the
 # server and parses Storyteller's returned EPUB 3 overlays without bundling

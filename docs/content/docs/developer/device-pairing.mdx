@@ -69,12 +69,15 @@ Request:
 ```
 
 `kind` is a `DeviceKind` (`kobo | koreader | coppice | mihon | komelia | liseur |
-opds | abs | api | web | worker | kavita`) and decides which credential(s) the
-devices service mints. `liseur` gets a liseur-sync token; other one-key kinds
-get a prefixed API key with the protocol's permission set. `coppice` gets two
-credentials atomically: an API key (`kind=api_key`, `protocol=koreader`) for
-catalog/download/progress/KOSync and a device-bound liseur token
-(`kind=liseur_token`, `protocol=liseur`) for annotation/read-state scopes.
+opds | abs | api | web | worker | source_worker | kavita`) and decides which
+credential(s) the devices service mints. `worker` and `source_worker` are
+separate authorities: the former receives compute-job access, while the latter
+receives only remote-source access. `liseur` gets a liseur-sync token; other
+one-key kinds get a prefixed API key with the protocol's permission set.
+`coppice` gets two credentials atomically: an API key (`kind=api_key`,
+`protocol=koreader`) for catalog/download/progress/KOSync and a device-bound
+liseur token (`kind=liseur_token`, `protocol=liseur`) for
+annotation/read-state scopes.
 `name` is optional, trimmed, at most 100 characters; the devices service picks
 a default such as `Al's Kobo` when it is absent. An unknown `kind` is rejected
 with `422`.

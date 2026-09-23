@@ -38,21 +38,19 @@ RUN set -ex; \
 # Frontend Build Stage
 # ------------------------------------------------------------------------------
 
-FROM node:24.20-alpine3.23 AS frontend
+FROM oven/bun:1.4.1-alpine AS frontend
 ARG TARGETARCH
 
 WORKDIR /app
 
 COPY . .
 
-# We need to install git for yarn to work (we have git dependencies)
+# Git is required by dependencies sourced directly from repositories.
 RUN apk add --no-cache git
 
-RUN --mount=type=cache,target=/usr/local/yarn/.cache,id=${TARGETARCH} \
-    # https://github.com/nodejs/docker-node/issues/1335
-    yarn config set network-timeout 300000 && \
-    YARN_CACHE_FOLDER=/usr/local/yarn/.cache yarn install --frozen-lockfile && \
-    yarn web build && \
+RUN --mount=type=cache,target=/root/.bun/install/cache,id=bun-${TARGETARCH} \
+    bun install --frozen-lockfile && \
+    bun run web build && \
     mv ./apps/web/dist/ ./build && \
     if [ ! -d "./build" ] || [ ! "$(ls -A ./build)" ]; then exit 1; fi
 

@@ -8,8 +8,11 @@ use axum::{
 	http::{HeaderMap, Response},
 	response::IntoResponse,
 };
-use models::entity::{
-	collection, library_config, media, reading_list, series, user, user::AuthUser,
+use models::{
+	entity::{
+		collection, library_config, media, reading_list, series, user, user::AuthUser,
+	},
+	shared::image::ImageMetadata,
 };
 use prefixed_api_key::PrefixedApiKey;
 use sea_orm::{prelude::*, DatabaseConnection, QueryOrder};
@@ -22,11 +25,15 @@ use stump_kavita::{
 	errors::{APIError as KavitaError, APIResult as KavitaResult},
 	routes::{
 		KavitaBackend, KavitaBookResource, KavitaBookStructure, KavitaImage,
-		KavitaNavPoint, KavitaSpineItem, ServerFacts,
+		KavitaNavPoint, KavitaSeriesTarget, KavitaSpineItem, ServerFacts,
 	},
 	KavitaClaims,
 };
-use stump_media::{media::get_page_async, EpubNavEntry, EpubProcessor};
+use stump_media::{
+	image::{generate_image_metadata_from_bytes, replace_thumbnail},
+	media::get_page_async,
+	ContentType, EpubNavEntry, EpubProcessor,
+};
 
 use crate::{
 	config::{jwt::access_token_secret, state::AppState},
@@ -123,6 +130,36 @@ fn map_server_error(error: APIError) -> KavitaError {
 		APIError::Forbidden(message) => KavitaError::Forbidden(message),
 		other => KavitaError::InternalServerError(other.to_string()),
 	}
+}
+async fn save_kavita_cover(
+	id: &str,
+	bytes: &[u8],
+	max_size: usize,
+	config: &stump_media::MediaConfig,
+) -> KavitaResult<(String, ImageMetadata)> {
+	if bytes.is_empty() {
+		return Err(KavitaError::BadRequest("Cover image is empty".to_owned()));
+	}
+	if bytes.len() > max_size {
+		return Err(KavitaError::BadRequest(
+			"Cover image exceeds the configured upload limit".to_owned(),
+		));
+	}
+	let content_type = ContentType::from_bytes(bytes);
+	if !content_type.is_image() {
+		return Err(KavitaError::BadRequest(
+			"Cover file must be an image".to_owned(),
+		));
+	}
+	let metadata = generate_image_metadata_from_bytes(bytes.to_vec())
+		.await
+		.map_err(|error| {
+			KavitaError::BadRequest(format!("Invalid cover image: {error}"))
+		})?;
+	let path = replace_thumbnail(id, content_type.extension(), bytes, config)
+		.await
+		.map_err(|error| KavitaError::InternalServerError(error.to_string()))?;
+	Ok((path.to_string_lossy().into_owned(), metadata))
 }
 
 /// Resolve the Stump user behind a Kavita token's `nameid`.
@@ -285,6 +322,68 @@ impl KavitaBackend for KavitaBackendAdapter {
 		.await
 		.map_err(map_server_error)?;
 		Ok(KavitaImage::new(content_type.to_string(), data))
+	}
+
+	async fn upload_series_cover(
+		&self,
+		user: &AuthUser,
+		target: KavitaSeriesTarget,
+		bytes: Vec<u8>,
+		lock_cover: bool,
+	) -> KavitaResult<()> {
+		let thumbnail_id = match &target {
+			KavitaSeriesTarget::Series(series_id) => series::Entity::find_for_user(user)
+				.filter(series::Column::Id.eq(series_id.to_owned()))
+				.filter(series::Column::DeletedAt.is_null())
+				.one(self.conn())
+				.await?
+				.map(|row| row.id)
+				.ok_or_else(|| {
+					KavitaError::NotFound("Series does not exist".to_owned())
+				})?,
+			KavitaSeriesTarget::Book(media_id) => media::Entity::find_for_user(user)
+				.filter(media::Column::Id.eq(media_id.to_owned()))
+				.filter(media::Column::DeletedAt.is_null())
+				.one(self.conn())
+				.await?
+				.map(|row| row.id)
+				.ok_or_else(|| {
+					KavitaError::NotFound("Chapter does not exist".to_owned())
+				})?,
+		};
+		let (path, metadata) = save_kavita_cover(
+			&thumbnail_id,
+			&bytes,
+			self.ctx.config.protocols.max_file_upload_size,
+			&self.ctx.config.media,
+		)
+		.await?;
+		self.persist_series_cover(user, target, path, metadata, lock_cover)
+			.await
+	}
+
+	async fn upload_media_cover(
+		&self,
+		user: &AuthUser,
+		media_id: String,
+		bytes: Vec<u8>,
+		lock_cover: bool,
+	) -> KavitaResult<()> {
+		let book = media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(media_id.clone()))
+			.filter(media::Column::DeletedAt.is_null())
+			.one(self.conn())
+			.await?
+			.ok_or_else(|| KavitaError::NotFound("Chapter does not exist".to_owned()))?;
+		let (path, metadata) = save_kavita_cover(
+			&book.id,
+			&bytes,
+			self.ctx.config.protocols.max_file_upload_size,
+			&self.ctx.config.media,
+		)
+		.await?;
+		self.persist_media_cover(user, book.id, path, metadata, lock_cover)
+			.await
 	}
 
 	async fn serve_media_file(

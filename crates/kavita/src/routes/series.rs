@@ -19,8 +19,9 @@ use stump_auth::AuthContext;
 
 use crate::{
 	dto::{
-		ChapterDto, GroupedSeriesDto, PaginationHeader, RefreshSeriesDto, SeriesByIdsDto,
-		SeriesDetailDto, SeriesDto, SeriesMetadataDto, VolumeDto,
+		ChapterDto, ChapterMetadataUpdateDto, GroupedSeriesDto, PaginationHeader,
+		RefreshSeriesDto, SeriesByIdsDto, SeriesDetailDto, SeriesDto, SeriesMetadataDto,
+		SeriesMetadataUpdateRequestDto, SeriesUpdateDto, VolumeDto,
 	},
 	errors::{APIError, APIResult},
 	filter::SeriesFilterV2Dto,
@@ -39,7 +40,7 @@ use super::{
 	},
 	route_ci,
 	series_filter::{plan, FilterPlan, ProgressSort, SortKey},
-	KavitaBackend,
+	KavitaBackend, KavitaSeriesTarget,
 };
 
 /// `UserParams`: `PageNumber` defaults to 1, `PageSize` to "everything".
@@ -125,6 +126,9 @@ where
 {
 	let router = Router::<S>::new();
 	let router = route_ci(router, "/api/Series/all-v2", post(series_all_v2));
+	let router = route_ci(router, "/api/Series/update", post(series_update));
+	let router = route_ci(router, "/api/Series/metadata", post(series_metadata_update));
+	let router = route_ci(router, "/api/Chapter/update", post(chapter_update));
 	let router = route_ci(router, "/api/Series/v2", post(series_v2));
 	let router = route_ci(router, "/api/Series/on-deck", post(series_on_deck));
 	let router = route_ci(
@@ -159,6 +163,59 @@ where
 	let router = route_ci(router, "/api/Volume", get(volume_by_query));
 	let router = route_ci(router, "/api/Volume/{volumeId}", get(volume_by_path));
 	route_ci(router, "/api/Chapter", get(chapter_by_query))
+}
+pub(super) fn target_for_input(input: &SeriesInput) -> KavitaSeriesTarget {
+	match input.key() {
+		SeriesKey::Series(id) => KavitaSeriesTarget::Series(id),
+		SeriesKey::Book(id) => KavitaSeriesTarget::Book(id),
+	}
+}
+
+async fn series_update(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(update): Json<SeriesUpdateDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	let Some(input) = find_series_input(ctx.as_ref(), &user, update.id).await? else {
+		return Err(APIError::NotFound("Series does not exist".to_owned()));
+	};
+	ctx.update_series(&user, target_for_input(&input), update)
+		.await?;
+	Ok(StatusCode::OK)
+}
+
+async fn series_metadata_update(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(update): Json<SeriesMetadataUpdateRequestDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	let series_id = update.series_metadata.series_id;
+	let Some(input) = find_series_input(ctx.as_ref(), &user, series_id).await? else {
+		return Err(APIError::NotFound("Series does not exist".to_owned()));
+	};
+	ctx.update_series_metadata(&user, target_for_input(&input), update)
+		.await?;
+	Ok(StatusCode::OK)
+}
+
+async fn chapter_update(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Json(update): Json<ChapterMetadataUpdateDto>,
+) -> APIResult<StatusCode> {
+	let user = auth.user();
+	let Some((input, index)) = find_media(ctx.as_ref(), &user, update.id).await? else {
+		return Err(APIError::NotFound("Chapter does not exist".to_owned()));
+	};
+	let media_id = input
+		.media
+		.get(index)
+		.map(|media| media.media.id.clone())
+		.ok_or_else(|| APIError::NotFound("Chapter does not exist".to_owned()))?;
+	ctx.update_chapter_metadata(&user, media_id, update).await?;
+	Ok(StatusCode::OK)
 }
 
 pub(crate) fn pagination_response<T: serde::Serialize>(
@@ -1597,8 +1654,8 @@ mod books {
 mod maintenance {
 	use super::*;
 	use crate::test_support::{
-		auth_user, db, library_of_type, request, series_with_files, EnqueuedJob,
-		TestBackend,
+		auth_user, db, library_of_type, request, request_raw, series_with_files,
+		EnqueuedJob, TestBackend,
 	};
 	use ::tests::fake_data;
 	use models::shared::enums::LibraryType as StumpLibraryType;
@@ -1689,6 +1746,309 @@ mod maintenance {
 		.await;
 		assert_eq!(status, StatusCode::OK);
 		assert_eq!(backend.enqueued().len(), before);
+	}
+	#[tokio::test]
+	async fn komf_metadata_and_cover_writes_round_trip_through_native_read_routes() {
+		use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+		let conn = db().await;
+		let user_row = fake_data::User::new("komf-writes").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let library = library_of_type(&conn, StumpLibraryType::Comic).await;
+		let (series_row, files) =
+			series_with_files(&conn, &library.id, "Zeta", &[("v01", "cbz", 10)]).await;
+		let backend = std::sync::Arc::new(TestBackend::new(conn));
+		let series_id =
+			KavitaIds::resolve(backend.conn(), IdKind::Series, &series_row.id)
+				.await
+				.unwrap();
+		let cover_bytes = b"komf-cover-payload".to_vec();
+		let cover_base64 = STANDARD.encode(&cover_bytes);
+		let chapter_id = KavitaIds::resolve(backend.conn(), IdKind::Media, &files[0].id)
+			.await
+			.unwrap();
+
+		let (status, update_body) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Series/update",
+			Some(serde_json::json!({
+				"id": series_id,
+				"localizedName": "Localized Zeta",
+				"sortName": "Zeta, The",
+				"coverImageLocked": false,
+				"sortNameLocked": true,
+				"localizedNameLocked": true,
+			})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK, "{update_body}");
+		let (status, series_body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/{series_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(series_body["localizedName"], "Localized Zeta");
+		assert_eq!(series_body["sortName"], "Zeta, The");
+		assert_eq!(series_body["localizedNameLocked"], true);
+		assert_eq!(series_body["sortNameLocked"], true);
+		assert_eq!(series_body["coverImageLocked"], false);
+
+		let mut metadata = serde_json::json!({
+					"id": series_id,
+					"seriesId": series_id,
+					"summary": "Written by Komf",
+					"genres": [{"id": 1, "title": "Science Fiction"}],
+					"tags": [{"id": 2, "title": "Komf"}],
+					"writers": [{"id": 3, "name": "A. Writer"}],
+					"coverArtists": [],
+					"publishers": [],
+					"characters": [],
+					"pencillers": [],
+					"inkers": [],
+					"imprints": [],
+					"colorists": [],
+					"letterers": [],
+					"editors": [],
+					"translators": [],
+					"teams": [],
+					"locations": [],
+					"ageRating": 8,
+					"releaseYear": 2024,
+					"language": "en",
+					"maxCount": 4,
+					"totalCount": 4,
+					"publicationStatus": 0,
+					"webLinks": "https://example.invalid/zeta",
+		});
+		metadata.as_object_mut().unwrap().extend(
+			serde_json::json!({
+				"languageLocked": true,
+				"summaryLocked": true,
+				"ageRatingLocked": false,
+				"publicationStatusLocked": false,
+				"genresLocked": true,
+				"tagsLocked": true,
+				"writerLocked": true,
+				"characterLocked": false,
+				"coloristLocked": false,
+				"editorLocked": false,
+				"inkerLocked": false,
+				"imprintLocked": false,
+				"lettererLocked": false,
+				"pencillerLocked": false,
+				"publisherLocked": false,
+				"translatorLocked": false,
+				"teamLocked": false,
+				"locationLocked": false,
+				"coverArtistLocked": false,
+				"releaseYearLocked": true
+			})
+			.as_object()
+			.unwrap()
+			.clone(),
+		);
+		let (status, _) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Series/metadata",
+			Some(serde_json::json!({"seriesMetadata": metadata})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		let (status, metadata_body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/metadata?seriesId={series_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(metadata_body["summary"], "Written by Komf");
+		assert_eq!(metadata_body["genres"][0]["title"], "Science Fiction");
+		assert_eq!(metadata_body["tags"][0]["title"], "Komf");
+		assert_eq!(metadata_body["writers"][0]["name"], "A. Writer");
+		assert_eq!(metadata_body["languageLocked"], true);
+		assert_eq!(metadata_body["releaseYearLocked"], true);
+
+		let mut chapter_update = serde_json::json!({
+				"id": chapter_id,
+				"summary": "Chapter summary",
+				"genres": [{"id": 4, "title": "Mystery"}],
+				"tags": [{"id": 5, "title": "Chapter tag"}],
+				"ageRating": 8,
+				"language": "en",
+				"weblinks": "https://example.invalid/chapter",
+				"isbn": "9780000000000",
+				"releaseDate": "2024-04-03T12:00:00",
+				"titleName": "Chapter title",
+				"sortOrder": 7.5,
+				"writers": [{"id": 6, "name": "Chapter writer"}],
+				"coverArtists": [],
+				"publishers": [],
+				"characters": [],
+				"pencillers": [],
+				"inkers": [],
+				"imprints": [],
+				"colorists": [],
+				"letterers": [],
+				"editors": [],
+				"translators": [],
+				"teams": [],
+				"locations": [],
+		});
+		chapter_update.as_object_mut().unwrap().extend(
+			serde_json::json!({
+				"ageRatingLocked": false,
+				"titleNameLocked": true,
+				"genresLocked": true,
+				"tagsLocked": true,
+				"writerLocked": true,
+				"characterLocked": false,
+				"coloristLocked": false,
+				"editorLocked": false,
+				"inkerLocked": false,
+				"imprintLocked": false,
+				"lettererLocked": false,
+				"pencillerLocked": false,
+				"publisherLocked": false,
+				"translatorLocked": false,
+				"teamLocked": false,
+				"locationLocked": false,
+				"coverArtistLocked": false,
+				"languageLocked": true,
+				"summaryLocked": true,
+				"isbnLocked": true,
+				"releaseDateLocked": true,
+				"sortOrderLocked": true
+			})
+			.as_object()
+			.unwrap()
+			.clone(),
+		);
+		let (status, _) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Chapter/update",
+			Some(chapter_update),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		let (status, chapter_body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/chapter?chapterId={chapter_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(chapter_body["titleName"], "Chapter title");
+		assert_eq!(chapter_body["summary"], "Chapter summary");
+		assert_eq!(chapter_body["webLinks"], "https://example.invalid/chapter");
+		assert_eq!(chapter_body["titleNameLocked"], true);
+		assert_eq!(chapter_body["sortOrderLocked"], true);
+		assert_eq!(chapter_body["sortOrder"], serde_json::json!(7.5));
+
+		for (url, expected_cover) in [
+			("/api/Upload/series", "/api/Image/series-cover"),
+			("/api/Upload/chapter", "/api/Image/chapter-cover"),
+		] {
+			let id = if url.ends_with("series") {
+				series_id
+			} else {
+				chapter_id
+			};
+			let (status, _) = request(
+				backend.clone(),
+				&user,
+				"POST",
+				url,
+				Some(serde_json::json!({
+					"id": id,
+					"url": cover_base64.clone(),
+					"lockCover": true,
+				})),
+			)
+			.await;
+			assert_eq!(status, StatusCode::OK);
+			let query_name = if url.ends_with("series") {
+				"seriesId"
+			} else {
+				"chapterId"
+			};
+			let (status, bytes) = request_raw(
+				backend.clone(),
+				&user,
+				"GET",
+				&format!("{expected_cover}?{query_name}={id}"),
+				None,
+			)
+			.await;
+			assert_eq!(status, StatusCode::OK);
+			assert_eq!(bytes, cover_bytes);
+		}
+		let (status, series_body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/{series_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(series_body["coverImageLocked"], true);
+
+		let (status, chapter_body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/chapter?chapterId={chapter_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(chapter_body["coverImageLocked"], true);
+
+		let (status, _) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Upload/chapter",
+			Some(serde_json::json!({
+				"id": chapter_id, "url": "", "lockCover": false
+			})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		let (status, chapter_body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/chapter?chapterId={chapter_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(chapter_body["coverImageLocked"], false);
+		let (status, bytes) = request_raw(
+			backend,
+			&user,
+			"GET",
+			&format!("/api/Image/chapter-cover?chapterId={chapter_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(bytes, cover_bytes);
 	}
 }
 

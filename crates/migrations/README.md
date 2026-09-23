@@ -4,7 +4,7 @@
 
 `migrations` is the schema authority: an append-only, chronologically ordered
 list of `sea-orm-migration` steps (`m20250807_202824_init` through
-`m20260909_000000_add_ingest_media_targets`, plus in-flight untracked ones)
+`m20260957_000000_add_remote_source_imports`, plus in-flight untracked ones)
 exposed as `Migrator`. `stump_core` runs `Migrator::up` on every connect
 (`core/src/database.rs:150`), so the server never starts on a stale schema.
 It deliberately does **not** define entities (`crates/models`), seed data, or
@@ -46,7 +46,9 @@ server graph does not enable.
 | `m20260952` creates explicit work metadata/review targets and idempotently migrates legacy reviews | A merged detail view needs one user-owned review target without changing the legacy table used by older account-import paths; partial unique indexes enforce one review per target | `src/m20260952_000000_add_book_detail.rs`; `models::entity::book_review` |
 | `m20260953` adds code-owned runtime component state and a nullable device telemetry projection | Desired/effective component state must survive restart while feature/dependency truth stays in code; telemetry fields from independent protocol writers must merge without erasing counters or unrelated battery/sync values | `src/m20260953_000000_add_component_runtime.rs`; `crates/models/src/entity/{runtime_component,device_telemetry}.rs` |
 | `m20260954` adds lifecycle-scoped recommendation/share/overlay records and extends book-club invitations | External work snapshots and explicit scopes let social writes remain safe after a source disappears; overlays are recipient projections, not shared annotation ownership | `src/m20260954_000000_social_recommendations.rs`; `crates/models/src/entity/social_*.rs` |
-| `m20260955` adds the private request/release/search/grab/handoff ledger and encrypted gateway settings | Requests retain normalized release facts, score explanations, approval decisions, opaque grab handles, and verified ingest handoff state; cookies/raw tracker URLs never enter Coppice persistence | `src/m20260955_000000_add_book_requests.rs`; `models::entity::book_request*`; private `mam-gateway` contract |
+| `m20260955` is immutable migration history; active ORM maps only the generic request ledger and approvals, while its acquisition tables and automation columns remain for existing-database compatibility | Append-only migration order and deployed database decoding must survive removal of the in-process private gateway; dormant historical schema is safer than destructive rollback or rewrite | `src/m20260955_000000_add_book_requests.rs`; `models::entity::{book_request,book_request_approval}` |
+| `m20260956` adds opaque source-worker roots/items and server-verified media locations with cascade/set-null FKs and composite uniqueness | Inventory observations must never become generic filesystem authority or reader-visible media by themselves; verified locations need independent lifecycle and provenance | `src/m20260956_000000_add_remote_sources.rs`; `crates/models/src/entity/{remote_source,remote_source_item,media_location}.rs`; `tests/remote_sources.rs` |
+| `m20260957` adds the durable remote-source import proposal/decision ledger with immutable source identity and a composite uniqueness constraint | Matching must never publish media; an operator decision needs an auditable row and idempotent identity spanning the verified item version, target, and digest | `src/m20260957_000000_add_remote_source_imports.rs`; `models::entity::remote_source_import`; `tests/remote_sources.rs` |
 
 ## Layout
 
@@ -57,6 +59,7 @@ server graph does not enable.
 | `bin/migrate.rs`                     | `cargo run -p migrations --bin migrate` CLI (`cli` feature; defaults `DATABASE_URL` to `sqlite://./core/dev.db?mode=rwc`) |
 | `tests/reading_lists_collections.rs` | SQLite DDL assertions for the fork's list/collection migration                                                            |
 | `tests/backfill_reading_heads.rs`    | Seeds a v2-era database (sessions only) and asserts the reading-head backfill's mapping, ordering and idempotency         |
+| `tests/remote_sources.rs`             | SQLite DDL assertions for source-worker root/item/location tables, FKs, defaults, and unique indexes                               |
 | `tests/postgres.rs`                  | PostgreSQL run-through (feature `postgres-tests`, needs Docker)                                                           |
 
 ## How to verify

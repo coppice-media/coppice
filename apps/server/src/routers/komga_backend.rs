@@ -37,7 +37,7 @@ use crate::{
 use stump_komga::{
 	routes::{KomgaBackend, KomgaCoreEvent, KomgaImage},
 	KomgaBookId, KomgaLibraryCreateRequest, KomgaLibraryUpdateRequest, KomgaSeriesId,
-	KomgaThumbnailId, PatchValue, ScanInterval,
+	KomgaThumbnailId, PatchValue, ScanInterval, SUPPORTED_MEDIA_EXTENSIONS,
 };
 
 /// Server-side implementation of the Komga backend contract. Every Stump-specific
@@ -385,7 +385,7 @@ impl KomgaBackend for KomgaBackendAdapter {
 		}
 		let count = get_page_count_async(&book.path, &self.ctx.config.media)
 			.await
-			.map_err(map_core_error)?;
+			.map_err(|error| map_server_error(APIError::from(error)))?;
 		let count = usize::try_from(count).map_err(map_core_error)?;
 		if count == 0 {
 			return Ok(Vec::new());
@@ -395,7 +395,7 @@ impl KomgaBackend for KomgaBackendAdapter {
 		let content_types =
 			get_content_types_for_pages_async(&book.path, numbers.clone())
 				.await
-				.map_err(map_core_error)?;
+				.map_err(|error| map_server_error(APIError::from(error)))?;
 		Ok(numbers
 			.into_iter()
 			.map(|number| {
@@ -424,6 +424,10 @@ impl KomgaBackend for KomgaBackendAdapter {
 		page: u32,
 	) -> stump_komga::errors::APIResult<KomgaImage> {
 		let book = media::Entity::find_for_user(user)
+			.filter(
+				media::Column::Extension
+					.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+			)
 			.filter(media::Column::Id.eq(book_id))
 			.one(self.conn())
 			.await?
@@ -517,6 +521,10 @@ impl KomgaBackend for KomgaBackendAdapter {
 		book_id: String,
 	) -> stump_komga::errors::APIResult<Vec<stump_komga::KomgaBookThumbnail>> {
 		let book = media::Entity::find_for_user(user)
+			.filter(
+				media::Column::Extension
+					.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+			)
 			.filter(media::Column::Id.eq(book_id.clone()))
 			.filter(media::Column::DeletedAt.is_null())
 			.one(self.conn())
@@ -584,6 +592,10 @@ impl KomgaBackend for KomgaBackendAdapter {
 		thumbnail_id: String,
 	) -> stump_komga::errors::APIResult<KomgaImage> {
 		let book = media::Entity::find_for_user(user)
+			.filter(
+				media::Column::Extension
+					.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+			)
 			.filter(media::Column::Id.eq(book_id.clone()))
 			.filter(media::Column::DeletedAt.is_null())
 			.one(self.conn())
@@ -636,6 +648,10 @@ impl KomgaBackend for KomgaBackendAdapter {
 			));
 		}
 		let book = media::Entity::find_for_user(user)
+			.filter(
+				media::Column::Extension
+					.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+			)
 			.filter(media::Column::Id.eq(book_id))
 			.filter(media::Column::DeletedAt.is_null())
 			.one(self.conn())
@@ -687,6 +703,10 @@ impl KomgaBackend for KomgaBackendAdapter {
 		thumbnail_id: String,
 	) -> stump_komga::errors::APIResult<()> {
 		let book = media::Entity::find_for_user(user)
+			.filter(
+				media::Column::Extension
+					.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+			)
 			.filter(media::Column::Id.eq(book_id))
 			.filter(media::Column::DeletedAt.is_null())
 			.one(self.conn())
@@ -785,6 +805,10 @@ impl KomgaBackend for KomgaBackendAdapter {
 			stump_komga::errors::APIError::NotFound("Series not found".to_owned())
 		})?;
 		let first_book = media::Entity::find_for_user(user)
+			.filter(
+				media::Column::Extension
+					.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+			)
 			.filter(media::Column::SeriesId.eq(series.id.clone()))
 			.order_by_asc(media::Column::Name)
 			.into_model::<media::MediaThumbSelect>()
@@ -997,6 +1021,20 @@ impl KomgaBackend for KomgaBackendAdapter {
 		headers: HeaderMap,
 		book_id: String,
 	) -> stump_komga::errors::APIResult<Response<Body>> {
+		let user = auth.user();
+		let visible = media::Entity::find_for_user(&user)
+			.filter(media::Column::Id.eq(book_id.clone()))
+			.filter(
+				media::Column::Extension
+					.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+			)
+			.one(self.conn())
+			.await?;
+		if visible.is_none() {
+			return Err(stump_komga::errors::APIError::NotFound(
+				"Book not found".to_owned(),
+			));
+		}
 		serve_media::serve_media_file(auth, headers, self.conn(), book_id)
 			.await
 			.map(IntoResponse::into_response)

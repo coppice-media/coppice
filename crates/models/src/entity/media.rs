@@ -411,6 +411,10 @@ pub enum Relation {
 	MediaAudioTracks,
 	#[sea_orm(has_many = "super::media_audio_chapter::Entity")]
 	MediaAudioChapters,
+	#[sea_orm(has_many = "super::remote_source_item::Entity")]
+	RemoteSourceItems,
+	#[sea_orm(has_many = "super::media_location::Entity")]
+	Locations,
 }
 
 impl Related<super::book_club_book_suggestion::Entity> for Entity {
@@ -506,6 +510,17 @@ impl Related<super::media_audio_chapter::Entity> for Entity {
 impl Related<super::metadata_fetch_record::Entity> for Entity {
 	fn to() -> RelationDef {
 		Relation::MetadataFetchRecord.def()
+	}
+}
+impl Related<super::remote_source_item::Entity> for Entity {
+	fn to() -> RelationDef {
+		Relation::RemoteSourceItems.def()
+	}
+}
+
+impl Related<super::media_location::Entity> for Entity {
+	fn to() -> RelationDef {
+		Relation::Locations.def()
 	}
 }
 

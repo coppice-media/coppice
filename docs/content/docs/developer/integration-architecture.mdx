@@ -1,11 +1,11 @@
 ---
 title: Integration architecture
-description: The Coppice integration taxonomy, boundaries, evidence, and future request orchestration
+description: The Coppice integration taxonomy, request contract, acquisition boundary, and evidence
 ---
 
-Coppice is one Rust server process with explicit integration boundaries. A protocol
-adapter, metadata provider, catalog source, worker backend, or fulfillment
-connector may have a different owner and evidence level, but none silently owns
+Coppice is one Rust server process with explicit integration boundaries. A
+protocol adapter, metadata provider, catalog source, worker backend, or request
+system may have a different owner and evidence level, but none silently owns
 another class's job. The server remains authoritative for identity, permissions,
 storage, and publication.
 
@@ -35,75 +35,51 @@ Harness, source, and repository evidence never becomes app or device proof.
 | **Metadata providers** | Identify and look up metadata candidates, map fields, retain provenance, and participate in ingest policy. | `crates/integrations/metadata` and `crates/ingest` implement the candidate/apply boundary. Hardcover metadata is **Shipped** and **Contract-tested** offline; live credentials are **Blocked**, and account, progress, and journal sync are **Planned**. See [Provider status](/docs/developer/provider-status). | Metadata lookup does not create a wanted request, fetch copyrighted files, or synchronize a provider account. |
 | **Catalog/source providers** | Discover popular/latest/search/details/chapters/pages from a remote source and expose a materialized or virtual library. | `crates/provider`, `crates/provider-mangadex`, and `crates/provider-themes` own the `Source` contract and source definitions. The host and catalog path are **Shipped** when enabled; see [Provider host](/docs/developer/provider-host) and [Source definitions](/docs/developer/source-definitions). | A source provider is not the metadata-provider registry. It does not turn a search result into a fulfillment, and Storyteller never belongs here. |
 | **Worker backends** | Execute heavy or hardware-bound jobs outside the server process and return validated, digest-bound results. | `crates/worker`, `worker_jobs`, `transcode`, and `challenge_solve` are **Shipped**. The typed `align` contract is **Shipped**; a worker-local Storyteller adapter is **Planned**, with native known-text CTC/Viterbi as an independent later backend. See [Read-aloud](/docs/developer/read-aloud). | Storyteller is not a search/catalog provider, not a bundled dependency, and not the default server-side alignment runtime. |
-| **Fulfillment connectors** | Deliver a lawfully obtained requested item to a Coppice ingest boundary. | Generic staged ingest is **Shipped**. The request ledger, approval/release selection, automation defaults, download polling, and `mam-gateway` implementation are **Shipped**; mocked protocol-contract evidence is pending Main validation, while real MAM, qBittorrent/Gluetun deployment, and physical-device delivery remain untested. | Coppice does not put MAM credentials/raw tracker URLs in its config or database, and does not expose a downloader, arbitrary URL fetch, or provider-host auto-fulfillment. |
+| **Request system** | Store metadata-backed requests, enforce permissions and per-user visibility, record approval/rejection decisions, notify users, and accept social recommendation handoff. | The ledger, GraphQL create/list/detail/approve/reject contract, and Home request UI are **Shipped**. | Approval is not acquisition, release selection, downloading, polling, retry, or ingest. |
 
 These classes compose in the same process where the current source permits it.
 A worker is an optional executor that dials the server; it is not a second
 catalog or database. External systems keep their own credentials and lifecycle.
 
-## Search, wanted items, fulfillment, and ingest
+The contract-tested home-library source-worker role is separate from the
+compute-worker job executor. It reports privacy-minimized catalog observations
+and serves explicitly authorized bytes through private direct or outbound-tunnel
+connections. The server still owns verification, explicit location linking,
+ingest, reader authorization, and reader URLs. Automatic matching, publication,
+placement, caching, and replication remain planned. This role never turns
+request approval into acquisition or publication. See
+[Remote worker libraries](/docs/developer/remote-worker-libraries).
 
-The current search and source layers discover metadata or remote catalog entries.
-The request ledger, approval/release orchestration, and polling backend are now
-**Shipped**; automation remains off by default. The implemented orchestration is:
+## Search, requests, acquisition, and ingest
+
+Universal-style search discovers metadata or remote catalog entries. Coppice can
+turn that metadata into its own request record, but search results and approved
+requests do not represent acquired files.
+
+The shipped request flow is:
 
 ```text
-internal media/work or external work reference
-  -> optional destination device/shelf
-  -> approval (automation defaults off)
-  -> Torznab caps/search through private mam-gateway
-  -> opaque release selection and POST /v1/grabs
-  -> GET /v1/grabs/{id} download polling
-  -> existing ingest staging
-  -> destination queue
+metadata search or recommendation
+  -> request metadata + optional destination intent
+  -> permission and per-user visibility checks
+  -> operator approval or rejection
+  -> notifications and audit history
 ```
 
-The gateway boundary is deliberately narrow. It owns MAM cookies/raw tracker URLs
-and qBittorrent access inside a Gluetun network namespace. Coppice reaches only
-the private control-network gateway port by service name; qBittorrent's WebUI is
-loopback-only. Gateway Torznab is limited to `/torznab/api?t=caps` and
-`/torznab/api?t=search`; the private API exposes authenticated `POST /v1/grabs`
-and `GET /v1/grabs/{id}` with short-lived opaque result IDs. Coppice stores only
-the gateway endpoint/token, never a cookie, raw URL, magnet, or tracker secret.
-The gateway rejects redirects, arbitrary URLs, and user-supplied magnets.
-The transport references are the [Torznab v1.3 specification](https://torznab.github.io/spec-1.3-draft/torznab/Specification-v1.3.html) and [qBittorrent WebUI API 5.0](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-(qBittorrent-5.0)); they are behavior references only, not copied source or a claim that either real integration is tested.
+MAM acquisition is deferred. Coppice has no active release search/selection,
+grab, polling, retry, downloader, or acquisition-gateway configuration. If
+acquisition is added later, it must run in a separate authenticated provider
+sidecar that owns provider credentials and transport state. That boundary does
+not promise a provider, protocol, implementation, or delivery date.
 
-The handoff remains the existing `INGEST_DROP_DIR`/`INGEST_STAGING_DIR` boundary:
-the gateway writes only to a dedicated handoff subtree, while Coppice canonicalizes
-paths, rejects traversal/symlink escapes, recomputes hashes, and admits files
-through normal ingest review. The `mam-gateway` implementation and Torznab
-transport have **mocked protocol-contract evidence pending Main validation**.
-Real MAM authentication, VPN-egress proof, qBittorrent download, ingest replay,
-and physical-device delivery are **untested** and must not be described as live,
-shipped, or device-tested.
-
-## BookOrbit behavior evidence (not an implementation dependency)
-
-BookOrbit v2.9.0 is behavior-only AGPL evidence, pinned to commit
-[`028d4287b4f727336eabd3af29d165a73c661faa`](https://github.com/bookorbit/bookorbit/commit/028d4287b4f727336eabd3af29d165a73c661faa)
-and its [release page](https://github.com/bookorbit/bookorbit/releases/tag/v2.9.0).
-Read only its public behavior/specification: request approval, Torznab/Prowlarr
-source handling, ranked release selection, grab/download polling, inspection,
-and import. No BookOrbit AGPL source, dependency, or implementation is copied
-or implied in Coppice.
-
-The defaults and request lifecycle are pinned in [`BOOK_REQUESTS.md`](https://raw.githubusercontent.com/bookorbit/bookorbit/028d4287b4f727336eabd3af29d165a73c661faa/docs/BOOK_REQUESTS.md), [`book-request-automation.ts`](https://raw.githubusercontent.com/bookorbit/bookorbit/028d4287b4f727336eabd3af29d165a73c661faa/packages/types/src/book-request-automation.ts), and [`book-request-profile.ts`](https://raw.githubusercontent.com/bookorbit/bookorbit/028d4287b4f727336eabd3af29d165a73c661faa/packages/types/src/book-request-profile.ts).
-Its documented automation defaults are a useful reference, not Coppice defaults:
-auto-grab **off**, minimum score **80**, retry **on** with **3** total attempts,
-auto-search **off**, 24-hour search interval with a 60-day age cap, verification
-**on** at threshold **70**, import formats `all`, and empty destinations/release
-profiles. The four relevant open issues remain external evidence: [#1338](https://github.com/bookorbit/bookorbit/issues/1338)
-bulk request automation/search; [#1359](https://github.com/bookorbit/bookorbit/issues/1359)
-format-agnostic ebook/audiobook requests; [#1379](https://github.com/bookorbit/bookorbit/issues/1379)
-saga/all-volume requests; and [#1381](https://github.com/bookorbit/bookorbit/issues/1381),
-whose private-address setting does not reach direct-download redirect checks.
-Issue #1381 is a direct warning against treating a private-address toggle as a
-VPN kill-switch; Coppice requires the Gluetun gateway boundary above.
+Staged ingest remains an independent path for files an operator is allowed to
+store. Approval does not enqueue ingest, and ingest does not automatically
+fulfill a request.
 
 ## Alignment orchestration is a separate path
 
 Alignment begins only after a user confirms the ebook and audiobook edition pair.
-It does not start from catalog search or a fulfillment request. The future path
+It does not start from metadata search or request approval. The future path
 is:
 
 ```text

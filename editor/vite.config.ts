@@ -5,9 +5,10 @@ import { defineConfig } from 'vite';
 // Vite 7 keeps esbuild's nearest-tsconfig behavior; Vite 8's Rolldown transform
 // walks into the monorepo root tsconfig and its unavailable Expo reference.
 export default defineConfig({
-	// `src/lib/stump-ui` is a symlink to packages/stump-ui/src; resolving from
-	// the link position keeps one copy of svelte/graphql per app.
-	resolve: { preserveSymlinks: true },
+	// Resolve package symlinks to their real workspace/store locations so
+	// isolated Bun installs retain each package's dependency graph. Dedupe
+	// Svelte explicitly for the source-linked shared UI.
+	resolve: { dedupe: ['svelte'] },
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		port: 5174,

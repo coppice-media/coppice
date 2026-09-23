@@ -593,6 +593,20 @@ async fn build_read_aloud(
 			artifact: None,
 		});
 	};
+	if !sync_maps::map_matches_current_sources(core.conn.as_ref(), &map)
+		.await
+		.map_err(|error| async_graphql::Error::new(error.to_string()))?
+	{
+		return Ok(BookReadAloud {
+			status: BookReadAloudStatus::CacheMissing,
+			reason: Some("Read-aloud source has changed".to_owned()),
+			ebook_media_id: Some(ebook.media_id.clone()),
+			audio_media_id: Some(audio.media_id.clone()),
+			chapter_map,
+			sync_map: Some(SyncMap::from(map)),
+			artifact: None,
+		});
+	}
 	let cache_path =
 		sync_maps::read_aloud_cache_path(core.config.get_transform_cache_dir(), &map)
 			.map_err(|error| async_graphql::Error::new(error.to_string()))?;

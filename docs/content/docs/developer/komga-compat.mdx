@@ -27,6 +27,45 @@ and the Komelia client snapshot
 [`65f92fde`](https://github.com/Snd-R/Komelia/commit/65f92fde60b7b7b62b85a55ceb80b92adf50eec8).
 
 
+### External Komf workflow and adapter boundaries
+
+Komf is an external workflow, not an embedded Coppice component. The reviewed
+Komf 2.0.1 source is pinned to
+[`5ad67370c5da6d94372e7c51bff62dd75053ac64`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64).
+Its release JAR is identified by SHA-256
+`f5e01a06938cf1e13a4e9d8211db0569e89e09256072d1bbdf5b04291e809cb9`
+([release page](https://github.com/Snd-R/komf/releases/tag/2.0.1)); the
+[container tags](https://hub.docker.com/r/sndxr/komf/tags) pin is
+`sndxr/komf:2.0.1@sha256:e48652eb32b06cafce4680c229bdbdb682eb1066e3bdeb2872e9dc99255a5cf6`.
+That source depends on upstream `komga-client` 0.10.3. Coppice does not copy,
+compile, or execute Komf's Kotlin.
+
+The outbound architecture has one media-server adapter per production library:
+the Komga adapter is the default complete lane, while Kavita is an independent
+API-mode lane. Komf metadata providers are not automatically part of Coppice's
+HTTP compatibility surface; only the media-server adapter contract is in scope.
+Kavita automatic SignalR event mode is unsupported unless current-repository
+evidence proves it, so its event listener remains disabled.
+
+The source-contract workflow is: exact pin → deterministic
+`coppice/komf-media-server-contract-v1` extractor manifest → reviewed diff →
+Hurl behavioral replay → pinned-container smoke. `latest` may be inspected to
+report upstream drift, but it never rewrites canonical manifests or evidence.
+These evidence tiers remain distinct: source-derived facts establish the pin and
+manifest, contract-tested Hurl establishes wire behavior, and runtime-smoked
+container checks establish sidecar wiring. Historical direct Stump `/api/v1`
+Hurl requests are not Komf sidecar smoke; the latter uses
+`/api/{adapter}/media-server/connected` and `/libraries` (for example
+`/api/komga/media-server/connected`).
+
+On 2026-09-23 the checked-in `scripts/contracts/komf-media-server.json`
+was generated from the pinned Kotlin sources with
+`bun scripts/extract-komf-contract.mjs --write`; a subsequent `--check`
+matched. The direct Komga Hurl replay passed 38 requests (13 read/boundary,
+25 metadata/cover/scan mutations). The pinned Komga container separately
+passed two connection/library smoke requests. Neither sidecar smoke nor
+source extraction substitutes for the direct replay.
+
 **Live client verdict (2026-09-03, Komelia 0.19.0 on Android against a headless debug build):** login, library/series/book browsing, filters, reading (CBZ pages and EPUB via Readium), read-progress and mark-read, series/book metadata editing with immediate refresh through the SSE mutation events, collections, and background downloads all worked end to end. Three regressions were found and fixed during that session and are covered by the harness: a stale session cookie triggering Stump's `401` cookie clears and wiping the live session across Komelia's shared cookie jar; `book.url` returning an API path instead of a filesystem-style path, which broke downloaded filenames; and missing `remember-me` support, which left Komelia's background download worker without credentials. Remaining observed gaps at that time were the user-settings screens (`POST /api/logout`, password changes, user management), tracked below.
 
 **Live client verdict (2026-09-04, Komelia 0.19.0 on Android, same build
@@ -210,22 +249,29 @@ Source: [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/kom
 
 | Method | Path | Contract |
 | --- | --- | --- |
-| `GET` | `/api/v1/readlists` | Visible read-list collection, with Mihon `search`, supported library filtering, and pagination ([`Komga.kt:144-193`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L144-L193)). |
+| `GET` | `/api/v1/readlists` | Visible read-list collection, with Mihon `search`, supported library filtering, pagination, and repeated `sort=field,direction` values for `name`, `createdDate`, and `lastModifiedDate` ([`Komga.kt:144-193`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L144-L193)). |
 | `GET` | `/api/v1/readlists/{id}` | One visible read list. |
 | `GET` | `/api/v1/readlists/{id}/books` | Books in a visible read list, preserving read-list order, in a `Page` envelope ([`Komga.kt:244-249`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L244-L249)). |
 | `GET` | `/api/v1/readlists/{id}/read-progress/tachiyomi` | Mihon read-list progress DTO: visible-book counts and the 1-based continuous read prefix (`lastReadContinuousIndex`, `0` when none). |
 | `PUT` | `/api/v1/readlists/{id}/read-progress/tachiyomi` | Marks the first `lastBookRead` visible books in read-list order as read and returns `204`. |
 | `GET` | `/api/v1/books/{id}/readlists` | Read lists containing a visible book, returned as a plain JSON array (not a `Page`). |
-| `GET` | `/api/v1/collections` | Visible series-collection list, with supported library filtering and pagination. |
+| `GET` | `/api/v1/collections` | Visible series-collection list, with supported library filtering, pagination, and the same repeated `sort` contract as read lists. |
 | `GET` | `/api/v1/collections/{id}` | One visible collection. |
 | `PATCH` | `/api/v1/collections/{id}` | Creator-only update; provided non-null `name`, `ordered`, and `seriesIds` values are applied, while omitted or `null` values leave those fields unchanged. Duplicate series IDs are rejected, and an explicit empty `seriesIds` clears membership. Returns `204`. |
 | `GET` | `/api/v1/collections/{id}/thumbnail` | Thumbnail from the first visible series in the collection; `404` when no visible member has one. |
 | `GET` | `/api/v1/series/{id}/collections` | Collections containing a visible series, returned as a plain JSON array (not a `Page`). |
 | `GET` | `/api/v1/collections/{id}/series` | Series in a visible collection, preserving collection order, in a `Page` envelope ([`Komga.kt:144-193`](https://github.com/keiyoushi/extensions-source/blob/819e24c1c6581cf774ea9bcec979fda98cdb3e25/src/all/komga/src/eu/kanade/tachiyomi/extension/all/komga/Komga.kt#L144-L193)). |
 
-The read-list query accepts the Mihon `search`, `page`, `deleted`, and `sort`
-parameters; collection and read-list filters otherwise reject non-empty
-`condition` and `fullTextSearch` values rather than silently ignoring them.
+Read-list and collection queries accept repeated `sort=field,direction`
+parameters. Supported fields are `name`, `createdDate`, and
+`lastModifiedDate`; direction defaults to `asc`, and invalid values return
+`400`. Unsorted non-search requests default to name ascending, with ID as a
+stable tie-breaker. The local schema exposes one `updated_at` timestamp (the
+same value projected into both DTO date fields), so both date sort names map
+to that column. Read-list search preserves its existing stable ID order because
+this profile has no relevance index. Collection and read-list filters otherwise
+reject non-empty `condition` and `fullTextSearch` values rather than silently
+ignoring them.
 Source: [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/lists.rs), [`collection.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/collection.rs), and [`read_list.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/read_list.rs).
 
 Catalog and list query extraction uses `axum_extra::extract::Query` (the `serde_html_form` decoder), not Axum's plain query extractor. Collection fields are plain `Vec` values with `#[serde(default)]`, never `Option<Vec>`, so scalar and repeated query forms are both accepted: catalog queries use `libraryId`/`library_id`, while list filters use `libraryIds`/`library_id`. This wire-shape detail is required for Komelia's scalar library filter encoding and is implemented in [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/catalog.rs) and [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/lists.rs).
@@ -386,6 +432,10 @@ Catalog feeds, book/series list requests, author results, list endpoints, and au
 
 For book and series list/feed endpoints, sort expressions are `field` or `field,direction`, with `asc` or `desc` direction. The six supported book-list keys are `lastModified`, `createdDate`, `metadata.titleSort`, `metadata.numberSort`, `metadata.releaseDate`, and `readProgress.readDate`. Series list/feed sorting supports `lastModified`, `createdDate`, and `metadata.titleSort`. Unknown fields, malformed expressions, and invalid directions are warned about and fall back to the endpoint's default order; they do not return `400`. The on-deck feed additionally accepts its observed aliases for created date (`created`, `createdAt`, `created_at`), last modified (`lastModified`, `lastModifiedDate`, `last_modified`), and title/name (`name`, `title`, `metadata.title`, `relevance`), with unknown values also using the default order.
 
+Read-list and collection sorting is stricter: the supported keys are `name`,
+`createdDate`, and `lastModifiedDate`; unsupported or malformed expressions
+return `400` instead of silently falling back.
+
 The validation and envelope construction are implemented in [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/catalog.rs), [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/lists.rs), [`settings.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/settings.rs), and [`common.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/common.rs).
 
 ## DTO mapping and intentional losses
@@ -404,11 +454,15 @@ The media handler accepts only the corresponding generated ID for each book or s
 The following are current mapping decisions, not compatibility proposals:
 
 - `series.metadata.titleSort` is emitted from the persisted sort-title override, falling back to the series title when it is unset.
-- Series-level `metadata.readingDirection` and `metadata.language` are emitted from their persisted values, or `null` when unset. Series language conditions still search book metadata and project matching series.
+- Series-level `metadata.readingDirection` and `metadata.language` are emitted from their persisted values, or `""` when unset because Komga declares both fields as non-null strings. Series language conditions still search book metadata and project matching series.
+- Book, series, and representative-book summaries are converted from source HTML to plain text only when building Komga DTOs. The persisted source metadata remains unchanged. This matches Komga's EPUB provider and avoids exposing literal OPF `<p>`/`<br>` tags in Komelia, whose `ExpandableText` renders the value as plain Compose text.
 - `metadata.alternateTitles` is emitted from the persisted JSON array, or `[]` when unset; its lock and the reading-direction/language/title-sort locks are emitted from their dedicated persisted booleans.
 - `metadata.sharingLabels` remains empty and its lock remains false because Stump has no sharing-label model.
 - `scanInterval` is always `DISABLED`; Stump's watcher boolean is not converted into a fictional periodic interval.
 - Page metadata uses synthetic `page-N` file names because archive entry names are not persisted in the mapped row.
+- The separate admin-only `/api/v1/transient-books` scan/analyze lifecycle is not implemented. Persisted book page images already support conditional private caching, but that is not a substitute for Komga's transient repository and one-hour lifecycle.
+- The Komga catalog exposes only formats Komga readers can represent: EPUB, PDF, CBZ/CBR, and ZIP/RAR. Audiobook rows remain available through Coppice's native surfaces but are excluded from Komga book/series/list queries and direct media routes; Komga has no audio media profile, and `mediaProfile: null` with zero pages causes duplicate cards and a white-screen reader failure in Komelia.
+- PDF books require a loadable PDFium shared library through `PDFIUM_PATH` when the server starts. A failed PDFium initialization is cached for the process lifetime, so provisioning the library requires a server restart before `/books/{id}/pages` can render.
 - Each book lists its deterministic `GENERATED` thumbnail (`stump-book-{id}`) and, when a cover was uploaded, a `USER_UPLOADED` one (`stump-upload-book-{id}`) marked `selected`. Series lists contain only the uploaded cover (`stump-upload-series-{id}`, `USER_UPLOADED`) or are empty: Komga's `ThumbnailSeries.Type` is only `SIDECAR | USER_UPLOADED` and Komelia decodes it with an unguarded `valueOf`, so a `GENERATED` series entry must never be emitted; generated series covers are served solely through `/series/{id}/thumbnail`. `POST /{books,series}/{id}/thumbnails` (multipart `file` + `selected`) stores the cover through the same helper as the GraphQL upload mutations and returns the full thumbnail DTO; `DELETE .../thumbnails/{tid}` removes an uploaded cover (`204`) and answers `400` for a generated id, as Komga does. See `crates/komga/src/routes/media.rs` and the Komf study for the client sequence.
 - Library fields without Stump equivalents use neutral values from [`mapper.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/mapper.rs), including disabled scan/conversion/import switches where no persisted Stump setting exists.
 - Book metadata is projected from Stump metadata when present, with the media name as the title fallback; series aggregates derive counts, tags, and representative book metadata from visible books.

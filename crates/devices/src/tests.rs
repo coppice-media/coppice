@@ -302,6 +302,43 @@ async fn create_device_requires_the_kind_permissions() {
 }
 
 #[tokio::test]
+async fn source_worker_mints_only_remote_source_authority() {
+	let (conn, owner) = setup().await;
+	let service = DeviceService::new(conn.clone());
+	let source_user = reader(
+		&owner.id,
+		vec![
+			UserPermission::AccessApiKeys,
+			UserPermission::AccessRemoteSource,
+		],
+	);
+
+	let (device, issued) = service
+		.create_device(
+			&source_user,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::SourceWorker,
+			None,
+		)
+		.await
+		.expect("source worker should be creatable with its two owner permissions");
+	assert_eq!(device.kind, DeviceKind::SourceWorker);
+	assert_eq!(issued.kind, DeviceCredentialKind::ApiKey);
+	assert_eq!(issued.protocol, DeviceProtocol::Api);
+
+	let key = api_key::Entity::find()
+		.filter(api_key::Column::ShortToken.eq(&issued.credential_ref))
+		.one(conn.as_ref())
+		.await
+		.expect("source worker API key query should succeed")
+		.expect("source worker API key should exist");
+	assert_eq!(
+		key.permissions,
+		APIKeyPermissions::Custom(vec![UserPermission::AccessRemoteSource])
+	);
+}
+
+#[tokio::test]
 async fn delegated_credentials_cannot_mint_or_rotate_inherited_api_keys() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn.clone());

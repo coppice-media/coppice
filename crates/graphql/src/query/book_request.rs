@@ -1,17 +1,11 @@
 use async_graphql::{Context, Object, Result, ID};
-use models::entity::{
-	book_request, book_request_gateway_setting, book_request_grab, book_request_handoff,
-	book_request_release,
-};
+use models::entity::book_request;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use stump_auth::AuthContext;
 
 use crate::{
 	data::CoreContext,
-	object::book_request::{
-		BookRequest, BookRequestGatewaySettings, BookRequestGrab, BookRequestHandoff,
-		BookRequestRelease, BookRequestStatus,
-	},
+	object::book_request::{BookRequest, BookRequestStatus},
 };
 
 #[derive(Default)]
@@ -29,13 +23,6 @@ fn can_manage(auth: &AuthContext) -> bool {
 
 fn can_view(auth: &AuthContext, request: &book_request::Model) -> bool {
 	can_manage(auth) || request.requester_id == auth.user.id
-}
-
-async fn load_request(core: &CoreContext, id: &str) -> Result<book_request::Model> {
-	book_request::Entity::find_by_id(id)
-		.one(core.conn.as_ref())
-		.await?
-		.ok_or_else(|| async_graphql::Error::new("book request not found"))
 }
 
 #[Object]
@@ -72,9 +59,6 @@ impl BookRequestQuery {
 		let auth = ctx.data::<AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 		let manager = can_manage(auth);
-		if !manager && !mine_only {
-			// Ordinary users may only enumerate their own ledger rows.
-		}
 		let mut query = book_request::Entity::find();
 		if !manager || mine_only {
 			query = query.filter(book_request::Column::RequesterId.eq(&auth.user.id));
@@ -93,91 +77,5 @@ impl BookRequestQuery {
 			.into_iter()
 			.map(Into::into)
 			.collect())
-	}
-
-	async fn book_request_releases(
-		&self,
-		ctx: &Context<'_>,
-		request_id: ID,
-	) -> Result<Vec<BookRequestRelease>> {
-		let auth = ctx.data::<AuthContext>()?;
-		let core = ctx.data::<CoreContext>()?;
-		let request = load_request(core, request_id.as_ref()).await?;
-		if !can_view(auth, &request) {
-			return Err(async_graphql::Error::new(
-				"not authorized to view this request",
-			));
-		}
-		Ok(book_request_release::Entity::find()
-			.filter(book_request_release::Column::RequestId.eq(request_id.as_ref()))
-			.order_by_asc(book_request_release::Column::Rank)
-			.all(core.conn.as_ref())
-			.await?
-			.into_iter()
-			.map(Into::into)
-			.collect())
-	}
-
-	async fn book_request_grabs(
-		&self,
-		ctx: &Context<'_>,
-		request_id: ID,
-	) -> Result<Vec<BookRequestGrab>> {
-		let auth = ctx.data::<AuthContext>()?;
-		let core = ctx.data::<CoreContext>()?;
-		let request = load_request(core, request_id.as_ref()).await?;
-		if !can_view(auth, &request) {
-			return Err(async_graphql::Error::new(
-				"not authorized to view this request",
-			));
-		}
-		Ok(book_request_grab::Entity::find()
-			.filter(book_request_grab::Column::RequestId.eq(request_id.as_ref()))
-			.order_by_desc(book_request_grab::Column::CreatedAt)
-			.all(core.conn.as_ref())
-			.await?
-			.into_iter()
-			.map(Into::into)
-			.collect())
-	}
-
-	async fn book_request_handoffs(
-		&self,
-		ctx: &Context<'_>,
-		request_id: ID,
-	) -> Result<Vec<BookRequestHandoff>> {
-		let auth = ctx.data::<AuthContext>()?;
-		let core = ctx.data::<CoreContext>()?;
-		let request = load_request(core, request_id.as_ref()).await?;
-		if !can_view(auth, &request) {
-			return Err(async_graphql::Error::new(
-				"not authorized to view this request",
-			));
-		}
-		Ok(book_request_handoff::Entity::find()
-			.filter(book_request_handoff::Column::RequestId.eq(request_id.as_ref()))
-			.order_by_desc(book_request_handoff::Column::CreatedAt)
-			.all(core.conn.as_ref())
-			.await?
-			.into_iter()
-			.map(Into::into)
-			.collect())
-	}
-
-	async fn book_request_gateway(
-		&self,
-		ctx: &Context<'_>,
-	) -> Result<Option<BookRequestGatewaySettings>> {
-		let auth = ctx.data::<AuthContext>()?;
-		if !can_manage(auth) {
-			return Err(async_graphql::Error::new(
-				"gateway settings require administrator access",
-			));
-		}
-		let core = ctx.data::<CoreContext>()?;
-		Ok(book_request_gateway_setting::Entity::find_by_id("default")
-			.one(core.conn.as_ref())
-			.await?
-			.map(Into::into))
 	}
 }

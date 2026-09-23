@@ -4,11 +4,11 @@ This package is the component library used throughout the Stump web and desktop 
 
 ## Usage
 
-When developing components within this package, it is really useful to have the Storybook running. To do so, run the following command:
+When developing components within this package, run Storybook through the root
+Bun workspace:
 
 ```bash
-# Using yarn from the package root directory
-yarn run storybook
+bun run --filter @stump/components storybook
 ```
 
 ## Structure

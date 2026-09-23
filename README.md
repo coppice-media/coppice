@@ -25,7 +25,7 @@ media that you already own or are otherwise allowed to store.
 - **Install and run:** [installation guide](docs/content/docs/getting-started/installation/index.mdx)
 - **Compatibility at a glance:** [integration and compatibility status](docs/content/docs/guides/integrations/compatibility.mdx)
 - **Modular deployments:** [server profiles and static apps](docs/content/docs/guides/configuration/modular-deployment.mdx)
-- **Request and fulfillment boundary:** [Shelfmark companion guide](docs/content/docs/guides/integrations/shelfmark.mdx)
+- **Request and acquisition boundary:** [request and acquisition guide](docs/content/docs/guides/integrations/acquisition.mdx)
 - **Developer source of truth:** [server architecture](docs/content/docs/developer/server-architecture.mdx), [client verification](docs/content/docs/developer/client-verification.mdx), and [current state](docs/content/docs/developer/state.mdx)
 
 The Fumadocs site under `docs/` is the human-facing wiki. The developer pages
@@ -43,19 +43,20 @@ pages link to them rather than making broader compatibility promises.
   KOReader, liseur-sync, Kavita, and Audiobookshelf-compatible REST. The ABS
   Engine.IO/Socket.IO lane is present; broader official-app verification is
   still pending.
-- The request ledger/UI, approval and release selection, private `mam-gateway`
-  handoff, download polling, and ingest processing are present. Live external
-  MAM/VPN/qBittorrent deployment remains unverified.
+- The request ledger and Home UI retain metadata-backed creation, per-user
+  visibility, manager approval/rejection, notifications, and social
+  recommendation handoff. MAM acquisition is deferred; Coppice ships no active
+  acquisition connector.
 - Read-aloud pairing, validated `SyncMapV1` import, alignment enqueue, and
   authenticated cache-only status/download are present. Storyteller/SMIL
   execution and synchronized read-aloud playback remain planned.
 - Staged ingest, identifier matching, ordinary EPUB playback, and ordinary
   audiobook playback remain separate capabilities. Hardcover metadata mapping
   is covered by offline fixtures; no live credential run is recorded.
-- This worktree is an uncommitted no-commit nightly integration; the
-  post-merge full gate and replay set are pending. See
-  [.omp/PROJECT_STATE.md](.omp/PROJECT_STATE.md) for the exact state and
-  commands.
+- This worktree is an uncommitted, fully gated nightly integration. The
+  2026-09-21 Rust, Bun, browser, and 341-request protocol gates passed. See
+  [.omp/PROJECT_STATE.md](.omp/PROJECT_STATE.md) for the exact evidence,
+  commands, and exclusions.
 
 ## Evidence-labelled compatibility
 
@@ -86,35 +87,35 @@ The current matrix is intentionally scoped to observed evidence:
 | KOReader/KOSync                                                    | Shipped        | Contract-tested; Device-tested; Source-only; Blocked | Server routes are probed; Liseur's KOReader-sync flow is device-tested. The native KOReader app and `coppice.koplugin` have not been loaded; the plugin remains source-only.       |
 | liseur-sync                                                        | Shipped        | Device-tested; Contract-tested; Source-only          | Positions, heads, and annotations were exercised through Liseur. The attachment side-object extension is implemented, but no pinned-client or device attachment claim is made.     |
 | Audiobookshelf-compatible REST / Lissen 1.11.22                    | Shipped        | Device-tested; Contract-tested; Planned              | Lissen browse, listen, range download, sessions, and bookmarks were exercised. The Engine.IO/Socket.IO lane is present; a broader official Audiobookshelf-app run remains pending. |
-| Request workflow / private `mam-gateway`                           | Shipped        | Source-only; Planned                                 | Request ledger/UI, approval and release selection, download polling, and ingest handoff are present; live external deployment and post-merge replay remain pending.                |
+| Request ledger and approval UI                                    | Shipped        | Source-only                                          | Metadata-backed requests, per-user visibility, manager decisions, notifications, and social handoff are present. Acquisition is deferred; no MAM gateway or downloader ships.     |
 | Ordinary EPUB playback                                             | Shipped        | Device-tested                                        | EPUB reading is an ordinary reading flow, separate from audiobook synchronization.                                                                                                 |
 | Ordinary audiobook playback                                        | Shipped        | Device-tested                                        | Audiobook playback is an ordinary audio flow, separate from EPUB reading and read-aloud alignment.                                                                                 |
 | Hardcover metadata                                                 | Shipped        | Contract-tested; Blocked                             | Offline payload fixtures and mapper tests exist; live credentials have not been verified.                                                                                          |
 | Hardcover account/progress/journal sync                            | Planned        | Planned; Blocked                                     | No account, progress, or journal sync is shipped; live credentials and the sync design remain prerequisites.                                                                       |
-| Read-aloud pairing, SyncMap, and cache delivery                    | Shipped        | Source-only; Planned                                 | Pairing, validated map import, alignment enqueue, and authenticated cache-only status/download are present; post-merge verification is pending.                                    |
+| Read-aloud pairing, SyncMap, and cache delivery                    | Shipped        | Source-only; Planned                                 | Pairing, validated map import, alignment enqueue, and authenticated cache-only status/download passed the current integration gate; worker execution and synchronized playback remain planned.                                                     |
 | Synchronized Storyteller read-aloud EPUB                           | Planned        | Source-only; Planned; Blocked                        | Storyteller/SMIL execution and synchronized read-aloud playback remain planned.                                                                                                    |
 
 Canonical evidence and caveats live in [client verification](docs/content/docs/developer/client-verification.mdx), [platform status](docs/content/docs/developer/platforms.mdx), [Kobo capabilities](docs/content/docs/developer/kobo-sync-capabilities.mdx), [KOReader profile](docs/content/docs/developer/koreader-plugin.mdx), [Audiobookshelf profile](docs/content/docs/developer/abs-compat.mdx), and [read-aloud status](docs/content/docs/developer/read-aloud.mdx).
 
-## Request, fulfillment, and alignment boundaries
+## Request, acquisition, and alignment boundaries
 
-Coppice has a request ledger and UI with approval/release selection, private
-`mam-gateway` handoff, download polling, and ingest processing. It is not a
-search provider or bundled fulfillment service; live external deployment and
-post-merge protocol verification remain pending.
+Coppice owns Universal-style metadata search plus its request ledger,
+permissions, visibility rules, approval/rejection decisions, notifications,
+and social recommendation handoff. An approved request records a decision; it
+does not acquire a file.
 
-[Shelfmark](docs/content/docs/guides/integrations/shelfmark.mdx) is documented
-as an external fulfillment connector, not as a bundled Coppice integration.
-The first practical handoff is a shared-folder export from Shelfmark (or a
-manual/provider host where lawful) into Coppice ingest. A future request bridge
-must wait for a stable, token-authenticated Shelfmark service API.
+MAM acquisition is deferred. Any future acquisition integration belongs in a
+separate authenticated provider sidecar, outside the Coppice process and
+request GraphQL contract. This is a boundary, not a promise that a connector is
+implemented.
 
-The intended future flow is:
+The current flow ends at approval:
 
 ```text
-search -> wanted request -> fulfillment connector
-       (Shelfmark / manual / lawful provider host)
-       -> ingest -> identifier match -> fulfilled
+metadata search or recommendation
+  -> request
+  -> permission and visibility checks
+  -> operator approval or rejection
 ```
 
 An alignment request is a separate flow and requires a confirmed EPUB/audio
@@ -255,14 +256,12 @@ part of the architecture.
 - [Next steps](.omp/NEXT_STEPS.md) — the working roadmap.
 - [Roadmap docs](docs/content/docs/developer/) — including proposed (not implemented) work in [Server architecture](docs/content/docs/developer/server-architecture.mdx) and [Modular ingest](docs/content/docs/developer/modular-ingest.mdx).
 
-- **Current:** keep the default/full behavior compatible while proving smaller
-  headless and leaf-protocol compositions; request and read-aloud backends are
-  present but their post-merge evidence is pending.
-- **Planned:** external Shelfmark/request bridging, complete Storyteller/SMIL
-  alignment and synchronized EPUB playback after a confirmed EPUB/audio pair.
-- **Blocked:** live Hardcover account/progress/journal sync, direct Shelfmark
-  integration before its service API stabilizes, and physical-device claims
-  where the matrix says no device run exists.
+- **Current:** default/full compatibility plus the metadata-backed request
+  ledger/approval UI and read-aloud backend.
+- **Planned:** complete Storyteller/SMIL alignment and synchronized EPUB
+  playback after a confirmed pair.
+- **Blocked:** live Hardcover account/progress/journal sync and physical-device
+  claims without evidence.
 
 For implementation details and evidence, use the [developer wiki](docs/content/docs/developer/state.mdx) and the [roadmap](docs/content/docs/developer/roadmap.mdx). For installation and day-to-day configuration, use the [human wiki](docs/content/docs/index.mdx).
 

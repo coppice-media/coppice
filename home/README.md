@@ -6,10 +6,11 @@ does not own the root route.
 
 ## Development
 
+From the repository root:
+
 ```sh
-cd home
-bun install
-bun run dev
+bun install --frozen-lockfile
+bun run home dev
 ```
 
 Vite proxies `/api` to `http://127.0.0.1:25600`. Production calls the same
@@ -65,17 +66,17 @@ Do not copy theme variables or shared primitives into Home.
 ## GraphQL and build
 
 ```sh
-bun run codegen
-bun run check
-bun run build
+bun run home codegen
+bun run home check
+bun run home build
 ```
 
 Area operations live in `src/lib/graphql/*.graphql`; generated documents live
-in `src/lib/graphql/generated/`. Shared operations are generated separately:
+in `src/lib/graphql/generated/`. Generate shared operations from the repository
+root:
 
 ```sh
-cd packages/stump-ui
-bun run codegen
+bun run --filter @stump/ui codegen
 ```
 
 The static adapter writes `home/build` for the `/app` base path. Override it

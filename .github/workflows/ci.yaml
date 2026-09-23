@@ -26,13 +26,23 @@ jobs:
           filters: |
             docs:
               - './docs/**'
+              - './package.json'
+              - './bun.lock'
+              - './bunfig.toml'
+              - './.bun-version'
+              - './.github/actions/setup-bun/action.yml'
             frontend:
               - './apps/web/**'
               - './apps/desktop/src/**'
+              - './apps/desktop/package.json'
               - './packages/**'
-              - './.github/actions/setup-yarn/action.yml'
-            expo:
-              - './apps/expo/**'
+              - './home/**'
+              - './editor/**'
+              - './package.json'
+              - './bun.lock'
+              - './bunfig.toml'
+              - './.bun-version'
+              - './.github/actions/setup-bun/action.yml'
             rust:
               - './apps/server/**'
               - './apps/desktop/src-tauri/**'
@@ -91,14 +101,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
-      - name: Setup Node and Yarn
-        uses: ./.github/actions/setup-yarn
+      - name: Setup Node and Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Run TypeScript lints
-        run: yarn lint
+        run: bun run lint
 
       - name: Run TypeScript tests
-        run: yarn test
+        run: bun run test
 
   # TODO(ci): Add vercel dev deployment?
   check-docs:
@@ -110,8 +120,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
-      - name: Setup Node and Yarn
-        uses: ./.github/actions/setup-yarn
+      - name: Setup Node and Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Build documentation app
-        run: yarn docs build
+        run: bun run docs build

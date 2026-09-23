@@ -22,7 +22,7 @@ The [contributing guide](/docs/developer/contributing) provides detailed instruc
 Afterwards, you can run the following command to build Stump locally:
 
 ```bash copy
-yarn web build && cargo build --package stump_server --release
+bun run web build && cargo build --package stump_server --release
 ```
 
 This will bundle the web application and build the Stump server. The server binary is located at `target/release/stump_server`, and the web bundle at `apps/web/dist`. You can place those two items anywhere you'd like, just be sure they are either next to each other or you have set the appropriate [environment variable](/docs/guides/configuration/server-config#stump_client_dir).

@@ -2,12 +2,11 @@
 
 Every crate ships a `README.md` in the template below and a `//!` crate doc in
 its `lib.rs` (`bin/main.rs` for `cli`) pointing at it. Status reflects the
-integration worktree after merging `origin/nightly` at `766c7347` into
-`integrate/upstream-nightly-2026-09-20`. GitHub compare counted 87 upstream
-commits; local ancestry also contains one merged release parent. The post-merge
-full gate and fixture replay are pending, so this inventory does not claim a
-green verification result. The "Linkage" column is derived from
-`apps/server/Cargo.toml`, `core/Cargo.toml` and the crate's own `[features]`.
+current staged `coppice/nightly` tree after the upstream security merge and
+2026-09-21 MAM-removal/Bun cutover. The Rust/Bun gates and 341-request fixture
+replay passed; `.omp/PROJECT_STATE.md` records the exact evidence and
+exclusions. The "Linkage" column is derived from `apps/server/Cargo.toml`,
+`core/Cargo.toml`, and the crate's own `[features]`.
 `crates/integrations/` and `crates/macros/` are directories of sub-crates, not
 crates: they carry no `Cargo.toml`, their members come from the root globs
 `crates/macros/*` and `crates/integrations/*` (root `Cargo.toml:12-13`), and

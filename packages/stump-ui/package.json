@@ -3,9 +3,9 @@
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
-	"description": "Shared Svelte UI foundation for the Coppice companion apps (editor/, home/): GraphQL client, shared GraphQL operations, shadcn-svelte components and small utilities. Source-only: each app links `src/` into its tree (`src/lib/stump-ui`) and aliases `@stump/ui` to it, so the package is typechecked, bundled and installed through the consuming app. Runtime dependencies are declared as peers and installed by each app.",
+	"description": "Shared Svelte UI foundation for the Coppice companion apps. This source-only package is installed by the root Bun workspace; Home and Editor link src/ into their trees, while runtime dependencies remain peers supplied by each consuming app.",
 	"scripts": {
-		"codegen": "../../editor/node_modules/.bin/graphql-codegen --config codegen.ts"
+		"codegen": "graphql-codegen --config codegen.ts"
 	},
 	"peerDependencies": {
 		"@graphql-typed-document-node/core": "^3.2.0",

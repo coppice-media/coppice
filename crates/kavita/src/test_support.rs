@@ -10,7 +10,7 @@ use models::entity::{
 	reading_list_item, series, user::AuthUser,
 };
 use models::shared::enums::LibraryType;
-use models::shared::image::ImageRef;
+use models::shared::image::{ImageMetadata, ImageRef};
 use sea_orm::{
 	ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseBackend,
 	DbBackend, EntityTrait, QueryFilter, Schema, Statement,
@@ -20,7 +20,8 @@ use crate::errors::{APIError, APIResult};
 use crate::ids::CREATE_KAVITA_IDS_SQL;
 use crate::progress::CREATE_KAVITA_PROGRESS_SQL;
 use crate::routes::{
-	KavitaBackend, KavitaBookResource, KavitaBookStructure, KavitaImage, ServerFacts,
+	KavitaBackend, KavitaBookResource, KavitaBookStructure, KavitaImage,
+	KavitaSeriesTarget, ServerFacts,
 };
 
 /// An in-memory database with every entity table plus the Kavita side tables
@@ -227,6 +228,24 @@ pub(crate) async fn request(
 	uri: &str,
 	body: Option<serde_json::Value>,
 ) -> (axum::http::StatusCode, serde_json::Value) {
+	let (status, bytes) = request_raw(backend, user, method, uri, body).await;
+	let json = if bytes.is_empty() {
+		serde_json::Value::Null
+	} else {
+		serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+	};
+	(status, json)
+}
+
+/// Drive an authenticated Kavita request and return its response bytes
+/// unchanged, for image-cover readback tests.
+pub(crate) async fn request_raw(
+	backend: std::sync::Arc<TestBackend>,
+	user: &AuthUser,
+	method: &str,
+	uri: &str,
+	body: Option<serde_json::Value>,
+) -> (axum::http::StatusCode, Vec<u8>) {
 	use tower::ServiceExt;
 	let router = crate::routes::router::<()>(backend).layer(axum::Extension(
 		stump_auth::AuthContext {
@@ -252,13 +271,9 @@ pub(crate) async fn request(
 	let status = response.status();
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
 		.await
-		.expect("response body");
-	let json = if bytes.is_empty() {
-		serde_json::Value::Null
-	} else {
-		serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
-	};
-	(status, json)
+		.expect("response body")
+		.to_vec();
+	(status, bytes)
 }
 
 #[async_trait::async_trait]
@@ -313,22 +328,109 @@ impl KavitaBackend for TestBackend {
 
 	async fn media_thumbnail(
 		&self,
-		_user: &AuthUser,
+		user: &AuthUser,
 		media_id: &str,
 	) -> APIResult<KavitaImage> {
-		Err(APIError::NotFound(format!(
-			"unreachable in tests: {media_id}"
-		)))
+		let book = media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(media_id.to_owned()))
+			.filter(media::Column::DeletedAt.is_null())
+			.one(&self.conn)
+			.await?
+			.ok_or_else(|| APIError::NotFound("Chapter does not exist".to_owned()))?;
+		let path = book.thumbnail_path.ok_or_else(|| {
+			APIError::NotFound("Chapter cover does not exist".to_owned())
+		})?;
+		let bytes = tokio::fs::read(&path)
+			.await
+			.map_err(|error| APIError::InternalServerError(error.to_string()))?;
+		Ok(KavitaImage::new("image/png", bytes))
 	}
 
 	async fn series_thumbnail(
 		&self,
-		_user: &AuthUser,
+		user: &AuthUser,
 		series_id: &str,
 	) -> APIResult<KavitaImage> {
-		Err(APIError::NotFound(format!(
-			"unreachable in tests: {series_id}"
-		)))
+		let series = series::Entity::find_for_user(user)
+			.filter(series::Column::Id.eq(series_id.to_owned()))
+			.filter(series::Column::DeletedAt.is_null())
+			.one(&self.conn)
+			.await?
+			.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?;
+		let path = series.thumbnail_path.ok_or_else(|| {
+			APIError::NotFound("Series cover does not exist".to_owned())
+		})?;
+		let bytes = tokio::fs::read(&path)
+			.await
+			.map_err(|error| APIError::InternalServerError(error.to_string()))?;
+		Ok(KavitaImage::new("image/png", bytes))
+	}
+
+	async fn upload_series_cover(
+		&self,
+		user: &AuthUser,
+		target: KavitaSeriesTarget,
+		bytes: Vec<u8>,
+		lock_cover: bool,
+	) -> APIResult<()> {
+		let thumbnail_id = match &target {
+			KavitaSeriesTarget::Series(series_id) => series::Entity::find_for_user(user)
+				.filter(series::Column::Id.eq(series_id.to_owned()))
+				.filter(series::Column::DeletedAt.is_null())
+				.one(&self.conn)
+				.await?
+				.map(|row| row.id)
+				.ok_or_else(|| APIError::NotFound("Series does not exist".to_owned()))?,
+			KavitaSeriesTarget::Book(media_id) => media::Entity::find_for_user(user)
+				.filter(media::Column::Id.eq(media_id.to_owned()))
+				.filter(media::Column::DeletedAt.is_null())
+				.one(&self.conn)
+				.await?
+				.map(|row| row.id)
+				.ok_or_else(|| APIError::NotFound("Chapter does not exist".to_owned()))?,
+		};
+		let path = self
+			.file_root
+			.path()
+			.join(format!("cover-{thumbnail_id}.png"));
+		tokio::fs::write(&path, bytes)
+			.await
+			.map_err(|error| APIError::InternalServerError(error.to_string()))?;
+		self.persist_series_cover(
+			user,
+			target,
+			path.to_string_lossy().into_owned(),
+			ImageMetadata::default(),
+			lock_cover,
+		)
+		.await
+	}
+
+	async fn upload_media_cover(
+		&self,
+		user: &AuthUser,
+		media_id: String,
+		bytes: Vec<u8>,
+		lock_cover: bool,
+	) -> APIResult<()> {
+		let book = media::Entity::find_for_user(user)
+			.filter(media::Column::Id.eq(media_id))
+			.filter(media::Column::DeletedAt.is_null())
+			.one(&self.conn)
+			.await?
+			.ok_or_else(|| APIError::NotFound("Chapter does not exist".to_owned()))?;
+		let path = self.file_root.path().join(format!("cover-{}.png", book.id));
+		tokio::fs::write(&path, bytes)
+			.await
+			.map_err(|error| APIError::InternalServerError(error.to_string()))?;
+		self.persist_media_cover(
+			user,
+			book.id,
+			path.to_string_lossy().into_owned(),
+			ImageMetadata::default(),
+			lock_cover,
+		)
+		.await
 	}
 
 	/// Serves a registered file through the very service the server uses

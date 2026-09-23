@@ -375,7 +375,21 @@ and the server stops trusting the clearance then. Nothing polls for expiry: the
 next health probe finds the host gated again and queues another solve, which a
 connected browser worker answers in seconds.
 
-## 9. Verifying
+## 9. Home-library source workers
+
+Home-library inventory and remote byte locations use a contract-tested,
+separately authorized source-worker role. Configured roots are explicit and
+read-only; absolute paths remain in a private worker catalog. Do not expose them
+through the compute-worker credential or socket merely because one binary can
+run both roles. The server owns full-object verification, explicit location
+linking, ingest, reader ACLs, and reader-facing URLs. Native media serving can
+proxy linked bytes over a private direct origin or a worker-opened outbound
+tunnel. Automatic matching/publication, placement, caching, and replication
+remain planned. See
+[Remote worker libraries](/docs/developer/remote-worker-libraries) for the
+implemented contract, configuration, limitations, and security invariants.
+
+## 10. Verifying
 
 ```sh
 cargo test -p stump_worker      # protocol round-trip over a real 127.0.0.1 listener
@@ -386,11 +400,26 @@ cargo test -p stump_server --no-default-features --features headless,liseur-sync
 
 Live, against a running server:
 
+Compute worker:
+
 ```sh
 cargo run -p stump_worker --bin stump-worker -- \
   --server http://127.0.0.1:25600 --api-key stump_… --name dev-box
+```
 
-# with a browser, on a machine that has a display
+Source-only worker using an outbound tunnel:
+
+```sh
+cargo run -p stump_worker --bin stump-worker -- \
+  --server https://coppice.example \
+  --source-api-key stump_… \
+  --source-root 'books=/srv/books;label=Books;kind=ebooks;privacy=catalog' \
+  --source-transport tunnel
+```
+
+Compute worker with a browser, on a machine that has a display:
+
+```sh
 cargo run -p stump_worker --features browser --bin stump-worker -- \
   --server http://127.0.0.1:25600 --api-key stump_… --chrome google-chrome-stable
 ```

@@ -8,7 +8,7 @@
 		"lint": "eslint .",
 		"tauri": "tauri",
 		"start": "tauri dev --no-watch",
-		"start-bundled": "yarn tauri dev --no-watch",
+		"start-bundled": "bun run tauri dev --no-watch",
 		"vite": "vite --",
 		"dev": "tauri dev",
 		"build": "tauri build",
@@ -18,7 +18,7 @@
 		"build:win": "tauri build --target x86_64-pc-windows-msvc",
 		"build:linux": "tauri build --target x86_64-unknown-linux-gnu",
 		"format": "eslint --fix . && prettier --config ../../prettier.config.js --ignore-path ../../.prettierignore --write .",
-		"clean": "yarn exec rimraf node_modules"
+		"clean": "rimraf node_modules"
 	},
 	"dependencies": {
 		"@stump/browser": "*",
@@ -29,7 +29,8 @@
 		"@tauri-apps/plugin-store": "2.4.4",
 		"react": "^19.0.0",
 		"react-router": "^8.3.1",
-		"react-dom": "^19.0.0"
+		"react-dom": "^19.0.0",
+		"zod": "^3.23.8"
 	},
 	"devDependencies": {
 		"@tauri-apps/api": "2.11.1",

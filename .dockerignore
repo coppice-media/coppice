@@ -9,7 +9,5 @@ target
 *.db
 .git
 
-# ignore contents in excess directories, some are kept only so cargo 
-# doesn't yell at me
-docs
+# Frozen compatibility client; excluded from the active Bun workspace and image.
 apps/expo

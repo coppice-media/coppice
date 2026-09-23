@@ -307,6 +307,11 @@ impl Media {
 		else {
 			return Ok(None);
 		};
+		if map.ebook_media_id != self.model.id
+			|| !sync_maps::map_matches_current_sources(core.conn.as_ref(), &map).await?
+		{
+			return Ok(None);
+		}
 		let path =
 			sync_maps::read_aloud_cache_path(core.config.get_transform_cache_dir(), &map)
 				.map_err(|error| async_graphql::Error::new(error.to_string()))?;

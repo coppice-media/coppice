@@ -82,15 +82,15 @@ architecture](/docs/developer/read-aloud).
   hash-based matching, and the `ENABLE_KOREADER_SYNC` gate.
 - [Metadata fetching](/docs/guides/integrations/metadata-fetching) — provider
   configuration and the offline-only Hardcover boundary.
-- [Shelfmark companion](/docs/guides/integrations/shelfmark) — external
-  fulfillment handoff and the planned request bridge.
+- [Request and acquisition boundary](/docs/guides/integrations/acquisition) —
+  metadata-backed requests, approval, and the deferred acquisition boundary.
 
 ## Current, planned, and blocked at a glance
 
 | Area | Current | Planned | Blocked |
 | --- | --- | --- | --- |
 | Library access | OPDS, Komga-shaped, Kavita, Kobo, KOReader, liseur-sync, ABS-compatible REST, ordinary EPUB, and ordinary audiobook paths | — | A client/device not listed with **Device-tested** evidence |
-| Fulfillment | Shared-folder output can enter staged ingest and identifier matching | `requests`/wanted ledger; Shelfmark token-auth request bridge | Direct Shelfmark service integration before a stable token-auth API |
+| Requests and acquisition | Metadata-backed ledger, permissions, per-user visibility, manager approval/rejection, notifications, and social handoff | — | MAM acquisition is deferred; any future integration must be a separate authenticated provider sidecar |
 | Read-aloud | Pairing and existing timing import boundaries | Storyteller worker-side alignment; native CTC fallback | Synchronized Storyteller EPUB playback |
 | Hardcover | Offline-tested metadata mapper | Account/progress/journal sync | Live credential verification and account-sync prerequisites |
 

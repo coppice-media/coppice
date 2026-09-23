@@ -36,7 +36,8 @@ use super::{
 	preprocess::{HookOutcome, PreprocessHook},
 	progress::{ProgressHub, ProgressStream, StoredProgressStream},
 	providers::apply::{
-		apply_to_media_txn_with_context, resolve_picks_for_context, validate_picks,
+		apply_to_media_txn_with_context_and_cover, prepare_cover_for_new_media,
+		resolve_picks_for_context, validate_picks, CoverApplyConfig, CoverWrite,
 	},
 	staging,
 };
@@ -989,9 +990,8 @@ impl IngestStore {
 			.to_path_buf();
 		fs::create_dir_all(&series_path).await?;
 
-		let txn = begin_write(&self.conn).await?;
 		let config = library_config::Entity::find_by_id(library.config_id)
-			.one(&txn)
+			.one(self.conn.as_ref())
 			.await?
 			.ok_or_else(|| {
 				IngestError::NotFound(format!("library config {}", library.config_id))
@@ -1000,31 +1000,11 @@ impl IngestStore {
 		let existing_series = series::Entity::find()
 			.filter(series::Column::Path.eq(series_path_string.clone()))
 			.filter(series::Column::LibraryId.eq(item.library_id.clone()))
-			.one(&txn)
+			.one(self.conn.as_ref())
 			.await?;
-		let series_id = if let Some(existing) = existing_series {
-			existing.id
-		} else {
-			let series_path_for_build = series_path.clone();
-			let library_id = item.library_id.clone();
-			let factory = rows.clone();
-			let (series_model, series_metadata) =
-				tokio::task::spawn_blocking(move || {
-					factory.series_rows(&series_path_for_build, &library_id)
-				})
-				.await
-				.map_err(|error| IngestError::Unknown(error.to_string()))??;
-			let built_series = series_model.insert(&txn).await?;
-			if let Some(metadata) = series_metadata {
-				metadata.insert(&txn).await?;
-			}
-			built_series.id
-		};
 
-		// The media builder must see the file at its final library path, so the
-		// move happens inside the transaction window; any failure after this
-		// point rolls the database back (transaction drop) and moves the file
-		// back to staging so the item stays approvable.
+		// The media builder and cover preparation both run before the write
+		// transaction.  This keeps network/image work out of the SQLite lock.
 		let staging_path = item.staging_path.clone();
 		let sidecars = Self::sidecars(&item);
 		let drop_group_id = item.drop_group_id.clone();
@@ -1035,58 +1015,135 @@ impl IngestStore {
 		} else {
 			move_file(&staged, &destination).await?;
 		}
-		// Cover art and notes land beside the publication, which is where the
-		// scanner looks for a `cover.jpg` and where a librarian expects the
-		// `.nfo` they downloaded to be.
 		let moved_sidecars =
 			move_sidecars_beside(&sidecars, &destination, staged_is_dir).await;
+		let cover_config = CoverApplyConfig::new(
+			self.config.media.clone(),
+			self.config.max_image_upload_size,
+		);
 		let commit = async {
+			let (series_id, new_series) = if let Some(existing) = existing_series {
+				(existing.id, None)
+			} else {
+				let series_path_for_build = series_path.clone();
+				let library_id = item.library_id.clone();
+				let factory = rows.clone();
+				let (mut series_model, mut series_metadata) =
+					tokio::task::spawn_blocking(move || {
+						factory.series_rows(&series_path_for_build, &library_id)
+					})
+					.await
+					.map_err(|error| IngestError::Unknown(error.to_string()))??;
+				let series_id = match &series_model.id {
+					Set(id) => id.clone(),
+					_ => Uuid::new_v4().to_string(),
+				};
+				series_model.id = Set(series_id.clone());
+				if let Some(metadata) = &mut series_metadata {
+					metadata.series_id = Set(series_id.clone());
+				}
+				(series_id, Some((series_model, series_metadata)))
+			};
 			let media_config = config.clone();
 			let destination_for_build = destination.clone();
 			let series_id_for_build = series_id.clone();
 			let factory = rows.clone();
-			let (media_active, media_meta) = tokio::task::spawn_blocking(move || {
-				factory.media_rows(
-					&destination_for_build,
-					&series_id_for_build,
-					media_config,
-				)
-			})
-			.await
-			.map_err(|error| IngestError::Unknown(error.to_string()))??;
-			let media_model = media_active.insert(&txn).await?;
-			if let Some(metadata) = media_meta {
-				metadata.insert(&txn).await?;
+			let (mut media_active, mut media_meta) =
+				tokio::task::spawn_blocking(move || {
+					factory.media_rows(
+						&destination_for_build,
+						&series_id_for_build,
+						media_config,
+					)
+				})
+				.await
+				.map_err(|error| IngestError::Unknown(error.to_string()))??;
+			let media_id = match &media_active.id {
+				Set(id) => id.clone(),
+				_ => Uuid::new_v4().to_string(),
+			};
+			media_active.id = Set(media_id.clone());
+			if let Some(metadata) = &mut media_meta {
+				metadata.media_id = Set(Some(media_id.clone()));
 			}
-			let picks_value = serde_json::to_value(&picks)?;
-			apply_to_media_txn_with_context(
-				&txn,
-				&media_model.id,
-				resolved,
-				item.created_by.as_deref().unwrap_or("system"),
-				Some(item_id),
-				expected_revision,
-				"FILL_GAPS",
-				picks_value,
-			)
-			.await
-			.map_err(|error| IngestError::BadRequest(error.to_string()))?;
-			let revision = item.revision;
-			let mut updated_item = item.into_active_model();
-			updated_item.status = Set(DropItemStatus::Committed.as_str().to_string());
-			updated_item.media_id = Set(Some(media_model.id.clone()));
-			updated_item.series_id = Set(Some(series_id));
-			updated_item.sidecar_paths = Set((!moved_sidecars.is_empty())
-				.then(|| serde_json::to_value(&moved_sidecars))
-				.transpose()?);
-			updated_item.error = Set(None);
-			updated_item.revision = Set(revision.saturating_add(1));
-			updated_item.update(&txn).await?;
-			txn.commit().await?;
-			Ok::<_, IngestError>(media_model.id)
+			let mut cover_write =
+				prepare_cover_for_new_media(&media_id, &resolved, &cover_config)
+					.await
+					.map_err(|error| IngestError::BadRequest(error.to_string()))?;
+			let txn = match begin_write(&self.conn).await {
+				Ok(txn) => txn,
+				Err(error) => {
+					if let Some(write) = cover_write.take() {
+						write.rollback().await;
+					}
+					return Err(error.into());
+				},
+			};
+			let result: Result<(String, Option<CoverWrite>), IngestError> = async {
+				if let Some((series_model, series_metadata)) = new_series {
+					series_model.insert(&txn).await?;
+					if let Some(metadata) = series_metadata {
+						metadata.insert(&txn).await?;
+					}
+				}
+				let media_model = media_active.insert(&txn).await?;
+				if let Some(metadata) = media_meta {
+					metadata.insert(&txn).await?;
+				}
+				let picks_value = serde_json::to_value(&picks)?;
+				let applied_cover = apply_to_media_txn_with_context_and_cover(
+					&txn,
+					&media_model.id,
+					resolved,
+					item.created_by.as_deref().unwrap_or("system"),
+					Some(item_id),
+					expected_revision,
+					"FILL_GAPS",
+					picks_value,
+					cover_write.take(),
+				)
+				.await
+				.map_err(|error| IngestError::BadRequest(error.to_string()))?;
+				let committed: Result<String, IngestError> = async {
+					let revision = item.revision;
+					let mut updated_item = item.into_active_model();
+					updated_item.status =
+						Set(DropItemStatus::Committed.as_str().to_string());
+					updated_item.media_id = Set(Some(media_model.id.clone()));
+					updated_item.series_id = Set(Some(series_id));
+					updated_item.sidecar_paths = Set((!moved_sidecars.is_empty())
+						.then(|| serde_json::to_value(&moved_sidecars))
+						.transpose()?);
+					updated_item.error = Set(None);
+					updated_item.revision = Set(revision.saturating_add(1));
+					updated_item.update(&txn).await?;
+					txn.commit().await?;
+					Ok(media_model.id)
+				}
+				.await;
+				match committed {
+					Ok(media_id) => Ok((media_id, applied_cover)),
+					Err(error) => {
+						if let Some(write) = applied_cover {
+							write.rollback().await;
+						}
+						Err(error)
+					},
+				}
+			}
+			.await;
+			match result {
+				Ok(value) => Ok(value),
+				Err(error) => {
+					if let Some(write) = cover_write.take() {
+						write.rollback().await;
+					}
+					Err(error)
+				},
+			}
 		};
-		let media_id = match commit.await {
-			Ok(media_id) => media_id,
+		let (media_id, cover_write) = match commit.await {
+			Ok(result) => result,
 			Err(error) => {
 				let restore = if staged_is_dir {
 					staging::move_dir(&destination, Path::new(&staging_path)).await
@@ -1103,9 +1160,13 @@ impl IngestStore {
 						"approve failed and the staged file could not be moved back"
 					);
 				}
+				restore_moved_sidecars(&moved_sidecars, &sidecars).await;
 				return Err(error);
 			},
 		};
+		if let Some(write) = cover_write {
+			write.commit().await;
+		}
 		if let Some(group) = drop_group_id {
 			self.suggest_group_pairs(&group, item_id, &media_id, media_kind, created_by)
 				.await;
@@ -2321,6 +2382,27 @@ async fn move_sidecars_beside(
 	}
 	moved.sort();
 	moved
+}
+
+async fn restore_moved_sidecars(moved: &[String], originals: &[String]) {
+	for target in moved {
+		let Some(target_name) = Path::new(target).file_name() else {
+			continue;
+		};
+		let Some(original) = originals.iter().find(|original| {
+			Path::new(original.as_str()).file_name() == Some(target_name)
+		}) else {
+			continue;
+		};
+		if let Err(error) = move_file(Path::new(target), Path::new(original)).await {
+			tracing::warn!(
+				?error,
+				target,
+				original = %original,
+				"Could not restore an ingest sidecar after approval rollback"
+			);
+		}
+	}
 }
 
 /// Run one repair tool over `target`, returning whether it applied anything.

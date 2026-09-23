@@ -653,40 +653,27 @@ pub(crate) async fn resolve_catalog_book(
 		.into_iter()
 		.next()
 		.ok_or_else(|| LiseurSyncError::NotFound("book not found".into()))?;
-	let (identifier, fallback_sha) = if let Some(hash) = row.media.hash.clone() {
-		(
-			Identifier {
-				kind: "sha256".into(),
-				value: hash,
-			},
-			None,
-		)
-	} else if let Some(hash) = row.media.koreader_hash.clone() {
-		(
-			Identifier {
-				kind: "partial-md5".into(),
-				value: hash,
-			},
-			None,
-		)
-	} else {
-		let sha = full_file_sha256(row.media.path.clone())
-			.await?
-			.ok_or_else(|| LiseurSyncError::Gone("book file is missing".into()))?;
-		(
-			Identifier {
-				kind: "source".into(),
-				value: row.media.id.clone(),
-			},
-			Some(sha),
-		)
-	};
+	let fallback_sha = full_file_sha256(row.media.path.clone()).await?;
+	let mut identifiers = Vec::with_capacity(2);
+	if let Some(sha) = fallback_sha.clone() {
+		identifiers.push(Identifier {
+			kind: "sha256".into(),
+			value: sha,
+		});
+	}
+	// The catalog id is the stable binding that lets the backend verify a
+	// caller-provided digest against the file it actually serves. `media.hash`
+	// is a sampled Stump fingerprint, not a full-file SHA-256.
+	identifiers.push(Identifier {
+		kind: "source".into(),
+		value: row.media.id.clone(),
+	});
 	let catalog = catalog_book(&row);
 	let result = resolve_work(
 		ctx,
 		&auth.id(),
 		ResolveRequest {
-			identifiers: vec![identifier],
+			identifiers,
 			title: Some(catalog.title),
 			author: catalog.author,
 			confirmed,
@@ -992,11 +979,10 @@ async fn find_media_for_identifier(
 	identifier: &Identifier,
 ) -> Result<Option<MediaCandidate>, LiseurSyncError> {
 	let (sql, values) = match identifier.kind.as_str() {
-		"sha256" => (
-			"SELECT id, pages, hash, koreader_hash, path
-             FROM media WHERE deleted_at IS NULL AND hash = $1 LIMIT 1",
-			vec![identifier.value.clone().into()],
-		),
+		// Stump's `media.hash` is a sampled fingerprint, not a full-file
+		// SHA-256. A caller-provided digest is only verified when a stable
+		// source identifier lets us open the corresponding media row.
+		"sha256" => return Ok(None),
 		"partial-md5" => (
 			"SELECT id, pages, hash, koreader_hash, path
              FROM media WHERE deleted_at IS NULL AND koreader_hash = $1 LIMIT 1",
@@ -1159,18 +1145,29 @@ pub(crate) async fn resolve_work(
 		else {
 			continue;
 		};
-		if !seen_edition_shas.insert(edition_sha.clone()) {
-			continue;
-		}
 		let resolution_status = if verified { "verified" } else { "unverified" };
-		editions.push(EditionCandidate {
-			edition_sha,
+		let candidate = EditionCandidate {
+			edition_sha: edition_sha.clone(),
 			sampled_hash: media.sampled_hash,
 			koreader_hash: media.koreader_hash,
 			media_id: Some(media.id),
 			page_count: (media.pages >= 0).then_some(i64::from(media.pages)),
 			resolution_status: resolution_status.into(),
-		});
+		};
+		if let Some(existing_index) = editions
+			.iter()
+			.position(|edition| edition.edition_sha == edition_sha)
+		{
+			// A full digest may arrive before the source identifier. Keep the
+			// same edition, but upgrade its provenance once the media row is
+			// available and the bytes verify.
+			if verified && editions[existing_index].resolution_status != "verified" {
+				editions[existing_index] = candidate;
+			}
+			continue;
+		}
+		seen_edition_shas.insert(edition_sha);
+		editions.push(candidate);
 	}
 
 	let txn = begin_write(conn).await.map_err(internal)?;

@@ -6,9 +6,10 @@ use crate::shared::enums::DeviceKind;
 use super::user::AuthUser;
 
 /// A registered client: a Kobo, a KOReader install, Coppice, Mihon, Komelia,
-/// Liseur, an OPDS reader, a script, or a browser. A device owns credentials
-/// (see [`super::device_credential`]) and accumulates last-seen / last-sync
-/// state each time one of those credentials authenticates a request.
+/// Liseur, an OPDS reader, a script, a browser, a compute worker, or a source
+/// worker. A device owns credentials (see [`super::device_credential`]) and
+/// accumulates last-seen / last-sync state each time one of those credentials
+/// authenticates a request.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[cfg_attr(feature = "graphql", graphql(name = "DeviceModel"))]
@@ -103,6 +104,8 @@ pub enum Relation {
 	User,
 	#[sea_orm(has_many = "super::device_credential::Entity")]
 	Credentials,
+	#[sea_orm(has_many = "super::remote_source::Entity")]
+	RemoteSources,
 }
 
 impl Related<super::user::Entity> for Entity {
@@ -114,6 +117,11 @@ impl Related<super::user::Entity> for Entity {
 impl Related<super::device_credential::Entity> for Entity {
 	fn to() -> RelationDef {
 		Relation::Credentials.def()
+	}
+}
+impl Related<super::remote_source::Entity> for Entity {
+	fn to() -> RelationDef {
+		Relation::RemoteSources.def()
 	}
 }
 

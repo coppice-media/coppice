@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import Clock3Icon from '@lucide/svelte/icons/clock-3';
-	import DownloadIcon from '@lucide/svelte/icons/download';
+	import BookOpenIcon from '@lucide/svelte/icons/book-open';
 	import { resolve } from '$app/paths';
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
@@ -35,7 +35,7 @@
 			<img src={cover} alt="" class="size-14 shrink-0 rounded-md border object-cover" loading="lazy" />
 		{:else}
 			<div class="flex size-14 shrink-0 items-center justify-center rounded-md border bg-muted/40" aria-hidden="true">
-				<DownloadIcon class="size-5 text-muted-foreground" />
+				<BookOpenIcon class="size-5 text-muted-foreground" />
 			</div>
 		{/if}
 		<div class="min-w-0 flex-1">

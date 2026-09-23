@@ -139,7 +139,7 @@ const main = defineCommand({
 			const changelogSpinner = p.spinner()
 			changelogSpinner.start('generating changelog')
 			try {
-				await execa('yarn', ['gitmoji-changelog', '--output', './.github/CHANGELOG.md'])
+				await execa('bun', ['x', 'gitmoji-changelog', '--output', './.github/CHANGELOG.md'])
 				changelogSpinner.stop('updates written to .github/CHANGELOG.md')
 			} catch (err) {
 				changelogSpinner.stop('changelog generation failed!')
@@ -185,7 +185,7 @@ export async function setJsVersion(version) {
 	}
 
 	try {
-		await execa('yarn', ['prettier', '--write', ...TARGETS])
+		await execa('bun', ['x', 'prettier', '--write', ...TARGETS])
 	} catch (err) {
 		throw new Error(`prettier failed: ${err.message}`)
 	}

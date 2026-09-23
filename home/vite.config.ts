@@ -3,9 +3,10 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-	// `src/lib/stump-ui` is a symlink to packages/stump-ui/src; resolving from
-	// the link position keeps one copy of svelte/graphql per app.
-	resolve: { preserveSymlinks: true },
+	// Resolve package symlinks to their real workspace/store locations so
+	// isolated Bun installs retain each package's dependency graph. Dedupe
+	// Svelte explicitly for the source-linked shared UI.
+	resolve: { dedupe: ['svelte'] },
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		port: 5175,

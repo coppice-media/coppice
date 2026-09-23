@@ -120,9 +120,9 @@ pub fn protocol_for(kind: DeviceKind) -> DeviceProtocol {
 		DeviceKind::Abs | DeviceKind::Kavita => DeviceProtocol::Api,
 		DeviceKind::Liseur => DeviceProtocol::Liseur,
 		DeviceKind::Api | DeviceKind::Web => DeviceProtocol::Api,
-		// A worker authenticates with a prefixed API key on the native API,
-		// exactly like a script; the worker socket is a native route.
-		DeviceKind::Worker => DeviceProtocol::Api,
+		// Compute and source workers both use the native API protocol, but
+		// their credentials and sockets are deliberately separate.
+		DeviceKind::Worker | DeviceKind::SourceWorker => DeviceProtocol::Api,
 	}
 }
 
@@ -162,6 +162,11 @@ pub fn api_key_permissions_for(kind: DeviceKind) -> APIKeyPermissions {
 			UserPermission::AccessWorker,
 			UserPermission::DownloadFile,
 		]),
+		// Source workers advertise roots and serve only grants issued by the
+		// source hub. They never inherit compute, download, or user authority.
+		DeviceKind::SourceWorker => {
+			APIKeyPermissions::Custom(vec![UserPermission::AccessRemoteSource])
+		},
 		DeviceKind::Liseur | DeviceKind::Api | DeviceKind::Web => {
 			APIKeyPermissions::inherit()
 		},
@@ -210,6 +215,34 @@ pub(crate) async fn mint_api_key<C: ConnectionTrait>(
 	.await?;
 
 	Ok((pak.short_token().to_string(), pak.to_string()))
+}
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn source_worker_has_only_source_authority() {
+		assert_eq!(protocol_for(DeviceKind::SourceWorker), DeviceProtocol::Api);
+		assert_eq!(
+			credential_kind_for(DeviceKind::SourceWorker),
+			DeviceCredentialKind::ApiKey
+		);
+		assert_eq!(
+			api_key_permissions_for(DeviceKind::SourceWorker),
+			APIKeyPermissions::Custom(vec![UserPermission::AccessRemoteSource])
+		);
+		assert!(!matches!(
+			api_key_permissions_for(DeviceKind::SourceWorker),
+			APIKeyPermissions::Inherit(_)
+		));
+		assert_eq!(
+			required_permissions(DeviceKind::SourceWorker),
+			vec![
+				UserPermission::AccessRemoteSource,
+				UserPermission::AccessApiKeys
+			]
+		);
+	}
 }
 
 pub mod liseur {

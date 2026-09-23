@@ -58,16 +58,6 @@ pub enum StumpJob {
 	AnnotationSync {
 		user_id: String,
 	},
-	/// Advances one approved/automated book request through search, selection,
-	/// grab polling, and ingest handoff. The processor is idempotent and keeps
-	/// the durable request row as its source of truth.
-	BookRequestAutomation {
-		request_id: String,
-	},
-	/// Polls one opaque gateway grab and advances it to ingest handoff.
-	BookRequestPoll {
-		grab_id: String,
-	},
 }
 
 impl JobPayload for StumpJob {
@@ -77,11 +67,9 @@ impl JobPayload for StumpJob {
 			StumpJob::LibraryScan { .. } => "library_scan",
 			StumpJob::SeriesScan { .. } => "series_scan",
 			StumpJob::ThumbnailGeneration { .. } => "thumbnail_generation",
-			StumpJob::BookRequestPoll { .. } => "book_request_poll",
 			StumpJob::PlaceholderGeneration { .. } => "placeholder_generation",
 			StumpJob::MetadataFetch { .. } => "metadata_fetch",
 			StumpJob::AnalyzeMedia { .. } => "analyze_media",
-			StumpJob::BookRequestAutomation { .. } => "book_request_automation",
 			#[cfg(feature = "providers")]
 			StumpJob::ProviderGc => "provider_gc",
 			#[cfg(feature = "providers")]
@@ -109,12 +97,6 @@ impl JobPayload for StumpJob {
 			StumpJob::AnalyzeMedia { config } => {
 				Some(format!("Analyze media: {:?}", config.scope))
 			},
-			StumpJob::BookRequestAutomation { request_id } => {
-				Some(format!("Automate book request {request_id}"))
-			},
-			StumpJob::BookRequestPoll { grab_id } => {
-				Some(format!("Poll book request grab {grab_id}"))
-			},
 			#[cfg(feature = "providers")]
 			StumpJob::ProviderGc => Some("Reclaim stale materialised provider series".to_string()),
 			#[cfg(feature = "providers")]
@@ -133,9 +115,6 @@ impl JobPayload for StumpJob {
 		match self {
 			StumpJob::LibraryScan { .. } | StumpJob::SeriesScan { .. } => "SCAN",
 			StumpJob::AnalyzeMedia { .. } => "ANALYZE",
-			StumpJob::BookRequestAutomation { .. } | StumpJob::BookRequestPoll { .. } => {
-				"REQUESTS"
-			},
 			#[cfg(feature = "providers")]
 			StumpJob::ProviderGc => "GC",
 			#[cfg(feature = "providers")]
@@ -175,11 +154,5 @@ impl StumpJob {
 
 	pub fn analyze_media(config: AnalysisJobConfig) -> Self {
 		StumpJob::AnalyzeMedia { config }
-	}
-	pub fn book_request_automation(request_id: String) -> Self {
-		StumpJob::BookRequestAutomation { request_id }
-	}
-	pub fn book_request_poll(grab_id: String) -> Self {
-		StumpJob::BookRequestPoll { grab_id }
 	}
 }

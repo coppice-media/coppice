@@ -20,7 +20,8 @@ use stump_ingest::policy::{self, PolicyCandidate, PolicyPlan};
 use stump_ingest::{
 	contract::{FieldPick, ProviderIdentity},
 	providers::apply::{
-		apply_to_media, resolve_picks_for_context, validate_picks, ResolvedFields,
+		apply_to_media_with_cover, resolve_picks_for_context, validate_picks,
+		CoverApplyConfig, ResolvedFields,
 	},
 };
 
@@ -538,11 +539,16 @@ impl IngestMutation {
 				)
 				.map_err(core_error)?;
 				if let Some(linked_media_id) = &item.media_id {
-					apply_to_media(
+					let cover_config = CoverApplyConfig::new(
+						core.config.media.clone(),
+						core.config.protocols.max_image_upload_size,
+					);
+					apply_to_media_with_cover(
 						core.conn.as_ref(),
 						linked_media_id,
 						resolved,
 						&auth.user.id,
+						&cover_config,
 					)
 					.await
 					.map_err(core_error)?;
@@ -572,23 +578,22 @@ impl IngestMutation {
 				})
 			},
 			(None, Some(media_id)) => {
-				let media_row = media::Entity::find_by_id(&media_id)
-					.one(core.conn.as_ref())
-					.await
-					.map_err(core_error)?
-					.ok_or_else(|| Error::new("Media not found"))?;
 				let candidates = core
 					.ingest()
 					.store
 					.candidates_for_media(&media_id)
 					.await
 					.map_err(core_error)?;
+				let snapshot = core
+					.ingest()
+					.store
+					.media_snapshot(&media_id)
+					.await
+					.map_err(core_error)?;
 				let existing = media_metadata::Entity::find()
 					.filter(media_metadata::Column::MediaId.eq(&media_id))
 					.one(core.conn.as_ref())
 					.await?;
-				// The media query already scopes candidates to this media row;
-				// the digest expectation is unnecessary here.
 				let resolved = resolve_picks_for_context(
 					&picks,
 					&candidates,
@@ -596,14 +601,28 @@ impl IngestMutation {
 					&[],
 					strategy,
 					None,
-					None,
+					Some(&snapshot.source_sha256),
 				)
 				.map_err(core_error)?;
-				// Same apply path used when approving a staged item that
-				// already produced its media row.
-				apply_to_media(core.conn.as_ref(), &media_id, resolved, &auth.user.id)
-					.await
-					.map_err(core_error)?;
+				let cover_config = CoverApplyConfig::new(
+					core.config.media.clone(),
+					core.config.protocols.max_image_upload_size,
+				);
+				apply_to_media_with_cover(
+					core.conn.as_ref(),
+					&media_id,
+					resolved,
+					&auth.user.id,
+					&cover_config,
+				)
+				.await
+				.map_err(core_error)?;
+				let media_row = media::Entity::find_by_id(&media_id)
+					.one(core.conn.as_ref())
+					.await?
+					.ok_or_else(|| {
+						Error::new("Media disappeared after metadata apply")
+					})?;
 				let metadata = media_metadata::Entity::find()
 					.filter(media_metadata::Column::MediaId.eq(&media_id))
 					.one(core.conn.as_ref())

@@ -30,7 +30,7 @@ files are served. `scripts/dev-fixture-server.sh` exports both variables for
 the local fixture.
 
 ```sh
-cd home && bun install && bun run build
+bun install --frozen-lockfile && bun run home build
 STUMP_HOME_APP_DIR=/path/to/stump/home/build stump_server
 # → http://<server>/app
 ```
@@ -42,7 +42,7 @@ answers `GET /` with a `303` to `/app`, so the Home app is the landing page. A
 coexist, as before.
 
 `paths.base` is `/app` (`svelte.config.js`; override with `HOME_BASE_PATH` at
-build time). In development `bun run dev` serves on port 5175 and proxies
+build time). In development `bun run home dev` serves on port 5175 and proxies
 `/api` (including the `graphql-ws` socket) to `HOME_SERVER_URL`, default
 `http://127.0.0.1:25600`.
 
@@ -239,18 +239,17 @@ its tree as `src/lib/stump-ui` (a committed symlink) and aliases `@stump/ui`
 to it in `svelte.config.js`; `preserveSymlinks` in the app's `tsconfig.json`
 and `vite.config.ts` keeps the files inside the project, so they are
 typechecked by `svelte-check` like any other source and resolve `svelte`,
-`bits-ui`, `graphql`, … from the app's own `node_modules` — one copy of every
-runtime per app, no second realm for `graphql`. The package declares those
-runtimes as `peerDependencies`; each app installs them. It is not part of the
-root Yarn workspace's install (it has no `dependencies`), and no `bun install`
-is run inside it.
+`bits-ui`, `graphql`, … from the consuming workspace. The package and both
+apps are installed by the root Bun workspace. Runtime dependencies remain
+peer dependencies so each app supplies the versions used to render its
+source-linked UI.
 
 Codegen order after a schema change (`cargo dump-schema`):
 
 ```sh
-(cd packages/stump-ui && bun run codegen)   # shared docs, via editor/'s toolchain
-(cd editor && bun run codegen)
-(cd home && bun run codegen)
+bun run --filter @stump/ui codegen
+bun run editor codegen
+bun run home codegen
 ```
 
 App-specific operations stay in each app (`src/lib/graphql/operations.graphql`)
@@ -339,8 +338,8 @@ carries the same `ThemeSwitcher` inside a `Tooltip.Provider`.
 ## Verification
 
 ```sh
-cd editor && bun run check && bun run build
-cd home && bun run check && bun run build
+bun run editor check && bun run editor build
+bun run home check && bun run home build
 ```
 
 Then start the fixture (`scripts/dev-fixture-server.sh`) and open

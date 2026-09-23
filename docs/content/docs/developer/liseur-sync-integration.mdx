@@ -76,7 +76,7 @@ The following matrix records observed external behavior, not current Stump route
 | Surface | Verified contract | Source |
 | --- | --- | --- |
 | Push | `POST /v1/annotations` accepts `{ annotations: [...] }`, at most 100 items. Each item uses `base_rev: 0` for create or the revision read for an edit. The response is per-item and the batch is not atomic: `applied`, `duplicate`, `conflict`, or `invalid`. | ResearchLiseurSync, liseur-sync `docs/openapi.yaml:625-670`; `docs/integrating.md:263-312` |
-| Pull changes | `GET /v1/annotations/changes?since=<seq>&limit=<n>` defaults to `since=0`, `limit=500`, and caps the limit at 500. It returns `{ annotations, high_water, has_more }`. `high_water` is an annotation-feed counter separate from the position-operation counter. | ResearchLiseurSync, `docs/openapi.yaml:672-702`; `docs/integrating.md:321-338` |
+| Pull changes | `GET /v1/annotations/changes?since=<seq>&limit=<n>` defaults to `since=0`, `limit=500`; absent, zero, negative, non-numeric, and oversized limits all use `500`. Position changes use the same rule with default `50`. The annotation response contains `{ annotations, high_water, has_more }`; its high-water counter is separate from the position-operation counter. | ResearchLiseurSync, `docs/openapi.yaml:672-702`; pinned Liseur client query construction; `docs/integrating.md:321-338` |
 | Delete | `DELETE /v1/annotations/{id}?rev=N` requires the revision the client read. A matching delete returns `200` with `applied` and a new `rev`/`seq`; an already deleted record is `duplicate`; a stale revision returns `409` with the current server copy. | ResearchLiseurSync, `docs/openapi.yaml:703-738`; `internal/store/sqlite/annotations.go:65-199,253-356` |
 | Live set | `GET /v1/works/{id}/annotations` returns live annotations only, with no tombstones, ordered by `progression` and then `client_ts` (records without progression sort last). | ResearchLiseurSync, `docs/openapi.yaml:739-765` |
 | Push notification | **None.** The pinned OpenAPI has no SSE, WebSocket, or long-poll route; both change feeds are cursored polls. | ResearchLiseurSync, `docs/openapi.yaml` (no `text/event-stream` producer, no `ws` scheme) |
@@ -195,13 +195,19 @@ wire keys consumed by that client and does not require a second catalog API.
 | `GET /v1/folders?limit=<n>&after=<cursor>` | Requires `library-read`. Returns `folders`, each with `folder_id`, `name`, and `accepts_uploads: false`; `next_after` is present when another page exists. `limit` is 1–200. | `LiseurSyncApi.kt:135–141`; `LiseurSyncCatalogClient.kt:79–102`; upload target paging and `accepts_uploads` filtering: `LiseurSyncUploadClient.kt:56–87`. |
 | `GET /v1/folders/{folder_id}/books?limit=<n>&cursor=<cursor>` | Requires `library-read`. Returns `books` with `next_cursor` when another page exists. Books are visible media in the Stump library, ordered by `title` then `book_id`. | `LiseurSyncApi.kt:143–148`; `LiseurSyncCatalogClient.kt:26–56`. |
 | `GET /v1/folders/{folder_id}/search?q=<text>` | Requires `library-read`. Returns `{ books }`, searching title, author, and series. | `LiseurSyncApi.kt:150–155`; `LiseurSyncCatalogClient.kt:58–69`. |
-| `GET /v1/books/{book_id}` | Requires `library-read`. Returns the same book object as a catalog page, including `folder_id`, `contributors`, `series`, `status`, `size_bytes`, `cover_url`, `updated_at`, and optional `sha256`. | `LiseurSyncApi.kt:164–166`; `LiseurSyncCatalogClient.kt:134–159`. |
+| `GET /v1/books/{book_id}` | Requires `library-read`. Returns the same book object as a catalog page, including `folder_id`, `contributors`, `series`, `status`, `size_bytes`, `cover_url`, and `updated_at`; it does not hash the source file merely to populate optional `sha256`. | `LiseurSyncApi.kt:164–166`; `LiseurSyncCatalogClient.kt:134–159`. |
 | `GET /v1/books/{book_id}/cover` | Requires `library-read`. Uses Stump's saved-thumbnail/first-page helper and returns an image content type. | `LiseurSyncApi.kt:202–203`; cover URL consumed by `LiseurSyncCatalogClient.kt:143–149`. |
 | `GET /v1/books/{book_id}/download` | Requires `library-read`. Streams the original file through `ServeFile`, preserving range requests and returning the original filename as an attachment. Missing files return `410`. | `LiseurSyncApi.kt:161–162`; download URL and missing-file decision: `LiseurSyncCatalogClient.kt:139–149`; range/conditional request source: `LiseurSyncFileSource.kt` download implementation. |
 | `GET /v1/books/{book_id}/series` | Requires `library-read`. Returns the folder-derived series layer with `book_id`, `source`, `series`, and `folder`; `scope=folder|shared|personal` is accepted for compatibility. | `LiseurSyncApi.kt:168–186`; series fields parsed by `LiseurSyncCatalogClient.kt:137–155`. |
 | `POST /v1/books/{book_id}/resolve` | Requires `library-read` and `sync`; the client posts `{}` or `{ "confirmed": true }`. Returns `200` for an existing identity or `201` for a new one, with `book_id`, `work_id`, `confidence`, `created`, and `identifiers` containing the matched `sha256` edition when available. | URL/body/status handling: `WorkResolver.kt:200–218`; response parsing: `WorkResolver.kt:226–272`. |
 | `GET /v1/works/{work_id}/annotations` | Requires `sync`; returns the live annotation list used after catalog resolution. | URL builder: `LiseurSyncApi.kt:74–84`; response parsing after resolution: `WorkResolver.kt:226–238`; Stump response contract: `crates/liseur-sync/src/lib.rs`. |
-| `GET /v1/books/{book_id}/download` | Requires `library-read`. Streams the original file through `ServeFile`, preserving range requests and returning the original filename as an attachment. Missing files return `410`. | `LiseurSyncApi.kt:161–162`; download URL and missing-file decision: `LiseurSyncCatalogClient.kt:139–149`; range/conditional request source: `LiseurSyncFileSource.kt:19–26`. |
+
+Catalog list/detail responses deliberately omit `sha256`: Stump's stored
+`media.hash` is a sampled fingerprint, not a full-file digest. Explicit
+`POST /v1/books/{book_id}/resolve` opens and hashes the visible file and always
+includes the stable `source` identifier, so digest evidence is bound to the
+file the server actually serves.
+
 Folder `after` and book `cursor` values are opaque URL-safe base64 tokens
 encoding the last `(name, folder_id)` or `(title, book_id)` sort key. The
 client URL-encodes them before sending (`LiseurSyncApi.kt:136–148`), and the
@@ -284,15 +290,16 @@ treating a Stump `media_id` as a globally valid `work_id`:
 - **Alias:** `(user_id, kind, value, work_id)` for `sha256`, `partial-md5`, stable `source`, EPUB `dc`, or low-confidence `ta` evidence.
 - **Media link:** `(user_id, media_id, work_id, edition_sha, resolution_status)` connecting the Stump file to the user's identity without making catalog identity global.
 
-A full-file SHA-256 is computed for media-backed resolution whenever the file
-is readable; Stump's sampled `media.hash` and optional `media.koreader_hash`
-are retained as evidence, never substituted for a verified full digest. When
-the file cannot be read, a caller-provided `sha256` is stored as unverified.
-The current resolver directly indexes `sha256` and `partial-md5` media
-evidence; `source`, `dc`, and `ta` aliases are stored as opaque identity
-evidence but do not receive approximate matching. This deliberately leaves
-the uncertain TA normalizer and partial-MD5 equivalence visible rather than
-silently merging works.
+A full-file SHA-256 is computed for explicit media-backed resolution whenever
+the file is readable; ordinary catalog listing does not hash the object.
+Stump's sampled `media.hash` and optional `media.koreader_hash` are retained as
+evidence, never substituted for a verified full digest. A bare caller-provided
+`sha256` can create unverified edition evidence but cannot select a media row;
+a stable `source` identifier is required to open and verify the corresponding
+file. If that source-backed verification later produces the same digest, the
+existing edition is upgraded to verified provenance. `partial-md5` and
+`source` remain the only direct media lookups; `dc` and `ta` aliases are stored
+as opaque identity evidence and do not receive approximate matching.
 
 The TA normalizer remains a known compatibility hazard. The liseur contract
 and Android `WorkIdentifiers.kt:73-108` specify Unicode NFKD, removal of

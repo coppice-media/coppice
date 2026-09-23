@@ -1,0 +1,57 @@
+---
+title: Request and acquisition boundary
+description: What Coppice owns today and where any future acquisition integration must live
+---
+
+Coppice owns a metadata-backed request ledger, not an acquisition service.
+Universal-style metadata search can identify a work and seed a request, but a
+metadata result is never evidence that a file was found or acquired.
+
+## What Coppice owns
+
+The shipped request system keeps:
+
+- request metadata and optional destination intent;
+- requester identity, permissions, and per-user visibility;
+- mine/all views for authorized managers;
+- operator approval and rejection decisions;
+- request notifications; and
+- the social recommendation-to-request handoff.
+
+Approval records a decision in the ledger. It does not search releases, start a
+download, poll an acquisition, or import a file.
+
+```text
+metadata search or recommendation
+  -> request
+  -> permission and visibility checks
+  -> operator approval or rejection
+```
+
+## Acquisition is deferred
+
+MAM acquisition is deferred. Coppice has no active tracker account, release
+selection, grab, polling, retry, downloader, or acquisition-gateway surface.
+There is no acquisition endpoint or token to configure.
+
+If acquisition is added later, the integration boundary is a separate
+authenticated provider sidecar. The sidecar, not the Coppice process, would own
+provider credentials and transport-specific state. This boundary does not
+promise a provider, protocol, implementation, or delivery date.
+
+## Ingest remains separate
+
+Coppice can ingest a file that an operator is allowed to store through its
+existing staged-ingest paths. That ingest flow is independent of request
+approval: an approved request does not create an ingest job, and an ingested
+file is not automatically matched to a request.
+
+See [modular ingest](/docs/developer/modular-ingest) for the current ingest
+lifecycle and evidence.
+
+## Read-aloud alignment is separate
+
+Read-aloud alignment begins only after an ebook and audiobook pair already
+exists and has been confirmed. It is not metadata search, request approval, or
+acquisition. See [read-aloud](/docs/developer/read-aloud) for that independent
+workflow.
