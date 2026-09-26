@@ -403,6 +403,7 @@ impl HardcoverMutation {
 					id: NotSet,
 					locator: Set(locator),
 					annotation_text: Set(entry.note.clone()),
+					color: Set(None),
 					media_id: Set(local.id.clone()),
 					user_id: Set(user.id.clone()),
 					created_at: NotSet,

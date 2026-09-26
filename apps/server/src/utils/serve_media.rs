@@ -1,5 +1,6 @@
 //! Utilities for serving media files, thumbnails, etc.
 
+use axum::body::Bytes;
 use axum::{
 	body::Body,
 	extract::Request,
@@ -10,10 +11,10 @@ use models::{
 	entity::media::{self},
 	shared::enums::UserPermission,
 };
+use sea_orm::{prelude::*, DatabaseConnection, FromQueryResult};
 use stump_auth::AuthContext;
+use stump_media::virtual_media::{self, VirtualArchive};
 use tower_http::services::ServeFile;
-
-use sea_orm::{prelude::*, DatabaseConnection};
 
 use crate::{
 	config::state::AppState,
@@ -21,13 +22,17 @@ use crate::{
 	routers::api::v2::source_workers,
 };
 
-/// Looks up a piece of media in the database, checks that the user has permission to
-/// download it, and serves the local media file to the client.
+#[derive(FromQueryResult)]
+struct MediaDownloadSelect {
+	name: String,
+	path: String,
+}
+
+/// Looks up media in the database, checks download permission, and serves the
+/// local file or the archive built for a registered virtual-media path.
 ///
-/// Compatibility backends which only retain a database connection continue to
-/// use this local-only entry point.  The native API route uses
-/// [`serve_media_file_with_ctx`] so remote locations can be proxied without
-/// changing those provider trait signatures.
+/// Compatibility backends which retain only a database connection use this
+/// entry point; the native API route uses [`serve_media_file_with_ctx`].
 pub async fn serve_media_file(
 	req: AuthContext,
 	headers: HeaderMap,
@@ -42,10 +47,13 @@ pub async fn serve_media_file(
 		})?;
 	let book = media::Entity::find_for_user(&user)
 		.filter(media::Column::Id.eq(media_id))
-		.into_model::<media::MediaIdentSelect>()
+		.into_model::<MediaDownloadSelect>()
 		.one(conn)
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
+	if virtual_media::is_virtual_path(&book.path) {
+		return serve_provider_archive(&book.path, &book.name, headers).await;
+	}
 	validate_range_header(
 		&headers,
 		tokio::fs::metadata(&book.path).await.ok().map(|m| m.len()),
@@ -53,10 +61,9 @@ pub async fn serve_media_file(
 	serve_local_file(&book.path, headers).await
 }
 
-/// The reader-facing native API path.  It preserves the existing ACL check and
-/// ordinary local `ServeFile`, falling back to a verified healthy remote
-/// location only when local bytes are unavailable or the media path is the
-/// explicit `worker://` form.
+/// The reader-facing native API path. It preserves the existing ACL check and
+/// ordinary local `ServeFile`, while serving provider archives from the
+/// registered virtual-media resolver.
 pub async fn serve_media_file_with_ctx(
 	req: AuthContext,
 	headers: HeaderMap,
@@ -71,11 +78,13 @@ pub async fn serve_media_file_with_ctx(
 		})?;
 	let book = media::Entity::find_for_user(&user)
 		.filter(media::Column::Id.eq(media_id.clone()))
-		.into_model::<media::MediaIdentSelect>()
+		.into_model::<MediaDownloadSelect>()
 		.one(ctx.conn.as_ref())
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
-
+	if virtual_media::is_virtual_path(&book.path) {
+		return serve_provider_archive(&book.path, &book.name, headers).await;
+	}
 	let local_size = tokio::fs::metadata(&book.path).await.ok().map(|m| m.len());
 	let remote_size = source_workers::remote_media_size(ctx, &media_id).await?;
 	let local_unavailable = book.path.starts_with("worker://") || local_size.is_none();
@@ -160,6 +169,53 @@ async fn serve_local_file(path: &str, headers: HeaderMap) -> APIResult<Response>
 			)))
 		},
 	}
+}
+async fn serve_provider_archive(
+	path: &str,
+	file_stem: &str,
+	headers: HeaderMap,
+) -> APIResult<Response> {
+	let archive = virtual_media::get_archive(path, file_stem)
+		.await
+		.map_err(APIError::from)?;
+	virtual_archive_response(archive, &headers)
+}
+
+fn virtual_archive_response(
+	archive: VirtualArchive,
+	headers: &HeaderMap,
+) -> APIResult<Response> {
+	let bytes = Bytes::from(archive.bytes);
+	let total = u64::try_from(bytes.len())
+		.map_err(|error| APIError::InternalServerError(error.to_string()))?;
+	let range = parse_range_header(headers, Some(total))?;
+	let (body, status, content_range) = match range {
+		Some((offset, length)) => {
+			let end = offset + length;
+			let body = bytes.slice(offset as usize..end as usize);
+			(
+				body,
+				axum::http::StatusCode::PARTIAL_CONTENT,
+				Some(format!("bytes {offset}-{}/{total}", end - 1)),
+			)
+		},
+		None => (bytes, axum::http::StatusCode::OK, None),
+	};
+	let mut response = Response::builder()
+		.status(status)
+		.header(header::CONTENT_TYPE, archive.content_type.to_string())
+		.header(header::CONTENT_LENGTH, body.len())
+		.header(
+			header::CONTENT_DISPOSITION,
+			format!("attachment; filename=\"{}\"", archive.file_name),
+		)
+		.header(header::ACCEPT_RANGES, "bytes");
+	if let Some(content_range) = content_range {
+		response = response.header(header::CONTENT_RANGE, content_range);
+	}
+	response
+		.body(Body::from(body))
+		.map_err(|error| APIError::InternalServerError(error.to_string()))
 }
 
 /// Parse exactly one byte range.  Multiple ranges are intentionally rejected:
@@ -273,6 +329,49 @@ mod tests {
 		assert_eq!(
 			parse_range_header(&headers, Some(10)).unwrap(),
 			Some((4, 6))
+		);
+	}
+	#[tokio::test]
+	async fn virtual_archive_response_is_downloadable_and_supports_ranges() {
+		let archive = VirtualArchive {
+			file_name: "Mahou.cbz".to_owned(),
+			content_type: stump_media::ContentType::COMIC_ZIP,
+			bytes: b"abcdef".to_vec(),
+		};
+		let response = virtual_archive_response(archive, &HeaderMap::new()).unwrap();
+		assert_eq!(response.status(), axum::http::StatusCode::OK);
+		assert_eq!(
+			response.headers()[header::CONTENT_TYPE],
+			stump_media::ContentType::COMIC_ZIP.to_string()
+		);
+		assert_eq!(
+			response.headers()[header::CONTENT_DISPOSITION],
+			"attachment; filename=\"Mahou.cbz\""
+		);
+		assert_eq!(response.headers()[header::CONTENT_LENGTH], "6");
+		assert_eq!(
+			axum::body::to_bytes(response.into_body(), 16)
+				.await
+				.unwrap(),
+			"abcdef"
+		);
+
+		let archive = VirtualArchive {
+			file_name: "Mahou.cbz".to_owned(),
+			content_type: stump_media::ContentType::COMIC_ZIP,
+			bytes: b"abcdef".to_vec(),
+		};
+		let mut headers = HeaderMap::new();
+		headers.insert(header::RANGE, "bytes=1-3".parse().unwrap());
+		let response = virtual_archive_response(archive, &headers).unwrap();
+		assert_eq!(response.status(), axum::http::StatusCode::PARTIAL_CONTENT);
+		assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 1-3/6");
+		assert_eq!(response.headers()[header::CONTENT_LENGTH], "3");
+		assert_eq!(
+			axum::body::to_bytes(response.into_body(), 16)
+				.await
+				.unwrap(),
+			"bcd"
 		);
 	}
 }

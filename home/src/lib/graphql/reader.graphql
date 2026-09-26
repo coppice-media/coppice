@@ -83,7 +83,11 @@ query ReaderAnnotations($id: ID!) {
 			id
 			kind
 			source
+			sourceDeviceId
 			sourceDeviceName
+			revision
+			lastEditedSource
+			lastEditedAt
 			editable
 			chapterTitle
 			href

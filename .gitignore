@@ -1,7 +1,6 @@
 .DS_Store
 
 logs/
-!packages/browser/**/logs/
 *.log
 
 .eslintcache
@@ -22,7 +21,6 @@ cjs/
 dts/
 esm/
 lib/
-!apps/expo/**/lib/
 !docs/**/lib/
 mjs/
 tmp/

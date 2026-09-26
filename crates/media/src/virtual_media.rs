@@ -1,12 +1,12 @@
 //! Media rows whose `path` is not a file on disk.
 //!
 //! A [`VirtualMediaResolver`] owns a URI scheme (the provider host owns
-//! `provider://`) and answers the page-level questions the rest of Stump asks
-//! of a media path. Registering one makes [`crate::media::get_page_async`],
-//! [`crate::media::get_page_count_async`], and the page content-type helpers
-//! transparent for those rows, so every route that serves pages keeps calling
-//! the same functions. Synchronous file processors never see virtual paths:
-//! they fail with [`FileError::UnsupportedFileType`] as for any non-archive.
+//! `provider://`) and answers both page-level questions and downloadable
+//! archive requests for media paths. Registering one makes
+//! [`crate::media::get_page_async`], [`crate::media::get_page_count_async`],
+//! page content-type helpers, and file-serving routes transparent for those
+//! rows. Synchronous file processors never see virtual paths: they fail with
+//! [`FileError::UnsupportedFileType`] as for any non-archive.
 
 use std::{
 	collections::HashMap,
@@ -27,6 +27,14 @@ pub fn is_virtual_path(path: &str) -> bool {
 	path.starts_with(PROVIDER_SCHEME)
 }
 
+/// A complete downloadable archive assembled from virtual media pages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VirtualArchive {
+	pub file_name: String,
+	pub content_type: ContentType,
+	pub bytes: Vec<u8>,
+}
+
 #[async_trait]
 pub trait VirtualMediaResolver: Send + Sync {
 	/// Whether this resolver serves `path`.
@@ -41,6 +49,13 @@ pub trait VirtualMediaResolver: Send + Sync {
 
 	async fn get_page_count(&self, path: &str) -> Result<i32, FileError>;
 
+	/// Build a downloadable archive from this virtual media's pages.
+	async fn get_archive(
+		&self,
+		path: &str,
+		file_stem: &str,
+	) -> Result<VirtualArchive, FileError>;
+
 	/// Content types for 1-indexed pages without fetching them; unknown pages
 	/// may be reported as [`ContentType::UNKNOWN`].
 	fn page_content_types(
@@ -48,6 +63,28 @@ pub trait VirtualMediaResolver: Send + Sync {
 		path: &str,
 		pages: &[i32],
 	) -> Result<HashMap<i32, ContentType>, FileError>;
+}
+
+/// Return the resolver for a provider path, or a user-facing unavailability
+/// error when the host is not registered.
+pub fn resolver_for_virtual_path(
+	path: &str,
+) -> Result<Arc<dyn VirtualMediaResolver>, FileError> {
+	resolver_for(path).ok_or_else(|| {
+		FileError::Unavailable(
+			"Provider host is disabled; provider-backed media is unavailable".to_owned(),
+		)
+	})
+}
+
+/// Build a downloadable archive for a virtual media path.
+pub async fn get_archive(
+	path: &str,
+	file_stem: &str,
+) -> Result<VirtualArchive, FileError> {
+	resolver_for_virtual_path(path)?
+		.get_archive(path, file_stem)
+		.await
 }
 
 static RESOLVER: RwLock<Option<Arc<dyn VirtualMediaResolver>>> = RwLock::new(None);

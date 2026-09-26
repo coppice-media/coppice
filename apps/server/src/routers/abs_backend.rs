@@ -34,7 +34,7 @@ use axum::{
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use models::{
-	domain::edition_pair::PairStatus,
+	domain::edition_pair::{PairEvidence, PairStatus},
 	entity::{
 		device, liseur_sync_media_link, media, media_audio, media_audio_chapter,
 		media_audio_track, reading_head, reading_list, reading_list_item, user,
@@ -1189,9 +1189,10 @@ async fn confirmed_links(
 /// long the page is.
 ///
 /// This is the batched form of
-/// `models::domain::edition_pair::linked_media(.., Some(PairStatus::Confirmed))`
-/// and keeps its rule: only a `confirmed` link is a pair, a `rejected` one is
-/// never surfaced, and a `suggested` one must never reach an ABS client.
+/// `models::domain::edition_pair::linked_media(.., Some(PairStatus::Confirmed))`:
+/// both sides must be confirmed. A unique candidate is safe; when several
+/// confirmed EPUBs share the work, a uniquely manual pair wins, otherwise the
+/// ambiguity is logged and no ebook is guessed.
 async fn ebook_editions_for(
 	conn: &DatabaseConnection,
 	user: &AuthUser,
@@ -1208,7 +1209,7 @@ async fn ebook_editions_for(
 		.filter(liseur_sync_media_link::Column::MediaId.is_in(media_ids.to_vec()))
 		.filter(
 			liseur_sync_media_link::Column::PairStatus
-				.ne(PairStatus::Rejected.to_string()),
+				.eq(PairStatus::Confirmed.to_string()),
 		)
 		.all(conn)
 		.await?;
@@ -1239,15 +1240,43 @@ async fn ebook_editions_for(
 		.filter(|row| EBOOK_EXTENSIONS.contains(&row.extension.to_lowercase().as_str()))
 		.map(|row| (row.id.clone(), row))
 		.collect::<HashMap<_, _>>();
+	let manual_evidence = PairEvidence::Manual.to_string();
 
 	let mut out = HashMap::new();
 	for anchor in &anchors {
-		let ebook = counterparts
+		let candidates = counterparts
 			.iter()
 			.filter(|link| {
 				link.work_id == anchor.work_id && link.media_id != anchor.media_id
 			})
-			.find_map(|link| rows.get(&link.media_id));
+			.filter_map(|link| rows.get(&link.media_id).map(|row| (link, row)))
+			.collect::<Vec<_>>();
+		let explicit = candidates
+			.iter()
+			.filter(|(link, _)| {
+				link.pair_evidence.as_deref() == Some(manual_evidence.as_str())
+			})
+			.map(|(_, row)| *row)
+			.collect::<Vec<_>>();
+		let ebook = if explicit.len() == 1 {
+			explicit.first().copied()
+		} else if explicit.is_empty() && candidates.len() == 1 {
+			candidates.first().map(|(_, row)| *row)
+		} else {
+			if candidates.len() > 1 {
+				let candidate_ids = candidates
+					.iter()
+					.map(|(_, row)| row.id.as_str())
+					.collect::<Vec<_>>();
+				tracing::warn!(
+					audiobook_id = %anchor.media_id,
+					candidate_ids = ?candidate_ids,
+					manual_candidates = explicit.len(),
+					"Ambiguous confirmed ABS ebook pair; omitting ebookFile"
+				);
+			}
+			None
+		};
 		if let Some(row) = ebook {
 			out.insert(
 				anchor.media_id.clone(),
@@ -1436,8 +1465,214 @@ async fn audio_bookmarks(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use sea_orm::{DatabaseBackend, MockDatabase};
+	use sea_orm::{
+		ActiveModelTrait, ActiveValue::Set, DatabaseBackend, MockDatabase, Schema,
+	};
 
+	async fn add_media(
+		conn: &DatabaseConnection,
+		series_id: &str,
+		name: &str,
+		extension: &str,
+	) -> media::Model {
+		::tests::fake_data::Media {
+			series_id: series_id.to_owned(),
+			name: Some(name.to_owned()),
+			extension: Some(extension.to_owned()),
+			..Default::default()
+		}
+		.insert(conn)
+		.await
+	}
+	async fn add_pair_tables(conn: &DatabaseConnection) {
+		let schema = Schema::new(DatabaseBackend::Sqlite);
+		for statement in [
+			schema.create_table_from_entity(models::entity::liseur_sync_work::Entity),
+			schema.create_table_from_entity(liseur_sync_media_link::Entity),
+		] {
+			conn.execute(conn.get_database_backend().build(&statement))
+				.await
+				.expect("create pairing table");
+		}
+	}
+
+	async fn add_work(
+		conn: &DatabaseConnection,
+		user_id: &str,
+		media_id: &str,
+	) -> String {
+		let id = format!("abs-pair-work-{media_id}");
+		models::entity::liseur_sync_work::ActiveModel {
+			id: Set(id.clone()),
+			user_id: Set(user_id.to_owned()),
+			title: Set("ABS pairing test".to_owned()),
+			author: Set("Test Author".to_owned()),
+			pending: Set(false),
+			created_at: Set(chrono::Utc::now().to_rfc3339()),
+		}
+		.insert(conn)
+		.await
+		.unwrap();
+		id
+	}
+
+	async fn add_link(
+		conn: &DatabaseConnection,
+		user_id: &str,
+		media_id: &str,
+		work_id: &str,
+		status: PairStatus,
+		evidence: PairEvidence,
+	) {
+		liseur_sync_media_link::ActiveModel {
+			id: Set(format!("abs-pair-link-{media_id}")),
+			user_id: Set(user_id.to_owned()),
+			media_id: Set(media_id.to_owned()),
+			work_id: Set(work_id.to_owned()),
+			edition_sha: Set(String::new()),
+			resolution_status: Set("unverified".to_owned()),
+			created_at: Set(chrono::Utc::now().to_rfc3339()),
+			pair_status: Set(status.to_string()),
+			pair_evidence: Set(Some(evidence.to_string())),
+		}
+		.insert(conn)
+		.await
+		.unwrap();
+	}
+
+	#[tokio::test]
+	async fn confirmed_ebook_pair_prefers_manual_and_never_guesses_ambiguous_or_suggested(
+	) {
+		let conn = ::tests::db::test_database().await;
+		add_pair_tables(&conn).await;
+		let user_row = ::tests::fake_data::User::new("abs-ebook-pairing")
+			.insert(&conn)
+			.await;
+		let user = AuthUser {
+			id: user_row.id.clone(),
+			avatar_path: None,
+			avatar: models::shared::image::ImageRef::default(),
+			username: user_row.username.clone(),
+			is_server_owner: user_row.is_server_owner,
+			is_locked: false,
+			permissions: Vec::new(),
+			age_restriction: None,
+			preferences: None,
+			device_library_scope: None,
+		};
+		let library = ::tests::fake_data::Library::default().insert(&conn).await;
+		let series = ::tests::fake_data::Series {
+			name: Some("ABS EPUB pairs".to_owned()),
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await;
+
+		let preferred_audio =
+			add_media(&conn, &series.id, "preferred audio", "m4b").await;
+		let manual_ebook = add_media(&conn, &series.id, "manual ebook", "epub").await;
+		let provider_ebook = add_media(&conn, &series.id, "provider ebook", "epub").await;
+		let ambiguous_audio =
+			add_media(&conn, &series.id, "ambiguous audio", "m4b").await;
+		let ambiguous_ebook_a =
+			add_media(&conn, &series.id, "ambiguous ebook a", "epub").await;
+		let ambiguous_ebook_b =
+			add_media(&conn, &series.id, "ambiguous ebook b", "epub").await;
+		let suggested_audio =
+			add_media(&conn, &series.id, "suggested audio", "m4b").await;
+
+		// Seed the existing ledger shape from the device fixture directly:
+		// one audio row and two confirmed ebook rows share a work; evidence
+		// distinguishes the provider edition from the manual selection.
+		let preferred_work = add_work(&conn, &user.id, &preferred_audio.id).await;
+		add_link(
+			&conn,
+			&user.id,
+			&provider_ebook.id,
+			&preferred_work,
+			PairStatus::Confirmed,
+			PairEvidence::ProviderEditionList,
+		)
+		.await;
+		add_link(
+			&conn,
+			&user.id,
+			&manual_ebook.id,
+			&preferred_work,
+			PairStatus::Confirmed,
+			PairEvidence::Manual,
+		)
+		.await;
+		add_link(
+			&conn,
+			&user.id,
+			&preferred_audio.id,
+			&preferred_work,
+			PairStatus::Confirmed,
+			PairEvidence::Manual,
+		)
+		.await;
+		add_link(
+			&conn,
+			&user.id,
+			&suggested_audio.id,
+			&preferred_work,
+			PairStatus::Suggested,
+			PairEvidence::TitleAuthor,
+		)
+		.await;
+
+		let ambiguous_work = add_work(&conn, &user.id, &ambiguous_audio.id).await;
+		add_link(
+			&conn,
+			&user.id,
+			&ambiguous_audio.id,
+			&ambiguous_work,
+			PairStatus::Confirmed,
+			PairEvidence::Manual,
+		)
+		.await;
+		add_link(
+			&conn,
+			&user.id,
+			&ambiguous_ebook_a.id,
+			&ambiguous_work,
+			PairStatus::Confirmed,
+			PairEvidence::ProviderEditionList,
+		)
+		.await;
+		add_link(
+			&conn,
+			&user.id,
+			&ambiguous_ebook_b.id,
+			&ambiguous_work,
+			PairStatus::Confirmed,
+			PairEvidence::ProviderEditionList,
+		)
+		.await;
+
+		let media_ids = vec![
+			preferred_audio.id.clone(),
+			ambiguous_audio.id.clone(),
+			suggested_audio.id.clone(),
+		];
+		let ebooks = ebook_editions_for(&conn, &user, &media_ids).await.unwrap();
+
+		assert_eq!(ebooks.len(), 1);
+		assert_eq!(
+			ebooks[&preferred_audio.id].media_id, manual_ebook.id,
+			"the explicit manual pair takes precedence over a provider candidate"
+		);
+		assert!(
+			!ebooks.contains_key(&ambiguous_audio.id),
+			"multiple non-explicit candidates must remain unresolved"
+		);
+		assert!(
+			!ebooks.contains_key(&suggested_audio.id),
+			"a suggested anchor is not a confirmed pair even if its work has ebooks"
+		);
+	}
 	/// Axum panics on overlapping routes when the router is built, and this
 	/// profile adds routes at the server root next to `/api`; catch a
 	/// collision here rather than at server start.

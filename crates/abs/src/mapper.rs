@@ -115,12 +115,15 @@ pub fn series_name(series: Option<(&str, &str)>, sequence: Option<&str>) -> Stri
 	}
 }
 
-/// The `sequence` abs-ref reports for a book inside a series: Stump's
-/// `media_metadata.number` without trailing zeros, or `None`.
+/// The series position abs-ref reports for a book: Stump's `number` first
+/// (without trailing zeros), then `volume`, or `None`.
 pub fn sequence(metadata: Option<&media_metadata::Model>) -> Option<String> {
-	metadata
-		.and_then(|metadata| metadata.number)
-		.map(|number| number.normalize().to_string())
+	metadata.and_then(|metadata| {
+		metadata
+			.number
+			.map(|number| number.normalize().to_string())
+			.or_else(|| metadata.volume.map(|volume| volume.to_string()))
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -351,10 +354,10 @@ pub fn library_dto(input: LibraryInput<'_>) -> LibraryDto {
 			skip_matching_media_with_isbn: false,
 			audiobooks_only: false,
 			epubs_allow_scripted_content: false,
-			// A Stump series holding one audible book is that book's own
-			// folder, and this profile does not report it as a series; the
-			// setting says so to any client that reads it.
-			hide_single_book_series: true,
+			// ABS 2.36.1 defaults this to false. Explicit series metadata
+			// remains a series with one book; folder-only standalone books
+			// have no ABS series to hide or show.
+			hide_single_book_series: false,
 			only_show_later_books_in_continue_series: false,
 			metadata_precedence: [
 				"folderStructure",
@@ -426,7 +429,8 @@ pub fn filter_data(input: FilterDataInput) -> FilterDataDto {
 pub struct ItemInput<'a> {
 	pub media: &'a media::Model,
 	pub metadata: Option<&'a media_metadata::Model>,
-	/// `(series id, series name)` of the Stump series the book belongs to.
+	/// `(ABS series id, series name)` from explicit metadata or a multi-book
+	/// Stump series folder.
 	pub series: Option<(&'a str, &'a str)>,
 	pub library_id: &'a str,
 	/// The library's root path on disk, for the item's `relPath`.
@@ -1057,9 +1061,8 @@ pub fn session_dto(input: SessionInput<'_>) -> PlaybackSessionDto {
 // Series — GET /api/libraries/{id}/series, GET /api/series/{id}
 // ---------------------------------------------------------------------------
 
-/// One Audiobookshelf series. Stump's series row is a folder, so `addedAt`
-/// and `updatedAt` are the folder's own timestamps and `books` are the
-/// audible members the caller may see, already mapped.
+/// One ABS series projection. Metadata-backed groups use the earliest audible
+/// member's timestamps; multi-book Stump-folder groups retain folder metadata.
 pub fn series_dto(
 	series: &models::entity::series::Model,
 	library_id: &str,
@@ -1231,7 +1234,7 @@ mod tests {
 	#[test]
 	fn server_settings_pin_the_reference_release() {
 		let settings = server_settings();
-		assert_eq!(settings.version, "2.36.0");
+		assert_eq!(settings.version, "2.36.1");
 		assert_eq!(settings.build_number, 1);
 		assert_eq!(settings.auth_active_auth_methods, ["local"]);
 		assert_eq!(settings.sorting_prefixes, ["the", "a"]);

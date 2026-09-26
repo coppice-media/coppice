@@ -40,9 +40,9 @@ separate provider-sidecar protocol, never an in-process downloader.
   `apps/server/src/routers/koreader_backend.rs`/`apps/server/src/routers/koreader_backend/`,
   and `apps/server/src/routers/liseur_sync/`.
 - `crates/models/`, `crates/migrations/`, and `crates/graphql/` hold
-  persistence, migration, and generated/domain API contracts. Trace the frozen
-  `apps/expo/` compatibility source plus `packages/graphql/`,
-  `packages/browser/`, and `packages/client/` before API changes.
+  persistence, migration, and generated/domain API contracts.
+- The former `apps/expo/` client was removed; its source remains only in Git
+  history. Do not restore its dependencies or tooling.
 - Komga identity/settings are server-local under
   `apps/server/src/routers/komga/`; provider path ownership is
   `stump_komga::routes::is_komga_path`.
@@ -62,8 +62,8 @@ Komga/Grimmory, liseur-sync, GraphQL, auth, media, and mobile semantics.
 
 For protocol or public API work, document exact routes, auth behavior, payloads,
 and compatibility tests. Validate enum and DTO shapes against the pinned
-Komelia `65f92fde`, `komga-client` 0.11.0 `74412a6e`, Liseur v0.16.0
-`bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53`, and Grimmory main sources.
+Komelia `65f92fde`, `komga-client` 0.11.0 `74412a6e`, Liseur v0.19.0
+`62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6`, and Grimmory main sources.
 Keep migrations append-only and avoid speculative aliases, shims, in-process
 acquisition connectors, or dead fallback paths.
 

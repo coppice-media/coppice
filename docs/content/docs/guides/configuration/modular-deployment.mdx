@@ -30,8 +30,8 @@ These commands use the `stump_server` package and binary explicitly. A bare
 | Minimal | `cargo run -p stump_server --bin stump_server --no-default-features --features minimal` | `minimal = ["formats"]`; adds the PDF/RAR/transform format bundle while keeping optional protocol adapters out. |
 | KOReader-only | `ENABLE_KOREADER_SYNC=true cargo run -p stump_server --bin stump_server --no-default-features --features koreader` | Compiles the KOReader adapter and mounts it through `ENABLE_KOREADER_SYNC=true`. |
 | Kavita-only | `STUMP_ENABLE_KAVITA=true cargo run -p stump_server --bin stump_server --no-default-features --features kavita` | Compiles the Kavita adapter and mounts it through `STUMP_ENABLE_KAVITA=true`. |
-| Headless | `cargo run -p stump_server --bin stump_server --no-default-features --features headless` | Compiles all backend protocol and processing features, but no web SPA module or frontend assets. |
-| Full/default | `cargo run -p stump_server --bin stump_server` | `default = ["full"]`; `full = ["headless", "webui"]`, the browser-compatible baseline. |
+| Headless | `cargo run -p stump_server --bin stump_server --no-default-features --features headless` | Compiles all backend protocol and processing features without the `webui` GraphQL web-facing surfaces. |
+| Full/default | `cargo run -p stump_server --bin stump_server` | `default = ["full"]`; `full = ["headless", "webui"]`. |
 
 The leaf recipes are intentionally literal. Do not replace the KOReader
 command with `headless` if the goal is to prove a KOReader-only composition,
@@ -46,9 +46,9 @@ docker buildx build -f docker/Dockerfile --target full .
 docker buildx build -f docker/Dockerfile --target headless .
 ```
 
-The `full` target copies the web build to `/app/client` and sets
-`STUMP_CLIENT_DIR=/app/client`. The `headless` target copies only the server
-binary and sets `STUMP_ENABLE_WEBUI=false`; it does not contain SPA assets.
+The `full` target builds and includes both static applications. The `headless`
+target includes only the server binary; either target can serve the static apps
+when their directories are configured.
 
 ## Feature gates and runtime switches
 
@@ -57,7 +57,7 @@ key names are part of the existing configuration contract:
 
 | Cargo feature | Runtime switch | Result |
 | --- | --- | --- |
-| `webui` | `STUMP_ENABLE_WEBUI` | Compiles and, when enabled, mounts the SPA. `webui` now implies `graphql` and `graphql/web`; a headless binary cannot re-enable the SPA through configuration. |
+| `webui` | `STUMP_ENABLE_WEBUI` | Compiles and, when enabled, mounts GraphQL web-facing surfaces. `webui` implies `graphql` and `graphql/web`. |
 | `koreader` | `ENABLE_KOREADER_SYNC` | Mounts `/koreader/{api_key}` when both compile and runtime gates are present. |
 | `kobo` | `ENABLE_KOBO_SYNC` | Mounts `/kobo/{api_key}` when both gates are present. |
 | `komga` | `STUMP_ENABLE_KOMGA` | Mounts the Komga-shaped routes, including the Grimmory `/komga` identity split, when both gates are present. |
@@ -72,24 +72,20 @@ native API routes and logs an explicit warning rather than pretending that the
 compatibility adapter is available. See the [configuration reference](/docs/guides/configuration/server-config)
 for defaults and the complete key list.
 
-## Web UI and static apps are different
+## Home and Editor static apps
 
-`webui` is the Cargo feature for the bundled browser SPA and its GraphQL web
-surface. `STUMP_CLIENT_DIR` points at the SPA directory; in a full Docker image
-that directory is `/app/client`.
-
-The ingest editor and Home app are separate static applications. They are
-runtime mounts, not Cargo features, and can be served by a headless binary when
-their build directories contain `index.html`:
+Home and Editor are separate static SvelteKit applications. They are runtime
+mounts, not Cargo features, and can be served by any binary with their build
+directories configured:
 
 | Environment key | URL | Requirement |
 | --- | --- | --- |
-| `INGEST_EDITOR_DIR` | `/editor` | A built ingest editor directory with `index.html`. |
-| `STUMP_HOME_APP_DIR` | `/app` | A built Home app directory with `index.html`. |
+| `INGEST_EDITOR_DIR` | `/editor` | A built Editor directory with `index.html`. |
+| `STUMP_HOME_APP_DIR` | `/app` | A built Home directory with `index.html`. |
 
-The server mounts these paths before the web SPA fallback so `/editor` and `/app`
-are not swallowed by the full build. The [static-app implementation](/docs/developer/home-app)
-is the source reference for this boundary.
+The full Docker target builds both applications and configures these
+directories. The [static-app implementation](/docs/developer/home-app) is the
+source reference for this boundary.
 
 ## Proving a leaf composition
 

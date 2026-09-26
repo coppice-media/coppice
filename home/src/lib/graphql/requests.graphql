@@ -1,9 +1,12 @@
-# Requests carry metadata, destinations, decisions, and audit state. Acquisition
-# is intentionally outside Coppice's GraphQL contract.
+# Request intent and metadata are separate from explicit MAM acquisition actions.
+# Provider credentials and release transport are never sent to the browser.
 fragment BookRequestFields on BookRequest {
 	id
 	requesterId
 	title
+	format
+	isbn
+	preferredNarrator
 	authors
 	coverUrl
 	internalMediaId
@@ -66,5 +69,93 @@ mutation ApproveBookRequest($requestId: ID!, $reason: String) {
 mutation RejectBookRequest($requestId: ID!, $reason: String) {
 	rejectBookRequest(requestId: $requestId, reason: $reason) {
 		...BookRequestFields
+	}
+}
+
+# The requester or a request manager, until the request is fulfilled or
+# rejected; `null` clears the preference.
+mutation SetBookRequestPreferredNarrator($requestId: ID!, $narrator: String) {
+	setBookRequestPreferredNarrator(requestId: $requestId, narrator: $narrator) {
+		...BookRequestFields
+	}
+}
+
+fragment ReleaseCandidateFields on ReleaseCandidate {
+	torrentId
+	title
+	authors
+	narrators
+	series
+	kind
+	categoryName
+	languageCode
+	fileType
+	size
+	numFiles
+	added
+	seeders
+	leechers
+	timesCompleted
+	freeleech
+	vip
+	snatched
+	isbn
+	score
+	matchReasons
+}
+
+fragment ReleaseSearchFields on ReleaseSearch {
+	candidates {
+		...ReleaseCandidateFields
+	}
+	found
+	probe
+	searchedAt
+}
+
+fragment AcquisitionGrabFields on AcquisitionGrab {
+	id
+	requestId
+	torrentId
+	title
+	phase
+	progress
+	error
+	ingestItemId
+	createdAt
+	updatedAt
+}
+
+query AcquisitionStatus {
+	acquisitionStatus {
+		configured
+		reachable
+		ready
+		mode
+		message
+	}
+}
+
+query SearchReleases($requestId: ID!, $text: String, $format: RequestFormat, $limit: Int = 25) {
+	searchReleases(requestId: $requestId, text: $text, format: $format, limit: $limit) {
+		...ReleaseSearchFields
+	}
+}
+
+query CachedReleaseSearch($requestId: ID!) {
+	cachedReleaseSearch(requestId: $requestId) {
+		...ReleaseSearchFields
+	}
+}
+
+query AcquisitionGrabs($requestId: ID!) {
+	acquisitionGrabs(requestId: $requestId) {
+		...AcquisitionGrabFields
+	}
+}
+
+mutation GrabRelease($requestId: ID!, $torrentId: Int!, $confirm: Boolean!) {
+	grabRelease(requestId: $requestId, torrentId: $torrentId, confirm: $confirm) {
+		...AcquisitionGrabFields
 	}
 }

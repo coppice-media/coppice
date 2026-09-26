@@ -25,7 +25,7 @@ use axum::{
 };
 use models::{
 	domain::reading_state::SourceProtocol,
-	entity::{media, reading_head, series},
+	entity::{media, media_metadata, reading_head, series},
 };
 use sea_orm::{prelude::*, FromQueryResult, QueryOrder, QuerySelect, QueryTrait};
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,10 @@ pub struct ContinueReadingQuery {
 pub struct ContinueReadingItem {
 	pub media_id: String,
 	pub name: String,
+	/// Display title: the metadata title when present, else `name` (the file
+	/// or folder name, e.g. "Enders Game (MP3)"). Same rule as GraphQL
+	/// `Media.resolvedName`.
+	pub title: String,
 	/// The file extension without the leading period, so a client can decide
 	/// whether it can open the book before downloading it.
 	pub extension: String,
@@ -96,6 +100,7 @@ pub struct ContinueReadingResponse {
 struct ContinueReadingBook {
 	id: String,
 	name: String,
+	metadata_title: Option<String>,
 	extension: String,
 	pages: i32,
 	koreader_hash: Option<String>,
@@ -154,7 +159,9 @@ pub(crate) async fn continue_reading(
 			media::Column::SeriesId,
 		])
 		.column_as(series::Column::Name, "series_name")
+		.column_as(media_metadata::Column::Title, "metadata_title")
 		.left_join(series::Entity)
+		.left_join(media_metadata::Entity)
 		.filter(media::Column::Id.is_in(media_ids))
 		.into_model::<ContinueReadingBook>()
 		.all(conn)
@@ -173,6 +180,11 @@ pub(crate) async fn continue_reading(
 			Some(ContinueReadingItem {
 				media_id: head.media_id.clone(),
 				name: book.name.clone(),
+				title: book
+					.metadata_title
+					.clone()
+					.filter(|title| !title.trim().is_empty())
+					.unwrap_or_else(|| book.name.clone()),
 				extension: book.extension.clone(),
 				series_id: book.series_id.clone(),
 				series_name: book.series_name.clone(),

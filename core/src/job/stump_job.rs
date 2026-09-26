@@ -58,6 +58,11 @@ pub enum StumpJob {
 	AnnotationSync {
 		user_id: String,
 	},
+	/// Refreshes active MAM bridge grabs and hands completed content to ingest.
+	#[cfg(feature = "mam-acquisition")]
+	MamRefreshGrabs {
+		grab_ids: Vec<String>,
+	},
 }
 
 impl JobPayload for StumpJob {
@@ -76,6 +81,8 @@ impl JobPayload for StumpJob {
 			StumpJob::ProviderSourceHealth => "provider_source_health",
 			StumpJob::NotificationDispatch { .. } => "notification_dispatch",
 			StumpJob::AnnotationSync { .. } => "annotation_sync",
+			#[cfg(feature = "mam-acquisition")]
+			StumpJob::MamRefreshGrabs { .. } => "mam_refresh_grabs",
 		}
 	}
 
@@ -107,6 +114,11 @@ impl JobPayload for StumpJob {
 			StumpJob::AnnotationSync { user_id } => {
 				Some(format!("Export annotations for user {user_id}"))
 			},
+			#[cfg(feature = "mam-acquisition")]
+			StumpJob::MamRefreshGrabs { grab_ids } => Some(format!(
+				"Refresh {} MAM acquisition grab(s)",
+				grab_ids.len()
+			)),
 		}
 	}
 
@@ -121,6 +133,8 @@ impl JobPayload for StumpJob {
 			StumpJob::ProviderSourceHealth => "MAINTENANCE",
 			StumpJob::NotificationDispatch { .. } => "NOTIFY",
 			StumpJob::AnnotationSync { .. } => "ANNOTATIONS",
+			#[cfg(feature = "mam-acquisition")]
+			StumpJob::MamRefreshGrabs { .. } => "ACQUISITION",
 			StumpJob::MetadataFetch { .. } => "METADATA",
 			StumpJob::ThumbnailGeneration { .. }
 			| StumpJob::PlaceholderGeneration { .. } => "THUMBNAIL",

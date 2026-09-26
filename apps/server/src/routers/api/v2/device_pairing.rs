@@ -294,6 +294,7 @@ async fn start_pairing(
 		status: Set(DevicePairingStatus::Pending),
 		failed_attempts: Set(0),
 		credential_issued: Set(false),
+		allow_komf_metadata_editing: Set(false),
 		..Default::default()
 	}
 	.insert(conn)
@@ -430,15 +431,26 @@ async fn issue_credential(
 	};
 
 	let devices = ctx.devices();
-	let (device, credential) = match devices
-		.create_device(
-			&approver,
-			stump_devices::CredentialIssuance::InteractiveSession,
-			pairing.kind,
-			pairing.name.clone(),
-		)
-		.await
-	{
+	let minted = if pairing.kind == DeviceKind::Komelia {
+		devices
+			.create_komelia_device(
+				&approver,
+				stump_devices::CredentialIssuance::InteractiveSession,
+				pairing.name.clone(),
+				pairing.allow_komf_metadata_editing,
+			)
+			.await
+	} else {
+		devices
+			.create_device(
+				&approver,
+				stump_devices::CredentialIssuance::InteractiveSession,
+				pairing.kind,
+				pairing.name.clone(),
+			)
+			.await
+	};
+	let (device, credential) = match minted {
 		Ok(minted) => minted,
 		Err(error) => {
 			tracing::error!(?error, pairing_id = %pairing.id, "Failed to mint device credential for pairing");

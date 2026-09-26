@@ -32,10 +32,6 @@ jobs:
               - './.bun-version'
               - './.github/actions/setup-bun/action.yml'
             frontend:
-              - './apps/web/**'
-              - './apps/desktop/src/**'
-              - './apps/desktop/package.json'
-              - './packages/**'
               - './home/**'
               - './editor/**'
               - './package.json'
@@ -45,7 +41,6 @@ jobs:
               - './.github/actions/setup-bun/action.yml'
             rust:
               - './apps/server/**'
-              - './apps/desktop/src-tauri/**'
               - './core/**'
               - './crates/**'
               - './.github/actions/setup-rust/action.yml'
@@ -109,6 +104,9 @@ jobs:
 
       - name: Run TypeScript tests
         run: bun run test
+
+      - name: Build Home and Editor
+        run: bun run home build && bun run editor build
 
   # TODO(ci): Add vercel dev deployment?
   check-docs:

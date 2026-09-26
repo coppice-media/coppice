@@ -21,6 +21,13 @@ crosspoint = ["dep:stump_crosspoint"]
 # quality reports, metadata candidates. Off in the `minimal` server profile,
 # which links neither the crate nor `Ctx::ingest`.
 ingest = ["dep:stump_ingest"]
+# Bridges explicit request acquisition to the externally authenticated MAM sidecar.
+mam-acquisition = [
+	"ingest",
+	"dep:reqwest",
+	"dep:html5ever",
+	"dep:markup5ever_rcdom",
+]
 pdf = ["stump_media/pdf"]
 providers = [
 	"dep:stump_provider",
@@ -45,6 +52,8 @@ email = { path = "../crates/email", default-features = false }
 epub.workspace = true
 futures.workspace = true
 globset = "0.4.14"
+html5ever = { version = "0.26.0", optional = true }
+markup5ever_rcdom = { version = "0.2.0", optional = true }
 image = { version = "0.25.2", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 imagesize = "0.14.0"
 infer.workspace = true
@@ -79,8 +88,9 @@ serde_json.workspace = true
 serde_with.workspace = true
 simple_crypt.workspace = true
 stump-config-gen = { path = "../crates/macros/stump-config-gen"}
-# `fs`/`io-util`: staging streams and hashes files; `process`/`time`: the
-# ingest preprocess hook spawns a child under a timeout.
+# Bounded streaming requests to the authenticated MAM Bridge sidecar.
+reqwest = { workspace = true, features = ["stream"], optional = true }
+# `fs`/`io-util`: staged ingest streams; `process`/`time`: bounded preprocess hooks.
 tokio = { workspace = true, features = ["fs", "io-util", "process", "time"] }
 schematic = { version = "0.20.5", default-features = false, features = ["config", "env", "toml", "validate"] }
 strum.workspace = true

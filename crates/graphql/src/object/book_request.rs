@@ -1,3 +1,4 @@
+use crate::input::book_request::RequestFormat;
 use async_graphql::Object;
 use models::entity::book_request;
 
@@ -97,6 +98,12 @@ impl BookRequest {
 	async fn title(&self) -> &str {
 		&self.model.title
 	}
+	async fn format(&self) -> RequestFormat {
+		self.model.format.as_str().into()
+	}
+	async fn isbn(&self) -> Option<&str> {
+		self.model.isbn.as_deref()
+	}
 	async fn authors(&self) -> Option<&str> {
 		self.model.authors.as_deref()
 	}
@@ -108,6 +115,9 @@ impl BookRequest {
 	}
 	async fn destination_device_id(&self) -> Option<&str> {
 		self.model.destination_device_id.as_deref()
+	}
+	async fn preferred_narrator(&self) -> Option<&str> {
+		self.model.preferred_narrator.as_deref()
 	}
 	async fn status(&self) -> BookRequestStatus {
 		self.model.status.as_str().into()

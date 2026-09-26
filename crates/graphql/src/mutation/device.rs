@@ -17,20 +17,39 @@ impl DeviceMutation {
 	/// Registers a device for the current user and mints its credential(s). The
 	/// registry enforces the permissions the kind needs (`ACCESS_API_KEYS` plus
 	/// the protocol permission for API-key kinds); secrets are returned once.
+	/// `allowKomfMetadataEditing` defaults to false and only enables Komelia
+	/// metadata edits when the creator holds `EditMetadata`.
 	async fn create_device(
 		&self,
 		ctx: &Context<'_>,
 		kind: DeviceKind,
 		name: Option<String>,
+		#[graphql(default = false)] allow_komf_metadata_editing: bool,
 	) -> Result<DeviceWithCredential> {
 		let req_ctx = ctx.data::<stump_auth::AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
 
 		let issuance = credential_issuance(req_ctx);
 		let devices = core.devices();
-		let (device, credential) = devices
-			.create_device(&req_ctx.user, issuance, kind, name)
-			.await?;
+		let (device, credential) = if kind == DeviceKind::Komelia {
+			devices
+				.create_komelia_device(
+					&req_ctx.user,
+					issuance,
+					name,
+					allow_komf_metadata_editing,
+				)
+				.await?
+		} else {
+			if allow_komf_metadata_editing {
+				return Err(Error::new(
+					"Komf metadata editing is only available for Komelia devices",
+				));
+			}
+			devices
+				.create_device(&req_ctx.user, issuance, kind, name)
+				.await?
+		};
 		with_credential(ctx, device, credential).await
 	}
 

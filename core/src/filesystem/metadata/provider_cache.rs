@@ -84,3 +84,54 @@ pub enum ProviderCacheError {
 	#[error("Failed to create provider: {0}")]
 	ProviderCreationFailed(#[from] MetadataProviderError),
 }
+
+#[cfg(test)]
+mod tests {
+	use metadata_integrations::{create_provider, requires_api_token};
+	use models::shared::enums::MetadataProvider as Stored;
+
+	/// The factory is keyed by the stored enum's `Display` spelling
+	/// (`ANI_LIST`, `MANGA_DEX`); a mismatch silently disables a provider.
+	#[test]
+	fn every_stored_provider_type_constructs_a_client() {
+		let all = [
+			Stored::Hardcover,
+			Stored::ComicVine,
+			Stored::AniList,
+			Stored::Mal,
+			Stored::MangaDex,
+			Stored::MangaUpdates,
+			Stored::OpenLibrary,
+			Stored::GoogleBooks,
+			Stored::Metron,
+			Stored::Audible,
+		];
+		for provider in all {
+			// Exhaustive: a new variant must be added to `all` above.
+			match provider {
+				Stored::Hardcover
+				| Stored::ComicVine
+				| Stored::AniList
+				| Stored::Mal
+				| Stored::MangaDex
+				| Stored::MangaUpdates
+				| Stored::OpenLibrary
+				| Stored::GoogleBooks
+				| Stored::Metron
+				| Stored::Audible => {},
+			}
+			let name = provider.to_string();
+			let token = if requires_api_token(&name) {
+				"token"
+			} else {
+				""
+			};
+			assert!(
+				create_provider(&name, token.to_string()).is_ok(),
+				"no client for stored provider type {name}"
+			);
+		}
+		assert!(!requires_api_token(&Stored::AniList.to_string()));
+		assert!(!requires_api_token(&Stored::MangaDex.to_string()));
+	}
+}

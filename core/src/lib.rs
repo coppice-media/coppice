@@ -21,6 +21,8 @@ pub mod filesystem;
 mod ingest_host;
 pub mod job;
 pub mod kobo;
+#[cfg(feature = "mam-acquisition")]
+pub mod mam_acquisition;
 pub mod notification;
 pub mod opds;
 #[cfg(feature = "providers")]

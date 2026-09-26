@@ -7,6 +7,7 @@
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import XCircleIcon from '@lucide/svelte/icons/x-circle';
 	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
+	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
 	import { Input } from '@stump/ui/components/ui/input';
@@ -17,11 +18,14 @@
 		ApproveBookRequestDocument,
 		BookRequestDocument,
 		RejectBookRequestDocument,
-		RequestDestinationsDocument
+		RequestDestinationsDocument,
+		SetBookRequestPreferredNarratorDocument
 	} from '$lib/graphql/generated/graphql';
 	import { getHomeSession } from '$lib/session.svelte';
 	import { absoluteTime, relativeTime } from '$lib/format';
-	import { safeCoverUrl, statusDescription } from '$lib/requests';
+	import { canEditNarrator, requestFormatLabel, safeCoverUrl, statusDescription } from '$lib/requests';
+	import RequestAcquisitionPanel from '$lib/components/requests/RequestAcquisitionPanel.svelte';
+	import RequestFormatControl from '$lib/components/requests/RequestFormatControl.svelte';
 	import RequestStatusBadge from '$lib/components/requests/RequestStatusBadge.svelte';
 
 	const queryClient = useQueryClient();
@@ -32,6 +36,13 @@
 			session.user?.isServerOwner ||
 				session.user?.permissions.includes('MANAGE_SERVER') ||
 				session.user?.permissions.includes('MANAGE_LIBRARY')
+		)
+	);
+
+	const canAcquire = $derived(
+		Boolean(
+			session.user?.isServerOwner ||
+				session.user?.permissions.some((permission) => String(permission) === 'ACQUIRE_RELEASES')
 		)
 	);
 
@@ -91,6 +102,33 @@
 	}));
 
 	const canDecide = $derived(canManage && ['PENDING', 'AWAITING_APPROVAL'].includes(requestStatus));
+
+	// The requester or a request manager may re-aim the narrator preference
+	// until the request is fulfilled or rejected; the server enforces the same.
+	const narratorEditable = $derived(
+		Boolean(requestRecord) &&
+			(canManage || requestRecord?.requesterId === session.user?.id) &&
+			canEditNarrator(requestRecord?.format, requestStatus)
+	);
+	const setNarrator = createMutation(() => ({
+		mutationFn: (narrator: string | null) =>
+			request(SetBookRequestPreferredNarratorDocument, { requestId, narrator }),
+		onSuccess: () => {
+			actionError = null;
+			invalidate();
+		},
+		onError: (error) => showError(error, 'The narrator preference could not be saved.')
+	}));
+	const narratorLookup = $derived(
+		requestRecord?.sourceProvider && requestRecord.remoteId
+			? {
+					provider: requestRecord.sourceProvider,
+					remoteId: requestRecord.remoteId,
+					title: requestRecord.title,
+					authors: requestRecord.authors
+				}
+			: null
+	);
 </script>
 
 <svelte:head>
@@ -113,6 +151,9 @@
 						<div class="flex flex-wrap items-center gap-2">
 							<h1 class="text-2xl font-semibold tracking-tight">{requestRecord.title}</h1>
 							<RequestStatusBadge status={requestRecord.status} />
+							{#if requestRecord.preferredNarrator}
+								<Badge variant="outline">Narrator: {requestRecord.preferredNarrator}</Badge>
+							{/if}
 						</div>
 						<p class="mt-1 text-sm text-muted-foreground">
 							{requestRecord.authors || 'Author not provided'}{requestRecord.sourceProvider ? ` · ${requestRecord.sourceProvider}` : ''}
@@ -160,6 +201,14 @@
 				</CardContent>
 			{/if}
 		</Card>
+		{#if canAcquire && requestRecord.status === 'APPROVED'}
+			<RequestAcquisitionPanel
+				requestId={requestRecord.id}
+				requestTitle={requestRecord.title}
+				format={requestRecord.format}
+				isbn={requestRecord.isbn}
+			/>
+		{/if}
 
 		<div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
 			<div class="flex min-w-0 flex-col gap-5">
@@ -177,6 +226,32 @@
 							<div>
 								<dt class="text-muted-foreground">Authors</dt>
 								<dd class="mt-1 font-medium">{requestRecord.authors || 'Not provided'}</dd>
+							</div>
+							<div>
+								<dt class="text-muted-foreground">Format</dt>
+								<dd class="mt-1 font-medium">{requestFormatLabel(requestRecord.format)}</dd>
+							</div>
+							<div>
+								<dt class="text-muted-foreground">Narrator</dt>
+								<dd class="mt-1">
+									{#if narratorEditable}
+										<RequestFormatControl
+											value={requestRecord.format}
+											narrator={requestRecord.preferredNarrator ?? null}
+											lookup={narratorLookup}
+											lockFormat
+											disabled={setNarrator.isPending}
+											label="Requested format"
+											onnarratorchange={(narrator) => setNarrator.mutate(narrator)}
+										/>
+									{:else}
+										<span class="font-medium">{requestRecord.preferredNarrator || 'Any narrator'}</span>
+									{/if}
+								</dd>
+							</div>
+							<div>
+								<dt class="text-muted-foreground">ISBN</dt>
+								<dd class="mt-1 font-medium">{requestRecord.isbn || 'Not provided'}</dd>
 							</div>
 							{#if requestRecord.sourceProvider}
 								<div>

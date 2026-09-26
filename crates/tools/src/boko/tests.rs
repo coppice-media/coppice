@@ -18,7 +18,7 @@ fn version_is_parsed_from_the_boko_banner() {
 	assert_eq!(parse_version("boko 0.6"), Some((0, 6, 0)));
 	// The banner is the anchor: a versioned path printed first must not win.
 	assert_eq!(
-		parse_version("/home/al/.cargo/bin/boko-0.4/loader\nboko 0.5.0"),
+		parse_version("/home/user/.cargo/bin/boko-0.4/loader\nboko 0.5.0"),
 		Some((0, 5, 0))
 	);
 	assert_eq!(parse_version("boko"), None);

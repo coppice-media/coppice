@@ -199,6 +199,8 @@ impl CreateAnnotationInput {
 pub struct UpdateAnnotationInput {
 	pub id: String,
 	pub annotation_text: Option<String>,
+	pub color: Option<String>,
+	pub expected_revision: Option<i64>,
 }
 
 /// A manual override for searching metadata providers for a single media item. When

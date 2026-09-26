@@ -1,11 +1,8 @@
 <script lang="ts">
 	/**
-	 * One highlight, note, or bookmark.
-	 *
-	 * The note is editable in place, but only for native rows: a liseur-sync
-	 * CAS record is owned by the device that pushed it and is replicated with
-	 * compare-and-set revisions, so the server reports `editable: false` and
-	 * this card shows it read-only.
+	 * One highlight, note, or bookmark. All entries marked editable by the
+	 * server can be changed here; revisioned updates protect device-owned CAS
+	 * records from stale writes.
 	 */
 	import { resolve } from '$app/paths';
 	import BookOpenIcon from '@lucide/svelte/icons/book-open';
@@ -32,8 +29,8 @@
 		annotation: ConsoleAnnotationFieldsFragment;
 		saving?: boolean;
 		deleting?: boolean;
-		onsave: (id: string, note: string | null) => void;
-		ondelete: (id: string) => void;
+		onsave: (id: string, note: string | null, color: string | null, expectedRevision: number | null) => void;
+		ondelete: (id: string, expectedRevision: number | null) => void;
 	} = $props();
 
 	const KIND_ICONS = {
@@ -52,17 +49,30 @@
 
 	let editing = $state(false);
 	let draft = $state('');
+	let draftColor = $state('#f59e0b');
+	let hasDraftColor = $state(false);
+	let colorChanged = $state(false);
 
 	function startEditing(): void {
 		draft = annotation.note ?? '';
+		draftColor = /^#[0-9a-f]{6}$/i.test(annotation.color ?? '')
+			? annotation.color!
+			: '#f59e0b';
+		hasDraftColor = annotation.color != null;
+		colorChanged = false;
 		editing = true;
 	}
 
 	function save(): void {
 		const next = draft.trim();
+		const nextColor = hasDraftColor
+			? colorChanged || annotation.color == null
+				? draftColor
+				: annotation.color
+			: null;
 		editing = false;
-		if (next === (annotation.note ?? '')) return;
-		onsave(annotation.id, next ? next : null);
+		if (next === (annotation.note ?? '') && nextColor === (annotation.color ?? null)) return;
+		onsave(annotation.id, next ? next : null, nextColor, annotation.revision);
 	}
 </script>
 
@@ -102,6 +112,16 @@
 			{relativeTime(annotation.createdAt)}
 		</time>
 	</div>
+	{#if annotation.lastEditedSource && annotation.lastEditedSource !== annotation.source}
+		<p class="text-xs text-muted-foreground">
+			Edited in {SOURCE_LABELS[annotation.lastEditedSource]}
+			{#if annotation.lastEditedAt}
+				· <time datetime={annotation.lastEditedAt} title={absoluteTime(annotation.lastEditedAt)}>
+					{relativeTime(annotation.lastEditedAt)}
+				</time>
+			{/if}
+		</p>
+	{/if}
 
 	{#if annotation.excerpt}
 		<blockquote class="border-l-2 border-primary/50 pl-4 text-[0.9375rem] leading-relaxed text-foreground">
@@ -117,6 +137,23 @@
 				aria-label="Note"
 				placeholder="Your note on this passage"
 			/>
+			<div class="flex items-center gap-3">
+				<label class="flex items-center gap-2 text-sm text-muted-foreground">
+					<input
+						type="checkbox"
+						bind:checked={hasDraftColor}
+						aria-label="Set annotation colour"
+					/>
+					Colour
+				</label>
+				<input
+					type="color"
+					bind:value={draftColor}
+					oninput={() => (colorChanged = true)}
+					aria-label="Annotation colour"
+					class="size-8 cursor-pointer rounded border border-input bg-transparent p-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+				/>
+			</div>
 			<div class="flex gap-2">
 				<Button size="sm" disabled={saving} onclick={save}>
 					{saving ? 'Saving…' : 'Save note'}
@@ -151,7 +188,7 @@
 				variant="ghost"
 				class="text-destructive"
 				disabled={deleting}
-				onclick={() => ondelete(annotation.id)}
+				onclick={() => ondelete(annotation.id, annotation.revision)}
 			>
 				<Trash2Icon aria-hidden="true" />
 				{deleting ? 'Deleting…' : 'Delete'}

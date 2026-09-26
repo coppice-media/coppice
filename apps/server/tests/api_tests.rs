@@ -16,6 +16,8 @@ mod graphql;
 mod kindle;
 #[cfg(feature = "kobo")]
 mod kobo;
+#[cfg(feature = "komf")]
+mod komf;
 #[cfg(feature = "komga")]
 mod komga;
 #[cfg(feature = "koreader")]
@@ -28,6 +30,8 @@ mod liseur;
 mod opds;
 #[cfg(feature = "graphql")]
 mod reading_progress;
+#[cfg(feature = "webui")]
+mod webui;
 #[cfg(feature = "graphql")]
 mod worker;
 

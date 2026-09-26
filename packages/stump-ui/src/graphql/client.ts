@@ -1,6 +1,6 @@
 import { browser } from '$app/environment';
 import { resolve } from '$app/paths';
-import { ClientError, GraphQLClient } from 'graphql-request';
+import { ClientError, GraphQLClient, type RequestOptions, type Variables } from 'graphql-request';
 import { print } from 'graphql';
 import { createClient, type Sink } from 'graphql-ws';
 import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
@@ -28,14 +28,21 @@ export function redirectToLogin(): void {
  * Run a typed operation. A `401` sends the visitor to the login screen; a
  * GraphQL error surfaces as an `Error` carrying the server's first message
  * (graphql-request's own message dumps the whole request and response,
- * which is what toasts would otherwise show).
+ * which is what toasts would otherwise show). Pass TanStack Query's `signal`
+ * so a superseded request (a search the user has typed past) is aborted
+ * instead of racing the current one.
  */
 export async function request<TResult, TVariables extends object>(
 	document: TypedDocumentNode<TResult, TVariables>,
-	variables: TVariables
+	variables: TVariables,
+	options: { signal?: AbortSignal } = {}
 ): Promise<TResult> {
 	try {
-		return await graphQLClient.request<TResult>(print(document), variables);
+		return await graphQLClient.request<TResult>({
+			document: print(document),
+			variables,
+			signal: options.signal
+		} as RequestOptions<Variables, TResult>);
 	} catch (error) {
 		if (error instanceof ClientError) {
 			if (error.response.status === 401) redirectToLogin();

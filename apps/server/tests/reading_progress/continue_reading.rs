@@ -259,6 +259,38 @@ async fn test_continue_reading_exposes_koreader_hash() {
 	);
 }
 
+/// `title` is the display title: the metadata title when a book has one,
+/// otherwise the file/folder `name` (which may carry tags like "(MP3)").
+#[tokio::test]
+async fn test_continue_reading_title_prefers_metadata_title() {
+	let fixture = fixture().await;
+	models::entity::media_metadata::ActiveModel {
+		media_id: Set(Some("black_science_1".to_string())),
+		title: Set(Some("How to Fall Forever".to_string())),
+		..Default::default()
+	}
+	.insert(fixture.app.conn())
+	.await
+	.expect("metadata should insert");
+	write_head(&fixture, &fixture.user_id, &fixture.books[0], 10, 2, false).await;
+	write_head(&fixture, &fixture.user_id, &fixture.books[1], 10, 1, false).await;
+
+	let body = fetch(&fixture.app, "").await;
+
+	assert_eq!(
+		body["items"][1]["name"], "Black Science #1",
+		"name stays the file name"
+	);
+	assert_eq!(
+		body["items"][1]["title"], "How to Fall Forever",
+		"a book with metadata shows its metadata title"
+	);
+	assert_eq!(
+		body["items"][0]["title"], "Black Science #2",
+		"a book without metadata falls back to its name"
+	);
+}
+
 /// A finished book is not something to continue.
 #[tokio::test]
 async fn test_continue_reading_excludes_completed_heads() {

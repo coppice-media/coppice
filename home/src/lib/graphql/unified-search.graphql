@@ -1,0 +1,65 @@
+query LibrarySearch($query: String!, $limit: Int = 20) {
+	librarySearch(query: $query, limit: $limit) {
+		mediaId
+		title
+		authors
+		seriesName
+		extension
+		isAudiobook
+		thumbnailUrl
+	}
+}
+
+# One selection for every external catalog, so a Hardcover hit and an Audible
+# hit are the same row type on every surface.
+fragment ExternalHitFields on UnifiedExternalHit {
+	provider
+	remoteId
+	title
+	authors
+	year
+	seriesName
+	seriesPosition
+	isbn13
+	isbn10
+	coverUrl
+	inLibraryMediaIds
+	existingRequestId
+	existingRequestStatus
+	hasEbook
+	hasAudiobook
+	audioSeconds
+	asin
+	narrators
+}
+
+query ExternalBookSearch($query: String!, $limit: Int = 10) {
+	externalBookSearch(query: $query, limit: $limit) {
+		provider
+		error
+		hits {
+			...ExternalHitFields
+		}
+	}
+}
+
+query AudibleBookSearch($query: String!, $limit: Int = 5) {
+	audibleBookSearch(query: $query, limit: $limit) {
+		provider
+		error
+		hits {
+			...ExternalHitFields
+		}
+	}
+}
+
+# On demand when the narrator picker opens, never during a search.
+query AudiobookNarrators($provider: String!, $remoteId: String!, $title: String!, $authors: String) {
+	audiobookNarrators(provider: $provider, remoteId: $remoteId, title: $title, authors: $authors) {
+		name
+		sources
+		durationSeconds
+		abridged
+		asin
+	}
+}

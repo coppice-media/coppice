@@ -2,7 +2,7 @@
 title: Thumbnails
 ---
 
-Coppice uses thumbnails to display images of your media throughout the app. By default, Coppice will pull the first image from a media file to use as a thumbnail. However, you can customize this behavior per-library by configuring the thumbnail generation settings
+Coppice uses thumbnails to display images of your media throughout the app. By default, Coppice takes the first image from a media file, shrinks it to fit within 400×600 pixels as WebP the first time anyone asks for it, and keeps that file. You can customize the size and format per-library by configuring the thumbnail generation settings.
 
 ## Thumbnail Generation
 
@@ -11,16 +11,17 @@ The generation of thumbnails is controlled by the configuration options for a li
 - Explicitly sizing each thumbnail (height and width in pixels)
 - Scaling both dimensions of each thumbnail by a factor (e.g., 0.5)
 - The format to encode the thumbnail in (e.g., JPEG, PNG, WebP)
-- The quality of the encoding (e.g., 0-1.0)
+- The quality of the encoding (1–100; unset means 100)
 
-Thumbnail generation is optional, and you can disable it entirely if you prefer to use the default image as a thumbnail.
+Thumbnail generation is optional. Without it, a library's thumbnails are still bounded images (400×600 WebP at quality 80) made from the first page on first request rather than the raw page; configuring it lets you pick the size, format and quality, and have a job generate every thumbnail ahead of time instead of on first request.
 
 Please note that when thumbnail generation is enabled, you may not opt out of [placeholder color processing](#thumbnail-placeholder-colors), as the two features are somewhat intertwined.
 
 <Callout type="info" title="Performance Note">
-	The advantage of configuring thumbnail generation is that it allows you to minimize the size of
-	thumbnails being sent to the client, which greatly improves performance. Otherwise, the full-size
-	image would be sent to the client, which can be very large and slow to load.
+	A first page Coppice cannot re-encode (an image type its encoder does not read, such as AVIF or
+	JPEG XL) is served as-is, which can be very large and slow to load. Configuring thumbnail
+	generation does not change that; it only changes the size and format of the thumbnails that
+	can be encoded.
 </Callout>
 
 ### Image Candidacy
@@ -51,9 +52,9 @@ The reason for this separation is that while Coppice supports rendering these on
 
 ## Thumbnail Placeholder Colors
 
-The mobile app supports progressive loading of thumbnails by first displaying a placeholder based on the dominant colors of a thumbnail image. This is totally optional if you aren't opting into generating thumbnails, but can visually improve the look and feel of the app.
+Clients that support progressive thumbnail loading can show a placeholder based on a thumbnail's dominant colors before displaying the full image.
 
-If you choose to enable this feature, Coppice will compute the dominant colors of each thumbnail image during generation and store them in the database. While the thumbnail is being loaded on the client, a placeholder will be displayed using these colors and presented in one of three supported styles:
+If you enable this feature, Coppice computes the dominant colors during thumbnail generation so compatible clients can use them while the image loads. Three placeholder styles are available:
 
 - Average Color: A single color placeholder based on the average color of the thumbnail image
 - Colorful: A tvOS-like placeholder using multiple dominant colors from the thumbnail image
@@ -83,7 +84,7 @@ You may also upload a custom image to use as a thumbnail.
 
 You have the ability to regenerate thumbnails in a given library's settings page. The options are:
 
-- Generate only missing thumbnails
+- Generate only missing thumbnails — a thumbnail that was made on first request in the same format counts as present, so it keeps its size until forced
 - Force regenerate all thumbnails
 
 ### Deletion

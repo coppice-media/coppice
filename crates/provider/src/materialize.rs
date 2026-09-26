@@ -1282,14 +1282,17 @@ mod tests {
 			.await
 			.unwrap();
 		let chapter = &materialized.created[2];
-		let VirtualArchive {
+		let stump_media::virtual_media::VirtualArchive {
 			file_name,
 			content_type,
 			bytes,
-		} = host
-			.build_archive(MOCK_SOURCE_ID, "alpha-ch1", &chapter.name)
-			.await
-			.unwrap();
+		} = stump_media::virtual_media::VirtualMediaResolver::get_archive(
+			host.as_ref(),
+			&chapter.path,
+			&chapter.name,
+		)
+		.await
+		.unwrap();
 		assert_eq!(file_name, "Vol. 1 Ch. 1 - Chapter 1.cbz");
 		assert_eq!(content_type, ContentType::COMIC_ZIP);
 		assert_eq!(source.page_fetches(), PAGES_PER_CHAPTER as usize);
@@ -1307,10 +1310,13 @@ mod tests {
 		assert_eq!(contents, MockSource::page_bytes("alpha-ch1", 0));
 
 		// Pages fetched for the archive are cache hits afterwards.
-		let again = host
-			.build_archive(MOCK_SOURCE_ID, "alpha-ch1", "x")
-			.await
-			.unwrap();
+		let again = stump_media::virtual_media::VirtualMediaResolver::get_archive(
+			host.as_ref(),
+			&chapter.path,
+			"x",
+		)
+		.await
+		.unwrap();
 		assert_eq!(again.file_name, "x.cbz");
 		assert_eq!(source.page_fetches(), PAGES_PER_CHAPTER as usize);
 	}

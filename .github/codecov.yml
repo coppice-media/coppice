@@ -9,4 +9,3 @@ coverage:
 ignore:
   - 'crates/cli'
   - 'crates/migrations'
-  - 'apps/desktop'

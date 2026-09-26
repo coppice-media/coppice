@@ -12,7 +12,7 @@
 //!
 //! The official app also plays **offline**, from a downloaded copy, and
 //! uploads whole sessions afterwards (`POST /api/session/local` per session,
-//! `/local-all` for the backlog; `server/ApiHandler.kt:677,775`). Those
+//! `/local-all` for the backlog; `server/ApiHandler.kt:644,742`). Those
 //! carry the device clock time of the position, which is what decides
 //! whether the upload still moves the head: see [`merge_local`].
 
@@ -312,8 +312,8 @@ async fn library_of(
 /// `POST /api/session/local` → `200 OK`.
 ///
 /// The app sends one session per call while it plays a downloaded book
-/// (`MediaProgressSyncer.kt:274`) and reads nothing but the absence of an
-/// `error` key (`ApiHandler.kt:677-683`).
+/// (`MediaProgressSyncer.kt:276`) and considers the upload successful when
+/// the response has no `error` (`ApiHandler.kt:642-650`).
 pub(crate) async fn local(
 	backend: Backend,
 	Extension(user): User,
@@ -325,10 +325,10 @@ pub(crate) async fn local(
 
 /// `POST /api/session/local-all`: the backlog, in one request.
 ///
-/// One bad session never fails the batch — the app matches the results back
-/// to its stored sessions by id and only deletes the ones that succeeded
-/// (`ApiHandler.kt:776-795`), so a session naming a book that is gone has to
-/// come back as `success: false` rather than as a status code.
+/// One bad session never fails the batch. The official app correlates each
+/// result to a stored session by id and logs moved progress or per-session
+/// errors (`ApiHandler.kt:747-760`), so a missing book fails only its result,
+/// not the HTTP request.
 pub(crate) async fn local_all(
 	backend: Backend,
 	Extension(user): User,

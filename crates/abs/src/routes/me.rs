@@ -3,10 +3,9 @@
 //! the "continue" row (`GET /api/me/items-in-progress`) and the listening
 //! history (`/listening-sessions`, `/listening-stats`).
 //!
-//! Lissen reads `GET /api/me` twice for two different projections — once as
-//! `UserResponse{id,username,...}` (`AudiobookshelfApiClient.kt:77`) and once
-//! as `BookmarksResponse{bookmarks}` (`:62`) — so both have to be on the same
-//! object.
+//! Lissen 1.12.5 decodes `GET /api/me` as one `UserStateResponse`
+//! (`AudiobookshelfApiClient.kt:68-71`) with both `mediaProgress[]` and
+//! `bookmarks[]` on the same object.
 
 use axum::{
 	extract::{Json, Path, Query},
@@ -200,7 +199,7 @@ pub(crate) async fn patch_progress(
 
 	// `lastUpdate` is the device clock time of the position, which the
 	// official app sends when it pushes a reader position it recorded while
-	// offline (`ApiHandler.kt:854-858`). Dating the update with it is what
+	// offline (`ApiHandler.kt:821-824`). Dating the update with it is what
 	// lets the head keep the newer of two positions instead of the last one
 	// to arrive.
 	let at = body.last_update.and_then(mapper::ms_to_utc);
@@ -224,7 +223,7 @@ pub(crate) async fn patch_progress(
 /// `GET`/`PATCH /api/me/progress/{itemId}/{episodeId}`.
 ///
 /// The official app addresses a podcast episode's progress with this pair
-/// (`ApiHandler.kt:688,696`). The profile serves book libraries only — a
+/// (`ApiHandler.kt:655,663`). The profile serves book libraries only — a
 /// Stump audiobook has no episodes — so the episode never resolves and the
 /// route answers `404`, which is what abs-ref answers for an episode id that
 /// is not in the item and what the app reads as "no progress".
@@ -280,7 +279,7 @@ pub(crate) async fn create_bookmark(
 
 /// `PATCH /api/me/item/{id}/bookmark` — a rename of the bookmark at that
 /// second. Lissen only ever creates and deletes
-/// (`AudiobookshelfApiClient.kt:65,71`); the official client renames.
+/// (`AudiobookshelfApiClient.kt:73,79`); the official client renames.
 pub(crate) async fn update_bookmark(
 	backend: Backend,
 	Extension(user): User,
@@ -311,7 +310,7 @@ async fn upsert(
 }
 
 /// `DELETE /api/me/item/{id}/bookmark/{time}`. The time is in the path, in
-/// whole seconds (`AudiobookshelfApiClient.kt:71`, `@Path totalTime: Int`).
+/// whole seconds (`AudiobookshelfApiClient.kt:79`, `@Path totalTime: Int`).
 pub(crate) async fn delete_bookmark(
 	backend: Backend,
 	Extension(user): User,
@@ -345,7 +344,7 @@ pub(crate) async fn delete_bookmark(
 
 /// abs-ref's default page size for the in-progress row and the listening
 /// history; the official app sends no parameters for either
-/// (`ApiHandler.kt:612`, `pages/stats.vue:109`).
+/// (`ApiHandler.kt:579`, `pages/stats.vue:109`).
 const DEFAULT_PAGE_SIZE: u64 = 25;
 
 #[derive(Debug, Default, Deserialize)]

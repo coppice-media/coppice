@@ -123,11 +123,6 @@ pub(super) async fn update_series_metadata(
 	match target {
 		KavitaSeriesTarget::Series(id) => {
 			visible_series(&txn, user, &id).await?;
-			let media_rows = media::Entity::find_for_user(user)
-				.filter(media::Column::SeriesId.eq(id.clone()))
-				.filter(media::Column::DeletedAt.is_null())
-				.all(&txn)
-				.await?;
 			let existing = series_metadata::Entity::find_by_id(id.clone())
 				.one(&txn)
 				.await?;
@@ -166,24 +161,6 @@ pub(super) async fn update_series_metadata(
 
 			let desired_tags = tag_names(&update.tags);
 			replace_series_tags(&txn, &id, &desired_tags).await?;
-			for media_row in media_rows {
-				let existing = media_metadata::Entity::find()
-					.filter(
-						media_metadata::Column::MediaId.eq(Some(media_row.id.clone())),
-					)
-					.one(&txn)
-					.await?;
-				let had_metadata = existing.is_some();
-				let mut media_active = existing
-					.map(IntoActiveModel::into_active_model)
-					.unwrap_or_else(|| media_metadata::ActiveModel {
-						media_id: Set(Some(media_row.id.clone())),
-						..Default::default()
-					});
-				apply_aggregate_media_fields(&mut media_active, &update);
-				save_media_metadata(&txn, had_metadata, media_active).await?;
-				replace_media_tags(&txn, &media_row.id, &desired_tags).await?;
-			}
 			let series_row = visible_series(&txn, user, &id).await?;
 			if series_row.description != update.summary {
 				let mut active = series_row.into_active_model();
@@ -438,27 +415,6 @@ async fn set_media_cover_lock<C: ConnectionTrait>(
 		});
 	active.locked_fields = Set(locked_fields(current_locks, &[("COVER", locked)]));
 	save_media_metadata(conn, had_metadata, active).await
-}
-
-fn apply_aggregate_media_fields(
-	active: &mut media_metadata::ActiveModel,
-	update: &SeriesMetadataUpdateDto,
-) {
-	active.genres = Set(csv(&update
-		.genres
-		.iter()
-		.map(|item| item.title.clone())
-		.collect::<Vec<_>>()));
-	active.writers = Set(people_csv(&update.writers));
-	active.cover_artists = Set(people_csv(&update.cover_artists));
-	active.publisher = Set(people_csv(&update.publishers));
-	active.characters = Set(people_csv(&update.characters));
-	active.pencillers = Set(people_csv(&update.pencillers));
-	active.inkers = Set(people_csv(&update.inkers));
-	active.colorists = Set(people_csv(&update.colorists));
-	active.letterers = Set(people_csv(&update.letterers));
-	active.editors = Set(people_csv(&update.editors));
-	active.teams = Set(people_csv(&update.teams));
 }
 
 fn apply_book_metadata(

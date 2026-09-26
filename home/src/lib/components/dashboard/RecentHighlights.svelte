@@ -89,6 +89,11 @@
 							<SourceIcon aria-hidden="true" />
 							{annotation.sourceDeviceName ?? SOURCE_LABELS[annotation.source]}
 						</Badge>
+						{#if annotation.lastEditedSource && annotation.lastEditedSource !== annotation.source}
+							<span title={annotation.lastEditedAt ? absoluteTime(annotation.lastEditedAt) : undefined}>
+								Edited in {SOURCE_LABELS[annotation.lastEditedSource]}
+							</span>
+						{/if}
 						<span class="ml-auto shrink-0" title={absoluteTime(annotation.createdAt)}>
 							{relativeTime(annotation.createdAt, now)}
 						</span>

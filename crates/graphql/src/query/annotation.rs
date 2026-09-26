@@ -3,7 +3,7 @@ use stump_auth::AuthContext;
 
 use crate::{
 	data::CoreContext,
-	input::annotation::AnnotationFilterInput,
+	input::annotation::{AnnotationFilterInput, AnnotationOrder},
 	object::annotation::{AnnotationPage, AnnotationSink, AnnotationSyncStatus},
 	pagination::OffsetPagination,
 };
@@ -31,6 +31,7 @@ impl AnnotationQuery {
 		ctx: &Context<'_>,
 		filter: Option<AnnotationFilterInput>,
 		pagination: Option<OffsetPagination>,
+		#[graphql(default)] order: AnnotationOrder,
 	) -> Result<AnnotationPage> {
 		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
 		let core = ctx.data::<CoreContext>()?;
@@ -40,6 +41,7 @@ impl AnnotationQuery {
 			user,
 			&filter.unwrap_or_default(),
 			&pagination.unwrap_or_default(),
+			order,
 		)
 		.await
 	}

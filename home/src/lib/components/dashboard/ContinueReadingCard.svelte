@@ -34,7 +34,7 @@
 	const elapsedLabel = $derived(elapsedSeconds > 0 ? durationLabel(elapsedSeconds * 1000) : null);
 </script>
 
-<article class={cn('flex h-full w-36 shrink-0 snap-start flex-col gap-3', className)}>
+<article class={cn('flex h-full min-w-0 flex-col gap-3 @md/widget:w-36 @md/widget:shrink-0 @md/widget:snap-start', className)}>
 	<a
 		class="relative block aspect-2/3 w-full overflow-hidden rounded-lg bg-muted ring-1 ring-foreground/10 transition-shadow hover:shadow-md"
 		{href}
@@ -57,11 +57,11 @@
 			/>
 		{/if}
 	</a>
-	<div class="flex min-h-24 min-w-0 flex-1 flex-col gap-1.5">
+	<div class="flex min-w-0 flex-1 flex-col gap-1.5 @md/widget:min-h-24">
 		<span class="line-clamp-2 text-sm leading-snug font-medium" title={book.resolvedName}>
 			{book.resolvedName}
 		</span>
-		<span class="line-clamp-1 text-xs text-muted-foreground" title={book.series.resolvedName}>
+		<span class="line-clamp-1 text-xs text-muted-foreground @max-md/widget:hidden" title={book.series.resolvedName}>
 			{book.series.resolvedName}
 		</span>
 		<Progress
@@ -69,11 +69,11 @@
 			class="mt-1 h-1"
 			aria-label={`${book.resolvedName}: ${progress.label}`}
 		/>
-		<span class="text-xs tabular-nums text-muted-foreground">
-			{#if percent !== null}{percent}% · {/if}{progress.label}{#if elapsedLabel} · {elapsedLabel}{/if}
+		<span class="text-xs tabular-nums text-muted-foreground @max-md/widget:truncate">
+			{#if percent !== null}{percent}% ·{' '}{/if}{progress.label}{#if elapsedLabel}{' '}· {elapsedLabel}{/if}
 		</span>
 		{#if lastRead}
-			<span class="text-xs text-muted-foreground" title={absoluteTime(lastRead)}>
+			<span class="text-xs text-muted-foreground @max-md/widget:hidden" title={absoluteTime(lastRead)}>
 				Last read {relativeTime(lastRead, now)}
 			</span>
 		{/if}

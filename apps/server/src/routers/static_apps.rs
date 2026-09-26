@@ -80,8 +80,8 @@ fn validated_dir(dir: Option<&str>, env_key: &str, label: &str) -> Option<PathBu
 	}
 }
 
-/// Mount every configured static app. Mounted before the web UI SPA fallback
-/// so the app bases are not swallowed by it; they coexist with a full build.
+/// Mount configured Home and Editor apps before the web UI browser redirect
+/// fallback so their base paths and assets retain precedence.
 pub(crate) fn mount(app_state: &AppState) -> Router<AppState> {
 	let mut router = Router::new();
 	for app in configured_apps(app_state) {
@@ -91,11 +91,9 @@ pub(crate) fn mount(app_state: &AppState) -> Router<AppState> {
 	router
 }
 
-/// Make the Home app the landing page: `/` redirects to `/app/` when the app
-/// is served and nothing else owns the root. The caller decides the second
-/// half — a `webui` build with the web UI enabled mounts its own SPA
-/// fallback at `/`, and merging a second root route would panic at router
-/// build — so this is only ever merged when that fallback is absent.
+/// Make the Home app the landing page when the web UI redirect router is
+/// disabled or not compiled. The web UI-enabled route owner mounts the root
+/// redirect itself to avoid duplicate `/` routes.
 pub(crate) fn home_landing(app_state: &AppState) -> Router<AppState> {
 	let served = configured_apps(app_state)
 		.iter()

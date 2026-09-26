@@ -19,13 +19,17 @@ The [contributing guide](/docs/developer/contributing) provides detailed instruc
 
 ## Build Stump locally
 
-Afterwards, you can run the following command to build Stump locally:
+Build the server and both static apps:
 
 ```bash copy
-bun run web build && cargo build --package stump_server --release
+bun run home build && bun run editor build
+cargo build --package stump_server --release
 ```
 
-This will bundle the web application and build the Stump server. The server binary is located at `target/release/stump_server`, and the web bundle at `apps/web/dist`. You can place those two items anywhere you'd like, just be sure they are either next to each other or you have set the appropriate [environment variable](/docs/guides/configuration/server-config#stump_client_dir).
+The server binary is located at `target/release/stump_server`. Configure
+`STUMP_HOME_APP_DIR` and `INGEST_EDITOR_DIR` to the corresponding build
+directories (`home/build` and `editor/build`) to serve `/app` and `/editor`.
+See the [server configuration reference](/docs/guides/configuration/server-config) for details.
 
 ## Enable PDF support
 

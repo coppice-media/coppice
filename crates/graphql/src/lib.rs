@@ -1,7 +1,7 @@
-//! async-graphql schema for the web/desktop/mobile clients (server feature
+//! async-graphql schema for the server's API clients (server feature
 //! `graphql`; absent from `minimal`). Feature `web` (default on, forwarded by
-//! the server's `webui`) carries the resolvers only the upstream React SPA and
-//! the Expo app reach; a `headless` server drops them. `schema.graphql` is the
+//! the server's `webui`) preserves the web-specific resolver and input
+//! contract; a `headless` server omits those fields. `schema.graphql` is the
 //! *full* schema, generated with every feature on by the `graphql-gen` binary
 //! (`cargo dump-schema`) and checked in CI.
 //! See `crates/graphql/README.md`.

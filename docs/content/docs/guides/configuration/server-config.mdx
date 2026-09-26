@@ -22,8 +22,8 @@ Internally the server keeps these settings in `StumpConfig`, split into flattene
 | `server`                    | `core/src/config/server.rs`    | `profile`, `ip`, `port`, `verbosity`, `pretty_logs`, `log_dir`, `colorful_logs`, `allowed_origins`, `trust_proxy_headers`, `home_app_dir`                                                                                                                                                                                             |
 | `database`                  | `core/src/config/database.rs`  | `db_path`, `db_timeout_secs`, `db_max_connections`, `db_min_connections`, `sqlite_statement_cache_capacity`                                                                                                                                                                                                           |
 | `jobs`                      | `core/src/config/jobs.rs`      | `enable_background_jobs`, `parallelism_multiplier`                                                                                                                                                                                                                                                                    |
-| `protocols`                 | `core/src/config/protocols.rs` | `enable_koreader_sync`, `enable_kobo_sync`, `kobo_kepub_preconvert`, `kobo_kepub_cache_max_age_days`, `kobo_kepub_deflate_level`, `kobo_kepub_conversion`, `enable_komga`, `enable_kavita`, `enable_opds_progression`, `enable_upload`, `max_file_upload_size`, `max_image_upload_size`, `enable_webui`, `enable_playground`, `client_dir` |
-| `ingest`                    | `core/src/config/ingest.rs`    | `ingest_drop_dir`, `ingest_staging_dir`, `ingest_editor_dir`, `ingest_progress_retention`, `ingest_preprocess_command`, `ingest_preprocess_timeout_secs`                                                                                                                                                               |
+| `protocols`                 | `core/src/config/protocols.rs` | `enable_koreader_sync`, `enable_kobo_sync`, `kobo_kepub_preconvert`, `kobo_kepub_cache_max_age_days`, `kobo_kepub_deflate_level`, `kobo_kepub_conversion`, `enable_komga`, `enable_kavita`, `enable_opds_progression`, `enable_upload`, `max_file_upload_size`, `max_image_upload_size`, `enable_webui`, `enable_playground` |
+| `ingest`                    | `core/src/config/ingest.rs`    | `ingest_drop_dir`, `ingest_staging_dir`, `ingest_editor_dir`, `ingest_progress_retention`, `ingest_preprocess_command`, `ingest_preprocess_timeout_secs` |
 | `providers`                 | `core/src/config/providers.rs` | `enable_providers`, `provider_cache_max_bytes`, `virtual_series_ttl`, `provider_gc_days`, `provider_health_interval_secs`, `provider_health_dead_after`                                                                                                                                                                                                       |
 | `auth`                      | `core/src/config/auth.rs`      | `password_hash_cost`, `session_ttl`, `access_token_ttl`, `refresh_token_ttl`, `expired_session_cleanup_interval`                                                                                                                                                                                                      |
 | `pdf`                       | `core/src/config/pdf.rs`       | `pdfium_path`, `pdf_render_dpi`, `pdf_max_dimension`, `pdf_render_format`, `pdf_cache_pages`, `pdf_prerender_range`, `pdf_high_quality`                                                                                                                                                                               |
@@ -60,21 +60,15 @@ The directory where Coppice will look for its configuration file.
 | ------ | ------------- | ------------ |
 | String | `~/.stump`    | `config_dir` |
 
-### STUMP_CLIENT_DIR
-
-The directory that contains the web bundle for the web UI.
-
-| Type   | Default Value | TOML Key     |
-| ------ | ------------- | ------------ |
-| String | `./client`    | `client_dir` |
 
 ### STUMP_ENABLE_WEBUI
 
-Whether to serve the Coppice web UI and its single-page application (SPA) fallback routes. This is enabled by default. The setting takes effect only when the server was compiled with the Cargo `webui` feature; a `--no-default-features --features headless` build contains no SPA module or frontend assets and cannot re-enable the web UI through configuration.
+Whether to enable the GraphQL web-facing surfaces compiled by Cargo's `webui` feature. This setting does not enable or serve Home or Editor.
 
 | Type    | Default Value | TOML Key       |
 | ------- | ------------- | -------------- |
 | Boolean | `true`        | `enable_webui` |
+
 
 ### STUMP_RUNTIME_WORKER_THREADS
 
@@ -94,11 +88,12 @@ Whether to initialize scheduled jobs, the library-watcher listener, and the Apal
 
 ### STUMP_ALLOWED_ORIGINS
 
-A **comma-delineated** list of allowed origins for the Coppice API. If you're trying to access the API from a different domain, you'll need to add it to this list. By default, origins corresponding to the Tauri desktop application are allowed, and the host machine's IP address with the configured port is allowed for both HTTP and HTTPS.
+The list of allowed browser origins for the Coppice API. If you're accessing
+the API from a different domain, add that origin here.
 
-| Type   | Default Value                                                                              | TOML Key          |
-| ------ | ------------------------------------------------------------------------------------------ | ----------------- |
-| String | `"tauri://localhost","https://tauri.localhost","http(s)://{machine_ip}:{configured_port}"` | `allowed_origins` |
+| Type   | Default Value | TOML Key          |
+| ------ | ------------- | ----------------- |
+| String | Empty          | `allowed_origins` |
 
 Stored as a valid array in the configuration file.
 
@@ -568,10 +563,8 @@ then not served.
 Directory containing the built Home app (`home/build`). When set and it
 contains `index.html`, the app is served by this server under `/app` with the
 same caching rules as the editor, and it becomes the landing page: `GET /`
-redirects to `/app` unless this build ships the web UI and
-`STUMP_ENABLE_WEBUI` is on, in which case the web UI keeps `/`. Unset by
-default; the app is then not served. See the [Home app](/docs/developer/home-app)
-developer page.
+redirects to `/app`. Unset by default; the app is then not served. See the
+[Home app](/docs/developer/home-app) developer page.
 
 | Type   | Default Value | TOML Key       |
 | ------ | ------------- | -------------- |

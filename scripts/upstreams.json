@@ -11,13 +11,13 @@
 		{
 			"name": "Liseur",
 			"repo": "chmouel/liseur",
-			"baseline": { "kind": "commit", "value": "bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53" },
+			"baseline": { "kind": "commit", "value": "62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6" },
 			"sourcePolicy": "inspect"
 		},
 		{
 			"name": "Liseur Sync",
 			"repo": "chmouel/liseur-sync",
-			"baseline": { "kind": "commit", "value": "f8ce32b79aca0cddde84e9004fedde121fb77365" },
+			"baseline": { "kind": "commit", "value": "906889ffe11fc7260b071c1f142aeee1fa8a1419" },
 			"sourcePolicy": "inspect"
 		},
 		{
@@ -51,7 +51,7 @@
 		{
 			"name": "Audiobookshelf",
 			"repo": "advplyr/audiobookshelf",
-			"baseline": { "kind": "release", "value": "v2.30.0" },
+			"baseline": { "kind": "release", "value": "v2.36.1" },
 			"sourcePolicy": "release-notes-only"
 		},
 		{
@@ -88,7 +88,7 @@
 		{
 			"name": "KOReader",
 			"repo": "koreader/koreader",
-			"baseline": { "kind": "commit", "value": "009367df7ac7142bc0d1eb5782d061260b11baa6" },
+			"baseline": { "kind": "commit", "value": "9192014d8bd82a91dc1012473be0f238dedfdb54" },
 			"sourcePolicy": "inspect-contract-only"
 		},
 		{

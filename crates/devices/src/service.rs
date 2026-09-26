@@ -140,8 +140,40 @@ impl DeviceService {
 		kind: DeviceKind,
 		name: Option<String>,
 	) -> DeviceResult<(device::Model, IssuedCredential)> {
+		self.create_device_with_komf_metadata_editing(user, issuance, kind, name, false)
+			.await
+	}
+
+	/// Registers a Komelia device, optionally granting the owner-selected Komf
+	/// metadata-edit permission. The choice is accepted only when the owner
+	/// already holds that permission.
+	pub async fn create_komelia_device(
+		&self,
+		user: &AuthUser,
+		issuance: CredentialIssuance,
+		name: Option<String>,
+		allow_komf_metadata_editing: bool,
+	) -> DeviceResult<(device::Model, IssuedCredential)> {
+		self.create_device_with_komf_metadata_editing(
+			user,
+			issuance,
+			DeviceKind::Komelia,
+			name,
+			allow_komf_metadata_editing,
+		)
+		.await
+	}
+
+	async fn create_device_with_komf_metadata_editing(
+		&self,
+		user: &AuthUser,
+		issuance: CredentialIssuance,
+		kind: DeviceKind,
+		name: Option<String>,
+		allow_komf_metadata_editing: bool,
+	) -> DeviceResult<(device::Model, IssuedCredential)> {
 		authorize_credential_issuance(kind, issuance)?;
-		authorize_creation(user, kind)?;
+		authorize_creation(user, kind, allow_komf_metadata_editing)?;
 
 		let txn = begin_write(&self.conn).await?;
 		let name = match name {
@@ -168,7 +200,7 @@ impl DeviceService {
 		}
 		.insert(&txn)
 		.await?;
-		let issued = mint_credential(&txn, &device).await?;
+		let issued = mint_credential(&txn, &device, allow_komf_metadata_editing).await?;
 		txn.commit().await?;
 
 		Ok((device, issued))
@@ -187,9 +219,16 @@ impl DeviceService {
 			return Err(DeviceError::Revoked);
 		}
 
+		let allow_komf_metadata_editing =
+			komf_metadata_editing_for_device(self.conn.as_ref(), &device).await?;
+		if allow_komf_metadata_editing
+			&& !user.has_permission(models::shared::enums::UserPermission::EditMetadata)
+		{
+			return Err(DeviceError::Forbidden);
+		}
 		let txn = begin_write(&self.conn).await?;
 		discard_credentials(&txn, &device).await?;
-		let issued = mint_credential(&txn, &device).await?;
+		let issued = mint_credential(&txn, &device, allow_komf_metadata_editing).await?;
 		txn.commit().await?;
 
 		Ok(issued)
@@ -950,11 +989,20 @@ fn numbered_name(taken: &HashSet<String>, base: &str) -> String {
 		.expect("an unused numbered name exists")
 }
 
-fn authorize_creation(user: &AuthUser, kind: DeviceKind) -> DeviceResult<()> {
+fn authorize_creation(
+	user: &AuthUser,
+	kind: DeviceKind,
+	allow_komf_metadata_editing: bool,
+) -> DeviceResult<()> {
+	if allow_komf_metadata_editing
+		&& !user.has_permission(models::shared::enums::UserPermission::EditMetadata)
+	{
+		return Err(DeviceError::Forbidden);
+	}
 	if user.is_server_owner {
 		return Ok(());
 	}
-	let missing = required_permissions(kind)
+	let missing = required_permissions(kind, allow_komf_metadata_editing)
 		.into_iter()
 		.any(|permission| !user.permissions.contains(&permission));
 	if missing {
@@ -971,6 +1019,31 @@ async fn find_credentials<C: ConnectionTrait>(
 		.order_by_asc(device_credential::Column::Id)
 		.all(conn)
 		.await?)
+}
+async fn komf_metadata_editing_for_device<C: ConnectionTrait>(
+	conn: &C,
+	device: &device::Model,
+) -> DeviceResult<bool> {
+	if device.kind != DeviceKind::Komelia {
+		return Ok(false);
+	}
+	let Some(credential) = find_credentials(conn, &device.id)
+		.await?
+		.into_iter()
+		.find(|credential| credential.credential_kind == DeviceCredentialKind::ApiKey)
+	else {
+		return Ok(false);
+	};
+	let key = api_key::Entity::find()
+		.filter(api_key::Column::UserId.eq(&device.user_id))
+		.filter(api_key::Column::ShortToken.eq(&credential.credential_ref))
+		.one(conn)
+		.await?;
+	Ok(matches!(
+		key.map(|key| key.permissions),
+		Some(models::shared::api_key::APIKeyPermissions::Custom(permissions))
+			if permissions.contains(&models::shared::enums::UserPermission::EditMetadata)
+	))
 }
 
 fn primary_credential(
@@ -1030,6 +1103,7 @@ fn credential_specs(kind: DeviceKind) -> Vec<(DeviceCredentialKind, DeviceProtoc
 async fn mint_credential<C: ConnectionTrait>(
 	conn: &C,
 	device: &device::Model,
+	allow_komf_metadata_editing: bool,
 ) -> DeviceResult<IssuedCredential> {
 	let mut credentials = Vec::with_capacity(credential_specs(device.kind).len());
 	for (kind, protocol) in credential_specs(device.kind) {
@@ -1039,7 +1113,7 @@ async fn mint_credential<C: ConnectionTrait>(
 					conn,
 					&device.user_id,
 					&device.name,
-					api_key_permissions_for(device.kind),
+					api_key_permissions_for(device.kind, allow_komf_metadata_editing),
 				)
 				.await?
 			},

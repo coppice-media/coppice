@@ -16,27 +16,22 @@ dependency so a headless build can compile it without SeaORM.
 
 | Reference | Pin | Why it matters |
 | --- | --- | --- |
-| KOReader kosync plugin | [`plugins/kosync.koplugin/main.lua` @ `009367df`](https://github.com/koreader/koreader/blob/009367df7ac7142bc0d1eb5782d061260b11baa6/plugins/kosync.koplugin/main.lua) | Client that sends `users/auth` and `syncs/progress`; defines the five PUT fields and the `0..=1` percentage |
-| koreader-sync-server | [`config/routes.lua`](https://github.com/koreader/koreader-sync-server/blob/master/config/routes.lua) | Route shape Stump mirrors (`docs/content/docs/developer/sync-platforms.mdx:18`) |
-| KOReader `generateDocChecksum` | [`frontend/util.lua`](https://github.com/koreader/koreader/blob/master/frontend/util.lua) | Partial-MD5 document identity ported in `crates/media/src/hash.rs` |
-| Liseur KOSync client | [`31f8182d`](https://github.com/chmouel/liseur/commit/31f8182d524e3536cf9020594185e709a033094f) | Second real client of this route tree (`docs/content/docs/developer/liseur-providers.mdx:151-172`) |
+| KOReader app and first-party plugin | KOReader v2026.07.1 source pin `9192014d` | `coppice.koplugin` in sibling repository `koreader-coppice`; source-derived, not loaded into the native app |
+| Liseur KOSync client | [v0.19.0 `62ecb5a5`](https://github.com/chmouel/liseur/commit/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6) | Current source-only client reference; the older 2026-09-04 device run is a separate evidence record |
+| KOSync protocol | `GET users/auth`, `PUT syncs/progress`, `GET syncs/progress/{document}` | Progress-only route shape; see `docs/content/docs/developer/sync-platforms.mdx` |
 
-Client-verification status (`docs/content/docs/developer/client-verification.mdx:28`):
-Liseur KOReader-sync pairing is **device-verified** (2026-09-04, progress
-round-trip) plus a server probe `GET users/auth` → 200. Stock KOReader is
-source-level against the pinned plugin; no Hurl spec pins this protocol
-(`/home/al/Code/komga-compat/Makefile` has no KOReader target).
+Client/device evidence is recorded in `docs/content/docs/developer/client-verification.mdx`. The KOReader plugin has not been loaded into a native KOReader app; Liseur's KOSync device run is a separate client flow.
 
 ## Decisions
 
 | Decision | Why | Evidence |
 | --- | --- | --- |
-| API key in the path, not `x-auth-user`/`x-auth-key` | KOReader sends an MD5 password form that cannot be checked against Stump's hash; the username/password fields are accepted but ignored | `apps/server/src/middleware/auth.rs:492-510`; `docs/content/docs/guides/integrations/koreader.mdx:82-98` |
+| API key in the path, not `x-auth-user`/`x-auth-key` | KOReader sends an MD5 password form that cannot be checked against Coppice's hash; the username/password fields are accepted but ignored | `apps/server/src/middleware/auth.rs:492-510`; `docs/content/docs/guides/integrations/koreader.mdx:82-98` |
 | Backend trait is three methods: `check_authorized`, `get_progress`, `put_progress` | Matches the only three kosync routes; no healthcheck route is needed to configure KOReader | `src/lib.rs:33-47`; `apps/server/src/routers/koreader_backend/sync.rs:37-38` |
 | `Error` is an associated type bound by `IntoResponse` | Keeps server `APIError` JSON shape (`{status,message}`, `Cache-Control: no-store`) without the crate depending on it | `src/lib.rs:34`; `apps/server/src/errors.rs:347-374` |
 | `AuthContext` arrives via `Extension` from `stump_auth` | Middleware in the server inserts it; the crate stays auth-agnostic | `src/lib.rs:91,99`; `apps/server/src/routers/koreader_backend.rs:17-25` |
 | Key owner needs `AccessKoreaderSync` (second guard, 403) | Sync permission is separate from API-key use (`AccessApiKeys` / owner) | `apps/server/src/routers/koreader_backend/sync.rs:40-53`; `apps/server/src/middleware/auth.rs:496-598` |
-| Only binary partial-MD5 matching; ZIP/RAR get no hash | Stump never computes KOReader's filename MD5; archive hashing is a separate processor feature | `crates/media/src/format/zip.rs:60-76`; `crates/media/src/format/rar.rs:126-142` |
+| Only binary partial-MD5 matching; ZIP/RAR get no hash | Coppice never computes KOReader's filename MD5; archive hashing is a separate processor feature | `crates/media/src/format/zip.rs:60-76`; `crates/media/src/format/rar.rs:126-142` |
 | Non-numeric `progress` (x-pointer) is kept verbatim, never converted to a Readium locator | An x-pointer is not a locator; conversion would fabricate anchors | `apps/server/src/routers/koreader_backend/sync.rs:199-303`; `docs/content/docs/developer/unified-reading-state.mdx:256-273` |
 | GET: active session wins, finished → `percentage: 1.0` and no progress string, none → document only | Mirrors kosync expectations without inventing positions | `apps/server/src/routers/koreader_backend/sync.rs:139-196` |
 | Runtime switch `ENABLE_KOREADER_SYNC` (no `STUMP_` prefix), release default `false`, debug `true`; Cargo feature `koreader` | Cheap dormant behaviour is a switch; the feature only removes the crate from `minimal` | `core/src/config/env_keys.rs:36`; `core/src/config/protocols.rs:13-18`; `apps/server/Cargo.toml` `koreader = ["dep:stump_koreader"]`; `apps/server/src/routers/mod.rs:35-38` |

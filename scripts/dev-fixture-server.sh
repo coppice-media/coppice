@@ -41,7 +41,7 @@ Server base: $BASE
 Loopback:    http://127.0.0.1:$PORT
 Binary:      $BIN
 Fixture:     $FIXTURE_ROOT
-Enabled:     STUMP_ENABLE_KOMGA=true STUMP_ENABLE_KAVITA=true ENABLE_KOBO_SYNC=true ENABLE_KOREADER_SYNC=true STUMP_ENABLE_ABS=true KOBO_KEPUB_CONVERSION=true STUMP_ENABLE_UPLOAD=true STUMP_ENABLE_BACKGROUND_JOBS=true STUMP_ENABLE_PROVIDERS=false (+ liseur-sync compiled in)
+Enabled:     STUMP_ENABLE_KOMGA=true STUMP_ENABLE_KOMF=true STUMP_ENABLE_KAVITA=true ENABLE_KOBO_SYNC=true ENABLE_KOREADER_SYNC=true STUMP_ENABLE_ABS=true KOBO_KEPUB_CONVERSION=true STUMP_ENABLE_UPLOAD=true STUMP_ENABLE_BACKGROUND_JOBS=true STUMP_ENABLE_PROVIDERS=false (+ liseur-sync compiled in)
 
 ## Accounts
 
@@ -106,12 +106,15 @@ echo "wrote $SHEET"
 export STUMP_CONFIG_DIR="${STUMP_CONFIG_DIR:-$FIXTURE_ROOT/config}"
 export STUMP_DB_PATH="${STUMP_DB_PATH:-$FIXTURE_ROOT/config}"
 export STUMP_PORT="$PORT"
-export STUMP_VERBOSITY="${STUMP_VERBOSITY:-3}"
+# 2 = DEBUG. 3 adds TRACE plus every SQL statement (grew the log to 2.6 GB);
+# export STUMP_VERBOSITY=3 only while debugging queries.
+export STUMP_VERBOSITY="${STUMP_VERBOSITY:-2}"
 export STUMP_ENABLE_KOMGA="${STUMP_ENABLE_KOMGA:-true}"
+export STUMP_ENABLE_KOMF="${STUMP_ENABLE_KOMF:-true}"
 export STUMP_ENABLE_KAVITA="${STUMP_ENABLE_KAVITA:-true}"
 export ENABLE_KOBO_SYNC="${ENABLE_KOBO_SYNC:-true}"
 export KOBO_KEPUB_CONVERSION="${KOBO_KEPUB_CONVERSION:-true}"
-export PDFIUM_PATH="${PDFIUM_PATH:-/tmp/libpdfium.so}"
+export PDFIUM_PATH="${PDFIUM_PATH:-$FIXTURE_ROOT/lib/libpdfium.so}"
 export STUMP_ENABLE_UPLOAD="${STUMP_ENABLE_UPLOAD:-true}"
 export INGEST_EDITOR_DIR="${INGEST_EDITOR_DIR:-$STUMP_ROOT/editor/build}"
 export STUMP_HOME_APP_DIR="${STUMP_HOME_APP_DIR:-$STUMP_ROOT/home/build}"
@@ -120,5 +123,23 @@ export STUMP_ENABLE_ABS="${STUMP_ENABLE_ABS:-true}"
 export STUMP_ENABLE_BACKGROUND_JOBS="${STUMP_ENABLE_BACKGROUND_JOBS:-true}"
 export STUMP_ENABLE_PROVIDERS="${STUMP_ENABLE_PROVIDERS:-false}"
 
+# MAM Bridge sidecar. Enabled only when this workstation has both
+# ~/.config/mam-bridge/url (one line, the bridge origin) and api-token; the
+# server reads the token from the file and it is never exported. The bridge
+# address stays in local config, never in the repository.
+MAM_BRIDGE_CONFIG_DIR="$HOME/.config/mam-bridge"
+if [ -z "${MAM_BRIDGE_URL:-}" ] && [ -f "$MAM_BRIDGE_CONFIG_DIR/url" ]; then
+	MAM_BRIDGE_URL="$(head -n1 "$MAM_BRIDGE_CONFIG_DIR/url")"
+fi
+if [ -z "${STUMP_ENABLE_MAM_ACQUISITION:-}" ] && [ -n "${MAM_BRIDGE_URL:-}" ] \
+	&& [ -f "$MAM_BRIDGE_CONFIG_DIR/api-token" ]; then
+	export STUMP_ENABLE_MAM_ACQUISITION=true
+fi
+if [ -n "${MAM_BRIDGE_URL:-}" ]; then
+	export MAM_BRIDGE_URL
+fi
+export MAM_BRIDGE_TOKEN_FILE="${MAM_BRIDGE_TOKEN_FILE:-$MAM_BRIDGE_CONFIG_DIR/api-token}"
+# The bridge's /downloads prefix as mounted on this workstation.
+export MAM_BRIDGE_HANDOFF_ROOT="${MAM_BRIDGE_HANDOFF_ROOT:-/nfs/downloads}"
 cd "$FIXTURE_ROOT"
 exec "$BIN"

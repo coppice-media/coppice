@@ -9,15 +9,17 @@ use axum::{
 };
 use models::{
 	entity::{library, library_config, media, series, user::AuthUser},
-	shared::{enums::UserPermission, image_processor_options::SupportedImageFormat},
+	shared::{enums::UserPermission, image_processor_options::ImageProcessorOptions},
 };
 use sea_orm::{prelude::*, sea_query::Query, QuerySelect};
 use stump_auth::AuthContext;
 use stump_core::{config::StumpConfig, Ctx};
 use stump_kindle::{BokoConverter, FormatPolicy, KindleError};
 use stump_media::{
-	get_saved_thumbnail, get_thumbnail, media::get_page_async, ContentType, FileError,
-	MediaConfig,
+	get_saved_thumbnail, get_thumbnail,
+	image::{generate_thumbnail_on_demand, on_demand_thumbnail_options},
+	media::get_page_async,
+	ContentType, FileError,
 };
 
 use crate::{
@@ -156,9 +158,15 @@ fn kindle_error(error: KindleError) -> APIError {
 	}
 }
 
+/// The thumbnail for a book: its stored one, else the file the thumbnail job
+/// or an earlier request left under `thumbnails/`, else one generated now
+/// from its first page and kept for the next request. `thumbnail_config` is
+/// the owning library's; a library without one gets
+/// [`on_demand_thumbnail_options`] so no request ever serves the raw page
+/// (1–2 MB at print resolution) when a bounded thumbnail can be encoded.
 pub(crate) async fn get_media_thumbnail(
 	book: &media::MediaThumbSelect,
-	image_format: Option<SupportedImageFormat>,
+	thumbnail_config: Option<ImageProcessorOptions>,
 	config: &StumpConfig,
 ) -> APIResult<(ContentType, Vec<u8>)> {
 	// Note: This doesn't hard-fail because if the saved thumbnail is missing or corrupt, we want
@@ -172,19 +180,18 @@ pub(crate) async fn get_media_thumbnail(
 		}
 	}
 
-	let generated_thumb =
-		get_thumbnail(config.get_thumbnails_dir(), &book.id, image_format).await?;
-
-	let adjusted_config = MediaConfig {
-		pdf_prerender_range: 0, // Disable PDF prerendering for thumbnails since we only need the first page
-		..config.media.clone()
-	};
-
-	if let Some((content_type, bytes)) = generated_thumb {
-		Ok((content_type, bytes))
-	} else {
-		Ok(get_page_async(&book.path, 1, &adjusted_config).await?)
+	let image_format = thumbnail_config.as_ref().map(|options| options.format);
+	if let Some(found) =
+		get_thumbnail(config.get_thumbnails_dir(), &book.id, image_format).await?
+	{
+		return Ok(found);
 	}
+
+	let options = thumbnail_config.unwrap_or_else(on_demand_thumbnail_options);
+	Ok(
+		generate_thumbnail_on_demand(&book.id, &book.path, options, &config.media)
+			.await?,
+	)
 }
 
 pub(crate) async fn get_media_thumbnail_by_id(
@@ -258,9 +265,9 @@ async fn thumbnail_for_row(
 		)
 		.one(ctx.conn.as_ref())
 		.await?;
-	let image_format = library_config.and_then(|o| o.thumbnail_config.map(|c| c.format));
+	let thumbnail_config = library_config.and_then(|o| o.thumbnail_config);
 
-	get_media_thumbnail(&book, image_format, ctx.config.as_ref())
+	get_media_thumbnail(&book, thumbnail_config, ctx.config.as_ref())
 		.await
 		.map(ImageResponse::from)
 }
@@ -313,4 +320,110 @@ pub(crate) async fn get_media_page(
 	};
 
 	Ok(ImageResponse::from(content))
+}
+
+#[cfg(test)]
+mod tests {
+	use std::io::Write;
+
+	use models::shared::image_processor_options::{
+		ExactDimensionResize, ImageResizeMethod, SupportedImageFormat,
+	};
+	use stump_media::image::{GenericImageProcessor, ImageProcessor};
+	use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+	use super::*;
+
+	/// A one-page CBZ whose page is the media crate's fixture photo blown up
+	/// to print resolution, in a config directory of its own.
+	fn book_in_fresh_config(
+		root: &std::path::Path,
+	) -> (StumpConfig, media::MediaThumbSelect, usize) {
+		let mut config = StumpConfig::new(root.to_string_lossy().to_string());
+		config.finalize();
+		std::fs::create_dir_all(config.get_thumbnails_dir()).expect("thumbnails dir");
+
+		let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("../../crates/media/integration-tests/data/example.png");
+		let page = GenericImageProcessor::generate_from_path(
+			&fixture.to_string_lossy(),
+			ImageProcessorOptions {
+				resize_method: Some(ImageResizeMethod::Exact(ExactDimensionResize {
+					width: 1500,
+					height: 2100,
+				})),
+				format: SupportedImageFormat::Png,
+				quality: None,
+				page: None,
+			},
+		)
+		.expect("upscaled fixture");
+
+		let book_path = root.join("book.cbz");
+		let mut zip =
+			ZipWriter::new(std::fs::File::create(&book_path).expect("create cbz"));
+		zip.start_file(
+			"001.png",
+			SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+		)
+		.expect("start entry");
+		zip.write_all(&page).expect("write entry");
+		zip.finish().expect("finish cbz");
+
+		let book = media::MediaThumbSelect {
+			id: "book-1".to_owned(),
+			path: book_path.to_string_lossy().to_string(),
+			series_id: "series-1".to_owned(),
+			thumbnail_path: None,
+			thumbnail_meta: None,
+		};
+		(config, book, page.len())
+	}
+
+	#[tokio::test]
+	async fn unconfigured_library_gets_a_kept_bounded_thumbnail_not_the_page() {
+		let tempdir = tempfile::tempdir().expect("tempdir");
+		let (config, book, page_len) = book_in_fresh_config(tempdir.path());
+
+		let (content_type, first) = get_media_thumbnail(&book, None, &config)
+			.await
+			.expect("first request");
+		assert_eq!(content_type, ContentType::WEBP);
+		assert!(first.len() * 8 < page_len);
+
+		let saved = config.get_thumbnails_dir().join("book-1.webp");
+		assert_eq!(std::fs::read(&saved).expect("kept thumbnail"), first);
+
+		// With the book gone, only the kept file can answer: the second
+		// request reads it instead of extracting the page again.
+		std::fs::remove_file(&book.path).expect("remove book");
+		let (content_type, second) = get_media_thumbnail(&book, None, &config)
+			.await
+			.expect("second request");
+		assert_eq!(content_type, ContentType::WEBP);
+		assert_eq!(second, first);
+	}
+
+	#[tokio::test]
+	async fn configured_library_keeps_its_own_format() {
+		let tempdir = tempfile::tempdir().expect("tempdir");
+		let (config, book, _) = book_in_fresh_config(tempdir.path());
+		let thumbnail_config = ImageProcessorOptions {
+			resize_method: Some(ImageResizeMethod::Exact(ExactDimensionResize {
+				width: 100,
+				height: 150,
+			})),
+			format: SupportedImageFormat::Jpeg,
+			quality: None,
+			page: None,
+		};
+
+		let (content_type, _) =
+			get_media_thumbnail(&book, Some(thumbnail_config), &config)
+				.await
+				.expect("first request");
+		assert_eq!(content_type, ContentType::JPEG);
+		assert!(config.get_thumbnails_dir().join("book-1.jpeg").is_file());
+		assert!(!config.get_thumbnails_dir().join("book-1.webp").exists());
+	}
 }

@@ -85,6 +85,10 @@ query DashboardRecentAnnotations($pageSize: Int!) {
 			kind
 			source
 			sourceDeviceName
+			sourceDeviceId
+			revision
+			lastEditedSource
+			lastEditedAt
 			excerpt
 			note
 			chapterTitle
@@ -130,10 +134,9 @@ mutation AccountSignOutEverywhere($id: ID!) {
 	deleteUserSessions(id: $id)
 }
 
-# The same stream the web UI's `useCoreEvent` hook reads, narrowed to what the
-# dashboard shows live. `JobQueueStatus` carries the queued+running count
-# bucketed by job kind, `JobUpdate` carries per-job progress while it runs, and
-# `DeviceSeen` lets the sync widget refresh without polling.
+# The dashboard's live view of server events. `JobQueueStatus` carries the
+# queued+running count bucketed by job kind, `JobUpdate` carries per-job
+# progress while it runs, and `DeviceSeen` refreshes sync state without polling.
 subscription DashboardLiveEvents {
 	readEvents {
 		__typename

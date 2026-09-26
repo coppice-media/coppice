@@ -1,189 +1,100 @@
 ---
 title: Platforms and devices
-description: Every device, app, tool, and server around Stump — what it talks over, what works, and how each claim was checked
+description: Device, firmware, reference-server, and desktop-tool constraints for Coppice
 ---
 
-One row per platform. Status cells use exactly four levels, matching
-[client verification](/docs/developer/client-verification): **device-verified**
-(a person ran the real app/device against the fixture server, date given),
-**harness** (Hurl replay, live container, or server-side probe — proves the
-server contract, not the app), **source-derived** (implemented or described from
-pinned source, never run), **not verified**. Facts about hardware and third-party
-tools cite the public page they come from; nothing here is inferred from memory.
+This page covers hardware, firmware, external reference systems, and
+platform-specific limits. It is not a client evidence matrix: dated app/device
+runs and source pins belong in the [client verification matrix](/docs/developer/client-verification).
+Client setup, protocol, and authentication notes are in [Client apps](/docs/developer/clients).
 
-Every row below is a device in the registry, and what a device sees is not
-fixed by its protocol: `devices.library_scope` restricts one device to a subset
-of its user's libraries, enforced in the shared query funnel rather than in any
-adapter, so the same restriction applies to Kobo sync, Komga, Kavita, OPDS,
-KOReader, liseur-sync, and GraphQL alike, and two devices of the same user can
-see different libraries ([devices — library scope](/docs/developer/devices#library-scope)).
+Coppice device credentials can carry a per-device `library_scope`; the shared
+query funnel enforces it across protocols. See [Devices — library scope](/docs/developer/devices#library-scope).
 
 ## Kobo eReaders
 
-Two facts hold for every model below. Stock Nickel renders JPEG, GIF, PNG, BMP,
-and TIFF only — no WebP in CBZ or KEPUB
-([Kobo file formats](https://help.kobo.com/hc/en-us/articles/360017763713-File-formats-your-Kobo-eReader-and-Kobo-Books-app-support));
-a WebP page therefore has to be re-encoded before delivery. Stump serves EPUB
-through Kobo sync today, KEPUB when `KOBO_KEPUB_CONVERSION=true` (converter
-entry-parity with kepubify on 36 books — [Kobo capabilities](/docs/developer/kobo-sync-capabilities)),
-and the CBZ → fixed-layout KEPUB transform is planned ([roadmap phase 4](/docs/developer/roadmap)).
-No model has been connected to Stump yet.
+Stock Nickel renders JPEG, GIF, PNG, BMP, and TIFF, not WebP in CBZ or KEPUB
+([Kobo file formats](https://help.kobo.com/hc/en-us/articles/360017763713-File-formats-your-Kobo-eReader-and-Kobo-Books-app-support)).
+Coppice serves ordinary EPUB through Kobo sync. Optional EPUB-to-KEPUB conversion
+uses `KOBO_KEPUB_CONVERSION=true`. The separate comics transform can package
+CBZ/ZIP/CBR/RAR/PDF pages as CBZ or fixed-layout KEPUB with a device profile;
+it is **Shipped** but disabled by default (`STUMP_TRANSFORM_ENABLED=false`).
 
-| Model | Panel (cited spec) | Stylus | Status vs Stump | Evidence |
-| --- | --- | --- | --- | --- |
-| Aura (2013) | 6 in, 1024 × 768 | no | not verified | [Wikipedia](https://en.wikipedia.org/wiki/Kobo_eReader) |
-| Clara HD | 6 in, 300 ppi | no | not verified | [Wikipedia](https://en.wikipedia.org/wiki/Kobo_eReader) |
-| Nia | 6 in, 1024 × 758, 212 ppi | no | not verified | [Wikipedia](https://en.wikipedia.org/wiki/Kobo_eReader) |
-| Clara 2E | 6 in, 1448 × 1072, 300 ppi | no | not verified | [Wikipedia](https://en.wikipedia.org/wiki/Kobo_eReader) |
-| Clara BW | 6 in, Carta 1300 (resolution not stated in cited source) | no | not verified | [Wikipedia](https://en.wikipedia.org/wiki/Kobo_eReader) |
-| Clara Colour | 6 in, Kaleido 3 colour (resolution not stated) | no (pen colour picker only) | not verified | [Wikipedia](https://en.wikipedia.org/wiki/Kobo_eReader), [notebook help](https://help.kobo.com/hc/en-us/articles/360062226733-Use-your-Kobo-eReader-as-a-notebook) |
-| Libra H2O / Libra 2 | 7 in, 1680 × 1264, 300 ppi | no | not verified | [Wikipedia](https://en.wikipedia.org/wiki/Kobo_eReader) |
-| Libra Colour (N428) | 7 in, Kaleido 3 colour (resolution not stated) | yes — Stylus 2 | not verified | [Kobo help](https://help.kobo.com/hc/en-us/articles/17971574287895), [Wikipedia](https://en.wikipedia.org/wiki/Kobo_eReader) |
-| Forma | 8 in, 300 ppi | no | not verified | [Wikipedia](https://en.wikipedia.org/wiki/Kobo_eReader) |
-| Sage (N777/N778K) | 8 in (resolution not stated in cited source) | yes | not verified | [Kobo help](https://help.kobo.com/hc/en-us/articles/4406285084183) |
-| Elipsa / Elipsa 2E | 10.3 in; 2E: 1404 × 1872, 227 ppi | yes | not verified | [Wikipedia](https://en.wikipedia.org/wiki/Kobo_eReader), [stylus note](https://help.kobo.com/hc/en-us/articles/1500001927562) |
+| Model | Display (cited source) | Stylus |
+| --- | --- | --- |
+| Aura (2013) | 6 in, 1024 × 758, 212 ppi | No |
+| Clara HD | 6 in, 300 ppi | No |
+| Nia | 6 in, 1024 × 758, 212 ppi | No |
+| Clara 2E | 6 in, 1448 × 1072, 300 ppi | No |
+| Clara BW | 6 in, Carta 1300 | No |
+| Clara Colour | 6 in, Kaleido 3 | No; pen colour picker only |
+| Libra H2O / Libra 2 | 7 in, 1680 × 1264, 300 ppi | No |
+| Libra Colour (N428) | 7 in, Kaleido 3 | Yes — Stylus 2 |
+| Forma | 8 in, 300 ppi | No |
+| Sage (N777/N778K) | 8 in | Yes |
+| Elipsa / Elipsa 2E | 10.3 in; 2E: 1404 × 1872, 227 ppi | Yes |
 
-Stylus support is the manufacturer's list — Sage, Elipsa, Elipsa 2E, Libra
-Colour ([Kobo](https://help.kobo.com/hc/en-us/articles/1500001927562)). Stump
-itself still ingests no stylus data; NickelStump pushes `.kobo/markups`
-handwriting from those models as annotations, but has never run on one.
+Display specifications are from the [Kobo reader list](https://en.wikipedia.org/wiki/Kobo_eReader);
+manufacturer notes list stylus support for Sage, Elipsa, Elipsa 2E, and Libra
+Colour ([Kobo notebook help](https://help.kobo.com/hc/en-us/articles/1500001927562)).
 
-### Tools on Kobo
+Stock Kobo initialization, library sync, ReadingState, and KEPUB conversion are
+covered in [Kobo sync capabilities](/docs/developer/kobo-sync-capabilities).
+Shelf, tag, and tag-item handlers write through to collections and reading
+lists. `/auth/device` returns non-persistent compatibility data; stock Kobo
+sync has no annotation transport. Physical-device evidence is tracked only in
+the [client verification matrix](/docs/developer/client-verification).
 
-| Tool | Talks to Stump over | Works today | Gaps | Status | Evidence |
-| --- | --- | --- | --- | --- | --- |
-| Stock Nickel sync | `/kobo/{api_key}`: `initialization` (resources rewritten to Stump), `library/sync` (`NewEntitlement`, `ChangedProductMetadata`, `ChangedReadingState`), `library/{id}/metadata`, thumbnails, `library/{id}/state` GET/PUT, `/v1/books/{id}/file/epub` (EPUB or lazy KEPUB) | Full + incremental sync, ReadingState round-trip, KEPUB with `Range` | Tags/shelves and `auth/device` are stubs; annotations impossible over this API; EPUB-only | harness (fixture probe, KEPUB 35/35) — no physical Kobo | [Kobo capabilities](/docs/developer/kobo-sync-capabilities), [sync platforms](/docs/developer/sync-platforms), [client verification](/docs/developer/client-verification) |
-| KOReader on Kobo | `/koreader/{api_key}`: `users/auth`, `syncs/progress` PUT/GET keyed by partial-MD5 `koreader_hash` | Progress only; renders WebP inside CBZ (KOReader [#3016](https://github.com/koreader/koreader/issues/3016), closed by PR 9402, milestone 2022.08) | Own progress model (page or DOM x-pointer, not Readium); ZIP/RAR get no hash; no annotation surface | harness (server probe) — the app itself not verified on any device | [sync platforms](/docs/developer/sync-platforms), [standards](/docs/developer/standards) |
-| NickelMenu | — (launcher for scripts/settings on Nickel; firmware 5.x unsupported) | Not a Stump client | Only relevant as a way to trigger a device-side hook | not verified | [pgaskin/NickelMenu](https://github.com/pgaskin/NickelMenu) |
-| NickelDBus | — (monitor/control Nickel over D-Bus) | Not a Stump client | Candidate hook point; unused by us | not verified | [shermp/NickelDBus](https://github.com/shermp/NickelDBus) |
-| NickelHardcover `149ab0ec` (v0.5.3) | Hardcover, not Stump: hook reads Nickel's calculated progress; CLI opens `KoboReader.sqlite` read-only, selects `Bookmark.BookmarkID, Text, Annotation, DateCreated, ChapterProgress` + `content.WordCount`, pushes progress/journal quotes | Reference implementation of a stock-Nickel push | Does not read `StartContainerPath`, `Event`, `Activity`; firmware 5.x unsupported | source-derived | [Kobo device DB](/docs/developer/kobo-device-database), [Codeberg](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a) |
-| NickelStump (our fork, `/home/al/Code/nickelstump`) | Port of NickelHardcover `149ab0ec` on NickelHook `de76894`. Pairs with `POST /api/v2/devices/pair/start {kind:"liseur"}` → 6-digit code + server `qr.png` → liseur token; `GET /v1/token`; per book SHA-256 + Stump fingerprint + partial-MD5 → `POST /v1/works/resolve`; `POST /v1/ops` (Kobo percent/100, `locator.kobo`), `POST /v1/sessions`, `POST /v1/annotations` + `DELETE /v1/annotations/{id}?rev=`, `GET /v1/works/{id}/positions` (jump offer); optional `POST /api/v2/devices/me/touch` (plugin disables itself on 404). Backup server = second base URL of the same Stump tried on network-class failures; persisted op/session ids and a per-book annotation revision ledger make replays server-side `duplicate` | Code written. Reads the book's `content` row (`___PercentRead`, `ReadStatus`, `TimeSpentReading`, `DateLastRead`, `ChapterIDBookmarked`, `___NumPages`, `WordCount`) and, per volume, every `Bookmark` row (`Text`, `Annotation`, `Start`/`EndContainerPath`+`ChildIndex`+`Offset`, `ChapterProgress`, `DateCreated`/`DateModified`, `Type`, `Hidden`, `Version`, `UUID`, `ContextString`, probed `Color`) → highlights, notes, dog-ears and `.kobo/markups` handwriting as annotations; `Hidden`/missing rows become CAS tombstones. Locator = Stump `ReadiumLocator` (`href`, `locations.fragments`, resource-relative `progression`, word-count `totalProgression`, `koboSpan` for KEPUB `span#kobo.N.M`) + a `kobo` evidence object | No `partialCfi` (Kobo offsets are bytes, unvalidatable on-device) so precision is at most `resource`; markup page snapshots and oversized SVGs travel as name+size+SHA-256 only, and Kobo notebooks not at all — liseur-sync has no attachment lane; `ExtraAnnotationData`, `Event`, `Activity`, `AnalyticsEvents` unread; firmware 5.x unsupported | source-derived — cross-built (`KoboRoot.tgz`, 64 host tests), never run on hardware | [device pairing](/docs/developer/device-pairing), [liseur-sync](/docs/developer/liseur-sync-integration), `nickelstump/docs/PROTOCOL.md` |
-| Calibre / Calibre-Web | USB send-to-device (KoboTouch driver, `dbversion` gates, KEPUB); Calibre-Web `/kobo/<token>` is the wire-shape reference our profile copies | Not Stump clients | Calibre-Web web-form login/token/delete lanes Liseur expects are absent in Stump | source-derived | [Kobo device DB](/docs/developer/kobo-device-database), [Kobo capabilities](/docs/developer/kobo-sync-capabilities), [Liseur providers](/docs/developer/liseur-providers) |
+Stylus annotations are a separate source-only path. The `nickelcoppice` sibling
+repository reads `.kobo/markups` SVG/JPEG files and maps them to annotation side
+objects; this is not part of stock Kobo sync and has no device test recorded.
+Device database and bookmark details are in
+[Kobo device database](/docs/developer/kobo-device-database).
 
-### Kobo data model
+## KOReader
 
-| Source on device | What is read, by whom | Status | Evidence |
-| --- | --- | --- | --- |
-| `.kobo/KoboReader.sqlite` `content` | `ContentID`, `BookID`, `ContentType`, `Title`, `Attribution`, `ISBN`, `MimeType`, `___PercentRead`, `ReadStatus`, `DateLastRead`, `TimeSpentReading`, `WordCount`, `___NumPages` (importer design; NickelStump reads the progress subset) | source-derived | [Kobo device DB](/docs/developer/kobo-device-database) |
-| `Bookmark` | `BookmarkID`, `VolumeID`, `ContentID`, `StartContainerPath`/`ChildIndex`/`Offset`, `EndContainerPath`/`ChildIndex`/`Offset`, `Text`, `Annotation`, `ExtraAnnotationData`, `DateCreated`, `DateModified`, `ChapterProgress`, `Hidden`, `Version`, `Type`, `UUID`, `UserID`, `SyncTime`, `Published`, `ContextString`, `Creator`, optional `Color`. Paths are CFI-like with byte offsets, or a KEPUB `span#kobo.N.M` koboSpan anchor | source-derived (schema from `kobo-highlights-to-calibre` `7f04a7a`). NickelStump reads all of it except `ExtraAnnotationData`, `UserID`, `SyncTime`, `Published` and `Creator`, per volume, and pushes it to `/v1/annotations`; no server-side reader (the copied-database importer is still a design) | [Kobo device DB](/docs/developer/kobo-device-database), `nickelstump/docs/PROTOCOL.md` |
-| `AnalyticsEvents`, `Event`, `Activity` | Sessions (`OpenContent`/`LeaveContent`, cleared on store sync), opaque QVariant blobs, unverified table | source-derived; `Activity` quarantined | [Kobo device DB](/docs/developer/kobo-device-database) |
-| `.kobo/markups/*.svg` + `*.jpg` | Handwritten on-page markups on stylus models: SVG strokes plus a JPG page snapshot. The file stem **is** the `Bookmark.BookmarkID` (a UUID on KEPUB volumes) and the row is `Type = 'markup'`; there is no `Notebook` table in the pinned `.tables` capture, so `Bookmark` is the only join. Kobo: EPUB/KEPUB handwritten notes stay on the device and cannot be exported; PDF markups are written into the PDF | source-derived — NickelStump reads the pair (size + SHA-256, SVG inline when ≤ 15 KiB) and pushes it as an annotation; the join is taken from the composite tool's own SQL at `2c095d5b` (`main.js:88-104,203-206,236-255,287-313`), still never observed on a device | [composite markup tool](https://github.com/leldr/Unofficial-Chrome-Based-Kobo-Composite-Markup-Generator/blob/2c095d5b5913d390309c50e6e562796a38b4a045/main.js), [Kobo help](https://help.kobo.com/hc/en-us/articles/1500001927562), `nickelstump/docs/PROTOCOL.md` |
-| Notebooks | Exported from the device UI to `KOBOeReader/Exported Annotations` (Advanced: DOCX/TXT/HTML/ZIP; Basic: PNG/JPEG/PDF/ZIP); raw `.nebo` files at the volume root; backed up to kobo.com when "Sync My Notebooks" is on | not verified — deliberately out of scope: a notebook belongs to no work, the exports are multi-MB binaries, liseur-sync has no attachment lane, and `.nebo` is undocumented | [Kobo notebook help](https://help.kobo.com/hc/en-us/articles/360062226733-Use-your-Kobo-eReader-as-a-notebook), `nickelstump/docs/PROTOCOL.md` |
+The server's KOSync protocol is available at `/koreader/{api_key}` through
+`GET users/auth`, `PUT syncs/progress`, and
+`GET syncs/progress/{document}`. Progress uses KOReader's binary partial-MD5
+`koreader_hash` for EPUB/PDF; ZIP/RAR media have no hash. The protocol does not
+carry annotations and its page/DOM x-pointer is not a Readium locator.
 
-Read-only-snapshot rule for all of the above: never open a mounted device
-database for writes (NickelHardcover uses `SQLITE_OPEN_READ_ONLY`, kobuddy
-`immutable=1`); copy through a backup API or capture main + `-wal`/`-shm`
-together; absence in a later snapshot is not a tombstone
-([Kobo device DB](/docs/developer/kobo-device-database)).
+The first-party plugin is `coppice.koplugin` in sibling repository
+`koreader-coppice`. Its source reference is KOReader v2026.07.1 at
+`9192014d`; it has not been loaded into the native KOReader app. Liseur's
+KOReader-sync route is a separate client flow. See
+[KOReader sync](/docs/guides/integrations/koreader),
+[plugin notes](/docs/developer/koreader-plugin), and the
+[client verification matrix](/docs/developer/client-verification).
+
+`NickelMenu` and `NickelDBus` are possible device-side launch/control tools, not
+Coppice clients. `NickelHardcover` is an independent stock-Nickel progress
+publisher; Coppice has no stock server pull of the device database. Its
+read-only data model is documented in [Kobo device database](/docs/developer/kobo-device-database).
 
 ## Amazon Kindle
 
-A Kindle is the one device family that never talks to Stump. It has no sync
-protocol, no credential, and no endpoint, and it is reached in exactly two
-ways — both of them one-way, and both implemented by one crate
-(`crates/kindle`) so they cannot disagree about what the device can read:
+Kindle has no Coppice sync protocol or credential. Delivery is one-way:
+Amazon's Send to Kindle service uses the address stored in the device row
+(`devices.kindle_email`), while USB sideloading saves an exported file into the
+mounted device's `documents/` directory. Neither path returns reading progress
+or annotations.
 
-1. **E-mail.** Amazon's *Send to Kindle* service delivers whatever an approved
-   sender mails to the device's own address, so the address on the device row
-   (`devices.kindle_email`) is the entire transport.
-2. **USB.** The Kindle mounts as a disk and anything dropped into its
-   `documents/` folder is a book. There is no gateway on that path, so it is
-   the stricter of the two: a Kindle plugged into a computer opens AZW3/MOBI,
-   PDF and text, and **not** EPUB.
+The server can convert accepted EPUB input to AZW3 with the operator-installed
+`boko` tool; email delivery can otherwise rely on Amazon's conversion service.
+CBZ/CBR are refused for email delivery. The USB route returns a converted file
+with `X-Stump-Kindle-Converted`; that header is a compatibility identifier.
 
-Nothing comes back either way — not progress, not annotations.
+## Reference servers and desktop tools
 
-| Device family | Reached over | Works today | Gaps | Status | Evidence |
-| --- | --- | --- | --- | --- | --- |
-| Kindle (Paperwhite, Oasis, Scribe, Colorsoft, basic) — e-mail | `sendToKindle(mediaId, deviceId)`: primary emailer → `<name>@kindle.com`, EPUB converted to AZW3 by the operator's `boko` when present, otherwise mailed as EPUB (Amazon converts it), recorded as a `kindle_deliveries` row plus `{"protocol":"kindle-email","bytes","format"}` on the device | One book per call to one device address; refuses formats Amazon discards (CBZ/CBR); Amazon's 50 MB per-document ceiling and the emailer's own cap enforced before the SMTP connection; failures recorded with their reason and readable back through `kindleDeliveries` | One-way: no progress, no annotations, no browse. The sender address must be on the operator's Amazon *Approved Personal Document E-mail List* — Stump cannot check that, so a rejected send only shows up as a bounce in the operator's mailbox. No KFX (`boko` can write it; AZW3 is the safer sideload) | not verified — no Kindle and no live Amazon delivery; the lane's conversion, EPUB fallback, size refusals, failure recording, and history are covered by `cargo test -p stump_kindle` (13 tests, `lettre` stub transport + a fake `boko`) and `cargo test -p graphql --lib kindle` | [devices — send to Kindle](/docs/developer/devices#send-to-kindle), [calibre tooling](/docs/developer/calibre-tooling), [Send to Kindle by e-mail](https://www.amazon.com/sendtokindle/email) |
-| Kindle — USB sideload | `POST /api/v2/media/{id}/kindle-file`: the converted file as a download, `Content-Disposition: attachment; filename="<book>.azw3"`, `X-Stump-Kindle-Converted` header; save it into the mounted device's `documents/` folder | Any accepted format passes through untouched; an EPUB is converted with `boko`; no size limit (no relay involved); needs `DOWNLOAD_FILE` | An EPUB with no `boko` installed is refused with 400 rather than handed over, because the device cannot open it; nothing is recorded (there is no device on this path, so there is no delivery to log) | route-verified — `cargo test -p stump_server --no-default-features --features minimal --test api_tests kindle` (4 tests: pass-through, never-an-EPUB, CBZ refusal, unknown book) | [devices — USB](/docs/developer/devices#usb-post-apiv2mediaidkindle-file) |
+| System | Role in Coppice | Boundary |
+| --- | --- | --- |
+| Komga | Protocol reference for the Komga compatibility profile. | The current source-query version and replay oracle are separate records; see [Komga compatibility](/docs/developer/komga-compat). |
+| Kavita | Reference implementation for Coppice's Kavita-shaped profile. | Profile behavior is documented in [Kavita compatibility](/docs/developer/kavita-compat); client evidence remains per-client in the matrix. |
+| Audiobookshelf | Reference API for the REST and Engine.IO/Socket.IO compatibility profile. | Current source pin `2.36.1` (`4b67c170`) and the `2.36.0` replay capture are separate. See [Audiobookshelf compatibility](/docs/developer/abs-compat). |
+| Calibre / Calibre-Web | Desktop conversion and Kobo USB workflow; Calibre-Web's Kobo endpoint is a wire-shape reference. | They are external tools/services, not Coppice clients or bundled components. See [Calibre tooling](/docs/developer/calibre-tooling) and [Kobo sync capabilities](/docs/developer/kobo-sync-capabilities). |
+| Home and Editor | Active static SvelteKit browser applications served at `/app` and `/editor`. | Separate app assets, not hardware clients; see [modular deployment](/docs/guides/configuration/modular-deployment). |
+| `stump-worker` | Remote worker client for jobs such as transcode and configured alignment. | It dials the server's worker socket and uses authenticated input/output routes; see [Workers](/docs/developer/workers) and [read-aloud](/docs/developer/read-aloud). |
 
-## Android
-
-| App | Protocol against Stump | Auth | Browse / Read / Download / Progress / Annotations | Status | Evidence |
-| --- | --- | --- | --- | --- | --- |
-| Komelia 0.19.0 | Komga profile (`/api/v1`, `/api/v2`, Readium, SSE) | Basic or `X-API-Key`; `komga-remember-me` | yes / yes (CBZ+EPUB) / yes (offline) / yes / no | device-verified 2026-09-03/04; `replay` 8/8 | [client verification](/docs/developer/client-verification), [Komga compat](/docs/developer/komga-compat) |
-| Mihon + Keiyoushi Komga ext. + built-in Komga tracker | Komga profile (legacy GET catalog; `/api/v2/series/{id}/read-progress/tachiyomi`) | Basic or `X-API-Key` | yes / yes / yes / yes (tracker) / no | device-verified 2026-09-04; `replay-mihon` | [client verification](/docs/developer/client-verification) |
-| Mihon + tach-extension Kavita ext. (Kareadita `5f3c068`) | Kavita profile: `Plugin/authenticate`, `Series/all-v2`, `Series/volumes`, `Reader/image` | JWT from API key | not verified (Kavita profile wave 1 in progress) | source-derived inventory | `local://kavita-clients-inventory.md`, [roadmap phase 6](/docs/developer/roadmap) |
-| Mihon built-in Kavita tracker (`5fadea6`) | `/api/Tachiyomi/latest-chapter`, `mark-chapter-until-as-read` | JWT | not verified (wave 3) | source-derived | `local://kavita-clients-inventory.md` |
-| Stump Mihon extension (ours, `/home/al/Code/stump-mihon-extension`) | Native: GraphQL `/api/graphql` (libraries, series, media, tags, `updateMediaProgress`) + REST `/api/v2/media/{id}/page/{n}`, `/api/v2/series/{id}/thumbnail`, `/api/v2/epub/{id}/manifest.json`; six slots also usable as Komga / Kavita / OPDS 1.2+PSE sources | Device pairing only (`kind:"mihon"`, code or QR) → `Authorization: Bearer <api key>` | yes / yes / yes / yes (per-page write, download bursts ignored) / no — Mihon's Komga/Kavita trackers do not bind to it (`EnhancedTracker.getAcceptedSources`) | source-derived — code in progress, no APK | [device pairing](/docs/developer/device-pairing) |
-| Liseur `v0.16.0` (`bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53`) | Komga profile, OPDS 1.2, KOReader sync, native liseur-sync (OPDS 2.0 unsupported by the app) | API key / Basic / KOReader pairing / Bearer device token | **Source-only:** v0.16.0 annotation controls and exact palette; existing device-verified 2026-09-04 + `replay-liseur-sync` evidence remains separately scoped | [Liseur providers](/docs/developer/liseur-providers), [client verification](/docs/developer/client-verification) |
-| Inkita `67c1f4a` | Kavita `/api` (broad browse, reader, stats, read-only `Annotation/all-for-series`) | `x-api-key` | not verified | source-derived | `local://kavita-clients-inventory.md` |
-| Kover `0bd8d08` | Kavita `/api` (offline reader, progress, reading lists, want-to-read) | `x-api-key` + `Plugin/authenticate` | not verified | source-derived | `local://kavita-clients-inventory.md` |
-| Turnleaf `b54f1f7` | Kavita `/api` (libraries, `Series/v2`, `Download/chapter`, `Reader/progress`) | `x-api-key` | not verified | source-derived | `local://kavita-clients-inventory.md` |
-| Kamigura `f4baeff` | Kavita `/api` (manga reader, bookmarks, reading profiles, scan/analyze) | Bearer JWT, `x-api-key` fallback | not verified | source-derived | `local://kavita-clients-inventory.md` |
-| Lissen `1.11.22-release` (`f30bf9be`) | Audiobookshelf profile: `/status`, `/login`, `/auth/refresh`, `/api/libraries/{id}/items`, `/api/items/{id}` + `/play` + `/file/{ino}`, `/api/session/{id}/sync`, `/api/me` + progress + bookmarks | Bearer JWT (legacy, 1 h access, 30 d refresh), API key, Basic, or `?token=` | not verified (no device run) — the profile covers browse / listen / byte-range download / session progress / bookmarks | source-derived (pinned Lissen source + `abs-ref` 2.36.0 captures) | [Audiobookshelf compat](/docs/developer/abs-compat) |
-| KOReader (Android build) | `/koreader/{api_key}` | API key in path | no / n/a / no / yes / no | harness (server probe only) | [sync platforms](/docs/developer/sync-platforms) |
-| Moon+ Reader, Librera, other OPDS readers | `/opds/v1.2` (or `/opds/{api_key}/v1.2`) | Basic or key-in-path | browse / read / download; no progress | not verified by this fork (upstream guide only) | [OPDS guide](/docs/guides/features/opds), [client apps](/docs/developer/clients) |
-
-## Desktop and web
-
-| Client | Role | What it needs from Stump | Status | Evidence |
-| --- | --- | --- | --- | --- |
-| Kavita web UI 0.9.1.4 (`kavita-ref`, `jvmilazz0/kavita@sha256:31181a32…`, port 25620) | Reference and capture client for the Kavita profile — 858 `/api/*` requests, 90 unique endpoints across 23 screens recorded with Playwright | Nothing yet: it drives a real Kavita, the capture defines our target | harness reference (not a Stump client) | `komga-compat/kavita/README.md`, `capture/webui-routes.md` |
-| Komga web UI | Not applicable — ships inside Komga, cannot be pointed at another server | — | not verified (n/a) | [Komga compat](/docs/developer/komga-compat) |
-| Upstream Stump web UI | Native GraphQL/REST client bundled in `full`; omitted from `headless`/`minimal` builds of this fork | Native API | not part of this fork's verification | [standards](/docs/developer/standards), [server architecture](/docs/developer/server-architecture) |
-| Komf 2.0.1 (`sndxr/komf:2.0.1@sha256:e48652eb32b06cafce4680c229bdbdb682eb1066e3bdeb2872e9dc99255a5cf6`) | External server-side workflow using the Komga media-server adapter | `STUMP_ENABLE_KOMGA=true`, Basic auth, `/sse/v1/events` | **Source-derived** exact pin; **Contract-tested** historical direct `/api/v1` Hurl; pinned sidecar smoke is a separate `/api/komga/media-server/connected` + `/libraries` check | [client verification](/docs/developer/client-verification), [Komga compat](/docs/developer/komga-compat) |
-| Calibre desktop | Sideloading and KEPUB conversion for Kobo; KoboTouch driver reads/writes `KoboReader.sqlite` behind version gates | Nothing — no Stump protocol | source-derived | [Kobo device DB](/docs/developer/kobo-device-database) |
-| `stump-worker` (ours, `crates/worker`) | Runs Stump's heavy jobs on another machine — today `transcode`, next `align`. Dials *out*, so the machine with the encoder never has to be reachable from the server | A device of kind `Worker` and its API key; one WebSocket at `GET /api/v2/workers/socket` (`hello`/`claim`/`progress`/`result`/`fail` out, `job`/`cancel` in), the authenticated download routes for a job's input, and `PUT /api/v2/workers/jobs/{id}/output` for its bytes | harness (`cargo test -p stump_worker`: real client against a real hub over a `127.0.0.1` listener) + live run against the fixture server | [workers](/docs/developer/workers), [read-aloud §6](/docs/developer/read-aloud) |
-| `stump-worker --chrome` + Google Chrome (ours, `crates/worker` feature `browser`) | The `challenge_solve` kind: drives a **visible, headed** Chrome with a persistent profile through a Cloudflare managed challenge and hands the `cf_clearance` cookie and its user agent back, so a gated remote source becomes reachable without an operator pasting cookies. A machine with a display; never the server | The same worker socket, plus nothing else — the clearance travels in the `result` frame, not as an upload. Server side it merges into `provider_sources.request_headers` and re-probes | harness (`cargo test -p stump_worker`, `-p stump_provider`) + live run against `readcomicsonline.ru` on the fixture server | [workers §8](/docs/developer/workers), [challenged sources](/docs/developer/provider-host#challenged-sources) |
-
-## KOReader (all platforms)
-
-| Topic | Fact | Status | Evidence |
-| --- | --- | --- | --- |
-| Sync protocol | Three routes under `/koreader/{api_key}`: `GET users/auth`, `PUT syncs/progress`, `GET syncs/progress/{document}`; key owner needs `AccessKoreaderSync`; username/password accepted but not validated | harness (probe) | [sync platforms](/docs/developer/sync-platforms) |
-| Document identity | Binary partial-MD5 (`generateDocChecksum` port) stored as `media.koreader_hash` for EPUB and PDF when the library flag is on; ZIP/RAR never hash | source-derived | [sync platforms](/docs/developer/sync-platforms) |
-| KEPUB and x-pointer | KOReader opens `.kepub.epub` as EPUB; its progress string is a page or crengine DOM x-pointer, explicitly not a Readium locator, and KoboSpan ids from our converter are not used by it | source-derived | [sync platforms](/docs/developer/sync-platforms), [Kobo capabilities](/docs/developer/kobo-sync-capabilities) |
-| `stump.koplugin` (ours, `/home/al/Code/koreader-stump`) | First-party KOReader client: continue-reading dashboard over `GET /api/v2/reading/continue`, catalogue/search over `/opds/v2.0` (Basic `<user>:<api key>` or `<user>:<password>`), downloads over `GET /api/v2/media/{id}/file`, progress by configuring KOReader's own `kosync` plugin at `/koreader/{api_key}` (`checksum_method=0`, username/userkey filled because the built-in client requires them) plus on-demand PUT/GET, and highlight/note/bookmark export over `POST /v1/annotations` (liseur-sync). Book identity: sidecar `stump_media_id` → `koreaderHash` match → manual search link | harness — every route curl-verified live (annotation create/`conflict`/edit/live-read round trip); route contract has 9 `api_tests`; 184 pure-logic checks under `lua`/`luajit`. Never run inside KOReader: no device or desktop run, so the UI, menu wiring and KOReader's own networking are unverified. Push-only annotations (no tombstones, no import); `/opds/v2.0/books/browse` unusable (its `BrowseParams` flattens pagination, so `?page=1` is a `400`) | [KOReader plugin](/docs/developer/koreader-plugin) |
-| Kamare `b85ab0a` (KOReader plugin for Kavita) | `Plugin/authenticate`, dashboard/on-deck streams, `Reader/image`, `Reader/progress`, search, reading lists | not verified (Kavita profile in progress) | `local://kavita-clients-inventory.md` |
-| hardcoverapp.koplugin (Billiam) | Writes reading status, progress, ratings, and journal notes to Hardcover directly from the device with a user PAT | not verified; overlaps our planned journal sink — a user running both would produce duplicate `user_book_reads`/journal rows for the same book, so the sink must query before insert | [repo](https://github.com/Billiam/hardcoverapp.koplugin), [Hardcover integration](/docs/developer/hardcover-integration) |
-
-## Servers we speak to or impersonate
-
-| Server | Relationship | Surface | Status | Evidence |
-| --- | --- | --- | --- | --- |
-| Komga 1.26.3 (komga-client 0.11.0, Komelia `65f92fde`) | Impersonated | `/api/v1`, `/api/v2`, `/sse/v1/events`; `komga` feature + `STUMP_ENABLE_KOMGA` | device-verified (Komelia, Mihon, Liseur); historical direct `/api/v1` Komf contract evidence; pinned sidecar wiring is separately scoped to `/api/komga/media-server/connected` + `/libraries` | [Komga compat](/docs/developer/komga-compat) |
-| Kavita `d77d956b` (0.9.1.4 reference) | Impersonated — profile in progress | Wave 1: API-key + `Plugin/authenticate` JWT, `Library/libraries`, `Series/{id}` / `v2` / `all-v2` / `metadata` / `series-detail` / `volumes`, `Reader/get-progress` / `progress` / `continue-point` / `image` / `pdf`, covers | not verified — no client has run against it | `local://kavita-clients-inventory.md`, `local://kavita-profile-study.md` |
-| Audiobookshelf 2.36.0 (`abs-ref`, `ghcr.io/advplyr/audiobookshelf:2.36.0`, port 13450) | Impersonated | 28 routes at the server root: `/ping`, `/healthcheck`, `/status`, `/login`, `/auth/refresh`, `/api/authorize`, `/api/me` (+ progress, bookmarks), `/api/libraries` (+ `items`, `personalized`, `authors`, `search`), `/api/items/{id}` (+ `cover`, `file/{ino}`, `play`, `batch/get`), `/api/session/{id}` (+ `sync`, `close`), `/api/authors/{id}`; `abs` feature (in `headless` and `full`) + `STUMP_ENABLE_ABS` | not verified — no client has run against it; wire shapes pinned by `../komga-compat/abs/capture/` | [Audiobookshelf compat](/docs/developer/abs-compat) |
-| Grimmory main | Impersonated (alias) | `/komga/api/v2/users/me`, `GET /komga/api/v1/books`, `/file`, `/thumbnail`; Basic | device-verified login via Liseur; listing/file/thumbnail harness (`specs/grimmory.hurl`) | [Komga compat](/docs/developer/komga-compat) |
-| liseur-sync | Native protocol (ours) | `/v1/*` with Bearer device tokens: login, token mint, works resolve, ops, changes, heads, positions, sessions, annotations, catalog | device-verified (Liseur) + `replay-liseur-sync`; NickelStump consumer source-derived | [liseur-sync integration](/docs/developer/liseur-sync-integration) |
-| Hardcover (`https://api.hardcover.app/v1/graphql`) | Spoken to | Today: metadata provider (`crates/integrations/metadata/src/providers/hardcover.rs`, `search` Book/Series + detail fetch, PAT Bearer). Planned journal sink, exact write surface: `insert_user_book`/`update_user_book`, `insert_user_book_read`/`update_user_book_read`/`upsert_user_book_reads` (`DatesReadInput`: `started_at`, `finished_at`, `progress_pages`, `progress_seconds`, `edition_id`), `insert_reading_journal` (`book_id`, `event`, `privacy_setting_id`, `tags` required), `update_/delete_reading_journal`; scopes `read:library`+`write:library`; ≤5 queries or 5 mutations per request, 60/min, `429` + `Retry-After` | metadata read: source-derived (upstream provider with unit tests, no live account run in this fork); sink: not implemented | `local://hardcover-write-study.md`, [Hardcover integration](/docs/developer/hardcover-integration) |
-| Komf 2.0.1 | Hosted (we are its media server) | Komga `/api/v1` direct contract plus `/api/komga/media-server/*` sidecar wiring surface | source-derived pin; evidence tiers tracked separately | [client verification](/docs/developer/client-verification) |
-| Kobo store (`storeapi.kobo.com`) | Not proxied | `initialization` keeps store-only resources on official URLs; no store books, no proxy mode | source-derived | [Kobo capabilities](/docs/developer/kobo-sync-capabilities) |
-
-## Status legend and open verification list
-
-- **device-verified** — real app or device, dated. **harness** — Hurl replay,
-  live container, or server probe. **source-derived** — pinned source read, code
-  written, nothing executed against the target. **not verified** — no evidence
-  either way.
-
-Never tried on real hardware or a real app (as of 2026-09-05):
-
-1. Any physical Kobo against `/kobo/{api_key}` — initialization, `library/sync`,
-   opening a Stump-converted KEPUB on Nickel, or a device-originated `state` PUT.
-2. NickelStump on a device: pairing screen and QR, `/v1/ops` push, positions
-   pull, backup-server failover, `/api/v2/devices/me/touch`, and the whole
-   annotation lane (`Bookmark` scan, `/v1/annotations` batches, CAS
-   tombstones, markup SVG inlining) — the mapping is host-tested, the device
-   read is not.
-3. The KOReader app (any platform) against `/koreader/{api_key}`; only the
-   server probe and Liseur's pairing lane exist. Our own
-   [`stump.koplugin`](/docs/developer/koreader-plugin) has never been loaded by
-   KOReader either: its four lanes are curl-verified and its pure logic is
-   host-tested, but no menu has been tapped, and the hand-off to the built-in
-   `kosync` plugin (settings file written from outside, restart required) is
-   the least verified part of it.
-4. Any of the seven pinned Kavita clients against the Kavita profile.
-5. The Stump Mihon extension: no APK built, no device run.
-6. `.kobo/markups` and notebook files — never inspected on a device. The
-   markup-file-to-`Bookmark` join is now source-derived (the composite tool's
-   own SQL at `2c095d5b` binds the file stem to `Bookmark.BookmarkID`), but no
-   real `.svg`/`.jpg` pair has been read.
-7. WebP blank-page behaviour on Nickel — inferred from Kobo's format list, not
-   observed.
-8. Komf automatic mode on a real `BookAdded` burst remains **Blocked**. Historical
-   direct `/api/v1` evidence and pinned sidecar wiring smoke are separate claims.
-9. Hardcover journal sink — not implemented; the hardcoverapp.koplugin overlap
-   is therefore theoretical.
+For exact client versions, device dates, test scope, and unverified flows, use
+the [client verification matrix](/docs/developer/client-verification).

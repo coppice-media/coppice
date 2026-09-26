@@ -14,6 +14,8 @@ pub struct Model {
 	pub locator: ReadiumLocator,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub annotation_text: Option<String>,
+	#[sea_orm(column_type = "Text", nullable)]
+	pub color: Option<String>,
 	#[sea_orm(column_type = "Text")]
 	pub media_id: String,
 	#[sea_orm(column_type = "Text")]

@@ -54,6 +54,7 @@ credential and must be matched by kind and protocol.
 | `abs`, `kavita` | prefixed API key                                                                                                   | `DOWNLOAD_FILE`                                                                                   |
 | `worker`        | prefixed API key                                                                                                   | `ACCESS_WORKER`, `DOWNLOAD_FILE`                                                                  |
 | `source_worker` | prefixed API key                                                                                                   | `ACCESS_REMOTE_SOURCE`                                                                            |
+| `komelia`       | prefixed API key                                                                                                   | `DOWNLOAD_FILE`; optional `EDIT_METADATA` for Komf editing, only when requested and held by the owner |
 | `liseur`        | liseur-sync device token (`liseur-<uuid>`, scopes `sync`, `read-insights`, `library-read`, bound to the device id) | n/a                                                                                               |
 
 A key never grants what its owner does not hold, and an API key only
@@ -65,8 +66,14 @@ Only an interactive session may create or rotate `api` and `web` devices, becaus
 inherit all permissions of their user. A request authenticated by another credential may still
 create and rotate the narrowed protocol kinds above; the service rejects inherited issuance
 before changing any device or credential row.
-Plaintext secrets are returned exactly once (`IssuedCredential`), afterwards
+Plaintext secrets are returned exactly once (`IssuedCredential`); afterward,
 only hints such as `stump_abcdefgh_…` and `liseur-…` are available.
+
+Komelia remains download-only unless the owner enables **Allow Komf metadata editing**
+while creating or approving that device. The server rejects this choice unless the
+owner holds `EDIT_METADATA`; the opt-in grants exactly that additional permission.
+Credential rotation preserves an existing Komelia opt-in and checks the actor's
+`EDIT_METADATA` permission before re-issuing the key.
 
 `rotate_credential` discards every old credential (deleting API-key rows and
 revoking liseur tokens) before minting the replacement set in one transaction.
@@ -206,7 +213,7 @@ Every field is scoped to the caller: users see their own devices, the server own
 | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `devices: [Device!]!`, `device(id): Device!`                                           | `Device` flattens the row and adds `credential { kind protocol secretHint }`                                              |
 | `deviceEndpoints(id): [DeviceEndpoint!]!`                                              | secret redacted                                                                                                           |
-| `createDevice(kind, name): DeviceWithCredential!`                                      | `{ device, credential { kind protocol credentialRef secret }, endpoints }`; permissions enforced by the registry as above |
+| `createDevice(kind, name, allowKomfMetadataEditing: Boolean! = false): DeviceWithCredential!` | `{ device, credential { kind protocol credentialRef secret }, endpoints }`; opt-in is Komelia-only and requires `EDIT_METADATA` on the creating user; permissions otherwise enforced by the registry as above |
 | `renameDevice(id, name)`, `revokeDevice(id)`, `setDeviceTransformProfile(id, profile)` | owner or server owner                                                                                                     |
 | `setDeviceLibraryScope(id, libraryIds)`                                                | owner or server owner; `libraryIds: null` restores inherit — see [Library scope](#library-scope)                          |
 | `setDeviceKindleEmail(id, email)`                                                      | owner or server owner; `email: null` clears it — see [Send to Kindle](#send-to-kindle)                                    |

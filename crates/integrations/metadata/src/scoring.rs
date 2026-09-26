@@ -1,3 +1,9 @@
+mod cross_provider;
+pub use cross_provider::{
+	CrossProviderCandidate, CrossProviderScore, CrossProviderScorer, MergedWorkCandidate,
+	ProviderReference, ScoredCrossProviderCandidate, AUTO_MATCH_THRESHOLD,
+};
+
 use crate::types::{ConfidenceFactor, ExternalMetadata, MatchCandidate, SearchQuery};
 
 // Note: This is really iffy right now! I've mostly been running a bunch of tests to try and get

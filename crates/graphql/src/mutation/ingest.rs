@@ -1,7 +1,11 @@
 use std::collections::BTreeMap;
 
 use async_graphql::{Context, Error, Object, Result, ID};
+#[cfg(feature = "mam-acquisition")]
+use chrono::Utc;
 use metadata_integrations::MergeStrategy;
+#[cfg(feature = "mam-acquisition")]
+use models::entity::{book_request, mam_acquisition_grab};
 use models::txn::begin_write;
 use models::{
 	entity::{
@@ -24,6 +28,8 @@ use stump_ingest::{
 		CoverApplyConfig, ResolvedFields,
 	},
 };
+#[cfg(feature = "mam-acquisition")]
+use stump_notify::{Notification, NotificationKind};
 
 use crate::{
 	data::CoreContext,
@@ -52,6 +58,55 @@ use crate::{
 
 fn core_error<E: std::fmt::Display>(error: E) -> Error {
 	Error::new(error.to_string())
+}
+
+#[cfg(feature = "mam-acquisition")]
+async fn fulfill_acquisition_requests(
+	core: &CoreContext,
+	ingest_item_id: &str,
+) -> Result<()> {
+	let grabs = mam_acquisition_grab::Entity::find()
+		.filter(
+			mam_acquisition_grab::Column::IngestItemId
+				.eq(Some(ingest_item_id.to_owned())),
+		)
+		.all(core.conn.as_ref())
+		.await?;
+	let request_ids = grabs
+		.into_iter()
+		.map(|grab| grab.request_id)
+		.collect::<std::collections::BTreeSet<_>>();
+
+	for request_id in request_ids {
+		let Some(request) = book_request::Entity::find_by_id(&request_id)
+			.one(core.conn.as_ref())
+			.await?
+		else {
+			continue;
+		};
+		if request.status != "APPROVED" {
+			continue;
+		}
+		let requester_id = request.requester_id.clone();
+		let title = request.title.clone();
+		let active = request.into_active_model();
+		let mut active = active;
+		active.status = Set("COMPLETED".to_owned());
+		active.completed_at = Set(Some(Utc::now().into()));
+		active.update(core.conn.as_ref()).await?;
+		stump_core::notification::enqueue_user_notification(
+			core.as_ref(),
+			requester_id,
+			Notification::new(
+				NotificationKind::RequestStatusUpdated,
+				"Book request fulfilled",
+				format!("Your request for “{title}” has been fulfilled."),
+			),
+		)
+		.await
+		.map_err(core_error)?;
+	}
+	Ok(())
 }
 
 fn convert_selections(
@@ -709,6 +764,8 @@ impl IngestMutation {
 			.approve(&id, Vec::new(), item.revision)
 			.await
 			.map_err(core_error)?;
+		#[cfg(feature = "mam-acquisition")]
+		fulfill_acquisition_requests(core, &id).await?;
 		Ok(IngestDropItem::from(committed))
 	}
 

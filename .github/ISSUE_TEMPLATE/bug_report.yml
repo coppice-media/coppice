@@ -35,7 +35,6 @@ body:
       description: Select all that apply, to the best of your knowledge.
       options:
         - label: Web App
-        - label: Mobile App
         - label: Server
     validations:
       required: true

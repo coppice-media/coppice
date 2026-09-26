@@ -1,3 +1,5 @@
+#[cfg(feature = "mam-acquisition")]
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
 
 use chrono::Utc;
@@ -58,6 +60,8 @@ pub struct Ctx {
 	pub event_channel: Arc<EventChannel>,
 	component_runtime: Arc<ComponentRuntime>,
 	job_runtime: Arc<OnceLock<Arc<JobRuntime<JobServices>>>>,
+	#[cfg(feature = "mam-acquisition")]
+	pub(crate) mam_search_probe_complete: Arc<AtomicBool>,
 	#[cfg(feature = "watcher")]
 	library_watcher: Arc<OnceLock<Arc<Watcher>>>,
 	scheduler: Arc<Mutex<Option<JobScheduler>>>,
@@ -134,6 +138,8 @@ impl Ctx {
 			event_channel: Arc::new(channel::<CoreEvent>(1024)),
 			component_runtime,
 			job_runtime: Arc::new(OnceLock::new()),
+			#[cfg(feature = "mam-acquisition")]
+			mam_search_probe_complete: Arc::new(AtomicBool::new(false)),
 			#[cfg(feature = "watcher")]
 			library_watcher: Arc::new(OnceLock::new()),
 			scheduler: Arc::new(Mutex::new(None)),
@@ -277,6 +283,8 @@ impl Ctx {
 				// which is after the runtime may already have been built.
 				#[cfg(feature = "providers")]
 				let services = services.with_provider_host(self.provider_host.clone());
+				#[cfg(feature = "mam-acquisition")]
+				let services = services.with_mam_dependencies(self.ingest(), self.source_hub());
 				Arc::new(JobRuntime::new(Arc::new(services)))
 			})
 			.clone())
@@ -451,9 +459,20 @@ impl Ctx {
 		}
 		let mut scheduler = self.scheduler.lock().await;
 		let runtime = || self.job_runtime().map_err(JobError::from);
+		#[cfg(feature = "mam-acquisition")]
+		let with_mam_maintenance = self.config.mam_acquisition.enable_mam_acquisition;
+		#[cfg(not(feature = "mam-acquisition"))]
+		let with_mam_maintenance = false;
 
 		if let Some(existing) = scheduler.clone() {
-			if existing.reload(self.conn.as_ref(), runtime).await? {
+			if existing
+				.reload_with_maintenance(
+					self.conn.as_ref(),
+					runtime,
+					with_mam_maintenance,
+				)
+				.await?
+			{
 				self.component_runtime.record_activity(COMPONENT_SCHEDULER);
 				return Ok(Some(existing));
 			}
@@ -461,7 +480,13 @@ impl Ctx {
 			return Ok(None);
 		}
 
-		let Some(created) = JobScheduler::init(self.conn.as_ref(), runtime).await? else {
+		let Some(created) = JobScheduler::init_with_maintenance(
+			self.conn.as_ref(),
+			runtime,
+			with_mam_maintenance,
+		)
+		.await?
+		else {
 			return Ok(None);
 		};
 		scheduler.replace(created.clone());

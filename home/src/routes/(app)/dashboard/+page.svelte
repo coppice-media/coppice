@@ -212,7 +212,7 @@
 			to={year?.to ?? ''}
 			streakDays={year?.streakDays ?? 0}
 			query={yearQuery}
-			class="@3xl/page:col-span-8 @5xl/page:col-span-8"
+			class="self-start @3xl/page:col-span-8 @5xl/page:col-span-8"
 		/>
 
 		<DevicesWidget

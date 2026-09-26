@@ -1,163 +1,256 @@
 <script lang="ts">
+	/**
+	 * The header search: a field-shaped trigger (⌘K / Ctrl+K) that opens a
+	 * command palette. Library, Hardcover and Audible hits are three
+	 * independent queries, so the library group renders the moment it answers
+	 * and the Audible group waits only for Hardcover, which it is deduped against.
+	 */
 	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { createQuery } from '@tanstack/svelte-query';
+	import BookOpenIcon from '@lucide/svelte/icons/book-open';
+	import HeadphonesIcon from '@lucide/svelte/icons/headphones';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import XIcon from '@lucide/svelte/icons/x';
+	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
-	import { Input } from '@stump/ui/components/ui/input';
-	import { request } from '@stump/ui/graphql/client';
-	import { BookSearchDocument, ConsoleLibrarySeriesDocument } from '$lib/graphql/generated/graphql';
+	import * as Command from '@stump/ui/components/ui/command';
+	import { Kbd, KbdGroup } from '@stump/ui/components/ui/kbd';
+	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import ExternalHitActions from '$lib/components/requests/ExternalHitActions.svelte';
+	import { safeCoverUrl } from '$lib/requests';
+	import {
+		audibleHitMeta,
+		createAudibleSearch,
+		createExternalSearch,
+		createLibrarySearch,
+		EXTERNAL_MIN_CHARS,
+		externalHitHref,
+		externalHitMeta,
+		LIBRARY_MIN_CHARS,
+		onlyOnAudible,
+		SearchTerm,
+		type ExternalHit
+	} from '$lib/search.svelte';
 
-	const RESULT_LIMIT = 5;
-	let value = $state('');
-	let query = $state('');
-	let focused = $state(false);
-	let timer: ReturnType<typeof setTimeout> | null = null;
+	/** Hits per group in the palette; the rest live on `/search`. */
+	const LIMIT = 5;
+	/** Audible rows are the overflow of the overflow: three is plenty here. */
+	const AUDIBLE_LIMIT = 3;
+	const modifierKey = browser && /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 
-	const booksQuery = createQuery(() => ({
-		queryKey: ['shell-search', 'books', query],
-		queryFn: () => request(BookSearchDocument, { query, limit: RESULT_LIMIT }),
-		enabled: browser && query.length >= 2
-	}));
-	const seriesQuery = createQuery(() => ({
-		queryKey: ['shell-search', 'series', query],
-		queryFn: () =>
-			request(ConsoleLibrarySeriesDocument, {
-				filter: { name: { contains: query } },
-				orderBy: [{ series: { field: 'NAME', direction: 'ASC' } }],
-				pagination: { offset: { page: 1, pageSize: RESULT_LIMIT } }
-			}),
-		enabled: browser && query.length >= 2
-	}));
+	let open = $state(false);
+	const term = new SearchTerm();
+	const libraryQuery = createLibrarySearch(() => term.query, LIMIT);
+	const externalQuery = createExternalSearch(() => term.query, LIMIT);
+	const audibleQuery = createAudibleSearch(() => term.query, LIMIT);
+	const library = $derived(libraryQuery.data?.librarySearch ?? []);
+	const external = $derived(externalQuery.data?.externalBookSearch ?? null);
+	const typed = $derived(term.value.trim());
+	const audible = $derived(
+		onlyOnAudible(audibleQuery.data?.audibleBookSearch.hits ?? [], external?.hits ?? [], AUDIBLE_LIMIT)
+	);
+	// The dedupe needs Hardcover's answer, so the Audible group also waits for it.
+	const audiblePending = $derived(term.typing || audibleQuery.isPending || externalQuery.isPending);
+	// The group is silent unless it has something Hardcover lacks: no error text, no empty note.
+	const audibleVisible = $derived(
+		typed.length >= EXTERNAL_MIN_CHARS &&
+			(audiblePending || (!audibleQuery.isError && !audibleQuery.data?.audibleBookSearch.error && audible.length > 0))
+	);
 
-	const books = $derived(booksQuery.data?.searchBooks ?? []);
-	const series = $derived(seriesQuery.data?.series.nodes ?? []);
-	const searching = $derived(query.length >= 2 && (booksQuery.isPending || seriesQuery.isPending));
-	const hasResults = $derived(books.length > 0 || series.length > 0);
-	const showResults = $derived(focused && value.trim().length >= 2);
-
-	function scheduleSearch(): void {
-		if (timer) clearTimeout(timer);
-		const next = value.trim();
-		if (next.length < 2) {
-			query = '';
-			return;
-		}
-		timer = setTimeout(() => {
-			query = next;
-			timer = null;
-		}, 220);
-	}
-
-	function clear(): void {
-		value = '';
-		query = '';
-		focused = false;
-		if (timer) {
-			clearTimeout(timer);
-			timer = null;
+	function handleWindowKeydown(event: KeyboardEvent): void {
+		if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') {
+			event.preventDefault();
+			open = !open;
 		}
 	}
 
-	function closeOnEscape(event: KeyboardEvent): void {
-		if (event.key === 'Escape') {
-			clear();
-			(event.currentTarget as HTMLInputElement).blur();
-		}
+	function navigate(href: string): void {
+		open = false;
+		void goto(href);
+	}
+
+	function viewAll(): void {
+		const query = term.flush();
+		if (query) navigate(`${resolve('/(app)/search')}?q=${encodeURIComponent(query)}`);
 	}
 </script>
 
-<div class="relative min-w-0 flex-1 max-w-xl lg:mx-auto lg:px-6">
-	<label class="sr-only" for="home-local-search">Search visible books and series</label>
-	<SearchIcon
-		aria-hidden="true"
-		class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-	/>
-	<Input
-		id="home-local-search"
-		value={value}
-		placeholder="Search visible books and series"
-		autocomplete="off"
-		class="h-9 bg-muted/35 pr-9 pl-9 text-sm"
-		aria-controls="home-local-search-results"
-		aria-expanded={showResults}
-		role="combobox"
-		onfocus={() => (focused = true)}
-		oninput={(event) => {
-			value = event.currentTarget.value;
-			scheduleSearch();
-		}}
-		onkeydown={closeOnEscape}
-	/>
-	{#if value}
-		<Button
-			variant="ghost"
-			size="icon-xs"
-			class="absolute top-1/2 right-1 -translate-y-1/2"
-			aria-label="Clear search"
-			onclick={clear}
-		>
-			<XIcon aria-hidden="true" />
-		</Button>
-	{/if}
+<svelte:window onkeydown={handleWindowKeydown} />
 
-	{#if showResults}
+<Button
+	variant="outline"
+	class="h-9 min-w-0 flex-1 justify-start bg-muted/35 px-3 font-normal text-muted-foreground lg:mx-auto lg:max-w-xl"
+	aria-keyshortcuts="Control+K Meta+K"
+	onclick={() => (open = true)}
+>
+	<SearchIcon data-icon="inline-start" aria-hidden="true" />
+	<span class="truncate">Search library and Hardcover…</span>
+	<KbdGroup class="ml-auto hidden sm:inline-flex" aria-hidden="true">
+		<Kbd>{modifierKey}</Kbd>
+		<Kbd>K</Kbd>
+	</KbdGroup>
+</Button>
+
+{#snippet thumb(src: string | undefined, square = false)}
+	{#if src}
+		<img {src} alt="" class={['h-12 shrink-0 rounded-sm border object-cover', square ? 'w-12' : 'w-8']} loading="lazy" />
+	{:else}
+		<span
+			class={['flex h-12 shrink-0 items-center justify-center rounded-sm border bg-muted/40', square ? 'w-12' : 'w-8']}
+			aria-hidden="true"
+		>
+			<BookOpenIcon class="size-3.5 text-muted-foreground" />
+		</span>
+	{/if}
+{/snippet}
+
+{#snippet externalRow(hit: ExternalHit, meta: string, audible: boolean)}
+	<Command.Item
+		value="external:{hit.provider}:{hit.remoteId}"
+		onSelect={() => navigate(externalHitHref(hit))}
+		class="gap-3 [&>svg:last-child]:hidden"
+	>
+		{@render thumb(safeCoverUrl(hit.coverUrl), audible)}
+		<span class="min-w-0 flex-1">
+			<span class="block truncate">{hit.title}</span>
+			<span class="block truncate text-xs text-muted-foreground">
+				{hit.authors || 'Author not provided'}{meta ? ` · ${meta}` : ''}
+			</span>
+		</span>
+		{#if audible}
+			<Badge variant="outline" class="hidden sm:inline-flex" aria-label="Audiobook">
+				<HeadphonesIcon aria-hidden="true" />
+				Audible
+			</Badge>
+		{/if}
+		<!-- Svelte delegates these handlers, so stopping here keeps the click
+		     and Enter/Space with the control instead of selecting the item. -->
 		<div
-			id="home-local-search-results"
-			role="listbox"
-			tabindex="-1"
-			class="absolute top-[calc(100%+0.5rem)] right-0 left-0 z-50 max-h-[min(26rem,calc(100vh-5rem))] overflow-y-auto rounded-lg border bg-popover p-1 text-popover-foreground shadow-xl"
-			onmouseleave={() => (focused = false)}
+			role="presentation"
+			class="shrink-0"
+			onclick={(event) => event.stopPropagation()}
+			onkeydown={(event) => {
+				if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
+			}}
 		>
-			{#if searching}
-				<p class="px-3 py-4 text-sm text-muted-foreground" role="status">Searching your visible library…</p>
-			{:else if !hasResults && !booksQuery.isError && !seriesQuery.isError}
-				<p class="px-3 py-4 text-sm text-muted-foreground">No visible books or series match “{query}”.</p>
-			{:else}
-				{#if series.length}
-					<p class="px-3 pt-2 pb-1 text-[0.68rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-						Series
-					</p>
-					{#each series as entry (entry.id)}
-						<a
-							role="option"
-							aria-selected="false"
-							class="block rounded-md px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none"
-							href={resolve('/(app)/series/[id]', { id: entry.id })}
-							onclick={() => (focused = false)}
-						>
-							<span class="block truncate font-medium">{entry.resolvedName}</span>
-							<span class="block truncate text-xs text-muted-foreground">{entry.mediaCount} books</span>
-						</a>
-					{/each}
-				{/if}
-				{#if books.length}
-					<p class="px-3 pt-2 pb-1 text-[0.68rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-						Books
-					</p>
-					{#each books as entry (entry.mediaId)}
-						<a
-							role="option"
-							aria-selected="false"
-							class="block rounded-md px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none"
-							href={resolve('/(app)/book/[mediaId]', { mediaId: entry.mediaId })}
-							onclick={() => (focused = false)}
-						>
-							<span class="block truncate font-medium">{entry.title}</span>
-							<span class="block truncate text-xs text-muted-foreground">{entry.authors.join(', ') || entry.kind.toLowerCase()}</span>
-						</a>
-					{/each}
-				{/if}
-			{/if}
+			<ExternalHitActions {hit} onnavigate={() => (open = false)} />
 		</div>
-	{/if}
-</div>
+	</Command.Item>
+{/snippet}
 
-<style>
-	@media (max-width: 639px) {
-		:global(#home-local-search) {
-			font-size: 0.8125rem;
-		}
-	}
-</style>
+{#snippet note(text: string)}
+	<p class="px-2 py-1.5 text-sm text-muted-foreground">{text}</p>
+{/snippet}
+
+{#snippet skeletonRows(count: number, square = false)}
+	<Command.Loading aria-label="Searching…">
+		{#each { length: count } as _, index (index)}
+			<div class="flex items-center gap-3 px-2 py-1.5">
+				<Skeleton class={['h-12 shrink-0 rounded-sm', square ? 'w-12' : 'w-8']} />
+				<div class="flex flex-1 flex-col gap-1.5">
+					<Skeleton class="h-3.5 w-1/2" />
+					<Skeleton class="h-3 w-1/3" />
+				</div>
+			</div>
+		{/each}
+	</Command.Loading>
+{/snippet}
+
+<Command.Dialog
+	bind:open
+	shouldFilter={false}
+	loop
+	title="Search"
+	description="Search your library and request books from Hardcover or Audible."
+	class="sm:max-w-xl"
+>
+	<div class="relative">
+		<Command.Input
+			placeholder="Search your library and Hardcover"
+			autocomplete="off"
+			class="pr-7"
+			bind:value={() => term.value, (next) => term.update(next)}
+		/>
+		{#if term.value}
+			<Button
+				variant="ghost"
+				size="icon-xs"
+				class="absolute top-1/2 right-2.5 -translate-y-1/2"
+				aria-label="Clear search"
+				onclick={() => term.reset()}
+			>
+				<XIcon aria-hidden="true" />
+			</Button>
+		{/if}
+	</div>
+	<!-- The dialog sits a third of the way down, so the list stops short of the
+	     viewport's bottom and the footer stays pinned inside its scroll. -->
+	<Command.List class="max-h-[min(28rem,calc(66dvh-6rem))]">
+		{#if typed.length < LIBRARY_MIN_CHARS}
+			<p class="py-6 text-center text-sm text-muted-foreground">Type at least two characters to search.</p>
+		{:else}
+			<Command.Group heading="In your library">
+				{#if term.typing || libraryQuery.isPending}
+					{@render skeletonRows(3)}
+				{:else if libraryQuery.isError}
+					{@render note(libraryQuery.error instanceof Error ? libraryQuery.error.message : 'Library search unavailable')}
+				{:else if library.length === 0}
+					{@render note('No library matches')}
+				{:else}
+					{#each library as hit (hit.mediaId)}
+						<Command.LinkItem
+							value="library:{hit.mediaId}"
+							href={resolve('/(app)/book/[mediaId]', { mediaId: hit.mediaId })}
+							onSelect={() => (open = false)}
+							class="gap-3"
+						>
+							{@render thumb(hit.thumbnailUrl)}
+							<span class="min-w-0 flex-1">
+								<span class="block truncate">{hit.title}</span>
+								<span class="block truncate text-xs text-muted-foreground">
+									{hit.authors || 'Author not provided'}{hit.seriesName ? ` · ${hit.seriesName}` : ''}
+								</span>
+							</span>
+							<Badge variant="outline">{hit.isAudiobook ? 'Audiobook' : hit.extension.toUpperCase()}</Badge>
+						</Command.LinkItem>
+					{/each}
+				{/if}
+			</Command.Group>
+			<Command.Separator forceMount />
+			<Command.Group heading="Request from Hardcover">
+				{#if typed.length < EXTERNAL_MIN_CHARS}
+					{@render note('Keep typing to search Hardcover')}
+				{:else if term.typing || externalQuery.isPending}
+					{@render skeletonRows(2)}
+				{:else if externalQuery.isError || external?.error}
+					{@render note('Hardcover search unavailable')}
+				{:else if !external?.hits.length}
+					{@render note('No Hardcover matches')}
+				{:else}
+					{#each external.hits as hit (`${hit.provider}:${hit.remoteId}`)}
+						{@render externalRow(hit, externalHitMeta(hit), false)}
+					{/each}
+				{/if}
+			</Command.Group>
+			{#if audibleVisible}
+				<Command.Separator forceMount />
+				<Command.Group heading="Only on Audible">
+					{#if audiblePending}
+						{@render skeletonRows(1, true)}
+					{:else}
+						{#each audible as hit (`${hit.provider}:${hit.remoteId}`)}
+							{@render externalRow(hit, audibleHitMeta(hit), true)}
+						{/each}
+					{/if}
+				</Command.Group>
+			{/if}
+			<Command.Group class="sticky bottom-0 border-t bg-popover">
+				<Command.Item value="view-all" onSelect={viewAll} class="gap-3 [&>svg:last-child]:hidden">
+					<SearchIcon aria-hidden="true" />
+					<span class="truncate">View all results for “{typed}”</span>
+				</Command.Item>
+			</Command.Group>
+		{/if}
+	</Command.List>
+</Command.Dialog>

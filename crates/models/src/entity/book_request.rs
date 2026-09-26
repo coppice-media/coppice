@@ -19,6 +19,10 @@ pub struct Model {
 	#[sea_orm(column_type = "Text", nullable)]
 	pub external_key: Option<String>,
 	#[sea_orm(column_type = "Text")]
+	pub format: String,
+	#[sea_orm(column_type = "Text", nullable)]
+	pub isbn: Option<String>,
+	#[sea_orm(column_type = "Text")]
 	pub title: String,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub authors: Option<String>,
@@ -50,6 +54,10 @@ pub struct Model {
 	pub approved_at: Option<DateTimeWithTimeZone>,
 	#[sea_orm(column_type = "custom(\"DATETIME\")", nullable)]
 	pub completed_at: Option<DateTimeWithTimeZone>,
+	/// The narrator the requester would rather have for an audiobook release.
+	/// A ranking bias only: it never narrows which releases qualify.
+	#[sea_orm(column_type = "Text", nullable)]
+	pub preferred_narrator: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

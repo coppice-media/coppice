@@ -25,6 +25,57 @@ use crate::{
 };
 use stump_core::config::StumpConfig;
 
+/// Formats requests directly while replacing every `apiKey` query value.
+struct RequestTraceUri<'a>(&'a axum::http::Uri);
+
+impl std::fmt::Display for RequestTraceUri<'_> {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let uri = self.0;
+		let Some(query) = uri.query() else {
+			return write!(formatter, "{uri}");
+		};
+		let has_api_key = query.split('&').any(|parameter| {
+			let key = parameter.split_once('=').map_or(parameter, |(key, _)| key);
+			key.eq_ignore_ascii_case("apiKey")
+		});
+		if !has_api_key {
+			return write!(formatter, "{uri}");
+		}
+
+		if let Some(scheme) = uri.scheme_str() {
+			write!(formatter, "{scheme}:")?;
+		}
+		if let Some(authority) = uri.authority() {
+			write!(formatter, "//{authority}")?;
+		}
+		formatter.write_str(uri.path())?;
+		formatter.write_str("?")?;
+		for (index, parameter) in query.split('&').enumerate() {
+			if index > 0 {
+				formatter.write_str("&")?;
+			}
+			let key = parameter.split_once('=').map_or(parameter, |(key, _)| key);
+			if key.eq_ignore_ascii_case("apiKey") {
+				write!(formatter, "{key}=[REDACTED]")?;
+			} else {
+				formatter.write_str(parameter)?;
+			}
+		}
+		Ok(())
+	}
+}
+
+fn request_trace_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
+	let uri = RequestTraceUri(request.uri());
+	tracing::span!(
+		tracing::Level::DEBUG,
+		"request",
+		method = %request.method(),
+		uri = %uri,
+		version = ?request.version(),
+	)
+}
+
 pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	let core = StumpCore::new(config.clone()).await;
 	let server_ctx = core.get_context();
@@ -148,11 +199,9 @@ pub async fn run_http_server(config: StumpConfig) -> ServerResult<()> {
 	let app = app
 		.layer(cors_layer)
 		.layer(CompressionLayer::new().compress_when(compression_predicate))
-		// The default span only carries method/uri at TRACE; record them on the
-		// span so every 4xx/5xx `on_failure` line names the request.
-		.layer(TraceLayer::new_for_http().make_span_with(
-			tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::DEBUG),
-		))
+		// tower-http's default span stores the complete URI, including query
+		// credentials. Keep its method/uri/version fields but redact API keys.
+		.layer(TraceLayer::new_for_http().make_span_with(request_trace_span))
 		.layer(Extension(oidc_provider))
 		.layer(Extension(rate_limiter));
 
@@ -229,5 +278,35 @@ impl Connected<IncomingStream<'_, TcpListener>> for StumpRequestInfo {
 		StumpRequestInfo {
 			ip_addr: target.remote_addr().ip(),
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::RequestTraceUri;
+
+	#[test]
+	fn request_trace_uri_redacts_api_key_query_values() {
+		let uri: axum::http::Uri =
+			"/api/config?provider=1&apiKey=secret%2Bkey&ApiKey=second-secret&x=2"
+				.parse()
+				.expect("valid request URI");
+
+		assert_eq!(
+			RequestTraceUri(&uri).to_string(),
+			"/api/config?provider=1&apiKey=[REDACTED]&ApiKey=[REDACTED]&x=2"
+		);
+	}
+
+	#[test]
+	fn request_trace_uri_preserves_non_credential_queries() {
+		let uri: axum::http::Uri = "/api/jobs?page=2&status=running"
+			.parse()
+			.expect("valid request URI");
+
+		assert_eq!(
+			RequestTraceUri(&uri).to_string(),
+			"/api/jobs?page=2&status=running"
+		);
 	}
 }

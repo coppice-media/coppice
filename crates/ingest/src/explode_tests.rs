@@ -676,7 +676,7 @@ fn write_mp3(ffmpeg: &Path, target: &Path, frequency: u32) {
 /// regression test. Run:
 ///
 /// ```text
-/// STUMP_LIVE_INPUT=/home/al/Code/stump/input cargo test -p stump_ingest \
+/// STUMP_LIVE_INPUT=/path/to/input cargo test -p stump_ingest \
 ///   live_archive_drop_of_the_real_input -- --nocapture --exact
 /// ```
 #[tokio::test]

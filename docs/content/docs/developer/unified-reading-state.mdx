@@ -152,20 +152,20 @@ annotation {
 }
 ```
 
-**[observed]** Native Stump `media_annotations` has a required
-`ReadiumLocator`, optional `annotation_text`, media/user IDs, and
-created/updated timestamps (`crates/models/src/entity/media_annotation.rs:1-70@37fdb7d7340894a777c40d685d5262becceae007`).
-Native `bookmarks` has optional preview content, optional locator, optional
-page, media/user IDs, and a creation timestamp
+**[observed]** Native `bookmarks` has optional preview content, optional
+locator, optional page, media/user IDs, and a creation timestamp
 (`crates/models/src/entity/bookmark.rs:1-80@37fdb7d7340894a777c40d685d5262becceae007`).
 The unified `body` is the note/annotation text; selected text in
 `locator.text.highlight` or a provider excerpt is the quote, not the note.
 
-**[observed]** The native liseur-sync annotation contract carries `kind`, an
-opaque locator, optional progression/excerpt/color/body, client timestamp,
-revision, sequence, device, and deletion fields. `base_rev == 0` creates a
-record and later writes use compare-and-set revisions
-(`crates/liseur-sync/src/lib.rs:192-245@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
+**[observed]** Native Stump `media_annotations` stores a required
+`ReadiumLocator`, optional annotation text/color, media/user IDs, and timestamps
+(`crates/models/src/entity/media_annotation.rs:1-70@working-tree`). Native
+Liseur-sync annotations carry `kind`, optional locator/progression/excerpt/color,
+KOReader `drawer`, body, client timestamp, revision, sequence, device, and
+deletion fields. A note may omit or retain its locator; `base_rev == 0` creates
+a record and later writes use compare-and-set revisions
+(`crates/liseur-sync/src/lib.rs:192-245@working-tree`).
 The unified annotation MUST retain a tombstone even when a provider's local
 store normally hard-deletes rows.
 
@@ -320,8 +320,8 @@ returns changes ordered by sequence
 | `to_locator` — position op | **[observed]** `locator` is retained as opaque JSON; `progression` is a bounded scalar; `foreign_pos` is a separate foreign-position string; `client_ts` -> source timestamp; `device_id`, `seq`, `received_at`, `work_id`, and `edition_sha` -> provenance/identity. | **[inference]** Treat the single liseur progression as `total_progression` unless a provider-specific extension explicitly says it is resource-local. Parse an opaque locator as `ReadiumLocator` only when it validates; otherwise use `publication` or `unknown` while retaining raw JSON. |
 | `from_locator` — position op | **[inference]** Serialize the canonical locator as opaque `locator`, map `total_progression` to required liseur `progression`, copy a retained `foreign_pos` when the source was liseur, and use the canonical effective timestamp as `client_ts`. `op_id` remains a caller-owned idempotency key and MUST be supplied deterministically by the sync client. |
 | Sessions | **[observed]** `SessionInput` has `session_id`, `work_id`, optional edition, start/end timestamps and progressions, and `idle_ms`; Stump stores it as an immutable payload keyed by user/session (`crates/liseur-sync/src/lib.rs:171-189@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`, `apps/server/src/routers/liseur_sync/storage.rs:939-1029@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | **[inference]** Sessions become history events, not a competing current locator. Preserve the complete session JSON and never collapse idle time into progression. |
-| `to_annotation` | **[observed]** Map `AnnotationInput.kind` to `kind`; opaque `locator` to raw/native locator; `progression` to total progression; `excerpt` to quote text; `body` to note body; `client_ts` to source time; `id`/`base_rev` to identity/revision precondition. Server records add `rev`, `seq`, device, updated time, and tombstone fields (`crates/liseur-sync/src/lib.rs:192-245@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | `range`/`resource` only after validating the opaque locator. `color` is retained as annotation metadata; it is not represented in `ReadiumLocator`. |
-| `from_annotation` | **[inference]** For a live highlight/bookmark, emit the canonical locator JSON, progression, quote excerpt, body, color, edition, and `client_ts`; use the current `revision` as `base_rev`. For a tombstone, use the liseur delete route with its revision rather than sending a synthetic empty annotation. | Liseur's `note` kind forbids a locator while Stump's current annotation entity requires one; such a note cannot be projected into the native Stump row without loss and MUST remain in the unified bridge/raw store. |
+| `to_annotation` | **[observed]** Map `AnnotationInput.kind` to `kind`; optional opaque `locator` to raw/native locator; `progression` to total progression; `excerpt` to quote text; `body` to note body; `client_ts` to source time; `id`/`base_rev` to identity/revision precondition. Server records add `rev`, `seq`, device, updated time, and tombstone fields (`crates/liseur-sync/src/lib.rs:192-245@working-tree`). | **[observed]** `color` and KOReader `drawer` are retained as annotation metadata, not part of `ReadiumLocator`. |
+| `from_annotation` | **[inference]** For a live highlight/bookmark, emit the canonical locator JSON, progression, quote excerpt, body, color, edition, and `client_ts`; use the current `revision` as `base_rev`. For a tombstone, use the liseur delete route with its revision rather than sending a synthetic empty annotation. | **[observed]** Notes may omit or retain locators, but the native projection is deliberately limited to linked, valid Readium highlights/bookmarks; notes and unsupported locator forms remain in the Liseur CAS store. Stable prefixed IDs identify mirror rows, which GraphQL and annotation-sync exports suppress to avoid duplicate source annotations (`apps/server/src/routers/liseur_sync/storage.rs:2485-2658@working-tree`, `crates/graphql/src/object/annotation.rs:327-412`, `crates/annotation-sync/src/model.rs:224-406`). |
 | Conflict/lifecycle | **[observed]** Position ops are append-only/idempotent by `op_id`; annotation edits use CAS revisions, separate annotation sequence, and tombstones (`apps/server/src/routers/liseur_sync/storage.rs:740-838,1046-1297@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | **[inference]** The unified head uses the conflict rule below; liseur annotation `base_rev` remains a precondition, so a stale revision is a conflict rather than an automatic overwrite. |
 
 ### OPDS — no provider converter (none)

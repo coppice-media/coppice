@@ -821,12 +821,11 @@ impl KomgaBackend for KomgaBackendAdapter {
 			)
 			.one(self.conn())
 			.await?;
-		let format =
-			config.and_then(|config| config.thumbnail_config.map(|config| config.format));
+		let thumbnail_config = config.and_then(|config| config.thumbnail_config);
 		let (content_type, data) = api_series::get_series_thumbnail(
 			&series,
 			first_book,
-			format,
+			thumbnail_config,
 			self.ctx.config.as_ref(),
 		)
 		.await

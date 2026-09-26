@@ -4,7 +4,7 @@ description: >-
   Use for Coppice ebook↔audiobook read-aloud/read-along architecture,
   implementation, debugging, tier/status lookup, edition pairing, MappedPosition,
   SyncMap versus SMIL, zero-GPU alignment candidates, worker jobs, immutable
-  cache identity, cached on-demand EPUB overlays, or Storyteller comparisons.
+  cache-only EPUB Media Overlays, or Storyteller comparisons.
   Trigger on requests mentioning Media.pairedPosition, media_chapter_map,
   media_sync_maps, read-aloud EPUB, forced alignment, Whisper/fuzzy, CTC/Viterbi,
   Storyteller, or alignment manifests in the Coppice repository. NEVER use for a
@@ -19,26 +19,39 @@ RFC 2119 applies: MUST, REQUIRED, SHOULD, MAY; NEVER and AVOID are prohibitions.
 ## Status lookup (before making claims)
 
 1. Read `.omp/PROJECT_STATE.md` for volatile rollout state.
-2. Confirm the evidence in `docs/content/docs/developer/state.mdx` and
-   `docs/content/docs/developer/read-aloud.mdx` sections 2–9.
-3. NEVER claim that ML alignment ships today.
+2. Confirm current contracts in `docs/content/docs/developer/read-aloud.mdx`
+   and `.omp/PROJECT_STATE.md` before making status claims.
+3. Distinguish shipped external worker execution and deterministic delivery from
+   planned in-process model runtime, readiness checks, virtual composite, and
+   synchronized physical playback. Shipped source/contracts are not device proof.
 
-| Capability                                              | Current status                                                                          |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Tier 1 pairing, chapter map, approximate conversion     | **Shipped**                                                                             |
-| Generic worker queue/protocol and `transcode` substrate | **Shipped**; `align` is reserved                                                        |
-| Tier 2 sentence/word alignment and `media_sync_maps`    | **Planned**                                                                             |
-| Tier 3 audiobook-only ASR/transcript                    | **Blocked** (out of scope)                                                              |
-| Read-aloud EPUB/SMIL renderer and readiness             | **Planned**                                                                             |
-| `requests`/wanted ledger                                | **Planned**; no ledger/table/page exists                                                |
-| Storyteller worker-side adapter                         | **Planned**; optional external API only                                                 |
-| Synchronized Storyteller read-aloud EPUB playback       | **Planned**; not shipped; ordinary EPUB and ordinary audiobook playback remain separate |
-| Public alignment-manifest federation                    | **Planned**; legal/privacy gate                                                         |
-| Shelfmark request-service bridge                        | **Blocked**; Shelfmark is absent and a stable token-auth API is required                |
+| Capability                                              | Current status                                                                                   |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Tier 1 pairing, chapter map, approximate conversion     | **Shipped**                                                                                      |
+| Persistent `SyncMapV1` import and alignment enqueue      | **Shipped**                                                                                      |
+| Source-EPUB SMIL import                                 | **Shipped**, only with strict paired-audio byte identity                                         |
+| Storyteller and external native CTC worker runners      | **Shipped**, optional and operator-configured; worker-local                                    |
+| Deterministic read-aloud EPUB renderer and cache routes | **Shipped**, authenticated/cache-only; no request-time ML                                       |
+| Metadata-backed request ledger                         | **Shipped**; intent, approval/rejection, visibility, notifications                              |
+| In-process model runtime                               | **Planned**                                                                                      |
+| Readiness quality checks and virtual composite         | **Planned**                                                                                      |
+| Synchronized physical-reader playback/device evidence  | **Planned**; no physical playback evidence                                                       |
+| Tier 3 audiobook-only ASR/transcript                   | **Blocked** (out of scope)                                                                       |
+| Public alignment-manifest federation                  | **Planned**; legal/privacy gate                                                                  |
+| Shelfmark request-service bridge                       | **Blocked**; Shelfmark is absent and a stable token-auth API is required                          |
+
+The generic worker protocol, map persistence/import, strict native SMIL
+acceptance, optional worker runners, deterministic ZIP renderer, authenticated
+status/download endpoints, and cache-only OPDS links are shipped. Do not infer
+in-process inference or synchronized playback from those contracts.
 
 ## Storyteller boundary
 
-Storyteller may be referenced or called through an explicitly configured external worker-local API, but Coppice MUST NOT bundle Storyteller, GPL alignment code, models, or a default alignment backend. Storyteller is a worker-side alignment backend only; it is NEVER a search, catalog, metadata, or fulfillment provider.
+Storyteller may be called through an explicitly configured worker-local API, and
+the external native CTC executable/model may be configured on a worker. Coppice
+MUST NOT bundle either runner, alignment code, or model weights. Credentials and
+model paths remain worker-local and never enter server jobs. Storyteller is
+NEVER a search, catalog, metadata, or fulfillment provider.
 
 ## Non-negotiables
 
@@ -46,9 +59,10 @@ Storyteller may be referenced or called through an explicitly configured externa
 - Treat `MappedPosition` as read-only; derived positions NEVER update a head.
 - Keep the ebook as canonical text and audiobook as canonical time.
 - Collect and validate zero-GPU timing artifacts before scheduling GPU work.
-- GET handlers are cache-first and MUST NEVER start ML or enqueue alignment.
+- GET/status handlers are cache-only and MUST NEVER start ML or enqueue alignment.
 - An enqueue action deduplicates exact input plus algorithm identity.
 - Distinguish internal `SyncMap` from EPUB timing-overlay SMIL.
+- Accept imported SMIL only when embedded audio bytes equal the sole paired M4B.
 - Preserve originals; exchange no transcript, sentence text, or audio content.
 
 ## Route by task
@@ -60,14 +74,14 @@ Storyteller may be referenced or called through an explicitly configured externa
 - Source navigation: use the symbol map in `references/architecture.md`, not
   line numbers.
 - Implementation/debugging: classify tier, inspect cache identity, then trace
-  pair → map → enqueue → worker → validated map → deterministic derivative.
+  pair → map/import → enqueue/worker → validated map → deterministic derivative.
 - Storyteller comparison: separate web Whisper/fuzzy from CLI CTC/Viterbi;
-  both are external references, NEVER Coppice runtime dependencies. An optional
-  worker-local Storyteller API adapter may return only the typed `SyncMapV1`
-  contract after an edition pair is confirmed.
+  external worker runners are optional, operator-configured, and return only
+  typed `SyncMapV1`.
 
 The full design and its shipped/planned boundary are in
 `docs/content/docs/developer/read-aloud.mdx`; worker wire behavior is in
 `docs/content/docs/developer/workers.mdx`. Evidence labels are exact and must
 remain **Shipped**, **Contract-tested**, **Device-tested**, **Source-only**,
 **Planned**, or **Blocked**.
+

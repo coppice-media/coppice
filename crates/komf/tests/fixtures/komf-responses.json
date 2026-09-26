@@ -1,0 +1,46 @@
+{
+  "searchResults": [
+    {
+      "url": "https://mangadex.org/title/e9b1d4ba-b8fb-48c3-8d52-5a4eefd05980",
+      "imageUrl": "https://uploads.mangadex.org/covers/e9b1d4ba-b8fb-48c3-8d52-5a4eefd05980/8aa2d91e-adb9-46e9-a119-60751128b323.jpg.512.jpg",
+      "title": "Fruits Basket",
+      "provider": "MANGADEX",
+      "resultId": "e9b1d4ba-b8fb-48c3-8d52-5a4eefd05980"
+    }
+  ],
+  "providers": ["MAL"],
+  "configSecretFields": {
+    "malClientId": null,
+    "comicVineClientId": null,
+    "mangaBakaDatabase": null
+  },
+  "metadataJobResponse": {
+    "jobId": "7320f56d-152d-42d2-9cbb-47929d6ae175"
+  },
+  "mediaServerConnection": {
+    "success": true,
+    "httpStatusCode": 200,
+    "errorMessage": null
+  },
+  "mediaServerLibraries": [
+    {
+      "id": "422a4c5e-2876-487b-9ef8-1c3ca91be73e",
+      "name": "Synthetic Capture Library",
+      "roots": ["/data/library"]
+    }
+  ],
+  "jobs": {
+    "content": [
+      {
+        "seriesId": "ec35b856-0014-55e7-94ed-cf8261536369",
+        "id": "7320f56d-152d-42d2-9cbb-47929d6ae175",
+        "status": "FAILED",
+        "message": "Provider request failed",
+        "startedAt": "2026-09-24T05:44:38.738Z",
+        "finishedAt": "2026-09-24T05:44:44.414Z"
+      }
+    ],
+    "totalPages": 0,
+    "currentPage": 0
+  }
+}

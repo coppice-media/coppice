@@ -4,13 +4,12 @@
 
 `migrations` is the schema authority: an append-only, chronologically ordered
 list of `sea-orm-migration` steps (`m20250807_202824_init` through
-`m20260957_000000_add_remote_source_imports`, plus in-flight untracked ones)
-exposed as `Migrator`. `stump_core` runs `Migrator::up` on every connect
-(`core/src/database.rs:150`), so the server never starts on a stale schema.
-It deliberately does **not** define entities (`crates/models`), seed data, or
-backend selection (`core/src/database.rs`). The `migrate` binary is a thin
-`sea-orm-migration` CLI wrapper gated behind the `cli` feature, which the
-server graph does not enable.
+`m20260966_000000_repair_liseur_alias_split`) exposed as `Migrator`. `stump_core` runs
+`Migrator::up` on every connect (`core/src/database.rs:150`), so the server
+never starts on a stale schema. It deliberately does **not** define entities
+(`crates/models`), seed data, or backend selection (`core/src/database.rs`).
+The `migrate` binary is a thin `sea-orm-migration` CLI wrapper gated behind
+the `cli` feature, which the server graph does not enable.
 
 ## Reference / upstream
 
@@ -20,6 +19,7 @@ server graph does not enable.
 | Fork additions (`b068deb9`, `ab5b7e20`, `294bd461`, later)            | `m20260902` reading lists/collections, `m20260904` liseur-sync, `m20260905` Kobo reading state, `m20260906` liseur token metadata, `m20260907` ingest, `m20260908` series-metadata Komga fields, `m20260909` ingest media targets. |
 | Komga `komga-client` 0.11.0 `74412a6e`                                | `m20260908` columns mirror the Komga series-metadata DTO.                                                                                                                                                                          |
 | Liseur `31f8182d`                                                     | `m20260904`/`m20260906` tables mirror Liseur sync payloads (tokens, works, ops, annotations).                                                                                                                                      |
+| Liseur v0.18.0 `b00ee789` and liseur-sync `906889ff` | The new settings map is account-scoped, key/value text with a composite user/key primary key; client values and LWW timestamps follow the pinned current source. |
 | SQLite `ALTER TABLE` limits                                           | Drives the one-column-per-`alter_table` and rebuild-instead-of-alter rules below.                                                                                                                                                  |
 
 ## Decisions
@@ -49,6 +49,15 @@ server graph does not enable.
 | `m20260955` is immutable migration history; active ORM maps only the generic request ledger and approvals, while its acquisition tables and automation columns remain for existing-database compatibility | Append-only migration order and deployed database decoding must survive removal of the in-process private gateway; dormant historical schema is safer than destructive rollback or rewrite | `src/m20260955_000000_add_book_requests.rs`; `models::entity::{book_request,book_request_approval}` |
 | `m20260956` adds opaque source-worker roots/items and server-verified media locations with cascade/set-null FKs and composite uniqueness | Inventory observations must never become generic filesystem authority or reader-visible media by themselves; verified locations need independent lifecycle and provenance | `src/m20260956_000000_add_remote_sources.rs`; `crates/models/src/entity/{remote_source,remote_source_item,media_location}.rs`; `tests/remote_sources.rs` |
 | `m20260957` adds the durable remote-source import proposal/decision ledger with immutable source identity and a composite uniqueness constraint | Matching must never publish media; an operator decision needs an auditable row and idempotent identity spanning the verified item version, target, and digest | `src/m20260957_000000_add_remote_source_imports.rs`; `models::entity::remote_source_import`; `tests/remote_sources.rs` |
+| `m20260958` adds the account-scoped Liseur settings map with a `(user_id, setting_key)` primary key and cascading user FK | Settings are private account preferences, not device records; the server applies strict per-key LWW and enforces the current upstream quota at write time | `src/m20260958_000000_add_liseur_sync_settings.rs`; `apps/server/src/routers/liseur_sync/storage.rs` |
+| `m20260960` adds native annotation color, the projection cursor, and nullable bridge `drawer` style in separate one-column `alter_table` operations | Native readers can display annotation colors and recover projection backfill state while raw KOReader drawer data survives updates without changing the wire payload | `src/m20260960_000000_add_liseur_annotation_projection.rs`; `tests/liseur_annotation_projection.rs` |
+| `m20260961` adds one false-by-default pairing choice for Komelia Komf metadata editing | Pairing approval and credential minting happen on separate requests, so the owner-authorized least-privilege choice must persist until the device polls | `src/m20260961_000000_add_pairing_komf_metadata_editing.rs`; `crates/devices/src/service.rs` |
+| `m20260962` adds one nullable `liseur_sync_annotations.origin_device_id` column and backfills it from the prior `device_id` | Creator attribution must remain immutable while `device_id` continues to represent the latest CAS writer; one column per SQLite alter is preserved | `src/m20260962_000000_add_liseur_annotation_origin.rs`; its backfill regression test |
+| `m20260963` repairs pairing-evidenced alias-less works when a media link overlaps one unique alias-backed identity through a source id, KoReader partial MD5, mapped SHA-256 edition, or server-recorded full-file hash | Keep file identity authoritative, ignore weak title/author aliases, and preserve edition, pair and CAS rows including ids, revisions and sequences; runtime resolution uses the same merge operation | `src/m20260963_000000_repair_liseur_pair_work_identity.rs`; `tests/liseur_pair_work_identity.rs` |
+| `m20260964` adds `book_requests.format` with `ANY` for existing rows and nullable `book_requests.isbn` in separate column alterations | Request intent stays durable and defaults compatibly for rows created before format selection; SQLite append rules require one column per `alter_table` | `src/m20260964_000000_book_request_format_isbn.rs`; its existing-row migration test |
+| `m20260965` adds the request-scoped MAM release-search cache and durable bridge-grab/handoff state with request and staged-ingest FKs | Search results must survive request views without repeating budgeted MAM calls, and completed grabs need a durable ingest link for Editor fulfillment; append-only order keeps deployed schemas safe | `src/m20260965_000000_mam_acquisition.rs`; `crates/models/src/entity/{mam_release_search,mam_acquisition_grab}.rs`; focused migration check |
+| `m20260966` re-runs the strong-alias split repair for databases that already recorded the earlier detector, including Komga-prefixed sources and alias-backed editions with no `media_id` | Existing installations need an append-only repair; ambiguity across multiple alias-backed works stays untouched, while every link on the losing work (including audiobook links) moves atomically | `src/m20260966_000000_repair_liseur_alias_split.rs`; shared `merge_liseur_work`; `tests/liseur_pair_work_identity.rs`; server Liseur resolve test |
+| `m20260967` adds one nullable `book_requests.preferred_narrator` TEXT column; existing rows read `NULL` | A narrator preference is optional request intent added after the ledger shipped; one column per SQLite `alter_table`, appended after `m20260966` | `src/m20260967_000000_book_request_preferred_narrator.rs` (`existing_requests_have_no_preferred_narrator`); `crates/models/src/entity/book_request.rs` |
 
 ## Layout
 
@@ -60,15 +69,16 @@ server graph does not enable.
 | `tests/reading_lists_collections.rs` | SQLite DDL assertions for the fork's list/collection migration                                                            |
 | `tests/backfill_reading_heads.rs`    | Seeds a v2-era database (sessions only) and asserts the reading-head backfill's mapping, ordering and idempotency         |
 | `tests/remote_sources.rs`             | SQLite DDL assertions for source-worker root/item/location tables, FKs, defaults, and unique indexes                               |
+| `tests/liseur_sync_settings.rs`          | SQLite DDL assertion for the composite key and cascading account FK                                                        |
 | `tests/postgres.rs`                  | PostgreSQL run-through (feature `postgres-tests`, needs Docker)                                                           |
 
 ## How to verify
 
 ```text
-cargo test -p migrations --lib --tests                       # part of the project gate
+cargo test -p migrations --test liseur_sync_settings
+cargo test -p migrations --lib --tests
 cargo test -p migrations --features postgres-tests           # optional, Docker required
 cargo run -p migrations --bin migrate -- status              # against core/dev.db or $DATABASE_URL
-cargo check -p stump_server --no-default-features --features minimal
 ```
 
 Live probe: restart the `stump-komga` fixture via `hub`; startup log shows

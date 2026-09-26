@@ -184,6 +184,9 @@ export type BookHighlight = {
 	source: string
 	sourceDeviceId?: string | null
 	sourceDeviceName?: string | null
+	revision?: number | null
+	lastEditedSource?: string | null
+	lastEditedAt?: string | null
 	editable: boolean
 	chapterTitle?: string | null
 	href?: string | null

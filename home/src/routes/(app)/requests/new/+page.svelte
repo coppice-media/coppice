@@ -8,8 +8,8 @@
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import { request } from '@stump/ui/graphql/client';
-	import { CreateBookRequestDocument, RequestDestinationsDocument } from '$lib/graphql/generated/graphql';
-	import { externalReferenceFromParams, safeCoverUrl } from '$lib/requests';
+	import { CreateBookRequestDocument, RequestDestinationsDocument, type RequestFormat } from '$lib/graphql/generated/graphql';
+	import { externalReferenceFromParams, queryText, safeCoverUrl } from '$lib/requests';
 	import RequestCreateForm from '$lib/components/requests/RequestCreateForm.svelte';
 	const params = $derived(page.url.searchParams);
 	const recommendationId = $derived(params.get('recommendationId') ?? '');
@@ -20,6 +20,11 @@
 	const initialMode = $derived(external || (!initialMediaId && !initialWorkId) ? 'external' : 'internal');
 	const destinationShelfId = $derived(params.get('destinationShelfId') ?? '');
 	const destinationDeviceId = $derived(params.get('destinationDeviceId') ?? '');
+	// An Audible hit hands off its edition's format and narrator with the metadata.
+	const initialFormat = $derived<RequestFormat>(
+		params.get('format') === 'AUDIOBOOK' ? 'AUDIOBOOK' : params.get('format') === 'EBOOK' ? 'EBOOK' : 'ANY'
+	);
+	const initialNarrator = $derived(queryText(params, 'narrator'));
 
 	const destinationsQuery = createQuery(() => ({
 		queryKey: ['request-destinations'],
@@ -73,6 +78,8 @@
 			initialTitle={external?.title ?? params.get('title') ?? ''}
 			initialAuthors={external?.authors ?? params.get('authors') ?? ''}
 			initialCoverUrl={safeCoverUrl(external?.coverUrl ?? params.get('coverUrl')) ?? ''}
+			{initialFormat}
+			{initialNarrator}
 			initialDestinationShelfId={destinationShelfId}
 			initialDestinationDeviceId={destinationDeviceId}
 			{recommendationId}

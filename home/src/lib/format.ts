@@ -68,3 +68,26 @@ export function countLabel(count: number): string {
 export function countNoun(count: number, singular: string, plural = `${singular}s`): string {
 	return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
 }
+
+const NAMED_ENTITIES: Record<string, string> = {
+	amp: '&',
+	lt: '<',
+	gt: '>',
+	quot: '"',
+	apos: "'",
+	nbsp: '\u00a0'
+};
+
+/**
+ * `Alice&#039;s Adventures` → `Alice's Adventures`. Tracker titles arrive
+ * HTML-escaped; decoding them into a plain string keeps the template's text
+ * interpolation (never `{@html}`) as the only rendering path.
+ */
+export function decodeEntities(value: string): string {
+	return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+		if (entity[0] !== '#') return NAMED_ENTITIES[entity.toLowerCase()] ?? match;
+		const hex = entity[1] === 'x' || entity[1] === 'X';
+		const code = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+		return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+	});
+}

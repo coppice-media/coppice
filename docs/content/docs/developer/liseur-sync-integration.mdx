@@ -5,18 +5,22 @@ description: Native liseur-sync synchronization support in Stump
 
 This page records the current, feature-gated Stump implementation of the
 liseur-sync native protocol. The `liseur-sync` server feature exposes login,
-token minting and device-token introspection, catalog folders/books, covers,
-downloads, catalog work resolution, sync operations, position changes,
-sessions, and annotation revision endpoints. Upload/delete, insights, token
-listing/scope updates, and series-claim mutation routes remain deferred. The
-wire contract is grounded in the pinned liseur-sync
-`f8ce32b79aca0cddde84e9004fedde121fb77365` OpenAPI and implementation; Stump
-specific status is called out below.
+token minting and device-token introspection, account settings, catalog
+folders/books, covers, downloads, catalog work resolution, sync operations,
+position changes, sessions, and annotation revision endpoints. Personal series
+display-name overrides are supported; uploads/deletes, insights, token
+listing/scope updates, series ordering, and series-claim mutations remain
+deferred. Protocol evidence is pinned to liseur-sync
+`906889ffe11fc7260b071c1f142aeee1fa8a1419`, Liseur v0.19.0
+`62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6`, and Liseur v0.13.0
+`799a8c7afac022d49388cb637f091765557b0acf`. The compatibility changes await
+device replay against a rebuilt Stump server.
 
 The server remains authoritative and the adapter remains optional, consistent
-with the [server architecture](/docs/developer/server-architecture). The implementation
-stores a user-scoped sync identity and revision bridge; it does not make a
-remote liseur-sync service a prerequisite for local Stump annotations.
+with the [server architecture](/docs/developer/server-architecture). This
+implementation stores a user-scoped sync identity and revision bridge. Liseur
+CAS records remain authoritative; linked valid Readium highlights and
+bookmarks also have stable, filtered native projections.
 
 ## Current implementation status
 
@@ -25,12 +29,13 @@ remote liseur-sync service a prerequisite for local Stump annotations.
 | Authentication | **implemented (session + device tokens)** | `POST /v1/login` verifies Stump credentials and returns a one-hour token-management session bearer with no scopes. `POST /v1/tokens` accepts that session and returns a one-time device secret; `GET /v1/token` describes a device token. |
 | Token management | **implemented (mint, introspect, revoke)** | Device rows store a generated device ID, name, canonical scopes, hashed secret, expiry, and revocation state separately from the login session. `DELETE /v1/tokens/{id}` revokes a device token with the login session. |
 | Scope boundary | **implemented (catalog + sync lanes)** | Login sessions can mint or revoke but cannot sync or catalog. Minted device tokens must carry `sync` for work/position/session/annotation routes and `library-read` for folders/books/covers/downloads/series/resolve. |
+| Account settings | **implemented** | `GET/PUT /v1/me/settings` is behind the sync-token boundary. Settings are account-scoped, bounded by the migration-backed key/value map, and PUT returns the merged LWW snapshot. |
 | Work identity | **implemented (partial identifier coverage)** | User-scoped Work/Edition/Alias/media-link tables are created by the liseur migration; media-backed SHA-256 resolution computes a full-file digest when readable and retains Stump's sampled/Koreader hashes as evidence. |
-| Position sync | **implemented** | `POST /v1/ops`, `GET /v1/changes`, `GET /v1/heads`, and `GET /v1/works/{id}/positions` use per-user sequence counters and idempotent `op_id` writes. |
-| Sessions | **implemented** | `POST /v1/sessions` stores immutable, idempotent closed sessions. After a successful source write, a linked work is projected into `reading_sessions` in the same transaction with its Liseur session id and device; the nullable source-id/index migration is `crates/migrations/src/m20260949_000000_add_liseur_session_id.rs`. |
-| Annotations | **implemented (bridge only)** | Push, CAS delete, change feed, and live-work reads preserve revisions, sequences, opaque locators, and tombstones in adapter-owned tables; local `media_annotations`/`bookmarks` projection is deferred. |
+| Position sync | **implemented** | `POST /v1/ops`, `GET /v1/changes`, `GET /v1/heads`, and `GET /v1/works/{id}/positions` use per-user sequence counters and idempotent `op_id` writes. Structured atomic refusals identify the rejected item for stale-work recovery and oversized locators. |
+| Sessions | **implemented** | `POST /v1/sessions` stores immutable, idempotent closed sessions. Optional `active_ms` is authoritative when present; the device token advertises `session_active_ms: true`. A linked work is projected into `reading_sessions` in the same transaction with its Liseur session id and device. |
+| Annotations | **implemented (bidirectional CAS bridge)** | Liseur CAS and eligible linked native Readium highlights, body-bearing notes, and bookmarks share stable records, revisions, monotonic sequences, and tombstones. Liseur writes update the same native source/projection; Home writes use optional revision preconditions and preserve locators. Legacy Liseur colors remain capability-gated. |
 | Attachments | **implemented (Stump extension)** | `PUT /v1/annotations/{id}/attachments/{kind}` and `GET .../attachments` store markup/notebook bytes as side objects keyed by annotation id, idempotent on SHA-256; downloads go through an authenticated `/api/v2` route. Not part of the pinned OpenAPI. |
-| Catalog | **implemented (read-only)** | `GET /v1/folders`, folder books/search, book detail/cover/download/series, and `POST /v1/books/{id}/resolve` are mounted. Folder and book pages use bounded opaque cursors; uploads, deletes, and series-claim mutations remain deferred. |
+| Catalog | **implemented (read + personal names)** | `GET /v1/folders`, folder books/search, book detail/cover/download/series, and `POST /v1/books/{id}/resolve` are mounted. `PUT/DELETE /v1/entities/series/{id}/name` stores a personal display overlay without changing the scanned series name. Uploads, deletes, ordering, and series claims remain deferred. |
 
 The package is compiled only when the server's `liseur-sync` feature is
 enabled; `headless` enables it alongside the other compatibility providers.
@@ -39,24 +44,39 @@ enabled; `headless` enables it alongside the other compatibility providers.
 
 liseur-sync is the annotation lane because its native contract models annotations as mutable, user-owned records rather than as a side effect of progress or catalog transport. Each record has a client identity, a server revision, compare-and-set writes, a separate change sequence, and deletion tombstones. Komga, Kobo, and OPDS can carry books, files, progression, or position data, but their observed contracts do not carry a portable highlight/note/bookmark object with this lifecycle.
 
-The current Stump adapter therefore:
+The current Stump adapter:
 
-- keeps the core `media_annotations` and `bookmarks` entities independent of the
-  optional provider;
-- stores a user-scoped bridge for remote work, edition, alias, annotation ID,
-  revision, sequence, payload, device, and tombstone state;
-- resolves remote work identities to a user's Stump media without treating a
-  `media_id` as a globally valid work; and
-- exposes catalog folders/books, covers, downloads, and catalog work
-  resolution alongside annotation, session, and position routes under the
-  feature-gated provider. Upload/delete and series-claim mutations remain
-  deferred.
+- keeps native `media_annotations` and `bookmarks` as the original rows, and
+  exports linked, visible rows with valid Readium locators as CAS annotations
+  under deterministic `stump-native:annotation:<native-id>` and
+  `stump-native:bookmark:<native-id>` IDs;
+- keeps Liseur-created CAS rows authoritative and projects supported linked
+  notes, highlights, and bookmarks into Stump under
+  `liseur-sync:<user>:<annotation>` IDs;
+- reconciles both directions on annotation reads/writes: native edits, deletes,
+  and lost work links advance the CAS revision/sequence or publish tombstones,
+  while Liseur edits/deletes update or remove the native projection;
+- preserves the native Readium locator on Home edits and writes only note text
+  and highlight color through CAS; `AnnotationEntry.revision` is the current
+  CAS revision, and `lastEditedSource`/`lastEditedAt` describe the last writer;
+- stores immutable CAS creator attribution in `origin_device_id` while wire
+  `device_id` continues to identify the most recent writer; and
+- hides either projection direction from native GraphQL and annotation-sync
+  exports so one annotation never appears twice or loops back as a new record.
 
-The verified research baseline is the `liseur-sync` repository at commit
-`f8ce32b79aca0cddde84e9004fedde121fb77365`, whose OpenAPI document reports API
-version 1.0. The implementation and line references below point to that pinned
-source ([`docs/openapi.yaml`](https://github.com/chmouel/liseur-sync/blob/f8ce32b79aca0cddde84e9004fedde121fb77365/docs/openapi.yaml)).
-Liseur client evidence is pinned to release [`v0.16.0`](https://github.com/chmouel/liseur/releases/tag/v0.16.0), commit [`bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53`](https://github.com/chmouel/liseur/commit/bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53). The release includes the note/highlight control and blank-note/timestamp fixes described below. This is source-only evidence; preserve the existing 2026-09-04 device-tested run separately.
+Native annotation colors remain distinct from KOReader's `drawer` style. The
+full palette is returned only when the request opts in with
+`X-Liseur-Annotation-Capabilities: annotation-color-drawer-v1`; older Liseur
+clients receive the same annotation with unsupported extended colors omitted.
+
+The current liseur-sync source baseline is commit
+`906889ffe11fc7260b071c1f142aeee1fa8a1419`; its OpenAPI document reports API
+version 1.0. Source links below distinguish that document from the Go routes
+and handlers. Liseur client source pins are v0.19.0
+`62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6` and v0.13.0
+`799a8c7afac022d49388cb637f091765557b0acf`; neither is device-test evidence.
+The existing 2026-09-04 device-tested run remains separately pinned to Liseur
+`31f8182d`.
 The protocol's annotation ADR explicitly keeps annotations beside, rather than inside, the append-only
 position-operation log and says that KOReader/KOSync adapters do not carry
 annotations ([`docs/adr/0028-annotation-sync.md`](https://github.com/chmouel/liseur-sync/blob/f8ce32b79aca0cddde84e9004fedde121fb77365/docs/adr/0028-annotation-sync.md)).
@@ -67,7 +87,7 @@ The other observed lanes are insufficient as annotation contracts:
 - **Kobo:** Stump's current Kobo surface is a library/metadata/download compatibility adapter. Its advertised reading-state and tag routes are handled by compatibility stubs, and its inbound contract does not provide annotation text, notes, bookmarks, or Readium ranges ([`sync-platforms.mdx`](/docs/developer/sync-platforms) and ResearchLiseurSync, `docs/SERVER_CAPABILITIES.md:10-74`).
 - **OPDS:** OPDS 1.2/2.0 surfaces catalog and progression/download capabilities; they do not define a user-scoped, revisioned annotation resource or delta feed. OPDS progression therefore cannot be stretched into annotation replication without inventing a second protocol ([`server-architecture.mdx`](/docs/developer/server-architecture) and ResearchLiseurSync, `docs/adr/0028-annotation-sync.md:266-280`).
 
-This is a protocol distinction, not a claim that those clients cannot display local annotations. Stump's native GraphQL/EPUB path already stores user-owned annotations and bookmarks; the missing piece is a durable cross-device wire contract ([`sync-platforms.mdx`](/docs/developer/sync-platforms)).
+This is a protocol distinction, not a claim that those clients cannot display local annotations. Stump now bridges its existing native GraphQL/EPUB annotations through the Liseur CAS contract; Komga, Kobo, and OPDS remain unsuitable annotation transports without changing their public protocols ([`sync-platforms.mdx`](/docs/developer/sync-platforms)).
 
 ## Verified liseur-sync contract
 
@@ -75,44 +95,78 @@ The following matrix records observed external behavior, not current Stump route
 
 | Surface | Verified contract | Source |
 | --- | --- | --- |
-| Push | `POST /v1/annotations` accepts `{ annotations: [...] }`, at most 100 items. Each item uses `base_rev: 0` for create or the revision read for an edit. The response is per-item and the batch is not atomic: `applied`, `duplicate`, `conflict`, or `invalid`. | ResearchLiseurSync, liseur-sync `docs/openapi.yaml:625-670`; `docs/integrating.md:263-312` |
-| Pull changes | `GET /v1/annotations/changes?since=<seq>&limit=<n>` defaults to `since=0`, `limit=500`; absent, zero, negative, non-numeric, and oversized limits all use `500`. Position changes use the same rule with default `50`. The annotation response contains `{ annotations, high_water, has_more }`; its high-water counter is separate from the position-operation counter. | ResearchLiseurSync, `docs/openapi.yaml:672-702`; pinned Liseur client query construction; `docs/integrating.md:321-338` |
-| Delete | `DELETE /v1/annotations/{id}?rev=N` requires the revision the client read. A matching delete returns `200` with `applied` and a new `rev`/`seq`; an already deleted record is `duplicate`; a stale revision returns `409` with the current server copy. | ResearchLiseurSync, `docs/openapi.yaml:703-738`; `internal/store/sqlite/annotations.go:65-199,253-356` |
-| Live set | `GET /v1/works/{id}/annotations` returns live annotations only, with no tombstones, ordered by `progression` and then `client_ts` (records without progression sort last). | ResearchLiseurSync, `docs/openapi.yaml:739-765` |
-| Push notification | **None.** The pinned OpenAPI has no SSE, WebSocket, or long-poll route; both change feeds are cursored polls. | ResearchLiseurSync, `docs/openapi.yaml` (no `text/event-stream` producer, no `ws` scheme) |
+| Session writes | `POST /v1/sessions` accepts up to 1000 immutable closed sessions. Optional `active_ms` is authoritative, may be zero, and is independent of span/idle; `idle_ms` still cannot exceed the wall span. `GET /v1/token` advertises support with `session_active_ms: true`. | liseur-sync `906889ff` `docs/openapi.yaml:810-861,3181-3199,3626-3641`; `internal/api/sessions.go:14-29,47-106`; Liseur `62ecb5a5` `SessionUploads.kt:66-78` |
+| Batch refusals | `POST /v1/ops` and `POST /v1/sessions` refuse the complete batch on the first invalid item; item responses include `code` and zero-based `item_index`, plus `op_id` or `session_id` and `work_id`/`limit` where applicable. `unknown_work` supports re-resolution; `locator_too_large` supports retry without the locator. | liseur-sync `906889ff` `docs/openapi.yaml:704-713,848-861,2599-2641`; `internal/api/ops.go:31-103`; `internal/api/sessions.go:77-106` |
+| Account settings | `GET/PUT /v1/me/settings` uses the authenticated account's map `{settings:{key:{value,updated_at}}}`. Per-key strict LWW accepts only newer client timestamps; missing `value` means `""`, null is invalid, updates return the merged snapshot, and the default cap is 256 keys / 128-byte keys / 4-KiB values. | Liseur `62ecb5a5` `LiseurSyncApi.kt:25-66`, `LiseurSyncSettings.kt:267-308,366-384`; liseur-sync `906889ff` `internal/api/routes.go:358-359`, `internal/api/settings.go:17-26,28-137,163-201`, `internal/config/config.go:98-127,269-283` |
+| OpenAPI coverage | The current server's Go routes implement the settings API, but the pinned `docs/openapi.yaml` does not yet describe `/v1/me/settings`; use the client plus Go handler source for that route rather than inferring it from OpenAPI. | liseur-sync `906889ff` `internal/api/routes.go:358-359`, `internal/api/settings.go:28-137`; Liseur `62ecb5a5` `LiseurSyncSettings.kt` |
+| Push notification | The current liseur-sync server exposes authenticated `GET /v1/events` as SSE topic invalidations. Liseur has opened it once per foreground session since v0.15.0 and stops for the session on 401/403/404/501 but retries with capped backoff on anything else, so Stump mounts `GET /v1/events` behind the bearer boundary as an explicit `404 {"error":"live event stream is not implemented"}` rather than letting the SPA fallback answer. | liseur-sync `906889ff` `docs/openapi.yaml:51-89`, `internal/api/routes.go:365-367`, `internal/api/events.go:75-119`; Liseur `62ecb5a5` `LiseurSyncLive.kt:142-149`, `LiveRetry.kt:19-20`, `LiveSyncConnector.kt:131-152` |
 
 A successful write starts at revision 1 and increments the revision. The changes feed is state, not history: an edit moves the current record to the feed head. Deletes are tombstones containing identity/revision/sequence and deletion timestamps, retained for 180 days by default and then swept. A client that was offline longer than retention must reconcile its local set against the live-work endpoint ([ResearchLiseurSync, `docs/integrating.md:298-338`; `docs/adr/0028-annotation-sync.md:107-226`; `internal/store/sqlite/annotations.go:358+`).
 
-### There is no push lane, by evidence
+### Current event route; explicit refusal
 
-Stump's core event bus ([server architecture](/docs/developer/server-architecture))
-would happily feed a liseur-sync push transport, and it is deliberately not
-wired to one: neither end of the pinned contract can consume it.
+The current liseur-sync server (`906889ffe11fc7260b071c1f142aeee1fa8a1419`)
+does expose authenticated `GET /v1/events` as an SSE topic-invalidation feed
+([`openapi.yaml:51-89`](https://github.com/chmouel/liseur-sync/blob/906889ffe11fc7260b071c1f142aeee1fa8a1419/docs/openapi.yaml#L51-L89),
+[`routes.go:365-367`](https://github.com/chmouel/liseur-sync/blob/906889ffe11fc7260b071c1f142aeee1fa8a1419/internal/api/routes.go#L365-L367)).
+That route was added after the older `f8ce32b7` baseline; the old “no push
+lane” conclusion is no longer true of the server.
 
-- **Server.** liseur-sync `f8ce32b7` advertises exactly two change feeds,
-  `GET /v1/changes?since=<seq>` for position operations and
-  `GET /v1/annotations/changes?since=<seq>&limit=<n>` for annotations, both
-  returning `high_water`/`has_more` cursors. Adding an event stream to
-  Stump's `/v1/*` tree would be inventing a route the protocol does not
-  define, which every other client would then have to ignore.
-- **Client.** Liseur v0.16.0 (`bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53`) depends on plain `okhttp`: its
-  `gradle/libs.versions.toml` lists `okhttp`, `okhttp-tls`, `mockwebserver3-junit4`,
-  and `coil-network-okhttp`, and does **not** list `okhttp-sse` or any
-  WebSocket/ktor artifact. No file under
-  `app/src/main/kotlin/com/chmouel/liseur/data/liseursync/` references
-  `EventSource`, SSE, or a WebSocket; `LiseurSyncHttp.kt` and
-  `LiseurSyncApi.kt` are request/response only.
-
-A push lane would therefore have exactly zero consumers while adding a second,
-unpinned wire contract to maintain. Stump's live surfaces stay where clients
-actually read them: the GraphQL subscriptions and Komga SSE.
+Liseur has subscribed to it since v0.15.0: `LiseurSyncLive.stream` opens
+`GET /v1/events` with `Accept: text/event-stream` and the Bearer token once per
+foreground liseur-sync session and reacts only to `invalidate` events carrying
+`positions`, `annotations`, or `insights` topics
+([`LiseurSyncLive.kt:31-46,142-149`](https://github.com/chmouel/liseur/blob/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6/app/src/main/kotlin/com/chmouel/liseur/data/liseursync/LiseurSyncLive.kt#L142-L149)).
+`LiveRetry.delayMillis` stops for the session on 401/403/404/501 and retries
+with capped backoff on every other outcome, including a redirect to an HTML
+page
+([`LiveRetry.kt:19-20`](https://github.com/chmouel/liseur/blob/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6/app/src/main/kotlin/com/chmouel/liseur/data/remote/LiveRetry.kt#L19-L20),
+[`LiveSyncConnector.kt:131-152`](https://github.com/chmouel/liseur/blob/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6/app/src/main/kotlin/com/chmouel/liseur/sync/LiveSyncConnector.kt#L131-L152)).
+Stump therefore mounts `GET /v1/events` inside the bearer-protected router as
+an explicit `404 {"error":"live event stream is not implemented"}`
+(`crates/liseur-sync/src/lib.rs`, `deferred_events`) so the client falls back
+to request/response sync for the session instead of retrying against the SPA
+fallback. The adapter does not invent a separate push protocol; periodic and
+foreground syncs are unaffected.
 
 ### Annotation wire shape
 
-`AnnotationInput` requires `id`, `base_rev`, `work_id`, `kind`, and `client_ts`. `kind` is one of `highlight`, `note`, or `bookmark`; highlights and bookmarks require a locator, notes forbid one and require a body, and bookmarks forbid a body. Optional fields are `edition_sha`, `locator`, `progression` in `[0,1]`, `excerpt` (1 KiB default cap), `color` (the six lowercase palette tokens `yellow`, `green`, `blue`, `pink`, `purple`, and `orange`), and `body` (16 KiB default cap). The locator is arbitrary reader-native JSON, opaque to the server and replayed verbatim; the default locator cap is 16 KiB ([ResearchLiseurSync, liseur-sync `docs/openapi.yaml:2720-2794`; `internal/api/annotations.go:84-183`; `internal/config/config.go:105-151`).
-Liseur v0.16.0 maps the six persisted/sync colors to exact Android values: yellow `#FFD54F`, green `#9CCC65`, blue `#64B5F6`, pink `#F06292`, purple `#B39DDB`, and orange `#FFB74D`. The server continues to carry lowercase palette tokens on the wire; this hex mapping is client evidence, not a new liseur-sync server contract.
+`AnnotationInput` requires `id`, `base_rev`, `work_id`, `kind`, and `client_ts`.
+`kind` is `highlight`, `note`, or `bookmark`; highlights/bookmarks require a
+locator, a note requires a non-empty body and may retain a locator, and a
+bookmark carries no body. Optional fields include `edition_sha`, `locator`,
+`progression` in `[0,1]`, `excerpt`, `body`, `color`, and KOReader's distinct
+`drawer`. Stump accepts the six Liseur colors (`yellow`, `green`, `blue`,
+`pink`, `purple`, `orange`) plus KOReader's `red`, `olive`, `cyan`, and `gray`;
+`drawer` is one of `lighten`, `underline`, `strikeout`, or `invert`. The pinned
+Liseur v0.13/v0.18 `AnnotationWire.kt` decoder accepts only its six colors and
+drops a complete record when another color is present, so the adapter keeps
+the record but omits extended fields unless the request carries
+`X-Liseur-Annotation-Capabilities: annotation-color-drawer-v1`. With that
+header it returns the full palette and `drawer`; without it, extended colors
+are omitted and the highlight remains visible. The paired KOReader client
+sends this header on annotation POSTs, full-work annotation reads, and DELETE
+requests that may return conflicts; it does not currently consume
+`/v1/annotations/changes`. Other changes-feed clients must also send the header.
+`drawer` is ignored by the pinned Liseur decoder. Locator
+JSON remains opaque and is preserved verbatim; the default locator cap is
+16 KiB.
 
-A live wire record includes `id`, `rev`, `seq`, `work_id`, `edition_sha`, `kind`, `locator`, `progression`, `excerpt`, `color`, `body`, `device_id`, `client_ts`, `updated_at`, and deletion flags. A tombstone carries only `id`, `rev`, `seq`, `updated_at`, `deleted`, and `deleted_at` ([ResearchLiseurSync, `docs/openapi.yaml:2766-2788`; `internal/api/annotations.go:1-80`).
+A live wire record includes `id`, `rev`, `seq`, `work_id`, `edition_sha`,
+`kind`, `locator`, `progression`, `excerpt`, `color`, `drawer`, `body`,
+`device_id`, `client_ts`, `updated_at`, and deletion flags. Tombstones carry
+identity/revision/sequence and deletion timestamps. An update that omits a
+standard Liseur color clears it; an omitted extended color or drawer preserves
+the existing KOReader value, while explicit empty strings clear either field.
+For notes/bookmarks, empty color/drawer values are accepted and non-empty
+values are rejected.
+
+Liseur v0.19.0 still maps its six persisted/sync colors to exact Android
+values: yellow `#FFD54F`, green `#9CCC65`, blue `#64B5F6`, pink `#F06292`,
+purple `#B39DDB`, and orange `#FFB74D`
+([`Annotations.kt:27-32`](https://github.com/chmouel/liseur/blob/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6/app/src/main/kotlin/com/chmouel/liseur/reader/annotations/Annotations.kt#L27-L32)).
+These hex values are client evidence; the wire contract carries lowercase
+tokens ([`AnnotationWire.kt:25`](https://github.com/chmouel/liseur/blob/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6/app/src/main/kotlin/com/chmouel/liseur/data/liseursync/AnnotationWire.kt#L25)).
 
 The server never merges stale edits. A stale `base_rev` returns the current copy; the client must show or choose a copy and retry from the new revision. The batch can fail items independently, while malformed, empty, over-100-item, or impossible-sized requests are rejected as a whole ([ResearchLiseurSync, `docs/integrating.md:298-312`; `docs/openapi.yaml:625-670`).
 
@@ -174,10 +228,10 @@ A CAS delete cascades explicitly: the tombstone keeps identity and revision,
 not content, so the rows are dropped and the files unlinked in the same
 transaction that writes the tombstone.
 
-The first producer is NickelStump, which uploads both halves of a
+The first producer is NickelCoppice, which uploads both halves of a
 `.kobo/markups/<BookmarkID>.{svg,jpg}` pair and keeps a per-book digest ledger
 so a steady-state sync uploads nothing
-(`nickelstump/docs/PROTOCOL.md`, "Handwritten markups"). Kobo notebook exports
+(`nickelcoppice/docs/PROTOCOL.md`, "Handwritten markups"). Kobo notebook exports
 still do not travel: the `notebook` kind exists, but an attachment needs an
 annotation to hang off and a notebook has no `Bookmark` row.
 
@@ -199,8 +253,10 @@ wire keys consumed by that client and does not require a second catalog API.
 | `GET /v1/books/{book_id}/cover` | Requires `library-read`. Uses Stump's saved-thumbnail/first-page helper and returns an image content type. | `LiseurSyncApi.kt:202–203`; cover URL consumed by `LiseurSyncCatalogClient.kt:143–149`. |
 | `GET /v1/books/{book_id}/download` | Requires `library-read`. Streams the original file through `ServeFile`, preserving range requests and returning the original filename as an attachment. Missing files return `410`. | `LiseurSyncApi.kt:161–162`; download URL and missing-file decision: `LiseurSyncCatalogClient.kt:139–149`; range/conditional request source: `LiseurSyncFileSource.kt` download implementation. |
 | `GET /v1/books/{book_id}/series` | Requires `library-read`. Returns the folder-derived series layer with `book_id`, `source`, `series`, and `folder`; `scope=folder|shared|personal` is accepted for compatibility. | `LiseurSyncApi.kt:168–186`; series fields parsed by `LiseurSyncCatalogClient.kt:137–155`. |
+| `PUT /v1/entities/series/{id}/name` | Requires `library-manage`. Accepts `{ "name": "...", "scope": "personal" }`; omitted scope defaults to `personal`. Returns `id`, `name`, `scanned_name`, `name_source`, and `book_count`. | liseur-sync `906889ff` `HandleSetSeriesName`; Stump's per-user display overlay |
+| `DELETE /v1/entities/series/{id}/name?scope=personal` | Requires `library-manage`; scope defaults to `personal`. Removes only the caller's overlay and returns the scanned name. | liseur-sync `906889ff` `HandleClearSeriesName`; Stump's per-user display overlay |
 | `POST /v1/books/{book_id}/resolve` | Requires `library-read` and `sync`; the client posts `{}` or `{ "confirmed": true }`. Returns `200` for an existing identity or `201` for a new one, with `book_id`, `work_id`, `confidence`, `created`, and `identifiers` containing the matched `sha256` edition when available. | URL/body/status handling: `WorkResolver.kt:200–218`; response parsing: `WorkResolver.kt:226–272`. |
-| `GET /v1/works/{work_id}/annotations` | Requires `sync`; returns the live annotation list used after catalog resolution. | URL builder: `LiseurSyncApi.kt:74–84`; response parsing after resolution: `WorkResolver.kt:226–238`; Stump response contract: `crates/liseur-sync/src/lib.rs`. |
+| `GET /v1/works/{work_id}/annotations?include_deleted=true` | Requires `sync`; returns live records and, when requested, tombstones for reconciliation. Extended colors/drawers require the capability header. | `LiseurSyncApi.kt:74–84`; `WorkResolver.kt:226–238`; `crates/liseur-sync/src/lib.rs`. |
 
 Catalog list/detail responses deliberately omit `sha256`: Stump's stored
 `media.hash` is a sampled fingerprint, not a full-file digest. Explicit
@@ -217,66 +273,139 @@ is a `404`. `cover_url` is an absolute URL formed from the request origin so
 the client can fetch it without path rewriting.
 
 Upload (`POST /v1/folders/{folder_id}/books`), delete
-(`DELETE /v1/books/{book_id}`), and series-claim mutation routes
-(`PUT`/`DELETE /v1/books/{book_id}/series` and
-`/v1/entities/series/{id}/{order,name}`) are not needed by the catalog walk.
-The folder response advertises `accepts_uploads: false`; the deferred entity
-routes return a JSON `404` with an `error` field instead of an empty Axum
-not-found body. Upload status handling remains documented by the oracle at
-`LiseurSyncUploadClient.kt:90–146`.
+(`DELETE /v1/books/{book_id}`), and series ordering/claim mutation routes
+remain deferred. The folder response advertises `accepts_uploads: false`;
+the deferred entity-order route returns a JSON `404` with an `error` field
+instead of an empty Axum not-found body. Upload status handling remains
+documented by the oracle at `LiseurSyncUploadClient.kt:90–146`.
 
 
-## Stump projection (bridge implemented; local projection deferred)
+## Stump annotation exchange (native ↔ CAS)
 
 ### Preserve the core entities
 
-Stump's current `media_annotations` row has a required `ReadiumLocator`, optional `annotation_text`, `media_id`, `user_id`, and timestamps. `bookmarks` has optional preview text, an optional `ReadiumLocator`, an optional page, `media_id`, `user_id`, and creation time. Both are user-owned; the EPUB query paths filter by the current user and media ([`media_annotation::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_annotation.rs#L5-L23), [`bookmark::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/bookmark.rs#L7-L24), and ResearchLiseurSync, Stump `crates/models/src/entity/*`).
+Liseur-origin CAS rows remain canonical and project into a native
+`media_annotations` or `bookmarks` row under `liseur-sync:<user_id>:<annotation_id>`.
+Linked native rows export as deterministic CAS IDs
+`stump-native:annotation:<native_id>` or `stump-native:bookmark:<native_id>`.
+For those rows the original native row remains the native-side identity; the
+CAS record supplies the shared revision, sequence, change-feed, and tombstone
+contract. Neither direction re-exports its mirror.
 
-**Implemented bridge:** Stump keeps liseur-specific revision, sequence,
-remote-ID, raw-payload, and tombstone state in adapter-owned tables rather than
-adding those fields to core `media_annotations` or `bookmarks` rows. The bridge
-is user-scoped and remains usable only while the optional provider is enabled;
-local core rows stay independent.
+Liseur-authored rows are stored and replayed as the raw locator JSON, so an
+exact-screen bookmark (v0.17.0+, `locations.liseurAnchor: 1`,
+`locations.cssSelector`, `text.{before,highlight,after}`; see
+[`ExactLocatorAnchor.kt:51-65`](https://github.com/chmouel/liseur/blob/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6/app/src/main/kotlin/com/chmouel/liseur/reader/progress/ExactLocatorAnchor.kt#L51-L65))
+keeps its anchor across devices. Native `stump-native:bookmark:<native_id>`
+exports are typed `ReadiumLocator` values (`href`, `type`, `locations`,
+`text`) without a viewport anchor: Liseur v0.19.0 lists and jumps to them and
+prints `locations.position` as their page number, but matches the bookmark
+ribbon only by `href` plus integer `position`/`progression`
+([`ReadingPlace.kt:28-47`](https://github.com/chmouel/liseur/blob/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6/app/src/main/kotlin/com/chmouel/liseur/reader/progress/ReadingPlace.kt#L28-L47)).
+Only the reader's own viewport can produce the anchor, so no server-side
+shape change is required or possible.
 
 | Bridge field | Purpose |
 | --- | --- |
 | `user_id` | Tenant boundary for every lookup and feed cursor. |
-| `annotation_id` (`id`) | Stable client-chosen liseur-sync record ID, distinct from a Stump annotation/bookmark ID. |
-| `rev` / `seq` | Compare-and-set revision and annotation-feed sequence. |
-| `work_id` / `edition_sha` | Remote identity and optional exact-file provenance used for authorization and locator context. |
-| `kind`, `locator`, `progression` | Opaque reader anchor and its wire kind (`highlight`, `note`, or `bookmark`) plus optional position. |
-| `excerpt`, `color`, `body` | Bounded wire fields preserved without inventing a local projection. |
-| `device_id` / `client_ts` | Origin device and client idempotency timestamp. |
+| `annotation_id` (`id`) | Liseur-chosen ID, or stable prefixed ID for a native Stump source row. |
+| `rev` / `seq` | Compare-and-set revision and monotonic per-user annotation-feed sequence. |
+| `work_id` / `edition_sha` | User-scoped Liseur identity and exact-edition preference for media linking. |
+| `kind`, `locator`, `progression` | Wire kind and Readium anchor; native exports retain the full locator, including `text.before`, `text.highlight`, and `text.after`. |
+| `excerpt`, `color`, `drawer`, `body` | Selected passage, supported highlight color, KOReader drawer, and note text; drawer is distinct from color. |
+| `device_id` / `client_ts` | Last writer and original client timestamp. `origin_device_id` is server-side immutable creator attribution, not a wire field. |
 | `updated_at`, `deleted`, `deleted_at` | Current record/tombstone lifecycle state. |
-| `payload` | Canonical request payload used for retry/conflict comparison and audit. |
+| `payload` | Last request payload used for retry/conflict comparison and audit. |
 
-A user-scoped cursor is represented by the caller's `since` value and the
-adapter's annotation sequence counter; this pass does not add a separate
-cursor table. Tombstones remain in the bridge so an old device cannot recreate
-a deleted annotation with `base_rev: 0`. This supplemental
-revision/sequence/tombstone layer is the essential protocol adaptation;
-distorting `media_annotations` or `bookmarks` would couple local CRUD to a
-remote feed that can be disabled or compacted.
+Projection and export rules:
 
-### Conservative field mapping
+- A linked, visible native highlight or body-bearing note with a non-empty
+  Readium `href` and `locations` enters the CAS feed. A linked native bookmark
+  must also carry a valid Readium locator. The `work_id` and `edition_sha` come
+  from the user's existing media-link resolution; unlinked or invisible media
+  never crosses the user boundary.
+- A Liseur `highlight` maps to `media_annotations` with its selected text,
+  optional native note, and exact color. A Liseur `note` maps to a native note
+  with `text.highlight` cleared. A valid Liseur `bookmark` maps to `bookmarks`.
+- Native deletes, losing the link, or becoming ineligible publish a CAS
+  tombstone with an increased revision and sequence. Liseur deletes and kind
+  transitions remove the corresponding `liseur-sync:` mirror.
+- Liseur clients edit native-export records through normal `POST
+  /v1/annotations` `base_rev` CAS writes; the server writes note text, color,
+  and the submitted Readium anchor back to the same native row. Home GraphQL
+  uses `updateAnnotation(input: { id, annotationText?, color?,
+  expectedRevision? })` and `deleteAnnotation(id, expectedRevision?)`.
+  `expectedRevision` is optional; when supplied it must match the current
+  `AnnotationEntry.revision`. Updates change only note text/color, preserve the
+  locator and creator, and advance CAS revision/sequence. Deletes publish a
+  tombstone and remove the native or Liseur mirror row.
+- A stale GraphQL revision makes the non-null root mutation result `data: null`
+  and returns
+  `errors[0].message: "annotation revision conflict: expected <requested>,
+  current <revision>"`; no `extensions.code` is returned. The CAS update is
+  rolled back. GraphQL entries expose current `revision`, `editable`, immutable
+  creator `source`/`sourceDeviceId`, and separate
+  `lastEditedSource`/`lastEditedAt`.
+- The creator column is backfilled from the pre-existing `device_id`;
+  subsequent Liseur or Home edits change only `device_id`.
+- GraphQL annotation pages and annotation-sync exports suppress both
+  `liseur-sync:` native mirrors and `stump-native:` CAS rows. A Home annotation
+  is therefore listed once, with its original native ID.
 
-**Deferred local projection:** map only information Stump actually has. The
-current pass does not import remote records into `media_annotations` or
-`bookmarks`, so no locator, excerpt, color, progression, edition digest, or
-remote kind is fabricated.
+Example native export (a KOReader-capable response may include the extended
+`red` color):
 
-| Stump source | liseur-sync projection | Guard |
-| --- | --- | --- |
-| `media_annotations.locator` + `annotation_text` | `highlight` with the locator and `body` set to `annotation_text` when the local row represents a highlighted passage and the locator is valid. | The wire field is `body`, not `note`; do not serialize a note field that the protocol does not define. Preserve the local distinction between `ReadiumLocator.text.highlight` and the user's note. |
-| `bookmarks.locator` | `bookmark` with the locator. | `page` and `preview_content` have no wire fields; omit them, and never put a page number in opaque locator JSON. Rows without a locator cannot be sent as anchored bookmarks. |
-| A local annotation with a locator and no note | `highlight` with no `body`, if the selected passage is represented by the locator. | If it is only an anchor and not a text selection, choose `bookmark` only with an explicit, deterministic rule; otherwise hold it for review. |
-| A genuinely unanchored note from a future/imported source | `note` with a non-empty `body` and no locator. | Current `media_annotations` requires a locator, so do not turn an existing anchored row into an unanchored note merely to fit the wire shape. |
-| `ReadiumLocator` JSON | `locator` JSON, bounded and preserved. | liseur-sync treats it as opaque; validate size and JSON shape, but do not assume the server understands Readium ranges. |
+```json
+{
+  "id": "stump-native:annotation:7d9a2d9c-4d67-4a84-9d0a-60c5f02f11e1",
+  "rev": 1,
+  "seq": 84,
+  "work_id": "work-123",
+  "edition_sha": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "kind": "highlight",
+  "locator": {
+    "href": "OPS/chapter.xhtml",
+    "locations": { "position": 12, "progression": 0.37, "totalProgression": 0.57 },
+    "text": { "before": "words before", "highlight": "selected passage", "after": "words after" }
+  },
+  "progression": 0.57,
+  "excerpt": "selected passage",
+  "color": "red",
+  "body": "Home note",
+  "device_id": "stump-native",
+  "client_ts": "2026-09-11T12:00:00Z",
+  "updated_at": "2026-09-11T12:00:00Z"
+}
+```
 
-The inverse local-projection path is deferred. If a future remote edit races
-with a local edit, it must keep both payloads and mark a conflict for user
-resolution rather than use timestamp-only last-writer-wins. A remote tombstone
-must not silently erase a user-owned local row.
+`origin_device_id` is intentionally absent from the response. Without
+`X-Liseur-Annotation-Capabilities: annotation-color-drawer-v1`, the server
+omits unsupported extended colors such as `red` but keeps the annotation
+record; with the header, the full palette and KOReader drawer are available.
+This preserves pinned Liseur v0.13/v0.18 decoders, which otherwise discard an
+entire record for an unsupported color.
+`GET /v1/annotations/changes` and
+`GET /v1/works/{work_id}/annotations?include_deleted=true` require a valid
+bearer token with `sync`. Both reconcile native rows before returning the
+change stream/snapshot. `POST /v1/annotations` updates use `base_rev`; stale
+revisions conflict instead of overwriting. `DELETE /v1/annotations/{id}?rev=`
+publishes a tombstone with a new revision and sequence.
+
+No client change is needed to receive these records: they use the existing
+work-annotation response and record schema. The pinned Liseur Android sync
+calls `GET /v1/works/{id}/annotations` (`LiseurSyncApi.kt:74–84`,
+`WorkResolver.kt:226–238`). The Coppice KOReader sync also pulls the full work
+snapshot through `api:liseurWorkAnnotations(..., true)` and reconciles
+`response.annotations` (`coppice_annotation_sync.lua:238–244, 740–752`); that
+plugin does not consume `/v1/annotations/changes`, so a native edit appears on
+its next normal per-book sync. The capability header remains necessary for
+extended colors/drawers.
+
+No standalone annotation SSE route or `CoreEvent` is added: clients receive
+records through the existing work snapshot (and the authenticated
+change-feed endpoint where used), with KOReader seeing updates on its next
+normal per-book sync.
+
 
 ## Work, Edition, and Alias identity (implemented with limits)
 
@@ -323,14 +452,16 @@ on `GET /v1/token` returns `401`.
 singleton `scope` form is also accepted), stores a separate revocable device
 row, and returns `secret` exactly once with its `token_id`, `device_id`, name,
 canonical `scopes`, and `expires_at`. The device bearer can call
-`GET /v1/token`, which returns `id`, `device_id`, `name`, `scopes`, and the
-stable `account_id`; it never returns a secret. Missing, invalid, expired, or
-revoked credentials return `401`. A valid device token without `sync` returns
-`403` from the sync lane; a token without `library-read` returns `403` from
-catalog routes.
+`GET /v1/token`, which returns `id`, `device_id`, `name`, `scopes`, the stable
+`account_id`, and the current `session_active_ms: true` capability; it never
+returns a secret. Missing, invalid, expired, or revoked credentials return
+`401`. A valid device token without `sync` returns `403` from the sync lane; a
+token without `library-read` returns `403` from catalog routes.
 
-The upstream contract and scope distinctions are documented in liseur-sync's
-pinned [`openapi.yaml`](https://github.com/chmouel/liseur-sync/blob/f8ce32b79aca0cddde84e9004fedde121fb77365/docs/openapi.yaml).
+The current upstream API contract is pinned to liseur-sync
+[`906889ffe11fc7260b071c1f142aeee1fa8a1419`](https://github.com/chmouel/liseur-sync/blob/906889ffe11fc7260b071c1f142aeee1fa8a1419/docs/openapi.yaml).
+Use the linked Go route/handler sources for `/v1/me/settings`, which that
+OpenAPI document currently omits.
 
 **Implemented token policy:**
 
@@ -360,37 +491,31 @@ The adapter must code to the behavior it can verify and make each mismatch visib
 | --- | --- | --- | --- |
 | Duplicate writes | Integrating documentation describes a byte-identical retry as `duplicate`. | `SameAnnotationPayload` additionally requires the same `device_id` and compares the complete payload (including the stored timestamp at implementation precision); a different device with identical content is not necessarily a duplicate. | Persist device and canonical payload evidence; retry with the original device identity and treat cross-device retries as a conflict/replace decision. |
 | TA identity | The contract specifies accent/punctuation-insensitive NFKD normalization. | `NormalizeName` only lower-cases and collapses whitespace, so accents and punctuation remain significant. | Keep TA matches low-confidence and retain the normalizer/version; never promote on a server/client normalization accident. |
-| Note field | Stump calls its optional user text `annotation_text`. | liseur-sync's wire field is `body`; note kind requires body and forbids locator. | Map explicitly to `body`; do not invent `note`, and keep highlight text in locator/excerpt rather than confusing it with the user's body. |
+| Note field | Stump calls the user's text `annotation_text`; the wire field is `body`. | Upstream describes a note without a locator; Stump permits an optional retained locator so a CAS annotation can change kind without losing its anchor. | Map explicitly to `body`; never invent `note`, and keep highlight text separate from the user's body. |
 | Locator semantics | The wire accepts any bounded reader-native JSON and replays it verbatim. | The server validates shape/size but does not interpret Readium ranges or convert reader formats. | Store raw JSON and only project to Stump when it is a valid, authorized local locator; otherwise hold it pending instead of guessing. |
 
 Sources: ResearchLiseurSync, liseur-sync `docs/integrating.md:298-338`, `docs/openapi.yaml:2720-2794`, `internal/store/store.go:1100-1245`, `internal/api/annotations.go:84-183`, and `metadata/entities.go:9-27`.
 
 ## Implementation status and deferred work
 
-1. **Identity and storage groundwork — implemented.** The migration adds
-   user-scoped Work/Edition/Alias/media-link records, session/device token
-   storage, per-user position/annotation counters, operation/session records,
-   and annotation tombstones. The current pass does not project remote
-   annotations into Stump's core rows.
-2. **Sync and annotation endpoints — implemented.** The provider exposes work
-   resolution, `POST /v1/ops`, `GET /v1/changes`, `GET /v1/heads`,
-   `GET /v1/works/{id}/positions`, `POST /v1/sessions`,
-   `POST /v1/annotations`, `GET /v1/annotations/changes`,
-   `DELETE /v1/annotations/{id}?rev=`, and
-   `GET /v1/works/{id}/annotations`. Writes preserve per-item conflicts,
-   idempotency, CAS revisions, feed sequences, and delete tombstones.
-3. **Conflict and retention hardening — partial.** Validation, tenant
-   isolation, duplicate retries, CAS conflicts, and separate position and
-   annotation high-water counters are implemented. Automatic retention
-   sweeping, compaction recovery, and local projection reconciliation are
-   deferred.
-4. **Catalog capability — read-only implemented.** The provider exposes
-   folder/book pages and search, book detail, cover and range-capable download,
-   folder-derived series membership, and catalog-book work resolution. Upload,
-   delete, and series-claim mutation routes remain deferred.
-5. **Insights and remaining token administration — deferred.** The provider
-   exposes login, device-token minting, self-introspection, and revocation, but
-   not `/v1/register`, token listing, token scope updates, or `/v1/insights/*`.
+1. **Identity and storage — implemented.** User-scoped Work/Edition/Alias/media
+   links, device tokens, settings, position/annotation counters, CAS records,
+   tombstones, and nullable KOReader drawer persistence are migration-backed.
+2. **Sync and annotation endpoints — implemented.** Work resolution, settings,
+   ops/changes/heads, positions, sessions, annotations, conflict responses,
+   tombstones, and attachment side objects preserve their identity, status,
+   and idempotency contracts.
+3. **Native annotation exchange — implemented in both directions.**
+   Linked, visible native Readium highlights/notes/bookmarks enter CAS with
+   deterministic IDs; Liseur-owned records project into native rows. Both
+   mirror IDs are suppressed from re-export, and deletes advance tombstones.
+4. **Catalog — read-only implemented, with personal series names.** Folder and
+   book pages/search, details, covers, downloads, and work resolution are
+   mounted. Personal display-name changes overlay the scanned series name.
+   Upload/delete, ordering, and series-claim routes remain deferred.
+5. **Token administration and insights — deferred.** The provider supports
+   login, device-token minting, self-introspection, and revocation, but not
+   `/v1/register`, token listing/scope updates, or `/v1/insights/*`.
 
 ## Explicit unknowns and gates
 
@@ -408,12 +533,9 @@ provider fully interoperable with the entire upstream server:
   media remains unverified.
 - **TA normalization:** TA-only matching is intentionally not performed until
   the documented NFKD normalizer and the deployed upstream normalizer agree.
-- **Locator projection:** opaque locators are preserved in the adapter, but
-  importing every reader-native shape into a Stump `ReadiumLocator` requires an
-  explicit EPUB/KEPUB validation and mapping rule.
-- **Local projection:** the bridge does not yet create or update core
-  `media_annotations` or `bookmarks`; any future projection must preserve
-  independently edited local rows and surface conflicts.
+- **Readium projection scope:** only non-empty hrefs with parsed `locations`
+  map to native rows. Custom or invalid locator shapes remain in the CAS bridge
+  for the originating Liseur client.
 - **Retention and remaining administration:** the current pass has no
   tombstone/session retention worker, compaction horizon, token listing or
   scope-update API, or insight route.

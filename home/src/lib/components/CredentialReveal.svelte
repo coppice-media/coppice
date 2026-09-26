@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { browser } from '$app/environment'
 	import CheckIcon from '@lucide/svelte/icons/check'
 	import CopyIcon from '@lucide/svelte/icons/copy'
 	import ExternalLinkIcon from '@lucide/svelte/icons/external-link'
@@ -37,12 +38,24 @@
 	const protocol = $derived(profile?.protocol ?? PROTOCOL_LABELS[protocolForKind(issued.device.kind)])
 	const savedId = $derived(`saved-${issued.device.id}`)
 	const scopeLabel = $derived(libraryScopeSummary(issued.device.libraryScope))
+	const komfUrl = $derived(
+		issued.device.kind === 'KOMELIA' && browser
+			? `http://${window.location.host}/?apiKey=${encodeURIComponent(issued.credential.secret)}`
+			: null
+	)
 	let copied = $state(false)
+	let komfCopied = $state(false)
 
 	async function copySecret(): Promise<void> {
 		if (!(await copyText(issued.credential.secret, 'secret'))) return
 		copied = true
 		setTimeout(() => (copied = false), 2000)
+	}
+
+	async function copyKomfUrl(): Promise<void> {
+		if (!komfUrl || !(await copyText(komfUrl, 'Komf URL'))) return
+		komfCopied = true
+		setTimeout(() => (komfCopied = false), 2000)
 	}
 </script>
 
@@ -97,6 +110,28 @@
 		<p class="text-sm text-muted-foreground">
 			This client kind has no fixed endpoint; use the secret as an API key against this server's origin.
 		</p>
+	{/if}
+	{#if komfUrl}
+		<section class="flex flex-col gap-2 rounded-xl border bg-muted/20 p-3" aria-labelledby={`${savedId}-komf-url`}>
+			<div>
+				<h3 id={`${savedId}-komf-url`} class="text-sm font-medium">Komf URL</h3>
+				<p class="text-xs text-muted-foreground">
+					Use this URL in Komelia for Komf metadata editing. It includes the device API key.
+				</p>
+			</div>
+			<div class="flex flex-col gap-2 sm:flex-row">
+				<code class="min-w-0 flex-1 rounded-lg border bg-background px-3 py-2 font-mono text-sm break-all select-all">{komfUrl}</code>
+				<Button type="button" variant="outline" onclick={copyKomfUrl} class="sm:shrink-0" aria-live="polite">
+					{#if komfCopied}
+						<CheckIcon data-icon="inline-start" />
+						Copied
+					{:else}
+						<CopyIcon data-icon="inline-start" />
+						Copy Komf URL
+					{/if}
+				</Button>
+			</div>
+		</section>
 	{/if}
 
 	{#if hint}

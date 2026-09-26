@@ -166,9 +166,4 @@ sender address used for the delivery must be on Amazon's approved list.
 	reader devices because it provides the registry bookkeeping described above.
 </Callout>
 
-You can still create a raw API key in the React web UI at
-`/settings/app/api-keys`. A raw key still obeys the owner's permissions and the
-permissions minted for that key. It works for clients that need a
-general-purpose Bearer key, but it does not create the Devices-page bookkeeping:
-there is no device kind label, endpoint card or QR code, last-seen or sync
-summary, per-device library scope, or device credential rotation.
+Use the `createApiKey` GraphQL mutation described in the [API keys guide](/docs/guides/features/api-keys) to create a raw key. A raw key still obeys the owner's permissions and the permissions minted for that key. It works for clients that need a general-purpose Bearer key, but it does not create the Devices-page bookkeeping: there is no device kind label, endpoint card or QR code, last-seen or sync summary, per-device library scope, or device credential rotation.

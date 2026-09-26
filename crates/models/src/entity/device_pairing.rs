@@ -69,6 +69,9 @@ pub struct Model {
 	pub failed_attempts: i32,
 	/// Set once the credential has been handed to the device; it is never returned again.
 	pub credential_issued: bool,
+	/// Whether approval explicitly granted this Komelia pairing the metadata
+	/// edit permission. False for every new and pre-existing pairing by default.
+	pub allow_komf_metadata_editing: bool,
 	pub created_at: DateTimeWithTimeZone,
 	pub expires_at: DateTimeWithTimeZone,
 	pub approved_at: Option<DateTimeWithTimeZone>,
@@ -148,6 +151,7 @@ mod tests {
 			status,
 			failed_attempts: 0,
 			credential_issued: false,
+			allow_komf_metadata_editing: false,
 			created_at: now,
 			expires_at: now + chrono::Duration::seconds(expires_in_secs),
 			approved_at: None,

@@ -72,44 +72,6 @@ impl KavitaBackendAdapter {
 			.map(|book| book.path)
 			.ok_or_else(|| KavitaError::NotFound("Chapter does not exist".to_owned()))
 	}
-
-	/// The CBZ a provider-backed chapter downloads as: the pages come through
-	/// the provider host's cache and are packed into a stored zip, the same
-	/// archive every protocol serves for a virtual row. The chapter's own
-	/// name is the archive's file stem.
-	#[cfg(feature = "providers")]
-	async fn provider_archive(&self, book: &media::Model) -> KavitaResult<Vec<u8>> {
-		let host = crate::routers::provider_virtual::provider_host(&self.ctx)
-			.ok_or_else(|| {
-				KavitaError::NotFound("Provider libraries are disabled".to_owned())
-			})?;
-		let path = stump_provider::virtual_path::VirtualPath::parse(&book.path)
-			.filter(|path| path.remote_chapter_id.is_some())
-			.ok_or_else(|| {
-				KavitaError::InternalServerError(format!(
-					"{} is not a provider chapter path",
-					book.path
-				))
-			})?;
-		host.build_archive(
-			&path.source_id,
-			path.remote_chapter_id.as_deref().unwrap_or_default(),
-			&book.name,
-		)
-		.await
-		.map(|archive| archive.bytes)
-		.map_err(|error| KavitaError::InternalServerError(error.to_string()))
-	}
-
-	/// Provider libraries are compiled out: a `provider://` row cannot exist,
-	/// and a row that somehow carries the scheme has no file to serve.
-	#[cfg(not(feature = "providers"))]
-	async fn provider_archive(&self, book: &media::Model) -> KavitaResult<Vec<u8>> {
-		Err(KavitaError::NotFound(format!(
-			"{} has no file to download",
-			book.path
-		)))
-	}
 }
 
 /// A canonical container-service failure, mapped onto its Kavita status.
@@ -311,12 +273,11 @@ impl KavitaBackend for KavitaBackendAdapter {
 			.filter(library_config::Column::LibraryId.eq(series.library_id.clone()))
 			.one(self.conn())
 			.await?;
-		let format =
-			config.and_then(|config| config.thumbnail_config.map(|config| config.format));
+		let thumbnail_config = config.and_then(|config| config.thumbnail_config);
 		let (content_type, data) = api_series::get_series_thumbnail(
 			&series,
 			first_book,
-			format,
+			thumbnail_config,
 			self.ctx.config.as_ref(),
 		)
 		.await
@@ -409,7 +370,10 @@ impl KavitaBackend for KavitaBackendAdapter {
 			.await?
 			.ok_or_else(|| KavitaError::NotFound("Chapter does not exist".to_owned()))?;
 		if stump_media::virtual_media::is_virtual_path(&book.path) {
-			return self.provider_archive(&book).await;
+			return stump_media::virtual_media::get_archive(&book.path, &book.name)
+				.await
+				.map(|archive| archive.bytes)
+				.map_err(|error| map_server_error(APIError::from(error)));
 		}
 		tokio::fs::read(&book.path).await.map_err(|error| {
 			KavitaError::InternalServerError(format!(

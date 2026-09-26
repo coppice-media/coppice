@@ -2102,6 +2102,70 @@ mod metadata_mapping {
 			.collect()
 	}
 
+	fn series_metadata_payload(
+		series_id: i32,
+		summary: &str,
+		genre: &str,
+		tag_name: &str,
+		writer: &str,
+	) -> serde_json::Value {
+		let mut metadata = serde_json::json!({
+			"id": series_id,
+			"seriesId": series_id,
+			"summary": summary,
+			"genres": [{"id": 0, "title": genre}],
+			"tags": [{"id": 0, "title": tag_name}],
+			"writers": [{"id": 0, "name": writer}],
+			"coverArtists": [],
+			"publishers": [],
+			"characters": [],
+			"pencillers": [],
+			"inkers": [],
+			"imprints": [],
+			"colorists": [],
+			"letterers": [],
+			"editors": [],
+			"translators": [],
+			"teams": [],
+			"locations": [],
+			"ageRating": 8,
+			"releaseYear": 2024,
+			"language": "en",
+			"maxCount": 2,
+			"totalCount": 2,
+			"publicationStatus": 0,
+			"webLinks": "https://example.invalid/series"
+		});
+		metadata.as_object_mut().unwrap().extend(
+			serde_json::json!({
+				"languageLocked": false,
+				"summaryLocked": false,
+				"ageRatingLocked": false,
+				"publicationStatusLocked": false,
+				"genresLocked": true,
+				"tagsLocked": true,
+				"writerLocked": true,
+				"characterLocked": false,
+				"coloristLocked": false,
+				"editorLocked": false,
+				"inkerLocked": false,
+				"imprintLocked": false,
+				"lettererLocked": false,
+				"pencillerLocked": false,
+				"publisherLocked": false,
+				"translatorLocked": false,
+				"teamLocked": false,
+				"locationLocked": false,
+				"coverArtistLocked": false,
+				"releaseYearLocked": false
+			})
+			.as_object()
+			.unwrap()
+			.clone(),
+		);
+		serde_json::json!({"seriesMetadata": metadata})
+	}
+
 	#[tokio::test]
 	async fn series_metadata_aggregates_the_series_row_and_every_file() {
 		let conn = db().await;
@@ -2316,5 +2380,276 @@ mod metadata_mapping {
 				.collect::<Vec<_>>(),
 			["Classic", "Komf Tagged"]
 		);
+	}
+
+	#[tokio::test]
+	async fn grouped_series_metadata_updates_keep_each_books_metadata_and_locks() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("metadata-writes").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let library = library_of_type(&conn, StumpLibraryType::Manga).await;
+		let (series, files) = series_with_files(
+			&conn,
+			&library.id,
+			"Metadata writes",
+			&[("Volume 1", "cbz", 10), ("Volume 2", "cbz", 12)],
+		)
+		.await;
+
+		for (file, genre, writer, locks) in [
+			(
+				&files[0],
+				"Mystery",
+				"Book One Writer",
+				serde_json::json!(["GENRES", "TAGS", "WRITERS"]),
+			),
+			(
+				&files[1],
+				"Fantasy",
+				"Book Two Writer",
+				serde_json::json!([]),
+			),
+		] {
+			media_metadata::ActiveModel {
+				media_id: Set(Some(file.id.clone())),
+				genres: Set(Some(genre.to_owned())),
+				writers: Set(Some(writer.to_owned())),
+				locked_fields: Set(Some(locks)),
+				..Default::default()
+			}
+			.insert(&conn)
+			.await
+			.unwrap();
+		}
+		let first_tag = tag_id(&conn, "Book One Tag").await;
+		let second_tag = tag_id(&conn, "Book Two Tag").await;
+		for (file, tag_id) in [(&files[0], first_tag), (&files[1], second_tag)] {
+			media_tag::ActiveModel {
+				media_id: Set(file.id.clone()),
+				tag_id: Set(tag_id),
+				..Default::default()
+			}
+			.insert(&conn)
+			.await
+			.unwrap();
+		}
+
+		let backend = std::sync::Arc::new(TestBackend::new(conn));
+		let series_id = KavitaIds::resolve(backend.conn(), IdKind::Series, &series.id)
+			.await
+			.unwrap();
+		let chapter_ids = KavitaIds::resolve_many(
+			backend.conn(),
+			IdKind::Media,
+			&[files[0].id.clone(), files[1].id.clone()],
+		)
+		.await
+		.unwrap();
+
+		let update = series_metadata_payload(
+			series_id,
+			"Series-only summary",
+			"Series Genre",
+			"Series Tag",
+			"Series Writer",
+		);
+		let (status, body) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Series/metadata",
+			Some(update.clone()),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK, "{body}");
+
+		for (chapter_id, writer, genre, tag_name, locked) in [
+			(
+				chapter_ids[&files[0].id],
+				"Book One Writer",
+				"Mystery",
+				"Book One Tag",
+				true,
+			),
+			(
+				chapter_ids[&files[1].id],
+				"Book Two Writer",
+				"Fantasy",
+				"Book Two Tag",
+				false,
+			),
+		] {
+			let (status, chapter) = request(
+				backend.clone(),
+				&user,
+				"GET",
+				&format!("/api/Series/chapter?chapterId={chapter_id}"),
+				None,
+			)
+			.await;
+			assert_eq!(status, StatusCode::OK);
+			assert_eq!(names(&chapter, "writers"), [writer]);
+			assert_eq!(titles(&chapter, "genres"), [genre]);
+			assert_eq!(titles(&chapter, "tags"), [tag_name]);
+			assert_eq!(chapter["writerLocked"], locked);
+			assert_eq!(chapter["genresLocked"], locked);
+			assert_eq!(chapter["tagsLocked"], locked);
+		}
+
+		let (status, series_metadata) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/metadata?seriesId={series_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(series_metadata["summary"], "Series-only summary");
+		for writer in ["Series Writer", "Book One Writer", "Book Two Writer"] {
+			assert!(names(&series_metadata, "writers").contains(&writer.to_owned()));
+		}
+		for genre in ["Series Genre", "Mystery", "Fantasy"] {
+			assert!(titles(&series_metadata, "genres").contains(&genre.to_owned()));
+		}
+		for tag_name in ["Series Tag", "Book One Tag", "Book Two Tag"] {
+			assert!(titles(&series_metadata, "tags").contains(&tag_name.to_owned()));
+		}
+		assert_eq!(series_metadata["genresLocked"], true);
+		assert_eq!(series_metadata["tagsLocked"], true);
+		assert_eq!(series_metadata["writerLocked"], true);
+
+		let mut hidden_user = user.clone();
+		hidden_user.device_library_scope = Some(Vec::new());
+		let hidden_update = series_metadata_payload(
+			series_id,
+			"must not write",
+			"Hidden Genre",
+			"Hidden Tag",
+			"Hidden Writer",
+		);
+		let (status, _) = request(
+			backend.clone(),
+			&hidden_user,
+			"POST",
+			"/api/Series/metadata",
+			Some(hidden_update),
+		)
+		.await;
+		assert_eq!(status, StatusCode::NOT_FOUND);
+		let (status, unchanged) = request(
+			backend,
+			&user,
+			"GET",
+			&format!("/api/Series/metadata?seriesId={series_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(unchanged["summary"], "Series-only summary");
+		assert!(!names(&unchanged, "writers").contains(&"Hidden Writer".to_owned()));
+	}
+
+	#[tokio::test]
+	async fn book_library_metadata_update_targets_only_the_selected_book() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("book-metadata-writes")
+			.insert(&conn)
+			.await;
+		let user = auth_user(&user_row);
+		let library = library_of_type(&conn, StumpLibraryType::Book).await;
+		let (_, files) = series_with_files(
+			&conn,
+			&library.id,
+			"Book metadata writes",
+			&[("Book One", "epub", 10), ("Book Two", "epub", 12)],
+		)
+		.await;
+		for (file, genre, writer) in [
+			(&files[0], "Old Book One Genre", "Old Book One Writer"),
+			(&files[1], "Book Two Genre", "Book Two Writer"),
+		] {
+			media_metadata::ActiveModel {
+				media_id: Set(Some(file.id.clone())),
+				genres: Set(Some(genre.to_owned())),
+				writers: Set(Some(writer.to_owned())),
+				..Default::default()
+			}
+			.insert(&conn)
+			.await
+			.unwrap();
+		}
+		let first_tag = tag_id(&conn, "Old Book One Tag").await;
+		let second_tag = tag_id(&conn, "Book Two Tag").await;
+		for (file, tag_id) in [(&files[0], first_tag), (&files[1], second_tag)] {
+			media_tag::ActiveModel {
+				media_id: Set(file.id.clone()),
+				tag_id: Set(tag_id),
+				..Default::default()
+			}
+			.insert(&conn)
+			.await
+			.unwrap();
+		}
+
+		let backend = std::sync::Arc::new(TestBackend::new(conn));
+		let book_series_id =
+			KavitaIds::resolve(backend.conn(), IdKind::BookSeries, &files[0].id)
+				.await
+				.unwrap();
+		let chapter_ids = KavitaIds::resolve_many(
+			backend.conn(),
+			IdKind::Media,
+			&[files[0].id.clone(), files[1].id.clone()],
+		)
+		.await
+		.unwrap();
+		let (status, body) = request(
+			backend.clone(),
+			&user,
+			"POST",
+			"/api/Series/metadata",
+			Some(series_metadata_payload(
+				book_series_id,
+				"Updated single book",
+				"Updated Book Genre",
+				"Updated Book Tag",
+				"Updated Book Writer",
+			)),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK, "{body}");
+
+		let (status, updated_book) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!(
+				"/api/Series/chapter?chapterId={}",
+				chapter_ids[&files[0].id]
+			),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(names(&updated_book, "writers"), ["Updated Book Writer"]);
+		assert_eq!(titles(&updated_book, "genres"), ["Updated Book Genre"]);
+		assert_eq!(titles(&updated_book, "tags"), ["Updated Book Tag"]);
+
+		let (status, untouched_book) = request(
+			backend,
+			&user,
+			"GET",
+			&format!(
+				"/api/Series/chapter?chapterId={}",
+				chapter_ids[&files[1].id]
+			),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(names(&untouched_book, "writers"), ["Book Two Writer"]);
+		assert_eq!(titles(&untouched_book, "genres"), ["Book Two Genre"]);
+		assert_eq!(titles(&untouched_book, "tags"), ["Book Two Tag"]);
 	}
 }

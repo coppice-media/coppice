@@ -303,10 +303,5 @@ a single ABS position today: `currentTime`, `trackIndex`, `timeListening` and `c
 
 ---
 
-**Delivery notes.** Memo also written to `local://audiobook-study.md` (300 lines). Read-only: zero repo files
-touched. Docker teardown verified three times — `0` containers, `0` images, `0` volumes matching
-`audiobookshelf|grimmory|bookorbit|pgvector|linuxserver/mariadb`; measurement ports were 13400/13410/13420 only;
-no Stump process or 25600–25699 port was touched. Two research gaps stated rather than guessed: Plappa's route
-list (GitHub API rate limit exhausted mid-study) and the ID3v2 chapter addendum's canonical URL (id3.org served
-503). The five research scouts I fanned out first all failed on a provider usage limit, so every fact above was
-gathered first-hand in this session.
+**Research gaps.** Two facts were not established rather than guessed: Plappa's route list (the GitHub API rate
+limit was exhausted mid-study) and the ID3v2 chapter addendum's canonical URL (id3.org returned 503).

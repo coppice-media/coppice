@@ -61,7 +61,7 @@ use crate::{
 	config::state::AppState,
 	errors::{APIError, APIResult},
 	middleware::host::HostExtractor,
-	routers::{api::v2::media::get_media_thumbnail_by_id, relative_favicon_path},
+	routers::api::v2::media::get_media_thumbnail_by_id,
 	utils::{http::ImageResponse, serve_media},
 };
 
@@ -373,15 +373,9 @@ fn page_metadata(
 		.build()?)
 }
 
-#[tracing::instrument(skip(ctx))]
-pub(crate) async fn auth(
-	State(ctx): State<AppState>,
-	HostExtractor(host): HostExtractor,
-) -> APIResult<OPDSAuthDocWrapper> {
-	let mut links = vec![OPDSLink::help()];
-	if let Some(favicon_path) = relative_favicon_path(ctx.config.protocols.enable_webui) {
-		links.push(OPDSLink::logo(format!("{}{}", host.url(), favicon_path)));
-	}
+#[tracing::instrument]
+pub(crate) async fn auth() -> APIResult<OPDSAuthDocWrapper> {
+	let links = vec![OPDSLink::help()];
 
 	Ok(OPDSAuthDocWrapper(
 		OPDSAuthenticationDocumentBuilder::default()

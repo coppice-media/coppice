@@ -25,6 +25,9 @@
 //! Rules 2 and 3 produce **suggestions**, cached as `suggested` link rows so
 //! the console can offer them and so a rejection sticks. Only a `confirmed`
 //! link is an edition.
+//! A media row already linked to a different work is not re-homed by a
+//! suggestion or confirmation: each work owns its Liseur history, so a
+//! cross-work identity merge must be explicit and is refused here.
 //!
 //! ## Chapter map
 //!

@@ -6,6 +6,7 @@
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
 	import type { BookHighlight } from '$lib/book/detail';
 	import { formatDate } from '$lib/book/detail';
+	import { SOURCE_LABELS } from '$lib/annotations';
 
 	let { highlights = [] }: { highlights?: BookHighlight[] } = $props();
 </script>
@@ -28,6 +29,12 @@
 							{#if highlight.editable}<Badge variant="secondary">Editable</Badge>{/if}
 							<span class="ml-auto text-muted-foreground">{formatDate(highlight.createdAt)}</span>
 						</div>
+						{#if highlight.lastEditedSource && highlight.lastEditedSource !== highlight.source}
+							<p class="mt-2 text-xs text-muted-foreground">
+								Edited in {SOURCE_LABELS[highlight.lastEditedSource as keyof typeof SOURCE_LABELS]}
+								{#if highlight.lastEditedAt} · {formatDate(highlight.lastEditedAt)}{/if}
+							</p>
+						{/if}
 						{#if highlight.excerpt}<blockquote class="mt-3 border-l-2 pl-3 text-sm leading-6">{highlight.excerpt}</blockquote>{/if}
 						{#if highlight.note}<p class="mt-3 flex items-start gap-2 text-sm text-muted-foreground"><StickyNoteIcon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />{highlight.note}</p>{/if}
 						<div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">

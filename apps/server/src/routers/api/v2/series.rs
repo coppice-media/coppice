@@ -6,7 +6,7 @@ use axum::{
 };
 use models::{
 	entity::{library_config, media, series},
-	shared::image_processor_options::SupportedImageFormat,
+	shared::image_processor_options::ImageProcessorOptions,
 };
 use sea_orm::{prelude::*, sea_query::Query, QueryOrder};
 use stump_auth::AuthContext;
@@ -34,7 +34,7 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 pub(crate) async fn get_series_thumbnail(
 	series: &series::SeriesThumbSelect,
 	first_book: Option<media::MediaThumbSelect>,
-	image_format: Option<SupportedImageFormat>,
+	thumbnail_config: Option<ImageProcessorOptions>,
 	config: &StumpConfig,
 ) -> APIResult<(ContentType, Vec<u8>)> {
 	// Note: This doesn't hard-fail because if the saved thumbnail is missing or corrupt, we want
@@ -48,12 +48,13 @@ pub(crate) async fn get_series_thumbnail(
 		}
 	}
 
+	let image_format = thumbnail_config.as_ref().map(|options| options.format);
 	let generated_thumb =
 		get_thumbnail(config.get_thumbnails_dir(), &series.id, image_format).await?;
 
 	match (generated_thumb, first_book) {
 		(Some(result), _) => Ok(result),
-		(None, Some(book)) => get_media_thumbnail(&book, image_format, config).await,
+		(None, Some(book)) => get_media_thumbnail(&book, thumbnail_config, config).await,
 		(None, None) => Err(APIError::NotFound(
 			"Series does not have a thumbnail".to_string(),
 		)),
@@ -122,10 +123,10 @@ async fn get_series_thumbnail_handler(
 		)
 		.one(ctx.conn.as_ref())
 		.await?;
-	let image_format = library_config.and_then(|o| o.thumbnail_config.map(|c| c.format));
+	let thumbnail_config = library_config.and_then(|o| o.thumbnail_config);
 
 	let (content_type, bytes) =
-		get_series_thumbnail(&series, first_book, image_format, ctx.config.as_ref())
+		get_series_thumbnail(&series, first_book, thumbnail_config, ctx.config.as_ref())
 			.await?;
 
 	Ok(ImageResponse::new(content_type, bytes))

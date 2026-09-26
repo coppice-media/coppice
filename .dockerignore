@@ -8,6 +8,3 @@ target
 *.log
 *.db
 .git
-
-# Frozen compatibility client; excluded from the active Bun workspace and image.
-apps/expo

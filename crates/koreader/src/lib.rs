@@ -5,8 +5,8 @@
 //! in the path, `AccessKoreaderSync`), persistence, and the partial-MD5
 //! `koreader_hash` live in the host.
 //!
-//! See `crates/koreader/README.md` for the kosync pin (`009367df`), the Liseur
-//! `31f8182d` client (device-verified), decisions, and verification.
+//! See `crates/koreader/README.md` for the kosync pin, clients and their
+//! evidence tiers, decisions, and verification.
 
 use std::sync::Arc;
 

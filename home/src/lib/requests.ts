@@ -1,3 +1,5 @@
+import type { RequestFormat } from '$lib/graphql/generated/graphql'
+
 export const BOOK_REQUEST_STATUS_VALUES = [
 	'PENDING',
 	'SEARCHING',
@@ -25,6 +27,17 @@ export const REQUEST_STATUS_LABELS: Record<string, string> = {
 	FAILED: 'Legacy: failed',
 }
 
+export function requestFormatLabel(format: string | null | undefined): string {
+	switch (format) {
+		case 'EBOOK':
+			return 'Ebook'
+		case 'AUDIOBOOK':
+			return 'Audiobook'
+		default:
+			return 'Either'
+	}
+}
+
 export const REQUEST_STATUS_VARIANTS: Record<
 	string,
 	'default' | 'secondary' | 'outline' | 'destructive'
@@ -43,17 +56,17 @@ export const REQUEST_STATUS_VARIANTS: Record<
 }
 
 export const REQUEST_STATUS_DESCRIPTIONS: Record<string, string> = {
-	PENDING: 'Waiting for an operator to review this request.',
-	AWAITING_APPROVAL: 'Legacy approval state retained for an existing request; an operator can still record a decision.',
-	APPROVED: 'An operator approved this request. Acquisition is handled outside Coppice.',
-	SEARCHING: 'Legacy acquisition state retained from an earlier connector workflow.',
-	NEEDS_SELECTION: 'Legacy acquisition state retained from an earlier connector workflow.',
-	GRABBED: 'Legacy acquisition state retained from an earlier connector workflow.',
-	IMPORTING: 'Legacy acquisition state retained from an earlier connector workflow.',
-	QUEUED: 'Legacy acquisition state retained from an earlier connector workflow.',
-	COMPLETED: 'Legacy acquisition state retained from an earlier connector workflow.',
-	REJECTED: 'An operator rejected this request.',
-	FAILED: 'Legacy acquisition state retained from an earlier connector workflow.',
+	PENDING: 'Waiting for an operator to review it.',
+	AWAITING_APPROVAL: 'Legacy approval state; an operator can still record a decision.',
+	APPROVED: 'Approved. A manager can add a release, which lands in the Editor for review.',
+	SEARCHING: 'Legacy acquisition state from an earlier connector workflow.',
+	NEEDS_SELECTION: 'Legacy acquisition state from an earlier connector workflow.',
+	GRABBED: 'Legacy acquisition state from an earlier connector workflow.',
+	IMPORTING: 'Legacy acquisition state from an earlier connector workflow.',
+	QUEUED: 'Legacy acquisition state from an earlier connector workflow.',
+	COMPLETED: 'Legacy acquisition state from an earlier connector workflow.',
+	REJECTED: 'Rejected by an operator.',
+	FAILED: 'Legacy acquisition state from an earlier connector workflow.',
 }
 
 export const APPROVAL_STATUS_LABELS: Record<string, string> = {
@@ -80,10 +93,7 @@ export function statusLabel(status: string | null | undefined): string {
 }
 
 export function statusDescription(status: string | null | undefined): string {
-	return (
-		REQUEST_STATUS_DESCRIPTIONS[status?.toUpperCase() ?? ''] ??
-		'The server recorded this request status.'
-	)
+	return REQUEST_STATUS_DESCRIPTIONS[status?.toUpperCase() ?? ''] ?? 'Status recorded by the server.'
 }
 
 export function queryText(params: URLSearchParams, key: string): string {
@@ -127,4 +137,55 @@ export function safeCoverUrl(value: string | null | undefined): string | undefin
 	} catch {
 		return undefined
 	}
+}
+
+/** What a provider says exists for a work; `null`/missing means it does not say. */
+export type FormatAvailability = {
+	hasEbook?: boolean | null
+	hasAudiobook?: boolean | null
+	/** Length of the default audiobook edition. */
+	audioSeconds?: number | null
+}
+
+/**
+ * The format a request starts with: the formats known to exist, both when
+ * both are known (or neither is), and `ANY` again when both are known to be
+ * missing so a request still names at least one format.
+ */
+export function defaultRequestFormat(availability: FormatAvailability): RequestFormat {
+	// A provider that says “yes” outranks silence, which outranks “no”.
+	const ebook = availability.hasEbook === true ? 2 : availability.hasEbook === false ? 0 : 1
+	const audiobook = availability.hasAudiobook === true ? 2 : availability.hasAudiobook === false ? 0 : 1
+	if (ebook === audiobook) return 'ANY'
+	return ebook > audiobook ? 'EBOOK' : 'AUDIOBOOK'
+}
+
+/** A request format that can carry a narrator preference. */
+export function formatIncludesAudio(format: string | null | undefined): boolean {
+	return format === 'AUDIOBOOK' || format === 'ANY'
+}
+
+/** `11h 40m` (`40m` under an hour); `null` when the length is unknown or zero. */
+export function audioLengthLabel(seconds: number | null | undefined): string | null {
+	if (!seconds || seconds <= 0) return null
+	const minutes = Math.round(seconds / 60)
+	const hours = Math.floor(minutes / 60)
+	if (hours === 0) return `${minutes}m`
+	return `${hours}h ${minutes % 60}m`
+}
+
+/** Identifies a work for `audiobookNarrators`. */
+export type NarratorLookup = {
+	provider: string
+	remoteId: string
+	title: string
+	authors?: string | null
+}
+
+/** The statuses after which a request's narrator preference is settled. */
+const NARRATOR_SETTLED_STATUSES: Record<string, true> = { COMPLETED: true, REJECTED: true }
+
+/** The narrator can still be changed on a request of `status` that includes audio. */
+export function canEditNarrator(format: string | null | undefined, status: string | null | undefined): boolean {
+	return formatIncludesAudio(format) && !NARRATOR_SETTLED_STATUSES[status?.toUpperCase() ?? '']
 }

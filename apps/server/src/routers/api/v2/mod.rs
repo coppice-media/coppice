@@ -172,25 +172,12 @@ async fn health(
 		Err(e) => (false, json!({"status": "error", "message": e.to_string()})),
 	};
 
-	let webui_enabled = cfg!(feature = "webui") && ctx.config.protocols.enable_webui;
-	let (spa_available, spa_data) = if webui_enabled {
-		match tokio::fs::metadata(&ctx.config.protocols.client_dir).await {
-			Ok(metadata) if metadata.is_dir() => (true, ok_status),
-			Ok(_) => (
-				false,
-				json!({"status": "error", "message": "The client directory is malformed or missing"}),
-			),
-			Err(e) => (false, json!({"status": "error", "message": e.to_string()})),
-		}
-	} else {
-		(true, json!({"status": "disabled"}))
-	};
-
-	let status_code = if [db_ready, spa_available].iter().all(|&ready| ready) {
+	let status_code = if db_ready {
 		StatusCode::OK
 	} else {
 		StatusCode::SERVICE_UNAVAILABLE
 	};
+
 	let payload = json!({
 		"status": if status_code == StatusCode::OK { "ok" } else { "error" },
 		"jobs": ctx.jobs_health_status(),
@@ -200,14 +187,10 @@ async fn health(
 			.unwrap_or_else(|| json!({"status": "disabled"})),
 		"dependencies": {
 			"database": db_data,
-			"spa": spa_data
 		}
 	});
 
-	// ^ the above structure is pretty overkill for two dependencies, but this is how
-	// i've done it in the past (at least when i don't need background periodic checks or
-	// checks against external deps) and will make it easier to add more down the
-	// road if needed
+	// The database is the only external readiness dependency in this endpoint.
 
 	(status_code, Json(payload))
 }

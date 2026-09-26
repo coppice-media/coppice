@@ -43,6 +43,7 @@ const ALL_PERMISSIONS: &[UserPermission] = &[
 	UserPermission::AccessApiKeys,
 	UserPermission::AccessKoreaderSync,
 	UserPermission::AccessKoboSync,
+	UserPermission::AcquireReleases,
 	UserPermission::AccessWorker,
 	UserPermission::AccessBookClub,
 	UserPermission::CreateBookClub,

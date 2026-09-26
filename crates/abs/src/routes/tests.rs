@@ -6,7 +6,14 @@
 //! the test, or the Lissen model that reads the field.
 
 use axum::http::StatusCode;
-use models::shared::enums::LibraryType;
+use models::{
+	entity::{collection, collection_series, media, media_metadata},
+	shared::enums::LibraryType,
+};
+use sea_orm::{
+	sea_query::Expr, ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait,
+	QueryFilter,
+};
 use serde_json::json;
 
 use crate::{
@@ -81,7 +88,7 @@ async fn status_offers_the_local_auth_method_lissen_looks_for() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["authMethods"], json!(["local"]));
 	assert_eq!(body["app"], "audiobookshelf");
-	assert_eq!(body["serverVersion"], "2.36.0");
+	assert_eq!(body["serverVersion"], "2.36.1");
 	assert_eq!(body["isInit"], true);
 	assert!(body["authFormData"]["authLoginCustomMessage"].is_string());
 }
@@ -130,7 +137,7 @@ async fn login_returns_the_token_trio_only_when_tokens_were_requested() {
 	assert_eq!(body_with["user"]["isOldToken"], true);
 	assert_eq!(body_with["Source"], "local");
 	assert_eq!(body_with["ereaderDevices"], json!([]));
-	assert_eq!(body_with["serverSettings"]["version"], "2.36.0");
+	assert_eq!(body_with["serverSettings"]["version"], "2.36.1");
 	assert_eq!(
 		body_with["userDefaultLibraryId"],
 		json!(fixture.library_id.clone())
@@ -251,7 +258,7 @@ async fn me_exposes_the_projections_lissen_decodes_twice() {
 		request(fixture.backend, &fixture.user, "GET", "/api/me", None).await;
 	assert_eq!(status, StatusCode::OK);
 	// `UserResponse` and `BookmarksResponse` are both decoded from this one
-	// object (`AudiobookshelfApiClient.kt:62,77`).
+	// object (`AudiobookshelfApiClient.kt:68-71`).
 	assert_eq!(body["mediaProgress"][0]["currentTime"], 4.5);
 	assert_eq!(
 		body["mediaProgress"][0]["libraryItemId"],
@@ -515,7 +522,7 @@ async fn item_detail_is_the_full_shape_and_expanded_adds_tracks() {
 	// `capture/item.json`: the detail shape has libraryFiles/lastScan and the
 	// full metadata objects, and no numFiles/size/duration.
 	assert!(detail["libraryFiles"].is_array());
-	assert_eq!(detail["scanVersion"], "2.36.0");
+	assert_eq!(detail["scanVersion"], "2.36.1");
 	assert!(detail.get("numFiles").is_none());
 	assert!(detail["media"].get("duration").is_none());
 	assert_eq!(
@@ -1140,7 +1147,7 @@ async fn bookmarks_are_created_renamed_and_deleted_by_whole_second() {
 	assert_eq!(renamed["createdAt"], created["createdAt"]);
 
 	// Lissen deletes by whole second in the path
-	// (`AudiobookshelfApiClient.kt:71`).
+	// (`AudiobookshelfApiClient.kt:79`).
 	let (status, _) = request(
 		fixture.backend.clone(),
 		&fixture.user,
@@ -1330,7 +1337,7 @@ async fn collapse_series_folds_a_series_into_one_row() {
 // ---------------------------------------------------------------------------
 
 /// One offline session as `createPartialPlaybackSession` uploads it
-/// (`server/ApiHandler.kt:650-668`).
+/// (`server/ApiHandler.kt:622-640`).
 fn local_session(
 	id: &str,
 	item_id: &str,
@@ -1356,7 +1363,7 @@ fn local_session(
 		"deviceInfo": {
 			"deviceId": "cap-device",
 			"clientName": "Abs Android",
-			"clientVersion": "0.14.0-beta",
+			"clientVersion": "0.14.1-beta",
 			"manufacturer": "Google",
 			"model": "Pixel",
 			"sdkVersion": 34
@@ -1501,8 +1508,9 @@ async fn local_all_reports_per_session_whether_the_head_moved() {
 	assert_eq!(status, StatusCode::OK);
 	let results = body["results"].as_array().expect("results");
 	assert_eq!(results.len(), 3);
-	// The app matches these back to its stored sessions by id and only
-	// deletes the ones that succeeded (`ApiHandler.kt:780-795`).
+	// The app correlates each result with its stored session by id and distinguishes
+	// moved progress from an up-to-date head or per-session error
+	// (`ApiHandler.kt:747-760`).
 	assert_eq!(results[0]["id"], "fresh");
 	assert_eq!(results[0]["success"], true);
 	assert_eq!(results[0]["progressSynced"], true);
@@ -1689,8 +1697,8 @@ async fn the_series_route_lists_multi_book_folders_only() {
 
 	assert_eq!(status, StatusCode::OK);
 	let results = body["results"].as_array().expect("results");
-	// A Stump series holding one audiobook is that book's own folder, not an
-	// Audiobookshelf series — the same rule the item list applies.
+	// Without explicit series metadata, only a multi-audiobook folder is an
+	// ABS series; the standalone folder below remains ungrouped.
 	assert_eq!(results.len(), 1);
 	assert_eq!(results[0]["name"], "Compiler Chronicles");
 	assert_eq!(results[0]["libraryId"], library.id);
@@ -1712,8 +1720,8 @@ async fn the_collections_and_playlists_tabs_answer_an_empty_page() {
 			None,
 		)
 		.await;
-		// Never a 404: the app opens both tabs on a library, and a Stump
-		// shelf is not an Audiobookshelf collection.
+		// This fixture has no projectable collection memberships or playlists;
+		// both library tabs must still return their empty page rather than 404.
 		assert_eq!(status, StatusCode::OK, "{path}");
 		assert_eq!(body["results"], json!([]), "{path}");
 		assert_eq!(body["total"], 0, "{path}");
@@ -1781,12 +1789,442 @@ async fn personalized_carries_the_shelves_the_official_app_browses() {
 }
 
 #[tokio::test]
-async fn an_author_filter_narrows_a_page_to_that_authors_books() {
+async fn library_authors_support_the_official_and_paginated_response_shapes() {
 	let conn = db().await;
 	let user_row = ::tests::fake_data::User::new("ada").insert(&conn).await;
 	let user = auth_user(&user_row);
 	let library = library_of_type(&conn, LibraryType::Mixed).await;
 	let (_, rows) = series_with_files(
+		&conn,
+		&library.id,
+		"Author List",
+		&[
+			("Ada Book", "m4b"),
+			("Grace Book 1", "m4b"),
+			("Grace Book 2", "m4b"),
+		],
+	)
+	.await;
+	metadata(&conn, &rows[0].id, "Ada Book", Some("Ada Lovelace")).await;
+	metadata(&conn, &rows[1].id, "Grace Book 1", Some("Grace Hopper")).await;
+	metadata(&conn, &rows[2].id, "Grace Book 2", Some("Grace Hopper")).await;
+
+	let now = chrono::Utc::now();
+	let times = [(3, 1), (2, 3), (1, 2)];
+	for (row, (created_days_ago, updated_days_ago)) in rows.iter().zip(times) {
+		let created_at = (now - chrono::Duration::days(created_days_ago)).fixed_offset();
+		let updated_at = (now - chrono::Duration::days(updated_days_ago)).fixed_offset();
+		// `media::ActiveModel::before_save` resets updated_at to now, so write
+		// the fixture timestamps directly to make the sort order deterministic.
+		media::Entity::update_many()
+			.filter(media::Column::Id.eq(row.id.clone()))
+			.col_expr(media::Column::CreatedAt, Expr::value(created_at))
+			.col_expr(media::Column::UpdatedAt, Expr::value(Some(updated_at)))
+			.exec(&conn)
+			.await
+			.unwrap();
+	}
+
+	let backend = TestBackend::new(conn);
+	for row in &rows {
+		backend.set_audio(&row.id, one_track_audio(&row.path, 12_000));
+	}
+
+	let base = format!("/api/libraries/{}/authors", library.id);
+	let (status, legacy) = request(backend.clone(), &user, "GET", &base, None).await;
+	assert_eq!(status, StatusCode::OK);
+	let authors = legacy["authors"].as_array().expect("legacy authors");
+	assert_eq!(authors.len(), 2);
+	assert_eq!(authors[0]["name"], "Ada Lovelace");
+	assert_eq!(authors[1]["name"], "Grace Hopper");
+	assert_eq!(authors[1]["numBooks"], 2);
+	assert!(legacy.get("results").is_none());
+
+	let sort_cases: &[(&str, &[&str])] = &[
+		("name&desc=0", &["Ada Lovelace", "Grace Hopper"]),
+		("lastFirst&desc=0", &["Grace Hopper", "Ada Lovelace"]),
+		("addedAt&desc=0", &["Ada Lovelace", "Grace Hopper"]),
+		("updatedAt&desc=0", &["Grace Hopper", "Ada Lovelace"]),
+		("numBooks&desc=0", &["Ada Lovelace", "Grace Hopper"]),
+		("numBooks&desc=1", &["Grace Hopper", "Ada Lovelace"]),
+	];
+	for (query, expected) in sort_cases {
+		let (status, body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("{base}?sort={query}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK, "{query}");
+		let authors = body["authors"].as_array().expect("legacy authors");
+		assert_eq!(
+			authors
+				.iter()
+				.map(|author| author["name"].as_str().unwrap())
+				.collect::<Vec<_>>(),
+			*expected,
+			"{query}"
+		);
+	}
+
+	// Lissen supplies both page parameters and decodes the paginated envelope.
+	let (status, paginated) = request(
+		backend,
+		&user,
+		"GET",
+		&format!("{base}?limit=1&page=0&sort=numBooks&desc=1"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(paginated["total"], 2);
+	assert_eq!(paginated["limit"], 1);
+	assert_eq!(paginated["results"][0]["name"], "Grace Hopper");
+	assert!(paginated.get("authors").is_none());
+}
+
+#[tokio::test]
+async fn library_series_use_metadata_or_multi_book_folders() {
+	let conn = db().await;
+	let user_row = ::tests::fake_data::User::new("ada").insert(&conn).await;
+	let user = auth_user(&user_row);
+	let library = library_of_type(&conn, LibraryType::Mixed).await;
+	let (series_row, books) = series_with_files(
+		&conn,
+		&library.id,
+		"Compiler Chronicles",
+		&[("Volume One", "m4b"), ("Volume Two", "m4b")],
+	)
+	.await;
+	let (_, one_book_folder) = series_with_files(
+		&conn,
+		&library.id,
+		"Standalone Book",
+		&[("Standalone", "m4b")],
+	)
+	.await;
+	let (_, metadata_series_folder) = series_with_files(
+		&conn,
+		&library.id,
+		"Series Volume Folder",
+		&[("Volume One", "m4b")],
+	)
+	.await;
+	let metadata_book = &metadata_series_folder[0];
+	media_metadata::ActiveModel {
+		media_id: Set(Some(metadata_book.id.clone())),
+		title: Set(Some("Volume One".to_owned())),
+		series: Set(Some("The Trilogy".to_owned())),
+		volume: Set(Some(1)),
+		..Default::default()
+	}
+	.insert(&conn)
+	.await
+	.unwrap();
+	let (_, shared_first_folder) = series_with_files(
+		&conn,
+		&library.id,
+		"Shared Volume One",
+		&[("Saga One", "m4b")],
+	)
+	.await;
+	let (_, shared_second_folder) = series_with_files(
+		&conn,
+		&library.id,
+		"Shared Volume Two",
+		&[("Saga Two", "m4b")],
+	)
+	.await;
+	for (row, volume) in [(&shared_first_folder[0], 1), (&shared_second_folder[0], 2)] {
+		media_metadata::ActiveModel {
+			media_id: Set(Some(row.id.clone())),
+			title: Set(Some(row.name.clone())),
+			series: Set(Some("Shared Saga".to_owned())),
+			volume: Set(Some(volume)),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+	}
+
+	let backend = TestBackend::new(conn);
+	for row in books
+		.iter()
+		.chain(&one_book_folder)
+		.chain(&metadata_series_folder)
+		.chain(&shared_first_folder)
+		.chain(&shared_second_folder)
+	{
+		backend.set_audio(&row.id, one_track_audio(&row.path, 12_000));
+	}
+
+	let (status, body) = request(
+		backend.clone(),
+		&user,
+		"GET",
+		&format!(
+			"/api/libraries/{}/series?minified=1&sort=name&limit=10000",
+			library.id
+		),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["total"], 3);
+	let series = body["results"].as_array().expect("series");
+	let folder_group = series
+		.iter()
+		.find(|series| series["name"] == "Compiler Chronicles")
+		.expect("genuine multi-book Stump group");
+	assert_eq!(folder_group["id"], series_row.id);
+	assert_eq!(folder_group["books"].as_array().unwrap().len(), 2);
+	let metadata_group = series
+		.iter()
+		.find(|series| series["name"] == "The Trilogy")
+		.expect("single-book metadata series");
+	assert!(metadata_group["id"]
+		.as_str()
+		.unwrap()
+		.starts_with("metadata-series:"));
+	assert_eq!(metadata_group["books"].as_array().unwrap().len(), 1);
+	let cross_folder_group = series
+		.iter()
+		.find(|series| series["name"] == "Shared Saga")
+		.expect("metadata series combines books from different Stump folders");
+	assert_eq!(cross_folder_group["books"].as_array().unwrap().len(), 2);
+	assert!(
+		series
+			.iter()
+			.all(|series| series["name"] != "Standalone Book"),
+		"a singleton folder without series metadata is not an ABS series"
+	);
+
+	let (status, item) = request(
+		backend.clone(),
+		&user,
+		"GET",
+		&format!("/api/items/{}", metadata_book.id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		item["media"]["metadata"]["series"][0]["id"],
+		metadata_group["id"]
+	);
+	assert_eq!(
+		item["media"]["metadata"]["series"][0]["name"],
+		"The Trilogy"
+	);
+	assert_eq!(item["media"]["metadata"]["series"][0]["sequence"], "1");
+
+	use base64::Engine as _;
+	let encoded = base64::engine::general_purpose::STANDARD
+		.encode(metadata_group["id"].as_str().unwrap())
+		.replace('+', "%2B")
+		.replace('/', "%2F")
+		.replace('=', "%3D");
+	let (status, filtered) = request(
+		backend.clone(),
+		&user,
+		"GET",
+		&format!(
+			"/api/libraries/{}/items?limit=100&minified=1&filter=series.{encoded}",
+			library.id
+		),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(filtered["total"], 1);
+	assert_eq!(filtered["results"][0]["id"], metadata_book.id);
+	assert_eq!(
+		filtered["results"][0]["media"]["metadata"]["seriesName"],
+		"The Trilogy #1"
+	);
+	let (status, search) = request(
+		backend.clone(),
+		&user,
+		"GET",
+		&format!("/api/libraries/{}/search?q=Trilogy&limit=12", library.id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(search["series"][0]["series"]["id"], metadata_group["id"]);
+	assert_eq!(search["series"][0]["books"].as_array().unwrap().len(), 1);
+
+	let (status, filterdata) = request(
+		backend,
+		&user,
+		"GET",
+		&format!("/api/libraries/{}?include=filterdata", library.id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		filterdata["library"]["settings"]["hideSingleBookSeries"],
+		false
+	);
+	let filter_series = filterdata["filterdata"]["series"]
+		.as_array()
+		.expect("filterdata series");
+	assert_eq!(filter_series.len(), 3);
+	assert!(filter_series
+		.iter()
+		.all(|series| series["name"] != "Standalone Book"));
+}
+
+#[tokio::test]
+async fn library_collections_project_only_audiobooks_in_the_requested_library() {
+	let conn = db().await;
+	let user_row = ::tests::fake_data::User::new("ada").insert(&conn).await;
+	let user = auth_user(&user_row);
+	let first_library = library_of_type(&conn, LibraryType::Mixed).await;
+	let second_library = library_of_type(&conn, LibraryType::Mixed).await;
+	let (first_series, first_rows) = series_with_files(
+		&conn,
+		&first_library.id,
+		"First shelf",
+		&[("First audiobook", "m4b"), ("First ebook", "epub")],
+	)
+	.await;
+	let (second_series, second_rows) = series_with_files(
+		&conn,
+		&second_library.id,
+		"Second shelf",
+		&[("Second audiobook", "mp3")],
+	)
+	.await;
+	let (ebook_series, ebook_rows) = series_with_files(
+		&conn,
+		&first_library.id,
+		"Ebooks",
+		&[("Standalone ebook", "epub")],
+	)
+	.await;
+	let collection = collection::ActiveModel {
+		id: Set("shared-audio-collection".to_owned()),
+		name: Set("Shared Audio Collection".to_owned()),
+		description: Set(Some("One ABS collection across two libraries".to_owned())),
+		updated_at: Set(chrono::Utc::now().fixed_offset()),
+		ordered: Set(true),
+		kobo_shelf: Set(false),
+		source_device: Set(None),
+		creating_user_id: Set(user.id.clone()),
+	}
+	.insert(&conn)
+	.await
+	.unwrap();
+	let ebook_collection = collection::ActiveModel {
+		id: Set("ebook-only-collection".to_owned()),
+		name: Set("Ebook-only collection".to_owned()),
+		description: Set(None),
+		updated_at: Set(chrono::Utc::now().fixed_offset()),
+		ordered: Set(false),
+		kobo_shelf: Set(false),
+		source_device: Set(None),
+		creating_user_id: Set(user.id.clone()),
+	}
+	.insert(&conn)
+	.await
+	.unwrap();
+	for (collection_id, series_id, display_order) in [
+		(collection.id.clone(), first_series.id.clone(), 0),
+		(collection.id.clone(), second_series.id.clone(), 1),
+		(ebook_collection.id.clone(), ebook_series.id.clone(), 0),
+	] {
+		collection_series::ActiveModel {
+			display_order: Set(display_order),
+			series_id: Set(series_id),
+			collection_id: Set(collection_id),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+	}
+
+	let backend = TestBackend::new(conn);
+	let first_audio = &first_rows[0];
+	let first_ebook = &first_rows[1];
+	let second_audio = &second_rows[0];
+	backend.set_audio(&first_audio.id, one_track_audio(&first_audio.path, 12_000));
+	backend.set_audio(
+		&second_audio.id,
+		one_track_audio(&second_audio.path, 12_000),
+	);
+	backend.set_ebook(
+		&user.id,
+		&first_audio.id,
+		crate::model::AbsEbookFile {
+			media_id: first_ebook.id.clone(),
+			path: first_ebook.path.clone(),
+			format: "epub".to_owned(),
+			byte_size: first_ebook.size,
+		},
+	);
+
+	let path = |library_id: &str| {
+		format!("/api/libraries/{library_id}/collections?minified=1&sort=name&limit=1000")
+	};
+	let (status, first_page) = request(
+		backend.clone(),
+		&user,
+		"GET",
+		&path(&first_library.id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(first_page["total"], 1);
+	let first_collection = &first_page["results"][0];
+	assert_eq!(first_collection["id"], collection.id);
+	assert_eq!(first_collection["libraryId"], first_library.id);
+	let first_books = first_collection["books"].as_array().expect("books");
+	assert_eq!(first_books.len(), 1);
+	assert_eq!(first_books[0]["id"], first_audio.id);
+	assert_eq!(first_books[0]["media"]["ebookFile"]["ino"], first_ebook.id);
+
+	// A member EPUB is carried by its audiobook item and never becomes a
+	// second row in the library listing.
+	let (status, item_page) = request(
+		backend.clone(),
+		&user,
+		"GET",
+		&format!("/api/libraries/{}/items?minified=1", first_library.id),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(item_page["total"], 1);
+	assert_eq!(item_page["results"][0]["id"], first_audio.id);
+
+	let (status, second_page) =
+		request(backend, &user, "GET", &path(&second_library.id), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(second_page["total"], 1);
+	assert_eq!(second_page["results"][0]["id"], collection.id);
+	assert_eq!(second_page["results"][0]["libraryId"], second_library.id);
+	assert_eq!(
+		second_page["results"][0]["books"].as_array().unwrap().len(),
+		1
+	);
+	assert_eq!(second_page["results"][0]["books"][0]["id"], second_audio.id);
+	assert!(!ebook_rows.is_empty());
+}
+
+#[tokio::test]
+async fn an_author_filter_combines_with_collapsed_series() {
+	let conn = db().await;
+	let user_row = ::tests::fake_data::User::new("ada").insert(&conn).await;
+	let user = auth_user(&user_row);
+	let library = library_of_type(&conn, LibraryType::Mixed).await;
+	let (series_row, rows) = series_with_files(
 		&conn,
 		&library.id,
 		"Mixed Shelf",
@@ -1804,7 +2242,10 @@ async fn an_author_filter_narrows_a_page_to_that_authors_books() {
 		backend.clone(),
 		&user,
 		"GET",
-		&format!("/api/libraries/{}/authors", library.id),
+		&format!(
+			"/api/libraries/{}/authors?limit=10&page=0&sort=name&desc=0",
+			library.id
+		),
 		None,
 	)
 	.await;
@@ -1821,7 +2262,7 @@ async fn an_author_filter_narrows_a_page_to_that_authors_books() {
 	use base64::Engine as _;
 	let encoded = base64::engine::general_purpose::STANDARD.encode(&ada);
 	let (status, body) = request(
-		backend,
+		backend.clone(),
 		&user,
 		"GET",
 		&format!(
@@ -1836,6 +2277,127 @@ async fn an_author_filter_narrows_a_page_to_that_authors_books() {
 	let results = body["results"].as_array().expect("results");
 	assert_eq!(results.len(), 1, "only the filtered author's books");
 	assert_eq!(results[0]["media"]["metadata"]["title"], "Engine");
+
+	// The current Android app sends this author filter and series collapse
+	// together (`ApiHandler.kt:532-533`).
+	let (status, collapsed) = request(
+		backend,
+		&user,
+		"GET",
+		&format!(
+			"/api/libraries/{}/items?limit=1000&minified=1&filter=authors.{encoded}&sort=media.metadata.title&collapseseries=1",
+			library.id
+		),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(collapsed["collapseseries"], true);
+	assert_eq!(collapsed["total"], 1);
+	let results = collapsed["results"].as_array().expect("results");
+	assert_eq!(results.len(), 1, "the filter runs before series collapse");
+	assert_eq!(results[0]["media"]["metadata"]["title"], "Engine");
+	assert_eq!(results[0]["collapsedSeries"]["id"], json!(series_row.id));
+	assert_eq!(results[0]["collapsedSeries"]["name"], "Mixed Shelf");
+	assert_eq!(results[0]["collapsedSeries"]["numBooks"], 2);
+	assert_eq!(
+		results[0]["collapsedSeries"]["libraryItemIds"]
+			.as_array()
+			.expect("series item ids")
+			.len(),
+		2,
+		"collapsed metadata retains the complete series"
+	);
+}
+
+#[tokio::test]
+async fn author_details_require_a_visible_audiobook() {
+	let conn = db().await;
+	let user_row = ::tests::fake_data::User::new("ada").insert(&conn).await;
+	let user = auth_user(&user_row);
+	let visible = library_of_type(&conn, LibraryType::Mixed).await;
+	let hidden = library_of_type(&conn, LibraryType::Mixed).await;
+	let (_, visible_rows) =
+		series_with_files(&conn, &visible.id, "Visible", &[("Visible Book", "m4b")])
+			.await;
+	let (_, hidden_rows) =
+		series_with_files(&conn, &hidden.id, "Hidden", &[("Hidden Book", "m4b")]).await;
+	metadata(
+		&conn,
+		&visible_rows[0].id,
+		"Visible Book",
+		Some("Ada Lovelace"),
+	)
+	.await;
+	metadata(
+		&conn,
+		&hidden_rows[0].id,
+		"Hidden Book",
+		Some("Grace Hopper"),
+	)
+	.await;
+
+	let backend = TestBackend::new(conn);
+	for row in visible_rows.iter().chain(&hidden_rows) {
+		backend.set_audio(&row.id, one_track_audio(&row.path, 12_000));
+	}
+	let authors_path = |library_id: &str| {
+		format!("/api/libraries/{library_id}/authors?limit=10&page=0&sort=name&desc=0")
+	};
+	let (_, hidden_authors) = request(
+		backend.clone(),
+		&user,
+		"GET",
+		&authors_path(&hidden.id),
+		None,
+	)
+	.await;
+	let hidden_author_id = hidden_authors["results"][0]["id"]
+		.as_str()
+		.expect("hidden author id")
+		.to_owned();
+	let (_, visible_authors) = request(
+		backend.clone(),
+		&user,
+		"GET",
+		&authors_path(&visible.id),
+		None,
+	)
+	.await;
+	let visible_author_id = visible_authors["results"][0]["id"]
+		.as_str()
+		.expect("visible author id")
+		.to_owned();
+
+	let mut scoped = auth_user(&user_row);
+	scoped.device_library_scope = Some(vec![visible.id]);
+	let (status, _) = request(
+		backend.clone(),
+		&scoped,
+		"GET",
+		&format!("/api/authors/{hidden_author_id}?include=items"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+
+	let (status, detail) = request(
+		backend,
+		&scoped,
+		"GET",
+		&format!("/api/authors/{visible_author_id}?include=items"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		detail["libraryItems"]
+			.as_array()
+			.expect("visible items")
+			.len(),
+		1
+	);
+	assert_eq!(detail["libraryItems"][0]["id"], json!(visible_rows[0].id));
 }
 
 #[tokio::test]
@@ -1879,7 +2441,7 @@ async fn the_track_route_hands_the_delivery_layer_its_device() {
 }
 
 // ---------------------------------------------------------------------------
-// The official Audiobookshelf app, v0.14.0-beta (`12025ab5`)
+// The official Audiobookshelf app, v0.14.1-beta (`2ac4de4d`)
 //
 // Everything below is pinned to that checkout's own source. The app is a Nuxt
 // web view plus a native Kotlin player; the player parses server JSON with
@@ -1893,7 +2455,7 @@ async fn the_track_route_hands_the_delivery_layer_its_device() {
 // - an explicit `null` for a non-nullable primitive throws too.
 //
 // A throw there is not a caught error: `ApiHandler.playLibraryItem`
-// (`ApiHandler.kt:637`) calls `jacksonMapper.readValue<PlaybackSession>` with
+// (`ApiHandler.kt:604`) calls `jacksonMapper.readValue<PlaybackSession>` with
 // no try/catch.
 // ---------------------------------------------------------------------------
 
@@ -2077,7 +2639,7 @@ async fn the_play_session_satisfies_the_apps_kotlin_field_table() {
 				"manufacturer": "Google",
 				"model": "Pixel 8",
 				"sdkVersion": 35,
-				"clientVersion": "0.14.0-beta"
+				"clientVersion": "0.14.1-beta"
 			},
 			"mediaPlayer": "exo-player",
 			"forceDirectPlay": true,
@@ -2104,7 +2666,7 @@ async fn the_play_session_satisfies_the_apps_kotlin_field_table() {
 	// come back with `null` there.
 	assert_eq!(body["deviceInfo"]["manufacturer"], "Google");
 	assert_eq!(body["deviceInfo"]["model"], "Pixel 8");
-	assert_eq!(body["deviceInfo"]["clientVersion"], "0.14.0-beta");
+	assert_eq!(body["deviceInfo"]["clientVersion"], "0.14.1-beta");
 	// `audioTracks[].index` is 1-based on the wire; `/public/session/{id}/track/{index}`
 	// is addressed with exactly this number.
 	assert_eq!(body["audioTracks"][0]["index"], 1);

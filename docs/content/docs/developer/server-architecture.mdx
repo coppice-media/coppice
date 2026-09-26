@@ -5,11 +5,11 @@ description: Current Coppice server lifecycle, compatibility boundaries, and mod
 
 This page is a source map for the Coppice server and its headless/modular work. The evidence labels are literal: **Shipped**, **Contract-tested**, **Device-tested**, **Source-only**, **Planned**, and **Blocked**. Source inspection and server replay never become app/device proof; see [Client verification](/docs/developer/client-verification).
 
-The compatibility baseline is the full/default server. A headless build removes the browser UI, not the Rust process, database, authentication, GraphQL API, REST/media API, or protocol integrations.
+The compatibility baseline is the full/default server. A headless build removes the optional GraphQL `web` fields and the GraphQL playground, not the Rust process, database, authentication, GraphQL core API, REST/media API, or protocol integrations.
 
 ## At a glance
 
-Coppice is one Rust server process. `stump_server` adapts HTTP/WebSocket requests with Axum, `stump_core` owns orchestration and filesystem/job integration, and `crates/models` owns entities, domain types, and services. The web UI is a separately built Vite application whose static assets may be served by the same process. The database and authentication system remain shared by every profile.
+Coppice is one Rust server process. `stump_server` adapts HTTP/WebSocket requests with Axum, `stump_core` owns orchestration and filesystem/job integration, and `crates/models` owns entities, domain types, and services. Home (`/app`) and Editor (`/editor`) are separately built SvelteKit applications with static assets that may be served by the same process. The database and authentication system remain shared by every profile.
 
 The branch includes measured runtime and allocation work:
 
@@ -32,14 +32,14 @@ with per-crate READMEs is `crates/README.md`.
 | `crates/komga` | Komga API surface + `KomgaBackend`, `/komga` Grimmory alias | `komga` (implies `readium`) | headless, full | Komelia, Mihon, Liseur, Komf |
 | `crates/kavita` | Kavita client profile + identity allocation | `kavita` | headless, full | Turnleaf, Kamigura, Kover, Inkita, Kamare |
 | `crates/abs` | Audiobookshelf profile, tokens, sessions | `abs` + `STUMP_ENABLE_ABS` | headless, full | Lissen |
-| `crates/kobo`, `crates/kepub` | Kobo sync + `KoboBackend`, EPUB→KEPUB | `kobo` | headless, full | Kobo Nickel, NickelStump |
-| `crates/koreader` | kosync API + `KoreaderBackend` | `koreader` | headless, full | KOReader, `stump.koplugin`, Liseur |
-| `crates/opds` | OPDS 1.2/PSE and 2.0 + `OpdsBackend` | `opds` | headless, full | Liseur, `stump.koplugin`, OPDS readers |
-| `crates/liseur-sync` | Native sync wire + `LiseurSyncBackend` | `liseur-sync` | headless, full | Liseur, NickelStump |
+| `crates/kobo`, `crates/kepub` | Kobo sync + `KoboBackend`, EPUB→KEPUB | `kobo` | headless, full | Kobo Nickel, `nickelcoppice` |
+| `crates/koreader` | kosync API + `KoreaderBackend` | `koreader` | headless, full | KOReader, `coppice.koplugin`, Liseur |
+| `crates/opds` | OPDS 1.2/PSE and 2.0 + `OpdsBackend` | `opds` | headless, full | Liseur, `coppice.koplugin`, OPDS readers |
+| `crates/liseur-sync` | Native sync wire + `LiseurSyncBackend` | `liseur-sync` | headless, full | Liseur, `nickelcoppice` |
 | `crates/kindle` | Send-to-Kindle policy, conversion, delivery history | always linked | all | Kindle (e-mail, USB) |
 | `crates/provider`, `-mangadex`, `-themes` | Remote source host, MangaDex, theme engines | `providers` + `STUMP_ENABLE_PROVIDERS` | headless, full | every reader — remote series look local |
 | `crates/ingest` | Staged ingest pipeline and per-field policy | `ingest` | headless, full | ingest editor |
-| `crates/graphql` | Schema, guards, loaders, subscriptions | `graphql`; SPA-only resolvers behind `webui` → `graphql/web` | headless (no `web`), full | console, editor, Expo, web SPA |
+| `crates/graphql` | Schema, guards, loaders, subscriptions | `graphql`; web-specific fields behind `webui` → `graphql/web` | headless (no `web`), full | console, Editor, Home |
 | `crates/media` | Base EPUB/archive handling plus optional PDF/RAR/image transforms, hashing, Readium manifests, and thumbnails | `formats` = `pdf` + `rar` + `transform` | all; the optional bundle is in minimal/headless/full | every reader |
 | `crates/watcher` | `notify` setup, debounce, listener lifecycle | `watcher` | headless, full | — |
 | `crates/jobs` | Job runtime, lifecycle, cron scheduler | `apalis` selects the executor | headless, full | — |
@@ -68,15 +68,14 @@ The repository's normal development commands are defined in [`package.json`](htt
 
 | Command | Current behavior |
 | --- | --- |
-| `bun run setup` | Installs the active JavaScript workspace with Bun 1.4.1 and builds the web bundle. |
-| `bun run dev:web` | Runs the Bacon `stump_server` job and the Vite web dev server together. This is a development launcher; its Bacon `--headless` argument is not a separate packaged Cargo profile. |
+| `bun run setup` | Installs the active JavaScript workspace with Bun 1.4.1 and builds Home and Editor. |
+| `bun run home dev` / `bun run editor dev` | Runs the Home or Editor SvelteKit development server. |
 | `cargo run --package stump_server --bin stump_server` | Runs the Rust server directly. |
-| `cargo run --package stump_server --no-default-features --features headless` | Runs every backend route capability without compiling SPA routes. |
+| `cargo run --package stump_server --no-default-features --features headless` | Runs backend route capabilities with optional Home and Editor static mounts. |
 | `cargo run --package stump_server --no-default-features` | Runs the bare no-default REST/auth/database profile. It is leaner than `minimal` because optional formats and route trees are omitted. |
-| `bun run start:desktop` / `bun run dev:desktop` | Runs the Rust server beside the Tauri desktop application. |
-| `bun run web build && cargo build --package stump_server --release` | Builds the production web bundle and release server from source. A source build needs a usable PDFium library (`PDFIUM_PATH` or a system library); the container supplies PDFium itself. |
+| `bun run home build && bun run editor build && cargo build --package stump_server --release` | Builds both production static apps and the release server. A source build needs a usable PDFium library (`PDFIUM_PATH` or a system library); the container supplies PDFium itself. |
 
-`apps/server/src/main.rs` performs debug setup, bootstraps the configuration directory, parses CLI commands, initializes tracing, and enters `run_http_server`. In debug builds it points `STUMP_CLIENT_DIR` at the local web distribution. The Vite app uses `apps/web/dist` as its build output; see [`apps/web/vite.config.mts`](https://github.com/stumpapp/stump/blob/nightly/apps/web/vite.config.mts).
+The server entry point performs debug setup, bootstraps the configuration directory, parses CLI commands, initializes tracing, and enters `run_http_server`. Home and Editor are independently built static apps configured with `STUMP_HOME_APP_DIR` and `INGEST_EDITOR_DIR`.
 
 Database selection is centralized in [`core/src/database.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/database.rs). `STUMP_DATABASE_URL` has highest precedence, PostgreSQL component variables can compose a PostgreSQL URL, and SQLite is the default; `STUMP_DB_PATH` supplies the SQLite path. Connecting always runs the SeaORM migrations before the server starts accepting requests. Pool bounds apply to both backends; the SQLite statement-cache setting applies only to SQLite.
 
@@ -89,11 +88,11 @@ docker buildx build -f docker/Dockerfile --target full .
 docker buildx build -f docker/Dockerfile --target headless .
 ```
 
-- **`full` (the Dockerfile's default final stage):** builds the frontend, copies it to `/app/client`, builds the server with its default Cargo features, and uses the shared runtime image.
-- **`headless`:** builds with `--no-default-features --features headless`, copies no frontend bundle, and sets `STUMP_ENABLE_WEBUI=false`. It retains GraphQL, OPDS, Readium EPUB, Kobo, KOReader, native liseur-sync, authenticated REST, background jobs, PostgreSQL, and the shared PDFium runtime.
-- Both targets use the common PDFium stage and runtime base. The headless image also chooses conservative, overridable runtime defaults: two Tokio workers, eight blocking threads, at most two database connections, and 32 prepared statements cached per SQLite connection. [`docker/build_server.sh`](https://github.com/stumpapp/stump/blob/nightly/docker/build_server.sh) forwards feature arguments to Cargo after removing desktop/integration-test workspace members for the container build.
+- **`full` (the Dockerfile's default final stage):** builds Home and Editor, copies them to `/app/home` and `/app/editor`, builds the server with its default Cargo features, and uses the shared runtime image.
+- **`headless`:** builds with `--no-default-features --features headless`, copies no Home or Editor assets, and sets `STUMP_ENABLE_WEBUI=false`. It retains GraphQL, OPDS, Readium EPUB, Kobo, KOReader, native liseur-sync, authenticated REST, background jobs, PostgreSQL, and the shared PDFium runtime.
+- Both targets use the common PDFium stage and runtime base. The headless image also chooses conservative, overridable runtime defaults: two Tokio workers, eight blocking threads, at most two database connections, and 32 prepared statements cached per SQLite connection. [`docker/build_server.sh`](https://github.com/stumpapp/stump/blob/nightly/docker/build_server.sh) forwards feature arguments to Cargo for the container build.
 
-The server Cargo graph exposes three aggregates plus the bare base: default `full`, UI-free `headless`, `minimal = ["formats"]`, and no-default. `full` is `headless + webui`; `webui` implies `graphql` through `webui = ["graphql", "graphql/web"]`. `headless` contains every backend route feature, including optional `liseur-sync`; `minimal` adds only format processors; bare no-default is leaner and omits them. Core processor/provider crates remain linked in `headless` and `minimal` until the deeper package split described below.
+The server Cargo graph exposes three aggregates plus the bare base: default `full`, headless, `minimal = ["formats"]`, and no-default. `full` is `headless + webui`; `webui` implies `graphql` through `webui = ["graphql", "graphql/web"]`. `headless` contains every backend route feature, including optional `liseur-sync`; `minimal` adds only format processors; bare no-default is leaner and omits them. Core processor/provider crates remain linked in `headless` and `minimal` until the deeper package split described below.
 
 ## Current startup lifecycle
 
@@ -105,7 +104,7 @@ The startup sequence is visible in [`apps/server/src/http_server.rs`](https://gi
 4. With `STUMP_ENABLE_BACKGROUND_JOBS=true`, startup cancels islanded jobs with a direct database update. It creates scheduler loops only for valid enabled scheduled-job rows and creates the logical library watcher only when a ready library has watching enabled. With it set to `false`, these lifecycle steps are omitted and attempts to enqueue jobs or operate the watcher return an explicit `FeatureDisabled` error.
 5. The job runtime — the queue, its single executor (an Apalis worker with the `apalis` feature, the inline blocking-pool executor without it), the cancellation registry, and the typed queue counters — is created on the first enqueue (including enqueue paths reached by GraphQL, protocol adapters, or ingest), so work submitted after boot is processed without a restart. Registering a watched library, or starting the scheduler when a valid enabled scheduled-job row exists, also creates the job runtime.
 6. The OS `notify` backend remains lazy even after the logical watcher is created: it is created only when the first watched path is added. A configured path that no longer exists is skipped with a warning; listener termination and other backend failures abort watcher initialization instead of being silently ignored.
-7. A configured OIDC provider is initialized. Cargo features select GraphQL, OPDS, Readium, KOReader, Kobo, liseur-sync, and SPA route trees. Existing Kobo/KOReader configuration switches still decide whether their compiled routes are mounted.
+7. A configured OIDC provider is initialized. Cargo features select GraphQL, OPDS, Readium, KOReader, Kobo, and liseur-sync route trees. Existing Kobo/KOReader configuration switches still decide whether their compiled routes are mounted.
 8. GraphQL router mounting allocates only a shared `OnceCell`; `build_schema` runs once after the first GraphQL request has passed authentication.
 9. Session, CORS, compression, tracing, and optional OIDC layers are applied before binding the listener. The server keeps optional scheduler/watcher handles and stops only resources that were created; the job executor is independent of HTTP startup and follows the first enqueue.
 
@@ -113,16 +112,16 @@ Database connection/migration, server secrets, journal setup, session middleware
 
 ## Current compatibility matrix
 
-The route tree is mounted by [`apps/server/src/routers/api/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/mod.rs), [`opds/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/opds/mod.rs), and the protocol router modules. The following contracts must survive SPA removal and any future profile work.
+The route tree is mounted by [`apps/server/src/routers/api/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/mod.rs), [`opds/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/opds/mod.rs), and the protocol router modules. The following API contracts remain independent of the Home and Editor static apps and must survive profile work.
 
 | Surface | Current routes and behavior | Authentication and compatibility notes |
 | --- | --- | --- |
-| **GraphQL HTTP** | `POST /api/graphql`; `GET /api/graphql` is the owner-only GraphiQL playground when the effective web UI profile is enabled and either the playground setting is enabled or the server is a debug build. The GET route is not mounted in the headless profile. | The common auth middleware accepts a session cookie or `Bearer` JWT/API key. GraphQL requests receive `AuthContext`, host/scheme, and session data. See [`graphql.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/graphql.rs) and [`auth.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs). |
-| **GraphQL WebSocket** | `GET /api/graphql/ws`, using the async-graphql WebSocket protocols. | The route is authenticated and passes auth/context data into `GraphQLWebSocket`. The shared SDK connects with `graphql-ws`; see [`packages/sdk/src/socket.ts`](https://github.com/stumpapp/stump/blob/nightly/packages/sdk/src/socket.ts). This is an API contract, not a web-UI route. |
-| **GraphQL SPA-only resolvers** | Server feature `webui` forwards `graphql/web` (default on in the crate, in `full`, **not** in `headless`). It carries book clubs, smart lists and smart-list views, custom emoji, `updateViewerPreferences` + `User.preferences` + the navigation-arrangement mutations, and the multipart `upload*` lane including `uploadUserAvatar`: 34 wholly gated modules (9 query, 10 mutation, 12 object, 3 input) plus `cfg`-gated items in shared files, 6,029 source lines in total. Measured on the served schema, `headless` → `full` adds 62 root fields (`Query` 98 → 117, `Mutation` 148 → 191, `Subscription` 4 → 4), 74 named types, and one object field (`User.preferences`) — 4,939 → 5,684 SDL lines. A `headless` build compiles neither the resolvers nor their objects/inputs; there is no subscription arm to drop, since `log`, `event`, `ingest`, and `device` are all ungated. | The ungated set is what actually has callers: every root field, object field, and input used by the `.graphql` documents in `editor/`, `home/`, and `packages/stump-ui`, plus everything the OPDS/Komga/Kobo/KOReader/liseur-sync adapters reach. Cross-checking the 62 gated root fields and 74 gated types against those 10 client documents gives zero hits, and no field exists in the headless schema that the full one lacks. `cargo tree -p stump_server --features full --format "{p} :: {f}"` resolves the crate to `graphql :: providers,web`; the `headless,liseur-sync` profile resolves it to `graphql :: providers`. `crates/graphql/schema.graphql` stays the **full** schema (`cargo dump-schema` runs `--all-features`), so client codegen is unaffected by how a server is cut; a client calling a resolver the server did not compile gets a normal unknown-field GraphQL error. The REST emoji image route (`/api/v2/emoji`) is independent of the feature and stays mounted. See `crates/graphql/README.md` and `crates/graphql/Cargo.toml`. |
-| **REST and media** | `/api/v2` mounts auth, OIDC, emoji, media, EPUB, series, library, and user routers. `/api/v2/claim`, `/health`, `/ping`, `/version` (POST), and `/check-for-update` are the explicitly public utility routes; login/register/refresh/logout are mounted without auth while viewer/me and protected resources require it. Media includes `/api/v2/media/{id}/thumbnail`, `/page/{page}`, and `/file`. | Media is user-scoped. Full-file downloads enforce `DownloadFile`, preserve range handling through `ServeFile`, and retain content types/lengths needed by clients. See [`v2/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/v2/mod.rs), [`media.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/v2/media.rs), [`serve_media.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/utils/serve_media.rs), and [`packages/sdk/src/controllers/media-api.ts`](https://github.com/stumpapp/stump/blob/nightly/packages/sdk/src/controllers/media-api.ts). |
+| **GraphQL HTTP** | `POST /api/graphql`; `GET /api/graphql` is the owner-only GraphiQL playground when `webui` is enabled and either the playground setting is enabled or the server is a debug build. The GET route is not mounted in the headless profile. | The common auth middleware accepts a session cookie or `Bearer` JWT/API key. GraphQL requests receive `AuthContext`, host/scheme, and session data. See [`graphql.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/graphql.rs) and [`auth.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs). |
+| **GraphQL WebSocket** | `GET /api/graphql/ws`, using the async-graphql WebSocket protocols. | The route is authenticated and passes auth/context data into `GraphQLWebSocket`; clients connect with the `graphql-ws` protocol. This is an API contract, not an app route. |
+| **GraphQL web-only resolvers** | Server feature `webui` forwards `graphql/web` (default on in the crate, in `full`, **not** in `headless`). It carries book clubs, smart lists and smart-list views, custom emoji, viewer preferences, navigation-arrangement mutations, and multipart upload operations. | These are public GraphQL fields; availability is determined by the retained Cargo feature contract, not the static Home or Editor apps. |
+| **REST and media** | `/api/v2` mounts auth, OIDC, emoji, media, EPUB, series, library, and user routers. `/api/v2/claim`, `/health`, `/ping`, `/version` (POST), and `/check-for-update` are the explicitly public utility routes; login/register/refresh/logout are mounted without auth while viewer/me and protected resources require it. Media includes `/api/v2/media/{id}/thumbnail`, `/page/{page}`, and `/file`. | Media is user-scoped. Full-file downloads enforce `DownloadFile`, preserve range handling through `ServeFile`, and retain content types/lengths needed by clients. See [`v2/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/v2/mod.rs), [`media.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/v2/media.rs), and [`serve_media.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/utils/serve_media.rs). |
 | **Source-worker control and media** | `/api/v2/source-workers/socket` carries authenticated inventory/control JSON; `/api/v2/source-workers/streams/{grant_id}` carries one outbound tunnel; `/api/v2/remote-sources`, `/api/v2/remote-sources/{id}/items`, and `/api/v2/remote-source-items/{id}/{verify,link,materialize}` are administrative operations. The native `/api/v2/media/{id}/file` route can proxy a verified linked location over direct or tunnel transport. | Source credentials have only `AccessRemoteSource`; they are separate from compute-worker authority. Manifests are untrusted until full-object verification, readers never receive worker URLs or credentials, and invalid/multiple ranges or offline locations remain explicit `416`/`503` responses. See [Remote worker libraries](/docs/developer/remote-worker-libraries). |
-| **REST and EPUB** | `/api/v2/epub/{id}/manifest.json`, `/positions.json`, `/search`, and `/resource/{path}` provide the Readium web publication contract. | Routes use the same auth and user-visibility lookup as comic page streaming; `DownloadFile` applies only to the full archive endpoint, not these EPUB resources. See [`epub.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/v2/epub.rs) and [`packages/sdk/src/controllers/epub-api.ts`](https://github.com/stumpapp/stump/blob/nightly/packages/sdk/src/controllers/epub-api.ts). |
+| **REST and EPUB** | `/api/v2/epub/{id}/manifest.json`, `/positions.json`, `/search`, and `/resource/{path}` provide the Readium web publication contract. | Routes use the same auth and user-visibility lookup as comic page streaming; `DownloadFile` applies only to the full archive endpoint, not these EPUB resources. See [`epub.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/api/v2/epub.rs). |
 | **OPDS 1.2** | `/opds/v1.2/catalog`, search/search feed, keep-reading, libraries, series, books, thumbnails, page streaming, and filename downloads. | The same router is mounted under `/opds/v1.2` with normal auth and `/opds/{api_key}/v1.2` with an API-key path middleware. Basic authentication is accepted for OPDS 1.2. Feeds emit OPDS Page Streaming Extension links with page count and optional last-read attributes. See [`opds/v1_2.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/opds/v1_2.rs) and [`core/src/opds/v1_2/link.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/opds/v1_2/link.rs). |
 | **OPDS 2.0** | `/opds/v2.0/auth`, catalog/search, library/series/book navigation, thumbnails, pages, `/books/{id}/progression` GET/PUT, and `/books/{id}/file`. | The router uses common auth. `/opds/v2.0/auth` is intentionally public so clients can discover the Basic flow and authentication-document content type; other resources require auth. See [`opds/v2_0.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/opds/v2_0.rs) and the OPDS authentication handling in [`auth.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs). |
 | **KOReader sync** | When `ENABLE_KOREADER_SYNC` is enabled, `/koreader/{api_key}/users/auth`, `/syncs/progress` (PUT), and `/syncs/progress/{document}` (GET) are mounted. | The API key is in the path and the user must have `AccessKoreaderSync`. The hash-based document identity and MD5-compatible route shape are deliberate interoperability behavior; there is no required Coppice healthcheck route. See [`koreader/sync.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/koreader/sync.rs). |
@@ -153,16 +152,17 @@ The OPDS route handles catalog/search/acquisition and optional progression. It v
 
 The route shape is derived from the official [KOReader sync-server routes](https://github.com/koreader/koreader-sync-server/blob/master/config/routes.lua). Coppice's hash implementation also cites the [KOReader `generateDocChecksum` algorithm](https://github.com/koreader/koreader/blob/master/frontend/util.lua#L1046-L1072). Do not replace this API-key and hash contract with the normal Coppice auth middleware: the KOReader client sends a different password/hash representation, which is why the path-key middleware is retained.
 
-## Safe SPA-removal boundary and mobile invariants
+## Static app and mobile invariants
 
-The browser SPA is isolated in [`apps/server/src/routers/spa.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/spa.rs): it serves `/`, `/index.html`, `/favicon.ico`, `/sw.js`, `/assets`, `/dist`, and an SPA fallback from `STUMP_CLIENT_DIR`. The static `/editor` and `/app` surfaces are separate boundaries, configured by `INGEST_EDITOR_DIR` and `STUMP_HOME_APP_DIR`; removing one static app does not remove the API.
+Home (`/app`) and Editor (`/editor`) are independently configured static mounts using `STUMP_HOME_APP_DIR` and `INGEST_EDITOR_DIR`; their availability does not change the API contracts.
 
 - `/api/graphql`, `/api/graphql/ws`, `/api/v2`, OPDS 1.2/2.0, KOReader, Kobo, sessions, auth middleware, CORS, compression, and media/EPUB routes remain mounted.
-- Health/readiness is profile-aware. `/api/v2/health` checks the enabled static surface's directory only when its UI/module is compiled and enabled; omitted surfaces report their dependency as disabled without failing readiness.
-- OPDS authentication documents omit their logo link when the web UI is disabled or not compiled, avoiding a link to an unavailable static asset route.
+- `/api/v2/health` readiness checks the database, not the availability of optional static apps.
 - Media access remains user-scoped, range-capable, and permission-checked. The server-side EPUB manifest, positions, search, and resource routes remain available.
 
-The native/mobile clients do not need the SPA to read a library. They use the shared SDK and route contracts: GraphQL calls go to `/api/graphql`, GraphQL subscriptions use `/api/graphql/ws`, media pages/downloads use `/api/v2/media/...`, and EPUB readers use `/api/v2/epub/...`. The Expo server layout configures an SDK for each saved server and authenticates it; see [`apps/expo/app/server/[serverId]/_layout.tsx`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/app/server/%5BserverId%5D/_layout.tsx), [`media-api.ts`](https://github.com/stumpapp/stump/blob/nightly/packages/sdk/src/controllers/media-api.ts), and [`epub-api.ts`](https://github.com/stumpapp/stump/blob/nightly/packages/sdk/src/controllers/epub-api.ts). A headless profile can therefore serve native clients without packaging the browser SPA.
+Third-party native and mobile clients do not need the Home or Editor apps to
+use the server. They use the same GraphQL, media, and EPUB route contracts. The
+former Expo app was removed and remains only in Git history.
 
 ## Three independent modularity layers
 
@@ -170,9 +170,9 @@ These layers must not be conflated:
 
 | Layer | What it controls | Current state | Remaining boundary |
 | --- | --- | --- | --- |
-| **Runtime switch** | Resource sizing and work selection in an already-built binary. | `STUMP_ENABLE_WEBUI` and `STUMP_ENABLE_BACKGROUND_JOBS` gate SPA and job infrastructure. `STUMP_RUNTIME_WORKER_THREADS`, `STUMP_RUNTIME_MAX_BLOCKING_THREADS`, database pool bounds, and the SQLite statement cache right-size retained services. Existing Kobo, KOReader, OIDC, upload, and OPDS progression switches remain. | Metadata providers and PDFium are already initialized on first use. A provider/processor runtime switch would add no idle saving unless some caller currently initializes it. |
-| **Cargo feature** | Compile-time route/code selection. | `full`, `headless`, named `minimal`, and leaf no-default compositions select route and processor code additively. Shared request-origin and pagination types live in `stump_api_types`; shared authentication context and authorization errors live in `stump_auth`. GraphQL derives are opt-in, so bare no-default, leaf profiles, and `minimal` exclude `async-graphql` unless `graphql` or `webui` is selected. Apalis sits behind server feature `apalis` and is included by `headless`/`full`, not `minimal`. `stump_media` exposes `pdf`, `rar`, and `transform`; server `formats = ["pdf", "rar", "transform"]` is included by `minimal`, `headless`, and `full`, while bare no-default and leaf profiles omit it unless requested. Cargo features are additive: there is no `headless minus pdf` switch, so a custom processor set must enumerate leaves (for example `koreader,rar`) instead of enabling `headless`. Without `pdf`, PDF requests fail with `PdfConfigurationError`; without `rar`, RAR/CBR fail with `UnsupportedFileType` while content-type detection still recognizes both. | Scanning and concrete thumbnail/analysis/metadata jobs remain in `stump_core`; see the scanner split plan. |
-| **Container target** | Packaged assets plus runtime defaults. | Docker `full` includes the frontend. Docker `headless` omits it, builds the `headless` Cargo aggregate, and supplies conservative thread/pool/cache defaults. Both retain PostgreSQL support, PDFium, and the same database/auth model. | A processor-minimal image would need explicit capability labels and route/scan tests; image size alone is not RAM evidence. |
+| **Runtime switch** | Resource sizing and work selection in an already-built binary. | `STUMP_ENABLE_WEBUI` controls GraphQL web-facing surfaces; `STUMP_ENABLE_BACKGROUND_JOBS` controls job infrastructure. Runtime thread, pool, and statement-cache keys right-size retained services. Existing Kobo, KOReader, OIDC, upload, and OPDS progression switches remain. | Metadata providers and PDFium are already initialized on first use. A provider/processor runtime switch would add no idle saving unless some caller currently initializes it. |
+| **Cargo feature** | Compile-time route/code selection. | `full`, `headless`, named `minimal`, and leaf no-default compositions select route and processor code additively. Shared request-origin and pagination types live in `stump_api_types`; shared authentication context and authorization errors live in `stump_auth`. GraphQL derives are opt-in, so bare no-default, leaf profiles, and `minimal` exclude `async-graphql` unless `graphql` or `webui` is selected. |
+| **Container target** | Packaged assets plus runtime defaults. | Docker `full` includes Home and Editor; Docker `headless` omits both and supplies conservative thread/pool/cache defaults. Both retain PostgreSQL support, PDFium, and the same database/auth model. |
 
 A runtime switch can avoid doing work but cannot remove a linked dependency. A Cargo feature can remove code/dependencies but cannot choose which assets a release image copies. A Docker target chooses packaged inputs but does not create a different server architecture.
 
@@ -190,7 +190,7 @@ The following ownership boundaries keep Coppice as one process rather than split
 - **Background job execution lives in `stump_jobs` (`crates/jobs`).** It owns the `JobLifecycle` contract (`init` → `execute_task` loop → `finalize`, driven by `run_job`), the per-job `JobContext<X>` (`conn`, `config`, `report_progress`, `report_output`, `emit_event`, follow-up `enqueue`, `cancel_token`, `complete`/`fail`/`cancel` persistence), `JobRuntime<X>` (queue, single executor, typed queue counters that publish `JobQueueStatus` on every transition, cancellation registry, `cancel_job`, `is_idle`, graceful `stop` with a 30 s grace period), and the cron `JobScheduler` (`init`/`reload` take a runtime factory that is only called once a valid enabled row exists). It never names a concrete job: the host implements `JobExecutionContext` (`type Job/Config/Output/Event`, `conn`, `config`, `emit`, `persist_started`, `persist_finished`, `run`) and `ScheduledJobDispatcher`. Core implements both on `JobServices` (`core/src/job/services.rs`: job/log rows, `JobEvent` → `CoreEvent`, the `StumpJob` dispatch table, scheduled scan and metadata-retry policy); `StumpJob` (`impl JobPayload`, incl. the `SCAN`/`ANALYZE`/`METADATA`/`THUMBNAIL` queue kinds) and `CoreJobOutput` stay in core. `JobServices` holds only the connection, config, and event sender, so the runtime never owns the `Ctx` that owns it. With the `apalis` Cargo feature (`stump_jobs/apalis`, forwarded by `stump_core/apalis` and the server's `apalis`; on by default and in `headless`, off in `minimal`) the executor is one Apalis worker over `MemoryStorage`, run directly so `Worker::stop` ends an idle worker immediately; without it `JobRuntime::inline` drains an unbounded channel one job at a time on the Tokio blocking pool with the same hooks.
 - **Orchestration stays in `stump_core` (`core`).** Core owns watcher adapters, concrete scan/thumbnail/analysis/metadata jobs and their `JobServices` host, metadata coordination, and shared application context; it delegates filesystem traversal to `stump_scanner` and event watching to `stump_watcher`. File-level processing is delegated to `stump_media` and queue/executor mechanics to `stump_jobs`.
 - **Axum adapters stay in `stump_server` (`apps/server`).** Routes, middleware, protocol adapters, HTTP/WebSocket extraction, and response mapping belong here. The server remains the composition root for one process.
-- **The web UI stays in `apps/web`.** Server static serving, Vite build output, and Docker asset copying are the UI modularity boundary; they are not a reason to fork the API server.
+- **Home and Editor are separate app surfaces.** Their static files are built by the SvelteKit workspaces and served from configured directories; this boundary does not fork the API server.
 - **Metadata starts with provider features in `metadata_integrations`.** Add provider-level Cargo features and preserve the default dependency graph before considering a gratuitous crate split. Provider DTOs and retry/cache behavior should remain behind the existing integration boundary.
 - **Komga contracts live in `stump_komga` (`crates/komga`).** It owns Komga DTOs, pagination, and error mapping; the `komga` Cargo feature in `apps/server` compiles the adapter route tree under `apps/server/src/routers/komga/`. The server still owns route mounting while existing models/services own persistence. See [Komga compatibility](/docs/developer/komga-compat) for the current spec.
 
@@ -267,27 +267,29 @@ far more often than anything here.
 
 ### The liseur-sync lane
 
-There is no liseur-sync push lane, and adding one would be inventing protocol.
-Both ends of the pinned contract are pull-only: liseur-sync `f8ce32b7` exposes
-`GET /v1/changes?since=<seq>` and
-`GET /v1/annotations/changes?since=<seq>&limit=<n>` with `high_water`/`has_more`
-cursors and no streaming route, and the Liseur v0.16.0 client (`bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53`) depends on
-plain `okhttp` (`gradle/libs.versions.toml` lists `okhttp`, `okhttp-tls`, and
-`mockwebserver3-junit4` — no `okhttp-sse`), with no `EventSource`, SSE, or
-WebSocket use anywhere under
-`app/src/main/kotlin/com/chmouel/liseur/data/liseursync/`. A push lane would
-have no consumer. See
-[liseur-sync integration](/docs/developer/liseur-sync-integration).
+Coppice's mounted liseur-sync adapter answers `GET /v1/events` with an
+explicit bearer-protected `404` (`stump_liseur_sync::routes`,
+`deferred_events`) rather than a stream. The current liseur-sync server pin
+[`906889ff`](https://github.com/chmouel/liseur-sync/commit/906889ffe11fc7260b071c1f142aeee1fa8a1419)
+defines authenticated SSE at `GET /v1/events`, and Liseur v0.19.0
+[`62ecb5a5`](https://github.com/chmouel/liseur/commit/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6)
+opens it once per foreground session (`LiseurSyncLive.kt`) and stops for that
+session on 404 but retries with capped backoff on any other answer, including
+the SPA fallback redirect. A Coppice SSE route would implement an existing
+protocol contract, not invent one; until then the 404 keeps the client on
+request/response sync. The refreshed pins are source-only; the older client
+device run remains separately recorded. See [Liseur provider analysis](/docs/developer/liseur-providers)
+and [liseur-sync integration](/docs/developer/liseur-sync-integration).
 
 ## Profiles
 
 ### Full/default
 
-`default = ["full"]`, and `full = ["headless", "webui"]`. The Docker `full` target packages the Vite output. Unset runtime and database tuning variables preserve upstream Tokio and SQLx defaults. This is the compatibility baseline.
+`default = ["full"]`, and `full = ["headless", "webui"]`. The Docker `full` target packages Home and Editor assets. Unset runtime and database tuning variables preserve upstream Tokio and SQLx defaults. This is the compatibility baseline.
 
 ### Headless
 
-`cargo build --package stump_server --no-default-features --features headless` compiles GraphQL, OPDS, Readium, Kobo, KOReader, the library filesystem watcher, authenticated REST, jobs, SQLite, and PostgreSQL without SPA routes. The Docker `headless` target uses this exact aggregate. `/api/v2/health` reports the SPA dependency as disabled and continues to validate the database. Because `headless` omits `webui`, it also omits `graphql/web`: the schema it serves has no book-club, smart-list, custom-emoji, viewer-preference/navigation-arrangement, or `upload*` resolvers, since nothing but the React SPA and the Expo app ever calls them.
+`cargo build --package stump_server --no-default-features --features headless` compiles GraphQL, OPDS, Readium, Kobo, KOReader, the library filesystem watcher, authenticated REST, jobs, SQLite, and PostgreSQL without the web-specific GraphQL fields or playground. The Docker `headless` target uses this exact aggregate. `/api/v2/health` reports the database health; it does not depend on static app assets. Because `headless` omits `webui`, it also omits `graphql/web`: the schema it serves has no book-club, smart-list, custom-emoji, viewer-preference/navigation-arrangement, or `upload*` resolvers.
 
 ### Minimal
 
@@ -324,7 +326,7 @@ Environment overrides, read by `apps/server/src/config/rate_limit.rs` at startup
 
 ### Configuration structure
 
-`StumpConfig` (`core/src/config/stump_config.rs`) is composed of `#[serde(flatten)]` groups, each a small struct in `core/src/config/`: `server` (listener, logging, CORS, proxy trust), `database` (path, pool, statement cache), `jobs` (`enable_background_jobs`, `parallelism_multiplier`, `cpu_concurrency_limit()`), `protocols` (KOReader/Kobo/Komga/Kavita/OPDS switches, KEPUB settings, uploads, web UI, playground, client dir), `ingest`, `providers` (provider host switch and cache bound), `auth` (hash cost, session/token TTLs), and `pdf` (PDFium path and render settings). Only `config_dir`, the `[oidc]` table, and the derived `media` snapshot stay at the top level. The groups are structural: `Stump.toml` keys and environment variables are unchanged and files written by earlier builds load as-is (covered by `test_pre_split_toml_loads_into_grouped_config`). Code reads settings through the group path (`config.server.port`, `config.protocols.enable_komga`); `StumpConfig::finalize()` computes `media` once after the file and environment overlays. The `stump_config_gen` derive supports this with `#[nested]`: the group's generated `Partial<Group>` is flattened into the parent partial, so env/TOML overlay and validators work per group without hand-written parsing. The full key-to-group table is in [Server Config](/docs/guides/configuration/server-config#key-groups).
+`StumpConfig` (`core/src/config/stump_config.rs`) is composed of `#[serde(flatten)]` groups in `core/src/config/`: `server` (listener, logging, CORS, proxy trust), `database` (path, pool, statement cache), `jobs` (`enable_background_jobs`, `parallelism_multiplier`, `cpu_concurrency_limit()`), `protocols` (KOReader/Kobo/Komga/Kavita/OPDS switches, KEPUB settings, uploads, GraphQL web UI/playground controls), `ingest`, `providers` (provider host switch and cache bound), `auth` (hash cost, session/token TTLs), and `pdf` (PDFium path and render settings). Home and Editor asset directories are configured independently of this struct. Only `config_dir`, the `[oidc]` table, and the derived `media` snapshot stay at the top level. The groups are structural: `Stump.toml` keys and environment variables are unchanged and files written by earlier builds load as-is (covered by `test_pre_split_toml_loads_into_grouped_config`). Code reads settings through the group path (`config.server.port`, `config.protocols.enable_komga`); `StumpConfig::finalize()` computes `media` once after the file and environment overlays. The `stump_config_gen` derive supports this with `#[nested]`: the group's generated `Partial<Group>` is flattened into the parent partial, so env/TOML overlay and validators work per group without hand-written parsing. The full key-to-group table is in [Server Config](/docs/guides/configuration/server-config#key-groups).
 
 ## Uploader-prepared ingest boundary
 
@@ -343,12 +345,10 @@ A future neutral ingest contract should model:
 All ingress adapters must converge on one service rather than implement separate import semantics:
 
 ```text
-web/desktop upload ─┐
-Expo upload ────────┼─> verify/stage IngestBook ─> atomic file + DB commit
-optional node ──────┘
+Home and Editor uploads ──> verify/stage IngestBook ─> atomic file + DB commit
 ```
 
-The existing implementation does not yet provide this contract. Browser/desktop uploads are one-shot GraphQL multipart requests that copy files and enqueue a scan. Expo can already inspect EPUB/PDF and CBZ files through its native Readium/streamer modules, but it has no server-upload flow or full-content digest field. The Rust processors are filesystem/native-library oriented and are not a suitable browser WASM boundary. The first implementation should therefore extract `MediaBuilder`'s projection from an already processed file and the scanner's persistence transaction into a neutral ingest service, harden staging and limits, then add the digest-bound HTTP contract. Current GraphQL upload/scan behavior remains the all-in-one fallback until that path is proven end to end.
+The existing implementation does not yet provide this contract. Editor uploads are one-shot GraphQL multipart requests that copy files and enqueue a scan. The Rust processors are filesystem/native-library oriented and are not a suitable browser WASM boundary. The first implementation should therefore extract `MediaBuilder`'s projection from an already processed file and the scanner's persistence transaction into a neutral ingest service, harden staging and limits, then add the digest-bound HTTP contract. Current GraphQL upload/scan behavior remains the all-in-one fallback until that path is proven.
 
 ### Metadata and book-lab pipeline (**Planned**)
 
@@ -394,7 +394,7 @@ The uploader/worker handoff sends normalized metadata candidates, the accepted l
 
 [`crates/media/src/media/format/pdf.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/media/src/media/format/pdf.rs) uses a process-wide `OnceLock<Result<Mutex<Pdfium>, FileError>>`. PDFium is initialized lazily on the first operation that needs it, and a failed initialization is cached until process restart. PDFium is used for more than the browser reader: scan-time processing/page counts and optional PDF metadata, page analysis, server-side page rendering/thumbnails, and OPDS/media page routes all depend on it.
 
-Consequently, omitting the SPA does not make PDFium optional for a server that still promises PDF scanning, page rendering, thumbnails, or OPDS/media page streaming. The Docker runtime currently packages PDFium for both `full` and `headless`; source builds need `PDFIUM_PATH` or a system library. The upstream implementation is [PDFium](https://pdfium.googlesource.com/pdfium/) and the container binary distribution is documented by [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries).
+Consequently, omitting the optional static apps does not make PDFium optional for a server that still promises PDF scanning, page rendering, thumbnails, or OPDS/media page streaming. The Docker runtime currently packages PDFium for both `full` and `headless`; source builds need `PDFIUM_PATH` or a system library. The upstream implementation is [PDFium](https://pdfium.googlesource.com/pdfium/) and the container binary distribution is documented by [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries).
 
 A future split between a lightweight **Planned** `pdf-core` path (identify/index/download) and a **Planned** `pdf-render` path (PDFium, page rendering, thumbnails, and page streaming) must prove that scans, media readers, OPDS pages, and mobile downloads still work before changing the default profile. The current dependency diet retains Coppice's existing GIF, JPEG, PNG, and WebP decoding paths while omitting unrelated default `image` codecs. AVIF, JPEG XL, and HEIF remain **Planned** only if a measured use case justifies their cost.
 
@@ -451,7 +451,7 @@ The optimization-specific gates are equally strict:
 - Scanner mtime skip/results are identical, and the immutable mtime map is shared rather than repeatedly deep-copied.
 - `LibraryWatcher` command/public method behavior is unchanged; no `notify` backend exists before the first path is added, and the backend appears when that first path is added. Once created, the backend is retained until watcher shutdown, including after the last path is removed.
 - Full/default output and startup semantics remain unchanged.
-- The full image contains SPA assets and PDFium; the headless image contains no SPA assets (its target does not copy the frontend stage), and health/readiness reports the SPA dependency as disabled.
+- The full image contains Home and Editor assets and PDFium; the headless image contains no app assets (its target does not copy the frontend stage), and health/readiness depends only on database status.
 
 ## Incremental upstream candidate PRs
 
@@ -473,9 +473,8 @@ local source status; the 2026-09-20 full gate and server-contract replay passed.
    watcher/job lifecycle with an explicit disabled error.
 4. **`upstream/server-profile-boundaries` (issue-first, local
    implementation):** add `full`, `headless`, `minimal`, and leaf route
-   features while keeping `webui` independent; make health/readiness, GraphiQL
-   redirects, OPDS logo links, and container assets reflect the effective
-   profile. Split this branch if upstream review asks for smaller units.
+   features while keeping `webui` independent; keep health/readiness and
+   optional static app behavior aligned with the active server profile.
 5. **`upstream/graphql-lazy-schema` (issue-first, local implementation):**
    build the GraphQL schema/DataLoaders once on first authenticated use and
    expose Tokio/database resource bounds without changing unset defaults.

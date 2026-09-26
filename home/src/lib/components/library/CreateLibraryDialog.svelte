@@ -35,9 +35,8 @@
 					description: description.trim() ? description.trim() : null,
 					scanAfterPersist,
 					// `LibraryConfigInput` has no optional flags, so the dialog
-					// sends the same defaults the web UI's form starts from
-					// (packages/browser/.../createOrUpdate/schema.ts) with the
-					// three choices this dialog exposes on top.
+					// sends explicit defaults for fields this dialog does not
+					// expose alongside the three choices the user can make.
 					config: {
 						libraryType,
 						libraryPattern,

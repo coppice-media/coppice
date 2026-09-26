@@ -8,6 +8,27 @@ enum AccessRole {
 	CO_CREATOR
 }
 
+type AcquisitionGrab {
+	id: ID!
+	requestId: ID!
+	torrentId: Int!
+	title: String!
+	phase: String!
+	progress: Float!
+	error: String
+	ingestItemId: ID
+	createdAt: DateTime!
+	updatedAt: DateTime!
+}
+
+type AcquisitionStatus {
+	configured: Boolean!
+	reachable: Boolean!
+	ready: Boolean!
+	mode: String
+	message: String
+}
+
 type AdaptiveRecommendation {
 	targetKey: String!
 	title: String!
@@ -123,20 +144,26 @@ type AnnotationEntry {
 	id: ID!
 	kind: AnnotationKind!
 	"""
-	Where the annotation came from. Native rows carry no per-row device,
-	so they report `WEB` — the native lane, i.e. this server's readers and
-	GraphQL API. A liseur-sync CAS record reports the kind of the device
-	that pushed it (`KOBO` for NickelStump on a Kobo, `KOREADER`,
-	`LISEUR`), falling back to `LISEUR` when that device is no longer
-	registered.
+	The immutable creator lane. Native rows and Home edits report `WEB`;
+	Liseur-sync rows report the device that first created the CAS record.
 	"""
 	source: DeviceKind!
 	sourceDeviceId: ID
 	sourceDeviceName: String
 	"""
-	Whether `updateAnnotation`/`deleteAnnotation` accept this row. Only
-	native rows are editable here: a liseur CAS record is owned by its
-	device and replicated with compare-and-set revisions.
+	Current Liseur CAS revision when one exists; native-only rows have none
+	until they are linked and exported.
+	"""
+	revision: Int
+	"""
+	The lane that last changed the CAS record, separate from its immutable
+	creator attribution.
+	"""
+	lastEditedSource: DeviceKind
+	lastEditedAt: DateTime
+	"""
+	Whether `updateAnnotation`/`deleteAnnotation` accept this row. Linked
+	Readium notes/highlights use CAS with `revision`.
 	"""
 	editable: Boolean!
 	"The chapter the anchor names, when the locator carries one"
@@ -156,7 +183,7 @@ type AnnotationEntry {
 	excerpt: String
 	"The user's own note, distinct from the selected passage"
 	note: String
-	"Liseur palette token (`yellow`, `green`, …); native rows have no colour"
+	"Stored color token, when present, for native or Liseur annotations"
 	color: String
 	createdAt: DateTime
 	updatedAt: DateTime
@@ -207,6 +234,20 @@ enum AnnotationKind {
 	HIGHLIGHT
 	NOTE
 	BOOKMARK
+}
+
+"How the cross-book annotation list is ordered."
+enum AnnotationOrder {
+	"""
+	Grouped by book, newest book first, each book's annotations in the
+	order they were made (the hub and export layout)
+	"""
+	BOOK
+	"""
+	Newest change first across every book, by last update time — a
+	"recent highlights" feed
+	"""
+	RECENT
 }
 
 "One page of the cross-book annotation hub."
@@ -788,10 +829,13 @@ type BookRequest {
 	remoteId: String
 	externalKey: String
 	title: String!
+	format: RequestFormat!
+	isbn: String
 	authors: String
 	coverUrl: String
 	destinationShelfId: String
 	destinationDeviceId: String
+	preferredNarrator: String
 	status: BookRequestStatus!
 	approvalPolicy: String!
 	approvedBy: String
@@ -1016,9 +1060,16 @@ input CreateBookRequestInput {
 	external: ExternalWorkReferenceInput
 	title: String
 	authors: String
+	format: RequestFormat! = ANY
+	isbn: String
 	coverUrl: String
 	destinationShelfId: ID
 	destinationDeviceId: ID
+	"""
+	Biases audiobook release ranking toward this reader; ignored for
+	ebook-only requests and never a filter.
+	"""
+	preferredNarrator: String
 }
 
 input CreateCustomEmojiInput {
@@ -1807,6 +1858,17 @@ input ExactDimensionResizeInput {
 	width: Int!
 	"The height (in pixels) the resulting image should be resized to"
 	height: Int!
+}
+
+"""
+External (provider) hits for one query. `provider` is `null` when no
+Hardcover credential is available to the caller; `error` carries a
+provider failure without failing the whole operation.
+"""
+type ExternalBookSearch {
+	provider: String
+	error: String
+	hits: [UnifiedExternalHit!]!
 }
 
 "Metadata about a media item from an external metadata provider"
@@ -3277,6 +3339,7 @@ type MediaAnnotation {
 	id: String!
 	locator: ReadiumLocator!
 	annotationText: String
+	color: String
 	mediaId: String!
 	userId: String!
 	createdAt: DateTime!
@@ -3288,6 +3351,7 @@ type MediaAnnotationModel {
 	id: String!
 	locator: ReadiumLocator!
 	annotationText: String
+	color: String
 	mediaId: String!
 	userId: String!
 	createdAt: DateTime!
@@ -4185,10 +4249,16 @@ type Mutation {
 	deleteBookmark(id: String!): Bookmark!
 	"Create an annotation (highlight/note)"
 	createAnnotation(input: CreateAnnotationInput!): MediaAnnotation!
-	"Update an annotation's note text"
+	"""
+	Update an annotation's note text or color. Liseur-backed rows use CAS;
+	expectedRevision rejects stale Home edits without changing the locator.
+	"""
 	updateAnnotation(input: UpdateAnnotationInput!): MediaAnnotation!
-	"Delete an annotation by ID"
-	deleteAnnotation(id: String!): MediaAnnotation!
+	"""
+	Delete an annotation by ID. Liseur-backed rows accept an optional CAS
+	revision precondition and publish the tombstone through the sync feed.
+	"""
+	deleteAnnotation(id: String!, expectedRevision: Int): MediaAnnotation!
 	"""
 	Returns a list containing the newly created tags, or an error if creation failed.
 	
@@ -4262,9 +4332,8 @@ type Mutation {
 	
 	Works with or without a prior suggestion: an operator who knows the
 	pair can create it directly, which also mints the work row when
-	neither book has one. Re-confirming is a no-op, and a book that is
-	already a confirmed edition of a *different* work is refused rather
-	than re-homed — the liseur lane owns those links.
+	neither book has one. Re-confirming is a no-op; two existing work
+	identities are refused rather than silently merged or re-homed.
 	"""
 	confirmEditionPair(mediaIdA: ID!, mediaIdB: ID!): EditionPairResult!
 	"""
@@ -4413,8 +4482,15 @@ type Mutation {
 	updateApiKey(id: Int!, input: ApikeyInput!): Apikey!
 	deleteApiKey(id: Int!): Apikey!
 	createBookRequest(input: CreateBookRequestInput!): BookRequest!
+	"""
+	Set or clear (`narrator: null`) the reader a request would rather
+	have. Requester or operator; refused once the request is completed or
+	rejected.
+	"""
+	setBookRequestPreferredNarrator(requestId: ID!, narrator: String): BookRequest!
 	approveBookRequest(requestId: ID!, reason: String): BookRequest!
 	rejectBookRequest(requestId: ID!, reason: String): BookRequest!
+	grabRelease(requestId: ID!, torrentId: Int!, confirm: Boolean!): AcquisitionGrab!
 	"""
 	Probe a private IPv4 address using CrossPoint's fixed HTTP port. The
 	returned identity is deliberately not persisted until the user submits
@@ -4587,8 +4663,10 @@ type Mutation {
 	possession is either the 6-digit `code` shown on the device or the `nonce`
 	carried by its QR payload; exactly one must be given. After
 	`MAX_FAILED_ATTEMPTS` wrong proofs the pairing is denied.
+	`allowKomfMetadataEditing` defaults to false; true is Komelia-only,
+	adds `EditMetadata`, and requires the approving user to hold it.
 	"""
-	approveDevicePairing(pairingId: ID!, code: String, nonce: String): DevicePairing!
+	approveDevicePairing(pairingId: ID!, code: String, nonce: String, allowKomfMetadataEditing: Boolean! = false): DevicePairing!
 	"""
 	Deny a pending pairing. Any user allowed to approve may deny, so a
 	suspicious request can be shut down by whoever sees it first.
@@ -4682,8 +4760,10 @@ type Mutation {
 	Registers a device for the current user and mints its credential(s). The
 	registry enforces the permissions the kind needs (`ACCESS_API_KEYS` plus
 	the protocol permission for API-key kinds); secrets are returned once.
+	`allowKomfMetadataEditing` defaults to false and only enables Komelia
+	metadata edits when the creator holds `EditMetadata`.
 	"""
-	createDevice(kind: DeviceKind!, name: String): DeviceWithCredential!
+	createDevice(kind: DeviceKind!, name: String, allowKomfMetadataEditing: Boolean! = false): DeviceWithCredential!
 	renameDevice(id: String!, name: String!): Device!
 	"""
 	Discards the device's credential and mints a replacement; the new secret
@@ -4741,6 +4821,33 @@ Format: %Y-%m-%d
 * `2000-02-24`
 """
 scalar NaiveDate
+
+"""
+One narrator a requester can prefer, with what each source knows about
+their reading of this work.
+"""
+type NarratorOption {
+	"The name as the first source to mention it spells it."
+	name: String!
+	"Which providers credit this narrator: `hardcover`, `audible`."
+	sources: [String!]!
+	"""
+	The longest advertised length among this narrator's editions: the
+	unabridged full reading, where an abridgement is the shorter cut.
+	"""
+	durationSeconds: Int
+	"""
+	`true` only when every edition labelling its format is abridged;
+	`false` as soon as one unabridged edition is known; `null` when no
+	source says.
+	"""
+	abridged: Boolean
+	"""
+	The ASIN of the edition the length was taken from, else the first
+	edition naming this narrator that has one.
+	"""
+	asin: String
+}
 
 input NavigationArrangementInput {
 	sections: [ArrangementSectionInput!]!
@@ -5588,6 +5695,40 @@ type Query {
 	result is persisted and returned for review; no fields are auto-applied.
 	"""
 	searchBookMetadata(mediaId: ID!, search: MediaMetadataSearchInput): MetadataFetchRecord!
+	"""
+	Search the caller's visible library by title, author, series, or
+	ISBN. Never touches the network.
+	"""
+	librarySearch(query: String!, limit: Int = 20): [UnifiedLibraryHit!]!
+	"""
+	Search Hardcover when a credential is available: the server's enabled
+	Hardcover provider first, otherwise only this caller's own personal
+	connection. Provider hits are served from a short in-memory cache;
+	library matches and request status are recomputed for every call.
+	"""
+	externalBookSearch(query: String!, limit: Int = 10): ExternalBookSearch!
+	"""
+	Search Audible's public catalog, independently of Hardcover: no
+	credential, its own short cache, and a hard timeout so a slow answer
+	never holds up the page. Hits keep the catalog's own ranking and are
+	kept only when they plausibly answer the query (title equals or begins
+	with it, or every query word appears in title and authors). Hits are
+	not deduplicated against Hardcover; the caller hides those it already
+	shows.
+	"""
+	audibleBookSearch(		query: String!,		limit: Int = 5,
+		"ISO 639 code or name of the language hits must be in; default `en`"
+		language: String
+	): ExternalBookSearch!
+	"""
+	Narrators known for one external search hit. Open to every signed-in
+	member, as filing a request is. `provider`/`remoteId` identify the hit
+	(`hardcover` book id or `audible` ASIN); `title` and `authors` drive
+	the Audible search. `language` (ISO 639 code or name, default `en`)
+	keeps Hardcover editions in the requester's language; Audible's US
+	catalog is English already.
+	"""
+	audiobookNarrators(provider: String!, remoteId: String!, title: String!, authors: String, language: String): [NarratorOption!]!
 	me: User!
 	userCount: Int!
 	topReaders(take: Int): [User!]!
@@ -5635,6 +5776,10 @@ type Query {
 	apiKeyById(id: Int!): Apikey!
 	bookRequest(id: ID!): BookRequest
 	bookRequests(status: BookRequestStatus, mineOnly: Boolean! = false, limit: Int! = 50, offset: Int! = 0): [BookRequest!]!
+	acquisitionStatus: AcquisitionStatus!
+	searchReleases(requestId: ID!, text: String, format: RequestFormat, limit: Int = 25): ReleaseSearch!
+	cachedReleaseSearch(requestId: ID!): ReleaseSearch
+	acquisitionGrabs(requestId: ID!): [AcquisitionGrab!]!
 	jobs(pagination: Pagination! = {offset: {page: 1, pageSize: 20, zeroBased: false}}): PaginatedJobResponse!
 	jobById(id: ID!): Job
 	scheduledJobs: [ScheduledJob!]!
@@ -5812,7 +5957,7 @@ type Query {
 	on a Kobo, KOReader, Liseur). Results are book-contiguous so a page
 	can be grouped as it arrives.
 	"""
-	annotations(filter: AnnotationFilterInput, pagination: OffsetPagination): AnnotationPage!
+	annotations(filter: AnnotationFilterInput, pagination: OffsetPagination, order: AnnotationOrder! = BOOK): AnnotationPage!
 	"""
 	The annotation sync state for a user: configured sinks, last runs,
 	errors, and whether a debounced export is pending. Defaults to the
@@ -6157,9 +6302,50 @@ type RegisteredEmailDevice {
 	sendHistory: [EmailerSendRecord!]!
 }
 
+type ReleaseCandidate {
+	torrentId: Int!
+	title: String!
+	authors: [String!]!
+	narrators: [String!]!
+	series: [String!]!
+	kind: String!
+	categoryName: String
+	languageCode: String
+	fileType: String
+	size: String
+	numFiles: Int
+	added: String
+	seeders: Int
+	leechers: Int
+	timesCompleted: Int
+	freeleech: Boolean!
+	vip: Boolean!
+	snatched: Boolean!
+	isbn: String
+	score: Float!
+	matchReasons: [String!]!
+}
+
+type ReleaseSearch {
+	candidates: [ReleaseCandidate!]!
+	found: Int
+	probe: Boolean!
+	searchedAt: DateTime!
+}
+
 input RequestDestinationInput {
 	shelfId: ID
 	deviceId: ID
+}
+
+"""
+The requested release lane. Existing and unspecified requests accept any
+format.
+"""
+enum RequestFormat {
+	EBOOK
+	AUDIOBOOK
+	ANY
 }
 
 """
@@ -7064,8 +7250,6 @@ type StumpConfig {
 	attachmentMaxBytes: Int!
 	"Indicates if the GraphQL playground should be enabled."
 	enablePlayground: Boolean!
-	"The client directory."
-	clientDir: String!
 	"Password hash cost"
 	passwordHashCost: Int!
 	"The time in seconds that a login session will be valid for."
@@ -7256,6 +7440,51 @@ enum ThumbnailPlaceholderStyle {
 	THUMBHASH
 }
 
+type UnifiedExternalHit {
+	provider: String!
+	remoteId: String!
+	title: String!
+	authors: String
+	year: Int
+	seriesName: String
+	seriesPosition: String
+	isbn13: String
+	isbn10: String
+	coverUrl: String
+	"""
+	Whether the provider knows an ebook edition exists; `null` when it
+	does not say.
+	"""
+	hasEbook: Boolean
+	"""
+	Whether the provider knows an audiobook edition exists; always `true`
+	for Audible hits, `null` when the provider does not say.
+	"""
+	hasAudiobook: Boolean
+	"Length of the default audiobook edition, in seconds."
+	audioSeconds: Int
+	"The Audible product identifier; `null` for other providers."
+	asin: String
+	"""
+	The credited readers of an Audible edition; `null` when the provider
+	does not carry narrators on a search hit.
+	"""
+	narrators: [String!]
+	inLibraryMediaIds: [ID!]!
+	existingRequestId: ID
+	existingRequestStatus: String
+}
+
+type UnifiedLibraryHit {
+	mediaId: ID!
+	title: String!
+	authors: String
+	seriesName: String
+	extension: String!
+	isAudiobook: Boolean!
+	thumbnailUrl: String!
+}
+
 """
 A simple pagination input object which does not paginate. An explicit struct is
 required as a limitation of async_graphql's [OneofObject], which doesn't allow
@@ -7268,6 +7497,8 @@ input Unpaginated {
 input UpdateAnnotationInput {
 	id: String!
 	annotationText: String
+	color: String
+	expectedRevision: Int
 }
 
 input UpdateBookClubInput {
@@ -7404,6 +7635,8 @@ enum UserPermission {
 	serve only explicitly authorized remote-source reads.
 	"""
 	ACCESS_REMOTE_SOURCE
+	"Search and grab releases for approved book requests."
+	ACQUIRE_RELEASES
 	"""
 	Grant a device the right to act as a remote worker: open the worker
 	socket, claim `worker_jobs`, and upload their outputs

@@ -1198,6 +1198,27 @@ impl VirtualMediaResolver for ProviderHost {
 			None => Ok(1),
 		}
 	}
+	async fn get_archive(
+		&self,
+		path: &str,
+		file_stem: &str,
+	) -> Result<stump_media::virtual_media::VirtualArchive, FileError> {
+		let virtual_path = Self::parse_path(path)?;
+		let chapter = virtual_path.remote_chapter_id.ok_or_else(|| {
+			FileError::UnsupportedFileType(
+				"Provider-backed series covers do not have a downloadable archive"
+					.to_owned(),
+			)
+		})?;
+		let archive = self
+			.build_archive(&virtual_path.source_id, &chapter, file_stem)
+			.await?;
+		Ok(stump_media::virtual_media::VirtualArchive {
+			file_name: archive.file_name,
+			content_type: archive.content_type,
+			bytes: archive.bytes,
+		})
+	}
 
 	fn page_content_types(
 		&self,

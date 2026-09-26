@@ -69,6 +69,7 @@ const COMPONENT_KEYS_FOR_KIND: Record<CatalogDeviceKind, readonly string[]> = {
 	WEB: ['webui'],
 	WORKER: ['worker'],
 	KAVITA: ['kavita'],
+	SOURCE_WORKER: [],
 }
 
 export function capabilityForKind(
@@ -134,6 +135,7 @@ export const DEVICE_KIND_LABELS: Record<CatalogDeviceKind, string> = {
 	WEB: 'Browser',
 	WORKER: 'Worker',
 	KAVITA: 'Kavita',
+	SOURCE_WORKER: 'Source worker',
 }
 
 /** The lucide icon that stands for each kind on cards, tiles, and lists. */
@@ -151,6 +153,7 @@ export const DEVICE_KIND_ICONS: Record<CatalogDeviceKind, LucideIcon> = {
 	WEB: GlobeIcon,
 	WORKER: CpuIcon,
 	KAVITA: MonitorIcon,
+	SOURCE_WORKER: CpuIcon,
 }
 
 /** The wire protocol a credential was minted for, as the chip on a card reads it. */
@@ -184,10 +187,10 @@ export function protocolForKind(kind: CatalogDeviceKind): DeviceProtocol {
 		case 'API':
 		case 'WEB':
 		case 'WORKER':
+		case 'SOURCE_WORKER':
 		case 'KAVITA':
 			return 'API'
 	}
-	throw new Error(`Unsupported device kind: ${kind}`)
 }
 
 /**
@@ -207,6 +210,7 @@ const KIND_PERMISSIONS: Partial<Record<CatalogDeviceKind, readonly UserPermissio
 	API: ['ACCESS_API_KEYS'],
 	WEB: ['ACCESS_API_KEYS'],
 	WORKER: ['ACCESS_API_KEYS', 'ACCESS_WORKER', 'DOWNLOAD_FILE'],
+	SOURCE_WORKER: ['ACCESS_API_KEYS', 'ACCESS_REMOTE_SOURCE'],
 	KAVITA: ['ACCESS_API_KEYS', 'DOWNLOAD_FILE'],
 }
 
@@ -215,6 +219,7 @@ export const PERMISSION_LABELS: Partial<Record<UserPermission, string>> = {
 	ACCESS_KOBO_SYNC: 'Kobo sync',
 	ACCESS_KOREADER_SYNC: 'KOReader sync',
 	ACCESS_WORKER: 'worker access',
+	ACCESS_REMOTE_SOURCE: 'remote source access',
 	DOWNLOAD_FILE: 'download files',
 }
 
@@ -345,7 +350,7 @@ export interface ClientCatalogEntry {
 	connection: ClientConnectionMode
 	evidence: ClientEvidence
 	maturity: ClientMaturity
-	/** Important support boundary that must remain visible on the compact card. */
+	/** Support boundary shown once the client is chosen (step 2), never on the compact card. */
 	caveat?: string
 	/** Exact app variants represented by this family card. */
 	variants?: readonly ClientAppVariant[]
@@ -1489,12 +1494,7 @@ export const CLIENT_CATALOG: readonly ClientCatalogEntry[] = [
 						BookOpenTextIcon,
 						'Audiobookshelf is an audiobook client.',
 					),
-					unsupportedMedia(
-						'ebooks',
-						'eBooks',
-						BookMarkedIcon,
-						'Audiobookshelf is an audiobook client.',
-					),
+					fullMedia('ebooks', 'eBooks', BookMarkedIcon),
 					fullMedia('audiobooks', 'Audiobooks', AudioLinesIcon),
 				],
 				protocol: 'Audiobookshelf API',
@@ -1722,6 +1722,63 @@ export function clientProfileForVariant(
 		evidence: variant.evidence,
 		maturity: variant.maturity,
 		caveat: variant.caveat,
+	}
+}
+
+/** The catalog facts a paired device can show; see `clientProfileForKind`. */
+export interface ClientKindProfile {
+	evidence: ClientEvidence | null
+	maturity: ClientMaturity | null
+	capabilities: readonly ClientCapability[]
+	mediaFormats: readonly ClientMediaCapability[]
+}
+
+/**
+ * What a paired device of `kind` is known to do. A device row stores only its
+ * kind, and NickelCoppice/coppice.koplugin, the OPDS readers, and the Kavita
+ * apps share one, so such a device keeps only the evidence, readiness, and
+ * capability statuses every app of that kind agrees on; an explanation that
+ * differs between those apps is dropped rather than attributed to the device.
+ */
+export function clientProfileForKind(kind: CatalogDeviceKind): ClientKindProfile {
+	const variants = CLIENT_CATALOG.flatMap((entry) =>
+		clientVariants(entry).filter((variant) => variant.kind === kind),
+	)
+	const [first, ...others] = variants
+	if (!first) return { evidence: null, maturity: null, capabilities: [], mediaFormats: [] }
+	const agreed = <T extends { status: ClientCapabilityStatus; detail?: string }>(
+		item: T,
+		peers: (variant: ClientAppVariant) => T | undefined,
+	): T | null => {
+		const matches = others.map(peers)
+		if (!matches.every((match) => match?.status === item.status)) return null
+		return matches.every((match) => match?.detail === item.detail)
+			? item
+			: { ...item, detail: undefined }
+	}
+	return {
+		evidence: others.every(
+			(variant) =>
+				variant.evidence.label === first.evidence.label &&
+				variant.evidence.detail === first.evidence.detail,
+		)
+			? first.evidence
+			: null,
+		maturity: others.every((variant) => variant.maturity === first.maturity)
+			? first.maturity
+			: null,
+		capabilities: first.capabilities.flatMap((capability) => {
+			const shared = agreed(capability, (variant) =>
+				variant.capabilities.find((item) => item.id === capability.id),
+			)
+			return shared ? [shared] : []
+		}),
+		mediaFormats: first.mediaFormats.flatMap((format) => {
+			const shared = agreed(format, (variant) =>
+				variant.mediaFormats.find((item) => item.format === format.format),
+			)
+			return shared ? [shared] : []
+		}),
 	}
 }
 

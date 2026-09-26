@@ -1,147 +1,123 @@
 ---
 title: Sync platforms
-description: Current KOReader, Kobo, and native EPUB reading-state and annotation synchronization contracts
+description: Current KOReader, Kobo, and native EPUB reading-state and annotation contracts
 ---
 
-This page records the synchronization behavior implemented by Stump today. The protocol routers are optional: the router tree compiles the `koreader` and `kobo` modules behind Cargo features, and `routers::mount` merges each one only when its runtime configuration switch is enabled ([`routers::mount`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/mod.rs#L40-L56), [`StumpConfig.protocols.enable_koreader_sync` and `enable_kobo_sync`](https://github.com/stumpapp/stump/blob/nightly/core/src/config/protocols.rs)). Release defaults for both switches are `false`; debug defaults are `true` ([`protocols.rs`](https://github.com/stumpapp/stump/blob/nightly/core/src/config/protocols.rs)).
+This page describes Coppice's current server-side synchronization contracts.
+Client versions, device dates, and test scope belong in the
+[client verification matrix](/docs/developer/client-verification); client setup
+belongs in [Client apps](/docs/developer/clients).
 
 ## Shared authentication boundary
 
-KOReader and Kobo both put a full Stump API key in the URL path rather than sending the normal bearer credential. Their route trees nest under `/{api_key}` and install `api_key_middleware` before the protocol-specific permission guard (`koreader::mount` (`apps/server/src/routers/koreader_backend.rs:17-24`), `kobo::mount` (`apps/server/src/routers/kobo_backend.rs:66-83`)). The path middleware extracts `api_key`, parses the prefixed key, validates its stored hash and expiry, and creates the authenticated context ([`api_key_middleware`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs#L538-L586), [`validate_api_key`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs#L622-L687)).
+KOReader and Kobo put a full API key in the URL path rather than sending a
+bearer credential. Their adapters validate the key and then apply the
+protocol-specific permission: `AccessKoreaderSync` or `AccessKoboSync`. A key
+owner must be the server owner or retain `AccessApiKeys`; custom key permissions
+replace inherited user permissions. The KOReader username/password fields are
+not used for authentication because its legacy MD5 password form does not match
+Coppice's API-key scheme.
 
-The API-key owner must be the server owner or retain `AccessApiKeys`; an API key with custom permissions replaces the user's inherited permissions ([`validate_api_key`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs#L622-L687)). KOReader then requires `AccessKoreaderSync`, while Kobo requires `AccessKoboSync` (`koreader::authorize` (`apps/server/src/routers/koreader_backend/sync.rs:44-56`), `kobo::authorize` (`apps/server/src/routers/kobo_backend/router.rs:136-149`)). The path-key design is intentional: the KOReader frontend sends an MD5 password representation that does not match Stump's authentication scheme ([`api_key_middleware` comment](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/middleware/auth.rs#L534-L536)).
+Both adapters are optional Cargo features and have runtime configuration
+switches. The release defaults are disabled; debug defaults are enabled. The
+server mounts each router only when its runtime switch is active. Feature and
+configuration definitions live in `apps/server/Cargo.toml` and
+`core/src/config/protocols.rs`.
 
-## KOReader sync
+## KOReader progress sync
 
-### Routes and wire DTOs
+The adapter exposes three routes under `/koreader/{api_key}`:
 
-The current KOReader adapter exposes only the three routes below. The route declaration is the source of truth (`koreader::mount` (`apps/server/src/routers/koreader_backend.rs:17-24`)); its shape follows the official [KOReader sync-server routes](https://github.com/koreader/koreader-sync-server/blob/master/config/routes.lua).
+| Method and path | Contract |
+| --- | --- |
+| `GET /users/auth` | Returns `{ "authorized": "OK" }` after key and permission checks. |
+| `PUT /syncs/progress` | Accepts `document`, `progress`, `percentage`, `device`, and `device_id`; stores the progress for the authenticated user and returns a timestamp. |
+| `GET /syncs/progress/{document}` | Reads the current user's progress for the KOReader document hash. Absent optional values are omitted. |
 
-| Method and path | Request | Response and behavior | Source |
-| --- | --- | --- | --- |
-| `GET /koreader/{api_key}/users/auth` | No body is declared. | Returns `{ "authorized": "OK" }`. | `check_authorized` (`apps/server/src/routers/koreader_backend/sync.rs:63-67`) |
-| `PUT /koreader/{api_key}/syncs/progress` | The declared JSON input has five required fields: `document: String`, `progress: String`, `percentage: f32`, `device: String`, and `device_id: String`. | Returns `document: String` and `timestamp: u64`; the timestamp is milliseconds since the Unix epoch. | `PutProgressInput` (`apps/server/src/routers/koreader_backend/sync.rs:161-168`), `put_progress` (`apps/server/src/routers/koreader_backend/sync.rs:176-306`) |
-| `GET /koreader/{api_key}/syncs/progress/{document}` | `document` is the KOReader document hash in the path. | Returns `document` plus optional `progress`, `percentage`, `device`, `device_id`, and millisecond `timestamp`; absent optional values are omitted. | `GetProgressResponse` (`apps/server/src/routers/koreader_backend/sync.rs:69-93`), `get_progress` (`apps/server/src/routers/koreader_backend/sync.rs:95-153`) |
+`document` matches the optional `media.koreader_hash`, generated for EPUB and
+PDF by the media processors when enabled. ZIP and RAR do not currently receive
+a KOReader hash. Numeric `progress` is interpreted as a page; a non-numeric
+page string or KOReader DOM x-pointer is preserved verbatim. An x-pointer is
+not a Readium locator. Percentage uses KOReader's `0..=1` range; timestamps
+are milliseconds since the Unix epoch.
 
-`GetProgressResponse.progress` is either a page string or a KOReader DOM x-pointer. The source explicitly says that the x-pointer is not a Readium locator (`GetProgressResponse::progress` (`apps/server/src/routers/koreader_backend/sync.rs:71-93`)). `percentage` uses the KOReader range `0..=1.0`, and `timestamp` is represented as an unsigned millisecond value (`GetProgressResponse` (`apps/server/src/routers/koreader_backend/sync.rs:69-93`), `put_progress` (`apps/server/src/routers/koreader_backend/sync.rs:235-241`)).
+A PUT updates the device record and the shared reading-session service. The
+session stores the KOReader progress string separately from its normalized
+page/percentage state. On GET, an active `Reading` session wins; a finished
+session returns `percentage: 1.0` without a progress string; no session returns
+the document identity only.
 
-### Document identity and hash coverage
-
-`document` is matched against `media.koreader_hash`, an optional media column kept separately from Stump's ordinary file hash ([`media::Model::koreader_hash`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media.rs#L74-L80)). Stump's `generate_koreader_hash` is a port of KOReader's MD5 sampling algorithm: it reads 1 KiB chunks at the KOReader offsets and stops at EOF or after the defined iterations; the source cites KOReader's [`generateDocChecksum`](https://github.com/koreader/koreader/blob/master/frontend/util.lua#L1046-L1072) implementation (`generate_koreader_hash` (`crates/media/src/hash.rs:62-101`)).
-
-EPUB and PDF processors generate that hash when `FileProcessorOptions.generate_koreader_hashes` is enabled, and `MediaBuilder` persists the resulting optional value on the media row (`FileProcessorOptions` (`crates/media/src/media/process.rs:27-41`), `EpubProcessor::generate_hashes` (`crates/media/src/media/format/epub.rs:114-133`), `PdfProcessor::generate_hashes` (`crates/media/src/media/format/pdf.rs:53-72`), [`MediaBuilder::build`](https://github.com/stumpapp/stump/blob/nightly/core/src/filesystem/media/builder.rs#L87-L95)). ZIP and RAR processors intentionally return `koreader_hash: None`; both implementations leave the KOReader hashing code commented out with a `TODO(koreader)` (`ZipProcessor::generate_hashes` (`crates/media/src/media/format/zip.rs:57-77`), `RarProcessor::generate_hashes` (`crates/media/src/media/format/rar.rs:191-211`)). A ZIP or RAR therefore has no Stump-generated KOReader document identity through these processors (`ZipProcessor::generate_hashes` (`crates/media/src/media/format/zip.rs:57-77`), `RarProcessor::generate_hashes` (`crates/media/src/media/format/rar.rs:191-211`)).
-
-GET applies the hash match together with the current user's ID, joining `reading_sessions` to `media` and ordering by the session's `updated_at` (`get_progress` (`apps/server/src/routers/koreader_backend/sync.rs:95-113`)). PUT resolves the media with a `media.koreader_hash == document` filter, then writes the resulting session for the authenticated user (`put_progress` (`apps/server/src/routers/koreader_backend/sync.rs:176-205`), [`upsert_reading_session`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/services/reading_progress.rs#L71-L139)).
-
-### What round-trips
-
-A KOReader PUT validates `percentage`, upserts a `devices` row (kind `koreader`, owned by the syncing user) by `device_id` while updating its name and `last_seen_at` on conflict, converts a numeric `progress` to a page, and keeps a non-numeric progress string as the raw KOReader value (`put_progress` (`apps/server/src/routers/koreader_backend/sync.rs:235-285`)). It then calls the shared reading-session service with percentage, completion status, parsed page when available, and device ID, and stores the raw string in `reading_session.koreader_progress` (`put_progress` (`apps/server/src/routers/koreader_backend/sync.rs:270-305`), [`NormalizedProgression`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/services/reading_progress.rs#L13-L23)).
-
-The shared service either extends the latest logical-day session within its grace period or creates a new session. Its persisted session projection includes page/locator/percentage anchors, status, accumulated elapsed seconds, device IDs, media ID, and user ID ([`upsert_reading_session`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/services/reading_progress.rs#L71-L139), [`reading_session::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/reading_session.rs#L22-L74)). KOReader itself supplies no elapsed-time delta and no Readium locator: the adapter's `NormalizedProgression` sets only the fields described above (`put_progress` (`apps/server/src/routers/koreader_backend/sync.rs:270-288`), [`NormalizedProgression`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/services/reading_progress.rs#L13-L23)).
-
-On GET, an active `Reading` session wins. Stump returns its end percentage, timestamp, device identity, and stored raw KOReader progress, falling back to the numeric end page when no raw value exists (`get_progress` (`apps/server/src/routers/koreader_backend/sync.rs:125-152`)). If no active session exists but a finalized/finished session is available, Stump returns `percentage: 1.0`, the session timestamp and device fields, and no progress string; if no session exists, it returns only the document (`get_progress` (`apps/server/src/routers/koreader_backend/sync.rs:114-152`)).
-
-There is no annotation or highlight surface in this protocol. The route tree contains only authorization, progress PUT, and progress GET, and the progress DTOs contain no annotation text, note, bookmark, or locator field beyond KOReader's progress string (`koreader::mount` (`apps/server/src/routers/koreader_backend.rs:17-24`), `GetProgressResponse` (`apps/server/src/routers/koreader_backend/sync.rs:69-93`), `PutProgressInput` (`apps/server/src/routers/koreader_backend/sync.rs:161-168`)).
+KOSync is progress-only. Its routes and DTOs carry no annotation, note,
+bookmark, or portable locator object. `coppice.koplugin` in sibling repository
+`koreader-coppice` is source-derived against KOReader v2026.07.1 (`9192014d`);
+it has not been loaded into the native app. Liseur's KOSync flow is a separate
+client and evidence record.
 
 ## Kobo sync
 
-### Routes, authentication, and no-op compatibility
+Kobo uses a path-scoped key at `/kobo/{api_key}`. The adapter serves
+initialization, library sync, ReadingState, metadata, thumbnails, book access,
+and tag/shelf routes. The `POST /v1/auth/device` response is compatibility data
+only: it returns generated token-like identifiers but does not persist device
+authentication or create a login session.
 
-The Kobo adapter exposes initialization, library sync, metadata, two thumbnail URL forms, device authentication, and EPUB download under `/kobo/{api_key}` (`kobo::mount` (`apps/server/src/routers/kobo_backend.rs:66-83`)). The EPUB download additionally goes through Stump's file-serving permission boundary (`book_download` (`apps/server/src/routers/kobo_backend/router.rs:637-644`), [`serve_media_file`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/utils/serve_media.rs#L18-L43)). Every other `/v1/{*path}` GET, POST, PUT, PATCH, or DELETE is handled by `stubbed_route_empty_success`, which logs the request and returns `{}` (`stubbed_route_empty_success` (`apps/server/src/routers/kobo_backend/router.rs:116-134`), `stubbed_route_empty_success` (`apps/server/src/routers/kobo_backend/router.rs:116-134`)).
+`GET /v1/initialization` rewrites the advertised library, state, metadata, tag,
+profile, and book-access resource URLs to the Coppice key-scoped routes. Store
+account, product, and other store-only resources remain official Kobo URLs.
+The compatibility `x-kobo-apitoken` value is not a second authentication
+credential.
 
-`POST /v1/auth/device` reads only `UserKey` from the request JSON and returns freshly generated UUID strings for `AccessToken`, `RefreshToken`, and `TrackingId`, along with the echoed user key; the handler does not persist a device-auth record (`auth_device` (`apps/server/src/routers/kobo_backend/router.rs:102-114`)). This response is compatibility data, not a second Stump login or session (`auth_device` (`apps/server/src/routers/kobo_backend/router.rs:102-114`)).
+`GET /v1/library/sync` returns a JSON array and a server-generated
+`x-kobo-synctoken`. A full sync sends visible media; subsequent tokens represent
+an incremental or incomplete sync. The device ID and optional `x-kobo-*`
+metadata are retained with the persisted sync session. The server can emit
+`NewEntitlement`, `ChangedProductMetadata`, and `ChangedReadingState` items.
 
-`GET /v1/initialization` clones the static native Kobo resource object, rewrites image host and thumbnail templates for the current Stump API-key URL, and adds `x-kobo-apitoken: e30=` (`initialization` (`apps/server/src/routers/kobo_backend/router.rs:152-181`)). The static resource object is copied from Komga's reverse-engineered Kobo proxy and advertises upstream-looking `tags`, `tag_items`, `rename_tag`, `delete_tag`, `delete_tag_items`, and `reading_state` URLs (`native_kobo_resources` (`core/src/kobo/mod.rs:11-18`), `NATIVE_KOBO_RESOURCES_JSON` (`core/src/kobo/mod.rs:63-67`), `NATIVE_KOBO_RESOURCES_JSON tag/state entries` (`core/src/kobo/mod.rs:63-187`)). Advertising those URLs does not create handlers: the catch-all returns an empty success for calls that are not one of the explicit routes (`kobo::mount` (`apps/server/src/routers/kobo_backend.rs:66-83`), `stubbed_route_empty_success` (`apps/server/src/routers/kobo_backend/router.rs:116-134`)).
+`GET` and `PUT /v1/library/{book_id}/state` read and write Kobo ReadingState.
+PUT accepts `ReadingStates[0]`, applies its progress/location/status fields to
+the current user's reading state, and retains the native payload in
+`reading_sessions.kobo_state`; GET reconstructs the one-element response.
+Shelf/tag and tag-item calls are write-through operations that create or update
+collections and reading lists, retain `source_device` provenance, and use
+delete tombstones. They are not empty-success stubs.
 
-Kobo shelf/tag calls are write-through compatibility routes. The `tags` and tag-item handlers upsert Stump collections or reading lists marked `kobo_shelf`, record the writing device in `source_device`, and use tombstones for deletes; they are not empty-success stubs ([`tags.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo_backend/tags.rs#L1-L240), [`collection::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/collection.rs#L4-L14), [`reading_list::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/reading_list.rs#L8-L18), [`m20260918`](https://github.com/stumpapp/stump/blob/nightly/crates/migrations/src/m20260918_000000_add_container_shelves.rs)).
+Stock Kobo sync does not transport annotation objects or pull
+`KoboReader.sqlite`. Its ReadingState progress/location fields are not a
+bookmark/highlight API. `nickelcoppice` contains a separate source-derived
+reader for device `.kobo/markups` data; that is not a stock-server annotation
+import and has no device run recorded.
 
-### Sync token and persisted session
+Ordinary EPUB remains the default delivery. `KOBO_KEPUB_CONVERSION=true`
+enables the optional pure-Rust EPUB-to-KEPUB converter. The comics transform
+is a separate shipped feature, disabled by default with
+`STUMP_TRANSFORM_ENABLED=false`. KEPUB byte-parity evidence and the separate
+36-book / 37 MB performance measurement are documented in
+[Kobo sync capabilities](/docs/developer/kobo-sync-capabilities); neither is a
+physical Kobo test.
 
-`GET /v1/library/sync` returns a JSON array of sync items. Each response always carries `x-kobo-synctoken`; a page with more items also carries `x-kobo-sync: continue` (`SyncResponse::into_response` (`apps/server/src/routers/kobo_backend/router.rs:76-96`)). The token is server-generated JSON encoded as standard Base64 without padding. `IncompleteV1` contains `{ "type": "IncompleteV1", "sync_id": String, "next_offset": usize }`; `CompletedV1` contains `{ "type": "CompletedV1", "sync_id": String }` (`SyncToken` (`crates/kobo/src/sync_token.rs:18-37`), `SyncToken::try_to_base64_string` (`crates/kobo/src/sync_token.rs:85-88`)). The device sends the token back in `x-kobo-synctoken`; Stump separately reads `x-kobo-deviceid` and stores other `x-kobo-*` headers as device metadata (`library_sync` (`apps/server/src/routers/kobo_backend/router.rs:211-303`), `device_metadata` (`apps/server/src/routers/kobo_backend/router.rs:191-209`)).
+## Native EPUB bookmarks and annotations
 
-A missing or invalid token starts a full sync of user-visible EPUB media. A completed token starts an incremental session using media created or modified since the previous session began, and an incomplete token continues the referenced session at its stored offset (`KoboSync::next_page` (`crates/kobo/src/sync.rs:222-287`), `KoboSync::begin_new_sync` (`crates/kobo/src/sync.rs:82-182`)). Each persisted `kobo_sync_sessions` row records the user, selected media IDs, device ID, device metadata, creation time, and previous-sync timestamp ([`kobo_sync_session::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/kobo_sync_session.rs#L9-L32)). The normal-authenticated `DELETE /api/v2/kobo/sync-sessions` route deletes the current user's rows and forces a full sync on the next connection (`delete_kobo_sync_sessions` (`apps/server/src/routers/kobo_backend.rs:54-64`)).
+Coppice's native GraphQL annotation model is distinct from the KOReader and
+Kobo protocol adapters. `media_annotations` stores a required `ReadiumLocator`,
+optional annotation text, media/user IDs, and timestamps. `bookmarks` stores
+optional preview text, a locator or page, media/user IDs, and creation time.
+Queries filter by both the authenticated user and media.
 
-### Emitted items and synthetic values
+| GraphQL surface | Behavior |
+| --- | --- |
+| `createBookmark(input: BookmarkInput!)` | Creates a user-owned bookmark with a `ReadiumLocator` and optional preview. |
+| `deleteBookmark(id: String!)` | Deletes only the authenticated user's bookmark. |
+| `createAnnotation(input: CreateAnnotationInput!)` | Creates a user-owned highlight/note with a `ReadiumLocator` and optional text. |
+| `updateAnnotation(input: UpdateAnnotationInput!)` | Updates note text after filtering by annotation and authenticated user. |
+| `deleteAnnotation(id: String!)` | Deletes only the authenticated user's annotation. |
+| `bookmarksByMediaId(id: ID!)`, `annotationsByMediaId(id: ID!)` | Return only the current user's rows for that media. |
 
-The current library-sync implementation can construct `NewEntitlement`, `ChangedProductMetadata`, and `ChangedReadingState`. A state-only Kobo PUT is eligible for a `ChangedReadingState` item; new or newly visible media yields `NewEntitlement`, and metadata changes yield `ChangedProductMetadata` (`SyncItem` (`core/src/kobo/sync_types.rs:24-36`) and `sync_items` (`crates/kobo/src/sync.rs:362-444`), `SyncItem` (`core/src/kobo/sync_types.rs:24-36`)).
+The relevant implementation is in `crates/models/src/entity/media_annotation.rs`,
+`crates/models/src/entity/bookmark.rs`, and `crates/graphql/src/{input/media.rs,mutation/epub.rs,query/epub.rs}`.
+Neither stock KOReader KOSync nor Kobo sync writes those GraphQL rows.
 
-A `NewEntitlement` contains an entitlement, metadata, and an optional generated reading state; the current constructor always sets `reading_state: Some(...)` (`BookEntitlementContainer` (`core/src/kobo/sync_types.rs:84-90`), `BookEntitlementContainer::from_media` (`core/src/kobo/entity.rs:848-926`)). The current mapping is:
-
-| Kobo output | Current Stump value | Source |
-| --- | --- | --- |
-| Book identity fields | `media.id` is reused for entitlement, revision, work, cross-revision, and cover IDs. | `BookMetadata::from_media` (`core/src/kobo/entity.rs:218-232`), `BookEntitlementContainer::from_media` (`core/src/kobo/entity.rs:848-926`) |
-| Book metadata | Title, summary, writers, ISBN, publication date, publisher, series, size, and a Stump EPUB URL are projected when available. | `BookMetadata::from_media` (`core/src/kobo/entity.rs:218-284`), `book_metadata` (`apps/server/src/routers/kobo_backend/router.rs:552-601`) |
-| Metadata defaults | Categories and genre use a dummy UUID; prices are zero USD; external IDs are empty; language is `en`; the download is `Generic`/`EPUB3` with DRM `None`; several Kobo flags are fixed booleans. | `DUMMY_UUID` (`core/src/kobo/entity.rs:215-216`), `BookMetadata::from_media` (`core/src/kobo/entity.rs:218-284`) |
-| Entitlement | Accessibility is `Full`, origin is `Imported`, status is `Active`, IDs reuse `media.id`, and the active period begins at generation time. | `BookEntitlementContainer::from_media` (`core/src/kobo/entity.rs:848-926`) |
-| Reading state | `ReadyToRead`, `Finished`, or `Reading` is derived from Stump's latest/current-user reading session and finished-session history. | `MediaWithMetadataAndReadingSessions` (`core/src/kobo/entity.rs:32-40`), `BookEntitlementContainer::from_media` (`core/src/kobo/entity.rs:848-856`) |
-| Active progress | An active session's 0..1 end percentage is multiplied by 100 for both Kobo percentage fields; `location` is always `None` because Kobo span computation is not implemented. | `ReadingState::from_active_reading_session` (`core/src/kobo/entity.rs:756-845`), `ReadingState` (`core/src/kobo/sync_types.rs:204-214`) |
-
-The metadata and entitlement values above are compatibility projections, not a Kobo account or store mirror (`BookMetadata::from_media` (`core/src/kobo/entity.rs:226-282`), `BookEntitlementContainer::from_media` (`core/src/kobo/entity.rs:848-926`)).
-
-### Directionality and inbound state
-
-Kobo synchronization is bidirectional for reading state. `PUT /v1/library/{book_id}/state` parses `ReadingStates[0]`, persists the raw payload in `reading_sessions.kobo_state`, promotes a `KoboSpan` bookmark when present, and applies the accepted position to the canonical reading head. `GET /v1/library/{book_id}/state` projects the canonical head back to Kobo's `ReadingState` shape and echoes the winning raw Kobo fields where available ([`book_state` and `update_book_state`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo_backend/router.rs#L448-L550), [`KoboBackend`](https://github.com/stumpapp/stump/blob/nightly/crates/kobo/src/lib.rs#L45-L120)).
-
-`/v1/library/sync` uses persisted sync sessions and can emit reading-state changes after a Kobo state write. Kobo shelf/tag routes are write-back routes rather than no-op stubs; they persist `kobo_shelf` containers and `source_device` provenance ([`sync.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/kobo/src/sync.rs#L104-L129), [`tags.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo_backend/tags.rs#L1-L240)).
-
-Kobo ReadingState has no annotation object or annotation route. Direct Kobo highlight/note import is therefore unsupported; the separate liseur-sync CAS annotation lane is the supported cross-device annotation bridge ([`update_book_state`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo_backend/router.rs#L473-L550), [`liseur-sync storage`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/liseur_sync/storage.rs#L1989-L2268)).
-
-## Annotations by lane
-
-| Lane | Push | Read | Storage | Evidence |
-| --- | --- | --- | --- | --- |
-| Native GraphQL + Home | GraphQL create/update/delete mutations | Combined annotations hub; reader overlay is native-media-only | `media_annotations` and `bookmarks` | **Shipped; Source-only** ([`epub.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/mutation/epub.rs#L1-L126), [`annotation.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/object/annotation.rs#L280-L414)) |
-| liseur-sync CAS | Push, CAS edit/delete, changes and tombstones | Work/live reads; Home exposes rows as non-editable | `liseur_sync_annotations` with opaque locators, excerpt/body, device and tombstones | **Shipped; Contract-tested; Device-tested** ([`storage.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/liseur_sync/storage.rs#L1989-L2268), [`annotation.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/object/annotation.rs#L405-L479)) |
-| Direct Kobo | No annotation payload or route | No direct annotation read | No Kobo annotation projection | **Planned** for direct import ([`router.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo_backend/router.rs#L473-L550)) |
-| Direct KOReader | Kosync has auth and progress only; its DTOs carry no annotations | No direct annotation read | No KOReader annotation projection | **Planned** direct import; plugin run **Blocked** ([`sync.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/koreader_backend/sync.rs#L100-L303), [`README.md`](https://github.com/stumpapp/stump/blob/nightly/crates/koreader/README.md#L42-L58)) |
-| Kavita | Bookmark add/remove only; annotation writes are not mounted | Reads native annotations and bookmarks | Native Stump rows | **Shipped; Contract-tested** ([`annotation.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/kavita/src/routes/annotation.rs#L1-L12), [`reader.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/kavita/src/routes/reader.rs#L809-L1043)) |
-| ABS | Audio bookmarks only | Audio bookmark/progress routes | Native audio bookmarks | **Shipped; Contract-tested** ([`abs_backend.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/abs_backend.rs#L795-L850)) |
-| Komga / OPDS2 | No portable annotation object in progression contracts | Progress only | No cross-lane annotation projection | **Shipped; Contract-tested** ([`readium.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/readium.rs#L308-L500), [`v2_0.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/opds_backend/v2_0.rs#L1235-L1380)) |
-
-The liseur attachment/blob lane remains **Planned**; markup snapshots and notebooks are not transported ([`PROJECT_STATE.md`](https://github.com/stumpapp/stump/blob/nightly/.omp/PROJECT_STATE.md#L117-L119)).
-
-
-## Native Stump annotations and offline EPUB sync
-
-### Server persistence
-
-Stump's server-side annotation entity represents a highlight and/or note. It stores a required `ReadiumLocator` JSON document, optional `annotation_text`, media and user IDs, and created/updated timestamps in `media_annotations` ([`media_annotation::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_annotation.rs#L5-L23)). Its user-and-media query filters both IDs before returning rows ([`media_annotation::Model::find_for_user_and_media_id`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_annotation.rs#L57-L68)).
-
-The separate `bookmarks` entity stores optional preview text, an optional `ReadiumLocator`, an optional page, media and user IDs, and creation time ([`bookmark::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/bookmark.rs#L7-L24)). Its EPUB query path filters by the current user and media and excludes rows without a locator ([`bookmark::Entity::find_for_user_and_media_id`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/bookmark.rs#L58-L68)).
-
-### GraphQL Epub surface
-
-`EpubMutation` is the current server write surface for EPUB bookmarks and annotations:
-
-| Mutation | Current behavior | Source |
-| --- | --- | --- |
-| `createBookmark(input: BookmarkInput!)` | Creates a user-owned bookmark from `media_id`, a required `ReadiumLocator`, and optional preview content. | [`BookmarkInput`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/input/media.rs#L64-L76), [`EpubMutation::create_bookmark`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/mutation/epub.rs#L16-L32) |
-| `deleteBookmark(id: String!)` | Deletes only a bookmark belonging to the authenticated user. | [`EpubMutation::delete_bookmark`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/mutation/epub.rs#L34-L48) |
-| `createAnnotation(input: CreateAnnotationInput!)` | Creates a user-owned highlight/note from `media_id`, a required `ReadiumLocator`, and optional annotation text. | [`CreateAnnotationInput`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/input/media.rs#L178-L190), [`EpubMutation::create_annotation`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/mutation/epub.rs#L50-L64) |
-| `updateAnnotation(input: UpdateAnnotationInput!)` | Updates note text only after filtering by annotation ID and authenticated user ID. | [`UpdateAnnotationInput`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/input/media.rs#L197-L203), [`EpubMutation::update_annotation`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/mutation/epub.rs#L66-L88) |
-| `deleteAnnotation(id: String!)` | Deletes only an annotation belonging to the authenticated user. | [`EpubMutation::delete_annotation`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/mutation/epub.rs#L90-L109) |
-
-The matching query fields are `bookmarksByMediaId(id: ID!)` and `annotationsByMediaId(id: ID!)`; each reads only the current user's rows for that media ([`EpubQuery::bookmarks_by_media_id`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/query/epub.rs#L29-L48), [`EpubQuery::annotations_by_media_id`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/query/epub.rs#L50-L69)).
-
-### Expo offline mirror and reconciliation
-
-The Expo app keeps separate local-first SQLite tables for progress, bookmarks, and annotations. `readProgress` stores page or EPUB locator JSON, elapsed seconds, percentage, timestamps, sync status, and server-session anchors; `bookmarks` stores EPUB location data, preview content, server IDs, sync status, and a soft-delete timestamp; `annotations` stores the full locator JSON, optional note text, server IDs, sync status, and a soft-delete timestamp ([`readProgress`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/db/schema.ts#L94-L129), [`bookmarks`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/db/schema.ts#L143-L179), [`annotations`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/db/schema.ts#L181-L218)).
-
-Background tasks push local annotation creates, note updates, and deletes through the GraphQL annotation mutations, retaining a server annotation ID after creation and marking sync status as it succeeds or fails ([`pushLocalAnnotations.ts`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pushLocalAnnotations.ts#L12-L18), [`pushLocalAnnotations.ts`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pushLocalAnnotations.ts#L20-L35), [`executeSingleServerAnnotationPushSync`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pushLocalAnnotations.ts#L110-L155)). Bookmark pushes use the corresponding create/delete mutations and server bookmark IDs ([`pushLocalBookmarks.ts`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pushLocalBookmarks.ts#L12-L26), [`executeSingleServerBookmarkPushSync`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pushLocalBookmarks.ts#L94-L135)).
-
-Pull tasks query the server per downloaded book, reconcile by server ID or locator/position, insert missing server records into the local tables, and remove local records that the server no longer returns ([`pullServerAnnotations.ts`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pullServerAnnotations.ts#L10-L38), [`executeSingleServerAnnotationPullSync`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pullServerAnnotations.ts#L123-L195), [`pullServerBookmarks.ts`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pullServerBookmarks.ts#L8-L28), [`executeSingleServerBookmarkPullSync`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pullServerBookmarks.ts#L93-L160)). Progress uses a separate GraphQL `updateMediaProgress` task rather than either protocol adapter ([`pushLocalProgress.ts`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pushLocalProgress.ts#L9-L16), [`executeSingleServerSync`](https://github.com/stumpapp/stump/blob/nightly/apps/expo/backgroundTasks/pushLocalProgress.ts#L24-L139)).
-
-This native GraphQL/local-SQLite path is distinct from KOReader and Kobo protocol sync: it has a locator-aware annotation/bookmark contract, while the two protocol adapters currently do not write `media_annotations` or `bookmarks` ([`EpubMutation`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/mutation/epub.rs#L10-L109), `koreader::mount` (`apps/server/src/routers/koreader_backend.rs:17-24`), `kobo::mount` (`apps/server/src/routers/kobo_backend.rs:66-83`)).
-
-## Capability gaps
-
-The table distinguishes a **protocol limit** (the wire contract cannot carry or write the capability) from an **unimplemented Stump feature** (Stump has a native target or supporting model, but no adapter/import implementation). The final status is the current behavior, not a future compatibility promise ([`media_annotation::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_annotation.rs#L5-L23), [`bookmark::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/bookmark.rs#L7-L24)).
-
-| Capability | Protocol limit | Unimplemented Stump feature | Current result |
-| --- | --- | --- | --- |
-| KOReader highlight text and notes | KOReader exposes only auth plus progress PUT/GET; its DTOs have no highlight, note, or bookmark fields (`koreader::mount` (`apps/server/src/routers/koreader_backend.rs:17-24`), `PutProgressInput` (`apps/server/src/routers/koreader_backend/sync.rs:161-168`), `GetProgressResponse` (`apps/server/src/routers/koreader_backend/sync.rs:69-93`)). | A native `media_annotations` target and GraphQL mutations exist, but no KOReader adapter maps protocol data into them ([`media_annotation::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_annotation.rs#L5-L23), [`EpubMutation`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/mutation/epub.rs#L11-L17)). | Highlights/notes are **not importable through KOReader sync today**. |
-| Kobo highlight text and notes | Kobo library sync emits server-to-device entitlement/metadata items; inbound annotation calls are not represented, and unmatched routes return `{}` (`SyncItem` (`core/src/kobo/sync_types.rs:24-36`), `SyncPage::sync_items` (`crates/kobo/src/sync.rs:362-444`), `stubbed_route_empty_success` (`apps/server/src/routers/kobo_backend/router.rs:116-134`)). | A native `media_annotations` target and GraphQL mutations exist, but no Kobo adapter or importer writes them ([`media_annotation::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_annotation.rs#L5-L23), [`EpubMutation`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/mutation/epub.rs#L11-L17)). | Highlights/notes are **not importable through Kobo sync today**. |
-| KOReader/Kobo locator-aware highlight ranges | KOReader documents an x-pointer as a progress string and explicitly says it is not a Readium locator; Kobo-generated reading state sets `location: None`, and the Kobo adapter has no inbound locator DTO (`GetProgressResponse::progress` (`apps/server/src/routers/koreader_backend/sync.rs:71-93`), `ReadingState::from_active_reading_session` (`core/src/kobo/entity.rs:756-845`)). | Native annotations require a `ReadiumLocator`, so an external-to-Readium conversion/import path would still need to be implemented ([`media_annotation::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_annotation.rs#L10-L22), [`CreateAnnotationInput`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/input/media.rs#L178-L190)). | Locator-bearing highlights are **not importable through either protocol today**. |
-| Kobo reading-state writes | Kobo exposes `GET` and `PUT /v1/library/{book_id}/state`; PUT accepts `ReadingStates[0]` and writes the authenticated user's Kobo state, while GET returns the projected current state ([`book_state` and `update_book_state`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo_backend/router.rs#L448-L550)). | Kobo does not import annotation objects or map them into native `media_annotations`/`bookmarks` ([`update_book_state`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo_backend/router.rs#L473-L550)). | Reading-state write/read **Shipped; Contract-tested**; annotation import **Planned** |
-| KOReader identity for ZIP/RAR | KOReader itself can send a progress document string, but Stump's ZIP/RAR processors return no `koreader_hash` for it to match (`ZipProcessor::generate_hashes` (`crates/media/src/media/format/zip.rs:57-77`), `RarProcessor::generate_hashes` (`crates/media/src/media/format/rar.rs:191-211`)). | Implementing KOReader hash generation for those formats is a separate Stump processor feature; it is currently left as a source `TODO(koreader)` (`zip.rs` (`crates/media/src/media/format/zip.rs:57-77`), `rar.rs` (`crates/media/src/media/format/rar.rs:191-211`)). | KOReader progress cannot match ZIP/RAR through a Stump-generated KOReader hash today. |
-| Kobo shelves/tags | Kobo `tags` and tag-item endpoints write Stump collections/reading lists marked `kobo_shelf`, retaining `source_device` provenance and delete tombstones ([`tags.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/kobo_backend/tags.rs#L1-L240), [`collection::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/collection.rs#L4-L14), [`reading_list::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/reading_list.rs#L8-L18), [`m20260918`](https://github.com/stumpapp/stump/blob/nightly/crates/migrations/src/m20260918_000000_add_container_shelves.rs)). | Kobo shelf write-back is implemented; broader Kobo metadata remains projection-only. | **Shipped; Contract-tested** |
+Liseur-sync has a separate CAS annotation store with opaque locators and
+conflict/tombstone behavior. Its attachment routes and storage also ship, but
+current attachment evidence is source/contract-level rather than a client
+device test. See [Liseur sync integration](/docs/developer/liseur-sync-integration)
+and the [client verification matrix](/docs/developer/client-verification).

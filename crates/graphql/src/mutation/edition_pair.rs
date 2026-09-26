@@ -33,9 +33,8 @@ impl EditionPairMutation {
 	///
 	/// Works with or without a prior suggestion: an operator who knows the
 	/// pair can create it directly, which also mints the work row when
-	/// neither book has one. Re-confirming is a no-op, and a book that is
-	/// already a confirmed edition of a *different* work is refused rather
-	/// than re-homed — the liseur lane owns those links.
+	/// neither book has one. Re-confirming is a no-op; two existing work
+	/// identities are refused rather than silently merged or re-homed.
 	async fn confirm_edition_pair(
 		&self,
 		ctx: &Context<'_>,
@@ -241,7 +240,7 @@ fn result(outcome: PairOutcome, chapter_map_entries: i32) -> EditionPairResult {
 				status: None,
 				changed: false,
 				message: Some(format!(
-					"{media_id} is already a confirmed edition of work {work_id}"
+					"{media_id} resolves to work {work_id}; pairing cannot merge work identities"
 				)),
 				chapter_map_entries: 0,
 			}

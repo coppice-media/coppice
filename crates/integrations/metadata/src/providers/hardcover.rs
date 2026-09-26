@@ -8,13 +8,18 @@ use crate::{
 	provider::ProviderCredentialVerification,
 	serde_utils::string_or_number,
 	types::{
-		ExternalMediaMetadata, ExternalSeriesMetadata, MatchCandidate, MediaType,
-		SearchOutcome, SearchQuery,
+		AudiobookEdition, ExternalMediaMetadata, ExternalSeriesMetadata, MatchCandidate,
+		MediaType, SearchOutcome, SearchQuery,
 	},
 	ExternalMetadata, MetadataProvider, RateLimiter,
 };
 
 const HARDCOVER_DEFAULT_RATE_LIMIT: u32 = 5;
+
+/// Audio editions fetched per book. A work rarely has more than a handful of
+/// audiobook releases (regional narrators, abridgements); the cap bounds the
+/// response rather than paginating.
+const AUDIO_EDITIONS_LIMIT: u32 = 25;
 
 pub struct HardcoverClient {
 	client: ClientWithMiddleware,
@@ -40,6 +45,18 @@ impl HardcoverSearchType {
 	}
 }
 
+/// Hardcover's account page shows the token as `Bearer <token>`; accept it
+/// pasted with or without that prefix, since `bearer_auth` adds its own.
+fn normalize_token(raw: &str) -> String {
+	let trimmed = raw.trim();
+	match trimmed.get(..7) {
+		Some(prefix) if prefix.eq_ignore_ascii_case("bearer ") => {
+			trimmed[7..].trim().to_string()
+		},
+		_ => trimmed.to_string(),
+	}
+}
+
 impl HardcoverClient {
 	const API_URL: &'static str = "https://api.hardcover.app/v1/graphql";
 
@@ -49,7 +66,7 @@ impl HardcoverClient {
 				reqwest::Client::new(),
 				RetryClientConfig::default(),
 			),
-			api_token: Some(api_token),
+			api_token: Some(normalize_token(&api_token)),
 			api_url: Self::API_URL.to_string(),
 			rate_limiter: RateLimiter::new(
 				rate_limit.unwrap_or(HARDCOVER_DEFAULT_RATE_LIMIT),
@@ -60,8 +77,18 @@ impl HardcoverClient {
 	/// Test-only override of the API base URL, used to point the client at a
 	/// local mock server.
 	#[cfg(test)]
-	fn with_api_url(mut self, api_url: impl Into<String>) -> Self {
+	pub(crate) fn with_api_url(mut self, api_url: impl Into<String>) -> Self {
 		self.api_url = api_url.into();
+		self
+	}
+
+	/// Point the client at a local mock server, for tests in crates that
+	/// cannot reach the private override above. `base_url` is the server
+	/// root; the GraphQL endpoint path is appended as on the real host.
+	#[cfg(any(test, feature = "mock"))]
+	#[must_use]
+	pub fn pointed_at(mut self, base_url: &str) -> Self {
+		self.api_url = format!("{base_url}/v1/graphql");
 		self
 	}
 
@@ -191,6 +218,46 @@ impl HardcoverClient {
 			.next()
 			.ok_or_else(|| MetadataProviderError::NotFound(format!("Book {}", id)))
 	}
+
+	/// The audiobook editions (`reading_format_id` 2 = Audio, per
+	/// https://docs.hardcover.app/api/graphql/schemas/editions/) of one book,
+	/// most-shelved first. Narrators come from the edition's `contributions`
+	/// and, when those are empty, its `cached_contributors` snapshot.
+	async fn fetch_audio_editions(
+		&self,
+		id: i64,
+	) -> Result<Vec<serde_json::Value>, MetadataProviderError> {
+		let graphql_query = format!(
+			r#"query GetAudiobookEditions {{
+				editions(
+					where: {{ book_id: {{ _eq: {} }}, reading_format_id: {{ _eq: 2 }} }}
+					order_by: {{ users_count: desc }}
+					limit: {}
+				) {{
+					id
+					asin
+					audio_seconds
+					users_count
+					language {{
+						language
+						code2
+						code3
+					}}
+					contributions {{
+						contribution
+						author {{
+							name
+						}}
+					}}
+					cached_contributors
+				}}
+			}}"#,
+			id, AUDIO_EDITIONS_LIMIT
+		);
+
+		let data: EditionsQueryData = self.execute_graphql(&graphql_query).await?;
+		Ok(data.editions)
+	}
 }
 
 #[async_trait::async_trait]
@@ -287,9 +354,17 @@ impl MetadataProvider for HardcoverClient {
 		// TODO: Parallelize these fetches
 		let mut candidates = Vec::with_capacity(hits.len());
 		for hit in hits {
+			let search_writers = hit.document.search_writers();
 			let external_id = hit.document.id;
 			match self.fetch_media_metadata(&external_id).await {
-				Ok(metadata) => {
+				Ok(mut metadata) => {
+					let detail_has_writers = metadata
+						.writers
+						.as_ref()
+						.is_some_and(|writers| !writers.is_empty());
+					if !detail_has_writers && !search_writers.is_empty() {
+						metadata.writers = Some(search_writers);
+					}
 					tracing::trace!(external_id, "Fetched book metadata successfully");
 					candidates.push(MatchCandidate {
 						external_id,
@@ -297,7 +372,7 @@ impl MetadataProvider for HardcoverClient {
 						provider: self.id().to_string(),
 						confidence: 0.0,
 						confidence_factors: Vec::new(),
-					});
+					})
 				},
 				Err(e) => {
 					// TODO: Maybe if fetch fails, use naive meta from search?
@@ -321,6 +396,46 @@ impl MetadataProvider for HardcoverClient {
 
 		Ok(SearchOutcome {
 			candidates: self.score_search(query, candidates),
+			requested,
+		})
+	}
+
+	/// Search for books and build candidates from the search index documents
+	/// alone: exactly one request, no per-hit `books` query. Hits keep the
+	/// index's own relevance order.
+	#[tracing::instrument(skip(self))]
+	async fn search_media_brief(
+		&self,
+		query: &SearchQuery,
+	) -> Result<SearchOutcome, MetadataProviderError> {
+		let response = self
+			.search(
+				&query.title,
+				HardcoverSearchType::Book,
+				query.limit.unwrap_or(10),
+			)
+			.await?;
+
+		let hits = response.parse_book_hits()?;
+		let requested = hits.len();
+		let candidates = hits
+			.into_iter()
+			.map(|hit| {
+				let external_id = hit.document.id.clone();
+				MatchCandidate {
+					external_id,
+					metadata: ExternalMetadata::Media(
+						hit.document.into_brief_metadata(self.id()),
+					),
+					provider: self.id().to_string(),
+					confidence: 0.0,
+					confidence_factors: Vec::new(),
+				}
+			})
+			.collect();
+
+		Ok(SearchOutcome {
+			candidates,
 			requested,
 		})
 	}
@@ -460,6 +575,20 @@ impl MetadataProvider for HardcoverClient {
 			tags,
 			..Default::default()
 		})
+	}
+
+	/// One `editions` query; see [`Self::fetch_audio_editions`]. Editions
+	/// naming no narrator still count: their length and ASIN are answers too.
+	#[tracing::instrument(skip(self))]
+	async fn audiobook_editions(
+		&self,
+		external_id: &str,
+	) -> Result<Vec<AudiobookEdition>, MetadataProviderError> {
+		let id: i64 = external_id.parse().map_err(|_| {
+			MetadataProviderError::Other(format!("Invalid book ID: {}", external_id))
+		})?;
+		let editions = self.fetch_audio_editions(id).await?;
+		Ok(editions.iter().map(audiobook_edition).collect())
 	}
 
 	#[tracing::instrument(skip(self))]
@@ -635,16 +764,39 @@ fn first_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
 		.find_map(|key| value.get(*key).and_then(value_as_string))
 }
 
-fn first_i32(value: &serde_json::Value, keys: &[&str]) -> Option<i32> {
-	keys.iter().find_map(|key| {
-		value.get(*key).and_then(|value| {
-			value
-				.as_i64()
-				.and_then(|number| i32::try_from(number).ok())
-				.or_else(|| value.as_str()?.parse().ok())
-		})
-	})
+fn value_as_i32(value: &serde_json::Value) -> Option<i32> {
+	value
+		.as_i64()
+		.or_else(|| value.as_f64().map(|number| number.trunc() as i64))
+		.and_then(|number| i32::try_from(number).ok())
+		.or_else(|| value.as_str()?.trim().parse().ok())
 }
+
+fn value_as_f32(value: &serde_json::Value) -> Option<f32> {
+	value
+		.as_f64()
+		.map(|number| number as f32)
+		.or_else(|| value.as_str()?.trim().parse().ok())
+}
+
+fn value_as_bool(value: &serde_json::Value) -> Option<bool> {
+	match value {
+		serde_json::Value::Bool(flag) => Some(*flag),
+		serde_json::Value::Number(number) => number.as_i64().map(|n| n != 0),
+		serde_json::Value::String(text) => match text.trim() {
+			"true" | "1" => Some(true),
+			"false" | "0" => Some(false),
+			_ => None,
+		},
+		_ => None,
+	}
+}
+
+fn first_i32(value: &serde_json::Value, keys: &[&str]) -> Option<i32> {
+	keys.iter()
+		.find_map(|key| value.get(*key).and_then(value_as_i32))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct MeResponse {
 	pub me: Vec<Me>,
@@ -712,6 +864,173 @@ pub type SeriesHit = Hit<SeriesDocument>;
 pub struct BookDocument {
 	#[serde(deserialize_with = "string_or_number")]
 	pub id: String,
+	#[serde(default)]
+	pub author_names: Option<serde_json::Value>,
+	#[serde(default)]
+	pub cached_contributors: Option<serde_json::Value>,
+	#[serde(default)]
+	pub title: Option<String>,
+	#[serde(default)]
+	pub slug: Option<String>,
+	#[serde(default)]
+	pub description: Option<String>,
+	#[serde(default)]
+	pub release_year: Option<serde_json::Value>,
+	#[serde(default)]
+	pub pages: Option<serde_json::Value>,
+	#[serde(default)]
+	pub isbns: Option<serde_json::Value>,
+	#[serde(default)]
+	pub series_names: Option<serde_json::Value>,
+	#[serde(default)]
+	pub featured_series: Option<serde_json::Value>,
+	#[serde(default)]
+	pub featured_series_position: Option<serde_json::Value>,
+	#[serde(default)]
+	pub image: Option<serde_json::Value>,
+	#[serde(default)]
+	pub has_audiobook: Option<serde_json::Value>,
+	#[serde(default)]
+	pub has_ebook: Option<serde_json::Value>,
+	/// Documented as the default audiobook edition's length, but absent from
+	/// live index documents (observed 2026-09-25); parsed leniently in case
+	/// Hardcover starts sending it. Lengths come from audio editions.
+	#[serde(default)]
+	pub audio_seconds: Option<serde_json::Value>,
+}
+
+impl BookDocument {
+	fn search_writers(&self) -> Vec<String> {
+		let author_names: Vec<String> = self
+			.author_names
+			.as_ref()
+			.map(|value| match value {
+				serde_json::Value::Array(values) => {
+					values.iter().filter_map(search_author_name).collect()
+				},
+				value => search_author_name(value).into_iter().collect(),
+			})
+			.unwrap_or_default();
+		if !author_names.is_empty() {
+			return author_names;
+		}
+
+		self.cached_contributors
+			.as_ref()
+			.and_then(serde_json::Value::as_array)
+			.map(|contributors| {
+				contributors
+					.iter()
+					.filter_map(|contributor| {
+						let role = contributor.get("contribution")?.as_str()?;
+						if !matches!(role, "Author" | "Writer") {
+							return None;
+						}
+						contributor.get("author").and_then(search_author_name)
+					})
+					.collect()
+			})
+			.unwrap_or_default()
+	}
+
+	/// Build metadata from the indexed document only. ISBNs are classified
+	/// by length after stripping separators; the series comes from
+	/// `featured_series` and falls back to the first `series_names` entry.
+	fn into_brief_metadata(self, provider: &str) -> ExternalMediaMetadata {
+		let writers = self.search_writers();
+		let (isbn, isbn_13) = self
+			.isbns
+			.as_ref()
+			.and_then(serde_json::Value::as_array)
+			.map(|values| {
+				values.iter().filter_map(value_as_string).fold(
+					(None, None),
+					|(isbn10, isbn13), raw| {
+						let digits: String =
+							raw.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+						match digits.len() {
+							10 => (isbn10.or(Some(digits)), isbn13),
+							13 => (isbn10, isbn13.or(Some(digits))),
+							_ => (isbn10, isbn13),
+						}
+					},
+				)
+			})
+			.unwrap_or((None, None));
+		let featured = self.featured_series.as_ref();
+		let series_name = featured
+			.and_then(|series| {
+				first_string(series, &["name", "series_name"]).or_else(|| {
+					series
+						.get("series")
+						.and_then(|inner| first_string(inner, &["name"]))
+				})
+			})
+			.or_else(|| {
+				self.series_names
+					.as_ref()
+					.and_then(serde_json::Value::as_array)
+					.and_then(|names| names.iter().find_map(value_as_string))
+			});
+		let series_external_id = featured.and_then(|series| {
+			first_string(series, &["id", "series_id"]).or_else(|| {
+				series
+					.get("series")
+					.and_then(|inner| first_string(inner, &["id"]))
+			})
+		});
+		let number = self
+			.featured_series_position
+			.as_ref()
+			.and_then(value_as_f32)
+			.or_else(|| {
+				featured
+					.and_then(|series| series.get("position"))
+					.and_then(value_as_f32)
+			});
+		let cover_url = self.image.as_ref().and_then(|image| {
+			first_string(image, &["url"]).or_else(|| value_as_string(image))
+		});
+
+		let has_audiobook = self.has_audiobook.as_ref().and_then(value_as_bool);
+		let audio_seconds = self
+			.audio_seconds
+			.as_ref()
+			.and_then(value_as_i32)
+			.filter(|seconds| *seconds > 0);
+
+		ExternalMediaMetadata {
+			provider: provider.to_string(),
+			external_id: self.id,
+			series_name,
+			series_external_id,
+			title: self.title.filter(|title| !title.trim().is_empty()),
+			summary: self.description,
+			number,
+			year: self.release_year.as_ref().and_then(value_as_i32),
+			page_count: self.pages.as_ref().and_then(value_as_i32),
+			isbn,
+			isbn_13,
+			writers: Some(writers),
+			cover_url,
+			provider_url: self
+				.slug
+				.map(|slug| format!("https://hardcover.app/books/{slug}")),
+			has_ebook: self.has_ebook.as_ref().and_then(value_as_bool),
+			has_audiobook,
+			audio_seconds,
+			..Default::default()
+		}
+	}
+}
+
+fn search_author_name(value: &serde_json::Value) -> Option<String> {
+	value
+		.as_str()
+		.or_else(|| value.get("name").and_then(serde_json::Value::as_str))
+		.map(str::trim)
+		.filter(|name| !name.is_empty())
+		.map(str::to_owned)
 }
 
 /// Document returned from series search
@@ -781,6 +1100,60 @@ pub struct SeriesNameRef {
 pub struct EditionRef {
 	pub isbn_10: Option<String>,
 	pub isbn_13: Option<String>,
+}
+
+/// Editions come back as raw documents: every field the query names is
+/// optional in practice, and the contributor shape has already drifted once
+/// (`contributions` rows versus the `cached_contributors` snapshot).
+#[derive(Debug, Deserialize)]
+pub struct EditionsQueryData {
+	#[serde(default)]
+	pub editions: Vec<serde_json::Value>,
+}
+
+/// Contributors credited with a role that reads as narration. Roles are
+/// free text on Hardcover, so the match is on the word rather than the
+/// exact "Narrator" the docs list.
+fn narrator_names(contributors: &serde_json::Value) -> Vec<String> {
+	contributors
+		.as_array()
+		.map(|rows| {
+			rows.iter()
+				.filter_map(|row| {
+					let role = row.get("contribution")?.as_str()?;
+					if !role.to_ascii_lowercase().contains("narrat") {
+						return None;
+					}
+					row.get("author").and_then(search_author_name)
+				})
+				.collect()
+		})
+		.unwrap_or_default()
+}
+
+/// See [`HardcoverClient::fetch_audio_editions`] for the shape queried.
+fn audiobook_edition(edition: &serde_json::Value) -> AudiobookEdition {
+	let narrators = edition
+		.get("contributions")
+		.map(narrator_names)
+		.filter(|names| !names.is_empty())
+		.or_else(|| edition.get("cached_contributors").map(narrator_names))
+		.unwrap_or_default();
+	AudiobookEdition {
+		external_id: edition.get("id").and_then(value_as_string),
+		narrators,
+		audio_seconds: edition
+			.get("audio_seconds")
+			.and_then(value_as_i32)
+			.filter(|seconds| *seconds > 0),
+		abridged: None,
+		asin: edition.get("asin").and_then(value_as_string),
+		language: edition.get("language").and_then(|language| {
+			first_string(language, &["code2", "code3", "language"])
+				.map(|value| value.trim().to_lowercase())
+		}),
+		users_count: edition.get("users_count").and_then(value_as_i32),
+	}
 }
 
 #[cfg(test)]
@@ -899,7 +1272,16 @@ mod tests {
 			"data": {
 				"search": {
 					"results": {
-						"hits": [{ "document": { "id": 52709 } }]
+						"hits": [{
+							"document": {
+								"id": 52709,
+								"author_names": ["Becky Chambers"],
+								"cached_contributors": [{
+									"contribution": "Author",
+									"author": { "name": "Becky Chambers" }
+								}]
+							}
+						}]
 					}
 				}
 			}
@@ -917,12 +1299,7 @@ mod tests {
 						"release_date": null,
 						"pages": 518,
 						"cached_image": { "url": "https://hardcover.app/cover.jpg" },
-						"cached_contributors": [
-							{
-								"contribution": "Author",
-								"author": { "name": "Becky Chambers" }
-							}
-						],
+						"cached_contributors": [],
 						"cached_tags": {
 							"Genre": [{ "tag": "Science Fiction" }]
 						},
@@ -999,5 +1376,227 @@ mod tests {
 		assert!(requests[0].contains("The Long Way"));
 		assert!(requests[1].contains("books(where:"));
 		assert!(requests[1].contains("_eq: 52709"));
+	}
+
+	#[tokio::test]
+	async fn search_media_brief_maps_index_document_with_one_request() {
+		use crate::mock_http::{render_ok, MockServer};
+
+		let search_body = serde_json::json!({
+			"data": { "search": { "results": { "hits": [
+				{
+					"document": {
+						"id": 52709,
+						"title": "The Long Way to a Small, Angry Planet",
+						"slug": "the-long-way-to-a-small-angry-planet",
+						"author_names": ["Becky Chambers"],
+						"release_year": 2014,
+						"pages": "518",
+						"isbns": ["978-1477818542", "1477818541", "bogus"],
+						"series_names": ["Wayfarers"],
+						"featured_series": { "id": 123, "name": "Wayfarers" },
+						"featured_series_position": 1,
+						"image": { "url": "https://hardcover.app/cover.jpg" },
+						"has_audiobook": true,
+						"has_ebook": false,
+						"audio_seconds": 52380
+					}
+				},
+				{
+					"document": {
+						"id": "99",
+						"title": "Record of a Spaceborn Few",
+						"cached_contributors": [{
+							"contribution": "Author",
+							"author": { "name": "Becky Chambers" }
+						}],
+						"release_year": "2018",
+						"series_names": ["Wayfarers"],
+						"featured_series": { "series": { "name": "Wayfarers" }, "position": "3" },
+						"image": "https://hardcover.app/spaceborn.jpg",
+						"has_audiobook": "true",
+						"audio_seconds": 0
+					}
+				}
+			] } } }
+		})
+		.to_string();
+
+		let server = MockServer::spawn(vec![render_ok(&search_body)]);
+		let client = HardcoverClient::new("test-token".to_string(), Some(u32::MAX))
+			.with_api_url(format!("{}/v1/graphql", server.url));
+
+		let outcome = client
+			.search_media_brief(&SearchQuery {
+				title: "Wayfarers".to_string(),
+				limit: Some(5),
+				..Default::default()
+			})
+			.await
+			.expect("brief search should succeed against the mock");
+
+		let requests = server.requests();
+		assert_eq!(
+			requests.len(),
+			1,
+			"brief search must not fetch per-hit detail"
+		);
+		assert!(requests[0].contains("search(query:"));
+		assert!(requests[0].contains(r#"query_type: \"Book\""#));
+		assert!(requests[0].contains("per_page: 5"));
+
+		assert_eq!(outcome.requested, 2);
+		assert_eq!(outcome.candidates.len(), 2);
+
+		let first = outcome.candidates[0].metadata.as_media().unwrap();
+		assert_eq!(outcome.candidates[0].external_id, "52709");
+		assert_eq!(
+			first.title.as_deref(),
+			Some("The Long Way to a Small, Angry Planet")
+		);
+		assert_eq!(
+			first.writers.as_deref(),
+			Some(["Becky Chambers".to_string()].as_slice())
+		);
+		assert_eq!(first.year, Some(2014));
+		assert_eq!(first.page_count, Some(518));
+		assert_eq!(first.isbn_13.as_deref(), Some("9781477818542"));
+		assert_eq!(first.isbn.as_deref(), Some("1477818541"));
+		assert_eq!(
+			first.cover_url.as_deref(),
+			Some("https://hardcover.app/cover.jpg")
+		);
+		assert_eq!(first.series_name.as_deref(), Some("Wayfarers"));
+		assert_eq!(first.series_external_id.as_deref(), Some("123"));
+		assert_eq!(first.number, Some(1.0));
+		assert_eq!(
+			first.provider_url.as_deref(),
+			Some("https://hardcover.app/books/the-long-way-to-a-small-angry-planet")
+		);
+		assert_eq!(first.has_audiobook, Some(true));
+		assert_eq!(first.has_ebook, Some(false));
+		assert_eq!(first.audio_seconds, Some(52380));
+
+		let second = outcome.candidates[1].metadata.as_media().unwrap();
+		assert_eq!(outcome.candidates[1].external_id, "99");
+		assert_eq!(
+			second.writers.as_deref(),
+			Some(["Becky Chambers".to_string()].as_slice())
+		);
+		assert_eq!(second.year, Some(2018));
+		assert_eq!(second.series_name.as_deref(), Some("Wayfarers"));
+		assert_eq!(second.number, Some(3.0));
+		assert_eq!(
+			second.cover_url.as_deref(),
+			Some("https://hardcover.app/spaceborn.jpg")
+		);
+		assert!(second.isbn.is_none() && second.isbn_13.is_none());
+		assert_eq!(
+			second.has_audiobook,
+			Some(true),
+			"string flags are accepted"
+		);
+		assert_eq!(second.has_ebook, None, "an absent flag stays unknown");
+		assert_eq!(second.audio_seconds, None, "a zero length is no length");
+	}
+
+	#[tokio::test]
+	async fn audiobook_editions_use_one_query_and_read_narrators_from_either_shape() {
+		use crate::mock_http::{render_ok, MockServer};
+
+		let body = serde_json::json!({
+			"data": { "editions": [
+				{
+					"id": 1,
+					"asin": "B08G9PRS1K",
+					"audio_seconds": 57000.0,
+					"users_count": 812,
+					"language": { "language": "English", "code2": "en", "code3": "eng" },
+					"contributions": [
+						{ "contribution": "Author", "author": { "name": "Andy Weir" } },
+						{ "contribution": "narrator", "author": { "name": "Ray Porter" } }
+					],
+					"cached_contributors": []
+				},
+				{
+					"id": "2",
+					"asin": null,
+					"audio_seconds": "0",
+					"language": { "language": "Finnish", "code2": null, "code3": "fin" },
+					"contributions": [],
+					"cached_contributors": [
+						{ "contribution": "Narrator", "author": { "name": "Someone Else" } }
+					]
+				},
+				{ "id": 3 }
+			] }
+		})
+		.to_string();
+		let server = MockServer::spawn(vec![render_ok(&body)]);
+		let client = HardcoverClient::new("test-token".to_string(), Some(u32::MAX))
+			.pointed_at(&server.url);
+
+		let editions = client.audiobook_editions("52709").await.unwrap();
+
+		let requests = server.requests();
+		assert_eq!(requests.len(), 1);
+		assert!(requests[0].contains("book_id: { _eq: 52709 }"));
+		assert!(requests[0].contains("reading_format_id: { _eq: 2 }"));
+		assert_eq!(
+			editions,
+			vec![
+				AudiobookEdition {
+					external_id: Some("1".to_string()),
+					narrators: vec!["Ray Porter".to_string()],
+					audio_seconds: Some(57000),
+					abridged: None,
+					asin: Some("B08G9PRS1K".to_string()),
+					language: Some("en".to_string()),
+					users_count: Some(812),
+				},
+				AudiobookEdition {
+					external_id: Some("2".to_string()),
+					narrators: vec!["Someone Else".to_string()],
+					audio_seconds: None,
+					abridged: None,
+					asin: None,
+					language: Some("fin".to_string()),
+					users_count: None,
+				},
+				AudiobookEdition {
+					external_id: Some("3".to_string()),
+					..Default::default()
+				},
+			]
+		);
+
+		assert!(client.audiobook_editions("not-a-number").await.is_err());
+	}
+
+	#[test]
+	fn book_search_document_extracts_cached_contributors() {
+		let document: BookDocument = serde_json::from_value(serde_json::json!({
+			"id": 52709,
+			"cached_contributors": [
+				{
+					"contribution": "Author",
+					"author": { "name": "Becky Chambers" }
+				},
+				{
+					"contribution": "Translator",
+					"author": { "name": "Other Contributor" }
+				}
+			]
+		}))
+		.unwrap();
+
+		assert_eq!(document.search_writers(), vec!["Becky Chambers"]);
+	}
+
+	#[test]
+	fn pasted_bearer_prefix_is_not_sent_twice() {
+		for raw in ["tok", "Bearer tok", "bearer  tok ", " BEARER tok\n"] {
+			assert_eq!(super::normalize_token(raw), "tok", "input {raw:?}");
+		}
 	}
 }

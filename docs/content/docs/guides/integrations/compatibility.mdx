@@ -14,38 +14,32 @@ status](/docs/developer/platforms), and [protocol standards](/docs/developer/sta
 
 ## Evidence labels
 
-- **Shipped** — the implementation is present in this fork.
-- **Contract-tested** — a pinned fixture, replay, or server harness exercised a
-  protocol surface. It does not prove that a physical app works.
-- **Device-tested** — a real app or device ran the flow against Coppice.
-- **Source-only** — pinned client or protocol source was inspected without a
-  live run.
-- **Planned** — a future capability or design item.
-- **Blocked** — a prerequisite is missing, so the flow is not currently
-  claimable.
+[Integration architecture](/docs/developer/integration-architecture) defines
+the canonical status vocabulary. The detailed client versions, evidence
+records, and exact tested flows are maintained only in the
+[client verification matrix](/docs/developer/client-verification).
 
 ## Client and protocol matrix
 
 | Surface or client | Implementation | Evidence | What the evidence means |
 | --- | --- | --- | --- |
-| Komga profile / Komelia 0.19.0 | Shipped | Device-tested; Contract-tested | Login, browse, CBZ/EPUB offline download, reading progress, and mark-read were exercised. The profile is not a promise of full Komga parity. |
-| Grimmory `/komga` alias | Shipped | Device-tested; Contract-tested | Device login was exercised; listing, file, and thumbnail routes were replayed. |
-| Mihon Komga extension and tracker | Shipped | Device-tested | Browse, download, read, and tracker GET/PUT were exercised. |
-| Kavita profile / Turnleaf and Kamigura | Shipped | Device-tested; Contract-tested | The recorded browse/read/download or want-to-read flows were exercised, and the wire profile has a replay. |
-| Other Kavita-shaped clients (Inkita, Kover, Kamare, Mihon tracker) | Shipped | Source-only | Pinned sources informed the profile; no device run is claimed. |
-| OPDS 1.2/PSE | Shipped | Device-tested; Contract-tested | Liseur exercised OPDS 1.2 and the server contract is covered. Generic OPDS readers are not blanket-certified. |
-| OPDS 2.0 | Shipped | Contract-tested | Auth and progression contracts are covered; universal OPDS 2.0 app support is not claimed. |
-| Kobo sync and KEPUB | Shipped | Contract-tested; Blocked | Initialization, library sync, KEPUB, range requests, and reading-state routes are replayed. No physical Kobo has run against Coppice. |
-| KOReader/KOSync | Shipped | Contract-tested; Device-tested; Source-only; Blocked | Server routes are probed. Liseur's KOReader-sync flow is device-tested. The native KOReader app and `stump.koplugin` have not been loaded; the plugin is source-only. |
-| liseur-sync | Shipped | Device-tested; Contract-tested | Positions, heads, and annotations were exercised through Liseur. |
-| Audiobookshelf-compatible REST / Lissen 1.11.22 | Shipped | Device-tested; Contract-tested | Lissen browse, listen, byte-range download, sessions, and bookmarks were exercised. |
-| Official Audiobookshelf app | Shipped profile | Blocked; Source-only | The profile is Lissen-shaped REST. The official app needs the Engine.IO/Socket.IO lane, which is not shipped, and no official-app run is claimed. |
-| Ordinary EPUB playback | Shipped | Device-tested | EPUB reading is an ordinary reading flow, separate from audiobook playback and alignment. |
-| Ordinary audiobook playback | Shipped | Device-tested | Audiobook playback is an ordinary audio flow, separate from EPUB reading and alignment. |
+| Komga profile / Komelia | Shipped | Device-tested; Contract-tested | Komelia 0.19.0 was device-tested; current 0.19.3 source is a separate Source-only record. The profile is not full Komga parity. |
+| Built-in Komf-compatible API / Komelia | Shipped | Contract-tested; Source-only | Komf 2.0.1 route, DTO, and device-permission behavior is tested; no live Komelia 0.19.3 device run is claimed. |
+| Grimmory `/komga` alias | Shipped | Device-tested; Contract-tested | Device login and selected listing, file, and thumbnail routes were exercised. |
+| Mihon Komga extension and tracker | Shipped | Device-tested; Contract-tested | Tracker source-analysis pin `21af65b1` and replay-client v0.20.4 pin `df650725` are distinct; evidence does not imply other clients. |
+| Kavita profile / Turnleaf and Kamigura | Shipped | Device-tested; Contract-tested | Device runs are scoped to Turnleaf and Kamigura; other Kavita-shaped clients remain Source-only. |
+| OPDS 1.2/PSE | Shipped | Device-tested; Contract-tested | Liseur exercised OPDS 1.2; generic OPDS readers are not blanket-certified. |
+| OPDS 2.0 | Shipped | Contract-tested | Server contract only; Liseur has no OPDS 2 parser. |
+| Kobo sync and KEPUB | Shipped | Contract-tested; Blocked | Routes and KEPUB conversion are contract-tested; no physical Kobo run is recorded. KEPUB's 35/35 parity sample is distinct from the 36-book/37 MB performance corpus. |
+| KOReader/KOSync | Shipped | Contract-tested; Device-tested; Source-only | Liseur's KOReader-sync flow is device-tested. The native KOReader app and `coppice.koplugin` have not been loaded; the plugin is Source-only at v2026.07.1 `9192014d`. |
+| liseur-sync | Shipped | Device-tested; Contract-tested; Source-only | Existing device flows cover positions/heads. Current Liseur v0.19.0 `62ecb5a5` and liseur-sync `906889ff` pins are Source-only; attachment routes/storage have source/contract evidence, not an attachment device test. |
+| Audiobookshelf REST / Lissen | Shipped | Contract-tested; Source-only | Contract replay is pinned to Lissen 1.11.22; current Lissen 1.12.5 `fd5c0417` is Source-only. No Lissen device run is claimed. |
+| Official Audiobookshelf app | Shipped profile | Device-tested; Source-only | Android 35 test of app v0.14.0-beta is scoped, not full parity. Current source pin v0.14.1-beta `2ac4de4d` is Source-only, not a device-tested version. |
+| Ordinary EPUB playback | Shipped | Device-tested | EPUB reading is separate from audiobook synchronization. |
+| Ordinary audiobook playback | Shipped | Device-tested | Audiobook playback is separate from EPUB reading and alignment. |
 
-The canonical dates, versions, route scopes, and caveats are maintained in the
-[developer verification record](/docs/developer/state). The table intentionally
-does not turn a harness result into a device result.
+This summary is intentionally compact. The [client verification matrix](/docs/developer/client-verification)
+is the canonical record for dates, pins, routes, and caveats.
 
 ## Provider status
 
@@ -63,16 +57,15 @@ record](/docs/developer/hardcover-integration) for the exact boundary.
 
 ### Storyteller and read-aloud
 
-Synchronized Storyteller read-aloud EPUB playback is **not shipped**. Storyteller
-is a future worker-side alignment backend, not a search provider, catalog
-provider, or bundled dependency. The current product keeps ordinary EPUB
-playback and ordinary audiobook playback separate.
+Pairing, `SyncMapV1`/SMIL timing import, alignment enqueue, deterministic
+M4B-to-EPUB streaming, and authenticated cache-only status/download are
+shipped. Remote workers can use optional operator-configured Storyteller or
+native CTC alignment runners; neither is bundled or run as server-local ML.
 
-A future alignment flow starts only after an EPUB and audiobook pair has been
-confirmed. It can then import existing timing data, run a Storyteller worker,
-and use a native CTC fallback candidate. The worker and synchronized playback
-remain **Planned**; current app playback is therefore **Blocked**. See [read-aloud
-architecture](/docs/developer/read-aloud).
+Readiness quality checks and full synchronized reader playback/UI remain
+planned; ordinary EPUB and audiobook playback remain separate. No ordinary
+playback device test is evidence for synchronized read-aloud playback. See
+[read-aloud architecture](/docs/developer/read-aloud).
 
 ## Setup guides
 
@@ -80,18 +73,19 @@ architecture](/docs/developer/read-aloud).
   physical-device limitation.
 - [KOReader sync](/docs/guides/integrations/koreader) — API-key setup,
   hash-based matching, and the `ENABLE_KOREADER_SYNC` gate.
+- [Komelia Komf API](/docs/guides/integrations/komelia-komf) — device-key URL setup, the metadata-edit opt-in, read-only behavior, and limits.
 - [Metadata fetching](/docs/guides/integrations/metadata-fetching) — provider
   configuration and the offline-only Hardcover boundary.
 - [Request and acquisition boundary](/docs/guides/integrations/acquisition) —
-  metadata-backed requests, approval, and the deferred acquisition boundary.
+  metadata-backed requests, approval, and manager-confirmed MAM Bridge handoff.
 
 ## Current, planned, and blocked at a glance
 
 | Area | Current | Planned | Blocked |
 | --- | --- | --- | --- |
-| Library access | OPDS, Komga-shaped, Kavita, Kobo, KOReader, liseur-sync, ABS-compatible REST, ordinary EPUB, and ordinary audiobook paths | — | A client/device not listed with **Device-tested** evidence |
-| Requests and acquisition | Metadata-backed ledger, permissions, per-user visibility, manager approval/rejection, notifications, and social handoff | — | MAM acquisition is deferred; any future integration must be a separate authenticated provider sidecar |
-| Read-aloud | Pairing and existing timing import boundaries | Storyteller worker-side alignment; native CTC fallback | Synchronized Storyteller EPUB playback |
+| Library access | OPDS, Komga-shaped, Kavita, Kobo, KOReader, liseur-sync, ABS-compatible REST, ordinary EPUB, and ordinary audiobook paths | — | A client/device not explicitly listed as Device-tested |
+| Requests and acquisition | Metadata-backed ledger, permissions, per-user visibility, manager approval/rejection, notifications, social handoff, manager-confirmed MAM Bridge search/grab and staged-ingest handoff | — | MAM Bridge configuration and operator confirmation are required; no in-process downloader, automatic retries, or auto-grab |
+| Read-aloud | Pairing, maps, alignment enqueue, cache endpoints, optional configured worker runners | Readiness checks and synchronized playback/UI | Physical synchronized read-aloud evidence |
 | Hardcover | Offline-tested metadata mapper | Account/progress/journal sync | Live credential verification and account-sync prerequisites |
 
 The [modular deployment guide](/docs/guides/configuration/modular-deployment)

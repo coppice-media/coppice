@@ -137,7 +137,10 @@ pub fn credential_kind_for(kind: DeviceKind) -> DeviceCredentialKind {
 /// The permissions the device's API key is narrowed to. Protocol kinds get the
 /// protocol permission plus what the protocol needs to serve files; native API
 /// kinds act as the user.
-pub fn api_key_permissions_for(kind: DeviceKind) -> APIKeyPermissions {
+pub fn api_key_permissions_for(
+	kind: DeviceKind,
+	allow_komf_metadata_editing: bool,
+) -> APIKeyPermissions {
 	match kind {
 		DeviceKind::Kobo => APIKeyPermissions::Custom(vec![
 			UserPermission::AccessKoboSync,
@@ -154,7 +157,13 @@ pub fn api_key_permissions_for(kind: DeviceKind) -> APIKeyPermissions {
 		| DeviceKind::Komelia
 		| DeviceKind::Opds
 		| DeviceKind::Abs
-		| DeviceKind::Kavita => APIKeyPermissions::Custom(vec![UserPermission::DownloadFile]),
+		| DeviceKind::Kavita => {
+			let mut permissions = vec![UserPermission::DownloadFile];
+			if kind == DeviceKind::Komelia && allow_komf_metadata_editing {
+				permissions.push(UserPermission::EditMetadata);
+			}
+			APIKeyPermissions::Custom(permissions)
+		},
 		// A worker opens the socket and downloads the inputs of the jobs it
 		// claims; it never acts as the user, so its key is narrowed to those
 		// two rights and nothing else.
@@ -176,8 +185,11 @@ pub fn api_key_permissions_for(kind: DeviceKind) -> APIKeyPermissions {
 /// The permissions the owning user must hold before a device of `kind` can be
 /// created: a key must never grant what the user does not have, and an API key
 /// only authenticates for users allowed to use API keys.
-pub fn required_permissions(kind: DeviceKind) -> Vec<UserPermission> {
-	let mut required = match api_key_permissions_for(kind) {
+pub fn required_permissions(
+	kind: DeviceKind,
+	allow_komf_metadata_editing: bool,
+) -> Vec<UserPermission> {
+	let mut required = match api_key_permissions_for(kind, allow_komf_metadata_editing) {
 		APIKeyPermissions::Custom(permissions) => permissions,
 		APIKeyPermissions::Inherit(_) => Vec::new(),
 	};
@@ -228,18 +240,40 @@ mod tests {
 			DeviceCredentialKind::ApiKey
 		);
 		assert_eq!(
-			api_key_permissions_for(DeviceKind::SourceWorker),
+			api_key_permissions_for(DeviceKind::SourceWorker, false),
 			APIKeyPermissions::Custom(vec![UserPermission::AccessRemoteSource])
 		);
 		assert!(!matches!(
-			api_key_permissions_for(DeviceKind::SourceWorker),
+			api_key_permissions_for(DeviceKind::SourceWorker, false),
 			APIKeyPermissions::Inherit(_)
 		));
 		assert_eq!(
-			required_permissions(DeviceKind::SourceWorker),
+			required_permissions(DeviceKind::SourceWorker, false),
 			vec![
 				UserPermission::AccessRemoteSource,
 				UserPermission::AccessApiKeys
+			]
+		);
+	}
+	#[test]
+	fn komelia_permissions_are_download_only_unless_metadata_editing_is_opted_in() {
+		assert_eq!(
+			api_key_permissions_for(DeviceKind::Komelia, false),
+			APIKeyPermissions::Custom(vec![UserPermission::DownloadFile])
+		);
+		assert_eq!(
+			api_key_permissions_for(DeviceKind::Komelia, true),
+			APIKeyPermissions::Custom(vec![
+				UserPermission::DownloadFile,
+				UserPermission::EditMetadata,
+			])
+		);
+		assert_eq!(
+			required_permissions(DeviceKind::Komelia, true),
+			vec![
+				UserPermission::DownloadFile,
+				UserPermission::EditMetadata,
+				UserPermission::AccessApiKeys,
 			]
 		);
 	}

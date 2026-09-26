@@ -17,13 +17,14 @@ never enqueue work or run ML. An in-process Rust model runtime, virtual
 composite delivery, and readiness quality checks remain **Planned**. The
 metadata-backed request ledger, permissions, per-user visibility,
 approval/rejection decisions, notifications, and social handoff are
-**Shipped**. Acquisition is deferred and is not part of the read-aloud worker
-contract. Storyteller and native model paths stay in the worker process and
-never enter the server or job payload.
+**Shipped**. Manager-confirmed MAM Bridge acquisition is separate from the
+read-aloud worker contract; the browser never talks to the bridge. Storyteller
+and native model paths stay in the worker process and never enter the server or
+job payload.
 
-**Integration status:** The implementation and its focused read-aloud tests are
-green in the 2026-09-22 full Rust/Bun/build gate. This is source and automated
-contract evidence, not physical-reader playback proof.
+Automated source and contract evidence is not physical-reader evidence. No
+synchronized physical-reader playback is recorded; see the
+[client verification matrix](/docs/developer/client-verification).
 
 The three rows below are **cost/input tiers, not three independent product
 features**. Coppice ships the deterministic first tier, strict native SMIL
@@ -37,7 +38,7 @@ scope.
 | Have | Want | Evidence / cost tier |
 | --- | --- | --- |
 | an audiobook (`media_audio`, chapters) and the same book as an EPUB | “you were at 41 % of chapter 7 on the phone” → open the EPUB there, and back | **Shipped** — chapter + percentage |
-| both, plus a worker | sentence-level sync: tap a sentence, hear it; playback highlights text | **Shipped** — explicit alignment, validated `SyncMapV1`, and cached EPUB 3 delivery; synchronized console playback remains separate |
+| both, plus a worker | sentence-level sync: tap a sentence, hear it; playback highlights text | **Shipped** — explicit alignment, validated `SyncMapV1`, and cached EPUB 3 delivery; synchronized playback in the Home reader remains **Planned** |
 | only the audiobook | a transcript / search | out of scope — full ASR is not a read-aloud prerequisite |
 
 The canonical portable output for the alignment tier is **EPUB 3
@@ -58,7 +59,7 @@ The key is the **work**, and the tree already has one.
 | `works` / `editions` / `aliases` / `media_links` (a work has editions; a media row links to an edition by identifier) | **Shipped** (liseur-sync model, `POST /v1/works/resolve`) | `crates/migrations/src/m20260904_000000_add_liseur_sync.rs`, `apps/server/src/routers/liseur_sync/` |
 | identifiers on media metadata: `identifier_isbn`, `identifier_amazon`, `identifier_google`, `identifier_mobi_asin`, `identifier_calibre`, `identifier_uuid` | **Shipped** | `crates/models/src/entity/media_metadata.rs` |
 | Audible ASIN from the `audible` provider | **Shipped** | `crates/integrations/metadata/src/providers/audible.rs` |
-| **Pairing rule**: two media rows are the same work when (a) they link to the same work id, or (b) an identifier matches through a provider's edition list (Audnexus and OpenLibrary both expose “other editions”), or (c) normalised `title + first author` match and the user confirms | **Shipped** | `crates/library` (`pair_editions`), surfaced as `Media.editions: [Media]` in GraphQL and an “Also available as” row in the console |
+| **Pairing rule**: two media rows are the same work when (a) they link to the same work id, or (b) an identifier matches through a provider's edition list (Audnexus and OpenLibrary both expose “other editions”), or (c) normalised `title + first author` match and the user confirms | **Shipped** | `crates/library` (`pair_editions`), surfaced as `Media.editions: [Media]` in GraphQL and an “Also available as” row in Home |
 
 **Shipped:** same work id; identifier through a provider's edition list
 (Audnexus `GET /books/{asin}` → the print ISBN; Open Library
@@ -100,7 +101,7 @@ computed by the Readium positions generator — **Shipped**,
    from `locations.progression` inside the spine item.
 3. **Accuracy** — narrators are not metronomes, so this is ±1–3 min on a
    30-minute chapter; good enough for “resume near here”, never for highlighting.
-   The console shows the converted position as *approximate* and the unified
+   The Home reader shows the converted position as *approximate* and the unified
    head records no derived position.
 
 **Shipped** (readiness remains **Planned**): `media_chapter_map`
@@ -108,7 +109,7 @@ computed by the Readium positions generator — **Shipped**,
 matter skipping and per-entry `confidence`
 (`stump_library::editions::build_chapter_map`), both position conversions
 (`models::domain::reading_state::{map_time_to_locator,map_locator_to_time}`),
-console “Also available as” with **Open here** and an *approximate* badge,
+Home's “Also available as” section provides **Open here** and an *approximate* badge;
 GraphQL `Media.editions`, `Media.editionSuggestions`,
 `Media.pairedPosition(fromMediaId)`, `chapterMap`,
 `confirmEditionPair` / `rejectEditionPair`, and `setChapterMapEntry`.
@@ -172,7 +173,8 @@ overlays and worker output share one target contract.
 
 Fallback interpolation is bounded inside one confirmed chapter and marked with
 `confidence`; never interpolate across front matter, an unmatched chapter or a
-track boundary. The console does not highlight low-confidence cues.
+track boundary. The future synchronized Home reader does not yet highlight
+low-confidence cues.
 
 
 ### A Rust aligner: how hard, and whether it is worth it
@@ -186,15 +188,14 @@ The aligner is four parts; three are easy in Rust today, one is the decision.
 | Trellis + Viterbi forced alignment over CTC emissions, per chapter (memory `T × N`, bounded by the chapter map) | ~200 lines, no dependency | a day |
 | **CTC acoustic model inference** | `ort` (ONNX Runtime bindings, CUDA/ROCm/CoreML through the runtime's shared library - not a build dependency) with an ONNX export of the model; `candle` has no wav2vec2 and its GPU path is less mature | the real work: export, `ort` feature wiring, parity tests against the Python aligner |
 
-Verdict: **Planned** — CTC/Viterbi is the leading tier-2 candidate, but still
-second to reusing an existing valid timing map. Phase A can prove the `align`
-job, map, and EPUB render through an external process/container boundary with a
-permissively licensed runtime and model. An operator-managed Storyteller API is
-an optional worker-side backend; the GPL-3.0 `ghost-story` CLI/toolchain is
-external only and is never bundled or the default runner. Phase B may serve the
-same wire contract from an in-binary `ort` aligner only when its `SyncMapV1`
-matches the fixture corpus within a declared tolerance. Nothing above that
-boundary changes.
+Verdict: the configured external native CTC executable runner is **Shipped**;
+**Planned** applies only to adding an in-process Rust/ONNX model runtime.
+Reusing an existing valid timing map remains first choice. The `align` job and
+external process boundary are implemented. An operator-managed Storyteller API
+is an optional worker-side backend; the GPL-3.0 `ghost-story` CLI/toolchain
+remains external only, never bundled or the default runner. An in-binary `ort`
+aligner is future work only if its `SyncMapV1` output matches the fixture corpus
+within a declared tolerance. This does not change the worker result contract.
 
 Model licences decide what phase B may ship: `facebook/wav2vec2-base-960h`
 (English, Apache-2.0) is fine; `MMS_FA` (1,100+ languages) is **CC-BY-NC 4.0**
@@ -342,9 +343,10 @@ try the next candidate when coverage or confidence fails.
 
 **Planned:** “Can this book be read aloud, and how well?” is a future
 quality-check family in the existing ingest registry shape
-(`crates/ingest/src/quality/`). It is not currently registered, and the console
-has no readiness badge or Requests page. When implemented, each check will name
-the action that fixes it without pretending that a missing source was acquired.
+(`crates/ingest/src/quality/`). It is not currently registered. Home's Requests
+page is a separate shipped surface; no read-aloud readiness badge or action is
+present. When implemented, each check will name the action that fixes it
+without pretending that a missing source was acquired.
 
 | Check id | Future pass condition | Future fix action |
 | --- | --- | --- |
@@ -502,11 +504,11 @@ If those checks pass, the cache keeps only the small immutable layout/metadata
 plan and generated text resources. A materialized ZIP remains the compatibility
 fallback for a client that cannot consume the virtual representation.
 
-The console's own reader does not need the EPUB at all: it reads the **Shipped**
-persisted SyncMap through GraphQL (`Media.syncMap(granularity)`), plays the track
-route it already uses, and highlights `element_id`s in the rendered XHTML.
-The field resolves a map from either the ebook or audiobook side; see
-`crates/graphql/src/object/media.rs` and `crates/graphql/src/object/sync_map.rs`.
+The Home EPUB reader supports ordinary reading; it does not yet synchronize
+highlighting or playback with an audiobook. A future synchronized reader may
+use the **Shipped** persisted map via GraphQL (`Media.syncMap(granularity)`) and
+the audio track route. These fields expose a map but do not implement paired
+audio playback; the synchronized reader contract remains **Planned**.
 
 **External Storyteller references** are separate from Coppice's optional
 worker-local adapter. Coppice does not bundle a Storyteller app or call it from
@@ -524,13 +526,13 @@ VPS never needs to reach the PC), so NAT and dynamic IPs are not a concern.
 
 | Concept | Design |
 | --- | --- |
-| Worker identity | a device of kind `Worker` (*devices crate exists*): paired with a QR/API key like every other device, scoped to the `worker` permission, revocable in the console |
+| Worker identity | a device of kind `Worker` (*devices crate exists*): paired with a QR/API key like every other device, scoped to the `worker` permission, revocable through Home device management |
 | Transport | one WebSocket `/api/v2/workers/socket` (the server already runs axum `ws`); worker sends `hello { capabilities }`, then `claim` / `progress` / `result` / `fail`; server sends `job` and `cancel`. Reconnect resumes claimed jobs by id |
-| Capabilities | `{ align: { device: cuda\|rocm\|metal\|cpu, models: [...], algorithms: [...], precisions: [...] }, transcode: { ffmpeg, hwaccel: [nvenc,...] }, asr: {...} }` - free-form JSON matched structurally; the console's Workers page lists who advertises what |
+| Capabilities | `{ align: { device: cuda\|rocm\|metal\|cpu, models: [...], algorithms: [...], precisions: [...] }, transcode: { ffmpeg, hwaccel: [nvenc,...] }, asr: {...} }` - free-form JSON matched structurally; Home's Workers page lists who advertises what |
 | Job table | `worker_jobs (id, kind, input JSON, requires JSON, status: queued\|claimed\|running\|done\|failed\|needs_worker, worker_id, priority, progress, result JSON, error)`; `needs_worker` is shown, not hidden - "no worker advertises `align` right now" |
 | Routing | a job kind declares `local: Option<fn>`; if a capable worker is connected it is offered first, else the local implementation runs (transcode has one: the `ffmpeg` ExternalTool), else the job waits. Priority is low by default: alignment never competes with a scan |
 | Data path | input by authenticated download (`/api/v2/media/{id}/file`, `/audio/track/{i}`); output uploaded as raw bytes to `PUT /api/v2/workers/jobs/{id}/output` with a required SHA-256, then atomically published only after result validation |
-| Events | job transitions are `CoreEvent::WorkerJobChanged` on the bus (*exists* as a pattern) → console live status, ntfy on completion |
+| Events | job transitions are `CoreEvent::WorkerJobChanged` on the bus (*exists* as a pattern) → Home live status, ntfy on completion |
 | Worker binary | `crates/worker` (`stump_worker`): protocol client, transcode/browser runners, optional worker-local Storyteller delegate, and optional external native CTC runner; the server-side `AlignInput`, `AlignResult` and `SyncMapV1` contract remains shared |
 
 An `align` runner is registered when the worker has either a configured
@@ -564,10 +566,11 @@ for deduplication or provenance. A result is only a candidate until Coppice
 checks exact digests, chapter correspondence, monotonic timing, duration,
 targets, and coverage.
 
-This backend is **Shipped** behind the worker client feature. Native
-CTC/Viterbi remains the later independent backend; both produce the same map
-contract. The adapter never sends Storyteller credentials to the server or
-embeds them in an EPUB/archive.
+The optional Storyteller backend is **Shipped** behind the configured worker
+client feature. The external native-CTC runner is also **Shipped** when
+configured; only an in-process CTC/Viterbi model runtime remains **Planned**.
+Both external runners produce the same map contract. Neither adapter sends
+Storyteller credentials to the server or embeds them in an EPUB/archive.
 
 ## 7. Requests - asking for what is missing
 
@@ -576,25 +579,17 @@ server owns request creation, mine/all visibility, permissions, optional
 destination intent, manager approval/rejection, notifications, and social
 recommendation handoff.
 
-Universal-style metadata search can seed a request, but approval ends the
-Coppice request flow:
+Universal-style metadata search can seed a request. Once approved, a manager
+can search releases through the separate authenticated MAM Bridge sidecar and
+explicitly confirm a grab. Coppice polls progress and copies completed downloads
+into staged ingest; Editor approval fulfils the request and notifies its owner.
+See the [request and acquisition boundary](/docs/guides/integrations/acquisition)
+for configuration and ownership details.
 
-```text
-metadata search or recommendation
-  -> request
-  -> permission and visibility checks
-  -> operator approval or rejection
-```
-
-MAM acquisition is deferred. There is no active release selection, grab,
-download polling, retry, or gateway configuration. If acquisition is added
-later, it must run as a separate authenticated provider sidecar. This boundary
-does not promise a provider, implementation, or schedule.
-
-Alignment is a separate explicit path: a user confirms an ebook + audiobook
-pair, then imports a validated map or enqueues an alignment job. The optional
-worker-local Storyteller adapter can fulfill that job; Storyteller is never a
-search/catalog provider.
+This acquisition path is separate from alignment: a user confirms an ebook +
+ audiobook pair, then imports a validated map or enqueues an alignment job. The
+optional worker-local Storyteller adapter can fulfill that job; Storyteller is
+never a search/catalog provider.
 
 ## 8. What is deliberately not here
 
@@ -615,7 +610,7 @@ search/catalog provider.
 
 1. `pair_editions` + `media_chapter_map` + read-time position conversion (tier
    1) — **Shipped**; the readiness check family (4b) remains **Planned**.
-2. Worker protocol + `crates/worker` + `worker_jobs` + console Workers page,
+2. Worker protocol + `crates/worker` + `worker_jobs` + Home's Workers page,
    with `transcode` as the first job kind — **Shipped**.
 3. `AlignInput`/capability requirements + `SyncMapV1` validation —
    **Shipped**; `media_sync_maps`, `Media.syncMap`, explicit enqueue/import,

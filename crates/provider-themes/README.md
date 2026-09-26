@@ -2,18 +2,13 @@
 
 ## Purpose
 
-Executes `keiyoushi/extensions-source` `lib-multisrc` **themes** — the shared
-base classes a few hundred Mihon extensions subclass — driven entirely by a
-data-only [`SourceDefinition`](../provider/src/definition.rs). One engine per
-theme; a site is a JSON file, never Rust.
-
-Owns: the theme engines, a `Send` HTML tree, a jsoup-compatible selector
-subset, and Java-pattern/relative/locale-aware chapter date parsing.
-
-Does not own: the definition schema, the loader, or the registry (all
-`stump_provider`); the definition *generator* (separate repository, see
-`docs/content/docs/developer/source-definitions.mdx`); API-shaped sources such
-as MangaDex (`stump_provider_mangadex`).
+Executes the `lib-multisrc` themes from `keiyoushi/extensions-source` through
+data-only [`SourceDefinition`](../provider/src/definition.rs) records. One
+engine serves each shared theme; site-specific configuration remains JSON.
+The crate owns theme engines, a `Send` HTML tree, jsoup-compatible selectors,
+and Java-pattern, relative, and locale-aware chapter-date parsing. Schema,
+loading, and registry belong to `stump_provider`; API-shaped sources such as
+MangaDex use `stump_provider_mangadex`.
 
 | Theme (`theme` value) | Base class | Extensions @ `064c1a0e` |
 | --- | --- | --- |
@@ -25,8 +20,8 @@ as MangaDex (`stump_provider_mangadex`).
 ## Reference / upstream
 
 - `keiyoushi/extensions-source` @ `064c1a0e8c58be4b36c21444c3d3df6840636950`
-  (2026-09-06, "Add HunlightComics (#18871)"), read-only clone at
-  `/tmp/keiyoushi-src`. Every knob below cites the Kotlin member it comes from.
+  (2026-09-06, "Add HunlightComics (#18871)"), inspected read-only. Every
+  knob below cites the Kotlin member it derives from.
 - Selector semantics follow **jsoup**, because the selector tables were written
   against it: case-insensitive class and attribute-value matching,
   `:contains`/`:containsOwn`/`:containsData`, `:has(> a)`, and `abs:` attribute
@@ -57,8 +52,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-No Kotlin is copied: the behaviour is reimplemented in Rust, and the
-site-specific data lives outside this repository. Stump itself remains MIT.
+No Kotlin is copied: the behavior is reimplemented in Rust. Source definitions
+are data assets; this crate implements the parser and theme engines. Coppice is
+licensed under MIT.
 
 ## Decisions
 
@@ -99,7 +95,7 @@ site-specific data lives outside this repository. Stump itself remains MIT.
 ## How to verify
 
 ```text
-cargo test -p stump_provider_themes                 # 65 tests, synthetic HTML/JSON
+cargo test -p stump_provider_themes                 # synthetic HTML/JSON fixtures
 cargo check -p stump_provider -p stump_core -p stump_server \
   --no-default-features --features headless,liseur-sync
 ```
@@ -108,7 +104,7 @@ Live, against a definition repository on disk:
 
 ```text
 STUMP_ENABLE_PROVIDERS=true \
-STUMP_SOURCE_DEFINITIONS_URL=file:///tmp/stump-sources \
+STUMP_SOURCE_DEFINITIONS_URL=file:///path/to/stump-sources \
   target/debug/stump_server
 # then, per theme: enableProviderSource(catalogId) -> browse -> series
 # -> chapters -> first page bytes

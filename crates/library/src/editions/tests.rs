@@ -1,5 +1,5 @@
 use models::entity::{liseur_sync_media_link, liseur_sync_work, media_audio};
-use sea_orm::{ActiveValue, DbBackend, DbConn, Schema};
+use sea_orm::{ActiveValue, DbBackend, DbConn, Schema, Statement};
 
 use super::*;
 use ::tests::fake_data;
@@ -27,6 +27,23 @@ async fn database() -> DbConn {
 	)
 	.await
 	.expect("create chapter map index");
+	conn.execute_unprepared(
+		"CREATE TABLE liseur_sync_aliases (
+			id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL,
+			value TEXT NOT NULL, work_id TEXT NOT NULL, edition_sha TEXT,
+			created_at TEXT NOT NULL
+		)",
+	)
+	.await
+	.expect("create Liseur alias lookup table");
+	conn.execute_unprepared(
+		"CREATE TABLE liseur_sync_editions (
+			id TEXT PRIMARY KEY, user_id TEXT NOT NULL, work_id TEXT NOT NULL,
+			edition_sha TEXT NOT NULL, media_id TEXT, created_at TEXT
+		)",
+	)
+	.await
+	.expect("create Liseur edition lookup table");
 	conn
 }
 
@@ -339,6 +356,372 @@ async fn editions_suggests_a_title_match_until_confirmed() {
 		.await
 		.expect("pair after confirm");
 	assert_eq!(editions[0].status, PairStatus::Confirmed);
+}
+
+#[tokio::test]
+async fn pairing_never_repoints_links_between_resolved_works() {
+	let conn = database().await;
+	let user = fake_data::User::new("owner").insert(&conn).await;
+	let series_id = library_and_series(&conn).await;
+	let first = book(
+		&conn,
+		&series_id,
+		"Edition 0",
+		"epub",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+	let first_pair = book(
+		&conn,
+		&series_id,
+		"Edition 1",
+		"epub",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+	let second = book(
+		&conn,
+		&series_id,
+		"Edition 2",
+		"epub",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+	let second_pair = book(
+		&conn,
+		&series_id,
+		"Edition 3",
+		"epub",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+
+	edition_pair::suggest_pair(
+		&conn,
+		&user.id,
+		&first.media.id,
+		&first_pair.media.id,
+		PairEvidence::TitleAuthor,
+	)
+	.await
+	.expect("first work suggestion");
+	edition_pair::suggest_pair(
+		&conn,
+		&user.id,
+		&second.media.id,
+		&second_pair.media.id,
+		PairEvidence::TitleAuthor,
+	)
+	.await
+	.expect("second work suggestion");
+	let second_link =
+		edition_pair::link_for_media(&conn, &user.id, &second_pair.media.id)
+			.await
+			.expect("second work link")
+			.expect("second work link exists");
+
+	for outcome in [
+		edition_pair::suggest_pair(
+			&conn,
+			&user.id,
+			&first.media.id,
+			&second_pair.media.id,
+			PairEvidence::TitleAuthor,
+		)
+		.await
+		.expect("conflicting suggestion"),
+		edition_pair::confirm_pair(
+			&conn,
+			&user.id,
+			&first.media.id,
+			&second_pair.media.id,
+		)
+		.await
+		.expect("conflicting confirmation"),
+	] {
+		assert_eq!(
+			outcome,
+			PairOutcome::Unchanged(PairUnchanged::WorkConflict {
+				media_id: second_pair.media.id.clone(),
+				work_id: second_link.work_id.clone(),
+			})
+		);
+		let after = edition_pair::link_for_media(&conn, &user.id, &second_pair.media.id)
+			.await
+			.expect("link remains readable")
+			.expect("existing link remains");
+		assert_eq!(after.id, second_link.id);
+		assert_eq!(after.work_id, second_link.work_id);
+		assert_eq!(after.pair_status, PairStatus::Suggested.to_string());
+		assert_eq!(
+			edition_pair::link_for_media(&conn, &user.id, &first.media.id)
+				.await
+				.expect("anchor remains readable")
+				.expect("anchor link remains")
+				.work_id,
+			edition_pair::link_for_media(&conn, &user.id, &first_pair.media.id)
+				.await
+				.expect("anchor pair remains readable")
+				.expect("anchor pair link remains")
+				.work_id
+		);
+	}
+}
+
+#[tokio::test]
+async fn confirming_two_confirmed_work_identities_is_refused() {
+	let conn = database().await;
+	let user = fake_data::User::new("owner").insert(&conn).await;
+	let series_id = library_and_series(&conn).await;
+	let left = book(&conn, &series_id, "Left", "m4b", None, None, None, None).await;
+	let right = book(&conn, &series_id, "Right", "epub", None, None, None, None).await;
+	work(&conn, &user.id, "left-work").await;
+	work(&conn, &user.id, "right-work").await;
+	liseur_link(&conn, &user.id, &left.media.id, "left-work").await;
+	liseur_link(&conn, &user.id, &right.media.id, "right-work").await;
+
+	let outcome =
+		edition_pair::confirm_pair(&conn, &user.id, &left.media.id, &right.media.id)
+			.await
+			.expect("conflicting confirmation is a business no-op");
+	assert_eq!(
+		outcome,
+		PairOutcome::Unchanged(PairUnchanged::WorkConflict {
+			media_id: right.media.id.clone(),
+			work_id: "right-work".to_owned(),
+		})
+	);
+	assert_eq!(
+		edition_pair::link_for_media(&conn, &user.id, &left.media.id)
+			.await
+			.expect("left remains readable")
+			.unwrap()
+			.work_id,
+		"left-work"
+	);
+	assert_eq!(
+		edition_pair::link_for_media(&conn, &user.id, &right.media.id)
+			.await
+			.expect("right remains readable")
+			.unwrap()
+			.work_id,
+		"right-work"
+	);
+}
+
+#[tokio::test]
+async fn alias_resolved_media_reuses_its_existing_work_without_a_link() {
+	let conn = database().await;
+	let user = fake_data::User::new("owner").insert(&conn).await;
+	let series_id = library_and_series(&conn).await;
+	let identified = book(
+		&conn,
+		&series_id,
+		"Identified edition",
+		"epub",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+	let candidate = book(
+		&conn,
+		&series_id,
+		"Candidate edition",
+		"m4b",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+	let identity_work = "alias-resolved-work";
+	work(&conn, &user.id, identity_work).await;
+	conn.execute(Statement::from_sql_and_values(
+		DbBackend::Sqlite,
+		"INSERT INTO liseur_sync_editions \
+		 (id, user_id, work_id, edition_sha, media_id, created_at) \
+		 VALUES ($1, $2, $3, $4, $5, $6)",
+		vec![
+			"resolved-edition".into(),
+			user.id.clone().into(),
+			identity_work.into(),
+			"edition-sha".into(),
+			identified.media.id.clone().into(),
+			"2026-09-01T00:00:00Z".into(),
+		],
+	))
+	.await
+	.expect("insert the alias-resolved edition");
+	conn.execute(Statement::from_sql_and_values(
+		DbBackend::Sqlite,
+		"INSERT INTO liseur_sync_aliases \
+		 (id, user_id, kind, value, work_id, edition_sha, created_at) \
+		 VALUES ($1, $2, 'sha256', $3, $4, $5, $6)",
+		vec![
+			"resolved-alias".into(),
+			user.id.clone().into(),
+			"edition-sha".into(),
+			identity_work.into(),
+			"edition-sha".into(),
+			"2026-09-01T00:00:00Z".into(),
+		],
+	))
+	.await
+	.expect("insert the work alias");
+
+	let outcome = edition_pair::suggest_pair(
+		&conn,
+		&user.id,
+		&identified.media.id,
+		&candidate.media.id,
+		PairEvidence::TitleAuthor,
+	)
+	.await
+	.expect("suggest the pairing");
+	assert_eq!(
+		outcome,
+		PairOutcome::Written {
+			work_id: identity_work.to_owned(),
+			status: PairStatus::Suggested,
+		}
+	);
+	for media_id in [&identified.media.id, &candidate.media.id] {
+		assert_eq!(
+			edition_pair::link_for_media(&conn, &user.id, media_id)
+				.await
+				.expect("link lookup succeeds")
+				.expect("pair should have a media link")
+				.work_id,
+			identity_work
+		);
+	}
+	assert_eq!(
+		liseur_sync_work::Entity::find()
+			.all(&conn)
+			.await
+			.expect("work lookup succeeds")
+			.len(),
+		1,
+		"pairing must not create a parallel alias-less work"
+	);
+}
+
+/// A user can keep a provider-confirmed EPUB and manually add another EPUB as
+/// an edition of the same audiobook work.
+#[tokio::test]
+async fn confirming_a_second_ebook_in_an_existing_audio_work_succeeds() {
+	let conn = database().await;
+	let user_row = fake_data::User::new("owner").insert(&conn).await;
+	let user = owner(&user_row.id);
+	let series_id = library_and_series(&conn).await;
+
+	let audio = book(
+		&conn,
+		&series_id,
+		"Audio edition",
+		"m4b",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+	make_audio(&conn, &audio.media.id, 120_000).await;
+	let provider_ebook = book(
+		&conn,
+		&series_id,
+		"Provider EPUB",
+		"epub",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+	let manual_ebook = book(
+		&conn,
+		&series_id,
+		"Manual EPUB",
+		"epub",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+
+	edition_pair::suggest_pair(
+		&conn,
+		&user.id,
+		&audio.media.id,
+		&provider_ebook.media.id,
+		PairEvidence::ProviderEditionList,
+	)
+	.await
+	.expect("suggest provider edition");
+	let provider_outcome = confirm_edition_pair(
+		&conn,
+		&user.id,
+		&audio.media.id,
+		&provider_ebook.media.id,
+		None,
+	)
+	.await
+	.expect("confirm provider edition");
+	assert!(matches!(
+		provider_outcome,
+		PairOutcome::Written {
+			status: PairStatus::Confirmed,
+			..
+		}
+	));
+
+	let outcome = confirm_edition_pair(
+		&conn,
+		&user.id,
+		&audio.media.id,
+		&manual_ebook.media.id,
+		None,
+	)
+	.await
+	.expect("a second EPUB may join the audio's existing work");
+	assert!(matches!(
+		outcome,
+		PairOutcome::Written {
+			status: PairStatus::Confirmed,
+			..
+		}
+	));
+
+	let confirmed = edition_pair::linked_media(
+		&conn,
+		&user.id,
+		&audio.media.id,
+		Some(PairStatus::Confirmed),
+	)
+	.await
+	.expect("load confirmed editions");
+	assert_eq!(confirmed.len(), 2);
+	assert!(confirmed
+		.iter()
+		.any(|link| link.media_id == provider_ebook.media.id));
+	assert!(confirmed
+		.iter()
+		.any(|link| link.media_id == manual_ebook.media.id));
 }
 
 /// A rejected suggestion must stay rejected. Suggestions are recomputed on

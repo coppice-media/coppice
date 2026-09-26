@@ -19,9 +19,6 @@ jobs:
             const labels = issue.labels.map(l => l.name);
             const originalLabelCount = labels.length;
 
-            if (body.includes('- [x] Mobile App') && !labels.includes('mobile-app')) {
-              labels.push('mobile-app');
-            }
 
             if (body.includes('- [x] Web App') && !labels.includes('web-app')) {
               labels.push('web-app');

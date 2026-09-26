@@ -34,8 +34,9 @@ Harness, source, and repository evidence never becomes app or device proof.
 | **Protocol adapters** | Translate an external client's routes, authentication, DTOs, and progress model at the HTTP/WebSocket edge. | `crates/komga`, `crates/kavita`, `crates/abs`, `crates/kobo`, `crates/koreader`, `crates/opds`, `crates/liseur-sync`, plus native GraphQL/REST/Readium. Profiles are **Shipped**; their harness and client records are separated in [Client verification](/docs/developer/client-verification). | A protocol adapter is not a search provider, downloader, metadata authority, or alignment engine. |
 | **Metadata providers** | Identify and look up metadata candidates, map fields, retain provenance, and participate in ingest policy. | `crates/integrations/metadata` and `crates/ingest` implement the candidate/apply boundary. Hardcover metadata is **Shipped** and **Contract-tested** offline; live credentials are **Blocked**, and account, progress, and journal sync are **Planned**. See [Provider status](/docs/developer/provider-status). | Metadata lookup does not create a wanted request, fetch copyrighted files, or synchronize a provider account. |
 | **Catalog/source providers** | Discover popular/latest/search/details/chapters/pages from a remote source and expose a materialized or virtual library. | `crates/provider`, `crates/provider-mangadex`, and `crates/provider-themes` own the `Source` contract and source definitions. The host and catalog path are **Shipped** when enabled; see [Provider host](/docs/developer/provider-host) and [Source definitions](/docs/developer/source-definitions). | A source provider is not the metadata-provider registry. It does not turn a search result into a fulfillment, and Storyteller never belongs here. |
-| **Worker backends** | Execute heavy or hardware-bound jobs outside the server process and return validated, digest-bound results. | `crates/worker`, `worker_jobs`, `transcode`, and `challenge_solve` are **Shipped**. The typed `align` contract is **Shipped**; a worker-local Storyteller adapter is **Planned**, with native known-text CTC/Viterbi as an independent later backend. See [Read-aloud](/docs/developer/read-aloud). | Storyteller is not a search/catalog provider, not a bundled dependency, and not the default server-side alignment runtime. |
-| **Request system** | Store metadata-backed requests, enforce permissions and per-user visibility, record approval/rejection decisions, notify users, and accept social recommendation handoff. | The ledger, GraphQL create/list/detail/approve/reject contract, and Home request UI are **Shipped**. | Approval is not acquisition, release selection, downloading, polling, retry, or ingest. |
+| **Worker backends** | Execute heavy or hardware-bound jobs outside the server process and return validated, digest-bound results. | `crates/worker`, `worker_jobs`, `transcode`, and `challenge_solve` are **Shipped**. The typed `align` contract and optional operator-configured Storyteller and external native-CTC worker runners are **Shipped**. See [Read-aloud](/docs/developer/read-aloud) for the configuration boundary. | Alignment runners are not bundled ML and are not a default server-side runtime. |
+| **Request system** | Store metadata-backed requests, enforce permissions and per-user visibility, record approval/rejection decisions, notify users, and accept social recommendation handoff. | The ledger, GraphQL create/list/detail/approve/reject contract, and Home request UI are **Shipped**. | Approval alone does not trigger release search, a grab, or publication. |
+| **Acquisition handoff** | Coordinate explicit manager search/grab through MAM Bridge and copy completed files into reviewed staged ingest. | The `mam-acquisition` feature and default-off runtime switch are **Shipped**; release calls are server-to-bridge only, and completed files use a local mapped root or verified source-worker materialization. | Coppice does not own MAM credentials, select or grab automatically, retry acquisition, or bypass Editor review. |
 
 These classes compose in the same process where the current source permits it.
 A worker is an optional executor that dials the server; it is not a second
@@ -46,61 +47,73 @@ compute-worker job executor. It reports privacy-minimized catalog observations
 and serves explicitly authorized bytes through private direct or outbound-tunnel
 connections. The server still owns verification, explicit location linking,
 ingest, reader authorization, and reader URLs. Automatic matching, publication,
-placement, caching, and replication remain planned. This role never turns
-request approval into acquisition or publication. See
-[Remote worker libraries](/docs/developer/remote-worker-libraries).
+placement, caching, and replication remain planned. For MAM handoffs, an
+operator-configured `MAM_BRIDGE_SOURCE_ROOT` can use this existing verified
+read/materialization path; request approval alone never starts acquisition.
+See [Remote worker libraries](/docs/developer/remote-worker-libraries).
 
 ## Search, requests, acquisition, and ingest
 
 Universal-style search discovers metadata or remote catalog entries. Coppice can
-turn that metadata into its own request record, but search results and approved
+turn metadata into its own request record, but search results and approved
 requests do not represent acquired files.
 
-The shipped request flow is:
+The request and acquisition flow is explicitly gated:
 
 ```text
 metadata search or recommendation
   -> request metadata + optional destination intent
   -> permission and per-user visibility checks
-  -> operator approval or rejection
-  -> notifications and audit history
+  -> operator approval
+  -> manager with AcquireReleases explicitly searches and confirms a grab
+  -> MAM Bridge refresh reports completion
+  -> server copies the manifest handoff into staged Editor review
+  -> ingest approval fulfils the request and notifies its requester
 ```
 
-MAM acquisition is deferred. Coppice has no active release search/selection,
-grab, polling, retry, downloader, or acquisition-gateway configuration. If
-acquisition is added later, it must run in a separate authenticated provider
-sidecar that owns provider credentials and transport state. That boundary does
-not promise a provider, protocol, implementation, or delivery date.
+MAM Bridge remains a separate authenticated sidecar that owns the MAM account
+and transport state. Coppice reads its API bearer token from a server-side file;
+the browser never calls the bridge or receives that token. `mam-acquisition` is
+included in headless/full profiles but disabled at runtime unless
+`STUMP_ENABLE_MAM_ACQUISITION=true`. Configure `MAM_BRIDGE_URL`,
+`MAM_BRIDGE_TOKEN_FILE`, and either `MAM_BRIDGE_HANDOFF_ROOT` for the local
+`/downloads` mapping or `MAM_BRIDGE_SOURCE_ROOT` for the verified source-worker
+path.
 
-Staged ingest remains an independent path for files an operator is allowed to
-store. Approval does not enqueue ingest, and ingest does not automatically
-fulfill a request.
+Search is an explicit manager action for an approved request, results are
+cached, and the first successful search uses the bridge's five-result probe.
+Paused/rate-limited responses are surfaced to the manager; no code enables
+search or retries grabs automatically. The background job only refreshes
+accepted active grabs. A completed manifest path is copied, never moved,
+renamed, or deleted, into staged ingest so seeding continues. Editor review,
+quality checks, and approval remain required; only that ingest approval marks
+the request fulfilled.
 
 ## Alignment orchestration is a separate path
 
-Alignment begins only after a user confirms the ebook and audiobook edition pair.
-It does not start from metadata search or request approval. The future path
-is:
+Alignment begins only after a user confirms the ebook and audiobook edition
+pair. Pairing, timing import, alignment enqueue, and cache-only status/download
+are shipped; synchronized reader playback and readiness quality checks remain
+open.
 
 ```text
 confirmed ebook + audiobook pair
-  -> exact timing import (existing SMIL, Storyteller artifact, or manifest)
-  -> validate SyncMapV1 and persist the accepted map
+  -> import existing SMIL or accepted timing data
+  -> validate and persist SyncMapV1
   -> explicit alignment job
-  -> worker-local Storyteller adapter (optional external API)
-  -> native known-text CTC/Viterbi fallback
-  -> deterministic read-aloud EPUB derivative (future)
+  -> optional operator-configured Storyteller or external native CTC worker
+  -> validate result and persist accepted map
+  -> deterministic streamed M4B-to-EPUB render and cache
 ```
 
-Storyteller may be used by a worker that the operator configures to reach an
-external instance. Storyteller credentials and remote-library lifecycle policy
-remain worker-local. The worker obtains the confirmed source EPUB/audio through
-Coppice's authenticated media routes and may send those bytes only to that
-operator-configured instance; only validated `SyncMapV1` timing returns as the
-job result. Synchronized Storyteller read-aloud EPUB playback is not shipped.
-Ordinary EPUB playback and ordinary audiobook playback remain separate
-supported experiences until the future derivative and reader contract are
-complete.
+Storyteller runs only through a worker configured by the operator to reach an
+external instance; its credentials and remote-library lifecycle remain
+worker-local. The worker obtains the confirmed source EPUB/audio through
+Coppice's authenticated media routes and sends those bytes only to that
+configured instance. The server does not bundle or execute local ML. The
+deterministic renderer and cache endpoints do not by themselves provide a
+synchronized reader UI; ordinary EPUB and audiobook playback remain separate
+until that playback contract is shipped.
 
 ## Application and server boundaries
 

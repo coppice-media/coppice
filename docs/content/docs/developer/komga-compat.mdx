@@ -27,44 +27,83 @@ and the Komelia client snapshot
 [`65f92fde`](https://github.com/Snd-R/Komelia/commit/65f92fde60b7b7b62b85a55ceb80b92adf50eec8).
 
 
-### External Komf workflow and adapter boundaries
+### Built-in Komf-compatible API
 
-Komf is an external workflow, not an embedded Coppice component. The reviewed
-Komf 2.0.1 source is pinned to
-[`5ad67370c5da6d94372e7c51bff62dd75053ac64`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64).
-Its release JAR is identified by SHA-256
-`f5e01a06938cf1e13a4e9d8211db0569e89e09256072d1bbdf5b04291e809cb9`
-([release page](https://github.com/Snd-R/komf/releases/tag/2.0.1)); the
-[container tags](https://hub.docker.com/r/sndxr/komf/tags) pin is
-`sndxr/komf:2.0.1@sha256:e48652eb32b06cafce4680c229bdbdb682eb1066e3bdeb2872e9dc99255a5cf6`.
-That source depends on upstream `komga-client` 0.10.3. Coppice does not copy,
-compile, or execute Komf's Kotlin.
+Coppice implements the Komf 2.0.1 HTTP contract consumed by Komelia 0.19.3;
+this is a native Rust server adapter, not a separately deployed Komf process.
+The contract is pinned to [Komf
+`5ad67370c5da6d94372e7c51bff62dd75053ac64`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64)
+and [Komelia
+`3c5f501ef24b3acc239302adcab28efe0772c513`](https://github.com/Snd-R/komelia/commit/3c5f501ef24b3acc239302adcab28efe0772c513),
+which bundles `komf-client` 2.0.0. `stump_komf` owns the HTTP DTOs and router;
+the server adapter uses native metadata providers and Stump metadata storage.
 
-The outbound architecture has one media-server adapter per production library:
-the Komga adapter is the default complete lane, while Kavita is an independent
-API-mode lane. Komf metadata providers are not automatically part of Coppice's
-HTTP compatibility surface; only the media-server adapter contract is in scope.
-Kavita automatic SignalR event mode is unsupported unless current-repository
-evidence proves it, so its event listener remains disabled.
+The `komf` Cargo feature is included in `headless` and `full`, but not
+`minimal`. Routes mount only when `STUMP_ENABLE_KOMF=true`; the Komga media
+server profile must also be enabled with `STUMP_ENABLE_KOMGA=true` for
+Komelia's library browsing and reading API.
 
-The source-contract workflow is: exact pin → deterministic
-`coppice/komf-media-server-contract-v1` extractor manifest → reviewed diff →
-Hurl behavioral replay → pinned-container smoke. `latest` may be inspected to
-report upstream drift, but it never rewrites canonical manifests or evidence.
-These evidence tiers remain distinct: source-derived facts establish the pin and
-manifest, contract-tested Hurl establishes wire behavior, and runtime-smoked
-container checks establish sidecar wiring. Historical direct Stump `/api/v1`
-Hurl requests are not Komf sidecar smoke; the latter uses
-`/api/{adapter}/media-server/connected` and `/libraries` (for example
-`/api/komga/media-server/connected`).
+| Method and path | Contract |
+| --- | --- |
+| `GET/PATCH /api/config` | Return sanitized Komf-shaped config; provider secrets are `null`. Patch uses native provider settings only. |
+| `GET /api/jobs`, `GET /api/jobs/{job_id}`, `GET /api/jobs/{job_id}/events`, `DELETE /api/jobs/all` | List/get owner jobs, stream progress events, or delete that owner's jobs. |
+| `GET /api/komga/metadata/providers`, `GET /api/komga/metadata/search`, `GET /api/komga/metadata/series-cover` | List enabled native providers and search/serve their series metadata. |
+| `POST /api/komga/metadata/identify` | Start an explicit provider identify job; response is `200` with `jobId`. |
+| `POST /api/komga/metadata/match/library/{library_id}` and `POST /api/komga/metadata/match/library/{library_id}/series/{series_id}` | Match a whole visible library (`202`) or one series (`200` with `jobId`). |
+| `POST /api/komga/metadata/reset/library/{library_id}` and `POST /api/komga/metadata/reset/library/{library_id}/series/{series_id}` | Reset native metadata and fetch history (`204`). |
+| `GET /api/komga/media-server/connected`, `GET /api/komga/media-server/libraries` | Return Komf media-server connection status and device-visible libraries. |
 
-On 2026-09-23 the checked-in `scripts/contracts/komf-media-server.json`
-was generated from the pinned Kotlin sources with
-`bun scripts/extract-komf-contract.mjs --write`; a subsequent `--check`
-matched. The direct Komga Hurl replay passed 38 requests (13 read/boundary,
-25 metadata/cover/scan mutations). The pinned Komga container separately
-passed two connection/library smoke requests. Neither sidecar smoke nor
-source extraction substitutes for the direct replay.
+The `apiKey` query lane is accepted only on these Komf routes, and only when
+the key resolves to a device-bound credential. An invalid key returns `401`
+before session or other authentication fallback. The server request span
+redacts the query value; a reverse proxy or browser history may still record
+the URL, so treat the complete Komf URL as a secret.
+
+| Operation | Required access |
+| --- | --- |
+| Providers, search, cover, config GET, jobs list/get/events, media-server status/libraries | Authenticated user/device; library-dependent data uses device `library_scope`. |
+| Identify, series/library match, series/library reset, jobs DELETE | `EditMetadata`; new Komelia credentials receive it only through owner opt-in. |
+| `PATCH /api/config` | `MetadataProviderManage`, matching native GraphQL provider mutations (`crates/graphql/src/mutation/metadata_provider.rs:28,44,66,87`). Neither download-only nor `EditMetadata` Komelia credentials receive it by default. |
+
+Job records and SSE history are process-local. Provider matching writes through
+the native metadata merger and respects field locks; it does not create a
+second metadata store or perform acquisition. `removeComicInfo=true` is not
+implemented and returns `422` without resetting metadata; the default reset
+mode clears Coppice metadata and fetch history without editing archive files.
+
+### Route-collision proof
+
+Komf registers at root `/api/config`, `/api/jobs*`, and `/api/komga/*`. These
+paths are disjoint from the simultaneously enabled compatibility routers:
+
+| Router | Mounted route namespace | Why it does not capture the Komf paths |
+| --- | --- | --- |
+| Native API | `/api/graphql`, `/api/v2` (`apps/server/src/routers/api/mod.rs:9-19`) | No root `/api/config` or `/api/jobs` route is registered. |
+| ABS | Many explicit authenticated routes below `/api`, including `/libraries`, `/items`, `/session`, and `/playlists` (`crates/abs/src/routes/mod.rs:394-490`) | The ABS table has no `/config`, `/jobs`, or `/komga` route and no generic `/api/{*path}` fallback. |
+| Kavita | Explicit `/api/<Controller>` routes plus selected controller fallbacks (`crates/kavita/src/routes/mod.rs:474-537`) | `route_ci` adds lowercase twins only for registered literals (`:426-452`); neither `Config`, `Jobs`, nor `Komga` has a route or fallback. |
+| Komga / Grimmory | Komga `/api/v1` and identity routes; Grimmory is nested under `/komga` (`crates/komga/src/routes/mod.rs:441-459`; `apps/server/src/routers/komga/mod.rs:31-53`) | Komga's fallback starts at `/api/v1`; Grimmory's `/komga/api/...` prefix is distinct from `/api/komga/...`. |
+| Other protocols | OPDS `/opds/...`, Kobo `/kobo/...` and `/api/v2/kobo/...`, KOReader `/koreader/...`, Liseur `/v1/...` plus its separate `/api/v2` device route (`apps/server/src/routers/opds_backend.rs:49-76`; `crates/kobo/src/lib.rs:184-230`; `crates/koreader/src/lib.rs:71-88`; `crates/liseur-sync/src/lib.rs:916-976`; `apps/server/src/routers/liseur_sync/touch.rs:30-32`) | Their registered paths do not overlap Komf's root config/jobs or `/api/komga` paths. |
+
+`apps/server/tests/komf/mod.rs::abs_kavita_komga_and_komf_mount_together_without_route_collisions`
+builds the complete router with ABS, Kavita, Komga, and Komf enabled and probes
+`/api/config`; successful construction and the expected unauthenticated `401`
+prove the Komf route is mounted without an Axum/matchit route-build panic.
+
+The checked-in `scripts/contracts/komf-media-server.json` is source-derived
+from the pinned Kotlin contract; it is not runtime proof. Server routes,
+fixtures, permissions, and SSE are exercised by:
+
+```sh
+cargo test -p stump_komf
+cargo test -p stump_server --no-default-features --features headless,liseur-sync --test api_tests komf
+cargo test -p stump_server --no-default-features --features headless,liseur-sync --lib identify_metadata_uses_native_storage_and_respects_series_locks
+```
+
+No live Komelia 0.19.3 device run is claimed. The earlier Komga Hurl replay and
+Komga client runs below exercise the separate Komga profile; they do not
+substitute for the Komf route tests.
+
+### Historical Komelia 0.19.0 Komga profile client evidence
 
 **Live client verdict (2026-09-03, Komelia 0.19.0 on Android against a headless debug build):** login, library/series/book browsing, filters, reading (CBZ pages and EPUB via Readium), read-progress and mark-read, series/book metadata editing with immediate refresh through the SSE mutation events, collections, and background downloads all worked end to end. Three regressions were found and fixed during that session and are covered by the harness: a stale session cookie triggering Stump's `401` cookie clears and wiping the live session across Komelia's shared cookie jar; `book.url` returning an API path instead of a filesystem-style path, which broke downloaded filenames; and missing `remember-me` support, which left Komelia's background download worker without credentials. Remaining observed gaps at that time were the user-settings screens (`POST /api/logout`, password changes, user management), tracked below.
 
@@ -476,7 +515,7 @@ The replay observations above are compatibility evidence, not new routes. They a
 - A Range request to a page or thumbnail asset served through `cached_bytes` returns `200` without `Content-Range`; this is the observed behavior for those cached asset endpoints, not a promise of byte-range semantics. The full-file download at `/api/v1/books/{id}/file` is served through tower-http `ServeFile` and honors Range, returning `206 Partial Content` with `Content-Range`.
 - `POST /api/v1/auth/login` returns `404`; login discovery is `HEAD /login`, and credentials are sent through the common Basic-auth path scope.
 
-The Komga router also mounts a scoped `ANY /api/v1/{*path}` fallback. Any unmatched request under `/api/v1/` that reaches this wildcard, including an unsupported method, is warned with its HTTP method and URI (`Unmatched Komga-profile route`) and returns `404`; the fallback does not replace the application-wide SPA fallback. Unsupported search conditions are separately warned with the rejected condition serialized as a JSON log field before the `400` response.
+The Komga router also mounts a scoped `ANY /api/v1/{*path}` fallback. Any unmatched request under `/api/v1/` that reaches this wildcard, including an unsupported method, is warned with its HTTP method and URI (`Unmatched Komga-profile route`) and returns `404`. This route-scoped handler does not affect the browser apps mounted at `/app` and `/editor`. Unsupported search conditions are separately warned with the rejected condition serialized as a JSON log field before the `400` response.
 
 The external **komga-compat harness** and its sanitized Komelia 0.19.0 capture/replay provide the interoperability evidence. Harness specifications are referred to by filename only, including `management-pending.hurl`; their machine paths are not part of this contract. They do not turn unlisted methods into supported endpoints.
 

@@ -405,6 +405,11 @@ pub async fn get_page_async(
 	config: &MediaConfig,
 ) -> Result<(ContentType, Vec<u8>), FileError> {
 	let path_str = path.as_ref().to_str().unwrap_or_default();
+	if virtual_media::is_virtual_path(path_str) {
+		return virtual_media::resolver_for_virtual_path(path_str)?
+			.get_page(path_str, page)
+			.await;
+	}
 	if let Some(resolver) = virtual_media::resolver_for(path_str) {
 		return resolver.get_page(path_str, page).await;
 	}
@@ -475,6 +480,11 @@ pub async fn get_page_count_async(
 	config: &MediaConfig,
 ) -> Result<i32, FileError> {
 	let path_str = path.as_ref().to_str().unwrap_or_default();
+	if virtual_media::is_virtual_path(path_str) {
+		return virtual_media::resolver_for_virtual_path(path_str)?
+			.get_page_count(path_str)
+			.await;
+	}
 	if let Some(resolver) = virtual_media::resolver_for(path_str) {
 		return resolver.get_page_count(path_str).await;
 	}
@@ -515,6 +525,10 @@ pub fn get_content_types_for_pages(
 	path: &str,
 	pages: Vec<i32>,
 ) -> Result<HashMap<i32, ContentType>, FileError> {
+	if virtual_media::is_virtual_path(path) {
+		return virtual_media::resolver_for_virtual_path(path)?
+			.page_content_types(path, &pages);
+	}
 	if let Some(resolver) = virtual_media::resolver_for(path) {
 		return resolver.page_content_types(path, &pages);
 	}
@@ -530,6 +544,10 @@ pub async fn get_content_types_for_pages_async(
 	pages: Vec<i32>,
 ) -> Result<HashMap<i32, ContentType>, FileError> {
 	let path_str = path.as_ref().to_str().unwrap_or_default();
+	if virtual_media::is_virtual_path(path_str) {
+		return virtual_media::resolver_for_virtual_path(path_str)?
+			.page_content_types(path_str, &pages);
+	}
 	if let Some(resolver) = virtual_media::resolver_for(path_str) {
 		return resolver.page_content_types(path_str, &pages);
 	}
@@ -691,6 +709,23 @@ mod tests {
 		let result = determine_processor(path);
 		assert!(result.is_err());
 		assert!(matches!(result, Err(FileError::UnsupportedFileType(_))));
+	}
+	#[tokio::test]
+	async fn provider_path_without_host_returns_clear_unavailable_error() {
+		crate::virtual_media::unregister();
+		let path = "provider://mangadex-en/series/chapter";
+		let error = get_page_async(path, 1, &MediaConfig::default())
+			.await
+			.unwrap_err();
+		assert!(matches!(
+			error,
+			FileError::Unavailable(message)
+				if message == "Provider host is disabled; provider-backed media is unavailable"
+		));
+		let error = crate::virtual_media::get_archive(path, "Chapter")
+			.await
+			.unwrap_err();
+		assert!(matches!(error, FileError::Unavailable(_)));
 	}
 }
 

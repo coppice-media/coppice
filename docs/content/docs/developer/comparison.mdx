@@ -1,15 +1,15 @@
 ---
 title: Feature comparison
-description: This fork against BookOrbit, Grimmory, Kavita, Komga, Calibre-Web Automated, and Audiobookshelf — every cell cited
+description: Coppice compared with BookOrbit, Grimmory, Kavita, Komga, Calibre-Web Automated, and Audiobookshelf — every cell cited
 ---
 
-Where this fork stands against six comparable self-hosted library servers. The
+Where Coppice stands against six comparable self-hosted library servers. The
 point of the page is the **missing** and **partial** cells: they are the honest
 gap list, and they feed [Roadmap › Future](/docs/developer/roadmap#future).
 
 ## How to read this
 
-- **This fork.** Every cell cites a path in this working tree. `dev/x.mdx:N`
+- **Coppice.** Every cell cites a path in this working tree. `dev/x.mdx:N`
   means `docs/content/docs/developer/x.mdx` at that line; other paths are
   repo-relative. `missing` and `partial: …` are used literally.
 - **Competitors.** Every cell links the page it was read from — the project's
@@ -27,7 +27,7 @@ gap list, and they feed [Roadmap › Future](/docs/developer/roadmap#future).
 
 ## Formats and readers
 
-| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| Feature | Coppice | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | EPUB | yes `dev/state.mdx:89` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-intro] | [yes][cwa-readme] | [partial: "basic ebook support"][abs-readme] |
 | CBZ / CBR | yes `dev/comics-transform.mdx:11` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-intro] | [partial: ingest/convert list][cwa-readme] | [partial: ebook reader only][abs-readme] |
@@ -37,15 +37,15 @@ gap list, and they feed [Roadmap › Future](/docs/developer/roadmap#future).
 | Merge a split audiobook into one M4B | yes — `audio-assemble`, pure-Rust AAC remux, `ffmpeg` only to re-encode `dev/state.mdx:37` | [n/e][bo-what] | [n/e][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [yes][abs-readme] |
 | Audiobook quality report | yes — seven checks in their own scoring family `dev/state.mdx:38` | [n/e][bo-what] | [n/e][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [n/e][abs-readme] |
 | Per-device audio delivery (Opus transcode) | yes — `AudioOutput::{Passthrough,Opus}`, cached and swept `dev/state.mdx:40` | [n/e][bo-what] | [n/e][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [partial: "stream all audio formats on the fly", no per-device preset][abs-readme] |
-| Web ebook reader | yes (`full` build) `docs/content/docs/apps/web/readers.mdx:7-11`, console foliate reader `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [yes][cwa-readme] | [yes][abs-intro] |
-| Web comic reader | yes `docs/content/docs/apps/web/readers.mdx:13-28` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
-| Web PDF reader | yes `docs/content/docs/apps/web/readers.mdx:35` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
-| Web audio player | yes — console reader audio lane `dev/state.mdx:41`, `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [yes][abs-readme] |
-| Read-aloud (ebook ↔ audiobook position sync) | **partial** — edition pairing, editable chapter maps, persisted sync maps, import/enqueue, deterministic cache delivery, and worker validation substrate ship (`crates/library/src/editions.rs`, `crates/library/src/sync_maps.rs`, `crates/graphql/src/mutation/sync_map.rs`, `crates/worker/src/alignment.rs`); native alignment, full synchronized playback/UI, and deployment/device evidence remain open | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [n/e][abs-readme] |
+| Home ebook reader | yes — Foliate reader in Home `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [yes][cwa-readme] | [yes][abs-intro] |
+| Home comic reader | yes — image reader in Home `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
+| Home PDF reader | yes — PDF reader in Home `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
+| Home audio player | yes — audio lane in Home `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [yes][abs-readme] |
+| Read-aloud (ebook ↔ audiobook position sync) | **partial** — pairing, editable chapter maps, sync-map import/enqueue, SMIL import, deterministic cache delivery, worker protocol, and optional configured Storyteller/native-CTC runners ship; readiness quality, virtual composite, synchronized playback/UI, and deployment/device evidence remain open | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [n/e][abs-readme] |
 
 ## Protocols, sync, delivery
 
-| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| Feature | Coppice | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | OPDS 1.2 (+PSE) | yes `dev/provider-status.mdx:132-133` | [yes][bo-opds] | [yes][gr-readme] | [yes][kav-opds] | [yes][komga-readme] | [yes][cwa-readme] | [n/e][abs-intro] |
 | OPDS 2.0 | yes `dev/provider-status.mdx:134-135` | [no — XML catalog only][bo-opds] | [n/e — version unstated][gr-readme] | [no — OPDS + OPDS-PS][kav-opds] | [yes][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
@@ -55,7 +55,7 @@ gap list, and they feed [Roadmap › Future](/docs/developer/roadmap#future).
 | ABS socket.io / websocket lane | **implemented; verification partial** — hand-rolled Engine.IO v4 / Socket.IO v5 route and authenticated frame tests (`crates/abs/src/socket/mod.rs`, `crates/abs/src/socket/protocol.rs`, `crates/abs/src/socket/tests.rs`, `apps/server/src/routers/abs_backend.rs::compose`); broader official-client/device verification remains open | n/a | n/a | n/a | n/a | n/a | [required by the server][abs-readme] |
 | Kobo sync | yes `dev/provider-status.mdx:153-159` | [yes][bo-kobo] | [yes][gr-readme] | [n/e][kav-readme] | [yes][komga-readme] | [yes][cwa-readme] | [n/e][abs-intro] |
 | KOReader sync server | yes `dev/provider-status.mdx:174-180` | [yes][bo-kor] | [yes][gr-readme] | [yes][kav-kor] | [yes][komga-readme] | [yes][cwa-readme] | [n/e][abs-intro] |
-| First-party KOReader plugin | yes — `stump.koplugin`: continue-reading dashboard, OPDS 2.0 catalogue, downloads, two-way progress, annotation export; **never run inside KOReader** `dev/koreader-plugin.mdx:6-14,29` | [yes][bo-korp] | [n/e][gr-readme] | [no — third-party Kamare][kav-kor] | [n/e][komga-readme] | [yes — served at `/kosync`][cwa-readme] | [n/e][abs-intro] |
+| First-party KOReader plugin | `coppice.koplugin`: continue-reading, OPDS 2.0 browse/download, KOSync progress, and liseur-sync annotation sync; source-derived against KOReader v2026.07.1 (`9192014d`), not loaded into the native app `dev/koreader-plugin.mdx` | [yes][bo-korp] | [n/e][gr-readme] | [no — third-party Kamare][kav-kor] | [n/e][komga-readme] | [yes — served at `/kosync`][cwa-readme] | [n/e][abs-intro] |
 | Kindle / e-mail send | yes — `crates/kindle`: format policy, `boko` EPUB→AZW3, 50 MB cap, delivery history, plus a USB sideload route; **never mailed to a real Kindle** `dev/state.mdx:28`, `dev/platforms.mdx:98-99` | [yes][bo-email] | [yes][gr-readme] | [yes][kav-email] | [n/e][komga-readme] | [yes][cwa-readme] | [yes][abs-readme] |
 | Device pairing + QR | yes `dev/device-pairing.mdx:6-17`, `dev/state.mdx#reading-state-devices-and-events` | [partial: token pairing, no QR][bo-kobo] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
 | Per-device library scope | yes — `devices.library_scope` narrows every protocol `dev/state.mdx#reading-state-devices-and-events` | [n/e][bo-home] | [n/e][gr-readme] | [n/e][kav-readme] | [partial: per-library user access][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
@@ -63,10 +63,10 @@ gap list, and they feed [Roadmap › Future](/docs/developer/roadmap#future).
 
 ## Remote sources
 
-Nothing in the peer set matches this section; it is the fork's differentiating
+Nothing in the peer set matches this section; it is Coppice's differentiating
 capability, so the cells are mostly `n/e` by construction.
 
-| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| Feature | Coppice | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Remote sources as libraries | yes — `Source` trait, `provider://` paths, page cache, GC, Mode A materialisation and Mode B virtual libraries `dev/state.mdx:67,70` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [partial: podcast search/download][abs-readme] |
 | Themed site engines | yes — four `lib-multisrc` theme engines over a jsoup-subset selector engine `dev/state.mdx:68` | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
@@ -76,7 +76,7 @@ capability, so the cells are mostly `n/e` by construction.
 
 ## Metadata and ingest
 
-| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| Feature | Coppice | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Metadata providers | 12 catalogued — embedded, Comic Vine, Hardcover, AniList, MAL, MangaDex, MangaUpdates, Open Library, Google Books, Metron, Audible/Audnexus, LLM `dev/state.mdx:58` | [9 — Google Books, Amazon, Goodreads, Hardcover, Open Library, iTunes, Audible, AudNexus, ComicVine][bo-meta] | [3 — Google Books, Open Library, Amazon][gr-readme] | [partial: paid Kavita+ only][kav-plus] | [no — external Komf][komga-readme] | [yes — Calibre plugins + ISBNdb, Hardcover, Kobo, LitRes][cwa-readme] | [yes — "several providers" + Audnexus chapters][abs-readme] |
 | Per-field provider rules + merge | yes — ordered providers per field, five strategies, `lock_respected`, per-library override `dev/state.mdx:57` | [yes — priority list + per-field overwrite control][bo-meta] | [n/e][gr-readme] | [n/e][kav-plus] | [n/e][komga-readme] | [partial: provider hierarchy + overwrite/fill-missing][cwa-readme] | [n/e][abs-intro] |
@@ -88,7 +88,7 @@ capability, so the cells are mostly `n/e` by construction.
 
 ## Annotations and reading data
 
-| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| Feature | Coppice | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | One reading head across protocols | yes — `reading_heads` + append-only provenance, `source_protocol` per write, locator *or* `position_ms` `dev/state.mdx:79` | [n/e][bo-ann] | [n/e][gr-readme] | [n/e][kav-readme] | [partial: read progress only][komga-readme] | [n/e][cwa-readme] | [partial: per-user progress synced across devices][abs-readme] |
 | Annotations model | **partial**: native `media_annotations`/`bookmarks` plus liseur CAS rows, surfaced together but never reconciled into one head with a repair state `dev/state.mdx:82` | [yes — CFI + KOReader XPointer + Kobo span, repair states][bo-ann] | [yes][gr-readme] | [partial: EPUB only][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
@@ -100,7 +100,7 @@ capability, so the cells are mostly `n/e` by construction.
 
 ## Library, users, operations
 
-| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| Feature | Coppice | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Series and authors browsing | yes `dev/state.mdx:20`, `dev/home-app.mdx:54-56` | [yes][bo-what] | [n/e][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: search and filtering][cwa-readme] | [yes — series management][abs-libs] |
 | Collections / reading lists / shelves | yes — two canonical containers projected to Komga, Kobo, native `dev/shelves-and-collections.mdx:6-11,53-58` | [yes — collections + Smart Scopes][bo-what] | [yes — smart shelves][gr-readme] | [yes][kav-lists] | [yes][komga-readme] | [yes — magic shelves][cwa-readme] | [yes — playlists][abs-libs] |
@@ -115,7 +115,7 @@ capability, so the cells are mostly `n/e` by construction.
 
 ## Distribution
 
-| Feature | This fork | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
+| Feature | Coppice | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Docker | yes — `full` and `headless` targets `dev/server-architecture.mdx:85-96` | [yes][bo-inst] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-intro] | [yes][cwa-readme] | [yes][abs-intro] |
 | Single binary | yes `docs/content/docs/getting-started/installation/binaries.mdx:45,80` | [no — Docker-native][bo-what] | [no — Compose + MariaDB][gr-readme] | [yes — native install][kav-readme] | [yes — Java or Docker][komga-intro] | [n/e — Docker][cwa-readme] | [n/e][abs-intro] |
@@ -123,15 +123,11 @@ capability, so the cells are mostly `n/e` by construction.
 | Idle memory (measured) | 29,924 KiB RSS / 5 threads, optimized headless, SQLite; 40,776 KiB / 21 threads for pristine upstream `dev/state.mdx#lifecycle-profiles-and-operations` | [n/e][bo-inst] | [n/e — JVM + MariaDB][gr-readme] | [n/e][kav-readme] | [n/e — JVM][komga-intro] | [n/e][cwa-readme] | [n/e][abs-intro] |
 | License | MIT `LICENSE:1` | [AGPL-3.0][bo-repo] | [AGPL-3.0][gr-lic] | [GPL-3.0][kav-lic] | [MIT][komga-lic] | [GPL-3.0][cwa-lic] | [GPL-3.0][abs-lic] |
 
-## Where this fork is behind
+## Remaining gaps
 
-Four rows remain the highest-priority gaps:
+The highest-priority remaining gaps are:
 
-1. **Read-aloud** — pairing, chapter maps, persisted sync maps, import/enqueue,
-   cache delivery, and worker validation now ship; native alignment, full
-   synchronized playback/UI, and deployment/device evidence remain open. No
-   peer in this table documents that complete path, so finishing it remains a
-   lead rather than parity work.
+1. **Read-aloud** — pairing, chapter maps, sync-map persistence/import, SMIL, deterministic cache delivery, and optional worker runners ship. Readiness, virtual composite, synchronized playback/UI, and deployment/device evidence remain open. No peer in this table documents the complete path, so finishing it remains a lead rather than parity work.
 2. **ABS socket.io lane** — Audiobookshelf's own server "requires a websocket
    connection" ([README][abs-readme]); our Engine.IO v4 / Socket.IO v5 lane is
    implemented for the profile and covered by authenticated frame tests, but

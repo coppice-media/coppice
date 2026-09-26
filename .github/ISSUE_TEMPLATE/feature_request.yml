@@ -33,7 +33,6 @@ body:
       description: Select all that apply. If the documentation on https://www.stumpapp.dev/ will require updating, please tick `Documentation`.
       options:
         - label: Web App
-        - label: Mobile App
         - label: Server
         - label: Documentation
     validations:

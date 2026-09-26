@@ -11,16 +11,16 @@ API keys are user-scoped, long-lived tokens that can be used to authenticate req
 
 For reader devices, create the device from the [Devices page](/docs/guides/features/devices) instead; it provides a device kind, endpoint details, library scope, last-seen tracking, and rotation.
 
-## Generating an API Key
+## Creating an API Key
 
-To generate an API key:
+The active Home and Editor apps do not provide personal API key management.
+An authenticated GraphQL client with the `ACCESS_API_KEYS` permission can use
+the `createApiKey` mutation; consult the server GraphQL schema for its current
+input and permission shape. The one-time `secret` returned by the mutation is
+the full key and is not available for retrieval later.
 
-1. Navigate to the app settings (`/settings/app`)
-2. Click the `API keys` tab (`/settings/app/api-keys`)
-3. Click the `Generate API key` button
-4. Give your key a name, assign it permissions, optionally declare an expiration date, and click `Create key`
-
-Once a key is generated, you will be presented with the full key. **This key will not be shown again**, so be sure to copy it to a secure location. If you lose the key, you will need to generate a new one.
+Editor Settings → API keys configures metadata-provider credentials. Those
+secrets are separate from user API keys.
 
 <Callout type="error" title="🚨 Security Warning">
 	Be sure to keep your API key secure, as you would with any other password. I encourage you to set
@@ -29,29 +29,13 @@ Once a key is generated, you will be presented with the full key. **This key wil
 
 ## Using an API Key
 
-You can authorize a request to your Coppice instance by including the key value in the `Authorization` header of your requests. The header should look like this:
 
+Use the key as a Bearer token in an `Authorization` header:
+
+```bash filename="example.sh" copy
+curl https://my-coppice.cloud/api/v2/libraries \
+  -H "Authorization: Bearer <your_api_key>"
 ```
-Authorization: Bearer <your_api_key>
-```
-
-If you're using the Coppice SDK (`@stump/sdk`), you can set it directly when you create the SDK instance:
-
-```js filename="example.ts" copy
-import { Api } from '@stump/sdk'
-
-// Create a new SDK instance, passing in your API key
-const sdk = new Api({
-	baseURL: 'https://my-coppice.cloud',
-	authMethod: 'api-key',
-	apiKey: '<your_api_key>',
-})
-
-// Now you can make requests
-const library = await sdk.library.get({ name: ['Ebooks'] })
-```
-
-This will automatically include the key in the request headers for you.
 
 #### Special API Key Routes
 

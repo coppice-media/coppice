@@ -22,7 +22,12 @@ use models::{
 		book_review, bookmark, liseur_sync_media_link, media, media_annotation,
 		media_metadata, reading_head, reading_session,
 	},
-	shared::readium::ReadiumLocator,
+	shared::{
+		liseur_annotation_projection::{
+			is_liseur_sync_projection_id, is_stump_native_annotation_id,
+		},
+		readium::ReadiumLocator,
+	},
 };
 use rust_decimal::prelude::ToPrimitive;
 use sea_orm::{prelude::*, DbBackend, QueryOrder, QuerySelect, Statement};
@@ -215,17 +220,23 @@ pub async fn build_export_batch(
 		.select_only()
 		.distinct()
 		.column(media_annotation::Column::MediaId)
-		.into_tuple()
+		.into_tuple::<String>()
 		.all(conn)
-		.await?;
+		.await?
+		.into_iter()
+		.filter(|id| !is_liseur_sync_projection_id(id))
+		.collect();
 	let bookmark_media_ids: Vec<String> = bookmark::Entity::find()
 		.filter(bookmark::Column::UserId.eq(user_id))
 		.select_only()
 		.distinct()
 		.column(bookmark::Column::MediaId)
-		.into_tuple()
+		.into_tuple::<String>()
 		.all(conn)
-		.await?;
+		.await?
+		.into_iter()
+		.filter(|id| !is_liseur_sync_projection_id(id))
+		.collect();
 
 	let review_media_ids: Vec<String> = book_review::Entity::find()
 		.filter(book_review::Column::UserId.eq(user_id))
@@ -361,6 +372,7 @@ async fn build_native_book(
 		.await?;
 	book.annotations = annotations
 		.iter()
+		.filter(|annotation| !is_liseur_sync_projection_id(&annotation.id))
 		.map(|annotation| {
 			Ok(ExportAnnotation {
 				id: annotation.id.clone(),
@@ -368,7 +380,7 @@ async fn build_native_book(
 				origin: AnnotationOrigin::Native,
 				locator: Some(serde_json::to_value(&annotation.locator)?),
 				progression: locator_progression(&annotation.locator),
-				color: None,
+				color: annotation.color.clone(),
 				excerpt: annotation
 					.locator
 					.text
@@ -393,6 +405,7 @@ async fn build_native_book(
 		.await?;
 	book.bookmarks = bookmarks
 		.iter()
+		.filter(|row| !is_liseur_sync_projection_id(&row.id))
 		.map(|row| {
 			Ok(ExportBookmark {
 				id: row.id.clone(),
@@ -747,6 +760,10 @@ async fn liseur_annotations(
 
 	let mut annotations = Vec::with_capacity(rows.len());
 	for row in &rows {
+		let id: String = row.try_get("", "annotation_id")?;
+		if is_stump_native_annotation_id(&id) {
+			continue;
+		}
 		let kind: String = row.try_get("", "kind")?;
 		let locator_raw: Option<String> = row.try_get("", "locator")?;
 		let created: Option<DateTime<Utc>> = row
@@ -763,7 +780,7 @@ async fn liseur_annotations(
 			.map(|value| value.with_timezone(&Utc));
 
 		annotations.push(ExportAnnotation {
-			id: row.try_get("", "annotation_id")?,
+			id,
 			kind: match kind.as_str() {
 				"note" => ExportAnnotationKind::Note,
 				"bookmark" => ExportAnnotationKind::Bookmark,
@@ -807,6 +824,9 @@ mod tests {
 	use models::{
 		domain::reading_state::SourceProtocol,
 		entity::{bookmark, media_annotation, media_metadata, reading_head},
+		shared::liseur_annotation_projection::{
+			liseur_sync_projection_id, stump_native_annotation_id,
+		},
 		shared::readium::{ReadiumLocation, ReadiumLocator, ReadiumText},
 	};
 	use rust_decimal::Decimal;
@@ -880,6 +900,7 @@ mod tests {
 		id: &str,
 		created: DateTime<Utc>,
 		note: Option<&str>,
+		color: Option<&str>,
 	) {
 		let locator = ReadiumLocator {
 			href: "ch1.xhtml".to_string(),
@@ -902,6 +923,7 @@ mod tests {
 			id: Set(id.to_string()),
 			locator: Set(locator),
 			annotation_text: Set(note.map(str::to_string)),
+			color: Set(color.map(str::to_owned)),
 			media_id: Set(media_id.to_string()),
 			user_id: Set(user_id.to_string()),
 			..Default::default()
@@ -967,9 +989,38 @@ mod tests {
 		.await;
 
 		// Native rows inserted out of chronological order.
-		insert_native_annotation(&conn, &user_id, &media_id, "n2", ts(20), None).await;
-		insert_native_annotation(&conn, &user_id, &media_id, "n1", ts(10), Some("first"))
+		insert_native_annotation(&conn, &user_id, &media_id, "n2", ts(20), None, None)
 			.await;
+		insert_native_annotation(
+			&conn,
+			&user_id,
+			&media_id,
+			"n1",
+			ts(10),
+			Some("first"),
+			Some("red"),
+		)
+		.await;
+		insert_liseur_annotation(
+			&conn,
+			&user_id,
+			"w-linked",
+			&stump_native_annotation_id("annotation", "n1"),
+			1,
+			"highlight",
+			false,
+		)
+		.await;
+		insert_native_annotation(
+			&conn,
+			&user_id,
+			&media_id,
+			&liseur_sync_projection_id(&user_id, "l1"),
+			ts(30),
+			None,
+			Some("yellow"),
+		)
+		.await;
 		bookmark::ActiveModel {
 			id: Set("b1".to_string()),
 			preview_content: Set(Some("preview".to_string())),
@@ -1093,6 +1144,9 @@ mod tests {
 		assert_eq!(n1.excerpt.as_deref(), Some("highlight n1"));
 		assert_eq!(n1.note.as_deref(), Some("first"));
 		assert_eq!(n1.progression, Some(0.25));
+		assert_eq!(n1.color.as_deref(), Some("red"));
+		assert_eq!(native.annotations[2].id, "l1");
+		assert_eq!(native.annotations[2].color.as_deref(), Some("yellow"));
 		assert_eq!(n1.origin, AnnotationOrigin::Native);
 		let l2 = &native.annotations[3];
 		assert!(l2.deleted);

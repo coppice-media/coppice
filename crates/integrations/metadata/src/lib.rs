@@ -18,6 +18,7 @@ mod provider;
 mod providers;
 pub mod rate_limit;
 pub mod scoring;
+pub mod search_cache;
 pub(crate) mod serde_utils;
 pub mod types;
 
@@ -28,16 +29,23 @@ pub use mangaupdates::MangaUpdatesClient;
 pub use merge::{AutoApplyConfig, FieldMerger, MergeStrategy, MetadataFieldOverride};
 pub use provider::{MetadataProvider, ProviderCredentialVerification};
 use providers::{
-	AniListClient, AudibleClient, ComicVineClient, GoogleBooksClient, MalClient,
-	MangaDexClient, MetronClient, OpenLibraryClient,
+	AniListClient, ComicVineClient, GoogleBooksClient, MalClient, MangaDexClient,
+	MetronClient, OpenLibraryClient,
 };
-pub use providers::{HardcoverClient, HardcoverIdentity, HardcoverJournalEntry};
+pub use providers::{
+	AudibleClient, HardcoverClient, HardcoverIdentity, HardcoverJournalEntry,
+};
 pub use rate_limit::RateLimiter;
-pub use scoring::{title_similarity, MatchScorer};
+pub use scoring::{
+	title_similarity, CrossProviderCandidate, CrossProviderScore, CrossProviderScorer,
+	MatchScorer, MergedWorkCandidate, ProviderReference, ScoredCrossProviderCandidate,
+	AUTO_MATCH_THRESHOLD,
+};
+pub use search_cache::{BriefSearchCache, TtlCache};
 pub use types::{
-	ConfidenceFactor, ExternalMediaMetadata, ExternalMetadata, ExternalSeriesMetadata,
-	MatchCandidate, MediaType, MetadataField, PublicationStatus, SearchOutcome,
-	SearchQuery,
+	AudiobookEdition, ConfidenceFactor, ExternalMediaMetadata, ExternalMetadata,
+	ExternalSeriesMetadata, MatchCandidate, MediaType, MetadataField, PublicationStatus,
+	SearchOutcome, SearchQuery,
 };
 
 pub fn create_provider(
@@ -48,12 +56,12 @@ pub fn create_provider(
 		"COMIC_VINE" => Ok(Box::new(ComicVineClient::new(api_token, None))),
 		"HARDCOVER" => Ok(Box::new(HardcoverClient::new(api_token, None))),
 		// AniList is keyless; the token argument is ignored.
-		"ANILIST" => Ok(Box::new(AniListClient::new(None, None))),
+		"ANI_LIST" => Ok(Box::new(AniListClient::new(None, None))),
 		"MANGA_UPDATES" => Ok(Box::new(MangaUpdatesClient::new())),
 		// The MAL client id is stored as the provider's API token.
 		"MAL" => Ok(Box::new(MalClient::new(api_token, None))),
 		// MangaDex is keyless; the token argument is ignored.
-		"MANGADEX" => Ok(Box::new(MangaDexClient::new())),
+		"MANGA_DEX" => Ok(Box::new(MangaDexClient::new())),
 		// Open Library and Google Books are keyless; the token argument is
 		// ignored (a Google Books key only raises the quota).
 		"OPEN_LIBRARY" => Ok(Box::new(OpenLibraryClient::new())),
@@ -79,8 +87,8 @@ pub fn create_provider(
 pub fn requires_api_token(provider_type: &str) -> bool {
 	!matches!(
 		provider_type,
-		"ANILIST"
-			| "MANGADEX"
+		"ANI_LIST"
+			| "MANGA_DEX"
 			| "MANGA_UPDATES"
 			| "OPEN_LIBRARY"
 			| "GOOGLE_BOOKS"

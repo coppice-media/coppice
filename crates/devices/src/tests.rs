@@ -180,6 +180,139 @@ async fn kavita_device_mints_download_only_api_key_and_server_endpoint() {
 }
 
 #[tokio::test]
+async fn komelia_metadata_editing_requires_owner_permission_and_adds_only_that_permission(
+) {
+	let (conn, owner) = setup().await;
+	let service = DeviceService::new(conn.clone());
+	let (_, default_issued) = service
+		.create_device(
+			&owner,
+			crate::CredentialIssuance::InteractiveSession,
+			DeviceKind::Komelia,
+			None,
+		)
+		.await
+		.expect("default Komelia device");
+	let default_key = api_key::Entity::find()
+		.filter(api_key::Column::ShortToken.eq(&default_issued.credential_ref))
+		.one(conn.as_ref())
+		.await
+		.expect("query")
+		.expect("API key");
+	assert_eq!(
+		default_key.permissions,
+		APIKeyPermissions::Custom(vec![UserPermission::DownloadFile])
+	);
+
+	let without_edit_metadata = reader(
+		&owner.id,
+		vec![UserPermission::AccessApiKeys, UserPermission::DownloadFile],
+	);
+	assert!(matches!(
+		service
+			.create_komelia_device(
+				&without_edit_metadata,
+				crate::CredentialIssuance::InteractiveSession,
+				None,
+				true,
+			)
+			.await,
+		Err(DeviceError::Forbidden)
+	));
+
+	let owner_with_metadata = reader(
+		&owner.id,
+		vec![
+			UserPermission::AccessApiKeys,
+			UserPermission::DownloadFile,
+			UserPermission::EditMetadata,
+		],
+	);
+	let (device, issued) = service
+		.create_komelia_device(
+			&owner_with_metadata,
+			crate::CredentialIssuance::InteractiveSession,
+			None,
+			true,
+		)
+		.await
+		.expect("metadata-capable Komelia key");
+	let key = api_key::Entity::find()
+		.filter(api_key::Column::ShortToken.eq(&issued.credential_ref))
+		.one(conn.as_ref())
+		.await
+		.expect("query")
+		.expect("API key");
+	assert_eq!(
+		key.permissions,
+		APIKeyPermissions::Custom(vec![
+			UserPermission::DownloadFile,
+			UserPermission::EditMetadata,
+		])
+	);
+	let rotated = service
+		.rotate_credential(
+			&owner_with_metadata,
+			crate::CredentialIssuance::InteractiveSession,
+			&device.id,
+		)
+		.await
+		.expect("rotate metadata-capable key");
+	let rotated_key = api_key::Entity::find()
+		.filter(api_key::Column::ShortToken.eq(&rotated.credential_ref))
+		.one(conn.as_ref())
+		.await
+		.expect("query")
+		.expect("rotated API key");
+	assert_eq!(
+		rotated_key.permissions,
+		APIKeyPermissions::Custom(vec![
+			UserPermission::DownloadFile,
+			UserPermission::EditMetadata,
+		])
+	);
+}
+
+/// A server owner holds every permission implicitly (`permissions` is empty),
+/// so the Komf opt-in must use the owner-aware check, for minting and rotation.
+#[tokio::test]
+async fn server_owner_can_opt_komelia_into_metadata_editing() {
+	let (conn, owner) = setup().await;
+	assert!(owner.is_server_owner && owner.permissions.is_empty());
+	let service = DeviceService::new(conn.clone());
+	let (device, issued) = service
+		.create_komelia_device(
+			&owner,
+			crate::CredentialIssuance::InteractiveSession,
+			None,
+			true,
+		)
+		.await
+		.expect("server owner may grant EditMetadata");
+	let key = api_key::Entity::find()
+		.filter(api_key::Column::ShortToken.eq(&issued.credential_ref))
+		.one(conn.as_ref())
+		.await
+		.expect("query")
+		.expect("API key");
+	assert_eq!(
+		key.permissions,
+		APIKeyPermissions::Custom(vec![
+			UserPermission::DownloadFile,
+			UserPermission::EditMetadata,
+		])
+	);
+	service
+		.rotate_credential(
+			&owner,
+			crate::CredentialIssuance::InteractiveSession,
+			&device.id,
+		)
+		.await
+		.expect("server owner may rotate a metadata-capable key");
+}
+
+#[tokio::test]
 async fn default_names_are_numbered_on_collision() {
 	let (conn, user) = setup().await;
 	let service = DeviceService::new(conn);

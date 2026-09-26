@@ -12,8 +12,7 @@ compatibility.
   feature boundaries, request-ledger backend, API/protocol compatibility, and
   upstream-ready implementation.
 - Use `.omp/agents/coppice-web.md` for Bun workspace tooling, Home `/app`,
-  Editor `/editor`, shared `stump-ui`, generated web clients, docs UI, and
-  legacy React/Vite compatibility.
+  Editor `/editor`, shared `stump-ui`, generated app operations, and docs UI.
 - Use global `scout` for read-only exploration and `hiring-manager` for
   onboarding or project-coverage audits.
 - Load `.omp/PROJECT_STATE.md` and `.omp/NEXT_STEPS.md` on demand; do not inject
@@ -45,7 +44,8 @@ compatibility.
   `apps/server/src/routers/komga/`; provider exports
   `stump_komga::routes::is_komga_path`, while auth uses broader
   `is_komga_basic_auth_path` for identity/alias routes.
-- `apps/server/Cargo.toml` defines `minimal`, `headless` (GraphQL, OPDS, Readium, Kobo, KOReader, Komga, liseur-sync), and `full` (headless + webui).
+- `apps/server/Cargo.toml` is the source of truth for Cargo profile features;
+  do not duplicate the `minimal`/`headless`/`full` feature list here.
 - Book requests are a metadata-backed ledger: users create intent and managers
   approve or reject it. Release search, acquisition, retries, and transport
   belong to a future independent authenticated provider sidecar; staged ingest
@@ -66,16 +66,15 @@ compatibility.
   its workflow routes are `drop`, `queue`, `rework`, `bulk`, and `library`.
   Both Svelte apps consume the source-linked `packages/stump-ui/`; theme
   tokens and the preset switcher are owned there, not duplicated per app.
-- Root JavaScript tooling uses Bun 1.4.1 with one `bun.lock`. `apps/expo/` is a
-  frozen compatibility snapshot outside the active workspace and gate; trace it
-  for API breakage but do not add native mobile tooling.
+- Root JavaScript tooling uses Bun 1.4.1 with one `bun.lock`. `apps/expo/` was
+  removed; its source remains only in Git history.
 - User/device security is owned by GraphQL plus
   `apps/server/src/middleware/auth.rs`: device credentials inherit the owning
   user's permissions and may only narrow access through `library_scope`.
   `/app/devices` is the supported device setup surface; raw API keys are an
   authenticated fallback, not a permission bypass.
 - Client integrations also include the sibling checkouts
-  `../koreader-stump/` (KOReader plugin) and `../nickelstump/` (Kobo
+  `../koreader-coppice/` (KOReader plugin) and `../nickelcoppice/` (Kobo
   NickelMenu client). Their host tests are client evidence only; physical
   reader verification remains a separate evidence tier.
 
@@ -83,7 +82,7 @@ compatibility.
 
 Record exact paths, symbols, routes, dependency declarations, and URLs/commits.
 Use pinned Komelia `65f92fde`, `komga-client` 0.11.0 `74412a6e`, Liseur
-v0.16.0 `bf5a4fd6fb0aca92a1f47c7feaf102202fd99d53`, and Grimmory main rather
+v0.19.0 `62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6`, and Grimmory main rather
 than Komga OpenAPI alone.
 Source-of-record docs:
 `docs/content/docs/developer/komga-compat.mdx`,
@@ -99,7 +98,6 @@ Source-of-record docs:
 `docs/content/docs/developer/server-architecture.mdx`.
 The sibling user-owned `../komga-compat/` uses `make replay`; Hurl 6.x
 multi-value cookie assertions use `cookie "name[Attr]"`.
-The fixture launcher is `scripts/dev-fixture-server.sh`; it regenerates
-owner-only `ENDPOINTS.md` with mode 0600 and exports `STUMP_ENABLE_KOMGA`,
-`ENABLE_KOBO_SYNC`, and `ENABLE_KOREADER_SYNC`; only the first key has the
-`STUMP_` prefix.
+The fixture launcher is `scripts/dev-fixture-server.sh`; read it for the
+current environment switches and endpoint-generation behavior rather than
+maintaining a duplicate list here.

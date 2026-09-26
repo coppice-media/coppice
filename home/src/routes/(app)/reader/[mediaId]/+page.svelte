@@ -38,12 +38,17 @@
 	import PagedReader from '$lib/components/reader/PagedReader.svelte';
 	import { KIND_LABELS, SOURCE_LABELS } from '$lib/annotations';
 	import { decimal, type ReaderLocator } from '$lib/components/reader/locator';
+	import { absoluteTime, relativeTime } from '$lib/format';
 
 	type ReaderAnnotationRecord = {
 		id: string;
 		kind: AnnotationKind;
 		source: DeviceKind;
+		sourceDeviceId: string | null;
 		sourceDeviceName: string | null;
+		revision: number | null;
+		lastEditedSource: DeviceKind | null;
+		lastEditedAt: string | null;
 		editable: boolean;
 		chapterTitle: string | null;
 		locator: ReaderLocator | null;
@@ -438,6 +443,19 @@
 								</Badge>
 								<span class="ml-auto">Read-only</span>
 							</div>
+							{#if annotation.lastEditedSource && annotation.lastEditedSource !== annotation.source}
+								<p class="text-xs text-muted-foreground">
+									Edited in {SOURCE_LABELS[annotation.lastEditedSource]}
+									{#if annotation.lastEditedAt}
+										· <time
+											datetime={annotation.lastEditedAt}
+											title={absoluteTime(annotation.lastEditedAt)}
+										>
+											{relativeTime(annotation.lastEditedAt)}
+										</time>
+									{/if}
+								</p>
+							{/if}
 							{#if annotation.excerpt}
 								<blockquote class="border-l-2 pl-3 text-sm italic">
 									{annotation.excerpt}

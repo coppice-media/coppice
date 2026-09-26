@@ -5,9 +5,8 @@
 //! in `stump_core::opds`; authentication, mounting (`/opds/v1.2`,
 //! `/opds/{api_key}/v1.2`, `/opds/v2.0`), and persistence stay in the host.
 //!
-//! See `crates/opds/README.md` for spec URLs, the Liseur `31f8182d` client
-//! (OPDS 1.2 device-verified; OPDS 2.0 unsupported by the app), decisions,
-//! and verification.
+//! See `crates/opds/README.md` for spec URLs, clients and their evidence
+//! tiers, decisions, and verification.
 
 use std::sync::Arc;
 

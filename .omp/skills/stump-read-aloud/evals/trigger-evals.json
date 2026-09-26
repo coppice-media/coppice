@@ -4,7 +4,7 @@
 		"should_trigger": true
 	},
 	{
-		"query": "Plan the unshipped Stump align worker: how should a confirmed EPUB/audio pair produce a validated SyncMap and what happens when no worker advertises align?",
+		"query": "Review Stump's shipped optional align worker runners: how can an operator-configured Storyteller or native CTC worker produce a validated SyncMap, and what remains planned?",
 		"should_trigger": true
 	},
 	{

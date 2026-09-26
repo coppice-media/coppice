@@ -285,10 +285,8 @@ impl OpdsBackend for OpdsBackendImpl {
 		.into_response())
 	}
 
-	async fn v2_auth(&self, host: ProviderHost) -> Result<Response, Self::Error> {
-		Ok(v2_0::auth(State(self.0.clone()), host_details(host))
-			.await?
-			.into_response())
+	async fn v2_auth(&self, _host: ProviderHost) -> Result<Response, Self::Error> {
+		Ok(v2_0::auth().await?.into_response())
 	}
 
 	async fn v2_catalog(

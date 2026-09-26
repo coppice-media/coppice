@@ -329,6 +329,34 @@ async fn collect_files(
 	Ok(())
 }
 
+/// Copy a publication directory into immutable staging without consuming or
+/// changing its source. Used by acquisition handoff so a seeding client keeps
+/// owning the original files.
+pub async fn copy_dir_into_staging(
+	source: &Path,
+	staging_root: &Path,
+	library_id: &str,
+	filename: &str,
+	sha256: &str,
+) -> IngestResult<PathBuf> {
+	let destination = staging_path(staging_root, library_id, sha256, filename)?;
+	if fs::try_exists(&destination).await? {
+		return Ok(destination);
+	}
+
+	match copy_dir(source, &destination).await {
+		Ok(()) => Ok(destination),
+		Err(error) => {
+			if fs::try_exists(&destination).await? {
+				Ok(destination)
+			} else {
+				let _ = fs::remove_dir_all(&destination).await;
+				Err(error)
+			}
+		},
+	}
+}
+
 /// Move a directory into the immutable staging location, for a folder
 /// audiobook.
 ///
@@ -522,5 +550,49 @@ mod tests {
 			.await
 			.unwrap();
 		assert_eq!(second.source_sha256, staged.source_sha256);
+	}
+	#[tokio::test]
+	async fn copies_directory_into_staging_without_consuming_the_source() {
+		let temporary = tempfile::tempdir().unwrap();
+		let source = temporary.path().join("release");
+		tokio::fs::create_dir_all(source.join("disc 1"))
+			.await
+			.unwrap();
+		tokio::fs::write(source.join("disc 1/01.mp3"), b"part one")
+			.await
+			.unwrap();
+		tokio::fs::write(source.join("cover.jpg"), b"cover")
+			.await
+			.unwrap();
+		let (digest, size) = hash_dir(&source).await.unwrap();
+
+		let staged = copy_dir_into_staging(
+			&source,
+			&temporary.path().join("staging"),
+			"library",
+			"release",
+			&digest,
+		)
+		.await
+		.unwrap();
+		assert_eq!(size, 13);
+		assert_eq!(
+			tokio::fs::read(staged.join("disc 1/01.mp3")).await.unwrap(),
+			b"part one"
+		);
+		assert_eq!(
+			tokio::fs::read(source.join("disc 1/01.mp3")).await.unwrap(),
+			b"part one"
+		);
+		let duplicate = copy_dir_into_staging(
+			&source,
+			&temporary.path().join("staging"),
+			"library",
+			"release",
+			&digest,
+		)
+		.await
+		.unwrap();
+		assert_eq!(duplicate, staged);
 	}
 }

@@ -8,7 +8,9 @@ use axum::{
 	response::{IntoResponse, Response},
 	Extension,
 };
-use models::entity::{library, media, media_metadata, series, user::AuthUser};
+use models::entity::{
+	collection, collection_series, library, media, media_metadata, series, user::AuthUser,
+};
 use sea_orm::{
 	ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
 };
@@ -26,7 +28,7 @@ use crate::{
 };
 
 /// `GET /api/libraries/{id}/items`. Lissen sends every one of these
-/// (`AudiobookshelfApiClient.kt:80-90`); `include` and `expanded` come from
+/// (`AudiobookshelfApiClient.kt:85-97`); `include` and `expanded` come from
 /// other ABS clients.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -47,6 +49,27 @@ fn flag(value: Option<&String>) -> bool {
 	value
 		.map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 		.unwrap_or(false)
+}
+
+fn compare_ascii_case_insensitive(left: &str, right: &str) -> std::cmp::Ordering {
+	left.bytes()
+		.map(|byte| byte.to_ascii_lowercase())
+		.cmp(right.bytes().map(|byte| byte.to_ascii_lowercase()))
+}
+
+fn last_first_parts(name: &str) -> (&str, &str) {
+	let name = name.trim();
+	match name.rsplit_once(' ') {
+		Some((first, last)) => (last, first),
+		None => (name, name),
+	}
+}
+
+fn compare_last_first(left: &str, right: &str) -> std::cmp::Ordering {
+	let (left_last, left_first) = last_first_parts(left);
+	let (right_last, right_first) = last_first_parts(right);
+	compare_ascii_case_insensitive(left_last, right_last)
+		.then_with(|| compare_ascii_case_insensitive(left_first, right_first))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -143,7 +166,7 @@ async fn library_metadata(
 }
 
 /// `GET /api/libraries/{id}`. Lissen always asks for `include=filterdata`
-/// (`AudiobookshelfApiClient.kt:43-47`) and decodes `{library, filterdata}`;
+/// (`AudiobookshelfApiClient.kt:48-53`) and decodes `{library, filterdata}`;
 /// without the parameter abs-ref answers the bare library object.
 pub(crate) async fn detail(
 	backend: Backend,
@@ -191,11 +214,18 @@ pub(crate) async fn detail(
 		});
 	}
 
-	let series_rows = series::Entity::find()
+	let audio_rows = query::audio_media(&user)
 		.filter(series::Column::LibraryId.eq(library_id.as_str()))
-		.order_by_asc(series::Column::Name)
 		.all(backend.conn())
 		.await?;
+	let series_index = query::series_index_for_rows(&**backend, &audio_rows).await?;
+	let mut series_rows = series_index
+		.series
+		.values()
+		.filter(|row| row.library_id.as_deref() == Some(library_id.as_str()))
+		.collect::<Vec<_>>();
+	series_rows
+		.sort_by(|left, right| compare_ascii_case_insensitive(&left.name, &right.name));
 
 	let distinct = |values: Vec<String>| {
 		let mut seen = Vec::new();
@@ -258,30 +288,13 @@ async fn collapse_groups(
 	backend: &dyn AbsBackend,
 	user: &AuthUser,
 	library_id: &str,
-) -> AbsResult<HashMap<String, Vec<String>>> {
-	#[derive(FromQueryResult)]
-	struct Row {
-		id: String,
-		series_id: Option<String>,
-	}
-
+) -> AbsResult<query::SeriesIndex> {
 	let rows = query::audio_media(user)
 		.filter(series::Column::LibraryId.eq(library_id))
-		.select_only()
-		.column(media::Column::Id)
-		.column(media::Column::SeriesId)
 		.order_by_asc(media::Column::Name)
-		.into_model::<Row>()
 		.all(backend.conn())
 		.await?;
-
-	let mut groups: HashMap<String, Vec<String>> = HashMap::new();
-	for row in rows {
-		if let Some(series_id) = row.series_id {
-			groups.entry(series_id).or_default().push(row.id);
-		}
-	}
-	Ok(groups)
+	query::series_index_for_rows(backend, &rows).await
 }
 
 pub(crate) async fn items(
@@ -316,9 +329,9 @@ pub(crate) async fn items(
 	};
 
 	let groups = if collapse {
-		collapse_groups(&**backend, &user, &library_id).await?
+		Some(collapse_groups(&**backend, &user, &library_id).await?)
 	} else {
-		HashMap::new()
+		None
 	};
 
 	// Under `collapseseries=1` a whole series is one row, so the page is cut
@@ -335,17 +348,20 @@ pub(crate) async fn items(
 			0,
 		)
 		.await?;
+		let all_groups = groups.as_ref().expect("collapsed groups were loaded");
 		let mut seen = HashSet::new();
 		let grouped = all
 			.rows
 			.into_iter()
-			.filter(|row| match row.series_id.as_ref() {
-				// A single-book folder is not a series, so it is never
-				// folded away; see `ItemContext::series_of`.
-				Some(series_id) if groups.get(series_id).map_or(0, Vec::len) > 1 => {
+			.filter(|row| {
+				let Some(series_id) = all_groups.media_series.get(&row.id) else {
+					return true;
+				};
+				if all_groups.members.get(series_id).map_or(0, Vec::len) > 1 {
 					seen.insert(series_id.clone())
-				},
-				_ => true,
+				} else {
+					true
+				}
 			})
 			.collect::<Vec<_>>();
 		let total = grouped.len() as i64;
@@ -381,7 +397,7 @@ pub(crate) async fn items(
 			let collapsed = collapse.then(|| {
 				let (series_id, _) = context.series_of(row)?;
 				let series = context.series.get(series_id)?;
-				let members = groups.get(series_id)?;
+				let members = groups.as_ref()?.members.get(series_id)?;
 				Some(CollapsedSeriesDto {
 					id: series.id.clone(),
 					name: series.name.clone(),
@@ -493,9 +509,8 @@ pub(crate) async fn personalized(
 		all.rows.iter().take(SHELF_LIMIT).collect(),
 	));
 
-	// A Stump series is a folder, and a folder holding one audiobook is that
-	// book, not a series (`ItemContext::series_of`), so the series shelf is
-	// built from the same rule the browse routes use.
+	// The shared index prefers explicit book series metadata and only treats a
+	// Stump folder as a series when it contains multiple audible books.
 	let mut recent_series = Vec::new();
 	let mut seen = HashSet::new();
 	for row in &all.rows {
@@ -511,7 +526,10 @@ pub(crate) async fn personalized(
 		let books = all
 			.rows
 			.iter()
-			.filter(|member| member.series_id.as_deref() == Some(series_id))
+			.filter(|member| {
+				context.media_series.get(&member.id).map(String::as_str)
+					== Some(series_id)
+			})
 			.map(|member| context.item(member, ItemShape::Minified, &user.id, None))
 			.collect::<Vec<_>>();
 		recent_series.push(PersonalizedEntityDto::Series(Box::new(mapper::series_dto(
@@ -591,6 +609,7 @@ pub(crate) struct AuthorFacts {
 	pub name: String,
 	pub num_books: i64,
 	pub added_at: i64,
+	pub updated_at: i64,
 }
 
 pub(crate) async fn author_facts(
@@ -602,6 +621,7 @@ pub(crate) async fn author_facts(
 	struct Row {
 		writers: Option<String>,
 		created_at: sea_orm::prelude::DateTimeWithTimeZone,
+		updated_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
 	}
 
 	let rows = query::audio_media(user)
@@ -609,6 +629,7 @@ pub(crate) async fn author_facts(
 		.select_only()
 		.column(media_metadata::Column::Writers)
 		.column(media::Column::CreatedAt)
+		.column(media::Column::UpdatedAt)
 		.into_model::<Row>()
 		.all(backend.conn())
 		.await?;
@@ -616,21 +637,27 @@ pub(crate) async fn author_facts(
 	let mut facts: Vec<AuthorFacts> = Vec::new();
 	for row in rows {
 		let added_at = row.created_at.timestamp_millis();
+		let updated_at = row
+			.updated_at
+			.unwrap_or_else(|| row.created_at.clone())
+			.timestamp_millis();
 		for name in mapper::csv(row.writers.as_deref()) {
 			match facts.iter_mut().find(|fact| fact.name == name) {
 				Some(fact) => {
 					fact.num_books += 1;
 					fact.added_at = fact.added_at.min(added_at);
+					fact.updated_at = fact.updated_at.max(updated_at);
 				},
 				None => facts.push(AuthorFacts {
 					name,
 					num_books: 1,
 					added_at,
+					updated_at,
 				}),
 			}
 		}
 	}
-	facts.sort_by(|left, right| left.name.cmp(&right.name));
+	facts.sort_by(|left, right| compare_ascii_case_insensitive(&left.name, &right.name));
 	Ok(facts)
 }
 
@@ -648,7 +675,7 @@ pub(crate) fn author_dto(
 		image_path: None,
 		library_id: library_id.to_owned(),
 		added_at: facts.added_at,
-		updated_at: facts.added_at,
+		updated_at: facts.updated_at,
 		num_books: with_counts.then_some(facts.num_books),
 		last_first: with_counts.then(|| mapper::last_first(&facts.name)),
 		library_items: None,
@@ -660,18 +687,32 @@ pub(crate) async fn authors(
 	Extension(user): User,
 	Path(library_id): Path<String>,
 	Query(params): Query<AuthorsQuery>,
-) -> AbsResult<Json<AuthorsPageDto>> {
+) -> AbsResult<Response> {
 	query::library(&**backend, &user, &library_id).await?;
 
 	let mut facts = author_facts(&**backend, &user, &library_id).await?;
-	let desc = flag(params.desc.as_ref());
+	match params.sort.as_deref() {
+		Some("name") => facts.sort_by(|left, right| {
+			compare_ascii_case_insensitive(&left.name, &right.name)
+		}),
+		Some("lastFirst") => {
+			facts.sort_by(|left, right| compare_last_first(&left.name, &right.name))
+		},
+		Some("addedAt") => facts.sort_by_key(|fact| fact.added_at),
+		Some("updatedAt") => facts.sort_by_key(|fact| fact.updated_at),
+		Some("numBooks") => facts.sort_by_key(|fact| fact.num_books),
+		_ => {},
+	}
+	let desc = params.desc.as_deref() == Some("1");
 	if desc {
 		facts.reverse();
 	}
+
 	let total = facts.len() as i64;
 	let limit = params.limit.unwrap_or(0);
 	let page = params.page.unwrap_or(0);
-	let window = if limit > 0 {
+	let paginated = params.limit.is_some() && params.page.is_some();
+	let window = if paginated {
 		facts
 			.into_iter()
 			.skip((page * limit) as usize)
@@ -698,17 +739,22 @@ pub(crate) async fn authors(
 				true,
 			)
 		})
-		.collect();
+		.collect::<Vec<_>>();
 
-	Ok(Json(AuthorsPageDto {
-		results,
-		total,
-		limit: limit as i64,
-		page: page as i64,
-		sort_by: params.sort.unwrap_or_else(|| "name".to_owned()),
-		sort_desc: desc,
-		minified: false,
-	}))
+	if paginated {
+		Ok(Json(AuthorsPageDto {
+			results,
+			total,
+			limit: limit as i64,
+			page: page as i64,
+			sort_by: params.sort.unwrap_or_else(|| "name".to_owned()),
+			sort_desc: desc,
+			minified: false,
+		})
+		.into_response())
+	} else {
+		Ok(Json(serde_json::json!({ "authors": results })).into_response())
+	}
 }
 
 /// `GET /api/libraries/{id}/search`. Lissen searches titles and fans the
@@ -785,41 +831,41 @@ pub(crate) async fn search(
 		}
 	}
 
-	let series_rows = series::Entity::find()
-		.filter(series::Column::LibraryId.eq(library_id.as_str()))
-		.order_by_asc(series::Column::Name)
-		.all(backend.conn())
-		.await?;
-	let series = series_rows
-		.iter()
-		.filter(|row| row.name.to_lowercase().contains(&needle))
-		// Lissen fans a series hit out into a series listing, so a
-		// single-book folder must not appear as one.
-		.filter(|row| {
-			context
-				.series_book_counts
-				.get(&row.id)
-				.copied()
-				.unwrap_or(0)
-				> 1
-		})
-		.take(limit)
-		.map(|row| {
-			let books = all
-				.rows
-				.iter()
-				.filter(|media| media.series_id.as_deref() == Some(row.id.as_str()))
-				.map(|media| context.item(media, ItemShape::Expanded, &user.id, None))
-				.collect();
-			SearchSeriesDto {
-				series: NamedIdDto {
-					id: row.id.clone(),
-					name: row.name.clone(),
-				},
-				books,
-			}
-		})
-		.collect();
+	let mut series = Vec::new();
+	let mut seen_series = HashSet::new();
+	for row in &all.rows {
+		let Some((series_id, _)) = context.series_of(row) else {
+			continue;
+		};
+		if !seen_series.insert(series_id.to_owned()) {
+			continue;
+		}
+		let Some(series_row) = context.series.get(series_id) else {
+			continue;
+		};
+		if !series_row.name.to_lowercase().contains(&needle) {
+			continue;
+		}
+		let books = all
+			.rows
+			.iter()
+			.filter(|member| {
+				context.media_series.get(&member.id).map(String::as_str)
+					== Some(series_id)
+			})
+			.map(|member| context.item(member, ItemShape::Expanded, &user.id, None))
+			.collect();
+		series.push(SearchSeriesDto {
+			series: NamedIdDto {
+				id: series_row.id.clone(),
+				name: series_row.name.clone(),
+			},
+			books,
+		});
+		if series.len() == limit {
+			break;
+		}
+	}
 
 	let facts = author_facts(&**backend, &user, &library_id).await?;
 	let matching = facts
@@ -872,13 +918,13 @@ pub(crate) struct SeriesQuery {
 }
 
 /// `GET /api/libraries/{id}/series`. The official app browses by series with
-/// `?minified=1&sort=name&limit=10000` (`ApiHandler.kt:516`) and reads
+/// `?minified=1&sort=name&limit=10000` (`ApiHandler.kt:483`) and reads
 /// `results[]` as `LibrarySeriesItem{id,libraryId,name,description,addedAt,
 /// updatedAt,books}` (`data/LibrarySeriesItem.kt:11-20`).
 ///
-/// A Stump series is a folder; a folder holding one audiobook is that book,
-/// not a series, so it is absent here for the same reason it reports
-/// `seriesName: ""` in a library listing.
+/// ABS series use explicit media metadata even when they contain one book;
+/// Stump folder rows without metadata are projected only when they contain
+/// multiple audible books.
 pub(crate) async fn series(
 	backend: Backend,
 	Extension(user): User,
@@ -921,7 +967,10 @@ pub(crate) async fn series(
 		let books = all
 			.rows
 			.iter()
-			.filter(|member| member.series_id.as_deref() == Some(series_id))
+			.filter(|member| {
+				context.media_series.get(&member.id).map(String::as_str)
+					== Some(series_id)
+			})
 			.map(|member| context.item(member, shape, &user.id, None))
 			.collect::<Vec<_>>();
 		results.push(mapper::series_dto(series, &library_id, Some(books)));
@@ -968,28 +1017,156 @@ pub(crate) async fn series(
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-pub(crate) struct EmptyPageQuery {
+pub(crate) struct CollectionsQuery {
 	limit: Option<u64>,
 	page: Option<u64>,
+	sort: Option<String>,
+	desc: Option<String>,
+	filter: Option<String>,
+	minified: Option<String>,
+	include: Option<String>,
 }
 
-/// `GET /api/libraries/{id}/collections` and `/playlists`.
+/// `GET /api/libraries/{id}/collections`.
 ///
-/// The official app opens both tabs on a library (`ApiHandler.kt:585`,
-/// `store/libraries.js`). Stump's shelves and reading lists are not
-/// Audiobookshelf collections — they span every media type and carry no
-/// audio semantics — so the profile answers the envelope empty instead of
-/// 404ing a tab, and instead of dressing a comic shelf up as an audiobook
-/// collection.
+/// Stump collections contain series rather than book rows, so their ABS
+/// projection includes only visible audiobook rows from member series in the
+/// requested library. An empty collection or one whose series has no visible
+/// audiobook is not an ABS library collection.
 pub(crate) async fn collections(
 	backend: Backend,
 	Extension(user): User,
 	Path(library_id): Path<String>,
-	Query(params): Query<EmptyPageQuery>,
-) -> AbsResult<Json<EmptyPageDto>> {
+	Query(params): Query<CollectionsQuery>,
+) -> AbsResult<Json<CollectionsPageDto>> {
 	query::library(&**backend, &user, &library_id).await?;
-	Ok(Json(EmptyPageDto::new(
-		params.limit.unwrap_or(0) as i64,
-		params.page.unwrap_or(0) as i64,
-	)))
+
+	let page = query::item_page(
+		&**backend,
+		&user,
+		&library_id,
+		ItemSort::Title,
+		false,
+		None,
+		0,
+		0,
+	)
+	.await?;
+	let series_media = page.rows.iter().fold(
+		HashMap::<String, Vec<String>>::new(),
+		|mut by_series, row| {
+			if let Some(series_id) = row.series_id.as_ref() {
+				by_series
+					.entry(series_id.clone())
+					.or_default()
+					.push(row.id.clone());
+			}
+			by_series
+		},
+	);
+	let series_ids = series_media.keys().cloned().collect::<Vec<_>>();
+	let memberships = if series_ids.is_empty() {
+		Vec::new()
+	} else {
+		collection_series::Entity::find()
+			.filter(collection_series::Column::SeriesId.is_in(series_ids))
+			.order_by_asc(collection_series::Column::CollectionId)
+			.order_by_asc(collection_series::Column::DisplayOrder)
+			.all(backend.conn())
+			.await?
+	};
+
+	let mut books_by_collection = HashMap::<String, Vec<String>>::new();
+	for membership in memberships {
+		if let Some(media_ids) = series_media.get(&membership.series_id) {
+			let books = books_by_collection
+				.entry(membership.collection_id)
+				.or_default();
+			for media_id in media_ids {
+				if !books.contains(media_id) {
+					books.push(media_id.clone());
+				}
+			}
+		}
+	}
+
+	let collection_ids = books_by_collection.keys().cloned().collect::<Vec<_>>();
+	let mut rows = if collection_ids.is_empty() {
+		Vec::new()
+	} else {
+		collection::Entity::find()
+			.filter(collection::Column::Id.is_in(collection_ids))
+			.all(backend.conn())
+			.await?
+	};
+	if params.sort.as_deref() == Some("name") {
+		rows.sort_by(|left, right| {
+			compare_ascii_case_insensitive(&left.name, &right.name)
+		});
+	}
+	let desc = params.desc.as_deref() == Some("1");
+	if desc {
+		rows.reverse();
+	}
+
+	let total = rows.len() as i64;
+	let limit = params.limit.unwrap_or(0);
+	let page_number = params.page.unwrap_or(0);
+	let rows = if limit > 0 {
+		rows.into_iter()
+			.skip((page_number * limit) as usize)
+			.take(limit as usize)
+			.collect::<Vec<_>>()
+	} else {
+		rows
+	};
+	let context = query::context(&**backend, &user, &page.rows, false).await?;
+	let rows_by_id = page
+		.rows
+		.iter()
+		.map(|row| (row.id.as_str(), row))
+		.collect::<HashMap<_, _>>();
+	let results = rows
+		.into_iter()
+		.map(|collection| {
+			let books = books_by_collection
+				.get(&collection.id)
+				.into_iter()
+				.flatten()
+				.filter_map(|media_id| rows_by_id.get(media_id.as_str()))
+				.map(|media| context.item(media, ItemShape::Expanded, &user.id, None))
+				.collect();
+			let updated_at = collection.updated_at.timestamp_millis();
+			CollectionDto {
+				id: collection.id,
+				library_id: library_id.clone(),
+				name: collection.name,
+				description: collection.description,
+				books,
+				last_update: updated_at,
+				created_at: updated_at,
+			}
+		})
+		.collect();
+
+	let include = params
+		.include
+		.unwrap_or_default()
+		.split(',')
+		.map(str::trim)
+		.filter(|part| !part.is_empty())
+		.map(str::to_ascii_lowercase)
+		.collect::<Vec<_>>()
+		.join(",");
+	Ok(Json(CollectionsPageDto {
+		results,
+		total,
+		limit: limit as i64,
+		page: page_number as i64,
+		sort_by: params.sort,
+		sort_desc: desc,
+		filter_by: params.filter,
+		minified: flag(params.minified.as_ref()),
+		include,
+	}))
 }

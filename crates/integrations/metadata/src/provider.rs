@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::{
 	error::MetadataProviderError,
 	types::{
-		ExternalMediaMetadata, ExternalSeriesMetadata, MatchCandidate, MediaType,
-		SearchOutcome, SearchQuery,
+		AudiobookEdition, ExternalMediaMetadata, ExternalSeriesMetadata, MatchCandidate,
+		MediaType, SearchOutcome, SearchQuery,
 	},
 	MatchScorer,
 };
@@ -40,6 +40,18 @@ pub trait MetadataProvider: Send + Sync {
 		query: &SearchQuery,
 	) -> Result<SearchOutcome, MetadataProviderError>;
 
+	/// Search for books using only what the provider's search index already
+	/// returns, without a per-hit detail fetch. Intended for interactive
+	/// lookups (type-ahead, request pickers) where latency matters more than
+	/// completeness; providers whose index is not self-describing fall back
+	/// to [`Self::search_media`].
+	async fn search_media_brief(
+		&self,
+		query: &SearchQuery,
+	) -> Result<SearchOutcome, MetadataProviderError> {
+		self.search_media(query).await
+	}
+
 	/// Score and sort search results based on their relevance to the query
 	fn score_search(
 		&self,
@@ -62,6 +74,18 @@ pub trait MetadataProvider: Send + Sync {
 		&self,
 		external_id: &str,
 	) -> Result<ExternalMediaMetadata, MetadataProviderError>;
+
+	/// The audiobook editions of a work this provider already identifies by
+	/// `external_id`: narrators, advertised length and ASIN. One request at
+	/// most. Providers without an edition graph know nothing and say so with
+	/// an empty list rather than an error, so a caller merging several
+	/// sources treats "no editions" and "no edition data" alike.
+	async fn audiobook_editions(
+		&self,
+		_external_id: &str,
+	) -> Result<Vec<AudiobookEdition>, MetadataProviderError> {
+		Ok(Vec::new())
+	}
 
 	//// Fetch cover image URL
 	// async fn fetch_cover_url(

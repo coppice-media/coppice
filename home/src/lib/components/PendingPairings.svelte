@@ -9,6 +9,8 @@
 	import { Button } from '@stump/ui/components/ui/button';
 	import * as InputOTP from '@stump/ui/components/ui/input-otp';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import { Checkbox } from '@stump/ui/components/ui/checkbox';
+	import { Label } from '@stump/ui/components/ui/label';
 	import { request } from '@stump/ui/graphql/client';
 	import { errorMessage } from '@stump/ui/utils/errors.js';
 	import {
@@ -17,12 +19,14 @@
 		PendingDevicePairingsDocument
 	} from '$lib/graphql/generated/graphql';
 	import { DEVICE_KIND_ICONS, DEVICE_KIND_LABELS } from '$lib/devices';
+	import { getHomeSession } from '$lib/session.svelte';
 	import { relativeTime } from '$lib/format';
 	let { now }: { now: Date } = $props();
 
 	const CODE_LENGTH = 6;
 
 	const queryClient = useQueryClient();
+	const session = getHomeSession();
 	const pairings = createQuery(() => ({
 		queryKey: ['pendingDevicePairings'],
 		queryFn: () => request(PendingDevicePairingsDocument, {}),
@@ -35,6 +39,7 @@
 	);
 
 	let codes = $state<Record<string, string>>({});
+	let komfMetadataOptIn = $state<Record<string, boolean>>({});
 	let denyConfirm = $state<string | null>(null);
 	function settle(): void {
 		void queryClient.invalidateQueries({ queryKey: ['pendingDevicePairings'] });
@@ -43,7 +48,11 @@
 
 	const approve = createMutation(() => ({
 		mutationFn: (pairingId: string) =>
-			request(ApproveDevicePairingDocument, { pairingId, code: codes[pairingId] ?? '' }),
+			request(ApproveDevicePairingDocument, {
+				pairingId,
+				code: codes[pairingId] ?? '',
+				allowKomfMetadataEditing: komfMetadataOptIn[pairingId] ?? false
+			}),
 		onSuccess: () => {
 			toast.success('Pairing approved; the device picks up its credential on its next poll.');
 			settle();
@@ -125,6 +134,29 @@
 							</p>
 						{/if}
 					</div>
+					{#if pairing.kind === 'KOMELIA'}
+						<div class="flex items-start gap-3 rounded-lg border border-dashed p-3">
+							<Checkbox
+								id={`pairing-komf-metadata-${pairing.id}`}
+								checked={komfMetadataOptIn[pairing.id] ?? false}
+								onCheckedChange={(checked) => (komfMetadataOptIn[pairing.id] = checked === true)}
+								disabled={!(session.user?.isServerOwner || session.user?.permissions.includes('EDIT_METADATA'))}
+							/>
+							<div class="flex flex-col gap-1">
+								<Label for={`pairing-komf-metadata-${pairing.id}`} class="font-medium">
+									Allow Komf metadata editing
+								</Label>
+								<p class="text-xs text-muted-foreground">
+									Add only the Edit metadata permission to this Komelia credential.
+								</p>
+								{#if !(session.user?.isServerOwner || session.user?.permissions.includes('EDIT_METADATA'))}
+									<p class="text-xs text-muted-foreground">
+										Disabled because your account does not have Edit metadata permission.
+									</p>
+								{/if}
+							</div>
+						</div>
+					{/if}
 				</div>
 				<form
 					class="flex flex-wrap items-center gap-3"
@@ -136,7 +168,7 @@
 					<InputOTP.Root
 						maxlength={CODE_LENGTH}
 						pattern={REGEXP_ONLY_DIGITS}
-						bind:value={codes[pairing.id]}
+						bind:value={() => codes[pairing.id] ?? '', (value) => (codes[pairing.id] = value)}
 						aria-label={`Pairing code for ${pairing.name ?? 'unnamed device'}`}
 						onComplete={() => submitCode(pairing.id)}
 						disabled={approve.isPending || deny.isPending}

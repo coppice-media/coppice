@@ -22,15 +22,12 @@ types (`src/sync_token.rs:14`).
 | Calibre-Web `cps/kobo.py`     | `a97826402f1b39c45b7ea8d906efddc9f1750934`                                                                                                           | Route inventory, `ReadingStates[0]` state wire shape, sync-item vocabulary (`docs/content/docs/developer/kobo-sync-capabilities.mdx:8-70`)                           |
 | Komga Kobo ReadingState/KEPUB | `656001eb03bf8b54ca909f3e74fe2ec1b95dac48`                                                                                                           | Second ReadingState precedent (`kobo-sync-capabilities.mdx` §6-7)                                                                                                    |
 | kepubify                      | `9546034bc023891af5ce30709de6ae2dcf264628`                                                                                                           | KEPUB byte parity target; see `crates/kepub/README.md`                                                                                                               |
-| Liseur `KoboClient.kt`        | [`31f8182d`](https://github.com/chmouel/liseur/commit/31f8182d524e3536cf9020594185e709a033094f)                                                      | Only pinned software client: `library/sync`, `library/{id}/state` GET/PUT (`docs/content/docs/developer/liseur-providers.mdx:83-103`)                                |
+| Liseur `KoboClient.kt`        | [v0.19.0 `62ecb5a5`](https://github.com/chmouel/liseur/commit/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6) | Current source-only route inventory; the older device-tested client run is distinct (`client-verification.mdx`) |
 | Kobo firmware format support  | [Kobo help](https://help.kobo.com/hc/en-us/articles/360017763713)                                                                                    | JPEG/PNG/GIF/BMP/TIFF only — no WebP in CBZ/KEPUB (`clients.mdx:90`)                                                                                                 |
 
-Client-verification status (`docs/content/docs/developer/client-verification.mdx:33`):
-**Harness only** — `initialization` 200, `library/sync`, KEPUB delivery with
-`Range`, `ReadingState` round-trip. **No physical Kobo has been tested.** The
-harness in this case is the fixture curl probe in
-`kobo-sync-capabilities.mdx` (Fixture probe section); `/home/al/Code/komga-compat`
-has no Kobo Hurl spec or replay target.
+Client and hardware evidence belongs in `docs/content/docs/developer/client-verification.mdx`.
+The fixture curl probe in `kobo-sync-capabilities.mdx` checks server contract
+paths only; it does not establish physical-device compatibility.
 
 ## Decisions
 

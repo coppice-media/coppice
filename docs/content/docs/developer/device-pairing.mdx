@@ -19,8 +19,8 @@ the server never has to trust the network the device sits on.
 ## Sequence
 
 ```text
- Device (Kobo / Mihon / Coppice)   Coppice server                  User (Home / mobile app)
- ──────────────────────────────    ──────────────                  ────────────────────────
+ Device (Kobo / Mihon / Coppice)   Coppice server                  User (Home)
+ ──────────────────────────────    ──────────────                  ────────────
  POST /api/v2/devices/pair/start ─►
    {kind, name?}                    create device_pairings row:
                                     code (6 digits, bcrypt-hashed),
@@ -196,13 +196,17 @@ owner could not have created directly. Files:
   oldest first. Pending pairings are not owned by anyone yet, so every user
   who may approve sees them (kind, requested name, remote IP, deadline).
   Neither the code hash nor the nonce is ever exposed.
-- `approveDevicePairing(pairingId: ID!, code: String, nonce: String): DevicePairing!`
+- `approveDevicePairing(pairingId: ID!, code: String, nonce: String, allowKomfMetadataEditing: Boolean! = false): DevicePairing!`
   — exactly one of `code` (typed from the device screen) or `nonce` (from the
   scanned `stump://pair?host=…&id=…&nonce=…` deep link) must be provided.
-  On success `status = APPROVED`, `userId` is the caller and `approvedAt` is
-  set. A wrong proof answers `Incorrect code or nonce (N attempts left)`; the
-  fifth wrong proof denies the pairing (`MAX_FAILED_ATTEMPTS = 5`). Expired,
-  approved and denied pairings are rejected with a message naming the state.
+  `allowKomfMetadataEditing` defaults to false and is valid only for Komelia;
+  enabling it additionally requires the approving user to hold
+  `UserPermission::EditMetadata`, including server owners. It adds only that
+  permission to the download-only Komelia key. On success `status = APPROVED`,
+  `userId` is the caller and `approvedAt` is set. A wrong proof answers
+  `Incorrect code or nonce (N attempts left)`; the fifth wrong proof denies
+  the pairing (`MAX_FAILED_ATTEMPTS = 5`). Expired, approved and denied
+  pairings are rejected with a message naming the state.
 - `denyDevicePairing(pairingId: ID!): DevicePairing!` — settles a pending
   pairing as `DENIED` and records the caller in `userId`. Anyone allowed to
   approve may deny, so a suspicious toast can be shut down by whoever sees it.
@@ -219,7 +223,9 @@ approval.
 
 ## Storage
 
-Migration `m20260911_000000_add_device_pairings` creates:
+Migration `m20260911_000000_add_device_pairings` creates the base table;
+append-only migration `m20260961_000000_add_pairing_komf_metadata_editing`
+adds the Komelia opt-in column.
 
 ```text
 device_pairings(
@@ -227,11 +233,15 @@ device_pairings(
   remote_ip TEXT, user_id TEXT NULL → users.id ON DELETE CASCADE,
   status TEXT DEFAULT 'PENDING', failed_attempts INTEGER DEFAULT 0,
   credential_issued BOOLEAN DEFAULT FALSE,
+  allow_komf_metadata_editing BOOLEAN DEFAULT FALSE,
   created_at, expires_at, approved_at NULL
 )
 idx-device-pairings-status-expires (status, expires_at)
 idx-device-pairings-remote-ip (remote_ip)
 ```
+
+The Komelia opt-in is kept on the pairing row so the owner’s choice survives
+until the approved device polls and receives its credentials.
 
 `EXPIRED` is derived from `expires_at` for pending rows and persisted lazily
 when a poll or a mutation observes it, so rows stay self-describing without a
@@ -306,7 +316,8 @@ curl -s -o qr.png -w '%{content_type}\n' "$BASE/api/v2/devices/pair/$ID/qr.png?n
 - `cargo test -p stump_server --test api_tests device_pairing` — end-to-end
   over the in-memory server: happy path, credential returned exactly once,
   five wrong codes → denied, expired, nonce mismatch → 404, QR-nonce approval,
-  approval bound to the approver and blocked for others, permission gate, deny,
+  approval bound to the approver and blocked for others, permission gates and
+  Komelia `EditMetadata` opt-in enforcement, deny,
   per-IP cap and input validation, QR PNG (with `qr`).
 - `cargo test -p stump_server --lib device_pairing` — code/nonce generation,
   payload encoding, PNG rendering.

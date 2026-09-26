@@ -85,10 +85,9 @@ guide.
 ## GraphQL Playground
 
 The playground is available at `http(s)://your-server(:10801)/api/graphql` when
-the effective web UI profile is enabled and either the server is running in
-debug mode or the `enable_playground` config variable is set to `true`. Headless
-builds and servers running with `STUMP_ENABLE_WEBUI=false` do not mount the
-playground route.
+the `webui` Cargo feature is compiled and enabled, and either the server is
+running in debug mode or `enable_playground` is set to `true`. Headless builds
+and servers running with `STUMP_ENABLE_WEBUI=false` do not mount the playground.
 
 If you're new to GraphQL, I would recommend giving the [GraphQL
 documentation](https://graphql.org/learn/) a quick read, and then trying out the
@@ -96,10 +95,10 @@ playground.
 
 ### Disabling GraphQL Playground
 
-For release builds with the web UI enabled, set `STUMP_ENABLE_PLAYGROUND=false`
-to disable the playground. Debug builds enable it whenever the web UI is
-enabled; set `STUMP_ENABLE_WEBUI=false` or use a headless build to remove
-browser UI routes. See the [configuration guide](/docs/guides/configuration/server-config)
+For release builds with `webui` enabled, set `STUMP_ENABLE_PLAYGROUND=false`
+to disable the playground. Debug builds enable it whenever `STUMP_ENABLE_WEBUI`
+is enabled. Home and Editor are separate static apps and are not controlled by
+this setting. See the [configuration guide](/docs/guides/configuration/server-config)
 for more information.
 
 ## Compatibility APIs and tested apps
@@ -115,9 +114,9 @@ the listed routes and clients:
 | OPDS 1.2/PSE | Shipped | Device-tested and Contract-tested with Liseur | Generic OPDS clients are not blanket-certified. |
 | OPDS 2.0 | Shipped | Contract-tested | No universal app/device claim. |
 | Kobo sync/KEPUB | Shipped | Contract-tested | Physical Kobo testing remains Blocked. |
-| KOReader/KOSync | Shipped | Contract-tested; Liseur sync is Device-tested | Native KOReader and `stump.koplugin` remain Source-only/Blocked. |
-| liseur-sync | Shipped | Device-tested and Contract-tested with Liseur | Attachment blobs are not transported. |
-| Audiobookshelf-compatible REST | Shipped | Device-tested and Contract-tested with Lissen | The official Audiobookshelf app remains Blocked on the missing Engine.IO/Socket.IO lane. |
+| KOReader/KOSync | Shipped | Server contract-tested; Liseur KOSync has a scoped device run. `coppice.koplugin` is source-only against KOReader v2026.07.1 (`9192014d`) and has not been loaded into the native app. |
+| liseur-sync | Shipped | Current Liseur v0.19.0 (`62ecb5a5`) and liseur-sync (`906889ff`) are source-only; the older device run is separate. Attachment routes/storage ship with source/contract evidence, not a client attachment test. |
+| Audiobookshelf-compatible REST/Socket.IO | Shipped | ABS 2.36.1 (`4b67c170`) and app v0.14.1-beta (`2ac4de4d`) are source-only; the older v0.14.0-beta app run is scoped, not full parity. Lissen 1.12.5 (`fd5c0417`) is source-only; the v1.11.22 replay is contract-only and there is no Lissen device run. |
 
 These labels never promote a source review or replay into physical-client
 support. Exact versions, dates, route coverage, and known failures live in

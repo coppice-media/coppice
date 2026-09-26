@@ -21,8 +21,8 @@ compatibility-sensitive.
 - Browser/server work grows release search, tracker credentials, acquisition,
   retries, VPN/qBittorrent control, or transport instead of defining a narrow
   authenticated future sidecar protocol.
-- Yarn/Lerna, subsidiary lockfiles, or native Expo tooling re-enter the active
-  Bun workspace without an explicit lane decision.
+- Native mobile build tooling for the removed `apps/expo/` app stays out of the
+  active workspace; third-party client compatibility remains a server contract.
 
 Keep the default build working, preserve user files/remotes and client behavior,
 and leave no speculative shim or dead compatibility path. Do not rely on

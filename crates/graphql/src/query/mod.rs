@@ -1,6 +1,7 @@
 pub(crate) mod annotation;
 mod annotation_attachment;
 mod api_key;
+mod audiobook_narrators;
 mod author;
 #[cfg(feature = "web")]
 mod book_club;
@@ -33,6 +34,8 @@ mod job;
 mod kindle;
 mod library;
 mod log;
+#[cfg(feature = "mam-acquisition")]
+mod mam_acquisition;
 pub(crate) mod media;
 mod media_metadata_overview;
 mod metadata_provider;
@@ -52,6 +55,7 @@ mod smart_lists;
 #[cfg(feature = "web")]
 pub(crate) mod smart_lists_builder;
 mod tag;
+mod unified_search;
 pub(crate) mod user;
 mod worker;
 
@@ -59,6 +63,7 @@ use crate::social::SocialQuery;
 use annotation::AnnotationQuery;
 use annotation_attachment::AnnotationAttachmentQuery;
 use api_key::APIKeyQuery;
+use audiobook_narrators::AudiobookNarratorsQuery;
 use author::AuthorQuery;
 #[cfg(feature = "web")]
 use book_club::BookClubQuery;
@@ -90,6 +95,8 @@ use ingest::IngestQuery;
 use kindle::KindleQuery;
 use library::LibraryQuery;
 use log::LogQuery;
+#[cfg(feature = "mam-acquisition")]
+use mam_acquisition::MamAcquisitionQuery;
 use media::MediaQuery;
 use media_metadata_overview::MediaMetadataOverviewQuery;
 use metadata_provider::MetadataProviderQuery;
@@ -107,6 +114,7 @@ use smart_list_view::SmartListViewQuery;
 #[cfg(feature = "web")]
 use smart_lists::SmartListsQuery;
 use tag::TagQuery;
+use unified_search::UnifiedSearchQuery;
 use user::UserQuery;
 use worker::WorkerQuery;
 
@@ -138,6 +146,8 @@ struct ContentQueries(
 	DuplicatePageQuery,
 	EditionPairQuery,
 	BookDetailQuery,
+	UnifiedSearchQuery,
+	AudiobookNarratorsQuery,
 );
 #[derive(async_graphql::MergedObject, Default)]
 struct UserAndNotifsQueries(
@@ -153,6 +163,7 @@ struct UserAndNotifsQueries(
 struct SystemQueries(
 	APIKeyQuery,
 	BookRequestQuery,
+	#[cfg(feature = "mam-acquisition")] MamAcquisitionQuery,
 	JobQuery,
 	LogQuery,
 	ConfigQuery,

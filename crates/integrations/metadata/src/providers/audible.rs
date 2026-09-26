@@ -399,6 +399,35 @@ impl MetadataProvider for AudibleClient {
 		})
 	}
 
+	/// The catalog search alone, in the catalog's own relevance order: no
+	/// ASIN shortcut (an ASIN-shaped query is not a type-ahead term) and no
+	/// re-scoring, so the caller sees what Audible ranks first.
+	#[tracing::instrument(skip(self))]
+	async fn search_media_brief(
+		&self,
+		query: &SearchQuery,
+	) -> Result<SearchOutcome, MetadataProviderError> {
+		let products = self.search_catalog(query).await?;
+		let requested = products.len();
+		let candidates = products
+			.into_iter()
+			.filter_map(|product| {
+				let metadata = media_from_product(self.id(), product)?;
+				Some(MatchCandidate {
+					external_id: metadata.external_id.clone(),
+					metadata: ExternalMetadata::Media(metadata),
+					provider: self.id().to_string(),
+					confidence: 0.0,
+					confidence_factors: Vec::new(),
+				})
+			})
+			.collect();
+		Ok(SearchOutcome {
+			candidates,
+			requested,
+		})
+	}
+
 	async fn fetch_series_metadata(
 		&self,
 		_external_id: &str,
@@ -475,12 +504,21 @@ impl EditionLookup for AudibleClient {
 
 /// Map a catalog product straight onto media metadata. A product with no ASIN
 /// has no identity to fetch or store against, so it is dropped -- and counted,
-/// through [`SearchOutcome::failed`].
+/// through [`SearchOutcome::failed`]. So is anything the catalog labels a
+/// podcast, episode or periodical: the store lists them beside audiobooks,
+/// but no book on a shelf is one.
 fn media_from_product(
 	provider_id: &str,
 	product: CatalogProduct,
 ) -> Option<ExternalMediaMetadata> {
 	let asin = non_empty(product.asin)?;
+	if [&product.content_type, &product.content_delivery_type]
+		.into_iter()
+		.flatten()
+		.any(|kind| is_non_book_content(kind))
+	{
+		return None;
+	}
 	let (year, month, day) = parse_release_date(product.release_date.as_deref());
 	// The catalog lists every series a product belongs to; the first is the
 	// primary one, and the metadata type has room for exactly one.
@@ -537,8 +575,33 @@ fn media_from_product(
 		runtime_minutes: product.runtime_length_min,
 		cover_url: largest_image(product.product_images),
 		provider_url: Some(product_url(&asin)),
+		has_audiobook: Some(true),
+		abridged: abridged_from_format_type(product.format_type.as_deref()),
+		language: non_empty(product.language).map(|language| language.to_lowercase()),
 		..Default::default()
 	})
+}
+
+/// The catalog's `content_type`/`content_delivery_type` labels for things
+/// that are not books: `Podcast`, `PodcastEpisode`, `PodcastParent`,
+/// `Periodical`, and the newspaper/magazine editions sold as subscriptions.
+fn is_non_book_content(kind: &str) -> bool {
+	let kind = kind.trim().to_ascii_lowercase();
+	kind.contains("podcast")
+		|| kind.contains("periodical")
+		|| kind.contains("newspaper")
+		|| kind.contains("magazine")
+}
+
+/// `format_type` is the catalog's abridgement label: `abridged` or
+/// `unabridged` on audiobooks. Anything else (podcasts, unstated) is unknown
+/// rather than a guess either way.
+fn abridged_from_format_type(format_type: Option<&str>) -> Option<bool> {
+	match format_type?.trim().to_ascii_lowercase().as_str() {
+		"abridged" => Some(true),
+		"unabridged" => Some(false),
+		_ => None,
+	}
 }
 
 /// The ASIN a search should resolve directly, if the caller supplied one.
@@ -783,8 +846,11 @@ struct CatalogResponse {
 /// `content_delivery_type`, `is_listenable`, `has_children`, `asset_details`,
 /// `sku`/`sku_lite` (store and delivery attributes -- the audio facts Stump
 /// keeps are measured from the file, not advertised), `social_media_images`
-/// (share cards, not covers), and `language`, `format_type`, `content_type`,
-/// `is_adult_product` (no carrier, as on the Audnexus record).
+/// (share cards, not covers) and `is_adult_product` (no carrier, as on the
+/// Audnexus record). `format_type` is carried only as the abridged flag,
+/// `language` lowercased as the edition language, and
+/// `content_type`/`content_delivery_type` only decide whether the product is
+/// a book at all.
 #[derive(Debug, Deserialize)]
 struct CatalogProduct {
 	asin: Option<String>,
@@ -803,6 +869,10 @@ struct CatalogProduct {
 	product_images: HashMap<String, String>,
 	publisher_summary: Option<String>,
 	merchandising_summary: Option<String>,
+	format_type: Option<String>,
+	content_type: Option<String>,
+	content_delivery_type: Option<String>,
+	language: Option<String>,
 }
 
 /// A catalog contributor. The sibling `asin` on an author is not mapped: the
@@ -1042,6 +1112,9 @@ mod tests {
 			media.provider_url.as_deref(),
 			Some("https://www.audible.com/pd/B07DFN5FBP")
 		);
+		assert_eq!(media.has_audiobook, Some(true));
+		assert_eq!(media.abridged, Some(false), "format_type unabridged");
+		assert_eq!(media.language.as_deref(), Some("english"));
 
 		let requests = server.requests();
 		assert_eq!(requests.len(), 1);
@@ -1063,6 +1136,64 @@ mod tests {
 			"{request}"
 		);
 		assert!(request.contains("author=Becky+Chambers"), "{request}");
+	}
+
+	#[tokio::test]
+	async fn brief_search_keeps_catalog_order_and_never_shortcuts_to_audnexus() {
+		let mut body: serde_json::Value =
+			serde_json::from_str(&catalog_response()).unwrap();
+		body["products"][1] = serde_json::json!({
+			"asin": "B0ABRIDGED",
+			"title": "The Long Way to a Small, Angry Planet",
+			"format_type": "Abridged"
+		});
+		let products = body["products"].as_array_mut().unwrap();
+		products.push(serde_json::json!({
+			"asin": "B0GTXCMJM4",
+			"title": "3/25 Wednesday Hr 1: Harry Potter T...",
+			"content_type": "Podcast",
+			"content_delivery_type": "PodcastEpisode",
+			"runtime_length_min": 40
+		}));
+		products.push(serde_json::json!({
+			"asin": "B0PERIODIC",
+			"title": "The New York Times Audio Digest",
+			"content_delivery_type": "Periodical"
+		}));
+		let server = MockServer::spawn(vec![render_ok(&body.to_string())]);
+		let client = client(&server);
+
+		let outcome = client
+			.search_media_brief(&query("B0ABRIDGED"))
+			.await
+			.expect("brief search should hit the catalog");
+
+		let requests = server.requests();
+		assert_eq!(requests.len(), 1);
+		assert!(
+			requests[0].starts_with("GET /1.0/catalog/products?"),
+			"an ASIN-shaped brief query still searches the catalog: {}",
+			requests[0]
+		);
+		assert_eq!(outcome.requested, 4);
+		assert_eq!(
+			outcome.failed(),
+			2,
+			"podcast and periodical products are dropped"
+		);
+		let ids: Vec<_> = outcome
+			.candidates
+			.iter()
+			.map(|candidate| candidate.external_id.as_str())
+			.collect();
+		assert_eq!(ids, ["B07DFN5FBP", "B0ABRIDGED"], "catalog order is kept");
+		assert!(outcome
+			.candidates
+			.iter()
+			.all(|candidate| candidate.confidence == 0.0));
+		let abridged = outcome.candidates[1].metadata.as_media().unwrap();
+		assert_eq!(abridged.abridged, Some(true));
+		assert_eq!(abridged.runtime_minutes, None);
 	}
 
 	#[tokio::test]

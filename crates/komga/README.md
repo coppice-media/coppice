@@ -20,24 +20,20 @@ Komga persistence or a second identity store.
 
 | Reference                           | Pin                                                                                                                                          | Used for                                                                                                                      |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Komga oracle                        | 1.26.3, `4cabeb8abd05ddfff473a8f850a3c33c8f9e9aa1`; [OpenAPI](https://raw.githubusercontent.com/gotson/komga/1.26.3/komga/docs/openapi.json) | Identity/session paths, DTO field names (`/home/al/Code/komga-compat/config/pins.json`)                                       |
-| komga-client (Kotlin)               | 0.11.0 [`74412a6e`](https://github.com/Snd-R/komga-client/commit/74412a6e27402b90f73672c7452f60a0f05914ca)                                   | DTO strictness (`WPLink.rel: String?`, `published: LocalDate`, contributor lists, `ThumbnailSeries.Type`)                     |
-| Komelia (Android)                   | 0.19.0 [`65f92fde`](https://github.com/Snd-R/Komelia/commit/65f92fde60b7b7b62b85a55ceb80b92adf50eec8)                                        | Observed route profile (`evidence/sanitized-komelia-0.19.0.json`), one-based page requests, scalar `libraryId` query encoding |
-| Mihon tracker + Keiyoushi extension | Mihon `21af65b` (`KomgaApi.kt`), Keiyoushi v1.6.69 `819e24c1`                                                                                | `GET/PUT /api/v2/series/{id}/read-progress/tachiyomi`, legacy `GET /api/v1/books`                                             |
-| Liseur Komga provider               | [`31f8182d`](https://github.com/chmouel/liseur/commit/31f8182d524e3536cf9020594185e709a033094f)                                              | API-key-only REST catalog/file/progression (`liseur-providers.mdx:32-56`)                                                     |
-| Grimmory `KomgaController`          | main (`komga-compat.mdx` Grimmory shim section)                                                                                              | `/komga` prefix alias: GET listing + own `users/me` shape                                                                     |
-| Komf 2.0.1                          | [`5ad67370`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64); release JAR SHA-256 `f5e01a06938cf1e13a4e9d8211db0569e89e09256072d1bbdf5b04291e809cb9`; [`sndxr/komf:2.0.1@sha256:e48652eb32b06cafce4680c229bdbdb682eb1066e3bdeb2872e9dc99255a5cf6`](https://hub.docker.com/r/sndxr/komf/tags); `komga-client` 0.10.3 | External workflow: Basic + SSE `TaskQueueStatus`, metadata/cover writes; no Kotlin is embedded in Coppice |
-| Readium Web Publication             | <https://readium.org/webpub>                                                                                                                 | Native EPUB routes keep spec shapes; the Komga alias narrows to Komelia's types                                               |
+| Komga replay oracle                  | 1.26.3, `4cabeb8abd05ddfff473a8f850a3c33c8f9e9aa1`; [OpenAPI](https://raw.githubusercontent.com/gotson/komga/1.26.3/komga/docs/openapi.json) | Identity/session contract and historical replay baseline; not the current source/query pin |
+| Komga current source/query | [1.27.1 `65981e600edb24944ffaae4818ff2716a5fa08dd`](https://github.com/gotson/komga/commit/65981e600edb24944ffaae4818ff2716a5fa08dd) | Source-derived query/controller behavior, distinct from the 1.26.3 replay oracle |
+| komga-client (Kotlin)                 | 0.11.0 [`74412a6e`](https://github.com/Snd-R/komga-client/commit/74412a6e27402b90f73672c7452f60a0f05914ca)                         | DTO strictness (`WPLink.rel: String?`, `published: LocalDate`, contributor lists, `ThumbnailSeries.Type`) |
+| Komelia device record                 | 0.19.0 [`65f92fde`](https://github.com/Snd-R/Komelia/commit/65f92fde60b7b7b62b85a55ceb80b92adf50eec8)                              | Historical device-tested version; current source record is separate in the matrix |
+| Komelia current source              | [0.19.3 `3c5f501ef24b3acc239302adcab28efe0772c513`](https://github.com/Snd-R/Komelia/commit/3c5f501ef24b3acc239302adcab28efe0772c513) | Source-only DTO behavior; not the 0.19.0 device run |
+| Mihon tracker source-analysis         | `21af65b1` (`KomgaApi.kt`)                                                                                                          | Tracker source-analysis pin; separate from the replay client |
+| Mihon replay client                   | v0.20.4 `df650725`                                                                                                                   | Replay-client pin; distinct from source-analysis |
+| Liseur Komga provider                 | [v0.19.0 `62ecb5a5`](https://github.com/chmouel/liseur/commit/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6)                            | Current source-only provider inventory; older device evidence is separate |
+| Grimmory Komga alias                  | `/komga` compatibility route                                                                                                        | Preserves the separate `routes_without_current_user` identity contract |
+| Komf 2.0.1                             | [`5ad67370`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64); release JAR SHA-256 `f5e01a06938cf1e13a4e9d8211db0569e89e09256072d1bbdf5b04291e809cb9`; image `sndxr/komf:2.0.1@sha256:e48652eb32b06cafce4680c229bdbdb682eb1066e3bdeb2872e9dc99255a5cf6`; `komga-client` 0.10.3 | External workflow: Basic + SSE `TaskQueueStatus`, metadata/cover writes; no Kotlin is embedded in Coppice |
+| Readium Web Publication             | <https://readium.org/webpub>                                                                                                         | Native EPUB routes keep spec shapes; the Komga alias narrows to Komelia's types |
 
-Client-verification status (`docs/content/docs/developer/client-verification.mdx:24-32`):
-
-| Client                 | Level                                                                                | Harness                              |
-| ---------------------- | ------------------------------------------------------------------------------------ | ------------------------------------ |
-| Komelia 0.19.0         | **Device** (login, browse, CBZ+EPUB read, offline download, progress; 2026-09-03/04) | `make replay` 8/8, `replay-readium`  |
-| Liseur (Komga profile) | **Device** (login, browse, read, progress; 2026-09-04)                               | —                                    |
-| Mihon / Tachiyomi      | **Device** (browse, download, read, enhanced tracker; 2026-09-04)                    | `replay-mihon` (Basic + `X-API-Key`) |
-| Komf 2.0.1                         | **External workflow; evidence is separately labeled**                               | Historical direct `/api/v1` Hurl versus pinned sidecar `/api/komga/media-server/connected` + `/libraries` smoke |
-| Grimmory alias         | **Device** login (via Liseur); listing/file/thumbnail harness                        | `specs/grimmory.hurl`                |
+Client versions, dates, replay scope, and device evidence are maintained in the
+[canonical client verification matrix](../../docs/content/docs/developer/client-verification.mdx).
 
 ## Decisions
 
@@ -93,28 +89,17 @@ Route families (declared in `src/routes/*.rs`; full matrix in `komga-compat.mdx`
 
 ## How to verify
 
-```text
-cargo test -p stump_komga --lib --tests       # 82 inline tests (DTO + route/mapper/SSE behavior)
-cargo test -p stump_server --lib komga        # mount test in routers/komga/mod.rs (must stay: Axum panics on overlapping routes)
-cargo check -p stump_server --no-default-features --features minimal   # feature-off
-STUMP_ENABLE_KOMGA=false                      # runtime-off; native /api routes only
-cd ../komga-compat && make replay             # 8/8 observed specs (auth, libraries, catalog, books, siblings, cache-range, session-cookie-scope, grimmory)
-make replay-negative-auth; make replay-readium; make replay-mihon SERIES_ID=…; make replay-komf
+```sh
+cargo test -p stump_komga --lib --tests
+cargo test -p stump_server --lib komga
+cargo check -p stump_server --no-default-features --features minimal
 ```
-
-Live probe (fixture `http://127.0.0.1:25600`, credentials from generated
-`ENDPOINTS.md`): `GET /api/v2/users/me?remember-me=true` with Basic → 200 +
-`komga-remember-me` cookie; `POST /api/v1/books/list` `{}` → `Page` envelope;
-`GET /sse/v1/events` → `text/event-stream`. After a rebuild log out/in once to
-re-store the remember-me token.
 
 ## Deep docs
 
-- `docs/content/docs/developer/komga-compat.mdx` — the authoritative profile spec: routes, auth, pagination, search, DTO losses, replay diagnostics.
-- `docs/content/docs/developer/standards.mdx` (Komga profile, Grimmory alias) — one-table summaries.
-- `docs/content/docs/developer/provider-status.mdx` (Komga) — status table (SSE row is stale: four core events are forwarded, not only `CreatedMedia`).
-- `docs/content/docs/developer/clients.mdx`, `client-verification.mdx` — Komelia/Mihon/Liseur/Komf/Grimmory rows.
-- `docs/content/docs/developer/liseur-providers.mdx` (Komga provider, Grimmory) — Liseur's exact requests.
-- `docs/content/docs/developer/unified-reading-state.mdx` (Komga Readium) — locator mapping precision.
-- `docs/content/docs/developer/roadmap.mdx` — Komf follow-ups; `local://komf-compat-study.md`.
-- Harness: `/home/al/Code/komga-compat/README.md`, `specs/*.hurl`, `evidence/sanitized-komelia-0.19.0.json`.
+- `docs/content/docs/developer/komga-compat.mdx` — routes, auth, pagination, search, DTO losses, and replay boundaries.
+- `docs/content/docs/developer/standards.mdx` — Komga profile and Grimmory alias summary.
+- `docs/content/docs/developer/provider-status.mdx` — provider integration status.
+- `docs/content/docs/developer/client-verification.mdx` — canonical client pins and evidence scope.
+- `docs/content/docs/developer/liseur-providers.mdx` — Liseur provider requests.
+- `docs/content/docs/developer/unified-reading-state.mdx` — Komga Readium locator mapping.

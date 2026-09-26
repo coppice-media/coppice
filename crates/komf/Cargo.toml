@@ -1,0 +1,17 @@
+[package]
+name = "stump_komf"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+
+async-stream.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+stump_auth = { path = "../auth" }
+thiserror.workspace = true
+uuid.workspace = true

@@ -1,9 +1,11 @@
-//! Stable Audiobookshelf identities for things Stump does not identify.
+//! Stable Audiobookshelf identities that do not map directly to Stump ids.
 //!
-//! Audiobookshelf identifies everything by uuid, and so does Stump, so
-//! libraries, library items (books) and series are exposed under their Stump
-//! uuid verbatim — no mapping, no lookup. Three ABS ids have no Stump uuid to
-//! borrow and are allocated here, in the `abs_ids` table (migration
+//! Audiobookshelf's library id and Stump's library-item id both reuse Stump
+//! UUIDs. ABS's separate `media.id` is allocated below.
+//! A Stump series id is reused when a genuine multi-book folder is the ABS
+//! series. Explicit `media_metadata.series` groups can span several folders
+//! and use a namespaced library/name id in the ABS profile instead. Three other
+//! are allocated here, in the `abs_ids` table (migration
 //! `m20260935_000000_add_abs_compat`):
 //!
 //! | kind | Stump key | why |
@@ -12,9 +14,9 @@
 //! | [`IdKind::Book`] | the media id | ABS's `media.id` is a second uuid beside `libraryItem.id` (`item.json:2,21`) |
 //! | [`IdKind::Folder`] | the library id | ABS's `libraryFolder.id` is a third uuid beside the library's (`library_include_filterdata.json:35,39`) |
 //!
-//! Ids are allocated on first use, never reused, and survive restarts. The
-//! table is keyed by the ABS uuid so `GET /api/authors/{id}` can resolve a
-//! uuid back to the author name in one indexed lookup.
+//! Allocated ids are created on first use, never reused, and survive
+//! restarts. The table is keyed by the ABS uuid so `GET /api/authors/{id}`
+//! can resolve a uuid back to the author name in one indexed lookup.
 
 use std::collections::HashMap;
 

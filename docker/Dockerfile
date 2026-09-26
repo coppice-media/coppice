@@ -50,9 +50,10 @@ RUN apk add --no-cache git
 
 RUN --mount=type=cache,target=/root/.bun/install/cache,id=bun-${TARGETARCH} \
     bun install --frozen-lockfile && \
-    bun run web build && \
-    mv ./apps/web/dist/ ./build && \
-    if [ ! -d "./build" ] || [ ! "$(ls -A ./build)" ]; then exit 1; fi
+    bun run home build && \
+    bun run editor build && \
+    test -s ./home/build/index.html && \
+    test -s ./editor/build/index.html
 
 # ------------------------------------------------------------------------------
 # Shared Rust Builder Base
@@ -165,6 +166,8 @@ ENV STUMP_ENABLE_WEBUI=false \
 FROM runtime-base AS full
 
 COPY --from=full-builder /app/stump_server /app/stump
-COPY --from=frontend /app/build /app/client
+COPY --from=frontend /app/home/build /app/home
+COPY --from=frontend /app/editor/build /app/editor
 
-ENV STUMP_CLIENT_DIR=/app/client
+ENV STUMP_HOME_APP_DIR=/app/home \
+    INGEST_EDITOR_DIR=/app/editor

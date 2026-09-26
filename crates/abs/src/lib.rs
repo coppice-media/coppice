@@ -1,12 +1,13 @@
 //! Audiobookshelf compatibility profile: the routes, DTOs and identity
-//! mapping that Audiobookshelf clients — Lissen `1.11.22-release`
-//! (`f30bf9be`) first — exercise, pinned to Audiobookshelf 2.36.0.
+//! mapping that current Audiobookshelf clients — Lissen `1.12.5-release`
+//! (`fd5c0417`) first — exercise, pinned to Audiobookshelf 2.36.1.
 //!
 //! The crate owns request routing and DTO mapping; the server supplies the
 //! [`routes::AbsBackend`] adapter over its context and authenticates requests
 //! with the JWT/API-key/device rules documented in `abs-compat.mdx`. Every
-//! wire shape here was captured from a live `abs-ref` 2.36.0 container
-//! (`../komga-compat/abs/`), never copied from its GPL-3.0 source.
+//! captured wire shape here comes from the live `abs-ref` 2.36.0 container
+//! (`../komga-compat/abs/`); v2.36.1 is the pinned compatibility target and
+//! its client-used changes are recorded in `crates/abs/README.md`.
 //!
 //! An ABS "library item" is one Stump media row whose extension is an audio
 //! container; an ABS "book" is that row's audio metadata. Podcast libraries
@@ -39,9 +40,10 @@ pub use routes::{
 pub use sessions::{AbsSessions, CREATE_ABS_SESSIONS_SQL};
 pub use socket::{router as socket_router, AbsEvent, AbsEvents};
 
-/// The Audiobookshelf release whose reference responses this profile
-/// reproduces.
-pub const ABS_VERSION: &str = "2.36.0";
+/// The Audiobookshelf release reported by this compatibility profile. The
+/// checked-in response captures are from 2.36.0; 2.36.1 is the current source
+/// and image reference.
+pub const ABS_VERSION: &str = "2.36.1";
 
-/// `serverSettings.buildNumber` as reported by 2.36.0.
+/// `serverSettings.buildNumber` as reported by the 2.36.1 reference source.
 pub const ABS_BUILD_NUMBER: i64 = 1;

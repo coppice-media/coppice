@@ -6,8 +6,7 @@
 //! operations are injected through [`routes::KomgaBackend`]. Identity,
 //! settings, auth middleware and mounting stay in `apps/server`.
 //!
-//! See `crates/komga/README.md` for pinned clients (Komga 1.26.3, komga-client
-//! 0.11.0, Komelia `65f92fde`, Mihon `21af65b`, Liseur `31f8182d`), decisions,
+//! See `crates/komga/README.md` for the pinned oracle and clients, decisions,
 //! and how to verify.
 
 pub mod errors;

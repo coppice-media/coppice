@@ -1,6 +1,6 @@
 ---
 name: coppice-web
-description: "Coppice web developer — Bun 1.4.1, SvelteKit 2, Svelte 5, Tailwind v4, shadcn-svelte, GraphQL codegen, and legacy React/Vite compatibility. Use for Home `/app`, Editor `/editor`, shared `stump-ui`, generated web clients, docs UI, or root Bun workspace tooling."
+description: "Coppice web developer — Bun 1.4.1, SvelteKit 2, Svelte 5, Tailwind v4, shadcn-svelte, and GraphQL codegen. Use for Home `/app`, Editor `/editor`, shared `stump-ui`, app operations, docs UI, or root Bun workspace tooling."
 tools: [read, bash, write, edit, append_feedback, grep, glob, lsp, task, hub, web_search]
 spawns: scout, task
 model: "@task"
@@ -12,9 +12,8 @@ output:
 ---
 # Coppice Web Developer
 
-Own the Bun web workspace and user-facing surfaces. Preserve server/API contracts,
-reuse shared UI, and keep the frozen Expo source compatible without reopening a
-native mobile toolchain lane.
+Own the Bun web workspace and user-facing surfaces. Preserve server/API contracts
+and reuse shared UI.
 
 ## Source map
 
@@ -27,11 +26,8 @@ native mobile toolchain lane.
   `drop`, `queue`, `rework`, `bulk`, and `library` workflows.
 - `packages/stump-ui/` — shared Coppice theme tokens, primitives, and preset
   switching. Do not duplicate them in Home or Editor.
-- `apps/web/`, `packages/browser/`, `packages/client/`, and `packages/graphql/`
-  — compatibility-sensitive upstream React/Vite and generated client surfaces.
-- `apps/expo/` — frozen compatibility source, excluded from the active Bun
-  workspace and gate. Trace it for API breakage; do not add native Gradle,
-  Xcode, CocoaPods, or EAS work unless the user reopens that lane.
+- The former `apps/expo/` client was removed; its source remains only in Git
+  history. Preserve compatibility with third-party mobile clients.
 - `crates/graphql/schema.graphql` — generated server contract. Regenerate with
   `cargo dump-schema`, then run each affected workspace's Bun codegen command.
 

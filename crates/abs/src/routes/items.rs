@@ -34,8 +34,8 @@ pub(crate) struct ItemQuery {
 #[serde(default)]
 pub(crate) struct CoverQuery {
 	/// Lissen sends `raw=1` for the full-size cover
-	/// (`AudiobookshelfApiClient.kt:176`) and `width` for a thumbnail
-	/// (`:182`). Stump serves one rendition, so both are accepted and the
+	/// (`AudiobookshelfApiClient.kt:192`) and `width` for a thumbnail
+	/// (`:198`). Stump serves one rendition, so both are accepted and the
 	/// stored cover is returned either way.
 	#[allow(dead_code)]
 	raw: Option<String>,
@@ -111,9 +111,8 @@ pub(crate) async fn batch_get(
 /// (`store/index.js:89-102` — `getDoesServerImagesRequireToken` is *false*
 /// for any server >= 2.17 — used by `store/globals.js:54-56,68-70`; the
 /// native notification art loader does the same at
-/// `android/.../data/PlaybackSession.kt:186-190`). The profile reports
-/// 2.36.0, so every cover request from this app arrives anonymous, and
-/// answering `401` is what left the app's shelves blank.
+/// The profile reports 2.36.1, so every cover request from this app arrives
+/// anonymous, and answering `401` is what left the app's shelves blank.
 ///
 /// A credential is still honoured when one is present, and the row must
 /// still be an audible, undeleted book: the route is a cover lane, not a
@@ -455,6 +454,14 @@ pub(crate) async fn author(
 			.all(backend.conn())
 			.await?
 	};
+	// ABS 2.36.1 author endpoints return 404 when the caller cannot access the
+	// author's library. Stump's author ids are global names, so require at least
+	// one visible audiobook before emitting an author object.
+	if rows.is_empty() {
+		return Err(AbsError::NotFound(format!(
+			"No visible books for author {author_id}"
+		)));
+	}
 
 	let context = query::context(&**backend, &user, &rows, false).await?;
 	let library_id = rows
@@ -472,6 +479,15 @@ pub(crate) async fn author(
 			.iter()
 			.map(|row| row.created_at.timestamp_millis())
 			.min()
+			.unwrap_or_else(|| Utc::now().timestamp_millis()),
+		updated_at: rows
+			.iter()
+			.map(|row| {
+				row.updated_at
+					.unwrap_or_else(|| row.created_at.clone())
+					.timestamp_millis()
+			})
+			.max()
 			.unwrap_or_else(|| Utc::now().timestamp_millis()),
 	};
 
@@ -493,7 +509,7 @@ pub(crate) async fn author(
 
 /// `GET /api/authors/{id}/image`. Stump stores no author images — there is no
 /// author row to hang one off — so this is always a 404, which is what Lissen
-/// treats as "no image" (`AudiobookshelfApiClient.kt:189`).
+/// treats as "no image" (`AudiobookshelfApiClient.kt:205`).
 pub(crate) async fn author_image(Path(author_id): Path<String>) -> AbsResult<StatusCode> {
 	Err(AbsError::NotFound(format!(
 		"No image for author {author_id}"

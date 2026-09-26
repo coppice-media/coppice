@@ -1,5 +1,5 @@
 use std::{
-	collections::{HashMap, HashSet},
+	collections::{BTreeMap, HashMap, HashSet},
 	fs::File,
 	io::{self, Read},
 	path::Path,
@@ -14,20 +14,26 @@ use models::{
 		reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
 	},
 	entity::{
-		library, media, media_metadata, reading_session, series,
+		bookmark, library, liseur_sync_series_name, media, media_annotation,
+		media_metadata, reading_session, series,
 		user::{self, AuthUser, LoginUser},
 		user_preferences,
 	},
 	services::{reading_progress::derive_readthrough_number, reading_state},
 	shared::{
 		enums::{FileStatus, ReadingStatus},
-		readium::ReadiumLocator,
+		liseur_annotation_projection::{
+			is_liseur_sync_projection_id, is_stump_native_annotation_id,
+			liseur_sync_projection_id, parse_stump_native_annotation_id,
+			stump_native_annotation_id, STUMP_NATIVE_ANNOTATION_ID_PREFIX,
+		},
+		readium::{ReadiumLocator, ReadiumText},
 	},
 };
 use sea_orm::{
 	prelude::Decimal, ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait,
-	DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QueryResult, Statement,
-	Value as DbValue,
+	DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+	QueryResult, Statement, Value as DbValue,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -40,10 +46,12 @@ use stump_devices::{
 use stump_liseur_sync::{
 	AnnotationInput, AnnotationRecord, AnnotationResult, CatalogBook, CatalogBookSeries,
 	CatalogBooksPage, CatalogContributor, CatalogCover, CatalogDownload, CatalogFolder,
-	CatalogFoldersPage, CatalogResolveResult, CatalogSeriesMembership, ChangesPage,
-	DeleteAnnotationResult, HeadsPage, Identifier, LiseurSyncError, LiseurToken,
-	LiseurTokenKind, LoginResult, OpInput, OpRecord, OpResult, ResolveRequest,
-	ResolveResult, SessionInput, TokenCreateResult,
+	CatalogFoldersPage, CatalogResolveResult, CatalogSeriesMembership, CatalogSeriesName,
+	ChangesPage, DeleteAnnotationResult, HeadsPage, Identifier, LiseurSyncError,
+	LiseurToken, LiseurTokenKind, LoginResult, OpInput, OpRecord, OpResult,
+	ResolveRequest, ResolveResult, SessionInput, SettingUpdate, SettingValue,
+	TokenCreateResult, ANNOTATION_COLORS, ANNOTATION_DRAWERS, LISEUR_ANNOTATION_COLORS,
+	MAX_SERIES_NAME_BYTES, MAX_SETTINGS_PER_ACCOUNT,
 };
 use uuid::Uuid;
 
@@ -426,6 +434,197 @@ fn sort_books(books: &mut [CatalogBook]) {
 			.then_with(|| left.book_id.cmp(&right.book_id))
 	});
 }
+async fn apply_personal_series_names(
+	ctx: &AppState,
+	auth: &AuthContext,
+	books: &mut [CatalogBook],
+) -> Result<(), LiseurSyncError> {
+	if books.is_empty() {
+		return Ok(());
+	}
+	let names = liseur_sync_series_name::Entity::find()
+		.filter(liseur_sync_series_name::Column::UserId.eq(auth.id()))
+		.all(ctx_conn(ctx))
+		.await
+		.map_err(internal)?;
+	let names = names
+		.into_iter()
+		.map(|name| (name.series_id, name.name))
+		.collect::<HashMap<_, _>>();
+	for book in books {
+		for series in &mut book.series {
+			if let Some(name) = names.get(&series.id) {
+				series.name.clone_from(name);
+			}
+		}
+	}
+	Ok(())
+}
+
+fn normalize_series_name(name: &str) -> String {
+	name.split_whitespace()
+		.collect::<Vec<_>>()
+		.join(" ")
+		.to_lowercase()
+}
+
+async fn series_name_response(
+	ctx: &AppState,
+	auth: &AuthContext,
+	series_id: &str,
+) -> Result<CatalogSeriesName, LiseurSyncError> {
+	let user = auth.user();
+	let conn = ctx_conn(ctx);
+	let series = series::Entity::find_for_user(&user)
+		.filter(series::Column::Id.eq(series_id.to_owned()))
+		.one(conn)
+		.await
+		.map_err(internal)?
+		.ok_or_else(|| LiseurSyncError::NotFound("series not found".into()))?;
+	let personal = liseur_sync_series_name::Entity::find()
+		.filter(liseur_sync_series_name::Column::UserId.eq(auth.id()))
+		.filter(liseur_sync_series_name::Column::SeriesId.eq(series_id.to_owned()))
+		.one(conn)
+		.await
+		.map_err(internal)?;
+	let book_count = media::Entity::find_for_user(&user)
+		.filter(media::Column::SeriesId.eq(series_id.to_owned()))
+		.filter(media::audio_extension_condition().not())
+		.count(conn)
+		.await
+		.map_err(internal)?;
+	Ok(CatalogSeriesName {
+		id: series.id,
+		name: personal
+			.as_ref()
+			.map(|name| name.name.clone())
+			.unwrap_or_else(|| series.name.clone()),
+		scanned_name: series.name,
+		name_source: if personal.is_some() {
+			"personal"
+		} else {
+			"folder"
+		}
+		.into(),
+		book_count: i64::try_from(book_count).map_err(internal)?,
+	})
+}
+
+pub(crate) async fn set_series_name(
+	ctx: &AppState,
+	auth: &AuthContext,
+	series_id: &str,
+	scope: &str,
+	requested_name: &str,
+) -> Result<CatalogSeriesName, LiseurSyncError> {
+	if scope != "personal" {
+		return Err(LiseurSyncError::BadRequest(
+			"only personal series names are supported".into(),
+		));
+	}
+	let name = requested_name.trim();
+	if name.is_empty() {
+		return Err(LiseurSyncError::BadRequest(
+			"series name cannot be empty".into(),
+		));
+	}
+	if name.len() > MAX_SERIES_NAME_BYTES {
+		return Err(LiseurSyncError::BadRequest(
+			"series name is too long".into(),
+		));
+	}
+	let normalized_name = normalize_series_name(name);
+	let user_id = auth.id();
+	let user = auth.user();
+	let txn = begin_write(ctx_conn(ctx)).await.map_err(internal)?;
+	let visible_series = series::Entity::find_for_user(&user)
+		.all(&txn)
+		.await
+		.map_err(internal)?;
+	let Some(target) = visible_series.iter().find(|series| series.id == series_id) else {
+		return Err(LiseurSyncError::NotFound("series not found".into()));
+	};
+	let personal_names = liseur_sync_series_name::Entity::find()
+		.filter(liseur_sync_series_name::Column::UserId.eq(user_id.clone()))
+		.all(&txn)
+		.await
+		.map_err(internal)?;
+	let personal_names = personal_names
+		.into_iter()
+		.map(|name| (name.series_id, name.name))
+		.collect::<HashMap<_, _>>();
+	for series in &visible_series {
+		if series.id == target.id {
+			continue;
+		}
+		let display_name = personal_names
+			.get(&series.id)
+			.map(String::as_str)
+			.unwrap_or(&series.name);
+		if normalize_series_name(display_name) == normalized_name {
+			return Err(LiseurSyncError::Conflict(
+				"another visible series already uses that name".into(),
+			));
+		}
+	}
+	let now = now_string();
+	txn.execute(db_statement(
+		&txn,
+		"INSERT INTO liseur_sync_series_names
+            (user_id, series_id, name, normalized_name, updated_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT(user_id, series_id) DO UPDATE SET
+            name = excluded.name,
+            normalized_name = excluded.normalized_name,
+            updated_at = excluded.updated_at",
+		vec![
+			user_id.into(),
+			series_id.to_owned().into(),
+			name.to_owned().into(),
+			normalized_name.into(),
+			now.into(),
+		],
+	))
+	.await
+	.map_err(internal)?;
+	txn.commit().await.map_err(internal)?;
+	series_name_response(ctx, auth, series_id).await
+}
+
+pub(crate) async fn clear_series_name(
+	ctx: &AppState,
+	auth: &AuthContext,
+	series_id: &str,
+	scope: &str,
+) -> Result<CatalogSeriesName, LiseurSyncError> {
+	if scope != "personal" {
+		return Err(LiseurSyncError::BadRequest(
+			"only personal series names are supported".into(),
+		));
+	}
+	let user_id = auth.id();
+	let user = auth.user();
+	let txn = begin_write(ctx_conn(ctx)).await.map_err(internal)?;
+	let visible = series::Entity::find_for_user(&user)
+		.filter(series::Column::Id.eq(series_id.to_owned()))
+		.one(&txn)
+		.await
+		.map_err(internal)?
+		.is_some();
+	if !visible {
+		return Err(LiseurSyncError::NotFound("series not found".into()));
+	}
+	txn.execute(db_statement(
+		&txn,
+		"DELETE FROM liseur_sync_series_names
+         WHERE user_id = $1 AND series_id = $2",
+		vec![user_id.into(), series_id.to_owned().into()],
+	))
+	.await
+	.map_err(internal)?;
+	txn.commit().await.map_err(internal)?;
+	series_name_response(ctx, auth, series_id).await
+}
 
 pub(crate) async fn folders(
 	ctx: &AppState,
@@ -489,6 +688,7 @@ pub(crate) async fn folder_books(
 	visible_library(ctx, auth, folder_id).await?;
 	let rows = visible_media(ctx, auth, Some(folder_id), None).await?;
 	let mut books = rows.iter().map(catalog_book).collect::<Vec<_>>();
+	apply_personal_series_names(ctx, auth, &mut books).await?;
 	sort_books(&mut books);
 	let cursor = cursor
 		.as_deref()
@@ -528,22 +728,20 @@ pub(crate) async fn folder_search(
 	visible_library(ctx, auth, folder_id).await?;
 	let query = query.trim().to_lowercase();
 	let rows = visible_media(ctx, auth, Some(folder_id), None).await?;
-	let mut books = rows
-		.iter()
-		.map(catalog_book)
-		.filter(|book| {
-			query.is_empty()
-				|| book.title.to_lowercase().contains(&query)
-				|| book
-					.author
-					.as_deref()
-					.is_some_and(|author| author.to_lowercase().contains(&query))
-				|| book
-					.series
-					.iter()
-					.any(|series| series.name.to_lowercase().contains(&query))
-		})
-		.collect::<Vec<_>>();
+	let mut books = rows.iter().map(catalog_book).collect::<Vec<_>>();
+	apply_personal_series_names(ctx, auth, &mut books).await?;
+	books.retain(|book| {
+		query.is_empty()
+			|| book.title.to_lowercase().contains(&query)
+			|| book
+				.author
+				.as_deref()
+				.is_some_and(|author| author.to_lowercase().contains(&query))
+			|| book
+				.series
+				.iter()
+				.any(|series| series.name.to_lowercase().contains(&query))
+	});
 	sort_books(&mut books);
 	Ok(books)
 }
@@ -553,11 +751,14 @@ pub(crate) async fn book(
 	auth: &AuthContext,
 	book_id: &str,
 ) -> Result<CatalogBook, LiseurSyncError> {
-	visible_media(ctx, auth, None, Some(book_id))
+	let row = visible_media(ctx, auth, None, Some(book_id))
 		.await?
-		.first()
-		.map(catalog_book)
-		.ok_or_else(|| LiseurSyncError::NotFound("book not found".into()))
+		.into_iter()
+		.next()
+		.ok_or_else(|| LiseurSyncError::NotFound("book not found".into()))?;
+	let mut book = catalog_book(&row);
+	apply_personal_series_names(ctx, auth, std::slice::from_mut(&mut book)).await?;
+	Ok(book)
 }
 
 pub(crate) async fn book_download(
@@ -654,6 +855,82 @@ pub(crate) async fn resolve_catalog_book(
 		.next()
 		.ok_or_else(|| LiseurSyncError::NotFound("book not found".into()))?;
 	let fallback_sha = full_file_sha256(row.media.path.clone()).await?;
+	let existing_link = ctx_conn(ctx)
+		.query_one(db_statement(
+			ctx_conn(ctx),
+			"SELECT work_id, edition_sha, pair_status, pair_evidence
+             FROM liseur_sync_media_links
+             WHERE user_id = $1 AND media_id = $2",
+			vec![auth.id().to_owned().into(), book_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?;
+	if let Some(link) = existing_link {
+		let mut work_id: String = link.try_get("", "work_id").map_err(internal)?;
+		let linked_edition_sha: Option<String> =
+			link.try_get("", "edition_sha").map_err(internal)?;
+		let pair_status: Option<String> =
+			link.try_get("", "pair_status").map_err(internal)?;
+		let pair_evidence: Option<String> =
+			link.try_get("", "pair_evidence").map_err(internal)?;
+		let sha = fallback_sha.as_deref().or(linked_edition_sha.as_deref());
+		let alias_work_ids = strong_alias_work_ids(
+			ctx_conn(ctx),
+			&auth.id(),
+			&row.media.id,
+			row.media.koreader_hash.as_deref(),
+			sha,
+		)
+		.await?;
+		if alias_work_ids.len() > 1 {
+			let mut works = alias_work_ids;
+			works.push(work_id);
+			works.sort();
+			works.dedup();
+			return Err(LiseurSyncError::IdentityConflict(works));
+		}
+		if let Some(alias_work_id) = alias_work_ids.first() {
+			if alias_work_id != &work_id {
+				let pair_created = pair_evidence.is_some()
+					&& matches!(
+						pair_status.as_deref().unwrap_or("suggested"),
+						"suggested" | "confirmed"
+					);
+				if pair_created {
+					merge_aliasless_pair_work(
+						ctx,
+						&auth.id(),
+						&row.media.id,
+						&work_id,
+						alias_work_id,
+						row.media.koreader_hash.as_deref(),
+						sha,
+					)
+					.await?;
+					work_id = alias_work_id.clone();
+				} else {
+					let mut works = vec![work_id, alias_work_id.clone()];
+					works.sort();
+					works.dedup();
+					return Err(LiseurSyncError::IdentityConflict(works));
+				}
+			}
+		}
+		let edition_sha = fallback_sha.or(linked_edition_sha);
+		return Ok(CatalogResolveResult {
+			book_id: book_id.to_owned(),
+			work_id,
+			confidence: "high".into(),
+			created: false,
+			identifiers: edition_sha
+				.into_iter()
+				.map(|value| Identifier {
+					kind: "sha256".into(),
+					value,
+				})
+				.collect(),
+		});
+	}
 	let mut identifiers = Vec::with_capacity(2);
 	if let Some(sha) = fallback_sha.clone() {
 		identifiers.push(Identifier {
@@ -858,6 +1135,103 @@ pub(crate) async fn revoke_token(
 	}
 	Ok(())
 }
+pub(crate) async fn settings(
+	ctx: &AppState,
+	user_id: &str,
+) -> Result<BTreeMap<String, SettingValue>, LiseurSyncError> {
+	let rows = ctx_conn(ctx)
+		.query_all(db_statement(
+			ctx_conn(ctx),
+			"SELECT setting_key, value, updated_at
+             FROM liseur_sync_settings WHERE user_id = $1
+             ORDER BY setting_key",
+			vec![user_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?;
+	let mut settings = BTreeMap::new();
+	for row in rows {
+		settings.insert(
+			row.try_get("", "setting_key").map_err(internal)?,
+			SettingValue {
+				value: row.try_get("", "value").map_err(internal)?,
+				updated_at: row.try_get("", "updated_at").map_err(internal)?,
+			},
+		);
+	}
+	Ok(settings)
+}
+
+pub(crate) async fn put_settings(
+	ctx: &AppState,
+	user_id: &str,
+	mut settings: Vec<SettingUpdate>,
+) -> Result<(), LiseurSyncError> {
+	if settings.is_empty() {
+		return Err(LiseurSyncError::BadRequest("no settings provided".into()));
+	}
+	if settings.len() > MAX_SETTINGS_PER_ACCOUNT {
+		return Err(LiseurSyncError::BadRequest(
+			"too many settings in one request".into(),
+		));
+	}
+	settings.sort_by(|left, right| left.key.cmp(&right.key));
+
+	let conn = ctx_conn(ctx);
+	let txn = begin_write(conn).await.map_err(internal)?;
+	ensure_counter(&txn, user_id).await?;
+	txn.execute(db_statement(
+		&txn,
+		"UPDATE liseur_sync_counters SET op_seq = op_seq WHERE user_id = $1",
+		vec![user_id.to_owned().into()],
+	))
+	.await
+	.map_err(internal)?;
+	let rows = txn
+		.query_all(db_statement(
+			&txn,
+			"SELECT setting_key FROM liseur_sync_settings WHERE user_id = $1",
+			vec![user_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?;
+	let existing = rows
+		.iter()
+		.map(|row| row.try_get::<String>("", "setting_key").map_err(internal))
+		.collect::<Result<HashSet<_>, _>>()?;
+	let new_keys = settings
+		.iter()
+		.filter(|setting| !existing.contains(&setting.key))
+		.map(|setting| setting.key.as_str())
+		.collect::<HashSet<_>>();
+	if existing.len() + new_keys.len() > MAX_SETTINGS_PER_ACCOUNT {
+		return Err(LiseurSyncError::Conflict(
+			"too many settings for this account".into(),
+		));
+	}
+
+	for setting in settings {
+		txn.execute(db_statement(
+			&txn,
+			"INSERT INTO liseur_sync_settings
+                (user_id, setting_key, value, updated_at)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT(user_id, setting_key) DO UPDATE
+             SET value = excluded.value, updated_at = excluded.updated_at
+             WHERE excluded.updated_at > liseur_sync_settings.updated_at",
+			vec![
+				user_id.to_owned().into(),
+				setting.key.into(),
+				setting.value.into(),
+				setting.updated_at.into(),
+			],
+		))
+		.await
+		.map_err(internal)?;
+	}
+	txn.commit().await.map_err(internal)?;
+	Ok(())
+}
 
 pub(crate) async fn authenticate(
 	ctx: &AppState,
@@ -1059,6 +1433,129 @@ async fn alias_matches(
 		row.try_get("", "work_id").map_err(internal)?,
 		row.try_get("", "edition_sha").map_err(internal)?,
 	)))
+}
+
+/// Return each work identified by a strong alias of this media. Catalog
+/// resolution emits the raw media id as a source identifier; Komga-imported
+/// identity aliases use `komga:`, and verified stored file hashes also count.
+async fn strong_alias_work_ids<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	media_id: &str,
+	koreader_hash: Option<&str>,
+	sha256: Option<&str>,
+) -> Result<Vec<String>, LiseurSyncError> {
+	let rows = conn
+		.query_all(db_statement(
+			conn,
+			"SELECT DISTINCT alias.work_id
+             FROM liseur_sync_aliases AS alias
+             WHERE alias.user_id = $1
+               AND (
+                    (alias.kind = 'source' AND alias.value IN ($2, 'komga:' || $2))
+                 OR (alias.kind = 'partial-md5' AND $3 IS NOT NULL AND alias.value = $3)
+                 OR (alias.kind = 'sha256' AND $4 IS NOT NULL AND alias.value = $4)
+                 OR (alias.kind = 'sha256' AND EXISTS (
+                       SELECT 1
+                       FROM liseur_sync_editions AS edition
+                       WHERE edition.user_id = alias.user_id
+                         AND edition.work_id = alias.work_id
+                         AND edition.media_id = $2
+                         AND edition.edition_sha = alias.value
+                    ))
+                 OR (alias.kind = 'sha256' AND EXISTS (
+                       SELECT 1
+                       FROM media_locations AS location
+                       WHERE location.media_id = $2
+                         AND location.sha256 = alias.value
+                    ))
+               )",
+			vec![
+				user_id.to_owned().into(),
+				media_id.to_owned().into(),
+				koreader_hash.map(str::to_owned).into(),
+				sha256.map(str::to_owned).into(),
+			],
+		))
+		.await
+		.map_err(internal)?;
+	let mut work_ids = rows
+		.into_iter()
+		.map(|row| row.try_get("", "work_id").map_err(internal))
+		.collect::<Result<Vec<_>, _>>()?;
+	work_ids.sort();
+	work_ids.dedup();
+	Ok(work_ids)
+}
+
+async fn merge_aliasless_pair_work(
+	ctx: &AppState,
+	user_id: &str,
+	media_id: &str,
+	losing_work_id: &str,
+	identity_work_id: &str,
+	koreader_hash: Option<&str>,
+	sha256: Option<&str>,
+) -> Result<(), LiseurSyncError> {
+	let tx = begin_write(ctx_conn(ctx)).await.map_err(internal)?;
+	let link = tx
+		.query_one(db_statement(
+			&tx,
+			"SELECT work_id, pair_status, pair_evidence
+             FROM liseur_sync_media_links
+             WHERE user_id = $1 AND media_id = $2",
+			vec![user_id.to_owned().into(), media_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?
+		.ok_or_else(|| {
+			LiseurSyncError::NotFound("book link changed during resolution".into())
+		})?;
+	let current_work_id: String = link.try_get("", "work_id").map_err(internal)?;
+	let pair_status: Option<String> =
+		link.try_get("", "pair_status").map_err(internal)?;
+	let pair_evidence: Option<String> =
+		link.try_get("", "pair_evidence").map_err(internal)?;
+	let alias_work_ids =
+		strong_alias_work_ids(&tx, user_id, media_id, koreader_hash, sha256).await?;
+	let unique_identity_match =
+		alias_work_ids.len() == 1 && alias_work_ids[0].as_str() == identity_work_id;
+	if current_work_id == identity_work_id && unique_identity_match {
+		tx.commit().await.map_err(internal)?;
+		return Ok(());
+	}
+	let has_alias = tx
+		.query_one(db_statement(
+			&tx,
+			"SELECT id FROM liseur_sync_aliases
+             WHERE user_id = $1 AND work_id = $2 LIMIT 1",
+			vec![user_id.to_owned().into(), losing_work_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?
+		.is_some();
+	let pair_created = pair_evidence.is_some()
+		&& matches!(
+			pair_status.as_deref().unwrap_or("suggested"),
+			"suggested" | "confirmed"
+		);
+	if current_work_id == losing_work_id
+		&& !has_alias
+		&& pair_created
+		&& unique_identity_match
+	{
+		migrations::merge_liseur_work(&tx, user_id, losing_work_id, identity_work_id)
+			.await
+			.map_err(internal)?;
+		tx.commit().await.map_err(internal)?;
+		return Ok(());
+	}
+
+	let mut works = alias_work_ids;
+	works.push(current_work_id);
+	works.sort();
+	works.dedup();
+	Err(LiseurSyncError::IdentityConflict(works))
 }
 
 fn normalized_identifier(identifier: &Identifier) -> Identifier {
@@ -1411,6 +1908,8 @@ pub(crate) async fn resolve_work(
 	))
 	.await
 	.map_err(internal)?;
+	reconcile_native_annotations(&txn, user_id).await?;
+	reconcile_annotation_projections(&txn, user_id).await?;
 	txn.commit().await.map_err(internal)?;
 
 	Ok(ResolveResult {
@@ -1577,12 +2076,18 @@ pub(crate) async fn append_ops(
 	let txn = begin_write(conn).await.map_err(internal)?;
 	ensure_counter(&txn, user_id).await?;
 	let mut results = Vec::with_capacity(ops.len());
-	for op in ops {
+	for (item_index, op) in ops.into_iter().enumerate() {
 		if !work_exists(&txn, user_id, &op.work_id).await? {
-			return Err(LiseurSyncError::BadRequest(format!(
-				"unknown work: {}",
-				op.work_id
-			)));
+			return Err(LiseurSyncError::ItemRefusal {
+				status: axum::http::StatusCode::BAD_REQUEST,
+				code: "unknown_work",
+				message: format!("unknown work: {}", op.work_id),
+				item_index: Some(item_index),
+				session_id: None,
+				op_id: Some(op.op_id.clone()),
+				work_id: Some(op.work_id.clone()),
+				limit: None,
+			});
 		}
 		if let Some(existing) = find_op(&txn, user_id, &op.op_id).await? {
 			let seq: i64 = existing.try_get("", "seq").map_err(internal)?;
@@ -1837,7 +2342,9 @@ async fn project_liseur_session<C: ConnectionTrait>(
 	let started_at =
 		DateTime::parse_from_rfc3339(&session.started_at).map_err(internal)?;
 	let ended_at = DateTime::parse_from_rfc3339(&session.ended_at).map_err(internal)?;
-	let elapsed_millis = (ended_at - started_at).num_milliseconds() - session.idle_ms;
+	let elapsed_millis = session
+		.active_ms
+		.unwrap_or_else(|| (ended_at - started_at).num_milliseconds() - session.idle_ms);
 	let elapsed_seconds = elapsed_millis / 1000;
 	let day_reset_hour_offset = user_preferences::Entity::find()
 		.filter(user_preferences::Column::UserId.eq(user_id))
@@ -1908,12 +2415,18 @@ pub(crate) async fn append_sessions(
 	let conn = ctx_conn(ctx);
 	let txn = begin_write(conn).await.map_err(internal)?;
 	let mut accepted = 0;
-	for session in sessions {
+	for (item_index, session) in sessions.into_iter().enumerate() {
 		if !work_exists(&txn, user_id, &session.work_id).await? {
-			return Err(LiseurSyncError::BadRequest(format!(
-				"unknown work: {}",
-				session.work_id
-			)));
+			return Err(LiseurSyncError::ItemRefusal {
+				status: axum::http::StatusCode::BAD_REQUEST,
+				code: "unknown_work",
+				message: format!("unknown work: {}", session.work_id),
+				item_index: Some(item_index),
+				session_id: Some(session.session_id.clone()),
+				op_id: None,
+				work_id: Some(session.work_id.clone()),
+				limit: None,
+			});
 		}
 		let payload = serde_json::to_string(&session).map_err(internal)?;
 		let existing = txn
@@ -1928,9 +2441,16 @@ pub(crate) async fn append_sessions(
 		if let Some(row) = existing {
 			let stored: String = row.try_get("", "payload").map_err(internal)?;
 			if stored != payload {
-				return Err(LiseurSyncError::Conflict(
-					"session_id reused with a different payload".into(),
-				));
+				return Err(LiseurSyncError::ItemRefusal {
+					status: axum::http::StatusCode::CONFLICT,
+					code: "id_reused",
+					message: "session_id reused with a different payload".into(),
+					item_index: Some(item_index),
+					session_id: Some(session.session_id.clone()),
+					op_id: None,
+					work_id: None,
+					limit: None,
+				});
 			}
 			project_liseur_session(&txn, user_id, device_id, &session).await?;
 			accepted += 1;
@@ -1986,6 +2506,7 @@ struct StoredAnnotation {
 	progression: Option<f64>,
 	excerpt: String,
 	color: String,
+	drawer: Option<String>,
 	body: String,
 	device_id: String,
 	client_ts: String,
@@ -1995,9 +2516,91 @@ struct StoredAnnotation {
 	payload: String,
 }
 
+#[derive(Clone, Debug)]
+struct NativeMediaLink {
+	work_id: String,
+	edition_sha: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct NativeAnnotationCandidate {
+	id: String,
+	work_id: String,
+	edition_sha: Option<String>,
+	kind: String,
+	locator: Value,
+	progression: Option<f64>,
+	excerpt: String,
+	color: String,
+	body: String,
+	client_ts: String,
+	updated_at: String,
+}
+
+impl NativeAnnotationCandidate {
+	fn input(&self, base_rev: i64, client_ts: String) -> AnnotationInput {
+		AnnotationInput {
+			id: self.id.clone(),
+			base_rev,
+			work_id: self.work_id.clone(),
+			edition_sha: self.edition_sha.clone(),
+			kind: self.kind.clone(),
+			locator: Some(self.locator.clone()),
+			progression: self.progression,
+			excerpt: self.excerpt.clone(),
+			color: (!self.color.is_empty()).then(|| self.color.clone()),
+			drawer: None,
+			body: self.body.clone(),
+			client_ts,
+		}
+	}
+}
+
+fn native_progression(locator: &ReadiumLocator) -> Option<f64> {
+	let locations = locator.locations.as_ref()?;
+	let progression = locations
+		.total_progression
+		.or(locations.progression)?
+		.to_string()
+		.parse::<f64>()
+		.ok()?;
+	(progression.is_finite() && (0.0..=1.0).contains(&progression)).then_some(progression)
+}
+
+fn native_timestamp(value: DateTime<Utc>) -> String {
+	value.to_rfc3339_opts(SecondsFormat::Nanos, true)
+}
+
+fn native_candidate_matches(
+	stored: &StoredAnnotation,
+	candidate: &NativeAnnotationCandidate,
+) -> bool {
+	!stored.deleted
+		&& stored.work_id == candidate.work_id
+		&& stored.edition_sha == candidate.edition_sha
+		&& stored.kind == candidate.kind
+		&& stored.locator.as_ref() == Some(&candidate.locator)
+		&& stored.progression == candidate.progression
+		&& stored.excerpt == candidate.excerpt
+		&& stored.color == candidate.color
+		&& stored.body == candidate.body
+		&& (stored.kind == "bookmark"
+			|| timestamps_match(&stored.updated_at, &candidate.updated_at))
+}
+
+fn timestamps_match(left: &str, right: &str) -> bool {
+	match (
+		DateTime::parse_from_rfc3339(left),
+		DateTime::parse_from_rfc3339(right),
+	) {
+		(Ok(left), Ok(right)) => left == right,
+		_ => left == right,
+	}
+}
+
 const ANNOTATION_COLUMNS: &str =
 	"annotation_id AS id, rev, seq, work_id, edition_sha, kind,
-    locator, progression, excerpt, color, body, device_id, client_ts,
+    locator, progression, excerpt, color, drawer, body, device_id, client_ts,
     updated_at, deleted, deleted_at, payload";
 
 fn annotation_record(annotation: &StoredAnnotation) -> AnnotationRecord {
@@ -2006,13 +2609,14 @@ fn annotation_record(annotation: &StoredAnnotation) -> AnnotationRecord {
 			id: annotation.id.clone(),
 			rev: annotation.rev,
 			seq: annotation.seq,
-			work_id: None,
+			work_id: Some(annotation.work_id.clone()),
 			edition_sha: None,
 			kind: None,
 			locator: None,
 			progression: None,
 			excerpt: None,
 			color: None,
+			drawer: None,
 			body: None,
 			device_id: None,
 			client_ts: None,
@@ -2033,6 +2637,7 @@ fn annotation_record(annotation: &StoredAnnotation) -> AnnotationRecord {
 		excerpt: (!annotation.excerpt.is_empty()).then(|| annotation.excerpt.clone()),
 		color: (!annotation.color.is_empty()).then(|| annotation.color.clone()),
 		body: (!annotation.body.is_empty()).then(|| annotation.body.clone()),
+		drawer: annotation_drawer(annotation),
 		device_id: Some(annotation.device_id.clone()),
 		client_ts: Some(annotation.client_ts.clone()),
 		updated_at: annotation.updated_at.clone(),
@@ -2053,6 +2658,7 @@ fn stored_annotation(row: &QueryResult) -> Result<StoredAnnotation, LiseurSyncEr
 		progression: row.try_get("", "progression").map_err(internal)?,
 		excerpt: row.try_get("", "excerpt").map_err(internal)?,
 		color: row.try_get("", "color").map_err(internal)?,
+		drawer: row.try_get("", "drawer").map_err(internal)?,
 		body: row.try_get("", "body").map_err(internal)?,
 		device_id: row.try_get("", "device_id").map_err(internal)?,
 		client_ts: row.try_get("", "client_ts").map_err(internal)?,
@@ -2061,6 +2667,800 @@ fn stored_annotation(row: &QueryResult) -> Result<StoredAnnotation, LiseurSyncEr
 		deleted_at: row.try_get("", "deleted_at").map_err(internal)?,
 		payload: row.try_get("", "payload").map_err(internal)?,
 	})
+}
+fn annotation_drawer(annotation: &StoredAnnotation) -> Option<String> {
+	if let Some(drawer) = annotation.drawer.as_deref() {
+		return ANNOTATION_DRAWERS
+			.contains(&drawer)
+			.then(|| drawer.to_owned());
+	}
+	if let Ok(payload) = serde_json::from_str::<Value>(&annotation.payload) {
+		if let Some(drawer) = payload.get("drawer") {
+			return drawer
+				.as_str()
+				.filter(|drawer| ANNOTATION_DRAWERS.contains(drawer))
+				.map(str::to_owned);
+		}
+	}
+	let drawer = annotation.locator.as_ref()?.get("drawer")?.as_str()?;
+	ANNOTATION_DRAWERS
+		.contains(&drawer)
+		.then(|| drawer.to_owned())
+}
+
+fn annotation_color_for_update(
+	incoming: &AnnotationInput,
+	stored: &StoredAnnotation,
+) -> String {
+	if incoming.kind != "highlight" {
+		return String::new();
+	}
+	match incoming.color.as_deref() {
+		Some(color) => color.to_owned(),
+		None if ANNOTATION_COLORS.contains(&stored.color.as_str())
+			&& !LISEUR_ANNOTATION_COLORS.contains(&stored.color.as_str()) =>
+		{
+			stored.color.clone()
+		},
+		None => String::new(),
+	}
+}
+
+fn annotation_drawer_for_update(
+	incoming: &AnnotationInput,
+	stored: &StoredAnnotation,
+) -> Option<String> {
+	if incoming.kind != "highlight" {
+		return None;
+	}
+	match incoming.drawer.as_deref() {
+		Some("") => None,
+		Some(drawer) => Some(drawer.to_owned()),
+		None => annotation_drawer(stored),
+	}
+}
+
+fn native_update_locator(
+	kind: &str,
+	incoming: &AnnotationInput,
+	stored: &StoredAnnotation,
+) -> Option<ReadiumLocator> {
+	let value = incoming
+		.locator
+		.as_ref()
+		.filter(|value| !value.is_null())
+		.cloned()
+		.or_else(|| stored.locator.clone())?;
+	let mut locator = serde_json::from_value::<ReadiumLocator>(value).ok()?;
+	if locator.href.trim().is_empty() || locator.locations.is_none() {
+		return None;
+	}
+	match kind {
+		"note" => {
+			if let Some(text) = &mut locator.text {
+				text.highlight = None;
+			}
+		},
+		"highlight" => {
+			if !incoming.excerpt.trim().is_empty() {
+				locator
+					.text
+					.get_or_insert(ReadiumText {
+						after: None,
+						before: None,
+						highlight: None,
+					})
+					.highlight = Some(incoming.excerpt.clone());
+			}
+			if locator
+				.text
+				.as_ref()
+				.and_then(|text| text.highlight.as_deref())
+				.map_or(true, |highlight| highlight.trim().is_empty())
+			{
+				return None;
+			}
+		},
+		"bookmark" => {},
+		_ => return None,
+	}
+	Some(locator)
+}
+
+fn native_update_invalid_reason(
+	incoming: &AnnotationInput,
+	stored: &StoredAnnotation,
+) -> Option<&'static str> {
+	let Some((kind, _)) = parse_stump_native_annotation_id(&incoming.id) else {
+		return Some("native annotation identity is invalid");
+	};
+	if incoming.work_id != stored.work_id {
+		return Some("native annotation work cannot change");
+	}
+	match kind {
+		"annotation" if matches!(incoming.kind.as_str(), "note" | "highlight") => {
+			native_update_locator(&incoming.kind, incoming, stored)
+				.is_none()
+				.then_some("native annotations require a valid Readium locator")
+		},
+		"bookmark" if incoming.kind == "bookmark" => {
+			native_update_locator("bookmark", incoming, stored)
+				.is_none()
+				.then_some("native bookmarks require a valid Readium locator")
+		},
+		_ => Some("native annotation kind cannot change"),
+	}
+}
+
+async fn writeback_native_annotation<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	incoming: &mut AnnotationInput,
+	stored: &StoredAnnotation,
+	updated_at: &str,
+) -> Result<(), LiseurSyncError> {
+	let (kind, native_id) = parse_stump_native_annotation_id(&incoming.id)
+		.ok_or_else(|| internal("native annotation identity is invalid"))?;
+	let locator = native_update_locator(&incoming.kind, incoming, stored)
+		.ok_or_else(|| internal("native annotation locator is invalid"))?;
+	incoming.edition_sha = stored.edition_sha.clone();
+	incoming.progression = native_progression(&locator);
+
+	match kind {
+		"annotation" => {
+			let color = annotation_color_for_update(incoming, stored);
+			incoming.excerpt = if incoming.kind == "highlight" {
+				locator
+					.text
+					.as_ref()
+					.and_then(|text| text.highlight.clone())
+					.unwrap_or_default()
+			} else {
+				String::new()
+			};
+			incoming.color = Some(color.clone());
+			let result = conn
+				.execute(db_statement(
+					conn,
+					"UPDATE media_annotations
+                     SET locator = $1, annotation_text = $2, color = $3, updated_at = $4
+                     WHERE id = $5 AND user_id = $6",
+					vec![
+						serde_json::to_string(&locator).map_err(internal)?.into(),
+						(!incoming.body.is_empty())
+							.then(|| incoming.body.clone())
+							.into(),
+						(!color.is_empty()).then_some(color).into(),
+						updated_at.to_owned().into(),
+						native_id.to_owned().into(),
+						user_id.to_owned().into(),
+					],
+				))
+				.await
+				.map_err(internal)?;
+			if result.rows_affected() != 1 {
+				return Err(internal("native annotation disappeared during update"));
+			}
+		},
+		"bookmark" => {
+			let preview = if !incoming.excerpt.is_empty() {
+				Some(incoming.excerpt.clone())
+			} else {
+				locator
+					.text
+					.as_ref()
+					.and_then(|text| text.highlight.clone())
+			};
+			let page = locator
+				.locations
+				.as_ref()
+				.and_then(|locations| locations.position);
+			let result = conn
+				.execute(db_statement(
+					conn,
+					"UPDATE bookmarks SET preview_content = $1, locator = $2, page = $3
+                     WHERE id = $4 AND user_id = $5",
+					vec![
+						preview.clone().into(),
+						Some(serde_json::to_string(&locator).map_err(internal)?).into(),
+						page.into(),
+						native_id.to_owned().into(),
+						user_id.to_owned().into(),
+					],
+				))
+				.await
+				.map_err(internal)?;
+			if result.rows_affected() != 1 {
+				return Err(internal("native bookmark disappeared during update"));
+			}
+			incoming.excerpt = preview.unwrap_or_default();
+			incoming.color = Some(String::new());
+			incoming.body.clear();
+		},
+		_ => return Err(internal("unsupported native annotation identity")),
+	}
+
+	incoming.locator = Some(serde_json::to_value(&locator).map_err(internal)?);
+	Ok(())
+}
+async fn delete_native_annotation_source<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	id: &str,
+) -> Result<(), LiseurSyncError> {
+	let Some((kind, native_id)) = parse_stump_native_annotation_id(id) else {
+		return Err(LiseurSyncError::BadRequest(
+			"native annotation identity is invalid".into(),
+		));
+	};
+	let table = match kind {
+		"annotation" => "media_annotations",
+		"bookmark" => "bookmarks",
+		_ => {
+			return Err(LiseurSyncError::BadRequest(
+				"native annotation identity is invalid".into(),
+			))
+		},
+	};
+	let result = conn
+		.execute(db_statement(
+			conn,
+			&format!("DELETE FROM {table} WHERE id = $1 AND user_id = $2"),
+			vec![native_id.to_owned().into(), user_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?;
+	if result.rows_affected() != 1 {
+		return Err(LiseurSyncError::NotFound(
+			"native annotation not found".into(),
+		));
+	}
+	Ok(())
+}
+async fn delete_native_annotation_projection<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	projection_id: &str,
+) -> Result<(), LiseurSyncError> {
+	for table in ["media_annotations", "bookmarks"] {
+		conn.execute(db_statement(
+			conn,
+			&format!("DELETE FROM {table} WHERE id = $1 AND user_id = $2"),
+			vec![projection_id.to_owned().into(), user_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?;
+	}
+	Ok(())
+}
+
+async fn linked_annotation_media_id<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	annotation: &StoredAnnotation,
+) -> Result<Option<String>, LiseurSyncError> {
+	let row = conn
+		.query_one(db_statement(
+			conn,
+			"SELECT media_id FROM liseur_sync_media_links
+             WHERE user_id = $1 AND work_id = $2
+             ORDER BY CASE WHEN $3 <> '' AND edition_sha = $3 THEN 0 ELSE 1 END,
+                      created_at ASC, id ASC
+             LIMIT 1",
+			vec![
+				user_id.to_owned().into(),
+				annotation.work_id.clone().into(),
+				annotation.edition_sha.clone().unwrap_or_default().into(),
+			],
+		))
+		.await
+		.map_err(internal)?;
+	row.map(|row| row.try_get("", "media_id").map_err(internal))
+		.transpose()
+}
+
+fn readium_projection_locator(annotation: &StoredAnnotation) -> Option<ReadiumLocator> {
+	let locator: ReadiumLocator =
+		serde_json::from_value(annotation.locator.clone()?).ok()?;
+	(!locator.href.trim().is_empty() && locator.locations.is_some()).then_some(locator)
+}
+
+async fn project_annotation<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	annotation: &StoredAnnotation,
+) -> Result<bool, LiseurSyncError> {
+	if is_stump_native_annotation_id(&annotation.id) {
+		return Ok(true);
+	}
+	let projection_id = liseur_sync_projection_id(user_id, &annotation.id);
+	if annotation.deleted
+		|| !matches!(annotation.kind.as_str(), "highlight" | "note" | "bookmark")
+	{
+		delete_native_annotation_projection(conn, user_id, &projection_id).await?;
+		return Ok(true);
+	}
+	let Some(mut locator) = readium_projection_locator(annotation) else {
+		delete_native_annotation_projection(conn, user_id, &projection_id).await?;
+		return Ok(true);
+	};
+	let Some(media_id) = linked_annotation_media_id(conn, user_id, annotation).await?
+	else {
+		delete_native_annotation_projection(conn, user_id, &projection_id).await?;
+		return Ok(false);
+	};
+	delete_native_annotation_projection(conn, user_id, &projection_id).await?;
+	let created_at = DateTime::parse_from_rfc3339(&annotation.client_ts)
+		.map_err(internal)?
+		.with_timezone(&Utc);
+	let updated_at = DateTime::parse_from_rfc3339(&annotation.updated_at)
+		.map_err(internal)?
+		.with_timezone(&Utc);
+	if matches!(annotation.kind.as_str(), "highlight" | "note") {
+		if annotation.kind == "note" {
+			if let Some(text) = &mut locator.text {
+				text.highlight = None;
+			}
+		} else if locator
+			.text
+			.as_ref()
+			.and_then(|text| text.highlight.as_deref())
+			.map_or(true, |highlight| highlight.trim().is_empty())
+			&& !annotation.excerpt.is_empty()
+		{
+			let text = locator.text.get_or_insert(ReadiumText {
+				after: None,
+				before: None,
+				highlight: None,
+			});
+			text.highlight = Some(annotation.excerpt.clone());
+		}
+		let color = (annotation.kind == "highlight"
+			&& !annotation.color.is_empty()
+			&& stump_liseur_sync::ANNOTATION_COLORS.contains(&annotation.color.as_str()))
+		.then(|| annotation.color.clone());
+		media_annotation::ActiveModel {
+			id: Set(projection_id.clone()),
+			locator: Set(locator),
+			annotation_text: Set(
+				(!annotation.body.is_empty()).then(|| annotation.body.clone())
+			),
+			color: Set(color),
+			media_id: Set(media_id),
+			user_id: Set(user_id.to_owned()),
+			created_at: Set(created_at.clone()),
+			updated_at: Set(updated_at.clone()),
+		}
+		.insert(conn)
+		.await
+		.map_err(internal)?;
+		conn.execute(db_statement(
+			conn,
+			"UPDATE media_annotations SET created_at = $1, updated_at = $2
+             WHERE id = $3 AND user_id = $4",
+			vec![
+				created_at.into(),
+				updated_at.into(),
+				projection_id.into(),
+				user_id.to_owned().into(),
+			],
+		))
+		.await
+		.map_err(internal)?;
+	} else {
+		let preview_content = if !annotation.excerpt.is_empty() {
+			Some(annotation.excerpt.clone())
+		} else {
+			locator
+				.text
+				.as_ref()
+				.and_then(|text| text.highlight.clone())
+		};
+		let page = locator
+			.locations
+			.as_ref()
+			.and_then(|locations| locations.position);
+		bookmark::ActiveModel {
+			id: Set(projection_id.clone()),
+			preview_content: Set(preview_content),
+			locator: Set(Some(locator)),
+			page: Set(page),
+			position_ms: Set(None),
+			media_id: Set(media_id),
+			user_id: Set(user_id.to_owned()),
+			created_at: Set(created_at.clone()),
+		}
+		.insert(conn)
+		.await
+		.map_err(internal)?;
+		conn.execute(db_statement(
+			conn,
+			"UPDATE bookmarks SET created_at = $1 WHERE id = $2 AND user_id = $3",
+			vec![
+				created_at.into(),
+				projection_id.into(),
+				user_id.to_owned().into(),
+			],
+		))
+		.await
+		.map_err(internal)?;
+	}
+	Ok(true)
+}
+
+async fn reconcile_annotation_projections<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+) -> Result<(), LiseurSyncError> {
+	let Some(counter) = conn
+		.query_one(db_statement(
+			conn,
+			"SELECT annotation_seq, projected_annotation_seq
+             FROM liseur_sync_counters WHERE user_id = $1",
+			vec![user_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?
+	else {
+		return Ok(());
+	};
+	let high_water: i64 = counter.try_get("", "annotation_seq").map_err(internal)?;
+	let projected: i64 = counter
+		.try_get("", "projected_annotation_seq")
+		.map_err(internal)?;
+	if high_water <= projected {
+		return Ok(());
+	}
+	let rows = conn
+		.query_all(db_statement(
+			conn,
+			&format!(
+				"SELECT {ANNOTATION_COLUMNS} FROM liseur_sync_annotations
+                 WHERE user_id = $1 AND seq > $2 AND seq <= $3 ORDER BY seq ASC"
+			),
+			vec![
+				user_id.to_owned().into(),
+				projected.into(),
+				high_water.into(),
+			],
+		))
+		.await
+		.map_err(internal)?;
+	let mut completed = high_water;
+	for row in &rows {
+		let annotation = stored_annotation(row)?;
+		if !project_annotation(conn, user_id, &annotation).await? {
+			completed = completed.min(annotation.seq.saturating_sub(1));
+		}
+	}
+	if completed > projected {
+		conn.execute(db_statement(
+			conn,
+			"UPDATE liseur_sync_counters
+             SET projected_annotation_seq = $1
+             WHERE user_id = $2 AND projected_annotation_seq < $1",
+			vec![completed.into(), user_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?;
+	}
+	Ok(())
+}
+
+fn media_annotation_candidate(
+	row: &media_annotation::Model,
+	link: &NativeMediaLink,
+) -> Result<Option<NativeAnnotationCandidate>, LiseurSyncError> {
+	if is_liseur_sync_projection_id(&row.id)
+		|| row.locator.href.trim().is_empty()
+		|| row.locator.locations.is_none()
+	{
+		return Ok(None);
+	}
+	let excerpt = row
+		.locator
+		.text
+		.as_ref()
+		.and_then(|text| text.highlight.clone())
+		.unwrap_or_default();
+	let kind = if excerpt.trim().is_empty() {
+		"note"
+	} else {
+		"highlight"
+	};
+	let body = row.annotation_text.clone().unwrap_or_default();
+	if kind == "note" && body.is_empty() {
+		return Ok(None);
+	}
+	let id = stump_native_annotation_id("annotation", &row.id);
+	if id.len() > 64 {
+		return Ok(None);
+	}
+	let color = if kind == "highlight" {
+		row.color
+			.clone()
+			.filter(|color| ANNOTATION_COLORS.contains(&color.as_str()))
+			.unwrap_or_default()
+	} else {
+		String::new()
+	};
+	Ok(Some(NativeAnnotationCandidate {
+		id,
+		work_id: link.work_id.clone(),
+		edition_sha: link.edition_sha.clone(),
+		kind: kind.to_owned(),
+		locator: serde_json::to_value(&row.locator).map_err(internal)?,
+		progression: native_progression(&row.locator),
+		excerpt,
+		color,
+		body,
+		client_ts: native_timestamp(row.created_at),
+		updated_at: native_timestamp(row.updated_at),
+	}))
+}
+
+fn bookmark_candidate(
+	row: &bookmark::Model,
+	link: &NativeMediaLink,
+) -> Result<Option<NativeAnnotationCandidate>, LiseurSyncError> {
+	if is_liseur_sync_projection_id(&row.id) {
+		return Ok(None);
+	}
+	let Some(locator) = row
+		.locator
+		.as_ref()
+		.filter(|locator| !locator.href.trim().is_empty() && locator.locations.is_some())
+	else {
+		return Ok(None);
+	};
+	let id = stump_native_annotation_id("bookmark", &row.id);
+	if id.len() > 64 {
+		return Ok(None);
+	}
+	let excerpt = row
+		.preview_content
+		.clone()
+		.filter(|preview| !preview.is_empty())
+		.or_else(|| {
+			locator
+				.text
+				.as_ref()
+				.and_then(|text| text.highlight.clone())
+		})
+		.unwrap_or_default();
+	Ok(Some(NativeAnnotationCandidate {
+		id,
+		work_id: link.work_id.clone(),
+		edition_sha: link.edition_sha.clone(),
+		kind: "bookmark".to_owned(),
+		locator: serde_json::to_value(locator).map_err(internal)?,
+		progression: native_progression(locator),
+		excerpt,
+		color: String::new(),
+		body: String::new(),
+		client_ts: native_timestamp(row.created_at),
+		updated_at: native_timestamp(row.created_at),
+	}))
+}
+
+async fn native_annotation_candidates<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+) -> Result<Vec<NativeAnnotationCandidate>, LiseurSyncError> {
+	let rows = conn
+		.query_all(db_statement(
+			conn,
+			"SELECT media_id, work_id, edition_sha FROM liseur_sync_media_links
+             WHERE user_id = $1",
+			vec![user_id.to_owned().into()],
+		))
+		.await
+		.map_err(internal)?;
+	let mut links: HashMap<String, NativeMediaLink> = HashMap::with_capacity(rows.len());
+	for row in rows {
+		let media_id: String = row.try_get("", "media_id").map_err(internal)?;
+		let work_id: String = row.try_get("", "work_id").map_err(internal)?;
+		let edition_sha: Option<String> =
+			row.try_get("", "edition_sha").map_err(internal)?;
+		links.insert(
+			media_id,
+			NativeMediaLink {
+				work_id,
+				edition_sha,
+			},
+		);
+	}
+	if links.is_empty() {
+		return Ok(Vec::new());
+	}
+
+	let media_ids = links.keys().cloned().collect::<Vec<_>>();
+	let auth_user = LoginUser::find_by_id(user_id.to_owned())
+		.into_model::<LoginUser>()
+		.one(conn)
+		.await
+		.map_err(internal)?
+		.map(AuthUser::from);
+	let Some(auth_user) = auth_user else {
+		return Ok(Vec::new());
+	};
+	let visible_media = media::Entity::find_for_user(&auth_user)
+		.filter(media::Column::Id.is_in(media_ids))
+		.filter(media::Column::DeletedAt.is_null())
+		.filter(media::Column::SeriesId.is_not_null())
+		.filter(series::Column::LibraryId.is_not_null())
+		.filter(media::audio_extension_condition().not())
+		.all(conn)
+		.await
+		.map_err(internal)?;
+	links.retain(|media_id, _| visible_media.iter().any(|media| &media.id == media_id));
+	if links.is_empty() {
+		return Ok(Vec::new());
+	}
+
+	let visible_ids = links.keys().cloned().collect::<Vec<_>>();
+	let annotations = media_annotation::Entity::find()
+		.filter(media_annotation::Column::UserId.eq(user_id))
+		.filter(media_annotation::Column::MediaId.is_in(visible_ids.clone()))
+		.all(conn)
+		.await
+		.map_err(internal)?;
+	let bookmarks = bookmark::Entity::find()
+		.filter(bookmark::Column::UserId.eq(user_id))
+		.filter(bookmark::Column::MediaId.is_in(visible_ids))
+		.all(conn)
+		.await
+		.map_err(internal)?;
+
+	let mut candidates = Vec::with_capacity(annotations.len() + bookmarks.len());
+	for row in annotations {
+		if let Some(link) = links.get(&row.media_id) {
+			if let Some(candidate) = media_annotation_candidate(&row, link)? {
+				candidates.push(candidate);
+			}
+		}
+	}
+	for row in bookmarks {
+		if let Some(link) = links.get(&row.media_id) {
+			if let Some(candidate) = bookmark_candidate(&row, link)? {
+				candidates.push(candidate);
+			}
+		}
+	}
+	Ok(candidates)
+}
+
+async fn reconcile_native_candidate<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	candidate: &NativeAnnotationCandidate,
+	stored: Option<StoredAnnotation>,
+) -> Result<(), LiseurSyncError> {
+	let Some(stored) = stored else {
+		let seq = next_annotation_seq(conn, user_id).await?;
+		let payload =
+			annotation_payload(&candidate.input(0, candidate.client_ts.clone()))?;
+		return conn
+			.execute(db_statement(
+				conn,
+				"INSERT INTO liseur_sync_annotations
+                    (user_id, annotation_id, rev, seq, work_id, edition_sha, kind, locator,
+                     progression, excerpt, color, drawer, body, device_id, origin_device_id,
+                     client_ts, updated_at, deleted, deleted_at, payload)
+                 VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11,
+                         'stump-native', 'stump-native', $12, $13, FALSE, NULL, $14)",
+				vec![
+					user_id.to_owned().into(),
+					candidate.id.clone().into(),
+					seq.into(),
+					candidate.work_id.clone().into(),
+					candidate.edition_sha.clone().into(),
+					candidate.kind.clone().into(),
+					Some(serde_json::to_string(&candidate.locator).map_err(internal)?).into(),
+					candidate.progression.into(),
+					candidate.excerpt.clone().into(),
+					candidate.color.clone().into(),
+					candidate.body.clone().into(),
+					candidate.client_ts.clone().into(),
+					candidate.updated_at.clone().into(),
+					payload.into(),
+				],
+			))
+			.await
+			.map(|_| ())
+			.map_err(internal);
+	};
+	if native_candidate_matches(&stored, candidate) {
+		return Ok(());
+	}
+
+	let seq = next_annotation_seq(conn, user_id).await?;
+	let client_ts = stored.client_ts.clone();
+	let payload = annotation_payload(&candidate.input(stored.rev, client_ts))?;
+	conn.execute(db_statement(
+		conn,
+		"UPDATE liseur_sync_annotations
+         SET rev = $1, seq = $2, work_id = $3, edition_sha = $4, kind = $5,
+             locator = $6, progression = $7, excerpt = $8, color = $9, body = $10,
+             device_id = 'stump-native', updated_at = $11, deleted = FALSE,
+             deleted_at = NULL, payload = $12
+         WHERE user_id = $13 AND annotation_id = $14",
+		vec![
+			(stored.rev + 1).into(),
+			seq.into(),
+			candidate.work_id.clone().into(),
+			candidate.edition_sha.clone().into(),
+			candidate.kind.clone().into(),
+			Some(serde_json::to_string(&candidate.locator).map_err(internal)?).into(),
+			candidate.progression.into(),
+			candidate.excerpt.clone().into(),
+			candidate.color.clone().into(),
+			candidate.body.clone().into(),
+			candidate.updated_at.clone().into(),
+			payload.into(),
+			user_id.to_owned().into(),
+			candidate.id.clone().into(),
+		],
+	))
+	.await
+	.map_err(internal)?;
+	Ok(())
+}
+
+async fn reconcile_native_annotations<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+) -> Result<(), LiseurSyncError> {
+	let candidates = native_annotation_candidates(conn, user_id).await?;
+	let rows = conn
+		.query_all(db_statement(
+			conn,
+			&format!(
+				"SELECT {ANNOTATION_COLUMNS} FROM liseur_sync_annotations
+                 WHERE user_id = $1 AND annotation_id LIKE $2"
+			),
+			vec![
+				user_id.to_owned().into(),
+				format!("{STUMP_NATIVE_ANNOTATION_ID_PREFIX}%").into(),
+			],
+		))
+		.await
+		.map_err(internal)?;
+	let mut existing = HashMap::with_capacity(rows.len());
+	for row in &rows {
+		let annotation = stored_annotation(row)?;
+		if parse_stump_native_annotation_id(&annotation.id).is_some() {
+			existing.insert(annotation.id.clone(), annotation);
+		}
+	}
+
+	for candidate in candidates {
+		let stored = existing.remove(&candidate.id);
+		reconcile_native_candidate(conn, user_id, &candidate, stored).await?;
+	}
+	for annotation in existing
+		.into_values()
+		.filter(|annotation| !annotation.deleted)
+	{
+		let seq = next_annotation_seq(conn, user_id).await?;
+		let updated_at = now_string();
+		conn.execute(db_statement(
+			conn,
+			"UPDATE liseur_sync_annotations
+             SET rev = $1, seq = $2, updated_at = $3, deleted = TRUE, deleted_at = $3
+             WHERE user_id = $4 AND annotation_id = $5",
+			vec![
+				(annotation.rev + 1).into(),
+				seq.into(),
+				updated_at.into(),
+				user_id.to_owned().into(),
+				annotation.id.into(),
+			],
+		))
+		.await
+		.map_err(internal)?;
+	}
+	Ok(())
 }
 
 async fn find_annotation<C: ConnectionTrait>(
@@ -2104,9 +3504,10 @@ pub(crate) async fn append_annotations(
 	let conn = ctx_conn(ctx);
 	let txn = begin_write(conn).await.map_err(internal)?;
 	ensure_counter(&txn, user_id).await?;
+	reconcile_native_annotations(&txn, user_id).await?;
 	let mut results = Vec::with_capacity(annotations.len());
 
-	for annotation in annotations {
+	for mut annotation in annotations {
 		if !work_exists(&txn, user_id, &annotation.work_id).await? {
 			results.push(AnnotationResult {
 				id: annotation.id,
@@ -2156,16 +3557,42 @@ pub(crate) async fn append_annotations(
 				}
 				continue;
 			}
-			let seq = next_annotation_seq(&txn, user_id).await?;
+			if is_stump_native_annotation_id(&annotation.id) {
+				if let Some(reason) = native_update_invalid_reason(&annotation, &stored) {
+					results.push(AnnotationResult {
+						id: annotation.id,
+						status: "invalid".into(),
+						rev: None,
+						seq: None,
+						reason: Some(reason.into()),
+						server: Some(annotation_record(&stored)),
+					});
+					continue;
+				}
+			}
 			let updated_at = now_string();
+			if is_stump_native_annotation_id(&annotation.id) {
+				writeback_native_annotation(
+					&txn,
+					user_id,
+					&mut annotation,
+					&stored,
+					&updated_at,
+				)
+				.await?;
+			}
+			let payload = annotation_payload(&annotation)?;
+			let color = annotation_color_for_update(&annotation, &stored);
+			let drawer = annotation_drawer_for_update(&annotation, &stored);
+			let seq = next_annotation_seq(&txn, user_id).await?;
 			txn.execute(db_statement(
 				&txn,
 				"UPDATE liseur_sync_annotations
                  SET rev = $1, seq = $2, edition_sha = $3, kind = $4, locator = $5,
-                     progression = $6, excerpt = $7, color = $8, body = $9,
-                     device_id = $10, client_ts = $11, updated_at = $12, deleted = FALSE,
-                     deleted_at = NULL, payload = $13
-                 WHERE user_id = $14 AND annotation_id = $15",
+                     progression = $6, excerpt = $7, color = $8, drawer = $9,
+                     body = $10, device_id = $11, client_ts = $12, updated_at = $13,
+                     deleted = FALSE, deleted_at = NULL, payload = $14
+                 WHERE user_id = $15 AND annotation_id = $16",
 				vec![
 					(stored.rev + 1).into(),
 					seq.into(),
@@ -2174,7 +3601,8 @@ pub(crate) async fn append_annotations(
 					locator_to_db(&annotation.locator)?.into(),
 					annotation.progression.into(),
 					annotation.excerpt.into(),
-					annotation.color.into(),
+					color.into(),
+					drawer.into(),
 					annotation.body.into(),
 					device_id.to_owned().into(),
 					annotation.client_ts.into(),
@@ -2208,35 +3636,50 @@ pub(crate) async fn append_annotations(
 			});
 			continue;
 		}
+		if is_stump_native_annotation_id(&annotation.id) {
+			results.push(AnnotationResult {
+				id: annotation.id,
+				status: "invalid".into(),
+				rev: None,
+				seq: None,
+				reason: Some("native annotation ids are reserved".into()),
+				server: None,
+			});
+			continue;
+		}
 		let seq = next_annotation_seq(&txn, user_id).await?;
+		let color = annotation.color.unwrap_or_default();
+		let drawer = annotation.drawer.filter(|drawer| !drawer.is_empty());
 		let updated_at = now_string();
 		txn.execute(db_statement(
-            &txn,
-            "INSERT INTO liseur_sync_annotations
+			&txn,
+			"INSERT INTO liseur_sync_annotations
                 (user_id, annotation_id, rev, seq, work_id, edition_sha, kind, locator,
-                 progression, excerpt, color, body, device_id, client_ts,
-                 updated_at, deleted, deleted_at, payload)
-             VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, FALSE, NULL, $15)",
-            vec![
-                user_id.to_owned().into(),
-                annotation.id.clone().into(),
-                seq.into(),
-                annotation.work_id.into(),
-                annotation.edition_sha.into(),
-                annotation.kind.into(),
-                locator_to_db(&annotation.locator)?.into(),
-                annotation.progression.into(),
-                annotation.excerpt.into(),
-                annotation.color.into(),
-                annotation.body.into(),
-                device_id.to_owned().into(),
-                annotation.client_ts.into(),
-                updated_at.into(),
-                payload.into(),
-            ],
-        ))
-        .await
-        .map_err(internal)?;
+                 progression, excerpt, color, drawer, body, device_id, origin_device_id,
+                 client_ts, updated_at, deleted, deleted_at, payload)
+             VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13,
+                     $14, $15, FALSE, NULL, $16)",
+			vec![
+				user_id.to_owned().into(),
+				annotation.id.clone().into(),
+				seq.into(),
+				annotation.work_id.into(),
+				annotation.edition_sha.into(),
+				annotation.kind.into(),
+				locator_to_db(&annotation.locator)?.into(),
+				annotation.progression.into(),
+				annotation.excerpt.into(),
+				color.into(),
+				drawer.into(),
+				annotation.body.into(),
+				device_id.to_owned().into(),
+				annotation.client_ts.into(),
+				updated_at.into(),
+				payload.into(),
+			],
+		))
+		.await
+		.map_err(internal)?;
 		results.push(AnnotationResult {
 			id: annotation.id,
 			status: "applied".into(),
@@ -2245,6 +3688,9 @@ pub(crate) async fn append_annotations(
 			reason: None,
 			server: None,
 		});
+	}
+	if results.iter().any(|result| result.status == "applied") {
+		reconcile_annotation_projections(&txn, user_id).await?;
 	}
 	txn.commit().await.map_err(internal)?;
 	if results.iter().any(|result| result.status == "applied") {
@@ -2279,6 +3725,11 @@ pub(crate) async fn annotation_changes(
 	limit: usize,
 ) -> Result<(Vec<AnnotationRecord>, i64, bool), LiseurSyncError> {
 	let conn = ctx_conn(ctx);
+	let txn = begin_write(conn).await.map_err(internal)?;
+	ensure_counter(&txn, user_id).await?;
+	reconcile_native_annotations(&txn, user_id).await?;
+	reconcile_annotation_projections(&txn, user_id).await?;
+	txn.commit().await.map_err(internal)?;
 	let high_water = annotation_high_water(conn, user_id).await?;
 	let rows = conn
 		.query_all(db_statement(
@@ -2312,19 +3763,39 @@ pub(crate) async fn work_annotations(
 	user_id: &str,
 	work_id: &str,
 ) -> Result<Vec<AnnotationRecord>, LiseurSyncError> {
+	work_annotations_with_deleted(ctx, user_id, work_id, false).await
+}
+
+pub(crate) async fn work_annotations_with_deleted(
+	ctx: &AppState,
+	user_id: &str,
+	work_id: &str,
+	include_deleted: bool,
+) -> Result<Vec<AnnotationRecord>, LiseurSyncError> {
 	let conn = ctx_conn(ctx);
 	if !work_exists(conn, user_id, work_id).await? {
 		return Err(LiseurSyncError::NotFound("work not found".into()));
 	}
+	let txn = begin_write(conn).await.map_err(internal)?;
+	ensure_counter(&txn, user_id).await?;
+	reconcile_native_annotations(&txn, user_id).await?;
+	reconcile_annotation_projections(&txn, user_id).await?;
+	txn.commit().await.map_err(internal)?;
 	let rows = conn
 		.query_all(db_statement(
 			conn,
 			&format!(
 				"SELECT {ANNOTATION_COLUMNS} FROM liseur_sync_annotations
-                 WHERE user_id = $1 AND work_id = $2 AND deleted = FALSE
-                 ORDER BY progression IS NULL ASC, progression ASC, client_ts ASC"
+                 WHERE user_id = $1 AND work_id = $2
+                   AND ($3 = TRUE OR deleted = FALSE)
+                 ORDER BY deleted ASC, progression IS NULL ASC,
+                          progression ASC, client_ts ASC, seq ASC"
 			),
-			vec![user_id.to_owned().into(), work_id.to_owned().into()],
+			vec![
+				user_id.to_owned().into(),
+				work_id.to_owned().into(),
+				include_deleted.into(),
+			],
 		))
 		.await
 		.map_err(internal)?;
@@ -2343,6 +3814,7 @@ pub(crate) async fn delete_annotation(
 	let conn = ctx_conn(ctx);
 	let txn = begin_write(conn).await.map_err(internal)?;
 	ensure_counter(&txn, user_id).await?;
+	reconcile_native_annotations(&txn, user_id).await?;
 	let Some(stored) = find_annotation(&txn, user_id, id).await? else {
 		return Err(LiseurSyncError::NotFound("annotation not found".into()));
 	};
@@ -2365,6 +3837,9 @@ pub(crate) async fn delete_annotation(
 			server: Some(annotation_record(&stored)),
 		});
 	}
+	if is_stump_native_annotation_id(id) {
+		delete_native_annotation_source(&txn, user_id, id).await?;
+	}
 	let seq = next_annotation_seq(&txn, user_id).await?;
 	let updated_at = now_string();
 	txn.execute(db_statement(
@@ -2386,6 +3861,7 @@ pub(crate) async fn delete_annotation(
 	// A tombstone keeps identity and revision, not content: the annotation's
 	// side objects go with its body.
 	let detached = super::attachments::detach_all(&txn, user_id, id).await?;
+	reconcile_annotation_projections(&txn, user_id).await?;
 	txn.commit().await.map_err(internal)?;
 	super::attachments::unlink_all(ctx, &detached).await;
 	ctx.note_annotation_activity(user_id);
@@ -2426,6 +3902,16 @@ mod tests {
                 id TEXT NOT NULL,
                 user_id TEXT NOT NULL
             )",
+			"CREATE TABLE liseur_sync_counters (
+                user_id TEXT PRIMARY KEY,
+                op_seq BIGINT NOT NULL DEFAULT 0,
+                annotation_seq BIGINT NOT NULL DEFAULT 0,
+                projected_annotation_seq BIGINT NOT NULL DEFAULT 0
+            )",
+			"CREATE TABLE liseur_sync_media_links (
+                user_id TEXT NOT NULL, media_id TEXT NOT NULL,
+                work_id TEXT NOT NULL, edition_sha TEXT
+            )",
 			"CREATE TABLE liseur_sync_annotations (
                 row_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
@@ -2439,6 +3925,7 @@ mod tests {
                 progression DOUBLE,
                 excerpt TEXT NOT NULL,
                 color TEXT NOT NULL,
+                drawer TEXT,
                 body TEXT NOT NULL,
                 device_id TEXT NOT NULL,
                 client_ts TEXT NOT NULL,
@@ -2450,11 +3937,11 @@ mod tests {
 			"INSERT INTO liseur_sync_works (id, user_id) VALUES ('work-1', 'user-1')",
 			"INSERT INTO liseur_sync_annotations
                 (user_id, annotation_id, rev, seq, work_id, edition_sha, kind, locator,
-                 progression, excerpt, color, body, device_id, client_ts, updated_at,
+                 progression, excerpt, color, drawer, body, device_id, client_ts, updated_at,
                  deleted, deleted_at, payload)
              VALUES
                 ('user-1', 'annotation-1', 1, 1, 'work-1', NULL, 'highlight', NULL,
-                 0.5, 'excerpt', 'yellow', 'body', 'device-1',
+                 0.5, 'excerpt', 'yellow', NULL, 'body', 'device-1',
                  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', FALSE, NULL, '{}')",
 		] {
 			conn.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
@@ -2465,6 +3952,896 @@ mod tests {
 		let annotations = work_annotations(&ctx, "user-1", "work-1").await.unwrap();
 		assert_eq!(annotations.len(), 1);
 		assert_eq!(annotations[0].id, "annotation-1");
+	}
+
+	#[tokio::test]
+	async fn annotations_preserve_extended_styles_and_reconcile_native_projections() {
+		use std::sync::Arc;
+
+		use ::tests::{db::test_database, fake_data};
+		use sea_orm::{DatabaseBackend, Schema};
+
+		let db = test_database().await;
+		let user = fake_data::User::new("liseur-annotation-user")
+			.insert(&db)
+			.await;
+		let library = fake_data::Library::default().insert(&db).await;
+		let series = fake_data::Series {
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let media = fake_data::Media {
+			series_id: series.id,
+			id: Some("liseur-annotation-media".to_owned()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let schema = Schema::new(DatabaseBackend::Sqlite);
+		for statement in [
+			schema.create_table_from_entity(media_annotation::Entity),
+			schema.create_table_from_entity(bookmark::Entity),
+		] {
+			db.execute(db.get_database_backend().build(&statement))
+				.await
+				.unwrap();
+		}
+		for sql in [
+			"CREATE TABLE liseur_sync_works (id TEXT NOT NULL, user_id TEXT NOT NULL)",
+			"CREATE TABLE liseur_sync_media_links (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, work_id TEXT NOT NULL,
+                media_id TEXT NOT NULL, edition_sha TEXT NOT NULL, created_at TEXT NOT NULL
+            )",
+			"CREATE TABLE liseur_sync_counters (
+                user_id TEXT PRIMARY KEY, op_seq BIGINT NOT NULL DEFAULT 0,
+                annotation_seq BIGINT NOT NULL DEFAULT 0,
+                projected_annotation_seq BIGINT NOT NULL DEFAULT 0
+            )",
+			"CREATE TABLE annotation_attachments (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, annotation_id TEXT NOT NULL,
+                kind TEXT NOT NULL, media_type TEXT NOT NULL, byte_size BIGINT NOT NULL,
+                sha256 TEXT NOT NULL, storage_path TEXT NOT NULL, created_at TEXT NOT NULL
+            )",
+			"CREATE TABLE liseur_sync_annotations (
+                row_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+                annotation_id TEXT NOT NULL, rev BIGINT NOT NULL, seq BIGINT NOT NULL,
+                work_id TEXT NOT NULL, edition_sha TEXT, kind TEXT NOT NULL,
+                locator TEXT, progression DOUBLE, excerpt TEXT NOT NULL, color TEXT NOT NULL,
+                drawer TEXT, body TEXT NOT NULL, device_id TEXT NOT NULL,
+                origin_device_id TEXT, client_ts TEXT NOT NULL,
+                updated_at TEXT NOT NULL, deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                deleted_at TEXT, payload TEXT NOT NULL,
+                UNIQUE (user_id, annotation_id)
+            )",
+		] {
+			db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
+				.await
+				.unwrap();
+		}
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_works (id, user_id) VALUES ($1, $2)",
+			vec!["work-1".to_owned().into(), user.id.clone().into()],
+		))
+		.await
+		.unwrap();
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_media_links
+                (id, user_id, work_id, media_id, edition_sha, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+			vec![
+				"link-1".to_owned().into(),
+				user.id.clone().into(),
+				"work-1".to_owned().into(),
+				media.id.clone().into(),
+				"edition-1".to_owned().into(),
+				"2026-09-11T12:00:00Z".to_owned().into(),
+			],
+		))
+		.await
+		.unwrap();
+		let ctx = Arc::new(stump_core::Ctx::for_testing(db));
+		let highlight = AnnotationInput {
+			id: "highlight-1".to_owned(),
+			base_rev: 0,
+			work_id: "work-1".to_owned(),
+			edition_sha: Some("edition-1".to_owned()),
+			kind: "highlight".to_owned(),
+			locator: Some(serde_json::json!({
+				"chapterTitle": "Chapter one",
+				"href": "OPS/chapter.xhtml",
+				"locations": {"position": 17},
+				"text": {"highlight": "Quoted passage"}
+			})),
+			progression: Some(0.42),
+			excerpt: "Quoted passage".to_owned(),
+			color: Some("red".to_owned()),
+			drawer: Some("invert".to_owned()),
+			body: "A note".to_owned(),
+			client_ts: "2026-09-11T12:00:00Z".to_owned(),
+		};
+		let bookmark_input = AnnotationInput {
+			id: "bookmark-1".to_owned(),
+			kind: "bookmark".to_owned(),
+			color: None,
+			drawer: None,
+			body: String::new(),
+			..highlight.clone()
+		};
+		let inserted = append_annotations(
+			&ctx,
+			&user.id,
+			"device-1",
+			vec![highlight.clone(), bookmark_input],
+		)
+		.await
+		.unwrap();
+		assert!(inserted.iter().all(|result| result.status == "applied"));
+
+		let highlight_projection_id = liseur_sync_projection_id(&user.id, &highlight.id);
+		let projected = media_annotation::Entity::find_by_id(&highlight_projection_id)
+			.one(ctx.conn.as_ref())
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(projected.color.as_deref(), Some("red"));
+		assert_eq!(
+			projected
+				.locator
+				.text
+				.as_ref()
+				.and_then(|text| text.highlight.as_deref()),
+			Some("Quoted passage")
+		);
+		assert!(bookmark::Entity::find_by_id(liseur_sync_projection_id(
+			&user.id,
+			"bookmark-1"
+		))
+		.one(ctx.conn.as_ref())
+		.await
+		.unwrap()
+		.is_some());
+		let live = work_annotations(&ctx, &user.id, "work-1").await.unwrap();
+		let stored = live.iter().find(|row| row.id == highlight.id).unwrap();
+		assert_eq!(stored.color.as_deref(), Some("red"));
+		assert_eq!(stored.drawer.as_deref(), Some("invert"));
+
+		let update_without_extended_fields = AnnotationInput {
+			base_rev: 1,
+			excerpt: "Updated passage".to_owned(),
+			body: "Updated note".to_owned(),
+			color: None,
+			drawer: None,
+			..highlight.clone()
+		};
+		assert_eq!(
+			append_annotations(
+				&ctx,
+				&user.id,
+				"device-1",
+				vec![update_without_extended_fields]
+			)
+			.await
+			.unwrap()[0]
+				.status,
+			"applied"
+		);
+		let live = work_annotations(&ctx, &user.id, "work-1").await.unwrap();
+		let stored = live.iter().find(|row| row.id == highlight.id).unwrap();
+		assert_eq!(stored.color.as_deref(), Some("red"));
+		assert_eq!(stored.drawer.as_deref(), Some("invert"));
+
+		let clear_extended_fields = AnnotationInput {
+			base_rev: 2,
+			color: Some(String::new()),
+			drawer: Some(String::new()),
+			..highlight.clone()
+		};
+		assert_eq!(
+			append_annotations(&ctx, &user.id, "device-1", vec![clear_extended_fields])
+				.await
+				.unwrap()[0]
+				.status,
+			"applied"
+		);
+		let live = work_annotations(&ctx, &user.id, "work-1").await.unwrap();
+		let stored = live.iter().find(|row| row.id == highlight.id).unwrap();
+		assert_eq!(stored.color, None);
+		assert_eq!(stored.drawer, None);
+
+		let change_to_note = AnnotationInput {
+			base_rev: 3,
+			kind: "note".to_owned(),
+			excerpt: String::new(),
+			color: Some(String::new()),
+			drawer: Some(String::new()),
+			body: "Note after highlight".to_owned(),
+			..highlight.clone()
+		};
+		assert_eq!(
+			append_annotations(&ctx, &user.id, "device-1", vec![change_to_note])
+				.await
+				.unwrap()[0]
+				.status,
+			"applied"
+		);
+		let projected_note =
+			media_annotation::Entity::find_by_id(&highlight_projection_id)
+				.one(ctx.conn.as_ref())
+				.await
+				.unwrap()
+				.unwrap();
+		assert_eq!(
+			projected_note.annotation_text.as_deref(),
+			Some("Note after highlight")
+		);
+		assert_eq!(
+			projected_note
+				.locator
+				.text
+				.as_ref()
+				.and_then(|text| text.highlight.as_deref()),
+			None
+		);
+		let live = work_annotations(&ctx, &user.id, "work-1").await.unwrap();
+		let note = live.iter().find(|row| row.id == highlight.id).unwrap();
+		assert_eq!(note.kind.as_deref(), Some("note"));
+		assert_eq!(note.color, None);
+		assert_eq!(note.drawer, None);
+
+		let home_highlight_id = "home-highlight-1";
+		let home_note_id = "home-note-1";
+		let home_bookmark_id = "home-bookmark-1";
+		let home_locator = serde_json::from_value::<ReadiumLocator>(serde_json::json!({
+			"chapterTitle": "Chapter two",
+			"href": "OPS/chapter.xhtml",
+			"locations": {
+				"position": 22,
+				"progression": 0.37,
+				"totalProgression": 0.57
+			},
+			"text": {
+				"before": "words before",
+				"highlight": "Home selected passage",
+				"after": "words after"
+			}
+		}))
+		.unwrap();
+		media_annotation::ActiveModel {
+			id: Set(home_highlight_id.to_owned()),
+			locator: Set(home_locator.clone()),
+			annotation_text: Set(Some("Home note on highlight".to_owned())),
+			color: Set(Some("red".to_owned())),
+			media_id: Set(media.id.clone()),
+			user_id: Set(user.id.clone()),
+			..Default::default()
+		}
+		.insert(ctx.conn.as_ref())
+		.await
+		.unwrap();
+		let home_note_locator =
+			serde_json::from_value::<ReadiumLocator>(serde_json::json!({
+				"chapterTitle": "Chapter three",
+				"href": "OPS/chapter.xhtml",
+				"locations": {"position": 30, "progression": 0.72},
+				"text": {"before": "note before", "after": "note after"}
+			}))
+			.unwrap();
+		media_annotation::ActiveModel {
+			id: Set(home_note_id.to_owned()),
+			locator: Set(home_note_locator),
+			annotation_text: Set(Some("Home standalone note".to_owned())),
+			color: Set(None),
+			media_id: Set(media.id.clone()),
+			user_id: Set(user.id.clone()),
+			..Default::default()
+		}
+		.insert(ctx.conn.as_ref())
+		.await
+		.unwrap();
+		bookmark::ActiveModel {
+			id: Set(home_bookmark_id.to_owned()),
+			preview_content: Set(Some("Home bookmark preview".to_owned())),
+			locator: Set(Some(home_locator)),
+			page: Set(Some(22)),
+			position_ms: Set(None),
+			media_id: Set(media.id.clone()),
+			user_id: Set(user.id.clone()),
+			..Default::default()
+		}
+		.insert(ctx.conn.as_ref())
+		.await
+		.unwrap();
+
+		let before_native = annotation_high_water(ctx.conn.as_ref(), &user.id)
+			.await
+			.unwrap();
+		let (native_records, native_high_water, has_more) =
+			annotation_changes(&ctx, &user.id, before_native, 500)
+				.await
+				.unwrap();
+		assert!(!has_more);
+		assert!(native_high_water > before_native);
+		let native_highlight_id =
+			stump_native_annotation_id("annotation", home_highlight_id);
+		let exported = native_records
+			.iter()
+			.find(|record| record.id == native_highlight_id)
+			.unwrap();
+		assert_eq!(exported.rev, 1);
+		assert_eq!(exported.work_id.as_deref(), Some("work-1"));
+		assert_eq!(exported.edition_sha.as_deref(), Some("edition-1"));
+		assert_eq!(exported.kind.as_deref(), Some("highlight"));
+		assert_eq!(exported.excerpt.as_deref(), Some("Home selected passage"));
+		assert_eq!(exported.body.as_deref(), Some("Home note on highlight"));
+		assert_eq!(exported.color.as_deref(), Some("red"));
+		assert_eq!(exported.progression, Some(0.57));
+		assert_eq!(
+			exported
+				.locator
+				.as_ref()
+				.unwrap()
+				.pointer("/text/before")
+				.and_then(Value::as_str),
+			Some("words before")
+		);
+		assert_eq!(
+			exported
+				.locator
+				.as_ref()
+				.unwrap()
+				.pointer("/text/after")
+				.and_then(Value::as_str),
+			Some("words after")
+		);
+		assert!(
+			DateTime::parse_from_rfc3339(exported.client_ts.as_deref().unwrap()).is_ok()
+		);
+		assert!(DateTime::parse_from_rfc3339(&exported.updated_at).is_ok());
+		let native_note_id = stump_native_annotation_id("annotation", home_note_id);
+		let exported_note = native_records
+			.iter()
+			.find(|record| record.id == native_note_id)
+			.unwrap();
+		assert_eq!(exported_note.kind.as_deref(), Some("note"));
+		assert_eq!(exported_note.body.as_deref(), Some("Home standalone note"));
+		let native_bookmark_id = stump_native_annotation_id("bookmark", home_bookmark_id);
+		assert!(native_records
+			.iter()
+			.any(|record| record.id == native_bookmark_id
+				&& record.kind.as_deref() == Some("bookmark")));
+		let work_snapshot = work_annotations(&ctx, &user.id, "work-1").await.unwrap();
+		for id in [
+			native_highlight_id.as_str(),
+			native_note_id.as_str(),
+			native_bookmark_id.as_str(),
+		] {
+			assert_eq!(
+				work_snapshot
+					.iter()
+					.filter(|record| record.id.as_str() == id)
+					.count(),
+				1,
+				"native annotation {id} should occur once in the work snapshot"
+			);
+		}
+		assert!(
+			media_annotation::Entity::find_by_id(liseur_sync_projection_id(
+				&user.id,
+				&native_highlight_id,
+			))
+			.one(ctx.conn.as_ref())
+			.await
+			.unwrap()
+			.is_none()
+		);
+		let origin_row = ctx
+			.conn
+			.query_one(db_statement(
+				ctx.conn.as_ref(),
+				"SELECT origin_device_id FROM liseur_sync_annotations
+                 WHERE user_id = $1 AND annotation_id = $2",
+				vec![user.id.clone().into(), native_highlight_id.clone().into()],
+			))
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			origin_row
+				.try_get::<String>("", "origin_device_id")
+				.unwrap(),
+			"stump-native"
+		);
+
+		let original_locator = media_annotation::Entity::find_by_id(home_highlight_id)
+			.one(ctx.conn.as_ref())
+			.await
+			.unwrap()
+			.unwrap()
+			.locator;
+		let ko_reader_edit = AnnotationInput {
+			id: native_highlight_id.clone(),
+			base_rev: 1,
+			work_id: "work-1".to_owned(),
+			edition_sha: Some("edition-1".to_owned()),
+			kind: "highlight".to_owned(),
+			locator: exported.locator.clone(),
+			progression: exported.progression,
+			excerpt: exported.excerpt.clone().unwrap(),
+			color: Some("orange".to_owned()),
+			drawer: None,
+			body: "Edited in KOReader".to_owned(),
+			client_ts: now_string(),
+		};
+		let applied = append_annotations(
+			&ctx,
+			&user.id,
+			"koreader-device",
+			vec![ko_reader_edit.clone()],
+		)
+		.await
+		.unwrap();
+		assert_eq!(applied[0].status, "applied");
+		assert_eq!(applied[0].rev, Some(2));
+		let updated_native = media_annotation::Entity::find_by_id(home_highlight_id)
+			.one(ctx.conn.as_ref())
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			updated_native.annotation_text.as_deref(),
+			Some("Edited in KOReader")
+		);
+		assert_eq!(updated_native.color.as_deref(), Some("orange"));
+		assert_eq!(updated_native.locator, original_locator);
+		let creator_after_edit = ctx
+			.conn
+			.query_one(db_statement(
+				ctx.conn.as_ref(),
+				"SELECT origin_device_id, device_id FROM liseur_sync_annotations
+                 WHERE user_id = $1 AND annotation_id = $2",
+				vec![user.id.clone().into(), native_highlight_id.clone().into()],
+			))
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			creator_after_edit
+				.try_get::<String>("", "origin_device_id")
+				.unwrap(),
+			"stump-native"
+		);
+		assert_eq!(
+			creator_after_edit
+				.try_get::<String>("", "device_id")
+				.unwrap(),
+			"koreader-device"
+		);
+		let stale = AnnotationInput {
+			base_rev: 1,
+			body: "Stale edit".to_owned(),
+			..ko_reader_edit
+		};
+		assert_eq!(
+			append_annotations(&ctx, &user.id, "another-device", vec![stale])
+				.await
+				.unwrap()[0]
+				.status,
+			"conflict"
+		);
+		let deleted = delete_annotation(&ctx, &user.id, &native_highlight_id, 2)
+			.await
+			.unwrap();
+		assert_eq!(deleted.status, "applied");
+		assert!(media_annotation::Entity::find_by_id(home_highlight_id)
+			.one(ctx.conn.as_ref())
+			.await
+			.unwrap()
+			.is_none());
+		media_annotation::Entity::delete_by_id(home_note_id)
+			.exec(ctx.conn.as_ref())
+			.await
+			.unwrap();
+		bookmark::Entity::delete_by_id(home_bookmark_id)
+			.exec(ctx.conn.as_ref())
+			.await
+			.unwrap();
+		let (after_all_deletes, _, _) =
+			annotation_changes(&ctx, &user.id, native_high_water, 500)
+				.await
+				.unwrap();
+		let client_tombstone = after_all_deletes
+			.iter()
+			.find(|record| record.id == native_highlight_id)
+			.unwrap();
+		assert!(client_tombstone.deleted);
+		assert_eq!(client_tombstone.rev, 3);
+		let note_tombstone = after_all_deletes
+			.iter()
+			.find(|record| record.id == native_note_id)
+			.unwrap();
+		assert!(note_tombstone.deleted);
+		assert_eq!(note_tombstone.rev, 2);
+		let bookmark_tombstone = after_all_deletes
+			.iter()
+			.find(|record| record.id == native_bookmark_id)
+			.unwrap();
+		assert!(bookmark_tombstone.deleted);
+		assert_eq!(bookmark_tombstone.rev, 2);
+	}
+	#[cfg(feature = "graphql")]
+	#[tokio::test]
+	async fn home_graphql_edits_liseur_note_into_cas_change_feed() {
+		use std::sync::Arc;
+
+		use ::tests::{db::test_database, fake_data};
+		use async_graphql::Request;
+		use models::entity::user::AuthUser;
+		use sea_orm::{DatabaseBackend, Schema};
+
+		let db = test_database().await;
+		let user = fake_data::User::new("liseur-home-edit").insert(&db).await;
+		let library = fake_data::Library::default().insert(&db).await;
+		let series = fake_data::Series {
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let media = fake_data::Media {
+			id: Some("liseur-home-edit-media".to_owned()),
+			series_id: series.id,
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let schema_builder = Schema::new(DatabaseBackend::Sqlite);
+		for statement in [
+			schema_builder.create_table_from_entity(media_annotation::Entity),
+			schema_builder.create_table_from_entity(bookmark::Entity),
+		] {
+			db.execute(db.get_database_backend().build(&statement))
+				.await
+				.unwrap();
+		}
+		for sql in [
+			"CREATE TABLE liseur_sync_works (id TEXT NOT NULL, user_id TEXT NOT NULL)",
+			"CREATE TABLE liseur_sync_media_links (
+				id TEXT PRIMARY KEY, user_id TEXT NOT NULL, work_id TEXT NOT NULL,
+				media_id TEXT NOT NULL, edition_sha TEXT, created_at TEXT NOT NULL
+			)",
+			"CREATE TABLE liseur_sync_counters (
+				user_id TEXT PRIMARY KEY, op_seq BIGINT NOT NULL DEFAULT 0,
+				annotation_seq BIGINT NOT NULL DEFAULT 0,
+				projected_annotation_seq BIGINT NOT NULL DEFAULT 0
+			)",
+			"CREATE TABLE liseur_sync_annotations (
+				row_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+				annotation_id TEXT NOT NULL, rev BIGINT NOT NULL, seq BIGINT NOT NULL,
+				work_id TEXT NOT NULL, edition_sha TEXT, kind TEXT NOT NULL, locator TEXT,
+				progression DOUBLE, excerpt TEXT NOT NULL, color TEXT NOT NULL, drawer TEXT,
+				body TEXT NOT NULL, device_id TEXT NOT NULL, origin_device_id TEXT,
+				client_ts TEXT NOT NULL, updated_at TEXT NOT NULL,
+				deleted BOOLEAN NOT NULL DEFAULT FALSE, deleted_at TEXT, payload TEXT NOT NULL,
+				UNIQUE(user_id, annotation_id)
+			)",
+		] {
+			db.execute(Statement::from_string(
+				DatabaseBackend::Sqlite,
+				sql.to_owned(),
+			))
+			.await
+			.unwrap();
+		}
+		let locator = serde_json::json!({
+			"chapterTitle": "Chapter One",
+			"href": "OPS/chapter.xhtml",
+			"locations": {"position": 12, "progression": 0.25},
+			"text": {"before": "before", "highlight": "selected words", "after": "after"}
+		});
+		let locator_json = serde_json::to_string(&locator).unwrap();
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_works (id, user_id) VALUES ('work-1', $1)",
+			vec![user.id.clone().into()],
+		))
+		.await
+		.unwrap();
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_media_links
+			 (id, user_id, work_id, media_id, edition_sha, created_at)
+			 VALUES ('link-1', $1, 'work-1', $2, 'edition-1', '2026-09-11T12:00:00Z')",
+			vec![user.id.clone().into(), media.id.clone().into()],
+		))
+		.await
+		.unwrap();
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_counters
+			 (user_id, op_seq, annotation_seq, projected_annotation_seq)
+			 VALUES ($1, 0, 1, 0)",
+			vec![user.id.clone().into()],
+		))
+		.await
+		.unwrap();
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_annotations
+			 (user_id, annotation_id, rev, seq, work_id, edition_sha, kind, locator,
+			  progression, excerpt, color, drawer, body, device_id, origin_device_id,
+			  client_ts, updated_at, deleted, deleted_at, payload)
+			 VALUES ($1, 'liseur-home-note', 1, 1, 'work-1', 'edition-1', 'highlight', $2,
+			  0.25, 'selected words', 'yellow', NULL, 'Original note', 'koreader-device',
+			  'koreader-device', '2026-09-11T12:00:00Z', '2026-09-11T12:00:00Z',
+			  FALSE, NULL, '{}')",
+			vec![user.id.clone().into(), locator_json.into()],
+		))
+		.await
+		.unwrap();
+
+		let ctx = Arc::new(stump_core::Ctx::for_testing(db));
+		let schema = graphql::schema::build_schema(ctx.clone()).await;
+		let auth = stump_auth::AuthContext {
+			user: AuthUser {
+				id: user.id.clone(),
+				username: user.username.clone(),
+				is_server_owner: true,
+				..Default::default()
+			},
+			api_key: None,
+			device_id: None,
+		};
+		let response = schema
+			.execute(
+				Request::new(
+					r#"mutation {
+						updateAnnotation(input: {
+							id: "liseur-home-note"
+							annotationText: "Edited in Home"
+							color: "blue"
+							expectedRevision: 1
+						}) { id annotationText color }
+					}"#,
+				)
+				.data(auth.clone()),
+			)
+			.await;
+		assert!(response.errors.is_empty(), "{:?}", response.errors);
+
+		let (feed, high_water, has_more) =
+			annotation_changes(&ctx, &user.id, 1, 500).await.unwrap();
+		assert_eq!(high_water, 2);
+		assert!(!has_more);
+		let changed = feed
+			.iter()
+			.find(|record| record.id == "liseur-home-note")
+			.unwrap();
+		assert_eq!(changed.rev, 2);
+		assert_eq!(changed.seq, 2);
+		assert_eq!(changed.body.as_deref(), Some("Edited in Home"));
+		assert_eq!(changed.color.as_deref(), Some("blue"));
+		assert_eq!(changed.locator.as_ref(), Some(&locator));
+		assert!(!changed.deleted);
+
+		let stale_response = schema
+			.execute(
+				Request::new(
+					r#"mutation {
+						updateAnnotation(input: {
+							id: "liseur-home-note"
+							annotationText: "Stale edit"
+							expectedRevision: 1
+						}) { id }
+					}"#,
+				)
+				.data(auth.clone()),
+			)
+			.await;
+		assert_eq!(
+			stale_response.errors[0].message,
+			"annotation revision conflict: expected 1, current 2"
+		);
+		assert!(
+			serde_json::to_value(&stale_response.data)
+				.unwrap()
+				.is_null(),
+			"the non-null root mutation field should bubble its conflict to data: null"
+		);
+
+		let stale_delete = schema
+			.execute(
+				Request::new(
+					r#"mutation {
+						deleteAnnotation(id: "liseur-home-note", expectedRevision: 1) { id }
+					}"#,
+				)
+				.data(auth.clone()),
+			)
+			.await;
+		assert_eq!(
+			stale_delete.errors[0].message,
+			"annotation revision conflict: expected 1, current 2"
+		);
+		assert!(
+			serde_json::to_value(&stale_delete.data).unwrap().is_null(),
+			"the non-null delete field should bubble its conflict to data: null"
+		);
+		let deleted_response = schema
+			.execute(
+				Request::new(
+					r#"mutation {
+						deleteAnnotation(id: "liseur-home-note", expectedRevision: 2) { id }
+					}"#,
+				)
+				.data(auth),
+			)
+			.await;
+		assert!(
+			deleted_response.errors.is_empty(),
+			"{:?}",
+			deleted_response.errors
+		);
+		let (tombstones, deleted_high_water, deleted_has_more) =
+			annotation_changes(&ctx, &user.id, 2, 500).await.unwrap();
+		assert_eq!(deleted_high_water, 3);
+		assert!(!deleted_has_more);
+		let tombstone = tombstones
+			.iter()
+			.find(|record| record.id == "liseur-home-note")
+			.unwrap();
+		assert_eq!(tombstone.rev, 3);
+		assert_eq!(tombstone.seq, 3);
+		assert!(tombstone.deleted);
+		assert_eq!(tombstone.body, None);
+
+		let row = ctx
+			.conn
+			.query_one(db_statement(
+				ctx.conn.as_ref(),
+				"SELECT rev, origin_device_id, device_id, body, deleted
+				 FROM liseur_sync_annotations WHERE user_id = $1 AND annotation_id = $2",
+				vec![user.id.into(), "liseur-home-note".into()],
+			))
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(row.try_get::<i64>("", "rev").unwrap(), 3);
+		assert_eq!(
+			row.try_get::<String>("", "origin_device_id").unwrap(),
+			"koreader-device"
+		);
+		assert_eq!(
+			row.try_get::<String>("", "device_id").unwrap(),
+			"stump-native"
+		);
+		assert_eq!(row.try_get::<String>("", "body").unwrap(), "Edited in Home");
+		assert!(row.try_get::<bool>("", "deleted").unwrap());
+	}
+	#[tokio::test]
+	async fn series_names_are_personal_overlays_and_conflicts_are_normalized() {
+		use std::sync::Arc;
+
+		use ::tests::{db::test_database, fake_data};
+		use sea_orm::{DatabaseBackend, Statement};
+
+		let db = test_database().await;
+		let first_user = fake_data::User::new("liseur-series-first")
+			.auth_user(&db)
+			.await;
+		let second_user = fake_data::User::new("liseur-series-second")
+			.auth_user(&db)
+			.await;
+		let first_auth = AuthContext {
+			user: first_user.clone(),
+			api_key: None,
+			device_id: None,
+		};
+		let second_auth = AuthContext {
+			user: second_user,
+			api_key: None,
+			device_id: None,
+		};
+		let library = fake_data::Library::default().insert(&db).await;
+		let first_series = fake_data::Series {
+			id: Some("series-one".to_owned()),
+			name: Some("Scanned series".to_owned()),
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let second_series = fake_data::Series {
+			id: Some("series-two".to_owned()),
+			name: Some("Other scanned series".to_owned()),
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let first_media = fake_data::Media {
+			id: Some("media-one".to_owned()),
+			name: Some("first.epub".to_owned()),
+			series_id: first_series.id.clone(),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let second_media = fake_data::Media {
+			id: Some("media-two".to_owned()),
+			name: Some("second.epub".to_owned()),
+			series_id: second_series.id.clone(),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		db.execute(Statement::from_string(
+			DatabaseBackend::Sqlite,
+			"CREATE TABLE liseur_sync_series_names (
+                user_id TEXT NOT NULL, series_id TEXT NOT NULL, name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL, updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, series_id)
+            )",
+		))
+		.await
+		.unwrap();
+		let ctx = Arc::new(stump_core::Ctx::for_testing(db));
+
+		let renamed = set_series_name(
+			&ctx,
+			&first_auth,
+			&first_series.id,
+			"personal",
+			"  New   Display Name  ",
+		)
+		.await
+		.unwrap();
+		assert_eq!(renamed.name, "New   Display Name");
+		assert_eq!(renamed.scanned_name, "Scanned series");
+		assert_eq!(renamed.name_source, "personal");
+		assert_eq!(renamed.book_count, 1);
+
+		let visible_to_owner = book(&ctx, &first_auth, &first_media.id).await.unwrap();
+		let visible_to_other = book(&ctx, &second_auth, &first_media.id).await.unwrap();
+		assert_eq!(visible_to_owner.series[0].name, "New   Display Name");
+		assert_eq!(visible_to_other.series[0].name, "Scanned series");
+		let scanned = series::Entity::find_by_id(&first_series.id)
+			.one(ctx.conn.as_ref())
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(scanned.name, "Scanned series");
+
+		set_series_name(
+			&ctx,
+			&first_auth,
+			&second_series.id,
+			"personal",
+			"Other Display",
+		)
+		.await
+		.unwrap();
+		assert!(matches!(
+			set_series_name(
+				&ctx,
+				&first_auth,
+				&first_series.id,
+				"personal",
+				" other   display ",
+			)
+			.await,
+			Err(LiseurSyncError::Conflict(_))
+		));
+		let cleared = clear_series_name(&ctx, &first_auth, &first_series.id, "personal")
+			.await
+			.unwrap();
+		assert_eq!(cleared.name, "Scanned series");
+		assert_eq!(cleared.name_source, "folder");
+		let still_private = book(&ctx, &second_auth, &second_media.id).await.unwrap();
+		assert_eq!(still_private.series[0].name, "Other scanned series");
 	}
 	#[tokio::test]
 	async fn append_sessions_projects_and_deduplicates_liseur_history() {
@@ -2553,6 +4930,7 @@ mod tests {
 			start_progression: Some(0.25),
 			end_progression: Some(0.5),
 			idle_ms: 1_000,
+			active_ms: None,
 		};
 
 		assert_eq!(
@@ -2562,7 +4940,24 @@ mod tests {
 			1
 		);
 		assert_eq!(
-			append_sessions(&ctx, &user.id, "liseur-device", vec![session])
+			append_sessions(&ctx, &user.id, "liseur-device", vec![session.clone()])
+				.await
+				.unwrap(),
+			1
+		);
+		let measured = SessionInput {
+			session_id: "session-2".to_owned(),
+			active_ms: Some(2_000),
+			..session
+		};
+		assert_eq!(
+			append_sessions(&ctx, &user.id, "liseur-device", vec![measured.clone()])
+				.await
+				.unwrap(),
+			1
+		);
+		assert_eq!(
+			append_sessions(&ctx, &user.id, "liseur-device", vec![measured])
 				.await
 				.unwrap(),
 			1
@@ -2581,6 +4976,14 @@ mod tests {
 			Some(reading_session::DeviceIds(vec!["liseur-device".to_owned()]))
 		);
 
+		let measured_rows = reading_session::Entity::find()
+			.filter(reading_session::Column::LiseurSessionId.eq("session-2"))
+			.all(ctx.conn.as_ref())
+			.await
+			.unwrap();
+		assert_eq!(measured_rows.len(), 1);
+		assert_eq!(measured_rows[0].elapsed_seconds, Some(2));
+
 		let source_rows = ctx
 			.conn
 			.query_all(db_statement(
@@ -2591,6 +4994,79 @@ mod tests {
 			))
 			.await
 			.unwrap();
-		assert_eq!(source_rows.len(), 1);
+		assert_eq!(source_rows.len(), 2);
+	}
+	#[tokio::test]
+	async fn settings_persistence_is_lww_and_account_scoped() {
+		use std::sync::Arc;
+
+		use ::tests::{db::test_database, fake_data};
+		use sea_orm::{DatabaseBackend, Statement};
+
+		let db = test_database().await;
+		let user = fake_data::User::new("liseur-settings-user")
+			.insert(&db)
+			.await;
+		let other_user = fake_data::User::new("liseur-settings-other")
+			.insert(&db)
+			.await;
+		for sql in [
+			"CREATE TABLE liseur_sync_settings (
+                user_id TEXT NOT NULL,
+                setting_key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, setting_key)
+            )",
+			"CREATE TABLE liseur_sync_counters (
+                user_id TEXT PRIMARY KEY,
+                op_seq BIGINT NOT NULL DEFAULT 0,
+                annotation_seq BIGINT NOT NULL DEFAULT 0
+            )",
+		] {
+			db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
+				.await
+				.unwrap();
+		}
+		let ctx = Arc::new(stump_core::Ctx::for_testing(db));
+		put_settings(
+			&ctx,
+			&user.id,
+			vec![SettingUpdate {
+				key: "reader.theme".into(),
+				value: "dark".into(),
+				updated_at: "2026-01-01T00:00:00.000000Z".into(),
+			}],
+		)
+		.await
+		.unwrap();
+		put_settings(
+			&ctx,
+			&user.id,
+			vec![
+				SettingUpdate {
+					key: "reader.theme".into(),
+					value: "light".into(),
+					updated_at: "2025-12-31T23:59:59.000000Z".into(),
+				},
+				SettingUpdate {
+					key: "reader.font".into(),
+					value: "serif".into(),
+					updated_at: "2026-01-02T00:00:00.000000Z".into(),
+				},
+			],
+		)
+		.await
+		.unwrap();
+
+		let stored = settings(&ctx, &user.id).await.unwrap();
+		assert_eq!(stored.len(), 2);
+		assert_eq!(stored["reader.theme"].value, "dark");
+		assert_eq!(
+			stored["reader.theme"].updated_at,
+			"2026-01-01T00:00:00.000000Z"
+		);
+		assert_eq!(stored["reader.font"].value, "serif");
+		assert!(settings(&ctx, &other_user.id).await.unwrap().is_empty());
 	}
 }

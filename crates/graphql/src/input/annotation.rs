@@ -4,6 +4,18 @@ use models::shared::enums::DeviceKind;
 
 use crate::object::annotation::AnnotationKind;
 
+/// How the cross-book annotation list is ordered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, async_graphql::Enum)]
+pub enum AnnotationOrder {
+	/// Grouped by book, newest book first, each book's annotations in the
+	/// order they were made (the hub and export layout)
+	#[default]
+	Book,
+	/// Newest change first across every book, by last update time — a
+	/// "recent highlights" feed
+	Recent,
+}
+
 /// Narrows the cross-book annotation hub. Every field is a conjunction; an
 /// empty list is the same as omitting it.
 #[derive(Debug, Clone, Default, InputObject)]

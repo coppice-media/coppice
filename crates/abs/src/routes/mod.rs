@@ -401,7 +401,7 @@ where
 				.delete(me::delete_progress),
 		)
 		// The official app suffixes an episode id for a podcast
-		// (`ApiHandler.kt:688,696`). The profile serves no podcast library,
+		// (`ApiHandler.kt:655,663`). The profile serves no podcast library,
 		// so the book has no episode to address and the pair answers `404`,
 		// as abs-ref does for an episode id that is not in the item.
 		.route(

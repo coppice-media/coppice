@@ -5,9 +5,10 @@ use stump_liseur_sync::{
 	AnnotationInput, AnnotationRecord, AnnotationResult, AttachmentRecord,
 	AttachmentUpload, AttachmentUploadResult, CatalogBook, CatalogBookSeries,
 	CatalogBooksPage, CatalogCover, CatalogDownload, CatalogFoldersPage,
-	CatalogResolveResult, ChangesPage, DeleteAnnotationResult, HeadsPage,
-	LiseurSyncBackend, LiseurSyncError, LiseurToken, LoginResult, OpInput, OpRecord,
-	OpResult, ResolveRequest, ResolveResult, SessionInput, TokenCreateResult,
+	CatalogResolveResult, CatalogSeriesName, ChangesPage, DeleteAnnotationResult,
+	HeadsPage, LiseurSyncBackend, LiseurSyncError, LiseurToken, LoginResult, OpInput,
+	OpRecord, OpResult, ResolveRequest, ResolveResult, SessionInput, SettingUpdate,
+	SettingValue, TokenCreateResult,
 };
 
 mod attachments;
@@ -65,6 +66,20 @@ impl LiseurSyncBackend for Backend {
 		token_id: &str,
 	) -> Result<(), LiseurSyncError> {
 		storage::revoke_token(&self.ctx, user_id, token_id).await
+	}
+	async fn settings(
+		&self,
+		user_id: &str,
+	) -> Result<std::collections::BTreeMap<String, SettingValue>, LiseurSyncError> {
+		storage::settings(&self.ctx, user_id).await
+	}
+
+	async fn put_settings(
+		&self,
+		user_id: &str,
+		settings: Vec<SettingUpdate>,
+	) -> Result<(), LiseurSyncError> {
+		storage::put_settings(&self.ctx, user_id, settings).await
 	}
 	async fn folders(
 		&self,
@@ -125,6 +140,24 @@ impl LiseurSyncBackend for Backend {
 		scope: Option<String>,
 	) -> Result<CatalogBookSeries, LiseurSyncError> {
 		storage::book_series(&self.ctx, auth, book_id, scope).await
+	}
+	async fn set_series_name(
+		&self,
+		auth: &AuthContext,
+		series_id: &str,
+		scope: &str,
+		name: &str,
+	) -> Result<CatalogSeriesName, LiseurSyncError> {
+		storage::set_series_name(&self.ctx, auth, series_id, scope, name).await
+	}
+
+	async fn clear_series_name(
+		&self,
+		auth: &AuthContext,
+		series_id: &str,
+		scope: &str,
+	) -> Result<CatalogSeriesName, LiseurSyncError> {
+		storage::clear_series_name(&self.ctx, auth, series_id, scope).await
 	}
 
 	async fn resolve_catalog_book(
@@ -208,6 +241,20 @@ impl LiseurSyncBackend for Backend {
 		work_id: &str,
 	) -> Result<Vec<AnnotationRecord>, LiseurSyncError> {
 		storage::work_annotations(&self.ctx, user_id, work_id).await
+	}
+	async fn work_annotations_with_deleted(
+		&self,
+		user_id: &str,
+		work_id: &str,
+		include_deleted: bool,
+	) -> Result<Vec<AnnotationRecord>, LiseurSyncError> {
+		storage::work_annotations_with_deleted(
+			&self.ctx,
+			user_id,
+			work_id,
+			include_deleted,
+		)
+		.await
 	}
 
 	async fn delete_annotation(

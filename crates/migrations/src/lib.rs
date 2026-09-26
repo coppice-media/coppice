@@ -86,6 +86,18 @@ mod m20260954_000000_social_recommendations;
 mod m20260955_000000_add_book_requests;
 mod m20260956_000000_add_remote_sources;
 mod m20260957_000000_add_remote_source_imports;
+mod m20260958_000000_add_liseur_sync_settings;
+mod m20260959_000000_add_liseur_series_names;
+mod m20260960_000000_add_liseur_annotation_projection;
+mod m20260961_000000_add_pairing_komf_metadata_editing;
+mod m20260962_000000_add_liseur_annotation_origin;
+mod m20260963_000000_repair_liseur_pair_work_identity;
+mod m20260964_000000_book_request_format_isbn;
+mod m20260965_000000_mam_acquisition;
+mod m20260966_000000_repair_liseur_alias_split;
+mod m20260967_000000_book_request_preferred_narrator;
+
+pub use m20260963_000000_repair_liseur_pair_work_identity::merge_liseur_work;
 
 // Keep newly added migrations appended in chronological order; do not reorder
 // already-published migrations.
@@ -177,6 +189,16 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260955_000000_add_book_requests::Migration),
 			Box::new(m20260956_000000_add_remote_sources::Migration),
 			Box::new(m20260957_000000_add_remote_source_imports::Migration),
+			Box::new(m20260958_000000_add_liseur_sync_settings::Migration),
+			Box::new(m20260959_000000_add_liseur_series_names::Migration),
+			Box::new(m20260960_000000_add_liseur_annotation_projection::Migration),
+			Box::new(m20260961_000000_add_pairing_komf_metadata_editing::Migration),
+			Box::new(m20260962_000000_add_liseur_annotation_origin::Migration),
+			Box::new(m20260963_000000_repair_liseur_pair_work_identity::Migration),
+			Box::new(m20260964_000000_book_request_format_isbn::Migration),
+			Box::new(m20260965_000000_mam_acquisition::Migration),
+			Box::new(m20260966_000000_repair_liseur_alias_split::Migration),
+			Box::new(m20260967_000000_book_request_preferred_narrator::Migration),
 		]
 	}
 }

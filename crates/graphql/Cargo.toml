@@ -15,11 +15,11 @@ providers = ["dep:stump_provider", "stump_core/providers"]
 # CrossPoint is linked only by server profiles that enable the protocol. The
 # GraphQL crate remains usable without the LAN transfer client.
 crosspoint = ["dep:stump_crosspoint", "stump_core/crosspoint"]
-# Resolvers no client other than the upstream React SPA (`packages/browser`)
-# and the Expo app reaches: book clubs, smart lists + smart-list views, custom
-# emoji, viewer preferences + navigation arrangement, and the multipart upload
-# lane. The SvelteKit editor/home apps and every protocol adapter (OPDS,
-# Komga, Kobo, KOReader, liseur-sync) are unaffected.
+# GraphQL web-only fields and inputs: book clubs, smart lists/views, custom
+# emoji, viewer preferences/navigation arrangement, and multipart uploads. The
+# `web` Cargo feature is retained as a public build contract independently of
+# which active client surfaces consume these fields.
+mam-acquisition = ["stump_core/mam-acquisition"]
 web = []
 
 [dependencies]
@@ -75,7 +75,8 @@ tempfile.workspace = true
 subtle.workspace = true
 stump_provider = { path = "../provider", optional = true }
 tower-sessions.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util"] }
+# `time`: the Audible catalog search and narrator lookups are time-boxed.
+tokio = { workspace = true, features = ["fs", "io-util", "time"] }
 tracing.workspace = true
 zip.workspace = true
 bcrypt.workspace = true
@@ -89,4 +90,6 @@ windows = { version = "0.58.0", features = ["Win32_Storage_FileSystem", "Win32_F
 maplit.workspace = true
 pretty_assertions.workspace = true
 async-graphql-axum.workspace = true
+# `mock`: point the Hardcover and Audible clients at a local server.
+metadata_integrations = { path = "../integrations/metadata", default-features = false, features = ["graphql", "mock"] }
 tests = { path = "../tests" }

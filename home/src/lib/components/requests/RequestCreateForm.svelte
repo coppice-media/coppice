@@ -7,7 +7,15 @@
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
 	import { Input } from '@stump/ui/components/ui/input';
 	import { Label } from '@stump/ui/components/ui/label';
-	import { safeCoverUrl, safeText, type ExternalWorkReference } from '$lib/requests';
+	import type { RequestFormat } from '$lib/graphql/generated/graphql';
+	import {
+		formatIncludesAudio,
+		safeCoverUrl,
+		safeText,
+		type ExternalWorkReference,
+		type NarratorLookup
+	} from '$lib/requests';
+	import RequestFormatControl from './RequestFormatControl.svelte';
 
 	type Destination = { id: string; name: string };
 	type Mode = 'internal' | 'external';
@@ -19,6 +27,8 @@
 		title?: string;
 		authors?: string;
 		coverUrl?: string;
+		format: RequestFormat;
+		preferredNarrator?: string | null;
 		destinationShelfId?: string;
 		destinationDeviceId?: string;
 	};
@@ -33,6 +43,8 @@
 		initialTitle = '',
 		initialAuthors = '',
 		initialCoverUrl = '',
+		initialFormat = 'ANY',
+		initialNarrator = '',
 		initialDestinationShelfId = '',
 		initialDestinationDeviceId = '',
 		recommendationId = '',
@@ -52,6 +64,8 @@
 		initialTitle?: string;
 		initialAuthors?: string;
 		initialCoverUrl?: string;
+		initialFormat?: RequestFormat;
+		initialNarrator?: string;
 		initialDestinationShelfId?: string;
 		initialDestinationDeviceId?: string;
 		recommendationId?: string;
@@ -75,6 +89,8 @@
 	let title = $state('');
 	let authors = $state('');
 	let coverUrl = $state('');
+	let format = $state<RequestFormat>('ANY');
+	let narrator = $state<string | null>(null);
 	let destinationShelfId = $state('');
 	let destinationDeviceId = $state('');
 
@@ -88,6 +104,8 @@
 		title = initialTitle;
 		authors = initialAuthors;
 		coverUrl = initialCoverUrl;
+		format = initialFormat;
+		narrator = initialNarrator || null;
 		destinationShelfId = initialDestinationShelfId;
 		destinationDeviceId = initialDestinationDeviceId;
 	}
@@ -95,6 +113,12 @@
 	initializeFormState();
 
 	const safeCover = $derived(safeCoverUrl(coverUrl));
+	// The narrator lookup needs the provider reference the external mode collects.
+	const narratorLookup = $derived<NarratorLookup | null>(
+		mode === 'external' && provider.trim() && remoteId.trim() && title.trim()
+			? { provider: provider.trim(), remoteId: remoteId.trim(), title: title.trim(), authors: authors.trim() || null }
+			: null
+	);
 	const valid = $derived(
 		mode === 'internal'
 			? Boolean(mediaId.trim() || workId.trim())
@@ -108,6 +132,8 @@
 			title: safeText(title, 240) || undefined,
 			authors: safeText(authors, 240) || undefined,
 			coverUrl: safeCover,
+			format,
+			preferredNarrator: formatIncludesAudio(format) ? narrator : null,
 			destinationShelfId: destinationShelfId || undefined,
 			destinationDeviceId: destinationDeviceId || undefined,
 		};
@@ -219,6 +245,10 @@
 				<div class="flex flex-col gap-2">
 					<Label for="request-cover">Cover URL <span class="font-normal text-muted-foreground">(optional)</span></Label>
 					<Input id="request-cover" bind:value={coverUrl} type="url" placeholder="https://…" />
+				</div>
+				<div class="flex flex-col gap-2" role="group" aria-labelledby="request-format-label">
+					<span id="request-format-label" class="text-sm leading-none font-medium">Format</span>
+					<RequestFormatControl bind:value={format} bind:narrator lookup={narratorLookup} label="Request format" />
 				</div>
 				{#if safeCover}
 					<div class="flex items-center gap-3 sm:col-span-2">

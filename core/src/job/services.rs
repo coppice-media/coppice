@@ -2,11 +2,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+#[cfg(feature = "mam-acquisition")]
+use models::entity::mam_acquisition_grab;
 use models::{
 	entity::{job, library, log, metadata_fetch_record, scheduled_job},
 	shared::enums::{JobStatus, MetadataFetchStatus, ScheduledJobKind},
 };
-use sea_orm::{prelude::*, sea_query::OnConflict, ActiveValue::Set, DatabaseConnection};
+use sea_orm::{
+	prelude::*, sea_query::OnConflict, ActiveValue::Set, DatabaseConnection, QueryOrder,
+	QuerySelect,
+};
 use stump_jobs::{
 	run_job, JobContext, JobError, JobExecutionContext, JobOutcome, JobPayload,
 	JobRuntime, ScheduledJobDispatcher,
@@ -45,6 +50,10 @@ pub struct JobServices {
 	/// that runs before the host is up simply has none.
 	#[cfg(feature = "providers")]
 	provider_host: Arc<std::sync::OnceLock<Arc<stump_provider::ProviderHost>>>,
+	#[cfg(feature = "mam-acquisition")]
+	mam_ingest: Option<Arc<stump_ingest::IngestServices>>,
+	#[cfg(feature = "mam-acquisition")]
+	source_hub: Option<Arc<stump_worker::SourceHub>>,
 }
 
 impl JobServices {
@@ -61,6 +70,10 @@ impl JobServices {
 			visible_pages,
 			#[cfg(feature = "providers")]
 			provider_host: Arc::new(std::sync::OnceLock::new()),
+			#[cfg(feature = "mam-acquisition")]
+			mam_ingest: None,
+			#[cfg(feature = "mam-acquisition")]
+			source_hub: None,
 		}
 	}
 
@@ -79,6 +92,30 @@ impl JobServices {
 	#[cfg(feature = "providers")]
 	pub fn provider_host(&self) -> Option<Arc<stump_provider::ProviderHost>> {
 		self.provider_host.get().cloned()
+	}
+	#[cfg(feature = "mam-acquisition")]
+	pub(crate) fn with_mam_dependencies(
+		mut self,
+		ingest: Arc<stump_ingest::IngestServices>,
+		source_hub: Arc<stump_worker::SourceHub>,
+	) -> Self {
+		self.mam_ingest = Some(ingest);
+		self.source_hub = Some(source_hub);
+		self
+	}
+
+	#[cfg(feature = "mam-acquisition")]
+	pub(crate) fn mam_ingest(&self) -> &stump_ingest::IngestServices {
+		self.mam_ingest
+			.as_deref()
+			.expect("MAM refresh jobs receive staged-ingest services")
+	}
+
+	#[cfg(feature = "mam-acquisition")]
+	pub(crate) fn mam_source_hub(&self) -> &stump_worker::SourceHub {
+		self.source_hub
+			.as_deref()
+			.expect("MAM refresh jobs receive the source-worker hub")
 	}
 
 	/// Drop the cached visible-page list for a media whose page hashes changed.
@@ -227,6 +264,12 @@ impl JobExecutionContext for JobServices {
 				)
 				.await
 			},
+			#[cfg(feature = "mam-acquisition")]
+			StumpJob::MamRefreshGrabs { grab_ids } => {
+				crate::mam_acquisition::refresh_grabs(self, &grab_ids)
+					.await
+					.map_err(JobError::Unknown)
+			},
 		}
 	}
 }
@@ -277,6 +320,37 @@ impl ScheduledJobDispatcher for JobServices {
 				dispatch_metadata_retry(job, runtime).await
 			},
 		}
+	}
+	async fn dispatch_due(&self, runtime: &JobRuntime<Self>) -> Result<(), JobError> {
+		#[cfg(feature = "mam-acquisition")]
+		if self.config.mam_acquisition.enable_mam_acquisition {
+			let cutoff = Utc::now().fixed_offset() - chrono::Duration::seconds(60);
+			let due = mam_acquisition_grab::Entity::find()
+				.filter(
+					mam_acquisition_grab::Column::Phase
+						.is_in(vec!["queued".to_string(), "downloading".to_string()]),
+				)
+				.filter(mam_acquisition_grab::Column::UpdatedAt.lte(cutoff))
+				.order_by_asc(mam_acquisition_grab::Column::UpdatedAt)
+				.limit(100)
+				.all(self.conn.as_ref())
+				.await?;
+			if !due.is_empty() {
+				let grab_ids = due.into_iter().map(|grab| grab.id).collect::<Vec<_>>();
+				mam_acquisition_grab::Entity::update_many()
+					.filter(mam_acquisition_grab::Column::Id.is_in(grab_ids.clone()))
+					.col_expr(
+						mam_acquisition_grab::Column::UpdatedAt,
+						Expr::value(Utc::now().fixed_offset()),
+					)
+					.exec(self.conn.as_ref())
+					.await?;
+				runtime
+					.enqueue(StumpJob::MamRefreshGrabs { grab_ids })
+					.await?;
+			}
+		}
+		Ok(())
 	}
 }
 

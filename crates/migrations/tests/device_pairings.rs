@@ -46,6 +46,7 @@ async fn device_pairings_migration_creates_audit_table() {
 		("created_at", 1, 0, Some("CURRENT_TIMESTAMP")),
 		("expires_at", 1, 0, None),
 		("approved_at", 0, 0, None),
+		("allow_komf_metadata_editing", 1, 0, Some("FALSE")),
 	];
 	for (name, not_null, primary_key, default) in expected {
 		let column = described

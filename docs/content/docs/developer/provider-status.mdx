@@ -140,9 +140,9 @@ The current host and source definitions live in `crates/provider`,
 `crates/provider-mangadex`, and `crates/provider-themes`; their source contract
 is documented in [Provider host](/docs/developer/provider-host) and [Source
 definitions](/docs/developer/source-definitions). Storyteller is not a catalog or
-metadata provider. Acquisition is deferred and outside this registry; any future
-integration must use a separate authenticated provider sidecar. See [Integration
-architecture](/docs/developer/integration-architecture).
+metadata provider. MAM acquisition is a separate authenticated sidecar
+integration, not part of this metadata registry. See [acquisition boundary](/docs/guides/integrations/acquisition)
+and [Integration architecture](/docs/developer/integration-architecture).
 
 ## Common feature gates and settings
 

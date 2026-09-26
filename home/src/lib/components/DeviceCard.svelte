@@ -13,7 +13,6 @@
 	import * as AlertDialog from '@stump/ui/components/ui/alert-dialog'
 	import { Badge } from '@stump/ui/components/ui/badge'
 	import { Button, buttonVariants } from '@stump/ui/components/ui/button'
-	import * as Card from '@stump/ui/components/ui/card'
 	import { Checkbox } from '@stump/ui/components/ui/checkbox'
 	import * as Dialog from '@stump/ui/components/ui/dialog'
 	import * as DropdownMenu from '@stump/ui/components/ui/dropdown-menu'
@@ -41,6 +40,7 @@
 		TRANSFORMABLE_KINDS,
 		TRANSFORM_PRESETS,
 		audioDeliveryOf,
+		clientProfileForKind,
 		libraryScopeSummary,
 		presetOf,
 		protocolForKind,
@@ -49,6 +49,7 @@
 		type IssuedCredential
 	} from '$lib/devices'
 	import { absoluteTime, relativeTime } from '$lib/format'
+	import ClientCard, { type ClientCardMeta } from './ClientCard.svelte'
 	import CredentialReveal from './CredentialReveal.svelte'
 	import CrossPointDeliveryQueue from './CrossPointDeliveryQueue.svelte'
 	import CrossPointTargetSetup from './CrossPointTargetSetup.svelte'
@@ -61,6 +62,7 @@
 	const queryClient = useQueryClient()
 	const revoked = $derived(!!device.revokedAt)
 	const KindIcon = $derived(DEVICE_KIND_ICONS[device.kind])
+	const profile = $derived(clientProfileForKind(device.kind))
 	const protocol = $derived(device.credential?.protocol ?? protocolForKind(device.kind))
 	const protocolLabel = $derived(PROTOCOL_LABELS[protocol])
 	const preset = $derived(presetOf(device.transformProfile))
@@ -75,6 +77,24 @@
 	const readingHref = $derived(`${resolve('/reading')}?device=${encodeURIComponent(device.id)}`)
 	const activityHref = $derived(`${readingHref}#reading-summary-heading`)
 	const progressHref = $derived(`${readingHref}#current-reading-heading`)
+	/** A relative timestamp row whose exact time sits in the tooltip. */
+	const when = (label: string, at: string | null | undefined): ClientCardMeta => ({
+		label,
+		value: at ? relativeTime(at, now) : 'Never',
+		title: at ? absoluteTime(at) : undefined
+	})
+	const meta = $derived<ClientCardMeta[]>([
+		{ label: 'App', value: DEVICE_KIND_LABELS[device.kind] },
+		{ label: 'Connection', value: protocolLabel },
+		...(device.credential
+			? [{ label: 'Credential', value: device.credential.secretHint, title: 'Primary credential hint', code: true }]
+			: revoked
+				? []
+				: [{ label: 'Credential', value: 'None' }]),
+		when('Added', device.createdAt),
+		when('Last seen', device.lastSeenAt),
+		when('Last sync', device.lastSyncAt)
+	])
 
 	let renaming = $state(false)
 	let draftName = $state('')
@@ -192,166 +212,146 @@
 	}
 </script>
 
-<Card.Root
-	size="sm"
-	class={cn('h-full min-h-0 gap-0', revoked && 'bg-muted/30 opacity-70 ring-dashed')}
+<ClientCard
+	icon={KindIcon}
+	title={device.name}
+	evidence={profile.evidence}
+	maturity={profile.maturity}
+	{meta}
+	capabilities={profile.capabilities}
+	mediaFormats={profile.mediaFormats}
+	muted={revoked}
 	data-device-id={device.id}
 >
-	<Card.Header class="!flex flex-col gap-3">
-		<div class="flex min-w-0 items-start gap-3">
-			<span class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-				<KindIcon class="size-5" aria-hidden="true" />
-			</span>
-			<div class="min-w-0 flex-1">
-				{#if renaming}
-					<form class="flex flex-wrap items-center gap-2" onsubmit={submitRename}>
-						<Input
-							bind:value={draftName}
-							maxlength={100}
-							aria-label="Device name"
-							autofocus
-							class="h-8 min-w-0 flex-1"
-							onkeydown={(event) => {
-								if (event.key === 'Escape') renaming = false
-							}}
-						/>
-						<Button type="submit" size="sm" disabled={rename.isPending}>Save</Button>
-						<Button type="button" size="sm" variant="ghost" onclick={() => (renaming = false)}>Cancel</Button>
-					</form>
-				{:else}
-					<div class="flex min-w-0 flex-wrap items-center gap-1.5">
-						{#if revoked}
-							<h3 class="min-w-0 truncate text-base font-semibold">{device.name}</h3>
-						{:else}
-							<button
-								type="button"
-								class="group/name flex min-w-0 items-center gap-1.5 rounded-md text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-								onclick={startRename}
-								aria-label={`Rename ${device.name}`}
-							>
-								<h3 class="truncate text-base font-semibold">{device.name}</h3>
-								<PencilIcon
-									class="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/name:opacity-100 group-focus-visible/name:opacity-100"
-									aria-hidden="true"
-								/>
-							</button>
-						{/if}
-						<Badge variant="outline">{DEVICE_KIND_LABELS[device.kind]}</Badge>
-						<Badge variant="outline" title="Protocol the device uses">{protocolLabel}</Badge>
-						{#if revoked}
-							<Badge variant="destructive">Revoked</Badge>
-						{:else}
-							<Badge variant="secondary">Enabled</Badge>
-						{/if}
-					</div>
-					<div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-						{#if device.credential}
-							<code class="font-mono" title="Primary credential hint">{device.credential.secretHint}</code>
-						{:else if !revoked}
-							<span>No credential</span>
-						{/if}
-						<span>Added {relativeTime(device.createdAt, now)}</span>
-					</div>
-				{/if}
-			</div>
-			<div class="shrink-0">
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger>
-						{#snippet child({ props })}
-							<Button {...props} variant="ghost" size="icon-sm" aria-label={`Actions for ${device.name}`}>
-								<EllipsisVerticalIcon />
-							</Button>
-						{/snippet}
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Content align="end" class="min-w-52">
-						<DropdownMenu.Group>
-							<DropdownMenu.Item onSelect={startRename}>Rename</DropdownMenu.Item>
-							{#if !revoked && device.credential}
-								<DropdownMenu.Item onSelect={() => (confirmation = 'rotate')}>Rotate credential</DropdownMenu.Item>
-							{/if}
-						</DropdownMenu.Group>
-						{#if !revoked}
-							<DropdownMenu.Separator />
-							<DropdownMenu.Group>
-								<DropdownMenu.Item onSelect={() => openPanel('libraries')}>Visible libraries</DropdownMenu.Item>
-								{#if transformable}
-									<DropdownMenu.Item onSelect={() => openPanel('preset')}>Comic preset</DropdownMenu.Item>
-								{/if}
-							</DropdownMenu.Group>
-							<DropdownMenu.Separator />
-							<DropdownMenu.Item variant="destructive" onSelect={() => (confirmation = 'revoke')}>Revoke</DropdownMenu.Item>
-						{/if}
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
-			</div>
-		</div>
-
-		<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-			<span title={device.lastSeenAt ? absoluteTime(device.lastSeenAt) : undefined}>
-				Last seen <span class="font-medium text-foreground">{device.lastSeenAt ? relativeTime(device.lastSeenAt, now) : 'Never'}</span>
-			</span>
-			<span title={device.lastSyncAt ? absoluteTime(device.lastSyncAt) : undefined}>
-				Last sync <span class="font-medium text-foreground">{device.lastSyncAt ? relativeTime(device.lastSyncAt, now) : 'Never'}</span>
-			</span>
-		</div>
-	</Card.Header>
-
-	<Card.Content class="flex min-h-0 flex-1 flex-col gap-3 pt-0">
-		{#if sentence}
-			<p class="text-sm text-muted-foreground">
-				Sync summary: <span class="font-medium text-foreground">{sentence}</span>
-			</p>
+	{#snippet heading()}
+		{#if renaming}
+			<form class="flex min-w-0 flex-1 flex-wrap items-center gap-2" onsubmit={submitRename}>
+				<Input
+					bind:value={draftName}
+					maxlength={100}
+					aria-label="Device name"
+					autofocus
+					class="h-8 min-w-0 flex-1"
+					onkeydown={(event) => {
+						if (event.key === 'Escape') renaming = false
+					}}
+				/>
+				<Button type="submit" size="sm" disabled={rename.isPending}>Save</Button>
+				<Button type="button" size="sm" variant="ghost" onclick={() => (renaming = false)}>Cancel</Button>
+			</form>
+		{:else if revoked}
+			<h3 class="min-w-0 max-w-full truncate font-semibold">{device.name}</h3>
+		{:else}
+			<button
+				type="button"
+				class="group/name flex min-w-0 max-w-full items-center gap-1.5 rounded-sm text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+				onclick={startRename}
+				aria-label={`Rename ${device.name}`}
+			>
+				<h3 class="truncate font-semibold">{device.name}</h3>
+				<PencilIcon
+					class="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/name:opacity-100 group-focus-visible/name:opacity-100"
+					aria-hidden="true"
+				/>
+			</button>
 		{/if}
+	{/snippet}
 
-		<div class="flex flex-wrap gap-1.5" aria-label="Device scope and delivery">
-			<Badge variant="secondary" title="Libraries this device can see">
-				<LibraryIcon aria-hidden="true" />
-				{libraryScopeSummary(device.libraryScope)}
-			</Badge>
-			{#if transformable}
-				<Badge variant="secondary" title={presetEntry?.label ?? 'Comic transform preset'}>
-					<LayersIcon aria-hidden="true" />
-					{presetChip}
-				</Badge>
-			{/if}
-			{#if audioDelivery !== PASSTHROUGH_AUDIO}
-				<Badge variant="secondary" title="Audiobooks are transcoded on demand for this device">
-					{audioDelivery}
-				</Badge>
-			{/if}
-		</div>
-		{#if String(device.kind) === 'CROSSPOINT' && !revoked}
-			<details class="rounded-xl border bg-background/40">
-				<summary class="cursor-pointer list-none px-3 py-2.5 text-sm font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
-					<span class="flex items-center justify-between gap-3">
-						<span>CrossPoint setup and queue</span>
-						<span class="text-xs font-normal text-muted-foreground">LAN delivery</span>
-					</span>
-				</summary>
-				<div class="flex flex-col gap-3 border-t p-3">
-					<CrossPointTargetSetup deviceId={device.id} />
-					<CrossPointDeliveryQueue deviceId={device.id} />
-				</div>
-			</details>
-		{/if}
-
+	{#snippet badges()}
 		{#if revoked}
-			<p class="text-xs text-muted-foreground">
-				Revoked {relativeTime(device.revokedAt, now)}. Its credential no longer works; add the client again to reconnect it.
-			</p>
+			<Badge variant="destructive">Revoked</Badge>
+		{:else}
+			<Badge variant="secondary">Enabled</Badge>
 		{/if}
+	{/snippet}
 
-		<nav class="mt-auto flex flex-wrap items-center gap-1.5 border-t pt-3" aria-label={`Read-only links for ${device.name}`}>
-			<a class={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-8 gap-1.5 px-2 text-xs')} href={activityHref}>
+	{#snippet actions()}
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger>
+				{#snippet child({ props })}
+					<Button {...props} variant="ghost" size="icon-sm" aria-label={`Actions for ${device.name}`}>
+						<EllipsisVerticalIcon />
+					</Button>
+				{/snippet}
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="end" class="min-w-52">
+				<DropdownMenu.Group>
+					<DropdownMenu.Item onSelect={startRename}>Rename</DropdownMenu.Item>
+					{#if !revoked && device.credential}
+						<DropdownMenu.Item onSelect={() => (confirmation = 'rotate')}>Rotate credential</DropdownMenu.Item>
+					{/if}
+				</DropdownMenu.Group>
+				{#if !revoked}
+					<DropdownMenu.Separator />
+					<DropdownMenu.Group>
+						<DropdownMenu.Item onSelect={() => openPanel('libraries')}>Visible libraries</DropdownMenu.Item>
+						{#if transformable}
+							<DropdownMenu.Item onSelect={() => openPanel('preset')}>Comic preset</DropdownMenu.Item>
+						{/if}
+					</DropdownMenu.Group>
+					<DropdownMenu.Separator />
+					<DropdownMenu.Item variant="destructive" onSelect={() => (confirmation = 'revoke')}>Revoke</DropdownMenu.Item>
+				{/if}
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+	{/snippet}
+
+	{#if sentence}
+		<p class="text-xs text-muted-foreground">
+			Sync summary: <span class="font-medium text-foreground">{sentence}</span>
+		</p>
+	{/if}
+
+	<div class="flex flex-wrap gap-1.5" aria-label="Device scope and delivery">
+		<Badge variant="secondary" title="Libraries this device can see">
+			<LibraryIcon aria-hidden="true" />
+			{libraryScopeSummary(device.libraryScope)}
+		</Badge>
+		{#if transformable}
+			<Badge variant="secondary" title={presetEntry?.label ?? 'Comic transform preset'}>
+				<LayersIcon aria-hidden="true" />
+				{presetChip}
+			</Badge>
+		{/if}
+		{#if audioDelivery !== PASSTHROUGH_AUDIO}
+			<Badge variant="secondary" title="Audiobooks are transcoded on demand for this device">
+				{audioDelivery}
+			</Badge>
+		{/if}
+	</div>
+	{#if String(device.kind) === 'CROSSPOINT' && !revoked}
+		<details class="rounded-xl border bg-background/40">
+			<summary class="cursor-pointer list-none px-3 py-2.5 text-sm font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+				<span class="flex items-center justify-between gap-3">
+					<span>CrossPoint setup and queue</span>
+					<span class="text-xs font-normal text-muted-foreground">LAN delivery</span>
+				</span>
+			</summary>
+			<div class="flex flex-col gap-3 border-t p-3">
+				<CrossPointTargetSetup deviceId={device.id} />
+				<CrossPointDeliveryQueue deviceId={device.id} />
+			</div>
+		</details>
+	{/if}
+
+	{#if revoked}
+		<p class="text-xs text-muted-foreground">
+			Revoked {relativeTime(device.revokedAt, now)}. Its credential no longer works; add the client again to reconnect it.
+		</p>
+	{/if}
+
+	{#snippet footer()}
+		<nav class="flex flex-wrap items-center gap-1.5 border-t pt-2" aria-label={`Read-only links for ${device.name}`}>
+			<a class={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-7 gap-1.5 px-2 text-xs')} href={activityHref}>
 				<ActivityIcon class="size-3.5" aria-hidden="true" />
 				Activity
 			</a>
-			<a class={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-8 gap-1.5 px-2 text-xs')} href={progressHref}>
+			<a class={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-7 gap-1.5 px-2 text-xs')} href={progressHref}>
 				<BookOpenTextIcon class="size-3.5" aria-hidden="true" />
 				Progress
 			</a>
 			<a
-				class={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-8 gap-1.5 px-2 text-xs')}
+				class={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-7 gap-1.5 px-2 text-xs')}
 				href={annotationHref}
 				title={`Annotations synced from ${device.name}; empty when this device has no annotation lane`}
 			>
@@ -359,8 +359,8 @@
 				Annotations
 			</a>
 		</nav>
-	</Card.Content>
-</Card.Root>
+	{/snippet}
+</ClientCard>
 
 <AlertDialog.Root
 	open={confirmation !== null}

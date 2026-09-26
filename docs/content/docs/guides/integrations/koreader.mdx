@@ -7,13 +7,13 @@ import { Step, Steps } from 'fumadocs-ui/components/steps';
 
 # KOReader Sync
 
-Coppice implements the KOReader-compatible sync API under
-`/koreader/{api_key}`. The server surface is **Shipped** and
-**Contract-tested**. Liseur's KOReader-sync flow is **Device-tested**, but the
-native KOReader app itself has not been loaded against Coppice. The first-party
-`stump.koplugin` remains **Source-only**; direct native-app verification is
-**Blocked**. See the [compatibility matrix](/docs/guides/integrations/compatibility)
-and [KOReader developer record](/docs/developer/koreader-plugin).
+Coppice implements the KOReader-compatible sync API under `/koreader/{api_key}`.
+The server surface is **Shipped** and **Contract-tested**. Liseur's KOSync flow
+is **Device-tested**, but the native KOReader app itself has not been loaded
+against Coppice. The first-party `coppice.koplugin` is **Source-only** against
+KOReader v2026.07.1 (`9192014d`); direct native-app verification is **Blocked**.
+See the [compatibility matrix](/docs/guides/integrations/compatibility) and
+[KOReader developer record](/docs/developer/koreader-plugin).
 
 <Callout title="Permission required">
 	This functionality is gated behind the `ACCESS_KOREADER_SYNC` and `ACCESS_API_KEYS` user permissions. To learn more about permissions, see the [permissions](/docs/guides/access-control/permissions) guide.
@@ -97,13 +97,10 @@ dialog; the full secret is shown only once.
 
 <Callout type="warn">This step requires the `ACCESS_API_KEYS` user permission.</Callout>
 
-In the Coppice web UI:
-
-1. Open app settings (`/settings/app`).
-2. Open **API keys** (`/settings/app/api-keys`).
-3. Select **Create API key**.
-4. Grant at least `ACCESS_KOREADER_SYNC`.
-5. Save the complete value when it is shown.
+The active browser apps do not provide personal API-key management. An
+authenticated GraphQL client with the `ACCESS_API_KEYS` permission can create
+the key through `createApiKey`; see the [API keys guide](/docs/guides/features/api-keys).
+Grant at least `ACCESS_KOREADER_SYNC`, then save the complete returned value.
 
 </Step>
 
@@ -152,8 +149,8 @@ and retry with **Binary** selected.
 - **Contract-tested:** server probes cover `users/auth` and progress requests.
 - **Device-tested:** Liseur's KOReader-sync client path has run against the
   server.
-- **Source-only:** the `stump.koplugin` source has been reviewed and its route
-  contract is documented, but it has not been loaded by KOReader.
+- **Source-only:** `coppice.koplugin` was reviewed against KOReader v2026.07.1
+  (`9192014d`) but has not been loaded by the native app.
 - **Blocked:** a direct KOReader app/device run and any device-specific UI or
   firmware behavior remain unverified.
 - **Planned:** device management UI and richer translation of x-pointer data

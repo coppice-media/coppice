@@ -5,9 +5,8 @@
 //! media serving, the `ReadingState` projection (`core/src/kobo`) and KEPUB
 //! conversion (`stump_kepub`) are supplied by the host through [`KoboBackend`].
 //!
-//! See `crates/kobo/README.md` for the Calibre-Web/Komga/kepubify pins, the
-//! Liseur `31f8182d` client, decisions, and verification (harness only; no
-//! physical Kobo has been tested).
+//! See `crates/kobo/README.md` for pinned references and clients, decisions,
+//! and verification status.
 
 use std::sync::Arc;
 

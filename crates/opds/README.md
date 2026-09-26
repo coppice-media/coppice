@@ -21,23 +21,14 @@ build `models` entity fixtures (see _How to verify_).
 | OPDS Page Streaming Extension      | <https://github.com/anansi-project/opds-pse/blob/master/v1.2.md>                                | `pse:count`/page links on `/books/{id}/pages/{page}` (`core/src/opds/v1_2/link.rs`)                 |
 | OPDS 2.0 draft                     | <https://drafts.opds.io/opds-2.0>                                                               | JSON catalog, groups, auth document (`core/src/opds/v2_0/mod.rs:1-3`)                               |
 | Readium Web Publication / locator  | `application/vnd.readium.progression+json`                                                      | v2 `progression` GET/PUT body (`core/src/opds/v2_0/progression.rs`)                                 |
-| Liseur (OPDS 1.2 client)           | [`31f8182d`](https://github.com/chmouel/liseur/commit/31f8182d524e3536cf9020594185e709a033094f) | Only pinned real client; its `OpdsHttp.kt:93` accepts Atom only, so OPDS 2.0 is unreachable from it |
+| Liseur (OPDS 1.2 client)           | [v0.19.0 `62ecb5a5`](https://github.com/chmouel/liseur/commit/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6) | Source-only current client; OPDS 2.0 is unreachable because the app has no `application/opds+json` parser; older device evidence is listed in the canonical matrix |
 | Readium Web Publication (link)     | <https://readium.org/webpub-manifest/schema/link.schema.json>                                   | `duration` in seconds on an audio link (`core/src/opds/v2_0/link.rs` `OPDSAudioLink`)               |
 | Readium Web Publication (metadata) | <https://readium.org/webpub-manifest/schema/metadata.schema.json>                               | publication `duration` in seconds (`core/src/opds/v2_0/metadata.rs`)                                |
 | W3C Media Fragments URI 1.0        | <https://www.w3.org/TR/media-frags/>                                                            | `#t=` chapter offsets on `toc` entries (`core/src/opds/v2_0/audio.rs`)                              |
 | Atom `link@length`                 | <https://datatracker.ietf.org/doc/html/rfc4287#section-4.2.7.5>                                 | per-track byte size as v2 `properties.length` (`core/src/opds/v2_0/properties.rs`)                  |
 
-Client-verification status (`docs/content/docs/developer/client-verification.mdx:26-27`,
-`clients.mdx:120-134`):
-
-| Client                        | Level                      | Notes                                                                                              |
-| ----------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------- |
-| Liseur OPDS 1.2               | **Device** (2026-09-04)    | login, merged-library browse with covers, read, download; progress via separate KOReader pairing   |
-| Liseur OPDS 2.0               | Not supported by the app   | Stump serves a valid 2.0 catalog; Liseur has no `application/opds+json` parser                     |
-| Panels, Moon+ Reader, Librera | Upstream-guide claims only | Not this fork's verification; Librera shows file names instead of titles on 1.2 and cannot use 2.0 |
-
-No Hurl spec in `/home/al/Code/komga-compat` targets OPDS; `make replay` covers
-the Komga profile only.
+Client/device evidence and current source pins are recorded in the canonical
+[client verification matrix](../../docs/content/docs/developer/client-verification.mdx).
 
 ## Decisions
 

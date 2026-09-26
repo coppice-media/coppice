@@ -42,6 +42,7 @@
 	import { downloadCoppicePlugin } from '$lib/coppice-plugin'
 	import { getHomeSession } from '$lib/session.svelte'
 	import ClientPicker from './ClientPicker.svelte'
+	import ClientStatusIcons from './ClientStatusIcons.svelte'
 	import CredentialReveal from './CredentialReveal.svelte'
 
 	let {
@@ -69,6 +70,7 @@
 	let pickerReset = $state(0)
 	let kind = $state<CatalogDeviceKind>('LISEUR')
 	let name = $state('')
+	let allowKomfMetadataEditing = $state(false)
 	let issued = $state<IssuedCredential | null>(null)
 	let saved = $state(false)
 	let createError = $state<string | null>(null)
@@ -140,7 +142,8 @@
 			const selectedKind = chosenVariant?.kind ?? kind
 			return request(CreateDeviceDocument, {
 				kind: selectedKind as DeviceKind,
-				name: trimmed && trimmed !== suggestedName ? trimmed : null
+				name: trimmed && trimmed !== suggestedName ? trimmed : null,
+				allowKomfMetadataEditing: selectedKind === 'KOMELIA' && allowKomfMetadataEditing
 			})
 		},
 		onSuccess: (result) => {
@@ -168,7 +171,7 @@
 	function selectCatalog(entry: ClientCatalogEntry | null, variant: ClientAppVariant | null = null): void {
 		selectedCatalogId = entry?.id ?? null
 		selectedVariantId = variant?.id ?? null
-		createError = null
+		allowKomfMetadataEditing = false
 		pluginDownloadError = null
 		if (!entry || !variant) {
 			name = ''
@@ -283,7 +286,7 @@
 		createError = null
 		scopeError = null
 		scopeRestricted = false
-		scopeIds = []
+		allowKomfMetadataEditing = false
 		pluginDownloadPending = false
 		pluginDownloadError = null
 	}
@@ -330,11 +333,7 @@
 		</Stepper.Root>
 
 		{#if step === 1}
-			<div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-scroll overscroll-contain pr-2 [scrollbar-gutter:stable]">
-				<p class="hidden rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground sm:block">
-					<strong class="font-medium text-foreground">Permission-safe by design.</strong>
-					Raw API keys inherit this account’s permissions; library scope can only narrow visibility.
-				</p>
+			<div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain pr-2 [scrollbar-gutter:stable]">
 				{#key pickerReset}
 					<ClientPicker
 						bind:selectedId={selectedCatalogId}
@@ -352,7 +351,6 @@
 					<AlertDescription>{createError}</AlertDescription>
 				</Alert>
 			{/if}
-			<p class="text-xs text-muted-foreground">Scroll the catalog for more clients and paging.</p>
 			<Dialog.Footer>
 				<Button type="button" variant="outline" onclick={() => (open = false)}>Cancel</Button>
 				<Button type="button" onclick={continueToName} disabled={!canCreate}>Continue</Button>
@@ -367,13 +365,19 @@
 					<div class="min-w-0 flex-1">
 						<div class="flex flex-wrap items-center gap-1.5 font-medium">
 							<span>{chosen.title}</span>
-							<span class="rounded-md border bg-background px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
-								{chosenVariant.label}
-							</span>
+							<ClientStatusIcons evidence={chosenVariant.evidence} maturity={chosenVariant.maturity} />
+							{#if chosenVariant.label !== chosen.title}
+								<span class="rounded-md border bg-background px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+									{chosenVariant.label}
+								</span>
+							{/if}
 						</div>
 						<div class="line-clamp-2 text-xs text-muted-foreground">
 							{chosenVariant.protocol} · {chosenVariant.setup}
 						</div>
+						{#if chosenVariant.caveat}
+							<p class="mt-1 text-xs text-muted-foreground">{chosenVariant.caveat}</p>
+						{/if}
 					</div>
 					<Button type="button" variant="ghost" size="sm" onclick={() => (step = 1)}>Change</Button>
 				</div>
@@ -450,9 +454,6 @@
 								After approval, the device receives the keyed sync URL under <code>/koreader/&lt;key&gt;</code>; any rich API is mounted only below <code>/koreader/&lt;key&gt;/api/v1</code>. The current physical firmware does not use that rich API at a custom URL.
 							</p>
 						{/if}
-						{#if chosenVariant.caveat}
-							<p class="text-xs font-medium text-muted-foreground">{chosenVariant.caveat}</p>
-						{/if}
 						{#if chosenVariant.setupProfile.docs}
 							<a
 								href={chosenVariant.setupProfile.docs.href}
@@ -488,6 +489,30 @@
 								Shown on this page and in reading stats. Keep the suggestion or name it after the device.
 							</p>
 						</div>
+						{#if chosenVariant.kind === 'KOMELIA'}
+							<div class="rounded-xl border border-dashed p-3">
+								<div class="flex items-start gap-3">
+									<Checkbox
+										id="allow-komf-metadata-editing"
+										bind:checked={allowKomfMetadataEditing}
+										disabled={!(session.user?.isServerOwner || session.user?.permissions.includes('EDIT_METADATA'))}
+									/>
+									<div class="flex flex-col gap-1">
+										<Label for="allow-komf-metadata-editing" class="font-medium">
+											Allow Komf metadata editing
+										</Label>
+										<p class="text-xs text-muted-foreground">
+											Grant this Komelia credential only the metadata-edit permission needed for Komf writes.
+										</p>
+										{#if !(session.user?.isServerOwner || session.user?.permissions.includes('EDIT_METADATA'))}
+											<p class="text-xs text-muted-foreground">
+												Disabled because your account does not have Edit metadata permission.
+											</p>
+										{/if}
+									</div>
+								</div>
+							</div>
+						{/if}
 						<div class="flex flex-col gap-3 rounded-xl border p-3">
 							<div class="flex items-start justify-between gap-4">
 								<Label for="device-scope" class="flex flex-col items-start gap-0.5">

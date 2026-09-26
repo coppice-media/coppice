@@ -7,6 +7,7 @@ pub mod enums;
 pub mod ignore_rules;
 pub mod image;
 pub mod image_processor_options;
+pub mod liseur_annotation_projection;
 pub mod ordering;
 pub mod permission_set;
 pub mod readium;

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 
 import Feedback from './Feedback'
 import Hero from './Hero'
-import MobileApp from './MobileApp'
 
 export default function LandingPage() {
 	const [mounted, setMounted] = useState(false)
@@ -26,7 +25,6 @@ export default function LandingPage() {
 
 			<Hero />
 			<div className="gap-y-12 flex w-full flex-col items-center overflow-x-hidden">
-				<MobileApp />
 				<Feedback />
 			</div>
 		</div>

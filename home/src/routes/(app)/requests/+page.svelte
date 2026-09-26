@@ -91,7 +91,7 @@
 	{#if requestsQuery.isPending}
 		<div class="grid gap-4 md:grid-cols-2">
 			{#each { length: 4 } as _, index (index)}
-				<Skeleton class="h-52 rounded-xl" />
+				<Skeleton class="h-36 rounded-xl" />
 			{/each}
 		</div>
 	{:else if requestsQuery.isError}

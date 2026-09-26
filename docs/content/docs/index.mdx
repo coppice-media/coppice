@@ -24,12 +24,13 @@ related package names).
 - **[Configure a profile](/docs/guides/configuration/modular-deployment)** —
   Choose full, headless, minimal, KOReader-only, or Kavita-only composition.
 - **[Understand requests and acquisition](/docs/guides/integrations/acquisition)** —
-  See what Coppice owns today and where acquisition stops.
+  See what Coppice owns today and where the manager-confirmed MAM Bridge handoff stops.
 
 ## What Coppice does today
 
 - Hosts media from libraries you control. Universal-style search discovers
-  metadata; it does not acquire or download media.
+  metadata; it does not itself acquire or download media. Managers can explicitly
+  request and confirm acquisition through the separate MAM Bridge sidecar.
 - Serves the native API plus protocol adapters for OPDS, Komga-shaped clients,
   Kobo, KOReader, Kavita, Audiobookshelf-compatible clients, and liseur-sync.
 - Supports ordinary EPUB reading and ordinary audiobook playback as separate
@@ -47,43 +48,40 @@ for the evidence label attached to each claim.
 
 ## Evidence labels
 
-The wiki uses these labels consistently:
-
-- **Shipped** — implementation exists in this fork.
-- **Contract-tested** — a pinned fixture, replay, or server harness exercised a
-  protocol surface; this does not prove a physical app works.
-- **Device-tested** — a real app or device ran the flow against the server.
-- **Source-only** — pinned source was inspected without a live run.
-- **Planned** — a future capability or design item.
-- **Blocked** — a prerequisite is missing, so the flow is not currently
-  claimable.
+[Integration architecture](/docs/developer/integration-architecture) defines
+the canonical implementation and evidence labels. Client-specific versions,
+replay coverage, device runs, and limits are recorded only in the
+[client verification matrix](/docs/developer/client-verification).
 
 ## Current, planned, and blocked
 
 ### Current
 
-The default `full` server is the compatibility baseline. The `headless` profile
-keeps backend protocols without the web SPA, while leaf features allow a
-smaller deployment. The [modular deployment guide](/docs/guides/configuration/modular-deployment)
+The default `full` profile includes the `webui` GraphQL web resolver and
+playground surfaces. `headless` omits those Rust surfaces; Home (`/app`) and
+Editor (`/editor`) are separate static applications that can still be served
+when their built directories are configured. The [modular deployment guide](/docs/guides/configuration/modular-deployment)
 distinguishes compile-time Cargo features from runtime `STUMP_*` and
 `ENABLE_*` switches.
 
-### Planned
-
-Any future acquisition integration must run as a separate authenticated
-provider sidecar; no provider, implementation, or delivery date is promised.
-Worker-side read-aloud alignment remains future work after an ebook and
-audiobook pair has been confirmed.
+The shipped request system supports manager-confirmed MAM Bridge acquisition
+for approved requests. The bridge is a separate authenticated sidecar; Coppice
+copies completed downloads into staged ingest, where Editor approval fulfils
+the request. MAM credentials and torrent transport remain outside Coppice, and
+there are no in-process downloader, automatic retries, or auto-grab.
+Read-aloud readiness quality checks and full synchronized EPUB/audio playback
+remain open.
 
 ### Blocked
 
-Synchronized Storyteller read-aloud EPUB playback is not shipped. Storyteller
-is a future worker-side alignment backend, never a search/catalog provider or a
-bundled dependency. Hardcover account, progress, and journal sync are not
-implemented and remain blocked on their live-credential and API prerequisites.
-The official Audiobookshelf app also remains blocked by the missing
-Engine.IO/Socket.IO lane; the Lissen-shaped REST profile is a narrower,
-separately evidenced path.
+Storyteller and native CTC alignment runners are available to remote workers
+when an operator configures them; neither is bundled or used as server-local
+ML. Pairing, `SyncMapV1`/SMIL import, alignment enqueue, and cache-only delivery
+are implemented, but synchronized reader playback is not shipped.
+Hardcover account, progress, and journal sync remain blocked on live-credential
+and API prerequisites. The official Audiobookshelf app has a scoped
+device-tested flow; this does not establish full client parity. See the
+[client verification matrix](/docs/developer/client-verification).
 
 ## Source-of-truth pages
 
@@ -104,6 +102,4 @@ Use the human guides for setup and the developer pages for implementation detail
 
 Coppice follows the upstream [Stump project](https://github.com/stumpapp/stump)
 where the protocol or distribution contract requires it. The repository root is
-MIT. The nested Expo application retains its GPL-3.0 license; see
-[`apps/expo/LICENSE`](https://github.com/stumpapp/stump/blob/main/apps/expo/LICENSE)
-and the [attribution notes](/docs/developer/contributing).
+MIT; see the [attribution notes](/docs/developer/contributing).

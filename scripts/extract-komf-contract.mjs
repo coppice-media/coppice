@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -12,12 +12,25 @@ const CONTRACT_PATH = resolve(ROOT, "scripts/contracts/komf-media-server.json");
 const SCHEMA = "coppice/komf-media-server-contract-v1";
 const KOMF_REPO = "Snd-R/komf";
 const KOMGA_CLIENT_REPO = "Snd-R/komga-client";
+const KOMF_CLIENT_RELEASE = {
+  ref: "3a0fb57028ef8235ea6bba6f399329da3c48b084",
+  version: "2.0.0",
+};
+const KOMELIA_REPO = "Snd-R/Komelia";
+const KOMF_CLIENT_REPO = KOMF_REPO;
+const KOMF_CLIENT_SOURCE_PREFIX = "komf-client/src/commonMain/kotlin/snd/komf/client/";
+const KOMF_API_MODEL_PREFIX = "komf-api-models/src/commonMain/kotlin/snd/komf/api/";
+const KOMELIA_SOURCE_PREFIXES = [
+  "komelia-komf-extension/content/src/wasmJsMain/kotlin/snd/komelia",
+  "komelia-ui/src/commonMain/kotlin/snd/komelia/ui/settings/komf",
+  "komelia-ui/src/commonMain/kotlin/snd/komelia/ui/dialogs/komf",
+];
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_GITHUB_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 50_000;
 const MAX_SOURCE_FILES = 128;
 const MAX_SOURCE_FILE_BYTES = 1024 * 1024;
-const CLASS_DECLARATIONS = new Set(["class", "object"]);
+const CLASS_DECLARATIONS = new Set(["class", "object", "interface"]);
 
 class ContractError extends Error {
   constructor(message) {
@@ -566,6 +579,7 @@ function parseClasses(source, tokens, pairs, path) {
     while (bodyOpen < tokens.length) {
       const value = tokens[bodyOpen].value;
       if (value === "{" && parens === 0 && brackets === 0 && braces === 0 && angles === 0) break;
+      if (value === "}" && parens === 0 && brackets === 0 && braces === 0 && angles === 0 && (pairs.closeToOpen.get(bodyOpen) ?? -1) < index) break;
       if (
         parens === 0 &&
         brackets === 0 &&
@@ -601,12 +615,32 @@ function parseClasses(source, tokens, pairs, path) {
         break;
       }
     }
-    const implementsInterface =
-      supertypeStart !== -1 && header.slice(supertypeStart).some((token) => token.value === "MediaServerClient");
+    const supertypeNames = supertypeStart === -1
+      ? []
+      : splitTopLevel(tokens, index + supertypeStart, bodyOpen)
+        .map(([start, end]) => {
+          let typeEnd = start;
+          while (typeEnd < end && !["(", "<", "by"].includes(tokens[typeEnd].value)) typeEnd += 1;
+          return tokenText(source, tokens, start, typeEnd).trim();
+        })
+        .filter(Boolean);
+    const implementsInterface = supertypeNames.some((name) => name.split(".").at(-1) === "MediaServerClient");
     if (tokens[bodyOpen]?.value !== "{") {
       if (implementsInterface) {
         throw new ContractError(`${path}:${tokens[index].line}: MediaServerClient adapter ${nameToken.value} has no body`);
       }
+      classes.push({
+        name: nameToken.value,
+        path,
+        implementsInterface,
+        properties: {},
+        supertypeNames,
+        methods: [],
+        startIndex: index,
+        bodyOpen,
+        bodyClose: null,
+        headerText: tokenText(source, tokens, index, bodyOpen),
+      });
       continue;
     }
     const bodyClose = pairs.openToClose.get(bodyOpen);
@@ -644,6 +678,7 @@ function parseClasses(source, tokens, pairs, path) {
       path,
       implementsInterface,
       properties,
+      supertypeNames,
       methods,
       startIndex: index,
       bodyOpen,
@@ -766,21 +801,83 @@ function extractCalls(source, tokens, pairs, startIndex = 0, endIndex = tokens.l
   return calls;
 }
 
+function httpClientReceiverNames(classDeclaration) {
+  return new Set(
+    Object.entries(classDeclaration?.properties ?? {})
+      .filter(([, type]) => type.replace(/\?$/, "").split(".").at(-1) === "HttpClient")
+      .map(([name]) => name),
+  );
+}
+function endpointContextForClass(classDeclaration, context) {
+  const httpClientReceivers = httpClientReceiverNames(classDeclaration);
+  return httpClientReceivers.size > 0 ? { ...context, httpClientReceivers } : context;
+}
+function komgaClientType(classDeclaration) {
+  return classDeclaration?.supertypeNames
+    .map((name) => name.split(".").at(-1))
+    .find((name) => name.startsWith("Komga") && name.endsWith("Client")) ?? null;
+}
+
 function directStringEndpoints(source, tokens, pairs, startIndex, endIndex, context = {}) {
   const endpoints = [];
-  const requestVerbs = new Map([
+  const clientVerbs = new Map([
     ["get", "GET"], ["post", "POST"], ["put", "PUT"], ["patch", "PATCH"],
-    ["delete", "DELETE"], ["head", "HEAD"], ["options", "OPTIONS"], ["sse", "SSE"],
+    ["delete", "DELETE"], ["request", "REQUEST"], ["preparePost", "POST"], ["sseSession", "SSE"],
+  ]);
+  const serverVerbs = new Map([
+    ...clientVerbs,
+    ["head", "HEAD"], ["options", "OPTIONS"], ["sse", "SSE"],
   ]);
   const routeNames = new Set(["route", "path", "url", "sse"]);
+  const httpClientReceivers = context.httpClientReceivers;
+  const clientMode = httpClientReceivers instanceof Set;
   for (let index = startIndex; index < endIndex; index += 1) {
     if (tokens[index].kind !== "identifier") continue;
     const name = tokens[index].value;
+    const receiver = receiverFor(tokens, pairs, index);
+    if (
+      clientMode &&
+      name === "sseSession" &&
+      httpClientReceivers.has(receiver) &&
+      tokens[index + 1]?.value === "{"
+    ) {
+      const bodyClose = pairs.openToClose.get(index + 1);
+      if (bodyClose == null || bodyClose >= endIndex) continue;
+      const nested = directStringEndpoints(source, tokens, pairs, index + 2, bodyClose, {
+        ...context,
+        clientRequestDepth: (context.clientRequestDepth ?? 0) + 1,
+      });
+      const nestedUrl = nested.find((endpoint) => endpoint.verb === "URL");
+      if (nestedUrl) {
+        endpoints.push({
+          verb: "URL",
+          path: nestedUrl.path,
+          literal: nestedUrl.literal,
+          sourcePath: context.sourcePath,
+          line: tokens[index].line,
+          function: context.functionName ?? null,
+        });
+      }
+      continue;
+    }
     const call = callAt(tokens, pairs, index);
-    if (!call) continue;
-    const first = call.ranges.length > 0 ? valueFromRange(tokens, call.ranges[0]) : null;
-    if (first != null && (requestVerbs.has(name) || routeNames.has(name))) {
-      const verb = name === "route" ? "ROUTE" : name === "path" ? "PATH" : name === "url" ? "URL" : requestVerbs.get(name);
+    const clientRequest = clientMode && clientVerbs.has(name) && httpClientReceivers.has(receiver);
+    if (!call && !(clientRequest && tokens[index + 1]?.value === "{")) continue;
+    const ranges = call?.ranges ?? [];
+    const first = ranges.length > 0 ? valueFromRange(tokens, ranges[0]) : null;
+    const requestVerb = clientMode ? clientVerbs.get(name) : serverVerbs.get(name);
+    const clientPathContext = clientMode && (context.clientRequestDepth ?? 0) > 0;
+    if (
+      first != null &&
+      (clientRequest || (!clientMode && (serverVerbs.has(name) || routeNames.has(name))) ||
+        (clientPathContext && ["path", "url"].includes(name)))
+    ) {
+      const verb = clientRequest
+        ? requestVerb
+        : name === "route" ? "ROUTE"
+          : name === "path" ? "PATH"
+            : name === "url" ? "URL"
+              : requestVerb;
       endpoints.push({
         verb,
         path: normalizePath(first),
@@ -790,7 +887,11 @@ function directStringEndpoints(source, tokens, pairs, startIndex, endIndex, cont
         function: context.functionName ?? null,
       });
     }
-    if (name === "appendPathSegments" && call.ranges.length > 0) {
+    if (
+      name === "appendPathSegments" &&
+      call.ranges.length > 0 &&
+      (!clientMode || clientPathContext)
+    ) {
       const segments = call.ranges.map((range) => valueFromRange(tokens, range)).filter((value) => value != null);
       if (segments.length === call.ranges.length) {
         endpoints.push({
@@ -803,14 +904,20 @@ function directStringEndpoints(source, tokens, pairs, startIndex, endIndex, cont
         });
       }
     }
-    if (requestVerbs.has(name) && tokens[index + 1]?.value === "{") {
+    if (
+      (clientRequest || (!clientMode && serverVerbs.has(name))) &&
+      tokens[index + 1]?.value === "{"
+    ) {
       const bodyClose = pairs.openToClose.get(index + 1);
       if (bodyClose == null || bodyClose >= endIndex) continue;
-      const nested = directStringEndpoints(source, tokens, pairs, index + 2, bodyClose, context);
+      const nested = directStringEndpoints(source, tokens, pairs, index + 2, bodyClose, {
+        ...context,
+        clientRequestDepth: clientMode ? (context.clientRequestDepth ?? 0) + 1 : context.clientRequestDepth,
+      });
       const nestedPath = nested.find((endpoint) => ["PATH", "URL"].includes(endpoint.verb));
       if (nestedPath) {
         endpoints.push({
-          verb: requestVerbs.get(name),
+          verb: requestVerb,
           path: nestedPath.path,
           literal: nestedPath.literal,
           sourcePath: context.sourcePath,
@@ -819,7 +926,7 @@ function directStringEndpoints(source, tokens, pairs, startIndex, endIndex, cont
         });
       }
     }
-    if (name === "sseSession" && tokens[index + 1]?.value === "{") {
+    if (!clientMode && name === "sseSession" && tokens[index + 1]?.value === "{") {
       const bodyClose = pairs.openToClose.get(index + 1);
       if (bodyClose == null || bodyClose >= endIndex) continue;
       const nested = directStringEndpoints(source, tokens, pairs, index + 2, bodyClose, context);
@@ -847,12 +954,20 @@ function endpointsForFunction(source, tokens, pairs, method, context) {
   });
 }
 
-function endpointsForSource(parsed) {
+function endpointsForSource(parsed, { includeClientMetadata = false } = {}) {
   const endpoints = [];
   const context = { sourcePath: parsed.entry.path };
   for (const classDeclaration of parsed.classes) {
+    const methodContext = endpointContextForClass(classDeclaration, context);
+    const receiverType = includeClientMetadata ? komgaClientType(classDeclaration) : null;
     for (const method of classDeclaration.methods) {
-      endpoints.push(...endpointsForFunction(parsed.text, parsed.tokens, parsed.pairs, method, context));
+      const methodEndpoints = endpointsForFunction(parsed.text, parsed.tokens, parsed.pairs, method, methodContext);
+      endpoints.push(...methodEndpoints.map((endpoint) => includeClientMetadata ? ({
+        ...endpoint,
+        argumentCount: method.parameters.length,
+        parameterTypes: method.parameters.map((parameter) => parameter.normalizedType),
+        receiverType,
+      }) : endpoint));
     }
   }
   const classRanges = parsed.classes.map((item) => [item.bodyOpen, item.bodyClose]);
@@ -861,7 +976,13 @@ function endpointsForSource(parsed) {
     if (classRanges.some(([start, end]) => index > start && index < end)) continue;
     const method = parseFunction(parsed.text, parsed.tokens, parsed.pairs, index, parsed.tokens.length);
     if (method.body) {
-      endpoints.push(...endpointsForFunction(parsed.text, parsed.tokens, parsed.pairs, method, context));
+      const methodEndpoints = endpointsForFunction(parsed.text, parsed.tokens, parsed.pairs, method, context);
+      endpoints.push(...methodEndpoints.map((endpoint) => includeClientMetadata ? ({
+        ...endpoint,
+        argumentCount: method.parameters.length,
+        parameterTypes: method.parameters.map((parameter) => parameter.normalizedType),
+        receiverType: null,
+      }) : endpoint));
     }
     index = Math.max(index, method.endIndex - 1);
   }
@@ -930,17 +1051,25 @@ function adapterView(adapter, parsed, interfaceOperations, allClasses) {
           const receiverBase = call.receiver.split(".")[0];
           const receiverType = adapter.properties[receiverBase] ?? null;
           const externalKomga = receiverType?.startsWith("Komga") || receiverBase.startsWith("komga");
-          const resolved = receiverType ? findClassMethod(allClasses, receiverType, call.name, call.args.length) : null;
+          const resolved = !externalKomga && receiverType
+            ? findClassMethod(allClasses, receiverType, call.name, call.args.length)
+            : null;
           let endpoints = [];
-          if (!externalKomga && resolved) {
+          if (resolved) {
             endpoints = endpointsForFunction(
               resolved.classDeclaration.source,
               resolved.classDeclaration._tokens,
               resolved.classDeclaration._pairs,
               resolved.method,
-              { sourcePath: resolved.classDeclaration.path },
+              endpointContextForClass(resolved.classDeclaration, { sourcePath: resolved.classDeclaration.path }),
             );
           }
+          const resolution = externalKomga
+            ? "unresolved-external-komga-client"
+            : resolved ? "resolved-source" : "non-http";
+          const reason = !externalKomga && !resolved
+            ? receiverType ? "no-matching-local-method" : "untyped-helper-or-mapper-call"
+            : undefined;
           return {
             argumentCount: call.args.length,
             endpoints,
@@ -948,7 +1077,8 @@ function adapterView(adapter, parsed, interfaceOperations, allClasses) {
             name: call.name,
             receiver: call.receiver,
             receiverType,
-            resolution: externalKomga ? "unresolved-external-komga-client" : resolved ? "resolved-source" : "unresolved",
+            resolution,
+            ...(reason ? { reason } : {}),
             sourcePath: resolved?.classDeclaration.path ?? null,
           };
         })
@@ -971,12 +1101,86 @@ function adapterView(adapter, parsed, interfaceOperations, allClasses) {
     if (!mapped.has(operationId(operation))) {
       throw new ContractError(`${parsed.entry.path}: adapter ${adapter.name} does not implement ${operationId(operation)}`);
     }
+
+
   }
   if (overrideMethods.length !== interfaceOperations.length) {
     throw new ContractError(`${parsed.entry.path}: adapter ${adapter.name} has ${overrideMethods.length} overrides for ${interfaceOperations.length} interface operations`);
   }
   operationRecords.sort((left, right) => compareText(left.operation, right.operation));
   return operationRecords;
+}
+function routeCandidateView(route) {
+  return {
+    argumentCount: route.argumentCount,
+    function: route.function,
+    parameterTypes: route.parameterTypes,
+    path: route.path,
+    sourcePath: route.sourcePath,
+    verb: route.verb,
+  };
+}
+
+function resolveKomgaClientCall(call, routes) {
+  if (!call.receiverType) {
+    return { resolution: "unresolved-external-komga-client", reason: "missing-receiver-type", endpoints: [] };
+  }
+  const namedRoutes = routes.filter((route) =>
+    route.function === call.name &&
+    ["DELETE", "GET", "PATCH", "POST", "PUT", "REQUEST"].includes(route.verb),
+  );
+  const receiverRoutes = namedRoutes.filter((route) => route.receiverType === call.receiverType);
+  if (receiverRoutes.length === 0) {
+    return {
+      resolution: "unresolved-external-komga-client",
+      reason: namedRoutes.length > 0 ? "no-route-for-receiver-type" : "no-route-for-method",
+      endpoints: [],
+      candidates: namedRoutes.map(routeCandidateView),
+    };
+  }
+  let matchingRoutes = receiverRoutes;
+  if (receiverRoutes.length > 1) {
+    matchingRoutes = receiverRoutes.filter((route) => route.argumentCount === call.argumentCount);
+    if (matchingRoutes.length !== 1) {
+      return {
+        resolution: "unresolved-external-komga-client",
+        reason: matchingRoutes.length > 1 ? "ambiguous-overload-match" : "no-overload-matches-argument-count",
+        endpoints: [],
+        candidates: (matchingRoutes.length > 1 ? matchingRoutes : receiverRoutes).map(routeCandidateView),
+      };
+    }
+  }
+  const [route] = matchingRoutes;
+  return {
+    resolution: "resolved-external-komga-client",
+    endpoints: [{
+      function: route.function,
+      line: route.line,
+      path: route.path,
+      sourcePath: route.sourcePath,
+      verb: route.verb,
+    }],
+    sourcePath: route.sourcePath,
+  };
+}
+
+function joinExternalKomgaRoutes(adapters, routes) {
+  for (const adapter of adapters) {
+    if (adapter.library !== "komga") continue;
+    for (const operation of adapter.operations) {
+      for (const call of operation.clientCalls) {
+        if (call.resolution !== "unresolved-external-komga-client") continue;
+        const result = resolveKomgaClientCall(call, routes);
+        call.resolution = result.resolution;
+        call.endpoints = result.endpoints;
+        call.sourcePath = result.sourcePath ?? null;
+        delete call.reason;
+        delete call.candidates;
+        if (result.reason) call.reason = result.reason;
+        if (result.candidates) call.candidates = result.candidates;
+      }
+    }
+  }
 }
 
 
@@ -1048,10 +1252,14 @@ async function fetchRepository(repo, ref, includeEntry) {
   return { tree, entries, get };
 }
 
-async function extractContract({ komfEntry, ref, expectedVersion }) {
+async function extractContract({ komfEntry, komeliaEntry, ref, expectedVersion }) {
   const komfRepository = await fetchRepository(KOMF_REPO, ref, (entry) =>
     (entry.path.startsWith("komf-mediaserver/src/") && /\/[^/]*Main\/kotlin\//.test(entry.path)) ||
-    (entry.path.startsWith("komf-app/src/main/kotlin/") && /\/(?:[^/]*Routes|ServerModule)\.kt$/.test(entry.path)),
+    (entry.path.startsWith("komf-app/src/main/kotlin/") && /\/(?:[^/]*Routes|ServerModule)\.kt$/.test(entry.path)) ||
+    entry.path.startsWith(KOMF_API_MODEL_PREFIX) ||
+    entry.path.startsWith("komf-app/src/main/kotlin/snd/komf/app/api/deprecated/dto/") ||
+    entry.path === "komf-core/src/commonMain/kotlin/snd/komf/model/SeriesSearchResult.kt" ||
+    entry.path === "komf-core/src/commonMain/kotlin/snd/komf/providers/CoreProviders.kt",
   );
   const catalogEntry = komfRepository.tree.tree.find((entry) => entry.path === "gradle/libs.versions.toml");
   if (!catalogEntry) throw new ContractError(`${KOMF_REPO}@${ref}: gradle/libs.versions.toml not found`);
@@ -1124,6 +1332,74 @@ async function extractContract({ komfEntry, ref, expectedVersion }) {
     }))
     .sort((left, right) => compareText(`${left.sourcePath}:${left.line}:${left.verb}:${left.path}`, `${right.sourcePath}:${right.line}:${right.verb}:${right.path}`));
   const routePrefixes = [...new Set(appRoutes.filter((route) => route.verb === "ROUTE").map((route) => route.path))].sort();
+  const komfClientRef = KOMF_CLIENT_RELEASE.ref;
+  const komfClientRepository = await fetchRepository(KOMF_CLIENT_REPO, komfClientRef, (entry) =>
+    entry.path.startsWith(KOMF_CLIENT_SOURCE_PREFIX) || entry.path.startsWith(KOMF_API_MODEL_PREFIX),
+  );
+  const komfClientCatalogEntry = komfClientRepository.tree.tree.find((entry) => entry.path === "gradle/libs.versions.toml");
+  if (!komfClientCatalogEntry) throw new ContractError(`${KOMF_CLIENT_REPO}@${komfClientRef}: gradle/libs.versions.toml not found`);
+  const komfClientCatalogSource = await komfClientRepository.get(komfClientCatalogEntry);
+  const komfClientVersion = parseVersion(komfClientCatalogSource, komfClientCatalogEntry.path, "app-version");
+  if (komfClientVersion !== KOMF_CLIENT_RELEASE.version) {
+    throw new ContractError(`${KOMF_CLIENT_REPO}@${komfClientRef}: expected Komf client ${KOMF_CLIENT_RELEASE.version}, source reports ${komfClientVersion}`);
+  }
+  const komfClientParsed = [];
+  for (const entry of komfClientRepository.entries) {
+    const text = await komfClientRepository.get(entry);
+    komfClientParsed.push(parseSource(KOMF_CLIENT_REPO, komfClientRef, entry, text));
+  }
+  const clientOperations = extractKomfClientOperations(komfClientParsed);
+
+  const komeliaRef = komeliaEntry.baseline.value;
+  const komeliaCatalogEntry = await repositoryFile(KOMELIA_REPO, komeliaRef, "gradle/libs.versions.toml");
+  const komeliaCatalogSource = await sourceText(KOMELIA_REPO, komeliaRef, komeliaCatalogEntry);
+  const komeliaVersion = parseVersion(komeliaCatalogSource, komeliaCatalogEntry.path, "app-version");
+  const bundledClientVersion = parseVersion(komeliaCatalogSource, komeliaCatalogEntry.path, "komf-client");
+  if (komeliaVersion !== "0.19.3" || bundledClientVersion !== komfClientVersion) {
+    throw new ContractError(`${KOMELIA_REPO}@${komeliaRef}: expected Komelia 0.19.3 with komf-client ${komfClientVersion}, source reports ${komeliaVersion} with ${bundledClientVersion}`);
+  }
+  const komeliaRepository = await fetchRepositorySubtrees(KOMELIA_REPO, komeliaRef, KOMELIA_SOURCE_PREFIXES, () => true);
+  const komeliaParsed = [];
+  for (const entry of komeliaRepository.entries) {
+    const text = await komeliaRepository.get(entry);
+    komeliaParsed.push(parseSource(KOMELIA_REPO, komeliaRef, entry, text));
+  }
+  attachKomeliaCallSites(clientOperations, komeliaParsed);
+  const komeliaFactory = komeliaParsed.find((parsed) => parsed.entry.path.endsWith("/KomfViewModelFactory.kt"));
+  if (!komeliaFactory) throw new ContractError(`${KOMELIA_REPO}@${komeliaRef}: KomfViewModelFactory.kt was not selected`);
+  const komeliaCallSitePaths = new Set([
+    komeliaFactory.entry.path,
+    ...clientOperations.flatMap((operation) => operation.callSites.map((callSite) => callSite.sourcePath)),
+  ]);
+  const komeliaSourceRecords = komeliaParsed
+    .filter((parsed) => komeliaCallSitePaths.has(parsed.entry.path))
+    .map((parsed) => sourceRecord(KOMELIA_REPO, komeliaRef, parsed.entry, parsed.text));
+  const komeliaCatalogRecord = sourceRecord(KOMELIA_REPO, komeliaRef, komeliaCatalogEntry, komeliaCatalogSource);
+  const komfClientSourceRecords = [
+    ...komfClientParsed.map((parsed) => sourceRecord(KOMF_CLIENT_REPO, komfClientRef, parsed.entry, parsed.text)),
+    sourceRecord(KOMF_CLIENT_REPO, komfClientRef, komfClientCatalogEntry, komfClientCatalogSource),
+  ];
+  const appDtoSources = parsedSources.filter((parsed) =>
+    parsed.entry.path.startsWith(KOMF_API_MODEL_PREFIX) ||
+    parsed.entry.path.startsWith("komf-app/src/main/kotlin/snd/komf/app/api/deprecated/dto/") ||
+    parsed.entry.path === "komf-core/src/commonMain/kotlin/snd/komf/model/SeriesSearchResult.kt" ||
+    parsed.entry.path === "komf-core/src/commonMain/kotlin/snd/komf/providers/CoreProviders.kt",
+  );
+  const appDtoTypes = parseDtoTypes(appDtoSources);
+  const clientDtoTypes = parseDtoTypes(komfClientParsed.filter((parsed) => parsed.entry.path.startsWith(KOMF_API_MODEL_PREFIX)));
+  const appHttpApi = buildKomfHttpApi({
+    appRoutes,
+    parsedSources: [...parsedSources, ...komfClientParsed],
+    apiTypes: appDtoTypes,
+    clientOperations,
+    clientSourceRecords: komfClientSourceRecords,
+    komeliaSourceRecords,
+    komeliaVersion,
+    komeliaRef,
+    komfClientVersion,
+    komfClientRef,
+    komeliaCatalogRecord,
+  });
 
   const externalRepoInfo = komfEntry.dependencies?.["komga-client"] ?? {};
   const externalRef = externalRepoInfo.baseline?.value;
@@ -1153,17 +1429,22 @@ async function extractContract({ komfEntry, ref, expectedVersion }) {
   }
   const externalRoutes = externalParsed.flatMap((parsed) => {
     if (!/(?:^|\/)(?:Http[^/]+|KomgaClientFactory)\.kt$/.test(parsed.entry.path)) return [];
-    return endpointsForSource(parsed).map((route) => ({
+    return endpointsForSource(parsed, { includeClientMetadata: true }).map((route) => ({
+      argumentCount: route.argumentCount,
       function: route.function,
       line: route.line,
+      parameterTypes: route.parameterTypes,
       path: route.path,
+      receiverType: route.receiverType,
       sourcePath: route.sourcePath,
       verb: route.verb,
     }));
   });
   const externalSourceRecords = externalParsed.map((parsed) => sourceRecord(KOMGA_CLIENT_REPO, externalRef, parsed.entry, parsed.text));
-  const ssePaths = [...new Set(externalRoutes.filter((route) => route.verb === "SSE").map((route) => route.path))].sort();
-
+  const ssePaths = [...new Set(externalRoutes
+    .filter((route) => route.function === "sseSession" && ["SSE", "URL"].includes(route.verb))
+    .map((route) => route.path))].sort();
+  joinExternalKomgaRoutes(adapters, externalRoutes);
   const sourceRecords = [interfaceSourceRecord, ...parsedSources.filter((parsed) => parsed !== interfaceSource).map((parsed) => sourceRecord(KOMF_REPO, ref, parsed.entry, parsed.text))]
     .sort((left, right) => compareText(`${left.repository}:${left.path}`, `${right.repository}:${right.path}`));
   const canonicalEntry = {
@@ -1177,10 +1458,19 @@ async function extractContract({ komfEntry, ref, expectedVersion }) {
     adapters,
     app: {
       endpoints: appRoutes,
+      httpApi: appHttpApi,
       routePrefixes,
       sourcePaths: appSources.map((item) => item.path).sort(),
     },
     dependencies: {
+      komfClient: {
+        commit: komfClientRef,
+        dtoTypes: clientDtoTypes,
+        repository: KOMF_CLIENT_REPO,
+        routes: appHttpApi.clientOperations,
+        sourceHashes: komfClientSourceRecords,
+        version: komfClientVersion,
+      },
       komgaClient: {
         commit: externalRef,
         repository: KOMGA_CLIENT_REPO,
@@ -1217,6 +1507,694 @@ function findUpstream(upstreams, repo) {
   return entry;
 }
 
+async function repositoryTreeAtPath(repo, ref, pathParts) {
+  let tree = await githubJson(`repos/${repo}/git/trees/${ref}`);
+  for (const part of pathParts) {
+    const directory = tree.tree?.find((entry) => entry.type === "tree" && entry.path === part);
+    if (!directory) throw new ContractError(`${repo}@${ref}: repository path component ${part} was not found`);
+    tree = await githubJson(`repos/${repo}/git/trees/${directory.sha}`);
+    if (!Array.isArray(tree.tree) || tree.tree.length > MAX_TREE_ENTRIES) {
+      throw new ContractError(`${repo}@${ref}:${pathParts.join("/")}: invalid or oversized tree`);
+    }
+  }
+  return tree;
+}
+
+async function repositoryFile(repo, ref, path) {
+  const parts = path.split("/");
+  const parent = await repositoryTreeAtPath(repo, ref, parts.slice(0, -1));
+  const entry = parent.tree.find((candidate) => candidate.type === "blob" && candidate.path === parts.at(-1));
+  if (!entry) throw new ContractError(`${repo}@${ref}:${path}: source file was not found`);
+  return { ...entry, path };
+}
+
+async function fetchRepositorySubtrees(repo, ref, prefixes, includeEntry) {
+  const selected = new Map();
+  for (const prefix of prefixes) {
+    const directory = await repositoryTreeAtPath(repo, ref, prefix.split("/"));
+    const tree = await githubJson(`repos/${repo}/git/trees/${directory.sha}?recursive=1`);
+    if (tree.truncated) throw new ContractError(`${repo}@${ref}:${prefix}: GitHub subtree response was truncated`);
+    if (!Array.isArray(tree.tree) || tree.tree.length > MAX_TREE_ENTRIES) {
+      throw new ContractError(`${repo}@${ref}:${prefix}: GitHub subtree is invalid or oversized`);
+    }
+    for (const entry of tree.tree) {
+      if (entry.type !== "blob") continue;
+      const fullEntry = { ...entry, path: `${prefix}/${entry.path}` };
+      if (!fullEntry.path.endsWith(".kt") || !includeEntry(fullEntry)) continue;
+      const previous = selected.get(fullEntry.path);
+      if (previous && previous.sha !== fullEntry.sha) {
+        throw new ContractError(`${repo}@${ref}:${fullEntry.path}: overlapping source selectors disagree`);
+      }
+      selected.set(fullEntry.path, fullEntry);
+    }
+  }
+  const entries = [...selected.values()].sort((left, right) => compareText(left.path, right.path));
+  if (entries.length === 0) throw new ContractError(`${repo}@${ref}: no Kotlin sources selected`);
+  if (entries.length > MAX_SOURCE_FILES) {
+    throw new ContractError(`${repo}@${ref}: selected ${entries.length} Kotlin files, exceeding limit ${MAX_SOURCE_FILES}`);
+  }
+  for (const entry of entries) {
+    if (!/^[0-9a-f]{40}$/.test(entry.sha) || !Number.isInteger(entry.size) || entry.size < 0) {
+      throw new ContractError(`${repo}@${ref}:${entry.path}: invalid Git tree blob metadata`);
+    }
+  }
+  const cache = new Map();
+  const get = async (entry) => {
+    if (!cache.has(entry.path)) cache.set(entry.path, sourceText(repo, ref, entry));
+    return cache.get(entry.path);
+  };
+  return { entries, get };
+}
+
+function annotationTextForDeclaration(source, lineNumber) {
+  const lines = source.split("\n");
+  const annotations = [];
+  for (let index = lineNumber - 2; index >= 0; index -= 1) {
+    const line = lines[index].trim();
+    if (!line) continue;
+    if (!line.startsWith("@")) break;
+    annotations.unshift(line);
+  }
+  return annotations.join("\n");
+}
+
+function parseDtoFields(source, tokens, pairs, openIndex, closeIndex) {
+  return splitTopLevel(tokens, openIndex + 1, closeIndex, { typeArguments: true })
+    .map(([rawStart, rawEnd]) => {
+      let start = rawStart;
+      let end = rawEnd;
+      while (start < end && tokens[start].value === ",") start += 1;
+      while (end > start && tokens[end - 1].value === ",") end -= 1;
+      if (start >= end) return null;
+
+      let colon = -1;
+      let equals = -1;
+      let depth = 0;
+      for (let index = start; index < end; index += 1) {
+        const value = tokens[index].value;
+        if (["(", "[", "{", "<"].includes(value)) depth += 1;
+        else if ([")", "]", "}", ">"].includes(value)) depth -= 1;
+        else if (depth === 0 && value === ":" && colon === -1) colon = index;
+        else if (depth === 0 && value === "=" && equals === -1) equals = index;
+      }
+      if (colon === -1) return null;
+      const nameToken = tokens[colon - 1];
+      if (!nameToken || nameToken.kind !== "identifier") return null;
+      const typeEnd = equals === -1 ? end : equals;
+      const type = tokenText(source, tokens, colon + 1, typeEnd);
+      const nullable = type.trim().endsWith("?");
+      let serialName = null;
+      for (let index = start; index < colon; index += 1) {
+        if (tokens[index].value !== "SerialName" || tokens[index + 1]?.value !== "(") continue;
+        const argument = tokens[index + 2];
+        if (argument?.kind === "string") serialName = argument.value;
+      }
+      return {
+        name: nameToken.value,
+        type,
+        nullable,
+        required: !nullable && equals === -1,
+        hasDefault: equals !== -1,
+        ...(serialName ? { serialName } : {}),
+      };
+    })
+    .filter(Boolean);
+}
+
+function primaryConstructorRange(parsed, declaration) {
+  let angleDepth = 0;
+  for (let index = declaration.startIndex + 2; index < declaration.bodyOpen; index += 1) {
+    const value = parsed.tokens[index].value;
+    if (value === "<") angleDepth += 1;
+    else if (value === ">" && angleDepth > 0) angleDepth -= 1;
+    else if (value === ":" && angleDepth === 0) return null;
+    else if (value === "(" && angleDepth === 0) {
+      const closeIndex = parsed.pairs.openToClose.get(index);
+      if (closeIndex != null && closeIndex < declaration.bodyOpen) return { openIndex: index, closeIndex };
+    }
+  }
+  return null;
+}
+
+function parseDtoTypes(parsedSources) {
+  const types = [];
+  for (const parsed of parsedSources) {
+    for (const declaration of parsed.classes) {
+      const declarationIndex = declaration.startIndex;
+      const annotations = annotationTextForDeclaration(parsed.text, parsed.tokens[declarationIndex].line);
+      const serializable = /@Serializable\b/.test(annotations);
+      const modifiers = parsed.tokens
+        .slice(Math.max(0, declarationIndex - 3), declarationIndex)
+        .map((token) => token.value);
+      const declarationKeyword = parsed.tokens[declarationIndex].value;
+      const kind = modifiers.includes("enum") ? "enum"
+        : declarationKeyword === "object" && modifiers.includes("data") ? "dataObject"
+          : modifiers.includes("data") ? "dataClass"
+            : modifiers.includes("value") ? "valueClass"
+              : modifiers.includes("sealed") ? "sealed"
+                : declarationKeyword;
+      const isProviderVariant = declaration.supertypeNames.some((name) => name.split(".").at(-1) === "KomfProviders");
+      if (!serializable && kind !== "enum" && !isProviderVariant) continue;
+      const constructor = primaryConstructorRange(parsed, declaration);
+      const constructorFields = constructor
+        ? parseDtoFields(parsed.text, parsed.tokens, parsed.pairs, constructor.openIndex, constructor.closeIndex)
+        : [];
+      const bodyText = declaration.bodyClose == null || parsed.tokens[declaration.bodyOpen]?.value !== "{"
+        ? ""
+        : parsed.text.slice(parsed.tokens[declaration.bodyOpen].end, parsed.tokens[declaration.bodyClose].start);
+      const enumValues = kind === "enum"
+        ? bodyText.split(";")[0].split(",").map((part) =>
+          part.trim().replace(/^(?:@[A-Za-z_][A-Za-z0-9_.]*(?:\([^)]*\))?\s*)+/, "").match(/^([A-Za-z_][A-Za-z0-9_]*)/)?.[1],
+        ).filter(Boolean)
+        : [];
+      const serialName = annotations.match(/@SerialName\s*\(\s*"([^"]+)"/)?.[1] ?? null;
+      const customSerializer = annotations.match(/@Serializable\s*\(\s*(?:with\s*=\s*)?([A-Za-z_][A-Za-z0-9_.]*)::class/)?.[1] ?? null;
+      types.push({
+        name: declaration.name,
+        kind,
+        serializable,
+        ...(customSerializer ? { customSerializer } : {}),
+        ...(serialName ? { serialName } : {}),
+        fields: constructorFields,
+        ...(enumValues.length > 0 ? { enumValues } : {}),
+        sourcePath: parsed.entry.path,
+        line: parsed.tokens[declarationIndex].line,
+      });
+    }
+  }
+  return types.sort((left, right) => compareText(`${left.sourcePath}:${left.line}:${left.name}`, `${right.sourcePath}:${right.line}:${right.name}`));
+}
+
+function normalizeClientPath(path, className) {
+  let normalized = path;
+  if (className === "KomfMetadataClient") {
+    normalized = normalized.replaceAll("$metadataApiPrefix", "/api/{mediaServer}/metadata");
+  }
+  if (className === "KomfMediaServerClient") {
+    normalized = normalized.replaceAll("$mediaServerApiPrefix", "/api/{mediaServer}/media-server");
+  }
+  normalized = normalized
+    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\.value)?\}/g, "{$1}")
+    .replace(/\$([A-Za-z_][A-Za-z0-9_]*)(?:\.value)?/g, "{$1}");
+  return normalizePath(normalized);
+}
+
+function extractKomfClientOperations(parsedSources) {
+  const operations = [];
+  for (const parsed of parsedSources.filter((item) => item.entry.path.startsWith(KOMF_CLIENT_SOURCE_PREFIX))) {
+    const endpoints = endpointsForSource(parsed);
+    for (const endpoint of endpoints) {
+      if (!endpoint.function || !["GET", "POST", "PUT", "PATCH", "DELETE", "SSE"].includes(endpoint.verb)) continue;
+      const classDeclaration = parsed.classes.find((candidate) => candidate.methods.some((method) => method.name === endpoint.function));
+      const method = classDeclaration?.methods.find((candidate) => candidate.name === endpoint.function);
+      if (!classDeclaration || !method) continue;
+      const bodyParameterName = method.body?.text.match(/\bsetBody\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)/)?.[1] ?? null;
+      const bodyParameter = bodyParameterName
+        ? method.parameters.find((parameter) => parameter.name === bodyParameterName)
+        : null;
+      operations.push({
+        clientClass: classDeclaration.name,
+        function: method.name,
+        line: method.line,
+        route: {
+          method: endpoint.verb === "SSE" ? "GET" : endpoint.verb,
+          transport: endpoint.verb === "SSE" ? "sse" : "http",
+          path: normalizeClientPath(endpoint.path, classDeclaration.name),
+          sourceLine: endpoint.line,
+        },
+        request: {
+          body: bodyParameter ? { name: bodyParameter.name, type: bodyParameter.type } : null,
+          parameters: method.parameters
+            .filter((parameter) => parameter.name !== bodyParameterName)
+            .map(({ name, type }) => ({ name, type })),
+        },
+        responseType: method.returnType,
+        sourcePath: parsed.entry.path,
+        callSites: [],
+      });
+    }
+  }
+  operations.sort((left, right) => compareText(`${left.sourcePath}:${left.line}:${left.function}`, `${right.sourcePath}:${right.line}:${right.function}`));
+  const operationKeys = new Set();
+  for (const operation of operations) {
+    const key = `${operation.clientClass}.${operation.function}`;
+    if (operationKeys.has(key)) throw new ContractError(`Komf client operation ${key} has multiple endpoint definitions`);
+    operationKeys.add(key);
+  }
+  return operations;
+}
+
+function attachKomeliaCallSites(operations, parsedSources) {
+  const byClassAndMethod = new Map(operations.map((operation) => [`${operation.clientClass}.${operation.function}`, operation]));
+  const clientClassNames = new Set(operations.map((operation) => operation.clientClass));
+  for (const parsed of parsedSources) {
+    for (const classDeclaration of parsed.classes) {
+      const clientProperties = new Map(
+        Object.entries(classDeclaration.properties)
+          .filter(([, type]) => clientClassNames.has(type.replace(/\?$/, "")))
+          .map(([name, type]) => [name, type.replace(/\?$/, "")]),
+      );
+      for (const method of classDeclaration.methods) {
+        if (!method.body) continue;
+        for (let index = method.body.startIndex; index < method.body.endIndex; index += 1) {
+          const candidateOperations = operations.filter((operation) => operation.function === parsed.tokens[index].value);
+          if (candidateOperations.length === 0 || parsed.tokens[index + 1]?.value !== "(") continue;
+          const receiver = receiverFor(parsed.tokens, parsed.pairs, index) ?? "";
+          if (!receiver) continue;
+          const receiverName = receiver.split(".").at(-1);
+          const clientClass = clientProperties.get(receiverName) ?? null;
+          if (!clientClass) continue;
+          const operation = byClassAndMethod.get(`${clientClass}.${parsed.tokens[index].value}`);
+          if (!operation) continue;
+          operation.callSites.push({
+            callerClass: classDeclaration.name,
+            callerFunction: method.name,
+            line: parsed.tokens[index].line,
+            sourcePath: parsed.entry.path,
+          });
+        }
+      }
+    }
+  }
+  for (const operation of operations) {
+    operation.callSites.sort((left, right) => compareText(`${left.sourcePath}:${left.line}`, `${right.sourcePath}:${right.line}`));
+  }
+}
+
+function pathMatches(pattern, path) {
+  const regex = pattern.split(/(\{[^}]+\})/)
+    .map((part) => part.startsWith("{") && part.endsWith("}")
+      ? "[^/]+"
+      : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("");
+  return new RegExp(`^${regex}$`).test(path);
+}
+
+function routeMounts(className) {
+  switch (className) {
+    case "ConfigRoutes":
+    case "JobRoutes":
+    case "NotificationRoutes":
+      return [{ prefix: "/api", mediaServer: null }];
+    case "MediaServerRoutes":
+    case "MetadataRoutes":
+      return ["komga", "kavita"].map((mediaServer) => ({ prefix: `/api/${mediaServer}`, mediaServer }));
+    case "DeprecatedConfigRoutes":
+      return [{ prefix: "", mediaServer: null }];
+    case "DeprecatedMetadataRoutes":
+      return ["komga", "kavita"].map((mediaServer) => ({ prefix: `/${mediaServer}`, mediaServer }));
+    default:
+      throw new ContractError(`No Komf app route mount is defined for ${className}`);
+  }
+}
+
+function routeLocalPrefix(className, route) {
+  switch (className) {
+    case "JobRoutes": return "/jobs";
+    case "MediaServerRoutes": return "/media-server";
+    case "MetadataRoutes": return "/metadata";
+    case "NotificationRoutes":
+      if (route.function.startsWith("discord")) return "/notifications/discord";
+      if (route.function.startsWith("apprise")) return "/notifications/apprise";
+      throw new ContractError(`${route.sourcePath}:${route.line}: notification route has no service prefix`);
+    case "ConfigRoutes":
+    case "DeprecatedConfigRoutes":
+    case "DeprecatedMetadataRoutes":
+      return "";
+    default:
+      throw new ContractError(`No Komf app route prefix is defined for ${className}`);
+  }
+}
+
+function pathJoin(...parts) {
+  return normalizePath(parts.filter(Boolean).join("/"));
+}
+
+function appRouteContract(className, functionName) {
+  const json = (bodyType, status = 200) => ({ status, contentType: "application/json", bodyType });
+  const empty = (status, contentType = null) => ({ status, contentType, bodyType: null });
+  const error = (status, bodyType = "KomfErrorResponse", condition = null) => ({
+    status,
+    contentType: bodyType ? "application/json" : null,
+    bodyType,
+    ...(condition ? { condition } : {}),
+  });
+  const request = (bodyType) => ({ bodyType, contentType: "application/json" });
+  const key = `${className}.${functionName}`;
+  switch (key) {
+    case "ConfigRoutes.getConfigRoute":
+      return { requestBody: null, queryParameters: [], responses: [json("KomfConfig")] };
+    case "ConfigRoutes.updateConfigRoute":
+      return {
+        requestBody: request("KomfConfigUpdateRequest"),
+        queryParameters: [],
+        responses: [empty(204), error(422, "KomfErrorResponse", "configuration persistence callback throws")],
+      };
+    case "ConfigRoutes.updateMangaBakaDB":
+    case "ConfigRoutes.updateBookWalkerDb":
+      return {
+        requestBody: null,
+        queryParameters: [],
+        responses: [{
+          status: 200,
+          contentType: "application/jsonl",
+          bodyType: "DownloadProgress",
+          framing: "one JSON object per newline; ProgressEvent continues, FinishedEvent/ErrorEvent ends",
+        }],
+      };
+    case "JobRoutes.getJobsRoute":
+      return {
+        requestBody: null,
+        queryParameters: [
+          { name: "status", type: "KomfMetadataJobStatus", required: false },
+          { name: "page", type: "Int", required: false, default: 0 },
+          { name: "pageSize", type: "Int", required: false, default: 1000 },
+        ],
+        responses: [json("KomfPage<List<KomfMetadataJob>>"), error(400, null, "invalid status, page, or pageSize yields an empty body")],
+      };
+    case "JobRoutes.getJobRoute":
+      return {
+        requestBody: null,
+        queryParameters: [],
+        responses: [json("KomfMetadataJob"), error(404, null, "job id is not present"), error(400, "KomfErrorResponse", "jobId is not a UUID")],
+      };
+    case "JobRoutes.metadataEventFlowRoute":
+      return {
+        requestBody: null,
+        queryParameters: [],
+        responses: [{
+          status: 200,
+          contentType: "text/event-stream",
+          bodyType: "KomfMetadataJobEvent",
+          framing: "Server-Sent Events",
+        }, error(400, "KomfErrorResponse", "jobId is not a UUID")],
+      };
+    case "JobRoutes.deleteAllRoute":
+      return { requestBody: null, queryParameters: [], responses: [empty(204)] };
+    case "MediaServerRoutes.checkConnectionRoute":
+      return {
+        requestBody: null,
+        queryParameters: [],
+        responses: [{
+          ...json("KomfMediaServerConnectionResponse"),
+          note: "HTTP 200 for success and connection failure; failure is represented by success=false and error fields",
+        }],
+      };
+    case "MediaServerRoutes.getLibrariesRoute":
+      return { requestBody: null, queryParameters: [], responses: [json("List<KomfMediaServerLibrary>")] };
+    case "MetadataRoutes.getProvidersRoute":
+      return {
+        requestBody: null,
+        queryParameters: [{ name: "libraryId", type: "String", required: false }],
+        responses: [json("List<String>")],
+      };
+    case "MetadataRoutes.searchSeriesRoute":
+      return {
+        requestBody: null,
+        queryParameters: [
+          { name: "name", type: "String", required: true },
+          { name: "seriesId", type: "String", required: false },
+          { name: "libraryId", type: "String", required: false },
+        ],
+        responses: [
+          json("List<KomfMetadataSeriesSearchResult>"),
+          error(400, null, "missing name query parameter"),
+          error(500, "KomfErrorResponse", "unexpected exception"),
+          error("upstream-status", "KomfErrorResponse", "upstream ResponseException; preserves upstream status"),
+        ],
+      };
+    case "MetadataRoutes.getSeriesCoverRoute":
+      return {
+        requestBody: null,
+        queryParameters: [
+          { name: "libraryId", type: "String", required: true },
+          { name: "provider", type: "CoreProviders", required: true },
+          { name: "providerSeriesId", type: "String", required: true },
+        ],
+        responses: [
+          { status: 200, contentType: "application/octet-stream", bodyType: "ByteArray" },
+          error(404, null, "series cover is absent"),
+          error(400, "KomfErrorResponse", "required query parameter missing or provider enum invalid"),
+        ],
+      };
+    case "MetadataRoutes.identifySeriesRoute":
+      return { requestBody: request("KomfIdentifyRequest"), queryParameters: [], responses: [json("KomfMetadataJobResponse")] };
+    case "MetadataRoutes.matchSeriesRoute":
+      return { requestBody: null, queryParameters: [], responses: [json("KomfMetadataJobResponse")] };
+    case "MetadataRoutes.matchLibraryRoute":
+      return { requestBody: null, queryParameters: [], responses: [empty(202)] };
+    case "MetadataRoutes.resetSeriesRoute":
+      return {
+        requestBody: null,
+        queryParameters: [{ name: "removeComicInfo", type: "Boolean", required: false, default: false }],
+        responses: [
+          empty(204),
+          error(422, "KomfErrorResponse", "ComicInfoException"),
+          error(400, "KomfErrorResponse", "invalid path or server argument"),
+        ],
+      };
+    case "MetadataRoutes.resetLibraryRoute":
+      return {
+        requestBody: null,
+        queryParameters: [{ name: "removeComicInfo", type: "Boolean", required: false, default: false }],
+        responses: [empty(204)],
+      };
+    case "NotificationRoutes.discordGetTemplatesRoute":
+      return { requestBody: null, queryParameters: [], responses: [json("KomfDiscordTemplates")] };
+    case "NotificationRoutes.discordUpdateTemplatesRoute":
+      return {
+        requestBody: request("KomfDiscordTemplates"),
+        queryParameters: [],
+        responses: [
+          json("KomfDiscordTemplates"),
+          error(422, "KomfErrorResponse", "template update exception; handler subsequently attempts its unconditional 200 response"),
+        ],
+      };
+    case "NotificationRoutes.discordSendRoute":
+      return {
+        requestBody: request("KomfDiscordRequest"),
+        queryParameters: [],
+        responses: [
+          empty(200, "text/plain"),
+          error("upstream-status", "KomfErrorResponse", "upstream ResponseException; handler subsequently attempts its unconditional 200 response"),
+        ],
+      };
+    case "NotificationRoutes.discordRenderRoute":
+      return { requestBody: request("KomfDiscordRequest"), queryParameters: [], responses: [json("KomfDiscordRenderResult")] };
+    case "NotificationRoutes.appriseGetTemplatesRoute":
+      return { requestBody: null, queryParameters: [], responses: [json("KomfAppriseTemplates")] };
+    case "NotificationRoutes.appriseUpdateTemplatesRoute":
+      return {
+        requestBody: request("KomfAppriseTemplates"),
+        queryParameters: [],
+        responses: [
+          json("KomfAppriseTemplates"),
+          error(422, "KomfErrorResponse", "template update exception; handler subsequently attempts its unconditional 200 response"),
+        ],
+      };
+    case "NotificationRoutes.appriseSendRoute":
+      return {
+        requestBody: request("KomfAppriseRequest"),
+        queryParameters: [],
+        responses: [
+          empty(200, "text/plain"),
+          error(422, "KomfErrorResponse", "send exception; handler subsequently attempts its unconditional 200 response"),
+        ],
+      };
+    case "NotificationRoutes.appriseRenderRoute":
+      return { requestBody: request("KomfAppriseRequest"), queryParameters: [], responses: [json("KomfAppriseRenderResult")] };
+    case "DeprecatedConfigRoutes.getConfigRoute":
+      return { requestBody: null, queryParameters: [], responses: [json("AppConfigDto")] };
+    case "DeprecatedConfigRoutes.updateConfigRoute":
+      return {
+        requestBody: request("AppConfigUpdateDto"),
+        queryParameters: [],
+        responses: [empty(204), error(422, "String", "configuration persistence callback throws")],
+      };
+    case "DeprecatedMetadataRoutes.getProvidersRoute":
+      return { requestBody: null, queryParameters: [{ name: "libraryId", type: "String", required: false }], responses: [json("List<String>")] };
+    case "DeprecatedMetadataRoutes.searchSeriesRoute":
+      return {
+        requestBody: null,
+        queryParameters: [
+          { name: "name", type: "String", required: true },
+          { name: "seriesId", type: "String", required: false },
+          { name: "libraryId", type: "String", required: false },
+        ],
+        responses: [json("Collection<SeriesSearchResult>"), error(400, null, "missing name query parameter")],
+      };
+    case "DeprecatedMetadataRoutes.identifySeriesRoute":
+      return { requestBody: request("IdentifySeriesRequest"), queryParameters: [], responses: [empty(204)] };
+    case "DeprecatedMetadataRoutes.matchSeriesRoute":
+      return { requestBody: null, queryParameters: [], responses: [empty(204)] };
+    case "DeprecatedMetadataRoutes.matchLibraryRoute":
+      return { requestBody: null, queryParameters: [], responses: [empty(202)] };
+    case "DeprecatedMetadataRoutes.resetSeriesRoute":
+    case "DeprecatedMetadataRoutes.resetLibraryRoute":
+      return {
+        requestBody: null,
+        queryParameters: [{ name: "removeComicInfo", type: "Boolean", required: false, default: false }],
+        responses: [empty(204)],
+      };
+    default:
+      throw new ContractError(`Missing Komf app HTTP contract details for ${key}`);
+  }
+}
+
+function buildKomfHttpApi({
+  appRoutes,
+  parsedSources,
+  apiTypes,
+  clientOperations,
+  clientSourceRecords,
+  komeliaSourceRecords,
+  komeliaVersion,
+  komeliaRef,
+  komfClientVersion,
+  komfClientRef,
+  komeliaCatalogRecord,
+}) {
+  const sourceByPath = new Map(parsedSources.map((parsed) => [parsed.entry.path, parsed]));
+  const serverModule = parsedSources.find((parsed) => parsed.entry.path.endsWith("/ServerModule.kt"));
+  const clientFactory = sourceByPath.get(`${KOMF_CLIENT_SOURCE_PREFIX}KomfClientFactory.kt`);
+  if (!serverModule || !clientFactory) throw new ContractError("Komf HTTP inventory requires ServerModule and KomfClientFactory sources");
+  for (const route of ['route("/api")', 'route("/komga")', 'route("/kavita")']) {
+    if (!serverModule.text.includes(route)) throw new ContractError(`ServerModule.kt no longer contains ${route}`);
+  }
+  for (const [className, expectedPath] of [
+    ["JobRoutes", "/jobs"],
+    ["MediaServerRoutes", "/media-server"],
+    ["MetadataRoutes", "/metadata"],
+    ["NotificationRoutes", "/notifications/discord"],
+    ["NotificationRoutes", "/notifications/apprise"],
+  ]) {
+    if (!appRoutes.some((route) => route.verb === "ROUTE" && route.sourcePath.endsWith(`/${className}.kt`) && route.path === expectedPath)) {
+      throw new ContractError(`Komf app route prefix ${expectedPath} for ${className} was not extracted`);
+    }
+  }
+
+  const routes = appRoutes
+    .filter((route) => ["GET", "POST", "PATCH", "PUT", "DELETE", "SSE"].includes(route.verb))
+    .flatMap((route) => {
+      const className = route.sourcePath.split("/").at(-1).replace(/\.kt$/, "");
+      const localPrefix = routeLocalPrefix(className, route);
+      const contract = appRouteContract(className, route.function);
+      return routeMounts(className).map((mount) => {
+        const path = pathJoin(mount.prefix, localPrefix, route.path);
+        const pathParameters = [...path.matchAll(/\{([^}]+)\}/g)].map((match) => ({
+          name: match[1],
+          type: match[1] === "jobId" ? "UUID" : "String",
+          required: true,
+        }));
+        const verb = route.verb === "SSE" ? "GET" : route.verb;
+        const matchingClients = clientOperations.filter((operation) =>
+          operation.route.method === verb && pathMatches(operation.route.path, path),
+        );
+        const usedClients = matchingClients.filter((operation) => operation.callSites.length > 0);
+        return {
+          verb,
+          path,
+          function: route.function,
+          line: route.line,
+          sourcePath: route.sourcePath,
+          mediaServer: mount.mediaServer,
+          deprecated: className.startsWith("Deprecated"),
+          transport: route.verb === "SSE" ? "sse" : "http",
+          requestBody: contract.requestBody,
+          pathParameters,
+          queryParameters: contract.queryParameters,
+          responses: contract.responses,
+          komeliaUsed: usedClients.length > 0,
+          clientOperations: usedClients.map((operation) => `${operation.clientClass}.${operation.function}`).sort(),
+        };
+      });
+    })
+    .sort((left, right) => compareText(`${left.path}:${left.verb}:${left.sourcePath}:${left.line}`, `${right.path}:${right.verb}:${right.sourcePath}:${right.line}`));
+  const clientOperationsWithMatches = clientOperations.map((operation) => ({
+    ...operation,
+    matchedRoutes: routes.filter((route) => route.verb === operation.route.method && pathMatches(operation.route.path, route.path))
+      .map((route) => `${route.verb} ${route.path}`)
+      .sort(),
+  }));
+  const eventSource = parsedSources.find((parsed) => parsed.entry.path.endsWith("/KomfMetadataJobEvents.kt"));
+  const events = eventSource
+    ? [...eventSource.text.matchAll(/^const val \w+ = "([^"]+)"/gm)].map((match) => match[1])
+    : [];
+  if (events.length === 0) throw new ContractError("KomfMetadataJobEvents.kt contains no named SSE event constants");
+  const clientFactoryText = clientFactory.text;
+  const baseUrl = clientFactoryText.match(/baseUrl:\s*\(\)\s*->\s*String\s*=\s*\{\s*"([^"]+)"\s*\}/)?.[1] ?? null;
+  const authPluginInstalled = /\binstall\s*\(\s*Authentication\b/.test(serverModule.text);
+  const authorizationConfigured = /\bAuthorization\b|\bBearer\b/.test(clientFactoryText);
+  const globalErrors = [
+    { exception: "IllegalArgumentException", status: 400, bodyType: "KomfErrorResponse" },
+    { exception: "IllegalStateException", status: 500, bodyType: "KomfErrorResponse" },
+  ];
+  const omitted = routes.filter((route) => !route.komeliaUsed).map((route) => `${route.verb} ${route.path}`);
+  const unmatched = clientOperationsWithMatches.filter((operation) => operation.matchedRoutes.length === 0);
+
+  return {
+    sourceCommit: parsedSources.find((parsed) => parsed.entry.path.startsWith("komf-app/"))?.ref ?? null,
+    authentication: {
+      serverAuthenticationPluginInstalled: authPluginInstalled,
+      serverRequiresAuthentication: authPluginInstalled,
+      clientDefaultAuthorizationHeaderConfigured: authorizationConfigured,
+      clientDefaultBaseUrl: baseUrl,
+      clientDefaultCookieStorage: clientFactoryText.includes("AcceptAllCookiesStorage()") ? "AcceptAllCookiesStorage" : null,
+      clientSupportsInjectedHttpClient: clientFactoryText.includes("fun ktor(ktor: HttpClient)"),
+      evidence: [
+        { repository: KOMF_REPO, path: serverModule.entry.path },
+        { repository: KOMF_CLIENT_REPO, path: clientFactory.entry.path },
+      ],
+    },
+    globalErrorResponses: globalErrors,
+    routes,
+    routeCoverage: {
+      total: routes.length,
+      usedByKomelia: routes.filter((route) => route.komeliaUsed).length,
+      omittedFromKomelia: omitted.length,
+    },
+    omittedFromKomelia: omitted,
+    clientOperations: clientOperationsWithMatches,
+    unmatchedClientOperations: unmatched.map((operation) => ({
+      function: operation.function,
+      clientClass: operation.clientClass,
+      method: operation.route.method,
+      path: operation.route.path,
+      calledByKomelia: operation.callSites.length > 0,
+      sourcePath: operation.sourcePath,
+    })),
+    dtoTypes: apiTypes,
+    sse: {
+      endpoint: "GET /api/jobs/{jobId}/events",
+      contentType: "text/event-stream",
+      eventNames: events,
+      eventPayloads: {
+        ProviderSeriesEvent: "KomfMetadataJobEvent.ProviderSeriesEvent",
+        ProviderBookEvent: "KomfMetadataJobEvent.ProviderBookEvent",
+        ProviderCompletedEvent: "KomfMetadataJobEvent.ProviderCompletedEvent",
+        ProviderErrorEvent: "KomfMetadataJobEvent.ProviderErrorEvent",
+        PostProcessingStartEvent: "KomfMetadataJobEvent.PostProcessingStartEvent",
+        ProcessingErrorEvent: "KomfMetadataJobEvent.ProcessingErrorEvent",
+        EventStreamNotFoundEvent: "empty SSE data; client maps to KomfMetadataJobEvent.NotFound",
+      },
+      completion: "CompletionEvent is filtered before emission; stream closes without a completion event",
+    },
+    jsonLines: routes.filter((route) => route.responses.some((response) => response.contentType === "application/jsonl"))
+      .map((route) => `${route.verb} ${route.path}`),
+    consumer: {
+      repository: KOMELIA_REPO,
+      commit: komeliaRef,
+      version: komeliaVersion,
+      komfClientRepository: KOMF_CLIENT_REPO,
+      komfClientCommit: komfClientRef,
+      komfClientVersion,
+      komfClientSourceHashes: clientSourceRecords,
+      komeliaSourceHashes: komeliaSourceRecords,
+      gradleCatalog: komeliaCatalogRecord,
+    },
+  };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 0 || (args.length === 1 && args[0] === "--help")) {
@@ -1232,6 +2210,7 @@ async function main() {
   const mode = args[0].slice(2);
   const upstreams = readJson(UPSTREAMS_PATH);
   const komfEntry = findUpstream(upstreams, KOMF_REPO);
+  const komeliaEntry = findUpstream(upstreams, KOMELIA_REPO);
   let ref = komfEntry.baseline.value;
   if (mode === "latest") {
     const repository = await githubJson(`repos/${KOMF_REPO}`);
@@ -1242,7 +2221,7 @@ async function main() {
       throw new ContractError(`${KOMF_REPO}: GitHub did not return an exact latest commit SHA`);
     }
     ref = head.sha;
-    const latestContract = await extractContract({ komfEntry, ref, expectedVersion: null });
+    const latestContract = await extractContract({ komfEntry, komeliaEntry, ref, expectedVersion: null });
     let canonical = null;
     try {
       canonical = JSON.parse(readFileSync(CONTRACT_PATH, "utf8"));
@@ -1268,6 +2247,7 @@ async function main() {
 
   const contract = await extractContract({
     komfEntry,
+    komeliaEntry,
     ref,
     expectedVersion: komfEntry.reviewedRelease ?? komfEntry.release?.version ?? null,
   });

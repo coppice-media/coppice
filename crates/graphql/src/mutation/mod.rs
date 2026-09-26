@@ -31,6 +31,8 @@ mod job;
 pub(crate) mod kindle;
 mod library;
 mod log;
+#[cfg(feature = "mam-acquisition")]
+mod mam_acquisition;
 mod media;
 mod media_metadata;
 mod metadata_provider;
@@ -92,6 +94,8 @@ use job::JobMutation;
 use kindle::KindleMutation;
 use library::LibraryMutation;
 use log::LogMutation;
+#[cfg(feature = "mam-acquisition")]
+use mam_acquisition::MamAcquisitionMutation;
 use media::MediaMutation;
 use media_metadata::MediaMetadataMutation;
 use metadata_provider::MetadataProviderMutation;
@@ -158,6 +162,7 @@ struct UserAndNotifsMutations(
 struct SystemMutations(
 	APIKeyMutation,
 	BookRequestMutation,
+	#[cfg(feature = "mam-acquisition")] MamAcquisitionMutation,
 	#[cfg(feature = "crosspoint")] CrosspointMutation,
 	JobMutation,
 	LogMutation,

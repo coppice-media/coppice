@@ -5,24 +5,26 @@
 //! [`LiseurSyncBackend`].  This keeps the protocol usable by a headless server
 //! without coupling it to Stump's database implementation.
 //!
-//! See `crates/liseur-sync/README.md` for the pins (liseur-sync `f8ce32b7`
-//! OpenAPI 1.0, Liseur `31f8182d` — device-verified and replayed by
-//! `make replay-liseur-sync`), decisions, and verification.
+//! See `crates/liseur-sync/README.md` for pinned client/server contracts,
+//! compatibility notes, decisions, and verification.
 
-use std::{collections::HashSet, fmt};
+use std::{
+	collections::{BTreeMap, HashMap, HashSet},
+	fmt,
+};
 
 use async_trait::async_trait;
 
 use axum::{
 	body::{Body, Bytes},
-	extract::{rejection::JsonRejection, Json, Path, Query, Request},
+	extract::{rejection::JsonRejection, DefaultBodyLimit, Json, Path, Query, Request},
 	http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
 	middleware::Next,
 	response::{IntoResponse, Response},
 	routing::{any, delete, get, post, put},
 	Extension, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -40,6 +42,12 @@ const MAX_LOCATOR_BYTES: usize = 16 * 1024;
 const MAX_EXCERPT_BYTES: usize = 1024;
 const MAX_BODY_BYTES: usize = 16 * 1024;
 const MAX_TOKEN_NAME_BYTES: usize = 256;
+
+pub const MAX_SETTINGS_PER_ACCOUNT: usize = 256;
+pub const MAX_SETTING_KEY_BYTES: usize = 128;
+pub const MAX_SETTING_VALUE_BYTES: usize = 4 * 1024;
+const MAX_SYNC_BODY_BYTES: usize = 1 << 20;
+pub const MAX_SESSION_ACTIVE_MS: i64 = 9_007_199_254_740_991;
 
 /// Upper bound on one attachment when the host does not override it through
 /// [`LiseurSyncBackend::attachment_max_bytes`].
@@ -72,6 +80,19 @@ pub enum LiseurSyncError {
 	Conflict(String),
 	#[error("{0}")]
 	PayloadTooLarge(String),
+	#[error("{0}")]
+	TimeInFuture(String),
+	#[error("{message}")]
+	ItemRefusal {
+		status: StatusCode,
+		code: &'static str,
+		message: String,
+		item_index: Option<usize>,
+		session_id: Option<String>,
+		op_id: Option<String>,
+		work_id: Option<String>,
+		limit: Option<usize>,
+	},
 	#[error("identifiers resolve to multiple works")]
 	IdentityConflict(Vec<String>),
 	#[error("{0}")]
@@ -176,6 +197,7 @@ pub struct TokenIntrospection {
 	pub scope: Option<String>,
 	pub scopes: Vec<String>,
 	pub account_id: String,
+	pub session_active_ms: bool,
 }
 
 fn normalize_scopes(
@@ -310,6 +332,23 @@ pub struct SessionInput {
 	pub end_progression: Option<f64>,
 	#[serde(default)]
 	pub idle_ms: i64,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub active_ms: Option<i64>,
+}
+
+/// A setting stored for an account and returned by `GET /v1/me/settings`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SettingValue {
+	pub value: String,
+	pub updated_at: String,
+}
+
+/// One client timestamped setting update. The backend applies strict LWW.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingUpdate {
+	pub key: String,
+	pub value: String,
+	pub updated_at: String,
 }
 
 /// A work's position snapshot used by the recovery endpoint.
@@ -334,8 +373,11 @@ pub struct AnnotationInput {
 	pub progression: Option<f64>,
 	#[serde(default)]
 	pub excerpt: String,
-	#[serde(default)]
-	pub color: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub color: Option<String>,
+	/// KOReader highlight decoration; distinct from semantic `kind`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub drawer: Option<String>,
 	#[serde(default)]
 	pub body: String,
 	pub client_ts: String,
@@ -362,6 +404,9 @@ pub struct AnnotationRecord {
 	pub excerpt: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub color: Option<String>,
+	/// KOReader highlight decoration; distinct from semantic `kind`.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub drawer: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub body: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -537,6 +582,89 @@ pub struct CatalogBookSeries {
 	pub outcome: Option<String>,
 }
 
+/// The response to `PUT` or `DELETE /v1/entities/series/{id}/name`.
+///
+/// A name is a display overlay; `scanned_name` remains the catalog value.
+#[derive(Clone, Debug, Serialize)]
+pub struct CatalogSeriesName {
+	pub id: String,
+	pub name: String,
+	pub scanned_name: String,
+	pub name_source: String,
+	pub book_count: i64,
+}
+
+/// Largest accepted series display name, in UTF-8 bytes.
+pub const MAX_SERIES_NAME_BYTES: usize = 512;
+
+/// Liseur and KOReader highlight colors are stored without lossy mapping.
+/// KOReader styles use the distinct top-level `drawer` field.
+pub const ANNOTATION_COLORS: [&str; 10] = [
+	"yellow", "green", "blue", "pink", "purple", "orange", "red", "olive", "cyan", "gray",
+];
+/// KOReader's highlight drawer styles; the locator remains opaque.
+pub const ANNOTATION_DRAWERS: [&str; 4] = ["lighten", "underline", "strikeout", "invert"];
+/// Header and capability token required to receive KOReader-only fields.
+pub const EXTENDED_ANNOTATION_CAPABILITIES_HEADER: &str =
+	"x-liseur-annotation-capabilities";
+pub const EXTENDED_ANNOTATION_COLOR_DRAWER_CAPABILITY: &str =
+	"annotation-color-drawer-v1";
+/// Palette understood by pinned Liseur Android v0.13 and v0.18 clients.
+pub const LISEUR_ANNOTATION_COLORS: [&str; 6] =
+	["yellow", "green", "blue", "pink", "purple", "orange"];
+
+fn supports_extended_annotation_fields(headers: &HeaderMap) -> bool {
+	headers
+		.get(EXTENDED_ANNOTATION_CAPABILITIES_HEADER)
+		.and_then(|value| value.to_str().ok())
+		.is_some_and(|capabilities| {
+			capabilities.split(',').any(|capability| {
+				capability.trim() == EXTENDED_ANNOTATION_COLOR_DRAWER_CAPABILITY
+			})
+		})
+}
+
+fn annotation_record_for_client(
+	mut record: AnnotationRecord,
+	supports_extended: bool,
+) -> AnnotationRecord {
+	if !supports_extended {
+		if record
+			.color
+			.as_deref()
+			.is_some_and(|color| !LISEUR_ANNOTATION_COLORS.contains(&color))
+		{
+			record.color = None;
+		}
+		record.drawer = None;
+	}
+	record
+}
+
+fn annotation_results_for_client(
+	results: Vec<AnnotationResult>,
+	supports_extended: bool,
+) -> Vec<AnnotationResult> {
+	results
+		.into_iter()
+		.map(|mut result| {
+			result.server = result
+				.server
+				.map(|record| annotation_record_for_client(record, supports_extended));
+			result
+		})
+		.collect()
+}
+
+fn delete_annotation_for_client(
+	mut result: DeleteAnnotationResult,
+	supports_extended: bool,
+) -> DeleteAnnotationResult {
+	result.server = result
+		.server
+		.map(|record| annotation_record_for_client(record, supports_extended));
+	result
+}
 /// The result of joining a catalog book to the caller's work.
 #[derive(Clone, Debug, Serialize)]
 pub struct CatalogResolveResult {
@@ -583,6 +711,17 @@ pub trait LiseurSyncBackend: Clone + Send + Sync + 'static {
 		user_id: &str,
 		token_id: &str,
 	) -> Result<(), LiseurSyncError>;
+	async fn settings(
+		&self,
+		user_id: &str,
+	) -> Result<BTreeMap<String, SettingValue>, LiseurSyncError>;
+
+	async fn put_settings(
+		&self,
+		user_id: &str,
+		settings: Vec<SettingUpdate>,
+	) -> Result<(), LiseurSyncError>;
+
 	async fn folders(
 		&self,
 		_auth: &AuthContext,
@@ -641,6 +780,24 @@ pub trait LiseurSyncBackend: Clone + Send + Sync + 'static {
 		_book_id: &str,
 		_scope: Option<String>,
 	) -> Result<CatalogBookSeries, LiseurSyncError> {
+		Err(LiseurSyncError::NotFound("catalog unavailable".into()))
+	}
+	async fn set_series_name(
+		&self,
+		_auth: &AuthContext,
+		_series_id: &str,
+		_scope: &str,
+		_name: &str,
+	) -> Result<CatalogSeriesName, LiseurSyncError> {
+		Err(LiseurSyncError::NotFound("catalog unavailable".into()))
+	}
+
+	async fn clear_series_name(
+		&self,
+		_auth: &AuthContext,
+		_series_id: &str,
+		_scope: &str,
+	) -> Result<CatalogSeriesName, LiseurSyncError> {
 		Err(LiseurSyncError::NotFound("catalog unavailable".into()))
 	}
 
@@ -708,6 +865,14 @@ pub trait LiseurSyncBackend: Clone + Send + Sync + 'static {
 		user_id: &str,
 		work_id: &str,
 	) -> Result<Vec<AnnotationRecord>, LiseurSyncError>;
+	async fn work_annotations_with_deleted(
+		&self,
+		user_id: &str,
+		work_id: &str,
+		_include_deleted: bool,
+	) -> Result<Vec<AnnotationRecord>, LiseurSyncError> {
+		self.work_annotations(user_id, work_id).await
+	}
 
 	async fn delete_annotation(
 		&self,
@@ -752,16 +917,30 @@ where
 	S: Clone + Send + Sync + 'static,
 	B: LiseurSyncBackend,
 {
+	let settings = Router::<S>::new()
+		.route(
+			"/v1/me/settings",
+			get(get_settings::<B>).put(put_settings::<B>),
+		)
+		.layer(DefaultBodyLimit::max(MAX_SYNC_BODY_BYTES));
+	let sessions = Router::<S>::new()
+		.route("/v1/sessions", post(push_sessions::<B>))
+		.layer(DefaultBodyLimit::max(MAX_SYNC_BODY_BYTES));
+	let ops = Router::<S>::new()
+		.route("/v1/ops", post(push_ops::<B>))
+		.layer(DefaultBodyLimit::max(MAX_SYNC_BODY_BYTES));
+
 	let protected = Router::<S>::new()
+		.merge(settings)
+		.merge(sessions)
 		.route("/v1/token", get(token_introspection))
 		.route("/v1/tokens", post(create_token::<B>))
 		.route("/v1/tokens/{id}", delete(revoke_token::<B>))
 		.route("/v1/works/resolve", post(resolve_work::<B>))
-		.route("/v1/ops", post(push_ops::<B>))
+		.merge(ops)
 		.route("/v1/changes", get(changes::<B>))
 		.route("/v1/heads", get(heads::<B>))
 		.route("/v1/works/{id}/positions", get(positions::<B>))
-		.route("/v1/sessions", post(push_sessions::<B>))
 		.route("/v1/annotations", post(push_annotations::<B>))
 		.route("/v1/annotations/changes", get(annotation_changes::<B>))
 		.route("/v1/annotations/{id}", delete(delete_annotation::<B>))
@@ -783,7 +962,11 @@ where
 		.route("/v1/books/{id}/series", get(book_series::<B>))
 		.route("/v1/books/{id}/resolve", post(resolve_catalog_book::<B>))
 		.route("/v1/entities/series/{id}/order", any(deferred_catalog))
-		.route("/v1/entities/series/{id}/name", any(deferred_catalog))
+		.route("/v1/events", get(deferred_events))
+		.route(
+			"/v1/entities/series/{id}/name",
+			put(set_series_name::<B>).delete(clear_series_name::<B>),
+		)
 		.layer(axum::middleware::from_fn(token_auth::<B>));
 
 	Router::<S>::new()
@@ -834,6 +1017,22 @@ struct CatalogSearchQuery {
 #[derive(Debug, Deserialize, Default)]
 struct CatalogSeriesQuery {
 	scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetSeriesNameRequest {
+	#[serde(default = "default_personal_series_name_scope")]
+	scope: String,
+	name: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ClearSeriesNameQuery {
+	scope: Option<String>,
+}
+
+fn default_personal_series_name_scope() -> String {
+	"personal".into()
 }
 
 fn catalog_limit(limit: Option<usize>) -> Result<usize, LiseurSyncError> {
@@ -983,6 +1182,50 @@ where
 	Ok(Json(series))
 }
 
+async fn set_series_name<B>(
+	Path(series_id): Path<String>,
+	Extension(auth): Extension<AuthContext>,
+	Extension(token): Extension<LiseurToken>,
+	Extension(backend): Extension<B>,
+	Json(request): Json<SetSeriesNameRequest>,
+) -> Result<Json<CatalogSeriesName>, Response>
+where
+	B: LiseurSyncBackend,
+{
+	require_library_manage(&token).map_err(error_response)?;
+	validate_personal_series_name_scope(&request.scope).map_err(error_response)?;
+	validate_series_name(&request.name).map_err(error_response)?;
+	let result = backend
+		.set_series_name(&auth, &series_id, &request.scope, &request.name)
+		.await
+		.map_err(error_response)?;
+	Ok(Json(result))
+}
+
+async fn clear_series_name<B>(
+	Path(series_id): Path<String>,
+	Extension(auth): Extension<AuthContext>,
+	Extension(token): Extension<LiseurToken>,
+	Extension(backend): Extension<B>,
+	Query(query): Query<ClearSeriesNameQuery>,
+) -> Result<Json<CatalogSeriesName>, Response>
+where
+	B: LiseurSyncBackend,
+{
+	require_library_manage(&token).map_err(error_response)?;
+	let scope = query
+		.scope
+		.as_deref()
+		.filter(|scope| !scope.is_empty())
+		.unwrap_or("personal");
+	validate_personal_series_name_scope(scope).map_err(error_response)?;
+	let result = backend
+		.clear_series_name(&auth, &series_id, scope)
+		.await
+		.map_err(error_response)?;
+	Ok(Json(result))
+}
+
 async fn book_cover<B>(
 	Path(book_id): Path<String>,
 	Extension(auth): Extension<AuthContext>,
@@ -1077,6 +1320,17 @@ async fn deferred_catalog() -> Response {
 	))
 }
 
+/// Liseur ≥ v0.15.0 opens `GET /v1/events` as an SSE topic feed once per
+/// foreground session and stops for good on 404 (`LiveRetry.delayMillis`),
+/// but retries with capped backoff on any other outcome — including the
+/// host's SPA fallback, which answers a redirect to an HTML page.  Answering
+/// a real 404 keeps the client on its request/response sync.
+async fn deferred_events() -> Response {
+	error_response(LiseurSyncError::NotFound(
+		"live event stream is not implemented".into(),
+	))
+}
+
 fn parse_json<T>(result: Result<Json<T>, JsonRejection>) -> Result<T, LiseurSyncError> {
 	result
 		.map(|Json(value)| value)
@@ -1157,7 +1411,155 @@ async fn token_introspection(
 		scope,
 		scopes: token.scopes,
 		account_id: token.context.id(),
+		session_active_ms: true,
 	}))
+}
+#[derive(Debug, Deserialize)]
+struct PutSettingsRequest {
+	#[serde(default)]
+	settings: HashMap<String, SettingRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SettingRequest {
+	#[serde(default)]
+	value: SettingValueField,
+	updated_at: String,
+}
+
+#[derive(Debug, Default)]
+enum SettingValueField {
+	#[default]
+	Missing,
+	Null,
+	String(String),
+	Other,
+}
+
+impl<'de> Deserialize<'de> for SettingValueField {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		Ok(match Value::deserialize(deserializer)? {
+			Value::Null => Self::Null,
+			Value::String(value) => Self::String(value),
+			_ => Self::Other,
+		})
+	}
+}
+
+#[derive(Debug, Serialize)]
+struct SettingsResponse {
+	settings: BTreeMap<String, SettingValue>,
+}
+
+async fn get_settings<B>(
+	Extension(auth): Extension<AuthContext>,
+	Extension(token): Extension<LiseurToken>,
+	Extension(backend): Extension<B>,
+) -> Result<Json<SettingsResponse>, Response>
+where
+	B: LiseurSyncBackend,
+{
+	require_sync(&token).map_err(error_response)?;
+	let settings = backend.settings(&auth.id()).await.map_err(error_response)?;
+	Ok(Json(SettingsResponse { settings }))
+}
+
+async fn put_settings<B>(
+	Extension(auth): Extension<AuthContext>,
+	Extension(token): Extension<LiseurToken>,
+	Extension(backend): Extension<B>,
+	json: Result<Json<PutSettingsRequest>, JsonRejection>,
+) -> Result<Json<SettingsResponse>, Response>
+where
+	B: LiseurSyncBackend,
+{
+	require_sync(&token).map_err(error_response)?;
+	let request = json.map(|Json(value)| value).map_err(|rejection| {
+		if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+			error_response(LiseurSyncError::PayloadTooLarge(
+				"request body too large".into(),
+			))
+		} else {
+			error_response(LiseurSyncError::BadRequest("invalid JSON body".into()))
+		}
+	})?;
+	let settings = validated_settings(request.settings).map_err(error_response)?;
+	backend
+		.put_settings(&auth.id(), settings)
+		.await
+		.map_err(error_response)?;
+	let settings = backend.settings(&auth.id()).await.map_err(error_response)?;
+	Ok(Json(SettingsResponse { settings }))
+}
+
+fn validated_settings(
+	request: HashMap<String, SettingRequest>,
+) -> Result<Vec<SettingUpdate>, LiseurSyncError> {
+	if request.is_empty() {
+		return Err(LiseurSyncError::BadRequest("no settings provided".into()));
+	}
+	if request.len() > MAX_SETTINGS_PER_ACCOUNT {
+		return Err(LiseurSyncError::BadRequest(
+			"too many settings in one request".into(),
+		));
+	}
+
+	let mut updates = Vec::with_capacity(request.len());
+	for (key, setting) in request {
+		if key.is_empty() {
+			return Err(LiseurSyncError::BadRequest("empty settings key".into()));
+		}
+		if key.len() > MAX_SETTING_KEY_BYTES {
+			return Err(LiseurSyncError::BadRequest(format!(
+				"settings key too long: {key}"
+			)));
+		}
+		let value = match setting.value {
+			SettingValueField::Missing => String::new(),
+			SettingValueField::String(value) => value,
+			SettingValueField::Null => {
+				return Err(LiseurSyncError::BadRequest(format!(
+					"settings value may not be null for key {key}"
+				)));
+			},
+			SettingValueField::Other => {
+				return Err(LiseurSyncError::BadRequest(format!(
+					"settings value must be a string for key {key}"
+				)));
+			},
+		};
+		if value.len() > MAX_SETTING_VALUE_BYTES {
+			return Err(LiseurSyncError::BadRequest(format!(
+				"settings value too long for key {key}"
+			)));
+		}
+		if key.contains('\0') || value.contains('\0') {
+			return Err(LiseurSyncError::BadRequest(
+				"settings key or value contains a character that cannot be stored".into(),
+			));
+		}
+		let updated_at = DateTime::parse_from_rfc3339(&setting.updated_at)
+			.map_err(|_| {
+				LiseurSyncError::BadRequest(format!("invalid updated_at for key {key}"))
+			})?
+			.with_timezone(&Utc);
+		if updated_at > Utc::now() + chrono::Duration::hours(24) {
+			return Err(LiseurSyncError::TimeInFuture(format!(
+				"updated_at in the future for key {key}"
+			)));
+		}
+		let updated_at = updated_at.to_rfc3339_opts(SecondsFormat::Micros, true);
+		updates.push(SettingUpdate {
+			key,
+			value,
+			updated_at,
+		});
+	}
+	updates.sort_by(|left, right| left.key.cmp(&right.key));
+	Ok(updates)
 }
 
 #[derive(Debug, Serialize)]
@@ -1229,7 +1631,15 @@ async fn push_ops<B>(
 where
 	B: LiseurSyncBackend,
 {
-	let request = parse_json(json).map_err(error_response)?;
+	let request = json.map(|Json(value)| value).map_err(|rejection| {
+		if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+			error_response(LiseurSyncError::PayloadTooLarge(
+				"request body too large".into(),
+			))
+		} else {
+			error_response(LiseurSyncError::BadRequest("invalid JSON body".into()))
+		}
+	})?;
 	require_sync(&token).map_err(error_response)?;
 	if request.ops.is_empty() {
 		return Err(error_response(LiseurSyncError::BadRequest(
@@ -1237,12 +1647,32 @@ where
 		)));
 	}
 	if request.ops.len() > MAX_OP_BATCH {
-		return Err(error_response(LiseurSyncError::BadRequest(
-			"batch too large".into(),
-		)));
+		return Err(error_response(LiseurSyncError::ItemRefusal {
+			status: StatusCode::BAD_REQUEST,
+			code: "batch_too_large",
+			message: "batch too large".into(),
+			item_index: None,
+			session_id: None,
+			op_id: None,
+			work_id: None,
+			limit: Some(MAX_OP_BATCH),
+		}));
 	}
-	for op in &request.ops {
-		validate_op(op).map_err(|e| error_response(LiseurSyncError::BadRequest(e)))?;
+	for (index, op) in request.ops.iter().enumerate() {
+		if let Err((code, message, limit)) = validate_op(op) {
+			let op_id = (!op.op_id.is_empty() && op.op_id.len() <= MAX_ID_BYTES)
+				.then(|| op.op_id.clone());
+			return Err(error_response(LiseurSyncError::ItemRefusal {
+				status: StatusCode::BAD_REQUEST,
+				code,
+				message,
+				item_index: Some(index),
+				session_id: None,
+				op_id,
+				work_id: None,
+				limit,
+			}));
+		}
 	}
 	let results = backend
 		.append_ops(&auth.id(), &token.device_id, request.ops)
@@ -1356,7 +1786,15 @@ async fn push_sessions<B>(
 where
 	B: LiseurSyncBackend,
 {
-	let request = parse_json(json).map_err(error_response)?;
+	let request = json.map(|Json(value)| value).map_err(|rejection| {
+		if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+			error_response(LiseurSyncError::PayloadTooLarge(
+				"request body too large".into(),
+			))
+		} else {
+			error_response(LiseurSyncError::BadRequest("invalid JSON body".into()))
+		}
+	})?;
 	require_sync(&token).map_err(error_response)?;
 	if request.sessions.is_empty() {
 		return Err(error_response(LiseurSyncError::BadRequest(
@@ -1364,13 +1802,33 @@ where
 		)));
 	}
 	if request.sessions.len() > MAX_SESSION_BATCH {
-		return Err(error_response(LiseurSyncError::BadRequest(
-			"batch too large".into(),
-		)));
+		return Err(error_response(LiseurSyncError::ItemRefusal {
+			status: StatusCode::BAD_REQUEST,
+			code: "batch_too_large",
+			message: "batch too large".into(),
+			item_index: None,
+			session_id: None,
+			op_id: None,
+			work_id: None,
+			limit: Some(MAX_SESSION_BATCH),
+		}));
 	}
-	for session in &request.sessions {
-		validate_session(session)
-			.map_err(|e| error_response(LiseurSyncError::BadRequest(e)))?;
+	for (index, session) in request.sessions.iter().enumerate() {
+		if let Err((code, message)) = validate_session(session) {
+			let session_id = (!session.session_id.is_empty()
+				&& session.session_id.len() <= MAX_ID_BYTES)
+				.then(|| session.session_id.clone());
+			return Err(error_response(LiseurSyncError::ItemRefusal {
+				status: StatusCode::BAD_REQUEST,
+				code,
+				message,
+				item_index: Some(index),
+				session_id,
+				op_id: None,
+				work_id: None,
+				limit: None,
+			}));
+		}
 	}
 	let accepted = backend
 		.append_sessions(&auth.id(), &token.device_id, request.sessions)
@@ -1393,6 +1851,7 @@ async fn push_annotations<B>(
 	Extension(auth): Extension<AuthContext>,
 	Extension(token): Extension<LiseurToken>,
 	Extension(backend): Extension<B>,
+	headers: HeaderMap,
 	json: Result<Json<RawAnnotationsRequest>, JsonRejection>,
 ) -> Result<Json<AnnotationsResponse>, Response>
 where
@@ -1400,6 +1859,7 @@ where
 {
 	let request = parse_json(json).map_err(error_response)?;
 	require_sync(&token).map_err(error_response)?;
+	let supports_extended = supports_extended_annotation_fields(&headers);
 	if request.annotations.is_empty() {
 		return Err(error_response(LiseurSyncError::BadRequest(
 			"annotations required".into(),
@@ -1467,10 +1927,13 @@ where
 	}
 
 	Ok(Json(AnnotationsResponse {
-		results: results
-			.into_iter()
-			.map(|result| result.expect("every annotation has a result"))
-			.collect(),
+		results: annotation_results_for_client(
+			results
+				.into_iter()
+				.map(|result| result.expect("every annotation has a result"))
+				.collect(),
+			supports_extended,
+		),
 	}))
 }
 
@@ -1483,19 +1946,24 @@ async fn annotation_changes<B>(
 	Extension(auth): Extension<AuthContext>,
 	Extension(token): Extension<LiseurToken>,
 	Extension(backend): Extension<B>,
+	headers: HeaderMap,
 	Query(query): Query<CursorQuery>,
 ) -> Result<Json<AnnotationChangesResponse>, Response>
 where
 	B: LiseurSyncBackend,
 {
 	require_sync(&token).map_err(error_response)?;
+	let supports_extended = supports_extended_annotation_fields(&headers);
 	let (since, limit) = cursor_params(&query).map_err(error_response)?;
 	let (annotations, high_water, has_more) = backend
 		.annotation_changes(&auth.id(), since, limit)
 		.await
 		.map_err(error_response)?;
 	Ok(Json(AnnotationChangesResponse {
-		annotations,
+		annotations: annotations
+			.into_iter()
+			.map(|annotation| annotation_record_for_client(annotation, supports_extended))
+			.collect(),
 		high_water,
 		has_more,
 	}))
@@ -1513,21 +1981,33 @@ async fn work_annotations<B>(
 	Extension(auth): Extension<AuthContext>,
 	Extension(token): Extension<LiseurToken>,
 	Extension(backend): Extension<B>,
+	headers: HeaderMap,
+	Query(query): Query<WorkAnnotationsQuery>,
 ) -> Result<Json<WorkAnnotationsResponse>, Response>
 where
 	B: LiseurSyncBackend,
 {
 	require_sync(&token).map_err(error_response)?;
+	let supports_extended = supports_extended_annotation_fields(&headers);
 	let annotations = backend
-		.work_annotations(&auth.id(), &work_id)
+		.work_annotations_with_deleted(&auth.id(), &work_id, query.include_deleted)
 		.await
 		.map_err(error_response)?;
+	let annotations = annotations
+		.into_iter()
+		.map(|annotation| annotation_record_for_client(annotation, supports_extended))
+		.collect();
 	Ok(Json(WorkAnnotationsResponse { annotations }))
 }
 
 #[derive(Debug, Serialize)]
 struct WorkAnnotationsResponse {
 	annotations: Vec<AnnotationRecord>,
+}
+#[derive(Debug, Default, Deserialize)]
+struct WorkAnnotationsQuery {
+	#[serde(default)]
+	include_deleted: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1540,12 +2020,14 @@ async fn delete_annotation<B>(
 	Extension(auth): Extension<AuthContext>,
 	Extension(token): Extension<LiseurToken>,
 	Extension(backend): Extension<B>,
+	headers: HeaderMap,
 	Query(query): Query<DeleteQuery>,
 ) -> Result<Response, Response>
 where
 	B: LiseurSyncBackend,
 {
 	require_sync(&token).map_err(error_response)?;
+	let supports_extended = supports_extended_annotation_fields(&headers);
 	let rev = query.rev.filter(|rev| *rev >= 1).ok_or_else(|| {
 		error_response(LiseurSyncError::BadRequest(
 			"rev query parameter required".into(),
@@ -1555,6 +2037,7 @@ where
 		.delete_annotation(&auth.id(), &id, rev)
 		.await
 		.map_err(error_response)?;
+	let result = delete_annotation_for_client(result, supports_extended);
 	if result.status == "conflict" {
 		return Ok((
 			StatusCode::CONFLICT,
@@ -1770,6 +2253,40 @@ fn require_library_read(token: &LiseurToken) -> Result<(), LiseurSyncError> {
 	}
 }
 
+fn require_library_manage(token: &LiseurToken) -> Result<(), LiseurSyncError> {
+	if token.is_login_session() || !token.allows_scope("library-manage") {
+		Err(LiseurSyncError::Forbidden(
+			"library-manage scope required".into(),
+		))
+	} else {
+		Ok(())
+	}
+}
+
+fn validate_personal_series_name_scope(scope: &str) -> Result<(), LiseurSyncError> {
+	if scope == "personal" {
+		Ok(())
+	} else {
+		Err(LiseurSyncError::BadRequest(
+			"Stump supports only personal series-name overlays".into(),
+		))
+	}
+}
+
+fn validate_series_name(name: &str) -> Result<(), LiseurSyncError> {
+	if name.len() > MAX_SERIES_NAME_BYTES {
+		return Err(LiseurSyncError::BadRequest(
+			"series name is too long".into(),
+		));
+	}
+	if name.trim().is_empty() {
+		return Err(LiseurSyncError::BadRequest(
+			"a series name cannot be empty".into(),
+		));
+	}
+	Ok(())
+}
+
 fn require_sync(token: &LiseurToken) -> Result<(), LiseurSyncError> {
 	if token.is_login_session() {
 		return Err(LiseurSyncError::Forbidden("sync scope required".into()));
@@ -1795,71 +2312,113 @@ fn validate_identifiers(identifiers: &[Identifier]) -> Result<(), String> {
 	Ok(())
 }
 
-fn validate_op(op: &OpInput) -> Result<(), String> {
+fn validate_op(op: &OpInput) -> Result<(), (&'static str, String, Option<usize>)> {
 	if op.op_id.is_empty() || op.op_id.len() > MAX_ID_BYTES {
-		return Err("op_id required (at most 64 bytes)".into());
+		return Err((
+			"missing_field",
+			"op_id required (at most 64 bytes)".into(),
+			None,
+		));
 	}
 	if op.work_id.is_empty() || op.work_id.len() > MAX_REFERENCE_BYTES {
-		return Err("work_id required (at most 128 bytes)".into());
+		return Err((
+			"missing_field",
+			"work_id required (at most 128 bytes)".into(),
+			None,
+		));
 	}
 	if let Some(edition_sha) = &op.edition_sha {
 		if edition_sha.len() > MAX_REFERENCE_BYTES {
-			return Err("edition_sha too large".into());
+			return Err(("missing_field", "edition_sha too large".into(), None));
 		}
 	}
 	let progression = op
 		.progression
-		.ok_or_else(|| "progression required".to_owned())?;
+		.ok_or_else(|| ("missing_field", "progression required".to_owned(), None))?;
 	if !(0.0..=1.0).contains(&progression) || !progression.is_finite() {
-		return Err("progression out of range [0,1]".into());
+		return Err((
+			"progression_out_of_range",
+			"progression out of range [0,1]".into(),
+			None,
+		));
 	}
 	if let Some(locator) = &op.locator {
-		let bytes =
-			serde_json::to_vec(locator).map_err(|_| "invalid locator".to_owned())?;
+		let bytes = serde_json::to_vec(locator)
+			.map_err(|_| ("missing_field", "invalid locator".to_owned(), None))?;
 		if bytes.len() > MAX_LOCATOR_BYTES {
-			return Err("locator too large".into());
+			return Err((
+				"locator_too_large",
+				"locator too large".into(),
+				Some(MAX_LOCATOR_BYTES),
+			));
 		}
 	}
-	validate_timestamp(&op.client_ts, false)
-		.map(|_| ())
-		.map_err(|_| "bad client_ts".to_owned())
+	if op.client_ts.len() > MAX_CLIENT_TS_BYTES {
+		return Err(("bad_time", "bad client_ts".into(), None));
+	}
+	let timestamp = DateTime::parse_from_rfc3339(&op.client_ts)
+		.map_err(|_| ("bad_time", "bad client_ts".to_owned(), None))?
+		.with_timezone(&Utc);
+	if timestamp > Utc::now() + chrono::Duration::hours(24) {
+		return Err((
+			"time_in_future",
+			"client_ts is too far in the future".into(),
+			None,
+		));
+	}
+	Ok(())
 }
 
-fn validate_session(session: &SessionInput) -> Result<(), String> {
+fn validate_session(session: &SessionInput) -> Result<(), (&'static str, String)> {
 	if session.session_id.is_empty() || session.session_id.len() > MAX_ID_BYTES {
-		return Err("session_id required (at most 64 bytes)".into());
+		return Err((
+			"missing_field",
+			"session_id required (at most 64 bytes)".into(),
+		));
 	}
 	if session.work_id.is_empty() || session.work_id.len() > MAX_REFERENCE_BYTES {
-		return Err("work_id required (at most 128 bytes)".into());
+		return Err((
+			"missing_field",
+			"work_id required (at most 128 bytes)".into(),
+		));
 	}
 	if let Some(edition_sha) = &session.edition_sha {
 		if edition_sha.len() > MAX_REFERENCE_BYTES {
-			return Err("edition_sha too large".into());
+			return Err(("missing_field", "edition_sha too large".into()));
 		}
 	}
 	let started = DateTime::parse_from_rfc3339(&session.started_at)
-		.map_err(|_| "bad started_at".to_owned())?;
+		.map_err(|_| ("bad_time", "bad started_at".to_owned()))?;
 	let ended = DateTime::parse_from_rfc3339(&session.ended_at)
-		.map_err(|_| "bad ended_at".to_owned())?;
+		.map_err(|_| ("bad_time", "bad ended_at".to_owned()))?;
 	if ended < started {
-		return Err("ended_at before started_at".into());
+		return Err(("bad_time", "ended_at before started_at".into()));
 	}
 	let start = session
 		.start_progression
-		.ok_or_else(|| "start_progression required".to_owned())?;
+		.ok_or_else(|| ("missing_field", "start_progression required".to_owned()))?;
 	let end = session
 		.end_progression
-		.ok_or_else(|| "end_progression required".to_owned())?;
+		.ok_or_else(|| ("missing_field", "end_progression required".to_owned()))?;
 	if !(0.0..=1.0).contains(&start)
 		|| !start.is_finite()
 		|| !(0.0..=1.0).contains(&end)
 		|| !end.is_finite()
 	{
-		return Err("progression out of range [0,1]".into());
+		return Err((
+			"progression_out_of_range",
+			"progression out of range [0,1]".into(),
+		));
 	}
 	let duration = (ended - started).num_milliseconds();
 	if session.idle_ms < 0 || session.idle_ms > duration {
-		return Err("idle_ms out of range".into());
+		return Err(("idle_out_of_range", "idle_ms out of range".into()));
+	}
+	if session
+		.active_ms
+		.is_some_and(|active_ms| !(0..=MAX_SESSION_ACTIVE_MS).contains(&active_ms))
+	{
+		return Err(("active_out_of_range", "active_ms out of range".into()));
 	}
 	Ok(())
 }
@@ -1885,9 +2444,6 @@ fn validate_annotation(annotation: &AnnotationInput) -> Result<(), String> {
 		.is_some_and(|value| !value.is_null());
 	match annotation.kind.as_str() {
 		"note" => {
-			if locator_present {
-				return Err("a note carries no locator".into());
-			}
 			if annotation.body.is_empty() {
 				return Err("a note requires a body".into());
 			}
@@ -1920,15 +2476,24 @@ fn validate_annotation(annotation: &AnnotationInput) -> Result<(), String> {
 	if annotation.body.len() > MAX_BODY_BYTES {
 		return Err("body too large".into());
 	}
-	if !annotation.color.is_empty()
-		&& !matches!(
-			annotation.color.as_str(),
-			"yellow" | "green" | "blue" | "pink" | "purple" | "orange"
-		) {
+	let color = annotation.color.as_deref().unwrap_or_default();
+	if !color.is_empty() && !ANNOTATION_COLORS.contains(&color) {
 		return Err("color must be one of the palette tokens".into());
 	}
-	if !annotation.color.is_empty() && annotation.kind != "highlight" {
+	if !color.is_empty() && annotation.kind != "highlight" {
 		return Err("color belongs to a highlight".into());
+	}
+	if let Some(drawer) = annotation
+		.drawer
+		.as_deref()
+		.filter(|drawer| !drawer.is_empty())
+	{
+		if !ANNOTATION_DRAWERS.contains(&drawer) {
+			return Err("drawer must be one of the KOReader highlight styles".into());
+		}
+		if annotation.kind != "highlight" {
+			return Err("drawer belongs to a highlight".into());
+		}
 	}
 	validate_timestamp(&annotation.client_ts, false)
 		.map(|_| ())
@@ -1952,13 +2517,16 @@ fn error_response(error: LiseurSyncError) -> Response {
 	let status = match &error {
 		LiseurSyncError::Unauthorized => StatusCode::UNAUTHORIZED,
 		LiseurSyncError::Forbidden(_) => StatusCode::FORBIDDEN,
-		LiseurSyncError::BadRequest(_) => StatusCode::BAD_REQUEST,
+		LiseurSyncError::BadRequest(_) | LiseurSyncError::TimeInFuture(_) => {
+			StatusCode::BAD_REQUEST
+		},
 		LiseurSyncError::NotFound(_) => StatusCode::NOT_FOUND,
 		LiseurSyncError::Gone(_) => StatusCode::GONE,
 		LiseurSyncError::Conflict(_) | LiseurSyncError::IdentityConflict(_) => {
 			StatusCode::CONFLICT
 		},
 		LiseurSyncError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+		LiseurSyncError::ItemRefusal { status, .. } => *status,
 		LiseurSyncError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
 	};
 	let body = match error {
@@ -1967,6 +2535,37 @@ fn error_response(error: LiseurSyncError) -> Response {
 				"error": "identifiers resolve to multiple works",
 				"works": work_ids,
 			})
+		},
+		LiseurSyncError::TimeInFuture(message) => {
+			json!({"error": message, "code": "time_in_future"})
+		},
+		LiseurSyncError::ItemRefusal {
+			code,
+			message,
+			item_index,
+			session_id,
+			op_id,
+			work_id,
+			limit,
+			..
+		} => {
+			let mut body = json!({"error": message, "code": code});
+			if let Some(item_index) = item_index {
+				body["item_index"] = json!(item_index);
+			}
+			if let Some(session_id) = session_id {
+				body["session_id"] = json!(session_id);
+			}
+			if let Some(op_id) = op_id {
+				body["op_id"] = json!(op_id);
+			}
+			if let Some(work_id) = work_id {
+				body["work_id"] = json!(work_id);
+			}
+			if let Some(limit) = limit {
+				body["limit"] = json!(limit);
+			}
+			body
 		},
 		other => json!({ "error": other.to_string() }),
 	};
@@ -2000,13 +2599,14 @@ mod tests {
 			id: "a".into(),
 			rev: 2,
 			seq: 4,
-			work_id: None,
+			work_id: Some("work".into()),
 			edition_sha: None,
 			kind: None,
 			locator: None,
 			progression: None,
 			excerpt: None,
 			color: None,
+			drawer: None,
 			body: None,
 			device_id: None,
 			client_ts: None,
@@ -2019,7 +2619,7 @@ mod tests {
 		assert_eq!(value["rev"], 2);
 		assert_eq!(value["seq"], 4);
 		assert_eq!(value["deleted"], true);
-		assert!(value.get("work_id").is_none());
+		assert_eq!(value["work_id"], "work");
 		assert!(value.get("kind").is_none());
 	}
 
@@ -2075,6 +2675,22 @@ mod tests {
 			..op.clone()
 		})
 		.is_err());
+		let locator_too_large = validate_op(&OpInput {
+			locator: Some(json!({"text": "x".repeat(MAX_LOCATOR_BYTES)})),
+			..op.clone()
+		})
+		.unwrap_err();
+		assert_eq!(locator_too_large.0, "locator_too_large");
+		assert_eq!(locator_too_large.2, Some(MAX_LOCATOR_BYTES));
+		assert_eq!(
+			validate_op(&OpInput {
+				client_ts: (Utc::now() + chrono::Duration::hours(25)).to_rfc3339(),
+				..op
+			})
+			.unwrap_err()
+			.0,
+			"time_in_future"
+		);
 
 		let annotation = AnnotationInput {
 			id: "a".into(),
@@ -2085,11 +2701,211 @@ mod tests {
 			locator: None,
 			progression: None,
 			excerpt: String::new(),
-			color: String::new(),
+			color: None,
+			drawer: None,
 			body: "body".into(),
 			client_ts: "2026-01-01T00:00:00Z".into(),
 		};
 		assert!(validate_annotation(&annotation).is_ok());
+		let anchored_note = AnnotationInput {
+			locator: Some(json!({"page": 4})),
+			..annotation.clone()
+		};
+		assert!(validate_annotation(&anchored_note).is_ok());
+		let highlight = AnnotationInput {
+			kind: "highlight".into(),
+			locator: Some(json!({"page": 1})),
+			color: Some("red".into()),
+			drawer: Some("underline".into()),
+			..annotation.clone()
+		};
+		assert!(validate_annotation(&highlight).is_ok());
+		for color in ANNOTATION_COLORS {
+			assert!(validate_annotation(&AnnotationInput {
+				color: Some(color.into()),
+				..highlight.clone()
+			})
+			.is_ok());
+		}
+		assert!(validate_annotation(&AnnotationInput {
+			color: Some("teal".into()),
+			..highlight.clone()
+		})
+		.is_err());
+		for drawer in ANNOTATION_DRAWERS {
+			assert!(validate_annotation(&AnnotationInput {
+				drawer: Some(drawer.into()),
+				..highlight.clone()
+			})
+			.is_ok());
+		}
+		assert!(validate_annotation(&AnnotationInput {
+			drawer: Some("wavy".into()),
+			..highlight.clone()
+		})
+		.is_err());
+		assert!(validate_annotation(&AnnotationInput {
+			drawer: Some("underline".into()),
+			..annotation
+		})
+		.is_err());
+		assert_eq!(
+			serde_json::to_value(&highlight).unwrap()["drawer"],
+			"underline"
+		);
+		let record = AnnotationRecord {
+			id: "red-highlight".into(),
+			rev: 1,
+			seq: 1,
+			work_id: Some("work".into()),
+			edition_sha: None,
+			kind: Some("highlight".into()),
+			locator: Some(json!({"href": "chapter.xhtml"})),
+			progression: None,
+			excerpt: Some("a passage".into()),
+			color: Some("red".into()),
+			drawer: Some("underline".into()),
+			body: None,
+			device_id: Some("device".into()),
+			client_ts: Some("2026-01-01T00:00:00Z".into()),
+			updated_at: "2026-01-01T00:00:00Z".into(),
+			deleted: false,
+			deleted_at: None,
+		};
+		let red_for_liseur =
+			serde_json::to_value(annotation_record_for_client(record.clone(), false))
+				.unwrap();
+		assert_eq!(red_for_liseur["id"], "red-highlight");
+		assert_eq!(red_for_liseur["kind"], "highlight");
+		assert_eq!(red_for_liseur["locator"]["href"], "chapter.xhtml");
+		assert!(!red_for_liseur.as_object().unwrap().contains_key("color"));
+		assert!(!red_for_liseur.as_object().unwrap().contains_key("drawer"));
+		let red_for_koreader =
+			serde_json::to_value(annotation_record_for_client(record, true)).unwrap();
+		assert_eq!(red_for_koreader["color"], "red");
+		assert_eq!(red_for_koreader["drawer"], "underline");
+		let mut headers = HeaderMap::new();
+		assert!(!supports_extended_annotation_fields(&headers));
+		headers.insert(
+			EXTENDED_ANNOTATION_CAPABILITIES_HEADER,
+			HeaderValue::from_static(EXTENDED_ANNOTATION_COLOR_DRAWER_CAPABILITY),
+		);
+		assert!(supports_extended_annotation_fields(&headers));
+	}
+
+	#[test]
+	fn settings_validation_matches_timestamp_and_value_contract() {
+		let missing_value: PutSettingsRequest = serde_json::from_value(json!({
+			"settings": {
+				"reader.font": {"updated_at": "2026-01-01T00:00:00.123456789Z"}
+			}
+		}))
+		.unwrap();
+		let update = validated_settings(missing_value.settings)
+			.unwrap()
+			.remove(0);
+		assert_eq!(update.value, "");
+		assert_eq!(update.updated_at, "2026-01-01T00:00:00.123456Z");
+
+		let null_value: PutSettingsRequest = serde_json::from_value(json!({
+			"settings": {
+				"reader.font": {"value": null, "updated_at": "2026-01-01T00:00:00Z"}
+			}
+		}))
+		.unwrap();
+		assert!(matches!(
+			validated_settings(null_value.settings),
+			Err(LiseurSyncError::BadRequest(_))
+		));
+
+		let future = (Utc::now() + chrono::Duration::hours(25)).to_rfc3339();
+		let future_value: PutSettingsRequest = serde_json::from_value(json!({
+			"settings": {
+				"reader.font": {"value": "serif", "updated_at": future}
+			}
+		}))
+		.unwrap();
+		assert!(matches!(
+			validated_settings(future_value.settings),
+			Err(LiseurSyncError::TimeInFuture(_))
+		));
+	}
+
+	#[test]
+	fn measured_session_time_is_authoritative_but_idle_stays_bounded() {
+		let session = SessionInput {
+			session_id: "session".into(),
+			work_id: "work".into(),
+			edition_sha: None,
+			started_at: "2026-01-01T00:00:00Z".into(),
+			ended_at: "2026-01-01T00:01:00Z".into(),
+			start_progression: Some(0.1),
+			end_progression: Some(0.2),
+			idle_ms: 0,
+			active_ms: None,
+		};
+		assert!(validate_session(&session).is_ok());
+		assert!(validate_session(&SessionInput {
+			active_ms: Some(0),
+			..session.clone()
+		})
+		.is_ok());
+		assert!(validate_session(&SessionInput {
+			active_ms: Some(MAX_SESSION_ACTIVE_MS),
+			..session.clone()
+		})
+		.is_ok());
+		assert_eq!(
+			validate_session(&SessionInput {
+				active_ms: Some(-1),
+				..session.clone()
+			})
+			.unwrap_err()
+			.0,
+			"active_out_of_range"
+		);
+		assert_eq!(
+			validate_session(&SessionInput {
+				active_ms: Some(MAX_SESSION_ACTIVE_MS + 1),
+				..session.clone()
+			})
+			.unwrap_err()
+			.0,
+			"active_out_of_range"
+		);
+		assert_eq!(
+			validate_session(&SessionInput {
+				idle_ms: 60_001,
+				active_ms: Some(0),
+				..session.clone()
+			})
+			.unwrap_err()
+			.0,
+			"idle_out_of_range"
+		);
+	}
+
+	#[tokio::test]
+	async fn session_refusal_serializes_recovery_identity() {
+		let response = error_response(LiseurSyncError::ItemRefusal {
+			status: StatusCode::BAD_REQUEST,
+			code: "unknown_work",
+			message: "unknown work".into(),
+			item_index: Some(2),
+			session_id: Some("session-3".into()),
+			op_id: None,
+			work_id: Some("work-3".into()),
+			limit: None,
+		});
+		assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+		let body = axum::body::to_bytes(response.into_body(), 1024)
+			.await
+			.unwrap();
+		let body: Value = serde_json::from_slice(&body).unwrap();
+		assert_eq!(body["code"], "unknown_work");
+		assert_eq!(body["item_index"], 2);
+		assert_eq!(body["session_id"], "session-3");
+		assert_eq!(body["work_id"], "work-3");
 	}
 
 	#[test]
@@ -2103,10 +2919,12 @@ mod tests {
 			start_progression: Some(0.1),
 			end_progression: Some(0.2),
 			idle_ms: 0,
+			active_ms: Some(30_000),
 		})
 		.unwrap();
 		assert_eq!(input["session_id"], "s");
 		assert_eq!(input["start_progression"], 0.1);
+		assert_eq!(input["active_ms"], 30_000);
 		assert!(input.get("sessionId").is_none());
 	}
 	#[test]
@@ -2167,6 +2985,7 @@ mod tests {
 			scope: None,
 			scopes: vec!["sync".into(), "library-read".into()],
 			account_id: "account-id".into(),
+			session_active_ms: true,
 		})
 		.unwrap();
 		assert_eq!(value["id"], "token-id");
@@ -2175,6 +2994,7 @@ mod tests {
 		assert_eq!(value["name"], "Boox Palma");
 		assert_eq!(value["scopes"], serde_json::json!(["sync", "library-read"]));
 		assert_eq!(value["account_id"], "account-id");
+		assert_eq!(value["session_active_ms"], true);
 		assert!(value.get("scope").is_none());
 		assert!(value.get("secret").is_none());
 	}
@@ -2254,6 +3074,20 @@ mod tests {
 
 		async fn revoke_token(&self, _: &str, _: &str) -> Result<(), LiseurSyncError> {
 			unreachable!()
+		}
+		async fn settings(
+			&self,
+			_: &str,
+		) -> Result<BTreeMap<String, SettingValue>, LiseurSyncError> {
+			Ok(BTreeMap::new())
+		}
+
+		async fn put_settings(
+			&self,
+			_: &str,
+			_: Vec<SettingUpdate>,
+		) -> Result<(), LiseurSyncError> {
+			Ok(())
 		}
 		async fn resolve_work(
 			&self,
@@ -2374,5 +3208,34 @@ mod tests {
 			.await
 			.unwrap();
 		assert_eq!(protected.status(), StatusCode::UNAUTHORIZED);
+	}
+
+	/// Liseur's live connector stops for the session on 404 and retries
+	/// forever on anything else, so the refusal must be a real 404 behind the
+	/// same bearer boundary as every other `/v1` route.
+	#[tokio::test]
+	async fn live_event_stream_is_refused_with_not_found_behind_bearer_auth() {
+		let app = routes::<(), FakeBackend>().layer(Extension(FakeBackend));
+		let anonymous = app
+			.clone()
+			.oneshot(
+				Request::builder()
+					.method("GET")
+					.uri("/v1/events")
+					.header("accept", "text/event-stream")
+					.body(Body::empty())
+					.unwrap(),
+			)
+			.await
+			.unwrap();
+		assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+
+		let refused = deferred_events().await;
+		assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+		let body = axum::body::to_bytes(refused.into_body(), 1024)
+			.await
+			.unwrap();
+		let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+		assert_eq!(json["error"], "live event stream is not implemented");
 	}
 }

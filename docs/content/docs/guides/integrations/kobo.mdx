@@ -76,13 +76,11 @@ closing the dialog because the full secret is shown only once.
 
 <Callout title="Permission required">This step requires the `ACCESS_API_KEYS` user permission.</Callout>
 
-The key is stored in plaintext on the Kobo device. In the Coppice web UI:
-
-1. Navigate to the app settings (`/settings`).
-2. Open the **API keys** tab (`/settings/api-keys`).
-3. Select **Create API key**.
-4. Grant `ACCESS_KOBO_SYNC` and `DOWNLOAD_FILE`.
-5. Save the complete value when it is shown; it cannot be recovered later.
+The active browser apps do not provide personal API-key management. An
+authenticated GraphQL client with the `ACCESS_API_KEYS` permission can create
+the key through `createApiKey`; see the [API keys guide](/docs/guides/features/api-keys).
+Grant `ACCESS_KOBO_SYNC` and `DOWNLOAD_FILE`, then save the returned complete
+value when it is shown; it cannot be recovered later.
 
 </Step>
 

@@ -7,7 +7,9 @@ use uuid::Uuid;
 
 use crate::{
 	data::CoreContext,
-	input::book_request::{CreateBookRequestInput, ExternalWorkReferenceInput},
+	input::book_request::{
+		CreateBookRequestInput, ExternalWorkReferenceInput, RequestFormat,
+	},
 	object::book_request::BookRequest,
 };
 
@@ -40,6 +42,45 @@ fn require_target(input: &CreateBookRequestInput) -> Result<()> {
 	Ok(())
 }
 
+/// A narrator preference is free text from a picker; blank means "no
+/// preference", which is stored as `NULL` rather than an empty string.
+fn normalize_narrator(value: Option<String>) -> Result<Option<String>> {
+	let Some(value) = value else {
+		return Ok(None);
+	};
+	let trimmed = value.trim();
+	if trimmed.chars().count() > 200 {
+		return Err(async_graphql::Error::new(
+			"preferred narrator must be at most 200 characters",
+		));
+	}
+	Ok((!trimmed.is_empty()).then(|| trimmed.to_owned()))
+}
+
+/// The requester may change their own request; operators may change any.
+/// Once a request is completed or rejected the preference has nothing left
+/// to bias, so it is frozen with the rest of the row.
+pub(crate) async fn set_preferred_narrator(
+	core: &CoreContext,
+	auth: &AuthContext,
+	request_id: &str,
+	narrator: Option<String>,
+) -> Result<book_request::Model> {
+	let request = find_request(core, request_id).await?;
+	if request.requester_id != auth.user.id && !manage(auth) {
+		return Err(async_graphql::Error::new(
+			"not authorized to change this request",
+		));
+	}
+	if matches!(request.status.as_str(), "COMPLETED" | "REJECTED") {
+		return Err(async_graphql::Error::new("request state is terminal"));
+	}
+	let narrator = normalize_narrator(narrator)?;
+	let mut active = request.into_active_model();
+	active.preferred_narrator = Set(narrator);
+	Ok(active.update(core.conn.as_ref()).await?)
+}
+
 /// Shared recommendation -> request handoff. It intentionally creates only a
 /// pending ledger row; accepting a recommendation never grants or acquires a book.
 pub async fn create_request_from_recommendation(
@@ -53,6 +94,9 @@ pub async fn create_request_from_recommendation(
 	cover_url: Option<String>,
 	destination_shelf_id: Option<String>,
 	destination_device_id: Option<String>,
+	format: RequestFormat,
+	isbn: Option<String>,
+	preferred_narrator: Option<String>,
 ) -> Result<book_request::Model> {
 	let input = CreateBookRequestInput {
 		media_id: media_id.map(ID::from),
@@ -60,9 +104,12 @@ pub async fn create_request_from_recommendation(
 		external,
 		title,
 		authors,
+		format,
+		isbn,
 		cover_url,
 		destination_shelf_id: destination_shelf_id.map(ID::from),
 		destination_device_id: destination_device_id.map(ID::from),
+		preferred_narrator,
 	};
 	require_target(&input)?;
 	let external = input.external.as_ref();
@@ -81,6 +128,7 @@ pub async fn create_request_from_recommendation(
 		.cover_url
 		.clone()
 		.or_else(|| external.and_then(|value| value.cover_url.clone()));
+	let preferred_narrator = normalize_narrator(input.preferred_narrator)?;
 	let now = Utc::now().fixed_offset();
 	let model = book_request::ActiveModel {
 		id: Set(Uuid::new_v4().to_string()),
@@ -90,6 +138,8 @@ pub async fn create_request_from_recommendation(
 		source_provider: Set(external.map(|value| value.source_provider.clone())),
 		remote_id: Set(external.map(|value| value.remote_id.clone())),
 		external_key: Set(external.and_then(|value| value.external_key.clone())),
+		format: Set(input.format.as_str().to_owned()),
+		isbn: Set(input.isbn),
 		title: Set(title),
 		authors: Set(authors),
 		cover_url: Set(cover_url),
@@ -109,6 +159,7 @@ pub async fn create_request_from_recommendation(
 		updated_at: Set(now),
 		approved_at: Set(None),
 		completed_at: Set(None),
+		preferred_narrator: Set(preferred_narrator),
 	};
 	Ok(model.insert(core.conn.as_ref()).await?)
 }
@@ -137,9 +188,30 @@ impl BookRequestMutation {
 			input.cover_url,
 			input.destination_shelf_id.map(|value| value.to_string()),
 			input.destination_device_id.map(|value| value.to_string()),
+			input.format,
+			input.isbn,
+			input.preferred_narrator,
 		)
 		.await?
 		.into())
+	}
+
+	/// Set or clear (`narrator: null`) the reader a request would rather
+	/// have. Requester or operator; refused once the request is completed or
+	/// rejected.
+	async fn set_book_request_preferred_narrator(
+		&self,
+		ctx: &Context<'_>,
+		request_id: ID,
+		narrator: Option<String>,
+	) -> Result<BookRequest> {
+		let auth = ctx.data::<AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+		Ok(
+			set_preferred_narrator(core, auth, request_id.as_ref(), narrator)
+				.await?
+				.into(),
+		)
 	}
 
 	async fn approve_book_request(
@@ -213,5 +285,174 @@ impl BookRequestMutation {
 		active.rejected_by = Set(Some(auth.user.id.clone()));
 		active.failure_message = Set(reason);
 		Ok(active.update(core.conn.as_ref()).await?.into())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use sea_orm::{ConnectionTrait, Database, DbBackend, EntityTrait, Statement};
+
+	use super::*;
+
+	async fn request_core() -> CoreContext {
+		let db = Database::connect("sqlite::memory:").await.unwrap();
+		db.execute(Statement::from_string(
+			DbBackend::Sqlite,
+			"CREATE TABLE book_requests (
+				id TEXT PRIMARY KEY NOT NULL,
+				requester_id TEXT NOT NULL,
+				internal_media_id TEXT,
+				internal_work_id TEXT,
+				source_provider TEXT,
+				remote_id TEXT,
+				external_key TEXT,
+				format TEXT NOT NULL DEFAULT 'ANY',
+				isbn TEXT,
+				title TEXT NOT NULL,
+				authors TEXT,
+				cover_url TEXT,
+				destination_shelf_id TEXT,
+				destination_device_id TEXT,
+				status TEXT NOT NULL,
+				approval_policy TEXT NOT NULL,
+				approved_by TEXT,
+				rejected_by TEXT,
+				failure_code TEXT,
+				failure_message TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				approved_at TEXT,
+				completed_at TEXT,
+				preferred_narrator TEXT
+			)"
+			.to_owned(),
+		))
+		.await
+		.unwrap();
+		std::sync::Arc::new(stump_core::Ctx::for_testing(db))
+	}
+
+	async fn create_audiobook_request(
+		core: &CoreContext,
+		requester_id: &str,
+		preferred_narrator: Option<&str>,
+	) -> book_request::Model {
+		let external = ExternalWorkReferenceInput {
+			source_provider: "hardcover".to_owned(),
+			remote_id: "book-42".to_owned(),
+			external_key: None,
+			title: "A requested book".to_owned(),
+			authors: Some("A Writer".to_owned()),
+			cover_url: None,
+		};
+		create_request_from_recommendation(
+			core,
+			requester_id,
+			None,
+			None,
+			Some(external),
+			None,
+			None,
+			None,
+			None,
+			None,
+			RequestFormat::Audiobook,
+			Some("9780306406157".to_owned()),
+			preferred_narrator.map(str::to_owned),
+		)
+		.await
+		.unwrap()
+	}
+
+	fn auth_for(user_id: &str, server_owner: bool) -> AuthContext {
+		AuthContext {
+			user: models::entity::user::AuthUser {
+				id: user_id.to_owned(),
+				is_server_owner: server_owner,
+				..crate::tests::common::get_default_user()
+			},
+			api_key: None,
+			device_id: None,
+		}
+	}
+
+	#[tokio::test]
+	async fn book_request_persists_the_selected_format_isbn_and_narrator() {
+		let core = request_core().await;
+		let created =
+			create_audiobook_request(&core, "requester", Some("  Ray Porter ")).await;
+		let stored = book_request::Entity::find_by_id(created.id.clone())
+			.one(core.conn.as_ref())
+			.await
+			.unwrap()
+			.unwrap();
+
+		assert_eq!(stored.format, "AUDIOBOOK");
+		assert_eq!(stored.isbn.as_deref(), Some("9780306406157"));
+		assert_eq!(stored.preferred_narrator.as_deref(), Some("Ray Porter"));
+
+		let blank = create_audiobook_request(&core, "requester", Some("   ")).await;
+		assert_eq!(blank.preferred_narrator, None, "blank is no preference");
+	}
+
+	#[tokio::test]
+	async fn preferred_narrator_is_set_by_requester_or_operator_until_terminal() {
+		let core = request_core().await;
+		let created = create_audiobook_request(&core, "requester", None).await;
+		let requester = auth_for("requester", false);
+		let stranger = auth_for("someone-else", false);
+		let operator = auth_for("operator", true);
+
+		let error = set_preferred_narrator(
+			&core,
+			&stranger,
+			&created.id,
+			Some("Ray Porter".to_owned()),
+		)
+		.await
+		.expect_err("another member cannot steer someone else's request");
+		assert_eq!(error.message, "not authorized to change this request");
+
+		let updated = set_preferred_narrator(
+			&core,
+			&requester,
+			&created.id,
+			Some("Ray Porter".to_owned()),
+		)
+		.await
+		.unwrap();
+		assert_eq!(updated.preferred_narrator.as_deref(), Some("Ray Porter"));
+
+		let updated = set_preferred_narrator(
+			&core,
+			&operator,
+			&created.id,
+			Some("Kate Reading".to_owned()),
+		)
+		.await
+		.unwrap();
+		assert_eq!(updated.preferred_narrator.as_deref(), Some("Kate Reading"));
+
+		let cleared = set_preferred_narrator(&core, &requester, &created.id, None)
+			.await
+			.unwrap();
+		assert_eq!(cleared.preferred_narrator, None, "null clears");
+
+		let mut active = cleared.into_active_model();
+		active.status = Set("COMPLETED".to_owned());
+		active.update(core.conn.as_ref()).await.unwrap();
+		let error = set_preferred_narrator(
+			&core,
+			&operator,
+			&created.id,
+			Some("Ray Porter".to_owned()),
+		)
+		.await
+		.expect_err("a completed request is frozen");
+		assert_eq!(error.message, "request state is terminal");
+
+		assert!(set_preferred_narrator(&core, &operator, "missing", None)
+			.await
+			.is_err());
 	}
 }

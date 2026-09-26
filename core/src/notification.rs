@@ -189,6 +189,25 @@ async fn dispatch_routed(ctx: &Ctx, routed: RoutedNotification) -> CoreResult<()
 		.await
 }
 
+/// Enqueue a routable notification for one user using their persisted channel
+/// rules.
+pub async fn enqueue_user_notification(
+	ctx: &Ctx,
+	user_id: impl Into<String>,
+	notification: Notification,
+) -> CoreResult<()> {
+	let kind = notification.kind;
+	dispatch_routed(
+		ctx,
+		RoutedNotification {
+			kind,
+			audience: Audience::user(user_id.into()),
+			notification,
+		},
+	)
+	.await
+}
+
 /// Spawn the long-lived listener that maps core events to notifications.
 /// Called once by `StumpCore::new`.
 pub fn spawn_listener(ctx: Ctx) {

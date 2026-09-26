@@ -7,7 +7,7 @@ default-run = "stump_server"
 [features]
 default = ["full"]
 full = ["headless", "webui"]
-headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "crosspoint", "komga", "kavita", "abs", "liseur-sync", "providers", "watcher", "qr", "ingest", "apalis"]
+headless = ["formats", "graphql", "opds", "readium", "kobo", "koreader", "crosspoint", "komga", "kavita", "abs", "liseur-sync", "providers", "watcher", "qr", "ingest", "mam-acquisition", "apalis", "komf"]
 # Apalis-backed job executor (links `apalis`); `minimal` runs jobs on the inline executor.
 apalis = ["stump_core/apalis"]
 # Native format bundle used by `minimal`, `headless`, and `full`; bare
@@ -26,6 +26,7 @@ graphql = [
 # The staged ingest pipeline (`stump_ingest` + `Ctx::ingest`): drop folder,
 # analysis queue, quality reports, metadata candidates, and the ingest SSE
 # route. `minimal` omits it, so neither the crate nor the route is compiled.
+mam-acquisition = ["graphql", "ingest", "stump_core/mam-acquisition", "graphql?/mam-acquisition"]
 ingest = ["dep:stump_ingest", "stump_core/ingest"]
 minimal = ["formats"]
 opds = ["dep:stump_opds"]
@@ -34,6 +35,7 @@ kobo = ["dep:stump_kobo", "dep:stump_kepub"]
 koreader = ["dep:stump_koreader", "crosspoint"]
 crosspoint = ["dep:stump_crosspoint", "stump_core/crosspoint", "graphql?/crosspoint"]
 komga = ["readium", "dep:stump_komga", "dep:stump_collections", "dep:stump_library"]
+komf = ["komga", "dep:stump_komf", "dep:metadata_integrations"]
 kavita = ["dep:stump_kavita", "dep:stump_collections"]
 # The Audiobookshelf compatibility profile (Lissen and other ABS clients);
 # gated at runtime by `STUMP_ENABLE_ABS`.
@@ -51,8 +53,9 @@ providers = [
 qr = ["dep:qrcode", "dep:image"]
 # Filesystem library watcher (links `notify`); omitted from `minimal`.
 watcher = ["stump_core/watcher"]
-# Serves the bundled React SPA and forwards the GraphQL resolvers only that SPA
-# (and the Expo app) reaches; `headless` deliberately omits it, `full` has it.
+# Browser redirect to Home (`/app`), GraphQL playground gating, and the
+# `graphql/web` resolvers Home uses (social/book clubs, smart lists, viewer
+# preferences, uploads). `headless` deliberately omits it; `full` has it.
 webui = ["graphql", "graphql/web"]
 
 [dependencies]
@@ -74,6 +77,8 @@ cli = { path = "../../crates/cli" }
 chrono.workspace = true
 data-encoding.workspace = true
 models = { path = "../../crates/models", default-features = false }
+migrations = { path = "../../crates/migrations", default-features = false }
+metadata_integrations = { path = "../../crates/integrations/metadata", default-features = false, optional = true }
 futures-util.workspace = true
 graphql = { path = "../../crates/graphql", optional = true, default-features = false }
 governor = "0.6"
@@ -120,6 +125,7 @@ stump_worker = { path = "../../crates/worker", default-features = false, feature
 # runs the same lane as the `sendToKindle` mutation.
 stump_kindle = { path = "../../crates/kindle" }
 stump_komga = { path = "../../crates/komga", optional = true }
+stump_komf = { path = "../../crates/komf", optional = true }
 stump_kavita = { path = "../../crates/kavita", optional = true }
 stump_abs = { path = "../../crates/abs", optional = true }
 stump_kobo = { path = "../../crates/kobo", optional = true }
@@ -157,7 +163,6 @@ axum-test = "17.2.0"
 maplit.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }
 tests = { path = "../../crates/tests" }
-migrations = { path = "../../crates/migrations", default-features = false }
 tempfile.workspace = true
 
 [build-dependencies]

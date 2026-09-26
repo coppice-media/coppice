@@ -11,7 +11,7 @@ use crate::{
 #[derive(Default)]
 pub struct BookRequestQuery;
 
-fn can_manage(auth: &AuthContext) -> bool {
+pub(super) fn can_manage(auth: &AuthContext) -> bool {
 	auth.user.is_server_owner
 		|| auth
 			.user

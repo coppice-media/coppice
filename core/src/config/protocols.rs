@@ -1,6 +1,7 @@
 use std::env;
 
 use serde::{Deserialize, Serialize};
+
 use stump_config_gen::StumpConfigGenerator;
 
 use super::{defaults::*, env_keys::*};
@@ -51,6 +52,14 @@ pub struct ProtocolsConfig {
 	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub enable_komga: bool,
 
+	/// Indicates if the Komf-compatible metadata API should be enabled. This
+	/// remains off even in debug builds; the Komf Cargo feature must also be
+	/// compiled and Komga compatibility enabled before it can be mounted.
+	#[default_value(false)]
+	#[env_key(ENABLE_KOMF_KEY)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub enable_komf: bool,
+
 	/// Indicates if the Kavita compatibility API (`/api/{Library,Series,Reader,...}`)
 	/// should be mounted.
 	#[default_value(false)]
@@ -96,7 +105,7 @@ pub struct ProtocolsConfig {
 	#[env_key(ATTACHMENT_MAX_BYTES_KEY)]
 	pub attachment_max_bytes: usize,
 
-	/// Indicates if the web UI and its SPA fallback routes should be served.
+	/// Indicates if the web UI redirect routes and GraphQL playground should be enabled.
 	#[default_value(DEFAULT_ENABLE_WEBUI)]
 	#[env_key(ENABLE_WEBUI_KEY)]
 	#[cfg_attr(feature = "graphql", graphql(skip))]
@@ -106,12 +115,6 @@ pub struct ProtocolsConfig {
 	#[default_value(false)]
 	#[env_key(ENABLE_PLAYGROUND_KEY)]
 	pub enable_playground: bool,
-
-	/// The client directory.
-	#[default_value("./client".to_string())]
-	#[debug_value(env!("CARGO_MANIFEST_DIR").to_string() + "/../web/dist")]
-	#[env_key(CLIENT_KEY)]
-	pub client_dir: String,
 }
 
 fn validate_kobo_kepub_deflate_level(level: &u32) -> bool {
@@ -146,14 +149,23 @@ mod tests {
 	}
 
 	#[test]
+	fn test_komf_is_off_by_default_in_all_profiles() {
+		assert!(!ProtocolsConfig::new().enable_komf);
+		assert!(!ProtocolsConfig::debug().enable_komf);
+		assert_eq!(ENABLE_KOMF_KEY, "STUMP_ENABLE_KOMF");
+	}
+
+	#[test]
 	fn test_compat_api_defaults() {
 		let release = ProtocolsConfig::new();
 		assert!(!release.enable_komga);
 		assert!(!release.enable_kavita);
 		assert!(!release.enable_abs);
+		assert!(!release.enable_komf);
 		let debug = ProtocolsConfig::debug();
 		assert!(debug.enable_komga);
 		assert!(debug.enable_kavita);
 		assert!(debug.enable_abs);
+		assert!(!debug.enable_komf);
 	}
 }

@@ -79,8 +79,7 @@ export function pageUrl(mediaId: string, page: number): string {
  * manifest's absolute URLs, a same-origin path, or an already-relative path,
  * so a locator written by any Stump client resolves to the same key.
  *
- * Mirrors `packagePathFromHref` in the React reader
- * (`packages/browser/src/components/readers/epub/readium/locator.ts`).
+ * Reader clients use the same resource-key derivation for shared locators.
  */
 export function packagePathFromHref(href: string): string {
 	const withoutFragment = href.split('#')[0] ?? href;

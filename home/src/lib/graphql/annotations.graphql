@@ -10,6 +10,9 @@ fragment ConsoleAnnotationFields on AnnotationEntry {
 	source
 	sourceDeviceId
 	sourceDeviceName
+	revision
+	lastEditedSource
+	lastEditedAt
 	editable
 	chapterTitle
 	href
@@ -66,8 +69,8 @@ mutation ConsoleUpdateAnnotation($input: UpdateAnnotationInput!) {
 	}
 }
 
-mutation ConsoleDeleteAnnotation($id: String!) {
-	deleteAnnotation(id: $id) {
+mutation ConsoleDeleteAnnotation($id: String!, $expectedRevision: Int) {
+	deleteAnnotation(id: $id, expectedRevision: $expectedRevision) {
 		id
 	}
 }

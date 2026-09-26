@@ -3,7 +3,10 @@
 
 use axum::http::StatusCode;
 use chrono::{Duration, Utc};
-use models::entity::device_pairing;
+use models::{
+	entity::{api_key, device_pairing},
+	shared::{api_key::APIKeyPermissions, enums::UserPermission},
+};
 use sea_orm::{prelude::*, sea_query::Expr};
 use serde_json::{json, Value};
 
@@ -199,6 +202,97 @@ async fn happy_path_issues_credential_exactly_once() {
 	// ...and cannot be approved twice
 	let twice = approve(&app, pairing_id, code).await;
 	assert_eq!(first_error(&twice), "Pairing has already been approved");
+}
+
+#[tokio::test]
+async fn komelia_pairing_metadata_opt_in_requires_and_mints_edit_permission() {
+	let app = TestApp::new_with_default_user().await;
+	let started = start(&app, json!({ "kind": "komelia", "name": "Komelia" })).await;
+	let pairing_id = started["pairing_id"].as_str().unwrap();
+	let code = started["code"].as_str().unwrap();
+	let approve_with_komf = r#"
+		mutation($pairingId: ID!, $code: String, $allowKomfMetadataEditing: Boolean = false) {
+			approveDevicePairing(
+				pairingId: $pairingId,
+				code: $code,
+				allowKomfMetadataEditing: $allowKomfMetadataEditing
+			) { id status }
+		}
+	"#;
+
+	let without_permission = second_user_token(&app, "komf-without-edit").await;
+	let rejected = gql_as(
+		&app,
+		&without_permission,
+		approve_with_komf,
+		json!({
+			"pairingId": pairing_id,
+			"code": code,
+			"allowKomfMetadataEditing": true,
+		}),
+	)
+	.await;
+	assert!(
+		first_error(&rejected).contains("requires the Edit metadata permission"),
+		"{rejected:#}"
+	);
+
+	let editor = app
+		.execute_gql(
+			r#"mutation($input: CreateUserInput!) { createUser(input: $input) { id } }"#,
+			Some(json!({ "input": {
+				"username": "komf-editor",
+				"password": "password",
+				"permissions": ["ACCESS_API_KEYS", "DOWNLOAD_FILE", "EDIT_METADATA"],
+			}})),
+		)
+		.await;
+	assert!(editor["errors"].is_null(), "{editor:#}");
+	let login = app
+		.server
+		.post("/api/v2/auth/login?generate_token=true")
+		.json(&json!({ "username": "komf-editor", "password": "password" }))
+		.await;
+	login.assert_status_ok();
+	let editor_token = login.json::<Value>()["accessToken"]
+		.as_str()
+		.unwrap()
+		.to_string();
+
+	let approved = gql_as(
+		&app,
+		&editor_token,
+		approve_with_komf,
+		json!({
+			"pairingId": pairing_id,
+			"code": code,
+			"allowKomfMetadataEditing": true,
+		}),
+	)
+	.await;
+	assert!(approved["errors"].is_null(), "{approved:#}");
+	assert_eq!(
+		approved["data"]["approveDevicePairing"]["status"], "APPROVED",
+		"{approved:#}"
+	);
+
+	let issued = status(&app, &started).await;
+	let secret = issued["credential"]["secret"].as_str().unwrap();
+	let credential_ref = issued["credential"]["credential_ref"].as_str().unwrap();
+	assert!(secret.starts_with("stump_"), "{secret}");
+	let key = api_key::Entity::find()
+		.filter(api_key::Column::ShortToken.eq(credential_ref))
+		.one(app.conn())
+		.await
+		.expect("query Komelia key")
+		.expect("Komelia API key exists");
+	assert_eq!(
+		key.permissions,
+		APIKeyPermissions::Custom(vec![
+			UserPermission::DownloadFile,
+			UserPermission::EditMetadata,
+		])
+	);
 }
 
 #[tokio::test]

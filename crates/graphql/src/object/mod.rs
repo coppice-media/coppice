@@ -42,6 +42,8 @@ pub mod library;
 pub mod library_config;
 pub mod library_scan_record;
 pub mod log;
+#[cfg(feature = "mam-acquisition")]
+pub mod mam_acquisition;
 pub mod media;
 pub mod media_annotation;
 pub mod media_metadata;

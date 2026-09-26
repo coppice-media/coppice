@@ -5,25 +5,30 @@ proposing a shared manifest service. Coppice's tree is MIT; behavior and
 published wire formats may be studied, but copyleft source MUST NEVER enter the
 product.
 
-The root repository is MIT; `apps/expo/LICENSE` remains GPL-3.0 and must be
-treated as a separately licensed nested app.
+The root repository is MIT, with upstream attribution and per-asset notices as
+specified by the files that carry those assets.
 
 ## Allowed boundaries
 
-- **Storyteller:** its server/apps and the cited `stalign` CLI are external MIT
-  references. Use them as an oracle, fixture producer, or comparison target only;
-  NEVER make Storyteller a Coppice runtime dependency or default backend.
-- **Optional worker API:** an explicitly configured worker-local adapter MAY call
-  an external Storyteller API after an ebook/audio edition pair is confirmed. It
+- **Storyteller:** its server/apps and the cited `stalign` CLI are external
+  references. Storyteller may be used through an explicitly configured,
+  worker-local API runner; NEVER bundle it, add it as a Coppice dependency, or
+  make it a default server backend.
+- **Optional worker API:** the shipped adapter MAY call an operator-configured
+  external Storyteller API after an ebook/audio edition pair is confirmed. It
   MUST return only the typed `SyncMapV1` contract; it MUST NOT make Storyteller a
   server dependency, search/catalog provider, metadata provider, or fulfillment
   connector.
 - **Storyteller web path:** Whisper transcription plus fuzzy reconciliation. It
-  is useful for validating preparation, GPU behavior, and the EPUB/SMIL envelope;
-  it is not Coppice's shipped alignment engine.
-- **Storyteller CLI path:** `pipeline --ctc` demonstrates direct CTC emissions and
-  Viterbi forced alignment. It is a reference for a future known-text worker,
-  not a bundled executable or implicit dependency.
+  informs external comparisons; model execution stays in an operator-configured
+  worker and is not part of the server process.
+- **Storyteller CLI path:** `pipeline --ctc` demonstrates direct CTC emissions
+  and Viterbi forced alignment. It is an external reference, not a bundled
+  executable or implicit dependency.
+- **Native CTC runner:** the shipped optional backend invokes only an
+  operator-configured worker-local executable and model for its typed
+  CPU/fp32/CTC profile. Executable, model, credentials, and dependencies are
+  never bundled or sent in a server job payload.
 - **Permissive model candidates:** `facebook/wav2vec2-base-960h` is Apache-2.0;
   NVIDIA NeMo CTC models are CC-BY-4.0 candidates. Record model identity and
   options in map provenance before reuse.
@@ -51,10 +56,10 @@ treated as a separately licensed nested app.
 
 ## Playback boundary
 
-Synchronized Storyteller read-aloud EPUB playback is not shipped. Ordinary EPUB
-playback and ordinary audiobook playback remain separate; an imported
-`SyncMapV1` or future SMIL derivative does not imply a bundled Storyteller
-player.
+Synchronized physical-reader playback is not shipped. Ordinary EPUB playback and
+ordinary audiobook playback remain separate, although the deterministic
+read-aloud EPUB delivery is shipped. An imported `SyncMapV1` or rendered SMIL
+derivative does not imply a bundled Storyteller player or synchronized playback.
 
 ## Manifest and federation gate
 

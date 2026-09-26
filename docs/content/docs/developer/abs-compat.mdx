@@ -3,21 +3,33 @@ title: Audiobookshelf compatibility profile
 description: The client-derived Audiobookshelf API profile served for audiobook clients, driven by Lissen
 ---
 
-This page is the authoritative specification for Stump's Audiobookshelf compatibility profile. It describes the **implemented profile**, not the full Audiobookshelf API: the routes and DTOs that the pinned Audiobookshelf client calls, reproduced against Audiobookshelf **2.36.0** (`ghcr.io/advplyr/audiobookshelf:2.36.0`, captured from the `abs-ref` container). An endpoint or field not listed here is not implied to be supported.
+This page is the authoritative specification for Stump's Audiobookshelf compatibility profile. It describes the **implemented profile**, not the full Audiobookshelf API: the supported routes and DTOs are source-checked against Audiobookshelf **2.36.1** (`ghcr.io/advplyr/audiobookshelf:2.36.1@sha256:117b014d317634d66778d6da9174ce90d47449b252c9b7e8f3bce591502af6aa`, Linux/amd64); the checked-in wire captures were recorded from **2.36.0**. An endpoint or field not listed here is not implied to be supported.
 
 ## Scope and evidence
 
-- **The clients that drove the profile:** Lissen **1.11.22-release** (`f30bf9be`), an Android audiobook player, and the **official Audiobookshelf app** `v0.14.0-beta` (`12025ab5`, Nuxt 2 + Capacitor). Lissen's entire server contract is one Retrofit interface, `channel/audiobookshelf/common/client/AudiobookshelfApiClient.kt` — 26 declarations, of which 4 belong to the podcast lane this profile does not serve. Every Lissen path in this page is relative to `app/src/main/kotlin/org/grakovne/lissen/`, and a bare `:NN` in the route matrix means that API-client file. The official app's 23 REST paths are in `server/ApiHandler.kt:427-854` and its socket contract in `plugins/server.js`; both are cited by file and line where they drove a decision.
-- **The server that pinned the wire shapes:** a live `abs-ref` container (`abs/compose.yml`, port 13450) in the `komga-compat` sibling repository. `abs/capture/capture.sh` drives it end to end — init, login, library create + scan, item detail, play session, sync, close, progress patch, bookmarks, byte ranges, negatives, refresh — and writes every response verbatim to `abs/capture/<name>.json`, so DTOs are diffed against the reference rather than guessed.
+- **Client baselines and current pins:** the original route/capture work used Lissen **1.11.22-release** (`f30bf9be95ea3792bcc53e4e958576121d450a4d`) and the **official Audiobookshelf app** `v0.14.0-beta` (`12025ab59a5c9f5654b31b4b68c1fc71ad676f61`). The current source audit uses Lissen **1.12.5-release** (`fd5c0417646bac3e011d4f4d3bb045286a9e5508`) and official app `v0.14.1-beta` (`2ac4de4d582dfaeb65b756a5e00e181207a867d7`); see [the pinned API diff](#pinned-upstream-and-client-diff). Lissen's contract remains one Retrofit interface with 26 declarations, of which 4 belong to the podcast lane this profile does not serve. Every Lissen path is relative to `app/src/main/kotlin/org/grakovne/lissen/`.
+- **Wire captures:** `komga-compat/abs/capture/` remains the 2.36.0 response corpus; `abs/compose.yml` now pins the 2.36.1 Linux/amd64 image digest. The 2.36.1 container was not launched and captures were not regenerated during this audit.
 - **Licensing boundary:** Audiobookshelf is GPL-3.0 and Stump is MIT. Nothing in `crates/abs` is derived from Audiobookshelf source; the profile is written from observed behaviour and captured JSON only. Lissen's own Retrofit declarations (paths, query parameters, field names) are cited as the client contract, which is what a client contract is for.
 - **Contract types** live in [`crates/abs/src`](https://github.com/stumpapp/stump/tree/nightly/crates/abs/src) (`stump_abs`): DTOs in `dto.rs`, the audio projection in `model.rs`, tokens in [`auth.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/abs/src/auth.rs), allocated identities in [`ids.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/abs/src/ids.rs), the socket lane in [`socket/`](https://github.com/stumpapp/stump/tree/nightly/crates/abs/src/socket). The server adapter is `apps/server/src/routers/abs_backend.rs`; persistence comes from migrations `m20260935_000000_add_abs_compat` (`abs_ids`, `abs_sessions`) and `m20260943_000000_add_abs_session_play_method`.
 - **Replay harness:** `specs/abs.hurl` with `make replay-abs`, plus `make replay-abs-diff` (a JSON key-set diff of Stump's responses against `abs-ref`), in the `komga-compat` sibling repository; bring-up and capture steps are in its `abs/README.md`.
-- **Verification status:** the official app release APK (`app-release.apk`, `v0.14.0-beta`, `12025ab5`) was installed and run on the `test_35` Android 35 emulator on 2026-09-07 against an isolated full+RAR fixture at `http://10.0.2.2:25890`. A full-screen seek drag moved the Lottery from `0:31` to `0:49`, and a clean one-track download reached the local-library view at `367.7 KB` (`376,525` bytes) with its cover. The two reported failures are client-side interaction/queue states documented below; no Stump JSON, byte, or header change was needed. The Lissen replay remains covered by the chained harness.
+- **Verification status:** the official `v0.14.0-beta` release APK (`12025ab5`) was installed and run on the `test_35` Android 35 emulator on 2026-09-07 against an isolated full+RAR fixture at `http://10.0.2.2:25890`. A full-screen seek drag moved the Lottery from `0:31` to `0:49`, and a clean one-track download reached the local-library view at `367.7 KB` (`376,525` bytes) with its cover. That is historical device evidence only; the current 0.14.1 and Lissen 1.12.5 checklist below has not been run on a device.
+
+### Pinned upstream and client diff
+
+Audited from pinned source and release metadata on 2026-09-24; the ref image was not started.
+
+| Comparison | Source delta | Coppice result |
+| --- | --- | --- |
+| ABS `v2.30.0` (`29752798f3d1eed348746830a879f0699ff48993`) → `v2.36.0` (`96d4021a3cd45f67bf374b65abafbe5d73e926b5`) | `server/routers/ApiRouter.js:174-186` adds aggregate `GET /api/me/progress`, `GET /api/me/bookmarks`, `GET /api/me/bookmarks/:libraryItemId`, and session-list/delete routes; `ServerSettings.js:283` adds `timeZone`. | Current mobile callers still use `/api/me`, per-item progress/bookmark routes and `/api/me/items-in-progress`; none calls those new aggregates. `timeZone` is already in `dto.rs` and the 2.36.0 `authorize.json:100` capture. |
+| ABS `v2.36.0` (`96d4021a3cd45f67bf374b65abafbe5d73e926b5`) → `v2.36.1` (`4b67c170ce46fd6ba770dc55c189ca13fef89b02`) | `server/utils/queries/libraryItemsBookFilters.js:312,317,585` passes active filter replacements to the collapsed-series query; current official app `ApiHandler.kt:532-533` sends `filter=authors.<base64>&collapseseries=1`. `server/controllers/AuthorController.js:430` adds library access checking. | Stump filters before collapse (`crates/abs/src/routes/query.rs:220-235`, `libraries.rs:318-361`) and now 404s author details when no book is visible; both behaviors have route tests. |
+| Other 2.36.1 API changes | `CacheManager.js:43,153` restricts cover `format`; `MiscController.js:143-165` and `ServerSettings.js:8-32` allowlist settings updates; `Book.js:422-436` removes media-file fields from `updateMedia` (removed in the 2.36.1 diff). | Neither current mobile client sends a cover `format`, patches global server settings, or updates `audioFiles`/`chapters`/`ebookFile`; these mutations do not add client routes to this profile. |
+| Lissen `1.11.22-release` (`f30bf9be95ea3792bcc53e4e958576121d450a4d`) → `1.12.5-release` (`fd5c0417646bac3e011d4f4d3bb045286a9e5508`) | `AudiobookshelfApiClient.kt:162-165` adds `POST /api/session/local-all`; duplicate `/api/me` projections are consolidated into one user-state response. | `/api/session/local-all` was already mounted at `crates/abs/src/routes/mod.rs:464` and behavior-tested; Hurl now uses the latest Lissen request shape. |
+| Official app `v0.14.0-beta` (`12025ab59a5c9f5654b31b4b68c1fc71ad676f61`) → `v0.14.1-beta` (`2ac4de4d582dfaeb65b756a5e00e181207a867d7`) | The current `android/app/src/main/java/com/audiobookshelf/app/server/ApiHandler.kt:394-821` retains the route set represented by the 0.14.0 matrix; line positions moved, e.g. series `:483`, author-filter + collapse `:532-533`, and offline local-all `:742`. | No new unsupported route found. The author-filter + collapse call is now covered by a combined regression; per-file download and offline local-all are in `abs.hurl`. |
 
 ### Non-goals
 
 - This is not a claim of complete Audiobookshelf server compatibility.
-- Podcast libraries, collections, ereader devices, and OIDC are outside the profile ([Known deviations](#known-deviations)). Collections answer an empty page rather than a `404`, because the app opens both tabs.
+- Podcast libraries, ereader devices, and OIDC are outside the profile. Stump collections are projected from their series memberships onto visible audiobook items; a collection with no membership in a library correctly appears empty.
 - Audiobookshelf endpoints outside the route matrix answer `404`.
 
 ## Enabling
@@ -29,7 +41,7 @@ Two independent gates must both allow the profile, the same pattern as the Komga
 
 When the setting is off the routes are **not registered at all**, so every path in the matrix answers `404` rather than `401` or `403`. `STUMP_ENABLE_ABS=true` on a binary compiled without the `abs` feature mounts nothing; the native API is unaffected either way.
 
-Every route is mounted at the server root, because Audiobookshelf clients build absolute paths from a bare host: `GET /ping`, `POST /login`, `POST /auth/refresh` and the `/api/...` tree. Lissen concatenates the host and the declared path with no prefix (`AudiobookshelfApiClient.kt:40-194`), and builds `/api/items/{id}/file/{ino}` itself (`channel/audiobookshelf/common/AudiobookshelfChannel.kt:48-64`), so there is no configurable base path to hide behind.
+Every route is mounted at the server root, because Audiobookshelf clients build absolute paths from a bare host: `GET /ping`, `POST /login`, `POST /auth/refresh` and the `/api/...` tree. Lissen concatenates the host and the declared path with no prefix (`AudiobookshelfApiClient.kt:43-210`), and builds `/api/items/{id}/file/{ino}` itself (`channel/audiobookshelf/common/AudiobookshelfChannel.kt:48-64`), so there is no configurable base path to hide behind.
 
 ## Authentication
 
@@ -110,41 +122,42 @@ Audio bytes are fetched by ExoPlayer through the same authenticated OkHttp clien
 
 ## Route matrix
 
-29 routes. The Lissen column cites the declaration that calls the route (`—` means Lissen never calls it and the row exists because the reference has it and the profile is symmetrical); the capture column cites the file under `../komga-compat/abs/capture/` that pins the wire shape.
+30 current Lissen routes. The Lissen column cites the declaration that calls the route (`—` means Lissen never calls it and the row exists because the reference has it and the profile is symmetrical); the capture column cites the file under `../komga-compat/abs/capture/` that pins the wire shape.
 
 | Method + path | Lissen declaration | abs-ref capture | Stump behaviour |
 | --- | --- | --- | --- |
 | `GET /ping` | — | `ping.json` | `{"success":true}`, unauthenticated |
 | `GET /healthcheck` | — | `healthcheck.txt` | `200` with the body `OK`, unauthenticated |
-| `GET /status` | `common/api/AudiobookshelfAuthService.kt:104-149` (URL built at `:108-113`) | `status.json` | `{"app":"audiobookshelf","serverVersion":"2.36.0","isInit":true,"language":"en-us","authMethods":["local"],"authFormData":{"authLoginCustomMessage":""}}`, unauthenticated |
-| `POST /login` | `:164-168` (`@Headers("x-return-tokens: true")` at `:165`) | `login.json` | Body `{"username","password"}` → the login envelope. `user.refreshToken` is a real token with `x-return-tokens: true`, `null` otherwise. Registers the ABS device row. `401` on a bad password |
-| `POST /auth/refresh` | `:170-174` (`x-return-tokens` at `:171`, `@Header("x-refresh-token")` at `:173`) | `refresh.json` | The same envelope with a new access token. `401` on an expired, invalid, or non-refresh token |
-| `POST /api/authorize` | `:59-60` | `authorize.json` | The envelope for an already-authenticated client. The reference emits `user.token` only here — no `accessToken`, no `refreshToken` (see the note below) |
-| `GET /api/me` | `:62-63` (bookmarks), `:77-78` (user info) | `me.json`, `me_bookmarks.json` | The `user` object with `mediaProgress[]` and `bookmarks[]`, carrying `token` but neither `accessToken` nor `refreshToken` |
-| `GET /api/libraries` | `:40-41` | `libraries.json` | `{"libraries":[…]}`, only libraries the user (and the device scope) can see and which contain audio; `mediaType` is always `book` |
-| `GET /api/libraries/{id}?include=filterdata` | `:43-47` (`include` defaults to `filterdata`) | `library_include_filterdata.json` | `{filterdata, issues, numUserPlaylists, library}`; without `include`, just the library object |
-| `GET /api/libraries/{id}/items?limit&page&sort&desc&minified&filter&collapseseries&include` | `:80-90` | `library_items_minified.json`, `library_items_collapseseries.json`, `library_items_filter_not_finished.json` | The paged item envelope. `sort`, `desc` and `filter` values are enumerated below |
-| `GET /api/libraries/{id}/personalized` | `:49-52` | `personalized.json` | An array of shelves: `continue-listening`, `recently-added`, `recent-series`, `discover`, `newest-authors` ([Personalized shelves](#personalized-shelves)) |
-| `GET /api/libraries/{id}/authors?limit&page&sort&desc` | `:102-109` | `library_authors.json` | `{results:[…]}`; authors are synthesised from `media_metadata.writers` and their ids allocated in `abs_ids` |
-| `GET /api/libraries/{id}/search?q&limit` | `:111-116` | `library_search.json` | `{book[], narrators[], tags[], genres[], series[], authors[]}`. A `book[]` element is a `{libraryItem:{…}}` wrapper, not a bare item |
-| `GET /api/items/{id}?expanded&include` | `:125-128` | `item.json`, `item_expanded.json`, `item_multitrack.json` | The full item. `media.audioFiles[]` and `media.chapters[]` always; `media.tracks[]`, `duration`, `size`, `numTracks`, `numAudioFiles`, `numChapters` only with `expanded=1` |
-| `GET /api/items/{id}/cover?raw&width` | `:176-180` (`?raw=1`), `:182-187` (`width`) | none — binary; status and content type recorded by `capture.sh:115-116` | The item's cover bytes |
-| `POST /api/items/batch/get` | `:140-143` | `items_batch.json` | `{libraryItemIds:[…]}` → `{libraryItems:[…]}`, scoped like every other read |
+| `GET /status` | `common/api/AudiobookshelfAuthService.kt:104-149` (URL built at `:108-113`) | `status.json` | `{"app":"audiobookshelf","serverVersion":"2.36.1","isInit":true,"language":"en-us","authMethods":["local"],"authFormData":{"authLoginCustomMessage":""}}`; generated from the current profile version (the captured status file remains 2.36.0), unauthenticated |
+| `POST /login` | `:180-184` (`@Headers("x-return-tokens: true")` at `:181`) | `login.json` | Body `{"username","password"}` → the login envelope. `user.refreshToken` is a real token with `x-return-tokens: true`, `null` otherwise. Registers the ABS device row. `401` on a bad password |
+| `POST /auth/refresh` | `:186-190` (`x-return-tokens` at `:187`, `@Header("x-refresh-token")` at `:189`) | `refresh.json` | The same envelope with a new access token. `401` on an expired, invalid, or non-refresh token |
+| `POST /api/authorize` | `:65-66` | `authorize.json` | The envelope for an already-authenticated client. The reference emits `user.token` only here — no `accessToken`, no `refreshToken` (see the note below) |
+| `GET /api/me` | `:68-71` | `me.json`, `me_bookmarks.json` | The `user` object with `mediaProgress[]` and `bookmarks[]`, carrying `token` but neither `accessToken` nor `refreshToken`; the current Lissen declaration consolidates its former duplicate `/api/me` calls |
+| `GET /api/libraries` | `:43-46` | `libraries.json` | `{"libraries":[…]}`, only libraries the user (and the device scope) can see and which contain audio; `mediaType` is always `book` |
+| `GET /api/libraries/{id}?include=filterdata` | `:48-53` (`include` defaults to `filterdata`) | `library_include_filterdata.json` | `{filterdata, issues, numUserPlaylists, library}`; without `include`, just the library object |
+| `GET /api/libraries/{id}/items?limit&page&sort&desc&minified&filter&collapseseries&include` | `:85-97` | `library_items_minified.json`, `library_items_collapseseries.json`, `library_items_filter_not_finished.json` | The paged item envelope. `sort`, `desc` and `filter` values are enumerated below |
+| `GET /api/libraries/{id}/personalized` | `:55-58` | `personalized.json` | An array of shelves: `continue-listening`, `recently-added`, `recent-series`, `discover`, `newest-authors` ([Personalized shelves](#personalized-shelves)) |
+| `GET /api/libraries/{id}/authors[?limit&page&sort&desc]` | `:109-118`; official app `pages/bookshelf/authors.vue` calls without query parameters and reads `response.authors` | `library_authors.json` | No pagination parameters → `{authors:[…]}` for the official app. When both `limit` and `page` are present → `{results,total,limit,page,sortBy,sortDesc,minified}` for Lissen. Both shapes list only visible audiobook-backed writers; supports `name`, `lastFirst`, `addedAt`, `updatedAt`, `numBooks` and `desc` |
+| `GET /api/libraries/{id}/search?q&limit` | `:119-124` | `library_search.json` | `{book[], narrators[], tags[], genres[], series[], authors[]}`. A `book[]` element is a `{libraryItem:{…}}` wrapper, not a bare item |
+| `GET /api/items/{id}?expanded&include` | `:133-137` | `item.json`, `item_expanded.json`, `item_multitrack.json` | The full item. `media.audioFiles[]` and `media.chapters[]` always; `media.tracks[]`, `duration`, `size`, `numTracks`, `numAudioFiles`, `numChapters` only with `expanded=1` |
+| `GET /api/items/{id}/cover?raw&width` | `:192-196` (`?raw=1`), `:198-203` (`width`) | none — binary; status and content type recorded by `capture.sh:115-116` | The item's cover bytes |
+| `POST /api/items/batch/get` | `:151-154` | `items_batch.json` | `{libraryItemIds:[…]}` → `{libraryItems:[…]}`, scoped like every other read |
 | `GET /api/items/{id}/file/{ino}` | built client-side: `common/AudiobookshelfChannel.kt:48-64`, `ino` from `library/converter/BookResponseConverter.kt:54` | `file_range_headers.txt` | The audio bytes of one track. `Accept-Ranges: bytes`; a `Range` request answers `206` with `Content-Range`. `ino` is the 0-based Stump track index |
-| `POST /api/items/{id}/play` | `:158-162` | `play_session.json` | A `PlaybackSession` with `audioTracks[].contentUrl = /api/items/{id}/file/{ino}` and `playMethod: 0`. Request body is `{deviceInfo{clientName,deviceId,deviceName}, supportedMimeTypes[], mediaPlayer, forceTranscode, forceDirectPlay}` |
+| `POST /api/items/{id}/play` | `:174-178` | `play_session.json` | A `PlaybackSession` with `audioTracks[].contentUrl = /api/items/{id}/file/{ino}` and `playMethod: 0`. Request body is `{deviceInfo{clientName,deviceId,deviceName}, supportedMimeTypes[], mediaPlayer, forceTranscode, forceDirectPlay}` |
 | `GET /api/session/{id}` | — | `session_get.json` | The session, same shape as the `play` response |
-| `POST /api/session/{id}/sync` | `:145-149`; the path parameter is the **session** id (`common/api/library/AudioBookshelfLibrarySyncService.kt:17-28` via `common/AudiobookshelfChannel.kt:66-70`) | `session_sync.txt` | Body `{currentTime, timeListened}` (`duration` optional, and Lissen never sends it) → applies a `Position::Time` reading state and adds the elapsed seconds to the session. `200` with the body `OK`; `404` for an unknown session |
+| `POST /api/session/{id}/sync` | `:156-160`; the path parameter is the **session** id (`common/api/library/AudioBookshelfLibrarySyncService.kt:17-28` via `common/AudiobookshelfChannel.kt:66-70`) | `session_sync.txt` | Body `{currentTime, timeListened}` (`duration` optional, and Lissen never sends it) → applies a `Position::Time` reading state and adds the elapsed seconds to the session. `200` with the body `OK`; `404` for an unknown session |
+| `POST /api/session/local-all` | `:162-165` (added in Lissen 1.12.5) | none — current client request, response asserted in `abs.hurl` | Uploads the offline backlog and returns per-session `{id, success, error?}`. The profile also emits `progressSynced`, which the official app reads |
 | `POST /api/session/{id}/close` | — | `session_close.txt`, `progress_after_close.json` | Sync, then close the session. `200` with the body `OK` |
-| `GET /api/me/progress/{itemId}` | `:54-57` | `progress.json` | A `MediaProgress`; `404` when the item has no progress |
+| `GET /api/me/progress/{itemId}` | `:60-63` | `progress.json` | A `MediaProgress`; `404` when the item has no progress |
 | `PATCH /api/me/progress/{itemId}` | — | `progress_patch.txt`, `progress_after_patch.json` | A partial update (`{isFinished}`, `{currentTime}`, …). `200` with the body `OK` |
 | `DELETE /api/me/progress/{progressId}` | `components/modals/ItemMoreMenuModal.vue:368-397` | — | Deletes the user's progress row and answers `200 OK`. `progressId` is the `id` returned in `/api/me` (`{userId}-{mediaId}` on Stump), not the library-item id; an unknown or foreign id is `404` |
-| `POST /api/me/item/{id}/bookmark` | `:65-69` | `bookmark_created.json` | `{time, title}` → `{libraryItemId, time, title, createdAt}` |
+| `POST /api/me/item/{id}/bookmark` | `:73-77` | `bookmark_created.json` | `{time, title}` → `{libraryItemId, time, title, createdAt}` |
 | `PATCH /api/me/item/{id}/bookmark` | — | `bookmark_patched.json` | Renames the bookmark at that `time`; `createdAt` is preserved |
-| `DELETE /api/me/item/{id}/bookmark/{time}` | `:71-75` (`totalTime` is an `Int`) | none — status only, recorded by `capture.sh:111-112` | Deletes the bookmark at that whole-second time |
-| `GET /api/authors/{id}?include=items` | `:135-138` (the query is inside the `@GET` path) | `library_authors.json` (author object), `personalized.json` (`newest-authors` shelf) | The synthesised author plus `libraryItems[]` |
-| `GET /api/authors/{id}/image` | `:189-194` | none | Always `404`: Stump stores no author images |
+| `DELETE /api/me/item/{id}/bookmark/{time}` | `:79-83` (`totalTime` is an `Int`) | none — status only, recorded by `capture.sh:111-112` | Deletes the bookmark at that whole-second time |
+| `GET /api/authors/{id}?include=items` | `:145-149` (the query is inside the `@GET` path) | `library_authors.json` (author object), `personalized.json` (`newest-authors` shelf) | The synthesised author plus `libraryItems[]`, limited to books visible to the caller; `404` if none are visible |
+| `GET /api/authors/{id}/image` | `:205-210` | none | Always `404`: Stump stores no author images |
 
-The rows below were added for the **official Audiobookshelf app** `v0.14.0-beta` (`12025ab5`), whose 23 REST paths are declared in `android/app/src/main/java/com/audiobookshelf/app/server/ApiHandler.kt:427-854`; a bare `ApiHandler:NN` cites that file, and `plugins/`, `pages/`, `store/` cite its Nuxt web view. They were captured live against the same `abs-ref` 2.36.0 container.
+The rows below were added for the **official Audiobookshelf app** `v0.14.0-beta` (`12025ab5`), whose 23 REST paths are declared in `android/app/src/main/java/com/audiobookshelf/app/server/ApiHandler.kt:427-854`; a bare `ApiHandler:NN` cites that file, and `plugins/`, `pages/`, `store/` cite its Nuxt web view. They were captured live against the same `abs-ref` 2.36.0 container. The current `v0.14.1-beta` source retains this route set; see the pinned diff above.
 
 | Method + path | Official-app call site | Stump behaviour |
 | --- | --- | --- |
@@ -156,10 +169,10 @@ The rows below were added for the **official Audiobookshelf app** `v0.14.0-beta`
 | `GET`/`PATCH /api/me/progress/{id}/{episodeId}` | `ApiHandler:688,696` | `404`. The episode id addresses a podcast episode; this profile serves book libraries only, so the episode never resolves. Mounted deliberately rather than left to the router's fallback |
 | `POST /api/session/local` | `ApiHandler:677` | The offline merge, one session. `200 OK`. See [Offline sessions](#offline-sessions) |
 | `POST /api/session/local-all` | `ApiHandler:775` | The offline merge, the whole backlog → `{results:[{id, success, progressSynced}]}` |
-| `GET /api/libraries/{id}/series?minified&sort&desc&limit&page` | `ApiHandler:516` | `{results, total, limit, page, sortBy, sortDesc, minified, include}`. A series entity is `{id, libraryId, name, nameIgnorePrefix, description, addedAt, updatedAt, books[]}`. A Stump series holding **one** audiobook is that book's own folder, not a series, and is absent — the same rule the item list applies with `seriesName: ""` |
+| `GET /api/libraries/{id}/series?minified&sort&desc&limit&page` | `ApiHandler:516` | `{results, total, limit, page, sortBy, sortDesc, minified, include}`. Explicit `media_metadata.series` defines an ABS series even with one book; otherwise a Stump folder is a series only when it contains multiple audible books. A standalone folder without series metadata has no series. Metadata-group ids use `metadata-series:<libraryId>:<seriesName>`; folder-group ids remain Stump UUIDs. `hideSingleBookSeries` remains the ABS 2.36.1 default `false`; `number` then `volume` supplies the book sequence |
 | `GET /api/series/{id}` | web view (`pages/series/_id.vue:12`) | **Not served.** The Kavita profile already owns `/api/series/{seriesId}` in the shared `/api` namespace (`crates/kavita/src/routes/series.rs:158`), and a second parameter name at the same position is a `matchit` conflict that panics while the router is built. The page's data is reachable through `/api/libraries/{id}/series` and the `series.<base64>` item filter, which is what the same page uses to list a series' books |
-| `GET /api/libraries/{id}/collections` | `ApiHandler:585`, web view | `{results: [], total: 0, limit, page}`. Stump collections span every media type and carry no audio semantics, so they are not dressed up as Audiobookshelf collections — but the tab the app opens must not 404 |
-| `GET /api/libraries/{id}/items?filter=authors.<base64 author id>` | `ApiHandler:565` | Narrows the page to the books crediting that author. The value is the **id** the profile allocated in `abs_ids`, resolved back to the `media_metadata.writers` name; an id with no name behind it selects nothing rather than everything |
+| `GET /api/libraries/{id}/collections?minified&sort&limit&page` | `ApiHandler:585`, web view | Collections project Stump's `collection_series` membership onto visible audiobook items from member series in the requested library. A cross-library collection is returned with that library's subset; empty and ebook-only collections are omitted. The current device fixture's collections have no `collection_series` rows, so its empty list is consistent with its data |
+| `GET /api/libraries/{id}/items?filter=authors.<base64>&collapseseries=1` | `ApiHandler:532-533` | Narrows the page to the books crediting that author, then folds each matching series into a representative row. The filter and collapse parameters must work together; regression-tested by `an_author_filter_combines_with_collapsed_series` |
 | `GET /socket.io/?EIO=4&transport=websocket` | `plugins/server.js:36-42` | The socket lane. See [socket.io](#socketio) |
 
 #### Fixed after the 2026-09-07 phone run
@@ -187,7 +200,7 @@ Stump on a real phone and reading the app's own source for each failure. The
 | `POST /api/playlists/{id}/batch/add`, `/batch/remove` | `components/modals/playlists/AddCreateModal.vue:137-139,155-157` | Body `{items:[{libraryItemId, episodeId}]}` → the updated playlist and a `playlist_updated` event |
 | `GET /api/libraries/{id}/playlists` | `components/modals/playlists/AddCreateModal.vue:113-115` | `{results, total, limit, page}`; the app reads `data.results` |
 | `GET /api/items/{id}` and `GET /api/libraries/{id}/items?minified=1` ebook fields | `components/cards/LazyBookCard.vue:184-186`, `components/cards/LazyListBookCard.vue:151-152`, `pages/item/_id/index.vue:461-466` | The reference omits `media.ebookFile`, `media.ebookFormat`, and `media.numEbooks` on minified rows; detail/expanded rows include `media.ebookFile: null` when no pair exists, with no `ebookFormat`/`numEbooks` siblings. Pull-to-refresh/reopen the item after pairing changes so the app replaces its cached card with the current shape |
-| Unknown `/api/…`, `/opds/…`, `/public/…`, `/koreader/…` | — | A JSON `404`. On a `full` build the web UI's fallback is the server's fallback, so before this every unmatched API path answered `200 text/html` — which is how `/api/items/{id}/download` and `/api/items/{id}/ebook` looked like working routes that returned the Nuxt shell |
+| Unknown `/api/…`, `/opds/…`, `/public/…`, `/koreader/…` | — | A JSON `404`. This remains a route-level 404 rather than being mistaken for a browser app response; `/app` and `/editor` are the only mounted static app prefixes. |
 
 #### Native app seek and download checks
 
@@ -207,6 +220,22 @@ is therefore the app's restored/incomplete queue state, not a malformed
 `PlaybackSession` or a short HTTP body. The seek behaviour is likewise in the
 app UI: dragging the cursor works, while tapping the track does not.
 
+#### Current on-device checklist (not yet run)
+
+Use the current client pins above and a fixture server reachable from the phone:
+`http://<fixture-host>:25600`. Use locally held fixture credentials only; do not
+put usernames, passwords, tokens, or endpoint-sheet contents in this page.
+
+| Flow | Official Audiobookshelf app `v0.14.1-beta` | Lissen `1.12.5-release` |
+| --- | --- | --- |
+| Login | Add the fixture URL and sign in; confirm the server remains connected after relaunch. | Add the same URL and sign in; confirm the server appears in the connection list after relaunch. |
+| Libraries | Open the audiobook library and an item; confirm title, cover when present, and track list. | Open the audiobook shelf and item details; confirm title, cover when present, and track list. |
+| Playback | Play a multi-track book and advance to the next track. | Play a multi-track book and advance to the next track. |
+| Ranged audio | Seek near the middle, then back and forward; confirm audio resumes without a download error. | Seek near the middle, then back and forward; confirm audio resumes without a playback error. |
+| Progress sync | Pause, close the app, reopen the item, and confirm the server position is retained. | Pause, reconnect or refresh, and confirm the server position is retained. |
+| Bookmarks | Add a bookmark, reopen it, then remove it. | Add a bookmark, reopen it, then remove it. |
+| Offline download | Download an audiobook, play it in airplane mode, reconnect, and confirm the uploaded local session does not rewind server progress. | Download an audiobook, play it in airplane mode, reconnect, and confirm `POST /api/session/local-all` syncs the queued session without rewinding server progress. |
+
 
 #### Why the app hammered `POST /api/items/{id}/play`
 
@@ -220,8 +249,9 @@ is not a retry policy:
    does **not** use `audioTracks[].contentUrl` for a direct-play session once
    the server reports >= 2.22.0. It streams
    `{server}/public/session/{id}/track/{index}` instead.
-3. Stump served no such route, so on a `full` build the SPA fallback answered
-   `200 text/html` and ExoPlayer failed to load it.
+3. Before the track route existed, the full build's SPA fallback answered
+   `200 text/html` and ExoPlayer failed to load it. Unmatched API routes now
+   return `404`, so the unsupported track request fails explicitly.
 4. A player error lands in `handlePlayerPlaybackError`
    (`android/.../player/PlayerNotificationService.kt:617-641`): for a
    direct-play session it re-POSTs `/play` with `forceTranscode: true`.
@@ -230,7 +260,7 @@ is not a retry policy:
    repeats with no delay.
 
 Serving `/public/session/{id}/track/{index}` breaks the loop at step 3. There
-is no throttle to add on the server side: the app's fallback terminates only
+is no throttle to add on the server side: the app's retry loop terminates only
 when the track actually loads.
 
 #### Ebook editions
@@ -243,15 +273,20 @@ two `media` rows and records the relationship instead: two
 `pair_status = 'confirmed'` (migration `m20260946`,
 `models::domain::edition_pair`).
 
-`AbsBackend::ebook_editions` is the batched form of
-`edition_pair::linked_media(.., Some(PairStatus::Confirmed))` and keeps its
-rule exactly: only a `confirmed` link is a pair, a `rejected` anchor yields
-nothing, and a `suggested` link never reaches an ABS client. Pairs are **per
-user**, so two users of the same server can disagree about whether an
-audiobook and an ebook are the same work, and the profile resolves them
-against the requesting user. Only `epub` counterparts are reported: the app
-has readers for mobi/pdf/cbz too (`components/readers/Reader.vue:300-318`),
+The server's `ebook_editions_for` resolver requires the requested audiobook
+anchor and the EPUB counterpart to have confirmed links. It reports a sole
+confirmed EPUB candidate; if multiple EPUBs are confirmed for the work, one
+uniquely manual candidate takes precedence. Multiple candidates without exactly
+one manual choice are ambiguous: the resolver logs and omits `ebookFile`
+instead of guessing. Pairing is per user, so users can disagree about whether
+an audiobook and ebook are one work. Only EPUB counterparts are reported: the
+app has readers for mobi/pdf/cbz too (`components/readers/Reader.vue:300-318`),
 but EPUB is the only format Stump's pairing treats as an edition.
+
+In the audiobook-only profile, a paired EPUB is attached to the audiobook's
+`media.ebookFile` and is not a second `/items` row; standalone EPUB rows are
+also outside the audio listing. This mirrors ABS's one-item scanner model
+without exposing duplicate books.
 
 The official app's card components use `media.ebookFile` as the has-ebook
 signal (`components/cards/LazyBookCard.vue:184-186`,
@@ -270,9 +305,8 @@ the previous has-ebook state while the fresh detail correctly reports
 
 A playlist is a Stump **reading list**. Every mutation goes through
 `stump_collections` — the same path the Komga read-list routes take — so a
-playlist created in the Audiobookshelf app is the same row a Komga client, a
-Kobo shelf and the web UI see. Two shape differences follow from that and are
-deliberate:
+playlist created in the Audiobookshelf app is the same row a Komga client or a
+Home reader sees. Two shape differences follow from that and are deliberate:
 
 - A reading list is not scoped to a library. `libraryId` is reported as the
   library of the playlist's first audible member, and a member-less playlist
@@ -293,11 +327,11 @@ are both its `updated_at`. The app reads neither.
 
 #### Offline sessions
 
-The official app plays downloaded books offline and uploads whole sessions afterwards — one per call while it plays (`media/MediaProgressSyncer.kt:274`), the backlog in one request on reconnect. The body is its `createPartialPlaybackSession` (`ApiHandler:650-668`): identity, book, `currentTime`, `timeListening` and `updatedAt`, plus `deviceInfo`.
+The official app plays downloaded books offline and uploads whole sessions afterwards — one per call while it plays (`media/MediaProgressSyncer.kt:276`), the backlog in one request on reconnect. The body is its `createPartialPlaybackSession` (`ApiHandler:622-640`): identity, book, `currentTime`, `timeListening` and `updatedAt`, plus `deviceInfo`.
 
-`updatedAt` is the **device clock time of the position**, not of the upload, and that is what the merge turns on: the profile passes it as the source time of the reading-state update, so the unified head's ordinary conflict rule decides. An upload dated more than the 60 s tolerance behind the head that also reports **less** progress is recorded as provenance and does not move the position; anything else moves it. `local-all` reports that decision per session as `progressSynced`, which is what the app logs and what tells it the server was already ahead. A session that names a book the caller cannot see comes back as `success: false` with an error, never as a status code: the app matches results to stored sessions by id and only deletes the ones that succeeded (`ApiHandler:780-795`).
+`updatedAt` is the **device clock time of the position**, not of the upload, and that is what the merge turns on: the profile passes it as the source time of the reading-state update, so the unified head's ordinary conflict rule decides. An upload dated more than the 60 s tolerance behind the head that also reports **less** progress is recorded as provenance and does not move the position; all other uploads go through the ordinary conflict rule. `local-all` reports whether the head moved as `progressSynced`; the official app correlates results by id and logs moved progress or per-session errors (`ApiHandler.kt:747-760`). A session that names a book the caller cannot see comes back as `success: false` with an error, never as a status code.
 
-Either way the upload becomes a listening-history row with `playMethod: 3` (Local) — the listening happened even when the position did not move. That is what `abs_sessions.play_method` (migration `m20260943_000000_add_abs_session_play_method`) exists for: a history that could not tell offline listening from streamed listening would report every uploaded session as if the server had served the bytes.
+Stale offline positions are provenance only and do not create or extend `reading_sessions`; accepted local history is marked `playMethod: 3` (Local) in `abs_sessions` so it is not mistaken for a streamed session.
 
 #### Personalized shelves
 
@@ -316,7 +350,7 @@ Reference status codes reproduced from `capture/negatives.txt`: unknown item `40
 | Created at | `addedAt` |
 | Updated at | `mtimeMs` |
 
-`desc` is the string `"0"` (ascending) or `"1"` (descending) — never a boolean (`LibraryOrderingRequestConverter.kt:24-25`). `minified` defaults to `"1"` and `collapseseries` to `"0"` (`:87`, `:89`).
+`desc` is the string `"0"` (ascending) or `"1"` (descending) — never a boolean (`LibraryOrderingRequestConverter.kt:24-25`). `minified` defaults to `"1"` and `collapseseries` to `"0"` (`:94`, `:96`).
 
 `filter` is `"<key>.<base64 of the value>"` (`common/api/EncodeLibraryFilter.kt:5-8`, `Base64.NO_WRAP`). Lissen sends two forms: the hard-coded `progress.bm90LWZpbmlzaGVk` — base64 `not-finished`, its "hide completed" toggle (`library/converter/LibraryFilteringRequestConverter.kt:15`) — and `series.<base64 series id>` when it drills into a collapsed series (`common/api/AudioBookshelfRepository.kt:158`, `library/LibraryAudiobookshelfChannel.kt:91-94`). The envelope echoes the value back as `filterBy`, which is absent from the response entirely when no filter was sent.
 
@@ -420,7 +454,7 @@ Ids are allocated on first use, never reused, and survive restarts; the table is
 | `media.audioFiles[].chapters[]` | The book's chapters that fall inside that file, clipped to it and rebased to the file's own timeline — abs-ref reads them from each file's embedded marks, so they are file-relative while `media.chapters[]` is publication-relative (`mapper::file_chapters`) |
 | `audioFiles[].metaTags` | Only tags Stump read are emitted, as abs-ref does. `tagAlbum` is the book title (`media_metadata.title`, falling back to `series`): the probe reads a folder book's title from the shared `album` tag in the first place. `tagEncoder` is never emitted — the probe does not keep it |
 | `deviceInfo` | `{deviceId, clientName, clientVersion}` are stored with the session; `deviceName`, `manufacturer`, `model`, `sdkVersion` are echoed from the `play` request and `null` when read back through `GET /api/session/{id}` |
-| Series | Stump series, exposed as the `series`/`collapsedSeries` shape |
+| Series | Explicit `media_metadata.series`, or a genuine multi-book Stump series folder, exposed as the `series`/`collapsedSeries` shape |
 | Author | A `media_metadata.writers` name under an allocated `author` id; `numBooks` counts the media carrying that name |
 | `MediaProgress` | The unified reading state (below) |
 | Bookmark | A Stump bookmark on the media, addressed by whole-second `time` |
@@ -471,7 +505,7 @@ An Audiobookshelf position is a Stump `Position::Time { position_ms, track_index
 - `DELETE /api/me/progress/{progressId}` removes the user's reading head and returns `200 OK`; `progressId` is the `MediaProgress.id` from `/api/me` (Stump's deterministic `{userId}-{mediaId}`), and an unknown/foreign id is `404`. The route emits `user_updated` only, matching abs-ref's `MeController.js:253-265`; it intentionally does not send a null `user_item_progress_updated.data`.
 - `GET /api/me/progress/{itemId}` and the `mediaProgress[]` array in `/api/me` project the reading state back: `currentTime` in seconds, `progress` as a fraction, `isFinished`, and `lastUpdate`/`startedAt`/`finishedAt` in milliseconds. Lissen requires `libraryItemId`, `currentTime`, `isFinished`, `lastUpdate` and `progress` to be present (`common/model/MediaProgressResponse.kt`).
 
-A session lives in `abs_sessions`. The important asymmetry is that `POST /api/items/{id}/play` returns a session whose id is what Lissen then syncs against — the sync path parameter is the **session** id, not the item id, despite Lissen naming the parameter `itemId` (`:145-149`, `common/api/library/AudioBookshelfLibrarySyncService.kt:17-28`). Lissen never calls `close`, so a session is closed by the server, not the client.
+A session lives in `abs_sessions`. The important asymmetry is that `POST /api/items/{id}/play` returns a session whose id is what Lissen then syncs against — the sync path parameter is the **session** id, not the item id, despite Lissen naming the parameter `itemId` (`:156-160`, `common/api/library/AudioBookshelfLibrarySyncService.kt:17-28`). Lissen never calls `close`, so a session is closed by the server, not the client.
 
 Lissen only reads `{id, libraryItemId}` from the play response (`common/model/playback/PlaybackSessionResponse.kt`) and builds its own audio URLs from the item's `audioFiles[].ino` (`common/AudiobookshelfChannel.kt:48-64`, `library/converter/BookResponseConverter.kt:54`). `contentUrl` in `audioTracks[]` is therefore reproduced for correctness, not because this client follows it — but `ino` must round-trip exactly, because it is the only thing standing between the item and its bytes.
 
@@ -497,7 +531,7 @@ One track, trimmed from `capture/play_session.json` (`metadata` and the ffprobe-
 | `playMethod` is always `0` (DirectPlay) | Stump never transcodes on this lane. `forceTranscode` in the play request is accepted and ignored — including the one the app sends from `handlePlayerPlaybackError` (`android/.../player/PlayerNotificationService.kt:617-641`), which is why `/public/session/{id}/track/{index}` has to work: that fallback only terminates when the track loads |
 | Only media whose extension is an audio container (`.m4b`, `.m4a`, `.mp3`, `.opus`, `.ogg`, `.flac`) appear, and a library with no audio at all is hidden from `GET /api/libraries` | Audiobookshelf has no per-page reading position, so a Stump ebook has nothing to say here. A visible library full of unplayable items is worse than an absent one |
 | `libraryItem.ino` echoes the item's own id and `audioFiles[].ino` is the 0-based track index — neither is a filesystem inode | The reference reports real inode strings (`"105885034"` in `item.json`), but Stump has no inode that survives a rescan. The values only need to be stable and to round-trip through `GET /api/items/{id}/file/{ino}`, which they do |
-| No `/api/search/books` | Lissen never calls it, and the official app's book search uses `/api/libraries/{id}/search`; no second search shape is implied. Collections answer an empty page and playlist/session lists are served for the official app |
+| No `/api/search/books` | Lissen never calls it, and the official app's book search uses `/api/libraries/{id}/search`; no second search shape is implied. Library collections project populated Stump memberships onto visible audio items and are empty when a library has no eligible membership; playlist/session lists are also served for the official app |
 | `ereaderDevices` is always `[]` | Stump's Kindle/ereader registry is not exposed through this profile; nothing in the client reads it |
 | `serverSettings` fields Stump has no analogue for carry the `abs-ref` 2.36.0 defaults verbatim | The block is large, mostly about scanner and metadata behaviour Stump implements differently, and clients read a handful of flags from it. Reproducing the reference defaults is honest about what is not configurable here |
 | `GET /api/authors/{id}/image` is always `404` | Stump stores no author images; the client's author-image fetch simply fails (`common/AudiobookshelfChannel.kt:77-80`) |

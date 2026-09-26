@@ -8,6 +8,10 @@ use models::{
 	},
 	shared::{
 		enums::{DeviceCredentialKind, DeviceKind},
+		liseur_annotation_projection::{
+			is_liseur_sync_projection_id, parse_stump_native_annotation_id,
+			stump_native_annotation_id,
+		},
 		readium::ReadiumLocator,
 	},
 };
@@ -17,8 +21,10 @@ use stump_annotation_sync::{SinkDescriptor, SinkPresetDescriptor};
 use stump_core::annotation_sync::SinkStatusRow;
 
 use crate::{
-	input::annotation::AnnotationFilterInput, object::ingest::IngestSettingDefinition,
-	pagination::OffsetPagination, utils::db_statement,
+	input::annotation::{AnnotationFilterInput, AnnotationOrder},
+	object::ingest::IngestSettingDefinition,
+	pagination::OffsetPagination,
+	utils::db_statement,
 };
 
 /// A built-in safe layout choice for an annotation sink.
@@ -131,18 +137,20 @@ pub struct AnnotationBook {
 pub struct AnnotationEntry {
 	pub id: ID,
 	pub kind: AnnotationKind,
-	/// Where the annotation came from. Native rows carry no per-row device,
-	/// so they report `WEB` — the native lane, i.e. this server's readers and
-	/// GraphQL API. A liseur-sync CAS record reports the kind of the device
-	/// that pushed it (`KOBO` for NickelStump on a Kobo, `KOREADER`,
-	/// `LISEUR`), falling back to `LISEUR` when that device is no longer
-	/// registered.
+	/// The immutable creator lane. Native rows and Home edits report `WEB`;
+	/// Liseur-sync rows report the device that first created the CAS record.
 	pub source: DeviceKind,
 	pub source_device_id: Option<ID>,
 	pub source_device_name: Option<String>,
-	/// Whether `updateAnnotation`/`deleteAnnotation` accept this row. Only
-	/// native rows are editable here: a liseur CAS record is owned by its
-	/// device and replicated with compare-and-set revisions.
+	/// Current Liseur CAS revision when one exists; native-only rows have none
+	/// until they are linked and exported.
+	pub revision: Option<i64>,
+	/// The lane that last changed the CAS record, separate from its immutable
+	/// creator attribution.
+	pub last_edited_source: Option<DeviceKind>,
+	pub last_edited_at: Option<DateTime<Utc>>,
+	/// Whether `updateAnnotation`/`deleteAnnotation` accept this row. Linked
+	/// Readium notes/highlights use CAS with `revision`.
 	pub editable: bool,
 	/// The chapter the anchor names, when the locator carries one
 	pub chapter_title: Option<String>,
@@ -159,7 +167,7 @@ pub struct AnnotationEntry {
 	pub excerpt: Option<String>,
 	/// The user's own note, distinct from the selected passage
 	pub note: Option<String>,
-	/// Liseur palette token (`yellow`, `green`, …); native rows have no colour
+	/// Stored color token, when present, for native or Liseur annotations
 	pub color: Option<String>,
 	pub created_at: Option<DateTime<Utc>>,
 	pub updated_at: Option<DateTime<Utc>>,
@@ -213,6 +221,7 @@ impl From<BookRow> for AnnotationBook {
 #[derive(Debug, FromQueryResult)]
 struct LiseurRow {
 	annotation_id: String,
+	rev: i64,
 	work_id: String,
 	kind: String,
 	locator: Option<String>,
@@ -221,11 +230,51 @@ struct LiseurRow {
 	color: Option<String>,
 	body: Option<String>,
 	device_id: String,
+	origin_device_id: Option<String>,
 	client_ts: String,
 	updated_at: String,
 	media_id: Option<String>,
 	work_title: Option<String>,
 	work_author: Option<String>,
+}
+#[derive(Debug)]
+struct NativeCasRevision {
+	revision: i64,
+	device_id: String,
+	updated_at: String,
+}
+
+/// Current CAS state backing native rows that have been exported to Liseur.
+async fn load_native_cas_revisions(
+	conn: &DatabaseConnection,
+	user_id: &str,
+) -> Result<HashMap<String, NativeCasRevision>> {
+	let rows = conn
+		.query_all(db_statement(
+			conn,
+			"SELECT annotation_id, rev, device_id, updated_at
+			 FROM liseur_sync_annotations
+			 WHERE user_id = $1 AND deleted = FALSE
+			   AND annotation_id LIKE 'stump-native:%'",
+			[user_id.into()],
+		))
+		.await?;
+	let mut revisions = HashMap::new();
+	for row in rows {
+		let annotation_id: String = row.try_get("", "annotation_id")?;
+		if parse_stump_native_annotation_id(&annotation_id).is_none() {
+			continue;
+		}
+		revisions.insert(
+			annotation_id,
+			NativeCasRevision {
+				revision: row.try_get("", "rev")?,
+				device_id: row.try_get("", "device_id")?,
+				updated_at: row.try_get("", "updated_at")?,
+			},
+		);
+	}
+	Ok(revisions)
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -309,6 +358,7 @@ impl AnnotationPage {
 		user: &AuthUser,
 		filter: &AnnotationFilterInput,
 		pagination: &OffsetPagination,
+		sort: AnnotationOrder,
 	) -> Result<Self> {
 		let liseur = load_liseur_rows(conn, &user.id, filter).await?;
 		let mut media_ids = BTreeSet::new();
@@ -321,7 +371,9 @@ impl AnnotationPage {
 					.distinct()
 					.into_tuple::<String>()
 					.all(conn)
-					.await?,
+					.await?
+					.into_iter()
+					.filter(|id| !is_liseur_sync_projection_id(id)),
 			);
 		}
 		if filter.wants(AnnotationKind::Bookmark) {
@@ -333,13 +385,17 @@ impl AnnotationPage {
 					.distinct()
 					.into_tuple::<String>()
 					.all(conn)
-					.await?,
+					.await?
+					.into_iter()
+					.filter(|id| !is_liseur_sync_projection_id(id)),
 			);
 		}
 		media_ids.extend(liseur.iter().filter_map(|row| row.media_id.clone()));
 
 		let books = load_books(conn, user, filter, media_ids).await?;
 		let visible: Vec<String> = books.keys().cloned().collect();
+		let devices = load_liseur_devices(conn, &user.id).await?;
+		let native_cas = load_native_cas_revisions(conn, &user.id).await?;
 
 		let mut entries = Vec::new();
 		if !visible.is_empty() {
@@ -353,6 +409,9 @@ impl AnnotationPage {
 					query = query.filter(media_annotation::Column::CreatedAt.gte(since));
 				}
 				for row in query.all(conn).await? {
+					if is_liseur_sync_projection_id(&row.id) {
+						continue;
+					}
 					let Some(book) = books.get(&row.media_id) else {
 						continue;
 					};
@@ -370,12 +429,30 @@ impl AnnotationPage {
 					if !filter.wants(kind) {
 						continue;
 					}
+					let native_cas_id = stump_native_annotation_id("annotation", &row.id);
+					let revision = native_cas.get(&native_cas_id);
 					entries.push(AnnotationEntry {
-						id: ID(row.id),
+						id: ID(row.id.clone()),
 						kind,
 						source: DeviceKind::Web,
 						source_device_id: None,
 						source_device_name: None,
+						revision: revision.map(|state| state.revision),
+						last_edited_source: Some(revision.map_or(
+							DeviceKind::Web,
+							|state| {
+								if state.device_id == "stump-native" {
+									DeviceKind::Web
+								} else {
+									devices
+										.get(&state.device_id)
+										.map_or(DeviceKind::Liseur, |device| device.kind)
+								}
+							},
+						)),
+						last_edited_at: revision
+							.and_then(|state| parse_ts(&state.updated_at))
+							.or(Some(row.updated_at)),
 						editable: true,
 						chapter_title: non_empty(Some(row.locator.chapter_title.clone())),
 						href: non_empty(Some(row.locator.href.clone())),
@@ -384,7 +461,7 @@ impl AnnotationPage {
 						progression: locator_progression(&row.locator),
 						excerpt,
 						note: non_empty(row.annotation_text),
-						color: None,
+						color: non_empty(row.color),
 						created_at: Some(row.created_at),
 						updated_at: Some(row.updated_at),
 						book: book.clone(),
@@ -400,6 +477,11 @@ impl AnnotationPage {
 					query = query.filter(bookmark::Column::CreatedAt.gte(since));
 				}
 				for row in query.all(conn).await? {
+					if is_liseur_sync_projection_id(&row.id) {
+						continue;
+					}
+					let native_cas_id = stump_native_annotation_id("bookmark", &row.id);
+					let revision = native_cas.get(&native_cas_id);
 					let Some(book) = books.get(&row.media_id) else {
 						continue;
 					};
@@ -409,6 +491,22 @@ impl AnnotationPage {
 						source: DeviceKind::Web,
 						source_device_id: None,
 						source_device_name: None,
+						revision: revision.map(|state| state.revision),
+						last_edited_source: Some(revision.map_or(
+							DeviceKind::Web,
+							|state| {
+								if state.device_id == "stump-native" {
+									DeviceKind::Web
+								} else {
+									devices
+										.get(&state.device_id)
+										.map_or(DeviceKind::Liseur, |device| device.kind)
+								}
+							},
+						)),
+						last_edited_at: revision
+							.and_then(|state| parse_ts(&state.updated_at))
+							.or(Some(row.created_at)),
 						// `updateAnnotation`/`deleteAnnotation` address
 						// `media_annotations`; a bookmark has its own
 						// `deleteBookmark` mutation and no note to edit.
@@ -440,7 +538,6 @@ impl AnnotationPage {
 			}
 		}
 
-		let devices = load_liseur_devices(conn, &user.id).await?;
 		for row in liseur {
 			let kind = match row.kind.as_str() {
 				"note" => AnnotationKind::Note,
@@ -485,15 +582,40 @@ impl AnnotationPage {
 					extension: None,
 				},
 			};
-			let device = devices.get(&row.device_id);
+			let creator_device_id =
+				row.origin_device_id.as_deref().unwrap_or(&row.device_id);
+			let creator = (creator_device_id != "stump-native")
+				.then(|| devices.get(creator_device_id))
+				.flatten();
+			let last_editor = (row.device_id != "stump-native")
+				.then(|| devices.get(&row.device_id))
+				.flatten();
+			let source = if creator_device_id == "stump-native" {
+				DeviceKind::Web
+			} else {
+				creator.map_or(DeviceKind::Liseur, |device| device.kind)
+			};
+			let last_edited_source = Some(if row.device_id == "stump-native" {
+				DeviceKind::Web
+			} else {
+				last_editor.map_or(DeviceKind::Liseur, |device| device.kind)
+			});
 			let anchor = liseur_anchor(row.locator.as_deref());
+			let editable = row.media_id.is_some()
+				&& matches!(kind, AnnotationKind::Highlight | AnnotationKind::Note)
+				&& anchor.as_ref().is_some_and(|anchor| {
+					!anchor.href.trim().is_empty() && anchor.locations.is_some()
+				});
 			entries.push(AnnotationEntry {
 				id: ID(row.annotation_id),
 				kind,
-				source: device.map_or(DeviceKind::Liseur, |device| device.kind),
-				source_device_id: device.map(|device| ID(device.id.clone())),
-				source_device_name: device.map(|device| device.name.clone()),
-				editable: false,
+				source,
+				source_device_id: creator.map(|device| ID(device.id.clone())),
+				source_device_name: creator.map(|device| device.name.clone()),
+				revision: Some(row.rev),
+				last_edited_source,
+				last_edited_at: parse_ts(&row.updated_at),
+				editable,
 				chapter_title: anchor
 					.as_ref()
 					.and_then(|at| non_empty(Some(at.chapter_title.clone()))),
@@ -564,12 +686,21 @@ impl AnnotationPage {
 			.map(|(index, (_, key))| (key, index))
 			.collect();
 		let book_count = rank.len() as i64;
-		entries.sort_by(|left, right| {
-			rank[&left.book.key]
-				.cmp(&rank[&right.book.key])
-				.then_with(|| left.created_at.cmp(&right.created_at))
-				.then_with(|| left.id.cmp(&right.id))
-		});
+		match sort {
+			AnnotationOrder::Book => entries.sort_by(|left, right| {
+				rank[&left.book.key]
+					.cmp(&rank[&right.book.key])
+					.then_with(|| left.created_at.cmp(&right.created_at))
+					.then_with(|| left.id.cmp(&right.id))
+			}),
+			AnnotationOrder::Recent => entries.sort_by(|left, right| {
+				let changed =
+					|entry: &AnnotationEntry| entry.updated_at.or(entry.created_at);
+				changed(right)
+					.cmp(&changed(left))
+					.then_with(|| left.id.cmp(&right.id))
+			}),
+		}
 
 		let total = entries.len() as i64;
 		let offset = pagination.offset() as usize;
@@ -648,10 +779,11 @@ async fn load_liseur_rows(
 	Ok(conn
 		.query_all(db_statement(
 			conn,
-			"SELECT a.annotation_id AS annotation_id, a.work_id AS work_id,
-				a.kind AS kind, a.locator AS locator, a.progression AS progression,
-				a.excerpt AS excerpt, a.color AS color, a.body AS body,
-				a.device_id AS device_id, a.client_ts AS client_ts,
+			"SELECT a.annotation_id AS annotation_id, a.rev AS rev,
+				a.work_id AS work_id, a.kind AS kind, a.locator AS locator,
+				a.progression AS progression, a.excerpt AS excerpt, a.color AS color,
+				a.body AS body, a.device_id AS device_id,
+				a.origin_device_id AS origin_device_id, a.client_ts AS client_ts,
 				a.updated_at AS updated_at,
 				w.title AS work_title, w.author AS work_author,
 				(
@@ -664,6 +796,7 @@ async fn load_liseur_rows(
 			LEFT JOIN liseur_sync_works w
 				ON w.user_id = a.user_id AND w.id = a.work_id
 			WHERE a.user_id = $1 AND a.deleted = FALSE
+				AND a.annotation_id NOT LIKE 'stump-native:%'
 			ORDER BY a.client_ts ASC, a.annotation_id ASC",
 			[user_id.into()],
 		))
@@ -753,8 +886,9 @@ mod tests {
 			row_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, annotation_id TEXT NOT NULL,
 			rev BIGINT NOT NULL, seq BIGINT NOT NULL, work_id TEXT NOT NULL, edition_sha TEXT, kind TEXT NOT NULL,
 			locator TEXT, progression DOUBLE, excerpt TEXT NOT NULL, color TEXT NOT NULL, body TEXT NOT NULL,
-			device_id TEXT NOT NULL, client_ts TEXT NOT NULL, updated_at TEXT NOT NULL,
-			deleted BOOLEAN NOT NULL DEFAULT FALSE, deleted_at TEXT, payload TEXT NOT NULL)",
+			device_id TEXT NOT NULL, origin_device_id TEXT, client_ts TEXT NOT NULL,
+			updated_at TEXT NOT NULL, deleted BOOLEAN NOT NULL DEFAULT FALSE,
+			deleted_at TEXT, payload TEXT NOT NULL)",
 	];
 
 	fn ts(secs: i64) -> DateTime<Utc> {
@@ -866,6 +1000,7 @@ mod tests {
 				id: Set(id.to_owned()),
 				locator: Set(highlight_locator("Chapter One", "ch1.xhtml", text)),
 				annotation_text: Set(note.map(str::to_owned)),
+				color: Set((id == "n-highlight").then(|| "red".to_owned())),
 				media_id: Set(books[0].clone()),
 				user_id: Set(user.id.clone()),
 				..Default::default()
@@ -958,7 +1093,84 @@ mod tests {
 			[user.id.clone().into(), ts(0).to_rfc3339().into()],
 		)
 		.await;
+		exec(
+			&conn,
+			"INSERT INTO liseur_sync_works (id, user_id, title, author)
+			 VALUES ('work-dune', $1, 'Dune', 'Frank Herbert')",
+			[user.id.clone().into()],
+		)
+		.await;
+		exec(
+			&conn,
+			"INSERT INTO liseur_sync_media_links
+				(id, user_id, media_id, work_id, edition_sha, resolution_status, created_at)
+			 VALUES ('link-dune', $1, 'm-dune', 'work-dune', 'edition-dune', 'linked', $2)",
+			[user.id.clone().into(), ts(0).to_rfc3339().into()],
+		)
+		.await;
+		let native_cas_id =
+			models::shared::liseur_annotation_projection::stump_native_annotation_id(
+				"annotation",
+				"n-highlight",
+			);
+		let native_locator = serde_json::to_string(&highlight_locator(
+			"Chapter One",
+			"ch1.xhtml",
+			Some("The spice must flow."),
+		))
+		.unwrap();
+		exec(
+			&conn,
+			"INSERT INTO liseur_sync_annotations
+				(user_id, annotation_id, rev, seq, work_id, edition_sha, kind, locator,
+				 progression, excerpt, color, body, device_id, origin_device_id, client_ts,
+				 updated_at, deleted, deleted_at, payload)
+			 VALUES ($1, $2, 4, 80, 'work-dune', 'edition-dune', 'highlight', $3,
+				 0.25, 'The spice must flow.', 'red', 'spice', 'liseur-dev-1',
+				 'stump-native', $4, $5, FALSE, NULL, '{}')",
+			[
+				user.id.clone().into(),
+				native_cas_id.into(),
+				native_locator.into(),
+				ts(10).to_rfc3339().into(),
+				ts(50).to_rfc3339().into(),
+			],
+		)
+		.await;
+		let native_bookmark_cas_id =
+			models::shared::liseur_annotation_projection::stump_native_annotation_id(
+				"bookmark", "b-mark",
+			);
+		insert_liseur(
+			&conn,
+			&user.id,
+			&native_bookmark_cas_id,
+			"bookmark",
+			false,
+			35,
+		)
+		.await;
 		insert_liseur(&conn, &user.id, "l-kobo", "highlight", false, 40).await;
+		let projection_id =
+			models::shared::liseur_annotation_projection::liseur_sync_projection_id(
+				&user.id, "l-kobo",
+			);
+		media_annotation::ActiveModel {
+			id: Set(projection_id),
+			locator: Set(highlight_locator(
+				"Chapter Three",
+				"OEBPS/ch3.xhtml",
+				Some("Emma Woodhouse, handsome, clever"),
+			)),
+			annotation_text: Set(Some("her father".to_owned())),
+			color: Set(Some("yellow".to_owned())),
+			media_id: Set(books[1].clone()),
+			user_id: Set(user.id.clone()),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
 		// A tombstone is not an annotation the user has.
 		insert_liseur(&conn, &user.id, "l-gone", "highlight", true, 50).await;
 
@@ -985,12 +1197,12 @@ mod tests {
 			conn,
 			"INSERT INTO liseur_sync_annotations
 				(user_id, annotation_id, rev, seq, work_id, edition_sha, kind, locator,
-				 progression, excerpt, color, body, device_id, client_ts, updated_at,
+				 progression, excerpt, color, body, device_id, origin_device_id, client_ts, updated_at,
 				 deleted, deleted_at, payload)
 			 VALUES ($1, $2, 1, 1, 'work-emma', NULL, $3,
-				 '{\"href\":\"OEBPS/ch3.xhtml\",\"chapterTitle\":\"Chapter Three\"}',
+				 '{\"href\":\"OEBPS/ch3.xhtml\",\"chapterTitle\":\"Chapter Three\",\"locations\":{\"position\":15,\"progression\":0.62},\"text\":{\"before\":\"before\",\"highlight\":\"Emma Woodhouse, handsome, clever\",\"after\":\"after\"}}',
 				 0.62, 'Emma Woodhouse, handsome, clever', 'yellow', 'her father',
-				 'liseur-dev-1', $4, $4, $5, NULL, '{}')",
+				 'liseur-dev-1', 'liseur-dev-1', $4, $4, $5, NULL, '{}')",
 			[
 				user_id.into(),
 				id.into(),
@@ -1007,9 +1219,15 @@ mod tests {
 		user: &AuthUser,
 		filter: AnnotationFilterInput,
 	) -> AnnotationPage {
-		AnnotationPage::fetch(conn, user, &filter, &OffsetPagination::default())
-			.await
-			.unwrap()
+		AnnotationPage::fetch(
+			conn,
+			user,
+			&filter,
+			&OffsetPagination::default(),
+			AnnotationOrder::Book,
+		)
+		.await
+		.unwrap()
 	}
 
 	fn ids(page: &AnnotationPage) -> Vec<&str> {
@@ -1043,6 +1261,10 @@ mod tests {
 		assert_eq!(highlight.excerpt.as_deref(), Some("The spice must flow."));
 		assert_eq!(highlight.note.as_deref(), Some("spice"));
 		assert_eq!(highlight.source, DeviceKind::Web);
+		assert_eq!(highlight.source_device_id, None);
+		assert_eq!(highlight.revision, Some(4));
+		assert_eq!(highlight.last_edited_source, Some(DeviceKind::Kobo));
+		assert_eq!(highlight.last_edited_at, Some(ts(50)));
 		assert!(highlight.editable);
 		assert_eq!(highlight.href.as_deref(), Some("ch1.xhtml"));
 		assert_eq!(highlight.fragment.as_deref(), Some("p12"));
@@ -1058,6 +1280,9 @@ mod tests {
 		assert_eq!(bookmark.kind, AnnotationKind::Bookmark);
 		assert_eq!(bookmark.page, Some(42));
 		assert!(!bookmark.editable);
+		assert_eq!(bookmark.source, DeviceKind::Web);
+		assert_eq!(bookmark.revision, Some(1));
+		assert_eq!(bookmark.last_edited_source, Some(DeviceKind::Kobo));
 
 		// The liseur record reports the kind of the device that pushed it and
 		// is folded onto the book its work is linked to.
@@ -1068,7 +1293,8 @@ mod tests {
 			Some("dev-kobo")
 		);
 		assert_eq!(kobo.source_device_name.as_deref(), Some("Kobo Clara"));
-		assert!(!kobo.editable);
+		assert_eq!(kobo.revision, Some(1));
+		assert!(kobo.editable);
 		assert_eq!(kobo.color.as_deref(), Some("yellow"));
 		assert_eq!(kobo.progression, Some(0.62));
 		assert_eq!(kobo.href.as_deref(), Some("OEBPS/ch3.xhtml"));
@@ -1077,6 +1303,19 @@ mod tests {
 			Some("m-emma")
 		);
 		assert_eq!(kobo.book.key, "native:m-emma");
+		let highlight = page
+			.items
+			.iter()
+			.find(|entry| entry.id == "n-highlight")
+			.unwrap();
+		assert_eq!(highlight.color.as_deref(), Some("red"));
+		let liseur_highlight = page
+			.items
+			.iter()
+			.find(|entry| entry.id == "l-kobo")
+			.unwrap();
+		assert_eq!(liseur_highlight.source, DeviceKind::Kobo);
+		assert_eq!(liseur_highlight.color.as_deref(), Some("yellow"));
 	}
 
 	#[tokio::test]
@@ -1251,6 +1490,7 @@ mod tests {
 				page_size: Some(3),
 				zero_based: Some(false),
 			},
+			AnnotationOrder::Book,
 		)
 		.await
 		.unwrap();
@@ -1267,10 +1507,44 @@ mod tests {
 				page_size: Some(3),
 				zero_based: Some(false),
 			},
+			AnnotationOrder::Book,
 		)
 		.await
 		.unwrap();
 		assert_eq!(ids(&second), ["n-note"]);
 		assert!(!second.has_next);
+	}
+
+	#[tokio::test]
+	async fn recent_order_is_newest_change_first_across_books() {
+		let (conn, user, ..) = seeded().await;
+		let book_order = AnnotationPage::fetch(
+			&conn,
+			&user,
+			&AnnotationFilterInput::default(),
+			&OffsetPagination::default(),
+			AnnotationOrder::Book,
+		)
+		.await
+		.unwrap();
+		let recent = AnnotationPage::fetch(
+			&conn,
+			&user,
+			&AnnotationFilterInput::default(),
+			&OffsetPagination::default(),
+			AnnotationOrder::Recent,
+		)
+		.await
+		.unwrap();
+		assert_eq!(recent.total, book_order.total, "same set, only reordered");
+		let changed: Vec<_> = recent
+			.items
+			.iter()
+			.map(|entry| entry.updated_at.or(entry.created_at))
+			.collect();
+		assert!(
+			changed.windows(2).all(|pair| pair[0] >= pair[1]),
+			"newest change first: {changed:?}"
+		);
 	}
 }

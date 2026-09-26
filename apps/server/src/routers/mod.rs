@@ -16,6 +16,8 @@ mod audio_transform;
 mod kavita;
 #[cfg(feature = "kobo")]
 mod kobo_backend;
+#[cfg(feature = "komf")]
+mod komf_backend;
 #[cfg(feature = "komga")]
 mod komga;
 #[cfg(feature = "komga")]
@@ -35,8 +37,6 @@ use api::v2::transcode_job::registry as worker_job_registry;
 #[cfg(feature = "webui")]
 mod spa;
 
-#[cfg(feature = "webui")]
-pub(crate) use spa::relative_favicon_path;
 fn server_component_definitions(state: &AppState) -> Vec<ComponentDefinition> {
 	vec![
 		ComponentDefinition::new(
@@ -141,10 +141,6 @@ fn server_component_definitions(state: &AppState) -> Vec<ComponentDefinition> {
 	]
 }
 
-#[cfg(not(feature = "webui"))]
-pub(crate) fn relative_favicon_path(_webui_enabled: bool) -> Option<String> {
-	None
-}
 pub(crate) fn install_worker_job_registry(app_state: &AppState) {
 	app_state.install_worker_registry(worker_job_registry(app_state));
 	#[cfg(feature = "readium")]
@@ -206,6 +202,10 @@ pub async fn mount(app_state: AppState) -> Router<AppState> {
 			COMPONENT_KOMGA,
 		));
 	}
+	#[cfg(feature = "komf")]
+	if app_state.config.protocols.enable_komf {
+		app_router = app_router.merge(komf_backend::mount(app_state.clone()));
+	}
 
 	#[cfg(feature = "liseur-sync")]
 	{
@@ -262,19 +262,17 @@ pub async fn mount(app_state: AppState) -> Router<AppState> {
 		);
 	}
 
-	// Mounted before the web UI so static app bases (`/editor`, `/app`) are
-	// not swallowed by the SPA fallback; they coexist with a full build.
+	// Mount static Home and Editor apps before the web UI redirect fallback.
 	app_router = app_router.merge(static_apps::mount(&app_state));
 
 	#[cfg(feature = "webui")]
 	let web_ui_owns_root = app_state.component_enabled(COMPONENT_WEBUI);
 	#[cfg(not(feature = "webui"))]
 	let web_ui_owns_root = false;
-
 	if web_ui_owns_root {
 		#[cfg(feature = "webui")]
 		{
-			app_router = app_router.merge(spa::mount(app_state.clone()));
+			app_router = app_router.merge(spa::mount());
 		}
 	} else {
 		app_router = app_router.merge(static_apps::home_landing(&app_state));
@@ -298,6 +296,12 @@ pub async fn mount(app_state: AppState) -> Router<AppState> {
 	if app_state.config.protocols.enable_komga {
 		tracing::warn!(
 			"STUMP_ENABLE_KOMGA is enabled, but this server was compiled without the `komga` feature; serving native API routes without Komga compatibility"
+		);
+	}
+	#[cfg(not(feature = "komf"))]
+	if app_state.config.protocols.enable_komf {
+		tracing::warn!(
+			"STUMP_ENABLE_KOMF is enabled, but this server was compiled without the `komf` feature; Komf compatibility routes are unavailable"
 		);
 	}
 

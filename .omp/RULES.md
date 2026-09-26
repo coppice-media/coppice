@@ -11,8 +11,8 @@
 - Preserve default/full behavior and mobile compatibility. Runtime switches are for dormant work; Cargo features remove code/dependencies only after tracing all consumers.
 - Treat Axum routes, auth, SQLite/SeaORM, GraphQL, OPDS, KOReader, Kobo, Komga, liseur-sync, media, and mobile clients as public contracts; trace callers before changing APIs, features, env keys, routes, schemas, or payloads.
 - Prefer lazy ownership and clean cutovers over speculative rewrites, aliases, compatibility shims, or dead fallback paths.
-- Root JavaScript tooling is Bun 1.4.1 with one `bun.lock`; `apps/expo/` is frozen compatibility source outside the active workspace and native-tooling gate.
-- Coppice owns metadata-backed request intent, permissions, visibility, approvals, notifications, and staged ingest. Release search, acquisition, retries, credentials, and transport belong to a future independent authenticated provider sidecar, not the Rust server or browser.
+- Root JavaScript tooling is Bun 1.4.1 with one `bun.lock`; `apps/expo/` was removed and remains only in Git history.
+- Coppice owns metadata-backed request intent, permissions, visibility, approvals, notifications, staged ingest, and the manager-confirmed MAM Bridge client. MAM credentials, torrent transport, and seeding stay in the separate authenticated MAM Bridge sidecar; the browser never talks to it.
 
 ## Defect guardrails
 

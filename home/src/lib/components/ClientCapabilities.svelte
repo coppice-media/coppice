@@ -4,10 +4,12 @@
 
 	let {
 		capabilities,
-		mediaFormats
+		mediaFormats,
+		class: className
 	}: {
 		capabilities: readonly ClientCapability[]
 		mediaFormats: readonly ClientMediaCapability[]
+		class?: string
 	} = $props()
 
 	const syncCapabilities = $derived(capabilities.filter((item) => item.group === 'sync'))
@@ -50,9 +52,9 @@
 	}
 </script>
 
-<span class="flex flex-col gap-1.5" aria-label="Capabilities">
+<span class={cn('flex flex-col gap-1', className)} aria-label="Capabilities">
 	{#if syncCapabilities.length}
-		<span class="flex flex-wrap items-center gap-1.5" aria-label="Sync capabilities">
+		<span class="flex flex-wrap items-center gap-1" aria-label="Sync capabilities">
 			<span class="mr-0.5 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Sync</span>
 			{#each syncCapabilities as capability (capability.id)}
 				{@const Icon = capability.icon}
@@ -73,7 +75,7 @@
 	{/if}
 
 	{#if readCapabilities.length || mediaFormats.length}
-		<span class="flex flex-wrap items-center gap-1.5" aria-label="Reading capabilities and formats">
+		<span class="flex flex-wrap items-center gap-1" aria-label="Reading capabilities and formats">
 			<span class="mr-0.5 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Reads</span>
 			{#each readCapabilities as capability (capability.id)}
 				{@const Icon = capability.icon}

@@ -3,8 +3,8 @@
 //! Every struct here reproduces a shape captured from a live `abs-ref`
 //! 2.36.0 container; the capture rig and the JSON files are in
 //! `../komga-compat/abs/` and each type names the capture it came from. The
-//! consuming client contract is Lissen `1.11.22-release` (`f30bf9be`),
-//! `app/src/main/kotlin/org/grakovne/lissen/channel/audiobookshelf/**`,
+//! current consuming client contract is Lissen `1.12.5-release`
+//! (`fd5c0417`), `app/src/main/kotlin/org/grakovne/lissen/channel/audiobookshelf/**`,
 //! whose Moshi models mark exactly which fields must exist.
 //!
 //! Two conventions run through the file:
@@ -931,7 +931,7 @@ pub struct SeriesDto {
 }
 
 /// `GET /api/libraries/{id}/series`. The app sends
-/// `?minified=1&sort=name&limit=10000` (`ApiHandler.kt:516`) and reads
+/// `?minified=1&sort=name&limit=10000` (`ApiHandler.kt:483`) and reads
 /// `results` alone.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -946,11 +946,41 @@ pub struct SeriesPageDto {
 	pub include: String,
 }
 
-/// The `{results, total, limit, page}` envelope abs-ref answers for a
-/// library's collections. Stump's collections are not Audiobookshelf
-/// collections (see `abs-compat.mdx`), so the profile serves the envelope
-/// empty rather than 404ing a browse tab the app opens. Playlists *are*
-/// served, through [`PlaylistsPageDto`].
+/// One library-scoped ABS collection. The ABS collection API embeds the
+/// expanded library items it contains; Stump collection membership is stored
+/// at series granularity and projected to visible audio books by the route.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionDto {
+	pub id: String,
+	pub library_id: String,
+	pub name: String,
+	pub description: Option<String>,
+	pub books: Vec<LibraryItemDto>,
+	pub last_update: i64,
+	pub created_at: i64,
+}
+
+/// `GET /api/libraries/{id}/collections`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionsPageDto {
+	pub results: Vec<CollectionDto>,
+	pub total: i64,
+	pub limit: i64,
+	pub page: i64,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub sort_by: Option<String>,
+	pub sort_desc: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub filter_by: Option<String>,
+	pub minified: bool,
+	pub include: String,
+}
+
+/// A generic empty `{results, total, limit, page}` envelope. Library
+/// collections use [`CollectionsPageDto`] so populated pages retain their
+/// sort, filter, minified and include metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EmptyPageDto {
@@ -1131,7 +1161,7 @@ pub struct ListeningStatsItemDto {
 /// One offline playback session, as the official app uploads it.
 ///
 /// The body is the app's `createPartialPlaybackSession`
-/// (`server/ApiHandler.kt:650-668`): the session identity, the book, and the
+/// (`server/ApiHandler.kt:622-640`): the session identity, the book, and the
 /// three numbers that matter — `currentTime` (absolute position, seconds),
 /// `timeListening` (cumulative seconds on this session) and `updatedAt` (the
 /// device clock time of that position, milliseconds). `updatedAt` is what
@@ -1160,7 +1190,7 @@ pub struct LocalSessionDto {
 }
 
 /// `POST /api/session/local-all`: every stored session in one request, with
-/// the device that recorded them (`ApiHandler.kt:770-775`).
+/// the device that recorded them (`ApiHandler.kt:732-742`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[serde(default)]
@@ -1171,7 +1201,7 @@ pub struct LocalSessionsRequestDto {
 
 /// One entry of the `local-all` answer. The app decodes
 /// `LocalSessionSyncResult(id, success, progressSynced, error)` and logs each
-/// one (`ApiHandler.kt:52-53,776-795`); `progressSynced` is `true` only when
+/// one (`ApiHandler.kt:53-54,747-760`); `progressSynced` is `true` only when
 /// the upload actually moved the server's position.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

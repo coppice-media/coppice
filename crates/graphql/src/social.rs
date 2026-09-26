@@ -25,7 +25,10 @@ use sea_orm::{
 };
 use stump_notify::{resolve_targets, Audience, Notification, NotificationKind, Rule};
 
-use crate::{data::CoreContext, input::book_request::ExternalWorkReferenceInput};
+use crate::{
+	data::CoreContext,
+	input::book_request::{ExternalWorkReferenceInput, RequestFormat},
+};
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 pub enum RecommendationTargetKind {
@@ -872,6 +875,9 @@ impl SocialMutation {
 			row.cover_url.clone(),
 			destination_shelf_id.clone(),
 			destination_device_id.clone(),
+			RequestFormat::Any,
+			None,
+			None,
 		)
 		.await?;
 		let mut active = row.into_active_model();

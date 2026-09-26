@@ -1,8 +1,5 @@
 import pluginJs from '@eslint/js'
 import eslintConfigPrettier from 'eslint-config-prettier'
-import pluginReact from 'eslint-plugin-react'
-import reactCompiler from 'eslint-plugin-react-compiler'
-import pluginReactHooks from 'eslint-plugin-react-hooks'
 import simpleImportSort from 'eslint-plugin-simple-import-sort'
 import keySort from 'eslint-plugin-sort-keys-fix'
 import globals from 'globals'
@@ -16,22 +13,13 @@ export default [
 			'**/target/**',
 			'**/.next/**',
 			'**/.vercel/**',
-			'**/emoji/data.json',
 		],
 	},
 	{
-		files: ['**/*.{js,mjs,cjs,ts,jsx,tsx}'],
+		files: ['**/*.{js,mjs,cjs,ts}'],
 		plugins: {
 			'simple-import-sort': simpleImportSort,
-			react: pluginReact,
-			'react-hooks': pluginReactHooks,
-			'react-compiler': reactCompiler,
 			'sort-keys-fix': keySort,
-		},
-		settings: {
-			react: {
-				version: 'detect',
-			},
 		},
 		rules: {
 			'no-console': ['error', { allow: ['warn', 'error'] }],
@@ -39,9 +27,6 @@ export default [
 			'simple-import-sort/exports': 'error',
 			'sort-imports': 'off',
 			semi: 0,
-			...pluginReactHooks.configs.recommended.rules,
-			'react-hooks/set-state-in-effect': 'off',
-			'react-compiler/react-compiler': 'error',
 		},
 	},
 	{ languageOptions: { globals: globals.node } },
@@ -49,15 +34,6 @@ export default [
 	pluginJs.configs.recommended,
 	...tseslint.configs.recommended,
 	eslintConfigPrettier,
-	pluginReact.configs.flat.recommended,
-	pluginReact.configs.flat['jsx-runtime'],
-	{
-		files: ['**/*.test.{ts,tsx}', '**/__tests__/**'],
-		languageOptions: { globals: globals.jest },
-		rules: {
-			'@typescript-eslint/no-explicit-any': 'off',
-		},
-	},
 	{
 		files: ['**/*.config.js'],
 		rules: {

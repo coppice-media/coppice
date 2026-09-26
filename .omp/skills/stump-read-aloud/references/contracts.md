@@ -1,21 +1,30 @@
 # Read-aloud contracts
 
-This reference is normative for implementation and debugging. The shared
-`align`/`SyncMapV1` Rust wire contract and validator are built; the runner,
-persistence and renderer are planned. NEVER report those later layers as shipped.
+This reference is normative for implementation and debugging. `align`/`SyncMapV1`
+validation, map import/persistence, strict source-EPUB SMIL import, optional
+operator-configured worker runners, deterministic EPUB rendering, and
+authenticated cache-only status/download routes are shipped. In-process model
+inference, readiness checks, virtual composite delivery, and synchronized
+physical-reader playback remain planned; never present server delivery as device
+playback evidence.
 
 ## Contract matrix
 
-| Surface                             | Contract                                                                                    | Current state                       |
-| ----------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `Media.editions`                    | Confirmed editions only; request-scoped visibility                                          | Shipped                             |
-| `Media.editionSuggestions`          | On-demand heuristics; cached verdicts; review-only                                          | Shipped                             |
-| `Media.pairedPosition(fromMediaId)` | Read-only cross-edition projection                                                          | Shipped, approximate                |
-| `chapterMap` and map mutations      | Ebook-spine ↔ audio-chapter entries                                                         | Shipped                             |
-| `align` worker job                  | Typed input/result/capability contract; Storyteller adapter planned first; native CTC later | Contract built; execution unshipped |
-| `Media.syncMap` / `media_sync_maps` | Sentence/word cue map                                                                       | Unshipped                           |
-| `read-aloud.epub`                   | Deterministic SMIL derivative; materialized baseline, virtual composite experiment planned  | Unshipped                           |
-| `requests` / federation             | Human request; public sharing is gated                                                      | Unshipped/legal review              |
+| Surface                             | Contract                                                                                    | Current state                                                                                     |
+| ----------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `Media.editions`                    | Confirmed editions only; request-scoped visibility                                          | Shipped                                                                                           |
+| `Media.editionSuggestions`          | On-demand heuristics; cached verdicts; review-only                                          | Shipped                                                                                           |
+| `Media.pairedPosition(fromMediaId)` | Read-only cross-edition projection                                                          | Shipped, approximate                                                                             |
+| `chapterMap` and map mutations      | Ebook-spine ↔ audio-chapter entries                                                         | Shipped                                                                                           |
+| `align` worker job                  | Typed input/result, explicit enqueue, optional Storyteller/native CTC worker runners         | Shipped; external worker execution only                                                           |
+| `Media.syncMap` / `media_sync_maps` | Validated sentence/word timing map                                                          | Shipped                                                                                           |
+| Native source-EPUB SMIL import      | Strict audio identity, XHTML ids, cue and duration validation                              | Shipped                                                                                           |
+| `read-aloud.epub`                   | Deterministic materialized SMIL derivative                                                  | Shipped; cache-only routes; virtual composite planned                                             |
+| Status/download and OPDS links      | Authenticated; current-user/pair scoped; no request-time ML                                 | Shipped                                                                                           |
+| Metadata-backed request ledger      | Intent, destination/visibility, manager approval/rejection and notifications                | Shipped                                                                                           |
+| In-process model runtime/readiness  | Local inference and quality checks                                                         | Planned                                                                                           |
+| Physical synchronized playback      | Consume derivative in a reader                                                             | Planned; no device evidence                                                                       |
+| Public alignment federation         | Cross-installation manifest sharing                                                        | Planned; legal/privacy gate                                                                       |
 
 ## Edition-pair invariants
 
@@ -91,49 +100,53 @@ or back matter return `None`; guessing chapter 1 is a contract violation.
 }
 ```
 
-The map implementation is in `crates/worker/src/alignment.rs`; future
-`media_sync_maps`/`Media.syncMap` persistence is not. Every backend returns this
-compact timing map, not XHTML, an EPUB, a transcript, or audio bytes. The first
-planned executable backend delegates to an operator's Storyteller instance from
-the worker; a native CTC/Viterbi backend follows. Server validation must match
-request-controlled identity/provenance and probe-supplied track durations before
-acceptance.
+The map implementation and validator are in `crates/worker/src/alignment.rs`;
+`media_sync_maps` persistence and `Media.syncMap` are shipped. Every backend
+returns this compact timing map, not XHTML, an EPUB, a transcript, or audio
+bytes. Optional operator-configured Storyteller and external native CTC
+worker runners are shipped. The native runner requires a configured executable
+and model for the typed CPU/fp32/CTC profile. Credentials and model paths remain
+worker-local; server validation matches request-controlled identity/provenance
+and probe-supplied track durations before acceptance. An in-process Rust model
+runtime remains planned.
 
-SMIL is the EPUB 3 **Media Overlay** timing document. A future read-aloud EPUB
+SMIL is the EPUB 3 **Media Overlay** timing document. The shipped read-aloud EPUB
 contains sentence-id-bearing XHTML, one SMIL document per spine item,
 `package.opf` `media-overlay` references and `media:duration`, and the original
-single-file audio. SMIL is not the full EPUB and is not the internal SyncMap;
-SMIL is a deterministic publication derivative rendered from a validated map.
+single-file M4B. Source-EPUB SMIL import is shipped only when its embedded audio
+bytes equal the sole paired external M4B. SMIL is not the full EPUB and is not
+the internal SyncMap.
 
 ## Zero-GPU candidate collection and ranking
 
-Collect reusable artifacts before scheduling ML:
+The shipped reusable timing inputs are a local validated `SyncMap` and strict
+native EPUB SMIL. SMIL import is accepted only when the embedded audio bytes
+equal the sole paired external M4B. Optional worker alignment is explicitly
+requested and may use operator-configured Storyteller or external native CTC;
+these runners produce a validated map rather than reusing a verified Storyteller
+UUID/artifact. Verified UUID reuse and public exact-edition manifest federation
+remain planned.
 
-1. local validated `SyncMap`;
-2. exact-edition shared `AlignmentManifestV1`;
-3. native EPUB SMIL;
-4. Storyteller timing artifact.
+For every available candidate, validate content identity, duration, chapter
+correspondence, monotonic non-overlapping cues, coverage, granularity, confidence,
+and generator provenance. Exact content identity outranks a heuristic re-anchor;
+sentence cues outrank chapter-only timing for sentence requests. Among valid
+candidates, rank coverage/confidence and provenance deterministically, then
+persist the winner and why it won. A candidate that fails a gate MUST fall
+through; NEVER accept a weak linear fallback merely because an earlier source
+existed.
 
-For every candidate, validate content identity, duration, chapter correspondence,
-monotonic non-overlapping cues, coverage, granularity, confidence, and generator
-provenance. Exact content identity outranks a heuristic re-anchor; sentence cues
-outrank chapter-only timing for sentence requests. Among valid candidates, rank
-coverage/confidence and provenance deterministically, then persist the winner and
-why it won. A candidate that fails a gate MUST fall through; NEVER accept a weak
-linear fallback merely because an earlier source existed.
-
-Only when no candidate passes may the system enqueue known-text CTC/Viterbi.
-Whisper/fuzzy is a final fallback for a Storyteller-compatible path, not the
-preferred tier-2 implementation. Audiobook-only ASR remains tier 3 and out of
-scope.
+If no reusable candidate passes, an explicit align enqueue may use known-text
+CTC/Viterbi. Storyteller Whisper/fuzzy is an external API path, not Stump's
+in-process runtime. Audiobook-only ASR remains tier 3 and out of scope.
 
 ## Storyteller comparison boundary
 
 | External path                                           | What it demonstrates                                                                                                                     | Stump boundary                                                                                                |
 | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Storyteller web/server pipeline                         | Whisper transcription followed by fuzzy reconciliation to known EPUB text; API supports artifact reuse plus upload/process/poll/download | Optional external `align` backend on a worker; never an in-process server dependency                          |
-| external `@storyteller-platform/align` CLI with `--ctc` | Direct CTC emissions plus Viterbi forced alignment; current package transitively depends on GPL-3.0 `ghost-story`                        | External reference for the later native cheap known-text path; Stump owns its worker, map, gates and renderer |
-| Stump `align`                                           | Typed worker input/result, capability requirement and validated `SyncMapV1`                                                              | Contract built; neither the Storyteller adapter nor native CTC runner/enqueue route exists today              |
+| Storyteller web/server pipeline                         | Whisper transcription followed by fuzzy reconciliation to known EPUB text; API supports artifact reuse plus upload/process/poll/download | Optional operator-configured worker-local `align` backend; never an in-process server dependency              |
+| external `@storyteller-platform/align` CLI with `--ctc` | Direct CTC emissions plus Viterbi forced alignment; current package transitively depends on GPL-3.0 `ghost-story`                        | External reference only; nothing bundled                                                                     |
+| Stump `align`                                           | Typed worker input/result, explicit enqueue, optional Storyteller/native CTC runners and validated `SyncMapV1`                           | Shipped worker-side contract and runners; in-process runtime remains planned                                  |
 
 NEVER collapse the Storyteller web Whisper/fuzzy route into the CLI
 CTC/Viterbi route. They have different compute, error, provenance and licensing
@@ -141,19 +154,17 @@ implications even when they render the same EPUB/SMIL envelope.
 
 ### Worker-side Storyteller backend
 
-An operator may run Storyteller on the worker device or on a host reachable
-from it. Keep its URL and credentials in worker-local configuration; Stump's
-server and `worker_jobs` never receive them. Prefer an exact existing
-Storyteller UUID/source identity. If no artifact exists, the adapter may upload
-the exact EPUB/audio, trigger processing, poll and download the read-aloud EPUB.
-In both modes it extracts timing, constructs `SyncMapV1`, and returns only that
-map to Stump.
+An operator configures the Storyteller endpoint and credentials in worker-local
+configuration. Stump's server and `worker_jobs` never receive them. The shipped
+worker backend uploads the exact prepared EPUB and single-file M4B, triggers
+processing, polls and downloads the result. It extracts timing, constructs
+`SyncMapV1`, and returns only that map to Stump. Verified UUID/artifact reuse
+remains planned.
 
-The advertised `align` capability must contain the actual Storyteller
-algorithm/model/device profile and an immutable configuration fingerprint. A
-generic installation flag is insufficient for deduplication and provenance.
-Title-only matching is prohibited. Before shipping, pin/probe the API contract
-and define cancellation, failure, and remote-item retention semantics.
+The advertised `align` capability must contain the actual algorithm/model/device
+profile and immutable configuration fingerprint. A generic installation flag
+is insufficient for deduplication and provenance. The optional worker runners
+are shipped, but do not imply in-process model execution or bundled dependencies.
 
 ## Async enqueue and immutable cache identity
 
@@ -183,22 +194,19 @@ not permission to key alignment solely by source mtime.
 
 ## GET and cached on-demand EPUB semantics
 
-- GET may serve a completed derivative cache hit.
-- GET may build/cache a deterministic derivative from an already validated
-  `SyncMap`; it MUST NOT run Whisper/CTC/ASR or create an `align` job.
-- If no accepted map exists, GET reports unavailable/readiness/needs-worker
-  state; it MUST NOT silently enqueue ML.
-- The enqueue action is the only ML trigger and returns the deduplicated job/map
-  identity for polling or subscription.
+- GET serves an already published deterministic derivative cache hit.
+- On a cache miss, GET/status returns not-ready/unavailable; it MUST NOT render
+  on demand, run Whisper/CTC/ASR, or create an `align` job.
+- Alignment enqueue is explicit and deduplicates by exact input plus algorithm
+  identity; processing and cache publication happen outside the GET path.
 - Rendered XHTML sentence IDs are deterministic from the original EPUB; original
-  EPUB and audio bytes remain untouched. A multi-track folder must be assembled
-  into one audio edition before rendering.
-- The initial derivative stores original `audio/mp4` bytes and deterministic
-  `clipBegin` / `clipEnd` references. A later virtual composite representation
-  MAY map the logical stored audio entry directly to ranges in the source M4B,
-  but only after the experiment below passes.
-- Range, ETag and `Content-Length` describe one immutable complete logical ZIP,
-  never an in-flight worker result or a mutable source.
+  EPUB and audio bytes remain untouched. A multi-track folder is unsupported and
+  not-ready.
+- The renderer produces the materialized deterministic EPUB and streams the
+  original single-file M4B rather than buffering it. The virtual composite
+  representation remains a planned experiment.
+- Range, ETag and `Content-Length` describe one immutable completed cached ZIP,
+  never an in-flight worker result or mutable source.
 
 ### Future virtual composite EPUB experiment
 

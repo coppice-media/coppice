@@ -253,6 +253,9 @@ query BookHighlights($mediaId: ID!) {
 			source
 			sourceDeviceId
 			sourceDeviceName
+			revision
+			lastEditedSource
+			lastEditedAt
 			editable
 			chapterTitle
 			href

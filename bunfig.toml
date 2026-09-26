@@ -2,3 +2,7 @@
 linker = "isolated"
 minimumReleaseAge = 259200
 saveTextLockfile = true
+
+[run]
+# Run package bins (vite, tsc, svelte-check) on Bun instead of Node.
+bun = true

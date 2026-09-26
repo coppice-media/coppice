@@ -38,8 +38,10 @@ pub mod image {
 	};
 	pub use self::process::{ImageProcessor, ImageProcessorOptionsExt};
 	pub use self::thumbnail_utils::{
-		place_thumbnail, remove_thumbnails, replace_thumbnail, scale_height_dimension,
-		scale_width_dimension, THUMBNAIL_LOG_FREQUENCY,
+		generate_thumbnail_on_demand, on_demand_thumbnail_options, place_thumbnail,
+		remove_thumbnails, replace_thumbnail, scale_height_dimension,
+		scale_width_dimension, ON_DEMAND_THUMBNAIL_MAX_HEIGHT,
+		ON_DEMAND_THUMBNAIL_MAX_WIDTH, THUMBNAIL_LOG_FREQUENCY,
 	};
 	pub use self::webp::WebpProcessor;
 

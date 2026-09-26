@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import * as p from '@clack/prompts'
 import { defineCommand, runMain } from 'citty'
@@ -155,7 +155,7 @@ const main = defineCommand({
 runMain(main)
 
 // i only added the user-facing ones here, figure the rest don't matter much
-const TARGETS = ['package.json', 'apps/web/package.json', 'apps/desktop/package.json']
+const TARGETS = ['package.json']
 
 /**
  * update the version in each target package.json

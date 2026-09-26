@@ -20,7 +20,10 @@
 //! archive drop commit and it cannot depend on `stump_library`.
 
 use chrono::Utc;
-use sea_orm::{prelude::*, ActiveValue::Set, ConnectionTrait, QueryOrder, QuerySelect};
+
+use sea_orm::{
+	prelude::*, ActiveValue::Set, ConnectionTrait, QueryOrder, QuerySelect, Statement,
+};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 use uuid::Uuid;
@@ -134,9 +137,7 @@ pub enum PairUnchanged {
 	Rejected { work_id: String },
 	/// Already in the requested state.
 	AlreadySet { work_id: String, status: PairStatus },
-	/// One side is a confirmed edition of a *different* work. Pairing never
-	/// re-homes a confirmed link: the liseur lane owns those, and moving one
-	/// would silently repoint annotations and sessions at another work.
+	/// A media row resolves to a different work, through either its link or aliases.
 	WorkConflict { media_id: String, work_id: String },
 	/// Neither side has a link to change.
 	NoLink,
@@ -162,7 +163,8 @@ impl PairOutcome {
 /// Idempotent: re-running with the same arguments is a no-op, a confirmed link
 /// is never downgraded to a suggestion, and a rejected pair stays rejected.
 /// `anchor_media_id` is the book whose page (or whose ingest commit) triggered
-/// the pairing; its work wins when both sides already have one.
+/// the pairing. A link or alias-resolved work is reused, but distinct identities
+/// are refused rather than merged by this heuristic.
 pub async fn suggest_pair<C: ConnectionTrait>(
 	conn: &C,
 	user_id: &str,
@@ -181,8 +183,8 @@ pub async fn suggest_pair<C: ConnectionTrait>(
 	.await
 }
 
-/// Promote a pair to a confirmed one, creating the work and the links when the
-/// operator paired two books that no heuristic had suggested.
+/// Promote a pair to a confirmed one, reusing an existing linked or alias-resolved
+/// work, and creating the work and links only when neither side has an identity.
 pub async fn confirm_pair<C: ConnectionTrait>(
 	conn: &C,
 	user_id: &str,
@@ -247,11 +249,27 @@ async fn write_pair<C: ConnectionTrait>(
 	let anchor = link_for_media(conn, user_id, anchor_media_id).await?;
 	let other = link_for_media(conn, user_id, other_media_id).await?;
 
-	// The work the pair will share. An existing link decides it (the anchor's
-	// first), so pairing joins the work the rest of the tree already knows
-	// instead of minting a rival one.
-	let work_id = match (anchor.as_ref(), other.as_ref()) {
-		(Some(link), _) | (None, Some(link)) => link.work_id.clone(),
+	// An existing media link is authoritative. When a link is not present, a
+	// Liseur source/edition alias can still prove which work already owns that
+	// media row; do not mint a competing identity just because its link is absent.
+	let anchor_work_id = match anchor.as_ref() {
+		Some(link) => Some(link.work_id.clone()),
+		None => work_for_unlinked_media(conn, user_id, anchor_media_id).await?,
+	};
+	let other_work_id = match other.as_ref() {
+		Some(link) => Some(link.work_id.clone()),
+		None => work_for_unlinked_media(conn, user_id, other_media_id).await?,
+	};
+	let work_id = match (anchor_work_id, other_work_id) {
+		(Some(anchor_work_id), Some(other_work_id))
+			if anchor_work_id != other_work_id =>
+		{
+			return Ok(PairOutcome::Unchanged(PairUnchanged::WorkConflict {
+				media_id: other_media_id.to_owned(),
+				work_id: other_work_id,
+			}));
+		},
+		(Some(work_id), _) | (_, Some(work_id)) => work_id,
 		(None, None) => {
 			create_work(conn, user_id, anchor_media_id, other_media_id).await?
 		},
@@ -271,18 +289,6 @@ async fn write_pair<C: ConnectionTrait>(
 		}
 	}
 
-	// A confirmed link to some *other* work is not ours to move.
-	for link in [anchor.as_ref(), other.as_ref()].into_iter().flatten() {
-		if link.work_id != work_id
-			&& PairStatus::from_stored(&link.pair_status) == PairStatus::Confirmed
-		{
-			return Ok(PairOutcome::Unchanged(PairUnchanged::WorkConflict {
-				media_id: link.media_id.clone(),
-				work_id: link.work_id.clone(),
-			}));
-		}
-	}
-
 	let mut wrote = false;
 	for (media_id, link) in
 		[(anchor_media_id, anchor), (other_media_id, other)].into_iter()
@@ -296,6 +302,38 @@ async fn write_pair<C: ConnectionTrait>(
 	} else {
 		PairOutcome::Unchanged(PairUnchanged::AlreadySet { work_id, status })
 	})
+}
+
+async fn work_for_unlinked_media<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	media_id: &str,
+) -> Result<Option<String>, DbErr> {
+	let rows = conn
+		.query_all(Statement::from_sql_and_values(
+			conn.get_database_backend(),
+			"SELECT DISTINCT alias.work_id \
+			 FROM liseur_sync_aliases AS alias \
+			 LEFT JOIN liseur_sync_editions AS edition \
+			   ON edition.user_id = alias.user_id \
+			  AND edition.work_id = alias.work_id \
+			  AND (alias.edition_sha IS NULL OR alias.edition_sha = edition.edition_sha) \
+			 WHERE alias.user_id = $1 \
+			   AND ((alias.kind = 'source' AND alias.value = $2) \
+			        OR edition.media_id = $2)",
+			vec![user_id.to_owned().into(), media_id.to_owned().into()],
+		))
+		.await?;
+	let work_ids = rows
+		.into_iter()
+		.map(|row| row.try_get("", "work_id"))
+		.collect::<Result<std::collections::BTreeSet<String>, _>>()?;
+	if work_ids.len() > 1 {
+		return Err(DbErr::Custom(format!(
+			"media {media_id} aliases resolve to multiple works; refusing to pair"
+		)));
+	}
+	Ok(work_ids.into_iter().next())
 }
 
 /// Write one side of a pair. Returns whether the row changed.
@@ -327,6 +365,11 @@ async fn upsert_link<C: ConnectionTrait>(
 		.await?;
 		return Ok(true);
 	};
+	if existing.work_id != work_id {
+		return Err(DbErr::Custom(
+			"pairing cannot re-home a media link between work identities".into(),
+		));
+	}
 
 	let current_status = PairStatus::from_stored(&existing.pair_status);
 	let current_evidence = existing
@@ -345,17 +388,11 @@ async fn upsert_link<C: ConnectionTrait>(
 		Some(current) if current.rank() >= evidence.rank() => current,
 		_ => evidence,
 	};
-	let same_work = existing.work_id == work_id;
-
-	if same_work
-		&& next_status == current_status
-		&& Some(next_evidence) == current_evidence
-	{
+	if next_status == current_status && Some(next_evidence) == current_evidence {
 		return Ok(false);
 	}
 
 	let mut model = media_link::ActiveModel::from(existing);
-	model.work_id = Set(work_id.to_owned());
 	model.pair_status = Set(next_status.to_string());
 	model.pair_evidence = Set(Some(next_evidence.to_string()));
 	model.update(conn).await?;

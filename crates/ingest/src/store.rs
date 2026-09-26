@@ -311,6 +311,92 @@ impl IngestStore {
 		}
 	}
 
+	/// Copy a publication directory into staged ingest while retaining the
+	/// source tree. An optional expected digest is checked before a row is
+	/// admitted; this is used when materializing a verified source-worker item.
+	pub async fn stage_directory_copy(
+		&self,
+		library_id: &str,
+		created_by: Option<&str>,
+		relative_path: Option<&str>,
+		filename: &str,
+		source: &Path,
+		expected_sha256: Option<&str>,
+		idempotency_key: Option<&str>,
+	) -> IngestResult<StagedUpload> {
+		self.ensure_library(library_id).await?;
+		let relative_path = staging::normalize_relative_path(relative_path)?;
+		let filename = staging::sanitize_filename(filename)?;
+		if let Some(key) = idempotency_key {
+			if let Some(item) = ingest_drop_item::Entity::find()
+				.filter(ingest_drop_item::Column::LibraryId.eq(library_id))
+				.filter(ingest_drop_item::Column::IdempotencyKey.eq(key))
+				.one(self.conn.as_ref())
+				.await?
+			{
+				return Ok(StagedUpload::deduplicated(item));
+			}
+		}
+
+		let (source_sha256, byte_size) = staging::hash_dir(source).await?;
+		if byte_size == 0 {
+			return Err(IngestError::BadRequest(
+				"cannot stage an empty publication directory".to_string(),
+			));
+		}
+		if expected_sha256.is_some_and(|expected| expected != source_sha256) {
+			return Err(IngestError::BadRequest(
+				"materialized directory digest does not match its verified source"
+					.to_string(),
+			));
+		}
+		if let Some(item) = self
+			.find_identity(library_id, &source_sha256, &filename)
+			.await?
+		{
+			return Ok(StagedUpload::deduplicated(item));
+		}
+
+		let staged_path = staging::copy_dir_into_staging(
+			source,
+			&self.config.staging_dir,
+			library_id,
+			&filename,
+			&source_sha256,
+		)
+		.await?;
+		let active = NewDropItem {
+			library_id: library_id.to_string(),
+			created_by: created_by.map(str::to_owned),
+			source_filename: filename.clone(),
+			relative_path,
+			byte_size,
+			source_sha256: source_sha256.clone(),
+			media_kind: IngestMediaKind::Audio,
+			staging_path: staged_path.to_string_lossy().into_owned(),
+			idempotency_key: idempotency_key.map(str::to_owned),
+			..NewDropItem::default()
+		}
+		.into_active_model()?;
+		match active.insert(self.conn.as_ref()).await {
+			Ok(item) => {
+				self.announce(&item);
+				Ok(StagedUpload::fresh(item))
+			},
+			Err(error) => {
+				if let Some(item) = self
+					.find_identity(library_id, &source_sha256, &filename)
+					.await?
+				{
+					Ok(StagedUpload::deduplicated(item))
+				} else {
+					staging::remove_staged(&staged_path).await?;
+					Err(error.into())
+				}
+			},
+		}
+	}
+
 	/// Admit everything sitting in a library's drop folder.
 	///
 	/// A dropped file is normally one publication. A dropped `.zip`/`.rar`/

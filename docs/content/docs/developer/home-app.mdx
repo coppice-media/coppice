@@ -11,23 +11,20 @@ foundation with it through `packages/stump-ui`.
 
 ## Serving
 
-The headless server serves built companion apps itself from
+The server serves built companion apps from
 `apps/server/src/routers/static_apps.rs`, one mount per configured directory:
 
-| Base      | Directory (env / TOML)                  | App                          |
-| --------- | --------------------------------------- | ---------------------------- |
-| `/editor` | `INGEST_EDITOR_DIR` / `ingest_editor_dir` | Ingest editor (`editor/build`) |
-| `/app`    | `STUMP_HOME_APP_DIR` / `home_app_dir`     | Home app (`home/build`)        |
+| Base | Directory (environment key) | App |
+| --- | --- | --- |
+| `/editor` | `INGEST_EDITOR_DIR` | Editor (`editor/build`) |
+| `/app` | `STUMP_HOME_APP_DIR` | Home (`home/build`) |
 
 A directory is mounted only when it contains `index.html`; a configured but
 empty directory logs a warning and is skipped. Hashed assets under
-`<base>/_app/immutable/*` get `Cache-Control: public, max-age=31536000,
-immutable`; everything else is `no-cache` and unknown paths under the base
-fall back to `index.html` so client-side routes deep-link. The mounts are
-merged before the web UI's SPA fallback, so they coexist with a `full` build.
-This is a runtime switch, not a Cargo feature: nothing is linked in, only
-files are served. `scripts/dev-fixture-server.sh` exports both variables for
-the local fixture.
+`<base>/_app/immutable/*` receive long-lived immutable caching; other files
+are `no-cache`, and unknown paths under the app base fall back to `index.html`
+for client-side deep links. These mounts are runtime configuration, not Cargo
+features.
 
 ```sh
 bun install --frozen-lockfile && bun run home build
@@ -35,11 +32,8 @@ STUMP_HOME_APP_DIR=/path/to/stump/home/build stump_server
 # → http://<server>/app
 ```
 
-When the Home app is served and nothing else owns `/` — every headless build,
-or a `webui` build with `STUMP_ENABLE_WEBUI=false` — `static_apps::home_landing`
-answers `GET /` with a `303` to `/app`, so the Home app is the landing page. A
-`webui` build with the web UI enabled keeps the web SPA at `/` and the two
-coexist, as before.
+When Home is served, `/` and unknown browser fallback paths redirect to
+`/app`.
 
 `paths.base` is `/app` (`svelte.config.js`; override with `HOME_BASE_PATH` at
 build time). In development `bun run home dev` serves on port 5175 and proxies
@@ -56,7 +50,7 @@ Routes are relative to the base.
 | `/login`   | Cookie session via `POST /api/v2/auth/login`. Reads `GET /api/v2/auth/oidc/config`: when `enabled`, automatically starts OIDC sign-in unless the URL has `?error=` or (with local auth enabled) `?manual=1`; the *Sign in with single sign-on* button remains available. It preserves the 401 `returnTo` route through the validated OIDC `return_to` state (`home/src/routes/login/+page.svelte`; `apps/server/src/routers/api/v2/oidc.rs`) and falls back to `/`. When `disableLocalAuth`, hides the password form. |
 | `/devices` | Cards for every device from the `devices` query (kind, credential hint and protocol, last seen, last sync + summary, registered). *Add client* runs `createDevice` and reveals the one-time secret with an endpoint card per `DeviceEndpoint` (URL, username, secret, copy buttons, QR code of the URL). Rename (`renameDevice`), rotate (`rotateDeviceCredential`, same reveal), revoke (`revokeDevice`). Kobo and KOReader cards get a comic transform preset selector (`setDeviceTransformProfile`). Pending pairings (`pendingDevicePairings`, polled every 10 s) are approved with the device's code (`approveDevicePairing`) or denied. |
 | `/reading` | `readingStats` for a selectable span (7/30/90 days, year, all time): totals, streak, a per-day bar strip, and a per-device table.                                                                                                                                                                                                                          |
-| `/library` | Every library from `libraries` as a card with its `stats` (series, books, finished, bytes on disk), the last scan, and *Scan* / *Analyze* (`scanLibrary`, `analyzeLibrary`). *New library* posts `createLibrary` with the three choices the dialog exposes (type, layout, watch) on top of the defaults the web UI's form starts from — `LibraryConfigInput` has no optional flags. |
+| `/library` | Every library from `libraries` as a card with its `stats` (series, books, finished, bytes on disk), the last scan, and *Scan* / *Analyze* (`scanLibrary`, `analyzeLibrary`). *New library* posts `createLibrary` with the three choices the dialog exposes (type, layout, watch) on top of the defaults the Home form starts from — `LibraryConfigInput` has no optional flags. |
 | `/library/[id]` | The browser for one library (`prerender = false`). A *Series* tab (`series`, grid or table) and a *Books* tab (`media`, table with progress and mark read/unread), a grid/table toggle, and filters for read status, format, tag, publisher, author, and title. Every filter, the tab, the view, and the page live in the query string, so the entity grids can link straight into a filtered view and the back button works. `SeriesFilterInput` carries no book-level fields, so setting format, tag, publisher, or author switches to the *Books* tab instead of silently dropping the filter. |
 | `/series/[id]` | One series (`prerender = false`): cover, progress, tags, metadata, and its books with per-book *Mark read* / *Mark unread* (`finishMediaProgress`; `clearMediaProgress` + `deleteMediaReadingHistory`), plus `finishSeriesProgress` and `clearSeriesReadingHistory` for the whole series. *Reshape* opens the sheet described in [Series reshape](#series-reshape). |
 | `/entities/{authors,publishers,tags}` | Grids of the metadata behind the books, each tile linking into `/library/[id]` pre-filtered. Authors come from `authors(search, libraryId)` and count the books the query already carries; publishers from `libraryById.publishers`; tags from `tags`. Neither publishers nor tags have an aggregate on the server, so those tiles count their own books with one small `media` query each (bounded by the page size of 24). A library selector scopes the grid and the links. |
@@ -193,8 +187,7 @@ API credential authenticates. If the socket cannot be opened the page shows a
 *Live updates paused* notice and falls back to reload-time freshness. A
 one-minute ticker keeps the relative timestamps honest in between.
 
-The Dashboard opens one socket instead of two: it subscribes to `readEvents`,
-the same union the web UI's `useCoreEvent` hook reads, and handles four
+The Dashboard opens one socket to subscribe to `readEvents` and handles four
 variants — `JobQueueStatus` (queued+running count, bucketed by kind),
 `JobUpdate` (current task, message, subtitle, task counters of a running job),
 `JobStarted`/`JobOutput` (refetch the `jobs` page), and `DeviceSeen` (refetch
@@ -228,7 +221,7 @@ starts on the device, not here.
 
 | Path                            | Contents                                                                                             |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `src/graphql/client.ts`         | `graphQLClient`, `request` (typed, redirects on 401), `redirectToLogin`, `subscribe` (`graphql-ws`) |
+| `src/graphql/client.ts`         | `graphQLClient`, `request` (typed, redirects on 401, optional `{ signal }` so TanStack Query aborts superseded fetches), `redirectToLogin`, `subscribe` (`graphql-ws`) |
 | `src/graphql/operations.graphql` | Operations used by more than one app (`Me`, which carries `permissions` so each shell can gate its own links); generated into `src/graphql/generated/` |
 | `src/components/ui/*`           | shadcn-svelte components (`bits-ui`, `vaul-svelte`, `@lucide/svelte`) plus the composites below      |
 | `src/theme.svelte.ts`, `src/styles/theme.css` | The theme store and the tokens both apps render with                               |

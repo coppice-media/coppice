@@ -112,26 +112,56 @@
 		void queryClient.invalidateQueries({ queryKey: ['readerAnnotations'] });
 	}
 
+	function isRevisionConflict(error: unknown): boolean {
+		return error instanceof Error && /annotation revision conflict/i.test(error.message);
+	}
+
+	async function reloadAnnotations(): Promise<void> {
+		invalidate();
+		await queryClient.refetchQueries({ queryKey: ['annotations'], type: 'active' });
+		toast.error('This note was changed in another app. Reloaded the latest version.');
+	}
+
 	const saveNote = createMutation(() => ({
-		mutationFn: (variables: { id: string; annotationText: string | null }) =>
-			request(ConsoleUpdateAnnotationDocument, { input: variables }),
+		mutationFn: (variables: {
+			id: string;
+			annotationText: string | null;
+			color: string | null;
+			expectedRevision: number | null;
+		}) => {
+			const { id, ...input } = variables;
+			return request(ConsoleUpdateAnnotationDocument, { input: { id, ...input } });
+		},
 		onSuccess: () => {
 			invalidate();
-			toast.success('Note saved.');
+			toast.success('Annotation saved.');
 		},
-		onError: (error) =>
-			toast.error(error instanceof Error ? error.message : 'The note could not be saved.'),
+		onError: async (error) => {
+			if (isRevisionConflict(error)) {
+				await reloadAnnotations();
+				return;
+			}
+			toast.error(error instanceof Error ? error.message : 'The annotation could not be saved.');
+		},
 		onSettled: () => (savingId = null)
 	}));
 
 	const removeAnnotation = createMutation(() => ({
-		mutationFn: (id: string) => request(ConsoleDeleteAnnotationDocument, { id }),
+		mutationFn: (variables: { id: string; expectedRevision: number | null }) =>
+			request(ConsoleDeleteAnnotationDocument, variables),
 		onSuccess: () => {
 			invalidate();
 			toast.success('Annotation deleted.');
 		},
-		onError: (error) =>
-			toast.error(error instanceof Error ? error.message : 'The annotation could not be deleted.'),
+		onError: async (error) => {
+			if (isRevisionConflict(error)) {
+				await reloadAnnotations();
+				return;
+			}
+			toast.error(
+				error instanceof Error ? error.message : 'The annotation could not be deleted.'
+			);
+		},
 		onSettled: () => (deletingId = null)
 	}));
 
@@ -171,14 +201,19 @@
 		});
 	}
 
-	function save(id: string, annotationText: string | null): void {
+	function save(
+		id: string,
+		annotationText: string | null,
+		color: string | null,
+		expectedRevision: number | null
+	): void {
 		savingId = id;
-		saveNote.mutate({ id, annotationText });
+		saveNote.mutate({ id, annotationText, color, expectedRevision });
 	}
 
-	function remove(id: string): void {
+	function remove(id: string, expectedRevision: number | null): void {
 		deletingId = id;
-		removeAnnotation.mutate(id);
+		removeAnnotation.mutate({ id, expectedRevision });
 	}
 </script>
 

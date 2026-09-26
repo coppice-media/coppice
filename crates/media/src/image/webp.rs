@@ -30,10 +30,10 @@ impl ImageProcessor for WebpProcessor {
 			image = resized_image;
 		}
 
-		// Generate WebP with quality setting
+		// Encode with the requested quality (1-100); unset keeps the documented 100.
 		let encoder = Encoder::from_image(&image)
 			.map_err(|err| FileError::WebpEncodeError(err.to_string()))?;
-		let encoded_webp = encoder.encode(100f32);
+		let encoded_webp = encoder.encode(f32::from(options.quality.unwrap_or(100)));
 
 		// Convert to Vec<u8> and shrink to fit to free excess capacity
 		let mut result = encoded_webp.as_bytes().to_vec();
@@ -131,6 +131,33 @@ mod tests {
 			image::ImageFormat::WebP
 		)
 		.is_ok());
+	}
+
+	#[test]
+	fn requested_quality_is_applied_instead_of_always_100() {
+		let jpg_path = get_test_jpg_path();
+		let encode = |quality| {
+			WebpProcessor::generate_from_path(
+				&jpg_path,
+				ImageProcessorOptions {
+					resize_method: None,
+					format: SupportedImageFormat::Webp,
+					quality,
+					page: None,
+				},
+			)
+			.expect("webp encode")
+		};
+		let default_quality = encode(None);
+		let full_quality = encode(Some(100));
+		let reduced_quality = encode(Some(60));
+		assert_eq!(default_quality, full_quality, "unset quality stays at 100");
+		assert!(
+			reduced_quality.len() < full_quality.len(),
+			"quality 60 ({} B) must be smaller than quality 100 ({} B)",
+			reduced_quality.len(),
+			full_quality.len()
+		);
 	}
 
 	#[test]

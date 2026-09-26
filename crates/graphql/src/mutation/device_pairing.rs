@@ -21,6 +21,8 @@ impl DevicePairingMutation {
 	/// possession is either the 6-digit `code` shown on the device or the `nonce`
 	/// carried by its QR payload; exactly one must be given. After
 	/// `MAX_FAILED_ATTEMPTS` wrong proofs the pairing is denied.
+	/// `allowKomfMetadataEditing` defaults to false; true is Komelia-only,
+	/// adds `EditMetadata`, and requires the approving user to hold it.
 	#[graphql(guard = "PermissionGuard::one(UserPermission::AccessApiKeys)")]
 	async fn approve_device_pairing(
 		&self,
@@ -28,6 +30,7 @@ impl DevicePairingMutation {
 		pairing_id: ID,
 		code: Option<String>,
 		nonce: Option<String>,
+		#[graphql(default = false)] allow_komf_metadata_editing: bool,
 	) -> Result<DevicePairing> {
 		let req_ctx = ctx.data::<stump_auth::AuthContext>()?;
 		let user = &req_ctx.user;
@@ -39,10 +42,23 @@ impl DevicePairingMutation {
 			pairing.kind,
 			credential_issuance(req_ctx),
 		)?;
-
+		if allow_komf_metadata_editing
+			&& pairing.kind != models::shared::enums::DeviceKind::Komelia
+		{
+			return Err(Error::new(
+				"Komf metadata editing is only available for Komelia devices",
+			));
+		}
+		if allow_komf_metadata_editing
+			&& !user.has_permission(UserPermission::EditMetadata)
+		{
+			return Err(Error::new(
+				"Approving Komf metadata editing requires the Edit metadata permission",
+			));
+		}
 		// The poll that follows mints the credential as this user; refuse now
 		// rather than leave the device polling an approved-but-forbidden pairing.
-		let missing = stump_devices::required_permissions(pairing.kind)
+		let missing = stump_devices::required_permissions(pairing.kind, false)
 			.into_iter()
 			.filter(|permission| !user.has_permission(*permission))
 			.collect::<Vec<_>>();
@@ -91,6 +107,10 @@ impl DevicePairingMutation {
 				Expr::value(user.id.as_str()),
 			)
 			.col_expr(device_pairing::Column::ApprovedAt, Expr::value(now))
+			.col_expr(
+				device_pairing::Column::AllowKomfMetadataEditing,
+				Expr::value(allow_komf_metadata_editing),
+			)
 			.filter(pending_row(&pairing.id))
 			.exec(conn)
 			.await?

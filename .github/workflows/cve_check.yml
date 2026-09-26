@@ -9,8 +9,6 @@ on:
       - bun.lock
       - bunfig.toml
       - package.json
-      - apps/desktop/package.json
-      - apps/web/package.json
       - docs/package.json
       - editor/package.json
       - home/package.json

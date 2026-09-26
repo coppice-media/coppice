@@ -15,8 +15,6 @@
 		"guides/configuration/modular-deployment",
 		"guides/breaking-changes",
 		"---Apps---",
-		"apps/mobile",
-		"apps/desktop",
 		"apps/web",
 		"---Developer---",
 		"developer/api",

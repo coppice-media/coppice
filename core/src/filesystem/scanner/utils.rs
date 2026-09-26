@@ -32,6 +32,7 @@ use crate::{
 	CoreEvent,
 };
 use stump_jobs::{JobContext, JobError, JobExecuteLog, JobProgress};
+use stump_media::image::remove_thumbnails;
 use stump_scanner::{BookVisitOperation, CustomVisitResult, TagCache};
 
 pub(crate) const MAX_INSERT_CHUNK_SIZE: usize = 250;
@@ -1120,13 +1121,21 @@ pub(crate) async fn visit_and_update_media(
 	let mut futures: BuiltEntityFutures<BookVisitResult, String> =
 		FuturesUnordered::new();
 	let mut cursor = 0i32;
-
+	// A book rebuilt from a changed file whose thumbnail was only ever
+	// generated on request (no stored `thumbnail_path`) must render its new
+	// first page next time, exactly as the raw-page fallback used to.
+	let mut rebuilt_on_demand_thumbnails = Vec::new();
 	for book in media {
 		let path = book.media.path.clone();
 		let Some(operation) = paths_to_operation.get(&path) else {
 			tracing::warn!(?path, "No operation found for media?");
 			continue;
 		};
+		if matches!(operation, BookVisitOperation::Rebuild)
+			&& book.media.thumbnail_path.is_none()
+		{
+			rebuilt_on_demand_thumbnails.push(book.media.id.clone());
+		}
 
 		if futures.len() >= concurrency {
 			if let Some(future_result) = futures.next().await {
@@ -1224,6 +1233,20 @@ pub(crate) async fn visit_and_update_media(
 	let success_count = output.updated_media;
 	let error_count = output.logs.len() - error_count; // Subtract the errors from the previous step
 	tracing::debug!(elapsed = ?start.elapsed(), success_count, error_count, "Updated books in database");
+
+	if !rebuilt_on_demand_thumbnails.is_empty() {
+		if let Err(error) = remove_thumbnails(
+			&rebuilt_on_demand_thumbnails,
+			&config_arc.get_thumbnails_dir(),
+		)
+		.await
+		{
+			tracing::warn!(
+				?error,
+				"Could not drop on-demand thumbnails of rebuilt books; they may be stale until regenerated"
+			);
+		}
+	}
 
 	Ok(output)
 }

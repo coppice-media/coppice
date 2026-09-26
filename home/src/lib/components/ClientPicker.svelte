@@ -21,9 +21,11 @@
 	import {
 		CLIENT_CATALOG,
 		clientCapabilityAvailability,
+		clientVariantForId,
 		clientVariants,
 		defaultClientVariant,
 		missingPermissionsForClient,
+		PERMISSION_LABELS,
 		type ClientAppVariant,
 		type ClientCatalogEntry,
 		type ClientPlatformFilter,
@@ -33,12 +35,13 @@
 	import type { UserPermission } from '$lib/graphql/generated/graphql'
 	import { cn } from '@stump/ui/utils.js'
 	import ClientCard from './ClientCard.svelte'
-	type PlatformChoice = { value: ClientPlatformFilter; label: string; icon: LucideIcon }
+	type PlatformChoice = { value: ClientPlatformFilter | 'all'; label: string; icon: LucideIcon }
 	type ReadChoice = { value: ClientReadFilter; label: string; icon: LucideIcon }
 	type SearchResult = { entry: ClientCatalogEntry; variant: ClientAppVariant }
 	type HighlightPart = { text: string; match: boolean }
 
 	const PLATFORM_FILTERS: readonly PlatformChoice[] = [
+		{ value: 'all', label: 'All', icon: LayoutGridIcon },
 		{ value: 'ios', label: 'iOS', icon: AppleIcon },
 		{ value: 'android', label: 'Android', icon: SmartphoneIcon },
 		{ value: 'ereaders', label: 'eReaders', icon: TabletIcon },
@@ -49,6 +52,12 @@
 		{ value: 'comics', label: 'Comics', icon: BookOpenTextIcon },
 		{ value: 'ebooks', label: 'eBooks', icon: BookMarkedIcon },
 		{ value: 'audiobooks', label: 'Audiobooks', icon: BookAudioIcon }
+	]
+	const LEGEND = [
+		{ marker: '✓', label: 'Full support', class: 'border-border/70' },
+		{ marker: '~', label: 'Partial', class: 'border-dashed border-muted-foreground/50' },
+		{ marker: '–', label: 'Unsupported', class: 'border-destructive/40' },
+		{ marker: '?', label: 'Unverified', class: 'border-dotted border-muted-foreground/50' }
 	]
 
 	let {
@@ -71,8 +80,7 @@
 
 	let search = $state('')
 	let platformFilter = $state<ClientPlatformFilter | null>(null)
-	let readFilter = $state<ClientReadFilter | null>(null)
-	let appFilter = $state<string | null>(null)
+	let readFilters = $state<ClientReadFilter[]>([])
 	let page = $state(1)
 	let pageSize = $state(6)
 	let searchFocused = $state(false)
@@ -130,8 +138,6 @@
 		return result
 	})
 
-	const appChoices = $derived(allAppVariants)
-
 	const filteredEntries = $derived.by(() => {
 		const needle = normalized(search)
 		return entries.filter((entry) => {
@@ -139,8 +145,7 @@
 			return variants.some((variant) => {
 				if (hideDisabled && !isServerVariantAvailable(variant)) return false
 				if (platformFilter && !variant.filters.includes(platformFilter)) return false
-				if (readFilter && !supportsRead(variant, readFilter)) return false
-				if (appFilter && variant.id !== appFilter) return false
+				if (!readFilters.every((format) => supportsRead(variant, format))) return false
 				if (!needle) return true
 				return variantSearchText(entry, variant).includes(needle)
 			})
@@ -198,13 +203,6 @@
 		searchFocused = false
 	}
 
-	function chooseAppFilter(id: string): void {
-		appFilter = id || null
-		page = 1
-		const result = allAppVariants.find(({ variant }) => variant.id === id)
-		if (result) choose(result.entry, result.variant)
-	}
-
 	function changeSearch(event: Event): void {
 		search = (event.currentTarget as HTMLInputElement).value
 		activeResultIndex = 0
@@ -218,12 +216,12 @@
 	}
 
 	function changePlatformFilter(value: string): void {
-		platformFilter = (value || null) as ClientPlatformFilter | null
+		platformFilter = value && value !== 'all' ? (value as ClientPlatformFilter) : null
 		page = 1
 	}
 
-	function changeReadFilter(value: string): void {
-		readFilter = (value || null) as ClientReadFilter | null
+	function changeReadFilters(value: string[]): void {
+		readFilters = value as ClientReadFilter[]
 		page = 1
 	}
 
@@ -274,7 +272,7 @@
 	function changePageSize(): void {
 		if (!browser) return
 		const width = window.innerWidth
-		const next = width < 640 ? 1 : window.innerHeight <= 1000 ? 3 : width >= 1024 ? 6 : 4
+		const next = width < 640 ? 2 : width < 1024 ? 4 : 6
 		if (next !== pageSize) {
 			pageSize = next
 			page = 1
@@ -387,127 +385,114 @@
 		</p>
 	</div>
 
-	<div class="grid min-w-0 grid-cols-2 gap-2" aria-label="Client filters">
-		<fieldset class="min-w-0">
-			<legend class="sr-only">Filter clients by platform</legend>
-			<ToggleGroup.Root
-				type="single"
-				variant="outline"
-				size="sm"
-				value={platformFilter ?? ''}
-				onValueChange={changePlatformFilter}
-				aria-label="Filter clients by platform"
-				class="flex min-w-0 max-w-full flex-wrap justify-start gap-1.5"
-			>
-				{#each PLATFORM_FILTERS as option (option.value)}
-					{@const Icon = option.icon}
-					<ToggleGroup.Item
-						value={option.value}
-						aria-label={`Platform: ${option.label}`}
-						aria-pressed={platformFilter === option.value}
-						class="min-w-0 gap-1.5 text-xs"
-					>
-						<Icon class="size-3.5 shrink-0" aria-hidden="true" />
-						<span class="min-w-0 break-words text-left">{option.label}</span>
-					</ToggleGroup.Item>
-				{/each}
-			</ToggleGroup.Root>
-		</fieldset>
+	<div class="flex flex-wrap items-center gap-x-3 gap-y-2" aria-label="Client filters">
+		<ToggleGroup.Root
+			type="single"
+			variant="outline"
+			size="sm"
+			bind:value={() => platformFilter ?? 'all', changePlatformFilter}
+			aria-label="Filter clients by platform"
+			class="max-w-full"
+		>
+			{#each PLATFORM_FILTERS as option (option.value)}
+				{@const Icon = option.icon}
+				<ToggleGroup.Item value={option.value} aria-label={option.label} class="text-xs">
+					<Icon class="size-3.5" aria-hidden="true" />
+					<span class="hidden sm:inline">{option.label}</span>
+				</ToggleGroup.Item>
+			{/each}
+		</ToggleGroup.Root>
 
-		<fieldset class="min-w-0">
-			<legend class="sr-only">Filter clients by media</legend>
-			<ToggleGroup.Root
-				type="single"
-				variant="outline"
-				size="sm"
-				value={readFilter ?? ''}
-				onValueChange={changeReadFilter}
-				aria-label="Filter clients by media"
-				class="flex min-w-0 max-w-full flex-wrap justify-start gap-1.5"
-			>
-				{#each READ_FILTERS as option (option.value)}
-					{@const Icon = option.icon}
-					<ToggleGroup.Item
-						value={option.value}
-						aria-label={`Reads: ${option.label}`}
-						aria-pressed={readFilter === option.value}
-						class="min-w-0 gap-1.5 text-xs"
-					>
-						<Icon class="size-3.5 shrink-0" aria-hidden="true" />
-						<span class="min-w-0 break-words text-left">{option.label}</span>
-					</ToggleGroup.Item>
-				{/each}
-			</ToggleGroup.Root>
-		</fieldset>
-
-		<fieldset class="col-span-2 min-w-0">
-			<legend class="sr-only">Filter clients by app</legend>
-			<div
-				class="flex max-h-[4.625rem] min-w-0 max-w-full flex-wrap gap-1.5 overflow-y-scroll overscroll-contain pr-1 [scrollbar-gutter:stable]"
-				role="group"
-				aria-label="Filter clients by app"
-			>
-				<Button
-					type="button"
-					variant={appFilter ? 'outline' : 'secondary'}
-					size="sm"
-					class="min-w-0 max-w-full gap-1.5 text-xs"
-					aria-pressed={!appFilter}
-					onclick={() => chooseAppFilter('')}
-				>
-					<LayoutGridIcon class="size-3.5 shrink-0" aria-hidden="true" />
-					<span class="min-w-0 break-words text-left">All apps</span>
-				</Button>
-				{#each appChoices as result (result.variant.id)}
-					{@const Icon = result.variant.icon ?? result.entry.icon}
-					<Button
-						type="button"
-						variant={appFilter === result.variant.id ? 'secondary' : 'outline'}
-						size="sm"
-						class="min-w-0 max-w-full gap-1.5 text-xs"
-						data-app-filter={result.variant.id}
-						aria-pressed={appFilter === result.variant.id}
-						onclick={() => chooseAppFilter(result.variant.id)}
-					>
-						<Icon class="size-3.5 shrink-0" aria-hidden="true" />
-						<span class="min-w-0 break-words text-left">{result.variant.label}</span>
-					</Button>
-				{/each}
-			</div>
-			<p class="mt-1 text-[10px] text-muted-foreground">Two rows shown; scroll for more apps.</p>
-		</fieldset>
+		<ToggleGroup.Root
+			type="multiple"
+			variant="outline"
+			size="sm"
+			bind:value={() => readFilters, changeReadFilters}
+			aria-label="Formats the client must read"
+			class="max-w-full"
+		>
+			{#each READ_FILTERS as option (option.value)}
+				{@const Icon = option.icon}
+				<ToggleGroup.Item value={option.value} aria-label={option.label} class="text-xs">
+					<Icon class="size-3.5" aria-hidden="true" />
+					<span class="hidden sm:inline">{option.label}</span>
+				</ToggleGroup.Item>
+			{/each}
+		</ToggleGroup.Root>
 	</div>
-
-	<p class="hidden flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground sm:flex">
-		<span class="inline-flex size-4 items-center justify-center rounded border border-border/70" aria-hidden="true">✓</span>
-		Full support
-		<span class="inline-flex size-4 items-center justify-center rounded border border-dashed border-muted-foreground/50" aria-hidden="true">~</span>
-		Partial
-		<span class="inline-flex size-4 items-center justify-center rounded border border-destructive/40" aria-hidden="true">–</span>
-		Unsupported
-		<span class="inline-flex size-4 items-center justify-center rounded border border-dotted border-muted-foreground/50" aria-hidden="true">?</span>
-		Unverified
-	</p>
 
 	{#if visibleEntries.length}
 		<div class="grid items-stretch gap-2 sm:grid-cols-2 lg:grid-cols-3">
 			{#each visibleEntries as entry (entry.id)}
-				{@const variant = cardVariantForEntry(entry)}
+				{@const variant =
+					selectedId === entry.id ? clientVariantForId(entry, selectedVariantId) : cardVariantForEntry(entry)}
+				{@const variants = clientVariants(entry)}
 				{@const serverAvailability = availabilityForVariant(variant)}
 				{@const missing = variant ? missingPermissionsForClient(entry, user, variant.kind) : []}
+				{@const available = serverAvailability.available && missing.length === 0}
 				<ClientCard
-					{entry}
-					{variant}
-					selectedVariantId={selectedId === entry.id ? selectedVariantId : variant?.id}
+					icon={variant?.icon ?? entry.icon}
+					title={entry.title}
+					evidence={variant?.evidence}
+					maturity={variant?.maturity}
+					description={entry.description}
+					meta={variant
+						? [
+								{ label: 'Runs on', value: variant.platforms.join(' · ') },
+								{ label: 'App', value: variant.label },
+								{ label: 'Connection', value: variant.protocol }
+							]
+						: []}
+					capabilities={variant?.capabilities}
+					mediaFormats={variant?.mediaFormats}
 					selected={selectedId === entry.id}
-					available={serverAvailability.available && missing.length === 0}
-					missingPermissions={missing}
-					unavailableReason={!serverAvailability.available ? serverAvailability.reason : null}
-					managementHref={!serverAvailability.available ? resolve('/components') : null}
-					variantAvailable={isServerVariantAvailable}
-					onclick={() => choose(entry)}
-					onselectvariant={(nextVariant) => choose(entry, nextVariant)}
-				/>
+					{available}
+					onchoose={() => choose(entry)}
+					data-client-card={entry.id}
+				>
+					{#snippet footer()}
+						{#if variants.length > 1}
+							<div class="flex min-w-0 flex-wrap gap-1" role="group" aria-label={`Apps in ${entry.title}`}>
+								{#each variants as appVariant (appVariant.id)}
+									{@const VariantIcon = appVariant.icon ?? entry.icon}
+									{@const appAvailable = isServerVariantAvailable(appVariant)}
+									<button
+										type="button"
+										class={cn(
+											'inline-flex min-h-6 min-w-0 max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50',
+											variant?.id === appVariant.id
+												? 'border-primary/60 bg-primary/10 text-primary'
+												: 'border-border/70 bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground',
+											!appAvailable && 'cursor-not-allowed opacity-50'
+										)}
+										data-app-variant={appVariant.id}
+										aria-pressed={variant?.id === appVariant.id}
+										disabled={!appAvailable}
+										title={!appAvailable ? 'Disabled by the server' : undefined}
+										onclick={() => choose(entry, appVariant)}
+									>
+										<VariantIcon class="size-3 shrink-0" aria-hidden="true" />
+										<span class="min-w-0 truncate">{appVariant.label}</span>
+									</button>
+								{/each}
+							</div>
+						{/if}
+						{#if !available}
+							<p class="text-[11px] font-medium text-destructive">
+								{#if serverAvailability.reason}
+									Unavailable: {serverAvailability.reason}
+								{:else}
+									Missing: {missing.map((permission) => PERMISSION_LABELS[permission] ?? permission).join(', ')}
+								{/if}
+							</p>
+							{#if !serverAvailability.available}
+								<a href={resolve('/components')} class="w-fit text-[11px] font-medium text-primary underline-offset-4 hover:underline">
+									Review in Components
+								</a>
+							{/if}
+						{/if}
+					{/snippet}
+				</ClientCard>
 			{/each}
 		</div>
 	{:else}
@@ -520,15 +505,23 @@
 			{:else}
 				<p class="text-sm font-medium">No clients match those filters</p>
 				<p class="mt-1 max-w-sm text-xs text-muted-foreground">
-					Try a different search term, media filter, or app chip.
+					Try a different search term, platform, or format filter.
 				</p>
 			{/if}
 		</div>
 	{/if}
 
-	<div class="flex items-center justify-between gap-2" aria-label="Catalog pagination">
+	<div class="flex flex-wrap items-center gap-x-3 gap-y-2" aria-label="Catalog pagination">
 		<p class="text-[10px] text-muted-foreground">Page {Math.min(page, totalPages)} of {totalPages}</p>
-		<div class="flex items-center gap-1.5">
+		<p class="hidden items-center gap-x-2.5 text-[10px] whitespace-nowrap text-muted-foreground sm:flex" aria-label="Capability legend">
+			{#each LEGEND as item (item.marker)}
+				<span class="inline-flex items-center gap-1">
+					<span class={cn('inline-flex size-4 items-center justify-center rounded border', item.class)} aria-hidden="true">{item.marker}</span>
+					{item.label}
+				</span>
+			{/each}
+		</p>
+		<div class="ml-auto flex items-center gap-1.5">
 			<Button
 				type="button"
 				variant="outline"

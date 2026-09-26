@@ -22,8 +22,8 @@
 		group: AnnotationGroup;
 		savingId?: string | null;
 		deletingId?: string | null;
-		onsave: (id: string, note: string | null) => void;
-		ondelete: (id: string) => void;
+		onsave: (id: string, note: string | null, color: string | null, expectedRevision: number | null) => void;
+		ondelete: (id: string, expectedRevision: number | null) => void;
 	} = $props();
 
 	const { book } = $derived(group);

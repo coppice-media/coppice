@@ -3,10 +3,10 @@
 //!
 //! Lissen's login sequence is `GET /status` to pick an auth method
 //! (`common/api/AudiobookshelfAuthService.kt:107-146`), then `POST /login`
-//! with `x-return-tokens: true` (`AudiobookshelfApiClient.kt:164`), then
+//! with `x-return-tokens: true` (`AudiobookshelfApiClient.kt:181`), then
 //! `POST /api/authorize` on every later app start to re-read the server
-//! version (`:59`), and `POST /auth/refresh` with the refresh token in
-//! `x-refresh-token` when the access token expires (`:170`).
+//! version (`:65`), and `POST /auth/refresh` with the refresh token in
+//! `x-refresh-token` when the access token expires (`:186-190`).
 
 use axum::{
 	extract::Json,

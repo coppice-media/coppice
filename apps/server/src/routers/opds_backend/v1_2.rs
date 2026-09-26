@@ -31,12 +31,13 @@ use stump_core::opds::{
 use stump_media::{
 	image::{GenericImageProcessor, ImageProcessor},
 	media::get_page_async,
-	ContentType, MediaConfig,
+	ContentType,
 };
 
 use crate::{
 	config::state::AppState,
 	errors::{APIError, APIResult},
+	routers::api::v2::media::get_media_thumbnail_by_id,
 	utils::{
 		http::{ImageResponse, Xml},
 		serve_media,
@@ -951,6 +952,9 @@ fn handle_opds_image_response(
 }
 
 /// A handler for GET /opds/v1.2/books/{id}/thumbnail, returns the thumbnail
+///
+/// The same stored-or-generated thumbnail every other profile serves, then
+/// narrowed to the image types OPDS 1.2 readers accept.
 pub(crate) async fn get_book_thumbnail(
 	Path(OPDSURLParams {
 		params: OPDSIDURLParams { id },
@@ -959,24 +963,9 @@ pub(crate) async fn get_book_thumbnail(
 	State(ctx): State<AppState>,
 	Extension(req): Extension<AuthContext>,
 ) -> APIResult<ImageResponse> {
-	let user = req.user();
-	let book = media::Entity::find_for_user(&user)
-		.columns(vec![media::Column::Id, media::Column::Path])
-		.filter(media::Column::Id.eq(id))
-		.into_model::<media::MediaIdentSelect>()
-		.one(ctx.conn.as_ref())
-		.await?
-		.ok_or(APIError::NotFound("Book not found".to_string()))?;
-
-	let adjusted_config = MediaConfig {
-		pdf_prerender_range: 0, // Disable PDF prerendering for thumbnails since we only need the first page
-		..ctx.config.media.clone()
-	};
-
-	let (content_type, image_buffer) =
-		get_page_async(PathBuf::from(book.path), 1, &adjusted_config).await?;
-
-	handle_opds_image_response(content_type, image_buffer)
+	let ImageResponse { content_type, data } =
+		get_media_thumbnail_by_id(&ctx, &req.user(), id).await?;
+	handle_opds_image_response(content_type, data)
 }
 
 /// A handler for GET /opds/v1.2/books/{id}/page/{page}, returns the page

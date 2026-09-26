@@ -40,6 +40,7 @@ export const SOURCE_LABELS: Record<AnnotationSourceKind, string> = {
 	KOMELIA: 'Komelia',
 	KAVITA: 'Kavita',
 	WORKER: 'Worker',
+	SOURCE_WORKER: 'Source worker',
 }
 
 /** The sources that can actually carry annotations, for the source selector. */

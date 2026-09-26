@@ -1,11 +1,11 @@
 ---
 title: Request and acquisition boundary
-description: What Coppice owns today and where any future acquisition integration must live
+description: Manager-triggered MAM acquisition and the staged-ingest handoff
 ---
 
-Coppice owns a metadata-backed request ledger, not an acquisition service.
-Universal-style metadata search can identify a work and seed a request, but a
-metadata result is never evidence that a file was found or acquired.
+Coppice owns a metadata-backed request ledger and an explicit, manager-triggered
+MAM Bridge integration for approved requests. Metadata search identifies works;
+a result is never evidence that a file was found or acquired.
 
 ## What Coppice owns
 
@@ -18,36 +18,60 @@ The shipped request system keeps:
 - request notifications; and
 - the social recommendation-to-request handoff.
 
-Approval records a decision in the ledger. It does not search releases, start a
-download, poll an acquisition, or import a file.
+An approved request does not search or grab automatically. A manager with
+`AcquireReleases` must explicitly search releases for that approved request and
+confirm the selected grab. A completed handoff is copied into staged ingest;
+Editor approval then fulfils the request and notifies its owner.
 
 ```text
 metadata search or recommendation
   -> request
   -> permission and visibility checks
-  -> operator approval or rejection
+  -> operator approval
+  -> manager explicitly searches and confirms a release grab
+  -> completed handoff copied into Editor staged review
+  -> ingest approval fulfils request and notifies requester
 ```
 
-## Acquisition is deferred
+## MAM Bridge
 
-MAM acquisition is deferred. Coppice has no active tracker account, release
-selection, grab, polling, retry, downloader, or acquisition-gateway surface.
-There is no acquisition endpoint or token to configure.
+The Coppice server talks to the separately authenticated MAM Bridge sidecar;
+the browser never calls the bridge and never receives its token. The feature
+requires a headless/full build with `mam-acquisition` and the default-off
+`STUMP_ENABLE_MAM_ACQUISITION=true` runtime switch. Configure:
 
-If acquisition is added later, the integration boundary is a separate
-authenticated provider sidecar. The sidecar, not the Coppice process, would own
-provider credentials and transport-specific state. This boundary does not
-promise a provider, protocol, implementation, or delivery date.
+- `MAM_BRIDGE_URL` — the bridge base URL (HTTPS, except loopback HTTP for
+  development);
+- `MAM_BRIDGE_TOKEN_FILE` — path to a file containing the bearer token. The
+  token is not returned in GraphQL or logged;
+- `MAM_BRIDGE_HANDOFF_ROOT` — optional local path corresponding to the bridge's
+  `/downloads` mount (for example, `/nfs/downloads` in development); and
+- `MAM_BRIDGE_SOURCE_ROOT` — optional source-worker root label covering
+  `/downloads`. When configured, Coppice uses the source worker's verified
+  read/materialization path instead of the local mapped path.
 
-## Ingest remains separate
+Search is on demand for an approved request and cached on that request;
+`cachedReleaseSearch` does not contact MAM. The first successful query is
+limited to the bridge's five-result probe. A paused search returns
+“Search is paused, check the bridge”; Coppice does not re-enable or reset the
+bridge. Rate limits report how many seconds to wait. A manager must explicitly
+confirm each grab; the server sends the bridge's required confirmation text.
+Active grabs are refreshed by the background job system.
 
-Coppice can ingest a file that an operator is allowed to store through its
-existing staged-ingest paths. That ingest flow is independent of request
-approval: an approved request does not create an ingest job, and an ingested
-file is not automatically matched to a request.
+When a completed manifest points below `/downloads`, Coppice copies the file or
+folder into staged ingest. It never moves, renames, or deletes the source, so
+MAM can continue seeding. With a source worker, bytes are verified against the
+reported size and digest during materialization; otherwise the configured local
+mount must contain the handoff path. The Editor remains the publication review:
+approving the staged item marks the linked approved request fulfilled and
+notifies the requester.
 
-See [modular ingest](/docs/developer/modular-ingest) for the current ingest
-lifecycle and evidence.
+## Ingest review
+
+Acquisition ends at the existing staged-ingest workflow. It does not bypass
+metadata review, quality checks, or Editor approval. See
+[modular ingest](/docs/developer/modular-ingest) for that lifecycle and
+evidence.
 
 ## Read-aloud alignment is separate
 

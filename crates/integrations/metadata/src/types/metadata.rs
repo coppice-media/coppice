@@ -91,6 +91,31 @@ pub struct ExternalMediaMetadata {
 	/// measured from the file itself (`media_audio.duration_ms`), which this
 	/// never overwrites.
 	pub runtime_minutes: Option<i32>,
+
+	/// Whether the provider knows an ebook edition exists. `None` when the
+	/// provider does not say; only Hardcover's search index carries the flag.
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub has_ebook: Option<bool>,
+
+	/// Whether the provider knows an audiobook edition exists. Audible hits
+	/// are audiobooks by construction; Hardcover reports its index flag.
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub has_audiobook: Option<bool>,
+
+	/// The default audiobook edition's length in whole seconds, as Hardcover's
+	/// index states it. Audible reports [`Self::runtime_minutes`] instead;
+	/// callers wanting seconds from either provider derive them there.
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub audio_seconds: Option<i32>,
+	/// Whether this audiobook edition is abridged, when the provider labels
+	/// its format (Audible's `format_type`). `None` when unstated.
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub abridged: Option<bool>,
+
+	/// The edition's language as the provider spells it, lowercased (Audible
+	/// says `english`/`italian`); `None` when unstated.
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub language: Option<String>,
 }
 
 /// Metadata about a series from an external metadata provider
@@ -118,4 +143,27 @@ pub struct ExternalSeriesMetadata {
 
 	pub cover_url: Option<String>,
 	pub volume_count: Option<i32>,
+}
+
+/// One audiobook edition of a work the provider already identifies, as
+/// returned by [`crate::MetadataProvider::audiobook_editions`]. Deliberately
+/// narrower than [`ExternalMediaMetadata`]: the caller asked "who reads this
+/// book and how long is it", not for a new candidate to match against.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudiobookEdition {
+	/// The provider's edition identifier, when it has one.
+	pub external_id: Option<String>,
+	/// The readers credited on this edition, in the provider's order.
+	pub narrators: Vec<String>,
+	/// Advertised length in whole seconds.
+	pub audio_seconds: Option<i32>,
+	/// Whether the edition is labelled abridged; `None` when unstated.
+	pub abridged: Option<bool>,
+	pub asin: Option<String>,
+	/// The edition's language as the provider spells it (a name or ISO 639
+	/// code, lowercased); `None` when unstated.
+	pub language: Option<String>,
+	/// How many provider users shelved this edition; a popularity order for
+	/// callers listing several editions.
+	pub users_count: Option<i32>,
 }

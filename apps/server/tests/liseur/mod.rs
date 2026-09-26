@@ -1,24 +1,41 @@
-//! The liseur-sync attachment lane: `PUT`/`GET
-//! /v1/annotations/{id}/attachments[/{kind}]` and the authenticated download
-//! at `GET /api/v2/annotations/{id}/attachments/{attachment_id}`.
+//! Liseur-sync server integration tests for annotation attachments and work
+//! identity, using the real migrated schema and a throwaway config directory.
 //!
-//! The suite runs against the real migrated schema because the liseur-sync
-//! tables have no SeaORM entities, and against a throwaway config directory
-//! because attachments write real files.
+//! The liseur-sync tables have no SeaORM entities, and attachment routes write
+//! files, so this suite exercises the migrated database and real file paths.
 
 use std::path::PathBuf;
 
 use axum::http::{Method, StatusCode};
 use axum_test::TestResponse;
 use migrations::{Migrator, MigratorTrait};
-use models::{entity::user, services::annotation_attachment as attachment_rows};
-use sea_orm::{Database, DatabaseConnection, EntityTrait};
+use models::{
+	entity::{media, media_annotation, media_metadata, user},
+	services::annotation_attachment as attachment_rows,
+	shared::liseur_annotation_projection::stump_native_annotation_id,
+};
+use sea_orm::{
+	ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend,
+	EntityTrait, Set, Statement,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use stump_core::config::StumpConfig;
 use tempfile::TempDir;
 
+use tests::fake_data;
+
 use crate::common::TestApp;
+
+async fn execute_sql(db: &DatabaseConnection, sql: &str, values: Vec<sea_orm::Value>) {
+	db.execute(Statement::from_sql_and_values(
+		DbBackend::Sqlite,
+		sql,
+		values,
+	))
+	.await
+	.expect("fixture SQL should succeed");
+}
 
 const SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1"/></svg>"#;
 const JPEG: &[u8] = &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46];
@@ -187,6 +204,340 @@ impl Fixture {
 			.expect("the fixture created an account")
 			.id
 	}
+}
+
+#[tokio::test]
+async fn linked_aliasless_pair_resolve_self_heals_and_preserves_identity_conflicts() {
+	const MEDIA_ID: &str = "lottery-epub";
+	const WORK_ID: &str = "lottery-identity";
+	const PAIR_WORK_ID: &str = "lottery-pair-suggestion";
+	const COMPETING_WORK_ID: &str = "other-work";
+	let fixture = Fixture::new().await;
+	let db = fixture.app.conn();
+	let owner_id = fixture.owner_id().await;
+	let bytes = b"EPUB bytes for the Lottery identity regression";
+	let sha = digest(bytes);
+	let media_path = fixture.config_dir.path().join("lottery.epub");
+	std::fs::write(&media_path, bytes).expect("fixture EPUB bytes should be written");
+
+	let library = fake_data::Library {
+		id: Some("lottery-library".into()),
+		name: Some("Lottery library".into()),
+		..Default::default()
+	}
+	.insert(db)
+	.await;
+	let series = fake_data::Series {
+		id: Some("lottery-series".into()),
+		name: Some("The Lottery".into()),
+		library_id: Some(library.id),
+		..Default::default()
+	}
+	.insert(db)
+	.await;
+	let book = fake_data::Media {
+		id: Some(MEDIA_ID.into()),
+		name: Some("The Lottery".into()),
+		extension: Some("epub".into()),
+		series_id: series.id,
+		pages: Some(12),
+		..Default::default()
+	}
+	.insert(db)
+	.await;
+	let mut book: media::ActiveModel = book.into();
+	book.path = Set(media_path.to_string_lossy().into_owned());
+	book.koreader_hash = Set(Some("partial-lottery".into()));
+	book.update(db)
+		.await
+		.expect("the book should point at the fixture EPUB");
+	media_metadata::ActiveModel {
+		media_id: Set(Some(MEDIA_ID.into())),
+		title: Set(Some("The Lottery".into())),
+		writers: Set(Some("Shirley Jackson".into())),
+		..Default::default()
+	}
+	.insert(db)
+	.await
+	.expect("catalog metadata should be inserted");
+
+	execute_sql(
+		db,
+		"INSERT INTO liseur_sync_works (id, user_id, title, author, pending, created_at) \
+		 VALUES ($1, $2, $3, $4, FALSE, $5)",
+		vec![
+			WORK_ID.into(),
+			owner_id.clone().into(),
+			"The Lottery".into(),
+			"Shirley Jackson".into(),
+			"2026-09-01T00:00:00Z".into(),
+		],
+	)
+	.await;
+	execute_sql(
+		db,
+		"INSERT INTO liseur_sync_editions \
+		 (id, user_id, edition_sha, work_id, media_id, created_at) \
+		 VALUES ($1, $2, $3, $4, $5, $6)",
+		vec![
+			"lottery-edition".into(),
+			owner_id.clone().into(),
+			sha.clone().into(),
+			WORK_ID.into(),
+			Option::<String>::None.into(),
+			"2026-09-01T00:00:00Z".into(),
+		],
+	)
+	.await;
+	for (id, kind, value) in [
+		("lottery-sha-alias", "sha256", sha.clone()),
+		(
+			"lottery-source-alias",
+			"source",
+			format!("komga:{MEDIA_ID}"),
+		),
+		("lottery-raw-source-alias", "source", MEDIA_ID.to_owned()),
+		(
+			"lottery-partial-alias",
+			"partial-md5",
+			"partial-lottery".to_owned(),
+		),
+	] {
+		execute_sql(
+			db,
+			"INSERT INTO liseur_sync_aliases \
+			 (id, user_id, kind, value, work_id, edition_sha, created_at) \
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+			vec![
+				id.into(),
+				owner_id.clone().into(),
+				kind.into(),
+				value.into(),
+				WORK_ID.into(),
+				sha.clone().into(),
+				"2026-09-01T00:00:00Z".into(),
+			],
+		)
+		.await;
+	}
+	execute_sql(
+		db,
+		"INSERT INTO liseur_sync_media_links \
+		 (id, user_id, media_id, work_id, edition_sha, resolution_status, created_at, pair_status, pair_evidence) \
+		 VALUES ($1, $2, $3, $4, $5, 'verified', $6, 'confirmed', NULL)",
+		vec![
+			"lottery-link".into(),
+			owner_id.clone().into(),
+			MEDIA_ID.into(),
+			WORK_ID.into(),
+			sha.clone().into(),
+			"2026-09-01T00:00:00Z".into(),
+		],
+	)
+	.await;
+
+	let pushed = fixture
+		.app
+		.server
+		.post("/v1/annotations")
+		.add_header("Authorization", fixture.bearer())
+		.json(&json!({
+			"annotations": [{
+				"id": "koreader-lottery",
+				"base_rev": 0,
+				"work_id": WORK_ID,
+				"edition_sha": sha,
+				"kind": "highlight",
+				"locator": {
+					"href": "chapter.xhtml",
+					"locations": { "position": 4, "progression": 0.4 },
+					"text": { "highlight": "Liseur excerpt" }
+				},
+				"progression": 0.4,
+				"excerpt": "Liseur excerpt",
+				"color": "yellow",
+				"body": "KOReader annotation",
+				"client_ts": "2026-09-02T00:00:00Z"
+			}]
+		}))
+		.await;
+	pushed.assert_status_ok();
+
+	let native_locator = serde_json::from_value(json!({
+		"href": "chapter.xhtml",
+		"locations": { "position": 7, "progression": 0.7 },
+		"text": { "highlight": "Home excerpt" }
+	}))
+	.expect("native locator should deserialize");
+	media_annotation::ActiveModel {
+		id: Set("home-native-highlight".into()),
+		locator: Set(native_locator),
+		annotation_text: Set(Some("Home-native annotation".into())),
+		color: Set(Some("yellow".into())),
+		media_id: Set(MEDIA_ID.into()),
+		user_id: Set(owner_id.clone()),
+		..Default::default()
+	}
+	.insert(db)
+	.await
+	.expect("the Home-native annotation should be inserted");
+
+	execute_sql(
+		db,
+		"INSERT INTO liseur_sync_works (id, user_id, title, author, pending, created_at) \
+		 VALUES ($1, $2, $3, $4, FALSE, $5)",
+		vec![
+			PAIR_WORK_ID.into(),
+			owner_id.clone().into(),
+			"The Lottery".into(),
+			"Shirley Jackson".into(),
+			"2026-09-04T00:00:00Z".into(),
+		],
+	)
+	.await;
+	execute_sql(
+		db,
+		"UPDATE liseur_sync_media_links \
+		 SET work_id = $1, pair_status = 'suggested', pair_evidence = 'title_author' \
+		 WHERE id = $2",
+		vec![PAIR_WORK_ID.into(), "lottery-link".into()],
+	)
+	.await;
+
+	let split_resolve = fixture
+		.app
+		.server
+		.post(&format!("/v1/books/{MEDIA_ID}/resolve"))
+		.add_header("Authorization", fixture.bearer())
+		.json(&json!({}))
+		.await;
+	split_resolve.assert_status_ok();
+	let split_resolve: Value = split_resolve.json();
+	assert_eq!(split_resolve["work_id"], WORK_ID);
+	assert_eq!(split_resolve["created"], false);
+
+	let linked = db
+		.query_one(sea_orm::Statement::from_string(
+			sea_orm::DbBackend::Sqlite,
+			"SELECT work_id FROM liseur_sync_media_links WHERE id = 'lottery-link'"
+				.to_owned(),
+		))
+		.await
+		.unwrap()
+		.unwrap();
+	assert_eq!(linked.try_get::<String>("", "work_id").unwrap(), WORK_ID);
+	let losing = db
+		.query_one(sea_orm::Statement::from_string(
+			sea_orm::DbBackend::Sqlite,
+			format!("SELECT id FROM liseur_sync_works WHERE id = '{PAIR_WORK_ID}'"),
+		))
+		.await
+		.unwrap();
+	assert!(
+		losing.is_none(),
+		"the alias-less pair work should be merged"
+	);
+
+	let home_id = stump_native_annotation_id("annotation", "home-native-highlight");
+	let identity_after_resolve = fixture
+		.app
+		.server
+		.get(&format!("/v1/works/{WORK_ID}/annotations"))
+		.add_header("Authorization", fixture.bearer())
+		.await;
+	identity_after_resolve.assert_status_ok();
+	let identity_after_resolve: Value = identity_after_resolve.json();
+	assert!(identity_after_resolve["annotations"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.any(|record| record["id"] == "koreader-lottery"));
+	assert!(identity_after_resolve["annotations"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.any(|record| record["id"] == home_id));
+
+	// A repeat resolve returns the repaired user/media binding unchanged.
+
+	let resolved = fixture
+		.app
+		.server
+		.post(&format!("/v1/books/{MEDIA_ID}/resolve"))
+		.add_header("Authorization", fixture.bearer())
+		.json(&json!({}))
+		.await;
+	resolved.assert_status_ok();
+	let resolved: Value = resolved.json();
+	assert_eq!(resolved["work_id"], WORK_ID);
+	assert_eq!(resolved["created"], false);
+
+	let annotations = fixture
+		.app
+		.server
+		.get(&format!("/v1/works/{WORK_ID}/annotations"))
+		.add_header("Authorization", fixture.bearer())
+		.await;
+	annotations.assert_status_ok();
+	let annotations: Value = annotations.json();
+	let records = annotations["annotations"]
+		.as_array()
+		.expect("work annotations should be returned");
+	assert!(
+		records
+			.iter()
+			.any(|record| record["id"] == "koreader-lottery"),
+		"the KOReader annotation should remain under the identity work: {annotations:#}"
+	);
+	let home_id = stump_native_annotation_id("annotation", "home-native-highlight");
+	assert!(
+		records.iter().any(|record| record["id"] == home_id),
+		"the Home-native annotation should export under the same work: {annotations:#}"
+	);
+	execute_sql(
+		db,
+		"INSERT INTO liseur_sync_works (id, user_id, title, author, pending, created_at) \
+		 VALUES ($1, $2, $3, $4, FALSE, $5)",
+		vec![
+			COMPETING_WORK_ID.into(),
+			owner_id.clone().into(),
+			"Different work".into(),
+			"Different author".into(),
+			"2026-09-05T00:00:00Z".into(),
+		],
+	)
+	.await;
+	execute_sql(
+		db,
+		"UPDATE liseur_sync_aliases SET work_id = $1 \
+		 WHERE user_id = $2 AND kind = 'source' AND value = $3",
+		vec![
+			COMPETING_WORK_ID.into(),
+			owner_id.clone().into(),
+			format!("komga:{MEDIA_ID}").into(),
+		],
+	)
+	.await;
+	let linked_result = fixture
+		.app
+		.server
+		.post(&format!("/v1/books/{MEDIA_ID}/resolve"))
+		.add_header("Authorization", fixture.bearer())
+		.json(&json!({}))
+		.await;
+	linked_result.assert_status(StatusCode::CONFLICT);
+	let conflict: Value = linked_result.json();
+	assert_eq!(
+		conflict["error"], "identifiers resolve to multiple works",
+		"{conflict:#}"
+	);
+	assert!(
+		conflict["works"]
+			.as_array()
+			.is_some_and(|works| works.iter().any(|work| work == WORK_ID)
+				&& works.iter().any(|work| work == COMPETING_WORK_ID)),
+		"two alias-backed works remain a conflict: {conflict:#}"
+	);
 }
 
 #[tokio::test]

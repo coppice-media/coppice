@@ -61,7 +61,7 @@ use crate::{
 		state::AppState,
 	},
 	errors::{api_error_message, APIError, APIResult},
-	routers::{enforce_max_sessions, relative_favicon_path},
+	routers::enforce_max_sessions,
 	utils::{
 		current_utc_time, decode_base64_credentials, fetch_session_user, verify_password,
 	},
@@ -92,6 +92,12 @@ pub(crate) fn inject_avatar_url(mut user: AuthUser, service: RequestOrigin) -> A
 #[cfg(feature = "komga")]
 fn is_komga_basic_auth_path(path: &str) -> bool {
 	let is_v1_path = path.starts_with("/api/v1/") || path.starts_with("/komga/api/v1/");
+	let is_komf_path = path.starts_with("/api/komga/");
+	#[cfg(feature = "komf")]
+	let is_komf_global_path =
+		path == "/api/config" || path == "/api/jobs" || path.starts_with("/api/jobs/");
+	#[cfg(not(feature = "komf"))]
+	let is_komf_global_path = false;
 	let is_identity_path = matches!(
 		path,
 		"/api/logout"
@@ -110,10 +116,85 @@ fn is_komga_basic_auth_path(path: &str) -> bool {
 		&& path.ends_with("/read-progress/tachiyomi");
 
 	is_v1_path
+		|| is_komf_path
+		|| is_komf_global_path
 		|| is_identity_path
 		|| is_latest_activity_path
 		|| is_tracker_path
 		|| path == "/sse/v1/events"
+}
+
+/// Matches only paths registered by `stump_komf::routes::router`; Kavita's
+/// separate `apiKey` query lane must not authenticate on its broader `/api/*` surface.
+#[cfg(feature = "komf")]
+fn is_komf_auth_path(path: &str) -> bool {
+	if matches!(
+		path,
+		"/api/config"
+			| "/api/jobs"
+			| "/api/jobs/all"
+			| "/api/komga/metadata/providers"
+			| "/api/komga/metadata/search"
+			| "/api/komga/metadata/series-cover"
+			| "/api/komga/metadata/identify"
+			| "/api/komga/media-server/connected"
+			| "/api/komga/media-server/libraries"
+	) {
+		return true;
+	}
+
+	let is_job_route = path.strip_prefix("/api/jobs/").is_some_and(|suffix| {
+		let mut segments = suffix.split('/');
+		if !segments.next().is_some_and(|segment| !segment.is_empty()) {
+			return false;
+		}
+		match segments.next() {
+			None => true,
+			Some("events") => segments.next().is_none(),
+			Some(_) => false,
+		}
+	});
+	let is_metadata_library_route = |prefix: &str| {
+		path.strip_prefix(prefix).is_some_and(|suffix| {
+			let mut segments = suffix.split('/');
+			if !segments.next().is_some_and(|segment| !segment.is_empty()) {
+				return false;
+			}
+			match segments.next() {
+				None => true,
+				Some("series") => {
+					segments.next().is_some_and(|segment| !segment.is_empty())
+						&& segments.next().is_none()
+				},
+				Some(_) => false,
+			}
+		})
+	};
+
+	is_job_route
+		|| is_metadata_library_route("/api/komga/metadata/match/library/")
+		|| is_metadata_library_route("/api/komga/metadata/reset/library/")
+}
+
+#[cfg(feature = "komf")]
+fn komf_api_key_query(query: Option<&str>) -> Option<String> {
+	query?.split('&').find_map(|pair| {
+		let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+		key.eq_ignore_ascii_case("apiKey").then(|| {
+			urlencoding::decode(value)
+				.map(|value| value.into_owned())
+				.unwrap_or_else(|_| value.to_owned())
+		})
+	})
+}
+
+#[cfg(feature = "komf")]
+fn require_komf_device(auth: &AuthContext) -> APIResult<()> {
+	if auth.device_id.is_some() {
+		Ok(())
+	} else {
+		Err(APIError::Unauthorized)
+	}
 }
 
 #[cfg(feature = "komga")]
@@ -323,9 +404,39 @@ pub async fn auth_middleware(
 		|| req.uri().path().to_owned(),
 		|path| path.0.path().to_owned(),
 	);
+	#[cfg(feature = "komf")]
+	let komf_api_key = if is_komf_auth_path(&request_uri) {
+		let query = req
+			.extensions()
+			.get::<OriginalUri>()
+			.map_or_else(|| req.uri().query(), |uri| uri.0.query());
+		komf_api_key_query(query)
+	} else {
+		None
+	};
 
 	let service =
 		RequestOrigin::new(host_details.host.clone(), host_details.scheme.clone());
+	// A present Komf query key is authoritative: invalid or unbound keys
+	// return 401 before cookie, Basic, or Bearer authentication can fall back.
+	#[cfg(feature = "komf")]
+	if let Some(api_key) = komf_api_key {
+		let mut req_ctx = authenticate_komga_api_key(Some(&api_key), ctx.conn.as_ref())
+			.await
+			.map_err(|error| error.into_response())?;
+		bind_device(
+			&ctx,
+			&mut req_ctx,
+			CredentialRef::ApiKey(&api_key),
+			Protocol::Komga,
+		)
+		.await
+		.map_err(|error| error.into_response())?;
+		require_komf_device(&req_ctx).map_err(|error| error.into_response())?;
+		req_ctx.user = inject_avatar_url(req_ctx.user, service);
+		req.extensions_mut().insert(req_ctx);
+		return Ok(next.run(req).await);
+	}
 
 	let session_user = fetch_session_user(&session, ctx.conn.as_ref())
 		.await
@@ -435,15 +546,14 @@ pub async fn auth_middleware(
 				.nth(2)
 				.map_or("1.2".to_string(), |v| v.replace('v', ""));
 
-			return Err(OPDSBasicAuth::new(
-				opds_version,
-				host_details.url(),
-				ctx.config.protocols.enable_webui,
-			)
-			.into_response());
+			return Err(
+				OPDSBasicAuth::new(opds_version, host_details.url()).into_response()
+			);
 		} else if is_playground {
-			// Sign in via React app and then redirect to server-side playground
-			return Err(Redirect::to("/auth?redirect=%2Fapi%2Fgraphql").into_response());
+			// Sign in through Home before opening the server-side playground.
+			return Err(
+				Redirect::to("/app/login?returnTo=%2Fapi%2Fgraphql").into_response()
+			);
 		}
 
 		return Err(APIError::Unauthorized.into_response());
@@ -986,15 +1096,13 @@ async fn handle_basic_auth(
 pub struct OPDSBasicAuth {
 	version: String,
 	service_url: String,
-	webui_enabled: bool,
 }
 
 impl OPDSBasicAuth {
-	pub fn new(version: String, service_url: String, webui_enabled: bool) -> Self {
+	pub fn new(version: String, service_url: String) -> Self {
 		Self {
 			version,
 			service_url,
-			webui_enabled,
 		}
 	}
 }
@@ -1002,13 +1110,7 @@ impl OPDSBasicAuth {
 impl IntoResponse for OPDSBasicAuth {
 	fn into_response(self) -> Response {
 		if self.version == "2.0" {
-			let mut links = vec![OPDSLink::help()];
-			if let Some(favicon_path) = relative_favicon_path(self.webui_enabled) {
-				links.push(OPDSLink::logo(format!(
-					"{}{}",
-					self.service_url, favicon_path
-				)));
-			}
+			let links = vec![OPDSLink::help()];
 
 			let document = match OPDSAuthenticationDocumentBuilder::default()
 				.id(format!("{}/opds/v2.0/auth", self.service_url))
@@ -1247,6 +1349,8 @@ mod tests {
 		assert!(is_komga_basic_auth_path("/api/logout"));
 		assert!(is_komga_basic_auth_path("/komga/api/v1/libraries"));
 		assert!(is_komga_basic_auth_path("/komga/api/v2/users/me"));
+		assert!(is_komga_basic_auth_path("/api/komga/v1/providers"));
+		assert!(is_komga_basic_auth_path("/api/komga/v1/config"));
 		assert!(is_komga_basic_auth_path(
 			"/api/v2/series/series-id/read-progress/tachiyomi"
 		));
@@ -1273,6 +1377,290 @@ mod tests {
 		assert!(!is_komga_basic_auth_path("/komga/api/v1"));
 		assert!(!is_komga_basic_auth_path("/komga/api/v2/users"));
 		assert!(!is_komga_basic_auth_path("/api/logout/other"));
+		assert!(!is_komga_basic_auth_path("/api/komga"));
+		assert!(!is_komga_basic_auth_path("/api/komgaish/v1/providers"));
+		#[cfg(feature = "komf")]
+		{
+			assert!(is_komga_basic_auth_path("/api/config"));
+			assert!(is_komga_basic_auth_path("/api/jobs"));
+			assert!(is_komga_basic_auth_path("/api/jobs/all"));
+			assert!(is_komga_basic_auth_path("/api/jobs/43/events"));
+			assert!(!is_komga_basic_auth_path("/api/config/"));
+			assert!(!is_komga_basic_auth_path("/api/metadata/providers"));
+		}
+	}
+
+	#[cfg(feature = "komf")]
+	#[test]
+	fn komf_api_key_auth_is_limited_to_registered_routes() {
+		for path in [
+			"/api/config",
+			"/api/jobs",
+			"/api/jobs/all",
+			"/api/jobs/job-id",
+			"/api/jobs/job-id/events",
+			"/api/komga/metadata/providers",
+			"/api/komga/metadata/search",
+			"/api/komga/metadata/series-cover",
+			"/api/komga/metadata/identify",
+			"/api/komga/metadata/match/library/library-id",
+			"/api/komga/metadata/match/library/library-id/series/series-id",
+			"/api/komga/metadata/reset/library/library-id",
+			"/api/komga/metadata/reset/library/library-id/series/series-id",
+			"/api/komga/media-server/connected",
+			"/api/komga/media-server/libraries",
+		] {
+			assert!(is_komf_auth_path(path), "expected Komf route: {path}");
+		}
+
+		for path in [
+			"/api/config/",
+			"/api/configure",
+			"/api/jobs/job-id/events/extra",
+			"/api/jobsfoo/job-id",
+			"/api/komga/metadata/search/extra",
+			"/api/komga/v1/providers",
+			"/api/graphql",
+			"/api/v1/libraries",
+			"/api/v2/libraries",
+			"/api/Plugin/authenticate",
+			"/api/items/item-id/cover",
+			"/api/series",
+		] {
+			assert!(!is_komf_auth_path(path), "unexpected Komf route: {path}");
+		}
+	}
+
+	#[cfg(feature = "komf")]
+	#[test]
+	fn komf_api_key_query_is_case_insensitive_and_decoded() {
+		assert_eq!(
+			komf_api_key_query(Some("page=1&apikey=stump_a%2Bb")),
+			Some("stump_a+b".to_owned())
+		);
+		assert_eq!(komf_api_key_query(Some("apiKey=")), Some(String::new()));
+		assert_eq!(komf_api_key_query(Some("apiKey")), Some(String::new()));
+		assert_eq!(komf_api_key_query(None), None);
+	}
+
+	#[cfg(feature = "komf")]
+	#[tokio::test]
+	async fn valid_unbound_komf_api_key_is_unauthorized() {
+		use sea_orm::{ActiveModelTrait, Set};
+
+		let conn = ::tests::db::test_database().await;
+		let owner = ::tests::fake_data::User::new("komf-key-owner")
+			.insert(&conn)
+			.await;
+		let (key, hash) = stump_core::api_key::create_prefixed_key().unwrap();
+		let key_value = key.to_string();
+		api_key::ActiveModel {
+			user_id: Set(owner.id),
+			name: Set("unbound Komf key".to_owned()),
+			short_token: Set(key.short_token().to_owned()),
+			long_token_hash: Set(hash),
+			permissions: Set(APIKeyPermissions::Custom(vec![
+				UserPermission::AccessApiKeys,
+			])),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+
+		let auth = authenticate_komga_api_key(Some(&key_value), &conn)
+			.await
+			.unwrap();
+		assert!(auth.device_id.is_none());
+		assert_eq!(
+			require_komf_device(&auth).unwrap_err().status_code(),
+			StatusCode::UNAUTHORIZED
+		);
+	}
+
+	#[cfg(feature = "komf")]
+	#[tokio::test]
+	async fn komf_device_auth_binds_its_library_scope() {
+		let database = ::tests::db::test_database().await;
+		let user = ::tests::fake_data::User::new("komf-scope-owner")
+			.insert(&database)
+			.await;
+		let owner = AuthUser {
+			id: user.id,
+			username: user.username,
+			is_server_owner: true,
+			..Default::default()
+		};
+		let library = ::tests::fake_data::Library::default()
+			.insert(&database)
+			.await;
+		let _hidden_library = ::tests::fake_data::Library::default()
+			.insert(&database)
+			.await;
+		let ctx = stump_core::Ctx::for_testing(database).arced();
+		let conn = ctx.conn.clone();
+		let devices = ctx.devices();
+		let (device, credential) = devices
+			.create_device(
+				&owner,
+				stump_devices::CredentialIssuance::InteractiveSession,
+				stump_devices::DeviceKind::Komelia,
+				None,
+			)
+			.await
+			.expect("Komelia device credential");
+		devices
+			.set_library_scope(
+				&owner,
+				&device.id,
+				stump_devices::LibraryScope::Only(vec![library.id.clone()]),
+			)
+			.await
+			.expect("device library scope");
+
+		let mut auth =
+			authenticate_komga_api_key(Some(&credential.secret), conn.as_ref())
+				.await
+				.expect("valid Komelia device key");
+		bind_device(
+			&ctx,
+			&mut auth,
+			CredentialRef::ApiKey(&credential.secret),
+			Protocol::Komga,
+		)
+		.await
+		.expect("bind the device");
+		let visible_libraries =
+			models::entity::library::Entity::find_for_user(auth.scope())
+				.all(conn.as_ref())
+				.await
+				.expect("query visible libraries");
+
+		assert_eq!(visible_libraries.len(), 1);
+		assert_eq!(visible_libraries[0].id, library.id);
+
+		assert_eq!(auth.device_id.as_deref(), Some(device.id.as_str()));
+		assert_eq!(auth.user.device_library_scope, Some(vec![library.id]));
+	}
+
+	#[cfg(feature = "komf")]
+	#[tokio::test]
+	async fn unknown_komf_api_key_is_unauthorized() {
+		let conn = ::tests::db::test_database().await;
+		let key = PrefixedApiKey::new(
+			API_KEY_PREFIX.to_owned(),
+			"unknown-token".to_owned(),
+			"unknown-secret".to_owned(),
+		)
+		.to_string();
+
+		let error = authenticate_komga_api_key(Some(&key), &conn)
+			.await
+			.err()
+			.expect("an unknown key must be rejected");
+		assert_eq!(error.status_code(), StatusCode::UNAUTHORIZED);
+	}
+
+	#[cfg(feature = "komf")]
+	#[tokio::test]
+	async fn revoked_komelia_api_key_is_unauthorized() {
+		let conn = std::sync::Arc::new(::tests::db::test_database().await);
+		let user = ::tests::fake_data::User::new("komf-revoked-owner")
+			.insert(conn.as_ref())
+			.await;
+		let owner = AuthUser {
+			id: user.id,
+			username: user.username,
+			is_server_owner: true,
+			..Default::default()
+		};
+		let devices = stump_devices::DeviceService::new(conn.clone());
+		let (device, credential) = devices
+			.create_device(
+				&owner,
+				stump_devices::CredentialIssuance::InteractiveSession,
+				stump_devices::DeviceKind::Komelia,
+				None,
+			)
+			.await
+			.expect("Komelia device credential");
+		devices
+			.revoke(&owner, &device.id)
+			.await
+			.expect("device revocation");
+
+		let error = authenticate_komga_api_key(Some(&credential.secret), conn.as_ref())
+			.await
+			.err()
+			.expect("a revoked device key must be rejected");
+		assert_eq!(error.status_code(), StatusCode::UNAUTHORIZED);
+	}
+
+	#[cfg(feature = "komf")]
+	#[tokio::test]
+	async fn malformed_komf_api_key_is_unauthorized() {
+		use sea_orm::{DatabaseBackend, MockDatabase};
+
+		let conn = MockDatabase::new(DatabaseBackend::Sqlite).into_connection();
+		let error = authenticate_komga_api_key(Some(""), &conn)
+			.await
+			.err()
+			.expect("an empty key must be rejected");
+		assert_eq!(error.status_code(), StatusCode::UNAUTHORIZED);
+	}
+
+	#[cfg(feature = "komf")]
+	#[tokio::test]
+	async fn invalid_komf_query_key_does_not_fall_back_to_a_valid_session() {
+		use sea_orm::{ActiveModelTrait, Set};
+
+		let database = ::tests::db::test_database().await;
+		let user = ::tests::fake_data::User::new("komf-query-session")
+			.insert(&database)
+			.await;
+		let session_id = Id::default();
+		session_entity::ActiveModel {
+			session_id: Set(session_id.to_string()),
+			user_id: Set(user.id),
+			expiry_time: Set((chrono::Utc::now() + chrono::Duration::minutes(1)).into()),
+			..Default::default()
+		}
+		.insert(&database)
+		.await
+		.expect("valid session");
+
+		let mut config = stump_core::config::StumpConfig::debug();
+		config.auth.expired_session_cleanup_interval = 0;
+		let ctx = std::sync::Arc::new(stump_core::Ctx::for_testing_with_config(
+			database, config,
+		));
+		let app = axum::Router::new()
+			.route(
+				"/api/config",
+				axum::routing::get(|| async { StatusCode::OK }),
+			)
+			.route_layer(axum::middleware::from_fn_with_state(
+				ctx.clone(),
+				auth_middleware,
+			))
+			.with_state(ctx.clone())
+			.layer(crate::config::session::get_session_layer(ctx));
+		let server = axum_test::TestServer::new(app).expect("test server");
+		let cookie = format!("{SESSION_NAME}={session_id}");
+
+		let invalid_key = server
+			.get("/api/config?apiKey=")
+			.add_header(header::COOKIE, cookie.clone())
+			.add_header("user-agent", "stump-server-tests")
+			.await;
+		assert_eq!(invalid_key.status_code(), StatusCode::UNAUTHORIZED);
+
+		let session_only = server
+			.get("/api/config")
+			.add_header(header::COOKIE, cookie)
+			.add_header("user-agent", "stump-server-tests")
+			.await;
+		assert_eq!(session_only.status_code(), StatusCode::OK);
 	}
 
 	#[cfg(feature = "komga")]
@@ -1471,7 +1859,7 @@ mod tests {
 	#[test]
 	fn test_opds_basic_auth_v1_2_into_response() {
 		let response =
-			OPDSBasicAuth::new("1.2".to_string(), "http://localhost".to_string(), true)
+			OPDSBasicAuth::new("1.2".to_string(), "http://localhost".to_string())
 				.into_response();
 		assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 		assert_eq!(response.headers().get("Authorization").unwrap(), "Basic");
@@ -1484,7 +1872,7 @@ mod tests {
 	#[test]
 	fn test_opds_basic_auth_v2_0_into_response() {
 		let response =
-			OPDSBasicAuth::new("2.0".to_string(), "http://localhost".to_string(), true)
+			OPDSBasicAuth::new("2.0".to_string(), "http://localhost".to_string())
 				.into_response();
 		assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 		assert_eq!(response.headers().get("Authorization").unwrap(), "Basic");

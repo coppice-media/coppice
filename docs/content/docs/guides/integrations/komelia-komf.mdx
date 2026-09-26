@@ -1,0 +1,69 @@
+---
+title: Komelia Komf integration
+description: Connect Komelia to Coppice's built-in Komf-compatible API
+---
+
+# Connect Komelia to Coppice's Komf-compatible API
+
+Coppice includes the Komf 2.0.1 HTTP contract used by Komelia 0.19.3. You do
+not need to run a separate Komf service. Komelia's Komf URL is a credential:
+keep it private and treat it like a password.
+
+## Prerequisites
+
+- The server is built with `headless` or `full` (both include the `komf` Cargo
+  feature; `minimal` does not).
+- Enable the Komga and Komf protocols with `STUMP_ENABLE_KOMGA=true` and
+  `STUMP_ENABLE_KOMF=true`. Komf is off by default.
+- The server must be reachable from the device or desktop running Komelia. For
+  access beyond a trusted private network, use HTTPS through a trusted proxy.
+
+## Create the Komelia device and add its URL
+
+1. In Coppice, open device management and create a **Komelia** device.
+2. Keep **metadata editing** disabled for a read-only credential. By default,
+   a Komelia device receives only `DownloadFile`; it can use Komf reads but
+   cannot identify, match, reset, or delete Komf jobs.
+3. To allow Komelia to write series metadata, enable the owner opt-in for
+   **Komf metadata editing**. The creating or approving user must already hold
+   `EditMetadata`. The device then receives only the additional
+   `EditMetadata` permission, not provider-configuration access.
+4. Copy the one-time revealed Komf URL and paste it into Komelia's Komf URL
+   setting. For a server listening on port 25600, the URL has this form:
+
+   ```text
+   http://<server>:25600/?apiKey=<device-key>
+   ```
+
+   Keep the query string intact. Coppice accepts this query key only on Komf
+   routes, and request tracing redacts it; reverse-proxy logs and browser URL
+   history may still record it. Rotate or revoke the device credential if the
+   URL is exposed.
+
+## What the device can do
+
+| Access | Komelia behavior |
+| --- | --- |
+| Both device types | Read enabled native providers, search metadata, request series covers, read Komf config with provider secrets redacted, list/get jobs and events, read the connection status, and list only libraries visible to that device. |
+| Download-only default | Read-only for Komf metadata and jobs; identify, match, reset, job deletion, and config changes are denied. |
+| `EditMetadata` opt-in | Identify a series, match a series or library, reset series/library metadata, and delete the owner's Komf jobs. |
+| Neither Komelia credential | `PATCH /api/config` requires native `MetadataProviderManage`; use an appropriately privileged Coppice session to manage provider settings. |
+
+Library-bound reads and writes remain filtered by the device's library scope.
+Provider lookup uses Coppice's enabled native metadata providers; this API is
+not a downloader or acquisition service.
+
+## Limits
+
+- Komf jobs and their SSE history are process-local and are not durable across a
+  server restart.
+- Only native provider-backed metadata is available. There are no separate
+  Komf credentials or an in-process acquisition connector.
+- The optional `removeComicInfo=true` reset mode is not supported and returns
+  `422`; the ordinary reset mode clears Coppice's native metadata and provider
+  fetch history without editing archive files.
+- Series-cover responses are fetched only from HTTPS provider hosts on the
+  server's allowlist, with redirects disabled.
+
+For exact route, permission, and collision details, see the [Komga and Komf
+compatibility specification](/docs/developer/komga-compat).

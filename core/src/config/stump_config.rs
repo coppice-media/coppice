@@ -18,6 +18,7 @@ use super::{
 	env_keys::*,
 	ingest::{IngestConfig, PartialIngestConfig},
 	jobs::{JobsConfig, PartialJobsConfig},
+	mam_acquisition::{MamAcquisitionConfig, PartialMamAcquisitionConfig},
 	oidc_config::OidcConfig,
 	pdf::{PartialPdfConfig, PdfConfig},
 	protocols::{PartialProtocolsConfig, ProtocolsConfig},
@@ -100,6 +101,11 @@ pub struct StumpConfig {
 	#[serde(flatten)]
 	#[cfg_attr(feature = "graphql", graphql(skip))]
 	pub providers: ProvidersConfig,
+	/// MAM Bridge settings and the default-off manager acquisition switch.
+	#[nested]
+	#[serde(flatten)]
+	#[cfg_attr(feature = "graphql", graphql(skip))]
+	pub mam_acquisition: MamAcquisitionConfig,
 
 	/// Annotation export sink directories and debounce timing.
 	#[nested]
@@ -360,7 +366,6 @@ mod tests {
 				..Default::default()
 			},
 			protocols: PartialProtocolsConfig {
-				client_dir: Some("not_a_real_dir".to_string()),
 				enable_webui: Some(true),
 				enable_opds_progression: Some(false),
 				enable_playground: Some(false),
@@ -431,6 +436,7 @@ mod tests {
 					kobo_kepub_deflate_level: Some(DEFAULT_KOBO_KEPUB_DEFLATE_LEVEL),
 					kobo_kepub_conversion: Some(false),
 					enable_komga: Some(false),
+					enable_komf: Some(false),
 					enable_kavita: Some(false),
 					enable_abs: Some(false),
 					enable_opds_progression: Some(false),
@@ -440,7 +446,6 @@ mod tests {
 					attachment_max_bytes: Some(DEFAULT_ATTACHMENT_MAX_BYTES),
 					enable_webui: Some(true),
 					enable_playground: Some(false),
-					client_dir: Some("not_a_real_dir".to_string()),
 				},
 				ingest: PartialIngestConfig {
 					ingest_drop_dir: None,
@@ -451,6 +456,13 @@ mod tests {
 					ingest_preprocess_timeout_secs: Some(
 						DEFAULT_INGEST_PREPROCESS_TIMEOUT_SECS,
 					),
+				},
+				mam_acquisition: PartialMamAcquisitionConfig {
+					enable_mam_acquisition: Some(DEFAULT_ENABLE_MAM_ACQUISITION),
+					mam_bridge_url: None,
+					mam_bridge_token_file: None,
+					mam_bridge_handoff_root: None,
+					mam_bridge_source_root: None,
 				},
 				providers: PartialProvidersConfig {
 					enable_providers: Some(DEFAULT_ENABLE_PROVIDERS),
@@ -577,6 +589,7 @@ mod tests {
 							kobo_kepub_deflate_level: DEFAULT_KOBO_KEPUB_DEFLATE_LEVEL,
 							kobo_kepub_conversion: false,
 							enable_komga: true,
+							enable_komf: false,
 							enable_kavita: true,
 							enable_abs: true,
 							enable_opds_progression: false,
@@ -586,7 +599,6 @@ mod tests {
 							attachment_max_bytes: DEFAULT_ATTACHMENT_MAX_BYTES,
 							enable_webui: false,
 							enable_playground: true,
-							client_dir: "./client".to_string(),
 						},
 						ingest: IngestConfig {
 							ingest_drop_dir: None,
@@ -596,6 +608,13 @@ mod tests {
 							ingest_preprocess_command: None,
 							ingest_preprocess_timeout_secs:
 								DEFAULT_INGEST_PREPROCESS_TIMEOUT_SECS,
+						},
+						mam_acquisition: MamAcquisitionConfig {
+							enable_mam_acquisition: DEFAULT_ENABLE_MAM_ACQUISITION,
+							mam_bridge_url: None,
+							mam_bridge_token_file: None,
+							mam_bridge_handoff_root: None,
+							mam_bridge_source_root: None,
 						},
 						providers: ProvidersConfig {
 							enable_providers: DEFAULT_ENABLE_PROVIDERS,
@@ -671,7 +690,6 @@ db_timeout_secs = 45
 db_max_connections = 4
 db_min_connections = 2
 sqlite_statement_cache_capacity = 64
-client_dir = "/srv/stump/client"
 enable_webui = false
 enable_background_jobs = false
 ingest_drop_dir = "/ingest/drop"
@@ -765,6 +783,7 @@ client_secret = "secret"
 				kobo_kepub_deflate_level: 9,
 				kobo_kepub_conversion: true,
 				enable_komga: true,
+				enable_komf: false,
 				enable_kavita: false,
 				enable_abs: false,
 				enable_opds_progression: true,
@@ -774,7 +793,6 @@ client_secret = "secret"
 				attachment_max_bytes: DEFAULT_ATTACHMENT_MAX_BYTES,
 				enable_webui: false,
 				enable_playground: true,
-				client_dir: "/srv/stump/client".to_string(),
 			}
 		);
 		assert_eq!(

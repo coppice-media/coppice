@@ -56,8 +56,8 @@ query Devices {
 	}
 }
 
-mutation CreateDevice($kind: DeviceKind!, $name: String) {
-	createDevice(kind: $kind, name: $name) {
+mutation CreateDevice($kind: DeviceKind!, $name: String, $allowKomfMetadataEditing: Boolean = false) {
+	createDevice(kind: $kind, name: $name, allowKomfMetadataEditing: $allowKomfMetadataEditing) {
 		device {
 			...DeviceFields
 		}
@@ -133,8 +133,8 @@ query PendingDevicePairings {
 	}
 }
 
-mutation ApproveDevicePairing($pairingId: ID!, $code: String) {
-	approveDevicePairing(pairingId: $pairingId, code: $code) {
+mutation ApproveDevicePairing($pairingId: ID!, $code: String, $allowKomfMetadataEditing: Boolean = false) {
+	approveDevicePairing(pairingId: $pairingId, code: $code, allowKomfMetadataEditing: $allowKomfMetadataEditing) {
 		id
 		status
 	}

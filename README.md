@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Stump reader icon" src="./.github/images/stump-logo--circle.png" style="width: 18%" />
+  <img alt="Coppice logo" src="./.github/images/stump-logo--circle.png" style="width: 18%" />
   <br />
   <a href="./LICENSE">
     <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=CF9977" />
@@ -37,101 +37,54 @@ pages link to them rather than making broader compatibility promises.
 - The `stump_server` binary runs one Rust process with one database, shared
   authentication, and lazy lifecycle components. Cargo features compile only
   the protocol or processing surfaces a deployment needs.
-- The default `full` profile includes the headless backend and web UI;
-  `headless` keeps backend protocols without the SPA module or frontend assets.
+- The default `full` profile includes the headless backend and the `webui`
+  GraphQL web-facing surfaces; `headless` keeps backend protocols without
+  those surfaces.
 - Shipped protocol surfaces include OPDS 1.2/PSE and 2.0, Komga, Kobo,
   KOReader, liseur-sync, Kavita, and Audiobookshelf-compatible REST. The ABS
   Engine.IO/Socket.IO lane is present; broader official-app verification is
   still pending.
 - The request ledger and Home UI retain metadata-backed creation, per-user
   visibility, manager approval/rejection, notifications, and social
-  recommendation handoff. MAM acquisition is deferred; Coppice ships no active
-  acquisition connector.
+  recommendation handoff. Managers can use the separate MAM Bridge sidecar
+  for confirmed acquisition of approved requests; see the
+  [acquisition boundary](docs/content/docs/guides/integrations/acquisition).
 - Read-aloud pairing, validated `SyncMapV1` import, alignment enqueue, and
-  authenticated cache-only status/download are present. Storyteller/SMIL
-  execution and synchronized read-aloud playback remain planned.
+  authenticated cache-only status/download are implemented. Optional
+  operator-configured Storyteller and native CTC worker runners are available;
+  they are not bundled or server-local ML. Full synchronized playback and
+  device verification remain open; see the [read-aloud contract](docs/content/docs/developer/read-aloud.mdx).
 - Staged ingest, identifier matching, ordinary EPUB playback, and ordinary
   audiobook playback remain separate capabilities. Hardcover metadata mapping
   is covered by offline fixtures; no live credential run is recorded.
-- This worktree is an uncommitted, fully gated nightly integration. The
-  2026-09-21 Rust, Bun, browser, and 341-request protocol gates passed. See
-  [.omp/PROJECT_STATE.md](.omp/PROJECT_STATE.md) for the exact evidence,
-  commands, and exclusions.
+- Compatibility evidence is deliberately scoped to each client and protocol;
+  physical-device and replay results live in the [client verification
+  matrix](docs/content/docs/developer/client-verification.mdx).
 
 ## Evidence-labelled compatibility
 
-The evidence labels are deliberately narrow:
-
-- **Shipped** means the implementation is present in this fork.
-- **Contract-tested** means a pinned protocol fixture, replay, or server
-  harness exercised the surface. It does not prove that a physical app works.
-- **Device-tested** means a real app or device ran the flow against the server.
-- **Source-only** means pinned client or protocol source was inspected without a
-  live run.
-- **Planned** means the capability is a future design or implementation item.
-- **Blocked** means a missing prerequisite currently prevents the claimed flow;
-  it is not a promise that the feature works.
-
-The current matrix is intentionally scoped to observed evidence:
-
-| Surface or client                                                  | Implementation | Evidence                                             | Boundary                                                                                                                                                                           |
-| ------------------------------------------------------------------ | -------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Komga profile / Komelia 0.19.0                                     | Shipped        | Device-tested; Contract-tested                       | Login, browse, CBZ/EPUB offline download, reading progress, and mark-read were exercised. This is a compatibility profile, not full Komga parity.                                  |
-| Grimmory `/komga` alias                                            | Shipped        | Device-tested; Contract-tested                       | Device login was exercised; listing, file, and thumbnail routes were replayed.                                                                                                     |
-| Mihon Komga extension/tracker                                      | Shipped        | Device-tested                                        | Browse, download, read, and tracker GET/PUT were exercised.                                                                                                                        |
-| Kavita profile: Turnleaf and Kamigura                              | Shipped        | Device-tested; Contract-tested                       | Browse/read/download and the recorded Kavita flows were exercised; the wire profile also has a replay.                                                                             |
-| Other Kavita-shaped clients (Inkita, Kover, Kamare, Mihon tracker) | Shipped        | Source-only                                          | Their pinned sources informed the profile; no device run is claimed.                                                                                                               |
-| OPDS 1.2/PSE                                                       | Shipped        | Device-tested; Contract-tested                       | Liseur exercised OPDS 1.2; generic OPDS clients are not blanket-certified.                                                                                                         |
-| OPDS 2.0                                                           | Shipped        | Contract-tested                                      | Auth and progression contracts are covered; a universal OPDS 2.0 app claim is not made.                                                                                            |
-| Kobo sync and KEPUB                                                | Shipped        | Contract-tested; Blocked                             | Initialization, sync, range requests, KEPUB, and reading-state routes are replayed. No physical Kobo has run against Coppice.                                                      |
-| KOReader/KOSync                                                    | Shipped        | Contract-tested; Device-tested; Source-only; Blocked | Server routes are probed; Liseur's KOReader-sync flow is device-tested. The native KOReader app and `coppice.koplugin` have not been loaded; the plugin remains source-only.       |
-| liseur-sync                                                        | Shipped        | Device-tested; Contract-tested; Source-only          | Positions, heads, and annotations were exercised through Liseur. The attachment side-object extension is implemented, but no pinned-client or device attachment claim is made.     |
-| Audiobookshelf-compatible REST / Lissen 1.11.22                    | Shipped        | Device-tested; Contract-tested; Planned              | Lissen browse, listen, range download, sessions, and bookmarks were exercised. The Engine.IO/Socket.IO lane is present; a broader official Audiobookshelf-app run remains pending. |
-| Request ledger and approval UI                                    | Shipped        | Source-only                                          | Metadata-backed requests, per-user visibility, manager decisions, notifications, and social handoff are present. Acquisition is deferred; no MAM gateway or downloader ships.     |
-| Ordinary EPUB playback                                             | Shipped        | Device-tested                                        | EPUB reading is an ordinary reading flow, separate from audiobook synchronization.                                                                                                 |
-| Ordinary audiobook playback                                        | Shipped        | Device-tested                                        | Audiobook playback is an ordinary audio flow, separate from EPUB reading and read-aloud alignment.                                                                                 |
-| Hardcover metadata                                                 | Shipped        | Contract-tested; Blocked                             | Offline payload fixtures and mapper tests exist; live credentials have not been verified.                                                                                          |
-| Hardcover account/progress/journal sync                            | Planned        | Planned; Blocked                                     | No account, progress, or journal sync is shipped; live credentials and the sync design remain prerequisites.                                                                       |
-| Read-aloud pairing, SyncMap, and cache delivery                    | Shipped        | Source-only; Planned                                 | Pairing, validated map import, alignment enqueue, and authenticated cache-only status/download passed the current integration gate; worker execution and synchronized playback remain planned.                                                     |
-| Synchronized Storyteller read-aloud EPUB                           | Planned        | Source-only; Planned; Blocked                        | Storyteller/SMIL execution and synchronized read-aloud playback remain planned.                                                                                                    |
-
-Canonical evidence and caveats live in [client verification](docs/content/docs/developer/client-verification.mdx), [platform status](docs/content/docs/developer/platforms.mdx), [Kobo capabilities](docs/content/docs/developer/kobo-sync-capabilities.mdx), [KOReader profile](docs/content/docs/developer/koreader-plugin.mdx), [Audiobookshelf profile](docs/content/docs/developer/abs-compat.mdx), and [read-aloud status](docs/content/docs/developer/read-aloud.mdx).
+An implemented protocol profile does not certify every client. The canonical
+matrix records each pinned client version, evidence tier, exercised flow, and
+remaining limit: [client verification](docs/content/docs/developer/client-verification.mdx).
+Hardware-specific constraints are in [platform status](docs/content/docs/developer/platforms.mdx).
 
 ## Request, acquisition, and alignment boundaries
 
 Coppice owns Universal-style metadata search plus its request ledger,
 permissions, visibility rules, approval/rejection decisions, notifications,
-and social recommendation handoff. An approved request records a decision; it
-does not acquire a file.
+and social recommendation handoff. A manager with `ACQUIRE_RELEASES` can
+search and explicitly confirm a MAM Bridge grab for an approved request.
+Completed downloads are copied into staged ingest for Editor review; approval
+fulfils the request and notifies its requester. MAM credentials and torrent
+transport stay in the separate authenticated sidecar; Coppice has no
+in-process downloader, automatic retries, or auto-grab. See the
+[acquisition boundary](docs/content/docs/guides/integrations/acquisition).
 
-MAM acquisition is deferred. Any future acquisition integration belongs in a
-separate authenticated provider sidecar, outside the Coppice process and
-request GraphQL contract. This is a boundary, not a promise that a connector is
-implemented.
-
-The current flow ends at approval:
-
-```text
-metadata search or recommendation
-  -> request
-  -> permission and visibility checks
-  -> operator approval or rejection
-```
-
-An alignment request is a separate flow and requires a confirmed EPUB/audio
-pair. It may then use the existing timing import, a future Storyteller worker,
-and finally the native CTC fallback candidate:
-
-```text
-confirmed EPUB + audiobook pair
-  -> existing timing import
-  -> Storyteller worker (future)
-  -> native CTC fallback (future)
-```
-
-Storyteller is never a search or catalog provider and is not a bundled
-runtime dependency. Ordinary EPUB and ordinary audiobook playback remain
-independent even if alignment work is added later.
+Read-aloud timing import, validated maps, alignment enqueue, and cache-only
+status/download are shipped. Operators may configure external Storyteller or
+native CTC worker runners; neither is bundled or run as server-local ML.
+Readiness quality checks and full synchronized EPUB/audio playback remain
+open. See the [read-aloud implementation and boundaries](docs/content/docs/developer/read-aloud.mdx).
 
 ## Modular server profiles
 
@@ -145,31 +98,29 @@ optional protocol adapters.
 | Minimal         | `cargo run -p stump_server --bin stump_server --no-default-features --features minimal`                            | `minimal = ["formats"]`; adds the PDF/RAR/transform format bundle while keeping optional protocol adapters out. |
 | KOReader-only   | `ENABLE_KOREADER_SYNC=true cargo run -p stump_server --bin stump_server --no-default-features --features koreader` | Compiles only the KOReader adapter among protocol leaves; `ENABLE_KOREADER_SYNC=true` mounts it.                |
 | Kavita-only     | `STUMP_ENABLE_KAVITA=true cargo run -p stump_server --bin stump_server --no-default-features --features kavita`    | Compiles only the Kavita adapter among protocol leaves; `STUMP_ENABLE_KAVITA=true` mounts it.                   |
-| Headless        | `cargo run -p stump_server --bin stump_server --no-default-features --features headless`                           | All backend protocol and processing features, without the SPA/web UI.                                           |
+| Headless        | `cargo run -p stump_server --bin stump_server --no-default-features --features headless` | All backend protocol and processing features without the `webui` GraphQL web-facing surfaces. |
 | Full/default    | `cargo run -p stump_server --bin stump_server`                                                                     | `default = ["full"]`; `full = ["headless", "webui"]`.                                                           |
 
-The `webui` feature now implies `graphql` (including the `graphql/web`
-resolver surface), so a web UI build cannot silently omit GraphQL. The
-`STUMP_ENABLE_WEBUI` runtime switch still controls whether the compiled SPA is
-mounted. The full Docker target copies frontend output to
-`STUMP_CLIENT_DIR`; the headless target does not copy SPA assets:
+The public `webui` feature implies `graphql`, including the `graphql/web`
+resolver surface. It does not bundle or serve a frontend. Home (`/app`) and
+Editor (`/editor`) are separate static applications, configured independently
+with `STUMP_HOME_APP_DIR` and `INGEST_EDITOR_DIR`; each directory must contain
+the app's `index.html`. They can be served by a headless binary. The full Docker
+target builds and includes both applications; the headless target includes
+neither:
 
 ```sh
 docker buildx build -f docker/Dockerfile --target full .
 docker buildx build -f docker/Dockerfile --target headless .
 ```
 
-The `/editor` and `/app` static applications are separate runtime mounts, not
-Cargo features. Set `INGEST_EDITOR_DIR` and/or `STUMP_HOME_APP_DIR` to built
-directories containing `index.html`; they can be served by a headless binary
-without enabling `webui`. See [modular deployment](docs/content/docs/guides/configuration/modular-deployment.mdx) for the full switch table.
+See [modular deployment](docs/content/docs/guides/configuration/modular-deployment.mdx) for the full switch table.
 
 ### Useful runtime switches
 
 | Environment key                | Purpose                                                                    |
 | ------------------------------ | -------------------------------------------------------------------------- |
-| `STUMP_ENABLE_WEBUI`           | Mounts the compiled SPA; ineffective in a build without `webui`.           |
-| `STUMP_CLIENT_DIR`             | Directory containing the web bundle served by the web UI.                  |
+| `STUMP_ENABLE_WEBUI`           | Enables GraphQL web-facing surfaces when compiled with `webui`.             |
 | `STUMP_ENABLE_BACKGROUND_JOBS` | Enables scheduled jobs, watcher, and the configured executor.              |
 | `ENABLE_KOBO_SYNC`             | Mounts Kobo routes when the `kobo` feature is compiled.                    |
 | `ENABLE_KOREADER_SYNC`         | Mounts KOReader routes when the `koreader` feature is compiled.            |
@@ -250,40 +201,24 @@ Scanner implementation is owned by `crates/scanner` and watcher implementation
 by `crates/watcher`; the removed upstream `core/src/scan` duplicates are not
 part of the architecture.
 
-## Project state and roadmap
+## Project documentation
 
-- [Project state](.omp/PROJECT_STATE.md) — branch, source map, and current coordination state.
-- [Next steps](.omp/NEXT_STEPS.md) — the working roadmap.
-- [Roadmap docs](docs/content/docs/developer/) — including proposed (not implemented) work in [Server architecture](docs/content/docs/developer/server-architecture.mdx) and [Modular ingest](docs/content/docs/developer/modular-ingest.mdx).
-
-- **Current:** default/full compatibility plus the metadata-backed request
-  ledger/approval UI and read-aloud backend.
-- **Planned:** complete Storyteller/SMIL alignment and synchronized EPUB
-  playback after a confirmed pair.
-- **Blocked:** live Hardcover account/progress/journal sync and physical-device
-  claims without evidence.
-
-For implementation details and evidence, use the [developer wiki](docs/content/docs/developer/state.mdx) and the [roadmap](docs/content/docs/developer/roadmap.mdx). For installation and day-to-day configuration, use the [human wiki](docs/content/docs/index.mdx).
+For implementation boundaries and compatibility evidence, use the
+[developer documentation](docs/content/docs/developer/state.mdx), the
+[client verification matrix](docs/content/docs/developer/client-verification.mdx),
+and the [roadmap](docs/content/docs/developer/roadmap.mdx). For installation
+and day-to-day configuration, use the [human wiki](docs/content/docs/index.mdx).
 
 ## Upstream relationship and licenses
 
-This repository is a fork of [stumpapp/stump](https://github.com/stumpapp/stump), tracking the nightly branch. Coppice follows the upstream repository for shared protocol, client, and distribution contracts. Changes here are made to be narrowly scoped and upstreamable, but they are not reviewed or endorsed by upstream. For the upstream project, its documentation, and its installation guides, see [stumpapp.dev](https://www.stumpapp.dev).
+Coppice is derived from the open-source [Stump project](https://github.com/stumpapp/stump).
+Stump compatibility names remain where they are part of a technical API,
+package, binary, environment key, storage field, or attribution; those names
+are not a second product brand. Coppice is independently maintained and is
+not reviewed or endorsed by the upstream project.
 
-For the issue-first upstream contribution policy, fresh `origin/nightly`
-branches, narrow changes, and LLM disclosure rules, see the
-[developer contribution guide](docs/content/docs/developer/contributing.mdx).
-The integration branch is never a PR source.
+See the [Coppice contribution guide](docs/content/docs/developer/contributing.mdx)
+for this repository's contribution process.
 
-Upstream names remain where they are part of a technical API, package, binary, environment key, storage field, Docker image slug, or attribution; those names are not a second product brand.
-
-The repository root is MIT, as shown by [LICENSE](LICENSE). The nested Expo application retains its upstream GPL-3.0 license and should be treated as a separate distribution boundary: [apps/expo/LICENSE](apps/expo/LICENSE). Some assets and native modules also retain their upstream notices; see the relevant source files and the [attribution notes](docs/content/docs/developer/contributing.mdx).
-
-## Attribution
-
-This fork inherits the upstream Stump project and the work of its contributors:
-
-- Some of the icons used in the web and mobile applications are from the [Spacedrive](https://github.com/spacedriveapp/spacedrive/tree/main/packages/assets/icons) repository, and are licensed under the [FSL-1.1-ALv2](https://github.com/spacedriveapp/spacedrive/blob/main/LICENSE) license.
-- The native Readium expo modules were adapted from [Storyteller](https://gitlab.com/storyteller-platform/storyteller).
-- The [expo application](./apps/expo/LICENSE) is licensed under [GPL-3.0](./apps/expo/LICENSE) ([summary](https://www.gnu.org/licenses/gpl-3.0.html)).
-- The [`wifi-ssid` native module](./apps/expo/modules/wifi-ssid) was sourced from Streamyfin and licensed under [MPL-2.0](https://www.mozilla.org/en-US/MPL/2.0/) ([summary](https://www.tldrlegal.com/license/mozilla-public-license-2-0-mpl-2)).
-- All other code in the repository is licensed under [MIT License](./LICENSE) ([summary](https://www.tldrlegal.com/license/mit-license)).
+The repository is licensed under the MIT License. Copyright (c) 2022 Aaron
+Leopold and (c) 2026 Coppice contributors; see [LICENSE](LICENSE).

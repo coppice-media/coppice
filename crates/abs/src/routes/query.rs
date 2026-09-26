@@ -128,13 +128,13 @@ impl ItemSort {
 
 /// The `filter` query parameter: `<key>.<base64(value)>`
 /// (Lissen `common/api/EncodeLibraryFilter.kt`; the official app builds the
-/// same shape with `Base64.encodeToString`, `ApiHandler.kt:531,564`).
+/// same shape with `Base64.encodeToString`, `ApiHandler.kt:528-533`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ItemFilter {
 	Series(String),
 	/// The **author id** the profile allocated in `abs_ids`, not the name:
 	/// the official app encodes the id it read off `/libraries/{id}/authors`
-	/// (`ApiHandler.kt:564`).
+	/// (`ApiHandler.kt:528-533`).
 	Author(String),
 	Progress(ProgressFilter),
 	/// `ebooks.<base64>`: the official app's "Ebooks" filter, whose two
@@ -219,7 +219,11 @@ pub(crate) async fn item_page(
 
 	match filter {
 		Some(ItemFilter::Series(series_id)) => {
-			select = select.filter(series::Column::Id.eq(series_id.as_str()));
+			if let Some(name) = metadata_series_name(series_id, library_id) {
+				select = select.filter(media_metadata::Column::Series.eq(name));
+			} else {
+				select = select.filter(series::Column::Id.eq(series_id.as_str()));
+			}
 		},
 		Some(ItemFilter::Author(author_id)) => {
 			// The id was allocated for a `media_metadata.writers` value, so
@@ -296,13 +300,147 @@ pub(crate) async fn item_page(
 	})
 }
 
+/// An ABS series is either explicit book metadata or a genuine multi-book
+/// Stump series folder. The maps are scoped to the rows indexed here.
+#[derive(Default)]
+pub(crate) struct SeriesIndex {
+	pub series: HashMap<String, series::Model>,
+	pub media_series: HashMap<String, String>,
+	pub members: HashMap<String, Vec<String>>,
+}
+
+const METADATA_SERIES_ID_PREFIX: &str = "metadata-series:";
+
+fn metadata_series_id(library_id: &str, name: &str) -> String {
+	format!("{METADATA_SERIES_ID_PREFIX}{library_id}:{}", name.trim())
+}
+
+pub(crate) fn metadata_series_name<'a>(
+	series_id: &'a str,
+	library_id: &str,
+) -> Option<&'a str> {
+	let prefix = format!("{METADATA_SERIES_ID_PREFIX}{library_id}:");
+	series_id.strip_prefix(&prefix)
+}
+
+fn build_series_index(
+	rows: &[media::Model],
+	metadata: &HashMap<String, media_metadata::Model>,
+	physical_series: &HashMap<String, series::Model>,
+	physical_counts: &HashMap<String, i64>,
+) -> SeriesIndex {
+	let mut index = SeriesIndex::default();
+	for row in rows {
+		let Some(physical_id) = row.series_id.as_ref() else {
+			continue;
+		};
+		let Some(folder) = physical_series.get(physical_id) else {
+			continue;
+		};
+		let metadata_name = metadata
+			.get(&row.id)
+			.and_then(|metadata| metadata.series.as_deref())
+			.map(str::trim)
+			.filter(|name| !name.is_empty());
+
+		let series_id = if let Some(name) = metadata_name {
+			let Some(library_id) = folder.library_id.as_deref() else {
+				continue;
+			};
+			let id = metadata_series_id(library_id, name);
+			let projected = index.series.entry(id.clone()).or_insert_with(|| {
+				let mut projected = folder.clone();
+				projected.id = id.clone();
+				projected.name = name.to_owned();
+				projected.description = None;
+				projected.created_at = row.created_at.clone();
+				projected.updated_at = row.updated_at.clone();
+				projected
+			});
+			if row.created_at < projected.created_at {
+				projected.created_at = row.created_at.clone();
+			}
+			let updated_at = row
+				.updated_at
+				.clone()
+				.unwrap_or_else(|| row.created_at.clone());
+			let previous = projected
+				.updated_at
+				.clone()
+				.unwrap_or_else(|| projected.created_at.clone());
+			if updated_at > previous {
+				projected.updated_at = Some(updated_at);
+			}
+			id
+		} else if physical_counts.get(physical_id).copied().unwrap_or(0) > 1 {
+			index
+				.series
+				.entry(physical_id.clone())
+				.or_insert_with(|| folder.clone());
+			physical_id.clone()
+		} else {
+			continue;
+		};
+
+		index.media_series.insert(row.id.clone(), series_id.clone());
+		index
+			.members
+			.entry(series_id)
+			.or_default()
+			.push(row.id.clone());
+	}
+	index
+}
+
+/// Build series groups from a complete visible-audio row set. Callers use
+/// this for library-wide projections; paged item contexts additionally query
+/// full-library Stump folder counts before invoking the shared indexer.
+pub(crate) async fn series_index_for_rows(
+	backend: &dyn AbsBackend,
+	rows: &[media::Model],
+) -> AbsResult<SeriesIndex> {
+	if rows.is_empty() {
+		return Ok(SeriesIndex::default());
+	}
+	let media_ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+	let metadata = media_metadata::Entity::find()
+		.filter(media_metadata::Column::MediaId.is_in(media_ids))
+		.all(backend.conn())
+		.await?
+		.into_iter()
+		.filter_map(|row| row.media_id.clone().map(|id| (id, row)))
+		.collect::<HashMap<_, _>>();
+	let physical_ids = rows
+		.iter()
+		.filter_map(|row| row.series_id.clone())
+		.collect::<HashSet<_>>();
+	let physical_series = series::Entity::find()
+		.filter(series::Column::Id.is_in(physical_ids))
+		.all(backend.conn())
+		.await?
+		.into_iter()
+		.map(|row| (row.id.clone(), row))
+		.collect::<HashMap<_, _>>();
+	let physical_counts = rows.iter().fold(HashMap::new(), |mut counts, row| {
+		if let Some(id) = row.series_id.as_ref() {
+			*counts.entry(id.clone()).or_default() += 1;
+		}
+		counts
+	});
+	Ok(build_series_index(
+		rows,
+		&metadata,
+		&physical_series,
+		&physical_counts,
+	))
+}
+
 /// The side data a page of books needs, all of it batched.
 pub(crate) struct ItemContext {
 	pub metadata: HashMap<String, media_metadata::Model>,
+	pub physical_series: HashMap<String, series::Model>,
 	pub series: HashMap<String, series::Model>,
-	/// How many audible books each of those series holds, across the whole
-	/// library rather than the page.
-	pub series_book_counts: HashMap<String, i64>,
+	pub media_series: HashMap<String, String>,
 	pub libraries: HashMap<String, library::Model>,
 	pub folder_ids: HashMap<String, String>,
 	pub book_ids: HashMap<String, String>,
@@ -337,7 +475,7 @@ pub(crate) async fn context(
 		.filter_map(|row| row.media_id.clone().map(|id| (id, row)))
 		.collect::<HashMap<_, _>>();
 
-	let series = series::Entity::find()
+	let physical_series = series::Entity::find()
 		.filter(series::Column::Id.is_in(series_ids.clone()))
 		.all(backend.conn())
 		.await?
@@ -345,12 +483,11 @@ pub(crate) async fn context(
 		.map(|row| (row.id.clone(), row))
 		.collect::<HashMap<String, series::Model>>();
 
-	// A Stump series is a folder, and an audiobook's folder is usually the
-	// book's own (`Author/Book/book.m4b`). It is only an Audiobookshelf
-	// series once it holds more than one audible book, which is why the
-	// count is taken over the library rather than over the page — abs-ref
-	// reports `seriesName: ""` for exactly that single-book case
-	// (`capture/library_items_minified.json`).
+	// A Stump series is a folder, not automatically an ABS series. Explicit
+	// `media_metadata.series` creates a metadata-backed group even with one
+	// book; without that metadata only a folder containing multiple audible
+	// books qualifies. Count beyond the page so pagination cannot hide a
+	// genuine multi-book folder from its remaining items.
 	let mut series_book_counts: HashMap<String, i64> = HashMap::new();
 	if !series_ids.is_empty() {
 		#[derive(FromQueryResult)]
@@ -369,8 +506,10 @@ pub(crate) async fn context(
 			*series_book_counts.entry(row.series_id).or_default() += 1;
 		}
 	}
+	let series_index =
+		build_series_index(rows, &metadata, &physical_series, &series_book_counts);
 
-	let library_ids = series
+	let library_ids = physical_series
 		.values()
 		.filter_map(|row| row.library_id.clone())
 		.collect::<HashSet<_>>();
@@ -407,8 +546,9 @@ pub(crate) async fn context(
 
 	Ok(ItemContext {
 		metadata,
-		series,
-		series_book_counts,
+		physical_series,
+		series: series_index.series,
+		media_series: series_index.media_series,
 		libraries,
 		folder_ids,
 		book_ids: backend.book_ids(&media_ids).await?,
@@ -425,24 +565,19 @@ impl ItemContext {
 	fn library_of(&self, row: &media::Model) -> (String, String) {
 		row.series_id
 			.as_ref()
-			.and_then(|series_id| self.series.get(series_id))
+			.and_then(|series_id| self.physical_series.get(series_id))
 			.and_then(|series| series.library_id.as_ref())
 			.and_then(|library_id| self.libraries.get(library_id))
 			.map(|library| (library.id.clone(), library.path.clone()))
 			.unwrap_or_default()
 	}
 
-	/// The Audiobookshelf series a book belongs to, if any: a Stump series
-	/// with a single audible book is that book's own folder, not a series.
+	/// The ABS series represented by explicit book metadata or a genuine
+	/// multi-book Stump series folder.
 	pub(crate) fn series_of(&self, row: &media::Model) -> Option<(&str, &str)> {
-		let series = self.series.get(row.series_id.as_ref()?).filter(|series| {
-			self.series_book_counts
-				.get(&series.id)
-				.copied()
-				.unwrap_or(0)
-				> 1
-		})?;
-		Some((series.id.as_str(), series.name.as_str()))
+		let series_id = self.media_series.get(&row.id)?;
+		let series = self.series.get(series_id)?;
+		Some((series_id.as_str(), series.name.as_str()))
 	}
 
 	/// One book, in the requested shape.

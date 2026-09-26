@@ -40,12 +40,12 @@ Visit the [GitHub releases page](https://github.com/stumpapp/stump/releases) and
 
 ## Unzip the file
 
-Unzip the downloaded file using your preferred method. The expected contents are:
-
 - `stump_server` (the binary executable file)
-- `client` (a folder containing all of the webapp files)
+- `home/` (the Home static app)
+- `editor/` (the Editor static app)
 
-These can live wherever you'd like, so long as they are adjacent to each other.
+Keep the application directories alongside the binary, or set
+`STUMP_HOME_APP_DIR` and `INGEST_EDITOR_DIR` to their absolute paths.
 
 <Tabs items={['🍎 macOS/Linux', '🪟 Windows']}>
   <Tab value="🍎 macOS/Linux">
@@ -84,16 +84,16 @@ sudo chmod +x stump_server
     You can now run the `stump` binary from the terminal:
     
     ```bash copy
-    # Navigate to the folder containing the stump binary, e.g., ~/Stump, or be sure to include the full path to the binary
-    ./stump_server
+    STUMP_HOME_APP_DIR="$PWD/home" INGEST_EDITOR_DIR="$PWD/editor" ./stump_server
     ```
   </Tab>
   <Tab value="🪟 Windows">
     You can run the `stump_server.exe` file by double clicking it in the file explorer, or by running it from the command prompt:
     
-    ```cmd copy
-    # Navigate to the folder containing the stump binary, e.g., C:\Stump, or be sure to include the full path to the binary
-    stump_server.exe
+    ```powershell copy
+    $env:STUMP_HOME_APP_DIR = "$PWD\home"
+    $env:INGEST_EDITOR_DIR = "$PWD\editor"
+    .\stump_server.exe
     ```
   </Tab>
 </Tabs>

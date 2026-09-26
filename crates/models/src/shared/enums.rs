@@ -756,6 +756,8 @@ pub enum UserPermission {
 	/// Grant access to act as a source worker: advertise configured roots and
 	/// serve only explicitly authorized remote-source reads.
 	AccessRemoteSource,
+	/// Search and grab releases for approved book requests.
+	AcquireReleases,
 	/// Grant a device the right to act as a remote worker: open the worker
 	/// socket, claim `worker_jobs`, and upload their outputs
 	AccessWorker,

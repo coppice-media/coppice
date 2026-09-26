@@ -39,20 +39,34 @@ jobs:
       - name: Print version
         run: echo "Building release for v${{ steps.resolve.outputs.version }}"
 
-  # build the common webapp HTML/JS/CSS used for all platforms
-  build-webapp:
+  # Build Home and Editor static applications for the server runtime mounts.
+  build-frontends:
     needs: [resolve-version]
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
-      - name: Build web application/upload artifact
-        uses: ./.github/actions/build-web
+      - name: Setup Node and Bun
+        uses: ./.github/actions/setup-bun
 
+      - name: Build Home and Editor
+        run: bun run home build && bun run editor build
+
+      - name: Upload Home app
+        uses: ./.github/actions/upload-artifact
+        with:
+          upload-name: home-app
+          upload-path: home/build
+
+      - name: Upload Editor app
+        uses: ./.github/actions/upload-artifact
+        with:
+          upload-name: editor-app
+          upload-path: editor/build
   # build the server binary for each supported platform
   build-binary:
-    needs: [resolve-version, build-webapp]
+    needs: [resolve-version, build-frontends]
     strategy:
       matrix:
         # See https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
@@ -79,11 +93,17 @@ jobs:
       - name: Build Coppice server
         uses: ./.github/actions/build-server
 
-      - name: Copy bundled web app
+      - name: Download Home app
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: webapp
-          path: ./staging/client
+          name: home-app
+          path: ./staging/home
+
+      - name: Download Editor app
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: editor-app
+          path: ./staging/editor
 
       - name: Prepare artifact
         run: mv target/release/${{ matrix.artifact_filename }} ./staging/${{ matrix.artifact_filename }}
