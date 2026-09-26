@@ -1,7 +1,10 @@
 use async_graphql::{Context, Object, Result, ID};
 use chrono::Utc;
 use models::entity::{book_request, book_request_approval};
-use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+use sea_orm::{
+	sea_query::Expr, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
+	IntoActiveModel, QueryFilter, Set,
+};
 use stump_auth::AuthContext;
 use uuid::Uuid;
 
@@ -57,6 +60,9 @@ fn normalize_narrator(value: Option<String>) -> Result<Option<String>> {
 	Ok((!trimmed.is_empty()).then(|| trimmed.to_owned()))
 }
 
+/// Request states with nothing left for a narrator preference to bias.
+const NARRATOR_FROZEN_STATUSES: [&str; 2] = ["COMPLETED", "REJECTED"];
+
 /// The requester may change their own request; operators may change any.
 /// Once a request is completed or rejected the preference has nothing left
 /// to bias, so it is frozen with the rest of the row.
@@ -72,13 +78,40 @@ pub(crate) async fn set_preferred_narrator(
 			"not authorized to change this request",
 		));
 	}
-	if matches!(request.status.as_str(), "COMPLETED" | "REJECTED") {
+	if NARRATOR_FROZEN_STATUSES.contains(&request.status.as_str()) {
 		return Err(async_graphql::Error::new("request state is terminal"));
 	}
 	let narrator = normalize_narrator(narrator)?;
-	let mut active = request.into_active_model();
-	active.preferred_narrator = Set(narrator);
-	Ok(active.update(core.conn.as_ref()).await?)
+	update_preferred_narrator(core.conn.as_ref(), request_id, narrator).await?;
+	find_request(core, request_id).await
+}
+
+/// Writes only `preferred_narrator` (and `updated_at`), and only while the
+/// stored status is still open: a completion or rejection that landed after
+/// the authorization read above wins, and none of that row's other columns
+/// are ever rewritten from the stale model.
+async fn update_preferred_narrator(
+	conn: &impl ConnectionTrait,
+	request_id: &str,
+	narrator: Option<String>,
+) -> Result<()> {
+	let written = book_request::Entity::update_many()
+		.col_expr(
+			book_request::Column::PreferredNarrator,
+			Expr::value(narrator),
+		)
+		.col_expr(
+			book_request::Column::UpdatedAt,
+			Expr::value(Utc::now().fixed_offset()),
+		)
+		.filter(book_request::Column::Id.eq(request_id))
+		.filter(book_request::Column::Status.is_not_in(NARRATOR_FROZEN_STATUSES))
+		.exec(conn)
+		.await?;
+	if written.rows_affected == 0 {
+		return Err(async_graphql::Error::new("request state is terminal"));
+	}
+	Ok(())
 }
 
 /// Shared recommendation -> request handoff. It intentionally creates only a
@@ -454,5 +487,70 @@ mod tests {
 		assert!(set_preferred_narrator(&core, &operator, "missing", None)
 			.await
 			.is_err());
+	}
+
+	/// The write itself is the gate: a rejection that lands between the
+	/// authorization read and the update wins, and a successful write leaves
+	/// every other column — including a concurrent approval — exactly as
+	/// stored rather than restoring the stale model.
+	#[tokio::test]
+	async fn narrator_write_is_gated_on_the_stored_status_and_touches_nothing_else() {
+		let core = request_core().await;
+		let created = create_audiobook_request(&core, "requester", None).await;
+		let approved_at = Utc::now().fixed_offset();
+		book_request::Entity::update_many()
+			.col_expr(book_request::Column::Status, Expr::value("APPROVED"))
+			.col_expr(
+				book_request::Column::ApprovedBy,
+				Expr::value(Some("operator")),
+			)
+			.col_expr(
+				book_request::Column::ApprovedAt,
+				Expr::value(Some(approved_at)),
+			)
+			.filter(book_request::Column::Id.eq(&created.id))
+			.exec(core.conn.as_ref())
+			.await
+			.unwrap();
+
+		update_preferred_narrator(
+			core.conn.as_ref(),
+			&created.id,
+			Some("Ray Porter".to_owned()),
+		)
+		.await
+		.unwrap();
+		let stored = find_request(&core, &created.id).await.unwrap();
+		assert_eq!(stored.preferred_narrator.as_deref(), Some("Ray Porter"));
+		assert_eq!(stored.status, "APPROVED", "the approval is kept");
+		assert_eq!(stored.approved_by.as_deref(), Some("operator"));
+		assert_eq!(
+			stored.approved_at.map(|at| at.timestamp()),
+			Some(approved_at.timestamp())
+		);
+
+		book_request::Entity::update_many()
+			.col_expr(book_request::Column::Status, Expr::value("REJECTED"))
+			.col_expr(
+				book_request::Column::FailureMessage,
+				Expr::value(Some("out of scope")),
+			)
+			.filter(book_request::Column::Id.eq(&created.id))
+			.exec(core.conn.as_ref())
+			.await
+			.unwrap();
+		let before = find_request(&core, &created.id).await.unwrap();
+		let error = update_preferred_narrator(
+			core.conn.as_ref(),
+			&created.id,
+			Some("Kate Reading".to_owned()),
+		)
+		.await
+		.expect_err("a rejection that landed after the read wins");
+		assert_eq!(error.message, "request state is terminal");
+		let after = find_request(&core, &created.id).await.unwrap();
+		assert_eq!(after, before, "nothing is written to a terminal row");
+		assert_eq!(after.preferred_narrator.as_deref(), Some("Ray Porter"));
+		assert_eq!(after.failure_message.as_deref(), Some("out of scope"));
 	}
 }

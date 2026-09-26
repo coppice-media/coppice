@@ -400,6 +400,7 @@ impl MetadataProvider for MetronClient {
 			cover_artists,
 			cover_url: non_empty(issue.image),
 			provider_url: issue.resource_url,
+			publisher: issue.publisher.map(|publisher| publisher.name),
 			..Default::default()
 		})
 	}
@@ -503,10 +504,10 @@ struct MetronListResponse<T> {
 	results: Vec<T>,
 }
 
-/// `{ "id": 1, "name": "Marvel" }` shape used across Metron payloads.
+/// `{ "id": 1, "name": "Marvel" }` shape used across Metron payloads; only the
+/// name is consumed.
 #[derive(Debug, Deserialize)]
 struct MetronIdName {
-	id: i64,
 	name: String,
 }
 
@@ -611,8 +612,6 @@ struct MetronSeries {
 	desc: Option<String>,
 	#[serde(default)]
 	genres: Vec<MetronIdName>,
-	#[serde(default)]
-	resource_url: Option<String>,
 }
 
 #[cfg(test)]
@@ -888,6 +887,7 @@ mod tests {
 			media.provider_url.as_deref(),
 			Some("https://metron.cloud/issue/406984/")
 		);
+		assert_eq!(media.publisher.as_deref(), Some("Puffin Comics"));
 
 		let request = &server.requests()[0];
 		assert!(request.starts_with("GET /issue/406984/"), "{request}");

@@ -89,7 +89,9 @@ A compact observation may include:
 ```text
 worker_id, root_id, worker_item_id, worker_content_version
 sanitized relative display path (optional)
-size, mtime, detected media type
+size, mtime (RFC 3339, or an epoch number: milliseconds as the built-in
+  worker sends them, seconds when the magnitude is below 10^11), detected
+  media type
 versioned quick fingerprint (optional)
 extracted bounded metadata (optional candidate evidence)
 full SHA-256 (only when requested/available)
@@ -107,10 +109,15 @@ inode, size, or timestamp changes force a new hash before any later range is
 served.
 
 A root declared with `kind=calibre` reads that root's `metadata.db` in
-read-only mode. The adapter validates the Calibre application/schema version
-and publishes only catalogued `data` rows whose path resolves below the
-non-symlink root. Calibre `data.name` is a basename; the on-disk format suffix
-comes from the lower-case `data.format`.
+read-only mode. The adapter validates the Calibre application id (`cali`, or
+zero for legacy databases) and accepts `user_version` 27 (Calibre v9.15.0) and
+28 (Calibre master's `upgrade_version_27`, which only adds the viewer
+`book_storage` table); anything newer is rejected as an unsupported schema. It
+publishes only catalogued `data` rows whose path resolves below the non-symlink
+root. Calibre `data.name` is a basename; the on-disk format suffix comes from
+the lower-case `data.format`. The catalog tables are read asynchronously; the
+per-format symlink, metadata, and fingerprint pass runs on the blocking pool so
+a large or network-mounted library never stalls the worker's control socket.
 
 ## State is not one lifecycle enum
 
@@ -159,6 +166,18 @@ local observation
   -> committed media/location
   -> optional publication
 ```
+
+A decision claims the proposal first. Approval and rejection each run one
+conditional update against `status = 'proposed'`; the decision that loses
+reads back the one that won and applies nothing. A `link` approval commits the
+claim, the identity re-check, and the location upsert in a single write
+transaction. A `materialize` approval claims, stages the bytes, and then
+records `staged_item_id`; a staging failure hands the proposal back to
+`proposed`. An approved proposal that carries neither `applied_location_id`
+nor `staged_item_id` is a materialization still in progress (409) while the
+server process is applying it, and is resumed by the next
+`action=materialize` approval otherwise; the staged upload is idempotent on
+`remote-source-import:<proposal id>`, so a resume never duplicates bytes.
 
 No remote observation, match, or authorization is itself a `Media` row. No
 reader listing or byte route becomes visible until verified ingest is committed
@@ -232,9 +251,20 @@ Remote serving is implemented after explicit verification and location linking:
    item lineage, exact offset/length, byte ceiling, transport, expiry, and—after
    verification—the server-computed whole-object SHA-256. The worker rehashes
    the opened file before serving a verified grant.
-4. The server validates the reader ACL and single range, proxies the response,
-   and returns `503` for a known location whose worker is unavailable. Media
-   bytes never use the JSON control socket.
+4. The grant's expiry (60 s) bounds acceptance: the worker's `ReadReady` and
+   the server's claim of the bytes. A route waiting on a silent worker gives
+   up at that deadline. An accepted stream is not cut off when the expiry
+   passes; it is bounded by its byte budget and a 30 s idle deadline between
+   chunks on both transports (the tunnel channel and the direct HTTP read).
+   A grant leaves the server's registry once its consumer is done with it
+   (consumed, finished, timed out, or gone); a worker-side failure is kept
+   until the waiting route has read its reason, and abandoned grants are
+   swept at the next registration.
+5. The server validates the reader ACL and single range, proxies the response,
+   and returns `503` for a known location whose worker is unavailable. When a
+   media has several verified remote copies, they are tried newest first and a
+   copy whose source is offline or refuses the grant is skipped for the next
+   one. Media bytes never use the JSON control socket.
 
 Direct browser-to-worker signed URLs are not the first implementation: they
 require inbound reachability, public TLS/CORS policy, and duplicate reader

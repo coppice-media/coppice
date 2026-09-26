@@ -19,6 +19,9 @@ pub enum APIError {
 	BadRequest(String),
 	#[error("{0}")]
 	NotFound(String),
+	/// A request body over its route's limit, as Kestrel answers for Kavita.
+	#[error("{0}")]
+	PayloadTooLarge(String),
 	#[error("Unauthorized")]
 	Unauthorized,
 	#[error("{0}")]
@@ -34,6 +37,7 @@ impl APIError {
 		match self {
 			Self::BadRequest(_) => StatusCode::BAD_REQUEST,
 			Self::NotFound(_) => StatusCode::NOT_FOUND,
+			Self::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
 			Self::Unauthorized => StatusCode::UNAUTHORIZED,
 			Self::Forbidden(_) => StatusCode::FORBIDDEN,
 			Self::InternalServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,

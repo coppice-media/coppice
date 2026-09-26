@@ -26,37 +26,44 @@ pub enum OpdsLinkType {
 	Zip,         // "application/zip"
 	Epub,        // "application/epub+zip"
 	Search,      // "application/opensearchdescription+xml"
-	/// An audiobook container, carrying the [`ContentType`] that decides the
-	/// MIME (`audio/mp4`, `audio/mpeg`, `audio/opus`, `audio/ogg`,
-	/// `audio/flac`). `stump_media` already owns the extension → type table,
-	/// so the feed defers to it instead of growing a second one.
-	Audio(ContentType),
+	/// A served file whose MIME [`ContentType`] already knows: PDF, the Kindle
+	/// family (`application/x-mobipocket-ebook`, `application/vnd.amazon.mobi8-ebook`)
+	/// and the audiobook containers (`audio/mp4`, `audio/mpeg`, `audio/opus`,
+	/// `audio/ogg`, `audio/flac`). `stump_media` owns the extension → type
+	/// table, so the feed defers to it instead of growing a second one.
+	File(ContentType),
 }
 
 impl OpdsLinkType {
+	/// The acquisition `link@type` for a book's file extension, or `None` for
+	/// an extension Coppice never serves.
+	///
+	/// Archives stay `application/zip` (upstream Stump's choice, what the OPDS
+	/// 1.2 clients were validated against; the href carries the real file
+	/// name). Every other served format takes [`ContentType`]'s own MIME.
 	pub fn from_extension(extension: &str) -> Option<Self> {
-		// An audiobook is a first-class acquisition, and all six audio
-		// containers are already mapped by `ContentType`.
 		let content_type = ContentType::from_extension(extension);
-		if content_type.is_audio() {
-			return Some(OpdsLinkType::Audio(content_type));
-		}
-
-		match extension {
-			"jpeg" | "jpg" => Some(OpdsLinkType::ImageJpeg),
-			"png" => Some(OpdsLinkType::ImagePng),
-			"gif" => Some(OpdsLinkType::ImageGif),
-			"epub" => Some(OpdsLinkType::Epub),
-			// TODO: RARs as ZIP??? Obviously for content type it's different, but does OPDS concern itself with that?
-			"zip" | "cbz" | "rar" | "cbr" => Some(OpdsLinkType::Zip),
-			_ => None,
-		}
+		Some(match content_type {
+			ContentType::JPEG => OpdsLinkType::ImageJpeg,
+			ContentType::PNG => OpdsLinkType::ImagePng,
+			ContentType::GIF => OpdsLinkType::ImageGif,
+			ContentType::EPUB_ZIP => OpdsLinkType::Epub,
+			ContentType::ZIP
+			| ContentType::COMIC_ZIP
+			| ContentType::RAR
+			| ContentType::COMIC_RAR => OpdsLinkType::Zip,
+			ContentType::PDF | ContentType::MOBI | ContentType::AZW3 => {
+				OpdsLinkType::File(content_type)
+			},
+			audio if audio.is_audio() => OpdsLinkType::File(audio),
+			_ => return None,
+		})
 	}
 
 	/// The value written into the Atom `link@type` attribute.
 	///
-	/// Every variant but [`OpdsLinkType::Audio`] is a fixed string and still
-	/// borrows; audio renders through [`ContentType`]'s `Display`, which is
+	/// Every variant but [`OpdsLinkType::File`] is a fixed string and still
+	/// borrows; a file renders through [`ContentType`]'s `Display`, which is
 	/// why this returns a [`Cow`] rather than the `&'static str` the other
 	/// v1.2 enums hand back through [`OpdsEnumStr`].
 	pub fn mime(&self) -> Cow<'static, str> {
@@ -76,7 +83,7 @@ impl OpdsLinkType {
 			OpdsLinkType::Search => {
 				Cow::Borrowed("application/opensearchdescription+xml")
 			},
-			OpdsLinkType::Audio(content_type) => Cow::Owned(content_type.mime_type()),
+			OpdsLinkType::File(content_type) => Cow::Owned(content_type.mime_type()),
 		}
 	}
 }
@@ -270,5 +277,38 @@ mod tests {
 		);
 
 		assert_eq!(result, expected_result);
+	}
+
+	/// Every format the scanner admits gets a real acquisition type; the
+	/// PDF and Kindle rows used to fall through to `application/zip` with an
+	/// error log.
+	#[test]
+	fn acquisition_type_covers_every_served_format() {
+		let mime = |extension: &str| {
+			OpdsLinkType::from_extension(extension)
+				.unwrap_or_else(|| panic!("{extension} has no OPDS link type"))
+				.mime()
+				.into_owned()
+		};
+		assert_eq!(mime("pdf"), "application/pdf");
+		assert_eq!(mime("PDF"), "application/pdf");
+		assert_eq!(mime("mobi"), "application/x-mobipocket-ebook");
+		assert_eq!(mime("prc"), "application/x-mobipocket-ebook");
+		assert_eq!(mime("azw"), "application/x-mobipocket-ebook");
+		assert_eq!(mime("azw3"), "application/vnd.amazon.mobi8-ebook");
+		assert_eq!(mime("epub"), "application/epub+zip");
+		for archive in ["zip", "cbz", "rar", "cbr"] {
+			assert_eq!(mime(archive), "application/zip", "{archive}");
+		}
+		assert_eq!(mime("m4b"), "audio/mp4");
+		assert_eq!(mime("mp3"), "audio/mpeg");
+		assert_eq!(mime("jpg"), "image/jpeg");
+		// Never scanned as media, so never an acquisition link.
+		for unsupported in ["cb7", "fb2", "txt", "kepub", "xhtml", ""] {
+			assert!(
+				OpdsLinkType::from_extension(unsupported).is_none(),
+				"{unsupported} is not served"
+			);
+		}
 	}
 }

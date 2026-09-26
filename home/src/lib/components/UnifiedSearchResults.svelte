@@ -6,11 +6,12 @@
 	 * Hardcover did not return, so it waits for Hardcover before it shows.
 	 */
 	import { resolve } from '$app/paths';
-	import BookOpenIcon from '@lucide/svelte/icons/book-open';
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Card, CardContent } from '@stump/ui/components/ui/card';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import ExternalBookRequestCard from '$lib/components/ExternalBookRequestCard.svelte';
+	import { providerLabel } from '$lib/requests';
 	import {
 		createAudibleSearch,
 		createExternalSearch,
@@ -81,13 +82,7 @@
 						>
 							<Card size="sm" class="h-full transition-colors hover:ring-primary/50">
 								<CardContent class="flex-row gap-3">
-									{#if hit.thumbnailUrl}
-										<img src={hit.thumbnailUrl} alt="" class="h-18 w-12 shrink-0 rounded-md border object-cover" loading="lazy" />
-									{:else}
-										<div class="flex h-18 w-12 shrink-0 items-center justify-center rounded-md border bg-muted/40" aria-hidden="true">
-											<BookOpenIcon class="size-4 text-muted-foreground" />
-										</div>
-									{/if}
+									<Cover src={hit.thumbnailUrl} class="h-18 w-12 rounded-md border" />
 									<div class="flex min-w-0 flex-1 flex-col gap-1.5">
 										<div class="min-w-0">
 											<p class="truncate font-medium" title={hit.title}>{hit.title}</p>
@@ -118,7 +113,7 @@
 			{:else if externalQuery.isError || external?.error}
 				{@render note('Hardcover search unavailable')}
 			{:else if !external?.hits.length}
-				{@render note(`No ${external?.provider ?? 'Hardcover'} books match “${query}”.`)}
+				{@render note(`No ${providerLabel(external?.provider) || 'Hardcover'} books match “${query}”.`)}
 			{:else}
 				<div class="grid gap-3 md:grid-cols-2">
 					{#each external.hits as hit (`${hit.provider}:${hit.remoteId}`)}

@@ -30,7 +30,7 @@ use crate::{
 const MAL_DEFAULT_RATE_LIMIT: u32 = 1;
 
 /// Fields requested for a full manga lookup.
-const DETAIL_FIELDS: &str = "id,title,alternative_titles,synopsis,status,start_date,genres,authors{first_name,last_name},main_picture,media_type,serialization{name}";
+const DETAIL_FIELDS: &str = "id,title,alternative_titles,synopsis,status,start_date,genres,authors{first_name,last_name},main_picture,serialization{name}";
 
 /// Fields requested for a search hit.
 const SEARCH_FIELDS: &str = "alternative_titles,media_type";
@@ -442,8 +442,6 @@ pub struct MalManga {
 	pub authors: Vec<MalAuthor>,
 	#[serde(rename = "main_picture")]
 	pub main_picture: Option<MalPicture>,
-	#[serde(rename = "media_type", default)]
-	pub media_type: Option<String>,
 	#[serde(default)]
 	pub serialization: Vec<MalSerialization>,
 }

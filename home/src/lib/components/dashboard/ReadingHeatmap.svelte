@@ -102,7 +102,7 @@
 >
 	{#snippet action()}
 		<Tabs.Root value={metric} onValueChange={(value) => (metric = value as HeatmapMetric)}>
-			<Tabs.List aria-label="Heatmap metric">
+			<Tabs.List aria-label="Heatmap metric" class="flex-wrap">
 				<Tabs.Trigger value="minutes" class="px-2 text-xs">Minutes</Tabs.Trigger>
 				<Tabs.Trigger value="pages" class="px-2 text-xs">Pages</Tabs.Trigger>
 			</Tabs.List>

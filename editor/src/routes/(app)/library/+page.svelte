@@ -7,6 +7,7 @@
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
 	import { Checkbox } from '@stump/ui/components/ui/checkbox';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@stump/ui/components/ui/table';
@@ -244,46 +245,44 @@
 			{:else if !nodes.length}
 				<div class="p-6"><Empty><EmptyHeader><EmptyTitle>No media in this library</EmptyTitle><EmptyDescription>Scan or stage books and audiobooks into the library to review them here.</EmptyDescription></EmptyHeader></Empty></div>
 			{:else}
-				<div class="overflow-x-auto">
-					<Table>
-						<TableHeader>
+				<Table stacked>
+					<TableHeader>
+						<TableRow>
+							<TableHead class="w-12"><Checkbox checked={allSelected} aria-label="Select all media on this page" onCheckedChange={() => toggleAll()} /></TableHead>
+							<TableHead>Media</TableHead>
+							<TableHead>Path</TableHead>
+							<TableHead>Pages</TableHead>
+							<TableHead>Quality score</TableHead>
+							<TableHead class="text-right">Actions</TableHead>
+						</TableRow>
+					</TableHeader>
+					<TableBody>
+						{#each nodes as book (book.id)}
 							<TableRow>
-								<TableHead class="w-12"><Checkbox checked={allSelected} aria-label="Select all media on this page" onCheckedChange={() => toggleAll()} /></TableHead>
-								<TableHead>Media</TableHead>
-								<TableHead>Path</TableHead>
-								<TableHead>Pages</TableHead>
-								<TableHead>Quality score</TableHead>
-								<TableHead class="text-right">Actions</TableHead>
-							</TableRow>
-						</TableHeader>
-						<TableBody>
-							{#each nodes as book (book.id)}
-								<TableRow>
-									<TableCell><Checkbox checked={selected.includes(book.id)} aria-label={`Select ${book.resolvedName}`} onCheckedChange={() => toggleRow(book.id)} /></TableCell>
-									<TableCell class="max-w-[24rem]">
-										<div class="flex items-center gap-3">
-											<img src={book.thumbnail.url} alt="" loading="lazy" class="h-10 w-10 shrink-0 rounded object-cover" />
-											<div class="min-w-0">
-												<div class="truncate font-medium">{book.resolvedName}</div>
-												<div class="truncate text-xs text-muted-foreground">{book.series.name}</div>
-											</div>
+								<TableCell><Checkbox checked={selected.includes(book.id)} aria-label={`Select ${book.resolvedName}`} onCheckedChange={() => toggleRow(book.id)} /></TableCell>
+								<TableCell class="max-w-[24rem]">
+									<div class="flex items-center gap-3">
+										<Cover src={book.thumbnail.url} aspect="square" class="size-10 rounded" />
+										<div class="min-w-0">
+											<div class="truncate font-medium">{book.resolvedName}</div>
+											<div class="truncate text-xs text-muted-foreground">{book.series.name}</div>
 										</div>
-									</TableCell>
-									<TableCell class="max-w-[20rem]"><div class="truncate text-xs text-muted-foreground">{book.path}</div></TableCell>
-									<TableCell class="tabular-nums">{book.pages >= 0 ? book.pages : '—'}</TableCell>
-									<TableCell>
-										{#if scoreById.get(book.id) === null || scoreById.get(book.id) === undefined}
-											<span class="text-muted-foreground">—</span>
-										{:else}
-											<span class="tabular-nums font-medium {((scoreById.get(book.id) as number) < 70 ? 'text-destructive' : (scoreById.get(book.id) as number) < 90 ? 'text-amber-600' : 'text-emerald-600')}">{scoreById.get(book.id)}</span><span class="text-muted-foreground"> / 100</span>
-										{/if}
-									</TableCell>
-									<TableCell><div class="flex items-center justify-end gap-1"><Button size="sm" variant="outline" onclick={() => review(book.id, book.resolvedName)}>Open review</Button><SendToKindleButton mediaId={book.id} /></div></TableCell>
-								</TableRow>
-							{/each}
-						</TableBody>
-					</Table>
-				</div>
+									</div>
+								</TableCell>
+								<TableCell data-label="Path" class="max-w-[20rem]"><div class="truncate text-xs text-muted-foreground">{book.path}</div></TableCell>
+								<TableCell data-label="Pages" class="tabular-nums">{book.pages >= 0 ? book.pages : '—'}</TableCell>
+								<TableCell data-label="Quality score">
+									{#if scoreById.get(book.id) === null || scoreById.get(book.id) === undefined}
+										<span class="text-muted-foreground">—</span>
+									{:else}
+										<span><span class="tabular-nums font-medium {((scoreById.get(book.id) as number) < 70 ? 'text-destructive' : (scoreById.get(book.id) as number) < 90 ? 'text-amber-600' : 'text-emerald-600')}">{scoreById.get(book.id)}</span><span class="text-muted-foreground"> / 100</span></span>
+									{/if}
+								</TableCell>
+								<TableCell><div class="flex flex-wrap items-center gap-1 @md/table:justify-end"><Button size="sm" variant="outline" onclick={() => review(book.id, book.resolvedName)}>Open review</Button><SendToKindleButton mediaId={book.id} /></div></TableCell>
+							</TableRow>
+						{/each}
+					</TableBody>
+				</Table>
 				<div class="flex items-center justify-between gap-2">
 					<Button size="sm" variant="outline" disabled={currentPage <= 1 || mediaQuery.isPending} onclick={() => goToPage(currentPage - 1)}>Previous</Button>
 					<span class="text-sm text-muted-foreground">Page {currentPage} of {totalPages}</span>

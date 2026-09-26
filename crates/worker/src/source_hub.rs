@@ -4,22 +4,35 @@
 //! transport drains [`SourceOutbound`] and feeds source control frames back to
 //! [`SourceHub::handle_frame`].  A tunnel is a separate bounded channel so
 //! media bytes never share the JSON control socket.
+//!
+//! A grant lives in the hub only while something can still act on it.  The
+//! grant's `expires_at` bounds *acceptance* (the worker's readiness frame and
+//! the consumer's claim); an accepted stream is bounded by its byte budget and
+//! [`SOURCE_TRANSFER_IDLE_TIMEOUT`] instead.  The consumer releases its grant:
+//! `wait_ready` on observing a terminal state, `consume_direct` at
+//! consumption, a [`TunnelReceiver`] on drop or idle timeout, and a finished
+//! tunnel at its final frame.  A worker-driven failure only marks the grant,
+//! so the route that issued it still reads the worker's reason rather than a
+//! "not found"; every new registration sweeps whatever no consumer released.
 
 use std::collections::HashMap;
+use std::pin::pin;
 use std::sync::{
 	atomic::{AtomicU64, Ordering},
-	Arc, Mutex,
+	Arc,
 };
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, FixedOffset, Utc};
+use parking_lot::{Mutex, MutexGuard};
 use thiserror::Error;
 use tokio::sync::{mpsc, Notify, RwLock};
 use uuid::Uuid;
 
 use crate::source_protocol::{
-	encode_source_frame, SourceManifestChunk, SourceProtocolError, SourceReadGrant,
-	SourceReadRequest, SourceRootHello, SourceServerFrame, SourceTransport,
-	SourceWorkerFrame, SourceWorkerHello,
+	encode_source_frame, expires_at_millis, SourceManifestChunk, SourceProtocolError,
+	SourceReadGrant, SourceReadRequest, SourceRootHello, SourceServerFrame,
+	SourceTransport, SourceWorkerFrame, SourceWorkerHello,
 };
 
 /// Number of control commands a source transport may buffer before the hub
@@ -29,11 +42,14 @@ pub const SOURCE_OUTBOUND_CAPACITY: usize = 64;
 pub const SOURCE_TUNNEL_CAPACITY: usize = 16;
 /// Maximum size of one tunnel WebSocket binary frame.
 pub const MAX_SOURCE_TUNNEL_CHUNK_BYTES: usize = 64 * 1024;
+/// How long an accepted transfer may stall between chunks before it is
+/// failed.  The grant expiry bounds acceptance only; a transfer that is still
+/// moving bytes past `expires_at` is legitimate and is bounded by this idle
+/// deadline plus its byte budget.
+pub const SOURCE_TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The receiving end of a source worker's bounded outbound command channel.
 pub type SourceOutbound = mpsc::Receiver<String>;
-/// The receiving end of a bounded tunnel data channel.
-pub type TunnelReceiver = mpsc::Receiver<Vec<u8>>;
 
 /// A connected source worker and its root advertisements.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,12 +78,31 @@ enum GrantLifecycle {
 	Expired,
 }
 
+impl GrantLifecycle {
+	fn is_terminal(&self) -> bool {
+		matches!(self, Self::Completed | Self::Failed(_) | Self::Expired)
+	}
+}
+
 #[derive(Debug)]
 struct GrantMutable {
 	lifecycle: GrantLifecycle,
 	tunnel_claimed: bool,
 	ready_seen: bool,
 	bytes_sent: u64,
+	/// Last readiness frame, claim, or delivered chunk.  Bounds accepted
+	/// streams, which the fixed grant expiry deliberately does not cover.
+	last_activity: Instant,
+}
+
+impl GrantMutable {
+	/// An accepted tunnel: the worker announced readiness and the tunnel
+	/// channel is in use.  Only the idle deadline and the byte budget bound it.
+	fn is_accepted_tunnel(&self) -> bool {
+		self.lifecycle == GrantLifecycle::Consumed
+			&& self.tunnel_claimed
+			&& self.ready_seen
+	}
 }
 
 struct PendingTransfer {
@@ -90,6 +125,7 @@ impl PendingTransfer {
 				tunnel_claimed: false,
 				ready_seen: false,
 				bytes_sent: 0,
+				last_activity: Instant::now(),
 			}),
 			notify: Notify::new(),
 			tunnel_tx: Mutex::new(Some(tunnel_tx)),
@@ -97,41 +133,90 @@ impl PendingTransfer {
 		})
 	}
 
-	fn fail(&self, error: String) {
-		let mut mutable = self.mutable.lock().expect("source grant mutex poisoned");
-		let should_fail = matches!(
-			&mutable.lifecycle,
-			GrantLifecycle::Pending | GrantLifecycle::Ready
-		) || (matches!(&mutable.lifecycle, GrantLifecycle::Consumed)
-			&& mutable.tunnel_claimed
-			&& !mutable.ready_seen);
-		if should_fail {
-			mutable.lifecycle = GrantLifecycle::Failed(error);
-			self.notify.notify_waiters();
-		}
+	fn lock(&self) -> MutexGuard<'_, GrantMutable> {
+		self.mutable.lock()
 	}
 
-	fn expire_if_needed(&self) -> bool {
-		if !self.grant.is_expired() {
-			return false;
-		}
-		let mut mutable = self.mutable.lock().expect("source grant mutex poisoned");
-		let should_expire = matches!(
-			&mutable.lifecycle,
-			GrantLifecycle::Pending | GrantLifecycle::Ready
-		) || (matches!(&mutable.lifecycle, GrantLifecycle::Consumed)
-			&& mutable.tunnel_claimed
-			&& !mutable.ready_seen);
-		if should_expire {
-			mutable.lifecycle = GrantLifecycle::Expired;
+	/// Drop the tunnel sender so the receiver observes end of stream once the
+	/// buffered chunks drain and any later push is refused.
+	fn close_tunnel(&self) {
+		self.tunnel_tx.lock().take();
+	}
+
+	/// Fail a grant that has not reached a terminal state.  Returns whether
+	/// this call performed the transition.
+	fn fail(&self, error: String) -> bool {
+		let transitioned = {
+			let mut mutable = self.lock();
+			if mutable.lifecycle.is_terminal() {
+				false
+			} else {
+				mutable.lifecycle = GrantLifecycle::Failed(error);
+				true
+			}
+		};
+		if transitioned {
+			self.close_tunnel();
 			self.notify.notify_waiters();
 		}
-		true
+		transitioned
+	}
+
+	/// Expire a grant that has not been accepted.  Returns whether the grant is
+	/// expired afterwards; an accepted tunnel and terminal grants are left
+	/// alone and report `false`.
+	fn expire_now(&self) -> bool {
+		let outcome = {
+			let mut mutable = self.lock();
+			match &mutable.lifecycle {
+				GrantLifecycle::Expired => return true,
+				GrantLifecycle::Pending | GrantLifecycle::Ready => {},
+				GrantLifecycle::Consumed
+					if mutable.tunnel_claimed && !mutable.ready_seen => {},
+				_ => return false,
+			}
+			mutable.lifecycle = GrantLifecycle::Expired;
+			true
+		};
+		self.close_tunnel();
+		self.notify.notify_waiters();
+		outcome
+	}
+
+	/// Expire the grant when its wall-clock deadline has passed.
+	fn expire_if_needed(&self) -> bool {
+		self.grant.is_expired() && self.expire_now()
+	}
+
+	/// Whether an accepted tunnel that no consumer holds has gone longer than
+	/// the idle deadline without a chunk.  A consumer holding the receiver
+	/// applies its own per-chunk deadline and releases the grant on drop; a
+	/// backpressured stream (channel full, reader slow) must not be mistaken
+	/// for a stalled worker.
+	fn is_idle(&self, now: Instant) -> bool {
+		let mutable = self.lock();
+		mutable.is_accepted_tunnel()
+			&& self.tunnel_rx.lock().is_some()
+			&& now.saturating_duration_since(mutable.last_activity)
+				>= SOURCE_TRANSFER_IDLE_TIMEOUT
+	}
+
+	/// Time left until `expires_at`, zero once it has passed.
+	fn remaining_ttl(&self) -> Duration {
+		let now_ms = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.map(|elapsed| elapsed.as_millis() as i128)
+			.unwrap_or(i128::MAX);
+		let remaining = expires_at_millis(self.grant.expires_at) - now_ms;
+		if remaining <= 0 {
+			Duration::ZERO
+		} else {
+			Duration::from_millis(u64::try_from(remaining).unwrap_or(u64::MAX))
+		}
 	}
 
 	fn status(&self) -> SourceReadStatus {
-		let mutable = self.mutable.lock().expect("source grant mutex poisoned");
-		match &mutable.lifecycle {
+		match &self.lock().lifecycle {
 			GrantLifecycle::Pending => SourceReadStatus::Pending,
 			GrantLifecycle::Ready => SourceReadStatus::Ready,
 			GrantLifecycle::Consumed => SourceReadStatus::Consumed,
@@ -139,6 +224,89 @@ impl PendingTransfer {
 			GrantLifecycle::Failed(error) => SourceReadStatus::Failed(error.clone()),
 			GrantLifecycle::Expired => SourceReadStatus::Expired,
 		}
+	}
+}
+
+/// Every grant the hub still tracks, shared with tunnel receivers so a dropped
+/// consumer releases its grant without an explicit call.
+#[derive(Default)]
+struct PendingRegistry {
+	transfers: Mutex<HashMap<String, Arc<PendingTransfer>>>,
+}
+
+impl PendingRegistry {
+	fn lock(&self) -> MutexGuard<'_, HashMap<String, Arc<PendingTransfer>>> {
+		self.transfers.lock()
+	}
+
+	fn get(&self, grant_id: &str) -> Option<Arc<PendingTransfer>> {
+		self.lock().get(grant_id).cloned()
+	}
+
+	fn remove(&self, grant_id: &str) {
+		self.lock().remove(grant_id);
+	}
+
+	/// Drop everything nothing can act on any more: grants whose acceptance
+	/// window closed, accepted tunnels that stalled, and terminal grants left
+	/// behind by a consumer that never observed their final state.
+	fn reap(&self) {
+		let now = Instant::now();
+		self.lock().retain(|_, pending| {
+			if pending.expire_if_needed() {
+				return false;
+			}
+			if pending.is_idle(now) {
+				pending.fail("source transfer stalled past the idle timeout".to_owned());
+				return false;
+			}
+			!pending.lock().lifecycle.is_terminal()
+		});
+	}
+}
+
+/// The consuming end of an accepted tunnel.
+///
+/// Each chunk is awaited under [`SOURCE_TRANSFER_IDLE_TIMEOUT`]; a stall fails
+/// the grant.  Dropping the receiver releases the grant from the hub, so a
+/// consumer that abandons a transfer (an HTTP client that went away) leaves
+/// nothing behind and any further chunk from the worker is refused.
+pub struct TunnelReceiver {
+	registry: Arc<PendingRegistry>,
+	pending: Arc<PendingTransfer>,
+	receiver: mpsc::Receiver<Vec<u8>>,
+}
+
+impl TunnelReceiver {
+	/// Wait for the next chunk.  `Ok(None)` is a clean end of stream (the
+	/// worker finished or the hub closed the tunnel); [`SourceHubError::IdleTimeout`]
+	/// means the worker stalled and the grant has been failed.
+	pub async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, SourceHubError> {
+		match tokio::time::timeout(SOURCE_TRANSFER_IDLE_TIMEOUT, self.receiver.recv())
+			.await
+		{
+			Ok(chunk) => Ok(chunk),
+			Err(_) => {
+				self.pending
+					.fail("source transfer stalled past the idle timeout".to_owned());
+				self.registry.remove(&self.pending.grant.grant_id);
+				Err(SourceHubError::IdleTimeout)
+			},
+		}
+	}
+
+	/// [`Self::next_chunk`] for consumers that treat a stall like end of
+	/// stream and rely on their own byte-count check.
+	pub async fn recv(&mut self) -> Option<Vec<u8>> {
+		self.next_chunk().await.ok().flatten()
+	}
+}
+
+impl Drop for TunnelReceiver {
+	fn drop(&mut self) {
+		self.pending
+			.fail("source tunnel receiver was dropped".to_owned());
+		self.registry.remove(&self.pending.grant.grant_id);
 	}
 }
 
@@ -183,6 +351,8 @@ pub enum SourceHubError {
 	NotReady,
 	#[error("source worker failed the read: {0}")]
 	WorkerFailed(String),
+	#[error("source transfer stalled past the idle timeout")]
+	IdleTimeout,
 	#[error("source tunnel has not been accepted")]
 	TunnelNotAccepted,
 	#[error("source tunnel chunk is {actual} bytes; maximum is {max}")]
@@ -205,7 +375,7 @@ pub enum SourceHubError {
 #[derive(Default)]
 pub struct SourceHub {
 	connections: RwLock<HashMap<String, Connection>>,
-	pending: RwLock<HashMap<String, Arc<PendingTransfer>>>,
+	pending: Arc<PendingRegistry>,
 	epochs: AtomicU64,
 }
 
@@ -235,8 +405,7 @@ impl SourceHub {
 		let epoch = self.epochs.fetch_add(1, Ordering::Relaxed) + 1;
 		// Invalidate grants before installing the replacement, so a concurrent
 		// request cannot be accidentally failed after it targets the new socket.
-		self.fail_device_grants(&device_id, "source worker connection replaced")
-			.await;
+		self.fail_device_grants(&device_id, "source worker connection replaced");
 		let connection = Connection {
 			worker: ConnectedSourceWorker {
 				device_id: device_id.clone(),
@@ -276,8 +445,7 @@ impl SourceHub {
 			) && connections.remove(device_id).is_some()
 		};
 		if removed {
-			self.fail_device_grants(device_id, "source worker disconnected")
-				.await;
+			self.fail_device_grants(device_id, "source worker disconnected");
 		}
 		removed
 	}
@@ -431,8 +599,7 @@ impl SourceHub {
 			.send(device_id, &SourceServerFrame::Read(grant.clone()))
 			.await
 		{
-			self.fail_pending(&grant.grant_id, "source read command could not be queued")
-				.await;
+			self.fail_pending(&grant.grant_id, "source read command could not be queued");
 			return Err(SourceHubError::OutboundFull);
 		}
 		Ok(grant)
@@ -441,6 +608,9 @@ impl SourceHub {
 	/// Register a pending grant without sending a control command.  This is
 	/// idempotent for the same device and exact grant, which lets a route split
 	/// grant creation and request tracking when it needs to do so transactionally.
+	///
+	/// Every registration also sweeps grants nothing can act on any more, so a
+	/// steady read workload keeps the registry bounded without a timer task.
 	pub async fn register_pending_read(
 		&self,
 		device_id: &str,
@@ -451,8 +621,9 @@ impl SourceHub {
 			return Err(SourceHubError::Expired);
 		}
 		self.validate_root_for_grant(device_id, &grant).await?;
+		self.pending.reap();
 		let pending = PendingTransfer::new(device_id.to_owned(), grant.clone());
-		let mut transfers = self.pending.write().await;
+		let mut transfers = self.pending.lock();
 		if let Some(existing) = transfers.get(&grant.grant_id) {
 			if existing.device_id == device_id && existing.grant == grant {
 				return Ok(());
@@ -463,40 +634,69 @@ impl SourceHub {
 		Ok(())
 	}
 
-	/// Wait until the worker says it has resolved and prepared the grant.
+	/// Number of grants the hub currently tracks.
+	#[must_use]
+	pub fn pending_grants(&self) -> usize {
+		self.pending.lock().len()
+	}
+
+	/// Wait until the worker says it has resolved and prepared the grant, or
+	/// until the grant's acceptance window closes.
 	pub async fn wait_ready(&self, grant_id: &str) -> Result<(), SourceHubError> {
-		let pending = self.pending_transfer(grant_id).await?;
+		let pending = self.pending_transfer(grant_id)?;
 		loop {
-			if pending.grant.is_expired() {
-				pending.expire_if_needed();
+			// Register for wake-ups before reading the state: `notify_waiters`
+			// only reaches futures that are already enabled, so a readiness
+			// frame landing between the read and the first poll would
+			// otherwise be lost.
+			let mut notified = pin!(pending.notify.notified());
+			notified.as_mut().enable();
+			if pending.expire_if_needed() {
+				self.pending.remove(grant_id);
+				return Err(SourceHubError::Expired);
 			}
-			let notified = pending.notify.notified();
-			let state = {
-				let mutable =
-					pending.mutable.lock().expect("source grant mutex poisoned");
+			let (ready_seen, lifecycle) = {
+				let mutable = pending.lock();
 				(mutable.ready_seen, mutable.lifecycle.clone())
 			};
-			if state.0 {
+			if ready_seen {
 				return Ok(());
 			}
-			match state.1 {
+			match lifecycle {
 				GrantLifecycle::Pending
 				| GrantLifecycle::Ready
-				| GrantLifecycle::Consumed => notified.await,
-				GrantLifecycle::Failed(error) => {
-					return Err(SourceHubError::WorkerFailed(error))
+				| GrantLifecycle::Consumed => {
+					if tokio::time::timeout(pending.remaining_ttl(), notified)
+						.await
+						.is_err()
+					{
+						// Nothing woke us before the deadline: close the
+						// acceptance window and let the next pass report it.
+						pending.expire_now();
+					}
 				},
-				GrantLifecycle::Expired => return Err(SourceHubError::Expired),
-				GrantLifecycle::Completed => return Err(SourceHubError::NotReady),
+				GrantLifecycle::Failed(error) => {
+					self.pending.remove(grant_id);
+					return Err(SourceHubError::WorkerFailed(error));
+				},
+				GrantLifecycle::Expired => {
+					self.pending.remove(grant_id);
+					return Err(SourceHubError::Expired);
+				},
+				GrantLifecycle::Completed => {
+					self.pending.remove(grant_id);
+					return Err(SourceHubError::NotReady);
+				},
 			}
 		}
 	}
+
 	/// Snapshot a grant's lifecycle without consuming it.
 	pub async fn read_status(
 		&self,
 		grant_id: &str,
 	) -> Result<SourceReadStatus, SourceHubError> {
-		let pending = self.pending_transfer(grant_id).await?;
+		let pending = self.pending_transfer(grant_id)?;
 		if pending.expire_if_needed() {
 			return Ok(SourceReadStatus::Expired);
 		}
@@ -509,23 +709,26 @@ impl SourceHub {
 		device_id: &str,
 		grant_id: &str,
 	) -> Result<(), SourceHubError> {
-		let pending = self.pending_transfer(grant_id).await?;
+		let pending = self.pending_transfer(grant_id)?;
 		self.check_device_and_expiry(&pending, device_id)?;
-		let mut mutable = pending.mutable.lock().expect("source grant mutex poisoned");
-		if mutable.ready_seen {
-			return Err(SourceHubError::Replay);
+		{
+			let mut mutable = pending.lock();
+			if mutable.ready_seen {
+				return Err(SourceHubError::Replay);
+			}
+			match &mutable.lifecycle {
+				GrantLifecycle::Pending => mutable.lifecycle = GrantLifecycle::Ready,
+				GrantLifecycle::Ready => {},
+				GrantLifecycle::Consumed if mutable.tunnel_claimed => {},
+				GrantLifecycle::Failed(error) => {
+					return Err(SourceHubError::WorkerFailed(error.clone()))
+				},
+				GrantLifecycle::Expired => return Err(SourceHubError::Expired),
+				_ => return Err(SourceHubError::Replay),
+			}
+			mutable.ready_seen = true;
+			mutable.last_activity = Instant::now();
 		}
-		match &mutable.lifecycle {
-			GrantLifecycle::Pending => mutable.lifecycle = GrantLifecycle::Ready,
-			GrantLifecycle::Ready => {},
-			GrantLifecycle::Consumed if mutable.tunnel_claimed => {},
-			GrantLifecycle::Failed(error) => {
-				return Err(SourceHubError::WorkerFailed(error.clone()))
-			},
-			GrantLifecycle::Expired => return Err(SourceHubError::Expired),
-			_ => return Err(SourceHubError::Replay),
-		}
-		mutable.ready_seen = true;
 		pending.notify.notify_waiters();
 		Ok(())
 	}
@@ -537,49 +740,52 @@ impl SourceHub {
 		grant_id: &str,
 		error: impl Into<String>,
 	) -> Result<(), SourceHubError> {
-		let pending = self.pending_transfer(grant_id).await?;
+		let pending = self.pending_transfer(grant_id)?;
 		self.check_device_and_expiry(&pending, device_id)?;
-		let mut mutable = pending.mutable.lock().expect("source grant mutex poisoned");
-		match &mutable.lifecycle {
-			GrantLifecycle::Pending | GrantLifecycle::Ready => {
-				mutable.lifecycle = GrantLifecycle::Failed(error.into());
-				pending.notify.notify_waiters();
-				Ok(())
-			},
-			GrantLifecycle::Consumed if mutable.tunnel_claimed && !mutable.ready_seen => {
-				mutable.lifecycle = GrantLifecycle::Failed(error.into());
-				pending.notify.notify_waiters();
-				Ok(())
-			},
-			GrantLifecycle::Expired => Err(SourceHubError::Expired),
-			_ => Err(SourceHubError::Replay),
+		{
+			let mutable = pending.lock();
+			match &mutable.lifecycle {
+				GrantLifecycle::Pending | GrantLifecycle::Ready => {},
+				GrantLifecycle::Consumed
+					if mutable.tunnel_claimed && !mutable.ready_seen => {},
+				GrantLifecycle::Expired => return Err(SourceHubError::Expired),
+				_ => return Err(SourceHubError::Replay),
+			}
 		}
+		// The route that issued the grant observes the failure in `wait_ready`
+		// and releases it there; evicting here would race a waiter that has not
+		// looked the grant up yet and turn the worker's reason into "not found".
+		pending.fail(error.into());
+		Ok(())
 	}
 
-	/// Consume a direct grant once and return its exact grant details.
+	/// Consume a direct grant once and return its exact grant details.  The
+	/// hub has no further part in a direct transfer, so the grant is released
+	/// here; the worker's own one-use store refuses a replayed grant id.
 	pub async fn consume_direct(
 		&self,
 		device_id: &str,
 		grant_id: &str,
 	) -> Result<SourceReadGrant, SourceHubError> {
-		let pending = self.pending_transfer(grant_id).await?;
+		let pending = self.pending_transfer(grant_id)?;
 		self.check_device_and_expiry(&pending, device_id)?;
 		if pending.grant.transport != SourceTransport::Direct {
 			return Err(SourceHubError::TransportMismatch);
 		}
-		let mut mutable = pending.mutable.lock().expect("source grant mutex poisoned");
-		match &mutable.lifecycle {
-			GrantLifecycle::Ready => {
-				mutable.lifecycle = GrantLifecycle::Consumed;
-				Ok(pending.grant.clone())
-			},
-			GrantLifecycle::Pending => Err(SourceHubError::NotReady),
-			GrantLifecycle::Failed(error) => {
-				Err(SourceHubError::WorkerFailed(error.clone()))
-			},
-			GrantLifecycle::Expired => Err(SourceHubError::Expired),
-			_ => Err(SourceHubError::Replay),
+		{
+			let mut mutable = pending.lock();
+			match &mutable.lifecycle {
+				GrantLifecycle::Ready => mutable.lifecycle = GrantLifecycle::Consumed,
+				GrantLifecycle::Pending => return Err(SourceHubError::NotReady),
+				GrantLifecycle::Failed(error) => {
+					return Err(SourceHubError::WorkerFailed(error.clone()))
+				},
+				GrantLifecycle::Expired => return Err(SourceHubError::Expired),
+				_ => return Err(SourceHubError::Replay),
+			}
 		}
+		self.pending.remove(grant_id);
+		Ok(pending.grant.clone())
 	}
 
 	/// Claim the one-use bounded receiver for a tunnel grant.
@@ -588,14 +794,13 @@ impl SourceHub {
 		device_id: &str,
 		grant_id: &str,
 	) -> Result<TunnelReceiver, SourceHubError> {
-		let pending = self.pending_transfer(grant_id).await?;
+		let pending = self.pending_transfer(grant_id)?;
 		self.check_device_and_expiry(&pending, device_id)?;
 		if pending.grant.transport != SourceTransport::Tunnel {
 			return Err(SourceHubError::TransportMismatch);
 		}
 		{
-			let mut mutable =
-				pending.mutable.lock().expect("source grant mutex poisoned");
+			let mut mutable = pending.lock();
 			match &mutable.lifecycle {
 				GrantLifecycle::Pending | GrantLifecycle::Ready => {
 					mutable.lifecycle = GrantLifecycle::Consumed;
@@ -608,14 +813,18 @@ impl SourceHub {
 				GrantLifecycle::Expired => return Err(SourceHubError::Expired),
 				_ => return Err(SourceHubError::Replay),
 			}
+			mutable.last_activity = Instant::now();
 		}
 		let receiver = pending
 			.tunnel_rx
 			.lock()
-			.expect("source tunnel receiver mutex poisoned")
 			.take()
-			.ok_or(SourceHubError::Replay);
-		receiver
+			.ok_or(SourceHubError::Replay)?;
+		Ok(TunnelReceiver {
+			registry: Arc::clone(&self.pending),
+			pending,
+			receiver,
+		})
 	}
 
 	/// Alias with the transport terminology used by the stream route.
@@ -629,7 +838,7 @@ impl SourceHub {
 
 	/// Whether an authenticated device may claim a pending tunnel grant.
 	pub async fn has_pending_tunnel(&self, device_id: &str, grant_id: &str) -> bool {
-		let Ok(pending) = self.pending_transfer(grant_id).await else {
+		let Ok(pending) = self.pending_transfer(grant_id) else {
 			return false;
 		};
 		if pending.device_id != device_id
@@ -638,9 +847,9 @@ impl SourceHub {
 		{
 			return false;
 		}
-		let mutable = pending.mutable.lock().expect("source grant mutex poisoned");
+		let mutable = pending.lock();
 		matches!(
-			&mutable.lifecycle,
+			mutable.lifecycle,
 			GrantLifecycle::Pending | GrantLifecycle::Ready
 		)
 	}
@@ -652,7 +861,7 @@ impl SourceHub {
 		grant_id: &str,
 		chunk: Vec<u8>,
 	) -> Result<(), SourceHubError> {
-		let pending = self.pending_transfer(grant_id).await?;
+		let pending = self.pending_transfer(grant_id)?;
 		self.check_device_and_expiry(&pending, device_id)?;
 		if chunk.len() > MAX_SOURCE_TUNNEL_CHUNK_BYTES {
 			pending.fail(format!(
@@ -660,19 +869,13 @@ impl SourceHub {
 				chunk.len(),
 				MAX_SOURCE_TUNNEL_CHUNK_BYTES
 			));
-			pending
-				.tunnel_tx
-				.lock()
-				.expect("source tunnel sender mutex poisoned")
-				.take();
 			return Err(SourceHubError::ChunkTooLarge {
 				actual: chunk.len(),
 				max: MAX_SOURCE_TUNNEL_CHUNK_BYTES,
 			});
 		}
 		let sender = {
-			let mut mutable =
-				pending.mutable.lock().expect("source grant mutex poisoned");
+			let mut mutable = pending.lock();
 			match &mutable.lifecycle {
 				GrantLifecycle::Pending | GrantLifecycle::Ready => {
 					mutable.lifecycle = GrantLifecycle::Consumed;
@@ -684,34 +887,24 @@ impl SourceHub {
 			let attempted = mutable.bytes_sent.saturating_add(chunk.len() as u64);
 			let max = pending.grant.max_bytes.min(pending.grant.length);
 			if attempted > max {
-				mutable.lifecycle = GrantLifecycle::Failed(format!(
+				drop(mutable);
+				pending.fail(format!(
 					"tunnel exceeded {} bytes with {} bytes",
 					max, attempted
 				));
-				pending.notify.notify_waiters();
-				pending
-					.tunnel_tx
-					.lock()
-					.expect("source tunnel sender mutex poisoned")
-					.take();
 				return Err(SourceHubError::ExcessBytes { attempted, max });
 			}
 			mutable.bytes_sent = attempted;
+			mutable.last_activity = Instant::now();
 			pending
 				.tunnel_tx
 				.lock()
-				.expect("source tunnel sender mutex poisoned")
 				.as_ref()
 				.cloned()
 				.ok_or(SourceHubError::TunnelDisconnected)?
 		};
 		if sender.send(chunk).await.is_err() {
 			pending.fail("source tunnel receiver disconnected".to_owned());
-			pending
-				.tunnel_tx
-				.lock()
-				.expect("source tunnel sender mutex poisoned")
-				.take();
 			return Err(SourceHubError::TunnelDisconnected);
 		}
 		Ok(())
@@ -728,16 +921,17 @@ impl SourceHub {
 	}
 
 	/// Finish an accepted tunnel and require the exact authorized byte count.
+	/// Either way the grant is terminal and leaves the hub; the receiver still
+	/// drains whatever the worker delivered before this frame.
 	pub async fn finish_tunnel(
 		&self,
 		device_id: &str,
 		grant_id: &str,
 	) -> Result<(), SourceHubError> {
-		let pending = self.pending_transfer(grant_id).await?;
+		let pending = self.pending_transfer(grant_id)?;
 		self.check_device_and_expiry(&pending, device_id)?;
-		let (actual, expected, complete) = {
-			let mut mutable =
-				pending.mutable.lock().expect("source grant mutex poisoned");
+		let outcome = {
+			let mut mutable = pending.lock();
 			if !mutable.tunnel_claimed || mutable.lifecycle != GrantLifecycle::Consumed {
 				return Err(SourceHubError::TunnelNotAccepted);
 			}
@@ -745,27 +939,19 @@ impl SourceHub {
 			let expected = pending.grant.length;
 			if actual == expected {
 				mutable.lifecycle = GrantLifecycle::Completed;
-				pending.notify.notify_waiters();
-				(actual, expected, true)
+				Ok(())
 			} else {
 				mutable.lifecycle = GrantLifecycle::Failed(format!(
 					"tunnel ended at {} bytes; expected {}",
 					actual, expected
 				));
-				pending.notify.notify_waiters();
-				(actual, expected, false)
+				Err(SourceHubError::LengthMismatch { actual, expected })
 			}
 		};
-		pending
-			.tunnel_tx
-			.lock()
-			.expect("source tunnel sender mutex poisoned")
-			.take();
-		if complete {
-			Ok(())
-		} else {
-			Err(SourceHubError::LengthMismatch { actual, expected })
-		}
+		pending.close_tunnel();
+		pending.notify.notify_waiters();
+		self.pending.remove(grant_id);
+		outcome
 	}
 
 	/// Handle one decoded source control frame.  Manifest chunks are returned to
@@ -814,18 +1000,18 @@ impl SourceHub {
 		Ok(())
 	}
 
-	async fn pending_transfer(
+	fn pending_transfer(
 		&self,
 		grant_id: &str,
 	) -> Result<Arc<PendingTransfer>, SourceHubError> {
 		self.pending
-			.read()
-			.await
 			.get(grant_id)
-			.cloned()
 			.ok_or(SourceHubError::GrantNotFound)
 	}
 
+	/// Enforce the device binding and the acceptance window.  An accepted
+	/// tunnel is not expired by the wall clock; only its idle deadline and
+	/// byte budget end it.
 	fn check_device_and_expiry(
 		&self,
 		pending: &PendingTransfer,
@@ -835,43 +1021,31 @@ impl SourceHub {
 			return Err(SourceHubError::WrongDevice);
 		}
 		if pending.expire_if_needed() {
-			pending
-				.tunnel_tx
-				.lock()
-				.expect("source tunnel sender mutex poisoned")
-				.take();
 			return Err(SourceHubError::Expired);
 		}
 		Ok(())
 	}
 
-	async fn fail_pending(&self, grant_id: &str, error: &str) {
-		if let Ok(pending) = self.pending_transfer(grant_id).await {
+	/// Fail a grant whose issuer already received an error and will not wait.
+	fn fail_pending(&self, grant_id: &str, error: &str) {
+		if let Ok(pending) = self.pending_transfer(grant_id) {
 			pending.fail(error.to_owned());
-			pending
-				.tunnel_tx
-				.lock()
-				.expect("source tunnel sender mutex poisoned")
-				.take();
+			self.pending.remove(grant_id);
 		}
 	}
 
-	async fn fail_device_grants(&self, device_id: &str, error: &str) {
+	/// Fail every grant of a device whose socket went away.  Waiters observe
+	/// the failure and release their grant; the rest is swept.
+	fn fail_device_grants(&self, device_id: &str, error: &str) {
 		let transfers: Vec<_> = self
 			.pending
-			.read()
-			.await
+			.lock()
 			.values()
 			.filter(|pending| pending.device_id == device_id)
 			.cloned()
 			.collect();
 		for pending in transfers {
 			pending.fail(error.to_owned());
-			pending
-				.tunnel_tx
-				.lock()
-				.expect("source tunnel sender mutex poisoned")
-				.take();
 		}
 	}
 }
@@ -880,7 +1054,6 @@ impl SourceHub {
 mod tests {
 	use super::*;
 	use crate::source_protocol::{SourceReadMode, SourceReadRequest};
-	use std::time::SystemTime;
 
 	fn hello(transport: SourceTransport) -> SourceWorkerHello {
 		SourceWorkerHello {
@@ -898,7 +1071,24 @@ mod tests {
 		}
 	}
 
+	fn now_ms() -> i64 {
+		SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_millis() as i64
+	}
+
 	fn request(transport: SourceTransport, length: u64) -> SourceReadRequest {
+		request_expiring_in(transport, length, Duration::from_secs(60))
+	}
+
+	/// A request whose acceptance window closes after `ttl`.  Millisecond
+	/// `expires_at` values keep sub-second windows exact.
+	fn request_expiring_in(
+		transport: SourceTransport,
+		length: u64,
+		ttl: Duration,
+	) -> SourceReadRequest {
 		SourceReadRequest {
 			root_id: "root".into(),
 			worker_item_id: "item".into(),
@@ -908,11 +1098,7 @@ mod tests {
 			offset: 0,
 			length,
 			transport,
-			expires_at: (SystemTime::now()
-				.duration_since(std::time::UNIX_EPOCH)
-				.unwrap()
-				.as_secs() as i64)
-				+ 60,
+			expires_at: now_ms() + ttl.as_millis() as i64,
 			max_bytes: length,
 		}
 	}
@@ -933,10 +1119,13 @@ mod tests {
 			Err(SourceHubError::WrongDevice)
 		));
 		hub.consume_direct("device", &grant.grant_id).await.unwrap();
+		// The hub has no further part in a direct transfer: consumption
+		// releases the grant, so a second consume finds nothing.
 		assert!(matches!(
 			hub.consume_direct("device", &grant.grant_id).await,
-			Err(SourceHubError::Replay)
+			Err(SourceHubError::GrantNotFound)
 		));
+		assert_eq!(hub.pending_grants(), 0);
 	}
 
 	#[tokio::test]
@@ -979,5 +1168,262 @@ mod tests {
 		hub.finish_tunnel("device", &grant.grant_id).await.unwrap();
 		assert_eq!(receiver.recv().await.as_deref(), Some(b"hello".as_slice()));
 		assert!(receiver.recv().await.is_none());
+	}
+
+	/// A grant is one-use: once its transfer finished, failed, or was
+	/// consumed, nothing must remain in the hub for it.
+	#[tokio::test]
+	async fn finished_grants_leave_the_hub() {
+		let hub = SourceHub::new();
+		let (_outbound, _) = hub
+			.attach("device", "Device", hello(SourceTransport::Tunnel))
+			.await;
+
+		// Completed tunnel, receiver drained and dropped.
+		let grant = hub
+			.issue_grant("device", request(SourceTransport::Tunnel, 2))
+			.await
+			.unwrap();
+		hub.read_ready("device", &grant.grant_id).await.unwrap();
+		let mut receiver = hub.accept_tunnel("device", &grant.grant_id).await.unwrap();
+		hub.push_tunnel_chunk("device", &grant.grant_id, vec![1, 2])
+			.await
+			.unwrap();
+		hub.finish_tunnel("device", &grant.grant_id).await.unwrap();
+		assert_eq!(hub.pending_grants(), 0, "completion releases the grant");
+		assert_eq!(receiver.recv().await, Some(vec![1, 2]));
+		assert!(receiver.recv().await.is_none());
+		drop(receiver);
+
+		// Worker-failed grant: the failure is kept for the waiter, which
+		// reads the worker's reason and releases the grant.
+		let grant = hub
+			.issue_grant("device", request(SourceTransport::Tunnel, 2))
+			.await
+			.unwrap();
+		hub.read_failed("device", &grant.grant_id, "storage offline")
+			.await
+			.unwrap();
+		assert_eq!(hub.pending_grants(), 1, "the reason is kept for the waiter");
+		assert!(matches!(
+			hub.wait_ready(&grant.grant_id).await,
+			Err(SourceHubError::WorkerFailed(reason)) if reason == "storage offline"
+		));
+		assert_eq!(
+			hub.pending_grants(),
+			0,
+			"the waiter releases a failed grant"
+		);
+
+		// Consumer that walked away: dropping the receiver releases the grant
+		// and a late chunk from the worker is refused.
+		let grant = hub
+			.issue_grant("device", request(SourceTransport::Tunnel, 2))
+			.await
+			.unwrap();
+		hub.read_ready("device", &grant.grant_id).await.unwrap();
+		let receiver = hub.accept_tunnel("device", &grant.grant_id).await.unwrap();
+		assert_eq!(hub.pending_grants(), 1);
+		drop(receiver);
+		assert_eq!(
+			hub.pending_grants(),
+			0,
+			"a dropped receiver releases the grant"
+		);
+		assert!(matches!(
+			hub.push_tunnel_chunk("device", &grant.grant_id, vec![1])
+				.await,
+			Err(SourceHubError::GrantNotFound)
+		));
+
+		// Abandoned before acceptance: swept by the next registration once
+		// its window closed.
+		let abandoned = hub
+			.issue_grant(
+				"device",
+				request_expiring_in(
+					SourceTransport::Tunnel,
+					2,
+					Duration::from_millis(50),
+				),
+			)
+			.await
+			.unwrap();
+		assert_eq!(hub.pending_grants(), 1);
+		tokio::time::sleep(Duration::from_millis(80)).await;
+		let fresh = hub
+			.issue_grant("device", request(SourceTransport::Tunnel, 2))
+			.await
+			.unwrap();
+		assert_eq!(hub.pending_grants(), 1, "the expired grant was swept");
+		assert!(matches!(
+			hub.read_ready("device", &abandoned.grant_id).await,
+			Err(SourceHubError::GrantNotFound)
+		));
+		hub.read_ready("device", &fresh.grant_id).await.unwrap();
+	}
+
+	/// A worker that never answers must not hang the route: the wait ends at
+	/// the grant's own expiry and reports it.
+	#[tokio::test]
+	async fn wait_ready_ends_when_the_grant_expires() {
+		let hub = SourceHub::new();
+		let (_outbound, _) = hub
+			.attach("device", "Device", hello(SourceTransport::Tunnel))
+			.await;
+		let grant = hub
+			.issue_grant(
+				"device",
+				request_expiring_in(
+					SourceTransport::Tunnel,
+					2,
+					Duration::from_millis(200),
+				),
+			)
+			.await
+			.unwrap();
+		let started = Instant::now();
+		let outcome =
+			tokio::time::timeout(Duration::from_secs(5), hub.wait_ready(&grant.grant_id))
+				.await
+				.expect("wait_ready must return once the grant expires");
+		assert!(
+			matches!(outcome, Err(SourceHubError::Expired)),
+			"{outcome:?}"
+		);
+		assert!(
+			started.elapsed() >= Duration::from_millis(150),
+			"the wait must last until the deadline, not fail early"
+		);
+		assert_eq!(hub.pending_grants(), 0, "an expired grant is released");
+	}
+
+	/// The readiness frame can land on another thread between the waiter's
+	/// state read and its first poll; the wake-up must still be delivered.
+	/// (Deterministic reproduction of that window is not possible from the
+	/// outside; this bounds the hang if the ordering ever regresses.)
+	#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+	async fn wait_ready_never_misses_a_readiness_frame() {
+		let hub = Arc::new(SourceHub::new());
+		let (mut outbound, _) = hub
+			.attach("device", "Device", hello(SourceTransport::Tunnel))
+			.await;
+		// Drain the control commands the way the socket writer would.
+		let drain = tokio::spawn(async move { while outbound.recv().await.is_some() {} });
+		for _ in 0..500 {
+			let grant = hub
+				.issue_grant("device", request(SourceTransport::Tunnel, 1))
+				.await
+				.unwrap();
+			let waiter = {
+				let hub = Arc::clone(&hub);
+				let grant_id = grant.grant_id.clone();
+				tokio::spawn(async move { hub.wait_ready(&grant_id).await })
+			};
+			let ready = {
+				let hub = Arc::clone(&hub);
+				let grant_id = grant.grant_id.clone();
+				tokio::spawn(async move { hub.read_ready("device", &grant_id).await })
+			};
+			ready.await.unwrap().unwrap();
+			tokio::time::timeout(Duration::from_secs(5), waiter)
+				.await
+				.expect("a ready grant must wake its waiter")
+				.unwrap()
+				.unwrap();
+			let mut receiver =
+				hub.accept_tunnel("device", &grant.grant_id).await.unwrap();
+			hub.push_tunnel_chunk("device", &grant.grant_id, vec![7])
+				.await
+				.unwrap();
+			hub.finish_tunnel("device", &grant.grant_id).await.unwrap();
+			assert_eq!(receiver.recv().await, Some(vec![7]));
+		}
+		assert_eq!(hub.pending_grants(), 0);
+		drain.abort();
+	}
+
+	/// The fixed expiry bounds acceptance only.  A transfer that is still
+	/// delivering bytes when `expires_at` passes keeps going to completion.
+	#[tokio::test]
+	async fn accepted_tunnel_outlives_the_grant_expiry() {
+		let hub = SourceHub::new();
+		let (_outbound, _) = hub
+			.attach("device", "Device", hello(SourceTransport::Tunnel))
+			.await;
+		let grant = hub
+			.issue_grant(
+				"device",
+				request_expiring_in(
+					SourceTransport::Tunnel,
+					4,
+					Duration::from_millis(150),
+				),
+			)
+			.await
+			.unwrap();
+		hub.read_ready("device", &grant.grant_id).await.unwrap();
+		let mut receiver = hub.accept_tunnel("device", &grant.grant_id).await.unwrap();
+		hub.push_tunnel_chunk("device", &grant.grant_id, vec![1, 2])
+			.await
+			.unwrap();
+		tokio::time::sleep(Duration::from_millis(250)).await;
+		assert!(grant.is_expired(), "the acceptance window has closed");
+		hub.push_tunnel_chunk("device", &grant.grant_id, vec![3, 4])
+			.await
+			.expect("an accepted stream is not cut off by the acceptance deadline");
+		hub.finish_tunnel("device", &grant.grant_id).await.unwrap();
+		assert_eq!(receiver.recv().await, Some(vec![1, 2]));
+		assert_eq!(receiver.recv().await, Some(vec![3, 4]));
+		assert!(receiver.recv().await.is_none());
+
+		// Acceptance itself still closes: a grant nobody made ready expires.
+		let late = hub
+			.issue_grant(
+				"device",
+				request_expiring_in(
+					SourceTransport::Tunnel,
+					1,
+					Duration::from_millis(50),
+				),
+			)
+			.await
+			.unwrap();
+		tokio::time::sleep(Duration::from_millis(80)).await;
+		assert!(matches!(
+			hub.read_ready("device", &late.grant_id).await,
+			Err(SourceHubError::Expired)
+		));
+	}
+
+	/// An accepted stream is bounded by the idle deadline instead: the
+	/// consumer learns about a stalled worker and the grant is released.
+	#[tokio::test(start_paused = true)]
+	async fn stalled_tunnel_times_out_for_the_consumer() {
+		let hub = SourceHub::new();
+		let (_outbound, _) = hub
+			.attach("device", "Device", hello(SourceTransport::Tunnel))
+			.await;
+		let grant = hub
+			.issue_grant("device", request(SourceTransport::Tunnel, 4))
+			.await
+			.unwrap();
+		hub.read_ready("device", &grant.grant_id).await.unwrap();
+		let mut receiver = hub.accept_tunnel("device", &grant.grant_id).await.unwrap();
+		hub.push_tunnel_chunk("device", &grant.grant_id, vec![1, 2])
+			.await
+			.unwrap();
+		assert_eq!(receiver.next_chunk().await.unwrap(), Some(vec![1, 2]));
+		// No further chunk arrives; the paused clock jumps to the deadline.
+		assert!(matches!(
+			receiver.next_chunk().await,
+			Err(SourceHubError::IdleTimeout)
+		));
+		assert_eq!(hub.pending_grants(), 0);
+		assert!(matches!(
+			hub.push_tunnel_chunk("device", &grant.grant_id, vec![3, 4])
+				.await,
+			Err(SourceHubError::GrantNotFound)
+		));
 	}
 }

@@ -96,6 +96,7 @@ mod m20260964_000000_book_request_format_isbn;
 mod m20260965_000000_mam_acquisition;
 mod m20260966_000000_repair_liseur_alias_split;
 mod m20260967_000000_book_request_preferred_narrator;
+mod m20260968_000000_mam_grab_handoff_attempts;
 
 pub use m20260963_000000_repair_liseur_pair_work_identity::merge_liseur_work;
 
@@ -199,6 +200,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260965_000000_mam_acquisition::Migration),
 			Box::new(m20260966_000000_repair_liseur_alias_split::Migration),
 			Box::new(m20260967_000000_book_request_preferred_narrator::Migration),
+			Box::new(m20260968_000000_mam_grab_handoff_attempts::Migration),
 		]
 	}
 }

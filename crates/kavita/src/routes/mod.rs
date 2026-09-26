@@ -185,6 +185,14 @@ pub trait KavitaBackend: Send + Sync {
 
 	fn server_facts(&self) -> ServerFacts;
 
+	/// The largest decoded cover `POST /api/Upload/{series,volume,chapter}`
+	/// accepts, in bytes: the server's image upload limit. The upload routes
+	/// size their request-body budget from it (base64 plus the JSON envelope)
+	/// and refuse a larger decoded image with `413` before it reaches
+	/// [`KavitaBackend::upload_series_cover`] or
+	/// [`KavitaBackend::upload_media_cover`].
+	fn max_cover_upload_bytes(&self) -> usize;
+
 	/// Render page `page` (1-based, Stump numbering) of a media item.
 	async fn media_page(
 		&self,
@@ -476,7 +484,7 @@ where
 		.merge(server::routes::<S>())
 		.merge(library::routes::<S>())
 		.merge(series::routes::<S>())
-		.merge(upload::routes::<S>())
+		.merge(upload::routes::<S>(backend.max_cover_upload_bytes()))
 		.merge(image::routes::<S>())
 		.merge(reader::routes::<S>())
 		.merge(book::routes::<S>())

@@ -1,31 +1,33 @@
+import { providerLabel as sharedProviderLabel } from '@stump/ui/editor-fields'
 import type { RequestFormat } from '$lib/graphql/generated/graphql'
 
-export const BOOK_REQUEST_STATUS_VALUES = [
-	'PENDING',
+/** The statuses the server still assigns; everything else is a historical row. */
+export const LIVE_REQUEST_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'] as const
+
+/** Statuses left behind by the retired connector workflow; shown as one `Historical` state. */
+const LEGACY_REQUEST_STATUSES = [
 	'SEARCHING',
 	'AWAITING_APPROVAL',
 	'NEEDS_SELECTION',
-	'APPROVED',
 	'GRABBED',
 	'IMPORTING',
 	'QUEUED',
 	'COMPLETED',
-	'REJECTED',
 	'FAILED',
 ] as const
+
+export const BOOK_REQUEST_STATUS_VALUES = [...LIVE_REQUEST_STATUSES, ...LEGACY_REQUEST_STATUSES] as const
+
+const LEGACY: Record<string, true> = Object.fromEntries(
+	LEGACY_REQUEST_STATUSES.map((status) => [status, true] as const)
+)
+
 export const REQUEST_STATUS_LABELS: Record<string, string> = {
 	PENDING: 'Awaiting approval',
-	AWAITING_APPROVAL: 'Legacy: awaiting approval',
 	APPROVED: 'Approved',
-	SEARCHING: 'Legacy: source search',
-	NEEDS_SELECTION: 'Legacy: selection needed',
-	GRABBED: 'Legacy: acquisition started',
-	IMPORTING: 'Legacy: importing',
-	QUEUED: 'Legacy: queued',
-	COMPLETED: 'Legacy: completed',
 	REJECTED: 'Rejected',
-	FAILED: 'Legacy: failed',
 }
+const LEGACY_STATUS_LABEL = 'Historical'
 
 export function requestFormatLabel(format: string | null | undefined): string {
 	switch (format) {
@@ -43,30 +45,22 @@ export const REQUEST_STATUS_VARIANTS: Record<
 	'default' | 'secondary' | 'outline' | 'destructive'
 > = {
 	PENDING: 'outline',
-	AWAITING_APPROVAL: 'outline',
 	APPROVED: 'secondary',
-	SEARCHING: 'secondary',
-	NEEDS_SELECTION: 'outline',
-	GRABBED: 'secondary',
-	IMPORTING: 'secondary',
-	QUEUED: 'outline',
-	COMPLETED: 'default',
 	REJECTED: 'destructive',
-	FAILED: 'destructive',
 }
 
 export const REQUEST_STATUS_DESCRIPTIONS: Record<string, string> = {
 	PENDING: 'Waiting for an operator to review it.',
-	AWAITING_APPROVAL: 'Legacy approval state; an operator can still record a decision.',
 	APPROVED: 'Approved. A manager can add a release, which lands in the Editor for review.',
-	SEARCHING: 'Legacy acquisition state from an earlier connector workflow.',
-	NEEDS_SELECTION: 'Legacy acquisition state from an earlier connector workflow.',
-	GRABBED: 'Legacy acquisition state from an earlier connector workflow.',
-	IMPORTING: 'Legacy acquisition state from an earlier connector workflow.',
-	QUEUED: 'Legacy acquisition state from an earlier connector workflow.',
-	COMPLETED: 'Legacy acquisition state from an earlier connector workflow.',
 	REJECTED: 'Rejected by an operator.',
-	FAILED: 'Legacy acquisition state from an earlier connector workflow.',
+}
+const LEGACY_STATUS_DESCRIPTION = 'Recorded by an earlier workflow; no further action is taken.'
+
+const APPROVAL_POLICY_LABELS: Record<string, string> = {
+	REQUIRED: 'Approval required',
+	NONE: 'Auto-approved',
+	NOT_REQUIRED: 'Auto-approved',
+	AUTO: 'Auto-approved',
 }
 
 export const APPROVAL_STATUS_LABELS: Record<string, string> = {
@@ -84,8 +78,18 @@ export function safeText(value: unknown, maxLength = 240): string {
 	return clean.length > maxLength ? `${clean.slice(0, maxLength - 1)}…` : clean
 }
 
+/** `SOME_NEW_POLICY` → `Some New Policy`: readable words for a value the client has no label for. */
+function titleWords(id: string): string {
+	return id
+		.split(/[-_\s]+/)
+		.filter(Boolean)
+		.map((word) => word[0].toUpperCase() + word.slice(1).toLowerCase())
+		.join(' ')
+}
+
 export function statusLabel(status: string | null | undefined): string {
 	const normalized = status?.toUpperCase() ?? ''
+	if (LEGACY[normalized]) return LEGACY_STATUS_LABEL
 	return (
 		REQUEST_STATUS_LABELS[normalized] ??
 		(normalized ? safeText(normalized.replace(/_/g, ' ')) : 'Unknown status')
@@ -93,7 +97,25 @@ export function statusLabel(status: string | null | undefined): string {
 }
 
 export function statusDescription(status: string | null | undefined): string {
-	return REQUEST_STATUS_DESCRIPTIONS[status?.toUpperCase() ?? ''] ?? 'Status recorded by the server.'
+	const normalized = status?.toUpperCase() ?? ''
+	if (LEGACY[normalized]) return LEGACY_STATUS_DESCRIPTION
+	return REQUEST_STATUS_DESCRIPTIONS[normalized] ?? 'Status recorded by the server.'
+}
+
+/** Only `REQUIRED` is written today; the rest guard against a server that starts auto-approving. */
+export function approvalPolicyLabel(policy: string | null | undefined): string {
+	const normalized = safeText(policy, 80).toUpperCase()
+	if (!normalized) return 'Unknown policy'
+	return APPROVAL_POLICY_LABELS[normalized] ?? titleWords(normalized)
+}
+
+/**
+ * A provider's display name; empty when there is no provider. `sourceProvider`
+ * is typed by hand on the create form, so it is sanitised before lookup.
+ */
+export function providerLabel(id: string | null | undefined): string {
+	const clean = safeText(id, 80)
+	return clean ? sharedProviderLabel(clean.toLowerCase()) : ''
 }
 
 export function queryText(params: URLSearchParams, key: string): string {

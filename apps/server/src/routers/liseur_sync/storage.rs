@@ -3,6 +3,7 @@ use std::{
 	fs::File,
 	io::{self, Read},
 	path::Path,
+	sync::{LazyLock, Mutex},
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -14,18 +15,22 @@ use models::{
 		reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
 	},
 	entity::{
-		bookmark, library, liseur_sync_series_name, media, media_annotation,
-		media_metadata, reading_session, series,
+		bookmark, library, liseur_sync_media_link, liseur_sync_series_name, media,
+		media_annotation, media_metadata, reading_session, series,
 		user::{self, AuthUser, LoginUser},
 		user_preferences,
 	},
-	services::{reading_progress::derive_readthrough_number, reading_state},
+	services::{
+		liseur_annotation::resequence_work_annotations,
+		reading_progress::derive_readthrough_number, reading_state,
+	},
 	shared::{
 		enums::{FileStatus, ReadingStatus},
 		liseur_annotation_projection::{
 			is_liseur_sync_projection_id, is_stump_native_annotation_id,
 			liseur_sync_projection_id, parse_stump_native_annotation_id,
-			stump_native_annotation_id, STUMP_NATIVE_ANNOTATION_ID_PREFIX,
+			projection_link_order_by, stump_native_annotation_id,
+			STUMP_NATIVE_ANNOTATION_ID_PREFIX,
 		},
 		readium::{ReadiumLocator, ReadiumText},
 	},
@@ -33,7 +38,7 @@ use models::{
 use sea_orm::{
 	prelude::Decimal, ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait,
 	DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
-	QueryResult, Statement, Value as DbValue,
+	QueryResult, QuerySelect, QueryTrait, Statement, Value as DbValue,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1547,6 +1552,14 @@ async fn merge_aliasless_pair_work(
 		migrations::merge_liseur_work(&tx, user_id, losing_work_id, identity_work_id)
 			.await
 			.map_err(internal)?;
+		// The merged work now carries the losing work's links and records:
+		// the records name a new `work_id` and may project onto a different
+		// book, so every feed consumer has to replay them.
+		ensure_counter(&tx, user_id).await?;
+		resequence_work_annotations(&tx, user_id, identity_work_id)
+			.await
+			.map_err(internal)?;
+		reconcile_annotation_projections(&tx, user_id).await?;
 		tx.commit().await.map_err(internal)?;
 		return Ok(());
 	}
@@ -1844,6 +1857,13 @@ pub(crate) async fn resolve_work(
 			.map_err(internal)?;
 		}
 	}
+	// A link that is new, or that now names a different edition digest,
+	// changes which book the work's annotations project onto and which book
+	// the exporter folds the work into. Neither reads links: both walk the
+	// CAS feed clock, so the work's live records are moved above the high
+	// water (position only — `rev`, timestamps, writer and payload stay) and
+	// every consumer replays them. A re-resolve that changes nothing must not.
+	let mut links_changed = false;
 	for edition in &editions {
 		let Some(media_id) = &edition.media_id else {
 			continue;
@@ -1851,7 +1871,8 @@ pub(crate) async fn resolve_work(
 		let existing_link = txn
 			.query_one(db_statement(
 				&txn,
-				"SELECT id, work_id FROM liseur_sync_media_links
+				"SELECT id, work_id, edition_sha, resolution_status
+                 FROM liseur_sync_media_links
                  WHERE user_id = $1 AND media_id = $2",
 				vec![user_id.to_owned().into(), media_id.clone().into()],
 			))
@@ -1866,6 +1887,16 @@ pub(crate) async fn resolve_work(
 					work_id.clone(),
 				]));
 			}
+			let stored_sha: Option<String> =
+				row.try_get("", "edition_sha").map_err(internal)?;
+			let stored_status: Option<String> =
+				row.try_get("", "resolution_status").map_err(internal)?;
+			if stored_sha.as_deref() == Some(edition.edition_sha.as_str())
+				&& stored_status.as_deref() == Some(edition.resolution_status.as_str())
+			{
+				continue;
+			}
+			links_changed |= stored_sha.as_deref() != Some(edition.edition_sha.as_str());
 			txn.execute(db_statement(
 				&txn,
 				"UPDATE liseur_sync_media_links
@@ -1881,34 +1912,33 @@ pub(crate) async fn resolve_work(
 			.map_err(internal)?;
 		} else {
 			txn.execute(db_statement(
-                &txn,
-                "INSERT INTO liseur_sync_media_links
+				&txn,
+				"INSERT INTO liseur_sync_media_links
                     (id, user_id, media_id, work_id, edition_sha, resolution_status, created_at)
                  VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                vec![
-                    Uuid::new_v4().to_string().into(),
-                    user_id.to_owned().into(),
-                    media_id.clone().into(),
-                    work_id.clone().into(),
-                    edition.edition_sha.clone().into(),
-                    edition.resolution_status.clone().into(),
-                    now.clone().into(),
-                ],
-            ))
-            .await
-            .map_err(internal)?;
+				vec![
+					Uuid::new_v4().to_string().into(),
+					user_id.to_owned().into(),
+					media_id.clone().into(),
+					work_id.clone().into(),
+					edition.edition_sha.clone().into(),
+					edition.resolution_status.clone().into(),
+					now.clone().into(),
+				],
+			))
+			.await
+			.map_err(internal)?;
+			links_changed = true;
 		}
 	}
 
-	txn.execute(db_statement(
-		&txn,
-		"INSERT INTO liseur_sync_counters (user_id, op_seq, annotation_seq)
-         VALUES ($1, 0, 0) ON CONFLICT(user_id) DO NOTHING",
-		vec![user_id.to_owned().into()],
-	))
-	.await
-	.map_err(internal)?;
-	reconcile_native_annotations(&txn, user_id).await?;
+	ensure_counter(&txn, user_id).await?;
+	if links_changed {
+		resequence_work_annotations(&txn, user_id, &work_id)
+			.await
+			.map_err(internal)?;
+	}
+	reconcile_native_works(&txn, user_id, std::slice::from_ref(&work_id)).await?;
 	reconcile_annotation_projections(&txn, user_id).await?;
 	txn.commit().await.map_err(internal)?;
 
@@ -2934,6 +2964,9 @@ async fn delete_native_annotation_projection<C: ConnectionTrait>(
 	Ok(())
 }
 
+/// The book a Liseur record projects onto, ranked by
+/// [`projection_link_order_by`] so the projection, the annotation hub, and
+/// Home edits all name the same media row.
 async fn linked_annotation_media_id<C: ConnectionTrait>(
 	conn: &C,
 	user_id: &str,
@@ -2942,11 +2975,13 @@ async fn linked_annotation_media_id<C: ConnectionTrait>(
 	let row = conn
 		.query_one(db_statement(
 			conn,
-			"SELECT media_id FROM liseur_sync_media_links
-             WHERE user_id = $1 AND work_id = $2
-             ORDER BY CASE WHEN $3 <> '' AND edition_sha = $3 THEN 0 ELSE 1 END,
-                      created_at ASC, id ASC
-             LIMIT 1",
+			&format!(
+				"SELECT l.media_id FROM liseur_sync_media_links l
+                 WHERE l.user_id = $1 AND l.work_id = $2
+                 ORDER BY {}
+                 LIMIT 1",
+				projection_link_order_by("l", "$3")
+			),
 			vec![
 				user_id.to_owned().into(),
 				annotation.work_id.clone().into(),
@@ -2965,29 +3000,30 @@ fn readium_projection_locator(annotation: &StoredAnnotation) -> Option<ReadiumLo
 	(!locator.href.trim().is_empty() && locator.locations.is_some()).then_some(locator)
 }
 
+/// Write (or remove) the native `media_annotations`/`bookmarks` row that
+/// mirrors one Liseur record. A record whose work has no linked book has no
+/// projection yet; the link writers re-sequence the work's records when a
+/// link arrives, so this never has to be retried on its own.
 async fn project_annotation<C: ConnectionTrait>(
 	conn: &C,
 	user_id: &str,
 	annotation: &StoredAnnotation,
-) -> Result<bool, LiseurSyncError> {
+) -> Result<(), LiseurSyncError> {
 	if is_stump_native_annotation_id(&annotation.id) {
-		return Ok(true);
+		return Ok(());
 	}
 	let projection_id = liseur_sync_projection_id(user_id, &annotation.id);
 	if annotation.deleted
 		|| !matches!(annotation.kind.as_str(), "highlight" | "note" | "bookmark")
 	{
-		delete_native_annotation_projection(conn, user_id, &projection_id).await?;
-		return Ok(true);
+		return delete_native_annotation_projection(conn, user_id, &projection_id).await;
 	}
 	let Some(mut locator) = readium_projection_locator(annotation) else {
-		delete_native_annotation_projection(conn, user_id, &projection_id).await?;
-		return Ok(true);
+		return delete_native_annotation_projection(conn, user_id, &projection_id).await;
 	};
 	let Some(media_id) = linked_annotation_media_id(conn, user_id, annotation).await?
 	else {
-		delete_native_annotation_projection(conn, user_id, &projection_id).await?;
-		return Ok(false);
+		return delete_native_annotation_projection(conn, user_id, &projection_id).await;
 	};
 	delete_native_annotation_projection(conn, user_id, &projection_id).await?;
 	let created_at = DateTime::parse_from_rfc3339(&annotation.client_ts)
@@ -3085,9 +3121,13 @@ async fn project_annotation<C: ConnectionTrait>(
 		.await
 		.map_err(internal)?;
 	}
-	Ok(true)
+	Ok(())
 }
 
+/// Bring the native projections up to the CAS high water. The cursor is a
+/// feed position: every record above it is projected once, in order, and
+/// the cursor then moves to the high water, so the work done here is bounded
+/// by what changed since the last call, never by the size of the account.
 async fn reconcile_annotation_projections<C: ConnectionTrait>(
 	conn: &C,
 	user_id: &str,
@@ -3126,24 +3166,18 @@ async fn reconcile_annotation_projections<C: ConnectionTrait>(
 		))
 		.await
 		.map_err(internal)?;
-	let mut completed = high_water;
 	for row in &rows {
-		let annotation = stored_annotation(row)?;
-		if !project_annotation(conn, user_id, &annotation).await? {
-			completed = completed.min(annotation.seq.saturating_sub(1));
-		}
+		project_annotation(conn, user_id, &stored_annotation(row)?).await?;
 	}
-	if completed > projected {
-		conn.execute(db_statement(
-			conn,
-			"UPDATE liseur_sync_counters
-             SET projected_annotation_seq = $1
-             WHERE user_id = $2 AND projected_annotation_seq < $1",
-			vec![completed.into(), user_id.to_owned().into()],
-		))
-		.await
-		.map_err(internal)?;
-	}
+	conn.execute(db_statement(
+		conn,
+		"UPDATE liseur_sync_counters
+         SET projected_annotation_seq = $1
+         WHERE user_id = $2 AND projected_annotation_seq < $1",
+		vec![high_water.into(), user_id.to_owned().into()],
+	))
+	.await
+	.map_err(internal)?;
 	Ok(())
 }
 
@@ -3243,71 +3277,158 @@ fn bookmark_candidate(
 	}))
 }
 
-async fn native_annotation_candidates<C: ConnectionTrait>(
+/// How many works one feed poll sweeps for native annotation changes. The
+/// sweep rotates through the account's works across polls, so a poll never
+/// reconciles the whole library, and the writer lock it holds is bounded by
+/// this window rather than by library size. A work or record a request names
+/// is reconciled in full on its own, so writes never wait for the rotation.
+const NATIVE_SWEEP_WORKS_PER_POLL: usize = 64;
+
+/// Where each account's rotating native sweep resumes: the last work id of
+/// the previous window. Process-local on purpose — losing it on restart only
+/// restarts the rotation.
+static NATIVE_SWEEP_CURSORS: LazyLock<Mutex<HashMap<String, String>>> =
+	LazyLock::new(Mutex::default);
+
+async fn native_auth_user<C: ConnectionTrait>(
 	conn: &C,
 	user_id: &str,
-) -> Result<Vec<NativeAnnotationCandidate>, LiseurSyncError> {
-	let rows = conn
-		.query_all(db_statement(
-			conn,
-			"SELECT media_id, work_id, edition_sha FROM liseur_sync_media_links
-             WHERE user_id = $1",
-			vec![user_id.to_owned().into()],
-		))
-		.await
-		.map_err(internal)?;
-	let mut links: HashMap<String, NativeMediaLink> = HashMap::with_capacity(rows.len());
-	for row in rows {
-		let media_id: String = row.try_get("", "media_id").map_err(internal)?;
-		let work_id: String = row.try_get("", "work_id").map_err(internal)?;
-		let edition_sha: Option<String> =
-			row.try_get("", "edition_sha").map_err(internal)?;
-		links.insert(
-			media_id,
-			NativeMediaLink {
-				work_id,
-				edition_sha,
-			},
-		);
-	}
-	if links.is_empty() {
-		return Ok(Vec::new());
-	}
-
-	let media_ids = links.keys().cloned().collect::<Vec<_>>();
-	let auth_user = LoginUser::find_by_id(user_id.to_owned())
+) -> Result<Option<AuthUser>, LiseurSyncError> {
+	Ok(LoginUser::find_by_id(user_id.to_owned())
 		.into_model::<LoginUser>()
 		.one(conn)
 		.await
 		.map_err(internal)?
-		.map(AuthUser::from);
-	let Some(auth_user) = auth_user else {
-		return Ok(Vec::new());
-	};
-	let visible_media = media::Entity::find_for_user(&auth_user)
-		.filter(media::Column::Id.is_in(media_ids))
+		.map(AuthUser::from))
+}
+
+/// Books whose native annotations export to Liseur: visible to the user,
+/// in a library, and not audiobooks (a Readium locator cannot open one).
+fn readable_native_media(auth_user: &AuthUser) -> sea_orm::Select<media::Entity> {
+	media::Entity::find_for_user(auth_user)
 		.filter(media::Column::DeletedAt.is_null())
 		.filter(media::Column::SeriesId.is_not_null())
 		.filter(series::Column::LibraryId.is_not_null())
 		.filter(media::audio_extension_condition().not())
+}
+
+/// `SELECT media_id FROM liseur_sync_media_links` for `works`, used as a
+/// subquery so the native tables are joined on the works rather than bound
+/// to one placeholder per linked media row.
+fn linked_media_subquery(
+	user_id: &str,
+	works: &[String],
+) -> sea_orm::sea_query::SelectStatement {
+	liseur_sync_media_link::Entity::find()
+		.select_only()
+		.column(liseur_sync_media_link::Column::MediaId)
+		.filter(liseur_sync_media_link::Column::UserId.eq(user_id))
+		.filter(
+			liseur_sync_media_link::Column::WorkId
+				.is_in(works.iter().map(String::as_str)),
+		)
+		.into_query()
+}
+
+/// The next window of works the native sweep visits: every work with a media
+/// link or a live native mirror, in id order, after `after`.
+async fn native_sweep_window<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	after: Option<&str>,
+	limit: usize,
+) -> Result<Vec<String>, LiseurSyncError> {
+	conn.query_all(db_statement(
+		conn,
+		"SELECT work_id FROM (
+             SELECT work_id FROM liseur_sync_media_links WHERE user_id = $1
+             UNION
+             SELECT work_id FROM liseur_sync_annotations
+             WHERE user_id = $1 AND deleted = FALSE AND annotation_id LIKE $2
+         ) works
+         WHERE work_id > $3
+         ORDER BY work_id ASC
+         LIMIT $4",
+		vec![
+			user_id.to_owned().into(),
+			format!("{STUMP_NATIVE_ANNOTATION_ID_PREFIX}%").into(),
+			after.unwrap_or_default().to_owned().into(),
+			(limit as i64).into(),
+		],
+	))
+	.await
+	.map_err(internal)?
+	.iter()
+	.map(|row| row.try_get("", "work_id").map_err(internal))
+	.collect()
+}
+
+/// The native rows on the readable books linked to `works`, as the CAS
+/// records they export as.
+async fn native_candidates_for_works<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	auth_user: &AuthUser,
+	works: &[String],
+) -> Result<Vec<NativeAnnotationCandidate>, LiseurSyncError> {
+	let rows = liseur_sync_media_link::Entity::find()
+		.select_only()
+		.column(liseur_sync_media_link::Column::MediaId)
+		.column(liseur_sync_media_link::Column::WorkId)
+		.column(liseur_sync_media_link::Column::EditionSha)
+		.filter(liseur_sync_media_link::Column::UserId.eq(user_id))
+		.filter(
+			liseur_sync_media_link::Column::WorkId
+				.is_in(works.iter().map(String::as_str)),
+		)
+		.into_tuple::<(String, String, Option<String>)>()
 		.all(conn)
 		.await
 		.map_err(internal)?;
-	links.retain(|media_id, _| visible_media.iter().any(|media| &media.id == media_id));
+	let mut links: HashMap<String, NativeMediaLink> = rows
+		.into_iter()
+		.map(|(media_id, work_id, edition_sha)| {
+			(
+				media_id,
+				NativeMediaLink {
+					work_id,
+					edition_sha,
+				},
+			)
+		})
+		.collect();
+	if links.is_empty() {
+		return Ok(Vec::new());
+	}
+	let readable: HashSet<String> = readable_native_media(auth_user)
+		.filter(media::Column::Id.in_subquery(linked_media_subquery(user_id, works)))
+		.select_only()
+		.column(media::Column::Id)
+		.into_tuple::<String>()
+		.all(conn)
+		.await
+		.map_err(internal)?
+		.into_iter()
+		.collect();
+	links.retain(|media_id, _| readable.contains(media_id));
 	if links.is_empty() {
 		return Ok(Vec::new());
 	}
 
-	let visible_ids = links.keys().cloned().collect::<Vec<_>>();
 	let annotations = media_annotation::Entity::find()
 		.filter(media_annotation::Column::UserId.eq(user_id))
-		.filter(media_annotation::Column::MediaId.is_in(visible_ids.clone()))
+		.filter(
+			media_annotation::Column::MediaId
+				.in_subquery(linked_media_subquery(user_id, works)),
+		)
 		.all(conn)
 		.await
 		.map_err(internal)?;
 	let bookmarks = bookmark::Entity::find()
 		.filter(bookmark::Column::UserId.eq(user_id))
-		.filter(bookmark::Column::MediaId.is_in(visible_ids))
+		.filter(
+			bookmark::Column::MediaId.in_subquery(linked_media_subquery(user_id, works)),
+		)
 		.all(conn)
 		.await
 		.map_err(internal)?;
@@ -3328,6 +3449,146 @@ async fn native_annotation_candidates<C: ConnectionTrait>(
 		}
 	}
 	Ok(candidates)
+}
+
+/// The link of one media row, when the row is a readable book.
+async fn readable_native_link<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	auth_user: &AuthUser,
+	media_id: &str,
+) -> Result<Option<NativeMediaLink>, LiseurSyncError> {
+	let Some((work_id, edition_sha)) = liseur_sync_media_link::Entity::find()
+		.select_only()
+		.column(liseur_sync_media_link::Column::WorkId)
+		.column(liseur_sync_media_link::Column::EditionSha)
+		.filter(liseur_sync_media_link::Column::UserId.eq(user_id))
+		.filter(liseur_sync_media_link::Column::MediaId.eq(media_id))
+		.into_tuple::<(String, Option<String>)>()
+		.one(conn)
+		.await
+		.map_err(internal)?
+	else {
+		return Ok(None);
+	};
+	let readable = readable_native_media(auth_user)
+		.filter(media::Column::Id.eq(media_id))
+		.select_only()
+		.column(media::Column::Id)
+		.into_tuple::<String>()
+		.one(conn)
+		.await
+		.map_err(internal)?
+		.is_some();
+	Ok(readable.then_some(NativeMediaLink {
+		work_id,
+		edition_sha,
+	}))
+}
+
+/// The CAS record one `stump-native:*` id exports as today, derived from the
+/// native row itself: `None` once the row is gone, unlinked, or unreadable.
+async fn native_candidate_for_id<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	auth_user: &AuthUser,
+	id: &str,
+) -> Result<Option<NativeAnnotationCandidate>, LiseurSyncError> {
+	let Some((kind, native_id)) = parse_stump_native_annotation_id(id) else {
+		return Ok(None);
+	};
+	match kind {
+		"annotation" => {
+			let Some(row) = media_annotation::Entity::find_by_id(native_id)
+				.filter(media_annotation::Column::UserId.eq(user_id))
+				.one(conn)
+				.await
+				.map_err(internal)?
+			else {
+				return Ok(None);
+			};
+			match readable_native_link(conn, user_id, auth_user, &row.media_id).await? {
+				Some(link) => media_annotation_candidate(&row, &link),
+				None => Ok(None),
+			}
+		},
+		"bookmark" => {
+			let Some(row) = bookmark::Entity::find_by_id(native_id)
+				.filter(bookmark::Column::UserId.eq(user_id))
+				.one(conn)
+				.await
+				.map_err(internal)?
+			else {
+				return Ok(None);
+			};
+			match readable_native_link(conn, user_id, auth_user, &row.media_id).await? {
+				Some(link) => bookmark_candidate(&row, &link),
+				None => Ok(None),
+			}
+		},
+		_ => Ok(None),
+	}
+}
+
+/// The native mirrors (live and tombstoned) of `works`, keyed by CAS id.
+async fn native_mirrors_for_works<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	works: &[String],
+) -> Result<HashMap<String, StoredAnnotation>, LiseurSyncError> {
+	let placeholders = (0..works.len())
+		.map(|index| format!("${}", index + 3))
+		.collect::<Vec<_>>()
+		.join(", ");
+	let mut values: Vec<DbValue> = Vec::with_capacity(works.len() + 2);
+	values.push(user_id.to_owned().into());
+	values.push(format!("{STUMP_NATIVE_ANNOTATION_ID_PREFIX}%").into());
+	values.extend(works.iter().map(|work_id| DbValue::from(work_id.clone())));
+	let rows = conn
+		.query_all(db_statement(
+			conn,
+			&format!(
+				"SELECT {ANNOTATION_COLUMNS} FROM liseur_sync_annotations
+                 WHERE user_id = $1 AND annotation_id LIKE $2
+                   AND work_id IN ({placeholders})"
+			),
+			values,
+		))
+		.await
+		.map_err(internal)?;
+	let mut mirrors = HashMap::with_capacity(rows.len());
+	for row in &rows {
+		let annotation = stored_annotation(row)?;
+		if parse_stump_native_annotation_id(&annotation.id).is_some() {
+			mirrors.insert(annotation.id.clone(), annotation);
+		}
+	}
+	Ok(mirrors)
+}
+
+async fn tombstone_native_mirror<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	stored: &StoredAnnotation,
+) -> Result<(), LiseurSyncError> {
+	let seq = next_annotation_seq(conn, user_id).await?;
+	let updated_at = now_string();
+	conn.execute(db_statement(
+		conn,
+		"UPDATE liseur_sync_annotations
+         SET rev = $1, seq = $2, updated_at = $3, deleted = TRUE, deleted_at = $3
+         WHERE user_id = $4 AND annotation_id = $5",
+		vec![
+			(stored.rev + 1).into(),
+			seq.into(),
+			updated_at.into(),
+			user_id.to_owned().into(),
+			stored.id.clone().into(),
+		],
+	))
+	.await
+	.map_err(internal)?;
+	Ok(())
 }
 
 async fn reconcile_native_candidate<C: ConnectionTrait>(
@@ -3407,59 +3668,135 @@ async fn reconcile_native_candidate<C: ConnectionTrait>(
 	Ok(())
 }
 
+/// Reconcile one `stump-native:*` id against its native row: update or
+/// create the mirror while the row exports, tombstone it once the row is
+/// gone, unlinked, or unreadable. `stored` skips the lookup when the caller
+/// already holds the mirror.
+async fn reconcile_native_id<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	auth_user: &AuthUser,
+	id: &str,
+	stored: Option<StoredAnnotation>,
+) -> Result<(), LiseurSyncError> {
+	let candidate = native_candidate_for_id(conn, user_id, auth_user, id).await?;
+	let stored = match stored {
+		Some(stored) => Some(stored),
+		None => find_annotation(conn, user_id, id).await?,
+	};
+	match (candidate, stored) {
+		(Some(candidate), stored) => {
+			reconcile_native_candidate(conn, user_id, &candidate, stored).await
+		},
+		(None, Some(stored)) if !stored.deleted => {
+			tombstone_native_mirror(conn, user_id, &stored).await
+		},
+		_ => Ok(()),
+	}
+}
+
+/// Reconcile the native mirrors of exactly the `stump-native:*` ids a request
+/// writes, so a CAS edit or delete is checked against the row's current
+/// state without sweeping anything else.
+async fn reconcile_native_ids<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	ids: impl IntoIterator<Item = &str>,
+) -> Result<(), LiseurSyncError> {
+	let ids: Vec<&str> = ids
+		.into_iter()
+		.filter(|id| is_stump_native_annotation_id(id))
+		.collect();
+	if ids.is_empty() {
+		return Ok(());
+	}
+	let Some(auth_user) = native_auth_user(conn, user_id).await? else {
+		return Ok(());
+	};
+	for id in ids {
+		reconcile_native_id(conn, user_id, &auth_user, id, None).await?;
+	}
+	Ok(())
+}
+
+/// Diff the native rows of `works` against their CAS mirrors. A mirror this
+/// window does not match is re-derived from its native row rather than
+/// tombstoned outright, because the row may simply be linked under another
+/// work now.
+async fn reconcile_native_works<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+	works: &[String],
+) -> Result<(), LiseurSyncError> {
+	if works.is_empty() {
+		return Ok(());
+	}
+	let mut mirrors = native_mirrors_for_works(conn, user_id, works).await?;
+	let linked = liseur_sync_media_link::Entity::find()
+		.filter(liseur_sync_media_link::Column::UserId.eq(user_id))
+		.filter(
+			liseur_sync_media_link::Column::WorkId
+				.is_in(works.iter().map(String::as_str)),
+		)
+		.count(conn)
+		.await
+		.map_err(internal)?;
+	// A work with no linked book and no live mirror has nothing to export
+	// and nothing to retire: skip the user and media lookups entirely.
+	if linked == 0 && mirrors.values().all(|stored| stored.deleted) {
+		return Ok(());
+	}
+	let Some(auth_user) = native_auth_user(conn, user_id).await? else {
+		return Ok(());
+	};
+	let candidates = if linked == 0 {
+		Vec::new()
+	} else {
+		native_candidates_for_works(conn, user_id, &auth_user, works).await?
+	};
+	for candidate in candidates {
+		let stored = match mirrors.remove(&candidate.id) {
+			Some(stored) => Some(stored),
+			// New to the feed, or mirrored under the work it was linked
+			// to before: the id is what identifies it, not the work.
+			None => find_annotation(conn, user_id, &candidate.id).await?,
+		};
+		reconcile_native_candidate(conn, user_id, &candidate, stored).await?;
+	}
+	for stored in mirrors.into_values().filter(|stored| !stored.deleted) {
+		let id = stored.id.clone();
+		reconcile_native_id(conn, user_id, &auth_user, &id, Some(stored)).await?;
+	}
+	Ok(())
+}
+
+/// One bounded pass of the native sweep, for a feed poll: the next
+/// [`NATIVE_SWEEP_WORKS_PER_POLL`] works after the account's cursor, wrapping
+/// to the start once the end is reached, so every work is visited over a few
+/// polls without any poll paying for the whole account.
 async fn reconcile_native_annotations<C: ConnectionTrait>(
 	conn: &C,
 	user_id: &str,
 ) -> Result<(), LiseurSyncError> {
-	let candidates = native_annotation_candidates(conn, user_id).await?;
-	let rows = conn
-		.query_all(db_statement(
-			conn,
-			&format!(
-				"SELECT {ANNOTATION_COLUMNS} FROM liseur_sync_annotations
-                 WHERE user_id = $1 AND annotation_id LIKE $2"
-			),
-			vec![
-				user_id.to_owned().into(),
-				format!("{STUMP_NATIVE_ANNOTATION_ID_PREFIX}%").into(),
-			],
-		))
-		.await
-		.map_err(internal)?;
-	let mut existing = HashMap::with_capacity(rows.len());
-	for row in &rows {
-		let annotation = stored_annotation(row)?;
-		if parse_stump_native_annotation_id(&annotation.id).is_some() {
-			existing.insert(annotation.id.clone(), annotation);
-		}
-	}
-
-	for candidate in candidates {
-		let stored = existing.remove(&candidate.id);
-		reconcile_native_candidate(conn, user_id, &candidate, stored).await?;
-	}
-	for annotation in existing
-		.into_values()
-		.filter(|annotation| !annotation.deleted)
+	let after = NATIVE_SWEEP_CURSORS
+		.lock()
+		.unwrap_or_else(std::sync::PoisonError::into_inner)
+		.get(user_id)
+		.cloned();
+	let works =
+		native_sweep_window(conn, user_id, after.as_deref(), NATIVE_SWEEP_WORKS_PER_POLL)
+			.await?;
+	reconcile_native_works(conn, user_id, &works).await?;
+	let mut cursors = NATIVE_SWEEP_CURSORS
+		.lock()
+		.unwrap_or_else(std::sync::PoisonError::into_inner);
+	match works
+		.last()
+		.filter(|_| works.len() == NATIVE_SWEEP_WORKS_PER_POLL)
 	{
-		let seq = next_annotation_seq(conn, user_id).await?;
-		let updated_at = now_string();
-		conn.execute(db_statement(
-			conn,
-			"UPDATE liseur_sync_annotations
-             SET rev = $1, seq = $2, updated_at = $3, deleted = TRUE, deleted_at = $3
-             WHERE user_id = $4 AND annotation_id = $5",
-			vec![
-				(annotation.rev + 1).into(),
-				seq.into(),
-				updated_at.into(),
-				user_id.to_owned().into(),
-				annotation.id.into(),
-			],
-		))
-		.await
-		.map_err(internal)?;
-	}
+		Some(last) => cursors.insert(user_id.to_owned(), last.clone()),
+		None => cursors.remove(user_id),
+	};
 	Ok(())
 }
 
@@ -3504,7 +3841,12 @@ pub(crate) async fn append_annotations(
 	let conn = ctx_conn(ctx);
 	let txn = begin_write(conn).await.map_err(internal)?;
 	ensure_counter(&txn, user_id).await?;
-	reconcile_native_annotations(&txn, user_id).await?;
+	reconcile_native_ids(
+		&txn,
+		user_id,
+		annotations.iter().map(|annotation| annotation.id.as_str()),
+	)
+	.await?;
 	let mut results = Vec::with_capacity(annotations.len());
 
 	for mut annotation in annotations {
@@ -3778,7 +4120,8 @@ pub(crate) async fn work_annotations_with_deleted(
 	}
 	let txn = begin_write(conn).await.map_err(internal)?;
 	ensure_counter(&txn, user_id).await?;
-	reconcile_native_annotations(&txn, user_id).await?;
+	reconcile_native_works(&txn, user_id, std::slice::from_ref(&work_id.to_owned()))
+		.await?;
 	reconcile_annotation_projections(&txn, user_id).await?;
 	txn.commit().await.map_err(internal)?;
 	let rows = conn
@@ -3814,7 +4157,7 @@ pub(crate) async fn delete_annotation(
 	let conn = ctx_conn(ctx);
 	let txn = begin_write(conn).await.map_err(internal)?;
 	ensure_counter(&txn, user_id).await?;
-	reconcile_native_annotations(&txn, user_id).await?;
+	reconcile_native_ids(&txn, user_id, [id]).await?;
 	let Some(stored) = find_annotation(&txn, user_id, id).await? else {
 		return Err(LiseurSyncError::NotFound("annotation not found".into()));
 	};
@@ -3909,8 +4252,12 @@ mod tests {
                 projected_annotation_seq BIGINT NOT NULL DEFAULT 0
             )",
 			"CREATE TABLE liseur_sync_media_links (
+                id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
                 user_id TEXT NOT NULL, media_id TEXT NOT NULL,
-                work_id TEXT NOT NULL, edition_sha TEXT
+                work_id TEXT NOT NULL, edition_sha TEXT,
+                resolution_status TEXT NOT NULL DEFAULT 'unverified',
+                created_at TEXT NOT NULL DEFAULT '',
+                pair_status TEXT NOT NULL DEFAULT 'none', pair_evidence TEXT
             )",
 			"CREATE TABLE liseur_sync_annotations (
                 row_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3992,7 +4339,9 @@ mod tests {
 			"CREATE TABLE liseur_sync_works (id TEXT NOT NULL, user_id TEXT NOT NULL)",
 			"CREATE TABLE liseur_sync_media_links (
                 id TEXT PRIMARY KEY, user_id TEXT NOT NULL, work_id TEXT NOT NULL,
-                media_id TEXT NOT NULL, edition_sha TEXT NOT NULL, created_at TEXT NOT NULL
+                media_id TEXT NOT NULL, edition_sha TEXT NOT NULL, created_at TEXT NOT NULL,
+                resolution_status TEXT NOT NULL DEFAULT 'unverified',
+                pair_status TEXT NOT NULL DEFAULT 'none', pair_evidence TEXT
             )",
 			"CREATE TABLE liseur_sync_counters (
                 user_id TEXT PRIMARY KEY, op_seq BIGINT NOT NULL DEFAULT 0,
@@ -4472,6 +4821,264 @@ mod tests {
 		assert!(bookmark_tombstone.deleted);
 		assert_eq!(bookmark_tombstone.rev, 2);
 	}
+
+	/// A work's first link may be its audiobook; a highlight pushed then has
+	/// nowhere readable to project, and once the ebook is linked the record
+	/// has to move there. Nothing about the record changed, so the feed must
+	/// re-deliver it at a new `seq` with the same `rev`, and a re-resolve
+	/// that changes no link must not replay it again.
+	#[tokio::test]
+	async fn a_new_edition_link_replays_the_work_and_moves_its_projection() {
+		use std::sync::Arc;
+
+		use ::tests::{db::test_database, fake_data};
+		use sea_orm::{DatabaseBackend, Schema};
+
+		let db = test_database().await;
+		let user = fake_data::User::new("liseur-relink-user").insert(&db).await;
+		let library = fake_data::Library::default().insert(&db).await;
+		let series = fake_data::Series {
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let audio = fake_data::Media {
+			series_id: series.id.clone(),
+			id: Some("relink-audio".to_owned()),
+			name: Some("book.m4b".to_owned()),
+			extension: Some("m4b".to_owned()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		models::entity::media_audio::ActiveModel {
+			media_id: Set(audio.id.clone()),
+			duration_ms: Set(3_600_000),
+			codec: Set("aac".to_owned()),
+			sample_rate: Set(None),
+			channels: Set(None),
+			bitrate: Set(None),
+			chapter_source: Set(models::domain::audio::AudioChapterSource::Mp4Chpl),
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+		let ebook_dir = tempfile::tempdir().unwrap();
+		let ebook_path = ebook_dir.path().join("book.epub");
+		std::fs::write(&ebook_path, b"not really an epub").unwrap();
+		let ebook = fake_data::Media {
+			series_id: series.id,
+			id: Some("relink-ebook".to_owned()),
+			name: Some("book".to_owned()),
+			extension: Some("epub".to_owned()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		db.execute(db_statement(
+			&db,
+			"UPDATE media SET path = $1 WHERE id = $2",
+			vec![
+				ebook_path.to_string_lossy().into_owned().into(),
+				ebook.id.clone().into(),
+			],
+		))
+		.await
+		.unwrap();
+		let ebook_sha = format!("{:x}", Sha256::digest(b"not really an epub"));
+		let schema = Schema::new(DatabaseBackend::Sqlite);
+		for statement in [
+			schema.create_table_from_entity(media_annotation::Entity),
+			schema.create_table_from_entity(bookmark::Entity),
+		] {
+			db.execute(db.get_database_backend().build(&statement))
+				.await
+				.unwrap();
+		}
+		for sql in [
+			"CREATE TABLE liseur_sync_works (
+                id TEXT NOT NULL, user_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+                author TEXT NOT NULL DEFAULT '', pending BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TEXT
+            )",
+			"CREATE TABLE liseur_sync_aliases (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL,
+                value TEXT NOT NULL, work_id TEXT NOT NULL, edition_sha TEXT,
+                created_at TEXT NOT NULL
+            )",
+			"CREATE TABLE liseur_sync_editions (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, edition_sha TEXT NOT NULL,
+                sampled_hash TEXT, koreader_hash TEXT, work_id TEXT NOT NULL,
+                media_id TEXT, page_count BIGINT, char_count BIGINT, metadata TEXT,
+                created_at TEXT NOT NULL
+            )",
+			"CREATE TABLE liseur_sync_media_links (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, work_id TEXT NOT NULL,
+                media_id TEXT NOT NULL, edition_sha TEXT NOT NULL,
+                resolution_status TEXT NOT NULL DEFAULT 'unverified',
+                created_at TEXT NOT NULL,
+                pair_status TEXT NOT NULL DEFAULT 'confirmed', pair_evidence TEXT
+            )",
+			"CREATE TABLE liseur_sync_counters (
+                user_id TEXT PRIMARY KEY, op_seq BIGINT NOT NULL DEFAULT 0,
+                annotation_seq BIGINT NOT NULL DEFAULT 0,
+                projected_annotation_seq BIGINT NOT NULL DEFAULT 0
+            )",
+			"CREATE TABLE annotation_attachments (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, annotation_id TEXT NOT NULL,
+                kind TEXT NOT NULL, media_type TEXT NOT NULL, byte_size BIGINT NOT NULL,
+                sha256 TEXT NOT NULL, storage_path TEXT NOT NULL, created_at TEXT NOT NULL
+            )",
+			"CREATE TABLE liseur_sync_annotations (
+                row_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+                annotation_id TEXT NOT NULL, rev BIGINT NOT NULL, seq BIGINT NOT NULL,
+                work_id TEXT NOT NULL, edition_sha TEXT, kind TEXT NOT NULL,
+                locator TEXT, progression DOUBLE, excerpt TEXT NOT NULL, color TEXT NOT NULL,
+                drawer TEXT, body TEXT NOT NULL, device_id TEXT NOT NULL,
+                origin_device_id TEXT, client_ts TEXT NOT NULL,
+                updated_at TEXT NOT NULL, deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                deleted_at TEXT, payload TEXT NOT NULL,
+                UNIQUE (user_id, annotation_id)
+            )",
+		] {
+			db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
+				.await
+				.unwrap();
+		}
+		// The work starts out linked to its audiobook only.
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_works (id, user_id, created_at) VALUES ('work-1', $1, $2)",
+			vec![user.id.clone().into(), now_string().into()],
+		))
+		.await
+		.unwrap();
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_media_links
+                (id, user_id, work_id, media_id, edition_sha, resolution_status, created_at)
+             VALUES ('link-audio', $1, 'work-1', $2, '', 'unverified', '2026-09-01T00:00:00Z')",
+			vec![user.id.clone().into(), audio.id.clone().into()],
+		))
+		.await
+		.unwrap();
+		// The catalog id already names the work, as `/v1/books/{id}/resolve`
+		// records it, so the ebook resolve below lands on `work-1`.
+		db.execute(db_statement(
+			&db,
+			"INSERT INTO liseur_sync_aliases
+                (id, user_id, kind, value, work_id, edition_sha, created_at)
+             VALUES ('alias-source', $1, 'source', $2, 'work-1', NULL, '2026-09-01T00:00:00Z')",
+			vec![user.id.clone().into(), ebook.id.clone().into()],
+		))
+		.await
+		.unwrap();
+		let ctx = Arc::new(stump_core::Ctx::for_testing(db));
+		let highlight = AnnotationInput {
+			id: "relink-highlight".to_owned(),
+			base_rev: 0,
+			work_id: "work-1".to_owned(),
+			edition_sha: Some(ebook_sha.clone()),
+			kind: "highlight".to_owned(),
+			locator: Some(serde_json::json!({
+				"href": "OPS/chapter.xhtml",
+				"locations": {"position": 3},
+				"text": {"highlight": "Quoted passage"}
+			})),
+			progression: Some(0.1),
+			excerpt: "Quoted passage".to_owned(),
+			color: Some("yellow".to_owned()),
+			drawer: None,
+			body: String::new(),
+			client_ts: "2026-09-11T12:00:00Z".to_owned(),
+		};
+		let pushed = append_annotations(&ctx, &user.id, "device-1", vec![highlight])
+			.await
+			.unwrap();
+		assert_eq!(pushed[0].status, "applied");
+		let first_seq = pushed[0].seq.unwrap();
+		let projection_id = liseur_sync_projection_id(&user.id, "relink-highlight");
+		let projected_media = |ctx: &Arc<stump_core::Ctx>| {
+			let conn = ctx.conn.clone();
+			let projection_id = projection_id.clone();
+			async move {
+				media_annotation::Entity::find_by_id(projection_id)
+					.one(conn.as_ref())
+					.await
+					.unwrap()
+					.map(|row| row.media_id)
+			}
+		};
+		// An audiobook is the only link: the Readium highlight lands there
+		// today rather than nowhere, and the cursor moves past it.
+		assert_eq!(
+			projected_media(&ctx).await.as_deref(),
+			Some(audio.id.as_str())
+		);
+
+		// Liseur resolves the ebook edition of the same work.
+		let resolved = resolve_work(
+			&ctx,
+			&user.id,
+			ResolveRequest {
+				identifiers: vec![
+					Identifier {
+						kind: "sha256".into(),
+						value: ebook_sha.clone(),
+					},
+					Identifier {
+						kind: "source".into(),
+						value: ebook.id.clone(),
+					},
+				],
+				title: Some("Relinked".into()),
+				author: None,
+				confirmed: true,
+			},
+		)
+		.await
+		.unwrap();
+		assert_eq!(resolved.work_id, "work-1");
+		assert_eq!(
+			projected_media(&ctx).await.as_deref(),
+			Some(ebook.id.as_str()),
+			"the projection follows the edition the highlight was made on"
+		);
+		let (feed, high_water, _) = annotation_changes(&ctx, &user.id, first_seq, 500)
+			.await
+			.unwrap();
+		let replayed = feed
+			.iter()
+			.find(|record| record.id == "relink-highlight")
+			.expect("the unchanged record is re-delivered above the old cursor");
+		assert_eq!(replayed.rev, 1, "a replay is not an edit");
+		assert!(replayed.seq > first_seq);
+		assert_eq!(replayed.seq, high_water);
+
+		// Resolving the same edition again changes no link: no replay.
+		resolve_work(
+			&ctx,
+			&user.id,
+			ResolveRequest {
+				identifiers: vec![Identifier {
+					kind: "source".into(),
+					value: ebook.id.clone(),
+				}],
+				title: None,
+				author: None,
+				confirmed: true,
+			},
+		)
+		.await
+		.unwrap();
+		let (again, unchanged_high_water, _) =
+			annotation_changes(&ctx, &user.id, high_water, 500)
+				.await
+				.unwrap();
+		assert_eq!(unchanged_high_water, high_water);
+		assert!(again.is_empty());
+	}
 	#[cfg(feature = "graphql")]
 	#[tokio::test]
 	async fn home_graphql_edits_liseur_note_into_cas_change_feed() {
@@ -4511,7 +5118,9 @@ mod tests {
 			"CREATE TABLE liseur_sync_works (id TEXT NOT NULL, user_id TEXT NOT NULL)",
 			"CREATE TABLE liseur_sync_media_links (
 				id TEXT PRIMARY KEY, user_id TEXT NOT NULL, work_id TEXT NOT NULL,
-				media_id TEXT NOT NULL, edition_sha TEXT, created_at TEXT NOT NULL
+				media_id TEXT NOT NULL, edition_sha TEXT, created_at TEXT NOT NULL,
+				resolution_status TEXT NOT NULL DEFAULT 'unverified',
+				pair_status TEXT NOT NULL DEFAULT 'none', pair_evidence TEXT
 			)",
 			"CREATE TABLE liseur_sync_counters (
 				user_id TEXT PRIMARY KEY, op_seq BIGINT NOT NULL DEFAULT 0,
@@ -4595,22 +5204,46 @@ mod tests {
 			api_key: None,
 			device_id: None,
 		};
-		let response = schema
+		// The hub never shows a bare Liseur record id: it is client-chosen and
+		// may equal a native row id or another record's routed id. Home
+		// mutations therefore only accept the routed projection id.
+		let routed_id = liseur_sync_projection_id(&user.id, "liseur-home-note");
+		let bare = schema
 			.execute(
 				Request::new(
 					r#"mutation {
 						updateAnnotation(input: {
 							id: "liseur-home-note"
 							annotationText: "Edited in Home"
-							color: "blue"
 							expectedRevision: 1
-						}) { id annotationText color }
+						}) { id }
 					}"#,
 				)
 				.data(auth.clone()),
 			)
 			.await;
+		assert_eq!(bare.errors[0].message, "Annotation not found");
+		let response = schema
+			.execute(
+				Request::new(format!(
+					r#"mutation {{
+						updateAnnotation(input: {{
+							id: "{routed_id}"
+							annotationText: "Edited in Home"
+							color: "blue"
+							expectedRevision: 1
+						}}) {{ id annotationText color }}
+					}}"#
+				))
+				.data(auth.clone()),
+			)
+			.await;
 		assert!(response.errors.is_empty(), "{:?}", response.errors);
+		assert_eq!(
+			response.data.clone().into_json().unwrap()["updateAnnotation"]["id"],
+			serde_json::Value::String(routed_id.clone()),
+			"the mutation answers with the id the hub lists"
+		);
 
 		let (feed, high_water, has_more) =
 			annotation_changes(&ctx, &user.id, 1, 500).await.unwrap();
@@ -4629,15 +5262,15 @@ mod tests {
 
 		let stale_response = schema
 			.execute(
-				Request::new(
-					r#"mutation {
-						updateAnnotation(input: {
-							id: "liseur-home-note"
+				Request::new(format!(
+					r#"mutation {{
+						updateAnnotation(input: {{
+							id: "{routed_id}"
 							annotationText: "Stale edit"
 							expectedRevision: 1
-						}) { id }
-					}"#,
-				)
+						}}) {{ id }}
+					}}"#
+				))
 				.data(auth.clone()),
 			)
 			.await;
@@ -4654,11 +5287,11 @@ mod tests {
 
 		let stale_delete = schema
 			.execute(
-				Request::new(
-					r#"mutation {
-						deleteAnnotation(id: "liseur-home-note", expectedRevision: 1) { id }
-					}"#,
-				)
+				Request::new(format!(
+					r#"mutation {{
+						deleteAnnotation(id: "{routed_id}", expectedRevision: 1) {{ id }}
+					}}"#
+				))
 				.data(auth.clone()),
 			)
 			.await;
@@ -4672,11 +5305,11 @@ mod tests {
 		);
 		let deleted_response = schema
 			.execute(
-				Request::new(
-					r#"mutation {
-						deleteAnnotation(id: "liseur-home-note", expectedRevision: 2) { id }
-					}"#,
-				)
+				Request::new(format!(
+					r#"mutation {{
+						deleteAnnotation(id: "{routed_id}", expectedRevision: 2) {{ id }}
+					}}"#
+				))
 				.data(auth),
 			)
 			.await;

@@ -8,13 +8,13 @@
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import BookOpenIcon from '@lucide/svelte/icons/book-open';
 	import HeadphonesIcon from '@lucide/svelte/icons/headphones';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
 	import * as Command from '@stump/ui/components/ui/command';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Kbd, KbdGroup } from '@stump/ui/components/ui/kbd';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import ExternalHitActions from '$lib/components/requests/ExternalHitActions.svelte';
@@ -93,16 +93,7 @@
 </Button>
 
 {#snippet thumb(src: string | undefined, square = false)}
-	{#if src}
-		<img {src} alt="" class={['h-12 shrink-0 rounded-sm border object-cover', square ? 'w-12' : 'w-8']} loading="lazy" />
-	{:else}
-		<span
-			class={['flex h-12 shrink-0 items-center justify-center rounded-sm border bg-muted/40', square ? 'w-12' : 'w-8']}
-			aria-hidden="true"
-		>
-			<BookOpenIcon class="size-3.5 text-muted-foreground" />
-		</span>
-	{/if}
+	<Cover {src} class={['h-12 rounded-sm border', square ? 'w-12' : 'w-8']} />
 {/snippet}
 
 {#snippet externalRow(hit: ExternalHit, meta: string, audible: boolean)}

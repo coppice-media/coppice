@@ -47,9 +47,11 @@ compatibility.
 - `apps/server/Cargo.toml` is the source of truth for Cargo profile features;
   do not duplicate the `minimal`/`headless`/`full` feature list here.
 - Book requests are a metadata-backed ledger: users create intent and managers
-  approve or reject it. Release search, acquisition, retries, and transport
-  belong to a future independent authenticated provider sidecar; staged ingest
-  remains the file-entry boundary.
+  approve or reject it. Managers with `ACQUIRE_RELEASES` search releases and
+  confirm grabs through the server's MAM Bridge client (`core/src/mam_acquisition.rs`);
+  MAM credentials, torrent transport and seeding stay in the separate MAM
+  Bridge sidecar, the browser never talks to it, and completed downloads are
+  copied into staged ingest, which remains the file-entry boundary.
 - Home-library discovery and remote locations use the separately scoped Coppice
   source-worker role, not the acquisition sidecar or compute-worker authority.
   Catalog inventory, explicit verification/link/materialization, and native
@@ -82,8 +84,8 @@ compatibility.
 
 Record exact paths, symbols, routes, dependency declarations, and URLs/commits.
 Use pinned Komelia `65f92fde`, `komga-client` 0.11.0 `74412a6e`, Liseur
-v0.19.0 `62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6`, and Grimmory main rather
-than Komga OpenAPI alone.
+v0.19.0 `62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6`, and Grimmory v3.5.0
+`402e89b4452f8e2b17ab95f16c1621c003516cd2` rather than Komga OpenAPI alone.
 Source-of-record docs:
 `docs/content/docs/developer/komga-compat.mdx`,
 `docs/content/docs/developer/kobo-sync-capabilities.mdx`,

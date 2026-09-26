@@ -300,15 +300,25 @@ pub(crate) async fn handle_book_visit_operation(
 				let tags = meta.tags.take().unwrap_or_default();
 
 				let txn = begin_write(db).await?;
+				// `meta` comes from the file on disk and carries no metadata row
+				// id, so `ActiveModel::update` would panic on the unset primary
+				// key (stump#1407). Upsert on the unique `media_id` instead.
 				let active_model = media_metadata::ActiveModel {
 					media_id: Set(Some(custom.id.clone())),
 					..meta.into_active_model()
 				};
-				let updated_meta = active_model.update(&txn).await?;
+				let upserted_meta = media_metadata::Entity::insert(active_model)
+					.on_conflict(
+						OnConflict::new()
+							.update_columns(media_metadata::Column::iter())
+							.to_owned(),
+					)
+					.exec_with_returning(&txn)
+					.await?;
 				ensure_tags_linked(&txn, &custom.id, &tags).await?;
 				txn.commit().await?;
 
-				tracing::trace!(?updated_meta, "Metadata upserted");
+				tracing::trace!(?upserted_meta, "Metadata upserted");
 			}
 
 			if let Some(hashes) = custom.hashes {
@@ -1391,6 +1401,93 @@ mod audio_persistence {
 			[(0, 0), (1, 4_000)]
 		);
 		assert_eq!(rescanned.chapters.len(), 2);
+	}
+}
+
+/// Ported from Stump `c9a4135e22` (`#1408`, fixes `#1407`): a custom visit
+/// that regenerates metadata carries no `media_metadata.id`, so the write must
+/// be an upsert on `media_id`, never `ActiveModel::update` (which panics on the
+/// unset primary key and took the whole server down).
+#[cfg(test)]
+mod custom_visit_metadata {
+	use super::*;
+	use migrations::{Migrator, MigratorTrait};
+	use sea_orm::{Database, PaginatorTrait};
+	use stump_media::media::ProcessedMediaMetadata;
+
+	fn regenerated(media_id: &str, title: &str, summary: &str) -> BookVisitResult {
+		BookVisitResult::Custom(CustomVisitResult {
+			id: media_id.to_string(),
+			meta: Some(Box::new(ProcessedMediaMetadata {
+				title: Some(title.to_string()),
+				summary: Some(summary.to_string()),
+				..Default::default()
+			})),
+			hashes: None,
+		})
+	}
+
+	async fn metadata_for(
+		db: &DatabaseConnection,
+		media_id: &str,
+	) -> media_metadata::Model {
+		media_metadata::Entity::find()
+			.filter(media_metadata::Column::MediaId.eq(media_id))
+			.one(db)
+			.await
+			.expect("query failed")
+			.expect("metadata row should exist")
+	}
+
+	#[tokio::test]
+	async fn test_handle_book_visit_operation_no_panic_upsert_metadata() {
+		let db = Database::connect("sqlite::memory:").await.unwrap();
+		Migrator::up(&db, None).await.unwrap();
+
+		let library = tests::fake_data::Library::default().insert(&db).await;
+		let series = tests::fake_data::Series {
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let media = tests::fake_data::Media {
+			series_id: series.id.clone(),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+
+		// First visit: no metadata row exists yet, so this is an insert.
+		handle_book_visit_operation(
+			&db,
+			regenerated(&media.id, "original title", "original summary"),
+		)
+		.await
+		.expect("first upsert should not fail");
+		let row = metadata_for(&db, &media.id).await;
+		assert_eq!(row.title.as_deref(), Some("original title"));
+
+		// Second visit: the row exists, so this must take the conflict path.
+		handle_book_visit_operation(
+			&db,
+			regenerated(&media.id, "updated title", "updated summary"),
+		)
+		.await
+		.expect("second upsert should not fail");
+		let row = metadata_for(&db, &media.id).await;
+		assert_eq!(row.title.as_deref(), Some("updated title"));
+		assert_eq!(row.summary.as_deref(), Some("updated summary"));
+
+		let total_metadata_records = media_metadata::Entity::find()
+			.filter(media_metadata::Column::MediaId.eq(media.id.clone()))
+			.count(&db)
+			.await
+			.expect("count query failed");
+		assert_eq!(
+			total_metadata_records, 1,
+			"there should only be one metadata record for the media"
+		);
 	}
 }
 

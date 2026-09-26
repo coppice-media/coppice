@@ -26,10 +26,13 @@ use crate::source_catalog::{
 	SourceRootConfig,
 };
 
-/// Calibre publishes an integer `user_version` in its schema (27 in the
-/// current upstream schema). We support that shape and reject a newer version
-/// as an actionable unsupported schema rather than guessing at columns.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 27;
+/// Calibre publishes an integer `user_version` in its schema. Version 27 is
+/// the current release schema (v9.15.0); Calibre master adds
+/// `upgrade_version_27` (`src/calibre/db/schema_upgrades.py`), which only
+/// creates the viewer `book_storage` table and bumps `user_version` to 28. Both
+/// are read; anything newer is rejected as an actionable unsupported schema
+/// rather than guessing at columns.
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 28;
 /// Calibre's current SQLite application id (`"cali"` big-endian). Zero is
 /// accepted for older synthetic/legacy databases that did not set it.
 pub const CALIBRE_APPLICATION_ID: i64 = 0x6361_6c69;
@@ -273,16 +276,67 @@ async fn discover_connection(
 			"SELECT book, format, name, uncompressed_size FROM data ORDER BY book ASC, lower(format) ASC, name ASC",
 		))
 		.await
-		.map_err(query_error)?;
+		.map_err(query_error)?
+		.iter()
+		.filter_map(|row| {
+			let book_id = match row_i64(row, "book") {
+				Ok(book_id) => book_id,
+				Err(error) => return Some(Err(error)),
+			};
+			// A `data` row for a book the catalog does not list is not a
+			// format of anything; it is skipped, as it always was.
+			books.contains_key(&book_id).then(|| {
+				Ok(FormatRow {
+					book_id,
+					format: row_string(row, "format")?,
+					name: row_string(row, "name")?,
+					uncompressed_size: row_i64(row, "uncompressed_size")?,
+				})
+			})
+		})
+		.collect::<Result<Vec<_>, CalibreSourceError>>()?;
+	// Everything below touches the filesystem (symlink checks, metadata, and
+	// the sampled fingerprint read of every format file).  On a large or
+	// network-mounted library that is seconds of blocking work, so it runs on
+	// the blocking pool rather than the runtime thread that also services
+	// control frames and grants.  The caller's per-root permit bounds it.
+	let root = root.to_path_buf();
+	tokio::task::spawn_blocking(move || {
+		observe_formats(books, &book_paths, format_rows, &root, max_entries)
+	})
+	.await
+	.map_err(|error| {
+		CalibreSourceError::Query(format!(
+			"Calibre format discovery task failed: {error}"
+		))
+	})?
+}
+
+/// One decoded `data` row, owned so it can cross into the blocking task.
+struct FormatRow {
+	book_id: i64,
+	format: String,
+	name: String,
+	uncompressed_size: i64,
+}
+
+/// Resolve every catalogued format below `root` and fingerprint it.  Pure
+/// filesystem work: no database handle crosses into this function.
+fn observe_formats(
+	mut books: BTreeMap<i64, CalibreBook>,
+	book_paths: &BTreeMap<i64, String>,
+	format_rows: Vec<FormatRow>,
+	root: &Path,
+	max_entries: usize,
+) -> Result<Vec<CatalogObservation>, CalibreSourceError> {
 	let mut observations = Vec::new();
 	let mut seen_relative_paths = BTreeSet::new();
 	for row in format_rows {
-		let book_id = row_i64(&row, "book")?;
+		let book_id = row.book_id;
 		let Some(book) = books.get_mut(&book_id) else {
 			continue;
 		};
-		let raw_format = row_string(&row, "format")?;
-		let format = normalise_format(&raw_format).ok_or_else(|| {
+		let format = normalise_format(&row.format).ok_or_else(|| {
 			CalibreSourceError::InvalidBook {
 				book_id,
 				reason: "format name is empty or contains a path separator".into(),
@@ -295,15 +349,14 @@ async fn discover_connection(
 		{
 			return Err(CalibreSourceError::DuplicateFormat { book_id, format });
 		}
-		let name = row_string(&row, "name")?;
-		let catalog_size = row_i64(&row, "uncompressed_size")?;
-		if catalog_size < 0 {
+		let name = row.name;
+		if row.uncompressed_size < 0 {
 			return Err(CalibreSourceError::InvalidBook {
 				book_id,
 				reason: "data.uncompressed_size is negative".into(),
 			});
 		}
-		let catalog_size = catalog_size as u64;
+		let catalog_size = row.uncompressed_size as u64;
 		let relative = safe_format_path(book_id, &book_paths[&book_id], &format, &name)?;
 		if !seen_relative_paths.insert(relative.clone()) {
 			return Err(CalibreSourceError::InvalidBook {
@@ -703,17 +756,19 @@ mod tests {
 		assert!(!value.to_string().contains("/home/"));
 	}
 
-	#[tokio::test]
-	async fn discovers_one_format_from_calibre_data_table() {
+	/// Writes a minimal Calibre library (one EPUB) below `root_path` with the
+	/// given `user_version` plus any `extra_sql` statements, returning the root
+	/// config `discover` expects.
+	async fn write_calibre_fixture(
+		root_path: &Path,
+		user_version: i64,
+		extra_sql: &[&str],
+	) -> SourceRootConfig {
 		use crate::source_protocol::SourceTransport;
-		use tempfile::tempdir;
 
-		let dir = tempdir().unwrap();
-		let root_path = dir.path().join("calibre");
 		let book_dir = root_path.join("Author").join("Book");
 		std::fs::create_dir_all(&book_dir).unwrap();
-		let format_path = book_dir.join("Book.epub");
-		std::fs::write(&format_path, b"fixture epub").unwrap();
+		std::fs::write(book_dir.join("Book.epub"), b"fixture epub").unwrap();
 
 		let db_path = root_path.join("metadata.db");
 		let options = sea_orm::sqlx::sqlite::SqliteConnectOptions::new()
@@ -726,11 +781,12 @@ mod tests {
 			.await
 			.unwrap();
 		let db = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool);
+		let user_version = format!("PRAGMA user_version = {user_version}");
 		for sql in [
 			"CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, path TEXT NOT NULL, has_cover INTEGER NOT NULL DEFAULT 0, series_index REAL)",
 			"CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
 			"PRAGMA application_id = 0x63616c69",
-			"PRAGMA user_version = 27",
+			user_version.as_str(),
 			"CREATE TABLE books_authors_link (book INTEGER NOT NULL, author INTEGER NOT NULL)",
 			"CREATE TABLE series (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
 			"CREATE TABLE books_series_link (book INTEGER NOT NULL, series INTEGER NOT NULL)",
@@ -747,22 +803,159 @@ mod tests {
 			"INSERT INTO books_tags_link (book, tag) VALUES (1, 1)",
 			"INSERT INTO identifiers (id, book, type, val) VALUES (1, 1, 'isbn', 'fixture-1')",
 			"INSERT INTO data (id, book, format, uncompressed_size, name) VALUES (1, 1, 'EPUB', 12, 'Book')",
-		] {
+		]
+		.into_iter()
+		.chain(extra_sql.iter().copied())
+		{
 			db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
 				.await
 				.unwrap();
 		}
 		db.close().await.unwrap();
 
-		let root = SourceRootConfig {
+		SourceRootConfig {
 			root_id: "calibre".into(),
 			label: "Calibre".into(),
 			kind: CALIBRE_ROOT_KIND.into(),
 			privacy_mode: "catalog".into(),
-			path: root_path,
+			path: root_path.to_path_buf(),
 			transport: SourceTransport::Tunnel,
 			direct_base_url: None,
+		}
+	}
+
+	/// THROWAWAY PROOF (removed before hand-off): the per-format loop stalls
+	/// the runtime thread when run inline, and does not when `discover` runs
+	/// it through `spawn_blocking`.
+	#[tokio::test(flavor = "current_thread")]
+	async fn throwaway_blocking_proof() {
+		use std::sync::atomic::{AtomicU64, Ordering};
+		use std::sync::Arc;
+		use std::time::{Duration, Instant};
+		use tempfile::tempdir;
+
+		let dir = tempdir().unwrap();
+		let root_path = dir.path().join("calibre");
+		let mut extra = Vec::new();
+		for id in 2..4000_i64 {
+			let book_dir = root_path.join("Author").join(format!("Book{id}"));
+			std::fs::create_dir_all(&book_dir).unwrap();
+			std::fs::write(book_dir.join(format!("Book{id}.epub")), vec![b'x'; 65_536])
+				.unwrap();
+			extra.push(format!(
+				"INSERT INTO books (id, title, path, has_cover, series_index) VALUES ({id}, 'Book{id}', 'Author/Book{id}', 0, 1.0)"
+			));
+			extra.push(format!(
+				"INSERT INTO data (id, book, format, uncompressed_size, name) VALUES ({id}, {id}, 'EPUB', 65536, 'Book{id}')"
+			));
+		}
+		let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
+		let root = write_calibre_fixture(&root_path, 27, &extra_refs).await;
+
+		// Heartbeat: records the longest gap between two consecutive ticks.
+		let max_gap = Arc::new(AtomicU64::new(0));
+		let heartbeat = {
+			let max_gap = max_gap.clone();
+			tokio::spawn(async move {
+				let mut last = Instant::now();
+				loop {
+					tokio::time::sleep(Duration::from_millis(1)).await;
+					let gap = last.elapsed().as_millis() as u64;
+					max_gap.fetch_max(gap, Ordering::Relaxed);
+					last = Instant::now();
+				}
+			})
 		};
+
+		// Warm up the page cache so both passes read the same bytes.
+		let _ = discover(&root, 10_000).await.unwrap();
+
+		max_gap.store(0, Ordering::Relaxed);
+		tokio::time::sleep(Duration::from_millis(20)).await;
+		let started = Instant::now();
+		let observations = discover(&root, 10_000).await.unwrap();
+		let blocking_elapsed = started.elapsed();
+		tokio::time::sleep(Duration::from_millis(20)).await;
+		let blocking_gap = max_gap.load(Ordering::Relaxed);
+
+		// The old shape: the same loop inline on the runtime thread.
+		let books = observations
+			.iter()
+			.map(|observation| {
+				let id = observation.metadata.as_ref().unwrap()["book_id"]
+					.as_i64()
+					.unwrap();
+				(
+					id,
+					CalibreBook {
+						id,
+						title: String::new(),
+						authors: Vec::new(),
+						series: None,
+						series_index: None,
+						tags: Vec::new(),
+						identifiers: BTreeMap::new(),
+						cover_relative_path: None,
+						formats: Vec::new(),
+					},
+				)
+			})
+			.collect::<BTreeMap<_, _>>();
+		let book_paths = observations
+			.iter()
+			.map(|observation| {
+				let id = observation.metadata.as_ref().unwrap()["book_id"]
+					.as_i64()
+					.unwrap();
+				let path = observation
+					.relative_path
+					.rsplit_once('/')
+					.unwrap()
+					.0
+					.to_owned();
+				(id, path)
+			})
+			.collect::<BTreeMap<_, _>>();
+		let rows = observations
+			.iter()
+			.map(|observation| FormatRow {
+				book_id: observation.metadata.as_ref().unwrap()["book_id"]
+					.as_i64()
+					.unwrap(),
+				format: "EPUB".into(),
+				name: observation
+					.relative_path
+					.rsplit_once('/')
+					.unwrap()
+					.1
+					.trim_end_matches(".epub")
+					.to_owned(),
+				uncompressed_size: 65_536,
+			})
+			.collect::<Vec<_>>();
+		max_gap.store(0, Ordering::Relaxed);
+		tokio::time::sleep(Duration::from_millis(20)).await;
+		let started = Instant::now();
+		let inline =
+			observe_formats(books, &book_paths, rows, &root_path, 10_000).unwrap();
+		let inline_elapsed = started.elapsed();
+		tokio::time::sleep(Duration::from_millis(20)).await;
+		let inline_gap = max_gap.load(Ordering::Relaxed);
+		heartbeat.abort();
+
+		eprintln!(
+			"PROOF formats={} discover(spawn_blocking): elapsed={blocking_elapsed:?} max_heartbeat_gap={blocking_gap}ms | inline loop: elapsed={inline_elapsed:?} max_heartbeat_gap={inline_gap}ms",
+			inline.len()
+		);
+		assert_eq!(inline.len(), observations.len());
+	}
+
+	#[tokio::test]
+	async fn discovers_one_format_from_calibre_data_table() {
+		use tempfile::tempdir;
+
+		let dir = tempdir().unwrap();
+		let root = write_calibre_fixture(&dir.path().join("calibre"), 27, &[]).await;
 		let observations = discover(&root, 10).await.unwrap();
 		assert_eq!(observations.len(), 1);
 		assert_eq!(observations[0].relative_path, "Author/Book/Book.epub");
@@ -772,5 +965,36 @@ mod tests {
 		assert_eq!(metadata["authors"][0], "Author");
 		assert_eq!(metadata["series"], "Series");
 		assert_eq!(metadata["format"], "EPUB");
+	}
+
+	/// Calibre master's `upgrade_version_27` only adds the viewer
+	/// `book_storage` table (schema 28); it must read like schema 27, while
+	/// anything newer stays an actionable rejection.
+	#[tokio::test]
+	async fn accepts_schema_28_book_storage_and_rejects_newer() {
+		use tempfile::tempdir;
+
+		let dir = tempdir().unwrap();
+		let root = write_calibre_fixture(
+			&dir.path().join("v28"),
+			28,
+			&[
+				"CREATE TABLE book_storage (id INTEGER PRIMARY KEY, book INTEGER NOT NULL, format TEXT NOT NULL COLLATE NOCASE, user_type TEXT NOT NULL, user TEXT NOT NULL, timestamp REAL NOT NULL, data TEXT NOT NULL DEFAULT '{}', UNIQUE(book, format, user_type, user), FOREIGN KEY (book) REFERENCES books(id) ON DELETE CASCADE)",
+				"INSERT INTO book_storage (book, format, user_type, user, timestamp, data) VALUES (1, 'EPUB', 'local', 'viewer', 1.0, '{}')",
+			],
+		)
+		.await;
+		let observations = discover(&root, 10).await.unwrap();
+		assert_eq!(observations.len(), 1);
+		assert_eq!(observations[0].relative_path, "Author/Book/Book.epub");
+
+		let root = write_calibre_fixture(&dir.path().join("v29"), 29, &[]).await;
+		match discover(&root, 10).await {
+			Err(CalibreSourceError::UnsupportedSchemaVersion { version, supported }) => {
+				assert_eq!(version, 29);
+				assert_eq!(supported, SUPPORTED_SCHEMA_VERSION);
+			},
+			other => panic!("expected unsupported schema rejection, got {other:?}"),
+		}
 	}
 }

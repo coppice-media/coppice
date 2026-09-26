@@ -5,6 +5,7 @@
 	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import * as Dialog from '@stump/ui/components/ui/dialog';
 	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
 	import { Input } from '@stump/ui/components/ui/input';
@@ -191,18 +192,7 @@
 				<ul class="flex flex-col gap-3" aria-label="Provider search hits">
 					{#each hits as hit (hit.providerId + ':' + hit.externalId)}
 						<li class="flex gap-3 rounded-lg border p-3">
-							{#if hit.coverUrl}
-								<img
-									src={hit.coverUrl}
-									alt=""
-									loading="lazy"
-									class="h-16 w-12 shrink-0 rounded border object-cover"
-								/>
-							{:else}
-								<div class="flex h-16 w-12 shrink-0 items-center justify-center rounded border bg-muted text-xs text-muted-foreground">
-									—
-								</div>
-							{/if}
+							<Cover src={hit.coverUrl} class="h-16 w-12 rounded border" />
 							<div class="flex min-w-0 flex-1 flex-col gap-1">
 								<div class="flex flex-wrap items-center gap-2">
 									<span class="truncate font-medium">{hit.title}</span>

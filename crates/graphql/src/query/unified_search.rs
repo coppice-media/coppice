@@ -17,7 +17,7 @@ use models::{
 	shared::enums::MetadataProvider as MetadataProviderKind,
 };
 use sea_orm::{
-	sea_query::{Expr, Func},
+	sea_query::{Expr, Func, IntoColumnRef, LikeExpr, SimpleExpr},
 	ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use stump_auth::AuthContext;
@@ -98,6 +98,16 @@ const EXTERNAL_SEARCH_CAPACITY: usize = 256;
 /// answer is worth less than the Hardcover column it would hold up.
 pub(super) const AUDIBLE_SEARCH_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// The longest an interactive Hardcover call (search, audio editions) may
+/// take. The client has retries but no request timeout of its own, so a
+/// connection Hardcover accepts and then stalls would otherwise pend for as
+/// long as the caller waits; the search dialog and the narrator picker both
+/// answer with an error instead.
+pub(super) const HARDCOVER_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The message a Hardcover search reports when [`HARDCOVER_TIMEOUT`] passes.
+pub(super) const HARDCOVER_TIMED_OUT: &str = "Hardcover search timed out";
+
 /// Cache scope for Audible hits: there is no credential, so every caller
 /// shares one entry per query.
 pub(super) const AUDIBLE_SCOPE: &str = "audible";
@@ -167,37 +177,40 @@ impl UnifiedSearchQuery {
 		}
 
 		let limit = limit.unwrap_or(20).clamp(1, 50) as u64;
-		let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+		let pattern = contains_pattern(query);
 		let mut local_condition = Condition::any()
-			.add(Expr::col((media::Entity, media::Column::Name)).like(&pattern))
-			.add(
-				Expr::col((media_metadata::Entity, media_metadata::Column::Title))
-					.like(&pattern),
-			)
-			.add(
-				Expr::col((media_metadata::Entity, media_metadata::Column::Writers))
-					.like(&pattern),
-			)
-			.add(
-				Expr::col((media_metadata::Entity, media_metadata::Column::Series))
-					.like(&pattern),
-			)
-			.add(Expr::col((series::Entity, series::Column::Name)).like(&pattern))
-			.add(
-				Expr::col((
+			.add(folded_like((media::Entity, media::Column::Name), &pattern))
+			.add(folded_like(
+				(media_metadata::Entity, media_metadata::Column::Title),
+				&pattern,
+			))
+			.add(folded_like(
+				(media_metadata::Entity, media_metadata::Column::Writers),
+				&pattern,
+			))
+			.add(folded_like(
+				(media_metadata::Entity, media_metadata::Column::Series),
+				&pattern,
+			))
+			.add(folded_like(
+				(series::Entity, series::Column::Name),
+				&pattern,
+			))
+			.add(folded_like(
+				(
 					media_metadata::Entity,
 					media_metadata::Column::IdentifierIsbn,
-				))
-				.like(&pattern),
-			);
+				),
+				&pattern,
+			));
 		if let Some(isbn) = query_isbn(query) {
-			local_condition = local_condition.add(
-				Expr::col((
+			local_condition = local_condition.add(folded_like(
+				(
 					media_metadata::Entity,
 					media_metadata::Column::IdentifierIsbn,
-				))
-				.like(format!("%{isbn}%")),
-			);
+				),
+				&contains_pattern(&isbn),
+			));
 		}
 		let local_models = media::ModelWithMetadata::find_for_user(&auth.user)
 			.filter(media::Column::DeletedAt.is_null())
@@ -287,37 +300,16 @@ impl UnifiedSearchQuery {
 		let (provider, error, external) =
 			match get_hardcover_provider(core, &auth.user.id).await {
 				Ok(Some((scope, provider))) => {
-					let result = EXTERNAL_SEARCH
-						.results
-						.search_media_brief(
-							&scope,
-							provider.as_ref(),
-							&SearchQuery {
-								title: query.to_owned(),
-								isbn: query_isbn(query),
-								limit: Some(limit),
-								..Default::default()
-							},
-						)
-						.await;
-					match result {
-						Ok(outcome) => (
-							Some("hardcover".to_owned()),
-							None,
-							outcome
-								.candidates
-								.iter()
-								.filter_map(|candidate| {
-									candidate.metadata.as_media().cloned()
-								})
-								.collect::<Vec<_>>(),
-						),
-						Err(error) => (
-							Some("hardcover".to_owned()),
-							Some(error.to_string()),
-							Vec::new(),
-						),
-					}
+					let (error, external) = hardcover_search(
+						&EXTERNAL_SEARCH.results,
+						&scope,
+						provider.as_ref(),
+						query,
+						limit,
+						HARDCOVER_TIMEOUT,
+					)
+					.await;
+					(Some("hardcover".to_owned()), error, external)
 				},
 				Ok(None) => (None, None, Vec::new()),
 				Err(error) => (Some("hardcover".to_owned()), Some(error), Vec::new()),
@@ -399,6 +391,39 @@ pub(super) fn language_matches(wanted: &str, found: Option<&str>) -> bool {
 			let found = found.to_lowercase();
 			found == wanted || found.starts_with(wanted) || wanted.starts_with(&found)
 		},
+	}
+}
+
+/// One cached Hardcover index search under the caller's credential `scope`,
+/// given up after `deadline`. A timeout is reported like any other provider
+/// failure ([`HARDCOVER_TIMED_OUT`]) and, like one, never cached, so the
+/// next keystroke asks again.
+async fn hardcover_search(
+	cache: &BriefSearchCache,
+	scope: &str,
+	provider: &dyn MetadataProvider,
+	query: &str,
+	limit: u32,
+	deadline: Duration,
+) -> (Option<String>, Vec<ExternalMediaMetadata>) {
+	let query_spec = SearchQuery {
+		title: query.to_owned(),
+		isbn: query_isbn(query),
+		limit: Some(limit),
+		..Default::default()
+	};
+	let search = cache.search_media_brief(scope, provider, &query_spec);
+	match tokio::time::timeout(deadline, search).await {
+		Ok(Ok(outcome)) => (
+			None,
+			outcome
+				.candidates
+				.iter()
+				.filter_map(|candidate| candidate.metadata.as_media().cloned())
+				.collect(),
+		),
+		Ok(Err(error)) => (Some(error.to_string()), Vec::new()),
+		Err(_) => (Some(HARDCOVER_TIMED_OUT.to_owned()), Vec::new()),
 	}
 }
 
@@ -709,6 +734,39 @@ fn query_isbn(query: &str) -> Option<String> {
 	matches!(isbn.len(), 10 | 13).then_some(isbn)
 }
 
+/// The `LIKE` escape character for library searches. Not a backslash: SQLite
+/// and PostgreSQL both take an explicit `ESCAPE`, but a backslash literal is
+/// rendered doubled for PostgreSQL and would no longer be one character.
+const LIKE_ESCAPE: char = '!';
+
+/// A `%…%` pattern matching text that contains `query` literally: the
+/// wildcards `%`, `_` and [`LIKE_ESCAPE`] itself are escaped, and the whole
+/// pattern is lowercased to meet the lowercased column of [`folded_like`].
+fn contains_pattern(query: &str) -> String {
+	let mut pattern = String::with_capacity(query.len() + 2);
+	pattern.push('%');
+	for character in query.to_lowercase().chars() {
+		if character == '%' || character == '_' || character == LIKE_ESCAPE {
+			pattern.push(LIKE_ESCAPE);
+		}
+		pattern.push(character);
+	}
+	pattern.push('%');
+	pattern
+}
+
+/// `LOWER(column) LIKE pattern ESCAPE '!'`: case-insensitive on PostgreSQL,
+/// whose `LIKE` is case-sensitive, as well as on SQLite, and with the same
+/// escape character on both (SQLite has none by default, so a backslash in
+/// the pattern would have been searched for literally).
+fn folded_like<C>(column: C, pattern: &str) -> SimpleExpr
+where
+	C: IntoColumnRef,
+{
+	Expr::expr(Func::lower(Expr::col(column)))
+		.like(LikeExpr::new(pattern).escape(LIKE_ESCAPE))
+}
+
 fn external_library_match_condition(
 	items: &[ExternalMediaMetadata],
 ) -> Option<Condition> {
@@ -905,7 +963,7 @@ fn matching_library_media_ids<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
 	use super::*;
 
 	#[test]
@@ -1145,6 +1203,95 @@ mod tests {
 		assert_eq!(result[0]["extension"], "epub");
 		assert_eq!(result[0]["isAudiobook"], false);
 		assert!(data["missing"].as_array().unwrap().is_empty());
+	}
+
+	/// `%`, `_` and the escape character in a query are searched for
+	/// literally on the one `ESCAPE` both databases honour, and both sides
+	/// are lowercased so PostgreSQL's case-sensitive `LIKE` folds like
+	/// SQLite's. Before, the pattern escaped with a backslash and no
+	/// `ESCAPE`, which SQLite matched literally: `100%` found nothing.
+	#[tokio::test]
+	async fn library_search_folds_case_and_matches_wildcards_literally() {
+		use sea_orm::ActiveModelTrait;
+
+		let db = seed_project_hail_mary().await;
+		let library = ::tests::fake_data::Library::default().insert(&db).await;
+		let series = ::tests::fake_data::Series {
+			name: Some("Odds".to_owned()),
+			library_id: Some(library.id),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let media = ::tests::fake_data::Media {
+			id: Some("percent-media".to_owned()),
+			name: Some("100% Sure_Thing!.epub".to_owned()),
+			series_id: series.id,
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		media_metadata::ActiveModel {
+			media_id: sea_orm::Set(Some(media.id.clone())),
+			title: sea_orm::Set(Some("100% Sure_Thing!".to_owned())),
+			..Default::default()
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+
+		let schema = search_schema(db, crate::tests::common::get_default_user());
+		let response = schema
+			.execute(
+				r#"{
+					percent: librarySearch(query: "100%") { mediaId }
+					underscore: librarySearch(query: "_THING") { mediaId }
+					bang: librarySearch(query: "thing!") { mediaId }
+					notWildcard: librarySearch(query: "100_") { mediaId }
+					lower: librarySearch(query: "project HAIL") { mediaId }
+				}"#,
+			)
+			.await;
+
+		assert!(response.errors.is_empty(), "{:?}", response.errors);
+		let data = response.data.into_json().unwrap();
+		let ids = |field: &str| {
+			data[field]
+				.as_array()
+				.unwrap()
+				.iter()
+				.map(|hit| hit["mediaId"].as_str().unwrap().to_owned())
+				.collect::<Vec<_>>()
+		};
+		assert_eq!(ids("percent"), ["percent-media"], "a literal percent sign");
+		assert_eq!(ids("underscore"), ["percent-media"], "a literal underscore");
+		assert_eq!(
+			ids("bang"),
+			["percent-media"],
+			"the escape character itself"
+		);
+		assert!(
+			ids("notWildcard").is_empty(),
+			"an underscore never stands for any character"
+		);
+		assert_eq!(ids("lower"), ["project-hail-mary-media"]);
+
+		assert_eq!(
+			contains_pattern("100% Sure_Thing!"),
+			"%100!% sure!_thing!!%"
+		);
+		let postgres = sea_orm::sea_query::Query::select()
+			.column(media::Column::Id)
+			.from(media::Entity)
+			.and_where(folded_like(
+				(media::Entity, media::Column::Name),
+				&contains_pattern("A%"),
+			))
+			.to_string(sea_orm::sea_query::PostgresQueryBuilder);
+		assert!(
+			postgres.ends_with(r#"WHERE LOWER("media"."name") LIKE '%a!%%' ESCAPE '!'"#),
+			"{postgres}"
+		);
 	}
 
 	#[tokio::test]
@@ -1428,6 +1575,82 @@ mod tests {
 			"a failed search reports instead of failing"
 		);
 		assert!(external.is_empty());
+	}
+
+	/// A server that accepts every connection and answers none for `hold`;
+	/// what a stalled Hardcover looks like to the client.
+	pub(in crate::query) fn stalled_server(hold: Duration) -> String {
+		let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+		let url = format!("http://{}", listener.local_addr().unwrap());
+		std::thread::spawn(move || {
+			let mut held = Vec::new();
+			for connection in listener.incoming().flatten() {
+				held.push(connection);
+				std::thread::sleep(hold);
+			}
+		});
+		url
+	}
+
+	/// Hardcover's client retries but never times out on its own; the search
+	/// gives up at the deadline, reports it like any provider failure, and
+	/// caches nothing, so the next keystroke asks a recovered Hardcover again.
+	#[tokio::test]
+	async fn hardcover_search_gives_up_at_its_deadline_and_asks_again_later() {
+		use metadata_integrations::{
+			mock_http::{render_ok, MockServer},
+			HardcoverClient,
+		};
+
+		let cache = BriefSearchCache::new(EXTERNAL_SEARCH_TTL, EXTERNAL_SEARCH_CAPACITY);
+		let stalled = HardcoverClient::new("token".to_owned(), Some(u32::MAX))
+			.pointed_at(&stalled_server(Duration::from_secs(3)));
+		let started = std::time::Instant::now();
+		let (error, hits) = hardcover_search(
+			&cache,
+			"server:1",
+			&stalled,
+			"Project Hail Mary",
+			5,
+			Duration::from_millis(200),
+		)
+		.await;
+		assert_eq!(error.as_deref(), Some(HARDCOVER_TIMED_OUT));
+		assert!(hits.is_empty());
+		assert!(
+			started.elapsed() < Duration::from_secs(2),
+			"gave up after {:?}, not when the server let go",
+			started.elapsed()
+		);
+		assert_eq!(cache.len(), 0, "a timeout is never cached");
+
+		let index = serde_json::json!({
+			"data": { "search": { "results": { "hits": [
+				{ "document": {
+					"id": 52709,
+					"title": "Project Hail Mary",
+					"author_names": ["Andy Weir"],
+					"release_year": 2021
+				} }
+			] } } }
+		})
+		.to_string();
+		let recovered = MockServer::spawn(vec![render_ok(&index)]);
+		let hardcover = HardcoverClient::new("token".to_owned(), Some(u32::MAX))
+			.pointed_at(&recovered.url);
+		let (error, hits) = hardcover_search(
+			&cache,
+			"server:1",
+			&hardcover,
+			"Project Hail Mary",
+			5,
+			Duration::from_millis(200),
+		)
+		.await;
+		assert_eq!(error, None);
+		assert_eq!(hits.len(), 1);
+		assert_eq!(hits[0].title.as_deref(), Some("Project Hail Mary"));
+		assert_eq!(cache.len(), 1);
 	}
 
 	/// Hardcover's index flags ride through to the hit; a hit from the same

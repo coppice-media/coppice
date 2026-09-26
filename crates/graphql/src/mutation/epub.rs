@@ -10,7 +10,8 @@ use models::{
 	shared::{
 		liseur_annotation_projection::{
 			is_liseur_sync_projection_id, liseur_sync_projection_id,
-			parse_stump_native_annotation_id, stump_native_annotation_id,
+			parse_stump_native_annotation_id, projection_link_order_by,
+			stump_native_annotation_id,
 		},
 		readium::{ReadiumLocator, ReadiumText},
 	},
@@ -88,6 +89,11 @@ impl EpubMutation {
 
 	/// Update an annotation's note text or color. Liseur-backed rows use CAS;
 	/// expectedRevision rejects stale Home edits without changing the locator.
+	///
+	/// The id routes by shape: `liseur-sync:{user}:{record}` is the Liseur
+	/// lane (the `AnnotationEntry`/`annotationsByMediaId` id of the record),
+	/// anything else is a native `media_annotations` row. A bare Liseur record
+	/// id is never accepted, because it is client-chosen and may equal either.
 	async fn update_annotation(
 		&self,
 		ctx: &Context<'_>,
@@ -109,48 +115,41 @@ impl EpubMutation {
 			return Err("Annotation not found".into());
 		}
 
-		if let Some(annotation) = media_annotation::Entity::find()
+		let annotation = media_annotation::Entity::find()
 			.filter(media_annotation::Column::Id.eq(&input.id))
 			.filter(media_annotation::Column::UserId.eq(&user.id))
 			.one(conn)
 			.await?
+			.ok_or("Annotation not found")?;
+		let native_cas_id = stump_native_annotation_id("annotation", &input.id);
+		if let Some(state) =
+			load_liseur_annotation(conn, &user.id, &native_cas_id).await?
 		{
-			let native_cas_id = stump_native_annotation_id("annotation", &input.id);
-			if let Some(state) =
-				load_liseur_annotation(conn, &user.id, &native_cas_id).await?
-			{
-				if state.deleted {
-					return Err("Liseur annotation is deleted".into());
-				}
-				let updated =
-					update_liseur_annotation(conn, user, &native_cas_id, &input)
-						.await?
-						.ok_or("Annotation not found")?;
-				core.note_annotation_activity(&user.id);
-				return Ok(MediaAnnotation::from(updated));
+			if state.deleted {
+				return Err("Liseur annotation is deleted".into());
 			}
-			if input.expected_revision.is_some() {
-				return Err("expectedRevision only applies to Liseur annotations".into());
-			}
-			let mut active_model: media_annotation::ActiveModel = annotation.into();
-			active_model.annotation_text = Set(input.annotation_text);
-			if let Some(color) = input.color {
-				active_model.color = Set((!color.is_empty()).then_some(color));
-			}
-			let updated = active_model.update(conn).await?;
+			let updated = update_liseur_annotation(conn, user, &native_cas_id, &input)
+				.await?
+				.ok_or("Annotation not found")?;
 			core.note_annotation_activity(&user.id);
 			return Ok(MediaAnnotation::from(updated));
 		}
-
-		let updated = update_liseur_annotation(conn, user, &input.id, &input)
-			.await?
-			.ok_or("Annotation not found")?;
+		if input.expected_revision.is_some() {
+			return Err("expectedRevision only applies to Liseur annotations".into());
+		}
+		let mut active_model: media_annotation::ActiveModel = annotation.into();
+		active_model.annotation_text = Set(input.annotation_text);
+		if let Some(color) = input.color {
+			active_model.color = Set((!color.is_empty()).then_some(color));
+		}
+		let updated = active_model.update(conn).await?;
 		core.note_annotation_activity(&user.id);
 		Ok(MediaAnnotation::from(updated))
 	}
 
-	/// Delete an annotation by ID. Liseur-backed rows accept an optional CAS
-	/// revision precondition and publish the tombstone through the sync feed.
+	/// Delete an annotation by ID, routed by shape exactly as
+	/// `updateAnnotation`. Liseur-backed rows accept an optional CAS revision
+	/// precondition and publish the tombstone through the sync feed.
 	async fn delete_annotation(
 		&self,
 		ctx: &Context<'_>,
@@ -174,43 +173,32 @@ impl EpubMutation {
 			return Err("Annotation not found".into());
 		}
 
-		if let Some(annotation) = media_annotation::Entity::find()
+		let annotation = media_annotation::Entity::find()
 			.filter(media_annotation::Column::Id.eq(&id))
 			.filter(media_annotation::Column::UserId.eq(&user.id))
 			.one(conn)
 			.await?
-		{
-			let native_cas_id = stump_native_annotation_id("annotation", &id);
-			if let Some(state) =
-				load_liseur_annotation(conn, &user.id, &native_cas_id).await?
-			{
-				if state.deleted {
-					return Err("Liseur annotation is already deleted".into());
-				}
-				let deleted = delete_liseur_annotation(
-					conn,
-					user,
-					&native_cas_id,
-					expected_revision,
-				)
-				.await?
-				.ok_or("Annotation not found")?;
-				core.note_annotation_activity(&user.id);
-				return Ok(MediaAnnotation::from(deleted));
-			}
-			if expected_revision.is_some() {
-				return Err("expectedRevision only applies to Liseur annotations".into());
-			}
-			let _ = annotation.clone().delete(conn).await?;
-			core.note_annotation_activity(&user.id);
-			return Ok(MediaAnnotation::from(annotation));
-		}
-
-		let deleted = delete_liseur_annotation(conn, user, &id, expected_revision)
-			.await?
 			.ok_or("Annotation not found")?;
+		let native_cas_id = stump_native_annotation_id("annotation", &id);
+		if let Some(state) =
+			load_liseur_annotation(conn, &user.id, &native_cas_id).await?
+		{
+			if state.deleted {
+				return Err("Liseur annotation is already deleted".into());
+			}
+			let deleted =
+				delete_liseur_annotation(conn, user, &native_cas_id, expected_revision)
+					.await?
+					.ok_or("Annotation not found")?;
+			core.note_annotation_activity(&user.id);
+			return Ok(MediaAnnotation::from(deleted));
+		}
+		if expected_revision.is_some() {
+			return Err("expectedRevision only applies to Liseur annotations".into());
+		}
+		let _ = annotation.clone().delete(conn).await?;
 		core.note_annotation_activity(&user.id);
-		Ok(MediaAnnotation::from(deleted))
+		Ok(MediaAnnotation::from(annotation))
 	}
 }
 
@@ -235,8 +223,12 @@ struct LiseurAnnotationState {
 	deleted: bool,
 }
 
+/// The Liseur record a routed id names: the projection id shape for this
+/// user, `liseur-sync:{user}:{record}`, decoded by stripping the fixed prefix
+/// so a record id containing `:` or a `liseur-sync:` prefix of its own
+/// round-trips unchanged.
 fn liseur_target_id(user_id: &str, id: &str) -> Option<String> {
-	let prefix = format!("liseur-sync:{user_id}:");
+	let prefix = liseur_sync_projection_id(user_id, "");
 	id.strip_prefix(&prefix)
 		.filter(|annotation_id| !annotation_id.is_empty())
 		.map(str::to_owned)
@@ -332,11 +324,13 @@ async fn visible_liseur_media_id<C: ConnectionTrait>(
 	let row = conn
 		.query_one(liseur_statement(
 			conn,
-			"SELECT media_id FROM liseur_sync_media_links
-             WHERE user_id = $1 AND work_id = $2
-             ORDER BY CASE WHEN $3 <> '' AND edition_sha = $3 THEN 0 ELSE 1 END,
-                      created_at ASC, id ASC
+			&format!(
+				"SELECT l.media_id FROM liseur_sync_media_links l
+             WHERE l.user_id = $1 AND l.work_id = $2
+             ORDER BY {}
              LIMIT 1",
+				projection_link_order_by("l", "$3")
+			),
 			vec![
 				user.id.clone().into(),
 				annotation.work_id.clone().into(),

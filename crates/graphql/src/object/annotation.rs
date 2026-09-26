@@ -9,7 +9,8 @@ use models::{
 	shared::{
 		enums::{DeviceCredentialKind, DeviceKind},
 		liseur_annotation_projection::{
-			is_liseur_sync_projection_id, parse_stump_native_annotation_id,
+			is_liseur_sync_projection_id, liseur_sync_projection_id,
+			parse_stump_native_annotation_id, projection_link_order_by,
 			stump_native_annotation_id,
 		},
 		readium::ReadiumLocator,
@@ -130,11 +131,21 @@ pub struct AnnotationBook {
 	pub library_id: Option<ID>,
 	/// The book's file extension, so a client can pick a reader lane
 	pub extension: Option<String>,
+	/// KOReader's partial-MD5 document hash of the book file. Byte-identical
+	/// copies of a book share it, so a reader can open the copy it already
+	/// holds even when that copy is a different Stump media row.
+	pub koreader_hash: Option<String>,
 }
 
 /// One highlight, note, or bookmark, wherever it came from.
 #[derive(Debug, Clone, PartialEq, SimpleObject)]
 pub struct AnnotationEntry {
+	/// The id `updateAnnotation`/`deleteAnnotation` route by. A native row
+	/// carries its `media_annotations`/`bookmarks` id; a Liseur-sync record
+	/// carries its projection id, `liseur-sync:{user}:{record}`, the same id
+	/// `annotationsByMediaId` shows for it. A Liseur record's own id is
+	/// client-chosen and may collide with either shape, so it is never
+	/// exposed bare.
 	pub id: ID,
 	pub kind: AnnotationKind,
 	/// The immutable creator lane. Native rows and Home edits report `WEB`;
@@ -198,6 +209,7 @@ struct BookRow {
 	library_id: Option<String>,
 	title: Option<String>,
 	writers: Option<String>,
+	koreader_hash: Option<String>,
 }
 
 impl From<BookRow> for AnnotationBook {
@@ -214,6 +226,7 @@ impl From<BookRow> for AnnotationBook {
 			series_name: row.series_name,
 			library_id: row.library_id.map(ID),
 			extension: Some(row.extension),
+			koreader_hash: row.koreader_hash,
 		}
 	}
 }
@@ -580,6 +593,7 @@ impl AnnotationPage {
 					series_name: None,
 					library_id: None,
 					extension: None,
+					koreader_hash: None,
 				},
 			};
 			let creator_device_id =
@@ -607,7 +621,7 @@ impl AnnotationPage {
 					!anchor.href.trim().is_empty() && anchor.locations.is_some()
 				});
 			entries.push(AnnotationEntry {
-				id: ID(row.annotation_id),
+				id: ID(liseur_sync_projection_id(&user.id, &row.annotation_id)),
 				kind,
 				source,
 				source_device_id: creator.map(|device| ID(device.id.clone())),
@@ -733,6 +747,7 @@ async fn load_books(
 		.column(media::Column::Id)
 		.column(media::Column::Name)
 		.column(media::Column::Extension)
+		.column(media::Column::KoreaderHash)
 		.column(media::Column::SeriesId)
 		.column_as(series::Column::Name, "series_name")
 		.column_as(series::Column::LibraryId, "library_id")
@@ -776,30 +791,44 @@ async fn load_liseur_rows(
 		return Ok(Vec::new());
 	}
 
-	Ok(conn
-		.query_all(db_statement(
-			conn,
-			"SELECT a.annotation_id AS annotation_id, a.rev AS rev,
-				a.work_id AS work_id, a.kind AS kind, a.locator AS locator,
-				a.progression AS progression, a.excerpt AS excerpt, a.color AS color,
-				a.body AS body, a.device_id AS device_id,
-				a.origin_device_id AS origin_device_id, a.client_ts AS client_ts,
-				a.updated_at AS updated_at,
-				w.title AS work_title, w.author AS work_author,
-				(
-					SELECT l.media_id FROM liseur_sync_media_links l
-					WHERE l.user_id = a.user_id AND l.work_id = a.work_id
-					ORDER BY l.created_at ASC, l.id ASC
-					LIMIT 1
-				) AS media_id
+	// A work also links its audiobook, and the oldest link is not
+	// necessarily a book a reader can open at the note. The ranking is
+	// `projection_link_order_by`, shared with the projection writer and the
+	// Home mutations so every consumer names the same book; it is a window
+	// over a join because SQLite does not resolve outer columns in a scalar
+	// subquery's ORDER BY.
+	let sql = format!(
+		"WITH ranked_links AS (
+			SELECT a.row_id AS row_id, l.media_id AS media_id,
+				ROW_NUMBER() OVER (
+					PARTITION BY a.row_id
+					ORDER BY {}
+				) AS link_rank
 			FROM liseur_sync_annotations a
-			LEFT JOIN liseur_sync_works w
-				ON w.user_id = a.user_id AND w.id = a.work_id
-			WHERE a.user_id = $1 AND a.deleted = FALSE
-				AND a.annotation_id NOT LIKE 'stump-native:%'
-			ORDER BY a.client_ts ASC, a.annotation_id ASC",
-			[user_id.into()],
-		))
+			JOIN liseur_sync_media_links l
+				ON l.user_id = a.user_id AND l.work_id = a.work_id
+			WHERE a.user_id = $1
+		)
+		SELECT a.annotation_id AS annotation_id, a.rev AS rev,
+			a.work_id AS work_id, a.kind AS kind, a.locator AS locator,
+			a.progression AS progression, a.excerpt AS excerpt, a.color AS color,
+			a.body AS body, a.device_id AS device_id,
+			a.origin_device_id AS origin_device_id, a.client_ts AS client_ts,
+			a.updated_at AS updated_at,
+			w.title AS work_title, w.author AS work_author,
+			r.media_id AS media_id
+		FROM liseur_sync_annotations a
+		LEFT JOIN liseur_sync_works w
+			ON w.user_id = a.user_id AND w.id = a.work_id
+		LEFT JOIN ranked_links r
+			ON r.row_id = a.row_id AND r.link_rank = 1
+		WHERE a.user_id = $1 AND a.deleted = FALSE
+			AND a.annotation_id NOT LIKE 'stump-native:%'
+		ORDER BY a.client_ts ASC, a.annotation_id ASC",
+		projection_link_order_by("l", "COALESCE(a.edition_sha, '')")
+	);
+	Ok(conn
+		.query_all(db_statement(conn, &sql, [user_id.into()]))
 		.await?
 		.iter()
 		.map(|row| LiseurRow::from_query_result(row, ""))
@@ -1229,9 +1258,18 @@ mod tests {
 		.await
 		.unwrap()
 	}
+	/// Entry ids with the Liseur routing prefix stripped, so the fixture's
+	/// record names read as written; the prefix itself is asserted once in
+	/// `liseur_entries_carry_their_routed_projection_id`.
+	fn ids(page: &AnnotationPage) -> Vec<String> {
+		page.items.iter().map(|entry| bare_id(entry)).collect()
+	}
 
-	fn ids(page: &AnnotationPage) -> Vec<&str> {
-		page.items.iter().map(|entry| entry.id.as_str()).collect()
+	fn bare_id(entry: &AnnotationEntry) -> String {
+		match entry.id.as_str().strip_prefix("liseur-sync:") {
+			Some(rest) => rest.split_once(':').map_or(rest, |(_, id)| id).to_owned(),
+			None => entry.id.to_string(),
+		}
 	}
 
 	#[tokio::test]
@@ -1250,7 +1288,7 @@ mod tests {
 		let by_id = |id: &str| {
 			page.items
 				.iter()
-				.find(|entry| entry.id.as_str() == id)
+				.find(|entry| bare_id(entry) == id)
 				.unwrap()
 		};
 
@@ -1312,10 +1350,19 @@ mod tests {
 		let liseur_highlight = page
 			.items
 			.iter()
-			.find(|entry| entry.id == "l-kobo")
+			.find(|entry| bare_id(entry) == "l-kobo")
 			.unwrap();
 		assert_eq!(liseur_highlight.source, DeviceKind::Kobo);
 		assert_eq!(liseur_highlight.color.as_deref(), Some("yellow"));
+		// A Liseur record is listed under its routed projection id — never its
+		// bare client-chosen id — so `updateAnnotation`/`deleteAnnotation`
+		// cannot mistake it for a native row or for another record.
+		assert_eq!(
+			liseur_highlight.id.as_str(),
+			models::shared::liseur_annotation_projection::liseur_sync_projection_id(
+				&user.id, "l-kobo"
+			)
+		);
 	}
 
 	#[tokio::test]
@@ -1476,6 +1523,81 @@ mod tests {
 		assert!(page.items.is_empty());
 		assert_eq!(page.total, 0);
 		assert_eq!(page.book_count, 0);
+	}
+
+	/// A work also links its audiobook. A merged work's oldest link may be
+	/// that audiobook, but a note must open the edition it was made on, or at
+	/// least one a reader can open (The Lottery regression).
+	#[tokio::test]
+	async fn liseur_note_points_at_its_edition_never_an_older_audiobook() {
+		let (conn, user, ..) = seeded().await;
+		let emma = media::Entity::find_by_id("m-emma".to_owned())
+			.one(&conn)
+			.await
+			.unwrap()
+			.unwrap();
+		for (id, name) in [("m-emma-audio", "emma.m4b"), ("m-emma-2", "emma-2.epub")] {
+			fake_data::Media {
+				series_id: emma.series_id.clone().expect("seeded media has a series"),
+				id: Some(id.to_owned()),
+				name: Some(name.to_owned()),
+				..Default::default()
+			}
+			.insert(&conn)
+			.await;
+		}
+		models::entity::media_audio::ActiveModel {
+			media_id: Set("m-emma-audio".to_owned()),
+			duration_ms: Set(3_600_000),
+			codec: Set("aac".to_owned()),
+			sample_rate: Set(None),
+			channels: Set(None),
+			bitrate: Set(None),
+			chapter_source: Set(models::domain::audio::AudioChapterSource::Mp4Chpl),
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+		for (link, media_id, edition, secs) in [
+			("link-audio", "m-emma-audio", "", -100),
+			("link-2", "m-emma-2", "edition-emma-2", 10),
+		] {
+			exec(
+				&conn,
+				"INSERT INTO liseur_sync_media_links
+					(id, user_id, media_id, work_id, edition_sha, resolution_status, created_at)
+				 VALUES ($1, $2, $3, 'work-emma', $4, 'linked', $5)",
+				[
+					link.into(),
+					user.id.clone().into(),
+					media_id.into(),
+					edition.into(),
+					ts(secs).to_rfc3339().into(),
+				],
+			)
+			.await;
+		}
+		let book_of = |page: &AnnotationPage| {
+			page.items
+				.iter()
+				.find(|entry| bare_id(entry) == "l-kobo")
+				.and_then(|entry| entry.book.media_id.as_ref().map(|id| id.to_string()))
+		};
+
+		// No edition on the note: the oldest *readable* link, not the audiobook.
+		let page = fetch(&conn, &user, AnnotationFilterInput::default()).await;
+		assert_eq!(book_of(&page).as_deref(), Some("m-emma"));
+
+		// The note names its edition: that edition wins over older links.
+		exec(
+			&conn,
+			"UPDATE liseur_sync_annotations SET edition_sha = 'edition-emma-2'
+			 WHERE annotation_id = 'l-kobo'",
+			Vec::<sea_orm::Value>::new(),
+		)
+		.await;
+		let page = fetch(&conn, &user, AnnotationFilterInput::default()).await;
+		assert_eq!(book_of(&page).as_deref(), Some("m-emma-2"));
 	}
 
 	#[tokio::test]

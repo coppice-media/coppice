@@ -4,8 +4,9 @@
 //! forwards bounded bridge operations and copies completed handoffs into ingest.
 
 use std::{
+	collections::HashSet,
 	path::{Component, Path, PathBuf},
-	sync::atomic::Ordering,
+	sync::{atomic::Ordering, Mutex},
 	time::Duration,
 };
 
@@ -18,8 +19,9 @@ use models::entity::{
 };
 use reqwest::{header, Method, Response};
 use sea_orm::{
-	sea_query::OnConflict, ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait,
-	IntoActiveModel, QueryFilter, QueryOrder,
+	sea_query::OnConflict, ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition,
+	DatabaseConnection, DbErr, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
+	QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -133,6 +135,23 @@ struct BridgeGrabRecord {
 	error: Option<String>,
 	#[serde(default)]
 	source_path: Option<String>,
+	#[serde(default)]
+	created_at_unix: u64,
+}
+
+impl BridgeGrabRecord {
+	/// The bridge stops touching a grab in these phases; `completed` still
+	/// waits for its handoff, so it stays active for adoption.
+	fn is_terminal(&self) -> bool {
+		matches!(self.phase.as_str(), "error" | "aborted" | "missing")
+	}
+}
+
+/// `GET api/state`: every grab the bridge still remembers.
+#[derive(Debug, Deserialize)]
+struct BridgeStateResponse {
+	#[serde(default)]
+	grabs: Vec<BridgeGrabRecord>,
 }
 
 struct BridgeClient {
@@ -360,8 +379,11 @@ impl BridgeClient {
 
 	async fn refresh(&self, grab_id: &str) -> Result<BridgeGrabRecord, String> {
 		let mut url = self.endpoint("api/grabs/")?;
+		// The base path ends in a slash; without `pop_if_empty` the pushed
+		// segment follows an empty one and the bridge sees `api/grabs//<id>`.
 		url.path_segments_mut()
 			.map_err(|_| "MAM Bridge endpoint is invalid".to_string())?
+			.pop_if_empty()
 			.push(grab_id)
 			.push("refresh");
 		let response = self
@@ -369,6 +391,18 @@ impl BridgeClient {
 			.await?;
 		serde_json::from_value(self.json_response(response, false).await?)
 			.map_err(|_| "MAM Bridge returned an invalid grab status".to_string())
+	}
+
+	/// Every grab the bridge still remembers, used to recover a local grab
+	/// whose bridge id was never saved.
+	async fn list_grabs(&self) -> Result<Vec<BridgeGrabRecord>, String> {
+		let url = self.endpoint("api/state")?;
+		let response = self.request(Method::GET, url, None, true).await?;
+		serde_json::from_value::<BridgeStateResponse>(
+			self.json_response(response, false).await?,
+		)
+		.map(|state| state.grabs)
+		.map_err(|_| "MAM Bridge returned an invalid grab listing".to_string())
 	}
 }
 
@@ -633,6 +667,11 @@ pub async fn cached_release_search(
 	}))
 }
 
+/// Phases in which a local grab still tracks (or awaits) bridge work: the
+/// row is the grab's idempotency key, so a second confirmation of the same
+/// release returns it instead of starting the bridge again.
+const ACTIVE_GRAB_PHASES: [&str; 4] = ["starting", "queued", "downloading", "completed"];
+
 pub async fn create_grab(
 	ctx: &Ctx,
 	request: &book_request::Model,
@@ -654,6 +693,24 @@ pub async fn create_grab(
 		})?;
 	let client = BridgeClient::from_config(ctx.config.as_ref())
 		.map_err(CoreError::InternalError)?;
+	// The bridge refuses a second grab of a torrent it is already working on,
+	// and a local row in an active phase is what proves one was started —
+	// including a `starting` row whose bridge id the refresh job still has
+	// to recover. Never send the POST twice for it.
+	if let Some(active) = mam_acquisition_grab::Entity::find()
+		.filter(mam_acquisition_grab::Column::TorrentId.eq(i64::from(torrent_id)))
+		.filter(mam_acquisition_grab::Column::Phase.is_in(ACTIVE_GRAB_PHASES))
+		.order_by_desc(mam_acquisition_grab::Column::CreatedAt)
+		.one(ctx.conn.as_ref())
+		.await?
+	{
+		if active.request_id == request.id {
+			return Ok(active.into());
+		}
+		return Err(CoreError::BadRequest(
+			"release is already being acquired for another request".to_string(),
+		));
+	}
 	let id = Uuid::new_v4().to_string();
 	let now = Utc::now().fixed_offset();
 	let model = mam_acquisition_grab::ActiveModel {
@@ -666,6 +723,7 @@ pub async fn create_grab(
 		progress: Set(0.0),
 		error: Set(None),
 		ingest_item_id: Set(None),
+		handoff_attempts: Set(0),
 		created_at: Set(now),
 		updated_at: Set(now),
 	};
@@ -688,6 +746,8 @@ pub async fn create_grab(
 			return Err(CoreError::InternalError(error));
 		},
 	};
+	// If this save fails (or the process dies first) the row stays `starting`
+	// and `refresh_grabs` adopts the bridge grab from the bridge listing.
 	let mut active = model.into_active_model();
 	active.bridge_grab_id = Set(Some(bridge.grab_id));
 	active.phase = Set(bridge.phase);
@@ -1044,7 +1104,118 @@ fn languages_match(requested: &str, found: &str) -> bool {
 	let found = found.trim().split(['-', '_']).next().unwrap_or_default();
 	!requested.is_empty() && normalize(requested) == normalize(found)
 }
-/// Refreshes bridge-owned grab state from the scheduled job executor.
+
+/// How long a `queued`/`downloading` grab rests between bridge refreshes.
+const REFRESH_INTERVAL: chrono::Duration = chrono::Duration::seconds(60);
+/// A `starting` row older than this was interrupted between the bridge POST
+/// and the save of its bridge id (the POST itself is bounded to 30 s), so the
+/// refresh job looks it up in the bridge listing instead of leaving it.
+const STARTING_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(2);
+/// How long a `completed` grab whose handoff failed rests before staging is
+/// retried; the usual causes (no local library yet, source worker offline)
+/// are fixed by an operator, not by polling faster.
+const HANDOFF_RETRY_INTERVAL: chrono::Duration = chrono::Duration::minutes(5);
+/// Failed handoffs after which a grab is marked `error` with the last reason
+/// instead of being retried again: a day at [`HANDOFF_RETRY_INTERVAL`].
+pub(crate) const HANDOFF_MAX_ATTEMPTS: i32 = 288;
+/// Rows one maintenance tick hands to the refresh job.
+const DUE_BATCH_LIMIT: u64 = 100;
+
+/// Grab ids handed to a queued or running refresh job. The maintenance loop
+/// ticks every 15 s while one job can spend 20 s per bridge call, so a row
+/// stays claimed — invisible to [`due_grab_ids`] — until the job that took it
+/// releases it, rather than for a fixed stamp on `updated_at`.
+#[derive(Default)]
+pub(crate) struct RefreshClaims(Mutex<HashSet<String>>);
+
+impl RefreshClaims {
+	fn lock(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+		self.0
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+	}
+
+	pub(crate) fn claimed(&self) -> Vec<String> {
+		self.lock().iter().cloned().collect()
+	}
+
+	pub(crate) fn claim(&self, ids: &[String]) {
+		self.lock().extend(ids.iter().cloned());
+	}
+
+	/// Releases `ids` when the returned guard drops, whichever way the job ends.
+	pub(crate) fn release_on_drop<'a>(&'a self, ids: &[String]) -> ReleaseClaims<'a> {
+		ReleaseClaims {
+			claims: self,
+			ids: ids.to_vec(),
+		}
+	}
+}
+
+pub(crate) struct ReleaseClaims<'a> {
+	claims: &'a RefreshClaims,
+	ids: Vec<String>,
+}
+
+impl Drop for ReleaseClaims<'_> {
+	fn drop(&mut self) {
+		let mut claimed = self.claims.lock();
+		for id in &self.ids {
+			claimed.remove(id);
+		}
+	}
+}
+
+/// Grabs the refresh job should visit now, oldest first and excluding the
+/// ones a queued or running job already holds: bridge-owned rows due for a
+/// poll, `completed` rows whose staging failed and is due for another try,
+/// and `starting` rows old enough to have lost their bridge id.
+pub(crate) async fn due_grab_ids(
+	conn: &DatabaseConnection,
+	now: DateTime<FixedOffset>,
+	claimed: &[String],
+) -> Result<Vec<String>, DbErr> {
+	let due = Condition::any()
+		.add(
+			Condition::all()
+				.add(mam_acquisition_grab::Column::Phase.is_in(["queued", "downloading"]))
+				.add(mam_acquisition_grab::Column::UpdatedAt.lte(now - REFRESH_INTERVAL)),
+		)
+		.add(
+			Condition::all()
+				.add(mam_acquisition_grab::Column::Phase.eq("completed"))
+				.add(mam_acquisition_grab::Column::IngestItemId.is_null())
+				.add(
+					mam_acquisition_grab::Column::UpdatedAt
+						.lte(now - HANDOFF_RETRY_INTERVAL),
+				),
+		)
+		.add(
+			Condition::all()
+				.add(mam_acquisition_grab::Column::Phase.eq("starting"))
+				.add(
+					mam_acquisition_grab::Column::UpdatedAt
+						.lte(now - STARTING_STALE_AFTER),
+				),
+		);
+	let mut query = mam_acquisition_grab::Entity::find().filter(due);
+	if !claimed.is_empty() {
+		query =
+			query.filter(mam_acquisition_grab::Column::Id.is_not_in(claimed.to_vec()));
+	}
+	query
+		.select_only()
+		.column(mam_acquisition_grab::Column::Id)
+		.order_by_asc(mam_acquisition_grab::Column::UpdatedAt)
+		.limit(DUE_BATCH_LIMIT)
+		.into_tuple::<String>()
+		.all(conn)
+		.await
+}
+
+/// Refreshes bridge-owned grab state from the scheduled job executor. A row
+/// that fails on its own (bridge error, failed handoff) records the failure
+/// and the loop moves on; only a local database failure stops the batch.
 pub(crate) async fn refresh_grabs(
 	services: &JobServices,
 	grab_ids: &[String],
@@ -1061,24 +1232,31 @@ pub(crate) async fn refresh_grabs(
 		else {
 			continue;
 		};
-		let Some(bridge_id) = model.bridge_grab_id.as_deref() else {
-			continue;
-		};
-		let bridge = match client.refresh(bridge_id).await {
-			Ok(bridge) if bridge.torrent_id == model.torrent_id => bridge,
-			Ok(_) => {
-				persist_bridge_error(
-					services,
-					model,
-					"MAM Bridge returned a different torrent id".to_string(),
-				)
-				.await?;
+		let (model, bridge) = if model.phase == "starting" {
+			match adopt_bridge_grab(services, &client, model).await? {
+				Some(adopted) => adopted,
+				None => continue,
+			}
+		} else {
+			let Some(bridge_id) = model.bridge_grab_id.as_deref() else {
 				continue;
-			},
-			Err(error) => {
-				persist_bridge_error(services, model, error).await?;
-				continue;
-			},
+			};
+			match client.refresh(bridge_id).await {
+				Ok(bridge) if bridge.torrent_id == model.torrent_id => (model, bridge),
+				Ok(_) => {
+					persist_bridge_error(
+						services,
+						model,
+						"MAM Bridge returned a different torrent id".to_string(),
+					)
+					.await?;
+					continue;
+				},
+				Err(error) => {
+					persist_bridge_error(services, model, error).await?;
+					continue;
+				},
+			}
 		};
 		let mut active = model.into_active_model();
 		active.phase = Set(bridge.phase.clone());
@@ -1089,24 +1267,107 @@ pub(crate) async fn refresh_grabs(
 			.await
 			.map_err(|_| "failed to update acquisition grab state".to_string())?;
 		if bridge.phase == "completed" && updated.ingest_item_id.is_none() {
-			match stage_handoff(services, &updated, bridge.source_path.as_deref()).await {
-				Ok(item_id) => {
-					let mut active = updated.into_active_model();
-					active.ingest_item_id = Set(Some(item_id));
-					active.error = Set(None);
-					active.update(services.conn.as_ref()).await.map_err(|_| {
-						"failed to link staged acquisition item".to_string()
-					})?;
-				},
-				Err(error) => {
-					let mut active = updated.into_active_model();
-					active.error = Set(Some(error));
-					active.update(services.conn.as_ref()).await.map_err(|_| {
-						"failed to save acquisition handoff error".to_string()
-					})?;
-				},
-			}
+			stage_completed_grab(services, updated, bridge.source_path.as_deref())
+				.await?;
 		}
+	}
+	Ok(())
+}
+
+/// A `starting` row never saved its bridge id: find the bridge grab for its
+/// torrent in the bridge listing and take it over. Any bridge grab another
+/// local row already tracks is off limits, an active grab beats a finished
+/// one, and the newest wins among equals. With none to adopt the bridge never
+/// accepted the POST, so the row ends in `error` and the manager may grab
+/// again; a bridge that cannot be listed leaves the row for the next pass.
+async fn adopt_bridge_grab(
+	services: &JobServices,
+	client: &BridgeClient,
+	model: mam_acquisition_grab::Model,
+) -> Result<Option<(mam_acquisition_grab::Model, BridgeGrabRecord)>, String> {
+	let listing = match client.list_grabs().await {
+		Ok(listing) => listing,
+		Err(error) => {
+			persist_bridge_error(services, model, error).await?;
+			return Ok(None);
+		},
+	};
+	let tracked = mam_acquisition_grab::Entity::find()
+		.filter(mam_acquisition_grab::Column::BridgeGrabId.is_not_null())
+		.select_only()
+		.column(mam_acquisition_grab::Column::BridgeGrabId)
+		.into_tuple::<Option<String>>()
+		.all(services.conn.as_ref())
+		.await
+		.map_err(|_| "failed to read acquisition grab state".to_string())?
+		.into_iter()
+		.flatten()
+		.collect::<HashSet<_>>();
+	let adopted = listing
+		.into_iter()
+		.filter(|grab| grab.torrent_id == model.torrent_id)
+		.filter(|grab| !tracked.contains(&grab.grab_id))
+		.max_by_key(|grab| (!grab.is_terminal(), grab.created_at_unix));
+	let Some(bridge) = adopted else {
+		let mut active = model.into_active_model();
+		active.phase = Set("error".to_string());
+		active.error = Set(Some(
+			"MAM Bridge has no grab for this release; grab it again".to_string(),
+		));
+		active
+			.update(services.conn.as_ref())
+			.await
+			.map_err(|_| "failed to save acquisition grab state".to_string())?;
+		return Ok(None);
+	};
+	let mut active = model.into_active_model();
+	active.bridge_grab_id = Set(Some(bridge.grab_id.clone()));
+	let model = active
+		.update(services.conn.as_ref())
+		.await
+		.map_err(|_| "failed to save the recovered bridge grab id".to_string())?;
+	Ok(Some((model, bridge)))
+}
+
+/// Copy a finished download into staged ingest. Staging is idempotent per
+/// grab (`mam-acquisition-<grab id>`), so a retry after a failure — or after
+/// a crash between staging and this link — finds the item it already made.
+/// A failure stays visible in `error`, counts against
+/// [`HANDOFF_MAX_ATTEMPTS`], and leaves the row `completed` for
+/// [`due_grab_ids`] to bring back; the last allowed failure ends the grab in
+/// `error`.
+async fn stage_completed_grab(
+	services: &JobServices,
+	grab: mam_acquisition_grab::Model,
+	source_path: Option<&str>,
+) -> Result<(), String> {
+	match stage_handoff(services, &grab, source_path).await {
+		Ok(item_id) => {
+			let mut active = grab.into_active_model();
+			active.ingest_item_id = Set(Some(item_id));
+			active.error = Set(None);
+			active
+				.update(services.conn.as_ref())
+				.await
+				.map_err(|_| "failed to link staged acquisition item".to_string())?;
+		},
+		Err(error) => {
+			let attempts = grab.handoff_attempts.saturating_add(1);
+			let mut active = grab.into_active_model();
+			active.handoff_attempts = Set(attempts);
+			if attempts >= HANDOFF_MAX_ATTEMPTS {
+				active.phase = Set("error".to_string());
+				active.error = Set(Some(format!(
+					"handoff failed after {attempts} attempts: {error}"
+				)));
+			} else {
+				active.error = Set(Some(error));
+			}
+			active
+				.update(services.conn.as_ref())
+				.await
+				.map_err(|_| "failed to save acquisition handoff error".to_string())?;
+		},
 	}
 	Ok(())
 }
@@ -1142,6 +1403,14 @@ async fn stage_handoff(
 		.ok_or_else(|| {
 			"create a local library before accepting MAM handoffs".to_string()
 		})?;
+	// `created_by` is a user: the request's requester, not the request id
+	// (which the ingest FK rejected, failing every handoff).
+	let requester_id = book_request::Entity::find_by_id(&grab.request_id)
+		.one(services.conn.as_ref())
+		.await
+		.map_err(|_| "failed to read the grab's request".to_string())?
+		.ok_or_else(|| "the grab's request no longer exists".to_string())?
+		.requester_id;
 	let idempotency_key = format!("mam-acquisition-{}", grab.id);
 	let staged = if let Some(source_label) = services
 		.config
@@ -1155,7 +1424,7 @@ async fn stage_handoff(
 			source_label,
 			source_path,
 			&library.id,
-			&grab.request_id,
+			&requester_id,
 			&idempotency_key,
 		)
 		.await?
@@ -1171,7 +1440,7 @@ async fn stage_handoff(
 			services,
 			&path,
 			&library.id,
-			&grab.request_id,
+			&requester_id,
 			&idempotency_key,
 		)
 		.await?
@@ -1758,6 +2027,42 @@ mod tests {
 		assert_eq!(payload["confirmation"], "download torrent 42");
 		assert!(payload.get("fl").is_none());
 	}
+
+	/// The base path ends in `/`; the grab id must follow it directly, not
+	/// an empty segment (`api/grabs//grab-1/refresh`), which the bridge
+	/// router does not route.
+	#[tokio::test]
+	async fn refresh_and_listing_hit_the_documented_bridge_paths() {
+		let (base, server) = mock_bridge(
+			200,
+			"",
+			r#"{"grab_id":"grab-1","torrent_id":42,"phase":"downloading","progress_millis":400}"#,
+		);
+		let (client, _token) = client_for(&base);
+		let grab = client.refresh("grab-1").await.unwrap();
+		assert_eq!(grab.phase, "downloading");
+		let request = server.join().unwrap();
+		assert!(
+			request.starts_with("POST /api/grabs/grab-1/refresh "),
+			"{request}"
+		);
+
+		let (base, server) = mock_bridge(
+			200,
+			"",
+			r#"{"schema_version":1,"grabs":[{"grab_id":"grab-1","torrent_id":42,"phase":"queued","created_at_unix":7}]}"#,
+		);
+		let (client, _token) = client_for(&base);
+		let grabs = client.list_grabs().await.unwrap();
+		assert_eq!(grabs.len(), 1);
+		assert_eq!(grabs[0].created_at_unix, 7);
+		let request = server.join().unwrap();
+		assert!(request.starts_with("GET /api/state "), "{request}");
+		assert!(request
+			.to_ascii_lowercase()
+			.contains("authorization: bearer fixture-test-token"));
+	}
+
 	#[test]
 	fn candidate_language_matches_primary_bcp47_tag() {
 		assert!(languages_match("en-US", "en"));
@@ -2009,6 +2314,684 @@ mod tests {
 				.iter()
 				.any(|reason| reason == "asin"),
 			"a Hardcover book id is not an ASIN"
+		);
+	}
+}
+
+/// The refresh job and its dispatcher against a migrated database and a
+/// scripted bridge; nothing here reaches a real MAM Bridge.
+#[cfg(test)]
+mod job_tests {
+	use std::{
+		io::{Read, Write},
+		net::TcpListener,
+		sync::{Arc, Mutex},
+		time::Duration,
+	};
+
+	use chrono::{DateTime, FixedOffset, Utc};
+	use migrations::MigratorTrait;
+	use models::{
+		entity::{
+			book_request, ingest_drop_item, library, library_config,
+			mam_acquisition_grab, mam_release_search,
+		},
+		shared::enums::FileStatus,
+	};
+	use sea_orm::{
+		sea_query::Expr, ActiveModelTrait, ActiveValue::Set, ColumnTrait, Database,
+		DatabaseConnection, EntityTrait, QueryFilter,
+	};
+	use serde_json::json;
+	use stump_jobs::{JobRuntime, ScheduledJobDispatcher};
+
+	use super::{
+		create_grab, due_grab_ids, refresh_grabs, RefreshClaims, HANDOFF_MAX_ATTEMPTS,
+	};
+	use crate::{config::StumpConfig, job::JobServices, Ctx};
+
+	/// One scripted response: the request line prefix it answers (`"POST
+	/// /api/grabs/grab-1/refresh"`), the status and JSON body, and how long
+	/// the bridge sits on the request before answering.
+	struct Route {
+		prefix: &'static str,
+		status: u16,
+		body: String,
+		delay: Duration,
+	}
+
+	fn route(prefix: &'static str, body: serde_json::Value) -> Route {
+		Route {
+			prefix,
+			status: 200,
+			body: body.to_string(),
+			delay: Duration::ZERO,
+		}
+	}
+
+	/// A bridge that answers every connection from its routes (404 for any
+	/// other request) and records each request line, for as long as the test
+	/// binary lives.
+	struct ScriptedBridge {
+		url: String,
+		requests: Arc<Mutex<Vec<String>>>,
+	}
+
+	impl ScriptedBridge {
+		fn spawn(routes: Vec<Route>) -> Self {
+			let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+			let url = format!("http://{}/", listener.local_addr().unwrap());
+			let requests = Arc::new(Mutex::new(Vec::new()));
+			let log = Arc::clone(&requests);
+			std::thread::spawn(move || {
+				for connection in listener.incoming() {
+					let Ok(mut stream) = connection else {
+						break;
+					};
+					let request = read_request(&mut stream);
+					let request_line =
+						request.lines().next().unwrap_or_default().to_owned();
+					log.lock().unwrap().push(request_line.clone());
+					let (status, body, delay) = routes
+						.iter()
+						.find(|route| request_line.starts_with(route.prefix))
+						.map(|route| (route.status, route.body.as_str(), route.delay))
+						.unwrap_or((404, r#"{"detail":"unknown"}"#, Duration::ZERO));
+					std::thread::sleep(delay);
+					let response = format!(
+						"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+						body.len()
+					);
+					let _ = stream.write_all(response.as_bytes());
+				}
+			});
+			Self { url, requests }
+		}
+
+		fn requests(&self) -> Vec<String> {
+			self.requests.lock().unwrap().clone()
+		}
+	}
+
+	fn read_request(stream: &mut std::net::TcpStream) -> String {
+		stream
+			.set_read_timeout(Some(Duration::from_secs(5)))
+			.unwrap();
+		let mut request = Vec::new();
+		let mut chunk = [0; 4096];
+		let header_end = loop {
+			let read = stream.read(&mut chunk).unwrap_or(0);
+			if read == 0 {
+				return String::from_utf8_lossy(&request).into_owned();
+			}
+			request.extend_from_slice(&chunk[..read]);
+			if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+			{
+				break end + 4;
+			}
+		};
+		let content_length = String::from_utf8_lossy(&request[..header_end])
+			.lines()
+			.find_map(|line| {
+				let (name, value) = line.split_once(':')?;
+				name.eq_ignore_ascii_case("content-length")
+					.then(|| value.trim().parse::<usize>().ok())
+					.flatten()
+			})
+			.unwrap_or(0);
+		while request.len() < header_end + content_length {
+			let read = stream.read(&mut chunk).unwrap_or(0);
+			if read == 0 {
+				break;
+			}
+			request.extend_from_slice(&chunk[..read]);
+		}
+		String::from_utf8_lossy(&request).into_owned()
+	}
+
+	struct Harness {
+		ctx: Ctx,
+		services: Arc<JobServices>,
+		bridge: ScriptedBridge,
+		_root: tempfile::TempDir,
+		_token: tempfile::NamedTempFile,
+	}
+
+	impl Harness {
+		fn conn(&self) -> &DatabaseConnection {
+			self.ctx.conn.as_ref()
+		}
+	}
+
+	async fn harness(routes: Vec<Route>) -> Harness {
+		let bridge = ScriptedBridge::spawn(routes);
+		let root = tempfile::tempdir().unwrap();
+		let mut token = tempfile::NamedTempFile::new().unwrap();
+		token.write_all(b"fixture-test-token\n").unwrap();
+		std::fs::create_dir_all(root.path().join("downloads")).unwrap();
+		std::fs::write(
+			root.path().join("downloads/book.epub"),
+			b"not really an epub",
+		)
+		.unwrap();
+
+		let conn = Database::connect("sqlite::memory:").await.unwrap();
+		migrations::Migrator::up(&conn, None).await.unwrap();
+
+		let mut config = StumpConfig::debug();
+		config.config_dir = root.path().to_string_lossy().into_owned();
+		config.mam_acquisition.enable_mam_acquisition = true;
+		config.mam_acquisition.mam_bridge_url = Some(bridge.url.clone());
+		config.mam_acquisition.mam_bridge_token_file =
+			Some(token.path().to_string_lossy().into_owned());
+		config.mam_acquisition.mam_bridge_handoff_root =
+			Some(root.path().join("downloads").to_string_lossy().into_owned());
+		let ctx = Ctx::for_testing_with_config(conn, config);
+		let services = Arc::new(
+			JobServices::new(
+				ctx.conn.clone(),
+				ctx.config.clone(),
+				ctx.get_event_tx(),
+				ctx.visible_pages_cache(),
+			)
+			.with_mam_dependencies(ctx.ingest(), ctx.source_hub()),
+		);
+		Harness {
+			ctx,
+			services,
+			bridge,
+			_root: root,
+			_token: token,
+		}
+	}
+
+	async fn seed_request(conn: &DatabaseConnection, id: &str) {
+		let user = ::tests::fake_data::User::new(format!("manager-{id}"))
+			.insert(conn)
+			.await;
+		let now = Utc::now().fixed_offset();
+		book_request::ActiveModel {
+			id: Set(id.to_owned()),
+			requester_id: Set(user.id),
+			format: Set("EBOOK".to_owned()),
+			title: Set("Ender's Game".to_owned()),
+			status: Set("APPROVED".to_owned()),
+			approval_policy: Set("MANUAL".to_owned()),
+			created_at: Set(now),
+			updated_at: Set(now),
+			..Default::default()
+		}
+		.insert(conn)
+		.await
+		.unwrap();
+	}
+
+	async fn seed_library(conn: &DatabaseConnection) {
+		let config = <library_config::ActiveModel as Default>::default()
+			.insert(conn)
+			.await
+			.unwrap();
+		library::ActiveModel {
+			id: Set("library".to_owned()),
+			name: Set("Library".to_owned()),
+			path: Set("/tmp/library".to_owned()),
+			status: Set(FileStatus::Ready),
+			config_id: Set(config.id),
+			..Default::default()
+		}
+		.insert(conn)
+		.await
+		.unwrap();
+	}
+
+	struct GrabRow {
+		id: &'static str,
+		request_id: &'static str,
+		torrent_id: i64,
+		bridge_grab_id: Option<&'static str>,
+		phase: &'static str,
+		ingest_item_id: Option<String>,
+		handoff_attempts: i32,
+		updated_at: DateTime<FixedOffset>,
+	}
+
+	fn grab(id: &'static str, phase: &'static str, age: chrono::Duration) -> GrabRow {
+		GrabRow {
+			id,
+			request_id: "request-1",
+			torrent_id: 42,
+			bridge_grab_id: Some("grab-1"),
+			phase,
+			ingest_item_id: None,
+			handoff_attempts: 0,
+			updated_at: Utc::now().fixed_offset() - age,
+		}
+	}
+
+	async fn insert_grab(conn: &DatabaseConnection, row: GrabRow) {
+		mam_acquisition_grab::ActiveModel {
+			id: Set(row.id.to_owned()),
+			request_id: Set(row.request_id.to_owned()),
+			torrent_id: Set(row.torrent_id),
+			bridge_grab_id: Set(row.bridge_grab_id.map(str::to_owned)),
+			title: Set("Ender's Game".to_owned()),
+			phase: Set(row.phase.to_owned()),
+			progress: Set(0.0),
+			error: Set(None),
+			ingest_item_id: Set(row.ingest_item_id),
+			handoff_attempts: Set(row.handoff_attempts),
+			created_at: Set(row.updated_at),
+			updated_at: Set(row.updated_at),
+		}
+		.insert(conn)
+		.await
+		.unwrap();
+		// `before_save` stamps `updated_at` with the present; the row must
+		// look as old as the scenario says.
+		age_grab(conn, row.id, row.updated_at).await;
+	}
+
+	async fn age_grab(
+		conn: &DatabaseConnection,
+		id: &str,
+		updated_at: DateTime<FixedOffset>,
+	) {
+		mam_acquisition_grab::Entity::update_many()
+			.col_expr(
+				mam_acquisition_grab::Column::UpdatedAt,
+				Expr::value(updated_at),
+			)
+			.filter(mam_acquisition_grab::Column::Id.eq(id))
+			.exec(conn)
+			.await
+			.unwrap();
+	}
+
+	async fn load_grab(
+		conn: &DatabaseConnection,
+		id: &str,
+	) -> mam_acquisition_grab::Model {
+		mam_acquisition_grab::Entity::find_by_id(id)
+			.one(conn)
+			.await
+			.unwrap()
+			.expect("grab row")
+	}
+
+	fn bridge_grab(grab_id: &str, torrent_id: i64, phase: &str) -> serde_json::Value {
+		json!({
+			"grab_id": grab_id,
+			"torrent_id": torrent_id,
+			"phase": phase,
+			"progress_millis": if phase == "completed" { 1000 } else { 250 },
+			"source_path": if phase == "completed" { Some("/downloads/book.epub") } else { None },
+			"created_at_unix": 1_700_000_000,
+		})
+	}
+
+	fn minutes(count: i64) -> chrono::Duration {
+		chrono::Duration::minutes(count)
+	}
+
+	#[tokio::test]
+	async fn due_rows_follow_phase_cadence_and_skip_claimed_ids() {
+		let harness = harness(Vec::new()).await;
+		let conn = harness.conn();
+		seed_request(conn, "request-1").await;
+		for row in [
+			grab("poll-due", "queued", minutes(2)),
+			grab("poll-fresh", "downloading", chrono::Duration::seconds(10)),
+			grab("handoff-due", "completed", minutes(6)),
+			grab("handoff-fresh", "completed", minutes(2)),
+			GrabRow {
+				ingest_item_id: None,
+				..grab("handoff-done", "completed", minutes(60))
+			},
+			GrabRow {
+				bridge_grab_id: None,
+				..grab("starting-stale", "starting", minutes(3))
+			},
+			GrabRow {
+				bridge_grab_id: None,
+				..grab("starting-inflight", "starting", minutes(1))
+			},
+			grab("failed", "error", minutes(60)),
+			grab("aborted", "aborted", minutes(60)),
+		] {
+			insert_grab(conn, row).await;
+		}
+		// A staged handoff is finished work whatever its age.
+		seed_library(conn).await;
+		let item = harness
+			.ctx
+			.ingest()
+			.store
+			.stage_upload("library", None, None, "done.epub", &b"done"[..], None)
+			.await
+			.unwrap()
+			.item;
+		mam_acquisition_grab::Entity::update_many()
+			.col_expr(
+				mam_acquisition_grab::Column::IngestItemId,
+				Expr::value(Some(item.id)),
+			)
+			.filter(mam_acquisition_grab::Column::Id.eq("handoff-done"))
+			.exec(conn)
+			.await
+			.unwrap();
+		age_grab(
+			conn,
+			"handoff-done",
+			Utc::now().fixed_offset() - minutes(60),
+		)
+		.await;
+
+		let now = Utc::now().fixed_offset();
+		let due = due_grab_ids(conn, now, &[]).await.unwrap();
+		assert_eq!(
+			due,
+			["handoff-due", "starting-stale", "poll-due"],
+			"oldest first"
+		);
+
+		let due = due_grab_ids(conn, now, &["poll-due".to_owned()])
+			.await
+			.unwrap();
+		assert_eq!(
+			due,
+			["handoff-due", "starting-stale"],
+			"a claimed row is not due"
+		);
+
+		let claims = RefreshClaims::default();
+		claims.claim(&["a".to_owned(), "b".to_owned()]);
+		{
+			let _release = claims.release_on_drop(&["a".to_owned()]);
+			assert_eq!(claims.claimed().len(), 2);
+		}
+		assert_eq!(claims.claimed(), ["b"], "released when the guard drops");
+	}
+
+	#[tokio::test]
+	async fn a_dispatched_row_stays_claimed_until_its_job_finishes() {
+		let harness = harness(vec![Route {
+			delay: Duration::from_millis(600),
+			..route(
+				"POST /api/grabs/grab-1/refresh",
+				bridge_grab("grab-1", 42, "downloading"),
+			)
+		}])
+		.await;
+		let conn = harness.conn();
+		seed_request(conn, "request-1").await;
+		insert_grab(conn, grab("slow", "queued", minutes(2))).await;
+		let runtime = JobRuntime::inline(Arc::clone(&harness.services));
+
+		harness.services.dispatch_due(&runtime).await.unwrap();
+		tokio::time::sleep(Duration::from_millis(150)).await;
+		// The job is still inside its 600 ms bridge call. Pretend the whole
+		// refresh interval passed meanwhile, as it does for a slow batch.
+		age_grab(conn, "slow", Utc::now().fixed_offset() - minutes(2)).await;
+		harness.services.dispatch_due(&runtime).await.unwrap();
+		tokio::time::sleep(Duration::from_millis(1_200)).await;
+		assert_eq!(
+			harness.bridge.requests().len(),
+			1,
+			"the running job holds the row; no second refresh: {:?}",
+			harness.bridge.requests()
+		);
+		let refreshed = load_grab(conn, "slow").await;
+		assert_eq!(refreshed.phase, "downloading");
+
+		// Once the job is done the row is released and due again when its time comes.
+		age_grab(conn, "slow", Utc::now().fixed_offset() - minutes(2)).await;
+		harness.services.dispatch_due(&runtime).await.unwrap();
+		tokio::time::sleep(Duration::from_millis(1_200)).await;
+		assert_eq!(harness.bridge.requests().len(), 2);
+		runtime.stop().await;
+	}
+
+	#[tokio::test]
+	async fn a_stale_starting_row_adopts_its_bridge_grab_or_ends_in_error() {
+		let harness = harness(vec![route(
+			"GET /api/state",
+			json!({
+				"schema_version": 1,
+				"grabs": [
+					bridge_grab("grab-0", 42, "error"),
+					bridge_grab("grab-7", 42, "downloading"),
+					bridge_grab("grab-8", 42, "aborted"),
+				]
+			}),
+		)])
+		.await;
+		let conn = harness.conn();
+		seed_request(conn, "request-1").await;
+		// An earlier attempt at the same torrent already tracks grab-0.
+		insert_grab(
+			conn,
+			GrabRow {
+				bridge_grab_id: Some("grab-0"),
+				..grab("earlier", "error", minutes(30))
+			},
+		)
+		.await;
+		insert_grab(
+			conn,
+			GrabRow {
+				bridge_grab_id: None,
+				..grab("interrupted", "starting", minutes(3))
+			},
+		)
+		.await;
+		insert_grab(
+			conn,
+			GrabRow {
+				bridge_grab_id: None,
+				torrent_id: 99,
+				..grab("never-accepted", "starting", minutes(3))
+			},
+		)
+		.await;
+
+		refresh_grabs(
+			&harness.services,
+			&["interrupted".to_owned(), "never-accepted".to_owned()],
+		)
+		.await
+		.unwrap();
+
+		let adopted = load_grab(conn, "interrupted").await;
+		assert_eq!(adopted.bridge_grab_id.as_deref(), Some("grab-7"));
+		assert_eq!(adopted.phase, "downloading");
+		assert_eq!(adopted.progress, 0.25);
+		let lost = load_grab(conn, "never-accepted").await;
+		assert_eq!(lost.phase, "error");
+		assert_eq!(
+			lost.error.as_deref(),
+			Some("MAM Bridge has no grab for this release; grab it again")
+		);
+		assert!(
+			harness
+				.bridge
+				.requests()
+				.iter()
+				.all(|line| line.starts_with("GET /api/state")),
+			"recovery only reads the listing, it never grabs again: {:?}",
+			harness.bridge.requests()
+		);
+	}
+
+	#[tokio::test]
+	async fn confirming_an_actively_grabbed_release_again_never_posts_twice() {
+		let harness = harness(Vec::new()).await;
+		let conn = harness.conn();
+		seed_request(conn, "request-1").await;
+		seed_request(conn, "request-2").await;
+		let now = Utc::now().fixed_offset();
+		for request_id in ["request-1", "request-2"] {
+			mam_release_search::ActiveModel {
+				request_id: Set(request_id.to_owned()),
+				candidates_json: Set(json!([{
+					"torrentId": 42, "title": "Ender's Game", "authors": [], "narrators": [],
+					"series": [], "kind": "ebook", "categoryName": null, "languageCode": null,
+					"fileType": null, "size": null, "numFiles": null, "added": null,
+					"seeders": null, "leechers": null, "timesCompleted": null,
+					"freeleech": false, "vip": false, "snatched": false, "isbn": null,
+					"score": 1.0, "matchReasons": []
+				}])
+				.to_string()),
+				found: Set(Some(1)),
+				probe: Set(false),
+				searched_at: Set(now),
+				updated_at: Set(now),
+			}
+			.insert(conn)
+			.await
+			.unwrap();
+		}
+		insert_grab(
+			conn,
+			GrabRow {
+				bridge_grab_id: None,
+				..grab("interrupted", "starting", minutes(1))
+			},
+		)
+		.await;
+		let request = book_request::Entity::find_by_id("request-1")
+			.one(conn)
+			.await
+			.unwrap()
+			.unwrap();
+
+		let again = create_grab(&harness.ctx, &request, 42).await.unwrap();
+		assert_eq!(again.id, "interrupted", "the persisted row is the answer");
+
+		let other = book_request::Entity::find_by_id("request-2")
+			.one(conn)
+			.await
+			.unwrap()
+			.unwrap();
+		let refused = create_grab(&harness.ctx, &other, 42).await.unwrap_err();
+		assert!(
+			refused
+				.to_string()
+				.contains("already being acquired for another request"),
+			"{refused}"
+		);
+		assert!(
+			harness.bridge.requests().is_empty(),
+			"no bridge POST at all"
+		);
+		assert_eq!(
+			mam_acquisition_grab::Entity::find()
+				.all(conn)
+				.await
+				.unwrap()
+				.len(),
+			1
+		);
+	}
+
+	#[tokio::test]
+	async fn a_completed_grab_whose_handoff_failed_is_retried_and_bounded() {
+		let harness = harness(vec![route(
+			"POST /api/grabs/grab-1/refresh",
+			bridge_grab("grab-1", 42, "completed"),
+		)])
+		.await;
+		let conn = harness.conn();
+		seed_request(conn, "request-1").await;
+		insert_grab(conn, grab("finished", "downloading", minutes(2))).await;
+
+		// No local library yet: the download is complete but cannot be staged.
+		refresh_grabs(&harness.services, &["finished".to_owned()])
+			.await
+			.unwrap();
+		let stranded = load_grab(conn, "finished").await;
+		assert_eq!(stranded.phase, "completed");
+		assert_eq!(stranded.ingest_item_id, None);
+		assert_eq!(stranded.handoff_attempts, 1);
+		assert_eq!(
+			stranded.error.as_deref(),
+			Some("create a local library before accepting MAM handoffs")
+		);
+		let now = Utc::now().fixed_offset();
+		assert!(
+			due_grab_ids(conn, now, &[]).await.unwrap().is_empty(),
+			"a failed handoff rests before its retry"
+		);
+		assert_eq!(
+			due_grab_ids(conn, now + minutes(6), &[]).await.unwrap(),
+			["finished"],
+			"and is due again afterwards"
+		);
+
+		// The operator creates the library; the next pass stages the download.
+		seed_library(conn).await;
+		refresh_grabs(&harness.services, &["finished".to_owned()])
+			.await
+			.unwrap();
+		let staged = load_grab(conn, "finished").await;
+		assert_eq!(staged.phase, "completed");
+		assert_eq!(staged.error, None);
+		let item_id = staged.ingest_item_id.expect("linked staged item");
+		let item = ingest_drop_item::Entity::find_by_id(item_id)
+			.one(conn)
+			.await
+			.unwrap()
+			.expect("staged item");
+		assert_eq!(item.source_filename, "book.epub");
+		let request = book_request::Entity::find_by_id("request-1")
+			.one(conn)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			item.created_by,
+			Some(request.requester_id),
+			"the item belongs to the requester (a user), not to the request id"
+		);
+		assert_eq!(
+			item.idempotency_key.as_deref(),
+			Some("mam-acquisition-finished")
+		);
+		assert!(
+			due_grab_ids(conn, now + minutes(60), &[])
+				.await
+				.unwrap()
+				.is_empty(),
+			"a staged grab is finished work"
+		);
+
+		// The last allowed failure ends the grab visibly instead of forever.
+		insert_grab(
+			conn,
+			GrabRow {
+				handoff_attempts: HANDOFF_MAX_ATTEMPTS - 1,
+				..grab("hopeless", "completed", minutes(6))
+			},
+		)
+		.await;
+		std::fs::remove_file(harness._root.path().join("downloads/book.epub")).unwrap();
+		refresh_grabs(&harness.services, &["hopeless".to_owned()])
+			.await
+			.unwrap();
+		let hopeless = load_grab(conn, "hopeless").await;
+		assert_eq!(hopeless.phase, "error");
+		assert_eq!(hopeless.handoff_attempts, HANDOFF_MAX_ATTEMPTS);
+		assert_eq!(
+			hopeless.error.as_deref(),
+			Some(&*format!(
+				"handoff failed after {HANDOFF_MAX_ATTEMPTS} attempts: MAM handoff source does not exist"
+			))
+		);
+		assert!(
+			due_grab_ids(conn, now + minutes(600), &[])
+				.await
+				.unwrap()
+				.is_empty(),
+			"an errored grab is never retried"
 		);
 	}
 }

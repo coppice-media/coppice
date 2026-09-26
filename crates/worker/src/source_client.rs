@@ -6,10 +6,11 @@
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use parking_lot::Mutex;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::header, Message};
 
@@ -358,6 +359,10 @@ async fn send_catalog(
 	Ok(())
 }
 
+/// Validate and dispatch one read grant.  A tunnel grant id enters `inflight`
+/// only once its transfer task exists: every earlier refusal (invalid grant,
+/// stale item, transport mismatch, full tunnel capacity) answers `ReadFailed`
+/// and leaves nothing behind, so repeated refusals cannot grow the set.
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_grant(
 	config: &SourceClientConfig,
@@ -369,17 +374,6 @@ async fn dispatch_grant(
 	tunnel_tasks: &mut tokio::task::JoinSet<Result<(), String>>,
 	grant: SourceReadGrant,
 ) -> Result<(), SourceClientError> {
-	let track_tunnel = grant.transport == SourceTransport::Tunnel;
-	if track_tunnel {
-		let is_new = inflight
-			.lock()
-			.expect("source grant mutex poisoned")
-			.insert(grant.grant_id.clone());
-		if !is_new {
-			send_read_failed(&tx, &grant.grant_id, "source grant replay").await?;
-			return Ok(());
-		}
-	}
 	let grant_id = grant.grant_id.clone();
 	if let Err(error) = grant.validate() {
 		send_read_failed(&tx, &grant_id, &error.to_string()).await?;
@@ -418,6 +412,11 @@ async fn dispatch_grant(
 					return Ok(());
 				},
 			};
+			let is_new = inflight.lock().insert(grant_id.clone());
+			if !is_new {
+				send_read_failed(&tx, &grant_id, "source grant replay").await?;
+				return Ok(());
+			}
 			tx.send(encode_source_frame(&SourceWorkerFrame::ReadReady {
 				grant_id: grant_id.clone(),
 			}))
@@ -438,10 +437,7 @@ async fn dispatch_grant(
 						}))
 						.await;
 				}
-				inflight_done
-					.lock()
-					.expect("source grant mutex poisoned")
-					.remove(&grant_id);
+				inflight_done.lock().remove(&grant_id);
 				result.map_err(|error| error.to_string())
 			});
 		},
@@ -503,5 +499,87 @@ mod tests {
 			.iter()
 			.enumerate()
 			.all(|(sequence, chunk)| chunk.sequence == sequence as u64));
+	}
+
+	/// A refused tunnel grant must not stay in the in-flight set: the set
+	/// exists to catch replays of grants whose transfer task is running, and
+	/// a worker that refuses many stale grants must not grow without bound.
+	#[tokio::test]
+	async fn refused_tunnel_grants_do_not_stay_inflight() {
+		use crate::source_catalog::PRIVACY_CATALOG;
+		use crate::source_protocol::{parse_source_worker_frame, SourceReadMode};
+
+		let dir = tempfile::tempdir().unwrap();
+		let root_path = dir.path().join("root");
+		std::fs::create_dir_all(&root_path).unwrap();
+		let root = SourceRootConfig {
+			root_id: "root".into(),
+			label: "Root".into(),
+			kind: "library".into(),
+			privacy_mode: PRIVACY_CATALOG.into(),
+			path: root_path,
+			transport: SourceTransport::Tunnel,
+			direct_base_url: None,
+		};
+		let catalog = Arc::new(
+			SourceCatalog::open(dir.path().join("state"), vec![root.clone()]).unwrap(),
+		);
+		let config = SourceClientConfig {
+			server: "http://127.0.0.1:1".into(),
+			api_key: "secret".into(),
+			name: None,
+			roots: vec![root],
+			state_dir: dir.path().join("state"),
+			scan_interval: Duration::from_secs(60),
+			listen: None,
+		};
+		let (tx, mut rx) = mpsc::channel(8);
+		let inflight = Arc::new(Mutex::new(HashSet::new()));
+		let permits = Arc::new(Semaphore::new(SOURCE_TUNNEL_TASK_LIMIT));
+		let mut tasks = tokio::task::JoinSet::new();
+		let grant = |id: &str| SourceReadGrant {
+			grant_id: id.into(),
+			root_id: "root".into(),
+			worker_item_id: "missing".into(),
+			worker_content_version: "v".into(),
+			expected_sha256: None,
+			mode: SourceReadMode::Full,
+			offset: 0,
+			length: 1,
+			transport: SourceTransport::Tunnel,
+			expires_at: std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_secs() as i64
+				+ 60,
+			max_bytes: 1,
+		};
+
+		for id in ["g1", "g2", "g3"] {
+			dispatch_grant(
+				&config,
+				catalog.clone(),
+				DirectGrantStore::new(),
+				tx.clone(),
+				inflight.clone(),
+				permits.clone(),
+				&mut tasks,
+				grant(id),
+			)
+			.await
+			.unwrap();
+			let frame = parse_source_worker_frame(&rx.recv().await.unwrap()).unwrap();
+			assert!(
+				matches!(frame, SourceWorkerFrame::ReadFailed { ref grant_id, .. } if grant_id == id),
+				"{frame:?}"
+			);
+		}
+		assert!(tasks.is_empty(), "no transfer task was started");
+		assert!(
+			inflight.lock().is_empty(),
+			"refused grants must not be retained: {:?}",
+			inflight.lock()
+		);
+		assert_eq!(permits.available_permits(), SOURCE_TUNNEL_TASK_LIMIT);
 	}
 }

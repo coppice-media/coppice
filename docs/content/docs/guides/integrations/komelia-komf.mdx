@@ -56,7 +56,11 @@ not a downloader or acquisition service.
 ## Limits
 
 - Komf jobs and their SSE history are process-local and are not durable across a
-  server restart.
+  server restart. Finished jobs stay listable for 24 hours or until the newest
+  1000 finished jobs push them out; running jobs are never dropped. A
+  whole-library match queues one job per series and processes at most three at
+  a time, so queued jobs show `RUNNING` with the message `Queued` until they
+  start.
 - Only native provider-backed metadata is available. There are no separate
   Komf credentials or an in-process acquisition connector.
 - The optional `removeComicInfo=true` reset mode is not supported and returns

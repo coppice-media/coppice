@@ -164,7 +164,7 @@
 			{:else if !known.length}
 				<p class="text-sm text-muted-foreground">No decisions yet.</p>
 			{:else}
-				<Table>
+				<Table stacked>
 					<TableHeader>
 						<TableRow>
 							<TableHead>Hash</TableHead>
@@ -176,11 +176,13 @@
 					<TableBody>
 						{#each known as entry (entry.dhash)}
 							<TableRow>
-								<TableCell class="font-mono text-xs">{entry.dhash}</TableCell>
-								<TableCell><Badge variant={entry.action === 'SKIP' ? 'destructive' : 'secondary'}>{entry.action === 'SKIP' ? 'Skipped' : 'Kept'}</Badge></TableCell>
-								<TableCell class="text-sm text-muted-foreground">{formatDate(entry.createdAt)}</TableCell>
-								<TableCell class="text-right">
-									<Button size="sm" variant="ghost" disabled={unmarkMutation.isPending} onclick={() => unmarkMutation.mutate(entry.dhash)}>Remove</Button>
+								<TableCell class="font-mono text-xs break-all">{entry.dhash}</TableCell>
+								<TableCell data-label="Decision"><Badge variant={entry.action === 'SKIP' ? 'destructive' : 'secondary'}>{entry.action === 'SKIP' ? 'Skipped' : 'Kept'}</Badge></TableCell>
+								<TableCell data-label="Recorded" class="text-sm text-muted-foreground">{formatDate(entry.createdAt)}</TableCell>
+								<TableCell>
+									<div class="flex flex-wrap gap-1 @md/table:justify-end">
+										<Button size="sm" variant="ghost" disabled={unmarkMutation.isPending} onclick={() => unmarkMutation.mutate(entry.dhash)}>Remove</Button>
+									</div>
 								</TableCell>
 							</TableRow>
 						{/each}

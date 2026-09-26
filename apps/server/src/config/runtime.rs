@@ -4,6 +4,12 @@ use tokio::runtime::{Builder, Runtime};
 
 pub const RUNTIME_WORKER_THREADS_KEY: &str = "STUMP_RUNTIME_WORKER_THREADS";
 pub const RUNTIME_MAX_BLOCKING_THREADS_KEY: &str = "STUMP_RUNTIME_MAX_BLOCKING_THREADS";
+/// Stack size for every runtime thread. async-graphql resolves nested objects
+/// recursively on the polling thread's stack; the KOReader plugin's book-detail
+/// query (media → series → media with its full field set) overflowed Tokio's
+/// 2 MiB default in debug builds and aborted the whole server. Stacks are
+/// reserved address space; pages are only committed as they are touched.
+const RUNTIME_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeConfig {
@@ -75,6 +81,7 @@ pub fn build_runtime() -> Result<Runtime, String> {
 	}
 
 	builder
+		.thread_stack_size(RUNTIME_THREAD_STACK_BYTES)
 		.enable_all()
 		.build()
 		.map_err(|error| format!("Failed to build Tokio runtime: {error}"))

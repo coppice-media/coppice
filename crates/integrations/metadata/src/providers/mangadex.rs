@@ -89,6 +89,7 @@ impl MangaDexClient {
 
 	/// Test-only: disable the retry middleware so a canned 429 surfaces
 	/// immediately instead of after the exponential backoff schedule.
+	#[cfg(test)]
 	fn without_retries(mut self) -> Self {
 		self.client = build_client_with_retry(
 			reqwest::Client::builder()
@@ -462,9 +463,6 @@ struct MangaDexAttributes {
 	alt_titles: Vec<HashMap<String, String>>,
 	#[serde(default)]
 	description: HashMap<String, String>,
-	#[serde(default)]
-	links: Option<HashMap<String, String>>,
-	original_language: Option<String>,
 	publication_demographic: Option<String>,
 	status: Option<String>,
 	year: Option<i32>,
@@ -500,10 +498,6 @@ struct MangaDexPersonAttributes {
 #[serde(rename_all = "camelCase")]
 struct MangaDexCoverArtAttributes {
 	file_name: String,
-	#[serde(default)]
-	volume: Option<String>,
-	#[serde(default)]
-	locale: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

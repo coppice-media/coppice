@@ -50,6 +50,8 @@ interface FoliateRenderer extends HTMLElement {
 	next(distance?: number): Promise<void>;
 	/** The live view; `overlayer` is only set once `create-overlay` attached one. */
 	getContents(): { doc: Document; index: number; overlayer?: unknown }[];
+	/** Paginator only: user CSS injected into every section document. Absent on the fixed-layout renderer. */
+	setStyles?(styles: string | [string, string]): void;
 	destroy(): void;
 }
 

@@ -92,6 +92,9 @@ linemux = { git = "https://github.com/jmagnuson/linemux.git", rev = "acaafc602af
 local-ip-address = "0.6.2"
 openidconnect = { version = "4.0.1", default-features = false }
 oauth2-reqwest = { version = "0.1.0-alpha.3" }
+# Await-free ledgers in the source-worker routes (manifest batches, proposals
+# being materialized); a guard with no poisoning path to unwrap per call.
+parking_lot = "0.12"
 prefixed-api-key = { workspace = true}
 qrcode = { workspace = true, optional = true }
 rand = { workspace = true }

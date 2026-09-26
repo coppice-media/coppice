@@ -96,23 +96,21 @@
 			{:else if !jobs.length}
 				<div class="p-6"><Empty><EmptyHeader><EmptyTitle>Queue is empty</EmptyTitle><EmptyDescription>Enqueue staged items from the drop folder to start analysis.</EmptyDescription></EmptyHeader></Empty></div>
 			{:else}
-				<div class="overflow-x-auto">
-					<Table>
-						<TableHeader><TableRow><TableHead>Priority</TableHead><TableHead>Phase</TableHead><TableHead>Status</TableHead><TableHead>Progress</TableHead><TableHead>Attempt</TableHead><TableHead class="text-right">Controls</TableHead></TableRow></TableHeader>
-						<TableBody>
-							{#each jobs as job (job.id)}
-								<TableRow>
-									<TableCell><div class="font-medium tabular-nums">{job.priorityScore.toFixed(0)}</div><div class="text-xs text-muted-foreground">{job.id.slice(0, 10)}</div></TableCell>
-									<TableCell class="whitespace-nowrap">{humanize(job.phase)}</TableCell>
-									<TableCell><StatusBadge status={job.status} /></TableCell>
-									<TableCell class="min-w-44"><ProgressIndicator analysisJobId={job.id} compact /></TableCell>
-									<TableCell class="tabular-nums text-muted-foreground">{job.attempt}</TableCell>
-									<TableCell><div class="flex justify-end gap-2">{#if job.status === 'QUEUED' || job.status === 'RUNNING'}<Button size="sm" variant="outline" disabled={isBusy()} onclick={() => pauseMutation.mutate(job.id)}>Pause</Button>{/if}{#if job.status === 'PAUSED'}<Button size="sm" variant="outline" disabled={isBusy()} onclick={() => resumeMutation.mutate(job.id)}>Resume</Button>{/if}{#if job.status === 'FAILED' || job.status === 'CANCELLED'}<Button size="sm" variant="outline" disabled={isBusy()} onclick={() => retryMutation.mutate(job.id)}>Retry</Button>{/if}{#if job.status === 'QUEUED' || job.status === 'RUNNING' || job.status === 'PAUSED'}<Button size="sm" variant="ghost" disabled={isBusy()} onclick={() => cancelMutation.mutate(job.id)}>Cancel</Button>{/if}</div></TableCell>
-								</TableRow>
-							{/each}
-						</TableBody>
-					</Table>
-				</div>
+				<Table stacked>
+					<TableHeader><TableRow><TableHead>Priority</TableHead><TableHead>Phase</TableHead><TableHead>Status</TableHead><TableHead>Progress</TableHead><TableHead>Attempt</TableHead><TableHead class="text-right">Controls</TableHead></TableRow></TableHeader>
+					<TableBody>
+						{#each jobs as job (job.id)}
+							<TableRow>
+								<TableCell><div class="font-medium tabular-nums">{job.priorityScore.toFixed(0)}</div><div class="text-xs text-muted-foreground">{job.id.slice(0, 10)}</div></TableCell>
+								<TableCell data-label="Phase" class="whitespace-nowrap">{humanize(job.phase)}</TableCell>
+								<TableCell data-label="Status"><StatusBadge status={job.status} /></TableCell>
+								<TableCell data-label="Progress" class="min-w-44"><div class="w-40 @md/table:w-auto"><ProgressIndicator analysisJobId={job.id} compact /></div></TableCell>
+								<TableCell data-label="Attempt" class="tabular-nums text-muted-foreground">{job.attempt}</TableCell>
+								<TableCell><div class="flex flex-wrap gap-2 @md/table:justify-end">{#if job.status === 'QUEUED' || job.status === 'RUNNING'}<Button size="sm" variant="outline" disabled={isBusy()} onclick={() => pauseMutation.mutate(job.id)}>Pause</Button>{/if}{#if job.status === 'PAUSED'}<Button size="sm" variant="outline" disabled={isBusy()} onclick={() => resumeMutation.mutate(job.id)}>Resume</Button>{/if}{#if job.status === 'FAILED' || job.status === 'CANCELLED'}<Button size="sm" variant="outline" disabled={isBusy()} onclick={() => retryMutation.mutate(job.id)}>Retry</Button>{/if}{#if job.status === 'QUEUED' || job.status === 'RUNNING' || job.status === 'PAUSED'}<Button size="sm" variant="ghost" disabled={isBusy()} onclick={() => cancelMutation.mutate(job.id)}>Cancel</Button>{/if}</div></TableCell>
+							</TableRow>
+						{/each}
+					</TableBody>
+				</Table>
 			{/if}
 		</CardContent>
 	</Card>

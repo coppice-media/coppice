@@ -40,10 +40,11 @@ patterns; a second convention beside an existing one is prohibited.
 
 Home and Editor consume the same GraphQL API and shared UI. Authorization stays
 server-enforced; hiding controls is not an access boundary. Request screens own
-metadata-backed intent, visibility, destination, and approval state only. Do
-not add tracker credentials, VPN/qBittorrent control, release search, grabs, or
-polling to the browser or server; future acquisition is an independent
-authenticated provider sidecar.
+metadata-backed intent, visibility, destination, approval state, and the
+manager-only acquisition panel, which calls the Coppice GraphQL API only
+(`searchReleases`, `grabRelease`, `acquisitionGrabs`). Never add tracker
+credentials, VPN/qBittorrent control, or any direct call to the MAM Bridge in
+the browser.
 
 Use Bun commands from the root workspace. Do not restore Yarn, Lerna,
 per-workspace lockfiles, Husky, or patch-package. Generated files must be

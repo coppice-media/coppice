@@ -17,6 +17,7 @@
 		CardTitle
 	} from '@stump/ui/components/ui/card';
 	import { QueryState } from '@stump/ui/components/ui/query-state';
+	import { cn } from '@stump/ui/utils.js';
 
 	let {
 		title,
@@ -58,15 +59,20 @@
 
 <Card class={className}>
 	<CardHeader>
-		<CardTitle>{title}</CardTitle>
+		<CardTitle class="@max-md/card-header:col-span-2">{title}</CardTitle>
 		{#if description}
-			<CardDescription>{description}</CardDescription>
+			<CardDescription class="@max-md/card-header:col-span-2">{description}</CardDescription>
 		{/if}
 		{#if action || href}
-			<CardAction class="flex items-center gap-2">
+			<CardAction
+				class={cn(
+					'flex flex-wrap items-center gap-2 @max-md/card-header:col-span-2 @max-md/card-header:col-start-1 @max-md/card-header:row-span-1 @max-md/card-header:mt-1 @max-md/card-header:justify-self-start',
+					description ? '@max-md/card-header:row-start-3' : '@max-md/card-header:row-start-2'
+				)}
+			>
 				{#if action}{@render action()}{/if}
 				{#if href}
-					<Button {href} size="sm" variant="ghost" class="-mr-2 text-muted-foreground">
+					<Button {href} size="sm" variant="ghost" class="-mr-2 text-muted-foreground @max-md/card-header:-ml-2 @max-md/card-header:mr-0">
 						{hrefLabel}
 						<ArrowRightIcon data-icon="inline-end" aria-hidden="true" />
 					</Button>

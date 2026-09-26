@@ -5,6 +5,7 @@
 	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Input } from '@stump/ui/components/ui/input';
 	import { Label } from '@stump/ui/components/ui/label';
 	import type { RequestFormat } from '$lib/graphql/generated/graphql';
@@ -252,7 +253,7 @@
 				</div>
 				{#if safeCover}
 					<div class="flex items-center gap-3 sm:col-span-2">
-						<img src={safeCover} alt="" class="size-14 rounded border object-cover" />
+						<Cover src={safeCover} class="size-14 rounded border" />
 						<span class="text-xs text-muted-foreground">Cover preview saved with the request metadata.</span>
 					</div>
 				{/if}

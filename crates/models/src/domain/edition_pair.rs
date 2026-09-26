@@ -28,8 +28,11 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 use uuid::Uuid;
 
-use crate::entity::{
-	liseur_sync_media_link as media_link, liseur_sync_work as work, media_metadata,
+use crate::{
+	entity::{
+		liseur_sync_media_link as media_link, liseur_sync_work as work, media_metadata,
+	},
+	services::liseur_annotation::resequence_work_annotations,
 };
 
 /// Whether a link is an asserted edition of the work, a guess, or a guess the
@@ -337,6 +340,11 @@ async fn work_for_unlinked_media<C: ConnectionTrait>(
 }
 
 /// Write one side of a pair. Returns whether the row changed.
+///
+/// A link that is new changes where the work's annotations belong, so the
+/// work's live CAS records are re-sequenced in the same transaction and every
+/// consumer of the feed clock replays them; a verdict or evidence change on an
+/// existing link is not a new edition and leaves the feed alone.
 async fn upsert_link<C: ConnectionTrait>(
 	conn: &C,
 	user_id: &str,
@@ -363,6 +371,7 @@ async fn upsert_link<C: ConnectionTrait>(
 		}
 		.insert(conn)
 		.await?;
+		resequence_work_annotations(conn, user_id, work_id).await?;
 		return Ok(true);
 	};
 	if existing.work_id != work_id {

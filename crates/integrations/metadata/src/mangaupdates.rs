@@ -157,8 +157,6 @@ struct SearchRequest<'a> {
 #[derive(Debug, Deserialize)]
 pub struct SearchResultPage {
 	#[serde(default)]
-	pub total_hits: i64,
-	#[serde(default)]
 	pub results: Vec<SearchResultHit>,
 }
 
@@ -216,8 +214,6 @@ pub struct MangaUpdatesSeries {
 	pub url: Option<String>,
 	#[serde(default, deserialize_with = "string_or_number_or_null")]
 	pub latest_chapter: Option<String>,
-	#[serde(rename = "bayesian_rating", default)]
-	pub bayesian_rating: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,8 +226,6 @@ pub struct MangaUpdatesImage {
 pub struct MangaUpdatesImageUrl {
 	#[serde(default)]
 	pub original: Option<String>,
-	#[serde(default)]
-	pub thumb: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

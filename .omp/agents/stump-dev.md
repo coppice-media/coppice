@@ -47,9 +47,10 @@ separate provider-sidecar protocol, never an in-process downloader.
   `apps/server/src/routers/komga/`; provider path ownership is
   `stump_komga::routes::is_komga_path`.
 - Book requests are a generic metadata-backed ledger with owner/operator
-  visibility, destinations, approval/rejection, and notifications. Release
-  search, acquisition, retry, tracker credentials, and transport belong to a
-  future independent authenticated sidecar; staged ingest is the handoff.
+  visibility, destinations, approval/rejection, and notifications. Manager
+  release search and confirmed grabs go through the MAM Bridge client in
+  `core/src/mam_acquisition.rs`; MAM credentials, torrent transport and
+  seeding stay in the separate MAM Bridge sidecar; staged ingest is the handoff.
 
 ## Implementation rules
 
@@ -63,7 +64,7 @@ Komga/Grimmory, liseur-sync, GraphQL, auth, media, and mobile semantics.
 For protocol or public API work, document exact routes, auth behavior, payloads,
 and compatibility tests. Validate enum and DTO shapes against the pinned
 Komelia `65f92fde`, `komga-client` 0.11.0 `74412a6e`, Liseur v0.19.0
-`62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6`, and Grimmory main sources.
+`62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6`, and Grimmory v3.5.0 `402e89b4` sources.
 Keep migrations append-only and avoid speculative aliases, shims, in-process
 acquisition connectors, or dead fallback paths.
 

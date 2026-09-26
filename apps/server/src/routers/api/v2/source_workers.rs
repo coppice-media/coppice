@@ -5,8 +5,9 @@
 //! JSON frames only; a tunnel WebSocket carries bounded binary chunks.
 
 use std::{
-	collections::{BTreeSet, HashMap, HashSet},
+	collections::{BTreeMap, BTreeSet, HashMap, HashSet},
 	sync::LazyLock,
+	time::Duration,
 };
 
 use crate::{
@@ -36,9 +37,10 @@ use models::{
 	},
 	shared::enums::{DeviceKind, UserPermission},
 };
+use parking_lot::Mutex;
 use sea_orm::{
-	prelude::*, ActiveModelTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
-	Set,
+	prelude::*, ActiveModelTrait, ConnectionTrait, EntityTrait, IntoActiveModel,
+	QueryFilter, QueryOrder, Set,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -46,23 +48,30 @@ use sha2::{Digest, Sha256};
 use stump_auth::AuthContext;
 use stump_worker::{
 	source_protocol::{
-		parse_source_worker_frame, SourceManifestChunk, SourceManifestItem,
-		SourceReadMode, SourceReadRequest, SourceRootHello, SourceServerFrame,
-		SourceTransport, SourceWorkerFrame, SourceWorkerHello,
+		expires_at_millis, parse_source_worker_frame, SourceManifestChunk,
+		SourceManifestItem, SourceReadMode, SourceReadRequest, SourceRootHello,
+		SourceServerFrame, SourceTransport, SourceWorkerFrame, SourceWorkerHello,
 		MAX_SOURCE_MANIFEST_FRAME_BYTES, MAX_SOURCE_MANIFEST_ITEMS,
 	},
-	SourceHub,
+	SourceHub, SOURCE_TRANSFER_IDLE_TIMEOUT,
 };
 #[cfg(feature = "ingest")]
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
 
+/// How long a worker has to answer a read grant with `ReadReady`.  The window
+/// bounds acceptance only; an accepted stream is bounded by the hub's idle
+/// deadline and its byte budget instead.
 const REMOTE_READ_TTL_SECS: i64 = 60;
+/// Connect phase of a direct-transport fetch.
+const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_LOCATION_KIND: &str = "remote_source";
 const ONLINE: &str = "online";
 const OBSERVED: &str = "observed";
 const VERIFIED: &str = "source_verified";
 const MISSING: &str = "missing";
+const PROPOSED: &str = "proposed";
+const APPROVED: &str = "approved";
+const REJECTED: &str = "rejected";
 
 /// In-flight manifest batches are intentionally server-local.  A disconnected
 /// batch is never reconciled and therefore cannot produce omission tombstones.
@@ -78,7 +87,9 @@ struct ManifestKey {
 struct ManifestBatch {
 	next_sequence: u64,
 	fingerprints: HashMap<u64, String>,
-	worker_versions: HashMap<String, String>,
+	/// Every item id the batch has committed so far; a later chunk repeating
+	/// one is a conflicting manifest, not a newer observation.
+	worker_ids: HashSet<String>,
 }
 
 static MANIFESTS: LazyLock<Mutex<HashMap<ManifestKey, ManifestBatch>>> =
@@ -87,6 +98,23 @@ static MANIFESTS: LazyLock<Mutex<HashMap<ManifestKey, ManifestBatch>>> =
 fn manifests() -> &'static Mutex<HashMap<ManifestKey, ManifestBatch>> {
 	&MANIFESTS
 }
+
+/// Proposals whose materialization this process is applying right now.  A
+/// claimed proposal carries no outcome until its bytes are staged; this set
+/// tells a concurrent approval apart from one left behind by a crash.
+static MATERIALIZING: LazyLock<Mutex<HashSet<String>>> =
+	LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// The direct-transport client: pooled, never follows a redirect off the
+/// advertised origin, and fails a fetch that stalls past the idle deadline.
+static DIRECT_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+	reqwest::Client::builder()
+		.redirect(reqwest::redirect::Policy::none())
+		.connect_timeout(DIRECT_CONNECT_TIMEOUT)
+		.read_timeout(SOURCE_TRANSFER_IDLE_TIMEOUT)
+		.build()
+		.expect("direct source client builds without TLS or proxy configuration")
+});
 
 pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 	let worker = Router::new()
@@ -197,7 +225,6 @@ async fn serve_socket(ctx: AppState, device: device::Model, mut socket: WebSocke
 		.await;
 	manifests()
 		.lock()
-		.await
 		.retain(|key, _| key.device_id != device.id);
 	for root in &frame.roots {
 		if let Err(error) = upsert_source(&ctx, &device.id, root).await {
@@ -247,7 +274,6 @@ async fn serve_socket(ctx: AppState, device: device::Model, mut socket: WebSocke
 	if detached {
 		manifests()
 			.lock()
-			.await
 			.retain(|key, _| key.device_id != device.id);
 	}
 	if detached && !hub.is_connected(&device.id).await {
@@ -402,6 +428,10 @@ fn sanitize_display_path(path: Option<&str>) -> APIResult<Option<String>> {
 	Ok(Some(components.join("/")))
 }
 
+/// Decode an observation's `modified_at`: an RFC 3339 string, or an epoch
+/// number read by the protocol's one rule for epoch values.  The built-in
+/// source worker sends milliseconds; a magnitude below 10^11 can only be
+/// seconds and is scaled up.
 fn modified_at(value: Option<&Value>) -> Option<DateTimeWithTimeZone> {
 	let value = value?;
 	if let Some(text) = value.as_str() {
@@ -409,9 +439,8 @@ fn modified_at(value: Option<&Value>) -> Option<DateTimeWithTimeZone> {
 			.ok()
 			.map(DateTimeWithTimeZone::from);
 	}
-	value
-		.as_i64()
-		.and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+	let millis = i64::try_from(expires_at_millis(value.as_i64()?)).ok()?;
+	DateTime::<Utc>::from_timestamp_millis(millis)
 		.map(|timestamp| DateTimeWithTimeZone::from(timestamp.fixed_offset()))
 }
 
@@ -452,8 +481,8 @@ async fn reconcile_manifest(
 	};
 	let fingerprint = chunk_fingerprint(&chunk);
 	let mut replay = false;
-	let next_worker_versions = {
-		let mut ledger = manifests().lock().await;
+	let chunk_ids = {
+		let mut ledger = manifests().lock();
 		if chunk.revision < source.current_revision as u64 {
 			return Err(APIError::Conflict(
 				"manifest revision is older than the committed revision".to_string(),
@@ -462,7 +491,7 @@ async fn reconcile_manifest(
 		if chunk.revision == source.current_revision as u64 && !ledger.contains_key(&key)
 		{
 			replay = true;
-			HashMap::new()
+			Vec::new()
 		} else {
 			if chunk.revision > source.current_revision as u64 + 1 {
 				return Err(APIError::Conflict("manifest revision gap".to_string()));
@@ -480,7 +509,7 @@ async fn reconcile_manifest(
 			if chunk.sequence < batch.next_sequence {
 				if batch.fingerprints.get(&chunk.sequence) == Some(&fingerprint) {
 					replay = true;
-					HashMap::new()
+					Vec::new()
 				} else {
 					return Err(APIError::Conflict(
 						"conflicting manifest replay".to_string(),
@@ -490,22 +519,24 @@ async fn reconcile_manifest(
 				if chunk.sequence != batch.next_sequence {
 					return Err(APIError::Conflict("manifest sequence gap".to_string()));
 				}
-				let mut versions = batch.worker_versions.clone();
-				let mut seen_ids = HashSet::new();
+				// Check against the batch's committed ids in place; only this
+				// chunk's ids are staged, and they join the batch after the
+				// database writes succeed.
+				let mut seen_ids = HashSet::with_capacity(chunk.items.len());
 				for item in &chunk.items {
-					if !seen_ids.insert(item.worker_item_id.clone())
-						|| versions.contains_key(&item.worker_item_id)
+					if !seen_ids.insert(item.worker_item_id.as_str())
+						|| batch.worker_ids.contains(&item.worker_item_id)
 					{
 						return Err(APIError::Conflict(
 							"duplicate item in manifest batch".to_string(),
 						));
 					}
-					versions.insert(
-						item.worker_item_id.clone(),
-						item.worker_content_version.clone(),
-					);
 				}
-				versions
+				chunk
+					.items
+					.iter()
+					.map(|item| item.worker_item_id.clone())
+					.collect()
 			}
 		}
 	};
@@ -556,7 +587,7 @@ async fn reconcile_manifest(
 	}
 
 	{
-		let mut ledger = manifests().lock().await;
+		let mut ledger = manifests().lock();
 		let batch = ledger.get_mut(&key).ok_or_else(|| {
 			APIError::Conflict(
 				"manifest connection changed during reconciliation".to_string(),
@@ -567,7 +598,7 @@ async fn reconcile_manifest(
 				"manifest sequence changed during reconciliation".to_string(),
 			));
 		}
-		batch.worker_versions = next_worker_versions;
+		batch.worker_ids.extend(chunk_ids);
 		batch.fingerprints.insert(chunk.sequence, fingerprint);
 		batch.next_sequence = batch.next_sequence.saturating_add(1);
 		if chunk.terminal {
@@ -832,7 +863,7 @@ impl From<remote_source_import::Model> for ImportSummary {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct CandidateMatch {
 	media_id: String,
 	kind: &'static str,
@@ -840,6 +871,65 @@ struct CandidateMatch {
 	evidence: Value,
 }
 type TypedIdentifier = (String, String);
+
+/// Lookup tables over the local library, built once per match request so a
+/// source with thousands of items costs one pass over the local rows rather
+/// than one pass per item.
+struct CandidateIndex {
+	/// Location digest → media ids holding those exact bytes.
+	media_by_digest: HashMap<String, BTreeSet<String>>,
+	/// Typed identifier → media ids whose metadata carries it.
+	media_by_identifier: HashMap<TypedIdentifier, BTreeSet<String>>,
+	/// Normalized title → (media id, normalized author set).
+	media_by_title: HashMap<String, Vec<(String, BTreeSet<String>)>>,
+}
+
+impl CandidateIndex {
+	fn build(
+		metadata: &[media_metadata::Model],
+		locations: &[media_location::Model],
+	) -> Self {
+		let mut media_by_digest: HashMap<String, BTreeSet<String>> = HashMap::new();
+		for location in locations {
+			media_by_digest
+				.entry(location.sha256.clone())
+				.or_default()
+				.insert(location.media_id.clone());
+		}
+		let mut media_by_identifier: HashMap<TypedIdentifier, BTreeSet<String>> =
+			HashMap::new();
+		let mut media_by_title: HashMap<String, Vec<(String, BTreeSet<String>)>> =
+			HashMap::new();
+		for value in metadata {
+			let Some(media_id) = value.media_id.as_deref() else {
+				continue;
+			};
+			for identifier in local_identifier_values(value) {
+				media_by_identifier
+					.entry(identifier)
+					.or_default()
+					.insert(media_id.to_owned());
+			}
+			if let Some(title) = value.title.as_deref().map(normalize_match_text) {
+				let authors = value
+					.writers
+					.as_deref()
+					.into_iter()
+					.flat_map(split_authors)
+					.collect::<BTreeSet<_>>();
+				media_by_title
+					.entry(title)
+					.or_default()
+					.push((media_id.to_owned(), authors));
+			}
+		}
+		Self {
+			media_by_digest,
+			media_by_identifier,
+			media_by_title,
+		}
+	}
+}
 
 async fn match_source(
 	State(ctx): State<AppState>,
@@ -870,17 +960,30 @@ async fn match_source(
 		.order_by_asc(media_location::Column::Id)
 		.all(ctx.conn.as_ref())
 		.await?;
-	let mut proposals = Vec::new();
-	// Discovery metadata alone is not an import identity. Proposals enter the
-	// ledger only after this server has streamed the whole object and persisted
-	// its exact SHA-256 verification.
-	for item in items {
-		if item.sha256.is_none() || item.observation_state != VERIFIED || item.size < 0 {
-			continue;
-		}
-		let Some(candidate) = find_candidate(&item, &metadata, &locations) else {
-			continue;
-		};
+	// Indexing the library and normalizing every item is CPU work proportional
+	// to the whole catalog; it runs on the blocking pool so this admin request
+	// does not stall the request threads.
+	let candidates = tokio::task::spawn_blocking(move || {
+		let index = CandidateIndex::build(&metadata, &locations);
+		items
+			.into_iter()
+			// Discovery metadata alone is not an import identity. Proposals
+			// enter the ledger only after this server has streamed the whole
+			// object and persisted its exact SHA-256 verification.
+			.filter(|item| {
+				item.sha256.is_some()
+					&& item.observation_state == VERIFIED
+					&& item.size >= 0
+			})
+			.filter_map(|item| {
+				find_candidate(&item, &index).map(|candidate| (item, candidate))
+			})
+			.collect::<Vec<_>>()
+	})
+	.await
+	.map_err(|error| APIError::InternalServerError(error.to_string()))?;
+	let mut proposals = Vec::with_capacity(candidates.len());
+	for (item, candidate) in candidates {
 		let proposal = upsert_import_proposal(&ctx, &source, &item, candidate).await?;
 		proposals.push(ImportSummary::from(proposal));
 	}
@@ -892,69 +995,62 @@ async fn match_source(
 	});
 	Ok(Json(proposals))
 }
+
+/// Match one verified item against the indexed library.  Evidence is tried
+/// strongest first, and ambiguous evidence at any tier fails closed rather
+/// than falling through to a weaker tier.
 fn find_candidate(
 	item: &remote_source_item::Model,
-	metadata: &[media_metadata::Model],
-	locations: &[media_location::Model],
+	index: &CandidateIndex,
 ) -> Option<CandidateMatch> {
-	let digest = if item.observation_state == VERIFIED {
-		item.sha256.as_deref().unwrap_or_default()
-	} else {
-		""
-	};
-	let digest_matches = unique_media_ids(
-		locations
-			.iter()
-			.filter(|location| location.sha256 == digest)
-			.map(|location| location.media_id.as_str()),
-	);
-	if digest_matches.len() == 1 {
-		return Some(CandidateMatch {
-			media_id: digest_matches[0].clone(),
-			kind: "digest",
-			score: 100,
-			evidence: json!({ "sha256": item.sha256 }),
-		});
-	}
-	if digest_matches.len() > 1 {
-		return None;
+	let digest = item
+		.sha256
+		.as_deref()
+		.filter(|_| item.observation_state == VERIFIED)
+		.unwrap_or_default();
+	if !digest.is_empty() {
+		if let Some(media_ids) = index.media_by_digest.get(digest) {
+			if media_ids.len() > 1 {
+				return None;
+			}
+			if let Some(media_id) = media_ids.iter().next() {
+				return Some(CandidateMatch {
+					media_id: media_id.clone(),
+					kind: "digest",
+					score: 100,
+					evidence: json!({ "sha256": item.sha256 }),
+				});
+			}
+		}
 	}
 
 	let remote_identifiers = metadata_identifier_values(item.metadata.as_ref());
 	if !remote_identifiers.is_empty() {
-		let identifier_candidates = metadata
-			.iter()
-			.filter_map(|value| {
-				let media_id = value.media_id.as_deref()?;
-				let local = local_identifier_values(value);
-				let shared = remote_identifiers
-					.intersection(&local)
-					.cloned()
-					.collect::<BTreeSet<_>>();
-				if shared.is_empty() {
-					None
-				} else {
-					Some((media_id, shared))
-				}
-			})
-			.collect::<Vec<_>>();
-		let identifier_matches =
-			unique_media_ids(identifier_candidates.iter().map(|(media_id, _)| *media_id));
-		if identifier_matches.len() == 1 {
-			let shared = identifier_candidates
+		let mut shared_by_media: BTreeMap<&str, BTreeSet<TypedIdentifier>> =
+			BTreeMap::new();
+		for identifier in &remote_identifiers {
+			for media_id in index
+				.media_by_identifier
+				.get(identifier)
 				.into_iter()
-				.filter(|(media_id, _)| *media_id == identifier_matches[0].as_str())
-				.flat_map(|(_, values)| values)
-				.collect::<BTreeSet<_>>();
+				.flatten()
+			{
+				shared_by_media
+					.entry(media_id.as_str())
+					.or_default()
+					.insert(identifier.clone());
+			}
+		}
+		if shared_by_media.len() > 1 {
+			return None;
+		}
+		if let Some((media_id, shared)) = shared_by_media.into_iter().next() {
 			return Some(CandidateMatch {
-				media_id: identifier_matches[0].clone(),
+				media_id: media_id.to_owned(),
 				kind: "identifier",
 				score: 90,
 				evidence: json!({ "identifiers": identifier_evidence(&shared) }),
 			});
-		}
-		if identifier_matches.len() > 1 {
-			return None;
 		}
 	}
 
@@ -976,23 +1072,17 @@ fn find_candidate(
 	if remote_authors.is_empty() {
 		return None;
 	}
-	let metadata_matches = unique_media_ids(metadata.iter().filter_map(|value| {
-		let media_id = value.media_id.as_deref()?;
-		let title = value.title.as_deref().map(normalize_match_text)?;
-		if title != remote_title {
-			return None;
-		}
-		let authors = value
-			.writers
-			.as_deref()
+	let metadata_matches = unique_media_ids(
+		index
+			.media_by_title
+			.get(&remote_title)
 			.into_iter()
-			.flat_map(split_authors)
-			.collect::<BTreeSet<_>>();
-		remote_authors
-			.iter()
-			.find(|author| authors.contains(*author))
-			.map(|_| media_id)
-	}));
+			.flatten()
+			.filter(|(_, authors)| {
+				remote_authors.iter().any(|author| authors.contains(author))
+			})
+			.map(|(media_id, _)| media_id.as_str()),
+	);
 	if metadata_matches.len() == 1 {
 		return Some(CandidateMatch {
 			media_id: metadata_matches[0].clone(),
@@ -1328,63 +1418,99 @@ fn verify_proposal_identity(
 	Ok(())
 }
 
-async fn decide_import(
-	ctx: &AppState,
+/// Move a `proposed` proposal to `status` with one conditional update.  A
+/// proposal another decision already moved is left untouched and reported as
+/// `false`, so the caller reads back what won instead of applying anything.
+async fn claim_proposal<C: ConnectionTrait>(
+	conn: &C,
 	proposal_id: &str,
 	status: &str,
 	actor_id: &str,
 	reason: Option<String>,
-	applied_location_id: Option<String>,
-	staged_item_id: Option<String>,
-) -> APIResult<remote_source_import::Model> {
-	let txn = models::txn::begin_write(ctx.conn.as_ref()).await?;
-	let current = remote_source_import::Entity::find_by_id(proposal_id.to_owned())
-		.one(&txn)
-		.await?
-		.ok_or_else(|| {
-			APIError::NotFound("remote import proposal not found".to_string())
-		})?;
-	if current.status != "proposed" {
-		txn.rollback().await?;
-		if current.status == status {
-			return Ok(current);
-		}
-		return Err(APIError::Conflict(format!(
-			"proposal is already {}",
-			current.status
-		)));
-	}
+) -> APIResult<bool> {
 	let now = DateTimeWithTimeZone::from(Utc::now());
-	let mut active = current.into_active_model();
-	active.status = Set(status.to_owned());
-	active.decision_actor_id = Set(Some(actor_id.to_owned()));
-	active.decision_at = Set(Some(now));
-	active.decision_reason = Set(reason);
-	active.applied_location_id = Set(applied_location_id);
-	active.staged_item_id = Set(staged_item_id);
-	let updated = active.update(&txn).await?;
-	txn.commit().await?;
-	Ok(updated)
+	let result = remote_source_import::Entity::update_many()
+		.col_expr(remote_source_import::Column::Status, Expr::value(status))
+		.col_expr(
+			remote_source_import::Column::DecisionActorId,
+			Expr::value(actor_id),
+		)
+		.col_expr(remote_source_import::Column::DecisionAt, Expr::value(now))
+		.col_expr(
+			remote_source_import::Column::DecisionReason,
+			Expr::value(reason),
+		)
+		.col_expr(remote_source_import::Column::UpdatedAt, Expr::value(now))
+		.filter(remote_source_import::Column::Id.eq(proposal_id))
+		.filter(remote_source_import::Column::Status.eq(PROPOSED))
+		.exec(conn)
+		.await?;
+	Ok(result.rows_affected == 1)
 }
 
-async fn approve_import(
-	State(ctx): State<AppState>,
-	Extension(req): Extension<AuthContext>,
-	Path(proposal_id): Path<String>,
-	Json(body): Json<ImportDecisionRequest>,
-) -> APIResult<Json<ImportDecisionResponse>> {
-	enforce_admin(&req)?;
-	let proposal = remote_source_import::Entity::find_by_id(proposal_id.clone())
-		.one(ctx.conn.as_ref())
+/// Hand a claimed approval that produced no outcome back to `proposed`, so it
+/// can be decided again.  A proposal that meanwhile recorded an outcome or
+/// changed status is left alone.
+#[cfg(feature = "ingest")]
+async fn release_claim<C: ConnectionTrait>(conn: &C, proposal_id: &str) -> APIResult<()> {
+	remote_source_import::Entity::update_many()
+		.col_expr(remote_source_import::Column::Status, Expr::value(PROPOSED))
+		.col_expr(
+			remote_source_import::Column::DecisionActorId,
+			Expr::value(Option::<String>::None),
+		)
+		.col_expr(
+			remote_source_import::Column::DecisionAt,
+			Expr::value(Option::<DateTimeWithTimeZone>::None),
+		)
+		.col_expr(
+			remote_source_import::Column::DecisionReason,
+			Expr::value(Option::<String>::None),
+		)
+		.col_expr(
+			remote_source_import::Column::UpdatedAt,
+			Expr::value(DateTimeWithTimeZone::from(Utc::now())),
+		)
+		.filter(remote_source_import::Column::Id.eq(proposal_id))
+		.filter(remote_source_import::Column::Status.eq(APPROVED))
+		.filter(remote_source_import::Column::AppliedLocationId.is_null())
+		.filter(remote_source_import::Column::StagedItemId.is_null())
+		.exec(conn)
+		.await?;
+	Ok(())
+}
+
+async fn load_proposal<C: ConnectionTrait>(
+	conn: &C,
+	proposal_id: &str,
+) -> APIResult<remote_source_import::Model> {
+	remote_source_import::Entity::find_by_id(proposal_id.to_owned())
+		.one(conn)
 		.await?
-		.ok_or_else(|| {
-			APIError::NotFound("remote import proposal not found".to_string())
-		})?;
-	if proposal.status == "rejected" {
-		return Err(APIError::Conflict("proposal was rejected".to_string()));
-	}
-	if proposal.status == "approved" {
-		return Ok(Json(ImportDecisionResponse {
+		.ok_or_else(|| APIError::NotFound("remote import proposal not found".to_string()))
+}
+
+/// The answer for an approval that lost its claim: the decision that won.
+fn settled_response(
+	proposal: remote_source_import::Model,
+) -> APIResult<ImportDecisionResponse> {
+	match proposal.status.as_str() {
+		APPROVED
+			if proposal.applied_location_id.is_none()
+				&& proposal.staged_item_id.is_none() =>
+		{
+			// Claimed, but its bytes were never recorded as staged: either a
+			// materialization is running right now or the process that
+			// claimed it died.  Only the latter may be resumed.
+			Err(APIError::Conflict(
+				if MATERIALIZING.lock().contains(&proposal.id) {
+					"proposal approval is still being applied".to_string()
+				} else {
+					"proposal was approved but its materialization did not finish; approve it again with action=materialize to resume".to_string()
+				},
+			))
+		},
+		APPROVED => Ok(ImportDecisionResponse {
 			action: if proposal.applied_location_id.is_some() {
 				"link".to_owned()
 			} else {
@@ -1394,51 +1520,25 @@ async fn approve_import(
 			staged_item_id: proposal.staged_item_id.clone(),
 			deduplicated: proposal.staged_item_id.as_ref().map(|_| true),
 			proposal: ImportSummary::from(proposal),
-		}));
+		}),
+		REJECTED => Err(APIError::Conflict("proposal was rejected".to_string())),
+		other => Err(APIError::Conflict(format!("proposal is already {other}"))),
 	}
-	let (item, source) = load_item(&ctx, &proposal.source_item_id).await?;
-	if source.id != proposal.source_id {
-		return Err(APIError::Conflict(
-			"proposal source no longer exists".to_string(),
-		));
-	}
-	verify_proposal_identity(&proposal, &item)?;
-	let action = body.action.as_deref().unwrap_or("link");
-	let (location_id, staged_item_id, deduplicated) = match action {
-		"link" => {
-			let linked =
-				link_verified_item(&ctx, &item, &proposal.target_media_id).await?;
-			(Some(linked.location_id), None, None)
-		},
+}
+
+async fn approve_import(
+	State(ctx): State<AppState>,
+	Extension(req): Extension<AuthContext>,
+	Path(proposal_id): Path<String>,
+	Json(body): Json<ImportDecisionRequest>,
+) -> APIResult<Json<ImportDecisionResponse>> {
+	enforce_admin(&req)?;
+	let response = match body.action.as_deref().unwrap_or("link") {
+		"link" => approve_link(&ctx, &proposal_id, &req.user().id, body.reason).await?,
 		"materialize" => {
 			#[cfg(feature = "ingest")]
 			{
-				let library_id = body.library_id.clone().ok_or_else(|| {
-					APIError::BadRequest(
-						"libraryId is required for materialization".to_string(),
-					)
-				})?;
-				let materialized = materialize_verified_item(
-					&ctx,
-					&req,
-					&item,
-					&source,
-					MaterializeRequest {
-						library_id,
-						filename: body.filename.clone(),
-						idempotency_key: Some(
-							body.idempotency_key.clone().unwrap_or_else(|| {
-								format!("remote-source-import:{proposal_id}")
-							}),
-						),
-					},
-				)
-				.await?;
-				(
-					None,
-					Some(materialized.item_id),
-					Some(materialized.deduplicated),
-				)
+				approve_materialize(&ctx, &req, &proposal_id, body).await?
 			}
 			#[cfg(not(feature = "ingest"))]
 			{
@@ -1451,23 +1551,151 @@ async fn approve_import(
 			));
 		},
 	};
-	let updated = decide_import(
-		&ctx,
-		&proposal_id,
-		"approved",
-		&req.user().id,
-		body.reason,
-		location_id.clone(),
-		staged_item_id.clone(),
-	)
-	.await?;
-	Ok(Json(ImportDecisionResponse {
+	Ok(Json(response))
+}
+
+/// Approve by linking the verified item to the proposal's target media.  The
+/// claim, the identity re-check, and the location upsert commit together: a
+/// proposal that lost its claim (rejected or approved meanwhile) applies
+/// nothing, and a link that fails leaves the proposal `proposed`.
+async fn approve_link(
+	ctx: &AppState,
+	proposal_id: &str,
+	actor_id: &str,
+	reason: Option<String>,
+) -> APIResult<ImportDecisionResponse> {
+	let txn = models::txn::begin_write(ctx.conn.as_ref()).await?;
+	if !claim_proposal(&txn, proposal_id, APPROVED, actor_id, reason).await? {
+		let current = load_proposal(&txn, proposal_id).await?;
+		txn.rollback().await?;
+		return settled_response(current);
+	}
+	let proposal = load_proposal(&txn, proposal_id).await?;
+	let (item, source) = load_item(&txn, &proposal.source_item_id).await?;
+	if source.id != proposal.source_id {
+		return Err(APIError::Conflict(
+			"proposal source no longer exists".to_string(),
+		));
+	}
+	verify_proposal_identity(&proposal, &item)?;
+	let linked = link_verified_item(&txn, &item, &proposal.target_media_id).await?;
+	let mut active = proposal.into_active_model();
+	active.applied_location_id = Set(Some(linked.location_id.clone()));
+	let updated = active.update(&txn).await?;
+	txn.commit().await?;
+	Ok(ImportDecisionResponse {
 		proposal: ImportSummary::from(updated),
-		action: action.to_owned(),
-		location_id,
-		staged_item_id,
-		deduplicated,
-	}))
+		action: "link".to_owned(),
+		location_id: Some(linked.location_id),
+		staged_item_id: None,
+		deduplicated: None,
+	})
+}
+
+/// Marks a proposal whose bytes this process is staging right now.  Dropped
+/// on every exit, including a cancelled request.
+#[cfg(feature = "ingest")]
+struct MaterializationGuard(String);
+
+#[cfg(feature = "ingest")]
+impl MaterializationGuard {
+	fn enter(proposal_id: &str) -> APIResult<Self> {
+		if !MATERIALIZING.lock().insert(proposal_id.to_owned()) {
+			return Err(APIError::Conflict(
+				"proposal approval is still being applied".to_string(),
+			));
+		}
+		Ok(Self(proposal_id.to_owned()))
+	}
+}
+
+#[cfg(feature = "ingest")]
+impl Drop for MaterializationGuard {
+	fn drop(&mut self) {
+		MATERIALIZING.lock().remove(&self.0);
+	}
+}
+
+/// Approve by staging the verified bytes.  Staging happens outside the
+/// database, so the claim is taken first and the outcome recorded after; a
+/// failure hands the proposal back as `proposed`.  A claim left without an
+/// outcome by a crash is resumed by the next approval (the staged upload is
+/// idempotent on the proposal's key), while one this process is still
+/// applying answers 409.
+#[cfg(feature = "ingest")]
+async fn approve_materialize(
+	ctx: &AppState,
+	req: &AuthContext,
+	proposal_id: &str,
+	body: ImportDecisionRequest,
+) -> APIResult<ImportDecisionResponse> {
+	let library_id = body.library_id.clone().ok_or_else(|| {
+		APIError::BadRequest("libraryId is required for materialization".to_string())
+	})?;
+	let conn = ctx.conn.as_ref();
+	let claimed =
+		claim_proposal(conn, proposal_id, APPROVED, &req.user().id, body.reason).await?;
+	let proposal = load_proposal(conn, proposal_id).await?;
+	let unfinished = proposal.status == APPROVED
+		&& proposal.applied_location_id.is_none()
+		&& proposal.staged_item_id.is_none();
+	if !claimed && !unfinished {
+		return settled_response(proposal);
+	}
+	let _in_flight = MaterializationGuard::enter(proposal_id)?;
+	let outcome = async {
+		let (item, source) = load_item(conn, &proposal.source_item_id).await?;
+		if source.id != proposal.source_id {
+			return Err(APIError::Conflict(
+				"proposal source no longer exists".to_string(),
+			));
+		}
+		verify_proposal_identity(&proposal, &item)?;
+		materialize_verified_item(
+			ctx,
+			req,
+			&item,
+			&source,
+			MaterializeRequest {
+				library_id,
+				filename: body.filename,
+				idempotency_key: Some(
+					body.idempotency_key
+						.unwrap_or_else(|| format!("remote-source-import:{proposal_id}")),
+				),
+			},
+		)
+		.await
+	}
+	.await;
+	match outcome {
+		Ok(materialized) => {
+			remote_source_import::Entity::update_many()
+				.col_expr(
+					remote_source_import::Column::StagedItemId,
+					Expr::value(materialized.item_id.clone()),
+				)
+				.col_expr(
+					remote_source_import::Column::UpdatedAt,
+					Expr::value(DateTimeWithTimeZone::from(Utc::now())),
+				)
+				.filter(remote_source_import::Column::Id.eq(proposal_id))
+				.filter(remote_source_import::Column::Status.eq(APPROVED))
+				.exec(conn)
+				.await?;
+			Ok(ImportDecisionResponse {
+				proposal: ImportSummary::from(load_proposal(conn, proposal_id).await?),
+				action: "materialize".to_owned(),
+				location_id: None,
+				staged_item_id: Some(materialized.item_id),
+				deduplicated: Some(materialized.deduplicated),
+			})
+		},
+		Err(error) => {
+			release_claim(conn, proposal_id).await?;
+			Err(error)
+		},
+	}
 }
 
 async fn reject_import(
@@ -1477,29 +1705,32 @@ async fn reject_import(
 	Json(body): Json<ImportDecisionRequest>,
 ) -> APIResult<Json<ImportSummary>> {
 	enforce_admin(&req)?;
-	let proposal = decide_import(
-		&ctx,
-		&proposal_id,
-		"rejected",
-		&req.user().id,
-		body.reason,
-		None,
-		None,
-	)
-	.await?;
-	Ok(Json(ImportSummary::from(proposal)))
+	let conn = ctx.conn.as_ref();
+	if !claim_proposal(conn, &proposal_id, REJECTED, &req.user().id, body.reason).await? {
+		let current = load_proposal(conn, &proposal_id).await?;
+		if current.status == REJECTED {
+			return Ok(Json(ImportSummary::from(current)));
+		}
+		return Err(APIError::Conflict(format!(
+			"proposal is already {}",
+			current.status
+		)));
+	}
+	Ok(Json(ImportSummary::from(
+		load_proposal(conn, &proposal_id).await?,
+	)))
 }
 
-async fn load_item(
-	ctx: &AppState,
+async fn load_item<C: ConnectionTrait>(
+	conn: &C,
 	id: &str,
 ) -> APIResult<(remote_source_item::Model, remote_source::Model)> {
 	let item = remote_source_item::Entity::find_by_id(id.to_string())
-		.one(ctx.conn.as_ref())
+		.one(conn)
 		.await?
 		.ok_or_else(|| APIError::NotFound("remote source item not found".to_string()))?;
 	let source = remote_source::Entity::find_by_id(item.source_id.clone())
-		.one(ctx.conn.as_ref())
+		.one(conn)
 		.await?
 		.ok_or_else(|| APIError::NotFound("remote source not found".to_string()))?;
 	Ok((item, source))
@@ -1539,6 +1770,9 @@ pub(crate) enum RemoteBody {
 }
 
 impl RemoteBody {
+	/// The accepted bytes as one stream, whichever transport carries them.  A
+	/// transport that stalls past [`SOURCE_TRANSFER_IDLE_TIMEOUT`] yields a
+	/// `TimedOut` error and ends, so no consumer waits on a silent worker.
 	fn into_stream(
 		self,
 	) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
@@ -1547,16 +1781,26 @@ impl RemoteBody {
 				.bytes_stream()
 				.map(|result| {
 					result.map(Bytes::from).map_err(|error| {
-						std::io::Error::new(std::io::ErrorKind::ConnectionAborted, error)
+						let kind = if error.is_timeout() {
+							std::io::ErrorKind::TimedOut
+						} else {
+							std::io::ErrorKind::ConnectionAborted
+						};
+						std::io::Error::new(kind, error)
 					})
 				})
 				.boxed(),
 			Self::Tunnel(receiver) => {
-				futures_util::stream::unfold(receiver, |mut receiver| async move {
-					receiver
-						.recv()
-						.await
-						.map(|chunk| (Ok(Bytes::from(chunk)), receiver))
+				futures_util::stream::unfold(Some(receiver), |receiver| async move {
+					let mut receiver = receiver?;
+					match receiver.next_chunk().await {
+						Ok(Some(chunk)) => Some((Ok(Bytes::from(chunk)), Some(receiver))),
+						Ok(None) => None,
+						Err(error) => Some((
+							Err(std::io::Error::new(std::io::ErrorKind::TimedOut, error)),
+							None,
+						)),
+					}
 				})
 				.boxed()
 			},
@@ -1605,7 +1849,7 @@ async fn open_remote_body(
 				base.trim_end_matches('/'),
 				grant.grant_id
 			);
-			let response = reqwest::Client::new()
+			let response = DIRECT_CLIENT
 				.get(url)
 				.send()
 				.await
@@ -1637,32 +1881,17 @@ async fn hash_body(
 ) -> APIResult<(String, u64)> {
 	let mut hasher = Sha256::new();
 	let mut total = 0_u64;
-	match body {
-		RemoteBody::Direct(response) => {
-			let mut stream = response.bytes_stream();
-			while let Some(chunk) = stream.next().await {
-				let chunk = chunk
-					.map_err(|error| APIError::ServiceUnavailable(error.to_string()))?;
-				total = total.saturating_add(chunk.len() as u64);
-				if total > max_bytes {
-					return Err(APIError::BadGateway(
-						"source worker exceeded the grant byte budget".to_string(),
-					));
-				}
-				hasher.update(&chunk);
-			}
-		},
-		RemoteBody::Tunnel(mut receiver) => {
-			while let Some(chunk) = receiver.recv().await {
-				total = total.saturating_add(chunk.len() as u64);
-				if total > max_bytes {
-					return Err(APIError::BadGateway(
-						"source tunnel exceeded the grant byte budget".to_string(),
-					));
-				}
-				hasher.update(&chunk);
-			}
-		},
+	let mut stream = body.into_stream();
+	while let Some(chunk) = stream.next().await {
+		let chunk =
+			chunk.map_err(|error| APIError::ServiceUnavailable(error.to_string()))?;
+		total = total.saturating_add(chunk.len() as u64);
+		if total > max_bytes {
+			return Err(APIError::BadGateway(
+				"source worker exceeded the grant byte budget".to_string(),
+			));
+		}
+		hasher.update(&chunk);
 	}
 	if total != expected_size {
 		return Err(APIError::BadGateway(format!(
@@ -1694,7 +1923,7 @@ async fn verify_item(
 	Path(item_id): Path<String>,
 ) -> APIResult<Json<VerifyResponse>> {
 	enforce_admin(&req)?;
-	let (item, source) = load_item(&ctx, &item_id).await?;
+	let (item, source) = load_item(ctx.conn.as_ref(), &item_id).await?;
 	let expected = u64::try_from(item.size)
 		.map_err(|_| APIError::Conflict("source item has an invalid size".to_string()))?;
 	let body = open_remote_body(
@@ -1739,12 +1968,17 @@ async fn link_item(
 	Json(body): Json<LinkRequest>,
 ) -> APIResult<Json<LinkResponse>> {
 	enforce_admin(&req)?;
-	let (item, _source) = load_item(&ctx, &item_id).await?;
-	Ok(Json(link_verified_item(&ctx, &item, &body.media_id).await?))
+	let (item, _source) = load_item(ctx.conn.as_ref(), &item_id).await?;
+	Ok(Json(
+		link_verified_item(ctx.conn.as_ref(), &item, &body.media_id).await?,
+	))
 }
 
-async fn link_verified_item(
-	ctx: &AppState,
+/// Upsert the verified remote location for `media_id`.  Runs on whatever
+/// connection the caller provides, so an approval can commit it together with
+/// the proposal claim.
+async fn link_verified_item<C: ConnectionTrait>(
+	conn: &C,
 	item: &remote_source_item::Model,
 	media_id: &str,
 ) -> APIResult<LinkResponse> {
@@ -1754,7 +1988,7 @@ async fn link_verified_item(
 		));
 	}
 	media::Entity::find_by_id(media_id.to_owned())
-		.one(ctx.conn.as_ref())
+		.one(conn)
 		.await?
 		.ok_or_else(|| APIError::NotFound("media not found".to_string()))?;
 	let digest = item.sha256.clone().expect("checked above");
@@ -1763,7 +1997,7 @@ async fn link_verified_item(
 		.filter(media_location::Column::MediaId.eq(media_id.to_owned()))
 		.filter(media_location::Column::SourceItemId.eq(item.id.clone()))
 		.filter(media_location::Column::Kind.eq(REMOTE_LOCATION_KIND))
-		.one(ctx.conn.as_ref())
+		.one(conn)
 		.await?;
 	let now = DateTimeWithTimeZone::from(Utc::now());
 	let location = if let Some(model) = existing {
@@ -1775,7 +2009,7 @@ async fn link_verified_item(
 		active.durability_role = Set(REMOTE_LOCATION_KIND.to_string());
 		active.verified_at = Set(Some(now));
 		active.last_seen_at = Set(Some(now));
-		active.update(ctx.conn.as_ref()).await?;
+		active.update(conn).await?;
 		id
 	} else {
 		let model = media_location::ActiveModel {
@@ -1793,11 +2027,11 @@ async fn link_verified_item(
 			created_at: Set(now),
 			updated_at: Set(now),
 		};
-		model.insert(ctx.conn.as_ref()).await?.id
+		model.insert(conn).await?.id
 	};
 	let mut item_active = item.clone().into_active_model();
 	item_active.imported_media_id = Set(Some(media_id.to_owned()));
-	item_active.update(ctx.conn.as_ref()).await?;
+	item_active.update(conn).await?;
 	Ok(LinkResponse {
 		item_id: item.id.clone(),
 		media_id: media_id.to_owned(),
@@ -1841,7 +2075,7 @@ async fn materialize_item(
 	Json(body): Json<MaterializeRequest>,
 ) -> APIResult<Json<MaterializeResponse>> {
 	enforce_admin(&req)?;
-	let (item, source) = load_item(&ctx, &item_id).await?;
+	let (item, source) = load_item(ctx.conn.as_ref(), &item_id).await?;
 	Ok(Json(
 		materialize_verified_item(&ctx, &req, &item, &source, body).await?,
 	))
@@ -1882,34 +2116,16 @@ async fn materialize_verified_item(
 	let mut file = tokio::fs::File::create(&temp_path).await?;
 	let mut total = 0_u64;
 	let mut hasher = Sha256::new();
-	match body_stream {
-		RemoteBody::Direct(response) => {
-			let mut stream = response.bytes_stream();
-			while let Some(chunk) = stream.next().await {
-				let chunk = chunk
-					.map_err(|error| APIError::ServiceUnavailable(error.to_string()))?;
-				total = total.saturating_add(chunk.len() as u64);
-				if total > expected {
-					return Err(APIError::BadGateway(
-						"source exceeded grant".to_string(),
-					));
-				}
-				hasher.update(&chunk);
-				tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
-			}
-		},
-		RemoteBody::Tunnel(mut receiver) => {
-			while let Some(chunk) = receiver.recv().await {
-				total = total.saturating_add(chunk.len() as u64);
-				if total > expected {
-					return Err(APIError::BadGateway(
-						"source exceeded grant".to_string(),
-					));
-				}
-				hasher.update(&chunk);
-				tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
-			}
-		},
+	let mut stream = body_stream.into_stream();
+	while let Some(chunk) = stream.next().await {
+		let chunk =
+			chunk.map_err(|error| APIError::ServiceUnavailable(error.to_string()))?;
+		total = total.saturating_add(chunk.len() as u64);
+		if total > expected {
+			return Err(APIError::BadGateway("source exceeded grant".to_string()));
+		}
+		hasher.update(&chunk);
+		file.write_all(&chunk).await?;
 	}
 	file.flush().await?;
 	if total != expected
@@ -1987,60 +2203,80 @@ pub(crate) async fn remote_media_size(
 
 /// Open a remote transfer for `serve_media_file`.  The helper is `pub(crate)`
 /// so the existing media route keeps its ACL and local `ServeFile` path.
+///
+/// Verified copies are tried newest first.  A disconnect marks only the
+/// `remote_source` offline, never its locations, so a copy whose source is
+/// gone is skipped in favour of an older copy that can still be served; only
+/// when no copy can be opened is the media reported unavailable.
 pub(crate) async fn open_media_transfer(
 	ctx: &AppState,
 	media_id: &str,
 	offset: u64,
 	length: u64,
 ) -> APIResult<Option<(RemoteBody, remote_source_item::Model)>> {
-	let Some(location) = media_location::Entity::find()
+	let locations = media_location::Entity::find()
 		.filter(media_location::Column::MediaId.eq(media_id.to_string()))
 		.filter(media_location::Column::Kind.eq(REMOTE_LOCATION_KIND))
 		.filter(media_location::Column::Health.eq(ONLINE))
 		.filter(media_location::Column::SourceItemId.is_not_null())
 		.order_by_desc(media_location::Column::VerifiedAt)
-		.one(ctx.conn.as_ref())
-		.await?
-	else {
-		return Ok(None);
-	};
-	let Some(source_item_id) = location.source_item_id else {
-		return Ok(None);
-	};
-	let Some(item) = remote_source_item::Entity::find_by_id(source_item_id)
-		.one(ctx.conn.as_ref())
-		.await?
-	else {
-		return Ok(None);
-	};
-	if item.observation_state != VERIFIED
-		|| item.sha256.as_deref() != Some(location.sha256.as_str())
-	{
-		return Ok(None);
+		.order_by_asc(media_location::Column::Id)
+		.all(ctx.conn.as_ref())
+		.await?;
+	for location in locations {
+		let Some(source_item_id) = location.source_item_id else {
+			continue;
+		};
+		let Some(item) = remote_source_item::Entity::find_by_id(source_item_id)
+			.one(ctx.conn.as_ref())
+			.await?
+		else {
+			continue;
+		};
+		if item.observation_state != VERIFIED
+			|| item.sha256.as_deref() != Some(location.sha256.as_str())
+		{
+			continue;
+		}
+		let Some(source) = remote_source::Entity::find_by_id(item.source_id.clone())
+			.filter(remote_source::Column::Health.eq(ONLINE))
+			.one(ctx.conn.as_ref())
+			.await?
+		else {
+			continue;
+		};
+		let mode =
+			if offset == 0 && length == u64::try_from(item.size).unwrap_or_default() {
+				SourceReadMode::Full
+			} else {
+				SourceReadMode::Range
+			};
+		match open_remote_body(
+			ctx,
+			&source,
+			&item,
+			Some(location.sha256.as_str()),
+			mode,
+			offset,
+			length,
+		)
+		.await
+		{
+			Ok(body) => return Ok(Some((body, item))),
+			// The stored health is what the socket handler last wrote; the
+			// hub's refusal is the live truth, so move on to the next copy.
+			Err(APIError::ServiceUnavailable(reason)) => {
+				tracing::warn!(
+					media_id,
+					source_id = %source.id,
+					%reason,
+					"verified remote copy could not be opened; trying the next"
+				);
+			},
+			Err(error) => return Err(error),
+		}
 	}
-	let Some(source) = remote_source::Entity::find_by_id(item.source_id.clone())
-		.filter(remote_source::Column::Health.eq(ONLINE))
-		.one(ctx.conn.as_ref())
-		.await?
-	else {
-		return Ok(None);
-	};
-	let mode = if offset == 0 && length == u64::try_from(item.size).unwrap_or_default() {
-		SourceReadMode::Full
-	} else {
-		SourceReadMode::Range
-	};
-	let body = open_remote_body(
-		ctx,
-		&source,
-		&item,
-		Some(location.sha256.as_str()),
-		mode,
-		offset,
-		length,
-	)
-	.await?;
-	Ok(Some((body, item)))
+	Ok(None)
 }
 
 pub(crate) fn remote_response(
@@ -2131,5 +2367,534 @@ mod tests {
 				("isbn".to_owned(), "9781402894626".to_owned()),
 			])
 		);
+	}
+
+	/// The built-in source worker serializes `CatalogEntry.modified_at_ms`
+	/// as a bare number; it must land as a 2020s date, not one tens of
+	/// thousands of years out.  Plain seconds and RFC 3339 keep working.
+	#[test]
+	fn modified_at_reads_worker_milliseconds_and_seconds() {
+		let millis = modified_at(Some(&json!(1_800_000_000_000_i64))).unwrap();
+		assert_eq!(millis.to_rfc3339(), "2027-01-15T08:00:00+00:00");
+		let seconds = modified_at(Some(&json!(1_700_000_000_i64))).unwrap();
+		assert_eq!(seconds.to_rfc3339(), "2023-11-14T22:13:20+00:00");
+		let text = modified_at(Some(&json!("2024-02-03T04:05:06+00:00"))).unwrap();
+		assert_eq!(text.to_rfc3339(), "2024-02-03T04:05:06+00:00");
+		assert!(modified_at(Some(&json!("not a date"))).is_none());
+		assert!(modified_at(None).is_none());
+	}
+
+	fn location(media_id: &str, sha256: &str) -> media_location::Model {
+		let now = DateTimeWithTimeZone::from(Utc::now());
+		media_location::Model {
+			id: format!("{media_id}-{sha256}"),
+			media_id: media_id.to_owned(),
+			source_item_id: None,
+			kind: REMOTE_LOCATION_KIND.to_owned(),
+			sha256: sha256.to_owned(),
+			content_version: format!("sha256:{sha256}"),
+			health: ONLINE.to_owned(),
+			durability_role: REMOTE_LOCATION_KIND.to_owned(),
+			cache_path: None,
+			verified_at: Some(now),
+			last_seen_at: Some(now),
+			created_at: now,
+			updated_at: now,
+		}
+	}
+
+	fn verified_item(sha256: &str, metadata: Value) -> remote_source_item::Model {
+		let now = DateTimeWithTimeZone::from(Utc::now());
+		remote_source_item::Model {
+			id: "item".to_owned(),
+			source_id: "source".to_owned(),
+			worker_item_id: "worker-item".to_owned(),
+			worker_content_version: "v1".to_owned(),
+			relative_path: Some("book.epub".to_owned()),
+			size: 3,
+			modified_at: None,
+			media_type: None,
+			quick_fingerprint: None,
+			sha256: Some(sha256.to_owned()),
+			metadata: Some(metadata),
+			retention: None,
+			observation_state: VERIFIED.to_owned(),
+			last_seen_revision: 1,
+			last_seen_at: now,
+			created_at: now,
+			updated_at: now,
+			imported_media_id: None,
+		}
+	}
+
+	/// The indexed matcher keeps the tiered semantics: exact digest first,
+	/// then typed identifiers, then title plus author, with ambiguity at any
+	/// tier failing closed instead of falling through.
+	#[test]
+	fn candidate_index_matches_by_digest_identifier_and_title() {
+		let metadata = vec![
+			media_metadata::Model {
+				media_id: Some("by-isbn".into()),
+				identifier_isbn: Some("978-1-4028-9462-6".into()),
+				title: Some("Dune".into()),
+				writers: Some("Frank Herbert".into()),
+				..Default::default()
+			},
+			media_metadata::Model {
+				media_id: Some("by-asin".into()),
+				identifier_amazon: Some("B000123".into()),
+				title: Some("Dune".into()),
+				writers: Some("Someone Else".into()),
+				..Default::default()
+			},
+			media_metadata::Model {
+				media_id: Some("twin-a".into()),
+				identifier_uuid: Some("twin".into()),
+				..Default::default()
+			},
+			media_metadata::Model {
+				media_id: Some("twin-b".into()),
+				identifier_uuid: Some("twin".into()),
+				..Default::default()
+			},
+			media_metadata::Model {
+				media_id: None,
+				identifier_isbn: Some("orphan".into()),
+				..Default::default()
+			},
+		];
+		let locations = vec![
+			location("digest-one", "aaa"),
+			location("digest-two", "bbb"),
+			location("digest-three", "bbb"),
+		];
+		let index = CandidateIndex::build(&metadata, &locations);
+
+		let digest = find_candidate(&verified_item("aaa", json!({})), &index).unwrap();
+		assert_eq!(
+			(digest.media_id.as_str(), digest.kind, digest.score),
+			("digest-one", "digest", 100)
+		);
+		assert!(
+			find_candidate(
+				&verified_item("bbb", json!({ "isbn": "9781402894626" })),
+				&index
+			)
+			.is_none(),
+			"two media with the same bytes is ambiguous and must not fall through"
+		);
+
+		let identifier = find_candidate(
+			&verified_item(
+				"zzz",
+				json!({ "identifiers": { "isbn13": "978-1-4028-9462-6" } }),
+			),
+			&index,
+		)
+		.unwrap();
+		assert_eq!(identifier.media_id, "by-isbn");
+		assert_eq!(identifier.kind, "identifier");
+		assert_eq!(
+			identifier.evidence,
+			json!({ "identifiers": [{ "scheme": "isbn", "value": "9781402894626" }] })
+		);
+		assert!(
+			find_candidate(&verified_item("zzz", json!({ "uuid": "twin" })), &index)
+				.is_none(),
+			"an identifier shared by two media is ambiguous"
+		);
+		assert!(
+			find_candidate(&verified_item("zzz", json!({ "isbn": "orphan" })), &index)
+				.is_none(),
+			"metadata without a media id cannot be a candidate"
+		);
+
+		let title = find_candidate(
+			&verified_item(
+				"zzz",
+				json!({ "title": "DUNE", "authors": ["Herbert, Frank", "Frank Herbert"] }),
+			),
+			&index,
+		)
+		.unwrap();
+		assert_eq!(title.media_id, "by-isbn");
+		assert_eq!(title.kind, "metadata");
+		assert!(
+			find_candidate(&verified_item("zzz", json!({ "title": "Dune" })), &index)
+				.is_none(),
+			"a title without any author is not evidence"
+		);
+		assert!(find_candidate(
+			&verified_item("zzz", json!({ "title": "Dune", "author": "Nobody" })),
+			&index
+		)
+		.is_none());
+	}
+
+	mod db {
+		use super::*;
+		use ::tests::fake_data;
+		use migrations::{Migrator, MigratorTrait};
+		use sea_orm::{ConnectOptions, Database};
+		use std::sync::Arc;
+		use stump_worker::source_protocol::parse_source_server_frame;
+
+		struct Fixture {
+			_dir: tempfile::TempDir,
+			ctx: AppState,
+			user_id: String,
+			media_id: String,
+			source: remote_source::Model,
+			item: remote_source_item::Model,
+		}
+
+		const DIGEST: &str =
+			"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+		/// A file-backed database with a real pool: the approval race needs
+		/// two connections contending for SQLite's write lock, which a
+		/// single-connection in-memory pool cannot express.  Migrations run on
+		/// a one-connection pool first, as `stump_core::database::connect`
+		/// does: sea-orm-migration does not transact SQLite DDL, and the
+		/// table-rebuild migrations break when spread over pooled connections.
+		async fn fixture() -> Fixture {
+			let dir = tempfile::tempdir().unwrap();
+			let url = format!("sqlite://{}/source.db?mode=rwc", dir.path().display());
+			let mut migrate_options = ConnectOptions::new(url.clone());
+			migrate_options.max_connections(1).sqlx_logging(false);
+			let migrator = Database::connect(migrate_options).await.unwrap();
+			migrator
+				.execute_unprepared("PRAGMA journal_mode=WAL")
+				.await
+				.unwrap();
+			Migrator::up(&migrator, None).await.unwrap();
+			migrator.close().await.unwrap();
+			let mut options = ConnectOptions::new(url);
+			options.max_connections(4).sqlx_logging(false);
+			let conn = Database::connect(options).await.unwrap();
+
+			let user = fake_data::User::new("operator").insert(&conn).await;
+			let library = fake_data::Library::default().insert(&conn).await;
+			let series = fake_data::Series {
+				library_id: Some(library.id.clone()),
+				..Default::default()
+			}
+			.insert(&conn)
+			.await;
+			let media = fake_data::Media {
+				series_id: series.id.clone(),
+				..Default::default()
+			}
+			.insert(&conn)
+			.await;
+			let ctx: AppState = Arc::new(stump_core::Ctx::for_testing(conn));
+			let (source, item) =
+				source_with_item(&ctx, &user.id, "device-a", "root-a").await;
+			Fixture {
+				_dir: dir,
+				ctx,
+				user_id: user.id,
+				media_id: media.id,
+				source,
+				item,
+			}
+		}
+
+		async fn source_with_item(
+			ctx: &AppState,
+			user_id: &str,
+			device_id: &str,
+			root_id: &str,
+		) -> (remote_source::Model, remote_source_item::Model) {
+			let conn = ctx.conn.as_ref();
+			device::ActiveModel {
+				id: Set(device_id.to_owned()),
+				user_id: Set(user_id.to_owned()),
+				name: Set(device_id.to_owned()),
+				kind: Set(DeviceKind::SourceWorker),
+				..Default::default()
+			}
+			.insert(conn)
+			.await
+			.unwrap();
+			let now = DateTimeWithTimeZone::from(Utc::now());
+			let source = remote_source::ActiveModel {
+				device_id: Set(device_id.to_owned()),
+				root_id: Set(root_id.to_owned()),
+				label: Set("Books".to_owned()),
+				kind: Set("ebooks".to_owned()),
+				privacy_mode: Set("catalog".to_owned()),
+				transport: Set("tunnel".to_owned()),
+				direct_base_url: Set(None),
+				current_revision: Set(1),
+				last_seen_at: Set(now),
+				health: Set(ONLINE.to_owned()),
+				..Default::default()
+			}
+			.insert(conn)
+			.await
+			.unwrap();
+			let item = remote_source_item::ActiveModel {
+				source_id: Set(source.id.clone()),
+				worker_item_id: Set(format!("{root_id}-item")),
+				worker_content_version: Set("v1".to_owned()),
+				relative_path: Set(Some("book.epub".to_owned())),
+				size: Set(3),
+				modified_at: Set(None),
+				media_type: Set(Some("application/epub+zip".to_owned())),
+				quick_fingerprint: Set(None),
+				sha256: Set(Some(DIGEST.to_owned())),
+				metadata: Set(None),
+				retention: Set(None),
+				observation_state: Set(VERIFIED.to_owned()),
+				last_seen_revision: Set(1),
+				last_seen_at: Set(now),
+				imported_media_id: Set(None),
+				..Default::default()
+			}
+			.insert(conn)
+			.await
+			.unwrap();
+			(source, item)
+		}
+
+		impl Fixture {
+			async fn proposal(&self) -> remote_source_import::Model {
+				remote_source_import::ActiveModel {
+					source_id: Set(self.source.id.clone()),
+					source_item_id: Set(self.item.id.clone()),
+					target_media_id: Set(self.media_id.clone()),
+					worker_item_id: Set(self.item.worker_item_id.clone()),
+					worker_content_version: Set(self.item.worker_content_version.clone()),
+					source_sha256: Set(DIGEST.to_owned()),
+					source_size: Set(self.item.size),
+					match_kind: Set("digest".to_owned()),
+					match_score: Set(100),
+					match_evidence: Set(json!({ "sha256": DIGEST })),
+					status: Set(PROPOSED.to_owned()),
+					..Default::default()
+				}
+				.insert(self.ctx.conn.as_ref())
+				.await
+				.unwrap()
+			}
+
+			async fn location_count(&self) -> u64 {
+				media_location::Entity::find()
+					.filter(media_location::Column::MediaId.eq(self.media_id.clone()))
+					.count(self.ctx.conn.as_ref())
+					.await
+					.unwrap()
+			}
+
+			async fn attach_responding_worker(&self, device_id: &str, root_id: &str) {
+				let hub = self.ctx.source_hub();
+				let (mut outbound, _) = hub
+					.attach(
+						device_id,
+						device_id,
+						SourceWorkerHello {
+							name: None,
+							version: None,
+							roots: vec![SourceRootHello {
+								root_id: root_id.to_owned(),
+								label: "Books".to_owned(),
+								kind: "ebooks".to_owned(),
+								privacy_mode: "catalog".to_owned(),
+								transport: SourceTransport::Tunnel,
+								direct_base_url: None,
+							}],
+						},
+					)
+					.await;
+				let device_id = device_id.to_owned();
+				tokio::spawn(async move {
+					while let Some(frame) = outbound.recv().await {
+						if let Ok(SourceServerFrame::Read(grant)) =
+							parse_source_server_frame(&frame)
+						{
+							let _ = hub.read_ready(&device_id, &grant.grant_id).await;
+						}
+					}
+				});
+			}
+		}
+
+		/// The regression: a rejection that commits while an approval is in
+		/// flight must leave nothing applied.  The rejecting transaction holds
+		/// the write lock so the approval is genuinely queued behind it.
+		#[tokio::test]
+		async fn approval_applies_nothing_when_a_rejection_wins_the_claim() {
+			let fixture = fixture().await;
+			let proposal = fixture.proposal().await;
+			let conn = fixture.ctx.conn.as_ref();
+
+			let holder = models::txn::begin_write(conn).await.unwrap();
+			assert!(claim_proposal(
+				&holder,
+				&proposal.id,
+				REJECTED,
+				&fixture.user_id,
+				None
+			)
+			.await
+			.unwrap());
+
+			let approval = {
+				let ctx = fixture.ctx.clone();
+				let proposal_id = proposal.id.clone();
+				let actor = fixture.user_id.clone();
+				tokio::spawn(async move {
+					approve_link(&ctx, &proposal_id, &actor, None).await
+				})
+			};
+			tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+			assert!(
+				!approval.is_finished(),
+				"the approval waits for the write lock"
+			);
+			holder.commit().await.unwrap();
+
+			let error = approval.await.unwrap().expect_err("the rejection won");
+			assert!(
+				matches!(&error, APIError::Conflict(reason) if reason == "proposal was rejected"),
+				"{error:?}"
+			);
+			assert_eq!(fixture.location_count().await, 0, "nothing was linked");
+			let settled = load_proposal(conn, &proposal.id).await.unwrap();
+			assert_eq!(settled.status, REJECTED);
+			assert_eq!(settled.applied_location_id, None);
+		}
+
+		/// Two operators approving at once: exactly one link is applied and
+		/// both see the same outcome.
+		#[tokio::test]
+		async fn concurrent_approvals_link_exactly_once() {
+			let fixture = fixture().await;
+			let proposal = fixture.proposal().await;
+			let approvals = (0..4)
+				.map(|_| {
+					let ctx = fixture.ctx.clone();
+					let proposal_id = proposal.id.clone();
+					let actor = fixture.user_id.clone();
+					tokio::spawn(async move {
+						approve_link(&ctx, &proposal_id, &actor, None).await
+					})
+				})
+				.collect::<Vec<_>>();
+			let mut location_ids = BTreeSet::new();
+			for approval in approvals {
+				let response = approval.await.unwrap().unwrap();
+				assert_eq!(response.action, "link");
+				assert_eq!(response.proposal.status, APPROVED);
+				location_ids.insert(response.location_id.unwrap());
+			}
+			assert_eq!(location_ids.len(), 1, "every approval reports the one link");
+			assert_eq!(fixture.location_count().await, 1);
+			let settled = load_proposal(fixture.ctx.conn.as_ref(), &proposal.id)
+				.await
+				.unwrap();
+			assert_eq!(settled.applied_location_id, location_ids.into_iter().next());
+			let item = remote_source_item::Entity::find_by_id(fixture.item.id.clone())
+				.one(fixture.ctx.conn.as_ref())
+				.await
+				.unwrap()
+				.unwrap();
+			assert_eq!(item.imported_media_id, Some(fixture.media_id.clone()));
+		}
+
+		/// A decision is claimed once: repeating it is idempotent, and the
+		/// opposite decision afterwards is a conflict that changes nothing.
+		#[tokio::test]
+		async fn a_proposal_is_decided_once() {
+			let fixture = fixture().await;
+			let proposal = fixture.proposal().await;
+			let conn = fixture.ctx.conn.as_ref();
+			assert!(claim_proposal(
+				conn,
+				&proposal.id,
+				REJECTED,
+				&fixture.user_id,
+				Some("dup".into())
+			)
+			.await
+			.unwrap());
+			assert!(!claim_proposal(
+				conn,
+				&proposal.id,
+				REJECTED,
+				&fixture.user_id,
+				None
+			)
+			.await
+			.unwrap());
+			let error = approve_link(&fixture.ctx, &proposal.id, &fixture.user_id, None)
+				.await
+				.expect_err("a rejected proposal cannot be approved");
+			assert!(matches!(error, APIError::Conflict(_)), "{error:?}");
+			assert_eq!(fixture.location_count().await, 0);
+			let settled = load_proposal(conn, &proposal.id).await.unwrap();
+			assert_eq!(settled.status, REJECTED);
+			assert_eq!(settled.decision_reason.as_deref(), Some("dup"));
+		}
+
+		/// Two verified copies, the newest on a source that went offline: the
+		/// reader is served from the older online copy instead of a 503.
+		#[tokio::test]
+		async fn remote_transfer_falls_back_to_an_online_copy() {
+			let fixture = fixture().await;
+			let conn = fixture.ctx.conn.as_ref();
+			let (offline_source, offline_item) =
+				source_with_item(&fixture.ctx, &fixture.user_id, "device-b", "root-b")
+					.await;
+			let mut offline = offline_source.into_active_model();
+			offline.health = Set("offline".to_owned());
+			offline.update(conn).await.unwrap();
+
+			let earlier =
+				DateTimeWithTimeZone::from(Utc::now() - chrono::Duration::hours(1));
+			let later = DateTimeWithTimeZone::from(Utc::now());
+			for (item, verified_at) in [(&fixture.item, earlier), (&offline_item, later)]
+			{
+				media_location::ActiveModel {
+					media_id: Set(fixture.media_id.clone()),
+					source_item_id: Set(Some(item.id.clone())),
+					kind: Set(REMOTE_LOCATION_KIND.to_owned()),
+					sha256: Set(DIGEST.to_owned()),
+					content_version: Set(format!("sha256:{DIGEST}")),
+					health: Set(ONLINE.to_owned()),
+					durability_role: Set(REMOTE_LOCATION_KIND.to_owned()),
+					cache_path: Set(None),
+					verified_at: Set(Some(verified_at)),
+					last_seen_at: Set(Some(verified_at)),
+					..Default::default()
+				}
+				.insert(conn)
+				.await
+				.unwrap();
+			}
+			fixture.attach_responding_worker("device-a", "root-a").await;
+
+			let (body, served) = tokio::time::timeout(
+				std::time::Duration::from_secs(5),
+				open_media_transfer(&fixture.ctx, &fixture.media_id, 0, 3),
+			)
+			.await
+			.expect("the online copy answers promptly")
+			.unwrap()
+			.expect("an online verified copy exists");
+			assert_eq!(
+				served.id, fixture.item.id,
+				"the older online copy is served"
+			);
+			assert!(matches!(body, RemoteBody::Tunnel(_)));
+			assert_eq!(fixture.ctx.source_hub().pending_grants(), 1);
+			drop(body);
+			assert_eq!(
+				fixture.ctx.source_hub().pending_grants(),
+				0,
+				"dropping the body releases the grant"
+			);
+		}
 	}
 }

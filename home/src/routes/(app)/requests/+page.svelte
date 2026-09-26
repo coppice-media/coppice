@@ -12,7 +12,7 @@
 	import { request } from '@stump/ui/graphql/client';
 	import { BookRequestsDocument } from '$lib/graphql/generated/graphql';
 	import { getHomeSession } from '$lib/session.svelte';
-	import { BOOK_REQUEST_STATUS_VALUES, REQUEST_STATUS_LABELS } from '$lib/requests';
+	import { LIVE_REQUEST_STATUSES, statusLabel } from '$lib/requests';
 	import RequestSummaryCard from '$lib/components/requests/RequestSummaryCard.svelte';
 
 	const session = getHomeSession();
@@ -38,11 +38,7 @@
 		enabled: browser
 	}));
 	const requests = $derived(requestsQuery.data?.bookRequests ?? []);
-	const statusOptions = $derived(
-		Object.entries(REQUEST_STATUS_LABELS).filter(([status]) =>
-			BOOK_REQUEST_STATUS_VALUES.includes(status as (typeof BOOK_REQUEST_STATUS_VALUES)[number])
-		)
-	);
+	const statusOptions = LIVE_REQUEST_STATUSES.map((status) => [status, statusLabel(status)] as const);
 </script>
 
 <svelte:head>

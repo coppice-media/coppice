@@ -245,6 +245,11 @@ export function labelKind(kind: EditionKind): string {
 	return kind === 'EBOOK' ? 'Ebook' : kind === 'AUDIOBOOK' ? 'Audiobook' : 'Other edition'
 }
 
+/** The server score is a weighted overlap sum (title 5, authors 4, genres 2, series 3; max 14), not a ratio. */
+export function matchTier(score: number): string {
+	return score >= 8 ? 'Strong match' : score >= 4 ? 'Good match' : 'Related'
+}
+
 export function statusLabel(status: FileStatus): string {
 	return status === 'READY'
 		? 'Ready'

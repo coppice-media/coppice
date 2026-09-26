@@ -93,19 +93,16 @@ fn map_server_error(error: APIError) -> KavitaError {
 		other => KavitaError::InternalServerError(other.to_string()),
 	}
 }
+
+/// Validate and store a decoded Kavita cover. Its size was already checked
+/// against [`KavitaBackend::max_cover_upload_bytes`] by the upload route.
 async fn save_kavita_cover(
 	id: &str,
 	bytes: &[u8],
-	max_size: usize,
 	config: &stump_media::MediaConfig,
 ) -> KavitaResult<(String, ImageMetadata)> {
 	if bytes.is_empty() {
 		return Err(KavitaError::BadRequest("Cover image is empty".to_owned()));
-	}
-	if bytes.len() > max_size {
-		return Err(KavitaError::BadRequest(
-			"Cover image exceeds the configured upload limit".to_owned(),
-		));
 	}
 	let content_type = ContentType::from_bytes(bytes);
 	if !content_type.is_image() {
@@ -219,6 +216,12 @@ impl KavitaBackend for KavitaBackendAdapter {
 		}
 	}
 
+	/// Covers are images, so they are bounded by the image upload limit
+	/// rather than the book-file one.
+	fn max_cover_upload_bytes(&self) -> usize {
+		self.ctx.config.protocols.max_image_upload_size
+	}
+
 	async fn media_page(
 		&self,
 		user: &AuthUser,
@@ -312,13 +315,8 @@ impl KavitaBackend for KavitaBackendAdapter {
 					KavitaError::NotFound("Chapter does not exist".to_owned())
 				})?,
 		};
-		let (path, metadata) = save_kavita_cover(
-			&thumbnail_id,
-			&bytes,
-			self.ctx.config.protocols.max_file_upload_size,
-			&self.ctx.config.media,
-		)
-		.await?;
+		let (path, metadata) =
+			save_kavita_cover(&thumbnail_id, &bytes, &self.ctx.config.media).await?;
 		self.persist_series_cover(user, target, path, metadata, lock_cover)
 			.await
 	}
@@ -336,13 +334,8 @@ impl KavitaBackend for KavitaBackendAdapter {
 			.one(self.conn())
 			.await?
 			.ok_or_else(|| KavitaError::NotFound("Chapter does not exist".to_owned()))?;
-		let (path, metadata) = save_kavita_cover(
-			&book.id,
-			&bytes,
-			self.ctx.config.protocols.max_file_upload_size,
-			&self.ctx.config.media,
-		)
-		.await?;
+		let (path, metadata) =
+			save_kavita_cover(&book.id, &bytes, &self.ctx.config.media).await?;
 		self.persist_media_cover(user, book.id, path, metadata, lock_cover)
 			.await
 	}

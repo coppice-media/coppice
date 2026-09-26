@@ -210,9 +210,9 @@ On a `401 Unauthorized` response, Stump attaches a session-clearing `Set-Cookie`
 Stump also exposes the Grimmory Komga-shaped profile below `/komga`. This is a
 prefix alias over the same authenticated Komga book, media, and identity
 handlers; it does not add a second database or identity store. The route shape
-matches Grimmory main [`65f92fde`](https://github.com/grimmory-tools/grimmory/commit/65f92fde)
+matches Grimmory v3.5.0 [`402e89b4`](https://github.com/grimmory-tools/grimmory/commit/402e89b4452f8e2b17ab95f16c1621c003516cd2)
 and its `KomgaController`
-(`backend/src/main/java/org/booklore/controller/KomgaController.java:45-46`):
+(`backend/src/main/java/org/booklore/controller/KomgaController.java:45-47`):
 
 | Method | Path | Contract |
 | --- | --- | --- |
@@ -223,7 +223,7 @@ and its `KomgaController`
 
 The listing route is intentionally `GET /api/v1/books`, rather than Komga's
 `POST /api/v1/books/list`, matching Grimmory's controller
-(`backend/src/main/java/org/booklore/controller/KomgaController.java:146-155`).
+(`backend/src/main/java/org/booklore/controller/KomgaController.java:148-156`).
 Liseur's Grimmory catalog requests `GET /api/v1/books?page=&size=200`, filters
 locally on `media.mediaType == application/epub+zip`, and derives thumbnail and
 file links under `/komga/api/v1/books/{id}/...`

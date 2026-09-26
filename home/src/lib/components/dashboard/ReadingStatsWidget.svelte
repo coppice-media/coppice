@@ -43,7 +43,7 @@
 >
 	{#snippet action()}
 		<Tabs.Root value={span} onValueChange={(value) => (span = value as ReadingStatsSpan)}>
-			<Tabs.List aria-label="Statistics span">
+			<Tabs.List aria-label="Statistics span" class="flex-wrap">
 				{#each SPAN_OPTIONS as option (option.value)}
 					<Tabs.Trigger value={option.value} class="px-2 text-xs">{option.label}</Tabs.Trigger>
 				{/each}

@@ -1,14 +1,16 @@
 # Coppice Next Steps
 
-Agent-facing resume file for branch `coppice/nightly`. Baseline commit
-`29115590` (2026-09-23) is pushed; the current uncommitted, fully gated
-(2026-09-25) tree removes the legacy React/Vite/Expo/desktop/web packages and
-adds MAM acquisition through the MAM Bridge sidecar, split unified search,
-narrator lookup and preferred narrator on requests, lazy thumbnails, the
-Liseur v0.19.0 pin with work-identity repair, SPA 404 prefixes, log rolling,
-and annotation sync. Remaining workstreams are the live MAM grab, device
-verification, deferred placement/readiness features, credentialed provider
-probes, repository publication, and upstream submission.
+Agent-facing resume file for branch `coppice/nightly`. Commit `47a9c61c`
+(2026-09-25, gated) is pushed: it removes the legacy React/Vite/Expo/desktop/web
+packages and adds MAM acquisition through the MAM Bridge sidecar, split unified
+search, narrator lookup and preferred narrator on requests, lazy thumbnails,
+the Liseur v0.19.0 pin with work-identity repair, SPA 404 prefixes, log
+rolling, and annotation sync. `coppice-media/koreader-coppice` is public
+(`ddbcdde`). The 2026-09-26 follow-up (runtime stack size, annotation book
+ranking + `koreaderHash`, plugin hash match) is described under Resume point.
+Remaining workstreams are the live MAM grab, device verification, deferred
+placement/readiness features, credentialed provider probes, sibling repository
+publication, and upstream submission.
 Product roadmap: `docs/content/docs/developer/roadmap.mdx`. Evidence for what
 already landed: `docs/content/docs/developer/state.mdx`. Working-tree, gate,
 and disk rules: `.omp/PROJECT_STATE.md` — that file is authoritative and this
@@ -96,14 +98,15 @@ waiting on an unnamed decision.
    `grabRelease(confirm)` → polling → completed download copied into staged
    ingest → Editor approval → request fulfilled. Do not grab without the
    user's go.
-2. **Publish `koreader-coppice`** as public `coppice-media/koreader-coppice`
-   (approved; not yet pushed — confirm the push). Every other sibling repo
-   (`nickelcoppice`, `stump-mihon-extension`) needs its own confirmation.
+2. **Publish sibling repositories.** `coppice-media/koreader-coppice` is public
+   (`ddbcdde`, 2026-09-25). `nickelcoppice` and `stump-mihon-extension` each
+   need their own confirmation.
 3. **Pinned Komf run + protocol replays** (Komga/Kavita/Mihon/ABS/Liseur)
-   were not rerun this session; blocked on user testing time.
-4. **Phone check of The Lottery notes**: the merged work resolves 200 and 3
-   Home notes are present server-side; the phone view is confirmed only when
-   the user opens the book.
+   were not rerun since 2026-09-21; blocked on user testing time.
+4. **Phone check of recent-note taps**: the phone holds The Lottery as
+   `72229c58`, the Home notes name `6829437f` (same KOReader hash
+   `285f7004…`). With the 2026-09-26 plugin build, tapping a recent note must
+   open the local copy and jump to the note.
 5. **Delete fixture test requests** created by UI workers (Project Hail Mary
    and two summary books).
 
@@ -137,9 +140,9 @@ User-gated.
 
 ### 4. Upstream integration and split
 
-The v0.1.10 security merge is committed on `coppice/nightly` (baseline
-`29115590`). The current uncommitted tree is gated but not yet committed;
-commit/push only with fresh explicit authorization.
+The v0.1.10 security merge and the 2026-09-25 gated tree are pushed on
+`coppice/nightly` (`47a9c61c`). Commit/push further work only with fresh
+explicit authorization.
 
 Keep `coppice/nightly` as the long-lived fork line. For an upstream PR, claim
 or open the issue first, reconstruct a fresh branch from an immutable commit on
@@ -227,11 +230,10 @@ comes only from Audible. See
   client/device claim; bytes are content-addressed and retention sweeping is
   deferred.
 
-## Resume point (updated 2026-09-25)
+## Resume point (updated 2026-09-26)
 
-The 2026-09-22 source-worker/metadata-cover/read-aloud/Liseur work is
-committed in baseline `29115590`. Completed in the current uncommitted tree
-(details and live numbers in `.omp/PROJECT_STATE.md` "Shipped 2026-09-24/25"):
+Pushed in `47a9c61c` (details and live numbers in `.omp/PROJECT_STATE.md`
+"Shipped 2026-09-24/25"):
 
 - Legacy React/Vite/Expo/desktop/web packages removed; Bun workspaces are
   docs, home, editor, packages/stump-ui.
@@ -242,17 +244,28 @@ committed in baseline `29115590`. Completed in the current uncommitted tree
 - Lazy WebP thumbnails on demand (1.6 MB → 47 KB, repeat ~4 ms).
 - Liseur pin v0.19.0, `/v1/events` 404, work-identity repair migrations,
   SPA 404 prefixes, log rolling, annotation sync.
-- KOReader plugin note anchoring fixed and installed on PC + phone.
-- Migrations `m20260958`–`m20260967`; the 2026-09-25 gate is green.
+- KOReader plugin note anchoring fixed; migrations `m20260958`–`m20260967`.
+
+2026-09-26 follow-up (device report: phone "Offline", empty Continue reading,
+recent note opened the wrong book):
+
+- The server had aborted with a stack overflow: the plugin's book-detail query
+  (media → series → media, full field set) exceeded Tokio's 2 MiB worker stack
+  in the debug build. Runtime threads now get 8 MiB
+  (`apps/server/src/config/runtime.rs`).
+- Liseur-sync notes name their edition, then a non-audio edition, then the
+  oldest link (window-ranked; SQLite rejects outer columns in a scalar
+  subquery's `ORDER BY`). `AnnotationBook.koreaderHash` lets the plugin open a
+  byte-identical local copy; the plugin matches on-device files by
+  `partial_md5_checksum`.
 
 Still actionable, by priority:
 
-1. **User-gated (open item 1):** live MAM grab end-to-end; publish
-   `koreader-coppice` (approved, not pushed); pinned Komf run + protocol
-   replays; phone check of The Lottery notes; delete the fixture test
-   requests.
-2. **Commit/push** the gated tree to `coppice/nightly` only with fresh
-   explicit authorization.
+1. **User-gated (open item 1):** live MAM grab end-to-end; pinned Komf run +
+   protocol replays; phone check of recent-note taps; delete the fixture test
+   requests; publish the remaining sibling repositories.
+2. **Commit/push** later work to `coppice/nightly` only with fresh explicit
+   authorization.
 3. **`liseur_sync/storage.rs` split** (5,053 lines) — deferred until after
    device testing; do not start it mid-verification.
 4. **Official ABS app phone retest:** physical-device proof remains required

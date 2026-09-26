@@ -34,12 +34,12 @@
 		</div>
 
 		<div class="grid gap-5 xl:grid-cols-2">
-			<section id="kindle" aria-labelledby="kindle-heading" class="scroll-mt-20">
+			<section id="kindle" aria-labelledby="kindle-heading" class="flex flex-col gap-4 scroll-mt-20">
 				<h3 id="kindle-heading" class="sr-only">Kindle</h3>
 				<ConnectionsKindle />
 			</section>
 
-			<section id="hardcover" aria-labelledby="hardcover-heading" class="scroll-mt-20">
+			<section id="hardcover" aria-labelledby="hardcover-heading" class="flex flex-col gap-4 scroll-mt-20">
 				<h3 id="hardcover-heading" class="sr-only">Hardcover</h3>
 				<ConnectionsHardcover />
 			</section>

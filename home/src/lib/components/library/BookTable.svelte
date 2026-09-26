@@ -62,8 +62,8 @@
 	}
 </script>
 
-<div class="overflow-x-auto rounded-xl border bg-card">
-	<Table.Root>
+<div class="overflow-hidden rounded-xl border bg-card">
+	<Table.Root stacked>
 		<Table.Header>
 			<Table.Row>
 				{#if selectable}
@@ -114,7 +114,7 @@
 						</div>
 					</Table.Cell>
 					{#if showSeries}
-						<Table.Cell class="text-muted-foreground">
+						<Table.Cell data-label="Series" class="text-muted-foreground">
 							<a
 								class="hover:underline"
 								href={resolve('/(app)/series/[id]', { id: book.series.id })}
@@ -123,12 +123,14 @@
 							</a>
 						</Table.Cell>
 					{/if}
-					<Table.Cell class="uppercase text-muted-foreground">{book.extension}</Table.Cell>
-					<Table.Cell class="text-right tabular-nums">
+					<Table.Cell data-label="Format" class="text-muted-foreground">
+						<span class="uppercase">{book.extension}</span>
+					</Table.Cell>
+					<Table.Cell data-label="Pages" class="text-right tabular-nums">
 						{book.pages > 0 ? countLabel(book.pages) : '—'}
 					</Table.Cell>
-					<Table.Cell>
-						<div class="flex flex-col gap-1">
+					<Table.Cell data-label="Progress">
+						<div class="flex w-40 flex-col gap-1 @md/table:w-full">
 							<span class="text-xs text-muted-foreground">
 								{READING_STATUS_LABELS[progress.status]}
 								{#if progress.status === 'READING'}
@@ -141,8 +143,8 @@
 							<Progress value={progressPercent(progress)} />
 						</div>
 					</Table.Cell>
-					<Table.Cell class="text-right">
-						<div class="flex justify-end gap-1">
+					<Table.Cell>
+						<div class="flex flex-wrap gap-1 @md/table:justify-end">
 							<Button
 								size="xs"
 								variant="outline"

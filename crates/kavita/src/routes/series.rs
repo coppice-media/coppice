@@ -33,6 +33,7 @@ use crate::{
 };
 
 use super::{
+	mutations::enforce_edit_metadata,
 	query::{
 		book_library_ids, find_media, find_series_input, library_for_series,
 		load_by_keys, load_kavita_series, on_deck_removals, resolve_series_key,
@@ -176,7 +177,7 @@ async fn series_update(
 	Extension(auth): Extension<AuthContext>,
 	Json(update): Json<SeriesUpdateDto>,
 ) -> APIResult<StatusCode> {
-	let user = auth.user();
+	let user = enforce_edit_metadata(&auth)?;
 	let Some(input) = find_series_input(ctx.as_ref(), &user, update.id).await? else {
 		return Err(APIError::NotFound("Series does not exist".to_owned()));
 	};
@@ -190,7 +191,7 @@ async fn series_metadata_update(
 	Extension(auth): Extension<AuthContext>,
 	Json(update): Json<SeriesMetadataUpdateRequestDto>,
 ) -> APIResult<StatusCode> {
-	let user = auth.user();
+	let user = enforce_edit_metadata(&auth)?;
 	let series_id = update.series_metadata.series_id;
 	let Some(input) = find_series_input(ctx.as_ref(), &user, series_id).await? else {
 		return Err(APIError::NotFound("Series does not exist".to_owned()));
@@ -205,7 +206,7 @@ async fn chapter_update(
 	Extension(auth): Extension<AuthContext>,
 	Json(update): Json<ChapterMetadataUpdateDto>,
 ) -> APIResult<StatusCode> {
-	let user = auth.user();
+	let user = enforce_edit_metadata(&auth)?;
 	let Some((input, index)) = find_media(ctx.as_ref(), &user, update.id).await? else {
 		return Err(APIError::NotFound("Chapter does not exist".to_owned()));
 	};
@@ -2164,6 +2165,215 @@ mod metadata_mapping {
 			.clone(),
 		);
 		serde_json::json!({"seriesMetadata": metadata})
+	}
+
+	fn chapter_update_payload(chapter_id: i32, title: &str) -> serde_json::Value {
+		let mut update = serde_json::json!({
+			"id": chapter_id,
+			"summary": "Chapter summary",
+			"genres": [],
+			"tags": [],
+			"ageRating": 0,
+			"language": "en",
+			"weblinks": "",
+			"isbn": "",
+			"releaseDate": "2024-04-03T12:00:00",
+			"titleName": title,
+			"sortOrder": 1.0,
+			"writers": [],
+			"coverArtists": [],
+			"publishers": [],
+			"characters": [],
+			"pencillers": [],
+			"inkers": [],
+			"imprints": [],
+			"colorists": [],
+			"letterers": [],
+			"editors": [],
+			"translators": [],
+			"teams": [],
+			"locations": [],
+		});
+		update.as_object_mut().unwrap().extend(
+			[
+				"ageRatingLocked",
+				"titleNameLocked",
+				"genresLocked",
+				"tagsLocked",
+				"writerLocked",
+				"characterLocked",
+				"coloristLocked",
+				"editorLocked",
+				"inkerLocked",
+				"imprintLocked",
+				"lettererLocked",
+				"pencillerLocked",
+				"publisherLocked",
+				"translatorLocked",
+				"teamLocked",
+				"locationLocked",
+				"coverArtistLocked",
+				"languageLocked",
+				"summaryLocked",
+				"isbnLocked",
+				"releaseDateLocked",
+				"sortOrderLocked",
+			]
+			.into_iter()
+			.map(|key| (key.to_owned(), serde_json::Value::Bool(false))),
+		);
+		update
+	}
+
+	/// Kavita's `UpdateSeries`, `UpdateSeriesMetadata`, `UpdateChapter` and
+	/// every `UploadController` action are `RequireAdminRole`; Stump's
+	/// equivalent is `EditMetadata`. A default Kavita device key carries only
+	/// `DownloadFile`, so it must be a `403` on every write — evaluated before
+	/// the target lookup, like an ASP.NET policy — while a user holding the
+	/// permission still gets a `404` for a series outside their visibility.
+	#[tokio::test]
+	async fn komf_writes_require_edit_metadata_before_resolving_the_target() {
+		use base64::{engine::general_purpose::STANDARD, Engine as _};
+		use models::shared::enums::UserPermission;
+
+		let conn = db().await;
+		let user_row = fake_data::User::new("komf-device").insert(&conn).await;
+		let library = library_of_type(&conn, StumpLibraryType::Comic).await;
+		let (series_row, files) =
+			series_with_files(&conn, &library.id, "Guarded", &[("v01", "cbz", 4)]).await;
+		let backend = std::sync::Arc::new(TestBackend::new(conn));
+		let series_id =
+			KavitaIds::resolve(backend.conn(), IdKind::Series, &series_row.id)
+				.await
+				.unwrap();
+		let chapter_id = KavitaIds::resolve(backend.conn(), IdKind::Media, &files[0].id)
+			.await
+			.unwrap();
+		let cover = STANDARD.encode(b"guarded-cover");
+		let writes = [
+			(
+				"/api/Series/update",
+				serde_json::json!({
+					"id": series_id,
+					"localizedName": null,
+					"sortName": "Guarded, The",
+					"coverImageLocked": false,
+					"sortNameLocked": true,
+					"localizedNameLocked": false,
+				}),
+			),
+			(
+				"/api/Series/metadata",
+				series_metadata_payload(series_id, "Guarded summary", "G", "T", "W"),
+			),
+			(
+				"/api/Chapter/update",
+				chapter_update_payload(chapter_id, "Guarded chapter"),
+			),
+			(
+				"/api/Upload/series",
+				serde_json::json!({"id": series_id, "url": cover, "lockCover": true}),
+			),
+			(
+				"/api/Upload/volume",
+				serde_json::json!({"id": chapter_id, "url": cover, "lockCover": true}),
+			),
+			(
+				"/api/Upload/chapter",
+				serde_json::json!({"id": chapter_id, "url": cover, "lockCover": true}),
+			),
+		];
+
+		// A Kavita device key: a plain user narrowed to `DownloadFile`.
+		let mut reader = AuthUser {
+			is_server_owner: false,
+			..auth_user(&user_row)
+		};
+		reader.permissions.push(UserPermission::DownloadFile);
+		for (url, body) in &writes {
+			let (status, response) =
+				request(backend.clone(), &reader, "POST", url, Some(body.clone())).await;
+			assert_eq!(status, StatusCode::FORBIDDEN, "{url}: {response}");
+			assert_eq!(response["status"], 403, "{url}");
+		}
+		let mut hidden_reader = reader.clone();
+		hidden_reader.device_library_scope = Some(Vec::new());
+		let (status, _) = request(
+			backend.clone(),
+			&hidden_reader,
+			"POST",
+			writes[0].0,
+			Some(writes[0].1.clone()),
+		)
+		.await;
+		assert_eq!(status, StatusCode::FORBIDDEN, "policy before lookup");
+
+		let (status, series) = request(
+			backend.clone(),
+			&reader,
+			"GET",
+			&format!("/api/Series/{series_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(series["sortName"], "Guarded", "a 403 wrote nothing");
+		assert_eq!(series["coverImageLocked"], false);
+		let (status, chapter) = request(
+			backend.clone(),
+			&reader,
+			"GET",
+			&format!("/api/Series/chapter?chapterId={chapter_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_ne!(
+			chapter["titleName"], "Guarded chapter",
+			"a 403 wrote nothing"
+		);
+		assert_eq!(chapter["coverImageLocked"], false);
+
+		let mut editor = reader.clone();
+		editor.permissions.push(UserPermission::EditMetadata);
+		let mut hidden_editor = editor.clone();
+		hidden_editor.device_library_scope = Some(Vec::new());
+		let (status, _) = request(
+			backend.clone(),
+			&hidden_editor,
+			"POST",
+			writes[0].0,
+			Some(writes[0].1.clone()),
+		)
+		.await;
+		assert_eq!(status, StatusCode::NOT_FOUND, "visibility still applies");
+		for (url, body) in &writes {
+			let (status, response) =
+				request(backend.clone(), &editor, "POST", url, Some(body.clone())).await;
+			assert_eq!(status, StatusCode::OK, "{url}: {response}");
+		}
+		let (status, series) = request(
+			backend.clone(),
+			&editor,
+			"GET",
+			&format!("/api/Series/{series_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(series["sortName"], "Guarded, The");
+		assert_eq!(series["coverImageLocked"], true);
+		let (status, chapter) = request(
+			backend,
+			&editor,
+			"GET",
+			&format!("/api/Series/chapter?chapterId={chapter_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(chapter["titleName"], "Guarded chapter");
+		assert_eq!(chapter["coverImageLocked"], true);
 	}
 
 	#[tokio::test]

@@ -3,8 +3,8 @@
 //! Hardcover audio editions of the hit's own book id and an Audible catalog
 //! search by title and first author -- and are merged by narrator name. A
 //! source that fails contributes nothing rather than failing the query, and
-//! the merged answer is cached for an hour per `(provider, remoteId)` so
-//! reopening the picker costs no request.
+//! the merged answer is cached for an hour per `(provider, remoteId,
+//! language, title, author)` so reopening the picker costs no request.
 
 use std::{
 	sync::{Arc, LazyLock},
@@ -21,7 +21,7 @@ use crate::data::CoreContext;
 
 use super::unified_search::{
 	audible_provider, get_hardcover_provider, language_matches, normalize_words,
-	requested_language, AUDIBLE_SCOPE, AUDIBLE_SEARCH_TIMEOUT,
+	requested_language, AUDIBLE_SCOPE, AUDIBLE_SEARCH_TIMEOUT, HARDCOVER_TIMEOUT,
 };
 
 /// One narrator a requester can prefer, with what each source knows about
@@ -84,7 +84,13 @@ impl AudiobookNarratorsQuery {
 			return Ok(Vec::new());
 		}
 		let language = requested_language(language.as_deref());
-		let key = cache_key(&provider, &remote_id, &language);
+		let key = cache_key(
+			&provider,
+			&remote_id,
+			&language,
+			title.trim(),
+			authors.as_deref(),
+		);
 		if let Some(cached) = NARRATORS.get(&key) {
 			return Ok(cached.as_ref().clone());
 		}
@@ -116,18 +122,37 @@ impl AudiobookNarratorsQuery {
 	}
 }
 
-/// The narrators of a hit differ by language only through the Hardcover
-/// editions kept, so the language is part of the cache identity.
-fn cache_key(provider: &str, remote_id: &str, language: &str) -> (String, String) {
-	(provider.to_owned(), format!("{remote_id}\u{1f}{language}"))
+/// The cache identity is every input a source reads: the Hardcover editions
+/// follow `remote_id` and are kept by `language`, the Audible products follow
+/// the normalized `title` and first author. Two hits sharing a remote id but
+/// searched under another title or author would otherwise share one Audible
+/// answer for an hour.
+fn cache_key(
+	provider: &str,
+	remote_id: &str,
+	language: &str,
+	title: &str,
+	authors: Option<&str>,
+) -> (String, String) {
+	let author = first_author(authors)
+		.map(|author| normalize_words(&author))
+		.unwrap_or_default();
+	(
+		provider.to_owned(),
+		format!(
+			"{remote_id}\u{1f}{language}\u{1f}{}\u{1f}{author}",
+			normalize_words(title)
+		),
+	)
 }
 
 /// Serve from `cache` or gather from both sources concurrently and cache
 /// the merge. `hardcover` is `None` when the hit is not a Hardcover book or
 /// the caller has no Hardcover credential; the Audible half runs regardless.
-/// Hardcover editions in another language than `language` are dropped. A
-/// merge in which every source that was tried failed is returned but not
-/// cached, so the next opening of the picker asks again.
+/// Hardcover editions in another language than `language` are dropped. The
+/// merge is cached only when a source that was actually asked answered: a
+/// lookup whose only attempted source failed (or every attempted source did)
+/// is returned but not cached, so the next opening of the picker asks again.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn narrator_options(
 	cache: &NarratorCache,
@@ -139,33 +164,15 @@ pub(super) async fn narrator_options(
 	authors: Option<&str>,
 	language: &str,
 ) -> Vec<NarratorOption> {
-	let key = cache_key(provider, remote_id, language);
+	let key = cache_key(provider, remote_id, language, title, authors);
 	if let Some(cached) = cache.get(&key) {
 		return cached.as_ref().clone();
 	}
 
+	// `None`: the source was not asked, so it neither answered nor failed.
 	let editions = async {
-		let Some(hardcover) = hardcover else {
-			return Ok(Vec::new());
-		};
-		hardcover
-			.audiobook_editions(remote_id)
-			.await
-			.map(|editions| {
-				editions
-					.into_iter()
-					.filter(|edition| {
-						language_matches(language, edition.language.as_deref())
-					})
-					.collect::<Vec<_>>()
-			})
-			.map_err(|error| {
-				tracing::warn!(
-					remote_id,
-					%error,
-					"Hardcover audio editions unavailable; narrators come from Audible only"
-				);
-			})
+		let hardcover = hardcover?;
+		Some(hardcover_editions(hardcover, remote_id, language, HARDCOVER_TIMEOUT).await)
 	};
 	let products = async {
 		let query = SearchQuery {
@@ -206,16 +213,49 @@ pub(super) async fn narrator_options(
 		}
 	};
 	let (editions, products) = tokio::join!(editions, products);
-	let every_source_failed = editions.is_err() && products.is_err();
+	let an_attempted_source_answered =
+		editions.as_ref().is_some_and(|editions| editions.is_ok()) || products.is_ok();
 
 	let options = Arc::new(merge_narrators(
-		&editions.unwrap_or_default(),
+		&editions.and_then(Result::ok).unwrap_or_default(),
 		&products.unwrap_or_default(),
 	));
-	if !every_source_failed {
+	if an_attempted_source_answered {
 		cache.insert(key, Arc::clone(&options));
 	}
 	options.as_ref().clone()
+}
+
+/// The Hardcover audio editions of one book in `language`, given up after
+/// `deadline`; a failure or timeout is logged and reported as `Err(())` so
+/// the merge knows the source was asked and did not answer.
+async fn hardcover_editions(
+	hardcover: &dyn MetadataProvider,
+	remote_id: &str,
+	language: &str,
+	deadline: Duration,
+) -> Result<Vec<AudiobookEdition>, ()> {
+	match tokio::time::timeout(deadline, hardcover.audiobook_editions(remote_id)).await {
+		Ok(Ok(editions)) => Ok(editions
+			.into_iter()
+			.filter(|edition| language_matches(language, edition.language.as_deref()))
+			.collect()),
+		Ok(Err(error)) => {
+			tracing::warn!(
+				remote_id,
+				%error,
+				"Hardcover audio editions unavailable; narrators come from Audible only"
+			);
+			Err(())
+		},
+		Err(_) => {
+			tracing::warn!(
+				remote_id,
+				"Hardcover audio editions timed out; narrators come from Audible only"
+			);
+			Err(())
+		},
+	}
 }
 
 /// The first of a `, `/`;`/`&`-separated author list, as the request stores
@@ -464,9 +504,59 @@ mod tests {
 			assert!(!language_matches("en", Some(found)), "{found}");
 		}
 		assert!(language_matches("fi", Some("Finnish")));
+	}
+
+	/// Every input a source reads is part of the identity; spelling that the
+	/// sources themselves ignore (case, punctuation, later authors) is not.
+	#[test]
+	fn cache_identity_covers_language_title_and_first_author() {
+		let base = cache_key(
+			"hardcover",
+			"1",
+			"en",
+			"Project Hail Mary",
+			Some("Andy Weir"),
+		);
 		assert_ne!(
-			cache_key("hardcover", "1", "en"),
-			cache_key("hardcover", "1", "fi")
+			base,
+			cache_key(
+				"hardcover",
+				"1",
+				"fi",
+				"Project Hail Mary",
+				Some("Andy Weir")
+			)
+		);
+		assert_ne!(
+			base,
+			cache_key("hardcover", "1", "en", "Artemis", Some("Andy Weir")),
+			"another title drives another Audible search"
+		);
+		assert_ne!(
+			base,
+			cache_key(
+				"hardcover",
+				"1",
+				"en",
+				"Project Hail Mary",
+				Some("Someone Else")
+			),
+			"another author drives another Audible search"
+		);
+		assert_ne!(
+			base,
+			cache_key("hardcover", "1", "en", "Project Hail Mary", None)
+		);
+		assert_eq!(
+			base,
+			cache_key(
+				"hardcover",
+				"1",
+				"en",
+				"project hail mary!",
+				Some("andy weir, Someone Else")
+			),
+			"normalized title and first author only"
 		);
 	}
 
@@ -725,5 +815,80 @@ mod tests {
 			2,
 			"a lookup where every source failed is not cached"
 		);
+	}
+
+	/// An Audible-only lookup (an `audible` hit, or a Hardcover hit without a
+	/// credential) asks one source; when that one fails there is no answer
+	/// to keep. Before, the unasked Hardcover half counted as a success and
+	/// the empty list was cached for an hour.
+	#[tokio::test]
+	async fn an_audible_only_lookup_whose_source_fails_is_not_cached() {
+		let bad_request =
+			"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+		let audible_server = MockServer::spawn(vec![bad_request.to_owned()]);
+		let audible = AudibleClient::new().pointed_at(&audible_server.url);
+		let cache = TtlCache::new(NARRATOR_TTL, NARRATOR_CAPACITY);
+
+		let options = narrator_options(
+			&cache,
+			None,
+			&audible,
+			AUDIBLE_SCOPE,
+			"B08G9PRS1K",
+			"Project Hail Mary",
+			None,
+			"en",
+		)
+		.await;
+		assert!(options.is_empty());
+		assert_eq!(cache.len(), 0, "the only source asked failed");
+
+		let audible_server = MockServer::spawn(vec![render_ok(&audible_catalog_body())]);
+		let audible = AudibleClient::new().pointed_at(&audible_server.url);
+		let options = narrator_options(
+			&cache,
+			None,
+			&audible,
+			AUDIBLE_SCOPE,
+			"B08G9PRS1K",
+			"Project Hail Mary",
+			None,
+			"en",
+		)
+		.await;
+		assert_eq!(
+			options.len(),
+			2,
+			"the next opening of the picker asks again"
+		);
+		assert_eq!(cache.len(), 1);
+	}
+
+	/// The Hardcover editions call has the same deadline as the search: a
+	/// stalled connection is a failed source, not a picker that never opens.
+	#[tokio::test]
+	async fn hardcover_editions_give_up_at_their_deadline() {
+		let stalled = HardcoverClient::new("token".to_owned(), Some(u32::MAX))
+			.pointed_at(&super::super::unified_search::tests::stalled_server(
+				Duration::from_secs(3),
+			));
+		let started = std::time::Instant::now();
+		let editions =
+			hardcover_editions(&stalled, "52709", "en", Duration::from_millis(200)).await;
+		assert_eq!(editions, Err(()));
+		assert!(
+			started.elapsed() < Duration::from_secs(2),
+			"gave up after {:?}",
+			started.elapsed()
+		);
+
+		let hardcover_server =
+			MockServer::spawn(vec![render_ok(&hardcover_editions_body())]);
+		let hardcover = hardcover_at(&hardcover_server);
+		let editions =
+			hardcover_editions(&hardcover, "52709", "en", Duration::from_millis(200))
+				.await
+				.expect("an answering Hardcover");
+		assert_eq!(editions.len(), 1, "the Finnish edition is dropped");
 	}
 }

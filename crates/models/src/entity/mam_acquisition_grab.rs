@@ -21,6 +21,10 @@ pub struct Model {
 	pub error: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub ingest_item_id: Option<String>,
+	/// Failed staged-ingest handoffs of a `completed` grab; the refresh job
+	/// retries until the bound in `stump_core::mam_acquisition` and then marks
+	/// the grab `error` with the last reason.
+	pub handoff_attempts: i32,
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]
 	pub created_at: DateTimeWithTimeZone,
 	#[sea_orm(column_type = "custom(\"DATETIME\")")]

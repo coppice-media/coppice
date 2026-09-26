@@ -39,7 +39,7 @@ use stump_komf::{
 	KomfJobPage, KomfMediaServerLibrary, KomfMetadataJobResponse, KomfResult,
 	KomfSearchResult, KomfSeriesSearchRequest,
 };
-use tokio::sync::{broadcast, OnceCell, RwLock};
+use tokio::sync::{broadcast, OnceCell, Semaphore};
 use uuid::Uuid;
 
 use crate::config::state::AppState;
@@ -712,7 +712,6 @@ impl KomfBackend for KomfBackendAdapter {
 		auth: &AuthContext,
 		request: KomfSeriesSearchRequest,
 	) -> KomfResult<Vec<KomfSearchResult>> {
-		let name = request.name.as_deref().unwrap_or_default();
 		let local_series = if let Some(series_id) = request.series_id.as_deref() {
 			Some(self.visible_series(auth, series_id).await?)
 		} else {
@@ -742,16 +741,12 @@ impl KomfBackend for KomfBackendAdapter {
 		let metadata = local_series
 			.as_ref()
 			.and_then(|model| model.metadata.as_ref());
-		let reference_title = metadata
+		let local_title = metadata
 			.and_then(|metadata| metadata.title.clone())
-			.unwrap_or_else(|| {
-				local_series
-					.as_ref()
-					.map(|model| model.series.name.clone())
-					.unwrap_or_else(|| name.to_string())
-			});
-		let reference = Self::reference_candidate(reference_title, metadata);
-		let query = search_query(name, metadata);
+			.or_else(|| local_series.as_ref().map(|model| model.series.name.clone()));
+		let titles = search_titles(request.name.as_deref(), local_title);
+		let query = search_query(&titles.query, metadata);
+		let reference = Self::reference_candidate(titles.reference, metadata);
 		let configs = self.enabled_provider_configs(library_type.as_ref()).await?;
 		let search = self.query_candidates(configs, &query, None).await?;
 		if search.attempted > 0 && search.successful == 0 {
@@ -940,11 +935,11 @@ impl KomfBackend for KomfBackendAdapter {
 		page: i64,
 		page_size: i64,
 	) -> KomfResult<KomfJobPage> {
-		self.jobs.page(&auth.id(), status, page, page_size).await
+		self.jobs.page(&auth.id(), status, page, page_size)
 	}
 
 	async fn job(&self, auth: &AuthContext, job_id: &str) -> KomfResult<Option<KomfJob>> {
-		self.jobs.get(&auth.id(), job_id).await
+		self.jobs.get(&auth.id(), job_id)
 	}
 
 	async fn delete_all_jobs(&self, auth: &AuthContext) -> KomfResult<()> {
@@ -981,16 +976,51 @@ struct CandidateSearch {
 	successful: usize,
 }
 
-#[derive(Clone, Default)]
+/// Retention and scheduling limits for the process-local Komf job store.
+///
+/// Komelia polls `/api/jobs` and replays `/api/jobs/{id}/events`; finished jobs
+/// stay listable until they age out or the finished-job cap evicts the oldest.
+/// Running jobs are never evicted. Provider work runs through a shared
+/// semaphore so a whole-library match is processed at a bounded pace instead
+/// of spawning one provider search per series at once.
+#[derive(Clone, Copy)]
+struct JobLimits {
+	max_finished_jobs: usize,
+	finished_job_max_age: chrono::Duration,
+	max_event_history: usize,
+	max_concurrent_jobs: usize,
+}
+
+impl Default for JobLimits {
+	fn default() -> Self {
+		Self {
+			max_finished_jobs: 1000,
+			finished_job_max_age: chrono::Duration::hours(24),
+			max_event_history: 128,
+			max_concurrent_jobs: 3,
+		}
+	}
+}
+
+#[derive(Clone)]
 struct JobStore {
+	limits: JobLimits,
 	records: Arc<StdRwLock<HashMap<Uuid, Arc<JobRecord>>>>,
+	slots: Arc<Semaphore>,
+}
+
+impl Default for JobStore {
+	fn default() -> Self {
+		Self::with_limits(JobLimits::default())
+	}
 }
 
 struct JobRecord {
 	owner_id: String,
-	job: RwLock<KomfJob>,
+	job: StdMutex<KomfJob>,
 	event_tx: broadcast::Sender<KomfEvent>,
 	event_history: StdMutex<Vec<KomfEvent>>,
+	max_event_history: usize,
 }
 
 #[derive(Clone)]
@@ -1008,9 +1038,32 @@ impl JobHandle {
 impl JobRecord {
 	fn emit(&self, event: KomfEvent) {
 		if let Ok(mut history) = self.event_history.lock() {
+			if history.len() >= self.max_event_history {
+				let overflow = history.len() + 1 - self.max_event_history;
+				history.drain(..overflow);
+			}
 			history.push(event.clone());
 			let _ = self.event_tx.send(event);
 		}
+	}
+
+	fn update(&self, apply: impl FnOnce(&mut KomfJob)) {
+		let mut job = self.job.lock().unwrap_or_else(|error| error.into_inner());
+		apply(&mut job);
+	}
+
+	fn snapshot(&self) -> KomfJob {
+		self.job
+			.lock()
+			.unwrap_or_else(|error| error.into_inner())
+			.clone()
+	}
+
+	fn finished_at(&self) -> Option<chrono::DateTime<Utc>> {
+		self.job
+			.lock()
+			.unwrap_or_else(|error| error.into_inner())
+			.finished_at
 	}
 
 	fn stream(self: &Arc<Self>) -> KomfEventStream {
@@ -1047,6 +1100,14 @@ impl JobRecord {
 }
 
 impl JobStore {
+	fn with_limits(limits: JobLimits) -> Self {
+		Self {
+			limits,
+			records: Arc::default(),
+			slots: Arc::new(Semaphore::new(limits.max_concurrent_jobs.max(1))),
+		}
+	}
+
 	fn start<F, Fut>(
 		&self,
 		owner_id: String,
@@ -1061,40 +1122,53 @@ impl JobStore {
 		let (event_tx, _) = broadcast::channel(32);
 		let record = Arc::new(JobRecord {
 			owner_id,
-			job: RwLock::new(KomfJob {
+			job: StdMutex::new(KomfJob {
 				series_id,
 				id: id.to_string(),
 				status: "RUNNING".into(),
-				message: "Processing".into(),
+				message: "Queued".into(),
 				started_at: Utc::now(),
 				finished_at: None,
 			}),
 			event_tx,
 			event_history: StdMutex::new(Vec::new()),
+			max_event_history: self.limits.max_event_history.max(1),
 		});
-		self.records
-			.write()
-			.map_err(|_| KomfError::Internal("Komf job store lock poisoned".into()))?
-			.insert(id, record.clone());
+		{
+			let mut records = self.records.write().map_err(|_| {
+				KomfError::Internal("Komf job store lock poisoned".into())
+			})?;
+			prune_finished(&mut records, &self.limits, Utc::now());
+			records.insert(id, record.clone());
+		}
+		let slots = self.slots.clone();
 		tokio::spawn(async move {
-			let result = work(JobHandle(record.clone())).await;
-			let mut job = record.job.write().await;
-			match result {
-				Ok(message) => {
-					job.status = "COMPLETED".into();
-					job.message = message;
+			let result = match slots.acquire().await {
+				Ok(_permit) => {
+					record.update(|job| job.message = "Processing".into());
+					work(JobHandle(record.clone())).await
 				},
-				Err(error) => {
-					job.status = "FAILED".into();
-					job.message = error.to_string();
-					record.emit(KomfEvent {
-						name: PROCESSING_ERROR_EVENT.into(),
-						data: Some(json!({ "message": error.to_string() })),
-					});
-				},
+				Err(_) => Err(KomfError::Internal("Komf job scheduler closed".into())),
+			};
+			record.update(|job| {
+				match &result {
+					Ok(message) => {
+						job.status = "COMPLETED".into();
+						job.message = message.clone();
+					},
+					Err(error) => {
+						job.status = "FAILED".into();
+						job.message = error.to_string();
+					},
+				}
+				job.finished_at = Some(Utc::now());
+			});
+			if let Err(error) = result {
+				record.emit(KomfEvent {
+					name: PROCESSING_ERROR_EVENT.into(),
+					data: Some(json!({ "message": error.to_string() })),
+				});
 			}
-			job.finished_at = Some(Utc::now());
-			drop(job);
 			record.emit(KomfEvent {
 				name: JOB_COMPLETED_EVENT.into(),
 				data: None,
@@ -1105,7 +1179,7 @@ impl JobStore {
 		})
 	}
 
-	async fn page(
+	fn page(
 		&self,
 		owner_id: &str,
 		status: Option<&str>,
@@ -1115,21 +1189,18 @@ impl JobStore {
 		if page < 0 || page_size <= 0 {
 			return Err(KomfError::BadRequest("Invalid jobs page".into()));
 		}
-		let records = self
-			.records
-			.read()
-			.map_err(|_| KomfError::Internal("Komf job store lock poisoned".into()))?
-			.values()
-			.filter(|record| record.owner_id == owner_id)
-			.cloned()
-			.collect::<Vec<_>>();
-		let mut jobs = Vec::new();
-		for record in records {
-			let job = record.job.read().await.clone();
-			if status.is_none_or(|status| job.status == status) {
-				jobs.push(job);
-			}
-		}
+		let mut jobs = {
+			let mut records = self.records.write().map_err(|_| {
+				KomfError::Internal("Komf job store lock poisoned".into())
+			})?;
+			prune_finished(&mut records, &self.limits, Utc::now());
+			records
+				.values()
+				.filter(|record| record.owner_id == owner_id)
+				.map(|record| record.snapshot())
+				.filter(|job| status.is_none_or(|status| job.status == status))
+				.collect::<Vec<_>>()
+		};
 		jobs.sort_by(|left, right| right.started_at.cmp(&left.started_at));
 		let count = jobs.len() as i64;
 		let offset = if page == 0 {
@@ -1147,20 +1218,16 @@ impl JobStore {
 		})
 	}
 
-	async fn get(&self, owner_id: &str, job_id: &str) -> KomfResult<Option<KomfJob>> {
+	fn get(&self, owner_id: &str, job_id: &str) -> KomfResult<Option<KomfJob>> {
 		let id = Uuid::parse_str(job_id)
 			.map_err(|error| KomfError::BadRequest(error.to_string()))?;
-		let record = self
+		Ok(self
 			.records
 			.read()
 			.map_err(|_| KomfError::Internal("Komf job store lock poisoned".into()))?
 			.get(&id)
 			.filter(|record| record.owner_id == owner_id)
-			.cloned();
-		match record {
-			Some(record) => Ok(Some(record.job.read().await.clone())),
-			None => Ok(None),
-		}
+			.map(|record| record.snapshot()))
 	}
 
 	fn events(&self, owner_id: &str, job_id: &str) -> Option<KomfEventStream> {
@@ -1178,6 +1245,31 @@ impl JobStore {
 			.map_err(|_| KomfError::Internal("Komf job store lock poisoned".into()))?
 			.retain(|_, record| record.owner_id != owner_id);
 		Ok(())
+	}
+}
+
+/// Drops finished jobs older than the retention window, then evicts the
+/// oldest-finished jobs beyond the count cap. Running jobs are never dropped.
+fn prune_finished(
+	records: &mut HashMap<Uuid, Arc<JobRecord>>,
+	limits: &JobLimits,
+	now: chrono::DateTime<Utc>,
+) {
+	let cutoff = now - limits.finished_job_max_age;
+	let mut finished = Vec::new();
+	records.retain(|id, record| match record.finished_at() {
+		Some(finished_at) if finished_at < cutoff => false,
+		Some(finished_at) => {
+			finished.push((finished_at, *id));
+			true
+		},
+		None => true,
+	});
+	if finished.len() > limits.max_finished_jobs {
+		finished.sort_unstable();
+		for (_, id) in &finished[..finished.len() - limits.max_finished_jobs] {
+			records.remove(id);
+		}
 	}
 }
 
@@ -1258,6 +1350,29 @@ fn alternative_titles(raw: Option<&str>) -> Vec<String> {
 				.map(str::to_string)
 		})
 		.collect()
+}
+
+struct SearchTitles {
+	/// Local title used as the ranking reference for cross-provider scoring.
+	reference: String,
+	/// Title sent to providers; a blank or missing `name` falls back to the
+	/// local series title because Komelia omits `name` when it passes `seriesId`.
+	query: String,
+}
+
+fn search_titles(
+	requested_name: Option<&str>,
+	local_title: Option<String>,
+) -> SearchTitles {
+	let requested = requested_name
+		.map(str::trim)
+		.filter(|name| !name.is_empty())
+		.map(str::to_string);
+	let reference = local_title
+		.or_else(|| requested.clone())
+		.unwrap_or_default();
+	let query = requested.unwrap_or_else(|| reference.clone());
+	SearchTitles { reference, query }
 }
 
 fn search_query(title: &str, metadata: Option<&series_metadata::Model>) -> SearchQuery {
@@ -1470,8 +1585,15 @@ fn metadata_update(library_type: &str) -> Value {
 }
 #[cfg(test)]
 mod tests {
-	use std::sync::Arc;
+	use std::{
+		sync::{
+			atomic::{AtomicUsize, Ordering},
+			Arc,
+		},
+		time::Duration,
+	};
 
+	use futures_util::StreamExt;
 	use metadata_integrations::{
 		ExternalMetadata, ExternalSeriesMetadata, MatchCandidate, MetadataField,
 	};
@@ -1481,8 +1603,195 @@ mod tests {
 	use serde_json::json;
 	use stump_core::config::StumpConfig;
 	use tests::fake_data;
+	use uuid::Uuid;
 
-	use super::KomfBackendAdapter;
+	use super::{search_titles, JobLimits, JobStore, KomfBackendAdapter};
+
+	const OWNER: &str = "owner";
+
+	fn limits() -> JobLimits {
+		JobLimits {
+			max_finished_jobs: 100,
+			finished_job_max_age: chrono::Duration::hours(1),
+			max_event_history: 64,
+			max_concurrent_jobs: 2,
+		}
+	}
+
+	async fn wait_until_finished(store: &JobStore, job_ids: &[String]) {
+		for job_id in job_ids {
+			for _ in 0..500 {
+				let job = store
+					.get(OWNER, job_id)
+					.expect("job lookup")
+					.expect("job exists while waiting");
+				if job.finished_at.is_some() {
+					break;
+				}
+				tokio::time::sleep(Duration::from_millis(5)).await;
+			}
+		}
+	}
+
+	#[test]
+	fn search_uses_local_series_title_when_name_is_missing_or_blank() {
+		let titles = search_titles(None, Some("Local title".into()));
+		assert_eq!(titles.query, "Local title");
+		assert_eq!(titles.reference, "Local title");
+
+		let titles = search_titles(Some("   "), Some("Local title".into()));
+		assert_eq!(titles.query, "Local title");
+
+		let titles = search_titles(Some("Typed name"), Some("Local title".into()));
+		assert_eq!(titles.query, "Typed name");
+		assert_eq!(
+			titles.reference, "Local title",
+			"ranking still uses the local series as reference"
+		);
+
+		let titles = search_titles(Some(" Typed name "), None);
+		assert_eq!(titles.query, "Typed name");
+		assert_eq!(titles.reference, "Typed name");
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+	async fn job_store_caps_concurrent_provider_work() {
+		let store = JobStore::with_limits(limits());
+		let active = Arc::new(AtomicUsize::new(0));
+		let peak = Arc::new(AtomicUsize::new(0));
+		let mut job_ids = Vec::new();
+		for index in 0..6 {
+			let active = active.clone();
+			let peak = peak.clone();
+			let response = store
+				.start(
+					OWNER.into(),
+					format!("series-{index}"),
+					move |_job| async move {
+						let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+						peak.fetch_max(now, Ordering::SeqCst);
+						tokio::time::sleep(Duration::from_millis(40)).await;
+						active.fetch_sub(1, Ordering::SeqCst);
+						Ok("done".into())
+					},
+				)
+				.expect("job starts");
+			job_ids.push(response.job_id);
+		}
+		wait_until_finished(&store, &job_ids).await;
+		assert!(
+			peak.load(Ordering::SeqCst) <= 2,
+			"peak concurrency {} exceeded the limit",
+			peak.load(Ordering::SeqCst)
+		);
+		let page = store.page(OWNER, Some("COMPLETED"), 0, 1000).expect("page");
+		assert_eq!(page.content.len(), 6, "every queued job still completes");
+	}
+
+	#[tokio::test]
+	async fn job_store_evicts_oldest_finished_jobs_beyond_count_cap() {
+		let store = JobStore::with_limits(JobLimits {
+			max_finished_jobs: 2,
+			..limits()
+		});
+		let mut job_ids = Vec::new();
+		for index in 0..4 {
+			let response = store
+				.start(OWNER.into(), format!("series-{index}"), |_job| async {
+					Ok("done".into())
+				})
+				.expect("job starts");
+			job_ids.push(response.job_id);
+			wait_until_finished(&store, &job_ids[index..]).await;
+			// Keep `finished_at` strictly increasing so eviction order is exact.
+			tokio::time::sleep(Duration::from_millis(2)).await;
+		}
+		let running = store
+			.start(OWNER.into(), "series-running".into(), |_job| async {
+				tokio::time::sleep(Duration::from_secs(30)).await;
+				Ok("done".into())
+			})
+			.expect("job starts");
+
+		let page = store.page(OWNER, None, 0, 1000).expect("page");
+		let listed: Vec<_> = page.content.iter().map(|job| job.id.as_str()).collect();
+		assert_eq!(
+			page.content.len(),
+			3,
+			"two finished jobs plus the running one"
+		);
+		assert!(listed.contains(&running.job_id.as_str()));
+		assert!(listed.contains(&job_ids[3].as_str()));
+		assert!(listed.contains(&job_ids[2].as_str()));
+		assert_eq!(store.get(OWNER, &job_ids[0]).expect("lookup"), None);
+		assert_eq!(store.get(OWNER, &job_ids[1]).expect("lookup"), None);
+		assert!(
+			store.events(OWNER, &job_ids[0]).is_none(),
+			"event history of evicted jobs is released"
+		);
+	}
+
+	#[tokio::test]
+	async fn job_store_expires_finished_jobs_by_age() {
+		let store = JobStore::with_limits(limits());
+		let response = store
+			.start(OWNER.into(), "series".into(), |_job| async {
+				Ok("done".into())
+			})
+			.expect("job starts");
+		wait_until_finished(&store, std::slice::from_ref(&response.job_id)).await;
+		assert_eq!(
+			store.page(OWNER, None, 0, 10).expect("page").content.len(),
+			1
+		);
+
+		let id = Uuid::parse_str(&response.job_id).expect("job id");
+		let record = store.records.read().expect("records")[&id].clone();
+		record.update(|job| {
+			job.finished_at = Some(chrono::Utc::now() - chrono::Duration::hours(2));
+		});
+
+		assert!(store
+			.page(OWNER, None, 0, 10)
+			.expect("page")
+			.content
+			.is_empty());
+		assert_eq!(store.get(OWNER, &response.job_id).expect("lookup"), None);
+	}
+
+	#[tokio::test]
+	async fn job_event_history_is_bounded_and_keeps_completion_marker() {
+		let store = JobStore::with_limits(JobLimits {
+			max_event_history: 3,
+			..limits()
+		});
+		let response = store
+			.start(OWNER.into(), "series".into(), |job| async move {
+				for index in 0..5 {
+					job.emit("ProviderSeriesEvent", json!({ "index": index }));
+				}
+				Ok("done".into())
+			})
+			.expect("job starts");
+		wait_until_finished(&store, std::slice::from_ref(&response.job_id)).await;
+
+		let events: Vec<_> = store
+			.events(OWNER, &response.job_id)
+			.expect("event stream")
+			.collect()
+			.await;
+		let names: Vec<_> = events.iter().map(|event| event.name.as_str()).collect();
+		assert_eq!(
+			names,
+			[
+				"ProviderSeriesEvent",
+				"ProviderSeriesEvent",
+				super::JOB_COMPLETED_EVENT
+			]
+		);
+		assert_eq!(events[0].data, Some(json!({ "index": 3 })));
+		assert_eq!(events[1].data, Some(json!({ "index": 4 })));
+	}
 
 	#[tokio::test]
 	async fn identify_metadata_uses_native_storage_and_respects_series_locks() {

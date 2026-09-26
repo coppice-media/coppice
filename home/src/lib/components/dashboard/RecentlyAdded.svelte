@@ -5,6 +5,7 @@
 	 */
 	import { resolve } from '$app/paths';
 	import { Badge } from '@stump/ui/components/ui/badge';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import type { DashboardBookCardFragment } from '$lib/graphql/generated/graphql';
 	import { clockLabel } from '$lib/dashboard';
@@ -22,12 +23,6 @@
 		now?: Date;
 		class?: string;
 	} = $props();
-	let failedCovers = $state<Set<string>>(new Set());
-
-	function failCover(id: string): void {
-		if (failedCovers.has(id)) return;
-		failedCovers = new Set(failedCovers).add(id);
-	}
 </script>
 
 <Widget
@@ -58,26 +53,16 @@
 		{#each books as book (book.id)}
 			<li class="flex items-center gap-3 py-2.5">
 				<a
-					class="block h-14 w-10 shrink-0 overflow-hidden rounded-md bg-muted ring-1 ring-foreground/10"
+					class="block shrink-0"
 					href={resolve('/(app)/reader/[mediaId]', { mediaId: book.id })}
 					tabindex="-1"
 					aria-hidden="true"
 				>
-					{#if failedCovers.has(book.id) || !book.thumbnail.url}
-						<span
-							class="flex size-full items-center justify-center px-1 text-center text-[10px] text-muted-foreground uppercase"
-						>
-							{book.extension || 'Book'}
-						</span>
-					{:else}
-						<img
-							class="size-full object-cover"
-							src={book.thumbnail.url}
-							alt=""
-							loading="lazy"
-							onerror={() => failCover(book.id)}
-						/>
-					{/if}
+					<Cover src={book.thumbnail.url} class="h-14 w-10 rounded-md ring-1 ring-foreground/10">
+						{#snippet fallback()}
+							<span class="px-1 text-center text-[10px] uppercase">{book.extension || 'Book'}</span>
+						{/snippet}
+					</Cover>
 				</a>
 				<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 					<a

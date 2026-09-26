@@ -168,6 +168,8 @@ pub(crate) struct TestBackend {
 	/// Real page images behind `(media id, 1-based page)`, for the routes that
 	/// read a page's bytes rather than just pass them through.
 	page_images: std::sync::Mutex<std::collections::HashMap<(String, i32), Vec<u8>>>,
+	/// The cover limit the upload routes enforce; the server's default.
+	pub max_cover_bytes: usize,
 }
 
 impl TestBackend {
@@ -179,6 +181,7 @@ impl TestBackend {
 			files: std::sync::Mutex::new(std::collections::HashMap::new()),
 			file_root: tempfile::tempdir().expect("temp dir"),
 			page_images: std::sync::Mutex::new(std::collections::HashMap::new()),
+			max_cover_bytes: 20 * 1024 * 1024,
 		}
 	}
 
@@ -303,6 +306,10 @@ impl KavitaBackend for TestBackend {
 			is_docker: false,
 			first_install_date: None,
 		}
+	}
+
+	fn max_cover_upload_bytes(&self) -> usize {
+		self.max_cover_bytes
 	}
 
 	/// The image bytes registered with [`TestBackend::store_page_image`], and

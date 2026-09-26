@@ -51,7 +51,7 @@ keeps those levels separate.
 
 | | |
 | --- | --- |
-| What it is | A Komga-shaped prefix alias matching Grimmory main `65f92fde`'s `KomgaController`, used by Liseur's Grimmory catalog client |
+| What it is | A Komga-shaped prefix alias matching Grimmory v3.5.0 `402e89b4`'s `KomgaController`, used by Liseur's Grimmory catalog client |
 | Routes + auth | `/komga/api/v1/books` (GET, not POST list), `/komga/api/v1/books/{id}/file`, `/komga/api/v1/books/{id}/thumbnail`, `/komga/api/v2/users/me`; Basic auth under the `/komga/api/v1|v2/` prefixes only |
 | Feature + switch | Same gates as the Komga profile: `komga` feature + `STUMP_ENABLE_KOMGA=true` |
 | We implement | The four-route listing/file/thumbnail/identity shim over the same handlers — no second database or identity store |

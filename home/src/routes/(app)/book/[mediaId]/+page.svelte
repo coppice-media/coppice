@@ -16,6 +16,7 @@
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import * as Tabs from '@stump/ui/components/ui/tabs';
@@ -260,13 +261,11 @@
 		</Alert>
 	{:else}
 		<div class="flex flex-wrap items-start gap-5">
-			<div class="flex h-56 w-40 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted shadow-sm sm:h-64 sm:w-44">
-				{#if coverUrl}
-					<img class="size-full object-cover" src={coverUrl} alt="" />
-				{:else}
-					<div class="flex flex-col items-center gap-2 p-4 text-center text-muted-foreground"><LibraryBigIcon class="size-10" aria-hidden="true" /><span class="text-xs">Cover unavailable</span></div>
-				{/if}
-			</div>
+			<Cover src={coverUrl} loading="eager" class="h-56 w-40 shrink-0 rounded-xl border shadow-sm sm:h-64 sm:w-44">
+				{#snippet fallback()}
+					<div class="flex flex-col items-center gap-2 p-4 text-center"><LibraryBigIcon class="size-10" aria-hidden="true" /><span class="text-xs">Cover unavailable</span></div>
+				{/snippet}
+			</Cover>
 			<div class="flex min-w-0 flex-1 flex-col gap-3">
 				<div class="flex flex-wrap items-center gap-2">
 					<h1 class="mr-auto text-2xl font-semibold tracking-tight sm:text-3xl">{detail.title}</h1>
@@ -283,20 +282,20 @@
 			</div>
 		</div>
 
-		<div class="flex flex-wrap items-center gap-3 border-b">
-			<Tabs.Root value={tab} onValueChange={navigateTab}>
-				<Tabs.List aria-label="Book detail sections" class="max-w-full overflow-x-auto">
-					<Tabs.Trigger value="details"><FileTextIcon data-icon="inline-start" aria-hidden="true" />Details</Tabs.Trigger>
-					<Tabs.Trigger value="edit" disabled={!canEditMetadata}><Edit3Icon data-icon="inline-start" aria-hidden="true" />Edit metadata</Tabs.Trigger>
-					<Tabs.Trigger value="files"><LibraryBigIcon data-icon="inline-start" aria-hidden="true" />Files & editions</Tabs.Trigger>
-					<Tabs.Trigger value="reading"><HistoryIcon data-icon="inline-start" aria-hidden="true" />Reading log</Tabs.Trigger>
-					<Tabs.Trigger value="highlights"><HighlighterIcon data-icon="inline-start" aria-hidden="true" />Highlights</Tabs.Trigger>
+		<div class="flex w-full min-w-0 flex-wrap items-center gap-3 border-b">
+			<Tabs.Root value={tab} onValueChange={navigateTab} class="w-full min-w-0">
+				<Tabs.List aria-label="Book detail sections" class="max-w-full min-w-0 justify-start overflow-x-auto">
+					<Tabs.Trigger value="details" class="shrink-0"><FileTextIcon data-icon="inline-start" aria-hidden="true" />Details</Tabs.Trigger>
+					<Tabs.Trigger value="edit" class="shrink-0" disabled={!canEditMetadata}><Edit3Icon data-icon="inline-start" aria-hidden="true" />Edit metadata</Tabs.Trigger>
+					<Tabs.Trigger value="files" class="shrink-0"><LibraryBigIcon data-icon="inline-start" aria-hidden="true" />Files & editions</Tabs.Trigger>
+					<Tabs.Trigger value="reading" class="shrink-0"><HistoryIcon data-icon="inline-start" aria-hidden="true" />Reading log</Tabs.Trigger>
+					<Tabs.Trigger value="highlights" class="shrink-0"><HighlighterIcon data-icon="inline-start" aria-hidden="true" />Highlights</Tabs.Trigger>
 				</Tabs.List>
 			</Tabs.Root>
 		</div>
 
 		{#if tab === 'details'}
-			<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+			<div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
 				<div class="flex min-w-0 flex-col gap-6">
 					<Card>
 						<CardHeader><CardTitle>About this book</CardTitle><CardDescription>Shared work context with edition metadata shown separately below.</CardDescription></CardHeader>

@@ -44,6 +44,25 @@ async fn database() -> DbConn {
 	)
 	.await
 	.expect("create Liseur edition lookup table");
+	// A new link re-sequences the work's CAS records, so the feed tables the
+	// liseur lane writes with raw SQL have to exist too.
+	for sql in [
+		"CREATE TABLE liseur_sync_counters (
+			user_id TEXT PRIMARY KEY, op_seq BIGINT NOT NULL DEFAULT 0,
+			annotation_seq BIGINT NOT NULL DEFAULT 0,
+			projected_annotation_seq BIGINT NOT NULL DEFAULT 0
+		)",
+		"CREATE TABLE liseur_sync_annotations (
+			row_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+			annotation_id TEXT NOT NULL, rev BIGINT NOT NULL, seq BIGINT NOT NULL,
+			work_id TEXT NOT NULL, deleted BOOLEAN NOT NULL DEFAULT FALSE,
+			updated_at TEXT NOT NULL, device_id TEXT NOT NULL, payload TEXT NOT NULL
+		)",
+	] {
+		conn.execute_unprepared(sql)
+			.await
+			.expect("create Liseur annotation feed table");
+	}
 	conn
 }
 
@@ -922,5 +941,129 @@ async fn editions_chapter_map_is_replaceable_and_editable() {
 			.expect("read map after clear")
 			.len(),
 		1
+	);
+}
+
+/// The feed position of a work's CAS records is what every annotation
+/// consumer reads by, so a link that is new must replay them; a suggestion
+/// that is already recorded, or a confirmation of it, changes no edition and
+/// must leave the feed exactly where it was.
+#[tokio::test]
+async fn a_new_pair_link_resequences_the_work_but_an_existing_one_does_not() {
+	let conn = database().await;
+	let user = fake_data::User::new("owner").insert(&conn).await;
+	let series_id = library_and_series(&conn).await;
+	let ebook = book(
+		&conn,
+		&series_id,
+		"Annotated edition",
+		"epub",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+	let audio = book(
+		&conn,
+		&series_id,
+		"Audio edition",
+		"m4b",
+		Some("A Shared Work"),
+		Some("Test Author"),
+		None,
+		None,
+	)
+	.await;
+	make_audio(&conn, &audio.media.id, 120_000).await;
+	let work_id = "annotated-work";
+	work(&conn, &user.id, work_id).await;
+	liseur_link(&conn, &user.id, &ebook.media.id, work_id).await;
+	conn.execute(Statement::from_sql_and_values(
+		DbBackend::Sqlite,
+		"INSERT INTO liseur_sync_counters (user_id, annotation_seq) VALUES ($1, 5)",
+		vec![user.id.clone().into()],
+	))
+	.await
+	.expect("seed the feed counter");
+	conn.execute(Statement::from_sql_and_values(
+		DbBackend::Sqlite,
+		"INSERT INTO liseur_sync_annotations \
+		 (user_id, annotation_id, rev, seq, work_id, deleted, updated_at, device_id, payload) \
+		 VALUES ($1, 'kobo-note', 2, 5, $2, FALSE, '2026-09-11T12:00:00Z', 'kobo', '{}')",
+		vec![user.id.clone().into(), work_id.into()],
+	))
+	.await
+	.expect("seed a live CAS record");
+	let feed_state = || async {
+		let row = conn
+			.query_one(Statement::from_sql_and_values(
+				DbBackend::Sqlite,
+				"SELECT a.rev AS rev, a.seq AS seq, a.updated_at AS updated_at, \
+				        c.annotation_seq AS high_water \
+				 FROM liseur_sync_annotations a \
+				 JOIN liseur_sync_counters c ON c.user_id = a.user_id \
+				 WHERE a.annotation_id = 'kobo-note'",
+				Vec::<sea_orm::Value>::new(),
+			))
+			.await
+			.expect("read the feed state")
+			.expect("the record exists");
+		(
+			row.try_get::<i64>("", "rev").unwrap(),
+			row.try_get::<i64>("", "seq").unwrap(),
+			row.try_get::<String>("", "updated_at").unwrap(),
+			row.try_get::<i64>("", "high_water").unwrap(),
+		)
+	};
+
+	let suggested = edition_pair::suggest_pair(
+		&conn,
+		&user.id,
+		&ebook.media.id,
+		&audio.media.id,
+		PairEvidence::TitleAuthor,
+	)
+	.await
+	.expect("suggest the audiobook into the annotated work");
+	assert_eq!(
+		suggested,
+		PairOutcome::Written {
+			work_id: work_id.to_owned(),
+			status: PairStatus::Suggested,
+		}
+	);
+	// One new link (the audiobook's): the record moved above the old high
+	// water and nothing but its position changed.
+	assert_eq!(
+		feed_state().await,
+		(2, 6, "2026-09-11T12:00:00Z".to_owned(), 6)
+	);
+
+	let repeated = edition_pair::suggest_pair(
+		&conn,
+		&user.id,
+		&ebook.media.id,
+		&audio.media.id,
+		PairEvidence::TitleAuthor,
+	)
+	.await
+	.expect("repeat the suggestion");
+	assert!(matches!(repeated, PairOutcome::Unchanged(_)));
+	let confirmed =
+		edition_pair::confirm_pair(&conn, &user.id, &ebook.media.id, &audio.media.id)
+			.await
+			.expect("confirm the existing pair");
+	assert_eq!(
+		confirmed,
+		PairOutcome::Written {
+			work_id: work_id.to_owned(),
+			status: PairStatus::Confirmed,
+		}
+	);
+	assert_eq!(
+		feed_state().await,
+		(2, 6, "2026-09-11T12:00:00Z".to_owned(), 6),
+		"an existing link's verdict change must not replay the work"
 	);
 }

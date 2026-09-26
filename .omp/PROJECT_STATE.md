@@ -19,18 +19,20 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
 
 ## Working tree
 
-- Branch `coppice/nightly`; baseline commit `29115590` ("Publish verified
-  Coppice integration with Komf compatibility", 2026-09-23) is pushed and
-  matches `origin/coppice/nightly`. Everything below is uncommitted on top.
-  The current tree deletes the legacy React/Vite, Expo, desktop, and web
-  packages (`packages/{browser,components,client,sdk,i18n,graphql}`,
+- Branch `coppice/nightly`; commit `47a9c61c` ("Coppice: MAM Bridge
+  acquisition, fast unified search with Audible and narrators, lazy
+  thumbnails, Liseur v0.19 and UI rework", 2026-09-25) is pushed on top of
+  `29115590` (2026-09-23). It deletes the legacy React/Vite, Expo, desktop,
+  and web packages (`packages/{browser,components,client,sdk,i18n,graphql}`,
   `apps/{expo,desktop,web}`) — removed, not frozen — and adds MAM acquisition
   through the separate MAM Bridge sidecar, split unified search, narrator
   lookup and preferred narrator on requests, lazy thumbnails, Liseur v0.19.0
   pin plus work-identity repair, SPA 404 prefixes, log rolling, annotation
   sync (canonical CAS, revisions, origin device, Home editing with
-  `expectedRevision`), and the Home/KOReader UI work below. Its 2026-09-25
-  gate is green (see "Only definition of green").
+  `expectedRevision`), and the Home/KOReader UI work below; its 2026-09-25
+  gate was green. The 2026-09-26 follow-up (8 MiB runtime thread stacks,
+  annotation book ranking + `koreaderHash`) is in `.omp/NEXT_STEPS.md`
+  "Resume point".
 - Stray `DocsApply` and a 118 MB `omp-session-*.html` were deleted
   (user-approved).
 - Recovery artifacts (keep unchanged) under
@@ -47,9 +49,9 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
   repository. `nickelcoppice/`, `koreader-coppice/`, and
   `stump-mihon-extension/` are independent Git repositories; create/publish
   each only after repository-specific user confirmation. `koreader-coppice/`
-  has no remote yet; publishing it as public `coppice-media/koreader-coppice`
-  is approved, not yet pushed. `komga-compat/` is private local evidence, not
-  a publishable repository.
+  is public as `coppice-media/koreader-coppice` (`main`, `ddbcdde`,
+  2026-09-25). `komga-compat/` is private local evidence, not a publishable
+  repository.
 - `stump-sources/` stays local-only with no remote. Do not publish or link its
   derived site list. Remote source definitions and Cloudflare-challenged sites
   are deferred until a browser-worker authentication design and a
@@ -340,7 +342,7 @@ IMMEDIATE`; plain `begin()` only for read-only work). Migrations run on a
   reject it. Acquisition now ships through the MAM Bridge sidecar (below);
   ordinary EPUB and audiobook playback remain separate.
 
-## Shipped 2026-09-24/25 (uncommitted)
+## Shipped 2026-09-24/25 (pushed in `47a9c61c`)
 
 - **MAM acquisition (Shipped, live-probed).** Feature `mam-acquisition` (in
   `headless`/`full`); env `STUMP_ENABLE_MAM_ACQUISITION`, `MAM_BRIDGE_URL`,
@@ -409,7 +411,7 @@ IMMEDIATE`; plain `begin()` only for read-only work). Migrations run on a
 - Contract evidence pinned to Komelia `65f92fde`, `komga-client` 0.11.0
   `74412a6e`, Liseur v0.19.0 `62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6`
   (source-only; wire unchanged since v0.18.0 `b00ee789`), liseur-sync `906889ff`, Grimmory
-  main, Kamigura `f4baeff4`, Turnleaf `b54f1f71`, and kavita-ref 0.9.1.4.
+  v3.5.0 `402e89b4`, Kamigura `f4baeff4`, Turnleaf `b54f1f71`, and kavita-ref 0.9.1.4.
   The 2026-09-04 Liseur device/replay baseline remains separately scoped to
   its older tested client run; records are in
   `docs/content/docs/developer/{komga-compat,kavita-compat,kobo-sync-capabilities,kobo-device-database,unified-reading-state,liseur-sync-integration,liseur-providers,modular-ingest,server-architecture,calibre-tooling,comparison}.mdx`.

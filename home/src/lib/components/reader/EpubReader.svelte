@@ -18,6 +18,7 @@
 	import { Progress } from '@stump/ui/components/ui/progress';
 	import * as Select from '@stump/ui/components/ui/select';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import { theme, type ResolvedTheme } from '@stump/ui/theme.svelte.js';
 	import type { ReadiumLocatorInput } from '$lib/graphql/generated/graphql';
 	import {
 		annotationRange,
@@ -118,6 +119,7 @@
 			created.renderer.setAttribute('gap', '6%');
 			created.renderer.setAttribute('max-inline-size', '720px');
 			created.renderer.setAttribute('max-block-size', '1400px');
+			created.renderer.setStyles?.(bookStyles(untrack(() => theme.resolved)));
 
 			// Published before the opening navigation so `onRelocate` can render
 			// the restored position; `ready` gates *persisting* it, because
@@ -250,6 +252,31 @@
 		flow = value;
 		view?.renderer.setAttribute('flow', value);
 	}
+
+	/**
+	 * Publisher stylesheets assume a white page, so on the dark canvas the
+	 * text vanishes. Only the page, text and link colours are forced, taken
+	 * from the host's tokens; fonts and spacing stay the publisher's.
+	 */
+	function bookStyles(resolved: ResolvedTheme): string {
+		const tokens = getComputedStyle(document.documentElement);
+		const token = (name: string) => tokens.getPropertyValue(name).trim();
+		return `
+			html { color-scheme: ${resolved}; }
+			html, body { background-color: ${token('--background')} !important; color: ${token('--foreground')} !important; }
+			a:any-link { color: ${token('--primary')} !important; }
+			img, svg { max-width: 100%; }
+		`;
+	}
+
+	// The tokens come from the host stylesheet, so the palette is tracked
+	// here explicitly: `theme.preset` never appears in the CSS itself.
+	$effect(() => {
+		const reader = view;
+		const resolved = theme.resolved;
+		void theme.preset;
+		reader?.renderer.setStyles?.(bookStyles(resolved));
+	});
 
 	/**
 	 * Paging keys. Also bound to every section document, because clicking the

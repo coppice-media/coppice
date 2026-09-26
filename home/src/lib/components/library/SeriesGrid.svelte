@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { Badge } from '@stump/ui/components/ui/badge';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Progress } from '@stump/ui/components/ui/progress';
 	import { countNoun } from '$lib/format';
 	import type { ConsoleSeriesCardFragment } from '$lib/graphql/generated/graphql';
@@ -16,12 +17,7 @@
 				href={resolve('/(app)/series/[id]', { id: entry.id })}
 				aria-label={entry.resolvedName}
 			>
-				<img
-					class="aspect-[2/3] w-full bg-muted object-cover"
-					src={entry.thumbnail.url}
-					alt=""
-					loading="lazy"
-				/>
+				<Cover src={entry.thumbnail.url} class="w-full" />
 				<div class="flex flex-1 flex-col gap-1 px-3 pb-3">
 					<span class="line-clamp-2 text-sm font-medium">{entry.resolvedName}</span>
 					<span class="text-xs text-muted-foreground">

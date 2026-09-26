@@ -9,7 +9,7 @@ use models::{
 		media, media_metadata, media_tag, series, series_metadata, series_tag, tag,
 		user::AuthUser,
 	},
-	shared::image::ImageMetadata,
+	shared::{enums::UserPermission, image::ImageMetadata},
 	txn::begin_write,
 };
 use sea_orm::{
@@ -18,6 +18,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use stump_auth::AuthContext;
 
 use crate::{
 	dto::{
@@ -31,6 +32,20 @@ use super::KavitaSeriesTarget;
 
 const SERIES_NOT_FOUND: &str = "Series does not exist";
 const CHAPTER_NOT_FOUND: &str = "Chapter does not exist";
+
+/// Every Komf write — `SeriesController.UpdateSeries`,
+/// `UpdateSeriesMetadata`, `ChapterController.UpdateChapter` and the whole
+/// `UploadController` — sits behind Kavita's `RequireAdminRole` policy, which
+/// ASP.NET evaluates before the action resolves its target. Stump's
+/// equivalent is `EditMetadata`; a default Kavita device key carries only
+/// `DownloadFile`, so it is a `403` here before any lookup, and a series it
+/// cannot see stays a `404` once the permission is held.
+pub(super) fn enforce_edit_metadata(auth: &AuthContext) -> APIResult<AuthUser> {
+	auth.user_and_enforce_permissions(&[UserPermission::EditMetadata])
+		.map_err(|_| {
+			APIError::Forbidden("You do not have permission to edit metadata".to_owned())
+		})
+}
 
 fn new_series_metadata(id: String) -> series_metadata::ActiveModel {
 	series_metadata::ActiveModel {

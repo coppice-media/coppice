@@ -11,7 +11,7 @@ Claims below distinguish source contracts from exercised behavior; upstream drif
 
 | Claim | Evidence |
 | --- | --- |
-| KOReader direct-call APIs used by the plugin | **Source-derived:** compared upstream baseline `009367df7ac7142bc0d1eb5782d061260b11baa6` with release `v2026.07.1`, peeled commit `9192014d8bd82a91dc1012473be0f238dedfdb54`. The KOReader plugin and frontend files listed below did not change. |
+| KOReader direct-call APIs used by the plugin | **Source-derived:** compared upstream baseline `009367df7ac7142bc0d1eb5782d061260b11baa6` with release `v2026.07.1`, peeled commit `9192014d8bd82a91dc1012473be0f238dedfdb54`. The KOReader plugin and frontend files listed below did not change. A further triage against unreleased master `1c8724e90c5ceb8046b656ab7ec2e4f7a7706ce1` found three plugin-facing changes, handled below: `InputContainer:_init` binds the physical Home key on every widget and its `onHome` closes windows through `onClose`; `ReaderHighlight:mergeHighlights` deletes the merged highlights and saves one new item without plugin fields; highlight colours can carry a user code in `highlight_custom_colors`. |
 | Plugin pure mapping, catalog layout/paging/cache behavior, and settings behavior | Host-test coverage exists in the sibling repository's `tests/pure_checks.lua`; this does not load KOReader's UI or networking runtime. |
 | API/OPDS/KOSync/liseur route contracts | **Source-derived** from the Coppice route handlers, middleware, and the pinned KOReader files below. |
 | KOReader UI, KOSync interaction, and physical-device installation | **Not device-verified.** A host pure check is not a KOReader runtime smoke test. |
@@ -77,8 +77,10 @@ KOReader), from GraphQL `annotations(order: RECENT, filter: { kind:
 [HIGHLIGHT, NOTE] })`. The last answer is cached in the plugin settings so the
 section still shows offline; before the server has ever answered, the device's
 own recently synced annotations are shown. Tapping a placed annotation opens its local book and uses KOReader's
-bookmark position navigation; an unplaceable cached annotation opens the book
-and Remote notes, while a book without a local copy opens its details. File
+bookmark position navigation. The local book is the file whose media id matches
+the note, or else any downloaded file with the note book's `koreaderHash`
+(byte-identical copies are separate media rows); an unplaceable cached
+annotation opens the book and Remote notes, while a book without a local copy opens its details. File
 Manager has a direct Main-menu entry; Coppice is first in the Tools menus for
 File Manager and Reader. Page changes request full e-ink refreshes and the
 library UI uses no transition animations.
@@ -88,6 +90,18 @@ scroll container's 3 × bar-width gutter when it scrolls), so there is no
 horizontal scrolling; Home fits one screen or at most two, stepping cover
 scale, highlight count, and compact text rows down on short screens; swipes
 move a full screen, snap to card rows, and stop at the content end.
+
+Physical keys: the browser merges its `Back` binding into the `key_events`
+table `InputContainer:_init` creates instead of replacing it, so the Home
+binding KOReader master adds there survives, and adds its own on v2026.07.1.
+`Browser:onClose` closes the browser (also answering KOReader's exit and
+USB-storage `Close` broadcast); `Browser:onHome` defers to master's
+`InputContainer:onHome` daisy chain when present and otherwise closes and
+re-sends `Home` so the file manager or reader underneath acts on it too. Cover
+tiles and cards are plain `InputContainer`s with no bindings of their own.
+Highlight chips read `G_reader_settings` `highlight_custom_colors[name].code`
+before `Blitbuffer.HIGHLIGHT_COLORS`; an unknown name such as Liseur's `pink`
+keeps the plugin's own fallback.
 
 The server exposes library/book and in-progress counts through
 `librariesStats`, not daily, seven-day, or streak reading statistics; those
@@ -131,7 +145,13 @@ produce one unique text-search match within the specified href or chapter.
 Ambiguous, unmatched, or unsupported remote records appear in the read-only
 **Remote notes** list instead of being assigned a guessed position. Repeated
 pulls use stable IDs and do not duplicate imported annotations. Server
-tombstones remove imported items.
+tombstones remove imported items. A KOReader highlight merge (master
+`ReaderHighlight:mergeHighlights`) deletes the originals and saves one item
+with `item1.datetime`, the joined notes and a widened range and no `coppice_id`,
+so the next plan queues a server delete per original and one create for the
+merged highlight; when one highlight lay inside the other the merged item has
+the outer one's datetime and range, maps back to its id, and is edited in place
+(or left alone when nothing changed) while only the inner one is deleted.
 
 Per-book sidecar state persists stable ID mappings, acknowledged signatures,
 server revisions, local snapshots, and pending upserts/deletes; the plugin
@@ -161,16 +181,23 @@ In sibling repository `koreader-coppice`, run:
 
 ```sh
 luajit tests/pure_checks.lua
+luajit tests/browser_checks.lua
+tests/static_checks.sh
 for module in coppice.koplugin/*.lua; do luajit -b "$module" /dev/null; done
 ```
 
 The host suite covers pure URL, settings/error classification, OPDS, KOSync
 backup/restore, pairing, bidirectional annotation color/drawer mapping,
-per-book queue persistence/idempotence, edit/delete conflicts, native and
-Readium anchoring (including ambiguous/saturated-search refusal), tombstone
-removal/recreation, catalog mapping/layout/paging/cache eviction, and migration
-behavior. It does not prove the KOReader UI, device filesystem, installed
-LuaSec behavior, or physical Kobo/Kindle compatibility.
+per-book queue persistence/idempotence, edit/delete conflicts, merged
+highlights, native and Readium anchoring (including ambiguous/saturated-search
+refusal), tombstone removal/recreation, catalog mapping/layout/paging/cache
+eviction, and migration behavior; the browser harness covers search, the cover
+grid, Continue-reading taps, Back/Home/Close key handling against both the
+v2026.07.1 and master `InputContainer` shapes, and custom highlight chip
+colours. It does not prove the KOReader UI, device filesystem, installed
+LuaSec behavior, or physical Kobo/Kindle compatibility; the desktop emulator
+smoke (browser open, Home key closing it and landing the file manager on its
+home folder, chips tinted with a custom colour) is run by hand.
 
 ## Source references
 

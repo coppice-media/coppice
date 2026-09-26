@@ -44,12 +44,11 @@ const STORY_ROLES: &[&str] = &["Story", "Original Story", "Original Creator"];
 const ART_ROLES: &[&str] = &["Art", "Illustration"];
 
 /// Fields requested for every media (Komf's `mangaFragment`, minus the
-/// unused `type`/`format` echo fields and the per-tag `description`/`category`
-/// payload; `idMal`/`countryOfOrigin` are requested for provenance but have no
-/// carrier in the shared metadata types yet).
+/// unused `type`/`format`/`idMal`/`countryOfOrigin` echo fields and the
+/// per-tag `description`/`category` payload, none of which have a carrier in
+/// the shared metadata types).
 const MANGA_FIELDS: &str = "
 	id
-	idMal
 	title {
 		romaji
 		english
@@ -83,7 +82,6 @@ const MANGA_FIELDS: &str = "
 			role
 		}
 	}
-	countryOfOrigin
 ";
 
 fn search_query() -> String {
@@ -427,10 +425,6 @@ pub struct PageData {
 #[serde(rename_all = "camelCase")]
 pub struct AniListMedia {
 	pub id: i64,
-	/// The matching MAL entry, when one exists (no carrier in the shared
-	/// metadata types yet; surfaced for provenance/future identifier mapping).
-	#[serde(default)]
-	pub id_mal: Option<i64>,
 	pub title: Option<AniListTitle>,
 	pub status: Option<AniListMediaStatus>,
 	pub description: Option<String>,
@@ -442,10 +436,6 @@ pub struct AniListMedia {
 	pub synonyms: Option<Vec<String>>,
 	pub tags: Option<Vec<AniListMediaTag>>,
 	pub staff: Option<AniListStaffConnection>,
-	/// The origin country, e.g. `JP` (no carrier in the shared metadata types
-	/// yet; the natural mapping is `MetadataField::Language`).
-	#[serde(default)]
-	pub country_of_origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -802,7 +792,6 @@ mod tests {
 	fn sample_media_json(id: i64, title_english: &str) -> serde_json::Value {
 		serde_json::json!({
 			"id": id,
-			"idMal": 21,
 			"title": {
 				"romaji": "One Piece",
 				"english": title_english,
@@ -833,8 +822,7 @@ mod tests {
 						"role": "Color (digital)"
 					}
 				]
-			},
-			"countryOfOrigin": "JP"
+			}
 		})
 	}
 
@@ -1016,7 +1004,6 @@ mod tests {
 	async fn staff_roles_follow_komf_mapping() {
 		let media = AniListMedia {
 			id: 1,
-			id_mal: None,
 			title: None,
 			status: None,
 			description: None,
@@ -1038,7 +1025,6 @@ mod tests {
 					edge(Some("No Role Person"), None),
 				],
 			}),
-			country_of_origin: None,
 		};
 
 		let (writers, artists) = media.staff_roles();

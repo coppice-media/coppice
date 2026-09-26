@@ -4,14 +4,17 @@ use std::{
 };
 
 use models::shared::image_processor_options::{
-	FitWithinResize, ImageProcessorOptions, ImageResizeMethod, SupportedImageFormat,
+	ExactDimensionResize, FitWithinResize, ImageProcessorOptions, ImageResizeMethod,
+	SupportedImageFormat,
 };
 use tokio::{fs, task::spawn_blocking};
 use tracing::{error, trace, warn};
 
 use crate::{
 	content_type::ContentType,
-	image::{GenericImageProcessor, ImageProcessor, WebpProcessor},
+	image::{
+		process::resized_dimensions, GenericImageProcessor, ImageProcessor, WebpProcessor,
+	},
 	media::get_page_async,
 	FileError, MediaConfig,
 };
@@ -24,6 +27,13 @@ pub const ON_DEMAND_THUMBNAIL_MAX_HEIGHT: u32 = 600;
 /// WebP quality for thumbnails generated on first request; quality 100 made a
 /// 396×600 page ~145 KB.
 pub const ON_DEMAND_THUMBNAIL_QUALITY: u16 = 80;
+/// The widest any thumbnail generated on first request may be, whatever the
+/// library's `thumbnail_config` asks for: four times the default bound,
+/// room for a HiDPI cover and still a thumbnail.
+pub const THUMBNAIL_MAX_WIDTH: u32 = 4 * ON_DEMAND_THUMBNAIL_MAX_WIDTH;
+/// The tallest any thumbnail generated on first request may be; see
+/// [`THUMBNAIL_MAX_WIDTH`].
+pub const THUMBNAIL_MAX_HEIGHT: u32 = 4 * ON_DEMAND_THUMBNAIL_MAX_HEIGHT;
 
 /// The options used for a book whose library has no `thumbnail_config`:
 /// WebP at [`ON_DEMAND_THUMBNAIL_QUALITY`], shrunk to fit within
@@ -41,6 +51,39 @@ pub fn on_demand_thumbnail_options() -> ImageProcessorOptions {
 	}
 }
 
+/// `options` with the image they would produce from a `source_width` ×
+/// `source_height` page bounded to [`THUMBNAIL_MAX_WIDTH`] ×
+/// [`THUMBNAIL_MAX_HEIGHT`]. Option validation only requires positive sizes,
+/// so a library `thumbnail_config` may ask for an exact 20 000 × 30 000
+/// thumbnail, or scale a webtoon strip's width up to a height in the tens of
+/// thousands; the resize buffer for that is allocated before anything can
+/// fail, on the first request for any book. An output that fits is left as
+/// configured; one that does not is shrunk to fit with its shape kept, as
+/// an exact size the encoder can hold.
+pub fn bounded_thumbnail_options(
+	options: ImageProcessorOptions,
+	source_width: u32,
+	source_height: u32,
+) -> ImageProcessorOptions {
+	let (height, width) = match options.resize_method {
+		Some(method) => resized_dimensions(source_height, source_width, method),
+		None => (source_height, source_width),
+	};
+	if width <= THUMBNAIL_MAX_WIDTH && height <= THUMBNAIL_MAX_HEIGHT {
+		return options;
+	}
+	let scale = (f64::from(THUMBNAIL_MAX_WIDTH) / f64::from(width.max(1)))
+		.min(f64::from(THUMBNAIL_MAX_HEIGHT) / f64::from(height.max(1)));
+	let bounded = |size: u32| ((f64::from(size) * scale).round() as u32).max(1);
+	ImageProcessorOptions {
+		resize_method: Some(ImageResizeMethod::Exact(ExactDimensionResize {
+			width: bounded(width),
+			height: bounded(height),
+		})),
+		..options
+	}
+}
+
 static ON_DEMAND_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Serve the thumbnail for a book nobody has generated one for yet, and keep it.
@@ -51,6 +94,11 @@ static ON_DEMAND_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 /// file — and returned. The write goes through a temporary sibling and a
 /// rename, so two first requests racing on the same book both produce a
 /// complete file and the last rename wins.
+///
+/// Whatever `options` ask for, the encoded image is bounded by
+/// [`bounded_thumbnail_options`] before the page is decoded, so a library
+/// configured for a giant size cannot make the first request for one of its
+/// books allocate a giant resize buffer.
 ///
 /// Anything short of the page itself being unreadable degrades to the raw
 /// page: a page that is not a raster the encoder understands, an encoder
@@ -82,6 +130,16 @@ pub async fn generate_thumbnail_on_demand(
 
 	let format = options.format;
 	let (page_data, encoded) = spawn_blocking(move || {
+		// The header alone gives the size; a page whose header cannot be read
+		// is not decodable either and takes the raw-page fallback below.
+		let options = match imagesize::blob_size(&page_data) {
+			Ok(size) => bounded_thumbnail_options(
+				options,
+				u32::try_from(size.width).unwrap_or(u32::MAX),
+				u32::try_from(size.height).unwrap_or(u32::MAX),
+			),
+			Err(_) => options,
+		};
 		let encoded = match format {
 			SupportedImageFormat::Webp => WebpProcessor::generate(&page_data, options),
 			_ => GenericImageProcessor::generate(&page_data, options),
@@ -357,6 +415,111 @@ mod tests {
 		assert_eq!((width, height), (120, 180));
 		assert!(config.get_thumbnails_dir().join("book-2.jpeg").is_file());
 		assert!(!config.get_thumbnails_dir().join("book-2.webp").exists());
+	}
+
+	/// The bound applies to what the options would produce from this page,
+	/// so every resize method is covered, including an aspect-preserving
+	/// width scale that would explode a tall page's height, and a page that
+	/// is already too big with no resize at all.
+	#[test]
+	fn bounded_options_shrink_only_outputs_that_exceed_the_cap_and_keep_shape() {
+		use models::shared::image_processor_options::{Dimension, ScaledDimensionResize};
+
+		let options = |resize_method| ImageProcessorOptions {
+			resize_method,
+			format: SupportedImageFormat::Webp,
+			quality: None,
+			page: None,
+		};
+		let exact = |width, height| {
+			Some(ImageResizeMethod::Exact(ExactDimensionResize {
+				width,
+				height,
+			}))
+		};
+		let within = |width, height| {
+			Some(ImageResizeMethod::FitWithin(FitWithinResize {
+				width,
+				height,
+			}))
+		};
+
+		let unchanged = options(exact(1200, 1800));
+		assert_eq!(
+			bounded_thumbnail_options(unchanged.clone(), 1500, 2100),
+			unchanged,
+			"a configured size within the cap is used as configured"
+		);
+		assert_eq!(
+			bounded_thumbnail_options(options(exact(20_000, 30_000)), 1500, 2100)
+				.resize_method,
+			exact(THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT),
+			"an exact giant is shrunk to the cap with its shape"
+		);
+		assert_eq!(
+			bounded_thumbnail_options(options(exact(9_600, 2_400)), 1500, 2100)
+				.resize_method,
+			exact(1_600, 400),
+			"a wide banner keeps its 4:1 shape"
+		);
+		let strip_width =
+			Some(ImageResizeMethod::ScaleDimension(ScaledDimensionResize {
+				dimension: Dimension::Width,
+				size: 1_600,
+			}));
+		assert_eq!(
+			bounded_thumbnail_options(options(strip_width), 1_000, 20_000).resize_method,
+			exact(120, 2_400),
+			"scaling a 1:20 strip to the width cap would be 32 000 px tall"
+		);
+		assert_eq!(
+			bounded_thumbnail_options(options(within(100_000, 100_000)), 6_000, 9_000)
+				.resize_method,
+			exact(1_600, 2_400),
+			"a fit-within box larger than the cap keeps a large page large"
+		);
+		assert_eq!(
+			bounded_thumbnail_options(options(None), 6_000, 9_000).resize_method,
+			exact(1_600, 2_400),
+			"no resize at all re-encodes the whole page"
+		);
+		assert_eq!(
+			bounded_thumbnail_options(options(None), 400, 600).resize_method,
+			None,
+			"a small page is not touched"
+		);
+	}
+
+	#[tokio::test]
+	async fn giant_configured_thumbnail_is_capped_before_encoding() {
+		let tempdir = tempfile::tempdir().expect("tempdir");
+		let config = media_config(tempdir.path());
+		let book =
+			cbz_with_first_page(tempdir.path(), "001.png", &print_resolution_png());
+
+		let (content_type, thumbnail) = generate_thumbnail_on_demand(
+			"book-5",
+			book.to_str().expect("utf-8 path"),
+			ImageProcessorOptions {
+				resize_method: Some(ImageResizeMethod::Exact(ExactDimensionResize {
+					width: 16_000,
+					height: 24_000,
+				})),
+				format: SupportedImageFormat::Jpeg,
+				quality: Some(60),
+				page: None,
+			},
+			&config,
+		)
+		.await
+		.expect("thumbnail");
+
+		assert_eq!(content_type, ContentType::JPEG);
+		let (width, height) = image::load_from_memory(&thumbnail)
+			.expect("decodable thumbnail")
+			.dimensions();
+		assert_eq!((width, height), (THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT));
+		assert!(config.get_thumbnails_dir().join("book-5.jpeg").is_file());
 	}
 
 	#[tokio::test]

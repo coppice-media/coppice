@@ -8,6 +8,7 @@
 	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
 	import { Progress } from '@stump/ui/components/ui/progress';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
@@ -109,11 +110,7 @@
 		</Alert>
 	{:else}
 		<div class="flex flex-wrap items-start gap-4">
-			<img
-				class="hidden h-40 w-28 shrink-0 rounded-lg border bg-muted object-cover sm:block"
-				src={series.thumbnail.url}
-				alt=""
-			/>
+			<Cover src={series.thumbnail.url} class="hidden h-40 w-28 rounded-lg border sm:flex" />
 			<div class="mr-auto flex min-w-0 flex-col gap-2">
 				<div class="flex flex-wrap items-center gap-2">
 					<h1 class="text-2xl font-semibold tracking-tight">{series.resolvedName}</h1>

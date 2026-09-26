@@ -104,7 +104,7 @@ pub use service::{
 pub use source_hub::{
 	ConnectedSourceWorker, SharedSourceHub, SourceHub, SourceHubError, SourceOutbound,
 	SourceReadStatus, TunnelReceiver, MAX_SOURCE_TUNNEL_CHUNK_BYTES,
-	SOURCE_OUTBOUND_CAPACITY, SOURCE_TUNNEL_CAPACITY,
+	SOURCE_OUTBOUND_CAPACITY, SOURCE_TRANSFER_IDLE_TIMEOUT, SOURCE_TUNNEL_CAPACITY,
 };
 pub use source_protocol::{
 	encode_source_frame, expires_at_millis, parse_source_server_frame,

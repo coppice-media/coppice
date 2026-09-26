@@ -6,6 +6,7 @@
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { PageHeader } from '@stump/ui/components/ui/page-header';
 	import { QueryState } from '@stump/ui/components/ui/query-state';
 	import { StatCard } from '@stump/ui/components/ui/stat-card';
@@ -45,7 +46,6 @@
 	let historyPage = $state(1);
 	let now = $state(new Date());
 	const deviceId = $derived(page.url.searchParams.get('device'))
-	let historyCovers = $state<Set<string>>(new Set());
 
 	const statsQuery = createQuery(() => ({
 		queryKey: ['readingStats', span, deviceId],
@@ -97,11 +97,6 @@
 
 	function turnHistoryPage(next: number): void {
 		historyPage = Math.max(1, next);
-	}
-
-	function failHistoryCover(id: string): void {
-		if (historyCovers.has(id)) return;
-		historyCovers = new Set(historyCovers).add(id);
 	}
 
 	function latestRecord(book: ConsoleBookRowFragment) {
@@ -262,24 +257,16 @@
 						{@const record = latestRecord(book)}
 						<li class="flex min-w-0 items-center gap-3 py-3 sm:gap-4">
 							<a
-								class="block h-20 w-14 shrink-0 overflow-hidden rounded-md bg-muted ring-1 ring-foreground/10 sm:h-24 sm:w-16"
+								class="block shrink-0"
 								href={resolve('/(app)/reader/[mediaId]', { mediaId: book.id })}
 								tabindex="-1"
 								aria-hidden="true"
 							>
-								{#if historyCovers.has(book.id) || !book.thumbnail.url}
-									<span class="flex size-full items-center justify-center px-1 text-center text-[10px] text-muted-foreground uppercase">
-										{book.extension || 'Book'}
-									</span>
-								{:else}
-									<img
-										class="size-full object-cover"
-										src={book.thumbnail.url}
-										alt=""
-										loading="lazy"
-										onerror={() => failHistoryCover(book.id)}
-									/>
-								{/if}
+								<Cover src={book.thumbnail.url} class="h-20 w-14 rounded-md ring-1 ring-foreground/10 sm:h-24 sm:w-16">
+									{#snippet fallback()}
+										<span class="px-1 text-center text-[10px] uppercase">{book.extension || 'Book'}</span>
+									{/snippet}
+								</Cover>
 							</a>
 							<div class="flex min-w-0 flex-1 flex-col gap-1">
 								<a

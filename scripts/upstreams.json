@@ -5,30 +5,32 @@
 			"name": "Stump upstream",
 			"repo": "stumpapp/stump",
 			"branch": "nightly",
-			"baseline": { "kind": "commit", "value": "37fdb7d7340894a777c40d685d5262becceae007" },
+			"baseline": { "kind": "commit", "value": "d3ce23b6788d3f8b6344d8bb2fbcc2068b91a52f" },
 			"sourcePolicy": "inspect"
 		},
 		{
 			"name": "Liseur",
 			"repo": "chmouel/liseur",
-			"baseline": { "kind": "commit", "value": "62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6" },
+			"baseline": { "kind": "commit", "value": "f43d859c81dc6e9a00fca6a22fbae7767cd916d4" },
 			"sourcePolicy": "inspect"
 		},
 		{
 			"name": "Liseur Sync",
 			"repo": "chmouel/liseur-sync",
-			"baseline": { "kind": "commit", "value": "906889ffe11fc7260b071c1f142aeee1fa8a1419" },
+			"baseline": { "kind": "commit", "value": "376951da193085e349cea97b09d346a629f062f6" },
 			"sourcePolicy": "inspect"
 		},
 		{
 			"name": "BookOrbit",
 			"repo": "bookorbit/bookorbit",
-			"baseline": { "kind": "release", "value": "v2.9.0" },
+			"baseline": { "kind": "release", "value": "v3.1.0" },
 			"sourcePolicy": "release-notes-only"
 		},
 		{
 			"name": "Grimmory",
 			"repo": "grimmory-tools/grimmory",
+			"baseline": { "kind": "release", "value": "v3.5.0" },
+			"note": "v3.5.0 = 402e89b4452f8e2b17ab95f16c1621c003516cd2; the /komga KomgaController shape in komga-compat.mdx is pinned to it",
 			"sourcePolicy": "release-notes-only"
 		},
 		{
@@ -40,6 +42,8 @@
 		{
 			"name": "Komga",
 			"repo": "gotson/komga",
+			"baseline": { "kind": "commit", "value": "65981e600edb24944ffaae4818ff2716a5fa08dd" },
+			"reviewedRelease": "1.27.1",
 			"sourcePolicy": "inspect"
 		},
 		{
@@ -69,7 +73,7 @@
 		{
 			"name": "Mihon",
 			"repo": "mihonapp/mihon",
-			"baseline": { "kind": "commit", "value": "21af65b10012f23e53dba9d01fd2474fcb810f7c" },
+			"baseline": { "kind": "commit", "value": "f52d890e7f8a3c418ddab41f41d4b577bce0dc06" },
 			"sourcePolicy": "inspect-contract-only"
 		},
 		{
@@ -77,6 +81,7 @@
 			"repo": "Snd-R/komf",
 			"baseline": { "kind": "commit", "value": "5ad67370c5da6d94372e7c51bff62dd75053ac64" },
 			"reviewedRelease": "2.0.1",
+			"note": "Held at tag 2.0.1 on purpose: Komelia 0.19.3 pairs with it and scripts/contracts/komf-media-server.json is extracted from this exact commit; later main commits were reviewed (through d73d8a23) with no media-server contract change. Re-pin only when Komf tags 2.1.0",
 			"sourcePolicy": "inspect-contract-only",
 			"dependencies": {
 				"komga-client": {
@@ -88,12 +93,14 @@
 		{
 			"name": "KOReader",
 			"repo": "koreader/koreader",
-			"baseline": { "kind": "commit", "value": "9192014d8bd82a91dc1012473be0f238dedfdb54" },
+			"baseline": { "kind": "commit", "value": "1c8724e90c5ceb8046b656ab7ec2e4f7a7706ce1" },
+			"reviewedRelease": "v2026.07.1",
 			"sourcePolicy": "inspect-contract-only"
 		},
 		{
 			"name": "Calibre",
 			"repo": "kovidgoyal/calibre",
+			"baseline": { "kind": "release", "value": "v9.15.0" },
 			"sourcePolicy": "release-notes-only"
 		}
 	]

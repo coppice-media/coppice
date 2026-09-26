@@ -137,10 +137,24 @@ type AnnotationBook {
 	libraryId: ID
 	"The book's file extension, so a client can pick a reader lane"
 	extension: String
+	"""
+	KOReader's partial-MD5 document hash of the book file. Byte-identical
+	copies of a book share it, so a reader can open the copy it already
+	holds even when that copy is a different Stump media row.
+	"""
+	koreaderHash: String
 }
 
 "One highlight, note, or bookmark, wherever it came from."
 type AnnotationEntry {
+	"""
+	The id `updateAnnotation`/`deleteAnnotation` route by. A native row
+	carries its `media_annotations`/`bookmarks` id; a Liseur-sync record
+	carries its projection id, `liseur-sync:{user}:{record}`, the same id
+	`annotationsByMediaId` shows for it. A Liseur record's own id is
+	client-chosen and may collide with either shape, so it is never
+	exposed bare.
+	"""
 	id: ID!
 	kind: AnnotationKind!
 	"""
@@ -4252,11 +4266,17 @@ type Mutation {
 	"""
 	Update an annotation's note text or color. Liseur-backed rows use CAS;
 	expectedRevision rejects stale Home edits without changing the locator.
+	
+	The id routes by shape: `liseur-sync:{user}:{record}` is the Liseur
+	lane (the `AnnotationEntry`/`annotationsByMediaId` id of the record),
+	anything else is a native `media_annotations` row. A bare Liseur record
+	id is never accepted, because it is client-chosen and may equal either.
 	"""
 	updateAnnotation(input: UpdateAnnotationInput!): MediaAnnotation!
 	"""
-	Delete an annotation by ID. Liseur-backed rows accept an optional CAS
-	revision precondition and publish the tombstone through the sync feed.
+	Delete an annotation by ID, routed by shape exactly as
+	`updateAnnotation`. Liseur-backed rows accept an optional CAS revision
+	precondition and publish the tombstone through the sync feed.
 	"""
 	deleteAnnotation(id: String!, expectedRevision: Int): MediaAnnotation!
 	"""

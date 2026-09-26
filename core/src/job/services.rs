@@ -2,16 +2,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-#[cfg(feature = "mam-acquisition")]
-use models::entity::mam_acquisition_grab;
 use models::{
 	entity::{job, library, log, metadata_fetch_record, scheduled_job},
 	shared::enums::{JobStatus, MetadataFetchStatus, ScheduledJobKind},
 };
-use sea_orm::{
-	prelude::*, sea_query::OnConflict, ActiveValue::Set, DatabaseConnection, QueryOrder,
-	QuerySelect,
-};
+use sea_orm::{prelude::*, sea_query::OnConflict, ActiveValue::Set, DatabaseConnection};
 use stump_jobs::{
 	run_job, JobContext, JobError, JobExecutionContext, JobOutcome, JobPayload,
 	JobRuntime, ScheduledJobDispatcher,
@@ -54,6 +49,10 @@ pub struct JobServices {
 	mam_ingest: Option<Arc<stump_ingest::IngestServices>>,
 	#[cfg(feature = "mam-acquisition")]
 	source_hub: Option<Arc<stump_worker::SourceHub>>,
+	/// Grab ids a queued or running `MamRefreshGrabs` job holds, so the
+	/// maintenance tick never hands the same row to a second job.
+	#[cfg(feature = "mam-acquisition")]
+	mam_refresh_claims: crate::mam_acquisition::RefreshClaims,
 }
 
 impl JobServices {
@@ -74,6 +73,8 @@ impl JobServices {
 			mam_ingest: None,
 			#[cfg(feature = "mam-acquisition")]
 			source_hub: None,
+			#[cfg(feature = "mam-acquisition")]
+			mam_refresh_claims: crate::mam_acquisition::RefreshClaims::default(),
 		}
 	}
 
@@ -266,6 +267,7 @@ impl JobExecutionContext for JobServices {
 			},
 			#[cfg(feature = "mam-acquisition")]
 			StumpJob::MamRefreshGrabs { grab_ids } => {
+				let _release = self.mam_refresh_claims.release_on_drop(&grab_ids);
 				crate::mam_acquisition::refresh_grabs(self, &grab_ids)
 					.await
 					.map_err(JobError::Unknown)
@@ -324,30 +326,26 @@ impl ScheduledJobDispatcher for JobServices {
 	async fn dispatch_due(&self, runtime: &JobRuntime<Self>) -> Result<(), JobError> {
 		#[cfg(feature = "mam-acquisition")]
 		if self.config.mam_acquisition.enable_mam_acquisition {
-			let cutoff = Utc::now().fixed_offset() - chrono::Duration::seconds(60);
-			let due = mam_acquisition_grab::Entity::find()
-				.filter(
-					mam_acquisition_grab::Column::Phase
-						.is_in(vec!["queued".to_string(), "downloading".to_string()]),
-				)
-				.filter(mam_acquisition_grab::Column::UpdatedAt.lte(cutoff))
-				.order_by_asc(mam_acquisition_grab::Column::UpdatedAt)
-				.limit(100)
-				.all(self.conn.as_ref())
-				.await?;
-			if !due.is_empty() {
-				let grab_ids = due.into_iter().map(|grab| grab.id).collect::<Vec<_>>();
-				mam_acquisition_grab::Entity::update_many()
-					.filter(mam_acquisition_grab::Column::Id.is_in(grab_ids.clone()))
-					.col_expr(
-						mam_acquisition_grab::Column::UpdatedAt,
-						Expr::value(Utc::now().fixed_offset()),
-					)
-					.exec(self.conn.as_ref())
-					.await?;
-				runtime
-					.enqueue(StumpJob::MamRefreshGrabs { grab_ids })
-					.await?;
+			let claimed = self.mam_refresh_claims.claimed();
+			let grab_ids = crate::mam_acquisition::due_grab_ids(
+				self.conn.as_ref(),
+				Utc::now().fixed_offset(),
+				&claimed,
+			)
+			.await?;
+			if !grab_ids.is_empty() {
+				// Claimed before the enqueue so no tick between the two can
+				// select the rows again; the job releases them when it ends.
+				self.mam_refresh_claims.claim(&grab_ids);
+				if let Err(error) = runtime
+					.enqueue(StumpJob::MamRefreshGrabs {
+						grab_ids: grab_ids.clone(),
+					})
+					.await
+				{
+					drop(self.mam_refresh_claims.release_on_drop(&grab_ids));
+					return Err(error);
+				}
 			}
 		}
 		Ok(())

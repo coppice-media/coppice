@@ -49,6 +49,9 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# Grant and in-flight state is guarded by short, await-free critical sections;
+# `parking_lot` guards carry no poisoning path to unwrap at every call site.
+parking_lot = "0.12"
 # `sync`: the hub's per-worker outbound channels and the enqueue-and-await
 # waiters; `time`: dispatch timeouts and the client's reconnect backoff.
 tokio = { workspace = true, features = ["fs", "io-util", "net", "rt", "sync", "time"] }

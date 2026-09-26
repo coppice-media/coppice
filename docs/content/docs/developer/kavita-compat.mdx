@@ -63,7 +63,7 @@ Kavita's ASP.NET routing is case-insensitive; every route is registered under it
 | --- | --- | --- |
 | `apiKey` query parameter | any Kavita route | A Stump API key (`stump_...`). Checked first, as Kavita does; an invalid value is `401` even if a valid header is present. |
 | `x-api-key` header | any Kavita route | A Stump API key. |
-| `Authorization: Bearer <token>` | any Kavita route | A Kavita token minted by `POST /api/Plugin/authenticate` or `POST /api/Account/login` (HS512, claims `name`, `nameid`, `role`, `nbf`, `exp`, `iat`, three-day lifetime, signed with Stump's access-token secret), or a Stump access token / API key. |
+| `Authorization: Bearer <token>` | any Kavita route | A Kavita token minted by `POST /api/Plugin/authenticate` or `POST /api/Account/login` (HS512, claims `name`, `nameid`, `role`, `nbf`, `exp`, `iat`, three-day lifetime, signed with Stump's access-token secret), or a Stump access token / API key. A token minted from an API key also carries that key (`api_key` claim) and is revalidated against it on **every** request: it acts with the key's permissions and device library scope, and once the device is revoked or the key expires the token answers `401` regardless of its `exp`. A password-login token acts as the user. |
 
 `POST /api/Plugin/authenticate?apiKey&pluginName` and `GET /api/Plugin/version?apiKey` validate the Stump API key; `POST /api/Account/login` accepts `{apiKey}` or `{username, password}`. The `UserDto.apiKey` echoes the key used to log in and is `null` after a password login (Stump never reveals stored keys). `refreshToken` is `null`; there is no refresh endpoint in this wave. `preferences` is the Kavita 0.9.1.4 default object; `roles` are `Admin` (server owner), `Login`, and `Download` (`DownloadFile` permission).
 
@@ -245,6 +245,12 @@ A stored file streams through the same file service every other Stump download u
 
 A provider-backed (`provider://`) media item has no file to stream, so its download is a CBZ built on the fly from its pages through the virtual resolver — the same thing Komga's book download does for one — named after the chapter and served whole (no `Range`, since there is no file to range over). `chapter-size` answers `200` with `0` for a chapter it cannot resolve, matching `kavita-ref` (`chapterId=9999` → `0`); the download routes answer `404`.
 
+## Komf writes
+
+`POST /api/Series/update`, `POST /api/Series/metadata`, `POST /api/Chapter/update` and `POST /api/Upload/{series,volume,chapter}` are Kavita's `RequireAdminRole` actions (`SeriesController.cs:175-177,456-458`, `ChapterController.cs:185-187`, `UploadController.cs:227-230,428-431,494-497` at `879b8b73`). Stump's equivalent is the `EditMetadata` permission: every one of them answers `403` without it — before the target is resolved, as the ASP.NET policy runs before the action — and a series or chapter outside the caller's visibility (a hidden library, or a device's library scope) stays a `404` with it. A registered Kavita device key carries only `DownloadFile`, so a Komf install needs a credential that holds `EditMetadata` (an `Api` device key inherits its owner's permissions); a server owner bypasses the check like every other Stump permission.
+
+Cover uploads are JSON with a base64 `url`. The request body is budgeted for a cover of `STUMP_MAX_IMAGE_UPLOAD_SIZE` bytes (default 20 MiB) once base64-encoded — not Axum's 2 MiB default, which refused any cover over ~1.5 MiB — and both a larger body and a decoded image over that limit answer `413`, as Kestrel does for Kavita's own 30 MB `RequestSizeLimit`. A `url` that is not valid base64 is a `400`; an empty `url` is the chapter lock reset (and a `400` for series and volume).
+
 ## Route matrix
 
 | Method | Route | Clients | Handler |
@@ -262,9 +268,9 @@ A provider-backed (`provider://`) media item has no file to stream, so its downl
 | GET | `/api/Account`, `/api/Account/roles` | Kamigura, Inkita | `routes/account.rs` |
 | GET | `/api/Users/has-library-access?libraryId` | Inkita | `routes/users.rs` |
 | GET | `/api/Series/{id}`, `/volumes`, `/volume`, `/metadata`, `/series-detail`, `/chapter` | all | `routes/series.rs` |
-| POST | `/api/Series/update`, `/api/Series/metadata` | external Komf Kavita adapter | Kavita adapter |
-| POST | `/api/Chapter/update` | external Komf Kavita adapter | Kavita adapter |
-| POST | `/api/Upload/series`, `/api/Upload/volume`, `/api/Upload/chapter` | external Komf Kavita adapter | Kavita adapter |
+| POST | `/api/Series/update`, `/api/Series/metadata` | Komf (`EditMetadata`) | `routes/series.rs` |
+| POST | `/api/Chapter/update` | Komf (`EditMetadata`) | `routes/series.rs` |
+| POST | `/api/Upload/series`, `/api/Upload/volume`, `/api/Upload/chapter` | Komf (`EditMetadata`) | `routes/upload.rs` |
 | POST | `/api/Series/series-by-ids` | Kamigura | `routes/series.rs` |
 | GET | `/api/Volume?volumeId`, `/api/Volume/{id}`, `/api/Chapter?chapterId` | extension, Kamare, Inkita | `routes/series.rs` |
 | GET | `/api/Image/series-cover`, `/volume-cover`, `/chapter-cover` | all | `routes/image.rs` |

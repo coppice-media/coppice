@@ -7,6 +7,7 @@
 	 */
 	import { resolve } from '$app/paths';
 	import { Button } from '@stump/ui/components/ui/button';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Progress } from '@stump/ui/components/ui/progress';
 	import { cn } from '@stump/ui/utils.js';
 	import type { DashboardBookCardFragment } from '$lib/graphql/generated/graphql';
@@ -23,39 +24,21 @@
 		class?: string;
 	} = $props();
 
-	let coverFailed = $state(false);
-
 	const href = $derived(resolve('/(app)/reader/[mediaId]', { mediaId: book.id }));
 	const progress = $derived(headProgress(book));
 	const percent = $derived(progress.ratio === null ? null : Math.round(progress.ratio * 100));
 	const elapsedSeconds = $derived(book.readProgress?.elapsedSeconds ?? 0);
 	const lastRead = $derived(book.readProgress?.updatedAt ?? null);
-	const coverMissing = $derived(!book.thumbnail.url || coverFailed);
 	const elapsedLabel = $derived(elapsedSeconds > 0 ? durationLabel(elapsedSeconds * 1000) : null);
 </script>
 
 <article class={cn('flex h-full min-w-0 flex-col gap-3 @md/widget:w-36 @md/widget:shrink-0 @md/widget:snap-start', className)}>
-	<a
-		class="relative block aspect-2/3 w-full overflow-hidden rounded-lg bg-muted ring-1 ring-foreground/10 transition-shadow hover:shadow-md"
-		{href}
-		tabindex="-1"
-		aria-hidden="true"
-	>
-		{#if coverMissing}
-			<span
-				class="absolute inset-0 flex items-center justify-center px-2 text-center text-xs text-muted-foreground uppercase"
-			>
-				{book.extension || 'Book'}
-			</span>
-		{:else}
-			<img
-				class="size-full object-cover"
-				src={book.thumbnail.url}
-				alt=""
-				loading="lazy"
-				onerror={() => (coverFailed = true)}
-			/>
-		{/if}
+	<a class="block w-full" {href} tabindex="-1" aria-hidden="true">
+		<Cover src={book.thumbnail.url} class="w-full rounded-lg ring-1 ring-foreground/10 transition-shadow hover:shadow-md">
+			{#snippet fallback()}
+				<span class="px-2 text-center text-xs uppercase">{book.extension || 'Book'}</span>
+			{/snippet}
+		</Cover>
 	</a>
 	<div class="flex min-w-0 flex-1 flex-col gap-1.5 @md/widget:min-h-24">
 		<span class="line-clamp-2 text-sm leading-snug font-medium" title={book.resolvedName}>

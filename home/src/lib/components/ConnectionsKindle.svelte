@@ -150,121 +150,123 @@
 	}
 </script>
 
-<div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]">
-	<Card>
-		<CardHeader>
-			<div class="flex flex-wrap items-start gap-2">
-				<div class="mr-auto">
-					<CardTitle class="text-base">Kindle destinations</CardTitle>
-					<CardDescription>
-						Save one or more Amazon Send to Kindle addresses for your account. A destination is not a device credential.
-					</CardDescription>
-				</div>
-				<Badge variant="secondary">{destinations.length}</Badge>
-			</div>
-		</CardHeader>
-		<CardContent class="flex flex-col gap-4">
-			{#if destinationsQuery.isPending}
-				<div class="flex flex-col gap-3" aria-label="Loading Kindle destinations">
-					<Skeleton class="h-16 w-full rounded-lg" />
-					<Skeleton class="h-16 w-full rounded-lg" />
-				</div>
-			{:else if destinationsQuery.isError}
-				<Alert variant="destructive">
-					<AlertTitle>Unable to load Kindle destinations</AlertTitle>
-					<AlertDescription>
-						{destinationsQuery.error instanceof Error ? destinationsQuery.error.message : 'Request failed.'}
-					</AlertDescription>
-					<Button type="button" size="sm" variant="outline" class="mt-3" onclick={() => destinationsQuery.refetch()}>
-						<RotateCcwIcon data-icon="inline-start" />
-						Retry
-					</Button>
-				</Alert>
-			{:else if destinations.length === 0}
-				<Empty class="rounded-lg border border-dashed">
-					<EmptyHeader>
-						<EmptyTitle>No Kindle destinations</EmptyTitle>
-						<EmptyDescription>Add the address Amazon gave your Kindle app or device.</EmptyDescription>
-					</EmptyHeader>
-				</Empty>
-			{:else}
-				<ul class="flex flex-col gap-2" aria-label="Kindle destinations">
-					{#each destinations as destination (destination.id)}
-						<li class="flex flex-wrap items-center gap-3 rounded-lg border p-3">
-							<div class="min-w-0 flex-1">
-								<div class="flex flex-wrap items-center gap-2">
-									<span class="truncate text-sm font-medium">{destination.name}</span>
-									{#if destination.isDefault}<Badge><CheckIcon aria-hidden="true" />Default</Badge>{/if}
-								</div>
-								<code class="break-all text-xs text-muted-foreground">{destination.email}</code>
-							</div>
-							<div class="flex items-center gap-1">
-								<Button size="icon-sm" variant="ghost" aria-label={`Edit ${destination.name}`} onclick={() => editDestination(destination)}>
-									<PencilIcon aria-hidden="true" />
-								</Button>
-								<Button
-									size="icon-sm"
-									variant="ghost"
-									aria-label={`Delete ${destination.name}`}
-									disabled={deletingId === destination.id}
-									onclick={() => removeDestination(destination.id)}
-								>
-									<Trash2Icon aria-hidden="true" />
-								</Button>
-							</div>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-
-			<form class="grid gap-3 rounded-lg border bg-muted/20 p-4" onsubmit={submitDestination}>
-				<div>
-					<h3 class="text-sm font-medium">{editingId ? 'Edit destination' : 'Add destination'}</h3>
-					<p class="text-xs text-muted-foreground">Only the Amazon-approved recipient address belongs here.</p>
-				</div>
-				<div class="grid gap-3 sm:grid-cols-2">
-					<div class="grid gap-2">
-						<Label for="kindle-destination-name">Name</Label>
-						<Input id="kindle-destination-name" bind:value={name} maxlength={80} autocomplete="off" placeholder="My Kindle" required />
+<div class="@container/kindle">
+	<div class="grid gap-4 @3xl/kindle:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]">
+		<Card>
+			<CardHeader>
+				<div class="flex flex-wrap items-start gap-2">
+					<div class="mr-auto">
+						<CardTitle class="text-base">Kindle destinations</CardTitle>
+						<CardDescription>
+							Save one or more Amazon Send to Kindle addresses for your account. A destination is not a device credential.
+						</CardDescription>
 					</div>
-					<div class="grid gap-2">
-						<Label for="kindle-destination-email">Kindle recipient address</Label>
-						<Input id="kindle-destination-email" bind:value={email} type="email" autocomplete="email" placeholder="name_123@kindle.com" required />
-					</div>
+					<Badge variant="secondary">{destinations.length}</Badge>
 				</div>
-				<div class="flex flex-wrap items-center justify-between gap-3">
-					<Label for="kindle-destination-default" class="flex items-center gap-2 text-sm font-normal">
-						<Switch id="kindle-destination-default" bind:checked={makeDefault} />
-						Use as default destination
-					</Label>
-					<div class="flex gap-2">
-						{#if editingId}<Button type="button" size="sm" variant="ghost" onclick={resetForm}>Cancel</Button>{/if}
-						<Button type="submit" size="sm" disabled={saving || !name.trim() || !email.trim()}>
-							{saving ? 'Saving…' : editingId ? 'Save changes' : 'Add destination'}
+			</CardHeader>
+			<CardContent class="flex flex-col gap-4">
+				{#if destinationsQuery.isPending}
+					<div class="flex flex-col gap-3" aria-label="Loading Kindle destinations">
+						<Skeleton class="h-16 w-full rounded-lg" />
+						<Skeleton class="h-16 w-full rounded-lg" />
+					</div>
+				{:else if destinationsQuery.isError}
+					<Alert variant="destructive">
+						<AlertTitle>Unable to load Kindle destinations</AlertTitle>
+						<AlertDescription>
+							{destinationsQuery.error instanceof Error ? destinationsQuery.error.message : 'Request failed.'}
+						</AlertDescription>
+						<Button type="button" size="sm" variant="outline" class="mt-3" onclick={() => destinationsQuery.refetch()}>
+							<RotateCcwIcon data-icon="inline-start" />
+							Retry
 						</Button>
+					</Alert>
+				{:else if destinations.length === 0}
+					<Empty class="rounded-lg border border-dashed">
+						<EmptyHeader>
+							<EmptyTitle>No Kindle destinations</EmptyTitle>
+							<EmptyDescription>Add the address Amazon gave your Kindle app or device.</EmptyDescription>
+						</EmptyHeader>
+					</Empty>
+				{:else}
+					<ul class="flex flex-col gap-2" aria-label="Kindle destinations">
+						{#each destinations as destination (destination.id)}
+							<li class="flex flex-wrap items-center gap-3 rounded-lg border p-3">
+								<div class="min-w-0 flex-1">
+									<div class="flex flex-wrap items-center gap-2">
+										<span class="truncate text-sm font-medium">{destination.name}</span>
+										{#if destination.isDefault}<Badge><CheckIcon aria-hidden="true" />Default</Badge>{/if}
+									</div>
+									<code class="break-all text-xs text-muted-foreground">{destination.email}</code>
+								</div>
+								<div class="flex items-center gap-1">
+									<Button size="icon-sm" variant="ghost" aria-label={`Edit ${destination.name}`} onclick={() => editDestination(destination)}>
+										<PencilIcon aria-hidden="true" />
+									</Button>
+									<Button
+										size="icon-sm"
+										variant="ghost"
+										aria-label={`Delete ${destination.name}`}
+										disabled={deletingId === destination.id}
+										onclick={() => removeDestination(destination.id)}
+									>
+										<Trash2Icon aria-hidden="true" />
+									</Button>
+								</div>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+	
+				<form class="grid gap-3 rounded-lg border bg-muted/20 p-4" onsubmit={submitDestination}>
+					<div>
+						<h3 class="text-sm font-medium">{editingId ? 'Edit destination' : 'Add destination'}</h3>
+						<p class="text-xs text-muted-foreground">Only the Amazon-approved recipient address belongs here.</p>
 					</div>
-				</div>
-			</form>
-		</CardContent>
-	</Card>
-
-	<Card>
-		<CardHeader>
-			<CardTitle class="text-base">How Send to Kindle works</CardTitle>
-			<CardDescription>One server sender, many personal destinations.</CardDescription>
-		</CardHeader>
-		<CardContent class="flex flex-col gap-3 text-sm text-muted-foreground">
-			<p>
-				Coppice sends the book through the server’s one administrator-managed SMTP sender. Amazon accepts it only when that sender is in your Amazon-approved email list.
-			</p>
-			<p>
-				Your Kindle address is stored privately on your account. It is never used as an SMTP credential and it does not make a generic sync device.
-			</p>
-			<p class="rounded-lg border border-dashed bg-muted/30 p-3 text-xs">
-				If delivery fails, verify both sides: the administrator’s SMTP sender and the approved-sender list in Amazon’s Kindle settings.
-			</p>
-		</CardContent>
-	</Card>
+					<div class="grid gap-3 sm:grid-cols-2">
+						<div class="grid gap-2">
+							<Label for="kindle-destination-name">Name</Label>
+							<Input id="kindle-destination-name" bind:value={name} maxlength={80} autocomplete="off" placeholder="My Kindle" required />
+						</div>
+						<div class="grid gap-2">
+							<Label for="kindle-destination-email">Kindle recipient address</Label>
+							<Input id="kindle-destination-email" bind:value={email} type="email" autocomplete="email" placeholder="name_123@kindle.com" required />
+						</div>
+					</div>
+					<div class="flex flex-wrap items-center justify-between gap-3">
+						<Label for="kindle-destination-default" class="flex items-center gap-2 text-sm font-normal">
+							<Switch id="kindle-destination-default" bind:checked={makeDefault} />
+							Use as default destination
+						</Label>
+						<div class="flex gap-2">
+							{#if editingId}<Button type="button" size="sm" variant="ghost" onclick={resetForm}>Cancel</Button>{/if}
+							<Button type="submit" size="sm" disabled={saving || !name.trim() || !email.trim()}>
+								{saving ? 'Saving…' : editingId ? 'Save changes' : 'Add destination'}
+							</Button>
+						</div>
+					</div>
+				</form>
+			</CardContent>
+		</Card>
+	
+		<Card>
+			<CardHeader>
+				<CardTitle class="text-base">How Send to Kindle works</CardTitle>
+				<CardDescription>One server sender, many personal destinations.</CardDescription>
+			</CardHeader>
+			<CardContent class="flex flex-col gap-3 text-sm text-muted-foreground">
+				<p>
+					Coppice sends the book through the server’s one administrator-managed SMTP sender. Amazon accepts it only when that sender is in your Amazon-approved email list.
+				</p>
+				<p>
+					Your Kindle address is stored privately on your account. It is never used as an SMTP credential and it does not make a generic sync device.
+				</p>
+				<p class="rounded-lg border border-dashed bg-muted/30 p-3 text-xs">
+					If delivery fails, verify both sides: the administrator’s SMTP sender and the approved-sender list in Amazon’s Kindle settings.
+				</p>
+			</CardContent>
+		</Card>
+	</div>
 </div>
 
 <Card>
@@ -280,7 +282,7 @@
 			</div>
 			<div class="grid gap-2">
 				<Label for="kindle-send-destination">Destination</Label>
-				<select id="kindle-send-destination" bind:value={sendDestinationId} class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required>
+				<select id="kindle-send-destination" bind:value={sendDestinationId} class="h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm" required>
 					<option value="" disabled>Select a destination</option>
 					{#each destinations as destination (destination.id)}
 						<option value={destination.id}>{destination.name}</option>

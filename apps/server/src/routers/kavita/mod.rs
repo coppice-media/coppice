@@ -24,7 +24,7 @@ use prefixed_api_key::PrefixedApiKey;
 use stump_api_types::RequestOrigin;
 use stump_auth::AuthContext;
 use stump_devices::{CredentialRef, Protocol};
-use stump_kavita::routes::KavitaBackend;
+use stump_kavita::{errors::APIError as KavitaError, routes::KavitaBackend};
 
 use crate::{
 	config::{jwt::access_token_secret, state::AppState},
@@ -85,9 +85,12 @@ async fn authenticate_api_key(
 	Ok(auth)
 }
 
-/// Kavita's own token is a JWT this server minted, and it carries the API key
-/// the client logged in with (`claims.api_key`), so a Kavita session stays
-/// bound to the device that key belongs to for its whole lifetime.
+/// Kavita's own token is a JWT this server minted. One minted from an API key
+/// (`claims.api_key`) is exactly as good as that key and no better: the key
+/// is validated again on every request — revoking or deleting the device, or
+/// the key expiring, ends the session at once rather than at the token's
+/// three-day `exp` — its narrowed permissions apply, and the request is bound
+/// to the key's device. A password-login token acts as the user.
 async fn authenticate_bearer(
 	ctx: &AppState,
 	token: &str,
@@ -95,16 +98,24 @@ async fn authenticate_bearer(
 	if stump_kavita::auth::looks_like_jwt(token) {
 		if let Ok(secret) = access_token_secret(ctx.conn.as_ref()).await {
 			if let Ok(claims) = stump_kavita::verify_token(secret.as_bytes(), token) {
+				if let Some(api_key) = claims.api_key.as_deref() {
+					let auth = authenticate_api_key(ctx, api_key).await?;
+					if auth.user.is_locked {
+						return Err(KavitaError::Forbidden(
+							"Your account has been locked by an administrator".to_owned(),
+						)
+						.into_response());
+					}
+					return Ok(auth);
+				}
 				let user = backend::user_by_kavita_id(ctx.conn.as_ref(), &claims)
 					.await
 					.map_err(|error| error.into_response())?;
-				let mut auth = AuthContext {
+				return Ok(AuthContext {
 					user,
-					api_key: claims.api_key.clone(),
+					api_key: None,
 					device_id: None,
-				};
-				bind_kavita_device(ctx, &mut auth).await?;
-				return Ok(auth);
+				});
 			}
 		}
 	}
@@ -198,5 +209,162 @@ mod tests {
 		assert_eq!(api_key_query(Some("apikey=x")), Some("x".to_owned()));
 		assert_eq!(api_key_query(Some("apiKey=")), None);
 		assert_eq!(api_key_query(None), None);
+	}
+
+	/// A Kavita token minted from a device key is only as good as the key:
+	/// it carries the key's narrowed permissions and device binding, and
+	/// revoking the device ends the session before the token's `exp`.
+	#[tokio::test]
+	async fn kavita_token_minted_from_a_device_key_dies_with_the_key() {
+		use models::entity::{server_config, user::AuthUser};
+		use models::shared::enums::UserPermission;
+		use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait, Statement};
+
+		let database = ::tests::db::test_database().await;
+		database
+			.execute(Statement::from_string(
+				DatabaseBackend::Sqlite,
+				stump_kavita::ids::CREATE_KAVITA_IDS_SQL,
+			))
+			.await
+			.unwrap();
+		server_config::ActiveModel {
+			initial_wal_setup_complete: Set(false),
+			jwt_access_secret: Set(Some("kavita-device-token-secret".to_owned())),
+			jwt_refresh_secret: Set(Some("kavita-device-refresh-secret".to_owned())),
+			..Default::default()
+		}
+		.insert(&database)
+		.await
+		.unwrap();
+		let user_row = ::tests::fake_data::User::new("kavita-owner")
+			.insert(&database)
+			.await;
+		let owner = AuthUser {
+			id: user_row.id.clone(),
+			username: user_row.username.clone(),
+			is_server_owner: true,
+			..Default::default()
+		};
+		let ctx = stump_core::Ctx::for_testing(database).arced();
+		let (device, credential) = ctx
+			.devices()
+			.create_device(
+				&owner,
+				stump_devices::CredentialIssuance::InteractiveSession,
+				stump_devices::DeviceKind::Kavita,
+				None,
+			)
+			.await
+			.expect("Kavita device credential");
+		let kavita_user_id = stump_kavita::KavitaIds::resolve(
+			ctx.conn.as_ref(),
+			stump_kavita::IdKind::User,
+			&owner.id,
+		)
+		.await
+		.unwrap();
+		// The secret is process-wide (`OnceLock`); mint with whatever the
+		// server will verify against.
+		let secret = access_token_secret(ctx.conn.as_ref()).await.unwrap();
+		let token = stump_kavita::mint_token(
+			secret.as_bytes(),
+			&owner.username,
+			kavita_user_id,
+			&["Login".to_owned()],
+			Some(&credential.secret),
+		)
+		.unwrap();
+
+		let auth = authenticate_bearer(&ctx, &token)
+			.await
+			.ok()
+			.expect("a live device key authenticates its token");
+		assert_eq!(auth.device_id.as_deref(), Some(device.id.as_str()));
+		assert_eq!(auth.api_key.as_deref(), Some(credential.secret.as_str()));
+		assert!(
+			!auth.user.is_server_owner,
+			"the token acts as the key, not as the owner behind it"
+		);
+		assert_eq!(auth.user.permissions, vec![UserPermission::DownloadFile]);
+
+		ctx.devices()
+			.revoke(&owner, &device.id)
+			.await
+			.expect("device revocation");
+		let response = authenticate_bearer(&ctx, &token)
+			.await
+			.err()
+			.expect("a revoked device key must not authenticate its token");
+		assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+	}
+
+	/// A password-login token carries no key, so it acts as the user — and
+	/// the user is reloaded on every request: locking the account answers
+	/// `403` for the rest of the token's three-day life.
+	#[tokio::test]
+	async fn kavita_password_login_token_stops_at_an_account_lock() {
+		use models::entity::{server_config, user};
+		use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait, Statement};
+
+		let database = ::tests::db::test_database().await;
+		database
+			.execute(Statement::from_string(
+				DatabaseBackend::Sqlite,
+				stump_kavita::ids::CREATE_KAVITA_IDS_SQL,
+			))
+			.await
+			.unwrap();
+		server_config::ActiveModel {
+			initial_wal_setup_complete: Set(false),
+			jwt_access_secret: Set(Some("kavita-password-token-secret".to_owned())),
+			jwt_refresh_secret: Set(Some("kavita-password-refresh-secret".to_owned())),
+			..Default::default()
+		}
+		.insert(&database)
+		.await
+		.unwrap();
+		let user_row = ::tests::fake_data::User::new("kavita-password")
+			.insert(&database)
+			.await;
+		let ctx = stump_core::Ctx::for_testing(database).arced();
+		let kavita_user_id = stump_kavita::KavitaIds::resolve(
+			ctx.conn.as_ref(),
+			stump_kavita::IdKind::User,
+			&user_row.id,
+		)
+		.await
+		.unwrap();
+		let secret = access_token_secret(ctx.conn.as_ref()).await.unwrap();
+		let token = stump_kavita::mint_token(
+			secret.as_bytes(),
+			&user_row.username,
+			kavita_user_id,
+			&["Admin".to_owned(), "Login".to_owned()],
+			None,
+		)
+		.unwrap();
+
+		let auth = authenticate_bearer(&ctx, &token)
+			.await
+			.ok()
+			.expect("a password-login token authenticates as the user");
+		assert_eq!(auth.user.id, user_row.id);
+		assert!(auth.api_key.is_none());
+		assert!(auth.device_id.is_none());
+
+		user::ActiveModel {
+			id: Set(user_row.id.clone()),
+			is_locked: Set(true),
+			..Default::default()
+		}
+		.update(ctx.conn.as_ref())
+		.await
+		.unwrap();
+		let response = authenticate_bearer(&ctx, &token)
+			.await
+			.err()
+			.expect("a locked account must not authenticate its token");
+		assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
 	}
 }

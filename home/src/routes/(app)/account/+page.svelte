@@ -5,6 +5,7 @@
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
+	import * as Table from '@stump/ui/components/ui/table';
 	import { request } from '@stump/ui/graphql/client';
 	import { MyLoginActivityDocument } from '$lib/graphql/generated/graphql';
 	import { getHomeSession } from '$lib/session.svelte';
@@ -81,36 +82,40 @@
 			{:else if activity.length === 0}
 				<p class="text-sm text-muted-foreground">No sign-ins recorded yet.</p>
 			{:else}
-				<table class="w-full text-sm">
-					<thead class="text-left text-muted-foreground">
-						<tr>
-							<th class="py-1 font-medium">When</th>
-							<th class="py-1 font-medium">From</th>
-							<th class="py-1 font-medium">Client</th>
-							<th class="py-1 text-right font-medium">Result</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each activity as entry (entry.id)}
-							<tr class="border-t">
-								<td class="py-1.5 whitespace-nowrap" title={absoluteTime(entry.timestamp)}>
-									{relativeTime(entry.timestamp)}
-								</td>
-								<td class="py-1.5 font-mono text-xs">{entry.ipAddress}</td>
-								<td class="max-w-md truncate py-1.5 text-xs text-muted-foreground" title={entry.userAgent}>
-									{entry.userAgent}
-								</td>
-								<td class="py-1.5 text-right">
-									{#if entry.authenticationSuccessful}
-										<Badge variant="outline">OK</Badge>
-									{:else}
-										<Badge variant="destructive">Failed</Badge>
-									{/if}
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
+				<div class="overflow-hidden rounded-xl border">
+					<Table.Root stacked class="table-fixed">
+						<Table.Header>
+							<Table.Row>
+								<Table.Head class="w-32">When</Table.Head>
+								<Table.Head class="w-44">From</Table.Head>
+								<Table.Head>Client</Table.Head>
+								<Table.Head class="w-20 text-right">Result</Table.Head>
+							</Table.Row>
+						</Table.Header>
+						<Table.Body>
+							{#each activity as entry (entry.id)}
+								<Table.Row>
+									<Table.Cell class="font-medium" title={absoluteTime(entry.timestamp)}>
+										{relativeTime(entry.timestamp)}
+									</Table.Cell>
+									<Table.Cell data-label="From" class="whitespace-normal">
+										<span class="font-mono text-xs break-all">{entry.ipAddress}</span>
+									</Table.Cell>
+									<Table.Cell data-label="Client" class="text-xs text-muted-foreground">
+										<span class="block max-w-full truncate" title={entry.userAgent}>{entry.userAgent}</span>
+									</Table.Cell>
+									<Table.Cell data-label="Result" class="text-right">
+										{#if entry.authenticationSuccessful}
+											<Badge variant="outline">OK</Badge>
+										{:else}
+											<Badge variant="destructive">Failed</Badge>
+										{/if}
+									</Table.Cell>
+								</Table.Row>
+							{/each}
+						</Table.Body>
+					</Table.Root>
+				</div>
 			{/if}
 		</CardContent>
 	</Card>

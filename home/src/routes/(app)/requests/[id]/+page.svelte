@@ -10,6 +10,7 @@
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Input } from '@stump/ui/components/ui/input';
 	import { Label } from '@stump/ui/components/ui/label';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
@@ -23,7 +24,14 @@
 	} from '$lib/graphql/generated/graphql';
 	import { getHomeSession } from '$lib/session.svelte';
 	import { absoluteTime, relativeTime } from '$lib/format';
-	import { canEditNarrator, requestFormatLabel, safeCoverUrl, statusDescription } from '$lib/requests';
+	import {
+		approvalPolicyLabel,
+		canEditNarrator,
+		providerLabel,
+		requestFormatLabel,
+		safeCoverUrl,
+		statusDescription
+	} from '$lib/requests';
 	import RequestAcquisitionPanel from '$lib/components/requests/RequestAcquisitionPanel.svelte';
 	import RequestFormatControl from '$lib/components/requests/RequestFormatControl.svelte';
 	import RequestStatusBadge from '$lib/components/requests/RequestStatusBadge.svelte';
@@ -137,26 +145,24 @@
 
 <div class="flex flex-col gap-6">
 	<div class="flex flex-wrap items-start gap-3">
-		<div class="mr-auto">
+		<div class="mr-auto min-w-0">
 			<Button variant="ghost" size="sm" href={resolve('/requests')}>
 				<ArrowLeftIcon data-icon="inline-start" aria-hidden="true" />
 				All requests
 			</Button>
 			{#if requestRecord}
 				<div class="mt-3 flex items-start gap-3">
-					{#if cover}
-						<img src={cover} alt="" class="size-16 rounded-md border object-cover" />
-					{/if}
-					<div>
+					<Cover src={cover} class="size-16 rounded-md border" />
+					<div class="min-w-0">
 						<div class="flex flex-wrap items-center gap-2">
-							<h1 class="text-2xl font-semibold tracking-tight">{requestRecord.title}</h1>
+							<h1 class="line-clamp-2 text-2xl font-semibold tracking-tight break-words" title={requestRecord.title}>{requestRecord.title}</h1>
 							<RequestStatusBadge status={requestRecord.status} />
 							{#if requestRecord.preferredNarrator}
 								<Badge variant="outline">Narrator: {requestRecord.preferredNarrator}</Badge>
 							{/if}
 						</div>
 						<p class="mt-1 text-sm text-muted-foreground">
-							{requestRecord.authors || 'Author not provided'}{requestRecord.sourceProvider ? ` · ${requestRecord.sourceProvider}` : ''}
+							{requestRecord.authors || 'Author not provided'}{requestRecord.sourceProvider ? ` · ${providerLabel(requestRecord.sourceProvider)}` : ''}
 						</p>
 					</div>
 				</div>
@@ -186,12 +192,9 @@
 		{/if}
 
 		<Card>
-			<CardHeader class="flex flex-row items-start gap-3 space-y-0">
-				<div class="mr-auto">
-					<CardTitle class="text-base">Request status</CardTitle>
-					<CardDescription class="mt-1">{statusDescription(requestRecord.status)}</CardDescription>
-				</div>
-				<RequestStatusBadge status={requestRecord.status} />
+			<CardHeader>
+				<CardTitle class="text-base">Request status</CardTitle>
+				<CardDescription>{statusDescription(requestRecord.status)}</CardDescription>
 			</CardHeader>
 			{#if requestRecord.failureMessage || requestRecord.failureCode}
 				<CardContent class="pt-0">
@@ -210,7 +213,7 @@
 			/>
 		{/if}
 
-		<div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+		<div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
 			<div class="flex min-w-0 flex-col gap-5">
 				<Card>
 					<CardHeader>
@@ -256,7 +259,7 @@
 							{#if requestRecord.sourceProvider}
 								<div>
 									<dt class="text-muted-foreground">Metadata provider</dt>
-									<dd class="mt-1 font-medium">{requestRecord.sourceProvider}</dd>
+									<dd class="mt-1 font-medium">{providerLabel(requestRecord.sourceProvider)}</dd>
 								</div>
 							{/if}
 							{#if requestRecord.remoteId}
@@ -333,13 +336,15 @@
 					</CardHeader>
 					<CardContent>
 						<dl class="grid gap-3 text-sm">
-							<div>
-								<dt class="text-muted-foreground">Requester</dt>
-								<dd class="mt-1 break-all font-mono text-xs">{requestRecord.requesterId}</dd>
-							</div>
+							{#if requestRecord.requesterId === session.user?.id}
+								<div>
+									<dt class="text-muted-foreground">Requester</dt>
+									<dd class="mt-1 font-medium">You</dd>
+								</div>
+							{/if}
 							<div>
 								<dt class="text-muted-foreground">Approval policy</dt>
-								<dd class="mt-1 font-medium">{requestRecord.approvalPolicy.replace(/_/g, ' ').toLowerCase()}</dd>
+								<dd class="mt-1 font-medium">{approvalPolicyLabel(requestRecord.approvalPolicy)}</dd>
 							</div>
 							<div>
 								<dt class="text-muted-foreground">Created</dt>
@@ -355,16 +360,16 @@
 									<dd class="mt-1 font-medium" title={absoluteTime(requestRecord.approvedAt)}>{relativeTime(requestRecord.approvedAt)}</dd>
 								</div>
 							{/if}
-							{#if requestRecord.approvedBy}
+							{#if requestRecord.approvedBy && requestRecord.approvedBy === session.user?.id}
 								<div>
 									<dt class="text-muted-foreground">Approved by</dt>
-									<dd class="mt-1 break-all font-mono text-xs">{requestRecord.approvedBy}</dd>
+									<dd class="mt-1 font-medium">You</dd>
 								</div>
 							{/if}
-							{#if requestRecord.rejectedBy}
+							{#if requestRecord.rejectedBy && requestRecord.rejectedBy === session.user?.id}
 								<div>
 									<dt class="text-muted-foreground">Rejected by</dt>
-									<dd class="mt-1 break-all font-mono text-xs">{requestRecord.rejectedBy}</dd>
+									<dd class="mt-1 font-medium">You</dd>
 								</div>
 							{/if}
 							{#if requestRecord.completedAt}

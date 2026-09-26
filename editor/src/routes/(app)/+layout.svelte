@@ -141,7 +141,7 @@
 						</select>
 					</label>
 				{/if}
-				<ThemeSwitcher class="flex-row items-center gap-2" />
+				<ThemeSwitcher />
 				{#if session.user}
 					<span class="hidden text-sm text-muted-foreground md:inline">{session.user.username}</span>
 					<Button variant="ghost" size="sm" onclick={logout}>Log out</Button>

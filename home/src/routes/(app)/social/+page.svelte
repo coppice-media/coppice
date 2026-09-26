@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import BookOpenCheckIcon from '@lucide/svelte/icons/book-open-check';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import LightbulbIcon from '@lucide/svelte/icons/lightbulb';
 	import SendIcon from '@lucide/svelte/icons/send';
@@ -10,6 +9,7 @@
 	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
 	import { Input } from '@stump/ui/components/ui/input';
 	import { PageHeader } from '@stump/ui/components/ui/page-header';
@@ -627,7 +627,7 @@
 				{#each visibleAdaptiveRecommendations as recommendation (recommendation.targetKey)}
 					<Card>
 						<CardHeader class="flex-row items-start gap-3 space-y-0">
-							{#if recommendation.coverUrl}<img class="size-14 shrink-0 rounded-md border object-cover" src={recommendation.coverUrl} alt="Cover for {recommendation.title}" loading="lazy" />{:else}<div class="flex size-14 shrink-0 items-center justify-center rounded-md border bg-muted" aria-hidden="true"><BookOpenCheckIcon class="size-5 text-muted-foreground" /></div>{/if}
+							<Cover src={recommendation.coverUrl} alt="Cover for {recommendation.title}" aspect="square" class="size-14 rounded-md border" />
 							<div class="min-w-0"><CardTitle class="text-base">{recommendation.title}</CardTitle><p class="mt-1 text-sm text-muted-foreground">{formatAuthors(recommendation.authors) || 'Author not provided'}</p></div>
 						</CardHeader>
 						<CardContent><p class="text-sm text-muted-foreground">{adaptiveReason(recommendation)}</p></CardContent>

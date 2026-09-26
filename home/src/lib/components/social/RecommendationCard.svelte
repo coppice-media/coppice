@@ -2,12 +2,12 @@
 	import ArrowDownToLineIcon from '@lucide/svelte/icons/arrow-down-to-line';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import Clock3Icon from '@lucide/svelte/icons/clock-3';
-	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
+	import { Cover } from '@stump/ui/components/ui/cover';
 	import type { AdaptiveRecommendation, SocialRecommendation } from '$lib/social';
 	import { formatAuthors, recommendationReason } from '$lib/social';
 
@@ -56,18 +56,7 @@
 
 <Card class="flex h-full flex-col">
 	<CardHeader class="flex-row items-start gap-3 space-y-0">
-		{#if recommendation.coverUrl}
-			<img
-				class="size-14 shrink-0 rounded-md border object-cover"
-				src={recommendation.coverUrl}
-				alt="Cover for {recommendation.title}"
-				loading="lazy"
-			/>
-		{:else}
-			<div class="flex size-14 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground" aria-hidden="true">
-				<ExternalLinkIcon class="size-5" />
-			</div>
-		{/if}
+		<Cover src={recommendation.coverUrl} alt="Cover for {recommendation.title}" aspect="square" class="size-14 rounded-md border" />
 		<div class="min-w-0 flex-1">
 			<div class="flex flex-wrap items-center gap-2">
 				<CardTitle class="text-base">{recommendation.title}</CardTitle>

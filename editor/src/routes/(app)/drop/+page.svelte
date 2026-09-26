@@ -242,16 +242,16 @@
 			<Empty><EmptyHeader><EmptyTitle>No staged items</EmptyTitle><EmptyDescription>Upload files above or run a folder scan to begin a staged ingest.</EmptyDescription></EmptyHeader></Empty>
 		{:else}
 			<div class="overflow-hidden rounded-xl border bg-background">
-				<Table>
+				<Table stacked>
 					<TableHeader><TableRow><TableHead>Source</TableHead><TableHead>Size</TableHead><TableHead>Status</TableHead><TableHead>Progress</TableHead><TableHead class="text-right">Actions</TableHead></TableRow></TableHeader>
 					<TableBody>
 						{#each items as item (item.id)}
 							<TableRow>
 								<TableCell class="max-w-[28rem]"><div class="truncate font-medium">{item.filename}</div><div class="truncate text-xs text-muted-foreground">{item.relativePath ?? item.filename}</div></TableCell>
-								<TableCell class="whitespace-nowrap text-muted-foreground">{formatBytes(item.sizeBytes)}</TableCell>
-								<TableCell><StatusBadge status={item.status} /></TableCell>
-								<TableCell class="min-w-36"><ProgressIndicator dropItemId={item.id} analysisJobId={item.analysisJob?.id} compact /></TableCell>
-								<TableCell><div class="flex justify-end gap-2">{#if item.status === 'RECEIVED' || item.status === 'STAGED' || item.status === 'FAILED'}<Button size="sm" variant="outline" disabled={enqueueMutation.isPending} onclick={() => enqueue(item.id)}>Enqueue</Button>{/if}{#if item.status === 'AWAITING_REVIEW' || item.status === 'READY'}<Button href={`/rework?item=${encodeURIComponent(item.id)}`} size="sm" variant="outline">Review</Button>{/if}{#if item.status !== 'COMMITTED' && item.status !== 'REJECTED'}<Button size="sm" variant="ghost" disabled={discardMutation.isPending} onclick={() => discard(item.id)}>Discard</Button>{/if}</div></TableCell>
+								<TableCell data-label="Size" class="whitespace-nowrap text-muted-foreground">{formatBytes(item.sizeBytes)}</TableCell>
+								<TableCell data-label="Status"><StatusBadge status={item.status} /></TableCell>
+								<TableCell data-label="Progress" class="min-w-36"><div class="w-40 @md/table:w-auto"><ProgressIndicator dropItemId={item.id} analysisJobId={item.analysisJob?.id} compact /></div></TableCell>
+								<TableCell><div class="flex flex-wrap gap-2 @md/table:justify-end">{#if item.status === 'RECEIVED' || item.status === 'STAGED' || item.status === 'FAILED'}<Button size="sm" variant="outline" disabled={enqueueMutation.isPending} onclick={() => enqueue(item.id)}>Enqueue</Button>{/if}{#if item.status === 'AWAITING_REVIEW' || item.status === 'READY'}<Button href={`/rework?item=${encodeURIComponent(item.id)}`} size="sm" variant="outline">Review</Button>{/if}{#if item.status !== 'COMMITTED' && item.status !== 'REJECTED'}<Button size="sm" variant="ghost" disabled={discardMutation.isPending} onclick={() => discard(item.id)}>Discard</Button>{/if}</div></TableCell>
 							</TableRow>
 						{/each}
 					</TableBody>
