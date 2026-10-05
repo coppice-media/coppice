@@ -18,7 +18,7 @@ use models::shared::enums::{JobStatus, UserPermission};
 use sea_orm::EntityTrait;
 use stump_ingest::contract::SearchQuery;
 use stump_ingest::policy;
-use stump_ingest::store::Pagination as StorePagination;
+use stump_ingest::store::{Pagination as StorePagination, QUALITY_CHECK_SETTING_KIND};
 
 use crate::object::metadata_policy::MetadataPolicy;
 
@@ -380,20 +380,41 @@ impl IngestQuery {
 		Ok(hits.into_iter().map(IngestSearchHit::from).collect())
 	}
 
+	/// The registered quality checks with the server-wide `enabled` switch
+	/// applied; disabled checks are listed only with `includeDisabled`.
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ReadJobs)")]
 	async fn ingest_quality_check_catalog(
 		&self,
 		ctx: &Context<'_>,
 		#[graphql(default = false)] include_disabled: bool,
 	) -> Result<Vec<IngestQualityCheckDescriptor>> {
-		let _ = include_disabled;
-		let catalog = ctx.data::<CoreContext>()?.ingest().quality.catalog();
-		Ok(catalog
+		let services = ctx.data::<CoreContext>()?.ingest();
+		let stored = services
+			.store
+			.quality_check_settings()
+			.await
+			.map_err(map_store_error)?;
+		Ok(services
+			.quality
+			.catalog()
 			.into_iter()
-			.map(IngestQualityCheckDescriptor::from)
+			.map(|descriptor| {
+				let enabled = stored
+					.get(&descriptor.id)
+					.and_then(|values| values.get("enabled"))
+					.and_then(serde_json::Value::as_bool)
+					.unwrap_or(true);
+				IngestQualityCheckDescriptor {
+					enabled,
+					..IngestQualityCheckDescriptor::from(descriptor)
+				}
+			})
+			.filter(|descriptor| include_disabled || descriptor.enabled)
 			.collect())
 	}
 
+	/// The server-wide settings of one quality check (analysis is not
+	/// per-user, so per-user `CHECK` rows are never read).
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ReadJobs)")]
 	async fn ingest_quality_check_settings(
 		&self,
@@ -401,7 +422,6 @@ impl IngestQuery {
 		check_id: String,
 	) -> Result<Option<IngestQualityCheckSettings>> {
 		let core = ctx.data::<CoreContext>()?;
-		let auth = ctx.data::<stump_auth::AuthContext>()?;
 		let services = core.ingest();
 		let Some(descriptor) = services
 			.quality
@@ -413,7 +433,7 @@ impl IngestQuery {
 		};
 		let model = services
 			.store
-			.plugin_settings(&check_id, "CHECK", None, Some(&auth.user.id))
+			.plugin_settings(&check_id, QUALITY_CHECK_SETTING_KIND, None, None)
 			.await
 			.map_err(map_store_error)?;
 		Ok(Some(IngestQualityCheckSettings::from_parts(

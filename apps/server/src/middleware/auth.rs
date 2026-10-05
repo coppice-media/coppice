@@ -52,11 +52,10 @@ use stump_core::opds::v2_0::{
 use stump_devices::{CredentialRef, Protocol};
 use tower_sessions::Session;
 
-#[cfg(feature = "komga")]
 use crate::config::session::SESSION_NAME;
 use crate::{
 	config::{
-		jwt::extract_user_from_jwt,
+		jwt::{confirm_active_user, extract_user_from_jwt},
 		session::{delete_cookie_header, SESSION_USER_KEY},
 		state::AppState,
 	},
@@ -300,8 +299,9 @@ pub(crate) async fn strip_komga_unauthorized_cookie_clears(
 
 /// Removes every `Set-Cookie` that expires the session cookie, keeping all
 /// other cookies (including a fresh session issued on the same response).
-#[cfg(feature = "komga")]
-fn strip_session_cookie_clears(headers: &mut header::HeaderMap) {
+/// Shared by the Komga 401 path and the capability-scoped club reader, whose
+/// guest errors must never sign the user out of the normal app.
+pub(crate) fn strip_session_cookie_clears(headers: &mut header::HeaderMap) {
 	let kept: Vec<_> = headers
 		.get_all(header::SET_COOKIE)
 		.iter()
@@ -314,7 +314,6 @@ fn strip_session_cookie_clears(headers: &mut header::HeaderMap) {
 	}
 }
 
-#[cfg(feature = "komga")]
 fn is_session_cookie_clear(cookie: &str) -> bool {
 	let Some(rest) = cookie.strip_prefix(SESSION_NAME) else {
 		return false;
@@ -523,6 +522,11 @@ pub async fn auth_middleware(
 					session.insert(SESSION_USER_KEY, user.id.clone()).await
 				{
 					tracing::error!(error = ?error, "Failed to save session");
+				}
+				if let Err(error) = confirm_active_user(&user.id, ctx.conn.as_ref()).await
+				{
+					let _ = session.delete().await;
+					return Err(error.into_response());
 				}
 			}
 
@@ -1081,6 +1085,10 @@ async fn handle_basic_auth(
 		enforce_max_sessions(&user, conn).await?;
 		if let Err(error) = session.insert(SESSION_USER_KEY, user.id.clone()).await {
 			tracing::error!(error = ?error, "Failed to save session");
+		}
+		if let Err(error) = confirm_active_user(&user.id, conn).await {
+			let _ = session.delete().await;
+			return Err(error);
 		}
 	}
 

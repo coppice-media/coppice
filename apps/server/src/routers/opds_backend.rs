@@ -11,7 +11,7 @@ use axum::{
 	Extension, Json, Router,
 };
 use stump_auth::AuthContext;
-use stump_core::opds::v2_0::progression::OPDSProgressionInput;
+use stump_core::opds::v2_0::progression::OPDSProgression;
 use stump_opds::{BrowseParams, OpdsBackend, ProviderHost};
 
 use crate::{
@@ -441,6 +441,24 @@ impl OpdsBackend for OpdsBackendImpl {
 		.into_response())
 	}
 
+	async fn v2_browse_library_series(
+		&self,
+		auth: AuthContext,
+		host: ProviderHost,
+		id: String,
+		pagination: stump_api_types::OffsetPagination,
+	) -> Result<Response, Self::Error> {
+		Ok(v2_0::browse_library_series(
+			State(self.0.clone()),
+			host_details(host),
+			Path(id),
+			Query(pagination),
+			Extension(auth),
+		)
+		.await?
+		.into_response())
+	}
+
 	async fn v2_browse_series(
 		&self,
 		auth: AuthContext,
@@ -595,24 +613,20 @@ impl OpdsBackend for OpdsBackendImpl {
 	async fn v2_get_book_progression(
 		&self,
 		auth: AuthContext,
-		host: ProviderHost,
 		id: String,
 	) -> Result<Response, Self::Error> {
-		Ok(v2_0::get_book_progression(
-			Path(id),
-			State(self.0.clone()),
-			host_details(host),
-			Extension(auth),
+		Ok(
+			v2_0::get_book_progression(Path(id), State(self.0.clone()), Extension(auth))
+				.await?
+				.into_response(),
 		)
-		.await?
-		.into_response())
 	}
 
 	async fn v2_update_book_progression(
 		&self,
 		auth: AuthContext,
 		id: String,
-		input: OPDSProgressionInput,
+		input: OPDSProgression,
 	) -> Result<Response, Self::Error> {
 		Ok(v2_0::update_book_progression(
 			Path(id),

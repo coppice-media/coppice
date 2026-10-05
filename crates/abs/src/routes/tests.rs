@@ -1537,6 +1537,39 @@ async fn local_all_reports_per_session_whether_the_head_moved() {
 	);
 }
 
+/// The merge must measure an offline position against the server's duration,
+/// not the one the client cached: Lissen's offline upload reports its own
+/// `duration` (12 s here) while the server knows the book is 30 s long. With
+/// the client's value a stale 4 s position looked like 33% and beat a newer
+/// 9 s head (30%).
+#[tokio::test]
+async fn local_merge_measures_progress_with_the_server_duration() {
+	let fixture = fixture().await;
+	fixture.backend.set_audio(
+		&fixture.item_id,
+		one_track_audio("/books/analytical-engine.m4b", 30_000),
+	);
+	let now = chrono::Utc::now().timestamp_millis();
+
+	let (status, _) = request(
+		fixture.backend.clone(),
+		&fixture.user,
+		"POST",
+		"/api/session/local-all",
+		Some(json!({
+			"sessions": [local_session("short-cache", &fixture.item_id, 4.0, 4.0, now)],
+			"deviceInfo": { "deviceId": "cap-device" }
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let applied = fixture.backend.applied_updates();
+	assert_eq!(
+		applied.last().expect("an applied update").1.duration_ms,
+		30_000
+	);
+}
+
 #[tokio::test]
 async fn listening_stats_are_derived_from_the_same_session_rows() {
 	let fixture = fixture().await;

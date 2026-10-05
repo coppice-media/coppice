@@ -14,7 +14,7 @@
 //! it over, and writes back whatever the hub queues. That is what lets the
 //! crate's own test drive the identical state machine through its own listener.
 
-use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
 	body::Bytes,
@@ -26,15 +26,23 @@ use axum::{
 	middleware,
 	response::Response,
 	routing::{get, put},
-	Json, Router,
+	Extension, Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
-use models::{entity::device, shared::enums::DeviceKind};
-use sea_orm::EntityTrait;
+use models::{
+	entity::{api_key, device, device_credential, user},
+	shared::{
+		api_key::{APIKeyPermissions, API_KEY_PREFIX},
+		enums::{DeviceCredentialKind, DeviceKind, UserPermission},
+		permission_set::PermissionSet,
+	},
+};
+use prefixed_api_key::{PrefixedApiKey, PrefixedApiKeyController};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use stump_auth::AuthContext;
-use stump_worker::{protocol::parse_worker_frame, WorkerError, WorkerJobs};
+use stump_worker::{protocol::parse_worker_frame, WorkerError};
 
 use crate::{
 	config::state::AppState,
@@ -94,6 +102,143 @@ impl FromRequestParts<AppState> for WorkerDevice {
 	}
 }
 
+/// An upgrade has already verified the secret. Keep only its immutable lookup
+/// identity; subsequent frames recheck the database instead of trusting the
+/// user/device snapshot captured by the original HTTP request.
+pub(super) struct LiveWorkerCredential {
+	short_token: String,
+	long_token_hash: String,
+	user_id: String,
+	device_id: String,
+	kind: DeviceKind,
+}
+
+impl LiveWorkerCredential {
+	pub(super) fn from_upgrade(
+		auth: &AuthContext,
+		device: &device::Model,
+	) -> Option<Self> {
+		let key = PrefixedApiKey::from_string(auth.api_key.as_deref()?).ok()?;
+		if key.prefix() != API_KEY_PREFIX
+			|| auth.user.id != device.user_id
+			|| auth.device_id() != Some(device.id.as_str())
+		{
+			return None;
+		}
+		let controller = PrefixedApiKeyController::configure()
+			.prefix(API_KEY_PREFIX.to_owned())
+			.seam_defaults()
+			.finalize()
+			.ok()?;
+		Some(Self {
+			short_token: key.short_token().to_string(),
+			long_token_hash: controller.long_token_hashed(&key),
+			user_id: auth.user.id.clone(),
+			device_id: device.id.clone(),
+			kind: device.kind,
+		})
+	}
+
+	/// Lock the owning account row for a bounded source inventory write. This
+	/// serializes that write against deletion on backends whose transactions do
+	/// not begin with SQLite's database-wide immediate write lock.
+	pub(super) async fn lock_account_for_mutation<C: ConnectionTrait>(
+		&self,
+		conn: &C,
+	) -> bool {
+		if user::Entity::update_many()
+			.col_expr(
+				user::Column::DeletedAt,
+				sea_orm::sea_query::Expr::col(user::Column::DeletedAt).into(),
+			)
+			.filter(user::Column::Id.eq(&self.user_id))
+			.filter(user::Column::DeletedAt.is_null())
+			.exec(conn)
+			.await
+			.is_err()
+		{
+			return false;
+		}
+		matches!(
+			user::Entity::find_by_id(&self.user_id).one(conn).await,
+			Ok(Some(user)) if user.deleted_at.is_none()
+		)
+	}
+	/// Recheck the original bearer credential and device against current rows
+	/// rather than trusting the HTTP request's captured account snapshot.
+	pub(super) async fn is_live<C: ConnectionTrait>(
+		&self,
+		conn: &C,
+		required_permission: Option<UserPermission>,
+	) -> bool {
+		let Ok(Some((key, Some(user)))) = api_key::Entity::find()
+			.filter(api_key::Column::ShortToken.eq(&self.short_token))
+			.filter(api_key::Column::LongTokenHash.eq(&self.long_token_hash))
+			.filter(api_key::Column::UserId.eq(&self.user_id))
+			.find_also_related(user::Entity)
+			.one(conn)
+			.await
+		else {
+			return false;
+		};
+		if user.deleted_at.is_some()
+			|| user.is_locked
+			|| key
+				.expires_at
+				.is_some_and(|expiry| expiry < chrono::Utc::now())
+		{
+			return false;
+		}
+		let user_permissions =
+			PermissionSet::from(user.permissions.unwrap_or_default()).resolve_into_vec();
+		if !user.is_server_owner
+			&& !user_permissions.contains(&UserPermission::AccessApiKeys)
+		{
+			return false;
+		}
+		if let Some(permission) = required_permission {
+			if !user.is_server_owner && !user_permissions.contains(&permission) {
+				return false;
+			}
+			let authorized = match &key.permissions {
+				APIKeyPermissions::Inherit(_) => {
+					user.is_server_owner || user_permissions.contains(&permission)
+				},
+				APIKeyPermissions::Custom(permissions) => {
+					permissions.contains(&permission)
+				},
+			};
+			if !authorized {
+				return false;
+			}
+		}
+
+		let Ok(Some(device)) =
+			device::Entity::find_by_id(&self.device_id).one(conn).await
+		else {
+			return false;
+		};
+		if device.user_id != self.user_id
+			|| device.kind != self.kind
+			|| device.revoked_at.is_some()
+		{
+			return false;
+		}
+		matches!(
+			device_credential::Entity::find()
+				.filter(device_credential::Column::DeviceId.eq(&self.device_id))
+				.filter(
+					device_credential::Column::CredentialKind
+						.eq(DeviceCredentialKind::ApiKey)
+				)
+				.filter(device_credential::Column::CredentialRef.eq(&self.short_token))
+				.one(conn)
+				.await,
+			Ok(Some(_))
+		)
+	}
+}
+
 /// `GET /api/v2/workers/socket`
 ///
 /// The worker sends `hello`, then `claim` / `progress` / `result` / `fail`; the
@@ -102,22 +247,37 @@ impl FromRequestParts<AppState> for WorkerDevice {
 async fn socket(
 	State(ctx): State<AppState>,
 	WorkerDevice(device): WorkerDevice,
+	Extension(auth): Extension<AuthContext>,
 	upgrade: WebSocketUpgrade,
 ) -> APIResult<Response> {
-	let jobs = ctx.worker_jobs();
-	Ok(upgrade.on_upgrade(move |socket| serve(jobs, device, socket)))
+	Ok(upgrade.on_upgrade(move |socket| serve(ctx, device, auth, socket)))
 }
 
-/// One connection's lifetime.
-async fn serve(jobs: Arc<WorkerJobs>, device: device::Model, socket: WebSocket) {
-	let mut socket = socket;
-	// The first frame must be `hello`: until the hub knows what this worker
-	// can do it cannot be offered anything, so there is nothing else to do
-	// with a connection that starts any other way.
+/// One connection's lifetime. Initial HTTP authentication cannot authorize a
+/// long-lived socket: every frame and job offer rechecks the same key, device,
+/// and account (including permissions) before it crosses the wire.
+async fn serve(
+	ctx: AppState,
+	device: device::Model,
+	auth: AuthContext,
+	mut socket: WebSocket,
+) {
+	let Some(credential) = LiveWorkerCredential::from_upgrade(&auth, &device) else {
+		let _ = socket.close().await;
+		return;
+	};
+	// Nothing can be offered until the first `hello` identifies the worker.
 	let Some(Ok(Message::Text(hello))) = socket.recv().await else {
 		tracing::debug!(device = %device.id, "Worker socket closed before hello");
 		return;
 	};
+	if !credential
+		.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessWorker))
+		.await
+	{
+		let _ = socket.close().await;
+		return;
+	}
 	let hello = match parse_worker_frame(&hello) {
 		Ok(frame) => frame,
 		Err(error) => {
@@ -126,6 +286,7 @@ async fn serve(jobs: Arc<WorkerJobs>, device: device::Model, socket: WebSocket) 
 		},
 	};
 
+	let jobs = ctx.worker_jobs();
 	let (mut outbound, epoch) =
 		match jobs.attach_worker(&device.id, &device.name, hello).await {
 			Ok(attached) => attached,
@@ -137,37 +298,47 @@ async fn serve(jobs: Arc<WorkerJobs>, device: device::Model, socket: WebSocket) 
 	tracing::info!(device = %device.id, name = %device.name, "Worker connected");
 
 	let (mut writer, mut reader) = socket.split();
-	let writes = tokio::spawn(async move {
-		while let Some(text) = outbound.recv().await {
-			if writer.send(Message::Text(text.into())).await.is_err() {
-				break;
-			}
-		}
-		let _ = writer.close().await;
-	});
-
-	while let Some(Ok(message)) = reader.next().await {
-		let Message::Text(text) = message else {
-			// Ping/pong are answered by axum; a binary frame is not part of
-			// the protocol and is ignored rather than fatal.
-			continue;
-		};
-		match parse_worker_frame(&text) {
-			Ok(frame) => {
-				if let Err(error) = jobs.handle_frame(&device.id, frame).await {
-					// A frame for a job this worker no longer holds is a race,
-					// not an attack: log it and keep the connection, because
-					// dropping it would strand the jobs it does hold.
-					tracing::debug!(?error, device = %device.id, "Worker frame refused");
+	// Idle sockets are closed too; active frames are always checked immediately
+	// rather than waiting for this bounded idle sweep.
+	let mut idle_check = tokio::time::interval(Duration::from_secs(5));
+	idle_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+	loop {
+		tokio::select! {
+			_ = idle_check.tick() => {
+				if !credential.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessWorker)).await {
+					break;
 				}
 			},
-			Err(error) => {
-				tracing::warn!(%error, device = %device.id, "Unparseable worker frame");
+			message = reader.next() => {
+				let Some(Ok(message)) = message else { break };
+				if !credential.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessWorker)).await {
+					break;
+				}
+				let Message::Text(text) = message else {
+					// Ping/pong are answered by axum; binary frames are not protocol.
+					continue;
+				};
+				match parse_worker_frame(&text) {
+					Ok(frame) => {
+						if let Err(error) = jobs.handle_frame(&device.id, frame).await {
+							tracing::debug!(?error, device = %device.id, "Worker frame refused");
+						}
+					},
+					Err(error) => tracing::warn!(%error, device = %device.id, "Unparseable worker frame"),
+				}
+			},
+			text = outbound.recv() => {
+				let Some(text) = text else { break };
+				if !credential.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessWorker)).await
+					|| writer.send(Message::Text(text.into())).await.is_err()
+				{
+					break;
+				}
 			},
 		}
 	}
 
-	writes.abort();
+	let _ = writer.close().await;
 	if let Err(error) = jobs.detach_worker(&device.id, epoch).await {
 		tracing::warn!(?error, device = %device.id, "Failed to release a worker");
 	}

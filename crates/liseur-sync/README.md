@@ -17,22 +17,20 @@ replacing the CAS source of truth.
 
 | Reference | Pin | Used for |
 | --- | --- | --- |
-| liseur-sync server | [`906889ff` `docs/openapi.yaml`](https://github.com/chmouel/liseur-sync/blob/906889ffe11fc7260b071c1f142aeee1fa8a1419/docs/openapi.yaml) | Current documented routes, measured sessions, and structured refusals; `/v1/me/settings` is implemented in Go source but absent from this OpenAPI revision |
+| liseur-sync current server source | [`d8000293ffcfa70072a3ce5543cc57e66e0d039b`](https://github.com/chmouel/liseur-sync/commit/d8000293ffcfa70072a3ce5543cc57e66e0d039b) | Current source-derived contract; not a new device run |
+| liseur-sync historical OpenAPI | [`906889ff` `docs/openapi.yaml`](https://github.com/chmouel/liseur-sync/blob/906889ffe11fc7260b071c1f142aeee1fa8a1419/docs/openapi.yaml) | Earlier documented routes, measured sessions, and structured refusals; `/v1/me/settings` exists in Go source but was absent from this OpenAPI revision |
 | liseur-sync ADR 0028 | [`docs/adr/0028-annotation-sync.md`](https://github.com/chmouel/liseur-sync/blob/f8ce32b79aca0cddde84e9004fedde121fb77365/docs/adr/0028-annotation-sync.md) | Annotations beside, not inside, the append-only op log |
-| Liseur Android client | [`v0.19.0` `62ecb5a5`](https://github.com/chmouel/liseur/commit/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6) — `AnnotationWire.kt`, `LiseurSyncApi.kt`, `LiseurSyncSettings.kt`, `LiseurSyncPositionSync.kt` | Current source contracts; older device replay remains pinned to `31f8182d` |
+| Liseur Android current client source | [`v0.20.0` `d8f0304c`](https://github.com/chmouel/liseur/commit/d8f0304c1c03ecdd0f4ed4ec1daf246f3dfb6d9f) | Current source-only client contract; no v0.20.0 device run |
+| Liseur Android historical client source | [`v0.19.0` `62ecb5a5`](https://github.com/chmouel/liseur/commit/62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6) — `AnnotationWire.kt`, `LiseurSyncApi.kt`, `LiseurSyncSettings.kt`, `LiseurSyncPositionSync.kt` | Historical source contracts; older device replay remains pinned to `31f8182d` |
 | Liseur Android client | [`v0.13.0` `799a8c7a`](https://github.com/chmouel/liseur/commit/799a8c7afac022d49388cb637f091765557b0acf) — `app/src/main/kotlin/com/chmouel/liseur/data/liseursync/AnnotationWire.kt` | Strict six-color annotation decoder drops a whole record for an unsupported color; legacy responses therefore omit only extended fields |
 
-Client-verification status (`docs/content/docs/developer/client-verification.mdx:29`):
-**Device** (2026-09-04, Liseur `31f8182d`) — login, token mint, `/v1/token`,
-folders/books/covers, download, positions/heads. The last recorded
-`make replay-liseur-sync` run covered 25 requests on that older baseline.
-This change adds Hurl assertions for account-settings LWW/merge behavior,
-session `active_ms`, and structured work-refusal identities. These expanded
-contracts have not yet been replayed against a rebuilt Coppice server.
-
-Current Liseur v0.19.0 (`62ecb5a5`) and liseur-sync (`906889ff`) pins are
-source-only; no device run is claimed for these newly inspected client-source
-contracts.
+Client-verification status (see `docs/content/docs/developer/client-verification.mdx`):
+**Device** (2026-09-04, Liseur `31f8182d`) covered login, token mint,
+`/v1/token`, folders/books/covers, download, positions/heads. Separately,
+the recorded 2026-10-04 `make replay-liseur-sync` pass exercised 43 Hurl
+requests against the server, not a physical client. Current Liseur v0.20.0
+(`d8f0304c`) and liseur-sync (`d8000293`) pins are source-only; neither
+extends the older device evidence.
 
 ## Decisions
 
@@ -66,6 +64,8 @@ contracts.
 | Extended KOReader colors/drawers require `X-Liseur-Annotation-Capabilities: annotation-color-drawer-v1`; without it, unsupported colors are omitted but the annotation remains visible | Pinned Liseur v0.13/v0.18 discard records whose `color` is outside their six-token palette; the plugin opts in to the full KOReader palette and style | `src/lib.rs` `annotation_record_for_client`; pinned `AnnotationWire.kt` sources; regression test `validates_protocol_boundaries` |
 | Linked native highlights/notes/bookmarks export under deterministic `stump-native:*` CAS IDs. Liseur edits use `base_rev` to write text/color/locator back; Home GraphQL edits change body/color only and preserve the locator. Either side's delete publishes a tombstone. `liseur-sync:*` mirrors are excluded from re-export; `origin_device_id` is immutable creator attribution and `device_id` tracks the last writer | One ordered feed preserves native identity without projection echoes; CAS revisions/sequence track every edit and delete | `apps/server/src/routers/liseur_sync/storage.rs` `reconcile_native_annotations`, `writeback_native_annotation`, `delete_annotation`; `crates/graphql/src/mutation/epub.rs` `update_liseur_annotation`, `delete_liseur_annotation`; `m20260962_add_liseur_annotation_origin`; round-trip tests in both crates |
 | Series-name PUT/DELETE supports per-account `personal` overlays only; normalized names cannot collide with another visible series, and scanned `series.name` stays unchanged | Personal display labels must not mutate folder metadata or leak to another account | `apps/server/src/routers/liseur_sync/storage.rs:463-621`; test `series_names_are_personal_overlays_and_conflicts_are_normalized` |
+| The catalogue (`/v1/folders/{id}/books`, `/search`, `/books/{id}`, `/download`) excludes audiobook rows (`models::entity::media::audio_extension_condition().not()`) | Liseur reads paginated documents; an audiobook has no pages to track, and a folder book's "download" is a directory — `ServeFile` answered that with a truncated `200` (`Content-Length: 82`, 35 bytes) and broke `replay-liseur-sync`. The ABS profile serves audio | `apps/server/src/routers/liseur_sync/storage.rs` `visible_media`; server test `audio::audiobooks_are_not_liseur_catalogue_books` |
+| `resolve` that matches no alias reuses the work an existing edition (same full-file SHA-256) already belongs to; several such works are a 409 conflict | Identical bytes are one edition; inventing a work collided with that edition inside the transaction and returned 409 on every retry for books with editions but no aliases | `apps/server/src/routers/liseur_sync/storage.rs` (`resolve_work`); `apps/server/tests/liseur/mod.rs::catalog_resolve_reuses_the_work_of_an_existing_edition_without_aliases` |
 
 Routes (`src/lib.rs`):
 
@@ -79,7 +79,6 @@ Routes (`src/lib.rs`):
 | Catalog | `GET /v1/folders`, `/v1/folders/{f}/books`, `/v1/folders/{f}/search`, `/v1/books/{id}`, `/cover`, `/download`, `/series`; `POST /v1/books/{id}/resolve` |
 | Personal series names | `PUT/DELETE /v1/entities/series/{id}/name` |
 | Deferred | `ANY /v1/entities/series/{id}/order` → 404; `GET /v1/events` → 404 (Liseur stops its live connector for the session) |
-| The catalogue (`/v1/folders/{id}/books`, `/search`, `/books/{id}`, `/download`) excludes audiobook rows (`models::entity::media::audio_extension_condition().not()`) | Liseur reads paginated documents; an audiobook has no pages to track, and a folder book's "download" is a directory — `ServeFile` answered that with a truncated `200` (`Content-Length: 82`, 35 bytes) and broke `replay-liseur-sync`. The ABS profile serves audio | `apps/server/src/routers/liseur_sync/storage.rs` `visible_media`; server test `audio::audiobooks_are_not_liseur_catalogue_books` |
 
 ## Layout
 
@@ -105,7 +104,7 @@ credentials from the fixture's generated `ENDPOINTS.md`.
 ## Deep docs
 
 - `docs/content/docs/developer/liseur-sync-integration.mdx` — wire contract, catalog, annotation bridge, auth, deviations, deferred list.
-- `docs/content/docs/developer/liseur-providers.mdx` (native REST section) — current deltas pinned to Liseur v0.19.0 `62ecb5a5`; historical route evidence remains separately pinned.
+- `docs/content/docs/developer/liseur-providers.mdx` (native REST section) — current statuses, source-only Liseur v0.20.0 `d8f0304c` and historical v0.19.0/older route evidence.
 - `docs/content/docs/developer/unified-reading-state.mdx` (liseur-sync projection) — position ops, sessions, annotation CAS in the unified model.
-- `docs/content/docs/developer/standards.mdx` (liseur-sync) and `provider-status.mdx` — summary tables (provider-status catalog row is stale: catalog is read-only implemented).
+- `docs/content/docs/developer/standards.mdx` (liseur-sync) and `provider-status.mdx` — summary tables.
 - `docs/content/docs/developer/clients.mdx`, `client-verification.mdx` — Liseur liseur-sync rows.

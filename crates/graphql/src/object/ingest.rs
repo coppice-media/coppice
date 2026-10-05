@@ -1137,6 +1137,8 @@ pub enum IngestSettingValueType {
 	Integer,
 	Number,
 	String,
+	/// A string restricted to the definition's `options`.
+	Enum,
 	Json,
 }
 
@@ -1146,7 +1148,8 @@ impl From<SettingKind> for IngestSettingValueType {
 			SettingKind::Bool => Self::Boolean,
 			SettingKind::Int => Self::Integer,
 			SettingKind::Float => Self::Number,
-			SettingKind::String | SettingKind::Enum => Self::String,
+			SettingKind::String => Self::String,
+			SettingKind::Enum => Self::Enum,
 			SettingKind::Json => Self::Json,
 		}
 	}
@@ -1162,6 +1165,12 @@ pub struct IngestSettingDefinition {
 	pub default_value: Option<Json<Value>>,
 	pub description: Option<String>,
 	pub help_url: Option<String>,
+	/// Inclusive lower bound of an `INTEGER`/`NUMBER` setting.
+	pub minimum: Option<f64>,
+	/// Inclusive upper bound of an `INTEGER`/`NUMBER` setting.
+	pub maximum: Option<f64>,
+	/// The accepted values of an `ENUM` setting; empty for every other type.
+	pub options: Vec<String>,
 }
 
 impl From<SettingDefinition> for IngestSettingDefinition {
@@ -1175,6 +1184,13 @@ impl From<SettingDefinition> for IngestSettingDefinition {
 			default_value: Some(Json(definition.default)),
 			description: Some(definition.description.to_owned()),
 			help_url: definition.help_url.map(str::to_owned),
+			minimum: definition.minimum,
+			maximum: definition.maximum,
+			options: definition
+				.options
+				.iter()
+				.map(|option| (*option).to_owned())
+				.collect(),
 		}
 	}
 }
@@ -1333,16 +1349,26 @@ pub struct IngestQualityCheckSettings {
 }
 
 impl IngestQualityCheckSettings {
+	/// `model` is the server-wide `CHECK` row. Its `enabled` column is the
+	/// authoritative switch, so it is reported both as `enabled` and as the
+	/// value of the `enabled` setting every check declares.
 	pub fn from_parts(
 		descriptor: IngestQualityCheckDescriptor,
 		model: Option<ingest_plugin_setting::Model>,
 	) -> Self {
 		let enabled = model.as_ref().is_none_or(|model| model.enabled);
 		let values = model.as_ref().and_then(|model| model.values.as_ref());
+		let mut settings = settings_for_definitions(&descriptor.settings, values);
+		if let Some(setting) =
+			settings.iter_mut().find(|setting| setting.key == "enabled")
+		{
+			setting.configured = model.is_some();
+			setting.value = Some(Json(Value::Bool(enabled)));
+		}
 		Self {
 			check_id: descriptor.id,
 			enabled,
-			settings: settings_for_definitions(&descriptor.settings, values),
+			settings,
 			updated_at: model.map(|model| model.updated_at),
 		}
 	}

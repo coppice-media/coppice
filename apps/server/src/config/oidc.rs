@@ -46,6 +46,7 @@ const ALL_PERMISSIONS: &[UserPermission] = &[
 	UserPermission::AcquireReleases,
 	UserPermission::AccessWorker,
 	UserPermission::AccessBookClub,
+	UserPermission::ShareBookClubReader,
 	UserPermission::CreateBookClub,
 	UserPermission::ChangePassword,
 	UserPermission::ChangeUsername,

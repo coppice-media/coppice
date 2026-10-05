@@ -49,6 +49,9 @@ pub fn base_url_setting() -> SettingDefinition {
 		required: false,
 		secret: false,
 		help_url: None,
+		minimum: None,
+		maximum: None,
+		options: &[],
 	}
 }
 
@@ -63,6 +66,9 @@ fn markdown_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "preset",
@@ -73,6 +79,9 @@ fn markdown_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "destination",
@@ -83,6 +92,9 @@ fn markdown_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "path_template",
@@ -93,6 +105,9 @@ fn markdown_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "body_template",
@@ -103,6 +118,9 @@ fn markdown_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		base_url_setting(),
 	]
@@ -562,6 +580,9 @@ fn push_annotation_frontmatter(
 	} else {
 		out.push_str("    progression: null\n");
 	}
+	if let Some(position_ms) = annotation.position_ms {
+		out.push_str(&format!("    position_ms: {position_ms}\n"));
+	}
 	push_optional_string(out, "color", annotation.color.as_deref(), 4);
 	push_optional_string(out, "excerpt", annotation.excerpt.as_deref(), 4);
 	push_optional_string(out, "note", annotation.note.as_deref(), 4);
@@ -699,7 +720,11 @@ fn push_annotation(
 		first = false;
 	}
 	let mut meta = Vec::new();
-	if let Some(position) = annotation.locator.as_ref().and_then(position_label) {
+	// A time anchor names a moment in a recording rather than a resource, and
+	// the reader link opens an EPUB, so it stays plain text.
+	if let Some(position_ms) = annotation.position_ms {
+		meta.push(clock(position_ms));
+	} else if let Some(position) = annotation.locator.as_ref().and_then(position_label) {
 		meta.push(link(&position, reader_url));
 	}
 	if let Some(progression) = annotation.progression {
@@ -807,6 +832,18 @@ fn position_label(locator: &Value) -> Option<String> {
 
 fn percent(progression: f64) -> String {
 	format!("{:.2}%", progression * 100.0)
+}
+
+/// `12:34` or `1:02:03`: a publication offset the way a listener reads it,
+/// truncated so it never claims a second the moment has not reached.
+fn clock(position_ms: i64) -> String {
+	let seconds = position_ms.max(0) / 1000;
+	let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+	if hours > 0 {
+		format!("{hours}:{minutes:02}:{seconds:02}")
+	} else {
+		format!("{minutes}:{seconds:02}")
+	}
 }
 
 fn block_id_legacy(id: &str) -> String {
@@ -1523,7 +1560,7 @@ impl Sink for MarkdownSink {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::test_support::{fixture_batch, fixture_book};
+	use crate::test_support::{at, fixture_batch, fixture_book};
 
 	#[test]
 	fn legacy_render_stays_byte_compatible() {
@@ -1547,6 +1584,63 @@ mod tests {
 		assert!(rendered.contains("provenance:"));
 		assert!(rendered.contains("^native-m1-a1"));
 		assert!(!rendered.contains("generated_at"));
+	}
+
+	/// A note made in an audiobook names a moment, not a resource: its label
+	/// is the time as plain text, never a reader link built from its empty
+	/// `href`, and the v2 frontmatter carries the exact millisecond anchor.
+	#[test]
+	fn audiobook_notes_render_their_time_not_a_resource() {
+		let mut book = fixture_book();
+		book.bookmarks.clear();
+		book.annotations = vec![ExportAnnotation {
+			id: "audio-1".to_owned(),
+			kind: ExportAnnotationKind::Highlight,
+			origin: AnnotationOrigin::Native,
+			locator: Some(serde_json::json!({
+				"chapterTitle": "The Litany",
+				"href": "",
+				"locations": {"totalProgression": 0.2094},
+				"type": ""
+			})),
+			progression: Some(0.2094),
+			position_ms: Some(754_000),
+			color: None,
+			excerpt: None,
+			note: Some("Fear is the mind-killer".to_owned()),
+			created_at: Some(at(10)),
+			updated_at: Some(at(10)),
+			deleted: false,
+			deleted_at: None,
+		}];
+		let base_url = Some("https://coppice.example".to_owned());
+		let legacy = render_book(
+			&book,
+			&RenderOptions {
+				base_url: base_url.clone(),
+				..Default::default()
+			},
+		);
+		assert!(legacy.contains("↗ 12:34 · 20.94% · "), "{legacy}");
+		assert!(
+			!legacy.contains("[12:34]") && !legacy.contains("[]("),
+			"{legacy}"
+		);
+
+		let v2 = render_book_checked(
+			&book,
+			&RenderOptions {
+				base_url,
+				format_version: FORMAT_VERSION_V2,
+				path_template: DEFAULT_PATH_TEMPLATE.to_owned(),
+				..Default::default()
+			},
+		)
+		.unwrap();
+		assert!(v2.contains("    position_ms: 754000\n"), "{v2}");
+		assert!(v2.contains("↗ 12:34 · 20.94% · "), "{v2}");
+		assert!(!v2.contains("[12:34]") && !v2.contains("[]("), "{v2}");
+		assert_eq!(clock(3_723_999), "1:02:03");
 	}
 
 	#[test]

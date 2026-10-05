@@ -2,12 +2,14 @@
 
 ## Purpose
 
-Remote workers: the `worker_jobs` queue and dispatcher, the socket protocol that
-carries a job to a process on another machine, and the `stump-worker` client
-binary that runs one.
-
-Two halves behind two features, one shared protocol. It owns _routing_ (who runs
-a job) and _state_ (what happened to it); it does not own the HTTP transport
+Remote workers include the `worker_jobs` queue and dispatcher, the compute
+socket protocol that carries jobs to another machine, and the `stump-worker`
+binary. A separately authorized **source-worker** role inventories local or
+Calibre `metadata.db` roots read-only and offers verified bytes under explicit
+server grants; its control/data frames and source credentials are not compute
+job permissions. The compute server/client halves sit behind features. They
+own _routing_ (who runs a job) and _state_ (what happened to it); the crate
+does not own the HTTP transport
 (the axum `ws` glue is `apps/server/src/routers/api/v2/workers.rs`), the row's
 schema (`crates/models`), or any job kind's server-side implementation — those
 are registered by the host, because running a transcode needs `ffmpeg`, media
@@ -26,6 +28,7 @@ and a server restart.
 | Status vocabulary `queued\|claimed\|running\|done\|failed\|needs_worker` | `docs/content/docs/developer/read-aloud.mdx` §6; `models::shared::enums::WorkerJobStatus`  |
 | Device pairing, credential format, `ACCESS_WORKER`                       | `crates/devices/README.md`; `crates/models/src/shared/enums.rs`                            |
 | `ffmpeg` argv (worker and local fallback must agree byte for byte)       | `crates/tools/src/ffmpeg.rs::argv`                                                         |
+| Source role, read-only Calibre schema 27/28 catalog, and verified serving | `docs/content/docs/developer/remote-worker-libraries.mdx`; `src/source_calibre.rs` and `src/source_catalog.rs` |
 
 ## Decisions
 
@@ -113,8 +116,5 @@ cargo run -p stump_worker --bin stump-worker -- \
 
 ## Deep docs
 
-- `docs/content/docs/developer/workers.mdx` — protocol frames, pairing,
-  capabilities, the queue, job kinds, fallback rules.
-- `docs/content/docs/developer/read-aloud.mdx` §6 — the design this implements.
-- `docs/content/docs/developer/remote-worker-libraries.mdx` — remote-source
-  inventory, verification, placement, and direct/tunnel serving contracts.
+- `docs/content/docs/developer/workers.mdx` — frames, pairing, capabilities, queue, jobs, fallback.
+- `docs/content/docs/developer/read-aloud.mdx` §6 — alignment; `docs/content/docs/developer/remote-worker-libraries.mdx` — inventory, verification, placement, serving.

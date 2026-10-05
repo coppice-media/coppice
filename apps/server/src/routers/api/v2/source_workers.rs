@@ -14,6 +14,7 @@ use crate::{
 	config::state::AppState,
 	errors::{APIError, APIResult},
 	middleware::auth::auth_middleware,
+	routers::api::v2::workers::LiveWorkerCredential,
 };
 use axum::body::Bytes;
 use axum::{
@@ -30,6 +31,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, Stream, StreamExt};
+use models::txn::begin_write;
 use models::{
 	entity::{
 		device, media, media_location, media_metadata, remote_source,
@@ -53,7 +55,7 @@ use stump_worker::{
 		SourceServerFrame, SourceTransport, SourceWorkerFrame, SourceWorkerHello,
 		MAX_SOURCE_MANIFEST_FRAME_BYTES, MAX_SOURCE_MANIFEST_ITEMS,
 	},
-	SourceHub, SOURCE_TRANSFER_IDLE_TIMEOUT,
+	SOURCE_TRANSFER_IDLE_TIMEOUT,
 };
 #[cfg(feature = "ingest")]
 use tokio::io::AsyncWriteExt;
@@ -189,18 +191,34 @@ impl FromRequestParts<AppState> for SourceDevice {
 async fn socket(
 	State(ctx): State<AppState>,
 	SourceDevice(device): SourceDevice,
+	Extension(auth): Extension<AuthContext>,
 	upgrade: WebSocketUpgrade,
 ) -> APIResult<Response> {
-	Ok(upgrade.on_upgrade(move |socket| serve_socket(ctx, device, socket)))
+	Ok(upgrade.on_upgrade(move |socket| serve_socket(ctx, device, auth, socket)))
 }
 
-/// Axum's upgrade callback owns the socket, so the actual socket handler is
-/// split out below.  Keeping this small adapter avoids doing any auth work
-/// after the WebSocket has been accepted.
-async fn serve_socket(ctx: AppState, device: device::Model, mut socket: WebSocket) {
+/// An upgraded source-worker socket has to keep its device, key, and
+/// AccessRemoteSource permission for every manifest and read grant frame.
+async fn serve_socket(
+	ctx: AppState,
+	device: device::Model,
+	auth: AuthContext,
+	mut socket: WebSocket,
+) {
+	let Some(credential) = LiveWorkerCredential::from_upgrade(&auth, &device) else {
+		let _ = socket.close().await;
+		return;
+	};
 	let Some(Ok(Message::Text(text))) = socket.recv().await else {
 		return;
 	};
+	if !credential
+		.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessRemoteSource))
+		.await
+	{
+		let _ = socket.close().await;
+		return;
+	}
 	let frame = match parse_source_worker_frame(text.as_str()) {
 		Ok(SourceWorkerFrame::Hello {
 			name,
@@ -226,50 +244,96 @@ async fn serve_socket(ctx: AppState, device: device::Model, mut socket: WebSocke
 	manifests()
 		.lock()
 		.retain(|key, _| key.device_id != device.id);
+	let mut revoked = false;
 	for root in &frame.roots {
-		if let Err(error) = upsert_source(&ctx, &device.id, root).await {
-			tracing::warn!(device = %device.id, root = %root.root_id, ?error, "failed to persist source root");
+		let txn = match begin_write(ctx.conn.as_ref()).await {
+			Ok(txn) => txn,
+			Err(error) => {
+				tracing::warn!(device = %device.id, ?error, "failed to start source registration transaction");
+				revoked = true;
+				break;
+			},
+		};
+		if !credential.lock_account_for_mutation(&txn).await
+			|| !credential
+				.is_live(&txn, Some(UserPermission::AccessRemoteSource))
+				.await
+		{
+			let _ = txn.rollback().await;
+			revoked = true;
+			break;
+		}
+		match upsert_source(&txn, &device.id, root).await {
+			Ok(_) => {
+				if let Err(error) = txn.commit().await {
+					tracing::warn!(device = %device.id, root = %root.root_id, ?error, "failed to commit source root");
+					revoked = true;
+					break;
+				}
+			},
+			Err(error) => {
+				tracing::warn!(device = %device.id, root = %root.root_id, ?error, "failed to persist source root");
+				let _ = txn.rollback().await;
+			},
 		}
 	}
-
-	let (mut writer, mut reader) = socket.split();
-	let write_task = tokio::spawn(async move {
-		while let Some(text) = outbound.recv().await {
-			if writer.send(Message::Text(text.into())).await.is_err() {
-				break;
+	if !revoked {
+		let (mut writer, mut reader) = socket.split();
+		let mut idle_check = tokio::time::interval(Duration::from_secs(5));
+		idle_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		loop {
+			tokio::select! {
+				_ = idle_check.tick() => {
+					if !credential.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessRemoteSource)).await {
+						break;
+					}
+				},
+				message = reader.next() => {
+					let Some(Ok(message)) = message else { break };
+					if !hub.is_current(&device.id, epoch).await
+						|| !credential.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessRemoteSource)).await
+					{
+						break;
+					}
+					let Message::Text(text) = message else { continue };
+					let Ok(frame) = parse_source_worker_frame(text.as_str()) else { continue };
+					match frame {
+						SourceWorkerFrame::ManifestChunk(chunk) => {
+							hub.touch(&device.id).await;
+							if let Err(error) = reconcile_manifest(
+								&ctx,
+								&device.id,
+								epoch,
+								&credential,
+								chunk,
+							)
+							.await
+							{
+								tracing::warn!(device = %device.id, ?error, "source manifest rejected");
+							}
+						},
+						other => {
+							if let Err(error) = hub.handle_frame(&device.id, other).await {
+								tracing::debug!(device = %device.id, ?error, "source frame refused");
+							}
+						},
+					}
+				},
+				text = outbound.recv() => {
+					let Some(text) = text else { break };
+					if !credential.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessRemoteSource)).await
+						|| writer.send(Message::Text(text.into())).await.is_err()
+					{
+						break;
+					}
+				},
 			}
 		}
 		let _ = writer.close().await;
-	});
-
-	while let Some(Ok(message)) = reader.next().await {
-		if !hub.is_current(&device.id, epoch).await {
-			break;
-		}
-		let Message::Text(text) = message else {
-			continue;
-		};
-		let Ok(frame) = parse_source_worker_frame(text.as_str()) else {
-			continue;
-		};
-		match frame {
-			SourceWorkerFrame::ManifestChunk(chunk) => {
-				hub.touch(&device.id).await;
-				if let Err(error) =
-					reconcile_manifest(&ctx, &device.id, epoch, chunk).await
-				{
-					tracing::warn!(device = %device.id, ?error, "source manifest rejected");
-				}
-			},
-			other => {
-				if let Err(error) = hub.handle_frame(&device.id, other).await {
-					tracing::debug!(device = %device.id, ?error, "source frame refused");
-				}
-			},
-		}
+	} else {
+		let _ = socket.close().await;
 	}
 
-	write_task.abort();
 	let detached = hub.detach(&device.id, epoch).await;
 	if detached {
 		manifests()
@@ -288,41 +352,66 @@ async fn serve_socket(ctx: AppState, device: device::Model, mut socket: WebSocke
 async fn tunnel_stream(
 	State(ctx): State<AppState>,
 	SourceDevice(device): SourceDevice,
+	Extension(auth): Extension<AuthContext>,
 	Path(grant_id): Path<String>,
 	upgrade: WebSocketUpgrade,
 ) -> APIResult<Response> {
-	let hub = ctx.source_hub();
-	Ok(upgrade.on_upgrade(move |socket| serve_tunnel(hub, device.id, grant_id, socket)))
+	Ok(upgrade
+		.on_upgrade(move |socket| serve_tunnel(ctx, device, auth, grant_id, socket)))
 }
 
 async fn serve_tunnel(
-	hub: std::sync::Arc<SourceHub>,
-	device_id: String,
+	ctx: AppState,
+	device: device::Model,
+	auth: AuthContext,
 	grant_id: String,
 	mut socket: WebSocket,
 ) {
-	while let Some(result) = socket.recv().await {
-		let Ok(message) = result else { break };
-		match message {
-			Message::Binary(bytes) => {
-				if hub
-					.push_tunnel_chunk(&device_id, &grant_id, bytes.to_vec())
-					.await
-					.is_err()
-				{
+	let Some(credential) = LiveWorkerCredential::from_upgrade(&auth, &device) else {
+		let _ = socket.close().await;
+		return;
+	};
+	let hub = ctx.source_hub();
+	let mut idle_check = tokio::time::interval(Duration::from_secs(5));
+	idle_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+	loop {
+		tokio::select! {
+			_ = idle_check.tick() => {
+				if !credential.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessRemoteSource)).await {
 					break;
 				}
 			},
-			Message::Close(_) => break,
-			Message::Ping(_) | Message::Pong(_) => {},
-			Message::Text(_) => break,
+			result = socket.recv() => {
+				let Some(Ok(message)) = result else { break };
+				if !credential.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessRemoteSource)).await {
+					break;
+				}
+				match message {
+					Message::Binary(bytes) => {
+						if hub.push_tunnel_chunk(&device.id, &grant_id, bytes.to_vec()).await.is_err() {
+							break;
+						}
+					},
+					Message::Close(_) => break,
+					Message::Ping(_) | Message::Pong(_) => {},
+					Message::Text(_) => break,
+				}
+			},
 		}
 	}
-	let _ = hub.finish_tunnel(&device_id, &grant_id).await;
+	// Revocation must never turn a partly streamed grant into a successful
+	// remote read. The detached control socket/idle grant timeout releases it.
+	if credential
+		.is_live(ctx.conn.as_ref(), Some(UserPermission::AccessRemoteSource))
+		.await
+	{
+		let _ = hub.finish_tunnel(&device.id, &grant_id).await;
+	}
+	let _ = socket.close().await;
 }
 
 async fn upsert_source(
-	ctx: &AppState,
+	conn: &impl ConnectionTrait,
 	device_id: &str,
 	root: &SourceRootHello,
 ) -> APIResult<remote_source::Model> {
@@ -332,7 +421,7 @@ async fn upsert_source(
 	let existing = remote_source::Entity::find()
 		.filter(remote_source::Column::DeviceId.eq(device_id))
 		.filter(remote_source::Column::RootId.eq(root.root_id.clone()))
-		.one(ctx.conn.as_ref())
+		.one(conn)
 		.await?;
 	if let Some(model) = existing {
 		let mut active = model.into_active_model();
@@ -343,7 +432,7 @@ async fn upsert_source(
 		active.direct_base_url = Set(direct_base_url);
 		active.health = Set(ONLINE.to_string());
 		active.last_seen_at = Set(now);
-		return Ok(active.update(ctx.conn.as_ref()).await?);
+		return Ok(active.update(conn).await?);
 	}
 	let active = remote_source::ActiveModel {
 		id: Set(uuid::Uuid::new_v4().to_string()),
@@ -360,7 +449,7 @@ async fn upsert_source(
 		created_at: Set(now),
 		updated_at: Set(now),
 	};
-	Ok(active.insert(ctx.conn.as_ref()).await?)
+	Ok(active.insert(conn).await?)
 }
 
 fn transport_name(transport: SourceTransport) -> &'static str {
@@ -455,6 +544,7 @@ async fn reconcile_manifest(
 	ctx: &AppState,
 	device_id: &str,
 	epoch: u64,
+	credential: &LiveWorkerCredential,
 	chunk: SourceManifestChunk,
 ) -> APIResult<()> {
 	if chunk.items.len() > MAX_SOURCE_MANIFEST_ITEMS
@@ -464,10 +554,20 @@ async fn reconcile_manifest(
 			"source manifest chunk exceeds limits".to_string(),
 		));
 	}
+	let txn = begin_write(ctx.conn.as_ref()).await?;
+	if !credential.lock_account_for_mutation(&txn).await
+		|| !credential
+			.is_live(&txn, Some(UserPermission::AccessRemoteSource))
+			.await
+	{
+		return Err(APIError::Forbidden(
+			"source worker credential is no longer live".to_string(),
+		));
+	}
 	let source = remote_source::Entity::find()
 		.filter(remote_source::Column::DeviceId.eq(device_id))
 		.filter(remote_source::Column::RootId.eq(chunk.root_id.clone()))
-		.one(ctx.conn.as_ref())
+		.one(&txn)
 		.await?
 		.ok_or_else(|| {
 			APIError::Conflict("manifest references an unknown source root".to_string())
@@ -542,6 +642,7 @@ async fn reconcile_manifest(
 	};
 
 	if replay {
+		txn.commit().await?;
 		let _ = ctx
 			.source_hub()
 			.send(
@@ -557,7 +658,7 @@ async fn reconcile_manifest(
 	}
 
 	for item in &chunk.items {
-		upsert_item(ctx, &source, item, chunk.revision).await?;
+		upsert_item(&txn, &source, item, chunk.revision).await?;
 	}
 
 	if chunk.terminal {
@@ -577,14 +678,15 @@ async fn reconcile_manifest(
 				remote_source_item::Column::ObservationState,
 				Expr::value(MISSING),
 			)
-			.exec(ctx.conn.as_ref())
+			.exec(&txn)
 			.await?;
 		let mut active = source.clone().into_active_model();
 		active.current_revision = Set(chunk.revision as i64);
 		active.health = Set(ONLINE.to_string());
 		active.last_seen_at = Set(DateTimeWithTimeZone::from(Utc::now()));
-		active.update(ctx.conn.as_ref()).await?;
+		active.update(&txn).await?;
 	}
+	txn.commit().await?;
 
 	{
 		let mut ledger = manifests().lock();
@@ -621,7 +723,7 @@ async fn reconcile_manifest(
 }
 
 async fn upsert_item(
-	ctx: &AppState,
+	conn: &impl ConnectionTrait,
 	source: &remote_source::Model,
 	item: &SourceManifestItem,
 	revision: u64,
@@ -632,7 +734,7 @@ async fn upsert_item(
 	let existing = remote_source_item::Entity::find()
 		.filter(remote_source_item::Column::SourceId.eq(source.id.clone()))
 		.filter(remote_source_item::Column::WorkerItemId.eq(item.worker_item_id.clone()))
-		.one(ctx.conn.as_ref())
+		.one(conn)
 		.await?;
 	let now = DateTimeWithTimeZone::from(Utc::now());
 	if let Some(model) = existing {
@@ -662,7 +764,7 @@ async fn upsert_item(
 		});
 		active.last_seen_revision = Set(revision as i64);
 		active.last_seen_at = Set(now);
-		active.update(ctx.conn.as_ref()).await?;
+		active.update(conn).await?;
 	} else {
 		remote_source_item::ActiveModel {
 			id: Set(uuid::Uuid::new_v4().to_string()),
@@ -684,7 +786,7 @@ async fn upsert_item(
 			updated_at: Set(now),
 			imported_media_id: Set(None),
 		}
-		.insert(ctx.conn.as_ref())
+		.insert(conn)
 		.await?;
 	}
 	Ok(())

@@ -432,6 +432,11 @@ where
 			get(libraries::personalized),
 		)
 		.route("/libraries/{library_id}/authors", get(libraries::authors))
+		.route("/libraries/{library_id}/stats", get(libraries::stats))
+		.route(
+			"/libraries/{library_id}/narrators",
+			get(libraries::narrators),
+		)
 		.route("/libraries/{library_id}/series", get(libraries::series))
 		.route(
 			"/libraries/{library_id}/collections",

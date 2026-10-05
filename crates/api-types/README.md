@@ -29,18 +29,20 @@ to/from this crate's type.
 | `RequestOrigin::default()` is `http://localhost` | Keeps tests and non-HTTP contexts (jobs, CLI) working without a request. | `src/lib.rs:14-21` |
 | `OffsetPagination` defaults: `page=1`, `page_size=Some(20)`, `zero_based=Some(false)` | Same as REST/GraphQL defaults clients already depend on. `Option`s stay so serde-omitted fields round-trip. | `src/lib.rs:79-112` |
 | `offset()` = `page * size` when zero-based, `(page-1) * size` otherwise; `previous_page()` returns `None` at the first page in either mode | Both bases exist for Komga (0-based) and Stump REST (1-based) clients. | `src/lib.rs:114-146` |
+| `SettingDefinition` carries optional `minimum`/`maximum` (numbers) and `options` (enums); `validate_setting_values` refuses unknown keys, wrong kinds, out-of-range numbers, and unlisted options, and drops `null` so the key falls back to its default | Editors render bounded controls from the descriptor and the server stores only values its consumer accepts; the ingest quality-check mutation is the first caller. | `src/settings.rs`, tests in `src/settings.rs` |
 
 ## Layout
 
 | File | Responsibility |
 | --- | --- |
 | `src/lib.rs` | `RequestOrigin` + URL helpers, `OffsetPagination` + arithmetic, unit tests |
-| `Cargo.toml` | `chrono`, `serde` only |
+| `src/settings.rs` | Pluggable-component setting schema (`SettingDefinition`, `SettingKind`, `SettingValues`) and value validation |
+| `Cargo.toml` | `chrono`, `serde`, `serde_json` only |
 
 ## How to verify
 
 ```text
-cargo test -p stump_api_types                                      # URL formatting and offset arithmetic
+cargo test -p stump_api_types                                      # URL formatting, offset arithmetic, setting validation
 cargo check -p stump_server --no-default-features --features minimal
 ```
 

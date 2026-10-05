@@ -1,309 +1,271 @@
-use crate::CoreResult;
-
-use super::{
-	entity::OPDSProgressionEntity,
-	link::{OPDSLinkFinalizer, OPDSLinkType},
-	utils::default_now,
-};
-use derive_builder::Builder;
-use models::shared::readium::{ReadiumLocation, ReadiumLocator, ReadiumText};
-use rust_decimal::{prelude::ToPrimitive, Decimal};
+use chrono::{DateTime, FixedOffset};
+use models::shared::readium::{ReadiumLocation, ReadiumLocator};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-pub const OPDS_PROGRESSION_MEDIA_TYPE: &str = "application/vnd.readium.progression+json";
-pub const CANTOOK_PROGRESSION_REL: &str = "http://www.cantook.com/api/progression";
+use super::entity::OPDSProgressionEntity;
 
-#[derive(Debug, Default, Clone, Builder, Serialize, Deserialize)]
-#[builder(build_fn(error = "crate::CoreError"), default, setter(into))]
-#[serde(rename_all = "camelCase")]
+pub const OPDS_PROGRESSION_MEDIA_TYPE: &str = "application/opds-progression+json";
+pub const OPDS_PROGRESSION_REL: &str = "http://opds-spec.org/progression";
+
+/// An OPDS Progression 1.0 document, used for both GET and PUT.
+///
+/// This intentionally does not replace the richer native Readium locator API.
+/// See <https://drafts.opds.io/opds-progression-1.0.html>.
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OPDSProgression {
-	#[builder(default = "default_now()")]
-	modified: String,
-	#[builder(default)]
-	device: OPDSProgressionDevice,
-	#[builder(default)]
-	locator: OPDSProgressionLocator,
+	pub modified: DateTime<FixedOffset>,
+	pub device: OPDSProgressionDevice,
+	pub title: Option<String>,
+	/// Whole-publication progression, in `0..=1`.
+	pub progression: f64,
+	/// URI references inside the publication, not server page-delivery URLs.
+	pub references: Option<Vec<String>>,
 }
 
 impl OPDSProgression {
-	pub fn new(
-		data: OPDSProgressionEntity,
-		link_finalizer: OPDSLinkFinalizer,
-	) -> CoreResult<Self> {
-		let device = match data.device.as_ref() {
-			Some(device) => OPDSProgressionDevice {
-				id: device.id.clone(),
-				name: device.name.clone(),
-			},
-			_ => OPDSProgressionDevice::default(),
-		};
-
-		OPDSProgressionBuilder::default()
-			.device(device)
-			.locator(OPDSProgressionLocator::new(&data, &link_finalizer)?)
-			.modified(data.head.updated_at.to_rfc3339())
-			.build()
-	}
-}
-
-// https://readium.org/architecture/schema/locator.schema.json
-#[skip_serializing_none]
-#[derive(Debug, Default, Clone, Serialize, Deserialize, Builder)]
-#[builder(build_fn(error = "crate::CoreError"), default, setter(into))]
-struct OPDSProgressionLocator {
-	title: Option<String>,
-	href: Option<String>,
-	#[serde(rename = "type")]
-	_type: Option<OPDSLinkType>,
-	#[builder(default)]
-	locations: Option<OPDSProgressionLocation>,
-}
-
-impl OPDSProgressionLocator {
-	fn new(
-		data: &OPDSProgressionEntity,
-		link_finalizer: &OPDSLinkFinalizer,
-	) -> CoreResult<Self> {
-		let percentage_completed = Some(data.head.progression);
-
-		if data.book.extension.eq_ignore_ascii_case("epub") {
-			return Self::epub(data.head.locator.as_ref(), percentage_completed);
-		}
-
-		Self::paged(data, link_finalizer, percentage_completed)
-	}
-
-	fn epub(
-		locator: Option<&ReadiumLocator>,
-		percentage_completed: Option<f64>,
-	) -> CoreResult<Self> {
-		let Some(locator) = locator else {
-			return OPDSProgressionLocatorBuilder::default().build();
-		};
-
-		let title = if locator.chapter_title.is_empty() {
-			locator.title.clone()
+	pub fn new(data: OPDSProgressionEntity) -> Self {
+		let (title, references) = if data.book.extension.eq_ignore_ascii_case("epub") {
+			data.head.locator.map(epub_fields).unwrap_or_default()
+		} else if let Some(page) = data.head.page {
+			(
+				Some(format!("Page {page}")),
+				Some(vec![format!("#page={page}")]),
+			)
 		} else {
-			Some(locator.chapter_title.clone())
+			(None, None)
+		};
+		Self {
+			modified: data.head.updated_at,
+			device: data
+				.device
+				.map(|device| OPDSProgressionDevice {
+					id: device.id,
+					name: device.name,
+				})
+				.unwrap_or_default(),
+			title,
+			// The head is authoritative even when a fraction-only update kept
+			// a more precise locator from an earlier protocol update.
+			progression: data.head.progression,
+			references,
 		}
-		.unwrap_or_else(|| "Ebook Progress".to_string());
-		let locations =
-			locator
-				.locations
-				.as_ref()
-				.map(|locations| OPDSProgressionLocation {
-					fragments: locations.fragments.clone(),
-					position: locations.position,
-					progression: locations.progression.and_then(|p| p.to_f64()),
-					total_progression: locations
-						.total_progression
-						.and_then(|p| p.to_f64())
-						.or(percentage_completed),
-				});
-
-		OPDSProgressionLocatorBuilder::default()
-			.title(Some(title))
-			.href(Some(locator.href.clone()))
-			._type(Some(OPDSLinkType::Xhtml))
-			.locations(locations)
-			.build()
 	}
 
-	fn paged(
-		data: &OPDSProgressionEntity,
-		link_finalizer: &OPDSLinkFinalizer,
-		percentage_completed: Option<f64>,
-	) -> CoreResult<Self> {
-		let Some(current_page) = data.head.page else {
-			return OPDSProgressionLocatorBuilder::default().build();
-		};
-		let href = link_finalizer.format_link(format!(
-			"/opds/v2.0/books/{}/pages/{current_page}",
-			data.book.id
-		));
-		let locations = OPDSProgressionLocation {
-			position: Some(current_page),
-			total_progression: percentage_completed
-				.or_else(|| Some(current_page as f64 / data.book.pages as f64)),
-			..Default::default()
-		};
-
-		OPDSProgressionLocatorBuilder::default()
-			.title(Some(format!("Page {current_page}")))
-			.href(Some(href))
-			// TODO: Don't assume JPEG; use analysis to determine this.
-			._type(Some(OPDSLinkType::ImageJpeg))
-			.locations(Some(locations))
-			.build()
-	}
-}
-
-#[skip_serializing_none]
-#[derive(Debug, Default, Clone, Serialize, Deserialize, Builder)]
-#[builder(build_fn(error = "crate::CoreError"), default, setter(into))]
-#[serde(rename_all = "camelCase")]
-struct OPDSProgressionLocation {
-	/// A list of fragments within the resource referenced by the [OPDSProgressionLocator] struct.
-	fragments: Option<Vec<String>>,
-	/// An index in the publication (1-based).
-	position: Option<i32>,
-	/// Progression in the resource expressed as a percentage (0.0 to 1.0). This is
-	/// progression within the current resource, not the entire publication.
-	///
-	/// A few clarifying notes:
-	/// If the publication is a single resource, e.g., comics, manga, etc, this is equivalent to total_progression
-	/// If the publication has multiple resources, e.g., EPUB, this is progression within the current resource only
-	progression: Option<f64>,
-	/// Progression in the publication expressed as a percentage (0.0 to 1.0). This is
-	/// progression within the entire publication.
-	total_progression: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct OPDSProgressionDevice {
-	id: String,
-	name: String,
-}
-
-/// The input type for updating book progression via OPDS v2
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OPDSProgressionInput {
-	pub modified: chrono::DateTime<chrono::FixedOffset>,
-	pub device: OPDSProgressionDeviceInput,
-	pub locator: OPDSProgressionLocatorInput,
-}
-
-/// Device information for progression input
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OPDSProgressionDeviceInput {
-	pub id: String,
-	pub name: String,
-}
-
-/// Locator input following Readium Locator schema
-/// See: https://readium.org/architecture/schema/locator.schema.json
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OPDSProgressionLocatorInput {
-	/// URI of the resource in the publication (required per spec)
-	pub href: String,
-	/// MIME type of the resource (required per spec)
-	#[serde(rename = "type")]
-	pub media_type: String,
-	/// Title of the chapter/section
-	pub title: Option<String>,
-	/// Location within the resource
-	pub locations: Option<OPDSProgressionLocationInput>,
-	/// Text context around the position
-	pub text: Option<OPDSProgressionTextInput>,
-}
-
-/// Location information within a resource
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OPDSProgressionLocationInput {
-	pub fragments: Option<Vec<String>>,
-	pub position: Option<i32>, // 1-based
-	pub progression: Option<f64>,
-	pub total_progression: Option<f64>, // 0.0 to 1.0
-}
-
-/// Text context around the reading position
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OPDSProgressionTextInput {
-	pub before: Option<String>,
-	pub highlight: Option<String>,
-	pub after: Option<String>,
-}
-
-impl OPDSProgressionInput {
-	pub fn device(&self) -> Option<OPDSProgressionDeviceInput> {
+	pub fn device(&self) -> Option<&OPDSProgressionDevice> {
 		if self.device.id.is_empty() && self.device.name.is_empty() {
 			None
 		} else {
-			Some(self.device.clone())
+			Some(&self.device)
 		}
 	}
 
+	/// The PDF-style page reference used for page-addressed publications.
 	pub fn page(&self) -> Option<i32> {
-		self.locator.locations.as_ref().and_then(|l| l.position)
+		self.references.as_ref()?.iter().find_map(|reference| {
+			reference
+				.strip_prefix("#page=")
+				.and_then(|page| page.parse().ok())
+		})
 	}
 
 	pub fn percentage_completed(&self) -> Option<Decimal> {
-		self.locator
-			.locations
-			.as_ref()
-			.and_then(|l| l.total_progression)
-			.and_then(|p| Decimal::try_from(p).ok())
+		Decimal::try_from(self.progression).ok()
 	}
 
+	/// Project a packaged-publication reference onto the native locator.
+	///
+	/// A fraction-only document or publication-wide fragment has no resource
+	/// anchor. Do not manufacture an empty locator that erases native context.
 	pub fn locator(&self) -> Option<ReadiumLocator> {
-		let locations = self.locator.locations.as_ref().map(|l| ReadiumLocation {
-			fragments: l.fragments.clone(),
-			progression: l.progression.and_then(|p| Decimal::try_from(p).ok()),
-			position: l.position,
-			total_progression: l
-				.total_progression
-				.and_then(|p| Decimal::try_from(p).ok()),
-			// TODO(opds): Do we need these for progression?
-			css_selector: None,
-			partial_cfi: None,
-		});
-
-		let text = self.locator.text.as_ref().map(|t| ReadiumText {
-			before: t.before.clone(),
-			highlight: t.highlight.clone(),
-			after: t.after.clone(),
-		});
-
+		let reference = self
+			.references
+			.as_ref()?
+			.iter()
+			.find(|reference| !reference.is_empty() && !reference.starts_with('#'))?;
+		let (href, fragment) = reference
+			.split_once('#')
+			.map_or((reference.as_str(), None), |(href, fragment)| {
+				(href, (!fragment.is_empty()).then_some(fragment))
+			});
 		Some(ReadiumLocator {
-			href: self.locator.href.clone(),
-			title: self.locator.title.clone(),
-			r#type: self.locator.media_type.clone(),
+			href: href.to_string(),
+			title: self.title.clone(),
+			r#type: "application/xhtml+xml".to_string(),
 			chapter_title: String::new(),
-			locations,
-			text,
+			locations: Some(ReadiumLocation {
+				fragments: fragment.map(|fragment| vec![fragment.to_string()]),
+				total_progression: self.percentage_completed(),
+				progression: None,
+				position: None,
+				css_selector: None,
+				partial_cfi: None,
+			}),
+			text: None,
 			kobo_span: None,
 		})
 	}
 }
 
+fn epub_fields(locator: ReadiumLocator) -> (Option<String>, Option<Vec<String>>) {
+	let title = if locator.chapter_title.is_empty() {
+		locator.title
+	} else {
+		Some(locator.chapter_title)
+	};
+	let mut reference = locator.href;
+	if reference.is_empty() {
+		return (title, None);
+	}
+	// A native href may already include its fragment. Appending it again
+	// would turn a valid anchor into chapter.xhtml#paragraph#paragraph.
+	if !reference.contains('#') {
+		if let Some(fragment) = locator
+			.locations
+			.as_ref()
+			.and_then(|locations| locations.fragments.as_ref())
+			.and_then(|fragments| fragments.first())
+			.filter(|fragment| !fragment.is_empty())
+		{
+			if !fragment.starts_with('#') {
+				reference.push('#');
+			}
+			reference.push_str(fragment);
+		}
+	}
+	(title, Some(vec![reference]))
+}
+
+/// The device that supplied the progression, distinct from a native locator.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OPDSProgressionDevice {
+	pub id: String,
+	pub name: String,
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use models::{domain::reading_state::SourceProtocol, entity::reading_head};
+	use serde_json::json;
 
-	#[test]
-	fn test_progression_input_deserializes_from_json() {
-		let json = r#"{
-        "modified": "2026-01-28T08:17:11.986000-07:00",
-        "device": { "id": "device-123", "name": "Coppice App - iOS" },
-        "locator": {
-            "href": "/opds/v2.0/books/1/pages/5",
-            "type": "image/jpeg",
-            "locations": {
-                "position": 5,
-                "progression": 0.25,
-                "totalProgression": 0.25
-            }
-        }
-    }"#;
+	use crate::opds::v2_0::entity::OPDSProgressionBookRef;
 
-		let input: OPDSProgressionInput = serde_json::from_str(json).unwrap();
-		assert_eq!(input.page(), Some(5));
-		assert_eq!(input.device().unwrap().id, "device-123");
+	fn document(references: Option<Vec<&str>>) -> OPDSProgression {
+		serde_json::from_value(json!({
+			"modified": "2026-01-28T08:17:11.986000-07:00",
+			"device": { "id": "urn:uuid:device-123", "name": "OPDS Reader" },
+			"progression": 0.25,
+			"title": "Chapter 1",
+			"references": references,
+		}))
+		.unwrap()
+	}
+
+	fn entity(
+		locator: Option<ReadiumLocator>,
+		page: Option<i32>,
+	) -> OPDSProgressionEntity {
+		let now = DateTime::parse_from_rfc3339("2026-01-28T08:17:11-07:00").unwrap();
+		OPDSProgressionEntity {
+			head: reading_head::Model {
+				user_id: "user".into(),
+				media_id: "book".into(),
+				locator,
+				progression: 0.5,
+				page,
+				position_ms: None,
+				track_index: None,
+				completed: false,
+				updated_at: now,
+				created_at: now,
+				changed_at: now,
+				source_protocol: SourceProtocol::Opds,
+				source_device_id: None,
+				revision: 1,
+				event_id: 1,
+			},
+			device: None,
+			book: OPDSProgressionBookRef {
+				id: "book".into(),
+				extension: if page.is_some() { "pdf" } else { "epub" }.into(),
+				pages: if page.is_some() { 20 } else { -1 },
+				analysis: None,
+			},
+		}
 	}
 
 	#[test]
-	fn test_empty_device_returns_none() {
-		let json = r#"{
-        "modified": "2026-01-28T08:17:11.986000-07:00",
-        "device": { "id": "", "name": "" },
-        "locator": { "href": "/opds/v2.0/books/1/pages/5", "type": "image/jpeg" }
-	}"#;
+	fn stable_document_deserializes_and_page_is_not_a_fake_resource() {
+		let input = document(Some(vec!["#page=5"]));
+		assert_eq!(input.page(), Some(5));
+		assert_eq!(input.device().unwrap().id, "urn:uuid:device-123");
+		assert_eq!(input.percentage_completed(), Some(Decimal::new(25, 2)));
+		assert!(input.locator().is_none());
+	}
 
-		let input: OPDSProgressionInput = serde_json::from_str(json).unwrap();
-		assert!(input.device().is_none());
+	#[test]
+	fn stable_document_requires_progression_not_the_legacy_locator_envelope() {
+		assert!(serde_json::from_value::<OPDSProgression>(json!({
+			"modified": "2026-01-28T08:17:11-07:00",
+			"device": { "id": "device", "name": "Reader" },
+			"locator": { "href": "chapter.xhtml", "type": "application/xhtml+xml" }
+		}))
+		.is_err());
+	}
+
+	#[test]
+	fn fraction_only_and_fragment_only_documents_preserve_native_locator_ownership() {
+		for references in [None, Some(vec![]), Some(vec![""]), Some(vec!["#t=42"])] {
+			assert!(document(references).locator().is_none());
+		}
+	}
+
+	#[test]
+	fn epub_reference_round_trips_resource_and_fragment_without_inventing_position() {
+		let input = document(Some(vec!["#t=42", "OPS/chapter.xhtml#paragraph"]));
+		let locator = input.locator().unwrap();
+		assert_eq!(locator.href, "OPS/chapter.xhtml");
+		let locations = locator.locations.as_ref().unwrap();
+		assert_eq!(locations.fragments, Some(vec!["paragraph".into()]));
+		assert_eq!(locations.total_progression, Some(Decimal::new(25, 2)));
+		assert!(locations.position.is_none());
+		assert!(locations.progression.is_none());
+		assert!(locator.text.is_none());
+
+		let output = OPDSProgression::new(entity(Some(locator), None));
+		assert_eq!(
+			output.references,
+			Some(vec!["OPS/chapter.xhtml#paragraph".into()])
+		);
+		assert_eq!(
+			output.progression, 0.5,
+			"the canonical head owns the fraction"
+		);
+	}
+
+	#[test]
+	fn native_epub_href_with_fragment_is_not_duplicated() {
+		let mut locator = document(Some(vec!["OPS/chapter.xhtml#paragraph"]))
+			.locator()
+			.unwrap();
+		locator.href.push_str("#paragraph");
+		let output = OPDSProgression::new(entity(Some(locator), None));
+		assert_eq!(
+			output.references,
+			Some(vec!["OPS/chapter.xhtml#paragraph".into()])
+		);
+	}
+
+	#[test]
+	fn paged_output_uses_publication_fragment_and_flat_progression() {
+		let output =
+			serde_json::to_value(OPDSProgression::new(entity(None, Some(10)))).unwrap();
+		assert_eq!(output["references"], json!(["#page=10"]));
+		assert_eq!(output["progression"], 0.5);
+		assert_eq!(output["title"], "Page 10");
+		assert!(output.get("locator").is_none());
 	}
 }

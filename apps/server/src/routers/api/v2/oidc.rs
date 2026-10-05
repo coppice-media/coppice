@@ -24,7 +24,7 @@ use openidconnect::PkceCodeChallenge;
 
 use crate::{
 	config::{
-		jwt::{create_jwt_auth, JwtTokenPair},
+		jwt::{create_jwt_auth, lock_active_user, JwtTokenPair},
 		oidc::{exchange_code_for_claims, get_oidc_authorize_url, OidcProvider},
 		session::SESSION_USER_KEY,
 		state::AppState,
@@ -373,10 +373,10 @@ async fn callback(
 		(user, true)
 	};
 
-	if user_model.is_locked {
-		tracing::warn!(user_id = %user_model.id, "Locked user attempted login via OIDC");
-		return Err(APIError::Forbidden("Account is locked".to_string()));
-	};
+	// An OIDC subject still resolves to its soft-deleted row. Reject it here,
+	// before permission sync or issuing a session/JWT: filtering it out above
+	// would instead register a second account for the same subject.
+	ensure_oidc_account_can_sign_in(&user_model)?;
 	if let Some(permissions) = claims.mapped_permissions(oidc_config) {
 		if !user_model.is_server_owner {
 			let tx = begin_write(&ctx.conn).await?;
@@ -409,7 +409,13 @@ async fn callback(
 	);
 
 	if generate_token {
-		let token = create_jwt_auth(&user_model.id, &ctx.conn, &ctx.config).await?;
+		let txn = begin_write(&ctx.conn).await?;
+		let active_user = lock_active_user(&txn, &user_model.id)
+			.await?
+			.ok_or_else(|| APIError::Forbidden("Account is deleted".to_string()))?;
+		ensure_oidc_account_can_sign_in(&active_user)?;
+		let token = create_jwt_auth(&user_model.id, &txn, &ctx.config).await?;
+		txn.commit().await?;
 		tracing::debug!(user_id = %user_model.id, "Generated JWT tokens for OIDC user");
 
 		if let Some(redirect_uri) = oidc_state.query.redirect_uri {
@@ -435,11 +441,36 @@ async fn callback(
 				tracing::error!("Failed to create session: {:?}", e);
 				APIError::InternalServerError("Session error".to_string())
 			})?;
+		let txn = begin_write(&ctx.conn).await?;
+		let active_user = lock_active_user(&txn, &user_model.id).await;
+		let validation = match active_user {
+			Ok(Some(active_user)) => ensure_oidc_account_can_sign_in(&active_user),
+			Ok(None) => Err(APIError::Forbidden("Account is deleted".to_string())),
+			Err(error) => Err(error),
+		};
+		if let Err(error) = validation {
+			txn.rollback().await?;
+			session.delete().await?;
+			return Err(error);
+		}
+		txn.commit().await?;
 		tracing::debug!(user_id = %user_model.id, "Created session for OIDC user");
 		Ok(OidcCallbackResponse::Redirect(Redirect::temporary(
 			oidc_state.query.return_to.as_deref().unwrap_or("/"),
 		)))
 	}
+}
+
+fn ensure_oidc_account_can_sign_in(user: &user::Model) -> APIResult<()> {
+	if user.deleted_at.is_some() {
+		tracing::warn!(user_id = %user.id, "Deleted user attempted login via OIDC");
+		return Err(APIError::Forbidden("Account is deleted".to_string()));
+	}
+	if user.is_locked {
+		tracing::warn!(user_id = %user.id, "Locked user attempted login via OIDC");
+		return Err(APIError::Forbidden("Account is locked".to_string()));
+	}
+	Ok(())
 }
 
 /// Ensure username is unique by adding a suffix as needed
@@ -478,7 +509,14 @@ async fn ensure_unique_username(
 
 #[cfg(test)]
 mod tests {
-	use super::validate_return_to;
+	use super::{
+		ensure_oidc_account_can_sign_in, user, user_preferences, validate_return_to,
+		APIError,
+	};
+	use sea_orm::{
+		ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DbBackend, EntityTrait,
+		PaginatorTrait, QueryFilter, Schema, Set,
+	};
 
 	#[test]
 	fn return_to_accepts_same_origin_paths_and_rejects_external_targets() {
@@ -493,6 +531,57 @@ mod tests {
 				"accepted invalid return_to: {value}"
 			);
 		}
+	}
+
+	#[tokio::test]
+	async fn callback_lookup_rejects_a_deleted_oidc_identity_instead_of_registering_again(
+	) {
+		let db = Database::connect("sqlite::memory:").await.unwrap();
+		let preferences_table = Schema::new(DbBackend::Sqlite)
+			.create_table_from_entity(user_preferences::Entity);
+		db.execute(db.get_database_backend().build(&preferences_table))
+			.await
+			.unwrap();
+		let table = Schema::new(DbBackend::Sqlite).create_table_from_entity(user::Entity);
+		db.execute(db.get_database_backend().build(&table))
+			.await
+			.unwrap();
+		let deleted = user::ActiveModel {
+			id: Set("oidc-member".to_owned()),
+			username: Set("member".to_owned()),
+			hashed_password: Set(String::new()),
+			is_server_owner: Set(false),
+			oidc_issuer_id: Set(Some("subject-1".to_owned())),
+			deleted_at: Set(Some(chrono::Utc::now().into())),
+			..Default::default()
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+
+		// Mirror the callback's exact subject lookup, not a deleted-at filter:
+		// filtering would reach the registration branch when registration is on.
+		let matched = user::Entity::find()
+			.filter(user::Column::OidcIssuerId.eq("subject-1"))
+			.one(&db)
+			.await
+			.unwrap()
+			.expect("a deleted subject still resolves to its account");
+		assert_eq!(matched.id, deleted.id);
+		assert!(matches!(
+			ensure_oidc_account_can_sign_in(&matched),
+			Err(APIError::Forbidden(reason)) if reason == "Account is deleted"
+		));
+		assert_eq!(user::Entity::find().count(&db).await.unwrap(), 1);
+
+		let mut active = matched;
+		active.deleted_at = None;
+		assert!(ensure_oidc_account_can_sign_in(&active).is_ok());
+		active.is_locked = true;
+		assert!(matches!(
+			ensure_oidc_account_can_sign_in(&active),
+			Err(APIError::Forbidden(reason)) if reason == "Account is locked"
+		));
 	}
 }
 

@@ -1,5 +1,6 @@
 pub(crate) mod audio;
 pub(crate) mod auth;
+pub(crate) mod club_reader;
 pub(crate) mod device_pairing;
 pub(crate) mod emoji;
 #[cfg(feature = "readium")]
@@ -57,6 +58,7 @@ pub(crate) fn mount(app_state: AppState) -> Router<AppState> {
 	#[cfg(feature = "readium")]
 	let router = router.merge(read_aloud::mount(app_state.clone()));
 	router
+		.merge(club_reader::mount(app_state.clone()))
 		.merge(series::mount(app_state.clone()))
 		.merge(library::mount(app_state.clone()))
 		.merge(user::mount(app_state.clone()))

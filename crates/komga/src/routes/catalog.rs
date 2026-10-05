@@ -740,6 +740,49 @@ fn series_ids_for_read_status(
 	media_query.into_query()
 }
 
+/// Match the same nonempty, comma-separated credits emitted by the DTO mapper.
+/// Komga 1.28.1's Author predicate is equality/existence, not substring search.
+fn author_metadata_condition(value: &AuthorMatch) -> Condition {
+	if value.name.as_deref() == Some("") {
+		return Condition::any();
+	}
+	let mut authors = Condition::any();
+	for (column, role) in [
+		(media_metadata::Column::Writers, "writer"),
+		(media_metadata::Column::Pencillers, "penciller"),
+		(media_metadata::Column::Inkers, "inker"),
+		(media_metadata::Column::Colorists, "colorist"),
+		(media_metadata::Column::Letterers, "letterer"),
+		(media_metadata::Column::CoverArtists, "cover"),
+		(media_metadata::Column::Editors, "editor"),
+	] {
+		if value.role.as_deref().is_some_and(|requested| {
+			!requested.eq_ignore_ascii_case(role)
+				&& !(role == "cover" && requested.eq_ignore_ascii_case("cover_artist"))
+		}) {
+			continue;
+		}
+		// json_quote escapes names before commas become JSON array separators.
+		// Trim the Unicode White_Space characters used by Rust's str::trim;
+		// equality retains SQLite's existing ASCII-only NOCASE capability.
+		let name = Expr::cust(
+			"trim(author.value, char(9, 10, 11, 12, 13, 32, 133, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288)) COLLATE NOCASE",
+		);
+		let name_match = match value.name.as_deref() {
+			Some(value) => name.eq(value),
+			None => name.ne(""),
+		};
+		authors = authors.add(Expr::cust_with_exprs(
+			r#"EXISTS (SELECT 1 FROM json_each('[' || replace(json_quote(?), ',', '","') || ']') AS author WHERE ?)"#,
+			[
+				Expr::col((media_metadata::Entity, column)).into(),
+				name_match,
+			],
+		));
+	}
+	authors
+}
+
 fn book_condition_filter(
 	condition: &BookCondition,
 	user: &AuthUser,
@@ -814,39 +857,23 @@ fn book_condition_filter(
 					.not_in_subquery(visible_head_media_ids_subquery(user, None)),
 			),
 		)),
-		BookCondition::Author {
-			operator: Equality::Is { value },
-		} => {
-			let role = value.role.as_deref().map(str::to_ascii_lowercase);
-			let columns = match role.as_deref() {
-				None => vec![
-					media_metadata::Column::Writers,
-					media_metadata::Column::Pencillers,
-					media_metadata::Column::Inkers,
-					media_metadata::Column::Colorists,
-					media_metadata::Column::Letterers,
-					media_metadata::Column::CoverArtists,
-					media_metadata::Column::Editors,
-				],
-				Some("writer") => vec![media_metadata::Column::Writers],
-				Some("penciller") => vec![media_metadata::Column::Pencillers],
-				Some("inker") => vec![media_metadata::Column::Inkers],
-				Some("colorist") => vec![media_metadata::Column::Colorists],
-				Some("letterer") => vec![media_metadata::Column::Letterers],
-				Some("cover") | Some("cover_artist") => {
-					vec![media_metadata::Column::CoverArtists]
-				},
-				Some("editor") => vec![media_metadata::Column::Editors],
-				Some(_) => return Err(unsupported_filter("author role")),
+		BookCondition::Author { operator } => {
+			let value = match operator {
+				Equality::Is { value } | Equality::IsNot { value } => value,
 			};
-			let mut authors = Condition::any();
-			for column in columns {
-				authors = authors.add(match value.name.as_deref() {
-					Some(name) => column.contains(name),
-					None => column.is_not_null(),
-				});
-			}
-			Ok(Some(authors))
+			let matching_books = media_metadata::Entity::find()
+				.select_only()
+				.column(media_metadata::Column::MediaId)
+				.filter(media_metadata::Column::MediaId.is_not_null())
+				.filter(author_metadata_condition(value))
+				.into_query();
+			let condition = match operator {
+				Equality::Is { .. } => media::Column::Id.in_subquery(matching_books),
+				Equality::IsNot { .. } => {
+					media::Column::Id.not_in_subquery(matching_books)
+				},
+			};
+			Ok(Some(Condition::all().add(condition)))
 		},
 		BookCondition::Tag {
 			operator: EqualityNullable::Is { value },
@@ -1034,16 +1061,29 @@ fn series_condition_filter(
 				Condition::all().add(series::Column::Id.in_subquery(matching_series)),
 			))
 		},
-		SeriesCondition::Author {
-			operator: Equality::Is { value },
-		} => {
-			let role = value.role.as_deref().map(str::to_ascii_lowercase);
-			if role.as_deref().is_some_and(|role| role != "writer") {
-				return Ok(Some(Condition::all().add(Expr::val(false).eq(true))));
-			}
-			let condition = match value.name.as_deref() {
-				Some(name) => series_metadata::Column::Writers.contains(name),
-				None => series_metadata::Column::Writers.is_not_null(),
+		SeriesCondition::Author { operator } => {
+			let value = match operator {
+				Equality::Is { value } | Equality::IsNot { value } => value,
+			};
+			// Aggregate only observable child books, never series-level writers.
+			// Negate membership in this set, not an individual child's authors.
+			let matching_series = media::Entity::find_for_user(user)
+				.select_only()
+				.column(media::Column::SeriesId)
+				.filter(media::Column::SeriesId.is_not_null())
+				.filter(media::Column::DeletedAt.is_null())
+				.filter(media::Column::Status.ne(FileStatus::Missing))
+				.filter(
+					media::Column::Extension
+						.is_in(SUPPORTED_MEDIA_EXTENSIONS.iter().copied()),
+				)
+				.filter(author_metadata_condition(value))
+				.into_query();
+			let condition = match operator {
+				Equality::Is { .. } => series::Column::Id.in_subquery(matching_series),
+				Equality::IsNot { .. } => {
+					series::Column::Id.not_in_subquery(matching_series)
+				},
 			};
 			Ok(Some(Condition::all().add(condition)))
 		},
@@ -2970,3 +3010,7 @@ mod tests {
 		);
 	}
 }
+
+#[cfg(test)]
+#[path = "catalog_author_tests.rs"]
+mod author_search_tests;

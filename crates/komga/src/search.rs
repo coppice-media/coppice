@@ -544,6 +544,7 @@ where
 		"ageRating" => "AgeRating",
 		"readStatus" => "ReadStatus",
 		"seriesStatus" => "SeriesStatus",
+		"author" => "Author",
 		_ => unreachable!(),
 	};
 	if let Some(type_value) = object.get("type") {

@@ -1,5 +1,6 @@
 use std::{
-	collections::{HashMap, HashSet},
+	collections::{hash_map::DefaultHasher, HashMap, HashSet},
+	hash::{Hash, Hasher},
 	sync::{Arc, LazyLock, Mutex},
 	time::Duration,
 };
@@ -663,7 +664,11 @@ fn select_hardcover_source(
 ) -> Option<HardcoverSearchSource> {
 	server_config
 		.map(HardcoverSearchSource::Server)
-		.or_else(|| personal_connection.map(HardcoverSearchSource::Personal))
+		.or_else(|| {
+			personal_connection
+				.filter(|connection| connection.use_for_metadata)
+				.map(HardcoverSearchSource::Personal)
+		})
 }
 
 /// Resolve the Hardcover client the caller may search with, plus the
@@ -696,7 +701,7 @@ pub(super) async fn get_hardcover_provider(
 	let Some(source) = select_hardcover_source(server_config, personal_connection) else {
 		return Ok(None);
 	};
-	let (scope, fingerprint) = match &source {
+	let (base_scope, fingerprint) = match &source {
 		HardcoverSearchSource::Server(config) => (
 			format!("server:{}", config.id),
 			config.encrypted_api_token.clone().unwrap_or_default(),
@@ -706,6 +711,11 @@ pub(super) async fn get_hardcover_provider(
 			connection.encrypted_api_token.clone(),
 		),
 	};
+	// Rotate cached client/results/narrators with the credential. The
+	// ciphertext is not itself included in a cache key or error message.
+	let mut hasher = DefaultHasher::new();
+	fingerprint.hash(&mut hasher);
+	let scope = format!("{base_scope}:{:016x}", hasher.finish());
 	if let Some(provider) = EXTERNAL_SEARCH.provider(&scope, &fingerprint) {
 		return Ok(Some((scope, provider)));
 	}
@@ -1032,7 +1042,7 @@ pub(super) mod tests {
 		assert_eq!(query_isbn("The Book"), None);
 	}
 	#[test]
-	fn server_config_precedes_personal_credentials_and_personal_is_fallback() {
+	fn server_config_precedes_personal_credentials_and_personal_is_opt_in_fallback() {
 		use chrono::Utc;
 
 		let now: sea_orm::prelude::DateTimeWithTimeZone = Utc::now().into();
@@ -1046,7 +1056,7 @@ pub(super) mod tests {
 			created_at: now.clone(),
 			updated_at: None,
 		};
-		let personal = hardcover_connection::Model {
+		let mut personal = hardcover_connection::Model {
 			user_id: "requesting-user".to_owned(),
 			encrypted_api_token: "personal-cipher".to_owned(),
 			credential_version: 1,
@@ -1054,7 +1064,7 @@ pub(super) mod tests {
 			remote_username: None,
 			scopes: None,
 			capabilities: None,
-			use_for_metadata: true,
+			use_for_metadata: false,
 			import_journals: false,
 			sync_progress: false,
 			connected_at: now.clone(),
@@ -1064,18 +1074,24 @@ pub(super) mod tests {
 			updated_at: now,
 		};
 
-		match select_hardcover_source(Some(server), Some(personal.clone())) {
+		assert!(select_hardcover_source(None, Some(personal.clone())).is_none());
+		match select_hardcover_source(Some(server.clone()), Some(personal.clone())) {
 			Some(HardcoverSearchSource::Server(config)) => {
 				assert_eq!(config.encrypted_api_token.as_deref(), Some("server-cipher"));
 			},
-			_ => panic!("the enabled server provider must take precedence"),
+			_ => panic!("an enabled server provider is independent of personal opt-in"),
+		}
+		personal.use_for_metadata = true;
+		match select_hardcover_source(Some(server), Some(personal.clone())) {
+			Some(HardcoverSearchSource::Server(_)) => {},
+			_ => panic!("an enabled server provider must take precedence"),
 		}
 		match select_hardcover_source(None, Some(personal)) {
 			Some(HardcoverSearchSource::Personal(connection)) => {
 				assert_eq!(connection.user_id, "requesting-user");
 				assert_eq!(connection.encrypted_api_token, "personal-cipher");
 			},
-			_ => panic!("the caller's personal connection is the fallback"),
+			_ => panic!("an opted-in caller's personal connection is the fallback"),
 		}
 	}
 
@@ -1319,6 +1335,134 @@ pub(super) mod tests {
 		assert!(result["hits"].as_array().unwrap().is_empty());
 		assert!(data["blank"]["provider"].is_null());
 		assert!(data["blank"]["hits"].as_array().unwrap().is_empty());
+	}
+
+	#[tokio::test]
+	async fn opted_out_pat_cannot_supply_search_even_after_client_warms() {
+		use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+
+		let db = seed_project_hail_mary().await;
+		let user = ::tests::fake_data::User::new("personal-search")
+			.auth_user(&db)
+			.await;
+		let key = stump_core::utils::encryption::create_encryption_key().unwrap();
+		models::entity::server_config::ActiveModel {
+			encryption_key: Set(Some(key.clone())),
+			initial_wal_setup_complete: Set(false),
+			..Default::default()
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+		let now = chrono::Utc::now().into();
+		let connection = hardcover_connection::ActiveModel {
+			user_id: Set(user.id.clone()),
+			encrypted_api_token: Set("not-a-valid-ciphertext".to_owned()),
+			credential_version: Set(1),
+			use_for_metadata: Set(false),
+			import_journals: Set(false),
+			sync_progress: Set(false),
+			connected_at: Set(now),
+			updated_at: Set(now),
+			..Default::default()
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+		let core: CoreContext = Arc::new(stump_core::Ctx::for_testing(db));
+		let schema = async_graphql::Schema::build(
+			UnifiedSearchQuery,
+			async_graphql::EmptyMutation,
+			async_graphql::EmptySubscription,
+		)
+		.data(AuthContext {
+			user: user.clone(),
+			api_key: None,
+			device_id: None,
+		})
+		.data(core.clone())
+		.data(stump_api_types::RequestOrigin::default())
+		.finish();
+		let response = schema
+			.execute(
+				r#"{ externalBookSearch(query: "fiction") { provider error hits { title } } }"#,
+			)
+			.await;
+		assert!(response.errors.is_empty(), "{:?}", response.errors);
+		let result = response.data.into_json().unwrap();
+		assert!(result["externalBookSearch"]["provider"].is_null());
+		assert!(result["externalBookSearch"]["error"].is_null());
+
+		let mut active = connection.into_active_model();
+		active.use_for_metadata = Set(true);
+		active.encrypted_api_token = Set(stump_core::utils::encryption::encrypt_string(
+			"personal-token",
+			&key,
+		)
+		.unwrap());
+		let connection = active.update(core.conn.as_ref()).await.unwrap();
+		let (scope, personal) = get_hardcover_provider(&core, &user.id)
+			.await
+			.unwrap()
+			.unwrap();
+		assert!(scope.starts_with(&format!("user:{}:", user.id)));
+		let mut active = connection.into_active_model();
+		active.encrypted_api_token = Set(stump_core::utils::encryption::encrypt_string(
+			"new-personal-token",
+			&key,
+		)
+		.unwrap());
+		active.credential_version = Set(2);
+		let connection = active.update(core.conn.as_ref()).await.unwrap();
+		let (rotated_scope, rotated) = get_hardcover_provider(&core, &user.id)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_ne!(rotated_scope, scope);
+		assert!(!Arc::ptr_eq(&rotated, &personal));
+		let mut active = connection.into_active_model();
+		active.use_for_metadata = Set(false);
+		active.update(core.conn.as_ref()).await.unwrap();
+		assert!(
+			get_hardcover_provider(&core, &user.id)
+				.await
+				.unwrap()
+				.is_none(),
+			"a warmed personal client cannot bypass a changed opt-in"
+		);
+
+		let server = metadata_provider_config::ActiveModel {
+			provider_type: Set(MetadataProviderKind::Hardcover),
+			enabled: Set(true),
+			encrypted_api_token: Set(Some(
+				stump_core::utils::encryption::encrypt_string("global-token", &key)
+					.unwrap(),
+			)),
+			created_at: Set(now),
+			..Default::default()
+		}
+		.insert(core.conn.as_ref())
+		.await
+		.unwrap();
+		let (global_scope, global) = get_hardcover_provider(&core, &user.id)
+			.await
+			.unwrap()
+			.unwrap();
+		assert!(global_scope.starts_with(&format!("server:{}:", server.id)));
+		assert!(!Arc::ptr_eq(&global, &personal));
+		let mut active = server.into_active_model();
+		active.encrypted_api_token = Set(Some(
+			stump_core::utils::encryption::encrypt_string("new-global-token", &key)
+				.unwrap(),
+		));
+		active.update(core.conn.as_ref()).await.unwrap();
+		let (rotated_global_scope, rotated_global) =
+			get_hardcover_provider(&core, &user.id)
+				.await
+				.unwrap()
+				.unwrap();
+		assert_ne!(rotated_global_scope, global_scope);
+		assert!(!Arc::ptr_eq(&global, &rotated_global));
 	}
 
 	/// The per-request annotation layer is what must never be cached: library

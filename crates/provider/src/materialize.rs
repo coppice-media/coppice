@@ -584,7 +584,7 @@ mod tests {
 
 	use super::*;
 	use crate::{
-		host::{ProviderHostConfig, VirtualArchive},
+		host::ProviderHostConfig,
 		mock::{
 			MockSource, ALPHA_CHAPTERS, BETA_CHAPTERS, MOCK_SOURCE_ID, PAGES_PER_CHAPTER,
 			SERIES_ALPHA, SERIES_BETA,

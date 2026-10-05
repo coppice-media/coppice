@@ -21,4 +21,6 @@ tokio.workspace = true
 tracing = { workspace = true }
 
 [dev-dependencies]
+migrations = { path = "../migrations" }
 tests = { path = "../tests" }
+tower = { version = "0.5", features = ["util"] }

@@ -294,9 +294,8 @@ fn emailer_config(
 	})
 }
 
-/// Build the recipient for `user_id` on `channel`: the channel defaults,
-/// overlaid with the stored (secret values still encrypted) settings, then
-/// decrypted.
+/// Build an active user's recipient settings for a channel. Missing and
+/// soft-deleted accounts cannot receive queued deliveries.
 pub async fn recipient_for(
 	conn: &DatabaseConnection,
 	encryption_key: &String,
@@ -312,12 +311,14 @@ pub async fn recipient_for(
 	.map_err(|error| ChannelError::Transport(error.to_string()))?;
 
 	let username = user::Entity::find_by_id(user_id)
+		.filter(user::Column::DeletedAt.is_null())
 		.one(conn)
 		.await
-		.ok()
-		.flatten()
-		.map(|user| user.username)
-		.unwrap_or_else(|| user_id.to_string());
+		.map_err(|error| ChannelError::Transport(error.to_string()))?
+		.ok_or_else(|| {
+			ChannelError::Rejected("notification recipient no longer exists".into())
+		})?
+		.username;
 
 	let mut settings = channel.default_settings(user_id);
 	if let Some(stored) = stored {

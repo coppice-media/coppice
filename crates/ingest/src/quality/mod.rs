@@ -78,6 +78,9 @@ static ENABLED_SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 		required: false,
 		secret: false,
 		help_url: None,
+		minimum: None,
+		maximum: None,
+		options: &[],
 	}]
 });
 

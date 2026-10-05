@@ -191,6 +191,12 @@ type AnnotationEntry {
 	"Whole-publication progression in `0..=1`, when known"
 	progression: Float
 	"""
+	Milliseconds from the start of the publication, for a moment in an
+	audiobook: a native note made while listening, or an audio bookmark.
+	Such an anchor has no `href`, `fragment`, or `page`.
+	"""
+	positionMs: Int
+	"""
 	The selected passage: the locator's `text.highlight`, the liseur
 	`excerpt`, or a bookmark's preview text
 	"""
@@ -1046,9 +1052,22 @@ union CoreEvent = JobStarted | JobUpdate | JobOutput | JobQueueStatus | Discover
 
 union CoreJobOutput = LibraryScanOutput | SeriesScanOutput | ThumbnailGenerationOutput | PlaceholderGenerationOutput | MetadataFetchJobOutput | AnalyzeMediaOutput | NotificationDispatchOutput | AnnotationSyncOutput | ProviderSourceHealthOutput
 
+"""
+A new annotation, anchored by exactly one of `locator` (text or a page)
+and `positionMs` (a moment in an audiobook).
+"""
 input CreateAnnotationInput {
 	mediaId: String!
-	locator: ReadiumLocatorInput!
+	"""
+	The Readium anchor: a text selection in an EPUB, or the
+	`locations.position` page of a comic or PDF.
+	"""
+	locator: ReadiumLocatorInput
+	"""
+	A moment in an audiobook: milliseconds from the start of the
+	publication, within `0..=durationMs`. Rejected on any other media.
+	"""
+	positionMs: Int
 	annotationText: String
 }
 
@@ -2687,6 +2706,12 @@ type IngestSettingDefinition {
 	defaultValue: JSON
 	description: String
 	helpUrl: String
+	"Inclusive lower bound of an `INTEGER`/`NUMBER` setting."
+	minimum: Float
+	"Inclusive upper bound of an `INTEGER`/`NUMBER` setting."
+	maximum: Float
+	"The accepted values of an `ENUM` setting; empty for every other type."
+	options: [String!]!
 }
 
 enum IngestSettingValueType {
@@ -2694,6 +2719,8 @@ enum IngestSettingValueType {
 	INTEGER
 	NUMBER
 	STRING
+	"A string restricted to the definition's `options`."
+	ENUM
 	JSON
 }
 
@@ -3352,6 +3379,12 @@ type MediaAnalysisData {
 type MediaAnnotation {
 	id: String!
 	locator: ReadiumLocator!
+	"""
+	A note in an audiobook: milliseconds from the start of the
+	publication, the same unit as `bookmarks.position_ms` and
+	`reading_heads.position_ms`. Null for a text- or page-anchored row.
+	"""
+	positionMs: Int
 	annotationText: String
 	color: String
 	mediaId: String!
@@ -3360,10 +3393,24 @@ type MediaAnnotation {
 	updatedAt: DateTime!
 }
 
-"A media annotation represents a highlight and/or note"
+"""
+A media annotation represents a highlight and/or note
+
+A text or page annotation is anchored by its `locator`. A note made in an
+audiobook is anchored by `position_ms` instead: its `locator` names no
+resource (empty `href`, no `text`) and only carries the chapter title and
+whole-publication progression of that moment, so every lane that needs a
+Readium anchor sees an unanchored row.
+"""
 type MediaAnnotationModel {
 	id: String!
 	locator: ReadiumLocator!
+	"""
+	A note in an audiobook: milliseconds from the start of the
+	publication, the same unit as `bookmarks.position_ms` and
+	`reading_heads.position_ms`. Null for a text- or page-anchored row.
+	"""
+	positionMs: Int
 	annotationText: String
 	color: String
 	mediaId: String!
@@ -4261,7 +4308,11 @@ type Mutation {
 	createBookmark(input: BookmarkInput!): Bookmark!
 	"Delete a bookmark by ID, only if the user created it"
 	deleteBookmark(id: String!): Bookmark!
-	"Create an annotation (highlight/note)"
+	"""
+	Create an annotation (highlight/note), anchored by a Readium `locator`
+	or, for a note in an audiobook, by `positionMs` (validated against the
+	audiobook's duration and rejected on any other media).
+	"""
 	createAnnotation(input: CreateAnnotationInput!): MediaAnnotation!
 	"""
 	Update an annotation's note text or color. Liseur-backed rows use CAS;
@@ -4475,10 +4526,9 @@ type Mutation {
 	"""
 	lookupHardcoverMetadata(mediaId: ID!): HardcoverMetadataLookup
 	"""
-	Runs one explicit, user-scoped synchronization. No scheduler calls this
-	continuously: the caller opts in through the manual mutation and the
-	connection toggles. Quotes are imported only with an exact local link and
-	page locator; all other records remain unresolved provenance.
+	Runs one explicit, user-scoped read-only synchronization. Journal
+	quotes are retained as provenance: Hardcover page numbers cannot
+	identify an EPUB resource/CFI, so no annotation is manufactured.
 	"""
 	syncHardcoverNow: HardcoverSyncResult!
 	"""
@@ -4665,6 +4715,17 @@ type Mutation {
 	setIngestProviderSettings(input: SetIngestProviderSettingsInput!): IngestProviderSettings!
 	verifyIngestProvider(providerId: String!, settings: JSON): ProviderCredentialVerification!
 	lookupIngestCandidate(dropItemId: ID!, providerId: String!, externalId: String!): IngestMetadataCandidate!
+	"""
+	Save the server-wide settings of one quality check.
+	
+	Analysis runs server-wide, so the row has no user or library and
+	needs both provider management and library management. `settings`
+	replaces the stored values after validation against the check's
+	descriptors (unknown keys, wrong types, and out-of-range numbers are
+	refused); `null` entries fall back to the default. The `enabled`
+	setting is stored in the row's `enabled` column: an explicit
+	`enabled` argument wins over one inside `settings`.
+	"""
 	setIngestQualityCheckSettings(input: SetIngestQualityCheckSettingsInput!): IngestQualityCheckSettings!
 	"""
 	Replace (or, with an empty field list, clear) a library's per-field
@@ -5828,7 +5889,15 @@ type Query {
 	ingestProviderCatalog(includeDisabled: Boolean! = false): [IngestProviderDescriptor!]!
 	ingestProviderSettings(providerId: String!): IngestProviderSettings
 	ingestProviderSearch(query: String!, mediaKind: IngestMediaKind, providers: [String!], limit: Int = 10): [IngestSearchHit!]!
+	"""
+	The registered quality checks with the server-wide `enabled` switch
+	applied; disabled checks are listed only with `includeDisabled`.
+	"""
 	ingestQualityCheckCatalog(includeDisabled: Boolean! = false): [IngestQualityCheckDescriptor!]!
+	"""
+	The server-wide settings of one quality check (analysis is not
+	per-user, so per-user `CHECK` rows are never read).
+	"""
 	ingestQualityCheckSettings(checkId: String!): IngestQualityCheckSettings
 	"""
 	Latest quality report stored against a library media row (library-wide
@@ -7669,6 +7738,8 @@ enum UserPermission {
 	ACCESS_BOOK_CLUB
 	"Grant access to create a book club (access book club)"
 	CREATE_BOOK_CLUB
+	"Grant authorized club organizers the ability to issue and manage guest-reader links."
+	SHARE_BOOK_CLUB_READER
 	"Grant user access to change **their own** password"
 	CHANGE_PASSWORD
 	"Grant user access to change **their own** username"

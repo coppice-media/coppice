@@ -12,15 +12,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::{
-	extract::{Path, Query},
-	http::{HeaderMap, StatusCode},
-	response::IntoResponse,
+	extract::{rejection::JsonRejection, Path, Query},
+	http::{header, HeaderMap, HeaderValue, StatusCode},
+	response::{IntoResponse, Response},
 	routing::get,
 	Extension, Json, Router,
 };
 use stump_api_types::OffsetPagination;
 use stump_auth::AuthContext;
-use stump_core::opds::v2_0::progression::OPDSProgressionInput;
+use stump_core::opds::v2_0::progression::{OPDSProgression, OPDS_PROGRESSION_MEDIA_TYPE};
 
 /// The externally visible origin used when a provider has to generate absolute links.
 ///
@@ -235,6 +235,13 @@ pub trait OpdsBackend: Send + Sync + 'static {
 		id: String,
 		pagination: OffsetPagination,
 	) -> Result<axum::response::Response, Self::Error>;
+	async fn v2_browse_library_series(
+		&self,
+		auth: AuthContext,
+		host: ProviderHost,
+		id: String,
+		pagination: OffsetPagination,
+	) -> Result<axum::response::Response, Self::Error>;
 	async fn v2_browse_series(
 		&self,
 		auth: AuthContext,
@@ -286,14 +293,13 @@ pub trait OpdsBackend: Send + Sync + 'static {
 	async fn v2_get_book_progression(
 		&self,
 		auth: AuthContext,
-		host: ProviderHost,
 		id: String,
 	) -> Result<axum::response::Response, Self::Error>;
 	async fn v2_update_book_progression(
 		&self,
 		auth: AuthContext,
 		id: String,
-		input: OPDSProgressionInput,
+		input: OPDSProgression,
 	) -> Result<axum::response::Response, Self::Error>;
 	async fn v2_download_book(
 		&self,
@@ -369,7 +375,8 @@ where
 							Router::new()
 								.route("/", get(v2_browse_library_books::<B>))
 								.route("/latest", get(v2_latest_library_books::<B>)),
-						),
+						)
+						.route("/series", get(v2_browse_library_series::<B>)),
 				),
 		)
 		.nest(
@@ -678,6 +685,18 @@ async fn v2_latest_library_books<B: OpdsBackend>(
 		.await
 }
 
+async fn v2_browse_library_series<B: OpdsBackend>(
+	Extension(backend): Extension<Arc<B>>,
+	Extension(host): Extension<ProviderHost>,
+	Path(id): Path<String>,
+	Query(pagination): Query<OffsetPagination>,
+	Extension(auth): Extension<AuthContext>,
+) -> Result<axum::response::Response, B::Error> {
+	backend
+		.v2_browse_library_series(auth, host, id, pagination)
+		.await
+}
+
 async fn v2_browse_series<B: OpdsBackend>(
 	Extension(backend): Extension<Arc<B>>,
 	Extension(host): Extension<ProviderHost>,
@@ -753,20 +772,75 @@ async fn v2_get_book_page<B: OpdsBackend>(
 
 async fn v2_get_book_progression<B: OpdsBackend>(
 	Extension(backend): Extension<Arc<B>>,
-	Extension(host): Extension<ProviderHost>,
 	Path(id): Path<String>,
 	Extension(auth): Extension<AuthContext>,
-) -> Result<axum::response::Response, B::Error> {
-	backend.v2_get_book_progression(auth, host, id).await
+) -> Response {
+	match backend.v2_get_book_progression(auth, id).await {
+		Ok(response) => progression_response(response),
+		Err(error) => progression_error(error.into_response()),
+	}
 }
 
 async fn v2_update_book_progression<B: OpdsBackend>(
 	Extension(backend): Extension<Arc<B>>,
 	Path(id): Path<String>,
 	Extension(auth): Extension<AuthContext>,
-	Json(input): Json<OPDSProgressionInput>,
-) -> Result<axum::response::Response, B::Error> {
-	backend.v2_update_book_progression(auth, id, input).await
+	input: Result<Json<OPDSProgression>, JsonRejection>,
+) -> Response {
+	let Ok(Json(input)) = input else {
+		return progression_error(StatusCode::BAD_REQUEST.into_response());
+	};
+	match backend.v2_update_book_progression(auth, id, input).await {
+		Ok(response) => progression_response(response),
+		Err(error) => progression_error(error.into_response()),
+	}
+}
+
+fn progression_response(mut response: Response) -> Response {
+	response.headers_mut().insert(
+		header::CONTENT_TYPE,
+		HeaderValue::from_static(OPDS_PROGRESSION_MEDIA_TYPE),
+	);
+	response
+}
+
+/// OPDS Progression errors use Problem Details, not the native API envelope.
+/// Keep the backend's status and headers (including retry/auth hints).
+fn progression_error(mut response: Response) -> Response {
+	if response.status() == StatusCode::UNAUTHORIZED {
+		return response;
+	}
+	#[derive(serde::Serialize)]
+	struct Problem<'a> {
+		#[serde(rename = "type")]
+		kind: &'a str,
+		title: &'a str,
+	}
+	let (kind, title) = match response.status() {
+		StatusCode::BAD_REQUEST => (
+			"https://registry.opds.io/error#progression-invalid-payload",
+			"Progression could not be updated due to an invalid payload.",
+		),
+		StatusCode::FORBIDDEN => (
+			"https://registry.opds.io/error#progression-incorrect-user",
+			"Progression could not be updated for the current user.",
+		),
+		StatusCode::CONFLICT => (
+			"https://registry.opds.io/error#progression-date",
+			"A more recent progression point is already available.",
+		),
+		status => (
+			"about:blank",
+			status.canonical_reason().unwrap_or("Unknown error"),
+		),
+	};
+	*response.body_mut() = Json(Problem { kind, title }).into_response().into_body();
+	response.headers_mut().remove(header::CONTENT_LENGTH);
+	response.headers_mut().insert(
+		header::CONTENT_TYPE,
+		HeaderValue::from_static("application/problem+json"),
+	);
+	response
 }
 
 async fn v2_download_book<B: OpdsBackend>(

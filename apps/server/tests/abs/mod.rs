@@ -7,4 +7,5 @@
 //! cannot put a header on its upgrade), and that the `abs` feature plus
 //! `STUMP_ENABLE_ABS` are what put both there.
 
+mod library_groups;
 mod mount;

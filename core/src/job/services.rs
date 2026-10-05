@@ -323,6 +323,8 @@ impl ScheduledJobDispatcher for JobServices {
 			},
 		}
 	}
+	// `runtime` only enqueues MAM refreshes, which exist with `mam-acquisition`.
+	#[cfg_attr(not(feature = "mam-acquisition"), allow(unused_variables))]
 	async fn dispatch_due(&self, runtime: &JobRuntime<Self>) -> Result<(), JobError> {
 		#[cfg(feature = "mam-acquisition")]
 		if self.config.mam_acquisition.enable_mam_acquisition {

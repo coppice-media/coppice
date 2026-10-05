@@ -165,6 +165,7 @@ zip.workspace = true
 axum-test = "17.2.0"
 maplit.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }
+tokio-tungstenite = "0.28"
 tests = { path = "../../crates/tests" }
 tempfile.workspace = true
 

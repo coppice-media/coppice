@@ -1,22 +1,3 @@
-use async_graphql::{Context, Object, Result, ID};
-use chrono::Utc;
-use metadata_integrations::{HardcoverClient, HardcoverJournalEntry, MetadataProvider};
-use models::{
-	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
-	entity::{
-		hardcover_connection, hardcover_journal_provenance, hardcover_media_link,
-		hardcover_metadata_cache, media, media_annotation,
-	},
-	services::reading_state,
-	shared::readium::{ReadiumLocation, ReadiumLocator, ReadiumText},
-};
-use sea_orm::{
-	prelude::DateTimeWithTimeZone, ActiveModelTrait, ColumnTrait, EntityTrait,
-	IntoActiveModel, NotSet, QueryFilter, Set,
-};
-use serde_json::json;
-use stump_core::utils::encryption::{decrypt_string, encrypt_string};
-
 use crate::{
 	data::CoreContext,
 	object::hardcover::{
@@ -24,6 +5,24 @@ use crate::{
 		HardcoverSyncResult,
 	},
 };
+use async_graphql::{Context, Object, Result, ID};
+use chrono::{DateTime, Utc};
+use metadata_integrations::{HardcoverClient, HardcoverJournalEntry, MetadataProvider};
+use models::{
+	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
+	entity::{
+		hardcover_connection, hardcover_journal_provenance, hardcover_media_link,
+		hardcover_metadata_cache, media,
+	},
+	services::reading_state,
+	txn::begin_write,
+};
+use sea_orm::{
+	prelude::DateTimeWithTimeZone, ActiveModelTrait, ColumnTrait, ConnectionTrait,
+	EntityTrait, IntoActiveModel, QueryFilter, Set,
+};
+use serde_json::json;
+use stump_core::utils::encryption::{decrypt_string, encrypt_string};
 #[derive(Default)]
 pub struct HardcoverMutation;
 
@@ -50,10 +49,7 @@ impl HardcoverMutation {
 			.verify_identity()
 			.await
 			.map_err(public_provider_error)?;
-		let capabilities = client
-			.inspect_capabilities()
-			.await
-			.unwrap_or_else(|_| vec!["me".to_owned(), "metadata".to_owned()]);
+		let capabilities = client.inspect_capabilities().await.ok();
 		let key = core.get_encryption_key().await?;
 		let encrypted = encrypt_string(token, &key)?;
 		let conn = core.conn.as_ref();
@@ -69,7 +65,7 @@ impl HardcoverMutation {
 			active.remote_user_id = Set(identity.remote_user_id);
 			active.remote_username = Set(identity.username);
 			active.scopes = Set(Some(json!(["me", "metadata"])));
-			active.capabilities = Set(Some(json!(capabilities)));
+			active.capabilities = Set(capabilities.clone().map(|value| json!(value)));
 			active.use_for_metadata = Set(use_for_metadata.unwrap_or(true));
 			active.import_journals = Set(import_journals.unwrap_or(false));
 			active.sync_progress = Set(sync_progress.unwrap_or(false));
@@ -85,7 +81,7 @@ impl HardcoverMutation {
 				remote_user_id: Set(identity.remote_user_id),
 				remote_username: Set(identity.username),
 				scopes: Set(Some(json!(["me", "metadata"]))),
-				capabilities: Set(Some(json!(capabilities))),
+				capabilities: Set(capabilities.map(|value| json!(value))),
 				use_for_metadata: Set(use_for_metadata.unwrap_or(true)),
 				import_journals: Set(import_journals.unwrap_or(false)),
 				sync_progress: Set(sync_progress.unwrap_or(false)),
@@ -257,10 +253,9 @@ impl HardcoverMutation {
 		}))
 	}
 
-	/// Runs one explicit, user-scoped synchronization. No scheduler calls this
-	/// continuously: the caller opts in through the manual mutation and the
-	/// connection toggles. Quotes are imported only with an exact local link and
-	/// page locator; all other records remain unresolved provenance.
+	/// Runs one explicit, user-scoped read-only synchronization. Journal
+	/// quotes are retained as provenance: Hardcover page numbers cannot
+	/// identify an EPUB resource/CFI, so no annotation is manufactured.
 	async fn sync_hardcover_now(&self, ctx: &Context<'_>) -> Result<HardcoverSyncResult> {
 		let core = ctx.data::<CoreContext>()?;
 		let user = &ctx.data::<stump_auth::AuthContext>()?.user;
@@ -272,243 +267,243 @@ impl HardcoverMutation {
 		let key = core.get_encryption_key().await?;
 		let token = decrypt_string(&row.encrypted_api_token, &key)?;
 		let client = HardcoverClient::new(token, None);
-		let identity = match client.verify_identity().await {
-			Ok(identity) => identity,
-			Err(error) => {
-				let message = provider_error_message(&error);
-				let mut active = row.into_active_model();
-				active.last_error = Set(Some(message.clone()));
-				active.update(db).await?;
-				return Ok(HardcoverSyncResult {
-					status: "error".to_owned(),
-					imported: 0,
-					unresolved: 0,
-					projected: 0,
-					skipped: 0,
-					last_sync_at: None,
-					error: Some(message),
-				});
-			},
-		};
-		let capabilities = client
-			.inspect_capabilities()
-			.await
-			.unwrap_or_else(|_| vec!["me".to_owned(), "metadata".to_owned()]);
-		let import_journals = row.import_journals;
-		let sync_progress = row.sync_progress;
-		let mut active = row.into_active_model();
-		active.remote_user_id = Set(identity.remote_user_id);
-		active.remote_username = Set(identity.username);
-		active.capabilities = Set(Some(json!(capabilities.clone())));
-		active.verified_at = Set(Some(Utc::now().into()));
-		active.last_error = Set(None);
-		let settings = (import_journals, sync_progress);
-		let entries = if settings.0 {
-			if !capabilities
-				.iter()
-				.any(|capability| capability == "user_books")
-			{
-				Vec::new()
-			} else {
-				client.fetch_journal_entries().await.unwrap_or_default()
-			}
-		} else {
-			Vec::new()
-		};
-		let mut imported = 0;
-		let mut unresolved = 0;
-		let mut projected = 0;
-		let mut skipped = 0;
-		for entry in entries {
-			let existing = hardcover_journal_provenance::Entity::find()
-				.filter(hardcover_journal_provenance::Column::UserId.eq(&user.id))
-				.filter(
-					hardcover_journal_provenance::Column::RemoteEntryId
-						.eq(&entry.remote_entry_id),
-				)
-				.one(db)
-				.await?;
-			if existing.is_some() {
-				skipped += 1;
-				continue;
-			}
-			let link = entry.remote_book_id.as_deref().map(|remote_id| async move {
-				hardcover_media_link::Entity::find()
-					.filter(hardcover_media_link::Column::UserId.eq(&user.id))
-					.filter(hardcover_media_link::Column::RemoteId.eq(remote_id))
-					.one(db)
-					.await
-			});
-			let link = match link {
-				Some(future) => future.await?,
-				None => None,
-			};
-			let Some(link) = link else {
-				insert_unresolved(db, user.id.as_str(), &entry, "no exact media link")
-					.await?;
-				unresolved += 1;
-				continue;
-			};
-			let Some(page) = entry.page.filter(|page| *page > 0) else {
-				insert_unresolved(
-					db,
-					user.id.as_str(),
-					&entry,
-					"missing exact page locator",
-				)
-				.await?;
-				unresolved += 1;
-				continue;
-			};
-			let local = media::Entity::find_by_id(link.media_id.clone())
-				.one(db)
-				.await?
-				.ok_or("linked media disappeared")?;
-			if local.pages <= 0 || page > local.pages {
-				insert_unresolved(
-					db,
-					user.id.as_str(),
-					&entry,
-					"page is outside local publication",
-				)
-				.await?;
-				unresolved += 1;
-				continue;
-			}
-			if let Some(text) = entry.quote.clone().or(entry.note.clone()) {
-				let locator = ReadiumLocator {
-					chapter_title: String::new(),
-					href: format!("hardcover://{}", entry.remote_entry_id),
-					title: None,
-					locations: Some(ReadiumLocation {
-						fragments: None,
-						// Page is the exact, durable locator. A remote
-						// progression is retained in provenance and is
-						// never guessed into a Readium decimal.
-						progression: None,
-						position: Some(page),
-						total_progression: None,
-						css_selector: None,
-						partial_cfi: None,
-					}),
-					text: Some(ReadiumText {
-						after: None,
-						before: None,
-						highlight: Some(text.clone()),
-					}),
-					kobo_span: None,
-					r#type: "application/xhtml+xml".to_owned(),
-				};
-				let annotation = media_annotation::ActiveModel {
-					id: NotSet,
-					locator: Set(locator),
-					annotation_text: Set(entry.note.clone()),
-					color: Set(None),
-					media_id: Set(local.id.clone()),
-					user_id: Set(user.id.clone()),
-					created_at: NotSet,
-					updated_at: NotSet,
-				}
-				.insert(db)
-				.await?;
-				insert_imported(db, user.id.as_str(), &entry, &local.id, &annotation.id)
-					.await?;
-				imported += 1;
-			} else {
-				insert_unresolved(
-					db,
-					user.id.as_str(),
-					&entry,
-					"remote entry has no quote or note",
-				)
-				.await?;
-				unresolved += 1;
-			}
-			if settings.1 {
-				let progression = entry
-					.progression
-					.filter(|progression| {
-						progression.is_finite() && (0.0..=1.0).contains(progression)
-					})
-					.or_else(|| Some(page as f64 / local.pages as f64));
-				if let Some(progression) = progression {
-					let applied = reading_state::apply(
-						db,
-						&user.id,
-						Publication::from(&local),
-						ProtocolUpdate {
-							protocol: SourceProtocol::Stump,
-							device_id: None,
-							updated_at: None,
-							position: Position::Page(page),
-							progression: Some(progression),
-							completed: None,
-							raw_payload: entry.raw.clone(),
-						},
-					)
-					.await?;
-					if applied.accepted() {
-						projected += 1;
-					}
-				}
-			}
-		}
-		let now = Utc::now();
-		active.last_sync_at = Set(Some(now.into()));
-		active.updated_at = Set(now.into());
-		active.update(db).await?;
-		Ok(HardcoverSyncResult {
-			status: "ok".to_owned(),
-			imported,
-			unresolved,
-			projected,
-			skipped,
-			last_sync_at: Some(now.into()),
-			error: None,
-		})
+		sync_with_client(db, &user.id, row, &client).await
 	}
 }
 
+async fn sync_with_client(
+	db: &sea_orm::DatabaseConnection,
+	user_id: &str,
+	row: hardcover_connection::Model,
+	client: &HardcoverClient,
+) -> Result<HardcoverSyncResult> {
+	let previous_sync_at = row.last_sync_at;
+	let import_journals = row.import_journals;
+	let sync_progress = row.sync_progress;
+	let mut active = row.into_active_model();
+	let identity = match client.verify_identity().await {
+		Ok(identity) => identity,
+		Err(error) => {
+			return sync_failure(
+				db,
+				active,
+				previous_sync_at,
+				format!(
+					"Hardcover identity verification failed: {}",
+					provider_error_message(&error)
+				),
+			)
+			.await;
+		},
+	};
+	active.remote_user_id = Set(identity.remote_user_id.clone());
+	active.remote_username = Set(identity.username);
+	active.verified_at = Set(Some(Utc::now().into()));
+
+	let entries = if import_journals {
+		let capabilities = match client.inspect_capabilities().await {
+			Ok(capabilities) => capabilities,
+			Err(error) => {
+				return sync_failure(
+					db,
+					active,
+					previous_sync_at,
+					format!(
+						"Hardcover capability check failed: {}",
+						provider_error_message(&error)
+					),
+				)
+				.await;
+			},
+		};
+		active.capabilities = Set(Some(json!(capabilities)));
+		if !capabilities.iter().any(|name| name == "reading_journals") {
+			return sync_failure(
+				db,
+				active,
+				previous_sync_at,
+				"Hardcover does not advertise the reading_journals capability".into(),
+			)
+			.await;
+		}
+		let Some(remote_user_id) = identity.remote_user_id.as_deref() else {
+			return sync_failure(
+				db,
+				active,
+				previous_sync_at,
+				"Hardcover did not return a user id for journal access".into(),
+			)
+			.await;
+		};
+		match client.fetch_journal_entries(remote_user_id).await {
+			Ok(entries) => entries,
+			Err(error) => {
+				return sync_failure(
+					db,
+					active,
+					previous_sync_at,
+					format!(
+						"Hardcover journal fetch failed: {}",
+						provider_error_message(&error)
+					),
+				)
+				.await;
+			},
+		}
+	} else {
+		Vec::new()
+	};
+	// An upstream page failure above must never leave a partially imported
+	// journal. A local persistence failure below rolls back all new records.
+	let transaction = begin_write(db).await?;
+	let mut unresolved = 0;
+	let mut projected = 0;
+	let mut skipped = 0;
+	for entry in entries {
+		let existing = hardcover_journal_provenance::Entity::find()
+			.filter(hardcover_journal_provenance::Column::UserId.eq(user_id))
+			.filter(
+				hardcover_journal_provenance::Column::RemoteEntryId
+					.eq(&entry.remote_entry_id),
+			)
+			.one(&transaction)
+			.await?;
+		if existing.is_some() {
+			skipped += 1;
+			continue;
+		}
+		let link = if let Some(remote_id) = entry.remote_book_id.as_deref() {
+			hardcover_media_link::Entity::find()
+				.filter(hardcover_media_link::Column::UserId.eq(user_id))
+				.filter(hardcover_media_link::Column::RemoteId.eq(remote_id))
+				.one(&transaction)
+				.await?
+		} else {
+			None
+		};
+		let reason = if link.is_none() {
+			"no exact media link"
+		} else if entry.quote.is_none() && entry.note.is_none() {
+			"journal entry has no quote text"
+		} else {
+			"no exact publication resource locator"
+		};
+		insert_unresolved(
+			&transaction,
+			user_id,
+			&entry,
+			link.as_ref().map(|link| link.media_id.as_str()),
+			reason,
+		)
+		.await?;
+		unresolved += 1;
+
+		// `sync_progress` is local-only and depends on `import_journals`.
+		// A quote's metadata.position is an edition-relative *fraction*,
+		// never a local page. An absent timestamp/position cannot move a head.
+		if !sync_progress {
+			continue;
+		}
+		let Some(link) = link else { continue };
+		let Some(progression) = entry.progression else {
+			continue;
+		};
+		let Some(source_time) = entry
+			.raw
+			.get("action_at")
+			.and_then(serde_json::Value::as_str)
+			.and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+			.map(|value| value.to_utc())
+		else {
+			continue;
+		};
+		// Reject future source times: they would pin the head past subsequent
+		// local updates, which reading-state conflict resolution treats as stale.
+		if source_time > Utc::now() {
+			continue;
+		}
+		let local = media::Entity::find_by_id(&link.media_id)
+			.one(&transaction)
+			.await?
+			.ok_or("linked media disappeared")?;
+		if reading_state::head(&transaction, user_id, &local.id)
+			.await?
+			.is_some_and(|head| source_time <= head.updated_at.to_utc())
+		{
+			continue;
+		}
+		let applied = reading_state::apply(
+			&transaction,
+			user_id,
+			Publication::from(&local),
+			ProtocolUpdate {
+				protocol: SourceProtocol::Stump,
+				device_id: None,
+				updated_at: Some(source_time),
+				position: Position::None,
+				progression: Some(progression),
+				completed: None,
+				raw_payload: entry.raw.clone(),
+			},
+		)
+		.await?;
+		if applied.accepted() {
+			projected += 1;
+		}
+	}
+	let now = Utc::now();
+	active.last_sync_at = Set(Some(now.into()));
+	active.last_error = Set(None);
+	active.updated_at = Set(now.into());
+	active.update(&transaction).await?;
+	transaction.commit().await?;
+	Ok(HardcoverSyncResult {
+		status: "ok".to_owned(),
+		imported: 0,
+		unresolved,
+		projected,
+		skipped,
+		last_sync_at: Some(now.into()),
+		error: None,
+	})
+}
+
+async fn sync_failure(
+	db: &sea_orm::DatabaseConnection,
+	mut active: hardcover_connection::ActiveModel,
+	previous_sync_at: Option<DateTimeWithTimeZone>,
+	message: String,
+) -> Result<HardcoverSyncResult> {
+	active.last_error = Set(Some(message.clone()));
+	active.updated_at = Set(Utc::now().into());
+	active.update(db).await?;
+	Ok(HardcoverSyncResult {
+		status: "error".to_owned(),
+		imported: 0,
+		unresolved: 0,
+		projected: 0,
+		skipped: 0,
+		last_sync_at: previous_sync_at,
+		error: Some(message),
+	})
+}
+
 async fn insert_unresolved(
-	conn: &sea_orm::DatabaseConnection,
+	conn: &impl ConnectionTrait,
 	user_id: &str,
 	entry: &HardcoverJournalEntry,
+	media_id: Option<&str>,
 	reason: &str,
 ) -> Result<(), sea_orm::DbErr> {
 	hardcover_journal_provenance::ActiveModel {
 		id: Set(uuid::Uuid::new_v4().to_string()),
 		user_id: Set(user_id.to_owned()),
 		remote_entry_id: Set(entry.remote_entry_id.clone()),
-		media_id: Set(None),
+		media_id: Set(media_id.map(str::to_owned)),
 		local_annotation_id: Set(None),
 		locator_key: Set(entry.page.map(|page| page.to_string())),
 		status: Set("unresolved".to_owned()),
 		unresolved_reason: Set(Some(reason.to_owned())),
-		payload: Set(Some(entry.raw.clone())),
-		created_at: Set(Utc::now().into()),
-		updated_at: Set(Utc::now().into()),
-	}
-	.insert(conn)
-	.await
-	.map(|_| ())
-}
-
-async fn insert_imported(
-	conn: &sea_orm::DatabaseConnection,
-	user_id: &str,
-	entry: &HardcoverJournalEntry,
-	media_id: &str,
-	annotation_id: &str,
-) -> Result<(), sea_orm::DbErr> {
-	hardcover_journal_provenance::ActiveModel {
-		id: Set(uuid::Uuid::new_v4().to_string()),
-		user_id: Set(user_id.to_owned()),
-		remote_entry_id: Set(entry.remote_entry_id.clone()),
-		media_id: Set(Some(media_id.to_owned())),
-		local_annotation_id: Set(Some(annotation_id.to_owned())),
-		locator_key: Set(entry.page.map(|page| page.to_string())),
-		status: Set("imported".to_owned()),
-		unresolved_reason: Set(None),
 		payload: Set(Some(entry.raw.clone())),
 		created_at: Set(Utc::now().into()),
 		updated_at: Set(Utc::now().into()),
@@ -546,4 +541,364 @@ fn provider_error_message(
 		"Hardcover request failed"
 	};
 	class.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use metadata_integrations::mock_http::{render_ok, MockServer};
+	use sea_orm::{
+		ActiveModelTrait, ConnectionTrait, DatabaseBackend, PaginatorTrait, Schema,
+	};
+
+	async fn setup_connection() -> (
+		sea_orm::DatabaseConnection,
+		String,
+		hardcover_connection::Model,
+	) {
+		let db = ::tests::db::test_database().await;
+		let schema = Schema::new(DatabaseBackend::Sqlite);
+		for statement in [
+			schema.create_table_from_entity(hardcover_connection::Entity),
+			schema.create_table_from_entity(hardcover_media_link::Entity),
+			schema.create_table_from_entity(hardcover_journal_provenance::Entity),
+			schema.create_table_from_entity(models::entity::media_annotation::Entity),
+		] {
+			db.execute(db.get_database_backend().build(&statement))
+				.await
+				.unwrap();
+		}
+		let user = ::tests::fake_data::User::new("journal-import")
+			.insert(&db)
+			.await;
+		let now = Utc::now().into();
+		let row = hardcover_connection::ActiveModel {
+			user_id: Set(user.id.clone()),
+			encrypted_api_token: Set("test-cipher".to_owned()),
+			credential_version: Set(1),
+			use_for_metadata: Set(false),
+			import_journals: Set(true),
+			sync_progress: Set(true),
+			connected_at: Set(now),
+			updated_at: Set(now),
+			..Default::default()
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+		(db, user.id, row)
+	}
+
+	fn identity() -> String {
+		serde_json::json!({
+			"data": { "me": [{ "id": 42, "username": "journal-import" }] }
+		})
+		.to_string()
+	}
+
+	fn capabilities(names: &[&str]) -> String {
+		serde_json::json!({
+			"data": { "__schema": { "queryType": { "fields":
+				names.iter().map(|name| json!({ "name": name })).collect::<Vec<_>>()
+			} } }
+		})
+		.to_string()
+	}
+
+	fn client(server: &MockServer) -> HardcoverClient {
+		HardcoverClient::new("test-token".into(), Some(u32::MAX)).pointed_at(&server.url)
+	}
+
+	#[tokio::test]
+	async fn capability_and_journal_failures_preserve_last_success_time() {
+		let (db, user_id, row) = setup_connection().await;
+		let prior_sync_at: DateTimeWithTimeZone =
+			(Utc::now() - chrono::Duration::days(1)).into();
+		let mut active = row.into_active_model();
+		active.last_sync_at = Set(Some(prior_sync_at));
+		let row = active.update(&db).await.unwrap();
+		let introspection_error = MockServer::spawn(vec![
+			render_ok(&identity()),
+			render_ok(r#"{"errors":[{"message":"capabilities denied"}]}"#),
+		]);
+		let result =
+			sync_with_client(&db, &user_id, row.clone(), &client(&introspection_error))
+				.await
+				.unwrap();
+		assert_eq!(result.status, "error");
+		assert_eq!(result.imported, 0);
+		assert!(result
+			.error
+			.as_deref()
+			.unwrap()
+			.contains("capability check failed"));
+		assert_eq!(result.last_sync_at, Some(prior_sync_at));
+		assert_eq!(introspection_error.requests().len(), 2);
+		let saved = hardcover_connection::Entity::find_by_id(&user_id)
+			.one(&db)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(saved.last_error.as_deref(), result.error.as_deref());
+		assert_eq!(saved.last_sync_at, Some(prior_sync_at));
+
+		let missing = MockServer::spawn(vec![
+			render_ok(&identity()),
+			render_ok(&capabilities(&["me", "user_books"])),
+		]);
+		let result = sync_with_client(&db, &user_id, saved.clone(), &client(&missing))
+			.await
+			.unwrap();
+		assert_eq!(result.status, "error");
+		assert!(result.error.unwrap().contains("reading_journals"));
+		assert_eq!(missing.requests().len(), 2);
+
+		let upstream_error = MockServer::spawn(vec![
+			render_ok(&identity()),
+			render_ok(&capabilities(&["me", "reading_journals"])),
+			render_ok(r#"{"errors":[{"message":"journal denied"}]}"#),
+		]);
+		let result = sync_with_client(
+			&db,
+			&user_id,
+			hardcover_connection::Entity::find_by_id(&user_id)
+				.one(&db)
+				.await
+				.unwrap()
+				.unwrap(),
+			&client(&upstream_error),
+		)
+		.await
+		.unwrap();
+		assert_eq!(result.status, "error");
+		assert!(result
+			.error
+			.as_deref()
+			.unwrap()
+			.contains("journal fetch failed"));
+		assert_eq!(upstream_error.requests().len(), 3);
+		assert_eq!(result.unresolved, 0);
+		assert_eq!(
+			hardcover_journal_provenance::Entity::find()
+				.count(&db)
+				.await
+				.unwrap(),
+			0
+		);
+		let saved = hardcover_connection::Entity::find_by_id(&user_id)
+			.one(&db)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(saved.last_error.as_deref(), result.error.as_deref());
+		assert_eq!(saved.last_sync_at, Some(prior_sync_at));
+	}
+
+	#[tokio::test]
+	async fn quote_import_deduplicates_and_projects_only_dated_fractions() {
+		let (db, user_id, row) = setup_connection().await;
+		let library = ::tests::fake_data::Library::default().insert(&db).await;
+		let series = ::tests::fake_data::Series {
+			library_id: Some(library.id),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		let media = ::tests::fake_data::Media {
+			series_id: series.id,
+			pages: Some(100),
+			..Default::default()
+		}
+		.insert(&db)
+		.await;
+		hardcover_media_link::ActiveModel {
+			id: Set(uuid::Uuid::new_v4().to_string()),
+			user_id: Set(user_id.clone()),
+			media_id: Set(media.id.clone()),
+			remote_id: Set("91".to_owned()),
+			linked_at: Set(Utc::now().into()),
+			updated_at: Set(Utc::now().into()),
+			..Default::default()
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+		// The old importer keyed user_books by a bare numeric id. A true
+		// reading_journals row with the same id must not be skipped.
+		insert_unresolved(
+			&db,
+			&user_id,
+			&HardcoverJournalEntry {
+				remote_entry_id: "100".to_owned(),
+				remote_book_id: Some("91".to_owned()),
+				quote: None,
+				note: None,
+				page: None,
+				progression: None,
+				raw: json!({ "id": 100, "source": "user_books" }),
+			},
+			None,
+			"legacy user_books row",
+		)
+		.await
+		.unwrap();
+		let entries = serde_json::json!({
+			"data": { "reading_journals": [
+				{ "id": 100, "user_id": 42, "book_id": 91, "edition_id": 12,
+				  "event": "quote", "entry": "Text\n━━━\nNote",
+				  "action_at": "2026-10-04T19:00:00+00:00",
+				  "metadata": { "position": { "type": "pages", "value": 150,
+												  "possible": 600, "percent": 25 } } },
+				{ "id": 101, "user_id": 42, "book_id": 91,
+				  "event": "quote", "entry": null,
+				  "action_at": "2026-10-04T20:00:00+00:00",
+				  "metadata": { "position": { "type": "pages", "percent": 30 } } }
+			] }
+		})
+		.to_string();
+		let responses = || {
+			vec![
+				render_ok(&identity()),
+				render_ok(&capabilities(&["reading_journals"])),
+				render_ok(&entries),
+			]
+		};
+		let first = MockServer::spawn(responses());
+		let result = sync_with_client(&db, &user_id, row, &client(&first))
+			.await
+			.unwrap();
+		assert_eq!(result.status, "ok");
+		assert_eq!(
+			(
+				result.imported,
+				result.unresolved,
+				result.projected,
+				result.skipped
+			),
+			(0, 2, 2, 0)
+		);
+		assert!(result.error.is_none());
+		let provenance = hardcover_journal_provenance::Entity::find()
+			.all(&db)
+			.await
+			.unwrap();
+		assert_eq!(provenance.len(), 3);
+		assert!(provenance
+			.iter()
+			.any(|entry| entry.remote_entry_id == "100"));
+		assert!(provenance
+			.iter()
+			.filter(|entry| entry.remote_entry_id.starts_with("reading_journals:"))
+			.all(|entry| {
+				entry.status == "unresolved"
+					&& entry.local_annotation_id.is_none()
+					&& entry.media_id.as_deref() == Some(media.id.as_str())
+			}));
+		assert_eq!(
+			models::entity::media_annotation::Entity::find()
+				.count(&db)
+				.await
+				.unwrap(),
+			0
+		);
+		let head = reading_state::head(&db, &user_id, &media.id)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(head.progression, 0.3);
+		assert!(head.page.is_none() && head.locator.is_none());
+
+		let repeated = MockServer::spawn(responses());
+		let result = sync_with_client(
+			&db,
+			&user_id,
+			hardcover_connection::Entity::find_by_id(&user_id)
+				.one(&db)
+				.await
+				.unwrap()
+				.unwrap(),
+			&client(&repeated),
+		)
+		.await
+		.unwrap();
+		assert_eq!(
+			(result.unresolved, result.projected, result.skipped),
+			(0, 0, 2)
+		);
+		assert_eq!(
+			hardcover_journal_provenance::Entity::find()
+				.count(&db)
+				.await
+				.unwrap(),
+			3
+		);
+		let old_quote = serde_json::json!({
+			"data": { "reading_journals": [{
+				"id": 102, "user_id": 42, "book_id": 91,
+				"event": "quote", "entry": "An older quote",
+				"action_at": "2026-10-03T00:00:00+00:00",
+				"metadata": { "position": { "type": "pages", "percent": 95 } }
+			}] }
+		})
+		.to_string();
+		let stale = MockServer::spawn(vec![
+			render_ok(&identity()),
+			render_ok(&capabilities(&["reading_journals"])),
+			render_ok(&old_quote),
+		]);
+		let result = sync_with_client(
+			&db,
+			&user_id,
+			hardcover_connection::Entity::find_by_id(&user_id)
+				.one(&db)
+				.await
+				.unwrap()
+				.unwrap(),
+			&client(&stale),
+		)
+		.await
+		.unwrap();
+		assert_eq!((result.unresolved, result.projected), (1, 0));
+		let head = reading_state::head(&db, &user_id, &media.id)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(head.progression, 0.3, "old quotes never move a newer head");
+		let future_action_at = (Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+		let future_quote = serde_json::json!({
+			"data": { "reading_journals": [{
+				"id": 103, "user_id": 42, "book_id": 91,
+				"event": "quote", "entry": "A future-dated quote",
+				"action_at": future_action_at,
+				"metadata": { "position": { "type": "pages", "percent": 90 } }
+			}] }
+		})
+		.to_string();
+		let future = MockServer::spawn(vec![
+			render_ok(&identity()),
+			render_ok(&capabilities(&["reading_journals"])),
+			render_ok(&future_quote),
+		]);
+		let result = sync_with_client(
+			&db,
+			&user_id,
+			hardcover_connection::Entity::find_by_id(&user_id)
+				.one(&db)
+				.await
+				.unwrap()
+				.unwrap(),
+			&client(&future),
+		)
+		.await
+		.unwrap();
+		assert_eq!((result.unresolved, result.projected), (1, 0));
+		let head = reading_state::head(&db, &user_id, &media.id)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			head.progression, 0.3,
+			"future external timestamps cannot pin a reading head"
+		);
+	}
 }

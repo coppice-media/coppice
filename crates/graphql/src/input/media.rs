@@ -1,7 +1,12 @@
 use async_graphql::{InputObject, OneofObject};
 use models::{
+	domain::reading_state::time_progression,
 	entity::{bookmark, media_annotation, media_metadata, user::AuthUser},
-	shared::{enums::MetadataProvider, readium::ReadiumLocator},
+	services::audio,
+	shared::{
+		enums::MetadataProvider,
+		readium::{ReadiumLocation, ReadiumLocator},
+	},
 };
 use sea_orm::{prelude::*, ActiveValue::Set, IntoActiveModel};
 
@@ -176,23 +181,89 @@ fn into_array_string(s: Option<Vec<String>>) -> Option<String> {
 	}
 }
 
+/// A new annotation, anchored by exactly one of `locator` (text or a page)
+/// and `positionMs` (a moment in an audiobook).
 #[derive(Debug, Clone, InputObject)]
 pub struct CreateAnnotationInput {
 	pub media_id: String,
-	pub locator: ReadiumLocator,
+	/// The Readium anchor: a text selection in an EPUB, or the
+	/// `locations.position` page of a comic or PDF.
+	pub locator: Option<ReadiumLocator>,
+	/// A moment in an audiobook: milliseconds from the start of the
+	/// publication, within `0..=durationMs`. Rejected on any other media.
+	pub position_ms: Option<i64>,
 	pub annotation_text: Option<String>,
 }
 
 impl CreateAnnotationInput {
-	pub fn into_active_model(self, user: &AuthUser) -> media_annotation::ActiveModel {
-		media_annotation::ActiveModel {
-			locator: Set(self.locator),
+	/// The row this input creates, validated against the media it names.
+	pub async fn into_active_model<C: ConnectionTrait>(
+		self,
+		conn: &C,
+		user: &AuthUser,
+	) -> async_graphql::Result<media_annotation::ActiveModel> {
+		let locator = match (self.locator, self.position_ms) {
+			(Some(locator), None) => locator,
+			(None, Some(position_ms)) => {
+				audio_annotation_locator(conn, &self.media_id, position_ms).await?
+			},
+			(Some(_), Some(_)) => {
+				return Err("An annotation takes a locator or positionMs, not both".into())
+			},
+			(None, None) => {
+				return Err("An annotation needs a locator or positionMs".into())
+			},
+		};
+		Ok(media_annotation::ActiveModel {
+			locator: Set(locator),
+			position_ms: Set(self.position_ms),
 			annotation_text: Set(self.annotation_text),
 			media_id: Set(self.media_id),
 			user_id: Set(user.id.clone()),
 			..Default::default()
-		}
+		})
 	}
+}
+
+/// The locator stored beside a time anchor. A moment in a recording has no
+/// resource to point into, so `href` is empty and there is no `text`, which
+/// every lane needing a Readium anchor already treats as unanchored. It
+/// carries what an annotation list shows: the chapter the moment falls in
+/// and the whole-publication progression.
+async fn audio_annotation_locator<C: ConnectionTrait>(
+	conn: &C,
+	media_id: &str,
+	position_ms: i64,
+) -> async_graphql::Result<ReadiumLocator> {
+	let duration_ms = audio::duration_ms(conn, media_id)
+		.await?
+		.ok_or("positionMs only applies to an audiobook")?;
+	if !(0..=duration_ms).contains(&position_ms) {
+		return Err(format!(
+			"positionMs must be within the audiobook (0 to {duration_ms} ms)"
+		)
+		.into());
+	}
+	let chapter = audio::chapter_at(conn, media_id, position_ms).await?;
+	Ok(ReadiumLocator {
+		chapter_title: chapter
+			.and_then(|chapter| chapter.title)
+			.unwrap_or_default(),
+		href: String::new(),
+		title: None,
+		locations: Some(ReadiumLocation {
+			fragments: None,
+			progression: None,
+			position: None,
+			total_progression: time_progression(position_ms, duration_ms)
+				.and_then(Decimal::from_f64_retain),
+			css_selector: None,
+			partial_cfi: None,
+		}),
+		text: None,
+		kobo_span: None,
+		r#type: String::new(),
+	})
 }
 
 #[derive(Debug, Clone, InputObject)]

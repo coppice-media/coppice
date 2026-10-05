@@ -20,6 +20,9 @@ const HARDCOVER_DEFAULT_RATE_LIMIT: u32 = 5;
 /// audiobook releases (regional narrators, abridgements); the cap bounds the
 /// response rather than paginating.
 const AUDIO_EDITIONS_LIMIT: u32 = 25;
+/// Hardcover's `reading_journals` accepts `limit` and an ordered id cursor.
+/// A full page must be followed by another request so imports never truncate.
+const JOURNAL_PAGE_SIZE: usize = 100;
 
 pub struct HardcoverClient {
 	client: ClientWithMiddleware,
@@ -667,45 +670,77 @@ impl HardcoverClient {
 				"query Capabilities { __schema { queryType { fields { name } } } }",
 			)
 			.await?;
-		Ok(value
-			.get("__schema")
-			.and_then(|schema| schema.get("queryType"))
-			.and_then(|query_type| query_type.get("fields"))
+		let fields = value
+			.pointer("/__schema/queryType/fields")
 			.and_then(serde_json::Value::as_array)
-			.map(|fields| {
-				fields
-					.iter()
-					.filter_map(|field| field.get("name").and_then(|name| name.as_str()))
-					.map(ToOwned::to_owned)
-					.collect()
+			.ok_or(MetadataProviderError::EmptyResponse)?;
+		fields
+			.iter()
+			.map(|field| {
+				field
+					.get("name")
+					.and_then(serde_json::Value::as_str)
+					.map(str::to_owned)
+					.ok_or(MetadataProviderError::EmptyResponse)
 			})
-			.unwrap_or_default())
+			.collect()
 	}
 
-	/// Reads the current user's journal/quote records when the provider
-	/// advertises the `user_books` query. Fields are intentionally optional:
-	/// an absent locator remains an unresolved provenance record instead of a
-	/// fabricated annotation.
+	/// Fetches the authenticated user's quote events from `reading_journals`
+	/// (not `user_books`). `user_id` comes from a successful `me` probe.
+	/// Stable ascending-id cursor pagination prevents an insert during a
+	/// manual sync from shifting already-read rows. Every page must succeed
+	/// before any caller persists provenance.
 	pub async fn fetch_journal_entries(
 		&self,
+		user_id: &str,
 	) -> Result<Vec<HardcoverJournalEntry>, MetadataProviderError> {
-		let value: serde_json::Value = self
-			.execute_graphql(
-				"query Journal { me { user_books { id book_id title quote note notes page pages current_page progression } } }",
-			)
-			.await?;
-		let values = value
-			.get("me")
-			.and_then(serde_json::Value::as_array)
-			.and_then(|users| users.first())
-			.and_then(|user| user.get("user_books"))
-			.and_then(serde_json::Value::as_array)
-			.cloned()
-			.unwrap_or_default();
-		Ok(values
-			.into_iter()
-			.filter_map(HardcoverJournalEntry::from_value)
-			.collect())
+		let user_id: i32 = user_id.parse().map_err(|_| {
+			MetadataProviderError::Other("Hardcover returned an invalid user id".into())
+		})?;
+		let mut cursor = 0_i64;
+		let mut entries = Vec::new();
+		loop {
+			let graphql_query = format!(
+				r#"query Journal {{
+					reading_journals(
+						where: {{ user_id: {{ _eq: {user_id} }}, event: {{ _eq: "quote" }}, id: {{ _gt: {cursor} }} }}
+						order_by: {{ id: asc }}
+						limit: {JOURNAL_PAGE_SIZE}
+					) {{ id user_id book_id edition_id event entry action_at metadata }}
+				}}"#
+			);
+			let mut data: serde_json::Value =
+				self.execute_graphql(&graphql_query).await?;
+			let page = data
+				.get_mut("reading_journals")
+				.and_then(serde_json::Value::as_array_mut)
+				.ok_or(MetadataProviderError::EmptyResponse)?;
+			let count = page.len();
+			for value in page.drain(..) {
+				let id = value
+					.get("id")
+					.and_then(value_as_string)
+					.and_then(|value| value.parse::<i64>().ok())
+					.filter(|id| *id > 0)
+					.ok_or_else(|| {
+						MetadataProviderError::Other(
+							"Hardcover returned an invalid journal id".into(),
+						)
+					})?;
+				if id <= cursor {
+					return Err(MetadataProviderError::Other(
+						"Hardcover returned an unordered journal page".into(),
+					));
+				}
+				let entry = HardcoverJournalEntry::from_value(value, user_id)?;
+				cursor = id;
+				entries.push(entry);
+			}
+			if count < JOURNAL_PAGE_SIZE {
+				return Ok(entries);
+			}
+		}
 	}
 }
 
@@ -721,23 +756,64 @@ pub struct HardcoverJournalEntry {
 }
 
 impl HardcoverJournalEntry {
-	fn from_value(value: serde_json::Value) -> Option<Self> {
+	fn from_value(
+		value: serde_json::Value,
+		user_id: i32,
+	) -> Result<Self, MetadataProviderError> {
+		let invalid = || {
+			MetadataProviderError::Other(
+				"Hardcover returned a malformed journal row".into(),
+			)
+		};
+		// Earlier imports used bare user_books ids in the same provenance
+		// table. Source-qualify journal ids so an unrelated legacy row with
+		// the same numeric id cannot suppress a real quote.
 		let remote_entry_id = value
 			.get("id")
 			.and_then(value_as_string)
-			.or_else(|| value.get("user_book_id").and_then(value_as_string))?;
-		let remote_book_id =
-			value.get("book_id").and_then(value_as_string).or_else(|| {
-				value
-					.get("book")
-					.and_then(|book| book.get("id"))
-					.and_then(value_as_string)
+			.map(|id| format!("reading_journals:{id}"))
+			.ok_or_else(invalid)?;
+		if value.get("user_id").and_then(serde_json::Value::as_i64)
+			!= Some(i64::from(user_id))
+			|| value.get("event").and_then(serde_json::Value::as_str) != Some("quote")
+		{
+			return Err(invalid());
+		}
+		let remote_book_id = value.get("book_id").and_then(value_as_string);
+		let text = value.get("entry").and_then(serde_json::Value::as_str);
+		let (quote, note) = match text.and_then(|text| text.split_once("\n━━━\n")) {
+			Some((quote, note)) => (nonempty_text(quote), nonempty_text(note)),
+			None => (text.and_then(nonempty_text), None),
+		};
+		// NickelHardcover's quote events use
+		// metadata.position = { type: "pages", value, possible, percent }.
+		// A page in one Hardcover edition is not a resource locator in a
+		// local EPUB, nor evidence that the two editions have equal pages.
+		let position = value.pointer("/metadata/position");
+		let position = position.filter(|position| {
+			position.get("type").and_then(serde_json::Value::as_str) == Some("pages")
+		});
+		let page = position
+			.and_then(|position| position.get("value"))
+			.and_then(serde_json::Value::as_i64)
+			.and_then(|page| i32::try_from(page).ok())
+			.filter(|page| *page > 0);
+		let possible = position
+			.and_then(|position| position.get("possible"))
+			.and_then(serde_json::Value::as_i64)
+			.and_then(|pages| i32::try_from(pages).ok())
+			.filter(|pages| *pages > 0);
+		let progression = position
+			.and_then(|position| position.get("percent"))
+			.and_then(serde_json::Value::as_f64)
+			.filter(|percent| percent.is_finite() && (0.0..=100.0).contains(percent))
+			.map(|percent| percent / 100.0)
+			.or_else(|| {
+				page.zip(possible)
+					.filter(|(page, pages)| page <= pages)
+					.map(|(page, pages)| f64::from(page) / f64::from(pages))
 			});
-		let quote = first_string(&value, &["quote", "highlight", "excerpt"]);
-		let note = first_string(&value, &["note", "notes", "review"]);
-		let page = first_i32(&value, &["page", "pages", "current_page"]);
-		let progression = value.get("progression").and_then(serde_json::Value::as_f64);
-		Some(Self {
+		Ok(Self {
 			remote_entry_id,
 			remote_book_id,
 			quote,
@@ -747,6 +823,11 @@ impl HardcoverJournalEntry {
 			raw: value,
 		})
 	}
+}
+
+fn nonempty_text(text: &str) -> Option<String> {
+	let text = text.trim();
+	(!text.is_empty()).then(|| text.to_owned())
 }
 
 fn value_as_string(value: &serde_json::Value) -> Option<String> {
@@ -790,11 +871,6 @@ fn value_as_bool(value: &serde_json::Value) -> Option<bool> {
 		},
 		_ => None,
 	}
-}
-
-fn first_i32(value: &serde_json::Value, keys: &[&str]) -> Option<i32> {
-	keys.iter()
-		.find_map(|key| value.get(*key).and_then(value_as_i32))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1159,6 +1235,97 @@ fn audiobook_edition(edition: &serde_json::Value) -> AudiobookEdition {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[tokio::test]
+	async fn journal_quotes_map_the_real_schema_and_page_past_one_hundred() {
+		use crate::mock_http::{render_ok, MockServer};
+
+		let row = |id| {
+			serde_json::json!({
+				"id": id, "user_id": 42, "book_id": 91, "edition_id": 12,
+				"event": "quote", "entry": "Quoted text\n━━━\nReader note",
+				"action_at": "2026-03-01T12:00:00+00:00",
+				"metadata": { "position": {
+					"type": "pages", "value": 24, "possible": 240, "percent": 10.0
+				} }
+			})
+		};
+		let first = (1..=100).map(row).collect::<Vec<_>>();
+		let server = MockServer::spawn(vec![
+			render_ok(
+				&serde_json::json!({ "data": { "reading_journals": first } }).to_string(),
+			),
+			render_ok(
+				&serde_json::json!({ "data": { "reading_journals": [row(101)] } })
+					.to_string(),
+			),
+		]);
+		let client = HardcoverClient::new("mock-token".into(), Some(u32::MAX))
+			.with_api_url(format!("{}/v1/graphql", server.url));
+		let entries = client.fetch_journal_entries("42").await.unwrap();
+		assert_eq!(entries.len(), 101);
+		assert_eq!(entries[100].remote_entry_id, "reading_journals:101");
+		assert_eq!(entries[100].remote_book_id.as_deref(), Some("91"));
+		assert_eq!(entries[100].quote.as_deref(), Some("Quoted text"));
+		assert_eq!(entries[100].note.as_deref(), Some("Reader note"));
+		assert_eq!(entries[100].page, Some(24));
+		assert_eq!(entries[100].progression, Some(0.1));
+		assert!(entries[100].raw.get("edition_id").is_some());
+		let requests = server.requests();
+		assert_eq!(requests.len(), 2);
+		assert!(requests[0].contains("reading_journals("));
+		assert!(requests[0].contains("user_id: { _eq: 42 }"));
+		assert!(requests[0].contains(r#"event: { _eq: \"quote\" }"#));
+		assert!(requests[0].contains("order_by: { id: asc }"));
+		assert!(requests[1].contains("id: { _gt: 100 }"));
+	}
+
+	#[tokio::test]
+	async fn journal_page_failure_is_not_an_empty_or_partial_import() {
+		use crate::mock_http::{render_ok, MockServer};
+
+		let first = (1..=100)
+			.map(|id| {
+				serde_json::json!({
+					"id": id, "user_id": 42, "book_id": 91,
+					"event": "quote", "entry": "Text",
+					"action_at": "2026-03-01T12:00:00+00:00", "metadata": {}
+				})
+			})
+			.collect::<Vec<_>>();
+		let server = MockServer::spawn(vec![
+			render_ok(
+				&serde_json::json!({ "data": { "reading_journals": first } }).to_string(),
+			),
+			render_ok(r#"{"errors":[{"message":"journal capability denied"}]}"#),
+		]);
+		let client = HardcoverClient::new("mock-token".into(), Some(u32::MAX))
+			.with_api_url(format!("{}/v1/graphql", server.url));
+		assert!(client.fetch_journal_entries("42").await.is_err());
+		assert_eq!(server.requests().len(), 2);
+	}
+
+	#[test]
+	fn journal_mapping_rejects_bad_rows_and_never_invents_local_positions() {
+		let row = serde_json::json!({
+			"id": "9001", "user_id": 42, "book_id": null,
+			"event": "quote", "entry": "",
+			"metadata": { "position": {
+				"type": "pages", "value": 12, "possible": 120
+			} }
+		});
+		let entry = HardcoverJournalEntry::from_value(row.clone(), 42).unwrap();
+		assert_eq!(entry.remote_book_id, None);
+		assert_eq!(entry.quote, None);
+		assert_eq!(entry.page, Some(12));
+		assert_eq!(entry.progression, Some(0.1));
+		assert!(HardcoverJournalEntry::from_value(row.clone(), 43).is_err());
+		let mut invalid_type = row;
+		invalid_type["metadata"]["position"]["type"] = serde_json::json!("location");
+		let entry = HardcoverJournalEntry::from_value(invalid_type, 42).unwrap();
+		assert_eq!(entry.page, None);
+		assert_eq!(entry.progression, None);
+	}
 
 	fn get_test_client() -> HardcoverClient {
 		dotenvy::dotenv().ok();

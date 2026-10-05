@@ -1198,6 +1198,26 @@ fn reading_list_item_title(
 	}
 }
 
+/// `GET /api/Search/chapters-by-series`: the chapters `GET /api/Series/volumes`
+/// serves (`map_volume`/`map_chapter`, unchanged), ordered as the wire
+/// contract orders them — volumes by `minNumber`, then a stable sort by
+/// chapter `sortOrder`. `title` and `volumeTitle` keep Coppice's chapter
+/// values; Kavita reformats both server-side, and Kover reads only the ids.
+pub fn map_series_chapters(input: &SeriesInput) -> Vec<ChapterDto> {
+	let mut volumes = input
+		.media
+		.iter()
+		.map(|media| map_volume(input.id, media))
+		.collect::<Vec<_>>();
+	volumes.sort_by(|left, right| left.min_number.0.total_cmp(&right.min_number.0));
+	let mut chapters = volumes
+		.into_iter()
+		.flat_map(|volume| volume.chapters)
+		.collect::<Vec<_>>();
+	chapters.sort_by(|left, right| left.sort_order.0.total_cmp(&right.sort_order.0));
+	chapters
+}
+
 /// `ReadingListService.GetReadingListItems` item: the media as a reading-list
 /// entry, carrying the series, volume and chapter identity blocks Kavita
 /// projects alongside it.
@@ -1790,6 +1810,27 @@ mod tests {
 			media,
 			kind: SeriesKind::Grouped,
 		}
+	}
+
+	/// `chapters-by-series` orders by volume `minNumber`, then stably by
+	/// chapter `sortOrder`, and leaves each `map_chapter` DTO untouched.
+	#[test]
+	fn series_chapters_follow_sort_order_and_keep_the_chapter_dto() {
+		let series = grouped_series(vec![
+			input("Chapter 2", "cbz", 10, 2),
+			input("Vol. 1", "cbz", 10, 1),
+		]);
+		let chapters = map_series_chapters(&series);
+		assert_eq!(
+			chapters.iter().map(|c| c.id).collect::<Vec<_>>(),
+			vec![11, 12],
+			"sortOrder (the ordinal) orders the chapters"
+		);
+		let expected = map_chapter(&series.media[1]);
+		assert_eq!(
+			serde_json::to_value(&chapters[0]).unwrap(),
+			serde_json::to_value(&expected).unwrap()
+		);
 	}
 
 	fn names(people: &[PersonDto]) -> Vec<&str> {

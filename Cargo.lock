@@ -7474,6 +7474,7 @@ dependencies = [
 name = "stump_abs"
 version = "0.1.9"
 dependencies = [
+ "alphanumeric-sort",
  "async-trait",
  "axum",
  "axum-extra",
@@ -7493,6 +7494,7 @@ dependencies = [
  "tokio-tungstenite",
  "tower 0.5.2",
  "tracing",
+ "urlencoding",
  "uuid",
 ]
 
@@ -7846,6 +7848,7 @@ dependencies = [
  "axum-extra",
  "chrono",
  "futures-util",
+ "migrations",
  "models",
  "sea-orm",
  "serde",
@@ -7855,6 +7858,7 @@ dependencies = [
  "tests",
  "thiserror 2.0.20",
  "tokio",
+ "tower 0.5.2",
  "tracing",
 ]
 
@@ -8160,6 +8164,7 @@ dependencies = [
  "thiserror 2.0.20",
  "time",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tower 0.4.13",
  "tower-http 0.5.2",

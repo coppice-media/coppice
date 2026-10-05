@@ -18,7 +18,7 @@ use sea_orm::{
 	ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set,
 };
 use serde_json::{json, Value};
-use stump_api_types::settings::SettingValues;
+use stump_api_types::settings::{validate_setting_values, SettingValues};
 use stump_core::event::{CoreEvent, IngestItemChanged};
 use stump_ingest::policy::{self, PolicyCandidate, PolicyPlan};
 use stump_ingest::{
@@ -27,6 +27,7 @@ use stump_ingest::{
 		apply_to_media_with_cover, resolve_picks_for_context, validate_picks,
 		CoverApplyConfig, ResolvedFields,
 	},
+	store::QUALITY_CHECK_SETTING_KIND,
 };
 #[cfg(feature = "mam-acquisition")]
 use stump_notify::{Notification, NotificationKind};
@@ -223,7 +224,8 @@ struct PluginSettingsUpdate<'a> {
 	core: &'a CoreContext,
 	plugin_id: &'a str,
 	kind: &'a str,
-	user_id: &'a str,
+	/// `None` for a server-wide row.
+	user_id: Option<&'a str>,
 	default_enabled: bool,
 	default_opted_in: bool,
 	enabled: Option<bool>,
@@ -238,7 +240,7 @@ async fn save_plugin_settings(
 		.core
 		.ingest()
 		.store
-		.plugin_settings(update.plugin_id, update.kind, None, Some(update.user_id))
+		.plugin_settings(update.plugin_id, update.kind, None, update.user_id)
 		.await
 		.map_err(core_error)?;
 	let mut active = if let Some(model) = existing {
@@ -248,7 +250,7 @@ async fn save_plugin_settings(
 			plugin_id: Set(update.plugin_id.to_owned()),
 			kind: Set(update.kind.to_owned()),
 			library_id: Set(None),
-			user_id: Set(Some(update.user_id.to_owned())),
+			user_id: Set(update.user_id.map(str::to_owned)),
 			enabled: Set(update.default_enabled),
 			opted_in: Set(update.default_opted_in),
 			..Default::default()
@@ -808,7 +810,7 @@ impl IngestMutation {
 			core,
 			plugin_id: &provider_id,
 			kind: "PROVIDER",
-			user_id: &auth.user.id,
+			user_id: Some(&auth.user.id),
 			default_enabled: descriptor.enabled_default,
 			default_opted_in: false,
 			enabled: input.enabled,
@@ -882,14 +884,24 @@ impl IngestMutation {
 			.ok_or_else(|| Error::new("Candidate was not persisted"))
 	}
 
-	#[graphql(guard = "PermissionGuard::one(UserPermission::MetadataProviderManage)")]
+	/// Save the server-wide settings of one quality check.
+	///
+	/// Analysis runs server-wide, so the row has no user or library and
+	/// needs both provider management and library management. `settings`
+	/// replaces the stored values after validation against the check's
+	/// descriptors (unknown keys, wrong types, and out-of-range numbers are
+	/// refused); `null` entries fall back to the default. The `enabled`
+	/// setting is stored in the row's `enabled` column: an explicit
+	/// `enabled` argument wins over one inside `settings`.
+	#[graphql(
+		guard = "PermissionGuard::new(&[UserPermission::MetadataProviderManage, UserPermission::ManageLibrary])"
+	)]
 	async fn set_ingest_quality_check_settings(
 		&self,
 		ctx: &Context<'_>,
 		input: SetIngestQualityCheckSettingsInput,
 	) -> Result<IngestQualityCheckSettings> {
 		let core = ctx.data::<CoreContext>()?;
-		let auth = ctx.data::<stump_auth::AuthContext>()?;
 		let check_id = input.check_id;
 		let descriptor = core
 			.ingest()
@@ -898,16 +910,28 @@ impl IngestMutation {
 			.into_iter()
 			.find(|descriptor| descriptor.id == check_id)
 			.ok_or_else(|| Error::new("Ingest quality check not found"))?;
+		let mut enabled = input.enabled;
+		let settings = match input.settings {
+			Some(json) => {
+				let mut values = validate_setting_values(&descriptor.settings, &json.0)
+					.map_err(core_error)?;
+				if let Some(Value::Bool(flag)) = values.remove("enabled") {
+					enabled.get_or_insert(flag);
+				}
+				Some(Value::Object(values.into_iter().collect()))
+			},
+			None => None,
+		};
 		let model = save_plugin_settings(PluginSettingsUpdate {
 			core,
 			plugin_id: &check_id,
-			kind: "CHECK",
-			user_id: &auth.user.id,
+			kind: QUALITY_CHECK_SETTING_KIND,
+			user_id: None,
 			default_enabled: true,
 			default_opted_in: false,
-			enabled: input.enabled,
+			enabled,
 			opted_in: None,
-			settings: settings_from_json(input.settings),
+			settings,
 		})
 		.await?;
 		Ok(IngestQualityCheckSettings::from_parts(

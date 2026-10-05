@@ -797,3 +797,97 @@ async fn tombstoning_the_annotation_cascades_rows_and_files() {
 		.await
 		.assert_status(StatusCode::NOT_FOUND);
 }
+
+/// The same bytes are the same edition: when an edition already maps a book's
+/// full digest to a work but no alias or media link exists (older data), the
+/// catalog resolve must reuse that work. It used to invent a work, collide
+/// with the edition inside the transaction, and answer 409 on every retry.
+#[tokio::test]
+async fn catalog_resolve_reuses_the_work_of_an_existing_edition_without_aliases() {
+	const MEDIA_ID: &str = "edition-only-epub";
+	const WORK_ID: &str = "edition-only-work";
+	let fixture = Fixture::new().await;
+	let db = fixture.app.conn();
+	let owner_id = fixture.owner_id().await;
+	let bytes = b"EPUB bytes whose edition predates any alias";
+	let media_path = fixture.config_dir.path().join("edition-only.epub");
+	std::fs::write(&media_path, bytes).expect("fixture EPUB bytes should be written");
+
+	let library = fake_data::Library {
+		id: Some("edition-only-library".into()),
+		name: Some("Edition library".into()),
+		..Default::default()
+	}
+	.insert(db)
+	.await;
+	let series = fake_data::Series {
+		id: Some("edition-only-series".into()),
+		name: Some("Edition Only".into()),
+		library_id: Some(library.id),
+		..Default::default()
+	}
+	.insert(db)
+	.await;
+	let book = fake_data::Media {
+		id: Some(MEDIA_ID.into()),
+		name: Some("Edition Only".into()),
+		extension: Some("epub".into()),
+		series_id: series.id,
+		pages: Some(3),
+		..Default::default()
+	}
+	.insert(db)
+	.await;
+	let mut book: media::ActiveModel = book.into();
+	book.path = Set(media_path.to_string_lossy().into_owned());
+	book.update(db)
+		.await
+		.expect("the book should point at the fixture EPUB");
+
+	execute_sql(
+		db,
+		"INSERT INTO liseur_sync_works (id, user_id, title, author, pending, created_at) \
+		 VALUES ($1, $2, $3, $4, FALSE, $5)",
+		vec![
+			WORK_ID.into(),
+			owner_id.clone().into(),
+			"Edition Only".into(),
+			"".into(),
+			"2026-09-01T00:00:00Z".into(),
+		],
+	)
+	.await;
+	execute_sql(
+		db,
+		"INSERT INTO liseur_sync_editions \
+		 (id, user_id, edition_sha, work_id, media_id, created_at) \
+		 VALUES ($1, $2, $3, $4, $5, $6)",
+		vec![
+			"edition-only-edition".into(),
+			owner_id.into(),
+			digest(bytes).into(),
+			WORK_ID.into(),
+			Option::<String>::None.into(),
+			"2026-09-01T00:00:00Z".into(),
+		],
+	)
+	.await;
+
+	for _ in 0..2 {
+		let resolved = fixture
+			.app
+			.server
+			.post(&format!("/v1/books/{MEDIA_ID}/resolve"))
+			.add_header("Authorization", fixture.bearer())
+			.json(&json!({}))
+			.await;
+		assert!(
+			resolved.status_code().is_success(),
+			"resolve should succeed: {}",
+			resolved.text()
+		);
+		let resolved: Value = resolved.json();
+		assert_eq!(resolved["work_id"], WORK_ID);
+		assert_eq!(resolved["created"], false);
+	}
+}

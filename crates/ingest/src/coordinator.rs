@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use models::shared::enums::JobStatus;
 use tokio::sync::Semaphore;
@@ -251,13 +251,16 @@ impl IngestCoordinator {
 			})?;
 		let repaired = self.store.run_quality_fix(item_id, check_id, &fix).await?;
 		let snapshot = self.store.snapshot(&repaired.id).await?;
-		let report = self
-			.quality
-			.run_all(&snapshot, &BTreeMap::new())
-			.await
-			.map_err(|error| {
-				IngestError::InternalError(format!("quality analysis failed: {error}"))
-			})?;
+		let settings = self.store.quality_check_settings().await?;
+		let report =
+			self.quality
+				.run_all(&snapshot, &settings)
+				.await
+				.map_err(|error| {
+					IngestError::InternalError(format!(
+						"quality analysis failed: {error}"
+					))
+				})?;
 		let score = report.score;
 		self.store.save_report(&repaired.id, &report).await?;
 		let failed_checks = Self::failed_check_ids(&report);
@@ -415,7 +418,7 @@ impl IngestCoordinator {
 			"Indexing pages",
 		)
 		.await?;
-		let settings = BTreeMap::new();
+		let settings = self.store.quality_check_settings().await?;
 		self.emit_phase(
 			job,
 			item,
@@ -517,7 +520,7 @@ impl IngestCoordinator {
 		targets: &[AnalysisTarget],
 	) -> IngestResult<(u8, usize)> {
 		let total = targets.len() as u32;
-		let settings = BTreeMap::new();
+		let settings = self.store.quality_check_settings().await?;
 		let mut worst_score = u8::MAX;
 		let mut candidate_total = 0_usize;
 		for (raw_index, target) in targets.iter().enumerate() {

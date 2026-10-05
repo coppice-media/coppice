@@ -69,7 +69,9 @@ impl EpubMutation {
 		Ok(Bookmark { model: bookmark })
 	}
 
-	/// Create an annotation (highlight/note)
+	/// Create an annotation (highlight/note), anchored by a Readium `locator`
+	/// or, for a note in an audiobook, by `positionMs` (validated against the
+	/// audiobook's duration and rejected on any other media).
 	async fn create_annotation(
 		&self,
 		ctx: &Context<'_>,
@@ -80,7 +82,7 @@ impl EpubMutation {
 		let core = ctx.data::<CoreContext>()?;
 		let conn = core.conn.as_ref();
 
-		let annotation = input.into_active_model(user);
+		let annotation = input.into_active_model(conn, user).await?;
 		let created_annotation = annotation.insert(conn).await?;
 		core.note_annotation_activity(&user.id);
 
@@ -138,7 +140,10 @@ impl EpubMutation {
 			return Err("expectedRevision only applies to Liseur annotations".into());
 		}
 		let mut active_model: media_annotation::ActiveModel = annotation.into();
-		active_model.annotation_text = Set(input.annotation_text);
+		// `""` is the one clear that every lane applies (a Liseur body keeps
+		// its text on `null`), so it is stored as NULL like the CAS path does.
+		active_model.annotation_text =
+			Set(input.annotation_text.filter(|text| !text.is_empty()));
 		if let Some(color) = input.color {
 			active_model.color = Set((!color.is_empty()).then_some(color));
 		}
@@ -490,6 +495,7 @@ async fn ensure_liseur_projection<C: ConnectionTrait>(
 		media_annotation::ActiveModel {
 			id: Set(projection_id.clone()),
 			locator: Set(locator),
+			position_ms: Set(None),
 			annotation_text: Set((!body.is_empty()).then(|| body.to_owned())),
 			color: Set(color.clone()),
 			media_id: Set(media_id),
@@ -1038,5 +1044,278 @@ mod tests {
 			"koreader-device"
 		);
 		assert!(liseur_tombstone.try_get::<bool>("", "deleted").unwrap());
+	}
+
+	/// An audiobook note is anchored by publication time alone: created
+	/// without a locator, listed by the hub with that time and the chapter it
+	/// falls in, edited and deleted on the native lane, and a time is refused
+	/// wherever it cannot be honored.
+	#[tokio::test]
+	async fn audiobook_notes_are_anchored_by_publication_time() {
+		use models::{
+			domain::audio::AudioChapterSource,
+			services::audio::{self, AudioFacts, ChapterFacts, TrackFacts},
+		};
+
+		use crate::query::annotation::AnnotationQuery;
+
+		let conn = test_database().await;
+		let tables = Schema::new(DbBackend::Sqlite);
+		for statement in [
+			tables.create_table_from_entity(media_annotation::Entity),
+			tables.create_table_from_entity(bookmark::Entity),
+		] {
+			conn.execute(conn.get_database_backend().build(&statement))
+				.await
+				.unwrap();
+		}
+		for sql in [
+			"CREATE TABLE liseur_sync_works (
+				id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL,
+				author TEXT NOT NULL
+			)",
+			"CREATE TABLE liseur_sync_media_links (
+				id TEXT PRIMARY KEY, user_id TEXT NOT NULL, work_id TEXT NOT NULL,
+				media_id TEXT NOT NULL, edition_sha TEXT, created_at TEXT NOT NULL
+			)",
+			"CREATE TABLE liseur_sync_annotations (
+				row_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+				annotation_id TEXT NOT NULL, rev BIGINT NOT NULL, seq BIGINT NOT NULL,
+				work_id TEXT NOT NULL, edition_sha TEXT, kind TEXT NOT NULL, locator TEXT,
+				progression DOUBLE, excerpt TEXT NOT NULL, color TEXT NOT NULL, drawer TEXT,
+				body TEXT NOT NULL, device_id TEXT NOT NULL, origin_device_id TEXT,
+				client_ts TEXT NOT NULL, updated_at TEXT NOT NULL,
+				deleted BOOLEAN NOT NULL DEFAULT FALSE, deleted_at TEXT, payload TEXT NOT NULL,
+				UNIQUE(user_id, annotation_id)
+			)",
+		] {
+			conn.execute(Statement::from_string(DbBackend::Sqlite, sql.to_owned()))
+				.await
+				.unwrap();
+		}
+		let user_row = fake_data::User::new("audio-home").insert(&conn).await;
+		let user = AuthUser {
+			id: user_row.id,
+			username: user_row.username,
+			is_server_owner: true,
+			..Default::default()
+		};
+		let library = fake_data::Library::default().insert(&conn).await;
+		let series = fake_data::Series {
+			library_id: Some(library.id.clone()),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await;
+		let audiobook = fake_data::Media {
+			id: Some("audio-home-media".to_owned()),
+			extension: Some("m4b".to_owned()),
+			series_id: series.id.clone(),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await;
+		let ebook = fake_data::Media {
+			id: Some("ebook-home-media".to_owned()),
+			series_id: series.id,
+			..Default::default()
+		}
+		.insert(&conn)
+		.await;
+		audio::replace(
+			&conn,
+			&audiobook.id,
+			&AudioFacts {
+				duration_ms: 3_600_000,
+				codec: "aac".to_owned(),
+				chapter_source: AudioChapterSource::Mp4Chpl,
+				tracks: vec![TrackFacts {
+					path: "/books/audio-home.m4b".to_owned(),
+					duration_ms: 3_600_000,
+					byte_size: 1_024,
+					mime: "audio/mp4".to_owned(),
+				}],
+				chapters: vec![
+					ChapterFacts {
+						title: Some("Opening".to_owned()),
+						start_ms: 0,
+						end_ms: None,
+					},
+					ChapterFacts {
+						title: Some("The Litany".to_owned()),
+						start_ms: 600_000,
+						end_ms: None,
+					},
+				],
+				..Default::default()
+			},
+		)
+		.await
+		.unwrap();
+
+		let core = std::sync::Arc::new(stump_core::Ctx::for_testing(conn));
+		let graphql = async_graphql::Schema::build(
+			AnnotationQuery,
+			EpubMutation,
+			async_graphql::EmptySubscription,
+		)
+		.data(stump_auth::AuthContext {
+			user,
+			api_key: None,
+			device_id: None,
+		})
+		.data(core.clone())
+		.finish();
+		let conn = core.conn.as_ref();
+		let created = graphql
+			.execute(format!(
+				r#"mutation {{
+					createAnnotation(input: {{
+						mediaId: "{}", positionMs: 754000,
+						annotationText: "Fear is the mind-killer"
+					}}) {{
+						id positionMs annotationText
+						locator {{ href chapterTitle text {{ highlight }} locations {{ position }} }}
+					}}
+				}}"#,
+				audiobook.id
+			))
+			.await;
+		assert!(created.errors.is_empty(), "{:?}", created.errors);
+		let created = created.data.into_json().unwrap();
+		let note = &created["createAnnotation"];
+		let note_id = note["id"].as_str().unwrap().to_owned();
+		assert_eq!(note["positionMs"], 754_000);
+		assert_eq!(note["annotationText"], "Fear is the mind-killer");
+		// No resource and no passage: only the chapter the moment falls in.
+		assert_eq!(note["locator"]["href"], "");
+		assert_eq!(note["locator"]["chapterTitle"], "The Litany");
+		assert!(note["locator"]["text"].is_null());
+		assert!(note["locator"]["locations"]["position"].is_null());
+
+		let listed = graphql
+			.execute(format!(
+				r#"{{
+					annotations(filter: {{ mediaId: "{}" }}) {{
+						items {{
+							id kind editable revision positionMs progression chapterTitle
+							href fragment page excerpt note
+						}}
+					}}
+				}}"#,
+				audiobook.id
+			))
+			.await;
+		assert!(listed.errors.is_empty(), "{:?}", listed.errors);
+		let listed = listed.data.into_json().unwrap();
+		let items = listed["annotations"]["items"].as_array().unwrap();
+		assert_eq!(items.len(), 1);
+		let entry = &items[0];
+		assert_eq!(entry["id"], note_id.as_str());
+		assert_eq!(entry["kind"], "NOTE");
+		assert_eq!(entry["editable"], true);
+		assert!(entry["revision"].is_null());
+		assert_eq!(entry["positionMs"], 754_000);
+		assert_eq!(entry["chapterTitle"], "The Litany");
+		assert_eq!(entry["note"], "Fear is the mind-killer");
+		for field in ["href", "fragment", "page", "excerpt"] {
+			assert!(entry[field].is_null(), "{field} should be null: {entry}");
+		}
+		let progression = entry["progression"].as_f64().unwrap();
+		assert!((progression - 754_000.0 / 3_600_000.0).abs() < 1e-9);
+
+		let updated = graphql
+			.execute(format!(
+				r#"mutation {{
+					updateAnnotation(input: {{
+						id: "{note_id}", annotationText: "I will face my fear"
+					}}) {{ annotationText positionMs locator {{ href chapterTitle }} }}
+				}}"#
+			))
+			.await;
+		assert!(updated.errors.is_empty(), "{:?}", updated.errors);
+		let updated = updated.data.into_json().unwrap();
+		let updated = &updated["updateAnnotation"];
+		assert_eq!(updated["annotationText"], "I will face my fear");
+		assert_eq!(updated["positionMs"], 754_000);
+		assert_eq!(updated["locator"]["chapterTitle"], "The Litany");
+
+		let deleted = graphql
+			.execute(format!(
+				r#"mutation {{ deleteAnnotation(id: "{note_id}") {{ id positionMs }} }}"#
+			))
+			.await;
+		assert!(deleted.errors.is_empty(), "{:?}", deleted.errors);
+		assert!(media_annotation::Entity::find_by_id(&note_id)
+			.one(conn)
+			.await
+			.unwrap()
+			.is_none());
+
+		// A text anchor still needs no time.
+		let text = graphql
+			.execute(format!(
+				r#"mutation {{
+					createAnnotation(input: {{
+						mediaId: "{}", locator: {{ href: "OPS/chapter.xhtml" }},
+						annotationText: "Text"
+					}}) {{ positionMs locator {{ href }} }}
+				}}"#,
+				ebook.id
+			))
+			.await;
+		assert!(text.errors.is_empty(), "{:?}", text.errors);
+		let text = text.data.into_json().unwrap();
+		assert!(text["createAnnotation"]["positionMs"].is_null());
+		assert_eq!(
+			text["createAnnotation"]["locator"]["href"],
+			"OPS/chapter.xhtml"
+		);
+
+		for (input, message) in [
+			(
+				format!(r#"mediaId: "{}", positionMs: 1000"#, ebook.id),
+				"only applies to an audiobook",
+			),
+			(
+				format!(r#"mediaId: "{}", positionMs: 3600001"#, audiobook.id),
+				"within the audiobook",
+			),
+			(
+				format!(r#"mediaId: "{}", positionMs: -1"#, audiobook.id),
+				"within the audiobook",
+			),
+			(
+				format!(
+					r#"mediaId: "{}", positionMs: 1000, locator: {{ href: "a.xhtml" }}"#,
+					audiobook.id
+				),
+				"not both",
+			),
+			(
+				format!(r#"mediaId: "{}""#, audiobook.id),
+				"needs a locator or positionMs",
+			),
+		] {
+			let refused = graphql
+				.execute(format!(
+					"mutation {{ createAnnotation(input: {{ {input} }}) {{ id }} }}"
+				))
+				.await;
+			assert!(
+				refused
+					.errors
+					.iter()
+					.any(|error| error.message.contains(message)),
+				"{input}: {:?}",
+				refused.errors
+			);
+		}
+		assert!(media_annotation::Entity::find()
+			.filter(media_annotation::Column::MediaId.eq(&audiobook.id))
+			.all(conn)
+			.await
+			.unwrap()
+			.is_empty());
 	}
 }

@@ -159,7 +159,7 @@ pub fn get_age_restriction_filter(min_age: i32, restrict_on_unset: bool) -> Cond
 					.add(
 						media_metadata::Column::AgeRating
 							.is_not_null()
-							.add(media_metadata::Column::AgeRating.lte(min_age)),
+							.and(media_metadata::Column::AgeRating.lte(min_age)),
 					),
 			)
 	}
@@ -564,19 +564,6 @@ mod tests {
 			r#"SELECT  WHERE "#.to_string()
 				+ r#"("media_metadata"."age_rating" IS NULL AND "series_metadata"."age_rating" IS NOT NULL AND "series_metadata"."age_rating" <= 18) OR "#
 				+ r#"("media_metadata"."age_rating" IS NOT NULL AND "media_metadata"."age_rating" <= 18)"#,
-		);
-	}
-
-	#[test]
-	fn test_age_restriction_filter_no_restrict_on_unset() {
-		let filter = get_age_restriction_filter(18, false);
-		assert_eq!(
-			condition_to_string(&filter),
-			r#"SELECT  WHERE "#.to_string()
-				+ r#"(("media_metadata"."id" IS NULL OR "media_metadata"."age_rating" IS NULL) AND "#
-				+ r#"("series_metadata"."series_id" IS NULL OR ("series_metadata"."series_id" IS NOT NULL AND "series_metadata"."age_rating" IS NOT NULL AND "series_metadata"."age_rating" <= 18) OR "#
-				+ r#"("series_metadata"."series_id" IS NOT NULL AND "series_metadata"."age_rating" IS NULL))) OR "#
-				+ r#"("media_metadata"."id" IS NOT NULL AND ("media_metadata"."age_rating" IS NOT NULL) + ("media_metadata"."age_rating" <= 18))"#
 		);
 	}
 

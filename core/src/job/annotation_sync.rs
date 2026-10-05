@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use models::{
-	entity::annotation_sink_config,
+	entity::{annotation_sink_config, user},
 	shared::enums::{JobStatus, LogLevel},
 };
 use sea_orm::{prelude::*, sea_query::Expr, QueryFilter};
@@ -105,6 +105,11 @@ impl JobLifecycle for AnnotationSyncJob {
 			JobStatus::Running,
 			"Loading annotation sinks",
 		));
+		if !export_account_is_active(ctx.conn(), &self.user_id).await? {
+			return Err(JobError::InitFailed(
+				"annotation export account is deleted or locked".into(),
+			));
+		}
 
 		let rows = annotation_sink_config::Entity::find()
 			.filter(annotation_sink_config::Column::UserId.eq(&self.user_id))
@@ -271,6 +276,13 @@ impl AnnotationSyncJob {
 		task: &AnnotationSyncTask,
 		state: &SinkState,
 	) -> Result<SinkState, String> {
+		if !export_sink_is_active(ctx.conn(), &batch.user_id, &task.sink_id)
+			.await
+			.map_err(|error| error.to_string())?
+		{
+			return Err("annotation export account or sink is no longer active".into());
+		}
+
 		let configured: SettingValues = task
 			.settings
 			.as_ref()
@@ -291,10 +303,110 @@ impl AnnotationSyncJob {
 	}
 }
 
+/// Queued and in-memory batches outlive their database row; check the account
+/// before snapshotting and again immediately before any external sink write.
+async fn export_account_is_active(
+	conn: &DatabaseConnection,
+	user_id: &str,
+) -> Result<bool, DbErr> {
+	Ok(user::Entity::find_by_id(user_id)
+		.filter(user::Column::DeletedAt.is_null())
+		.filter(user::Column::IsLocked.eq(false))
+		.one(conn)
+		.await?
+		.is_some())
+}
+
+async fn export_sink_is_active(
+	conn: &DatabaseConnection,
+	user_id: &str,
+	sink_id: &str,
+) -> Result<bool, DbErr> {
+	if !export_account_is_active(conn, user_id).await? {
+		return Ok(false);
+	}
+	Ok(annotation_sink_config::Entity::find()
+		.filter(annotation_sink_config::Column::UserId.eq(user_id))
+		.filter(annotation_sink_config::Column::SinkId.eq(sink_id))
+		.filter(annotation_sink_config::Column::Enabled.eq(true))
+		.one(conn)
+		.await?
+		.is_some())
+}
+
 /// The persisted sink state, or the default when the row has none yet (or
 /// it no longer parses).
 fn sink_state(value: Option<&Value>) -> SinkState {
 	value
 		.and_then(|value| serde_json::from_value(value.clone()).ok())
 		.unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+
+	#[tokio::test]
+	async fn queued_export_requires_a_live_account_and_enabled_sink() {
+		let dir = tempfile::tempdir().expect("temporary database");
+		let url = format!(
+			"sqlite://{}?mode=rwc",
+			dir.path().join("exports.db").display()
+		);
+		let db = crate::database::connect_at(&url)
+			.await
+			.expect("migrated database");
+		for sql in [
+			"INSERT INTO users (id, username, hashed_password, is_server_owner, created_at, is_locked) VALUES ('member', 'member', 'hash', 0, CURRENT_TIMESTAMP, 0)",
+			"INSERT INTO annotation_sink_configs (user_id, sink_id, enabled, updated_at) VALUES ('member', 'markdown', 1, CURRENT_TIMESTAMP)",
+		] {
+			db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql.to_string())).await.expect(sql);
+		}
+		assert!(export_account_is_active(&db, "member").await.unwrap());
+		assert!(export_sink_is_active(&db, "member", "markdown")
+			.await
+			.unwrap());
+
+		db.execute(Statement::from_string(
+			DatabaseBackend::Sqlite,
+			"UPDATE annotation_sink_configs SET enabled = 0 WHERE user_id = 'member'",
+		))
+		.await
+		.unwrap();
+		assert!(!export_sink_is_active(&db, "member", "markdown")
+			.await
+			.unwrap());
+		db.execute(Statement::from_string(
+			DatabaseBackend::Sqlite,
+			"UPDATE annotation_sink_configs SET enabled = 1 WHERE user_id = 'member'",
+		))
+		.await
+		.unwrap();
+		db.execute(Statement::from_string(
+			DatabaseBackend::Sqlite,
+			"UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE id = 'member'",
+		))
+		.await
+		.unwrap();
+		assert!(!export_account_is_active(&db, "member").await.unwrap());
+		assert!(
+			!export_sink_is_active(&db, "member", "markdown")
+				.await
+				.unwrap(),
+			"soft deletion retains settings but must block queued exports"
+		);
+		db.execute(Statement::from_string(
+			DatabaseBackend::Sqlite,
+			"DELETE FROM users WHERE id = 'member'",
+		))
+		.await
+		.unwrap();
+		assert!(
+			!export_sink_is_active(&db, "member", "markdown")
+				.await
+				.unwrap(),
+			"hard deletion removes both account and sink settings"
+		);
+	}
 }

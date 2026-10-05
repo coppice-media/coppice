@@ -191,6 +191,84 @@ async fn test_regular_user_cannot_change_own_max_sessions_allowed() {
 	);
 }
 
+/// `createUser` enforces the same positive session cap as `updateUser`
+#[tokio::test]
+async fn test_create_user_rejects_non_positive_session_cap() {
+	let app = TestApp::new_with_default_user().await;
+	for cap in [0_i32, -1] {
+		let response = app
+			.execute_gql(
+				r#"mutation($input: CreateUserInput!) { createUser(input: $input) { id } }"#,
+				Some(json!({ "input": {
+					"username": format!("zero-cap-{}", cap.abs()),
+					"password": "password",
+					"permissions": [],
+					"maxSessionsAllowed": cap,
+				}})),
+			)
+			.await;
+		assert_has_error(&response);
+	}
+}
+
+/// rewriting library exclusions needs MANAGE_LIBRARY *and* READ_USERS; either
+/// alone is refused (the guard used to accept any one of them)
+#[tokio::test]
+async fn test_library_exclusions_require_manage_library_and_read_users() {
+	let app = TestApp::new_with_default_user().await;
+	let library = tests::fake_data::Library {
+		id: Some("exclusion-library".to_string()),
+		name: Some("Exclusion Library".to_string()),
+		..Default::default()
+	}
+	.insert(app.conn())
+	.await;
+	let target = CreateTestUser {
+		username: "exclusion-target".to_string(),
+		..Default::default()
+	}
+	.insert(&app)
+	.await;
+	let exclude = |token: String| {
+		let app = &app;
+		let library_id = library.id.clone();
+		let target_id = target.id.clone();
+		async move {
+			app.execute_gql_with_token(
+				r#"mutation($id: ID!, $users: [String!]!) {
+					updateLibraryExcludedUsers(id: $id, userIds: $users) { id }
+				}"#,
+				Some(json!({ "id": library_id, "users": [target_id] })),
+				&token,
+			)
+			.await
+		}
+	};
+
+	for (username, permissions) in [
+		("reads-users-only", vec![UserPermission::ReadUsers]),
+		("manages-library-only", vec![UserPermission::ManageLibrary]),
+	] {
+		let actor = CreateTestUser {
+			username: username.to_string(),
+			permissions,
+			..Default::default()
+		}
+		.insert(&app)
+		.await;
+		assert_has_error(&exclude(actor.token).await);
+	}
+
+	let manager = CreateTestUser {
+		username: "manages-library-and-reads-users".to_string(),
+		permissions: vec![UserPermission::ManageLibrary, UserPermission::ReadUsers],
+		..Default::default()
+	}
+	.insert(&app)
+	.await;
+	assert_no_errors(&exclude(manager.token).await);
+}
+
 // TODO(permissions): server owner going away
 #[tokio::test]
 async fn test_server_owner_can_set_permissions_on_another_user() {

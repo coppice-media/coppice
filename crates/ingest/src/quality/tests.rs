@@ -544,6 +544,129 @@ async fn duplicate_pages_across_books_covers_statuses_and_threshold() {
 	assert_eq!(result.status, QualityStatus::Pass);
 }
 
+/// Writes a server-wide `CHECK` row the way `setIngestQualityCheckSettings`
+/// does: update the stored row when one exists, insert otherwise.
+async fn save_check_settings(
+	store: &crate::store::IngestStore,
+	check_id: &str,
+	enabled: bool,
+	values: Value,
+) {
+	use crate::store::QUALITY_CHECK_SETTING_KIND;
+	use models::entity::ingest_plugin_setting;
+	use sea_orm::IntoActiveModel;
+
+	let mut row = match store
+		.plugin_settings(check_id, QUALITY_CHECK_SETTING_KIND, None, None)
+		.await
+		.expect("read check settings")
+	{
+		Some(model) => model.into_active_model(),
+		None => ingest_plugin_setting::ActiveModel {
+			plugin_id: Set(check_id.to_string()),
+			kind: Set(QUALITY_CHECK_SETTING_KIND.to_string()),
+			library_id: Set(None),
+			user_id: Set(None),
+			opted_in: Set(false),
+			..Default::default()
+		},
+	};
+	row.enabled = Set(enabled);
+	row.values = Set(Some(values));
+	store
+		.set_plugin_settings(row)
+		.await
+		.expect("save check settings");
+}
+
+/// Stored server-wide check settings reach `run_all` through the store read
+/// the coordinator uses: a saved `minBooks` changes the duplicate-page
+/// outcome, and a disabled check does not run.
+#[tokio::test]
+async fn stored_check_settings_drive_analysis() {
+	let page = png(8, 8, [0, 0, 0, 255]);
+	let own_dhash = stump_media::page_dhash(&page).expect("hash fixture page") as i64;
+	let conn = Arc::new(::tests::db::test_database().await);
+	seed_library(&conn, "lib").await;
+	seed_library_book(&conn, "lib", "series-a", "book-a").await;
+	seed_library_book(&conn, "lib", "series-b", "book-b").await;
+	seed_page_hash(&conn, "book-a", 1, own_dhash).await;
+	seed_page_hash(&conn, "book-b", 1, own_dhash).await;
+	// The shared fixture schema has no ingest tables; add the settings table.
+	{
+		use sea_orm::{ConnectionTrait, Schema};
+		let backend = conn.get_database_backend();
+		conn.execute(
+			backend.build(
+				&Schema::new(backend).create_table_from_entity(
+					models::entity::ingest_plugin_setting::Entity,
+				),
+			),
+		)
+		.await
+		.expect("create ingest_plugin_settings");
+	}
+	let store = crate::store::IngestStore::new(
+		Arc::new(crate::config::IngestSettings::debug()),
+		conn.clone(),
+	);
+	let registry = QualityRegistry::builtin(conn);
+	let file = cbz(&[("001.png", page)]);
+	let mut book = snapshot(file.path(), IngestMediaKind::ComicArchive, 1);
+	book.library_id = "lib".to_string();
+	let outcome = |report: &crate::contract::QualityReport, check_id: &str| {
+		report
+			.checks
+			.iter()
+			.find(|check| check.outcome.check_id == check_id)
+			.map(|check| check.outcome.clone())
+			.expect("check is reported")
+	};
+
+	// Two matching books stay below the default threshold of three.
+	let settings = store.quality_check_settings().await.expect("load settings");
+	let report = registry.run_all(&book, &settings).await.expect("report");
+	assert_eq!(
+		outcome(&report, "duplicate_pages_across_books").status,
+		QualityStatus::Pass
+	);
+	assert_eq!(
+		outcome(&report, "cover_present").status,
+		QualityStatus::Pass
+	);
+
+	// Saving twice updates the same row; the last value wins.
+	save_check_settings(
+		&store,
+		"duplicate_pages_across_books",
+		true,
+		json!({"minBooks": 5}),
+	)
+	.await;
+	save_check_settings(
+		&store,
+		"duplicate_pages_across_books",
+		true,
+		json!({"minBooks": 2}),
+	)
+	.await;
+	save_check_settings(&store, "cover_present", false, json!({})).await;
+
+	let settings = store.quality_check_settings().await.expect("load settings");
+	let report = registry.run_all(&book, &settings).await.expect("report");
+	assert_eq!(
+		outcome(&report, "duplicate_pages_across_books").status,
+		QualityStatus::Warn
+	);
+	assert_eq!(
+		report.settings_snapshot["duplicate_pages_across_books"]["minBooks"],
+		json!(2)
+	);
+	let cover = outcome(&report, "cover_present");
+	assert_eq!(cover.status, QualityStatus::NotApplicable);
+	assert_eq!(cover.evidence["disabled"], true);
+}
+
 async fn seed_series(conn: &sea_orm::DatabaseConnection, library_id: &str, name: &str) {
 	series::ActiveModel {
 		id: Set(name.to_string()),

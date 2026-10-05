@@ -129,6 +129,12 @@ impl ItemSort {
 /// The `filter` query parameter: `<key>.<base64(value)>`
 /// (Lissen `common/api/EncodeLibraryFilter.kt`; the official app builds the
 /// same shape with `Base64.encodeToString`, `ApiHandler.kt:528-533`).
+///
+/// abs-ref decodes the value as `Buffer.from(decodeURIComponent(text),
+/// 'base64')` (`server/utils/queries/libraryFilters.js:13-20`), so a value
+/// that is percent-encoded once more — the `id` `GET
+/// /api/libraries/{id}/narrators` hands out is
+/// `encodeURIComponent(base64(name))` — decodes to the same name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ItemFilter {
 	Series(String),
@@ -142,6 +148,14 @@ pub(crate) enum ItemFilter {
 	/// (`components/modals/FilterModal.vue:237-248`). Ignoring it made the
 	/// "Audiobooks with an ebook" shelf list the whole library.
 	Ebook(EbookFilter),
+	/// `genres.<base64(name)>`: books whose genre list holds `name` exactly
+	/// (abs-ref `libraryItemsBookFilters.js:191-195`, `json_each(genres).value
+	/// = :filterValue`). Lissen 1.12.9 browses a genre this way
+	/// (`library/LibraryAudiobookshelfChannel.kt:197`).
+	Genre(String),
+	/// `narrators.<base64(name)>`: the same exact match on the narrator list
+	/// (`library/LibraryAudiobookshelfChannel.kt:205`).
+	Narrator(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,14 +183,20 @@ impl ItemFilter {
 		use base64::Engine;
 
 		let (key, encoded) = value.split_once('.')?;
+		let encoded = urlencoding::decode(encoded).ok()?;
 		let decoded = base64::engine::general_purpose::STANDARD
-			.decode(encoded)
-			.or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(encoded))
+			.decode(encoded.as_bytes())
+			.or_else(|_| {
+				base64::engine::general_purpose::STANDARD_NO_PAD
+					.decode(encoded.as_bytes())
+			})
 			.ok()?;
 		let decoded = String::from_utf8(decoded).ok()?;
 		match key {
 			"series" => Some(ItemFilter::Series(decoded)),
 			"authors" => Some(ItemFilter::Author(decoded)),
+			"genres" => Some(ItemFilter::Genre(decoded)),
+			"narrators" => Some(ItemFilter::Narrator(decoded)),
 			"progress" => match decoded.as_str() {
 				"not-finished" => Some(ItemFilter::Progress(ProgressFilter::NotFinished)),
 				"finished" => Some(ItemFilter::Progress(ProgressFilter::Finished)),
@@ -267,6 +287,28 @@ pub(crate) async fn item_page(
 				},
 				_ => select.filter(media::Column::Id.is_in(ids)),
 			};
+		},
+		Some(ItemFilter::Genre(name)) => {
+			let ids = library_media_ids_listing(
+				backend,
+				user,
+				library_id,
+				media_metadata::Column::Genres,
+				name,
+			)
+			.await?;
+			select = select.filter(media::Column::Id.is_in(ids));
+		},
+		Some(ItemFilter::Narrator(name)) => {
+			let ids = library_media_ids_listing(
+				backend,
+				user,
+				library_id,
+				media_metadata::Column::Narrators,
+				name,
+			)
+			.await?;
+			select = select.filter(media::Column::Id.is_in(ids));
 		},
 		Some(ItemFilter::Ebook(state)) => {
 			// The set is the user's confirmed audiobook↔ebook pairs, small
@@ -724,6 +766,45 @@ pub(crate) async fn media_ids_crediting(
 		.await?)
 }
 
+/// The ids of one library's audible books whose comma-separated
+/// `media_metadata` list `column` (`genres`, `narrators`) holds `value`
+/// exactly — abs-ref's `json_each(<group>).value = :filterValue`
+/// (`libraryItemsBookFilters.js:191-195`), which is case-sensitive. As in
+/// [`media_ids_crediting`], the SQL `contains` only narrows the candidates;
+/// the CSV values decide.
+pub(crate) async fn library_media_ids_listing(
+	backend: &dyn AbsBackend,
+	user: &AuthUser,
+	library_id: &str,
+	column: media_metadata::Column,
+	value: &str,
+) -> AbsResult<Vec<String>> {
+	#[derive(FromQueryResult)]
+	struct Row {
+		id: String,
+		listed: Option<String>,
+	}
+
+	let rows = audio_media(user)
+		.filter(series::Column::LibraryId.eq(library_id))
+		.filter(column.contains(value))
+		.select_only()
+		.column(media::Column::Id)
+		.column_as(column, "listed")
+		.into_model::<Row>()
+		.all(backend.conn())
+		.await?;
+	Ok(rows
+		.into_iter()
+		.filter(|row| {
+			mapper::csv(row.listed.as_deref())
+				.iter()
+				.any(|listed| listed == value)
+		})
+		.map(|row| row.id)
+		.collect())
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -761,9 +842,28 @@ mod tests {
 			ItemFilter::parse("authors.YWJj"),
 			Some(ItemFilter::Author("abc".to_owned()))
 		);
+		assert_eq!(
+			ItemFilter::parse("narrators.YWJj"),
+			Some(ItemFilter::Narrator("abc".to_owned()))
+		);
+		assert_eq!(
+			ItemFilter::parse("genres.YWJj"),
+			Some(ItemFilter::Genre("abc".to_owned()))
+		);
+		// Lissen 1.12.9 encodes with `java.util.Base64` (padded, standard
+		// alphabet); the narrator id abs-ref hands out is that string
+		// `encodeURIComponent`ed once more. Both decode to the same name.
+		assert_eq!(
+			ItemFilter::parse("narrators.w4lkaXRoIFDDqXJleiArIENv"),
+			Some(ItemFilter::Narrator("Édith Pérez + Co".to_owned()))
+		);
+		assert_eq!(
+			ItemFilter::parse("genres.U2NpLUZpPw%3D%3D"),
+			Some(ItemFilter::Genre("Sci-Fi?".to_owned()))
+		);
 		// An unknown key, an unknown progress state and malformed input all
 		// mean "no filter", never an error.
-		assert_eq!(ItemFilter::parse("narrators.YWJj"), None);
+		assert_eq!(ItemFilter::parse("tags.YWJj"), None);
 		assert_eq!(ItemFilter::parse("progress.bm9wZQ=="), None);
 		assert_eq!(ItemFilter::parse("progress.!!!"), None);
 		assert_eq!(ItemFilter::parse("nodot"), None);

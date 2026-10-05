@@ -122,6 +122,9 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: SETTING_BASE_URL,
@@ -132,6 +135,9 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			required: true,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: SETTING_MODEL,
@@ -142,6 +148,9 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			required: true,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: SETTING_API_KEY,
@@ -152,6 +161,9 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			required: false,
 			secret: true,
 			help_url: Some("https://platform.openai.com/api-keys"),
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: SETTING_EXTRA_INSTRUCTIONS,
@@ -162,6 +174,9 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 	]
 });

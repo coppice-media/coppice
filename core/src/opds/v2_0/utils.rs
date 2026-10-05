@@ -1,14 +1,9 @@
 use std::collections::HashMap;
 
-use chrono::Utc;
 use sea_orm::{prelude::*, DatabaseConnection, FromQueryResult, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::CoreResult;
-
-pub fn default_now() -> String {
-	Utc::now().to_rfc3339()
-}
 
 /// A utility enum that can represent either an array of items or a single item.
 #[derive(Debug, Clone, Serialize, Deserialize)]

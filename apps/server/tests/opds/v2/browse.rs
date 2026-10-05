@@ -193,3 +193,141 @@ async fn test_library_feed_group_links_are_mounted() {
 		Some("/opds/v2.0/libraries/image_comics/books?page=1&page_size=10".to_string())
 	);
 }
+
+#[tokio::test]
+async fn test_zero_based_pagination_links_keep_numbering_and_size() {
+	let app = setup().await;
+	let first = feed(
+		&app,
+		"/opds/v2.0/books/latest?page=0&page_size=2&zero_based=true",
+	)
+	.await;
+	// currentPage is 1-indexed whichever numbering the request used.
+	assert_eq!(pagination_metadata(&first), (5, 2, 1));
+	assert_eq!(href_with_rel(&first, "previous"), None);
+	let next = href_with_rel(&first, "next").unwrap();
+	assert_eq!(
+		server_path(&next),
+		"/opds/v2.0/books/latest?page=1&page_size=2&zero_based=true"
+	);
+	let middle = feed(&app, &server_path(&next)).await;
+	assert_eq!(pagination_metadata(&middle), (5, 2, 2));
+	let mut traversed_ids = publication_ids(&first);
+	traversed_ids.extend(publication_ids(&middle));
+	let last = feed(&app, &server_path(&href_with_rel(&middle, "last").unwrap())).await;
+	assert_eq!(pagination_metadata(&last), (5, 2, 3));
+	assert_eq!(
+		server_path(&href_with_rel(&middle, "last").unwrap()),
+		"/opds/v2.0/books/latest?page=2&page_size=2&zero_based=true"
+	);
+	traversed_ids.extend(publication_ids(&last));
+	traversed_ids.sort();
+	assert_eq!(
+		traversed_ids,
+		vec![
+			"black_science_1",
+			"black_science_2",
+			"black_science_3",
+			"black_science_4",
+			"black_science_5"
+		]
+	);
+	assert_eq!(href_with_rel(&last, "next"), None);
+}
+
+#[tokio::test]
+async fn test_exact_multiple_last_page_does_not_offer_an_empty_next() {
+	let app = setup().await;
+	let last = feed(&app, "/opds/v2.0/books/latest?page=5&page_size=1").await;
+	assert_eq!(publication_ids(&last).len(), 1);
+	assert_eq!(pagination_metadata(&last), (5, 1, 5));
+	assert_eq!(href_with_rel(&last, "next"), None);
+	assert_eq!(href_with_rel(&last, "last"), None);
+	assert_every_link_resolves(&app, &last).await;
+}
+
+#[tokio::test]
+async fn test_empty_filtered_feed_has_one_canonical_page() {
+	let app = setup().await;
+	let empty = feed(
+		&app,
+		"/opds/v2.0/books/browse?author=Nobody&page=1&page_size=2",
+	)
+	.await;
+	assert_eq!(pagination_metadata(&empty), (0, 2, 1));
+	for rel in ["first", "previous", "next", "last"] {
+		assert_eq!(href_with_rel(&empty, rel), None);
+	}
+	let past_end = feed(
+		&app,
+		"/opds/v2.0/books/browse?author=Nobody&page=9&page_size=2",
+	)
+	.await;
+	assert_eq!(href_with_rel(&past_end, "next"), None);
+	for rel in ["first", "previous", "last"] {
+		assert_eq!(
+			server_path(&href_with_rel(&past_end, rel).unwrap()),
+			"/opds/v2.0/books/browse?author=Nobody&page=1&page_size=2"
+		);
+	}
+}
+
+#[tokio::test]
+async fn test_past_end_previous_link_recovers_to_the_last_populated_page() {
+	let app = setup().await;
+	let past_end = feed(&app, "/opds/v2.0/books/latest?page=9&page_size=2").await;
+	assert!(publication_ids(&past_end).is_empty());
+	assert_eq!(href_with_rel(&past_end, "next"), None);
+	for rel in ["previous", "last"] {
+		let href = href_with_rel(&past_end, rel).unwrap();
+		assert_eq!(
+			server_path(&href),
+			"/opds/v2.0/books/latest?page=3&page_size=2"
+		);
+		assert_eq!(
+			publication_ids(&feed(&app, &server_path(&href)).await).len(),
+			1
+		);
+	}
+}
+
+#[tokio::test]
+async fn test_library_series_preview_pages_within_the_selected_library() {
+	let app = setup().await;
+	for index in 1..=11 {
+		fake_data::Series {
+			id: Some(format!("classic_{index}")),
+			name: Some(format!("Classic {index:02}")),
+			library_id: Some("image_classics".to_string()),
+			..Default::default()
+		}
+		.insert(app.conn())
+		.await;
+	}
+	fake_data::Series {
+		id: Some("outside".to_string()),
+		name: Some("Outside".to_string()),
+		library_id: Some("image_digital".to_string()),
+		..Default::default()
+	}
+	.insert(app.conn())
+	.await;
+
+	let library = feed(&app, "/opds/v2.0/libraries/image_classics").await;
+	let group = group_titled(&library, "Library Series");
+	assert_eq!(pagination_metadata(&group), (11, 10, 1));
+	assert_eq!(navigation_titles(&group).len(), 10);
+	let next = href_with_rel(&group, "next").expect("the eleventh series is reachable");
+	assert_eq!(
+		server_path(&next),
+		"/opds/v2.0/libraries/image_classics/series?page=2&page_size=10"
+	);
+	let last = feed(&app, &server_path(&next)).await;
+	assert_eq!(navigation_titles(&last), vec!["Classic 11"]);
+	assert_eq!(pagination_metadata(&last), (11, 10, 2));
+	assert_eq!(href_with_rel(&last, "next"), None);
+	assert_every_link_resolves(&app, &last).await;
+	app.get("/opds/v2.0/libraries/missing/series")
+		.await
+		.assert_status_not_found();
+}

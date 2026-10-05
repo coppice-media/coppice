@@ -685,6 +685,86 @@ pub struct AuthorsPageDto {
 }
 
 // ---------------------------------------------------------------------------
+// Library stats and narrators — abs-ref v2.37.1
+// `server/controllers/LibraryController.js` `stats` (978-1012) and
+// `getNarrators` (1110-1146)
+// ---------------------------------------------------------------------------
+
+/// `GET /api/libraries/{id}/stats` for a book library, keys in abs-ref's
+/// order. Lissen 1.12.9 reads only `genresWithCount`
+/// (`library/model/LibraryStatsResponse.kt`, non-null `{genre, count}`);
+/// the rest is served because abs-ref always sends it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStatsDto {
+	/// Ten largest items by `size`, descending.
+	pub largest_items: Vec<StatsSizedItemDto>,
+	pub total_authors: i64,
+	/// Ten authors with the most books, descending.
+	pub authors_with_count: Vec<StatsAuthorDto>,
+	pub total_genres: i64,
+	/// Every genre, most books first.
+	pub genres_with_count: Vec<StatsGenreDto>,
+	pub total_items: i64,
+	/// Ten longest items by `duration` (seconds), descending.
+	pub longest_items: Vec<StatsTimedItemDto>,
+	/// Bytes.
+	pub total_size: i64,
+	/// Seconds.
+	pub total_duration: f64,
+	pub num_audio_tracks: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsSizedItemDto {
+	pub id: String,
+	pub title: String,
+	pub size: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsTimedItemDto {
+	pub id: String,
+	pub title: String,
+	pub duration: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsAuthorDto {
+	pub id: String,
+	pub name: String,
+	pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsGenreDto {
+	pub genre: String,
+	pub count: i64,
+}
+
+/// `GET /api/libraries/{id}/narrators`. Lissen 1.12.9 decodes
+/// `narrators[]{name, numBooks?}` (`library/model/LibraryNarratorsResponse.kt`)
+/// and uses the name as its id; abs-ref also sends `id`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryNarratorsDto {
+	pub narrators: Vec<NarratorDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NarratorDto {
+	/// `encodeURIComponent(base64(name))`, which the `narrators.` item filter
+	/// and abs-ref's narrator routes decode back to the name.
+	pub id: String,
+	pub name: String,
+	pub num_books: i64,
+}
+
+// ---------------------------------------------------------------------------
 // Search — capture/library_search.json
 // ---------------------------------------------------------------------------
 

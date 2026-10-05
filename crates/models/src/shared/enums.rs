@@ -766,6 +766,8 @@ pub enum UserPermission {
 	AccessBookClub,
 	/// Grant access to create a book club (access book club)
 	CreateBookClub,
+	/// Grant authorized club organizers the ability to issue and manage guest-reader links.
+	ShareBookClubReader,
 	/// Grant user access to change **their own** password
 	ChangePassword,
 	/// Grant user access to change **their own** username

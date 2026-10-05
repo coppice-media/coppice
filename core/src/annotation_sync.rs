@@ -334,6 +334,9 @@ mod tests {
 			required: false,
 			secret: true,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		}];
 		let key = create_encryption_key().unwrap();
 		let values: SettingValues = [

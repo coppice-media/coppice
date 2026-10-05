@@ -97,6 +97,9 @@ mod m20260965_000000_mam_acquisition;
 mod m20260966_000000_repair_liseur_alias_split;
 mod m20260967_000000_book_request_preferred_narrator;
 mod m20260968_000000_mam_grab_handoff_attempts;
+mod m20260969_000000_add_book_club_readers;
+mod m20260970_000000_add_book_club_reader_messages;
+mod m20260971_000000_add_annotation_position_ms;
 
 pub use m20260963_000000_repair_liseur_pair_work_identity::merge_liseur_work;
 
@@ -201,6 +204,9 @@ impl MigratorTrait for Migrator {
 			Box::new(m20260966_000000_repair_liseur_alias_split::Migration),
 			Box::new(m20260967_000000_book_request_preferred_narrator::Migration),
 			Box::new(m20260968_000000_mam_grab_handoff_attempts::Migration),
+			Box::new(m20260969_000000_add_book_club_readers::Migration),
+			Box::new(m20260970_000000_add_book_club_reader_messages::Migration),
+			Box::new(m20260971_000000_add_annotation_position_ms::Migration),
 		]
 	}
 }

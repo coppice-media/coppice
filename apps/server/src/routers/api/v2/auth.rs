@@ -29,8 +29,8 @@ use tracing::error;
 use crate::{
 	config::{
 		jwt::{
-			create_jwt_auth, exchange_refresh_token, extract_jti_from_refresh_token,
-			JwtTokenPair,
+			confirm_active_user, create_jwt_auth_for_active_user, exchange_refresh_token,
+			extract_jti_from_refresh_token, JwtTokenPair,
 		},
 		session::{delete_cookie_header, SESSION_USER_KEY},
 		state::AppState,
@@ -246,7 +246,19 @@ async fn login(
 			// TODO: should this be tracked?
 			// TODO: should this be permission gated?
 			if generate_token {
-				let token = create_jwt_auth(&user.id, &state.conn, &state.config).await?;
+				let token = match create_jwt_auth_for_active_user(
+					&user.id,
+					&state.conn,
+					&state.config,
+				)
+				.await
+				{
+					Ok(token) => token,
+					Err(error) => {
+						let _ = session.delete().await;
+						return Err(error);
+					},
+				};
 				return Ok(Json(LoginResponse::AccessToken(GeneratedToken {
 					for_user: user.into(),
 					token,
@@ -339,12 +351,32 @@ async fn login(
 
 	// TODO: should this be permission gated?
 	if generate_token {
-		let token = create_jwt_auth(&auth_user.id, &state.conn, &state.config).await?;
+		let token = match create_jwt_auth_for_active_user(
+			&auth_user.id,
+			&state.conn,
+			&state.config,
+		)
+		.await
+		{
+			Ok(token) => token,
+			Err(error) => {
+				if create_session {
+					let _ = session.delete().await;
+				}
+				return Err(error);
+			},
+		};
 		Ok(Json(LoginResponse::AccessToken(GeneratedToken {
 			for_user: auth_user,
 			token,
 		})))
 	} else {
+		if let Err(error) = confirm_active_user(&auth_user.id, &state.conn).await {
+			if create_session {
+				let _ = session.delete().await;
+			}
+			return Err(error);
+		}
 		Ok(Json(LoginResponse::User(auth_user)))
 	}
 }

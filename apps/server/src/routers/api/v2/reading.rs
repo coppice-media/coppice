@@ -2,7 +2,7 @@
 //!
 //! OPDS 2.0 already names the books a user is part-way through
 //! (`/opds/v2.0/books/keep-reading`), but an OPDS publication carries its
-//! position only as a *link* (`rel=http://www.cantook.com/api/progression`),
+//! position only as a *link* (`rel=http://opds-spec.org/progression`),
 //! so a device dashboard that wants to draw a progress bar needs one extra
 //! request per row. This route answers the same question in a single request,
 //! and it reads [`reading_heads`] — the unified reading state, one canonical

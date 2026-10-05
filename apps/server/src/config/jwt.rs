@@ -2,10 +2,15 @@ use std::sync::OnceLock;
 
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use models::entity::{refresh_token, server_config};
-use sea_orm::{prelude::*, ActiveValue, IntoActiveModel, QuerySelect};
+use models::entity::{refresh_token, server_config, user};
+use models::txn::begin_write;
+use sea_orm::{
+	prelude::*, ActiveValue, ConnectionTrait, DatabaseConnection, IntoActiveModel,
+	QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use stump_core::config::StumpConfig;
+use uuid::Uuid;
 
 use crate::{
 	config::state::AppState,
@@ -26,7 +31,7 @@ pub(crate) async fn access_token_secret(conn: &DatabaseConnection) -> APIResult<
 	get_access_token_secret(conn).await
 }
 
-async fn get_access_token_secret(conn: &DatabaseConnection) -> APIResult<String> {
+async fn get_access_token_secret<C: ConnectionTrait>(conn: &C) -> APIResult<String> {
 	if let Some(secret) = ACCESS_TOKEN_SECRET.get() {
 		return Ok(secret.clone());
 	}
@@ -49,7 +54,7 @@ async fn get_access_token_secret(conn: &DatabaseConnection) -> APIResult<String>
 	Ok(ACCESS_TOKEN_SECRET.get_or_init(|| secret).clone())
 }
 
-async fn get_refresh_token_secret(conn: &DatabaseConnection) -> APIResult<String> {
+async fn get_refresh_token_secret<C: ConnectionTrait>(conn: &C) -> APIResult<String> {
 	if let Some(secret) = REFRESH_TOKEN_SECRET.get() {
 		return Ok(secret.clone());
 	}
@@ -99,9 +104,9 @@ struct RefreshTokenClaims {
 	jti: String,
 }
 
-pub(crate) async fn create_jwt_auth(
+pub(crate) async fn create_jwt_auth<C: ConnectionTrait>(
 	user_id: &str,
-	conn: &DatabaseConnection,
+	conn: &C,
 	config: &StumpConfig,
 ) -> APIResult<JwtTokenPair> {
 	let CreatedToken {
@@ -131,6 +136,53 @@ pub(crate) async fn create_jwt_auth(
 		expires_at,
 	})
 }
+/// Acquire a row lock that serializes credential issuance with account
+/// deletion on backends without SQLite's immediate database write lock.
+pub(crate) async fn lock_active_user<C: ConnectionTrait>(
+	conn: &C,
+	user_id: &str,
+) -> APIResult<Option<user::Model>> {
+	let _ = user::Entity::update_many()
+		.col_expr(
+			user::Column::DeletedAt,
+			sea_orm::sea_query::Expr::col(user::Column::DeletedAt).into(),
+		)
+		.filter(user::Column::Id.eq(user_id))
+		.filter(user::Column::DeletedAt.is_null())
+		.exec(conn)
+		.await?;
+	Ok(user::Entity::find_by_id(user_id)
+		.filter(user::Column::DeletedAt.is_null())
+		.one(conn)
+		.await?)
+}
+
+pub(crate) async fn create_jwt_auth_for_active_user(
+	user_id: &str,
+	conn: &DatabaseConnection,
+	config: &StumpConfig,
+) -> APIResult<JwtTokenPair> {
+	let txn = begin_write(conn).await?;
+	let account = lock_active_user(&txn, user_id)
+		.await?
+		.filter(|user| !user.is_locked)
+		.ok_or(APIError::Unauthorized)?;
+	let token = create_jwt_auth(&account.id, &txn, config).await?;
+	txn.commit().await?;
+	Ok(token)
+}
+pub(crate) async fn confirm_active_user(
+	user_id: &str,
+	conn: &DatabaseConnection,
+) -> APIResult<()> {
+	let txn = begin_write(conn).await?;
+	let account = lock_active_user(&txn, user_id).await?;
+	if !matches!(&account, Some(account) if !account.is_locked) {
+		return Err(APIError::Unauthorized);
+	}
+	txn.commit().await?;
+	Ok(())
+}
 
 pub(crate) async fn extract_jti_from_refresh_token(
 	token: &str,
@@ -149,10 +201,10 @@ pub(crate) async fn extract_jti_from_refresh_token(
 	Ok(token_data.claims.jti)
 }
 
-async fn generate_access_token(
+async fn generate_access_token<C: ConnectionTrait>(
 	user_id: &str,
 	config: &StumpConfig,
-	conn: &DatabaseConnection,
+	conn: &C,
 ) -> APIResult<CreatedToken> {
 	let now = Utc::now();
 	let iat = now.timestamp() as usize;
@@ -179,10 +231,10 @@ async fn generate_access_token(
 	Ok(CreatedToken { token, expires_at })
 }
 
-async fn generate_refresh_token(
+async fn generate_refresh_token<C: ConnectionTrait>(
 	user_id: &str,
 	config: &StumpConfig,
-	conn: &DatabaseConnection,
+	conn: &C,
 ) -> APIResult<(String, CreatedToken)> {
 	let now = Utc::now();
 	let iat = now.timestamp() as usize;
@@ -234,20 +286,27 @@ pub(crate) async fn exchange_refresh_token(
 	jti: &str,
 	state: AppState,
 ) -> APIResult<JwtTokenPair> {
+	let txn = begin_write(&state.conn).await?;
 	let refresh_token = refresh_token::Entity::find()
 		.filter(refresh_token::Column::Id.eq(jti))
-		.one(state.conn.as_ref())
+		.one(&txn)
 		.await?
 		.ok_or(APIError::Unauthorized)?;
 
 	if refresh_token.expires_at < Utc::now() {
 		let active_model = refresh_token.into_active_model();
-		let _ = active_model.delete(state.conn.as_ref()).await;
+		let _ = active_model.delete(&txn).await;
+		txn.commit().await?;
 		return Err(APIError::Unauthorized);
 	}
 
 	let user_id = &refresh_token.user_id;
-	let jwt_pair = create_jwt_auth(user_id, &state.conn, &state.config).await?;
+	let account = lock_active_user(&txn, user_id)
+		.await?
+		.filter(|user| !user.is_locked)
+		.ok_or(APIError::Unauthorized)?;
+	let jwt_pair = create_jwt_auth(&account.id, &txn, &state.config).await?;
+	txn.commit().await?;
 	tracing::debug!(?user_id, "Exchanged refresh token for new JWT");
 
 	Ok(jwt_pair)

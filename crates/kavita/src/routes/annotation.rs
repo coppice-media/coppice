@@ -115,9 +115,13 @@ pub(crate) async fn load_annotations(
 		.collect())
 }
 
+/// The user's annotations, oldest first. A note anchored at a moment in an
+/// audiobook (`position_ms`) is left out: a Kavita annotation is anchored by
+/// an xPath and a page, and such a note has neither.
 fn annotation_query(user: &AuthUser) -> Select<media_annotation::Entity> {
 	media_annotation::Entity::find()
 		.filter(media_annotation::Column::UserId.eq(user.id.clone()))
+		.filter(media_annotation::Column::PositionMs.is_null())
 		.order_by_asc(media_annotation::Column::CreatedAt)
 		.order_by_asc(media_annotation::Column::Id)
 }
@@ -232,6 +236,22 @@ mod tests {
 			locator: Set(locator("//p[9]", "second")),
 			annotation_text: Set(None),
 			media_id: Set(files[1].id.clone()),
+			user_id: Set(user_row.id.clone()),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+		// A note anchored at a moment in an audiobook has no xPath or page to
+		// map onto, so the profile leaves it out.
+		models::entity::media_annotation::ActiveModel {
+			locator: Set(ReadiumLocator {
+				chapter_title: "Chapter One".to_owned(),
+				..Default::default()
+			}),
+			position_ms: Set(Some(754_000)),
+			annotation_text: Set(Some("a note at 12:34".to_owned())),
+			media_id: Set(files[0].id.clone()),
 			user_id: Set(user_row.id.clone()),
 			..Default::default()
 		}

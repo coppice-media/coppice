@@ -43,6 +43,9 @@ fn git_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "branch",
@@ -53,6 +56,9 @@ fn git_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "token",
@@ -63,6 +69,9 @@ fn git_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: true,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "author_name",
@@ -73,6 +82,9 @@ fn git_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "author_email",
@@ -83,6 +95,9 @@ fn git_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		// Git and Markdown deliberately share the format-v2 layout settings.
 		// Versionless rows remain on the old key/UUID path lane.
@@ -95,6 +110,9 @@ fn git_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "preset",
@@ -105,6 +123,9 @@ fn git_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "destination",
@@ -115,6 +136,9 @@ fn git_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "path_template",
@@ -125,6 +149,9 @@ fn git_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "body_template",
@@ -135,6 +162,9 @@ fn git_settings() -> Vec<SettingDefinition> {
 			required: false,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		base_url_setting(),
 	]

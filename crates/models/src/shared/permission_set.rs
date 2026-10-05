@@ -64,6 +64,7 @@ impl AssociatedPermission for UserPermission {
 	fn associated(&self) -> Vec<UserPermission> {
 		match self {
 			UserPermission::CreateBookClub => vec![UserPermission::AccessBookClub],
+			UserPermission::ShareBookClubReader => vec![UserPermission::AccessBookClub],
 			UserPermission::EmailerRead => vec![UserPermission::EmailSend],
 			UserPermission::EmailerCreate => vec![UserPermission::EmailerRead],
 			UserPermission::EmailerManage => {

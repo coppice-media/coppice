@@ -757,6 +757,190 @@ pub(crate) async fn authors(
 	}
 }
 
+/// How many entries abs-ref puts on each top list of the stats object
+/// (`LibraryController.js:980,985,988`).
+const STATS_TOP: usize = 10;
+
+/// `GET /api/libraries/{id}/stats`, abs-ref's book-library branch
+/// (`LibraryController.js:978-1012`), computed over the audible books this
+/// user can see rather than over every row of the library.
+///
+/// Lissen 1.12.9 pages its genre browser out of `genresWithCount`
+/// (`common/converter/LibraryStatsResponseConverter.kt`). abs-ref orders that
+/// list by count descending and leaves ties to SQLite
+/// (`libraryItemsBookFilters.js:1290-1305`); ties here are by genre, byte
+/// order, which is the `GROUP BY value` order SQLite yields them in.
+pub(crate) async fn stats(
+	backend: Backend,
+	Extension(user): User,
+	Path(library_id): Path<String>,
+) -> AbsResult<Json<LibraryStatsDto>> {
+	query::library(&**backend, &user, &library_id).await?;
+
+	#[derive(FromQueryResult)]
+	struct Row {
+		id: String,
+		name: String,
+		size: i64,
+		title: Option<String>,
+		genres: Option<String>,
+	}
+
+	let rows = query::audio_media(&user)
+		.filter(series::Column::LibraryId.eq(library_id.as_str()))
+		.select_only()
+		.column(media::Column::Id)
+		.column(media::Column::Name)
+		.column(media::Column::Size)
+		.column(media_metadata::Column::Title)
+		.column(media_metadata::Column::Genres)
+		.into_model::<Row>()
+		.all(backend.conn())
+		.await?;
+	let ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+	let audio = backend.audio_batch(&ids).await?;
+	// The title `book_metadata` serves for the same row.
+	let title = |row: &Row| row.title.clone().unwrap_or_else(|| row.name.clone());
+	let duration_ms = |row: &Row| audio.get(&row.id).map_or(0, |audio| audio.duration_ms);
+
+	let mut ranked = rows.iter().collect::<Vec<_>>();
+	ranked.sort_by(|left, right| {
+		right
+			.size
+			.cmp(&left.size)
+			.then_with(|| left.id.cmp(&right.id))
+	});
+	let largest_items = ranked
+		.iter()
+		.take(STATS_TOP)
+		.map(|row| StatsSizedItemDto {
+			id: row.id.clone(),
+			title: title(row),
+			size: row.size,
+		})
+		.collect();
+	ranked.sort_by(|left, right| {
+		duration_ms(right)
+			.cmp(&duration_ms(left))
+			.then_with(|| left.id.cmp(&right.id))
+	});
+	let longest_items = ranked
+		.iter()
+		.take(STATS_TOP)
+		.map(|row| StatsTimedItemDto {
+			id: row.id.clone(),
+			title: title(row),
+			duration: mapper::ms_to_secs(duration_ms(row)),
+		})
+		.collect();
+
+	let mut genre_counts: HashMap<String, i64> = HashMap::new();
+	for genre in rows
+		.iter()
+		.flat_map(|row| mapper::csv(row.genres.as_deref()))
+	{
+		*genre_counts.entry(genre).or_default() += 1;
+	}
+	let mut genres_with_count = genre_counts
+		.into_iter()
+		.map(|(genre, count)| StatsGenreDto { genre, count })
+		.collect::<Vec<_>>();
+	genres_with_count.sort_by(|left, right| {
+		right
+			.count
+			.cmp(&left.count)
+			.then_with(|| left.genre.cmp(&right.genre))
+	});
+
+	// `author_facts` is name-ordered and the sort is stable, so authors with
+	// the same count stay in name order.
+	let mut authors = author_facts(&**backend, &user, &library_id).await?;
+	let total_authors = authors.len() as i64;
+	authors.sort_by(|left, right| right.num_books.cmp(&left.num_books));
+	authors.truncate(STATS_TOP);
+	let names = authors
+		.iter()
+		.map(|fact| fact.name.clone())
+		.collect::<Vec<_>>();
+	let author_ids = backend.author_ids(&names).await?;
+	let authors_with_count = authors
+		.into_iter()
+		.map(|fact| StatsAuthorDto {
+			id: author_ids
+				.get(&fact.name)
+				.cloned()
+				.unwrap_or_else(|| fact.name.clone()),
+			name: fact.name,
+			count: fact.num_books,
+		})
+		.collect();
+
+	Ok(Json(LibraryStatsDto {
+		largest_items,
+		total_authors,
+		authors_with_count,
+		total_genres: genres_with_count.len() as i64,
+		genres_with_count,
+		total_items: rows.len() as i64,
+		longest_items,
+		total_size: rows.iter().map(|row| row.size).sum(),
+		total_duration: mapper::ms_to_secs(
+			audio.values().map(|audio| audio.duration_ms).sum(),
+		),
+		num_audio_tracks: audio.values().map(|audio| audio.tracks.len() as i64).sum(),
+	}))
+}
+
+/// abs-ref's `naturalSort`, `Intl.Collator(undefined, {numeric: true,
+/// sensitivity: 'base'})` (`LibraryController.js:13-15`): digit runs compare
+/// as numbers and case does not count. Accent folding is not reproduced;
+/// the raw name breaks the remaining ties so the order is total.
+fn compare_natural(left: &str, right: &str) -> std::cmp::Ordering {
+	alphanumeric_sort::compare_str(left.to_lowercase(), right.to_lowercase())
+		.then_with(|| left.cmp(right))
+}
+
+/// `GET /api/libraries/{id}/narrators` (`LibraryController.js:1110-1146`):
+/// every distinct `media_metadata.narrators` credit among the audible books
+/// this user can see, with its book count, in natural name order.
+pub(crate) async fn narrators(
+	backend: Backend,
+	Extension(user): User,
+	Path(library_id): Path<String>,
+) -> AbsResult<Json<LibraryNarratorsDto>> {
+	use base64::Engine;
+
+	query::library(&**backend, &user, &library_id).await?;
+
+	let credits = query::audio_media(&user)
+		.filter(series::Column::LibraryId.eq(library_id.as_str()))
+		.select_only()
+		.column(media_metadata::Column::Narrators)
+		.into_tuple::<Option<String>>()
+		.all(backend.conn())
+		.await?;
+	let mut counts: HashMap<String, i64> = HashMap::new();
+	for name in credits
+		.iter()
+		.flat_map(|credit| mapper::csv(credit.as_deref()))
+	{
+		*counts.entry(name).or_default() += 1;
+	}
+	let mut narrators = counts
+		.into_iter()
+		.map(|(name, num_books)| NarratorDto {
+			id: urlencoding::encode(
+				&base64::engine::general_purpose::STANDARD.encode(name.as_bytes()),
+			)
+			.into_owned(),
+			name,
+			num_books,
+		})
+		.collect::<Vec<_>>();
+	narrators.sort_by(|left, right| compare_natural(&left.name, &right.name));
+	Ok(Json(LibraryNarratorsDto { narrators }))
+}
+
 /// `GET /api/libraries/{id}/search`. Lissen searches titles and fans the
 /// author and series hits out into further requests
 /// (`library/LibraryAudiobookshelfChannel.kt:181-238`), so all three arrays

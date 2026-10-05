@@ -131,6 +131,24 @@ pub async fn chapters<C: ConnectionTrait>(
 		.await
 }
 
+/// The chapter containing a publication-relative offset, read with one
+/// indexed query rather than loading every mark: the database twin of
+/// [`AudioBook::chapter_at`]. `None` when the book has no chapters or the
+/// offset precedes the first mark.
+pub async fn chapter_at<C: ConnectionTrait>(
+	conn: &C,
+	media_id: &str,
+	position_ms: i64,
+) -> Result<Option<media_audio_chapter::Model>, DbErr> {
+	media_audio_chapter::Entity::find()
+		.filter(media_audio_chapter::Column::MediaId.eq(media_id))
+		.filter(media_audio_chapter::Column::StartMs.lte(position_ms))
+		.order_by_desc(media_audio_chapter::Column::StartMs)
+		.order_by_desc(media_audio_chapter::Column::Index)
+		.one(conn)
+		.await
+}
+
 /// The audio facts a probe produced, in the shape [`replace`] persists. The
 /// probe crate converts its own result into this so `models` never depends on
 /// the media crate.

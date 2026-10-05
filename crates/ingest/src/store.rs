@@ -21,6 +21,7 @@ use sea_orm::{
 	ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde_json::{json, Value};
+use stump_api_types::settings::SettingValues;
 use tokio::{fs, io::AsyncRead};
 use uuid::Uuid;
 
@@ -58,6 +59,8 @@ pub type QualityReportModel = ingest_quality_report::Model;
 pub type CandidateModel = ingest_metadata_candidate::Model;
 pub type ApplicationModel = ingest_metadata_application::Model;
 pub type PluginSettingModel = ingest_plugin_setting::Model;
+/// `ingest_plugin_settings.kind` of a quality-check row.
+pub const QUALITY_CHECK_SETTING_KIND: &str = "CHECK";
 
 /// What one analysis job runs against: a staged drop item, or an existing
 /// library media row (library-wide rework).  Persisted in the job's `plan`
@@ -1571,14 +1574,47 @@ impl IngestStore {
 			.map_err(IngestError::from)
 	}
 
+	/// Writes one plugin settings row: an update when `setting` came from a
+	/// stored row (`into_active_model`), an insert otherwise.
 	pub async fn set_plugin_settings(
 		&self,
 		setting: ingest_plugin_setting::ActiveModel,
 	) -> IngestResult<PluginSettingModel> {
-		setting
-			.insert(self.conn.as_ref())
-			.await
-			.map_err(IngestError::from)
+		let stored = if setting.id.is_unchanged() {
+			setting.update(self.conn.as_ref()).await
+		} else {
+			setting.insert(self.conn.as_ref()).await
+		};
+		stored.map_err(IngestError::from)
+	}
+
+	/// The server-wide quality-check settings `QualityRegistry::run_all`
+	/// overlays on each check's defaults, keyed by check id.
+	///
+	/// Analysis is not per-user, so only `CHECK` rows with neither a library
+	/// nor a user apply; legacy per-user `CHECK` rows are ignored. The row's
+	/// `enabled` column is authoritative and lands under the `enabled` key
+	/// every check reads.
+	pub async fn quality_check_settings(
+		&self,
+	) -> IngestResult<std::collections::BTreeMap<String, SettingValues>> {
+		let rows = ingest_plugin_setting::Entity::find()
+			.filter(ingest_plugin_setting::Column::Kind.eq(QUALITY_CHECK_SETTING_KIND))
+			.filter(ingest_plugin_setting::Column::LibraryId.is_null())
+			.filter(ingest_plugin_setting::Column::UserId.is_null())
+			.all(self.conn.as_ref())
+			.await?;
+		Ok(rows
+			.into_iter()
+			.map(|row| {
+				let mut values = match row.values {
+					Some(Value::Object(values)) => values.into_iter().collect(),
+					_ => SettingValues::new(),
+				};
+				values.insert("enabled".to_owned(), Value::Bool(row.enabled));
+				(row.plugin_id, values)
+			})
+			.collect())
 	}
 
 	pub async fn subscribe_progress(

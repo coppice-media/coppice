@@ -184,7 +184,9 @@ impl SeriesFilterStatementDto {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SeriesSortOptionDto {
+	#[serde(default = "default_client_sort_field")]
 	pub sort_field: SeriesSortField,
+	#[serde(default = "default_sort_ascending")]
 	pub is_ascending: bool,
 }
 
@@ -195,6 +197,16 @@ impl Default for SeriesSortOptionDto {
 			is_ascending: true,
 		}
 	}
+}
+
+// Older Kavita extension serializers omit these fields at their client defaults.
+// This differs from a missing/null sortOptions, which retains SortName ordering.
+fn default_client_sort_field() -> SeriesSortField {
+	SeriesSortField::AverageRating
+}
+
+fn default_sort_ascending() -> bool {
+	true
 }
 
 /// `SeriesFilterV2Dto`, the body of `POST /api/Series/all-v2` and `/v2` and
@@ -560,6 +572,37 @@ mod tests {
 			r#"{"statements":[{"comparison":99,"field":1,"value":"x"}]}"#
 		)
 		.is_err());
+	}
+
+	#[test]
+	fn body_defaults_omitted_extension_sort_fields() {
+		for (body, field, ascending) in [
+			(
+				r#"{"sortOptions":{}}"#,
+				SeriesSortField::AverageRating,
+				true,
+			),
+			(
+				r#"{"sortOptions":{"isAscending":false}}"#,
+				SeriesSortField::AverageRating,
+				false,
+			),
+			(
+				r#"{"sortOptions":{"sortField":4}}"#,
+				SeriesSortField::LastChapterAdded,
+				true,
+			),
+			(
+				r#"{"sortOptions":{"sortField":4,"isAscending":false}}"#,
+				SeriesSortField::LastChapterAdded,
+				false,
+			),
+		] {
+			let filter: SeriesFilterV2Dto = serde_json::from_str(body).unwrap();
+			let sort = filter.effective_sort();
+			assert_eq!(sort.sort_field, field, "{body}");
+			assert_eq!(sort.is_ascending, ascending, "{body}");
+		}
 	}
 
 	#[test]

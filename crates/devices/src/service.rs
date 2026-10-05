@@ -19,7 +19,7 @@ use models::{
 };
 use sea_orm::{
 	prelude::*, sea_query::OnConflict, sea_query::Query, ActiveValue::Set,
-	DatabaseConnection, QueryOrder, QuerySelect,
+	DatabaseConnection, DatabaseTransaction, QueryOrder, QuerySelect,
 };
 use serde_json::Value as JsonValue;
 use stump_api_types::RequestOrigin;
@@ -172,14 +172,41 @@ impl DeviceService {
 		name: Option<String>,
 		allow_komf_metadata_editing: bool,
 	) -> DeviceResult<(device::Model, IssuedCredential)> {
+		let txn = begin_write(&self.conn).await?;
+		let created = self
+			.create_device_in_transaction(
+				&txn,
+				user,
+				issuance,
+				kind,
+				name,
+				allow_komf_metadata_editing,
+			)
+			.await?;
+		txn.commit().await?;
+		Ok(created)
+	}
+
+	/// Creates a device and credential within a caller-owned transaction.
+	///
+	/// The caller must revalidate any authority whose lifetime is shorter than
+	/// the device credential, then commit before returning the issued secret.
+	pub async fn create_device_in_transaction(
+		&self,
+		txn: &DatabaseTransaction,
+		user: &AuthUser,
+		issuance: CredentialIssuance,
+		kind: DeviceKind,
+		name: Option<String>,
+		allow_komf_metadata_editing: bool,
+	) -> DeviceResult<(device::Model, IssuedCredential)> {
 		authorize_credential_issuance(kind, issuance)?;
 		authorize_creation(user, kind, allow_komf_metadata_editing)?;
 
-		let txn = begin_write(&self.conn).await?;
 		let name = match name {
 			Some(name) => {
 				let name = validate_name(&name)?;
-				if existing_names(&txn, &user.id).await?.contains(&name) {
+				if existing_names(txn, &user.id).await?.contains(&name) {
 					return Err(DeviceError::InvalidName(format!(
 						"a device named {name:?} already exists"
 					)));
@@ -188,7 +215,7 @@ impl DeviceService {
 			},
 			None => {
 				let base = format!("{}'s {}", user.username, kind_label(kind));
-				numbered_name(&existing_names(&txn, &user.id).await?, &base)
+				numbered_name(&existing_names(txn, &user.id).await?, &base)
 			},
 		};
 
@@ -198,10 +225,9 @@ impl DeviceService {
 			kind: Set(kind),
 			..Default::default()
 		}
-		.insert(&txn)
+		.insert(txn)
 		.await?;
-		let issued = mint_credential(&txn, &device, allow_komf_metadata_editing).await?;
-		txn.commit().await?;
+		let issued = mint_credential(txn, &device, allow_komf_metadata_editing).await?;
 
 		Ok((device, issued))
 	}

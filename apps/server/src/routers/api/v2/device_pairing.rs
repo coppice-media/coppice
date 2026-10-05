@@ -26,6 +26,7 @@ use axum::{
 	response::IntoResponse,
 };
 use chrono::{SecondsFormat, Utc};
+use models::txn::begin_write;
 use models::{
 	entity::{
 		device_pairing::{self, DevicePairingStatus},
@@ -34,7 +35,10 @@ use models::{
 	shared::enums::DeviceKind,
 };
 use rand::{rngs::OsRng, TryRngCore};
-use sea_orm::{prelude::*, ActiveValue::Set};
+use sea_orm::{
+	entity::prelude::DateTimeWithTimeZone, prelude::*, sea_query::Expr, ActiveValue::Set,
+	DatabaseConnection, IntoActiveModel,
+};
 use serde::{Deserialize, Serialize};
 use stump_api_types::RequestOrigin;
 use stump_core::{CoreEvent, DevicePaired, DevicePairingRequested};
@@ -398,32 +402,58 @@ async fn release_credential_claim(conn: &DatabaseConnection, pairing_id: &str) {
 	}
 }
 
-/// Mint the device and its credential for an approved pairing. Called by the
-/// poll that won [`claim_credential`]; on failure the claim is released so the
-/// device can retry on its next poll.
+/// Mint the device and its credential for an approved pairing. The winning
+/// claim is revalidated in the same write transaction that creates the
+/// credential, so account deletion either invalidates the claim first or
+/// serializes after and revokes the committed device.
 async fn issue_credential(
 	ctx: &AppState,
 	pairing: &device_pairing::Model,
 	origin: &RequestOrigin,
 ) -> APIResult<PairingStatusResponse> {
 	let conn = ctx.conn.as_ref();
+	let txn = begin_write(conn).await?;
+	let Some(pairing) = device_pairing::Entity::find_by_id(pairing.id.clone())
+		.one(&txn)
+		.await?
+	else {
+		return Err(APIError::NotFound("Pairing not found".to_string()));
+	};
+	if pairing.status != DevicePairingStatus::Approved || !pairing.credential_issued {
+		return Err(APIError::Forbidden(
+			"Pairing is no longer approved".to_string(),
+		));
+	}
 	let Some(user_id) = pairing.user_id.as_deref() else {
-		tracing::error!(pairing_id = %pairing.id, "Approved device pairing has no user");
-		release_credential_claim(conn, &pairing.id).await;
-		return Err(APIError::InternalServerError(
-			"Pairing is approved but not bound to a user".to_string(),
+		return Err(APIError::Forbidden(
+			"Pairing is no longer bound to an account".to_string(),
 		));
 	};
-
+	let _ = user::Entity::update_many()
+		.col_expr(
+			user::Column::DeletedAt,
+			sea_orm::sea_query::Expr::col(user::Column::DeletedAt).into(),
+		)
+		.filter(user::Column::Id.eq(user_id))
+		.filter(user::Column::DeletedAt.is_null())
+		.exec(&txn)
+		.await?;
 	let approver = LoginUser::find_by_id(user_id.to_string())
 		.filter(user::Column::DeletedAt.is_null())
 		.into_model::<LoginUser>()
-		.one(conn)
+		.one(&txn)
 		.await?;
 	let approver = match approver {
 		Some(approver) if !approver.is_locked => AuthUser::from(approver),
 		_ => {
-			release_credential_claim(conn, &pairing.id).await;
+			let mut active = pairing.into_active_model();
+			active.status = Set(DevicePairingStatus::Denied);
+			active.user_id = Set(None);
+			active.credential_issued = Set(false);
+			active.allow_komf_metadata_editing = Set(false);
+			active.approved_at = Set(None);
+			active.update(&txn).await?;
+			txn.commit().await?;
 			return Err(APIError::Forbidden(
 				"The approving account is no longer available".to_string(),
 			));
@@ -431,33 +461,27 @@ async fn issue_credential(
 	};
 
 	let devices = ctx.devices();
-	let minted = if pairing.kind == DeviceKind::Komelia {
-		devices
-			.create_komelia_device(
-				&approver,
-				stump_devices::CredentialIssuance::InteractiveSession,
-				pairing.name.clone(),
-				pairing.allow_komf_metadata_editing,
-			)
-			.await
-	} else {
-		devices
-			.create_device(
-				&approver,
-				stump_devices::CredentialIssuance::InteractiveSession,
-				pairing.kind,
-				pairing.name.clone(),
-			)
-			.await
-	};
-	let (device, credential) = match minted {
+	let (device, credential) = match devices
+		.create_device_in_transaction(
+			&txn,
+			&approver,
+			stump_devices::CredentialIssuance::InteractiveSession,
+			pairing.kind,
+			pairing.name.clone(),
+			pairing.kind == DeviceKind::Komelia && pairing.allow_komf_metadata_editing,
+		)
+		.await
+	{
 		Ok(minted) => minted,
 		Err(error) => {
 			tracing::error!(?error, pairing_id = %pairing.id, "Failed to mint device credential for pairing");
+			txn.rollback().await?;
 			release_credential_claim(conn, &pairing.id).await;
 			return Err(error.into());
 		},
 	};
+	txn.commit().await?;
+
 	// The secret is already minted; a failure to describe endpoints must not
 	// cost the device its one chance to receive it.
 	let endpoints = devices

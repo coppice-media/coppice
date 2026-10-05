@@ -6,6 +6,7 @@ use models::shared::readium::{
 	RWPMPositionLocationsBuilder, RWPMPositions, RWPMPositionsBuilder, RWPManifest,
 	RWPManifestBuilder,
 };
+use quick_xml::{events::Event, Reader};
 
 use crate::FileError;
 
@@ -37,7 +38,7 @@ impl ReadiumManifestGenerator {
 		let mut epub = EpubDoc::new(&self.epub_path)
 			.map_err(|e| FileError::EpubOpenError(e.to_string()))?;
 
-		let metadata = self.extract_metadata(&epub)?;
+		let metadata = self.extract_metadata(&mut epub)?;
 		let links = self.generate_links()?;
 		let reading_order = self.generate_reading_order(&mut epub)?;
 		let resources = self.generate_resources(&epub)?;
@@ -149,8 +150,18 @@ impl ReadiumManifestGenerator {
 
 	fn extract_metadata(
 		&self,
-		epub: &EpubDoc<BufReader<File>>,
+		epub: &mut EpubDoc<BufReader<File>>,
 	) -> Result<RWPMMetadata, FileError> {
+		let reading_progression = Self::spine_reading_progression(epub)
+			.or_else(|| {
+				epub.metadata
+					.iter()
+					.find(|metadata| metadata.property == "direction")
+					.and_then(|metadata| {
+						Self::normalized_reading_progression(&metadata.value)
+					})
+			})
+			.unwrap_or("ltr");
 		let get_first = |key: &str| -> Option<String> {
 			epub.metadata
 				.iter()
@@ -178,9 +189,7 @@ impl ReadiumManifestGenerator {
 			.title(title)
 			.author(get_all("creator"))
 			.number_of_pages(epub.get_num_chapters() as u32)
-			.reading_progression(
-				get_first("direction").unwrap_or_else(|| "ltr".to_string()),
-			);
+			.reading_progression(reading_progression);
 		if let Some(identifier) = get_first("identifier") {
 			builder.identifier(identifier);
 		}
@@ -199,6 +208,42 @@ impl ReadiumManifestGenerator {
 		builder
 			.build()
 			.map_err(|error| FileError::EpubReadError(error.to_string()))
+	}
+
+	/// Prefer the OPF spine's page order. `default` is unspecified, so metadata
+	/// direction remains a fallback for legacy books before the final LTR default.
+	fn spine_reading_progression(
+		epub: &mut EpubDoc<BufReader<File>>,
+	) -> Option<&'static str> {
+		let package = epub.get_resource_str_by_path(epub.root_file.clone())?;
+		let mut reader = Reader::from_str(&package);
+		loop {
+			match reader.read_event() {
+				Ok(Event::Start(element) | Event::Empty(element))
+					if element.local_name().as_ref() == b"spine" =>
+				{
+					let attribute = element
+						.try_get_attribute("page-progression-direction")
+						.ok()??;
+					let value =
+						attribute.decode_and_unescape_value(reader.decoder()).ok()?;
+					return Self::normalized_reading_progression(value.as_ref());
+				},
+				Ok(Event::Eof) | Err(_) => return None,
+				_ => {},
+			}
+		}
+	}
+
+	fn normalized_reading_progression(value: &str) -> Option<&'static str> {
+		let value = value.trim();
+		if value.eq_ignore_ascii_case("rtl") {
+			Some("rtl")
+		} else if value.eq_ignore_ascii_case("ltr") {
+			Some("ltr")
+		} else {
+			None
+		}
 	}
 
 	fn generate_links(&self) -> Result<Vec<RWPMLink>, FileError> {
@@ -461,6 +506,139 @@ mod tests {
 	use super::*;
 	use crate::tests::get_test_epub_path;
 	use models::shared::readium::RWPM_CONTEXT;
+	use std::io::Write;
+	use tempfile::NamedTempFile;
+	use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+	fn direction_epub(spine: &str, metadata_direction: Option<&str>) -> NamedTempFile {
+		let file = NamedTempFile::with_suffix(".epub").unwrap();
+		let mut archive = ZipWriter::new(file.as_file());
+		let options =
+			SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+		let direction = metadata_direction
+			.map(|value| format!(r#"<meta property="direction">{value}</meta>"#))
+			.unwrap_or_default();
+		let package = format!(
+			r#"<?xml version="1.0" encoding="UTF-8"?>
+			<package xmlns="http://www.idpf.org/2007/opf"
+				xmlns:opf="http://www.idpf.org/2007/opf"
+				xmlns:dc="http://purl.org/dc/elements/1.1/" version="3.0"
+				unique-identifier="book-id">
+				<metadata><dc:identifier id="book-id">direction-test</dc:identifier>
+					<dc:title>Direction test</dc:title><dc:language>en</dc:language>
+					{direction}</metadata>
+				<manifest><item id="chapter" href="chapter.xhtml"
+					media-type="application/xhtml+xml"/></manifest>
+				{spine}
+			</package>"#
+		);
+		for (path, contents) in [
+			("mimetype", "application/epub+zip"),
+			(
+				"META-INF/container.xml",
+				r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"
+					version="1.0"><rootfiles><rootfile full-path="OPS/nested/content.opf"
+					media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+			),
+			("OPS/nested/content.opf", package.as_str()),
+			(
+				"OPS/nested/chapter.xhtml",
+				r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter</title>
+					</head><body><p>Reading direction</p></body></html>"#,
+			),
+		] {
+			archive.start_file(path, options).unwrap();
+			archive.write_all(contents.as_bytes()).unwrap();
+		}
+		archive.finish().unwrap();
+		drop(archive);
+		file
+	}
+
+	#[test]
+	fn test_manifest_reading_progression_from_epub_spine() {
+		for (direction, expected) in [
+			("rtl", "rtl"),
+			("ltr", "ltr"),
+			("default", "rtl"),
+			(" RTL ", "rtl"),
+			(" LTR ", "ltr"),
+			("&#x72;tl", "rtl"),
+			("invalid", "rtl"),
+		] {
+			let spine = format!(
+				r#"<spine page-progression-direction="{direction}">
+					<itemref idref="chapter"/></spine>"#
+			);
+			let file = direction_epub(&spine, Some("rtl"));
+			let generator = ReadiumManifestGenerator::new(
+				file.path().to_str().unwrap(),
+				"https://example.com/api/v2/epub/book-1",
+			);
+			let manifest = generator.generate_manifest().unwrap();
+			assert_eq!(
+				manifest.metadata.reading_progression.as_deref(),
+				Some(expected),
+				"spine direction {direction}"
+			);
+		}
+	}
+
+	#[test]
+	fn test_manifest_reading_progression_missing_and_namespaced_spines() {
+		for (spine, expected) in [
+			(r#"<spine><itemref idref="chapter"/></spine>"#, "rtl"),
+			(
+				r#"<opf:spine page-progression-direction="rtl">
+					<opf:itemref idref="chapter"/></opf:spine>"#,
+				"rtl",
+			),
+			(r#"<spine page-progression-direction="rtl"/>"#, "rtl"),
+		] {
+			let file = direction_epub(spine, Some("rtl"));
+			let generator = ReadiumManifestGenerator::new(
+				file.path().to_str().unwrap(),
+				"https://example.com/api/v2/epub/book-1",
+			);
+			let manifest = generator.generate_manifest().unwrap();
+			assert_eq!(
+				manifest.metadata.reading_progression.as_deref(),
+				Some(expected)
+			);
+		}
+	}
+
+	#[test]
+	fn test_manifest_reading_progression_retains_legacy_fallback() {
+		for (direction, metadata_direction, expected) in [
+			(Some("default"), None, "ltr"),
+			(Some("default"), Some(" RTL "), "rtl"),
+			(Some("default"), Some(" LTR "), "ltr"),
+			(None, Some("RTL"), "rtl"),
+			(None, None, "ltr"),
+			(Some("invalid"), Some("rtl"), "rtl"),
+			(Some("invalid"), Some("default"), "ltr"),
+			(None, Some("unknown"), "ltr"),
+			(Some("rtl"), Some("ltr"), "rtl"),
+		] {
+			let attribute = direction
+				.map(|value| format!(r#" page-progression-direction="{value}""#))
+				.unwrap_or_default();
+			let spine =
+				format!(r#"<spine{attribute}><itemref idref="chapter"/></spine>"#);
+			let file = direction_epub(&spine, metadata_direction);
+			let generator = ReadiumManifestGenerator::new(
+				file.path().to_str().unwrap(),
+				"https://example.com/api/v2/epub/book-1",
+			);
+			let manifest = generator.generate_manifest().unwrap();
+			assert_eq!(
+				manifest.metadata.reading_progression.as_deref(),
+				Some(expected),
+				"spine {direction:?}, legacy metadata {metadata_direction:?}"
+			);
+		}
+	}
 
 	#[test]
 	fn test_rwpm_link_builder() {

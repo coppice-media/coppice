@@ -84,27 +84,20 @@ impl AudiobookNarratorsQuery {
 			return Ok(Vec::new());
 		}
 		let language = requested_language(language.as_deref());
-		let key = cache_key(
-			&provider,
-			&remote_id,
-			&language,
-			title.trim(),
-			authors.as_deref(),
-		);
-		if let Some(cached) = NARRATORS.get(&key) {
-			return Ok(cached.as_ref().clone());
-		}
-
-		let hardcover = if provider == "hardcover" {
+		// Resolve consent before consulting a cached merged result. A cached
+		// Hardcover edition must not be served after a user opts out or to
+		// another personal credential; a global provider keeps its own scope.
+		let (scope, hardcover) = if provider == "hardcover" {
 			match get_hardcover_provider(core, &auth.user.id).await {
-				Ok(provider) => provider.map(|(_, provider)| provider),
+				Ok(Some((scope, provider))) => (scope, Some(provider)),
+				Ok(None) => ("audible-only".to_owned(), None),
 				Err(error) => {
 					tracing::warn!(%error, "Hardcover unavailable for narrator lookup");
-					None
+					("audible-only".to_owned(), None)
 				},
 			}
 		} else {
-			None
+			(AUDIBLE_SCOPE.to_owned(), None)
 		};
 		Ok(narrator_options(
 			&NARRATORS,
@@ -113,6 +106,7 @@ impl AudiobookNarratorsQuery {
 				.map(|provider| provider as &dyn MetadataProvider),
 			audible_provider(),
 			&provider,
+			&scope,
 			&remote_id,
 			title.trim(),
 			authors.as_deref(),
@@ -159,12 +153,19 @@ pub(super) async fn narrator_options(
 	hardcover: Option<&dyn MetadataProvider>,
 	audible: &dyn MetadataProvider,
 	provider: &str,
+	credential_scope: &str,
 	remote_id: &str,
 	title: &str,
 	authors: Option<&str>,
 	language: &str,
 ) -> Vec<NarratorOption> {
-	let key = cache_key(provider, remote_id, language, title, authors);
+	let key = cache_key(
+		&format!("{provider}:{credential_scope}"),
+		remote_id,
+		language,
+		title,
+		authors,
+	);
 	if let Some(cached) = cache.get(&key) {
 		return cached.as_ref().clone();
 	}
@@ -662,6 +663,7 @@ mod tests {
 			Some(&hardcover),
 			&audible,
 			"hardcover",
+			"user:owner",
 			"52709",
 			"Project Hail Mary",
 			Some("Andy Weir, Someone Else"),
@@ -705,6 +707,7 @@ mod tests {
 			Some(&hardcover),
 			&audible,
 			"hardcover",
+			"user:owner",
 			"52709",
 			"Project Hail Mary",
 			Some("Andy Weir"),
@@ -715,6 +718,55 @@ mod tests {
 		assert_eq!(audible_server.requests().len(), 1, "served from cache");
 		assert_eq!(hardcover_server.requests().len(), 1, "served from cache");
 		assert_eq!(cache.len(), 1);
+	}
+
+	#[tokio::test]
+	async fn warmed_narrators_do_not_cross_consent_or_credential_scopes() {
+		let cache = TtlCache::new(NARRATOR_TTL, NARRATOR_CAPACITY);
+		let personal_server =
+			MockServer::spawn(vec![render_ok(&hardcover_editions_body())]);
+		let personal = hardcover_at(&personal_server);
+		let global_server =
+			MockServer::spawn(vec![render_ok(&hardcover_editions_body())]);
+		let global = hardcover_at(&global_server);
+		let audible_server = MockServer::spawn(vec![
+			render_ok(&audible_catalog_body()),
+			render_ok(&audible_catalog_body()),
+			render_ok(&audible_catalog_body()),
+		]);
+		let audible = AudibleClient::new().pointed_at(&audible_server.url);
+		async fn lookup(
+			cache: &NarratorCache,
+			hardcover: Option<&dyn MetadataProvider>,
+			audible: &dyn MetadataProvider,
+			scope: &str,
+		) -> Vec<NarratorOption> {
+			narrator_options(
+				cache,
+				hardcover,
+				audible,
+				"hardcover",
+				scope,
+				"52709",
+				"Project Hail Mary",
+				Some("Andy Weir"),
+				"en",
+			)
+			.await
+		}
+		let opted_in = lookup(&cache, Some(&personal), &audible, "user:owner").await;
+		assert!(opted_in[0].sources.contains(&"hardcover".to_owned()));
+		let opted_out = lookup(&cache, None, &audible, "audible-only").await;
+		assert_eq!(opted_out[0].sources, ["audible"]);
+		let globally_configured =
+			lookup(&cache, Some(&global), &audible, "server:1").await;
+		assert!(globally_configured[0]
+			.sources
+			.contains(&"hardcover".to_owned()));
+		assert_eq!(personal_server.requests().len(), 1);
+		assert_eq!(global_server.requests().len(), 1);
+		assert_eq!(audible_server.requests().len(), 3);
+		assert_eq!(cache.len(), 3);
 	}
 
 	#[tokio::test]
@@ -734,6 +786,7 @@ mod tests {
 			Some(&hardcover),
 			&audible,
 			"hardcover",
+			"user:owner",
 			"52709",
 			"Project Hail Mary",
 			None,
@@ -764,6 +817,7 @@ mod tests {
 			Some(&hardcover),
 			&audible,
 			"hardcover",
+			"user:owner",
 			"52709",
 			"Project Hail Mary",
 			None,
@@ -780,6 +834,7 @@ mod tests {
 			&cache,
 			None,
 			&audible,
+			AUDIBLE_SCOPE,
 			AUDIBLE_SCOPE,
 			"B08G9PRS1K",
 			"Project Hail Mary",
@@ -803,6 +858,7 @@ mod tests {
 			Some(&hardcover),
 			&audible,
 			"hardcover",
+			"user:owner",
 			"99",
 			"Artemis",
 			None,
@@ -834,6 +890,7 @@ mod tests {
 			None,
 			&audible,
 			AUDIBLE_SCOPE,
+			AUDIBLE_SCOPE,
 			"B08G9PRS1K",
 			"Project Hail Mary",
 			None,
@@ -849,6 +906,7 @@ mod tests {
 			&cache,
 			None,
 			&audible,
+			AUDIBLE_SCOPE,
 			AUDIBLE_SCOPE,
 			"B08G9PRS1K",
 			"Project Hail Mary",

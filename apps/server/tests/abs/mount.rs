@@ -18,7 +18,7 @@ async fn migrated_database() -> DatabaseConnection {
 	db
 }
 
-async fn app() -> TestApp {
+pub(super) async fn app() -> TestApp {
 	TestApp::with_parts(migrated_database().await, StumpConfig::debug()).await
 }
 

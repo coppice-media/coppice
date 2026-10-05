@@ -1606,7 +1606,7 @@ pub(crate) async fn resolve_work(
 	if matched_work_ids.len() > 1 {
 		return Err(LiseurSyncError::IdentityConflict(matched_work_ids));
 	}
-	let existing_work_id = matched_work_ids.first().cloned();
+	let mut existing_work_id = matched_work_ids.first().cloned();
 	let strong_match = identifiers.iter().any(|identifier| identifier.kind != "ta");
 	if let Some(work_id) = existing_work_id
 		.as_ref()
@@ -1619,9 +1619,6 @@ pub(crate) async fn resolve_work(
 		});
 	}
 
-	let work_id = existing_work_id
-		.clone()
-		.unwrap_or_else(|| Uuid::new_v4().to_string());
 	let now = now_string();
 	let title = request.title.unwrap_or_default();
 	let author = request.author.unwrap_or_default();
@@ -1679,6 +1676,40 @@ pub(crate) async fn resolve_work(
 		seen_edition_shas.insert(edition_sha);
 		editions.push(candidate);
 	}
+
+	// Identical bytes are the same edition. When no alias matched, an edition
+	// already recorded for these digests names the work; inventing a new one
+	// would only collide with that edition below and 409 forever.
+	if existing_work_id.is_none() {
+		let mut edition_work_ids = Vec::new();
+		for edition in &editions {
+			if let Some(row) = conn
+				.query_one(db_statement(
+					conn,
+					"SELECT work_id FROM liseur_sync_editions
+                     WHERE user_id = $1 AND edition_sha = $2",
+					vec![
+						user_id.to_owned().into(),
+						edition.edition_sha.clone().into(),
+					],
+				))
+				.await
+				.map_err(internal)?
+			{
+				edition_work_ids
+					.push(row.try_get::<String>("", "work_id").map_err(internal)?);
+			}
+		}
+		edition_work_ids.sort();
+		edition_work_ids.dedup();
+		if edition_work_ids.len() > 1 {
+			return Err(LiseurSyncError::IdentityConflict(edition_work_ids));
+		}
+		existing_work_id = edition_work_ids.into_iter().next();
+	}
+	let work_id = existing_work_id
+		.clone()
+		.unwrap_or_else(|| Uuid::new_v4().to_string());
 
 	let txn = begin_write(conn).await.map_err(internal)?;
 	let existing = txn
@@ -3058,6 +3089,7 @@ async fn project_annotation<C: ConnectionTrait>(
 		media_annotation::ActiveModel {
 			id: Set(projection_id.clone()),
 			locator: Set(locator),
+			position_ms: Set(None),
 			annotation_text: Set(
 				(!annotation.body.is_empty()).then(|| annotation.body.clone())
 			),
@@ -3185,7 +3217,11 @@ fn media_annotation_candidate(
 	row: &media_annotation::Model,
 	link: &NativeMediaLink,
 ) -> Result<Option<NativeAnnotationCandidate>, LiseurSyncError> {
+	// A note anchored at a moment in an audiobook (`position_ms`) has no
+	// Readium text anchor, and the Liseur protocol has no time anchor, so it
+	// is never mirrored; the empty `href` its locator carries already says so.
 	if is_liseur_sync_projection_id(&row.id)
+		|| row.position_ms.is_some()
 		|| row.locator.href.trim().is_empty()
 		|| row.locator.locations.is_none()
 	{
@@ -4591,6 +4627,22 @@ mod tests {
 		.insert(ctx.conn.as_ref())
 		.await
 		.unwrap();
+		// A note anchored at a moment in an audiobook is never mirrored, even
+		// with a locator that would pass for a Readium text anchor: Liseur has
+		// no time anchor to carry it.
+		let home_audio_note_id = "home-audio-note-1";
+		media_annotation::ActiveModel {
+			id: Set(home_audio_note_id.to_owned()),
+			locator: Set(home_locator.clone()),
+			position_ms: Set(Some(754_000)),
+			annotation_text: Set(Some("Home note at 12:34".to_owned())),
+			media_id: Set(media.id.clone()),
+			user_id: Set(user.id.clone()),
+			..Default::default()
+		}
+		.insert(ctx.conn.as_ref())
+		.await
+		.unwrap();
 		bookmark::ActiveModel {
 			id: Set(home_bookmark_id.to_owned()),
 			preview_content: Set(Some("Home bookmark preview".to_owned())),
@@ -4677,6 +4729,14 @@ mod tests {
 				"native annotation {id} should occur once in the work snapshot"
 			);
 		}
+		let native_audio_note_id =
+			stump_native_annotation_id("annotation", home_audio_note_id);
+		assert!(native_records
+			.iter()
+			.all(|record| record.id != native_audio_note_id));
+		assert!(work_snapshot
+			.iter()
+			.all(|record| record.id != native_audio_note_id));
 		assert!(
 			media_annotation::Entity::find_by_id(liseur_sync_projection_id(
 				&user.id,

@@ -170,6 +170,34 @@ async fn serve_local_file(path: &str, headers: HeaderMap) -> APIResult<Response>
 		},
 	}
 }
+
+/// Serve an already-authorized reader resource inline with the same range
+/// semantics as an ordinary media file. Capability routes perform their own
+/// visibility and path checks before calling this lower-level byte primitive.
+#[cfg(feature = "readium")]
+pub(crate) async fn serve_reader_file(
+	path: &str,
+	headers: HeaderMap,
+	content_type: &str,
+) -> APIResult<Response> {
+	let mut serve_req = Request::new(Body::empty());
+	*serve_req.headers_mut() = headers;
+	match ServeFile::new(path).try_call(serve_req).await {
+		Ok(response) => {
+			let mut response = response.map(Body::new);
+			response.headers_mut().insert(
+				header::CONTENT_TYPE,
+				content_type.parse().map_err(|_| {
+					APIError::InternalServerError(
+						"Invalid stored media content type".to_string(),
+					)
+				})?,
+			);
+			Ok(response)
+		},
+		Err(_) => Err(APIError::NotFound("Reader resource not found".to_string())),
+	}
+}
 async fn serve_provider_archive(
 	path: &str,
 	file_stem: &str,

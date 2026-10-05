@@ -233,11 +233,18 @@ async fn merge_local(
 	let row = query::media_for_user(backend, user, &item_id).await?;
 	let audio = backend.audio(&item_id).await?;
 
-	let duration_ms = body
-		.duration
-		.map(mapper::secs_to_ms)
+	// The server's own duration is authoritative: progression compares this
+	// upload with the head, and a client-reported duration (a shorter cached
+	// file, rounding) would inflate a stale position past a newer one.
+	let duration_ms = audio
+		.as_ref()
+		.map(|audio| audio.duration_ms)
 		.filter(|duration| *duration > 0)
-		.or_else(|| audio.as_ref().map(|audio| audio.duration_ms))
+		.or_else(|| {
+			body.duration
+				.map(mapper::secs_to_ms)
+				.filter(|duration| *duration > 0)
+		})
 		.unwrap_or(0);
 	let position_ms = body.current_time.map(mapper::secs_to_ms).unwrap_or(0);
 	let elapsed_ms = body

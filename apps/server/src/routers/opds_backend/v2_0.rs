@@ -8,10 +8,7 @@ use axum::{
 };
 use models::txn::begin_write;
 use models::{
-	domain::{
-		reading_progress::compute_page_based_percentage,
-		reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
-	},
+	domain::reading_state::{Position, ProtocolUpdate, Publication, SourceProtocol},
 	services::reading_progress::{upsert_reading_session, NormalizedProgression},
 };
 use models::{
@@ -21,7 +18,6 @@ use models::{
 	},
 	shared::enums::{DeviceKind, ReadingStatus},
 };
-use rust_decimal::prelude::ToPrimitive;
 use sea_orm::{
 	prelude::*, sea_query::Expr, ActiveValue::Set, Condition, Order, QueryOrder,
 	QueryTrait,
@@ -45,7 +41,7 @@ use stump_core::{
 			OPDSNavigationLink, OPDSNavigationLinkBuilder,
 		},
 		metadata::{OPDSMetadata, OPDSMetadataBuilder, OPDSPaginationMetadataBuilder},
-		progression::{OPDSProgression, OPDSProgressionInput},
+		progression::OPDSProgression,
 		publication::OPDSPublication,
 	},
 	Ctx,
@@ -259,7 +255,7 @@ fn page_url(base_url: &str, pagination: &OffsetPagination, page: u64) -> String 
 }
 
 /// The first and last page holding an item, in the numbering the request used.
-/// An empty feed is one empty page, so both bounds are the page being served.
+/// An empty feed has one canonical empty page at the first page number.
 fn page_bounds(pagination: &OffsetPagination, total_items: u64) -> (u64, u64) {
 	let first = u64::from(!pagination.zero_based.unwrap_or(false));
 	let pages = total_items.div_ceil(pagination.limit().max(1)).max(1);
@@ -293,7 +289,7 @@ fn pagination_links(
 		links.push(page_link(first, OPDSLinkRel::First)?);
 	}
 	if let Some(previous) = pagination.previous_page() {
-		links.push(page_link(previous, OPDSLinkRel::Previous)?);
+		links.push(page_link(previous.min(last), OPDSLinkRel::Previous)?);
 	}
 	if has_next {
 		links.push(page_link(pagination.next_page(), OPDSLinkRel::Next)?);
@@ -1021,12 +1017,12 @@ pub(crate) async fn browse_library_by_id(
 			&preview,
 			library_series_count,
 		)?)
-		// .links(vec![OPDSLink::Link(
-		// 	OPDSBaseLinkBuilder::default()
-		// 		.href(format!("/opds/v2.0/libraries/{id}/series"))
-		// 		.rel(OPDSLinkRel::SelfLink.item()) // TODO(OPDS-V2): Not self
-		// 		.build()?,
-		// )])
+		.links(paginated_group_links(
+			&link_finalizer,
+			&format!("{LIBRARIES_ROUTE}/{id}/series"),
+			&preview,
+			library_series_count,
+		)?)
 		.navigation(
 			library_series
 				.into_iter()
@@ -1046,6 +1042,59 @@ pub(crate) async fn browse_library_by_id(
 					.build()?,
 			)]))
 			.groups(vec![books_group, latest_books_group, series_group])
+			.build()?,
+	))
+}
+
+#[tracing::instrument(skip(ctx))]
+pub(crate) async fn browse_library_series(
+	State(ctx): State<AppState>,
+	HostExtractor(host): HostExtractor,
+	Path(id): Path<String>,
+	Query(pagination): Query<OffsetPagination>,
+	Extension(req): Extension<AuthContext>,
+) -> APIResult<Json<OPDSFeed>> {
+	let user = req.user();
+	let conn = ctx.conn.as_ref();
+	let library = library::Entity::find_for_user(&user)
+		.filter(library::Column::Id.eq(id.clone()))
+		.one(conn)
+		.await?
+		.ok_or(APIError::NotFound("Library not found".to_string()))?;
+	let series = series::Entity::find_for_user(&user)
+		.filter(series::Column::LibraryId.eq(id.clone()))
+		.limit(pagination.limit())
+		.offset(pagination.offset())
+		.order_by_asc(series::Column::Name)
+		.all(conn)
+		.await?;
+	let series_count = series::Entity::find_for_user(&user)
+		.filter(series::Column::LibraryId.eq(id.clone()))
+		.count(conn)
+		.await?;
+	let link_finalizer = OPDSLinkFinalizer::from(host);
+
+	Ok(Json(
+		OPDSFeedBuilder::default()
+			.metadata(page_metadata(
+				&format!("{} Series", library.name),
+				None,
+				&pagination,
+				series_count,
+			)?)
+			.links(paginated_feed_links(
+				&link_finalizer,
+				&format!("{LIBRARIES_ROUTE}/{id}/series"),
+				&pagination,
+				series_count,
+			)?)
+			.navigation(
+				series
+					.into_iter()
+					.map(OPDSNavigationLink::from)
+					.map(|link| link.finalize(&link_finalizer))
+					.collect::<Vec<OPDSNavigationLink>>(),
+			)
 			.build()?,
 	))
 }
@@ -1471,107 +1520,107 @@ pub(crate) async fn get_book_page(
 	Ok(ImageResponse::new(content_type, image_buffer))
 }
 
-// // .route("/chapter/{chapter}", get(get_epub_chapter))
-// // .route("/{root}/{resource}", get(get_epub_meta)),
-// // async fn get_book_resource() {}
-
-/// A route handler which returns the progression of a book for a user.
+/// The caller's current OPDS Progression 1.0 document, or an empty 200.
 #[tracing::instrument(skip(ctx))]
 pub(crate) async fn get_book_progression(
 	Path(id): Path<String>,
 	State(ctx): State<AppState>,
-	HostExtractor(host): HostExtractor,
 	Extension(req): Extension<AuthContext>,
-) -> APIResult<Json<OPDSProgression>> {
-	let link_finalizer = OPDSLinkFinalizer::from(host);
-
+) -> APIResult<axum::response::Response> {
 	let user = req.user();
 	let conn = ctx.conn.as_ref();
-	let Some(head) = reading_state::head(conn, &user.id, &id).await? else {
-		return Ok(Json(OPDSProgression::default()));
-	};
-	let Some(book) = OPDSProgressionBookRef::find_by_media_id(&id)
-		.one(conn)
-		.await?
-	else {
-		return Ok(Json(OPDSProgression::default()));
-	};
-	let device = match head.source_device_id.as_deref() {
-		Some(device_id) => device::Entity::find_by_id(device_id).one(conn).await?,
-		None => None,
-	};
-
-	Ok(Json(OPDSProgression::new(
-		OPDSProgressionEntity { head, device, book },
-		link_finalizer,
-	)?))
-}
-
-/// A route handler which updates the progression of a book for a user
-///
-/// Returns 204 on success, 409 Conflict if the timestamp is older.
-#[tracing::instrument(skip(ctx))]
-pub(crate) async fn update_book_progression(
-	Path(id): Path<String>,
-	State(ctx): State<AppState>,
-	Extension(req): Extension<AuthContext>,
-	Json(input): Json<OPDSProgressionInput>,
-) -> APIResult<axum::http::StatusCode> {
-	let user = req.user();
-	let conn = ctx.conn.as_ref();
-
 	let book = media::Entity::find_for_user(&user)
 		.filter(media::Column::Id.eq(id.clone()))
 		.one(conn)
 		.await?
 		.ok_or(APIError::NotFound("Book not found".to_string()))?;
+	let Some(head) = reading_state::head(conn, &user.id, &id).await? else {
+		return Ok(axum::http::StatusCode::OK.into_response());
+	};
+	let device = match head.source_device_id.as_deref() {
+		Some(device_id) => device::Entity::find_by_id(device_id).one(conn).await?,
+		None => None,
+	};
+	Ok(Json(OPDSProgression::new(OPDSProgressionEntity {
+		head,
+		device,
+		book: OPDSProgressionBookRef {
+			id: book.id,
+			extension: book.extension,
+			pages: book.pages,
+			analysis: None,
+		},
+	}))
+	.into_response())
+}
 
-	let device_id = if let Some(input_device) = input.device() {
-		let existing_device = device::Entity::find_by_id(&input_device.id)
-			.one(conn)
-			.await?;
-
-		if existing_device.is_none() {
-			// OPDS 2.0 progression clients register themselves by the device
-			// they report; the row is owned by the syncing user.
-			let new_device = device::ActiveModel {
-				id: Set(input_device.id.clone()),
-				user_id: Set(user.id.clone()),
-				name: Set(input_device.name.clone()),
-				kind: Set(DeviceKind::Opds),
-				last_seen_at: Set(Some(chrono::Utc::now().into())),
-				created_at: Set(chrono::Utc::now().into()),
-				..Default::default()
-			};
-			device::Entity::insert(new_device).exec(conn).await?;
+/// Apply an OPDS Progression 1.0 document through the unified reading state.
+///
+/// Creation returns 201, updates return 200, both with the resulting document.
+/// A losing timestamp is retained as provenance and returns 409.
+#[tracing::instrument(skip(ctx))]
+pub(crate) async fn update_book_progression(
+	Path(id): Path<String>,
+	State(ctx): State<AppState>,
+	Extension(req): Extension<AuthContext>,
+	Json(input): Json<OPDSProgression>,
+) -> APIResult<axum::response::Response> {
+	let user = req.user();
+	let conn = ctx.conn.as_ref();
+	let book = media::Entity::find_for_user(&user)
+		.filter(media::Column::Id.eq(id.clone()))
+		.one(conn)
+		.await?
+		.ok_or(APIError::NotFound("Book not found".to_string()))?;
+	if !input.progression.is_finite() || !(0.0..=1.0).contains(&input.progression) {
+		return Err(APIError::BadRequest(
+			"Progression must be between 0 and 1".to_string(),
+		));
+	}
+	let is_epub = book.extension.eq_ignore_ascii_case("epub");
+	let page = if is_epub { None } else { input.page() };
+	if let Some(page) = page {
+		if page < 1 || (book.pages > 0 && page > book.pages) {
+			return Err(APIError::BadRequest(format!(
+				"Page {page} is out of bounds (1-{})",
+				book.pages
+			)));
 		}
-
-		Some(input_device.id.clone())
+	}
+	let percentage = input.percentage_completed();
+	let did_complete = input.progression >= 1.0
+		|| page.is_some_and(|page| book.pages > 0 && page >= book.pages);
+	let locator = if is_epub { input.locator() } else { None };
+	let txn = begin_write(conn).await?;
+	let device = if let Some(input_device) = input.device() {
+		match device::Entity::find_by_id(&input_device.id)
+			.one(&txn)
+			.await?
+		{
+			Some(device) if device.user_id != user.id => {
+				return Err(APIError::Forbidden(
+					"The progression device belongs to another user".to_string(),
+				));
+			},
+			Some(device) => Some(device),
+			None => Some(
+				device::ActiveModel {
+					id: Set(input_device.id.clone()),
+					user_id: Set(user.id.clone()),
+					name: Set(input_device.name.clone()),
+					kind: Set(DeviceKind::Opds),
+					last_seen_at: Set(Some(chrono::Utc::now().into())),
+					created_at: Set(chrono::Utc::now().into()),
+					..Default::default()
+				}
+				.insert(&txn)
+				.await?,
+			),
+		}
 	} else {
 		None
 	};
-
-	let page = input.page();
-	let percentage = match page {
-		Some(p) => Some(compute_page_based_percentage(p, book.pages)),
-		None => input.percentage_completed(),
-	};
-	let did_complete = match page {
-		Some(p) => p >= book.pages,
-		None => percentage.unwrap_or_default() >= Decimal::new(1, 0),
-	};
-
-	match page {
-		Some(p) if book.pages > -1 && (p < 1 || p > book.pages) => {
-			return Err(APIError::BadRequest(format!(
-				"Page {} is out of bounds (1-{})",
-				p, book.pages
-			)));
-		},
-		_ => {},
-	}
-
-	let locator = input.locator();
+	let device_id = device.as_ref().map(|device| device.id.clone());
 	let progression = NormalizedProgression {
 		page,
 		locator: locator.clone(),
@@ -1581,26 +1630,21 @@ pub(crate) async fn update_book_progression(
 		device_id: device_id.clone(),
 		reset_elapsed_seconds: false,
 	};
+	let position = match (page, locator) {
+		(Some(page), _) => Position::Page(page),
+		(_, Some(locator)) => Position::Locator(locator),
+		_ => Position::None,
+	};
 	let head_update = ProtocolUpdate {
 		protocol: SourceProtocol::Opds,
 		device_id,
 		updated_at: Some(input.modified.to_utc()),
-		position: locator.map_or(Position::None, Position::Locator),
-		progression: input
-			.percentage_completed()
-			.and_then(|value| value.to_f64()),
+		position,
+		progression: Some(input.progression),
 		completed: did_complete.then_some(true),
 		raw_payload: serde_json::to_value(&input)
 			.map_err(|error| APIError::InternalServerError(error.to_string()))?,
 	};
-	let sync_summary = serde_json::json!({
-		"protocol": "opds",
-		"media_id": id.clone(),
-		"progression": percentage.as_ref().and_then(|value| value.to_f64()),
-		"device": input.device.clone(),
-	});
-
-	let txn = begin_write(conn).await?;
 	let applied =
 		reading_state::apply(&txn, &user.id, Publication::from(&book), head_update)
 			.await?;
@@ -1616,6 +1660,12 @@ pub(crate) async fn update_book_progression(
 		));
 	}
 	if let Some(api_key) = req.api_key.as_deref() {
+		let sync_summary = serde_json::json!({
+			"protocol": "opds",
+			"media_id": id,
+			"progression": input.progression,
+			"device": input.device,
+		});
 		if let Err(error) = ctx
 			.devices()
 			.touch(
@@ -1628,8 +1678,25 @@ pub(crate) async fn update_book_progression(
 			tracing::warn!(?error, "Failed to record the OPDS sync on its device");
 		}
 	}
-
-	Ok(axum::http::StatusCode::NO_CONTENT)
+	let status = if applied.head.revision == 1 {
+		axum::http::StatusCode::CREATED
+	} else {
+		axum::http::StatusCode::OK
+	};
+	Ok((
+		status,
+		Json(OPDSProgression::new(OPDSProgressionEntity {
+			head: applied.head,
+			device,
+			book: OPDSProgressionBookRef {
+				id: book.id,
+				extension: book.extension,
+				pages: book.pages,
+				analysis: None,
+			},
+		})),
+	)
+		.into_response())
 }
 
 /// A route handler which downloads a book for a user.

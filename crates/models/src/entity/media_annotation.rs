@@ -3,6 +3,12 @@ use sea_orm::{entity::prelude::*, ActiveValue};
 use crate::shared::readium::ReadiumLocator;
 
 /// A media annotation represents a highlight and/or note
+///
+/// A text or page annotation is anchored by its `locator`. A note made in an
+/// audiobook is anchored by `position_ms` instead: its `locator` names no
+/// resource (empty `href`, no `text`) and only carries the chapter title and
+/// whole-publication progression of that moment, so every lane that needs a
+/// Readium anchor sees an unanchored row.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[cfg_attr(feature = "graphql", derive(async_graphql::SimpleObject))]
 #[cfg_attr(feature = "graphql", graphql(name = "MediaAnnotationModel"))]
@@ -12,6 +18,10 @@ pub struct Model {
 	pub id: String,
 	#[sea_orm(column_type = "Json")]
 	pub locator: ReadiumLocator,
+	/// A note in an audiobook: milliseconds from the start of the
+	/// publication, the same unit as `bookmarks.position_ms` and
+	/// `reading_heads.position_ms`. Null for a text- or page-anchored row.
+	pub position_ms: Option<i64>,
 	#[sea_orm(column_type = "Text", nullable)]
 	pub annotation_text: Option<String>,
 	#[sea_orm(column_type = "Text", nullable)]

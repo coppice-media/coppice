@@ -37,7 +37,7 @@ use crate::{
 	},
 	mapper::{
 		map_bookmark_search_result, map_chapter, map_file, map_search_result, map_series,
-		name_id,
+		map_series_chapters, name_id,
 	},
 };
 
@@ -46,7 +46,8 @@ use super::{
 	library::{map_libraries, visible_libraries},
 	metadata::{distinct_values, people_sources, visible_tags},
 	query::{
-		book_library_ids, find_media, group_by_media, load_by_keys, select_series_keys,
+		book_library_ids, find_media, find_series_input, group_by_media, load_by_keys,
+		select_series_keys,
 	},
 	reader::load_bookmarks,
 	reading_list::list_reading_lists,
@@ -78,16 +79,28 @@ struct ChapterIdQuery {
 	chapter_id: Option<i32>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesIdQuery {
+	#[serde(default)]
+	series_id: Option<i32>,
+}
+
 pub(crate) fn routes<S>() -> Router<S>
 where
 	S: Clone + Send + Sync + 'static,
 {
 	let router = Router::<S>::new();
 	let router = route_ci(router, "/api/Search/search", get(search));
-	route_ci(
+	let router = route_ci(
 		router,
 		"/api/Search/series-for-chapter",
 		get(series_for_chapter),
+	);
+	route_ci(
+		router,
+		"/api/Search/chapters-by-series",
+		get(chapters_by_series),
 	)
 }
 
@@ -149,6 +162,28 @@ async fn series_for_chapter(
 		return Ok(StatusCode::NO_CONTENT.into_response());
 	};
 	Ok(Json(map_series(&input)).into_response())
+}
+
+/// `GET /api/Search/chapters-by-series?seriesId`: every chapter of a series,
+/// ordered by `sortOrder`, which development Kover syncs a series' chapter
+/// ids from. Kavita answers `401` when the caller cannot see the series,
+/// which is also the answer for an unknown id (or a missing one, bound as
+/// `0`): the lookup is the same visible-series query, so a series in a
+/// hidden library or above the user's age restriction is indistinguishable
+/// from none.
+async fn chapters_by_series(
+	Extension(ctx): Extension<Arc<dyn KavitaBackend>>,
+	Extension(auth): Extension<AuthContext>,
+	Query(query): Query<SeriesIdQuery>,
+) -> APIResult<Json<Vec<ChapterDto>>> {
+	let user = auth.user();
+	let Some(input) =
+		find_series_input(ctx.as_ref(), &user, query.series_id.unwrap_or_default())
+			.await?
+	else {
+		return Err(APIError::Unauthorized);
+	};
+	Ok(Json(map_series_chapters(&input)))
 }
 
 fn like(term: &str) -> String {
@@ -550,5 +585,144 @@ mod tests {
 		)
 		.await;
 		assert_eq!(status, StatusCode::NO_CONTENT);
+	}
+
+	/// `GET /api/Search/chapters-by-series`: three single-chapter volumes
+	/// sharing volume 1, so the volume order is a tie and the chapters come
+	/// back by `sortOrder` (`metadata.number`), not by name.
+	#[tokio::test]
+	async fn chapters_by_series_orders_by_sort_order_and_401s_unseen_series() {
+		let conn = db().await;
+		let user_row = fake_data::User::new("syncer").insert(&conn).await;
+		let user = auth_user(&user_row);
+		let library = library_of_type(&conn, StumpLibraryType::Comic).await;
+		let (series_row, files) = series_with_files(
+			&conn,
+			&library.id,
+			"ordered",
+			&[
+				("issue_a", "cbz", 10),
+				("issue_b", "cbz", 11),
+				("issue_c", "cbz", 12),
+			],
+		)
+		.await;
+		for (file, number) in files.iter().zip([3, 1, 2]) {
+			media_metadata::ActiveModel {
+				media_id: sea_orm::ActiveValue::Set(Some(file.id.clone())),
+				volume: sea_orm::ActiveValue::Set(Some(1)),
+				number: sea_orm::ActiveValue::Set(Some(Decimal::from(number))),
+				..Default::default()
+			}
+			.insert(&conn)
+			.await
+			.unwrap();
+		}
+		let hidden_library = library_of_type(&conn, StumpLibraryType::Comic).await;
+		let (hidden_series, _) = series_with_files(
+			&conn,
+			&hidden_library.id,
+			"hidden",
+			&[("secret", "cbz", 5)],
+		)
+		.await;
+		models::entity::library_exclusion::ActiveModel {
+			user_id: sea_orm::ActiveValue::Set(user_row.id.clone()),
+			library_id: sea_orm::ActiveValue::Set(hidden_library.id.clone()),
+			..Default::default()
+		}
+		.insert(&conn)
+		.await
+		.unwrap();
+		let backend = std::sync::Arc::new(TestBackend::new(conn));
+		let series_id =
+			KavitaIds::resolve(backend.conn(), IdKind::Series, &series_row.id)
+				.await
+				.unwrap();
+		let hidden_id =
+			KavitaIds::resolve(backend.conn(), IdKind::Series, &hidden_series.id)
+				.await
+				.unwrap();
+		let mut chapter_ids = Vec::new();
+		for file in &files {
+			chapter_ids.push(
+				KavitaIds::resolve(backend.conn(), IdKind::Media, &file.id)
+					.await
+					.unwrap(),
+			);
+		}
+
+		let (status, body) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Search/chapters-by-series?seriesId={series_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK, "{body}");
+		let chapters = body.as_array().unwrap();
+		let ids = chapters
+			.iter()
+			.map(|chapter| chapter["id"].as_i64().unwrap() as i32)
+			.collect::<Vec<_>>();
+		assert_eq!(ids, vec![chapter_ids[1], chapter_ids[2], chapter_ids[0]]);
+		let orders = chapters
+			.iter()
+			.map(|chapter| chapter["sortOrder"].as_f64().unwrap())
+			.collect::<Vec<_>>();
+		assert_eq!(orders, vec![1.0, 2.0, 3.0]);
+
+		// Exactly the DTO `/api/Series/chapter` serves for that chapter.
+		let (_, single) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/chapter?chapterId={}", chapter_ids[1]),
+			None,
+		)
+		.await;
+		assert_eq!(chapters[0], single);
+
+		// Case-insensitive twin; the volumes route lists the same chapters.
+		let (status, lower) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/search/chapters-by-series?seriesId={series_id}"),
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(lower.as_array().unwrap().len(), 3);
+		let (_, volumes) = request(
+			backend.clone(),
+			&user,
+			"GET",
+			&format!("/api/Series/volumes?seriesId={series_id}"),
+			None,
+		)
+		.await;
+		// Identical DTOs to the chapters `/api/Series/volumes` lists.
+		let mut volume_chapters = volumes
+			.as_array()
+			.unwrap()
+			.iter()
+			.flat_map(|volume| volume["chapters"].as_array().unwrap().clone())
+			.collect::<Vec<_>>();
+		volume_chapters
+			.sort_by_key(|chapter| chapter["sortOrder"].as_f64().unwrap() as i64);
+		assert_eq!(&volume_chapters, chapters);
+
+		// An unseen series is `401`: unknown, missing and hidden ids alike.
+		for uri in [
+			"/api/Search/chapters-by-series?seriesId=999999".to_owned(),
+			"/api/Search/chapters-by-series".to_owned(),
+			format!("/api/Search/chapters-by-series?seriesId={hidden_id}"),
+		] {
+			let (status, body) = request(backend.clone(), &user, "GET", &uri, None).await;
+			assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}: {body}");
+			assert_eq!(body, serde_json::Value::Null, "{uri}");
+		}
 	}
 }

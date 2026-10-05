@@ -5,6 +5,9 @@ edition = "2021"
 description = "Serde contract types and routes for the client-derived Audiobookshelf compatibility API"
 
 [dependencies]
+# abs-ref's narrator list is ordered by `naturalSort` (numeric runs compare
+# as numbers); the workspace already links this for page order.
+alphanumeric-sort.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 axum-extra = { version = "0.10.0", features = ["query"] }
@@ -22,6 +25,9 @@ stump_auth = { path = "../auth" }
 thiserror.workspace = true
 tracing = { workspace = true }
 uuid.workspace = true
+# abs-ref's filter `decode` runs `decodeURIComponent` before base64; the
+# workspace already links this, so the lock gains an edge and no package.
+urlencoding.workspace = true
 
 [dev-dependencies]
 parking_lot = "0.12"

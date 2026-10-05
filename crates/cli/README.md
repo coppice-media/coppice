@@ -33,9 +33,10 @@ and **no** migrations (`crates/migrations`, used here only by tests).
 | `tools plan` is always a dry run; `tools apply` plans first and returns `OperationFailed("refusing to apply N action(s) without --yes")` when `--yes` is absent | A mistyped path must never mutate a library; the refusal still prints the plan so the operator sees what was declined. | `src/commands/tools.rs:9-12`, `src/commands/tools.rs:97-117`, `src/commands/tools.rs:126-139` |
 | Every `tools` subcommand takes `--json`; with it the progress bar becomes `ProgressBar::hidden()` and only JSON reaches stdout | Scripted callers (the source-definitions publishing flow) parse stdout; a spinner would corrupt it. | `src/commands/tools.rs:275-296`, `docs/content/docs/developer/source-definitions.mdx:209-210` |
 | Human output is `prettytable` tables (`Tool`/`Description`, `Account`/`Status`); nested action detail is `--json`-only, tables get flattened `k=v` scalars | Tables stay readable for the common case without truncating machine data. | `src/commands/tools.rs:87-92`, `src/commands/account.rs:192-202`, `src/commands/tools.rs:255-273` |
-| Destructive flows gate on an explicit `Confirm`, and the OIDC migration prints a numbered summary plus a second `default(false)` confirm before touching anything | `set-journal-mode` and the account merges are irreversible; ownership transfer inside the migration is an extra opt-in. | `src/commands/system.rs:35-42`, `src/commands/account.rs:318-359` |
-| The OIDC migration runs entirely inside `models::txn::begin_write` | Reassigning ~15 user-owned tables then deleting the local account must not half-apply. | `src/commands/account.rs:387-397` |
-| Locking an account and any owner change also delete that user's `session` rows | A lock or demotion that leaves a live session in place would not take effect until expiry. | `src/commands/account.rs:110-120`, `src/commands/account.rs:257-270` |
+| Destructive flows gate on an explicit `Confirm`, and OIDC migration prints a numbered summary plus an owner-transfer confirmation (declining it cancels migration) | A local owner cannot be deleted without knowingly preserving ownership. | `src/commands/account.rs::migrate_oidc_account` |
+| OIDC migration discovers and transfers current SQLite user references inside one `BEGIN IMMEDIATE` transaction; ambiguous unique/non-FK data conflicts, duplicate Liseur sequences, or queued payloads block source deletion. Approved device pairings without an issued credential are denied and detached before transfer. | Dynamic FK/audit discovery covers new schema rows without a stale list, and one transactional attempt transfers each row once; owned data is never dropped to satisfy a destination collision. Unissued pairing nonces cannot gain the destination's permissions. | `src/commands/account.rs::user_references`, `transfer_references`, `test_oidc_current_data_survives_temporary_db_migration`, `test_oidc_conflict_rolls_back_temporary_db`, `test_oidc_migration_denies_unissued_pairing_before_owner_transfer` |
+| The local username, permissions and preferences replace the destination values; destination OIDC issuer/email/ID remain. Both login/refresh sessions and Liseur login/unknown-kind tokens are revoked; device registrations and explicitly typed durable source credentials remain. Age/lock/session limits take the stricter value. | Preserve existing account behavior without silently widening authorization or logging in with a stale security context; reject populated Liseur sequence namespaces and credential authority conflicts before deleting the source. | `src/commands/account.rs::do_migrate_oidc_account` |
+| Embedded user IDs in saved `jobs`/`worker_jobs` payloads block the migration until drained or archived; missing local preferences keep the OIDC row (or create defaults if neither exists) | Opaque queued work cannot be rewritten reliably and an account without preferences would otherwise break after removing the source. | `src/commands/account.rs::do_migrate_oidc_account`, `test_oidc_rejects_queued_user_id_outside_foreign_keys`, `test_oidc_preserves_destination_preferences_without_local_preferences` |
 | `stump_core` and `migrations` are pulled with `default-features = false` | Only `config` + `database::connect` (and `Migrator` in tests) are used: this drops `pdf`/`rar`/`watcher`/`apalis`/`ingest` and `sea-orm-migration/cli`, so the CLI does not drag the media stack or a second argument parser into every server build. | `Cargo.toml:11-13`, `core/Cargo.toml` `[features] default`, `crates/migrations/Cargo.toml` `[features] default = ["cli"]` |
 | `tools` handling is synchronous inside the async dispatcher | The tools are blocking filesystem work with no database; running them inline keeps ordering obvious. | `src/commands/mod.rs:31-33`, `src/commands/tools.rs:54-71` |
 
@@ -55,16 +56,17 @@ and **no** migrations (`crates/migrations`, used here only by tests).
 ## How to verify
 
 ```text
-cargo test -p cli                          # commands::account::tests::test_oidc_user_migration
+flock /tmp/coppice-cargo.lock env CARGO_BUILD_JOBS=1 cargo test -p cli --lib commands::account::tests::test_oidc_
+cargo run -p cli --bin cli-bin -- --config-dir <disposable-config-dir> account migrate-oidc --username <synthetic-local-user> --oidc-email <synthetic-oidc-email>
 cargo run -p cli --bin cli-bin -- --help
 cargo run -p cli --bin cli-bin -- tools list
 cargo run -p cli --bin cli-bin -- tools plan epub2cbz <path> --json
 cargo run -p stump_server -- account list
 ```
 
-`test_oidc_user_migration` migrates a fully populated local user against an
-in-memory SQLite database built by `Migrator::up`; the `tools plan` form is the
-dry run, so it is safe to run against a real library path.
+The OIDC tests include two disposable on-disk SQLite databases built by
+`Migrator::up`: a populated migration covering current user-scoped state and a
+conflicting destination proving full rollback. `tools plan` is a dry run.
 
 ## Deep docs
 

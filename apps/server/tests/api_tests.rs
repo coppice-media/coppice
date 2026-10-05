@@ -2,6 +2,8 @@
 mod abs;
 #[cfg(feature = "graphql")]
 mod audio;
+#[cfg(feature = "readium")]
+mod club_reader;
 mod common;
 #[cfg(feature = "graphql")]
 mod device_pairing;

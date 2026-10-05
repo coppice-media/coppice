@@ -173,6 +173,10 @@ pub struct AnnotationEntry {
 	pub page: Option<i32>,
 	/// Whole-publication progression in `0..=1`, when known
 	pub progression: Option<f64>,
+	/// Milliseconds from the start of the publication, for a moment in an
+	/// audiobook: a native note made while listening, or an audio bookmark.
+	/// Such an anchor has no `href`, `fragment`, or `page`.
+	pub position_ms: Option<i64>,
 	/// The selected passage: the locator's `text.highlight`, the liseur
 	/// `excerpt`, or a bookmark's preview text
 	pub excerpt: Option<String>,
@@ -472,6 +476,7 @@ impl AnnotationPage {
 						fragment: locator_fragment(&row.locator),
 						page: row.locator.locations.as_ref().and_then(|at| at.position),
 						progression: locator_progression(&row.locator),
+						position_ms: row.position_ms,
 						excerpt,
 						note: non_empty(row.annotation_text),
 						color: non_empty(row.color),
@@ -540,6 +545,7 @@ impl AnnotationPage {
 								.and_then(|at| at.position)
 						}),
 						progression: row.locator.as_ref().and_then(locator_progression),
+						position_ms: row.position_ms,
 						excerpt: non_empty(row.preview_content),
 						note: None,
 						color: None,
@@ -644,6 +650,8 @@ impl AnnotationPage {
 				progression: row
 					.progression
 					.or_else(|| anchor.as_ref().and_then(locator_progression)),
+				// The Liseur protocol has no time anchor.
+				position_ms: None,
 				excerpt: non_empty(row.excerpt),
 				note: non_empty(row.body),
 				color: non_empty(row.color),

@@ -608,9 +608,11 @@ impl LibraryMutation {
 	///
 	/// The server owner cannot be excluded from a library, nor can the user performing the action exclude
 	/// themselves.
-	#[graphql(
-		guard = "PermissionGuard::new(&[UserPermission::ManageLibrary, UserPermission::ReadUsers])"
-	)]
+	// Both: changing exclusions is library management, and choosing users
+	// requires reading them. `PermissionGuard::new` is any-of, which let a
+	// READ_USERS-only account rewrite exclusions.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)
+		.and(PermissionGuard::one(UserPermission::ReadUsers))")]
 	async fn update_library_excluded_users(
 		&self,
 		ctx: &Context<'_>,

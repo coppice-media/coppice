@@ -33,6 +33,9 @@ static DUPLICATE_PAGES_SETTINGS: std::sync::LazyLock<Vec<SettingDefinition>> =
 				required: false,
 				secret: false,
 				help_url: None,
+				minimum: None,
+				maximum: None,
+				options: &[],
 			},
 			SettingDefinition {
 				key: "minBooks",
@@ -44,6 +47,11 @@ static DUPLICATE_PAGES_SETTINGS: std::sync::LazyLock<Vec<SettingDefinition>> =
 				required: false,
 				secret: false,
 				help_url: None,
+				// `min_books` clamps anything lower to 1 at run time; refusing
+				// it up front keeps the stored value equal to the effective one.
+				minimum: Some(1.0),
+				maximum: None,
+				options: &[],
 			},
 		]
 	});

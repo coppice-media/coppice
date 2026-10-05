@@ -367,9 +367,10 @@ async fn delete_sync_sessions<B: KoboBackend>(
 	backend.delete_sync_sessions(auth).await
 }
 
+/// Tag routes are `/{api_key}/v1/library/tags/{tag_id}`; the key segment is
+/// already authenticated by middleware, so only `tag_id` is deserialized.
 #[derive(Debug, serde::Deserialize)]
 struct TagPath {
-	api_key: String,
 	tag_id: String,
 }
 
@@ -450,7 +451,7 @@ pub struct TagRenameRequest {
 async fn rename_tag<B: KoboBackend>(
 	Extension(backend): Extension<Arc<B>>,
 	Extension(auth): Extension<AuthContext>,
-	Path(TagPath { api_key: _, tag_id }): Path<TagPath>,
+	Path(TagPath { tag_id }): Path<TagPath>,
 	Json(request): Json<TagRenameRequest>,
 ) -> Result<StatusCode, B::Error> {
 	backend.rename_tag(auth, tag_id, request.name).await?;
@@ -460,7 +461,7 @@ async fn rename_tag<B: KoboBackend>(
 async fn delete_tag<B: KoboBackend>(
 	Extension(backend): Extension<Arc<B>>,
 	Extension(auth): Extension<AuthContext>,
-	Path(TagPath { api_key: _, tag_id }): Path<TagPath>,
+	Path(TagPath { tag_id }): Path<TagPath>,
 ) -> Result<StatusCode, B::Error> {
 	backend.delete_tag(auth, tag_id).await?;
 	Ok(StatusCode::OK)
@@ -469,7 +470,7 @@ async fn delete_tag<B: KoboBackend>(
 async fn add_tag_items<B: KoboBackend>(
 	Extension(backend): Extension<Arc<B>>,
 	Extension(auth): Extension<AuthContext>,
-	Path(TagPath { api_key: _, tag_id }): Path<TagPath>,
+	Path(TagPath { tag_id }): Path<TagPath>,
 	Json(request): Json<TagItemsRequest>,
 ) -> Result<StatusCode, B::Error> {
 	let revision_ids = known_revision_ids(&request.items);
@@ -479,7 +480,7 @@ async fn add_tag_items<B: KoboBackend>(
 async fn remove_tag_items<B: KoboBackend>(
 	Extension(backend): Extension<Arc<B>>,
 	Extension(auth): Extension<AuthContext>,
-	Path(TagPath { api_key: _, tag_id }): Path<TagPath>,
+	Path(TagPath { tag_id }): Path<TagPath>,
 	Json(request): Json<TagItemsRequest>,
 ) -> Result<StatusCode, B::Error> {
 	let revision_ids = known_revision_ids(&request.items);

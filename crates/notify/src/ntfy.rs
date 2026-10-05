@@ -31,6 +31,9 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			required: true,
 			secret: false,
 			help_url: Some("https://docs.ntfy.sh/config/"),
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "topic",
@@ -41,6 +44,9 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			required: true,
 			secret: false,
 			help_url: None,
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 		SettingDefinition {
 			key: "access_token",
@@ -51,6 +57,9 @@ static SETTINGS: LazyLock<Vec<SettingDefinition>> = LazyLock::new(|| {
 			required: false,
 			secret: true,
 			help_url: Some("https://docs.ntfy.sh/publish/#access-tokens"),
+			minimum: None,
+			maximum: None,
+			options: &[],
 		},
 	]
 });

@@ -5,8 +5,10 @@
 `stump_abs` is the Audiobookshelf compatibility **profile**: the root-mounted
 `/ping`, `/status`, `/login`, `/logout`, `/auth/refresh`, `/socket.io` and
 `/api/...` routes, DTOs, mapper, `abs_ids`/`abs_sessions` side tables and
-HS256 tokens that Lissen `1.12.5-release` and the official Audiobookshelf app
-`v0.14.1-beta` call. It reaches persistence through `AbsBackend` (a
+HS256 tokens that released Lissen `1.12.8-release` and the official
+Audiobookshelf app `v0.14.2-beta` call; the reviewed Lissen 1.12.9 development
+head additionally uses genre/narrator grouping. It reaches persistence
+through `AbsBackend` (a
 `DatabaseConnection` accessor plus async audio/cover/track/session/progress
 methods) and does **not** own authentication middleware, route mounting,
 the concrete backend (`apps/server/src/routers/abs_backend.rs`), podcasts,
@@ -18,8 +20,8 @@ from.
 | Reference                            | Pin                                                                                                                               | Used for                                                                                                                      |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Audiobookshelf (`abs-ref`) | v2.36.1 source commit [`4b67c170ce46fd6ba770dc55c189ca13fef89b02`](https://github.com/advplyr/audiobookshelf/commit/4b67c170ce46fd6ba770dc55c189ca13fef89b02); Linux/amd64 image `ghcr.io/advplyr/audiobookshelf:2.36.1@sha256:117b014d317634d66778d6da9174ce90d47449b252c9b7e8f3bce591502af6aa` | Source-only current source pin; 35 captures remain from 2.36.0. `/status` reports the pin. |
-| Lissen                               | `1.12.5-release` (`fd5c0417646bac3e011d4f4d3bb045286a9e5508`)                                                                     | Source-only route inventory: 26 Retrofit declarations, 4 podcast-only; historical `v1.11.22` replay is contract-only and no Lissen device run is recorded. |
-| Official Audiobookshelf Android app  | `v0.14.1-beta` (`2ac4de4d582dfaeb65b756a5e00e181207a867d7`)                                                                        | Source-only route inventory; the older `v0.14.0-beta` scoped device run is listed in the [client verification matrix](/docs/developer/client-verification). |
+| Lissen | `1.12.8-release` (`3abe10611661ef07b085a425c473e7bfc3f82167`); reviewed 1.12.9 development head `c03a4b36f78112b61696bb4b59d9c818fc8584fd` | Source-only route inventory and grouping contract; earlier `1.12.5-release` source and `v1.11.22` contract replay are historical, and no Lissen device run is recorded. |
+| Official Audiobookshelf Android app | `v0.14.2-beta` (`7014e04e6febcc5fd326e816a57b1065817e85f5`) | Source-only current route inventory; older `v0.14.0-beta` scoped emulator run is listed in the [client verification matrix](/docs/developer/client-verification). |
 
 The `2.36.0` JSON capture set and current `2.36.1` source pin are separate evidence records; neither establishes full ABS client parity.
 
@@ -64,6 +66,9 @@ The `2.36.0` JSON capture set and current `2.36.1` source pin are separate evide
 | A series filter is applied before a collapsed-series page selects its representative | ABS 2.36.1 fixes the filtered collapsed-series query; the current Android author page sends `filter=authors.<base64>&collapseseries=1`, and the selected row must be a filtered match while series metadata retains all members. | `src/routes/query.rs::item_page`; `src/routes/libraries.rs::items`; `src/routes/tests.rs::an_author_filter_combines_with_collapsed_series`; ABS 2.36.1 `libraryItemsBookFilters.js:312,317,585` |
 | Author details require at least one audiobook visible to the caller | ABS 2.36.1 adds a library-access guard to author endpoints; author ids are global writer names in Stump, so an author with no visible book answers 404 rather than exposing an empty author object. | `src/routes/items.rs::author`; `src/routes/tests.rs::author_details_require_a_visible_audiobook`; ABS 2.36.1 `AuthorController.js:430` |
 | The official author's tab gets the unpaginated `{authors:[…]}` envelope; Lissen gets `{results,…}` only when both `limit` and `page` are present | The pinned Android view calls authors without query parameters and decodes `authors`; Lissen decodes its paginated envelope. Both enumerate the same visible audiobook-backed authors and support ABS sort keys. | `src/routes/libraries.rs::authors`; `src/routes/tests.rs::library_authors_support_the_official_and_paginated_response_shapes`; ABS app `pages/bookshelf/authors.vue`; Lissen `ApiHandler.kt` |
+| `GET /api/libraries/{id}/stats` and `/narrators` are computed over the caller's visible audible books; stats sends every key of ABS's book branch, `genresWithCount` by count desc then genre, narrators `{id, name, numBooks}` in natural order with `id = encodeURIComponent(base64(name))` | Lissen dev `c03a4b36` pages genres out of `stats.genresWithCount` and narrators out of `/narrators`. ABS computes both library-wide; Coppice must not count rows the user cannot see. A hidden library answers 404 like every other library route. | `src/routes/libraries.rs::{stats,narrators}`; `apps/server/tests/abs/library_groups.rs`; ABS v2.37.1 `3563d494` `LibraryController.js:978-1012,1110-1146`, `libraryItemsBookFilters.js:1290-1352` |
+| `genres.`/`narrators.` item filters match one CSV value of `media_metadata.{genres,narrators}` exactly; every filter value is percent-decoded before base64, and unknown groups remain no filter | ABS `decode` is `Buffer.from(decodeURIComponent(v),'base64')` and matches `json_each(<group>).value = :filterValue`, case-sensitive. Lissen sends `java.util.Base64` padded standard base64. | `src/routes/query.rs::{ItemFilter::parse,library_media_ids_listing}`; `apps/server/tests/abs/library_groups.rs`; ABS v2.37.1 `libraryFilters.js:13-20,35-38`, `libraryItemsBookFilters.js:191-195` |
+| Offline merges (`/session/local`, `/local-all`) measure the uploaded position against the server's audio duration; the client's `duration` is only a fallback | Progression decides whether a stale upload may move the head; a client's cached duration (12 s vs the server's 30 s) inflated a stale 4 s position past a newer 9 s head and overwrote it | `src/routes/session.rs` (`merge_local`); `routes::tests::local_merge_measures_progress_with_the_server_duration`; komga-compat `specs/abs.hurl:584-593` |
 
 ## Layout
 
