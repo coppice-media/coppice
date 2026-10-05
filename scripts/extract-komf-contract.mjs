@@ -13,10 +13,11 @@ const SCHEMA = "coppice/komf-media-server-contract-v1";
 const KOMF_REPO = "Snd-R/komf";
 const KOMGA_CLIENT_REPO = "Snd-R/komga-client";
 const KOMF_CLIENT_RELEASE = {
-  ref: "3a0fb57028ef8235ea6bba6f399329da3c48b084",
-  version: "2.0.0",
+  ref: "d8a34e9df29ddaa6941c302df216812ee6d525e9",
+  version: "2.1.0",
 };
 const KOMELIA_REPO = "Snd-R/Komelia";
+const KOMELIA_RELEASE_VERSION = "0.20.0";
 const KOMF_CLIENT_REPO = KOMF_REPO;
 const KOMF_CLIENT_SOURCE_PREFIX = "komf-client/src/commonMain/kotlin/snd/komf/client/";
 const KOMF_API_MODEL_PREFIX = "komf-api-models/src/commonMain/kotlin/snd/komf/api/";
@@ -24,6 +25,20 @@ const KOMELIA_SOURCE_PREFIXES = [
   "komelia-komf-extension/content/src/wasmJsMain/kotlin/snd/komelia",
   "komelia-ui/src/commonMain/kotlin/snd/komelia/ui/settings/komf",
   "komelia-ui/src/commonMain/kotlin/snd/komelia/ui/dialogs/komf",
+];
+const KOMELIA_SOURCE_FILES = [
+  "komelia-app/shared/src/commonMain/kotlin/snd/komelia/AppModule.kt",
+  "komelia-app/androidApp/src/main/kotlin/snd/komelia/AndroidAppModule.kt",
+  "komelia-app/desktopApp/src/main/kotlin/snd/komelia/DesktopAppModule.kt",
+  "komelia-app/webApp/src/wasmJsMain/kotlin/snd/komelia/WasmAppModule.kt",
+  "komelia-domain/core/src/commonMain/kotlin/snd/komelia/api/RemoteSeriesApi.kt",
+  "komelia-domain/core/src/commonMain/kotlin/snd/komelia/api/RemoteCollectionsApi.kt",
+  "komelia-domain/core/src/commonMain/kotlin/snd/komelia/image/coil/CoilFetchers.kt",
+  "komelia-domain/core/src/commonMain/kotlin/snd/komelia/settings/KomfSettingsRepository.kt",
+  "komelia-infra/database/shared/src/commonMain/kotlin/snd/komelia/db/KomfSettings.kt",
+  "komelia-ui/src/commonMain/kotlin/snd/komelia/ui/ViewModelFactory.kt",
+  "komelia-ui/src/commonMain/kotlin/snd/komelia/ui/common/menus/bulk/SeriesBulkActions.kt",
+  "komelia-ui/src/commonMain/kotlin/snd/komelia/ui/series/SeriesViewModel.kt",
 ];
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_GITHUB_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -989,6 +1004,63 @@ function endpointsForSource(parsed, { includeClientMetadata = false } = {}) {
   return endpoints;
 }
 
+function appEndpointsForSource(parsed) {
+  if (!parsed.entry.path.endsWith("/MangaBakaRoutes.kt")) return endpointsForSource(parsed);
+  const declaration = parsed.classes.find((item) => item.name === "MangaBakaRoutes");
+  const registrations = declaration?.methods.filter((method) => method.name === "registerRoutes") ?? [];
+  if (registrations.length !== 1 || !registrations[0].body) {
+    throw new ContractError(`${parsed.entry.path}: expected one inline MangaBaka route registration`);
+  }
+  const endpoints = [];
+  const verbs = new Map([
+    ["route", "ROUTE"], ["get", "GET"], ["post", "POST"], ["delete", "DELETE"],
+    ["put", "PUT"], ["patch", "PATCH"], ["head", "HEAD"], ["options", "OPTIONS"], ["sse", "SSE"],
+  ]);
+  const visit = (start, end, prefix) => {
+    for (let index = start; index < end; index += 1) {
+      const verb = verbs.get(parsed.tokens[index].value);
+      if (!verb) continue;
+      const call = callAt(parsed.tokens, parsed.pairs, index);
+      const literal = call?.ranges.length === 1 ? valueFromRange(parsed.tokens, call.ranges[0]) : null;
+      if ((call && (call.ranges.length !== 1 || literal == null)) || (!call && verb === "ROUTE")) {
+        throw new ContractError(`${parsed.entry.path}:${parsed.tokens[index].line}: inline route path is not a single string literal`);
+      }
+      const bodyOpen = call ? call.closeIndex + 1 : index + 1;
+      const bodyClose = parsed.pairs.openToClose.get(bodyOpen);
+      if (parsed.tokens[bodyOpen]?.value !== "{" || bodyClose == null || bodyClose >= end) {
+        throw new ContractError(`${parsed.entry.path}:${parsed.tokens[index].line}: inline route has no balanced body`);
+      }
+      const path = literal == null ? "" : normalizePath(literal);
+      const endpoint = {
+        verb,
+        path,
+        sourcePath: parsed.entry.path,
+        line: parsed.tokens[index].line,
+        function: "registerRoutes",
+      };
+      if (verb === "ROUTE") {
+        endpoints.push(endpoint);
+        visit(bodyOpen + 1, bodyClose, pathJoin(prefix, path));
+      } else {
+        const handler = parsed.tokens[bodyOpen + 1];
+        const handlerCall = callAt(parsed.tokens, parsed.pairs, bodyOpen + 1);
+        if (!handlerCall || handlerCall.ranges.length !== 0 || handlerCall.closeIndex !== bodyClose - 1 ||
+            !declaration.methods.some((method) => method.name === handler?.value && method.body)) {
+          throw new ContractError(`${parsed.entry.path}:${parsed.tokens[index].line}: inline route is not a single named handler call`);
+        }
+        endpoints.push({ ...endpoint, function: handler.value, registrationPrefix: prefix });
+      }
+      index = bodyClose;
+    }
+  };
+  const body = registrations[0].body;
+  visit(body.startIndex, body.endIndex, "");
+  if (!endpoints.some((endpoint) => endpoint.verb !== "ROUTE")) {
+    throw new ContractError(`${parsed.entry.path}: inline registration contains no HTTP routes`);
+  }
+  return endpoints;
+}
+
 function noOpMethod(method, calls) {
   const bodyText = method.body?.text?.replace(/\/\/.*$/gm, "").trim() ?? "";
   if (!method.body) return false;
@@ -1320,7 +1392,7 @@ async function extractContract({ komfEntry, komeliaEntry, ref, expectedVersion }
   }).sort((left, right) => compareText(left.library, right.library));
 
   const appParsed = parsedSources.filter((item) => item.entry.path.startsWith("komf-app/"));
-  const appEndpoints = appParsed.flatMap(endpointsForSource);
+  const appEndpoints = appParsed.flatMap(appEndpointsForSource);
   const appSources = appParsed.map((parsed) => sourceRecord(KOMF_REPO, ref, parsed.entry, parsed.text));
   const appRoutes = appEndpoints
     .map((endpoint) => ({
@@ -1328,6 +1400,7 @@ async function extractContract({ komfEntry, komeliaEntry, ref, expectedVersion }
       line: endpoint.line,
       path: endpoint.path,
       sourcePath: endpoint.sourcePath,
+      ...(endpoint.registrationPrefix != null ? { registrationPrefix: endpoint.registrationPrefix } : {}),
       verb: endpoint.verb,
     }))
     .sort((left, right) => compareText(`${left.sourcePath}:${left.line}:${left.verb}:${left.path}`, `${right.sourcePath}:${right.line}:${right.verb}:${right.path}`));
@@ -1355,10 +1428,11 @@ async function extractContract({ komfEntry, komeliaEntry, ref, expectedVersion }
   const komeliaCatalogSource = await sourceText(KOMELIA_REPO, komeliaRef, komeliaCatalogEntry);
   const komeliaVersion = parseVersion(komeliaCatalogSource, komeliaCatalogEntry.path, "app-version");
   const bundledClientVersion = parseVersion(komeliaCatalogSource, komeliaCatalogEntry.path, "komf-client");
-  if (komeliaVersion !== "0.19.3" || bundledClientVersion !== komfClientVersion) {
-    throw new ContractError(`${KOMELIA_REPO}@${komeliaRef}: expected Komelia 0.19.3 with komf-client ${komfClientVersion}, source reports ${komeliaVersion} with ${bundledClientVersion}`);
+  const bundledKomgaClientVersion = parseVersion(komeliaCatalogSource, komeliaCatalogEntry.path, "komga-client");
+  if (komeliaVersion !== KOMELIA_RELEASE_VERSION || bundledClientVersion !== komfClientVersion || bundledKomgaClientVersion !== komgaClientVersion) {
+    throw new ContractError(`${KOMELIA_REPO}@${komeliaRef}: expected Komelia ${KOMELIA_RELEASE_VERSION} with komf-client ${komfClientVersion} and komga-client ${komgaClientVersion}, source reports ${komeliaVersion} with ${bundledClientVersion} and ${bundledKomgaClientVersion}`);
   }
-  const komeliaRepository = await fetchRepositorySubtrees(KOMELIA_REPO, komeliaRef, KOMELIA_SOURCE_PREFIXES, () => true);
+  const komeliaRepository = await fetchRepositorySubtrees(KOMELIA_REPO, komeliaRef, KOMELIA_SOURCE_PREFIXES, () => true, KOMELIA_SOURCE_FILES);
   const komeliaParsed = [];
   for (const entry of komeliaRepository.entries) {
     const text = await komeliaRepository.get(entry);
@@ -1368,6 +1442,8 @@ async function extractContract({ komfEntry, komeliaEntry, ref, expectedVersion }
   const komeliaFactory = komeliaParsed.find((parsed) => parsed.entry.path.endsWith("/KomfViewModelFactory.kt"));
   if (!komeliaFactory) throw new ContractError(`${KOMELIA_REPO}@${komeliaRef}: KomfViewModelFactory.kt was not selected`);
   const komeliaCallSitePaths = new Set([
+    ...KOMELIA_SOURCE_FILES,
+    `${KOMELIA_SOURCE_PREFIXES[0]}/Main.kt`,
     komeliaFactory.entry.path,
     ...clientOperations.flatMap((operation) => operation.callSites.map((callSite) => callSite.sourcePath)),
   ]);
@@ -1528,7 +1604,7 @@ async function repositoryFile(repo, ref, path) {
   return { ...entry, path };
 }
 
-async function fetchRepositorySubtrees(repo, ref, prefixes, includeEntry) {
+async function fetchRepositorySubtrees(repo, ref, prefixes, includeEntry, files = []) {
   const selected = new Map();
   for (const prefix of prefixes) {
     const directory = await repositoryTreeAtPath(repo, ref, prefix.split("/"));
@@ -1547,6 +1623,17 @@ async function fetchRepositorySubtrees(repo, ref, prefixes, includeEntry) {
       }
       selected.set(fullEntry.path, fullEntry);
     }
+  }
+  for (const path of files) {
+    const entry = await repositoryFile(repo, ref, path);
+    if (!path.endsWith(".kt") || !includeEntry(entry)) {
+      throw new ContractError(`${repo}@${ref}:${path}: explicit source file was excluded`);
+    }
+    const previous = selected.get(path);
+    if (previous && previous.sha !== entry.sha) {
+      throw new ContractError(`${repo}@${ref}:${path}: overlapping source selectors disagree`);
+    }
+    selected.set(path, entry);
   }
   const entries = [...selected.values()].sort((left, right) => compareText(left.path, right.path));
   if (entries.length === 0) throw new ContractError(`${repo}@${ref}: no Kotlin sources selected`);
@@ -1693,6 +1780,9 @@ function normalizeClientPath(path, className) {
   if (className === "KomfMediaServerClient") {
     normalized = normalized.replaceAll("$mediaServerApiPrefix", "/api/{mediaServer}/media-server");
   }
+  if (className === "KomfMangaBakaClient") {
+    normalized = normalized.replaceAll("$metadataApiPrefix", "/api/mangabaka");
+  }
   normalized = normalized
     .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\.value)?\}/g, "{$1}")
     .replace(/\$([A-Za-z_][A-Za-z0-9_]*)(?:\.value)?/g, "{$1}");
@@ -1701,6 +1791,8 @@ function normalizeClientPath(path, className) {
 
 function extractKomfClientOperations(parsedSources) {
   const operations = [];
+  const modelNames = new Set(parsedSources.filter((parsed) => parsed.entry.path.startsWith(KOMF_API_MODEL_PREFIX))
+    .flatMap((parsed) => parsed.classes.map((declaration) => declaration.name)));
   for (const parsed of parsedSources.filter((item) => item.entry.path.startsWith(KOMF_CLIENT_SOURCE_PREFIX))) {
     const endpoints = endpointsForSource(parsed);
     for (const endpoint of endpoints) {
@@ -1708,10 +1800,19 @@ function extractKomfClientOperations(parsedSources) {
       const classDeclaration = parsed.classes.find((candidate) => candidate.methods.some((method) => method.name === endpoint.function));
       const method = classDeclaration?.methods.find((candidate) => candidate.name === endpoint.function);
       if (!classDeclaration || !method) continue;
-      const bodyParameterName = method.body?.text.match(/\bsetBody\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)/)?.[1] ?? null;
-      const bodyParameter = bodyParameterName
-        ? method.parameters.find((parameter) => parameter.name === bodyParameterName)
-        : null;
+      const bodyCalls = method.body
+        ? extractCalls(parsed.text, parsed.tokens, parsed.pairs, method.body.startIndex, method.body.endIndex)
+          .filter((call) => call.name === "setBody")
+        : [];
+      if (bodyCalls.length > 1 || (bodyCalls.length === 1 && bodyCalls[0].args.length !== 1)) {
+        throw new ContractError(`${parsed.entry.path}:${method.line}: ambiguous client request body`);
+      }
+      const bodyExpression = bodyCalls[0]?.args[0] ?? null;
+      const bodyParameter = method.parameters.find((parameter) => parameter.name === bodyExpression);
+      const constructedBodyType = bodyExpression?.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*\(/)?.[1] ?? null;
+      if (bodyExpression != null && !bodyParameter && (!constructedBodyType || !modelNames.has(constructedBodyType))) {
+        throw new ContractError(`${parsed.entry.path}:${method.line}: unsupported client request body ${bodyExpression}`);
+      }
       operations.push({
         clientClass: classDeclaration.name,
         function: method.name,
@@ -1723,12 +1824,15 @@ function extractKomfClientOperations(parsedSources) {
           sourceLine: endpoint.line,
         },
         request: {
-          body: bodyParameter ? { name: bodyParameter.name, type: bodyParameter.type } : null,
+          body: bodyParameter ? { name: bodyParameter.name, type: bodyParameter.type }
+            : constructedBodyType ? { name: null, type: constructedBodyType, expression: bodyExpression } : null,
           parameters: method.parameters
-            .filter((parameter) => parameter.name !== bodyParameterName)
+            .filter((parameter) => parameter.name !== bodyParameter?.name)
             .map(({ name, type }) => ({ name, type })),
         },
         responseType: method.returnType,
+        optionalFeature: classDeclaration.name === "KomfMangaBakaClient" ||
+          (classDeclaration.name === "KomfConfigClient" && method.name === "updateMangaBakaDb") ? "MangaBaka" : null,
         sourcePath: parsed.entry.path,
         callSites: [],
       });
@@ -1747,37 +1851,83 @@ function extractKomfClientOperations(parsedSources) {
 function attachKomeliaCallSites(operations, parsedSources) {
   const byClassAndMethod = new Map(operations.map((operation) => [`${operation.clientClass}.${operation.function}`, operation]));
   const clientClassNames = new Set(operations.map((operation) => operation.clientClass));
-  for (const parsed of parsedSources) {
-    for (const classDeclaration of parsed.classes) {
-      const clientProperties = new Map(
-        Object.entries(classDeclaration.properties)
-          .filter(([, type]) => clientClassNames.has(type.replace(/\?$/, "")))
-          .map(([name, type]) => [name, type.replace(/\?$/, "")]),
-      );
-      for (const method of classDeclaration.methods) {
-        if (!method.body) continue;
-        for (let index = method.body.startIndex; index < method.body.endIndex; index += 1) {
-          const candidateOperations = operations.filter((operation) => operation.function === parsed.tokens[index].value);
-          if (candidateOperations.length === 0 || parsed.tokens[index + 1]?.value !== "(") continue;
-          const receiver = receiverFor(parsed.tokens, parsed.pairs, index) ?? "";
-          if (!receiver) continue;
-          const receiverName = receiver.split(".").at(-1);
-          const clientClass = clientProperties.get(receiverName) ?? null;
-          if (!clientClass) continue;
-          const operation = byClassAndMethod.get(`${clientClass}.${parsed.tokens[index].value}`);
-          if (!operation) continue;
-          operation.callSites.push({
-            callerClass: classDeclaration.name,
-            callerFunction: method.name,
-            line: parsed.tokens[index].line,
-            sourcePath: parsed.entry.path,
-          });
-        }
+  const clientType = (type) => {
+    const direct = normalizedType(type).replace(/\?$/, "");
+    if (clientClassNames.has(direct)) return direct;
+    const flowType = direct.match(/^Flow<([A-Za-z_][A-Za-z0-9_]*)\??>$/)?.[1];
+    return clientClassNames.has(flowType) ? flowType : null;
+  };
+  const attachMethod = (parsed, method, properties, callerClass) => {
+    if (!method.body) return;
+    const clientProperties = new Map(
+      [...Object.entries(properties), ...method.parameters.map(({ name, type }) => [name, type])]
+        .map(([name, type]) => [name, clientType(type)])
+        .filter(([, type]) => type != null),
+    );
+    for (let index = method.body.startIndex; index < method.body.endIndex; index += 1) {
+      if (parsed.tokens[index + 1]?.value !== "(") continue;
+      let receiverName = receiverFor(parsed.tokens, parsed.pairs, index)?.split(".").at(-1);
+      if (receiverName === "<expression>" && [".", "?."].includes(parsed.tokens[index - 1]?.value)) {
+        const receiverStart = expressionStartBefore(parsed.tokens, parsed.pairs, index - 1);
+        const receiver = parsed.tokens.slice(receiverStart, index - 1).map((token) => token.value);
+        if (receiver[0] === "this" && receiver[1] === ".") receiver.splice(0, 2);
+        if (receiver.length === 5 && receiver[1] === "." && receiver[2] === "first" &&
+            receiver[3] === "(" && receiver[4] === ")") receiverName = receiver[0];
       }
+      const clientClass = clientProperties.get(receiverName);
+      const operation = byClassAndMethod.get(`${clientClass}.${parsed.tokens[index].value}`);
+      if (!operation) continue;
+      operation.callSites.push({
+        callerClass,
+        callerFunction: method.name,
+        line: parsed.tokens[index].line,
+        sourcePath: parsed.entry.path,
+      });
+    }
+  };
+  for (const parsed of parsedSources) {
+    for (const declaration of parsed.classes) {
+      for (const method of declaration.methods) attachMethod(parsed, method, declaration.properties, declaration.name);
+      for (let index = declaration.bodyOpen + 1; index < declaration.bodyClose; index += 1) {
+        if (parsed.tokens[index].value !== "constructor" ||
+            directDepth(parsed.tokens, declaration.bodyOpen, declaration.bodyClose, index) !== 0) continue;
+        const call = callAt(parsed.tokens, parsed.pairs, index);
+        if (!call || call.closeIndex >= declaration.bodyClose) {
+          throw new ContractError(`${parsed.entry.path}:${parsed.tokens[index].line}: constructor parameters are not balanced`);
+        }
+        let end = call.closeIndex + 1;
+        if (parsed.tokens[end]?.value === ":") {
+          const delegation = callAt(parsed.tokens, parsed.pairs, end + 1);
+          if (!["this", "super"].includes(parsed.tokens[end + 1]?.value) || !delegation || delegation.closeIndex >= declaration.bodyClose) {
+            throw new ContractError(`${parsed.entry.path}:${parsed.tokens[index].line}: unsupported constructor delegation`);
+          }
+          end = delegation.closeIndex + 1;
+        }
+        if (parsed.tokens[end]?.value === "{") {
+          const bodyClose = parsed.pairs.openToClose.get(end);
+          if (bodyClose == null || bodyClose >= declaration.bodyClose) {
+            throw new ContractError(`${parsed.entry.path}:${parsed.tokens[index].line}: constructor body is not balanced`);
+          }
+          end = bodyClose + 1;
+        }
+        attachMethod(parsed, {
+          name: "constructor",
+          parameters: parseParameters(parsed.text, parsed.tokens, call.openIndex, call.closeIndex),
+          body: { startIndex: call.closeIndex + 1, endIndex: end },
+        }, declaration.properties, declaration.name);
+        index = end - 1;
+      }
+    }
+    for (let index = 0; index < parsed.tokens.length; index += 1) {
+      if (parsed.tokens[index].value !== "fun" ||
+          parsed.classes.some((declaration) => index > declaration.bodyOpen && index < declaration.bodyClose)) continue;
+      const method = parseFunction(parsed.text, parsed.tokens, parsed.pairs, index, parsed.tokens.length);
+      attachMethod(parsed, method, {}, null);
+      index = Math.max(index, method.endIndex - 1);
     }
   }
   for (const operation of operations) {
-    operation.callSites.sort((left, right) => compareText(`${left.sourcePath}:${left.line}`, `${right.sourcePath}:${right.line}`));
+    operation.callSites.sort((left, right) => compareText(left.sourcePath, right.sourcePath) || left.line - right.line);
   }
 }
 
@@ -1795,6 +1945,7 @@ function routeMounts(className) {
     case "ConfigRoutes":
     case "JobRoutes":
     case "NotificationRoutes":
+    case "MangaBakaRoutes":
       return [{ prefix: "/api", mediaServer: null }];
     case "MediaServerRoutes":
     case "MetadataRoutes":
@@ -1809,6 +1960,7 @@ function routeMounts(className) {
 }
 
 function routeLocalPrefix(className, route) {
+  if (route.registrationPrefix != null) return route.registrationPrefix;
   switch (className) {
     case "JobRoutes": return "/jobs";
     case "MediaServerRoutes": return "/media-server";
@@ -1859,8 +2011,55 @@ function appRouteContract(className, functionName) {
           status: 200,
           contentType: "application/jsonl",
           bodyType: "DownloadProgress",
-          framing: "one JSON object per newline; ProgressEvent continues, FinishedEvent/ErrorEvent ends",
+          framing: functionName === "updateMangaBakaDB"
+            ? "one JSON object per newline; ProgressEvent/HeartbeatEvent continue, FinishedEvent/ErrorEvent ends"
+            : "one JSON object per newline; ProgressEvent continues, FinishedEvent/ErrorEvent ends",
+          ...(functionName === "updateMangaBakaDB" ? { heartbeatSeconds: 15 } : {}),
         }],
+      };
+    case "MangaBakaRoutes.getLinked":
+      return {
+        requestBody: null,
+        queryParameters: [],
+        responses: [json("KomfMangaBakaLinkedSeries"), error(404, "KomfErrorResponse", "series is not linked")],
+      };
+    case "MangaBakaRoutes.batch":
+      return { requestBody: request("List<String>"), queryParameters: [], responses: [json("List<KomfMangaBakaLinkedSeries>")] };
+    case "MangaBakaRoutes.link":
+      return { requestBody: request("KomfMangaBakaLinkRequest"), queryParameters: [], responses: [empty(200)] };
+    case "MangaBakaRoutes.unlink":
+      return { requestBody: request("KomfMangaBakaUnlinkRequest"), queryParameters: [], responses: [empty(200)] };
+    case "MangaBakaRoutes.search":
+      return {
+        requestBody: null,
+        queryParameters: [{ name: "title", type: "String", required: true }],
+        responses: [json("List<KomfMangaBakaSeries>"), error(400, "KomfErrorResponse", "missing title query parameter")],
+      };
+    case "MangaBakaRoutes.match":
+      return { requestBody: null, queryParameters: [], responses: [empty(501)] };
+    case "MangaBakaRoutes.getTags":
+      return { requestBody: null, queryParameters: [], responses: [json("List<KomfMangaBakaTag>")] };
+    case "MangaBakaRoutes.getCover":
+      return {
+        requestBody: null,
+        queryParameters: [],
+        pathParameterTypes: { seriesId: "Long" },
+        responses: [
+          { status: 200, contentType: "upstream-content-type", bodyType: "ByteArray" },
+          error(404, null, "series has no x350 cover"),
+          error(400, "KomfErrorResponse", "seriesId is not a Long"),
+        ],
+      };
+    case "MangaBakaRoutes.getFavIcon":
+      return {
+        requestBody: null,
+        queryParameters: [{ name: "url", type: "String", required: true }],
+        responses: [
+          { status: 200, contentType: "upstream-content-type", bodyType: "ByteArray" },
+          error(400, null, "invalid URL"),
+          error(400, "KomfErrorResponse", "missing url query parameter"),
+          error(404, null, "favicon upstream returns 404"),
+        ],
       };
     case "JobRoutes.getJobsRoute":
       return {
@@ -2067,6 +2266,10 @@ function buildKomfHttpApi({
     ["MetadataRoutes", "/metadata"],
     ["NotificationRoutes", "/notifications/discord"],
     ["NotificationRoutes", "/notifications/apprise"],
+    ["MangaBakaRoutes", "/mangabaka"],
+    ["MangaBakaRoutes", "/series"],
+    ["MangaBakaRoutes", "/linked"],
+    ["MangaBakaRoutes", "/link"],
   ]) {
     if (!appRoutes.some((route) => route.verb === "ROUTE" && route.sourcePath.endsWith(`/${className}.kt`) && route.path === expectedPath)) {
       throw new ContractError(`Komf app route prefix ${expectedPath} for ${className} was not extracted`);
@@ -2083,7 +2286,7 @@ function buildKomfHttpApi({
         const path = pathJoin(mount.prefix, localPrefix, route.path);
         const pathParameters = [...path.matchAll(/\{([^}]+)\}/g)].map((match) => ({
           name: match[1],
-          type: match[1] === "jobId" ? "UUID" : "String",
+          type: contract.pathParameterTypes?.[match[1]] ?? (match[1] === "jobId" ? "UUID" : "String"),
           required: true,
         }));
         const verb = route.verb === "SSE" ? "GET" : route.verb;
@@ -2099,6 +2302,8 @@ function buildKomfHttpApi({
           sourcePath: route.sourcePath,
           mediaServer: mount.mediaServer,
           deprecated: className.startsWith("Deprecated"),
+          optionalFeature: className === "MangaBakaRoutes" ||
+            (className === "ConfigRoutes" && route.function === "updateMangaBakaDB") ? "MangaBaka" : null,
           transport: route.verb === "SSE" ? "sse" : "http",
           requestBody: contract.requestBody,
           pathParameters,
@@ -2125,6 +2330,10 @@ function buildKomfHttpApi({
   const baseUrl = clientFactoryText.match(/baseUrl:\s*\(\)\s*->\s*String\s*=\s*\{\s*"([^"]+)"\s*\}/)?.[1] ?? null;
   const authPluginInstalled = /\binstall\s*\(\s*Authentication\b/.test(serverModule.text);
   const authorizationConfigured = /\bAuthorization\b|\bBearer\b/.test(clientFactoryText);
+  const rawStringBaseNormalization = /defaultRequest\s*\{\s*url\(baseUrl\(\)\.trimEnd\('\/'\)\s*\+\s*"\/"\)\s*\}/.test(clientFactoryText);
+  if (!rawStringBaseNormalization) {
+    throw new ContractError("Komf client defaultRequest base URL construction has changed; review query preservation before extracting");
+  }
   const globalErrors = [
     { exception: "IllegalArgumentException", status: 400, bodyType: "KomfErrorResponse" },
     { exception: "IllegalStateException", status: 500, bodyType: "KomfErrorResponse" },
@@ -2141,6 +2350,8 @@ function buildKomfHttpApi({
       clientDefaultBaseUrl: baseUrl,
       clientDefaultCookieStorage: clientFactoryText.includes("AcceptAllCookiesStorage()") ? "AcceptAllCookiesStorage" : null,
       clientSupportsInjectedHttpClient: clientFactoryText.includes("fun ktor(ktor: HttpClient)"),
+      clientBaseUrlNormalization: "baseUrl().trimEnd('/') + \"/\"",
+      clientPreservesQueryBearingBaseUrl: false,
       evidence: [
         { repository: KOMF_REPO, path: serverModule.entry.path },
         { repository: KOMF_CLIENT_REPO, path: clientFactory.entry.path },
@@ -2275,7 +2486,18 @@ async function main() {
   console.log(`Komf contract is current at ${ref}`);
 }
 
-main().catch((error) => {
-  console.error(`extract-komf-contract: ${error.message}`);
-  process.exitCode = 1;
-});
+export {
+  appEndpointsForSource,
+  attachKomeliaCallSites,
+  extractKomfClientOperations,
+  parseDtoTypes,
+  parseSource,
+  stableJson,
+};
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`extract-komf-contract: ${error.message}`);
+    process.exitCode = 1;
+  });
+}

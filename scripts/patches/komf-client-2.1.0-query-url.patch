@@ -1,0 +1,27 @@
+Base: Snd-R/komf d8a34e9df29ddaa6941c302df216812ee6d525e9 (2.1.0)
+Source: https://github.com/Snd-R/komf/blob/d8a34e9df29ddaa6941c302df216812ee6d525e9/komf-client/src/commonMain/kotlin/snd/komf/client/KomfClientFactory.kt
+Purpose: Normalize only the encoded URL path; preserve query credentials and relative-route subpaths.
+
+diff --git a/komf-client/src/commonMain/kotlin/snd/komf/client/KomfClientFactory.kt b/komf-client/src/commonMain/kotlin/snd/komf/client/KomfClientFactory.kt
+--- a/komf-client/src/commonMain/kotlin/snd/komf/client/KomfClientFactory.kt
++++ b/komf-client/src/commonMain/kotlin/snd/komf/client/KomfClientFactory.kt
+@@ -7,6 +7,7 @@
+ import io.ktor.client.plugins.cookies.HttpCookies
+ import io.ktor.client.plugins.defaultRequest
+ import io.ktor.client.plugins.sse.SSE
++import io.ktor.http.encodedPath
+ import io.ktor.serialization.kotlinx.json.json
+ import kotlinx.serialization.json.Json
+ import snd.komf.api.MediaServer
+@@ -29,7 +30,10 @@
+     private val ktor: HttpClient = (builder.ktor ?: HttpClient()).config {
+         expectSuccess = true
+         builder.cookieStorage?.let { install(HttpCookies) { storage = it } }
+-        defaultRequest { url(baseUrl().trimEnd('/') + "/") }
++        defaultRequest {
++            url(baseUrl())
++            url.encodedPath = url.encodedPath.trimEnd('/') + "/"
++        }
+         install(ContentNegotiation) { json(json) }
+         install(SSE)
+     }

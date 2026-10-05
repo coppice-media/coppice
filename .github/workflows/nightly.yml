@@ -3,10 +3,10 @@ name: 'Coppice Nightly CI'
 on:
   pull_request:
     branches:
-      - nightly
+      - coppice/nightly
   push:
     branches:
-      - nightly
+      - coppice/nightly
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,7 +22,7 @@ jobs:
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
         with:
-          base: 'nightly'
+          base: 'coppice/nightly'
           filters: |
             apps: ./apps/**
             core: ./core/**
@@ -35,19 +35,17 @@ jobs:
 
   nightly-docker-build:
     needs: code-changes-check
-    if: "!contains(github.event.pull_request.head.ref, 'release/v') && needs.code-changes-check.outputs.changes != '[]'"
+    if: "needs.code-changes-check.outputs.changes != '[]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)"
     name: Build docker image
     runs-on: [self-hosted]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
-      # The build on PRs is only for linux/amd64 as a sanity check. The build on pushes will
-      # actually build all the supported platforms and push them to dockerhub
+      # Fork snapshots are build-only. Do not publish through the inherited
+      # upstream Docker Hub configuration.
       - name: Configure environment
         run: |
-          echo "LOAD=${{ github.event_name == 'pull_request' }}" >> $GITHUB_ENV
-          echo "PUSH=${{ github.event_name == 'push' }}" >> $GITHUB_ENV
 
           if [[ ${{ github.event_name }} == 'pull_request' ]]; then
             echo "ARCHS=amd64" >> $GITHUB_ENV
@@ -62,6 +60,6 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           tags: 'nightly'
           build-channel: 'nightly'
-          push: ${{ env.PUSH }}
+          push: 'false'
           archs: ${{ env.ARCHS }}
           discord-webhook: ${{ secrets.DISCORD_WEBHOOK }}

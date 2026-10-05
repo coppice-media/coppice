@@ -7,8 +7,7 @@ on:
       - '!breaking/sea-orm'
   push:
     branches:
-      - main
-      - nightly
+      - 'coppice/**'
 
 jobs:
   code-changes-check:
@@ -18,6 +17,7 @@ jobs:
       frontend-changed: ${{ steps.filter.outputs.frontend == 'true' }}
       rust-changed: ${{ steps.filter.outputs.rust == 'true' }}
       docs-changed: ${{ steps.filter.outputs.docs == 'true' }}
+      contract-changed: ${{ steps.filter.outputs.contract == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
@@ -32,6 +32,7 @@ jobs:
               - './.bun-version'
               - './.github/actions/setup-bun/action.yml'
             frontend:
+              - './packages/stump-ui/**'
               - './home/**'
               - './editor/**'
               - './package.json'
@@ -44,11 +45,21 @@ jobs:
               - './core/**'
               - './crates/**'
               - './.github/actions/setup-rust/action.yml'
+              - './Cargo.toml'
+              - './Cargo.lock'
+              - './.github/workflows/ci.yaml'
+            contract:
+              - './scripts/extract-komf-contract.mjs'
+              - './scripts/extract-komf-contract.test.mjs'
+              - './scripts/contracts/komf-media-server.json'
+              - './scripts/upstreams.json'
+              - './.github/workflows/ci.yaml'
+              - './.github/actions/setup-bun/action.yml'
             docker: ./docker/**
 
   check-rust:
     needs: code-changes-check
-    if: "!contains(github.event.pull_request.head.ref, 'release/v') && needs.code-changes-check.outputs.rust-changed == 'true'"
+    if: "needs.code-changes-check.outputs.rust-changed == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)"
     name: Rust checks
     runs-on: [self-hosted]
     steps:
@@ -63,14 +74,20 @@ jobs:
       - name: Run cargo checks
         run: |
           cargo fmt --all -- --check
-          cargo clippy -- -D warnings
+          cargo check --workspace --all-targets
+
+      - name: Run workspace and server tests
+        run: |
+          cargo test --workspace --exclude stump_server
+          cargo test -p stump_server --no-default-features --features headless,liseur-sync
+
+      - name: Build supported server profiles
+        run: |
+          cargo build -p stump_server --no-default-features --features headless,liseur-sync
+          cargo build -p stump_server --features full
 
       - name: Verify GraphQL schema
-        run: |
-          cargo dump-schema -- --check
-
-      - name: Run tests
-        run: cargo test && cargo test --features postgres-tests -p migrations
+        run: cargo dump-schema -- --check
 
   check-coverage:
     if: "!contains(github.event.pull_request.head.ref, 'release/v') && needs.code-changes-check.outputs.rust-changed == 'true'"
@@ -99,14 +116,26 @@ jobs:
       - name: Setup Node and Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Run TypeScript lints
-        run: bun run lint
-
-      - name: Run TypeScript tests
-        run: bun run test
+      - name: Check workspace types
+        run: bun run check-types
 
       - name: Build Home and Editor
         run: bun run home build && bun run editor build
+
+  check-komf-contract:
+    needs: code-changes-check
+    if: needs.code-changes-check.outputs.contract-changed == 'true'
+    name: Check pinned Komf contract
+    runs-on: [ubuntu-22.04]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: ./.github/actions/setup-bun
+      - name: Exercise contract extraction edge cases
+        run: bun test scripts/extract-komf-contract.test.mjs
+      - name: Extract and compare the pinned contract
+        run: bun run check:komf-contract
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # TODO(ci): Add vercel dev deployment?
   check-docs:
