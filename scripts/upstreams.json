@@ -5,25 +5,28 @@
 			"name": "Stump upstream",
 			"repo": "stumpapp/stump",
 			"branch": "nightly",
-			"baseline": { "kind": "commit", "value": "d3ce23b6788d3f8b6344d8bb2fbcc2068b91a52f" },
+			"baseline": { "kind": "commit", "value": "b988179fa50065bcc5fdc10a016d1739d25df5df" },
+			"note": "Reviewed 2026-10-05: this adds a new reading-timeline GraphQL feature; its EPUB positions blocking work is already offloaded in Coppice. No requested contract fix to port.",
 			"sourcePolicy": "inspect"
 		},
 		{
 			"name": "Liseur",
 			"repo": "chmouel/liseur",
-			"baseline": { "kind": "commit", "value": "f43d859c81dc6e9a00fca6a22fbae7767cd916d4" },
+			"baseline": { "kind": "commit", "value": "d29a046b97bc2ed8568f9531251bd75e2fae22a9" },
+			"reviewedRelease": "v0.20.0",
+			"note": "Reviewed 2026-10-05: 42 commits past v0.20.0 are mainly reader/backup features. WorkResolver now derives `dc` identifiers using identityAuthor when present; request shape is unchanged and Coppice already accepts `dc`. Insights remain optional and SSE remains unsupported.",
 			"sourcePolicy": "inspect"
 		},
 		{
 			"name": "Liseur Sync",
 			"repo": "chmouel/liseur-sync",
-			"baseline": { "kind": "commit", "value": "376951da193085e349cea97b09d346a629f062f6" },
+			"baseline": { "kind": "commit", "value": "d8000293ffcfa70072a3ce5543cc57e66e0d039b" },
 			"sourcePolicy": "inspect"
 		},
 		{
 			"name": "BookOrbit",
 			"repo": "bookorbit/bookorbit",
-			"baseline": { "kind": "release", "value": "v3.1.0" },
+			"baseline": { "kind": "release", "value": "v3.2.0" },
 			"sourcePolicy": "release-notes-only"
 		},
 		{
@@ -42,20 +45,21 @@
 		{
 			"name": "Komga",
 			"repo": "gotson/komga",
-			"baseline": { "kind": "commit", "value": "65981e600edb24944ffaae4818ff2716a5fa08dd" },
-			"reviewedRelease": "1.27.1",
+			"baseline": { "kind": "commit", "value": "c0cd2537260142c2448f9a5273964f7eca9ebb22" },
+			"reviewedRelease": "1.28.1",
+			"note": "Reviewed 2026-10-05: the only delta bumps gradle/actions in two CI workflows; no runtime or wire-contract change.",
 			"sourcePolicy": "inspect"
 		},
 		{
 			"name": "Calibre-Web Automated",
 			"repo": "crocodilestick/Calibre-Web-Automated",
-			"baseline": { "kind": "release", "value": "v4.0.6" },
+			"baseline": { "kind": "release", "value": "v4.0.8" },
 			"sourcePolicy": "release-notes-only"
 		},
 		{
 			"name": "Audiobookshelf",
 			"repo": "advplyr/audiobookshelf",
-			"baseline": { "kind": "release", "value": "v2.36.1" },
+			"baseline": { "kind": "release", "value": "v2.37.1" },
 			"sourcePolicy": "release-notes-only"
 		},
 		{
@@ -67,34 +71,38 @@
 		{
 			"name": "Komelia",
 			"repo": "Snd-R/Komelia",
-			"baseline": { "kind": "commit", "value": "3c5f501ef24b3acc239302adcab28efe0772c513" },
+			"baseline": { "kind": "commit", "value": "9216fd18dec1a36ba42e7d810f47210a41d8ad99" },
+			"reviewedRelease": "0.20.0",
 			"sourcePolicy": "inspect-contract-only"
 		},
 		{
 			"name": "Mihon",
 			"repo": "mihonapp/mihon",
-			"baseline": { "kind": "commit", "value": "f52d890e7f8a3c418ddab41f41d4b577bce0dc06" },
+			"baseline": { "kind": "commit", "value": "7aacaa349019ff42b8b05403d8beebe94c8f6dfc" },
+			"reviewedRelease": "v0.20.4",
+			"note": "no contract impact (2026-10-04 review)",
 			"sourcePolicy": "inspect-contract-only"
 		},
 		{
 			"name": "Komf",
 			"repo": "Snd-R/komf",
-			"baseline": { "kind": "commit", "value": "5ad67370c5da6d94372e7c51bff62dd75053ac64" },
-			"reviewedRelease": "2.0.1",
-			"note": "Held at tag 2.0.1 on purpose: Komelia 0.19.3 pairs with it and scripts/contracts/komf-media-server.json is extracted from this exact commit; later main commits were reviewed (through d73d8a23) with no media-server contract change. Re-pin only when Komf tags 2.1.0",
+			"baseline": { "kind": "commit", "value": "d8a34e9df29ddaa6941c302df216812ee6d525e9" },
+			"reviewedRelease": "2.1.0",
+			"note": "Pinned 2.1.0 media-server and HTTP inventory, including optional MangaBaka routes that Coppice does not implement. Komelia 0.20.0's query-bearing Komf URL needs the client URL-builder fix documented in komelia-komf.mdx; do not normalize corrupted credentials on the server.",
 			"sourcePolicy": "inspect-contract-only",
 			"dependencies": {
 				"komga-client": {
-					"baseline": { "kind": "commit", "value": "d6cfcb3b625b113b181529b335d2c2b11ad08076" },
-					"version": "0.10.3"
+					"baseline": { "kind": "commit", "value": "74412a6e27402b90f73672c7452f60a0f05914ca" },
+					"version": "0.11.0"
 				}
 			}
 		},
 		{
 			"name": "KOReader",
 			"repo": "koreader/koreader",
-			"baseline": { "kind": "commit", "value": "1c8724e90c5ceb8046b656ab7ec2e4f7a7706ce1" },
+			"baseline": { "kind": "commit", "value": "2ce49e115fc1bcc47b473078c549e59b3922105b" },
 			"reviewedRelease": "v2026.07.1",
+			"note": "Reviewed 2026-10-05: five commits change local reader/file-manager UI and state; no Stump protocol contract impact.",
 			"sourcePolicy": "inspect-contract-only"
 		},
 		{
@@ -102,6 +110,74 @@
 			"repo": "kovidgoyal/calibre",
 			"baseline": { "kind": "release", "value": "v9.15.0" },
 			"sourcePolicy": "release-notes-only"
+		},
+		{
+			"name": "komga-client",
+			"repo": "Snd-R/komga-client",
+			"baseline": { "kind": "commit", "value": "74412a6e27402b90f73672c7452f60a0f05914ca" },
+			"reviewedRelease": "0.11.0",
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Lissen",
+			"repo": "GrakovNe/lissen-android",
+			"baseline": { "kind": "commit", "value": "fc621c44463af58d9ffed10c2f19ca85cd127bb7" },
+			"reviewedRelease": "1.12.9-release",
+			"note": "Reviewed 2026-10-05: 1.12.9 release includes pause rewind and genre/narrator grouping (the server routes/filters are already implemented); newer head is player/UI, CI, and test work with no ABS wire-contract change.",
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Audiobookshelf app",
+			"repo": "advplyr/audiobookshelf-app",
+			"baseline": { "kind": "commit", "value": "7014e04e6febcc5fd326e816a57b1065817e85f5" },
+			"reviewedRelease": "v0.14.2-beta",
+			"includePrereleases": true,
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Kover",
+			"repo": "rodonisi/kover",
+			"baseline": { "kind": "commit", "value": "0b8bec0ca4630e17378713d8faeef3aef8c05a67" },
+			"reviewedRelease": "0.17.1",
+			"note": "Reviewed development head 0b8bec0ca4630e17378713d8faeef3aef8c05a67 (2026-10-04); its GET /api/Search/chapters-by-series sync call is implemented. Latest release remains 0.17.1 (c80778bb8ac297930458b66cd0f9a9c2ca3e555f).",
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Turnleaf",
+			"repo": "sgerner/turnleaf",
+			"baseline": { "kind": "commit", "value": "56176e8a3270b9bf13073133f52754b0ca7615e6" },
+			"reviewedRelease": "v0.3.4+125",
+			"note": "no contract impact (2026-10-04 review)",
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Kamigura",
+			"repo": "KamiguraApp/Kamigura",
+			"baseline": { "kind": "commit", "value": "6b6a68b4178387267b26d30f1868a338b2172e08" },
+			"reviewedRelease": "v0.24",
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Kavita extension",
+			"repo": "Kareadita/tach-extension",
+			"branch": "master",
+			"baseline": { "kind": "commit", "value": "47eea1d6321b234c1ef1c65fbfbcd4a17a3ae258" },
+			"reviewedRelease": "v1.4.24",
+			"note": "Source master pin includes explicit sort defaults. Release v1.4.24 resolves to artifact-branch commit 84c021d65362508737113cf884d4356b81ce2438; source review is not APK verification.",
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Kamare",
+			"repo": "fpammer/kamare.koplugin",
+			"baseline": { "kind": "commit", "value": "b85ab0a81d4a36780659629a6a421914253aff6b" },
+			"reviewedRelease": "v0.9.21",
+			"sourcePolicy": "inspect-contract-only"
+		},
+		{
+			"name": "Inkita",
+			"repo": "dom-53/Inkita",
+			"baseline": { "kind": "commit", "value": "67c1f4a991117e941fefaf6f042c961cab711d99" },
+			"sourcePolicy": "inspect-contract-only"
 		}
 	]
 }

@@ -36,9 +36,9 @@ for (const entry of manifest.repositories) {
     const repository = github(`repos/${entry.repo}`);
     const branch = entry.branch ?? repository.default_branch;
     const head = github(`repos/${entry.repo}/commits/${branch}`);
-    const release = github(`repos/${entry.repo}/releases/latest`, {
-      optional: true,
-    });
+    const release = entry.includePrereleases
+      ? github(`repos/${entry.repo}/releases?per_page=10`).find((release) => !release.draft) ?? null
+      : github(`repos/${entry.repo}/releases/latest`, { optional: true });
     const row = {
       name: entry.name,
       repo: entry.repo,
@@ -47,6 +47,7 @@ for (const entry of manifest.repositories) {
       headDate: head.commit.committer?.date ?? head.commit.author?.date ?? null,
       latestRelease: release?.tag_name ?? null,
       releaseDate: release?.published_at ?? null,
+      reviewedRelease: entry.reviewedRelease ?? (entry.baseline?.kind === "release" ? entry.baseline.value : null),
       sourcePolicy: entry.sourcePolicy,
       baseline: entry.baseline ?? null,
       status: "unbaselined",
@@ -54,6 +55,11 @@ for (const entry of manifest.repositories) {
       url: `https://github.com/${entry.repo}`,
     };
 
+    row.releaseStatus = !row.reviewedRelease
+      ? "unreviewed"
+      : !row.latestRelease
+        ? "unpublished"
+        : row.latestRelease === row.reviewedRelease ? "current" : "changed";
     if (entry.baseline?.kind === "commit") {
       const comparison = github(
         `repos/${entry.repo}/compare/${entry.baseline.value}...${head.sha}`,
@@ -103,7 +109,9 @@ if (emitJson) {
     return [
       row.name,
       row.head?.slice(0, 8) ?? "-",
-      row.latestRelease ?? "-",
+      row.releaseStatus === "changed"
+        ? `${row.reviewedRelease} -> ${row.latestRelease}`
+        : row.latestRelease ?? "-",
       delta,
       row.sourcePolicy,
     ];
@@ -119,9 +127,9 @@ if (emitJson) {
   for (const row of rows) console.log(format(row));
   console.log("\nChanged/error details:");
   for (const row of results.filter((item) =>
-    ["ahead", "diverged", "changed", "error", "unbaselined"].includes(item.status),
+    ["ahead", "diverged", "changed", "error", "unbaselined"].includes(item.status) || item.releaseStatus === "changed",
   )) {
-    console.log(`- ${row.name}: ${row.url}${row.error ? ` (${row.error})` : ""}`);
+    console.log(`- ${row.name}: ${row.url}${row.releaseStatus === "changed" ? `; release ${row.reviewedRelease} -> ${row.latestRelease}` : ""}${row.error ? ` (${row.error})` : ""}`);
   }
 }
 

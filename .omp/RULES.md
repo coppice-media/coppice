@@ -27,6 +27,7 @@
 ## Evidence, upstream, and validation
 
 - Local working-tree docs need no pins until this fork is committed; external client/repository pins are immutable. Use pinned clients, not Komga OpenAPI alone, for client-facing contracts.
+- Coppice is MIT. For upstreams marked `release-notes-only` in `scripts/upstreams.json` (GPL projects such as Kavita, Audiobookshelf, Calibre-Web), read only the wire contract (routes, parameters, field names, status codes, ordering, encodings) and cite it; never port their logic or code.
 - Follow `.github/CONTRIBUTING.md` for upstream contributions. The assistant MAY commit and push only branches under `coppice/*` to this fork's existing `origin` when the user explicitly authorizes that commit and push in the current conversation. Never force-push, rewrite published history, change remotes, push secrets, or push directly to upstream/protected branches.
 - The only definition of green is the exact gate and post-build replay in `.omp/PROJECT_STATE.md`; never claim an unrun command or smoke result.
 

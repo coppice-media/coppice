@@ -19,10 +19,30 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
 
 ## Working tree
 
-- Branch `coppice/nightly`; commit `47a9c61c` ("Coppice: MAM Bridge
-  acquisition, fast unified search with Audible and narrators, lazy
-  thumbnails, Liseur v0.19 and UI rework", 2026-09-25) is pushed on top of
-  `29115590` (2026-09-23). It deletes the legacy React/Vite, Expo, desktop,
+- 2026-10-05: branch `coppice/client-updates-2026-10-04` (base
+  `origin/coppice/nightly` = `057d2da8`) holds all 2026-10-04/05 work in five
+  path-grouped commits: Rust server (`86169e4d`), JS workspaces (`ff97d2e9`),
+  Komf contract tooling and CI (`48140fc7`), docs (`e326cfba`), and this OMP
+  state plus upstream review records. Code content equals the 2026-10-05
+  gate-green tree.
+- Stump's upstream reading timeline (`b988179f`) is not adopted. Do not port
+  its `session_id` FK migration; if it is wanted, derive session events at
+  query time from `reading_sessions` (which already has readthroughs, elapsed
+  time, and Liseur/Kobo projections). See `.omp/NEXT_STEPS.md`.
+- The pre-review `bun run check:upstreams` on 2026-10-05 showed Stump +1,
+  Liseur +42, KOReader +5, Lissen +5 (release 1.12.9), and Komga +1; all
+  other tracked heads/releases were at their prior baselines. Reviewed each
+  delta: Stump adds a reading-timeline feature while its EPUB positions
+  offload is already present; Liseur's `WorkResolver` derives the existing
+  `dc` identifier using `identityAuthor` when available (Coppice already
+  accepts `dc`); KOReader changes are local UI/state; Lissen changes are
+  player/UI/CI/test work; Komga's sole change is a Gradle action version in
+  CI. No contract-relevant change needs porting. Review baselines are recorded
+  in `scripts/upstreams.json`; the post-review check reported zero commit
+  delta for those five repositories. No upstream pull or merge was done.
+- Historical 2026-09-25 baseline: `coppice/nightly` commit `47a9c61c`
+  (MAM acquisition and UI rework), pushed on top of `29115590`
+  (2026-09-23). It deletes the legacy React/Vite, Expo, desktop,
   and web packages (`packages/{browser,components,client,sdk,i18n,graphql}`,
   `apps/{expo,desktop,web}`) — removed, not frozen — and adds MAM acquisition
   through the separate MAM Bridge sidecar, split unified search, narrator
@@ -49,9 +69,9 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
   repository. `nickelcoppice/`, `koreader-coppice/`, and
   `stump-mihon-extension/` are independent Git repositories; create/publish
   each only after repository-specific user confirmation. `koreader-coppice/`
-  is public as `coppice-media/koreader-coppice` (`main`, `ddbcdde`,
-  2026-09-25). `komga-compat/` is private local evidence, not a publishable
-  repository.
+  is public as `coppice-media/koreader-coppice` (`main`, `35a1d5b`,
+  2026-09-26; earlier publication `ddbcdde` was 2026-09-25).
+  `komga-compat/` is private local evidence, not a publishable repository.
 - `stump-sources/` stays local-only with no remote. Do not publish or link its
   derived site list. Remote source definitions and Cloudflare-challenged sites
   are deferred until a browser-worker authentication design and a
@@ -67,6 +87,11 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
   `bun run check:upstreams`. `scripts/upstreams.json` records reviewed commits
   or releases plus the licence/source policy; `scripts/check-upstreams.mjs`
   uses authenticated `gh api` calls and prints compare/release links.
+- Optional stack links remain planned in Coppice; the sibling shared metadata
+  crate is not yet a dependency here. Its cutover needs a CI-fetchable pinned
+  source and publication authorization. See `integration-architecture.mdx`
+  “Optional stack links” and `.omp/NEXT_STEPS.md` “Remaining-work index”;
+  preserve solo operation and do not move folders, secrets, or user data.
 - Scanner implementation belongs to `crates/scanner`, and watcher
   implementation belongs to `crates/watcher`. The removed upstream
   `core/src/scan` duplicates are not an ownership location.
@@ -89,6 +114,80 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
   source-linked workspace packages resolve transitive dependencies from the
   wrong package boundary and fails on `esm-env`, `devalue`, query-core,
   `runed`, or `svelte-toolbelt`.
+
+## Documentation reconciliation (2026-10-04)
+
+- Reconciled compatibility/provider guides, crate READMEs, roadmap, and handoff
+  files with the October working tree. Completed fixes are not pending work;
+  historical client/device evidence stays dated. Optional stack links remain
+  planned. Remaining source risks live in `.omp/NEXT_STEPS.md`.
+- Fixed the docs runtime: Fumadocs core/UI aligned at `16.10.3`, last-modified
+  metadata passed to the renderer, unused legacy wrappers removed, formatter
+  stylesheet paths corrected, and a single correctly targeted GitHub edit
+  anchor replacing invalid nested anchors.
+- Scoped gate passed using **Bun 1.4.1** via `bunx bun@1.4.1`:
+  root `bunx bun@1.4.1 install --frozen-lockfile --ignore-scripts` (no changes);
+  root `bunx bun@1.4.1 x prettier --check prettier.config.js docs/package.json docs/src/lib/shared.ts docs/src/lib/source.ts 'docs/src/routes/docs/$.tsx'`;
+  from `docs/`, `bunx bun@1.4.1 run types:check && bunx bun@1.4.1 run build`.
+- Internal page-link audit: **88 pages, 401 `/docs/...` links, zero missing
+  page targets**. This is not an external-link or fragment-anchor audit.
+- Production preview smoke: **13 distinct pages**, expected headings/content
+  and fork edit URLs, Markdown endpoint `200`, no browser page errors.
+  Windows installation tabs selected the visible Windows download panel;
+  mobile guest-reader TOC opened/closed and exposed section links.
+  Desktop `1440×1000` and mobile `390×844` screenshots were captured.
+- Screenshot review passed for desktop and settled mobile. The initial mobile
+  capture caught a TOC-label transition; no persistent overlap remained.
+- Existing binary CLI inventory smoke: `account --help`, `system --help`,
+  and `tools --help` exited successfully without changing account data.
+- Docs-only verification; the full application gate and server replay below
+  were **not rerun**. No new physical-device or live-proxy evidence.
+
+## Priority-1 safety work (2026-10-05)
+
+- Hardcover personal search and narrator lookup require `use_for_metadata`;
+  caches are credential/consent scoped. Manual sync imports the authenticated
+  user's complete paged `reading_journals` quote set as provenance; optional
+  local progress requires valid non-future source time and an explicit fraction
+  newer than the local head. No outbound write or fabricated EPUB locator.
+- Live read-only verification: the fixture database contains one configured
+  personal connection (`use_for_metadata=1`, `import_journals=0`), no enabled
+  global Hardcover provider. The PAT was decrypted only inside the temporary
+  process and never printed. Live `reading_journals` introspection and the
+  exact `me.id` selection query returned HTTP 200 with no GraphQL errors; the
+  selected user ID was deliberately nonexistent and returned no rows. No
+  consent toggle changed and no real journal rows were fetched or imported.
+- Disposable runtime evidence (isolated `/tmp` DB): the OIDC CLI transferred one
+  reading head, one Hardcover connection, and one Liseur annotation to the
+  surviving account; the local source disappeared and both session tables
+  were empty. A duplicate Hardcover connection was rejected and rollback left
+  both users and both connections intact. The Home hard-delete dialog required
+  exact-name confirmation and removed the synthetic user and remaining user
+  ownership references. Annotation export routed exact-edition and unbound
+  notes to their selected files and left an unmatched note standalone.
+- OIDC migration transfers the current discovered SQLite references in one
+  write transaction, revokes both accounts' login sessions, and denies
+  approved-but-unissued pairings before ownership moves. External markdown/
+  Git exports remain outside the DB migration. Hard/soft deletion invalidates
+  user and guest capabilities, closes live sockets, and prevents queued
+  annotation/notification work from acting for deleted users.
+- Deletion races serialize against credential creation: JWT refresh-row inserts
+  and pairing device/key creation are in the transaction that locks and checks
+  the account; cookie-session issuance is followed by a locked liveness check.
+  Source-root registration and each bounded manifest chunk also lock/recheck
+  the account in their write transaction before mutating inventory. SQLite's
+  writer lock and other backends' account-row lock ensure either the creation
+  commits first (then deletion revokes it) or deletion commits first (then the
+  stale caller is rejected).
+- Liseur Markdown/Git export chooses only confirmed, visible, ready,
+  non-audiobook media; matching edition hash ranks first. Existing historical
+  exports are not automatically pruned or rewritten.
+- Baseline repro evidence: on a disposable account, consent-off search still
+  attempted to decrypt its personal credential; the old OIDC command deleted
+  the source but left its Hardcover connection behind; and annotation routing
+  lacked an eligible edition candidate. Regression tests now cover these paths.
+- No real Hardcover journal rows were fetched or imported, and no physical-device
+  behavior was exercised.
 
 ## Home-library source workers
 
@@ -113,6 +212,33 @@ Planned, Blocked. Harness/source evidence never becomes app/device proof.
 - Native media serving keeps Coppice as the ACL and HTTP range boundary with
   one-use exact-byte grants bound to the server-verified SHA-256;
   invalid/multiple ranges `416`, known offline location `503`.
+
+## Book-club guest reader (2026-10-04, uncommitted on `coppice/client-updates-2026-10-04`)
+
+- Per-person revocable links for accountless readers. Guide:
+  `docs/content/docs/guides/features/book-clubs/guest-reader.mdx` (incl. the
+  three Pangolin bypass rules, verified against pinned `pathMatch.ts`
+  `58a3701`; no live proxy rule was applied — no Pangolin config or SSH host
+  is reachable from this workspace).
+- Server: `apps/server/src/routers/api/v2/club_reader/` (readium-gated).
+  Management `/api/v2/book-clubs/{clubId}/reader-sessions...` needs
+  `UserPermission::ShareBookClubReader` + club Admin/Creator and refuses API
+  keys/device credentials. Guest `/api/v2/club-reader/...` uses a 256-bit
+  digest-stored capability → HttpOnly `coppice_club_reader` cookie scoped to
+  `/api/v2/club-reader/sessions/{id}`; mutations need same-origin `Origin`
+  and `X-Club-Reader-Participant` (409 on mismatch). Every request rechecks
+  issuer/publisher live (LoginUser, not deleted/locked), role, permission,
+  publisher media visibility (incl. `deleted_at`), and that the published
+  book is still the queue head (else 409 paused). Guest 401s never clear
+  `stump_session` (`strip_session_cookie_clears` is no longer Komga-gated).
+- Storage: migration `m20260969` + `book_club_reader_{session,participant,
+  progress,annotation}`; never writes reading heads or native annotations.
+- Home: `/app/club-reader/[sessionId]` outside `(app)`; organizer controls in
+  `BookClubPanel.svelte` via `home/src/lib/reader-sessions.ts`. EPUB
+  sections in BOTH readers are sanitized with DOMPurify on
+  `doc.documentElement` (passing the Document throws) keeping stylesheet
+  `<link>` and `epub:type`, plus a per-section CSP meta.
+- Regressions: `apps/server/tests/club_reader/mod.rs` (4 tests).
 
 ## Absorbed upstream security fixes
 
@@ -152,13 +278,26 @@ STUMP_ENABLE_PROVIDERS=false`; Komga, Kobo, and KOReader default on. `/editor`
 
 ## Replay commands
 
-Last full pass 2026-09-21 (historical; not rerun on 2026-09-25): 15 Hurl
-files, 341 requests, 0 failures — `replay` 36, `replay-negative-auth` 3,
-`replay-mihon` 19, `replay-liseur-sync` 35, `replay-kavita` 170,
-`replay-library-management` 17 (disposable root), `replay-abs` 45,
-`replay-komf` 16 (last; mutates the synthetic fixture). Server-contract
-results, not physical-client proof. `make replay-containers` is an unrun
-pending spec, not part of any green claim.
+Last full post-build pass **2026-10-05** (full binary, isolated `/tmp` fixture
+copy): 16 Hurl files, 375 requests, 0 failures — `replay` 36,
+`replay-negative-auth` 3, `replay-mihon` 19, `replay-liseur-sync` 43,
+`replay-kavita` 170, `replay-library-management` 17 (disposable root),
+`replay-abs` 49, `replay-komf` 38 (last; mutates its copy). Not run:
+`replay-komf-kavita`, the Komf sidecar smokes, `replay-readium`;
+`make replay-containers` remains an unrun pending spec. Server-contract results,
+not physical-client proof.
+
+Fixture pitfalls seen 2026-10-04 (data, not code): earlier Komf replays left
+`00 synthetic prelude` with number 7, so Mihon's PUT marks nothing — clear it
+first (`media_metadata.number = NULL` for `bd94f729…`), as the Komf note above
+says; `replay` must use the one-book Synthetic Solo series (the sibling spec
+expects 404 previous/next); Kavita `recently-updated-series` has a 12-day window,
+so a fixture older than that returns `[]` unless one book's `created_at` is
+recent. Copy the DB without its `-shm` file or the server reports
+"database disk image is malformed".
+- 2026-10-05 replay copy also inherited stale user-uploaded thumbnails; clear
+  the selected synthetic series and book `thumbnail_path` values in the copy
+  before `replay-komf`. These fixture-only resets do not alter the source DB.
 
 From the user-owned sibling harness `../komga-compat/`, Hurl needs
 `LD_LIBRARY_PATH=/tmp` and `PATH=$HOME/.cargo/bin:$PATH`. Runtime credentials
@@ -181,8 +320,8 @@ make smoke-komf-kavita
 
 ## Only definition of green
 
-The current tree is green as of 2026-09-25 under exactly this gate, in order:
-
+The current full application gate passed on 2026-10-05 after the priority-1
+safety changes. Exact commands:
 ```text
 cargo fmt --all -- --check
 cargo check --workspace --all-targets
@@ -199,6 +338,30 @@ bun run editor build
 bun run docs build
 (cd ../koreader-coppice && luajit tests/pure_checks.lua && luajit tests/browser_checks.lua && bash tests/static_checks.sh)
 ```
+
+2026-10-04 (pre-priority-1 uncommitted `coppice/client-updates-2026-10-04`):
+**baseline gate green** — 2,521 Rust tests (2,044 workspace + 477 headless
+server), 0 failed, 22 ignored (live-network tests); fmt, workspace check,
+headless and full builds, `dump-schema --check`, frozen Bun install,
+check-types, Komf contract, Home/Editor/docs builds, and KOReader plugin
+(580 pure checks, browser, static). The priority-1 changes are not covered by
+this baseline.
+- 2026-10-05 post-priority-1 gate: all commands above passed. The headless
+  server run reported 158 library tests and 165 API tests; the KOReader suite
+  passed 580 pure checks plus browser and static checks. Bun type/contract
+  checks and Home, Editor, and docs production builds passed. The first schema
+  check identified stale generated GraphQL output; `cargo dump-schema` updated
+  it, then the exact gate passed. Post-build `/tmp` runtime checks: OIDC
+  transfer/conflict rollback, Home hard deletion, and annotation export as
+  recorded above. No real journal import, physical-reader, or live-proxy run.
+Gate note: use `CARGO_BUILD_JOBS=1` while a desktop browser and other projects'
+`/tmp` (tmpfs, RAM-backed) Cargo targets are present — rustc was OOM-killed
+twice at ~4 GB. Runtime smoke (loopback, `/tmp` DB copy): anonymous guest
+EPUB/CBZ reading, shared/private annotations, 5 % group progress, live SSE
+(message/progress ~0.3 s, moderation, revocation), rotate/revoke/advance,
+same-tab link switch, organizer panel, `/app/users` create/grant/lock, account
+EPUB highlight and audiobook note, Editor quality setting save/re-save. No live
+Pangolin, Komelia, or device run.
 
 On 2026-09-25 the gate passed: 2,414 Rust tests passed, 0 failed, 22 ignored
 (workspace + headless server suites); check, headless and full builds, schema
