@@ -55,8 +55,10 @@ the current Liseur pins and the exact coverage of older client runs.
   full Coppice API key embedded in the path. The key owner needs
   `AccessKoreaderSync`; header auth is not used because KOReader's MD5 password
   form does not match Coppice's scheme.
-- **Client limits:** the protocol has no annotation/highlight/bookmark surface;
-  ZIP/RAR media have no `koreader_hash` and cannot match.
+- **Stock client limits:** KOSync has no annotation/highlight/bookmark surface;
+  ZIP/RAR media have no `koreader_hash` and cannot match. The separate
+  [first-party KOReader companion](/docs/developer/koreader-plugin) exports
+  annotations through a paired liseur-sync token, not through KOSync.
 
 ## Kobo eReaders (stock firmware)
 
@@ -93,15 +95,16 @@ the current Liseur pins and the exact coverage of older client runs.
 
 ## Komf API / Komelia
 
-Coppice ships a built-in Rust implementation of the Komf 2.0.1 HTTP contract
-used by Komelia 0.19.3; Komelia can call Coppice directly without a separate
-Komf service. The Komf source pin is
-[`5ad67370`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64).
-Create a Komelia device and paste its device-bound Komf URL into the client.
+Coppice ships the supported Komf 2.1.0 HTTP subset inventoried for Komelia
+0.20.0; it does not require a separate Komf service. The source pin is
+[`d8a34e9d`](https://github.com/Snd-R/komf/commit/d8a34e9df29ddaa6941c302df216812ee6d525e9).
+Native Komelia 0.20.0 needs the guide's client URLBuilder patch before its
+device-bound query-key URL can be used; the released app corrupts that key.
+Optional MangaBaka routes remain unsupported and must stay disabled.
 The default key is read-only for Komf metadata operations; the owner may opt
 into `EditMetadata`, while provider-config writes remain separately privileged.
 
-The API is contract-tested, but no live Komelia 0.19.3 device run is claimed;
+The API is contract-tested, but no live Komelia 0.20.0 device run is claimed;
 Komelia's current source record is Source-only in the
 [client verification matrix](/docs/developer/client-verification). This
 Komelia-facing Komf API is distinct from running an external Komf server-side
@@ -164,8 +167,9 @@ has no facets support.
 - The observed Komga profile has no annotation endpoint for Komelia or Mihon
   ([Komga compatibility](/docs/developer/komga-compat)).
 - The liseur-sync annotation bridge stores revisions, sequences, and tombstones
-  in adapter tables; projection into Coppice's native `media_annotations`
-  remains **Planned** ([liseur-sync integration](/docs/developer/liseur-sync-integration)).
+  in adapter tables and projects eligible linked native Readium highlights,
+  body-bearing notes, and bookmarks bidirectionally
+  ([liseur-sync integration](/docs/developer/liseur-sync-integration)).
 - Stock KOReader/KOSync and Kobo sync have protocol-specific annotation limits
   ([sync platforms](/docs/developer/sync-platforms)).
 - Liseur's KOReader-sync pairing is a separate progress protocol alongside its

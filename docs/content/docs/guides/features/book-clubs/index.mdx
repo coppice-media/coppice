@@ -2,10 +2,11 @@
 title: Book Clubs
 ---
 
-<Callout type="warn">
-	This feature is not yet stable and is under active development. You can track the progress on this
-	feature in [this issue](https://github.com/stumpapp/stump/issues/120). This is a personal favorite
-	feature of mine, so I'd love to get it out as soon as possible.
+<Callout type="info" title="Current scope">
+	Book clubs and the accountless [guest reader](/docs/guides/features/book-clubs/guest-reader)
+	are implemented. The Home **Social** screen offers club membership, invites, a book queue, and
+	guest sessions. Some older member-room discussion and book-suggestion operations exist only
+	in GraphQL, without corresponding Home controls. This distinction is not a device-test claim.
 </Callout>
 
 <Callout title="Permission required">
@@ -13,7 +14,7 @@ title: Book Clubs
 	permissions, see the [Permissions](/docs/guides/access-control/permissions) guide.
 </Callout>
 
-You can use Coppice to host your own book club! This guide will overview how this feature works, what functionalities are available, and walk you through the process of setting up a book club in Coppice.
+Coppice can host book clubs for managed accounts and issue opt-in guest reading links for people without accounts. Use **Social** in the Home app (`/app/social`) to manage clubs and their book queues. See [Roles and permissions](/docs/guides/features/book-clubs/rbac) for member access and [Guest reading links](/docs/guides/features/book-clubs/guest-reader) for reader sessions.
 
 ## Basic requirements
 
@@ -28,7 +29,10 @@ You don't even technically need any books on the server to start a book club, ei
 
 Book clubs in Coppice are effectively just a group of users that all have access to special pages and functionalities that are only available to members of a given book club. There can be multiple book clubs in a single Coppice instance, and users can be members of multiple book clubs.
 
-<Callout type="idea">
-	If you have any other ideas, please feel free to open an
-	[issue](https://github.com/stumpapp/stump/issues/new/choose)!
-</Callout>
+People without an account can join the reading itself through personal [guest reading links](/docs/guides/features/book-clubs/guest-reader). They read the club's current book in the browser and can share progress, highlights, and notes with the session, but they do not become club members.
+
+Club suggestions, votes, and member-room discussion are available through
+server GraphQL operations but have no Home controls yet; the guest session's
+own discussion is available in the Home/guest reader. For feature requests,
+use [this fork's issue tracker](https://github.com/coppice-media/coppice/issues)
+rather than the upstream Stump issue linked in older versions of this page.

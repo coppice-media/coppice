@@ -1,0 +1,139 @@
+---
+title: Guest reading links
+---
+
+A club organizer can give people **without a Coppice account** a personal link
+that opens the club's current book in a browser reader. Each person gets their
+own link. Readers in the same session can see each other's coarse progress and
+any highlights or notes that were explicitly shared, and talk in a discussion
+that belongs to that session only. Changes from other readers appear within
+about a second, without reloading.
+
+Guest links are a separate, narrow capability. They never create an account,
+never act as the organizer, and never touch anyone's normal reading history,
+annotations, or devices.
+
+## Who can do what
+
+| Action | Requirement |
+| --- | --- |
+| Create a session, publish or advance a book, issue, rotate, or revoke links, close a session | `SHARE_BOOK_CLUB_READER` permission **and** club Admin or Creator role, signed in interactively (API keys and device credentials are refused) |
+| Join a session as an account member | Club membership; the member chooses an alias and receives a personal link |
+| Read, save progress, highlight, take notes, and post in the session discussion | A valid personal link |
+| Read and delete session discussion messages (moderation) | Same as session management |
+
+`SHARE_BOOK_CLUB_READER` is opt-in and is not part of the default managed-user
+permissions, because it lets a user make library content readable outside
+Coppice accounts. Grant it on the Home app's **Users** screen (`/app/users`):
+the server owner or a user with `MANAGE_USERS` opens **Edit** on the account and
+ticks *Share guest reading links* under *Book clubs and smart lists*. An
+[OIDC group mapping](/docs/guides/access-control/oidc) can grant it too; while
+OIDC permission sync is on, an OIDC account's next sign-in replaces what was
+set on the Users screen.
+
+## Sessions and books
+
+A session follows the club's existing book queue (see
+[Books](/docs/guides/features/book-clubs/books)):
+
+- One book is active at a time: the club's current queue item, published by an
+  organizer. Only library books can be published; manual/external schedule
+  entries and books the publisher can no longer see cannot.
+- **Advance** completes the current book and publishes the next queued library
+  book in one step. If the next item cannot be published, nothing changes.
+- Links stay valid across books. Progress and annotations are stored per book,
+  and the previous book's content stops being served.
+- If the queue is changed elsewhere so the published book is no longer current,
+  guest reading pauses until an organizer publishes again.
+
+Every request is rechecked against the session, the person's link, the
+organizer's live permission and club role, and the publisher's current access to
+the book (library access and age restriction). Revoking a link, closing the
+session, deleting or locking the organizer account, or losing access to the
+book stops reading immediately.
+
+## Live updates
+
+While the reader is open it keeps one live connection to the session. When
+another reader shares progress or an annotation, posts a message, or an
+organizer publishes a book or revokes someone, the page refreshes the affected
+part within about a second. The live connection only says *that* something
+changed; the content itself is fetched through the same checked requests as
+before.
+
+- Access is rechecked when the connection opens, on every change, and at least
+  every 30 seconds. If your link is revoked, rotated, expired, or the session
+  closes, the page switches to "Guest reading is unavailable" right away.
+- If the live connection drops, the header shows **Updates every minute**: the
+  page checks for changes once a minute and keeps reconnecting. **Live updates**
+  means the connection is back.
+- Each link can hold up to three open reader tabs or devices at once.
+
+## Session discussion
+
+Each session has its own **Discussion** card below the reader.
+
+- Only readers currently in the session (guests and account members who joined)
+  see it, under their aliases. The club's member discussions are never shown to
+  guests, and session messages are not shown there.
+- Messages are plain text up to 4,000 characters; formatting and links are not
+  rendered. You can edit or delete your own messages. Posting is limited to 20
+  messages a minute per reader.
+- The discussion stays open while a session is paused waiting for a book; it
+  ends when the session is closed.
+- A revoked reader's messages stay, under their alias.
+- Organizers open **Discussion** under a session's participants in the BookClub
+  panel to read the whole thread and delete any message. Deleted messages
+  disappear for everyone. Organizers can still read and moderate after a
+  session is closed.
+
+## Links
+
+- Links look like `https://<server>/app/club-reader/<session>#token=<secret>`.
+  The secret is shown **once** when issued or rotated; Coppice stores only a
+  hash and cannot show it again.
+- On open, the reader removes the secret from the address bar and exchanges it
+  for an HttpOnly cookie scoped to that one session's API path. Fragments are
+  never sent to the server or in `Referer` headers.
+- Links expire after 30 days by default and never outlive their session.
+- **Rotate** issues a new secret for the same person and keeps their progress
+  and notes; the old link stops working. A revoked person cannot be restored by
+  rotation or by rejoining.
+
+## Privacy
+
+- Each reader picks an alias. Account names and the club roster are not shown.
+- Notes and highlights are private unless the author marks one as shared.
+- Progress is private unless the reader opts in; others then see it rounded to
+  5%. Your own exact position is only visible to you.
+- Revoked readers disappear from the group view; their stored data is kept with
+  the session.
+
+Supported formats are EPUB, comics and PDFs (page images), and audiobooks.
+There is no file download from a guest link.
+
+## Reverse proxy and Pangolin
+
+The guest reader must be reachable without your proxy's login, while everything
+else stays protected. Coppice authenticates every guest request itself.
+
+With [Pangolin](https://docs.pangolin.net/manage/access-control/rules), keep the
+resource's authentication enabled and add three **Bypass Auth** path rules:
+
+| Path rule | Why |
+| --- | --- |
+| `/app/club-reader/*` | The guest reader page |
+| `/app/_app/*` | The Home app's built scripts, styles, and fonts the page loads |
+| `/api/v2/club-reader/*` | The guest API: redemption, snapshot, progress, notes, discussion, live updates, book resources |
+
+Do **not** bypass `/app/*` or `/api/*`. These patterns were checked against
+Pangolin's path matcher (`server/lib/pathMatch.ts` at
+[`58a3701`](https://github.com/fosrl/pangolin/blob/58a3701fa8f9a19e26b7dfa1fed2b796982e0696/server/lib/pathMatch.ts)):
+they match the reader, its assets, and the guest API, and do not match
+`/app/dashboard`, `/api/graphql`, native media routes, the organizer API under
+`/api/v2/book-clubs/...`, or `..`/`%2F` traversal attempts. `/app/_app/*`
+exposes only the static Home bundle, which contains no user data. Other proxies
+need the equivalent three prefixes.
+
+Organizer actions (creating sessions and links) still go through your normal
+login.

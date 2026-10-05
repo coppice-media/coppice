@@ -63,8 +63,12 @@ explicit instruction that cannot be honoured.
 
 One WebSocket: `GET /api/v2/workers/socket`, authenticated with the device
 credential as `Authorization: Bearer <api key>`. The ordinary auth middleware
-resolves the device; the route adds one rule — the device must be of kind
-`WORKER`, live, and not revoked. Everything else is a `403`.
+resolves the device; the route requires a live `WORKER` device bound to the
+key's owner. The account must remain active and hold `ACCESS_API_KEYS` and
+`ACCESS_WORKER`, and the key must retain `ACCESS_WORKER`. Every inbound frame
+and outbound offer/cancel rechecks the account, device, key, and binding;
+revocation closes an otherwise idle socket within five seconds. A lost worker
+returns unclaimed work to the queue; reconnect requires a fresh valid key.
 
 Text frames, one JSON object each, discriminated by `type`.
 

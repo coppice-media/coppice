@@ -18,6 +18,11 @@ annotation / bookmark / reading-head change
         persist state + last_run_at + last_error
 ```
 
+Account soft/hard deletion revokes export authority. Queued jobs reload the
+user and sink before external export and stop if the account is deleted or the
+sink was removed or disabled. Already-delivered Markdown/Git copies and
+in-flight external writes cannot be recalled.
+
 ## Config keys
 
 | Key | Env | Default | Meaning |
@@ -113,6 +118,22 @@ for provenance but are omitted from body sections. V2 body blocks use a source-
 aware id (`^native-m1-a1`); legacy files retain `^a1`. Files are compared
 before writing, so unchanged bytes retain their mtime. Writes use a per-user
 lock, a same-directory 0600 temporary file, `sync_all`, and an atomic rename.
+
+A native note made in an audiobook (`media_annotations.position_ms` set) has a
+locator that names no resource. Its frontmatter row adds `position_ms`
+(milliseconds from the start of the publication), which only such rows carry,
+and its body line labels it with the time as plain text (`↗ 12:34 · 20.94% ·
+…`), never a reader link built from the empty `href`.
+
+Liseur CAS annotations are folded into a native export only through a
+confirmed link to a ready, non-deleted ebook visible to that user (including
+library exclusions and age restrictions). A record with `edition_sha` remains
+anchored to that edition; an absent or stale digest never moves its text
+locator onto another edition or an audiobook. Unmatched records retain a
+standalone `liseur:<work_id>` export, including tombstones. For unbound records,
+a verified link wins over an unverified confirmed pair, with oldest link/id
+breaking ties. Work reviews appear only on the selected default edition, or
+standalone when no eligible edition exists.
 
 ## Git safety
 

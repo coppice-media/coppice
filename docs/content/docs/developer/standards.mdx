@@ -29,12 +29,71 @@ keeps those levels separate.
 
 | | |
 | --- | --- |
-| What it is | JSON catalog format with an authentication document and explicit progression PUT ([OPDS 2.0 drafts](https://drafts.opds.io)) |
+| What it is | JSON catalog format with an authentication document and explicit [OPDS Progression 1.0](https://drafts.opds.io/opds-progression-1.0.html) GET/PUT |
 | Routes + auth | `/opds/v2.0/*`; Basic or session auth; public auth document advertises Basic. No v2 key-in-path alias |
 | Feature + switch | Cargo feature `opds` (compile-time only). Progression PUT is explicit — not affected by `ENABLE_OPDS_PROGRESSION` |
-| We implement | Auth document, catalog, search (mixed plus a paged route per kind at `/libraries/search`, `/series/search`, `/books/search`), browse, groups, book pages, acquisition, user-scoped progression GET/PUT with timestamp-conflict checking. Every feed takes `page`/`page_size` and emits `first`/`previous`/`next`/`last` only for pages that exist |
-| We deliberately do not | Facets (open TODO in core); EPUB chapter/resource streaming (route registrations commented out); v2 path-key auth until the contract is defined |
+| We implement | Auth document, catalog, search (mixed plus `/libraries/search`, `/series/search`, `/books/search`), browse/groups, book pages, acquisition, and user-scoped progression. Paginated feeds retain `page_size`/`zero_based`, omit `next` at the end, and recover past-end requests to the last populated page; library previews expose `/libraries/{id}/series` |
+| We deliberately do not | Facets; OPDS EPUB chapter/resource streaming; a v2 path-key auth alias; a legacy Cantook progression alias or a second locator-shaped OPDS protocol |
 | Evidence | **Shipped**, **Contract-tested** — [Provider status](/docs/developer/provider-status) |
+
+### Progression wire contract and smoke recipe
+
+The existing `/opds/v2.0/books/{id}/progression` route now advertises
+`rel: "http://opds-spec.org/progression"` and
+`type: "application/opds-progression+json"`. Its document is flat:
+
+```json
+{
+  "modified": "2026-01-28T11:00:00Z",
+  "device": { "id": "urn:uuid:reading-client", "name": "Reading client" },
+  "progression": 0.23,
+  "references": ["#page=20"]
+}
+```
+
+`modified`, `device`, and the finite whole-publication `progression` in `0..=1`
+are required; `title` and `references` are optional. Paged input uses
+`#page=N` with 1-based bounds, while EPUB references such as
+`chapter.xhtml#anchor` project to the existing native locator. Fraction-only
+input preserves richer canonical locator context. No publication-local
+position, CSS selector, CFI, quote context, or audio seek point is invented from
+a whole-publication fraction.
+
+GET returns 200 with the canonical document, or an empty 200 body before any
+head exists. PUT returns 201 for a new head or 200 for an update, with the
+resulting document in both cases. The shared conflict rule rejects an update
+only when it is more than 60 seconds older **and** moves progression backward.
+Invalid bodies/fractions/pages return 400, another user's device returns 403,
+and a rejected stale update returns 409, with `application/problem+json`
+(`type`, `title`). Auth remains in the existing middleware; its 401 behavior is
+not replaced by progression-specific error handling. Reading-state provenance
+retains rejected stale input without replacing the winning head.
+
+For a fresh visible paged fixture book with at least 20 pages, use its discovered
+progression URL and the normal OPDS Basic credentials:
+
+1. GET before the first write: 200, empty body, stable progression media type.
+2. PUT the document above with `Content-Type: application/opds-progression+json`:
+   201 with a receipt. GET must match it, including fraction `0.23` (not page/count).
+3. PUT a later `modified` and a larger fraction: 200 with the new receipt.
+4. PUT a fraction outside `0..=1`, page zero/past the final page, or an invalid
+   timestamp: 400 Problem Details and no changed head.
+5. PUT a lower fraction at least two minutes before the winning timestamp:
+   409 Problem Details; GET and native continue-reading retain the winner.
+6. Follow a library's series group's `next` with more than ten series, then
+   confirm the last page has no `next`. Exercise `zero_based=true`, exact page
+   multiples, empty filtered feeds, and a past-end page whose `previous` reaches
+   the last populated page.
+
+This is a selective integration of Stump's immutable
+[`7ddbed52`](https://github.com/stumpapp/stump/commit/7ddbed522d95ceb17368fde95e4494b40b07ecc0)
+and [`daa509fb`](https://github.com/stumpapp/stump/commit/daa509fbb29e5ec5ee1bb368ec1979319759b34a),
+not a replacement of native Readium/GraphQL. The sibling KOReader plugin's
+[`35a1d5bc` baseline parser](https://github.com/coppice-media/koreader-coppice/blob/35a1d5bc58615aab79404a21ad01931855e7201e/coppice.koplugin/coppice_opds.lua)
+only extracts a progression URL; its dashboard and KOSync keep their native
+APIs. The working-tree parser now recognizes the stable relation **and** MIME
+type without a Cantook fallback. Home's rich locator mutation/query is unchanged.
+
 
 ## Komga compatibility profile
 
@@ -101,6 +160,16 @@ keeps those levels separate.
 | We implement | The native client contract: libraries, media, progress, collections, read lists, auth/user management, Readium manifests/positions/progression for EPUB |
 | We deliberately do not | Nothing withheld from the native contract — this is the primary API, not a compatibility shim |
 | Evidence | **Shipped**, **Contract-tested** — [API](/docs/developer/api), [Server architecture](/docs/developer/server-architecture), [Unified reading state](/docs/developer/unified-reading-state) |
+
+EPUB manifests prefer the OPF spine's `page-progression-direction` for
+`metadata.readingProgression`. Recognized `rtl`/`ltr` values are canonical;
+absent, `default`, or invalid spine values fall through to the existing
+`direction` metadata (also normalized), then to `ltr`. An explicit spine wins
+over conflicting metadata. Constructed EPUB regressions cover nested package
+paths, namespaced/empty spines, XML escaping, precedence, and retained legacy
+fallbacks. For a runtime check, fetch `/api/v2/epub/{id}/manifest.json` for RTL,
+LTR, default-without-metadata, and legacy-metadata packages. This ports Stump
+[`ddb87886`](https://github.com/stumpapp/stump/commit/ddb8788679d5e108b1f4a34ec364a36d5c619cea).
 
 ## Which one should a client use?
 

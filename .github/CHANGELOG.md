@@ -1,3 +1,43 @@
+## Unreleased (Coppice)
+
+### Added
+
+- Book-club guest reading links: per-person revocable links open the club's current book (EPUB, comics/PDF, audiobooks) in an accountless browser reader with private-by-default progress, highlights, and notes, opt-in coarse group progress, and organizer queue/session controls in Home. Requires the new opt-in `SHARE_BOOK_CLUB_READER` permission plus club Admin/Creator.
+- Guest reading links update live and have their own discussion. A per-session event stream announces changes to progress, annotations, participants, publication, or messages without carrying their content, and ends when the link is revoked, rotated, expired, or closed. Each reader session has a private discussion for its active participants, kept separate from the club's member discussions. Participants can edit or delete their own messages, organizers can moderate, and posting is limited to 20 messages per minute.
+- Home **Users** screen (`/app/users`): list, create, permission editing with implied permissions, age restriction, session limit, lock/unlock, sign out everywhere, and delete, gated to owner/`READ_USERS`/`MANAGE_USERS` as the server enforces.
+- Create, edit, and delete your own annotations in the account reader: EPUB text-selection highlights, page notes for comics/PDF, and audiobook notes at the playhead (new `positionMs` anchor; never exported to text-anchor sync lanes).
+- Editor quality checks expose real per-setting controls (number bounds, booleans, enums) that are validated and saved server-wide.
+- Audiobookshelf profile: `GET /api/libraries/{id}/stats`, `GET /api/libraries/{id}/narrators`, and `genres.`/`narrators.` item filters (Lissen grouping).
+- Kavita profile: `GET /api/Search/chapters-by-series` (Kover sync).
+
+### Fixed
+
+- Guard Hardcover search and narrator lookup with personal metadata consent and credential-scoped caches; import only the authenticated user's quote journal, preserve unresolved source records, and refuse future-dated progress projections.
+- Make OIDC account consolidation transfer current SQLite-owned state atomically, revoke both accounts' login sessions, and deny approved-but-unissued device pairings before ownership moves.
+- Make account deletion revoke sessions and durable credentials, serialize login/refresh and device-pairing credential issuance with deletion, stop source-worker inventory writes after revocation, and prevent notification/annotation retries or OIDC sign-in for a deleted account.
+- Route Liseur annotation exports only through confirmed, visible, ready non-audiobook editions and rank a matching edition hash first.
+- Stored ingest quality-check settings and the enabled flag were never used by analysis; saving a check twice failed on a duplicate key. Settings are now server-wide and require `MANAGE_LIBRARY` plus `METADATA_PROVIDER_MANAGE`.
+- `updateLibraryExcludedUsers` accepted `READ_USERS` alone; it now requires `MANAGE_LIBRARY` and `READ_USERS`. `createUser` rejects a non-positive session limit.
+- The annotation hub's colour picker sent values Liseur-backed rows reject, and clearing a note left Liseur notes unchanged; both now use the server's shared palette and clear semantics.
+- Audiobookshelf offline uploads (`/api/session/local`, `/local-all`) measured progress with the client's cached duration, so a stale offline position could overwrite newer progress; the server's own duration now wins.
+- Liseur `resolve` invented a new work when only an existing edition (same file bytes, no alias) identified the book, then returned 409 on every retry; it now reuses that edition's work.
+- Sanitize EPUB sections with DOMPurify (stylesheets and `epub:type` kept) and a per-section CSP in both the account and guest readers.
+- Read EPUB reading direction from OPF spine, retaining normalized legacy metadata fallback.
+- Adopt stable OPDS Progression 1.0 without changing native rich locators; complete library-preview pagination and past-end recovery links.
+- Match Komga structured author existence/negation against visible child-book credits, including non-writer roles.
+- Correct shared media age filtering that used arithmetic addition instead of boolean AND.
+- Accept older Kavita extension bodies that omit nested sort defaults.
+- Supply the Komf-client 2.1.0 URLBuilder patch that preserves query credentials; published Komelia 0.20.0 still requires a rebuilt client.
+- Point documentation source/edit links at the Coppice fork and the actual `docs/content/docs` paths; remove the nested anchor that caused React hydration failures.
+- Align Fumadocs core/UI peer versions so generated page metadata retains its types, pass last-modified dates to the docs renderer, and point formatter stylesheets at the active Home/docs CSS.
+
+### Changed
+
+- Target fork checks at `coppice/*` and nightly builds at `coppice/nightly`; keep inherited Docker publishing disabled.
+- Refresh the Komf/Komelia source inventory, track all reviewed clients and beta releases, and preserve historical device evidence.
+- Refresh compatibility and provider documentation from pinned clients and current local source; describe Hardcover consent and manual import, atomic OIDC migration, account deletion, and annotation-edition routing with evidence boundaries. The live Hardcover schema was checked read-only; journal import itself remains unverified against real rows.
+- Remove unused legacy documentation wrappers; live MDX keeps the supported Fumadocs components.
+
 <a name="0.1.9"></a>
 ## 0.1.9 (2026-09-19)
 

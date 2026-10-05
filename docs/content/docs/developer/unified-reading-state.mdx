@@ -324,30 +324,52 @@ returns changes ordered by sequence
 | `from_annotation` | **[inference]** For a live highlight/bookmark, emit the canonical locator JSON, progression, quote excerpt, body, color, edition, and `client_ts`; use the current `revision` as `base_rev`. For a tombstone, use the liseur delete route with its revision rather than sending a synthetic empty annotation. | **[observed]** Notes may omit or retain locators, but the native projection is deliberately limited to linked, valid Readium highlights/bookmarks; notes and unsupported locator forms remain in the Liseur CAS store. Stable prefixed IDs identify mirror rows, which GraphQL and annotation-sync exports suppress to avoid duplicate source annotations (`apps/server/src/routers/liseur_sync/storage.rs:2485-2658@working-tree`, `crates/graphql/src/object/annotation.rs:327-412`, `crates/annotation-sync/src/model.rs:224-406`). |
 | Conflict/lifecycle | **[observed]** Position ops are append-only/idempotent by `op_id`; annotation edits use CAS revisions, separate annotation sequence, and tombstones (`apps/server/src/routers/liseur_sync/storage.rs:740-838,1046-1297@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | **[inference]** The unified head uses the conflict rule below; liseur annotation `base_rev` remains a precondition, so a stale revision is a conflict rather than an automatic overwrite. |
 
-### OPDS — no provider converter (none)
+### OPDS — stable progression document, no provider converter
 
-**[observed]** OPDS 1.2 page delivery can optionally record a page and a
-page-derived percentage through `NormalizedProgression`; it has no native
-locator payload (`apps/server/src/routers/opds_backend/v1_2.rs:794-835@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
-Therefore the OPDS 1.2 provider contract has **no `to_locator` or
-`from_locator` converter**: page tracking uses the Stump-native page mapping,
-and an OPDS feed/download itself does not create an annotation.
+**[observed]** OPDS 1.2 page delivery still optionally records a page and a
+page-derived percentage through `NormalizedProgression`, controlled by
+`ENABLE_OPDS_PROGRESSION`. Catalog/feed/download reads do not create
+annotations, and OPDS 1.2 has no provider-specific locator converter.
 
-**[observed]** OPDS 2.0's progression route is a wire wrapper around Readium
-fields. Its output maps EPUB session locators and paged positions to
-`href`/type/locations, and its input maps those fields into a
-`ReadiumLocator`; it checks the supplied `modified` timestamp before writing
-(`core/src/opds/v2_0/progression.rs:17-120,141-248@37fdb7d7340894a777c40d685d5262becceae007`,
-`apps/server/src/routers/opds_backend/v2_0.rs:1229-1351@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`).
-This is a direct canonical Readium path, not a second OPDS-specific converter.
+**[observed]** OPDS 2.0 GET/PUT keeps
+`/opds/v2.0/books/{id}/progression` but now uses the stable
+`http://opds-spec.org/progression` relation and
+`application/opds-progression+json`. One flat document carries
+`modified`, `device`, `progression`, optional `title`, and optional URI
+`references`; there is no nested `locator` envelope or Cantook alias.
+`core/src/opds/v2_0/progression.rs` projects that wire document into the
+existing native model, and `apps/server/src/routers/opds_backend/v2_0.rs`
+applies it through the shared transactional reading-state service.
 
 | OPDS surface | Mapping and declared loss |
 | --- | --- |
-| 2.0 envelope | **[observed]** `modified` -> effective timestamp and `device.id/name` -> device when present. | **[inference]** Preserve the raw envelope; OPDS still has no provider-specific converter. |
-| 1.2 page | **[observed]** Corrected page -> native page; page count -> computed percentage; optional progression tracking is configuration-gated. **[inference]** `precision=page`; `to_locator/from_locator=none`; retain request path/query as raw payload. |
-| 2.0 EPUB progression | **[observed]** Input `href`, `type`, title, fragments, position, progression, total progression, and text map to the canonical fields; output uses the session's end locator. **[observed]** The OPDS output type has no text, CSS selector, partial CFI, or Kobo span, so those fields are lost on a GET response even though input text is accepted. **[inference]** Use the canonical Readium converter with `losses=[opds-wire-fields-not-emitted]`, not an OPDS converter. |
-| 2.0 paged progression | **[observed]** Output synthesizes a server page URL and `image/jpeg` type from `end_page`; input position maps back to page and total progression. **[inference]** Mark the href/type as provider-derived, retain raw JSON, and do not treat the synthetic URL as a publication resource anchor. |
-| Annotation | **[observed]** OPDS route inventory has catalog, page/download, and v2 progression but no revisioned annotation resource (`crates/opds/src/lib.rs:225-236,332-337,650-665@working-tree (base 37fdb7d7340894a777c40d685d5262becceae007)`). | `to_annotation`/`from_annotation=unsupported` **[inference]**; no annotation id, quote, body, revision, or tombstone can be obtained from OPDS. |
+| 2.0 envelope | `modified` is the effective source timestamp; a supplied device is registered for its owner inside the write transaction. The complete input is retained as raw provenance. GET uses the winning canonical head, not an old reading-session locator fraction. |
+| 1.2 page | Corrected page maps to the native page and a page-derived fraction only when progression tracking is enabled. No locator, annotation, or quote is manufactured. |
+| 2.0 EPUB progression | A resource/fragment URI maps to native `href`/fragments and whole-publication `totalProgression`; output projects one native href/fragment and chapter title. The stable document cannot transport native CSS/CFI, quote context, resource-local progression, or position ordinals. Fraction-only input leaves existing richer canonical locator context intact. |
+| 2.0 paged progression | `#page=N` maps to a bounded 1-based page, never a server page URL masquerading as a publication resource. The asserted fraction is authoritative; it is not recalculated from page/count. |
+| 2.0 fraction-only/audio | The whole-publication fraction is represented; absent or fragment-only references do not invent a locator or an audio seek position. Native time/locator fields stay on their existing APIs. |
+| Annotation | OPDS has no revisioned annotation endpoint; no annotation id, quote, body, revision, or tombstone can be obtained from this document. |
+
+GET is 200 with the stable document, or an empty 200 before a canonical head
+exists. PUT returns a receipt with 201 on creation or 200 on update.
+Invalid document/fraction/page is 400, another user's device is 403, and a
+timestamp more than 60 seconds older **and** lower progression is 409, using
+`application/problem+json`. The rejected stale update remains provenance only.
+Auth middleware, OPDS Basic behavior, and native rich locator APIs are unchanged.
+
+The selected upstream reference is Stump
+[`7ddbed52`](https://github.com/stumpapp/stump/commit/7ddbed522d95ceb17368fde95e4494b40b07ecc0).
+The pinned sibling plugin
+[`35a1d5bc`](https://github.com/coppice-media/koreader-coppice/blob/35a1d5bc58615aab79404a21ad01931855e7201e/coppice.koplugin/coppice_opds.lua)
+only extracts its progression URL; its dashboard uses native continue-reading
+and its sync remains KOSync. The working-tree parser is migrated to the stable
+relation/MIME with no legacy alias. Home's `reader.graphql` rich locator
+mutation/query remains native and unchanged. Behavior regressions live in
+`core/src/opds/v2_0/progression.rs` and
+`apps/server/tests/opds/v2/progression.rs`; the latter exercises native
+continue-reading and preserves a real Home GraphQL locator through a
+fraction-only OPDS update. The operator recipe is in
+[Standards](/docs/developer/standards#progression-wire-contract-and-smoke-recipe).
 
 ## Reading sessions
 

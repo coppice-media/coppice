@@ -58,6 +58,18 @@ bridge. Rate limits report how many seconds to wait. A manager must explicitly
 confirm each grab; the server sends the bridge's required confirmation text.
 Active grabs are refreshed by the background job system.
 
+The refresh job adopts a `starting` grab from the bridge by torrent ID rather
+than submitting a second grab. It refreshes active rows no more than once per
+minute and treats a bridge-`completed` row without an `ingest_item_id` as a
+pending staged handoff: retry at five-minute intervals, ending in a visible
+error after 288 failed attempts. Active local rows deduplicate the same
+request/torrent and refuse a second request for that torrent. In-process job
+claims prevent a concurrently dispatched refresh of the same row
+(`core/src/mam_acquisition.rs`, `core/src/job/services.rs`). Scripted-bridge
+job tests cover refresh and failed-handoff recovery; the recorded live probe
+stopped before a grab, so it is **not** evidence of a live
+acquisition-to-Editor handoff.
+
 When a completed manifest points below `/downloads`, Coppice copies the file or
 folder into staged ingest. It never moves, renames, or deletes the source, so
 MAM can continue seeding. With a source worker, bytes are verified against the

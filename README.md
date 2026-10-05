@@ -49,6 +49,11 @@ pages link to them rather than making broader compatibility promises.
   recommendation handoff. Managers can use the separate MAM Bridge sidecar
   for confirmed acquisition of approved requests; see the
   [acquisition boundary](docs/content/docs/guides/integrations/acquisition).
+- The Home app includes owner/manager-scoped account administration at
+  `/app/users` and an opt-in accountless book-club guest reader at
+  `/app/club-reader/<session>`; neither route weakens the server's permission
+  checks. See [Users](docs/content/docs/guides/access-control/users.mdx) and
+  [guest reading links](docs/content/docs/guides/features/book-clubs/guest-reader.mdx).
 - Read-aloud pairing, validated `SyncMapV1` import, alignment enqueue, and
   authenticated cache-only status/download are implemented. Optional
   operator-configured Storyteller and native CTC worker runners are available;

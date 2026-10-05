@@ -9,9 +9,10 @@ import { Step, Steps } from 'fumadocs-ui/components/steps';
 
 Coppice implements the KOReader-compatible sync API under `/koreader/{api_key}`.
 The server surface is **Shipped** and **Contract-tested**. Liseur's KOSync flow
-is **Device-tested**, but the native KOReader app itself has not been loaded
-against Coppice. The first-party `coppice.koplugin` is **Source-only** against
-KOReader v2026.07.1 (`9192014d`); direct native-app verification is **Blocked**.
+is **Device-tested**, but the native KOReader app has not been loaded against
+Coppice. The companion plugin has been source-reviewed against KOReader
+`accee08c` (reviewed release v2026.07.1), with recorded host pure/browser/static
+checks but no physical-device run.
 See the [compatibility matrix](/docs/guides/integrations/compatibility) and
 [KOReader developer record](/docs/developer/koreader-plugin).
 
@@ -149,9 +150,10 @@ and retry with **Binary** selected.
 - **Contract-tested:** server probes cover `users/auth` and progress requests.
 - **Device-tested:** Liseur's KOReader-sync client path has run against the
   server.
-- **Source-only:** `coppice.koplugin` was reviewed against KOReader v2026.07.1
-  (`9192014d`) but has not been loaded by the native app.
-- **Blocked:** a direct KOReader app/device run and any device-specific UI or
+- **Source-only/client host checks:** `coppice.koplugin` was reviewed against
+  KOReader `accee08c` (v2026.07.1); the recorded 2026-10-04 sibling gate
+  passed 580 pure checks plus browser and static checks, not a device run.
+- **Blocked:** a direct KOReader app/device run and device-specific UI or
   firmware behavior remain unverified.
-- **Planned:** device management UI and richer translation of x-pointer data
-  into the native reader's position model are future work.
+- **Remaining translation:** richer mapping of KOReader x-pointers into the
+  native reader's position model is not supplied by the KOSync adapter.

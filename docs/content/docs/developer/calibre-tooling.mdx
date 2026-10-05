@@ -1,6 +1,6 @@
 ---
 title: Calibre and external e-book tooling
-description: What calibre's command line does that Stump cannot, why boko is the preferred converter for the Kindle formats and calibre the fallback, how the GPL-3 licence constrains both integrations to shelling out, and how ingest detects DRM-protected files without ever removing DRM.
+description: Native and boko conversions, licence-safe calibre CLI tools, read-only Calibre catalog discovery through source workers, and DRM detection without removal.
 ---
 
 # Calibre and external e-book tooling
@@ -16,13 +16,15 @@ owns the Kavita-style maintenance tools (`cbzit`, `epub2cbz`, `cbz-covers`,
 *Writing* the Kindle formats is **boko's** territory, not calibre's:
 `boko-convert` converts EPUB, AZW3/KF8 and KFX in both directions with no
 plugin, no Kindle Previewer and no Wine (see
-[boko](#boko-the-preferred-kindle-converter) below). What is left for calibre
-is everything neither Stump nor boko can do: MOBI *output*, PDF, DOCX, FB2,
-LIT, PDB, and writing metadata back into a book.
+[boko](#boko-the-preferred-kindle-converter) below). calibre remains an
+operator-installed fallback for formats neither Coppice nor boko cover (MOBI
+*output*, PDF, DOCX, FB2, LIT, and PDB). Its metadata-write CLI capability is
+documented here but is not wired into the Coppice `calibre-meta` read pass.
 
-This page records what calibre offers, where boko replaces it, why both
-integrations are a subprocess and never a library, and what the ingest pipeline
-does when a file turns out to be DRM-protected.
+This page records what calibre offers, where boko replaces it, why calibre
+conversion uses a subprocess rather than linking its code, how a **separate
+read-only Calibre catalog source worker** discovers `metadata.db` without
+invoking `calibredb`, and what ingest does when a file is DRM-protected.
 
 <Callout type="info">
 	Version and flag claims on this page are taken from the calibre manual for
@@ -64,16 +66,26 @@ The six that matter here:
 
 | Tool | What it does | What Stump cannot do without it |
 | --- | --- | --- |
-| [`ebook-convert`](https://manual.calibre-ebook.com/generated/en/ebook-convert.html) | `ebook-convert input output [options]`; the output plugin is guessed from the output file's extension | Every conversion outside EPUB→KEPUB |
-| [`ebook-meta`](https://manual.calibre-ebook.com/generated/en/ebook-meta.html) | Read and write embedded metadata; `--to-opf` dumps it as OPF | Reading metadata from MOBI/AZW3/LIT/FB2/DOCX; writing metadata into any format |
+| [`ebook-convert`](https://manual.calibre-ebook.com/generated/en/ebook-convert.html) | `ebook-convert input output [options]`; the output plugin is guessed from the output file's extension | Formats outside Coppice's native EPUB→KEPUB, Kindle→EPUB and boko conversions, such as MOBI output, PDF, DOCX, FB2, LIT, and PDB |
+| [`ebook-meta`](https://manual.calibre-ebook.com/generated/en/ebook-meta.html) | Read and write embedded metadata; `--to-opf` dumps it as OPF | Deep extraction for formats not covered natively, or writing embedded metadata to a selected output file |
 | [`ebook-polish`](https://manual.calibre-ebook.com/generated/en/ebook-polish.html) | Minimal-diff repairs on AZW3/EPUB/KEPUB only | Font subsetting, jackets, soft hyphens, unused-CSS removal, EPUB 2→3 upgrade |
 | [`fetch-ebook-metadata`](https://manual.calibre-ebook.com/generated/en/fetch-ebook-metadata.html) | Metadata lookup by title/author/ISBN/identifier; `--opf` for machine output | Nothing — Stump has its own providers (Comic Vine, Hardcover, AniList, MAL, MangaDex, MangaUpdates, Google Books, Open Library, Metron) |
 | [`calibredb`](https://manual.calibre-ebook.com/generated/en/calibredb.html) | "The command line interface to the calibre database": `list`, `add`, `remove`, `add_format`, `show_metadata --as-opf`, `set_metadata`, `export`, against a library path or a Content server URL | Nothing — Stump owns its own library model |
 | [`ebook-edit`](https://manual.calibre-ebook.com/generated/en/ebook-edit.html) | Launches calibre's interactive "Edit book" GUI | Nothing — a GUI has no place in a server pipeline |
 
-`ebook-edit`, `calibredb`, and `fetch-ebook-metadata` are documented here for
-completeness and are deliberately **not** wired up: the first is interactive,
-and the other two duplicate capabilities Stump already owns.
+`ebook-edit`, `calibredb`, and `fetch-ebook-metadata` are deliberately **not**
+wired as CLI tools: the first is interactive and the other two duplicate
+capabilities Coppice already owns. This does **not** mean Calibre libraries
+cannot be observed: a separately authorized source worker supports
+`kind=calibre` roots and reads `metadata.db` **read-only** without calling
+`calibredb` or altering Calibre-managed files
+(`crates/worker/src/source_calibre.rs`). It validates the SQLite application
+id (`cali`, or 0 for older databases), reads schema versions 27 (Calibre
+v9.15.0) and 28 (additive viewer `book_storage`), and rejects newer schemas.
+It publishes only catalogued format files whose paths resolve safely below
+the non-symlink root; import, publication, and byte serving still require
+Coppice authorization and verification. See
+[Remote worker libraries](/docs/developer/remote-worker-libraries).
 
 ### Conversion matrix
 
@@ -368,10 +380,10 @@ a `cover-image` property, plus an EPUB 2 NCX under `spine@toc`. Its own test
 asserts zero `epub-check` findings and re-opens the result with
 `EpubProcessor`.
 
-That leaves the external converters for what Stump genuinely cannot do:
+That leaves the external converters for what Coppice genuinely cannot do:
 `boko-convert` for KFX and for *writing* AZW3, `calibre-convert` for MOBI
-output, PDF, DOCX, FB2, LIT and PDB, and `calibre-meta`/`calibre-polish` for
-writing metadata back into a book.
+output, PDF, DOCX, FB2, LIT and PDB, `calibre-meta` for read-only extraction,
+and `calibre-polish` for operator-selected output-file transformations.
 
 Nothing here removes DRM: `MobiBook::open` refuses a protected file with the
 DRM detector's own verdict, so a `mobi2epub` run over a library reports it as

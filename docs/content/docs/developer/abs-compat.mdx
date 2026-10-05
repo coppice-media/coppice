@@ -7,12 +7,25 @@ This page is the authoritative specification for Stump's Audiobookshelf compatib
 
 ## Scope and evidence
 
-- **Client baselines and current pins:** the original route/capture work used Lissen **1.11.22-release** (`f30bf9be95ea3792bcc53e4e958576121d450a4d`) and the **official Audiobookshelf app** `v0.14.0-beta` (`12025ab59a5c9f5654b31b4b68c1fc71ad676f61`). The current source audit uses Lissen **1.12.5-release** (`fd5c0417646bac3e011d4f4d3bb045286a9e5508`) and official app `v0.14.1-beta` (`2ac4de4d582dfaeb65b756a5e00e181207a867d7`); see [the pinned API diff](#pinned-upstream-and-client-diff). Lissen's contract remains one Retrofit interface with 26 declarations, of which 4 belong to the podcast lane this profile does not serve. Every Lissen path is relative to `app/src/main/kotlin/org/grakovne/lissen/`.
+- **Client baselines and current pins:** the original route/capture work used Lissen **1.11.22-release** (`f30bf9be95ea3792bcc53e4e958576121d450a4d`) and the **official Audiobookshelf app** `v0.14.0-beta` (`12025ab59a5c9f5654b31b4b68c1fc71ad676f61`). Current source-only review targets Lissen **1.12.8-release** (`3abe10611661ef07b085a425c473e7bfc3f82167`) plus its reviewed development head `c03a4b36f78112b61696bb4b59d9c818fc8584fd` (genre/narrator grouping), and official app `v0.14.2-beta` (`7014e04e6febcc5fd326e816a57b1065817e85f5`). The earlier [pinned API diff](#pinned-upstream-and-client-diff) and device/checklist records retain their historical versions. Every Lissen path is relative to `app/src/main/kotlin/org/grakovne/lissen/`.
 - **Wire captures:** `komga-compat/abs/capture/` remains the 2.36.0 response corpus; `abs/compose.yml` now pins the 2.36.1 Linux/amd64 image digest. The 2.36.1 container was not launched and captures were not regenerated during this audit.
-- **Licensing boundary:** Audiobookshelf is GPL-3.0 and Stump is MIT. Nothing in `crates/abs` is derived from Audiobookshelf source; the profile is written from observed behaviour and captured JSON only. Lissen's own Retrofit declarations (paths, query parameters, field names) are cited as the client contract, which is what a client contract is for.
+- **Licensing boundary:** Audiobookshelf is GPL-3.0 and Stump is MIT. Nothing in `crates/abs` is derived from Audiobookshelf source code; the profile is written from observed behaviour and captured JSON. Where no capture exists (the `stats`/`narrators` routes and the filter `decode`), only the wire contract — key names, ordering, encodings — was read from the pinned v2.37.1 source and cited, and the implementation is Coppice's own. Lissen's own Retrofit declarations (paths, query parameters, field names) are cited as the client contract, which is what a client contract is for.
 - **Contract types** live in [`crates/abs/src`](https://github.com/stumpapp/stump/tree/nightly/crates/abs/src) (`stump_abs`): DTOs in `dto.rs`, the audio projection in `model.rs`, tokens in [`auth.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/abs/src/auth.rs), allocated identities in [`ids.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/abs/src/ids.rs), the socket lane in [`socket/`](https://github.com/stumpapp/stump/tree/nightly/crates/abs/src/socket). The server adapter is `apps/server/src/routers/abs_backend.rs`; persistence comes from migrations `m20260935_000000_add_abs_compat` (`abs_ids`, `abs_sessions`) and `m20260943_000000_add_abs_session_play_method`.
 - **Replay harness:** `specs/abs.hurl` with `make replay-abs`, plus `make replay-abs-diff` (a JSON key-set diff of Stump's responses against `abs-ref`), in the `komga-compat` sibling repository; bring-up and capture steps are in its `abs/README.md`.
-- **Verification status:** the official `v0.14.0-beta` release APK (`12025ab5`) was installed and run on the `test_35` Android 35 emulator on 2026-09-07 against an isolated full+RAR fixture at `http://10.0.2.2:25890`. A full-screen seek drag moved the Lottery from `0:31` to `0:49`, and a clean one-track download reached the local-library view at `367.7 KB` (`376,525` bytes) with its cover. That is historical device evidence only; the current 0.14.1 and Lissen 1.12.5 checklist below has not been run on a device.
+- **Verification status:** the official `v0.14.0-beta` release APK (`12025ab5`) was installed and run on the `test_35` Android 35 emulator on 2026-09-07 against an isolated full+RAR fixture at `http://10.0.2.2:25890`. A full-screen seek drag moved the Lottery from `0:31` to `0:49`, and a clean one-track download reached the local-library view at `367.7 KB` (`376,525` bytes) with its cover. This is historical device evidence only; neither current client pin has been run on a device in the 2026-10-04 source review.
+
+### 2026-10-04 source and release review
+
+Released Lissen 1.12.8 and official app v0.14.2-beta introduce no required
+route changes to this profile. Lissen development 1.12.9, reviewed at
+`c03a4b36f78112b61696bb4b59d9c818fc8584fd`, adds genre/narrator grouping
+with `GET /api/libraries/{id}/stats`, `GET /api/libraries/{id}/narrators`
+and the `genres.`/`narrators.` item filters; all three are implemented (see
+[Genre and narrator grouping](#genre-and-narrator-grouping)). Audiobookshelf
+v2.37.1 (`3563d494`) was reviewed from release notes, and from source for
+the routes this grouping uses. Its optional API-key Socket.IO authentication
+does not change the supported JWT socket lane, and the captured 2.36.0
+corpus remains unchanged.
 
 ### Pinned upstream and client diff
 
@@ -23,8 +36,8 @@ Audited from pinned source and release metadata on 2026-09-24; the ref image was
 | ABS `v2.30.0` (`29752798f3d1eed348746830a879f0699ff48993`) → `v2.36.0` (`96d4021a3cd45f67bf374b65abafbe5d73e926b5`) | `server/routers/ApiRouter.js:174-186` adds aggregate `GET /api/me/progress`, `GET /api/me/bookmarks`, `GET /api/me/bookmarks/:libraryItemId`, and session-list/delete routes; `ServerSettings.js:283` adds `timeZone`. | Current mobile callers still use `/api/me`, per-item progress/bookmark routes and `/api/me/items-in-progress`; none calls those new aggregates. `timeZone` is already in `dto.rs` and the 2.36.0 `authorize.json:100` capture. |
 | ABS `v2.36.0` (`96d4021a3cd45f67bf374b65abafbe5d73e926b5`) → `v2.36.1` (`4b67c170ce46fd6ba770dc55c189ca13fef89b02`) | `server/utils/queries/libraryItemsBookFilters.js:312,317,585` passes active filter replacements to the collapsed-series query; current official app `ApiHandler.kt:532-533` sends `filter=authors.<base64>&collapseseries=1`. `server/controllers/AuthorController.js:430` adds library access checking. | Stump filters before collapse (`crates/abs/src/routes/query.rs:220-235`, `libraries.rs:318-361`) and now 404s author details when no book is visible; both behaviors have route tests. |
 | Other 2.36.1 API changes | `CacheManager.js:43,153` restricts cover `format`; `MiscController.js:143-165` and `ServerSettings.js:8-32` allowlist settings updates; `Book.js:422-436` removes media-file fields from `updateMedia` (removed in the 2.36.1 diff). | Neither current mobile client sends a cover `format`, patches global server settings, or updates `audioFiles`/`chapters`/`ebookFile`; these mutations do not add client routes to this profile. |
-| Lissen `1.11.22-release` (`f30bf9be95ea3792bcc53e4e958576121d450a4d`) → `1.12.5-release` (`fd5c0417646bac3e011d4f4d3bb045286a9e5508`) | `AudiobookshelfApiClient.kt:162-165` adds `POST /api/session/local-all`; duplicate `/api/me` projections are consolidated into one user-state response. | `/api/session/local-all` was already mounted at `crates/abs/src/routes/mod.rs:464` and behavior-tested; Hurl now uses the latest Lissen request shape. |
-| Official app `v0.14.0-beta` (`12025ab59a5c9f5654b31b4b68c1fc71ad676f61`) → `v0.14.1-beta` (`2ac4de4d582dfaeb65b756a5e00e181207a867d7`) | The current `android/app/src/main/java/com/audiobookshelf/app/server/ApiHandler.kt:394-821` retains the route set represented by the 0.14.0 matrix; line positions moved, e.g. series `:483`, author-filter + collapse `:532-533`, and offline local-all `:742`. | No new unsupported route found. The author-filter + collapse call is now covered by a combined regression; per-file download and offline local-all are in `abs.hurl`. |
+| Historical Lissen `1.11.22-release` (`f30bf9be95ea3792bcc53e4e958576121d450a4d`) → `1.12.5-release` (`fd5c0417646bac3e011d4f4d3bb045286a9e5508`) | `AudiobookshelfApiClient.kt:162-165` added `POST /api/session/local-all`; duplicate `/api/me` projections were consolidated into one user-state response. | `/api/session/local-all` was already mounted at `crates/abs/src/routes/mod.rs:464` and behavior-tested; Hurl covers that historical request shape. Current Lissen 1.12.8 and reviewed development grouping are described above. |
+| Historical official app `v0.14.0-beta` (`12025ab59a5c9f5654b31b4b68c1fc71ad676f61`) → `v0.14.1-beta` (`2ac4de4d582dfaeb65b756a5e00e181207a867d7`) | At this review, `android/app/src/main/java/com/audiobookshelf/app/server/ApiHandler.kt:394-821` retained the route set represented by the 0.14.0 matrix; line positions moved, e.g. series `:483`, author-filter + collapse `:532-533`, and offline local-all `:742`. | No new unsupported route was found in this historical diff; the author-filter + collapse call has a combined regression, and per-file download/offline local-all are in `abs.hurl`. Current reviewed source is v0.14.2-beta, not this diff's pin. |
 
 ### Non-goals
 
@@ -122,7 +135,7 @@ Audio bytes are fetched by ExoPlayer through the same authenticated OkHttp clien
 
 ## Route matrix
 
-30 current Lissen routes. The Lissen column cites the declaration that calls the route (`—` means Lissen never calls it and the row exists because the reference has it and the profile is symmetrical); the capture column cites the file under `../komga-compat/abs/capture/` that pins the wire shape.
+30 current Lissen routes, plus the two development-head grouping routes marked `c03a4b36`. The Lissen column cites the declaration that calls the route (`—` means Lissen never calls it and the row exists because the reference has it and the profile is symmetrical); the capture column cites the file under `../komga-compat/abs/capture/` that pins the wire shape.
 
 | Method + path | Lissen declaration | abs-ref capture | Stump behaviour |
 | --- | --- | --- | --- |
@@ -139,6 +152,8 @@ Audio bytes are fetched by ExoPlayer through the same authenticated OkHttp clien
 | `GET /api/libraries/{id}/personalized` | `:55-58` | `personalized.json` | An array of shelves: `continue-listening`, `recently-added`, `recent-series`, `discover`, `newest-authors` ([Personalized shelves](#personalized-shelves)) |
 | `GET /api/libraries/{id}/authors[?limit&page&sort&desc]` | `:109-118`; official app `pages/bookshelf/authors.vue` calls without query parameters and reads `response.authors` | `library_authors.json` | No pagination parameters → `{authors:[…]}` for the official app. When both `limit` and `page` are present → `{results,total,limit,page,sortBy,sortDesc,minified}` for Lissen. Both shapes list only visible audiobook-backed writers; supports `name`, `lastFirst`, `addedAt`, `updatedAt`, `numBooks` and `desc` |
 | `GET /api/libraries/{id}/search?q&limit` | `:119-124` | `library_search.json` | `{book[], narrators[], tags[], genres[], series[], authors[]}`. A `book[]` element is a `{libraryItem:{…}}` wrapper, not a bare item |
+| `GET /api/libraries/{id}/stats` | `c03a4b36` `:121-125` | none — ABS v2.37.1 `LibraryController.js:978-1012` | ABS's book-library stats object over the caller's visible audible books. Lissen reads only `genresWithCount` ([Genre and narrator grouping](#genre-and-narrator-grouping)) |
+| `GET /api/libraries/{id}/narrators` | `c03a4b36` `:127-131` | none — ABS v2.37.1 `LibraryController.js:1110-1146` | `{narrators:[{id, name, numBooks}]}` over the caller's visible audible books, natural name order |
 | `GET /api/items/{id}?expanded&include` | `:133-137` | `item.json`, `item_expanded.json`, `item_multitrack.json` | The full item. `media.audioFiles[]` and `media.chapters[]` always; `media.tracks[]`, `duration`, `size`, `numTracks`, `numAudioFiles`, `numChapters` only with `expanded=1` |
 | `GET /api/items/{id}/cover?raw&width` | `:192-196` (`?raw=1`), `:198-203` (`width`) | none — binary; status and content type recorded by `capture.sh:115-116` | The item's cover bytes |
 | `POST /api/items/batch/get` | `:151-154` | `items_batch.json` | `{libraryItemIds:[…]}` → `{libraryItems:[…]}`, scoped like every other read |
@@ -157,7 +172,7 @@ Audio bytes are fetched by ExoPlayer through the same authenticated OkHttp clien
 | `GET /api/authors/{id}?include=items` | `:145-149` (the query is inside the `@GET` path) | `library_authors.json` (author object), `personalized.json` (`newest-authors` shelf) | The synthesised author plus `libraryItems[]`, limited to books visible to the caller; `404` if none are visible |
 | `GET /api/authors/{id}/image` | `:205-210` | none | Always `404`: Stump stores no author images |
 
-The rows below were added for the **official Audiobookshelf app** `v0.14.0-beta` (`12025ab5`), whose 23 REST paths are declared in `android/app/src/main/java/com/audiobookshelf/app/server/ApiHandler.kt:427-854`; a bare `ApiHandler:NN` cites that file, and `plugins/`, `pages/`, `store/` cite its Nuxt web view. They were captured live against the same `abs-ref` 2.36.0 container. The current `v0.14.1-beta` source retains this route set; see the pinned diff above.
+The rows below were added for the **official Audiobookshelf app** `v0.14.0-beta` (`12025ab5`), whose 23 REST paths are declared in `android/app/src/main/java/com/audiobookshelf/app/server/ApiHandler.kt:427-854`; a bare `ApiHandler:NN` cites that file, and `plugins/`, `pages/`, `store/` cite its Nuxt web view. They were captured live against the same `abs-ref` 2.36.0 container. The later `v0.14.2-beta` pin is source-reviewed only; see the scope and diff above.
 
 | Method + path | Official-app call site | Stump behaviour |
 | --- | --- | --- |
@@ -226,7 +241,7 @@ Use the current client pins above and a fixture server reachable from the phone:
 `http://<fixture-host>:25600`. Use locally held fixture credentials only; do not
 put usernames, passwords, tokens, or endpoint-sheet contents in this page.
 
-| Flow | Official Audiobookshelf app `v0.14.1-beta` | Lissen `1.12.5-release` |
+| Flow | Official Audiobookshelf app `v0.14.2-beta` (source-reviewed; device retest pending) | Lissen `1.12.8-release` (source-reviewed; device test pending) |
 | --- | --- | --- |
 | Login | Add the fixture URL and sign in; confirm the server remains connected after relaunch. | Add the same URL and sign in; confirm the server appears in the connection list after relaunch. |
 | Libraries | Open the audiobook library and an item; confirm title, cover when present, and track list. | Open the audiobook shelf and item details; confirm title, cover when present, and track list. |
@@ -331,6 +346,13 @@ The official app plays downloaded books offline and uploads whole sessions after
 
 `updatedAt` is the **device clock time of the position**, not of the upload, and that is what the merge turns on: the profile passes it as the source time of the reading-state update, so the unified head's ordinary conflict rule decides. An upload dated more than the 60 s tolerance behind the head that also reports **less** progress is recorded as provenance and does not move the position; all other uploads go through the ordinary conflict rule. `local-all` reports whether the head moved as `progressSynced`; the official app correlates results by id and logs moved progress or per-session errors (`ApiHandler.kt:747-760`). A session that names a book the caller cannot see comes back as `success: false` with an error, never as a status code.
 
+The offline local-merge path measures an uploaded position against the server's
+probed audio duration; the client-supplied `duration` is only a fallback. This
+prevents a stale upload with an incorrect short duration from appearing to
+outrank a newer server head (`crates/abs/src/routes/session.rs::merge_local`,
+`local_merge_measures_progress_with_the_server_duration`). This is a
+contract-tested guard, not a new phone/offline playback result.
+
 Stale offline positions are provenance only and do not create or extend `reading_sessions`; accepted local history is marked `playMethod: 3` (Local) in `abs_sessions` so it is not mistaken for a streamed session.
 
 #### Personalized shelves
@@ -352,9 +374,25 @@ Reference status codes reproduced from `capture/negatives.txt`: unknown item `40
 
 `desc` is the string `"0"` (ascending) or `"1"` (descending) — never a boolean (`LibraryOrderingRequestConverter.kt:24-25`). `minified` defaults to `"1"` and `collapseseries` to `"0"` (`:94`, `:96`).
 
-`filter` is `"<key>.<base64 of the value>"` (`common/api/EncodeLibraryFilter.kt:5-8`, `Base64.NO_WRAP`). Lissen sends two forms: the hard-coded `progress.bm90LWZpbmlzaGVk` — base64 `not-finished`, its "hide completed" toggle (`library/converter/LibraryFilteringRequestConverter.kt:15`) — and `series.<base64 series id>` when it drills into a collapsed series (`common/api/AudioBookshelfRepository.kt:158`, `library/LibraryAudiobookshelfChannel.kt:91-94`). The envelope echoes the value back as `filterBy`, which is absent from the response entirely when no filter was sent.
+`filter` is `"<key>.<base64 of the value>"` (`common/api/EncodeLibraryFilter.kt:5-8`; `Base64.NO_WRAP` in 1.12.8, `java.util.Base64.getEncoder()` — padded standard alphabet — at `c03a4b36`). Released Lissen sends two forms: the hard-coded `progress.bm90LWZpbmlzaGVk` — base64 `not-finished`, its "hide completed" toggle (`library/converter/LibraryFilteringRequestConverter.kt:15`) — and `series.<base64 series id>` when it drills into a collapsed series (`common/api/AudioBookshelfRepository.kt:158`, `library/LibraryAudiobookshelfChannel.kt:91-94`). The development head adds `genres.<base64 name>` and `narrators.<base64 name>` (`library/LibraryAudiobookshelfChannel.kt:197,205`). The envelope echoes the value back as `filterBy`, which is absent from the response entirely when no filter was sent. Like abs-ref's `libraryFilters.decode` (`Buffer.from(decodeURIComponent(value), 'base64')`, `libraryFilters.js:13-20`), the value is percent-decoded once more before base64, so the `encodeURIComponent`ed narrator `id` also works as a filter value. An unknown key or undecodable value is no filter at all.
 
 The response envelope is `{results, page, total, limit, offset, sortBy, sortDesc, mediaType, minified, collapseseries, include}` plus `filterBy` when filtered; Lissen only requires `results`, `page` and `total` to be present and non-null (`library/model/LibraryItemsResponse.kt`), but the whole reference envelope is emitted.
+
+### Genre and narrator grouping
+
+Lissen's development head pages both lists client-side, sorted by lower-cased name, and uses the name as the group id (`common/converter/LibraryStatsResponseConverter.kt`, `LibraryNarratorsResponseConverter.kt`). It decodes `genresWithCount[]{genre, count}` (both non-null) and `narrators[]{name, numBooks?}` (`library/model/LibraryStatsResponse.kt`, `LibraryNarratorsResponse.kt`).
+
+| Field | abs-ref v2.37.1 (`3563d494`) | Coppice |
+| --- | --- | --- |
+| Scope | Every item of the library (`LibraryController.js:978-1012,1110-1146`) | Only audible, undeleted books the caller can see (library exclusions, device scope, age restriction); an excluded library is `404` |
+| `genresWithCount` | `GROUP BY value ORDER BY numItems DESC` over `json_each(genres)` (`libraryItemsBookFilters.js:1290-1305`) | Each CSV value of `media_metadata.genres`, count descending, ties by genre in byte order |
+| `totalGenres`, `totalItems`, `totalSize`, `totalDuration`, `numAudioTracks` | Library sums (`:1312-1325`) | Visible-item count, `media.size` sum, probed duration sum in seconds, probed track count |
+| `largestItems`, `longestItems` | Top 10 `{id, title, size}` / `{id, title, duration}` | Same shape; ties by item id; a book without a probe row has duration `0` |
+| `totalAuthors`, `authorsWithCount` | Author rows and top 10 `{id, name, count}` (`authorFilters.js:11-52`) | Distinct visible writers and top 10 by book count, ties by name, ids from `abs_ids` |
+| `narrators[]` | `{id: encodeURIComponent(base64(name)), name, numBooks}`, `naturalSort` with `Intl.Collator({numeric:true, sensitivity:'base'})` | Same shape and id; natural, case-insensitive order (no accent folding), raw name as the final tie-break |
+| `genres.`/`narrators.` filter | `json_each(<group>).value = :filterValue` (`libraryItemsBookFilters.js:191-195`) | Exact, case-sensitive match against one CSV value of `media_metadata.{genres,narrators}` |
+
+Regression: `apps/server/tests/abs/library_groups.rs` (counts, ordering, a hidden library, EPUB exclusion, and Cyrillic/Latin-1/space names round-tripped through Lissen's encoding and abs-ref's narrator id).
 
 ### Where the capture and the client disagree
 

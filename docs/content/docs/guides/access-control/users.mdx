@@ -4,18 +4,30 @@ title: Users
 
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
-Coppice has two user account types:
+Coppice has two account types:
 
-- **Server Owner**: The owner of the server. This user has full control over the server, and can add and remove users.
-- **Server Member**: A user that is granted access to the server. This user has majority read-only access to the server, with opt-out options
+- **Server Owner**: The first account created on an empty server. The owner has
+  full control, including locking and deleting other accounts.
+- **Server Member**: An account whose access is determined by its assigned
+  permissions, library visibility, and age restrictions.
 
-An 'unclaimed' Coppice server, or a server that has no user with the `server owner` role, will prompt for an initialization step, and will automatically assign the first registered user the **Server Owner** role.
+The server does not automatically open a registration screen. To bootstrap a
+local owner on an empty server, send a JSON request with `username` and
+`password` to `POST /api/v2/auth/register`, then sign in at `/app/login`. Once
+an active account exists, unauthenticated registration is rejected. If OIDC is
+configured with registration enabled, the first OIDC account on an empty server
+becomes the owner instead. The Home **Users** screen manages subsequent local
+accounts; it does not offer the initial-registration flow
+(`apps/server/src/routers/api/v2/auth.rs`, `oidc.rs`).
 
 ## Management
 
 <Callout title="Permission required">
-	These functionalities are gated behind the `user:manage` user permission. To learn more about
-	permissions, see the [permissions](/docs/guides/access-control/permissions) guide.
+	The **Users** screen is listed under *Manage* in the Home app for the server owner and for users
+	with `READ_USERS`, who see the list without edit controls. Creating and editing accounts needs
+	`MANAGE_USERS`; locking, signing out, and deleting accounts are reserved for the server owner. To
+	learn more about permissions, see the [permissions](/docs/guides/access-control/permissions)
+	guide.
 </Callout>
 
 ### Create a user
@@ -23,45 +35,81 @@ An 'unclaimed' Coppice server, or a server that has no user with the `server own
 <Steps>
 
 <Step>
-### Navigate to the settings page
+### Open the Users screen
 
-Navigate to the primary settings page (`/settings`) in your browser
+Open the Home app (`/app`) and choose **Users** in the *Manage* group of the sidebar (`/app/users`). It lists every account with its status, last sign-in, active sessions, and permission count.
 </Step>
 
 <Step>
-### Select `Users` in the `Server` section of the sidebar
+### Click the `New user` button
 
-This will take you to the user management page. It will display a list of users, authentication history, and miscellaneous user stats.
-</Step>
-
-<Step>
-### Click the `Create user` button
-
-This will route you to a subpage which displays a form to create a new user
+This opens the form for a new local account.
 </Step>
 
 <Step>
 ### Fill out the form
 
-- **Username**: The username of the user. This is used to log in to the server
-- **Password**: The password of the user. This is used to log in to the server. You can click the `Generate` button to generate a random password, or manually enter one
-- **Age restriction**: The _optional_ age restriction of the user. This is used to determine which books the user can access. You may enter a number corresponding to the **maximum** age rating the user can access. For example, if you enter `13` then the user will be able to access books with an age rating of `13` or lower. See the [age restrictions](/docs/guides/access-control/age-restrictions) section of the Access Control guide for more information
-  - **Note**: If you check the `Enforce restrictions for missing metadata` checkbox, then the user will only be able to access books that:
-    1. _Explicitly_ have an age rating set
+- **Username** and **Password**: what the user signs in with. Share the password with them directly; whether they may change it later is the _Change own password_ permission
+- **Permissions**: grouped by area. A new account starts with none. Ticking a permission also grants the permissions it includes, which show as _Included_
+- **Age restriction**: the _optional_ **highest** age rating the user can access. For example, if you enter `13` then the user will be able to access books with an age rating of `13` or lower. See the [age restrictions](/docs/guides/access-control/age-restrictions) section of the Access Control guide for more information
+  - **Note**: If you check _Also hide books without a rating_, then the user will only be able to access books that:
+    1. _Explicitly_ have an age rating set (on the book or its series)
     2. The age rating is less than or equal to the user's age restriction
 
     Otherwise, the user will be able to access books that _do not_ have an age rating set
+- **Session limit**: the _optional_ number of sessions that may be signed in at once. At the limit, signing in again ends the oldest session
+</Step>
+
+<Step>
+### Click the `Create user` button
+
+If the server refuses the account, its reason is shown above the button.
 </Step>
 
 </Steps>
 
 ### Editing a user
 
-Follow steps 1 and 2 above to navigate to the user management page. Locate the `Users` table and click the action menu button (three dots) for the user you wish to edit. Click the `Edit` button in the action menu. This will route you to the same subpage as the `Create user` button, but with the form pre-filled with the user's current information. Make any necessary changes and click the `Save` button to save the changes.
+On the Users screen, click **Edit** on the user's row. The form starts from the user's current permissions, age restriction, and session limit; saving replaces all three and signs the user out everywhere, so the changes apply at their next sign-in. Nobody can edit their own account (the server ignores permission changes to yourself), and the server owner's account cannot be edited because the owner already holds every permission. Usernames and passwords are not changed here; see [Password reset](#password-reset).
+
+Accounts that sign in through OIDC are marked **OIDC**. While OIDC sign-in is enabled and [OIDC permission synchronization](/docs/guides/access-control/oidc#group-to-permission-synchronization) is on, their permissions are replaced at every sign-in, so edits to them last only until then.
+
+### Signing a user out
+
+Open the user's actions menu (three dots) and choose **Sign out everywhere…**. Every session of the account ends; the user can sign in again right away unless the account is locked.
 
 ### Deleting a user
 
-To delete a user, navigate to `/settings/users` in your browser. Locate the `Users` table and click the action menu button (three dots) for the user you wish to delete. Click the `Delete` button in the action menu. This will open a modal asking you to confirm the deletion. Click the `Delete` button in the modal to confirm the deletion.
+Open the user's actions menu (three dots):
+
+- **Delete…** marks the account deleted and keeps its username reserved.
+  Sign-in is blocked. Sessions, refresh tokens, API keys, Liseur/device
+  credentials, and guest-reader capabilities linked to or issued by this
+  account are revoked. Pending club invitations it issued and active/pending
+  social shares involving it are revoked; reader sessions it created are
+  closed. Reading history, requests, and most other account data remain
+  stored. This is not an account-data purge.
+- **Delete permanently…** removes the account and its private database
+  records, including reading progress, bookmarks, annotations, requests,
+  preferences, notification settings, personal integrations, collections,
+  private reading and smart lists, and device credentials. It also removes
+  the user's club membership and invitations. The server's books, series,
+  files, and libraries are not deleted. Explicitly shared/public reading
+  and smart lists and server-wide emoji are retained under the server owner's
+  custody rather than silently discarded. Club-reader sessions created by
+  the account are closed and kept under that custody, with their participant
+  history retained and guest credentials revoked. Other shared audit/history
+  records can remain with the account link removed (for example, another user's
+  request keeps its approval status but not the deleted approver's identity).
+
+**Neither action removes copies outside the database**: Markdown/Git annotation
+exports, remote repositories, already-sent emails and notifications, device
+downloads, and backups need separate retention review. In-flight external
+delivery cannot be recalled. Soft deletion retains the account data; permanent
+deletion does not erase text/display names already included in another
+member's shared club history. Type the username to confirm permanent
+deletion. Neither action can be undone or used on your own account or the
+server owner's.
 
 ## Security
 
@@ -76,7 +124,7 @@ Coppice currently does not enforce any password complexity requirements. This ca
 
 If a user has been locked out of their account, it is up to the server owner to unlock the account to restore access. This can be done using either of the following methods:
 
-1. Navigate to `/settings/users` in your browser. Locate the `Users` table and click the action menu button (three dots) for the user you wish to unlock. Click the `Unlock` button in the action menu. This will open a modal asking you to confirm the unlock. Click the `Unlock` button in the modal to confirm the unlock.
+1. On the Home app's **Users** screen (`/app/users`), open the actions menu (three dots) for the user you wish to unlock and choose **Unlock…**, then confirm. **Lock…** in the same menu locks an account: it is signed out everywhere and every sign-in is refused until it is unlocked. The server owner cannot lock their own account here.
 2. Use the embedded CLI in the Coppice server to unlock the user account. See the [CLI](/docs/developer/cli) guide for more information. In general, the command will look like this:
 
    ```bash copy

@@ -47,11 +47,15 @@ To reset a user's password, run:
 
 You will be prompted to enter a new password, with a confirmation prompt to ensure you entered it correctly. The password will be hashed and salted and stored in the database to replace the existing one.
 
-<Callout>
-	The CLI only contains user-management commands at this time. If you have any ideas for new
-	commands or features, please create a [feature
-	request](https://github.com/stumpapp/stump/issues/new/choose) on GitHub
-</Callout>
+## Server ownership
+
+`./stump account reset-owner` starts an interactive flow to select an existing
+unlocked account as the server owner. It removes owner status from the previous
+owner. Use the same configuration directory as the server; these commands
+operate directly on that database.
+
+The CLI also has `system` and `tools` subcommands. Use `./stump --help` and
+the relevant subcommand's `--help` for the current command inventory.
 
 ## Local to OIDC Account Migration
 
@@ -61,15 +65,37 @@ To migrate an existing local user account to an OIDC account, run:
 ./stump account migrate-oidc --username <local-username> --oidc-email <oidc-email>
 ```
 
-This will do the following, assuming both accounts exist:
+Both accounts must already exist. The command transfers the local username,
+permissions, preferences and user-scoped records to the OIDC account, preserving
+the destination OIDC identity (ID, issuer and email). Coverage includes reviews,
+reading sessions and heads, favorites, bookmarks, collections, lists, memberships
+and discussions, Liseur synchronization (including raw operations, annotations,
+attachments and provenance), devices and their credentials/scopes, requests and
+approval history, notifications, Kindle destinations and deliveries, and
+personal Hardcover connections. Library exclusions move with the account;
+age restrictions, lock state and session limits take the more restrictive value.
+The local account is deleted only after the database transfer succeeds. Transferring
+server ownership requires separate confirmation; declining cancels migration.
 
-- Relink all data (read history, preferences, etc.) from the local account to the OIDC account
-- Update the OIDC account to have the permissions of the local account
-- Delete the local account
-- Reassign the local account's username to the OIDC account
+The command revokes both accounts' login and refresh sessions, plus Liseur login
+tokens (including legacy tokens without a recorded kind). Durable local API keys
+and explicitly typed Liseur device credentials move with the local account's
+permissions; approved but unissued device pairings are denied and detached so
+their nonces cannot mint a credential with destination authority. Existing
+destination durable keys must be revoked before changing destination permissions
+or ownership. The command refuses ambiguous conflicts
+(for example two personal Hardcover connections or two populated Liseur sequence
+histories), as well as saved job state that still embeds the old user ID. It
+rolls back without deleting either account and names the blocking data. Drain
+or archive those jobs and resolve any conflict before retrying. If both users
+already have preferences, the local account's preferences replace the OIDC
+preferences (the old OIDC preference row is deleted); review those settings first.
 
 <Callout type="warning">
-	Both the local account and the OIDC account must already exist. The OIDC account should not have
-	any existing data, as it will be overwritten. Use this command with caution, as it cannot be
-	undone
+	Back up the database, drain queued jobs, and stop the server before using the
+	same configuration directory for this one-shot command. The migration transfers
+	database ownership, not exported Markdown or Git vault files in per-user
+	filesystem roots or backups. It never moves, deletes, or remaps those external
+	copies. Check such exports separately before deleting the local account; there
+	is no automatic undo after a successful merge.
 </Callout>

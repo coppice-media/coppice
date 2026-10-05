@@ -15,6 +15,13 @@ boundaries are defined in [Integration architecture](/docs/developer/integration
 The one-table view of crates → features → profiles → clients is
 [Server architecture › Architecture map](/docs/developer/server-architecture#architecture-map).
 
+The 2026-10-04 gate in `.omp/PROJECT_STATE.md` records 2,521 passing Rust tests
+(22 ignored), the headless/full and Bun workspace builds, 12 Hurl replay files
+(375 requests), and scoped loopback browser smokes for guest reading,
+`/app/users`, account annotations, and Editor quality settings. This is a
+record of the uncommitted tree at that gate, not a new device or live-Pangolin
+run; subsequent edits require a new gate.
+
 ## Protocols and clients
 
 | Area                                             | Current state                                                                                                                                                                                                                                                                                                                                          | Evidence                                                                                                                                                                                                       |
@@ -79,7 +86,7 @@ read-aloud product playback.
 | Metadata providers        | **Shipped:** twelve catalogued: `builtin:embedded`, `comic_vine`, `hardcover`, `anilist`, `mal`, `mangadex`, `mangaupdates`, `openlibrary`, `googlebooks`, `metron`, `audible`, `llm`                                                                                                                                 | **Contract-tested** offline payloads; Hardcover live credentials **Blocked** — [Provider status](/docs/developer/provider-status#metadata-providers) |
 | Uploads and mutations     | **Shipped:** `stageIngestUploads` multipart with auto-analysis and re-upload dedup, `bulkApplyIngestMetadata` (no partial writes), `requeueIngestAnalysis`, `rejectIngestItem`, `discardIngestItem`                                                                                                                   | **Source-only:** `crates/ingest/`                                                                                                                    |
 | Library maintenance tools | **Shipped:** 17 `Tool` implementations behind one plan/apply contract driven by `stump tools list`/`plan`/`apply`; calibre is shell-out only                                                                                                                                                                          | **Source-only:** `crates/tools/src/lib.rs:113-132`, [Calibre tooling](/docs/developer/calibre-tooling)                                               |
-| Editor and console apps   | **Shipped:** `editor/` (staged ingest, provider settings, API keys, policy) at `/editor`; `home/` (dashboard + heatmap, library/series/entity browsers, series reshape, foliate reader, annotation hub, notification and sink settings, devices, account) at `/app`; both share `packages/stump-ui`                   | **Source-only:** `apps/server/src/routers/static_apps.rs`, [Home app](/docs/developer/home-app)                                                      |
+| Editor and console apps   | **Shipped:** `editor/` (`/`, `/login`, staged drop/queue/rework/bulk/library, provider and field-policy settings, quality-check settings, remote sources, API keys); `home/` (`/`, `/login`, dashboard, library/series/book/reader, reading/annotations, devices/connections, social, requests/search, workers/account, owner-managed `/users`); accountless `/club-reader/[sessionId]` is outside the signed-in Home shell. Both share `packages/stump-ui`. | **Source-only:** `editor/src/routes/`, `home/src/routes/`; **2026-10-04 loopback browser smoke** for users, guest reader, account annotations, and quality settings — [Home app](/docs/developer/home-app), [Editor screen map](/docs/developer/modular-ingest#editor-screen-map) |
 
 ## Provider host and remote sources
 
@@ -182,13 +189,21 @@ specific tested flows. Refreshed source pins do not extend an older device run.
 ## Known limitations
 
 - **ABS socket.io.** The Engine.IO v4 / Socket.IO v5 lane is implemented by `crates/abs/src/socket/mod.rs` and `crates/abs/src/socket/protocol.rs`; `apps/server/src/routers/abs_backend.rs::compose` mounts it alongside the REST router. `crates/abs/src/socket/tests.rs` covers authenticated websocket frames. The official ABS app's scoped run does not establish complete parity, so broader official-client/device verification remains **Pending** ([ABS compatibility](/docs/developer/abs-compat)).
-- **No live keys** for Hardcover, Metron, Open Library, or Google Books: those
-  mappers are **Contract-tested** against recorded payloads, never against the
-  vendor. Hardcover account/progress/journal sync is **Planned** and **Blocked**.
-- **Cover pick is decided but not written** — `HIGHEST_RESOLUTION` ranks
-  candidates, yet `CoverUrl` is outside `STORABLE_FIELDS`, so the decision comes
-  back `applied: false`. Title-language preference is still fixed per provider
-  ([policy table](/docs/developer/provider-status#what-the-policy-layer-covers)).
+- **Provider live coverage is scoped:** Hardcover, Metron, Open Library, and
+  Google Books metadata mappers have recorded-payload **Contract-tested**
+  coverage, not complete live credential-backed runs. A 2026-09-22 live probe
+  reached OpenLibrary; Google Books returned HTTP 429. These observations do
+  not prove full live provider behavior. Personal Hardcover PAT storage and
+  manual `me.user_books` import are implemented with source/contract evidence;
+  they are not a live PAT run or a `reading_journals`/outbound progress sync.
+  Imported quote locations are synthetic `hardcover://` page locators without
+  exact text ranges (`crates/graphql/src/mutation/hardcover.rs:378-415`;
+  [Hardcover integration](/docs/developer/hardcover-integration)).
+- **Metadata post-processing:** selected-cover writeback now ships:
+  `HIGHEST_RESOLUTION` ranks candidates, `CoverUrl` is in `STORABLE_FIELDS`,
+  and artwork is fetched and staged before the metadata write
+  (`crates/ingest/src/providers/apply.rs`). Title-language preference is still
+  fixed per provider ([policy table](/docs/developer/provider-status#what-the-policy-layer-covers)).
 - **Komga is a target profile, not parity:** no persisted settings, no
   sidecar/artwork CRUD, narrower search operators; the filesystem browser is
   partial and owner-only (`crates/komga/src/routes/media.rs`).

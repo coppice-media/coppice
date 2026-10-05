@@ -11,10 +11,10 @@ Claims below distinguish source contracts from exercised behavior; upstream drif
 
 | Claim | Evidence |
 | --- | --- |
-| KOReader direct-call APIs used by the plugin | **Source-derived:** compared upstream baseline `009367df7ac7142bc0d1eb5782d061260b11baa6` with release `v2026.07.1`, peeled commit `9192014d8bd82a91dc1012473be0f238dedfdb54`. The KOReader plugin and frontend files listed below did not change. A further triage against unreleased master `1c8724e90c5ceb8046b656ab7ec2e4f7a7706ce1` found three plugin-facing changes, handled below: `InputContainer:_init` binds the physical Home key on every widget and its `onHome` closes windows through `onClose`; `ReaderHighlight:mergeHighlights` deletes the merged highlights and saves one new item without plugin fields; highlight colours can carry a user code in `highlight_custom_colors`. |
-| Plugin pure mapping, catalog layout/paging/cache behavior, and settings behavior | Host-test coverage exists in the sibling repository's `tests/pure_checks.lua`; this does not load KOReader's UI or networking runtime. |
+| KOReader direct-call APIs used by the plugin | **Source-derived:** current inventory baseline [`accee08cf776acdb88c35b9ed3a416331d8d89e0`](https://github.com/koreader/koreader/commit/accee08cf776acdb88c35b9ed3a416331d8d89e0), reviewed release v2026.07.1; the 2026-10-04 source refresh found no new contract impact. Earlier comparisons against baseline `009367df7ac7142bc0d1eb5782d061260b11baa6`, release commit `9192014d8bd82a91dc1012473be0f238dedfdb54`, and unreleased master `1c8724e90c5ceb8046b656ab7ec2e4f7a7706ce1` remain historical source evidence for Home-key binding, merged-highlight replacement, and custom highlight colours. |
+| Plugin mapping, layout/paging/cache, and settings | The recorded 2026-10-04 host gate passed 580 pure checks plus browser and static checks in sibling `koreader-coppice`. These host checks do not load a physical KOReader device or its networking runtime. |
 | API/OPDS/KOSync/liseur route contracts | **Source-derived** from the Coppice route handlers, middleware, and the pinned KOReader files below. |
-| KOReader UI, KOSync interaction, and physical-device installation | **Not device-verified.** A host pure check is not a KOReader runtime smoke test. |
+| KOReader UI, KOSync interaction, and physical-device installation | **Not device-verified.** Host browser checks are not a physical KOReader runtime smoke test. |
 
 The KOReader root `base` submodule moved from `4003ec5f9896647be5555c71c6b2c96c616bba12` to `6e4bc81af4e04f78d81677a323a780a71b29702a`; both pins use LuaSocket `e3ca4a767a68d127df548d82669aba3689bd84f` and LuaSec `v1.3.2`. No plugin-facing API change was identified in the audited source files:
 
@@ -33,6 +33,8 @@ Pairing is the only onboarding flow. `POST /api/v2/devices/pair/start` creates a
 | OPDS 2.0 browse/search | HTTP Basic username + API key | The API key is used as the Basic password on `/opds/v2.0/...`. Feed links are rebased to the configured origin before requests. |
 | Automatic and explicit KOSync | API key in `/koreader/{key}` | `GET /users/auth`, `PUT /syncs/progress`, and `GET /syncs/progress/{document}`. The key-in-path is required by KOReader's custom-server contract. Checksum mode is `BINARY` (`0`). |
 | Annotation lane | Paired liseur token in Bearer header | `GET /v1/token`, `POST /v1/books/{id}/resolve`, `POST /v1/annotations`, `GET /v1/works/{id}/annotations`, and revision-guarded `DELETE /v1/annotations/{id}?rev=…`. |
+
+OPDS 2.0 publication links also advertise a stable `http://opds-spec.org/progression` relation with `application/opds-progression+json` (`core/src/opds/v2_0/{link,progression}.rs`). This discoverable link is not the plugin's progress-sync lane, which remains KOSync.
 
 The client keeps the API key and liseur token in separate settings fields. It does not log the KOSync URL or display request URLs/raw response bodies in error messages. The API key appears in the KOSync URL because that protocol requires it; the polling nonce is scoped to its status request.
 
@@ -191,19 +193,20 @@ backup/restore, pairing, bidirectional annotation color/drawer mapping,
 per-book queue persistence/idempotence, edit/delete conflicts, merged
 highlights, native and Readium anchoring (including ambiguous/saturated-search
 refusal), tombstone removal/recreation, catalog mapping/layout/paging/cache
-eviction, and migration behavior; the browser harness covers search, the cover
-grid, Continue-reading taps, Back/Home/Close key handling against both the
-v2026.07.1 and master `InputContainer` shapes, and custom highlight chip
-colours. It does not prove the KOReader UI, device filesystem, installed
-LuaSec behavior, or physical Kobo/Kindle compatibility; the desktop emulator
-smoke (browser open, Home key closing it and landing the file manager on its
-home folder, chips tinted with a custom colour) is run by hand.
+eviction, and migration behavior; the browser harness covers search, a
+305-book catalog page at two geometries, the cover grid, Continue-reading taps,
+Back/Home/Close key handling against both the v2026.07.1 and master
+`InputContainer` shapes, and custom highlight chip colours. The recorded
+host run does not prove the KOReader UI on a physical device, device
+filesystem, installed LuaSec behavior, or physical Kobo/Kindle compatibility.
+The desktop emulator smoke (browser open, Home key returning the file manager
+to its home folder, custom-colour chips) is a separate manual check.
 
 ## Source references
 
 | Contract | Source |
 | --- | --- |
-| KOReader KOSync paths and settings | Pinned KOReader `plugins/kosync.koplugin/{main.lua,KOSyncClient.lua,api.json}` at the commit above |
+| KOReader KOSync paths and settings | Current KOReader source pin `accee08c` (`plugins/kosync.koplugin/{main.lua,KOSyncClient.lua,api.json}`); older reviewed release `9192014d` |
 | Continue-reading and media routes | `apps/server/src/routers/api/v2/reading.rs`; `apps/server/src/routers/api/v2/media.rs` |
 | Pairing start/status | `apps/server/src/routers/api/v2/device_pairing.rs` |
 | KOSync compatibility routes | `crates/koreader/src/lib.rs` |

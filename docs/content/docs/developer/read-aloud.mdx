@@ -587,7 +587,7 @@ See the [request and acquisition boundary](/docs/guides/integrations/acquisition
 for configuration and ownership details.
 
 This acquisition path is separate from alignment: a user confirms an ebook +
- audiobook pair, then imports a validated map or enqueues an alignment job. The
+audiobook pair, then imports a validated map or enqueues an alignment job. The
 optional worker-local Storyteller adapter can fulfill that job; Storyteller is
 never a search/catalog provider.
 
@@ -623,10 +623,12 @@ never a search/catalog provider.
    the authenticated cache-only route, OPDS link, GraphQL map/artifact fields,
    and materialized deterministic ZIP are **Shipped**. Readiness quality
    checks and the virtual composite EPUB remain **Planned**.
-6. Keep the request ledger, permissions, decisions, notifications, and social
-   handoff separate from provider search and alignment. Acquisition remains
-   deferred; any future integration must use a separate authenticated provider
-   sidecar.
+6. Keep the **Shipped** request ledger, permissions, decisions, notifications,
+   and social handoff separate from the **Shipped**, manager-confirmed MAM
+   Bridge acquisition path. The sidecar searches/grabs only after explicit
+   operator action; Coppice copies completed handoffs into staged ingest,
+   where Editor review fulfils the request. See
+   [request and acquisition boundary](/docs/guides/integrations/acquisition).
 7. Public manifest federation only after legal/privacy review and abuse controls.
 8. Optional Storyteller app serving profile (`crates/storyteller`), independent
    of the worker align backend.

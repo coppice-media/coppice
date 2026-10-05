@@ -3,13 +3,13 @@ title: Komga compatibility adapter
 description: The evidence-backed Komga API profile implemented for Komelia clients
 ---
 
-This page is the authoritative specification for Stump's Komga compatibility adapter. It describes the **implemented compatibility profile**, not the full Komga API. The target is the route and DTO profile observed from Komelia **0.19.0**; an endpoint or field not described here is not implied to be supported.
+This page specifies Stump's **implemented Komga compatibility profile**, not the full Komga API. The original device-tested profile was observed from Komelia **0.19.0**; the current Komelia **0.20.0** source inventory is separate and has no new device run. An endpoint or field not described here is not implied to be supported.
 
 ## Scope and evidence
 
 ### Current facts
 
-The adapter is a protocol boundary over Stump's existing authenticated library, media, reading-progress, collection, and read-list services. It does not introduce Komga persistence or a second identity system. All route handlers are mounted by [`apps/server/src/routers/komga/mod.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/mod.rs), and DTOs are defined in [`crates/komga/src`](https://github.com/stumpapp/stump/tree/nightly/crates/komga/src).
+The adapter is a protocol boundary over Stump's existing authenticated library, media, reading-progress, collection, and read-list services. It does not introduce Komga persistence or a second identity system. [`crates/komga/src/routes`](https://github.com/stumpapp/stump/tree/nightly/crates/komga/src/routes) owns the Komga/Grimmory route handlers; [`apps/server/src/routers/komga`](https://github.com/stumpapp/stump/tree/nightly/apps/server/src/routers/komga) mounts them and handles server-specific identity/settings. DTOs live in [`crates/komga/src`](https://github.com/stumpapp/stump/tree/nightly/crates/komga/src).
 
 The compatibility claims in this document have two sources:
 
@@ -23,20 +23,25 @@ document ([`openapi.json`](https://raw.githubusercontent.com/gotson/komga/1.26.3
 The request and response DTO shapes are corroborated by the pinned
 [`komga-client` 0.11.0 commit
 `74412a6e`](https://github.com/Snd-R/komga-client/commit/74412a6e27402b90f73672c7452f60a0f05914ca)
-and the Komelia client snapshot
-[`65f92fde`](https://github.com/Snd-R/Komelia/commit/65f92fde60b7b7b62b85a55ceb80b92adf50eec8).
+and Komelia 0.20.0
+[`9216fd18`](https://github.com/Snd-R/Komelia/commit/9216fd18dec1a36ba42e7d810f47210a41d8ad99).
+Komga 1.28.1 [`2ab7a5a6`](https://github.com/gotson/komga/commit/2ab7a5a61a8b8bb12a6edd576fed380b4b613c99)
+adds the structured author-existence semantics integrated into this profile;
+it does not replace the historical identity/session capture baseline above.
 
 
 ### Built-in Komf-compatible API
 
-Coppice implements the Komf 2.0.1 HTTP contract consumed by Komelia 0.19.3;
-this is a native Rust server adapter, not a separately deployed Komf process.
-The contract is pinned to [Komf
-`5ad67370c5da6d94372e7c51bff62dd75053ac64`](https://github.com/Snd-R/komf/commit/5ad67370c5da6d94372e7c51bff62dd75053ac64)
+Coppice implements the supported Komf 2.1.0 HTTP subset consumed by Komelia
+0.20.0; this is a native Rust server adapter, not a deployed Komf process.
+The generated contract inventory is pinned to [Komf
+`d8a34e9df29ddaa6941c302df216812ee6d525e9`](https://github.com/Snd-R/komf/commit/d8a34e9df29ddaa6941c302df216812ee6d525e9)
 and [Komelia
-`3c5f501ef24b3acc239302adcab28efe0772c513`](https://github.com/Snd-R/komelia/commit/3c5f501ef24b3acc239302adcab28efe0772c513),
-which bundles `komf-client` 2.0.0. `stump_komf` owns the HTTP DTOs and router;
-the server adapter uses native metadata providers and Stump metadata storage.
+`9216fd18dec1a36ba42e7d810f47210a41d8ad99`](https://github.com/Snd-R/Komelia/commit/9216fd18dec1a36ba42e7d810f47210a41d8ad99),
+which bundles `komf-client` 2.1.0. `stump_komf` owns the HTTP DTOs and router;
+the server uses native providers and metadata storage. Optional MangaBaka
+routes are inventoried but unsupported; they remain disabled, not empty
+successful fallback responses.
 
 The `komf` Cargo feature is included in `headless` and `full`, but not
 `minimal`. Routes mount only when `STUMP_ENABLE_KOMF=true`; the Komga media
@@ -58,6 +63,13 @@ the key resolves to a device-bound credential. An invalid key returns `401`
 before session or other authentication fallback. The server request span
 redacts the query value; a reverse proxy or browser history may still record
 the URL, so treat the complete Komf URL as a secret.
+
+Unpatched native Komelia 0.20.0 appends `/` to the raw Komf base URL and
+corrupts a query-bearing device key. A correct client URLBuilder patch is
+provided in the [setup guide](/docs/guides/integrations/komelia-komf).
+Coppice deliberately rejects corrupted keys rather than trimming credentials
+or widening query authentication. A server replay does not prove the patched
+client has been installed on a device.
 
 | Operation | Required access |
 | --- | --- |
@@ -90,8 +102,26 @@ builds the complete router with ABS, Kavita, Komga, and Komf enabled and probes
 prove the Komf route is mounted without an Axum/matchit route-build panic.
 
 The checked-in `scripts/contracts/komf-media-server.json` is source-derived
-from the pinned Kotlin contract; it is not runtime proof. Server routes,
-fixtures, permissions, and SSE are exercised by:
+from exact commits in `scripts/upstreams.json`, checked against Kotlin version
+catalogs; it is not runtime proof. Extraction records blob/content hashes and
+sorted JSON. Malformed Kotlin, dynamic inline paths, missing or ambiguous
+handlers, unresolved request models, missing sources, and version drift fail
+closed. `bun test scripts/extract-komf-contract.test.mjs` exercises those parser
+boundaries without GitHub; `bun run update:komf-contract` regenerates the
+inventory, and `bun run check:komf-contract` compares it.
+
+Komelia call-site coverage includes browse-time `RemoteSeriesApi` /
+`RemoteCollectionsApi`, `SeriesViewModel`, Coil cover/favicon fetchers, typed
+`Flow<KomfMangaBakaClient?>.first()` calls, and `SeriesBulkActions`' secondary
+constructor callback. Factory/settings/platform sources record actual auth
+configuration. All MangaBaka models, ID value classes and enums are inventoried,
+along with `DownloadProgress.HeartbeatEvent` and its 15-second heartbeat.
+Outbound HTTP is not misreported as an inbound route. The [integration
+guide](/docs/guides/integrations/komelia-komf) lists the optional upstream routes;
+none becomes a Coppice capability, including upstream's unimplemented
+`POST` match and unmatched client `DELETE`.
+
+Server routes, fixtures, permissions, and SSE are exercised by:
 
 ```sh
 cargo test -p stump_komf
@@ -99,7 +129,7 @@ cargo test -p stump_server --no-default-features --features headless,liseur-sync
 cargo test -p stump_server --no-default-features --features headless,liseur-sync --lib identify_metadata_uses_native_storage_and_respects_series_locks
 ```
 
-No live Komelia 0.19.3 device run is claimed. The earlier Komga Hurl replay and
+No live Komelia 0.20.0 device run is claimed. The earlier Komga Hurl replay and
 Komga client runs below exercise the separate Komga profile; they do not
 substitute for the Komf route tests.
 
@@ -128,7 +158,7 @@ logs its method and URI so the next client report can be matched to a request.
 The native Stump Readium routes are unchanged; only the Komga alias is narrowed
 to the pinned client's DTO types.
 
-The current harness/replay evidence covers the route and DTO observations used here, including non-empty read-list and collection responses with seeded ordered membership, collection `PATCH` returning `204` followed by a readback, successful and boundary sibling navigation, and the observed media/auth method behavior. In particular, `GET /api/v1/books/{id}/read-progress` returns `405 Method Not Allowed` because progress reads are provided by the Readium progression route, while `PATCH /api/v1/books/{id}/read-progress` returns `204`; a byte-range request to a page or thumbnail asset served through `cached_bytes` returns `200` without `Content-Range`, whereas the full-file `/api/v1/books/{id}/file` route is served through tower-http `ServeFile` and returns `206 Partial Content` with `Content-Range`; and `POST /api/v1/auth/login` returns `404` by design. Komelia's probe is `HEAD /login`, followed by Basic authentication on the protected route scope.
+The historical harness/replay evidence covers the route and DTO observations used here, including non-empty read-list and collection responses with seeded ordered membership, collection `PATCH` returning `204` followed by a readback, successful and boundary sibling navigation, and the observed media/auth method behavior. This is not a new physical-client run; see [client verification](/docs/developer/client-verification) for dated scope. In particular, `GET /api/v1/books/{id}/read-progress` returns `405 Method Not Allowed` because progress reads are provided by the Readium progression route, while `PATCH /api/v1/books/{id}/read-progress` returns `204`; a byte-range request to a page or thumbnail asset served through `cached_bytes` returns `200` without `Content-Range`, whereas the full-file `/api/v1/books/{id}/file` route is served through tower-http `ServeFile` and returns `206 Partial Content` with `Content-Range`; and `POST /api/v1/auth/login` returns `404` by design. Komelia's probe is `HEAD /login`, followed by Basic authentication on the protected route scope.
 
 ### Non-goals and proposals
 
@@ -239,7 +269,7 @@ identity response is Komga-shaped; no Grimmory-specific persistence is created.
 
 ## Route matrix
 
-All paths below are absolute request paths. Unless marked **public**, the route is authenticated by the parent Komga router. Route declarations are the source of truth; the module links in each table point to the corresponding `apps/server/src/routers/komga/*.rs` file.
+All paths below are absolute request paths. Unless marked **public**, the route is authenticated by the parent Komga router. Route declarations are the source of truth; table module names refer to `crates/komga/src/routes/*.rs`, except server identity/settings under `apps/server/src/routers/komga/`.
 
 ### Identity — `identity.rs`
 
@@ -313,7 +343,7 @@ reject non-empty `condition` and `fullTextSearch` values rather than silently
 ignoring them.
 Source: [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/lists.rs), [`collection.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/collection.rs), and [`read_list.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/read_list.rs).
 
-Catalog and list query extraction uses `axum_extra::extract::Query` (the `serde_html_form` decoder), not Axum's plain query extractor. Collection fields are plain `Vec` values with `#[serde(default)]`, never `Option<Vec>`, so scalar and repeated query forms are both accepted: catalog queries use `libraryId`/`library_id`, while list filters use `libraryIds`/`library_id`. This wire-shape detail is required for Komelia's scalar library filter encoding and is implemented in [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/catalog.rs) and [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/lists.rs).
+Catalog and list query extraction uses `axum_extra::extract::Query` (the `serde_html_form` decoder), not Axum's plain query extractor. Collection fields are plain `Vec` values with `#[serde(default)]`, never `Option<Vec>`, so scalar and repeated query forms are both accepted: catalog queries use `libraryId`/`library_id`, while list filters use `libraryIds`/`library_id`. This wire-shape detail is required for Komelia's scalar library filter encoding and is implemented in [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/catalog.rs) and [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/lists.rs).
 
 
 ### Library management — `library.rs`
@@ -373,7 +403,7 @@ Book patches persist `title`, `summary`, decimal `number`, `releaseDate`, `autho
 
 `tags` replaces the existing relation (with duplicate names removed); `links`, genres, and other legacy multi-value metadata use Stump's comma-separated columns, while `alternateTitles` uses its JSON column. Metadata writes and management jobs do not fabricate persistence for unsupported Komga settings.
 
-Sources: [`library.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/library.rs), [`book.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/book.rs), [`series.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/series.rs), and [`settings.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/settings.rs).
+Sources: [`library.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/library.rs), [`book.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/book.rs), [`series.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/series.rs), and [`settings.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/settings.rs).
 For Tachiyomi progress, the adapter counts only the authenticated user's
 latest reading session for each visible, non-deleted book. `FINISHED` is read;
 any other existing session is in progress; no session is unread. The series
@@ -418,7 +448,7 @@ Thumbnail uploads are validated from their bytes as images, persisted through th
 | `PATCH` | `/api/v1/books/{id}/read-progress` | Applies a JSON `{page?, completed?}` update and returns `204 No Content`. For this Komga progress contract, `page` is zero-based and valid in the half-open range `0..pages`; an empty patch or out-of-range page returns `400`. |
 | `DELETE` | `/api/v1/books/{id}/read-progress` | Deletes the current user's progress and returns `204 No Content`. |
 
-Progress visibility is checked before mutation so missing, hidden, and inaccessible books are not distinguishable. Source: [`progress.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/progress.rs) and [`book.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/book.rs).
+Progress visibility is checked before mutation so missing, hidden, and inaccessible books are not distinguishable. Source: [`progress.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/progress.rs) and [`book.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/book.rs).
 
 ### Readium — `readium.rs`
 
@@ -432,7 +462,9 @@ Progress visibility is checked before mutation so missing, hidden, and inaccessi
 | `GET` | `/api/v1/books/{id}/progression` | Returns the current Readium progression, or `204 No Content` when none exists. |
 | `PUT` | `/api/v1/books/{id}/progression` | Validates and stores Readium progression, returning `204 No Content`; stale timestamps conflict. |
 
-The manifest generator builds resource links from the request host, so a reverse proxy must preserve the client-facing `Host` when forwarding these requests. Source: [`readium.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/readium.rs) and [`crates/komga/src/readium.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/readium.rs).
+The manifest generator builds resource links from the request host, so a reverse proxy must preserve the client-facing `Host` when forwarding these requests. Source: [`readium.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/readium.rs) and [`crates/komga/src/readium.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/readium.rs).
+
+For EPUB manifests, shared media generation sets `readingProgression` from a normalized explicit OPF spine `page-progression-direction` (`rtl`/`ltr`), otherwise normalized OPF `direction` metadata, otherwise `ltr` (`crates/media/src/media/readium.rs`). This source-backed fix is covered by constructed-EPUB regressions, not by a new Komelia device run.
 
 ### Server-sent events — `sse.rs`
 
@@ -440,7 +472,7 @@ The manifest generator builds resource links from the request host, so a reverse
 | --- | --- | --- |
 | `GET` | `/sse/v1/events` | Authenticated `text/event-stream` with a 15-second keep-alive. |
 
-Two event sources feed the stream. Stump core events: `CreatedMedia` is mapped to `BookAdded` with `bookId`, `seriesId`, and `libraryId`; `MediaDeleted` → `BookDeleted`; `SeriesDeleted` → `SeriesDeleted`; `LibraryCreated`/`LibraryUpdated`/`LibraryDeleted` (emitted by the shared library service for both GraphQL and Komga writes) → `LibraryAdded`/`LibraryChanged`/`LibraryDeleted` with `libraryId`; `JobQueueStatus` → `TaskQueueStatus`; `JobStarted`, `JobUpdate`, `JobOutput`, `DiscoveredMissingLibrary`, `CreatedManySeries`, and `CreatedOrUpdatedManyMedia` are ignored because they carry no per-item IDs or would require fabricating update/deletion events. Adapter mutation events, published on a Komga-scoped broadcast bus (`KomgaEvents`, capacity 256) after the database write succeeds: `PATCH /api/v1/series/{id}/metadata` → `SeriesChanged`; `PATCH /api/v1/books/{id}/metadata` → `BookChanged`; `PATCH /api/v1/books/{id}/read-progress` and `PUT /api/v1/books/{id}/progression` → `ReadProgressChanged`, `ReadProgressSeriesChanged`, `BookChanged`, `SeriesChanged`; `DELETE /api/v1/books/{id}/read-progress` → `ReadProgressDeleted`, `ReadProgressSeriesDeleted`, `BookChanged`, `SeriesChanged`; `POST`/`DELETE /api/v1/series/{id}/read-progress` → `ReadProgressSeriesChanged`/`ReadProgressSeriesDeleted`, `SeriesChanged`, and one `BookChanged` per book; `PATCH /api/v1/collections/{id}` → `CollectionChanged` with the resulting ordered series IDs. Event names are the Komga PascalCase names and payloads are the camelCase DTOs from `crates/komga/src/sse.rs` without a type tag. Delivery is gated per subscriber: book/series/collection events require the referenced media or series to be visible to that user, `LibraryAdded`/`LibraryChanged` require the library to be visible, `LibraryDeleted` is broadcast to every subscriber (the row is gone, as upstream does), and every `ReadProgress*` event is delivered only to the user whose progress changed. A lagged subscriber continues with the newest available event. Source: [`sse.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/sse.rs) and [`crates/komga/src/sse.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/sse.rs).
+Two event sources feed the stream. Stump core events map book, series, library, reading-progress, collection and read-list changes to Komga events; `JobQueueStatus` becomes `TaskQueueStatus`, while job messages without per-item IDs are ignored rather than inventing updates. Mutations in the Komga adapter also publish book/series/progress/list changes after successful writes on the Komga-scoped broadcast bus (`KomgaEvents`, capacity 256). Event names use Komga PascalCase and camelCase DTO payloads without a type tag. Delivery is visibility-filtered per subscriber: media/series/list events require at least one referenced item to be visible, `LibraryAdded`/`LibraryChanged` require a visible library, `LibraryDeleted` is broadcast because the row is gone, and every `ReadProgress*` event is user-scoped. A lagged subscriber continues with the newest available event. Source: [`routes/sse.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/sse.rs) and [`crates/komga/src/sse.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/sse.rs).
 
 ## Search-condition profile
 
@@ -454,8 +486,21 @@ The JSON search DTOs are defined in [`crates/komga/src/search.rs`](https://githu
 - Book `ReleaseDate` with `operator: { "isInTheLast": ... }`.
 - Series `LibraryId` with `operator: { "is": ... }`.
 - Series `Language` with `operator: { "is": ... }`; matching is case-insensitive against the language stored on a book's metadata and then projects the matching series.
+- Book and series `Author` with `is` and `isNot`. Missing/null `name` and `role` are independent wildcards: `{"operator":"is","value":{}}` means has any author, and `isNot` with `{}` means has no author. With a name/role supplied, `isNot` means no matching credit, not some differing child book. Series aggregate only visible, supported, non-missing, non-deleted child-book credits; series-level writers never satisfy `Author`. `AllOf`/`AnyOf` compose these predicates normally.
 
 The `allOf` and `anyOf` arrays default to empty when their keys are omitted. This matches the pinned Komelia client payload shape and is part of the deserialization contract; it does not expand the set of supported leaf conditions.
+
+Author names compare literal trimmed comma-separated tokens, not substrings or
+LIKE patterns. Supported roles are ASCII-case-insensitive: writer, penciller,
+inker, colorist, letterer, cover and editor; the existing `cover_artist`
+spelling is also accepted. Unknown/literal-empty roles and literal-empty names
+match no credit. Equality retains SQLite ASCII NOCASE: non-ASCII case folding,
+accent-insensitive matching and canonical Unicode equivalence are not claimed
+as Komga ICU PRIMARY parity.
+
+Komga 1.28.1 removes the old empty-Author no-condition behavior. Child-book
+aggregation and nonempty `isNot` already existed in 1.27.1; their absence in
+Coppice was a preexisting profile gap fixed in this integration.
 
 Every other condition variant or operator returns `400 Bad Request` through the adapter's unsupported-filter error. Before returning that error, the adapter writes a warning whose `condition` field contains the rejected condition serialized as JSON. Unsupported filters are not accepted as if they had been applied. `fullTextSearch` is a separate supported search field; book full-text search covers book, book-metadata, series, and series-metadata text columns, while series full-text search covers series name, title, summary, and writers. The condition allowlist and full-text behavior are implemented in [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/catalog.rs).
 
@@ -475,7 +520,7 @@ Read-list and collection sorting is stricter: the supported keys are `name`,
 `createdDate`, and `lastModifiedDate`; unsupported or malformed expressions
 return `400` instead of silently falling back.
 
-The validation and envelope construction are implemented in [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/catalog.rs), [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/lists.rs), [`settings.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/settings.rs), and [`common.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/common.rs).
+The validation and envelope construction are implemented in [`catalog.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/catalog.rs), [`lists.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/lists.rs), [`settings.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/settings.rs), and [`common.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/common.rs).
 
 ## DTO mapping and intentional losses
 
@@ -486,7 +531,7 @@ Book, series, library, collection, and read-list IDs are the underlying Stump ID
 - book thumbnail: `stump-book-<book-id>`;
 - series thumbnail: `stump-series-<series-id>`.
 
-The media handler accepts only the corresponding generated ID for each book or series. These rules are implemented by [`mapper.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/mapper.rs), [`media.rs`](https://github.com/stumpapp/stump/blob/nightly/apps/server/src/routers/komga/media.rs), [`collection.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/collection.rs), and [`read_list.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/read_list.rs).
+The media handler accepts only the corresponding generated ID for each book or series. These rules are implemented by [`mapper.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/mapper.rs), [`media.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/routes/media.rs), [`collection.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/collection.rs), and [`read_list.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/komga/src/read_list.rs).
 
 ### Mapped fields and losses
 

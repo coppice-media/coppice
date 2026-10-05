@@ -23,33 +23,42 @@ the ingest contract: `builtin:embedded` and `llm`.
 | id | Domain | Key / configuration | Capabilities | Default | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | `builtin:embedded` | all media kinds, including `Unknown` | none; configured unconditionally | Identify, Lookup | yes | **Shipped**, **Contract-tested** (`builtin_embedded.rs`) |
-| `comic_vine` | comics (`Comic` → CBZ/CBR) | API key in `metadata_provider_configs`; [ComicVine API](https://comicvine.gamespot.com/api/) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline |
-| `hardcover` | books (`Book` → EPUB/PDF) | Bearer token; [Hardcover API account](https://hardcover.app/account/api) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline; live credential **Blocked** |
-| `anilist` | manga (`Manga`, `LightNovel`) | no token | Identify, Lookup, Search | yes | **Shipped**, **Contract-tested** offline |
-| `mal` | manga (`Manga`, `LightNovel`, `Webtoon`) | `X-MAL-CLIENT-ID` encrypted token; [MAL API config](https://myanimelist.net/apiconfig) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline |
-| `mangadex` | manga (`Manga`, `Manhwa`) | no token | Identify, Lookup, Search | yes | **Shipped**, **Contract-tested** offline |
-| `mangaupdates` | manga (`Manga`, `Manhwa`, `Webtoon`) | no token | Identify, Lookup, Search | yes | **Shipped**, **Contract-tested** offline |
-| `openlibrary` | books (`Book` → EPUB/PDF) | no token | Identify, Lookup, Search; ISBN-first | yes | **Shipped**, **Contract-tested** offline |
-| `googlebooks` | books (`Book` → EPUB/PDF) | optional API key raises project quota; [Google credentials](https://console.cloud.google.com/apis/credentials) | Identify, Lookup, Search; ISBN-first | yes | **Shipped**, **Contract-tested** offline; live key **Blocked** |
-| `metron` | comics (`Comic` → CBZ/CBR) | Basic credentials as encrypted token; [Metron signup](https://metron.cloud/accounts/signup/) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline; live key **Blocked** |
-| `audible` | audiobooks | keyless Audnexus + Audible catalogue | Identify, Lookup, Search; ASIN-first | yes | **Shipped**, **Contract-tested** offline; live request **Blocked** |
+| `comic_vine` | comics (`Comic` → CBZ/CBR) | API key in `metadata_provider_configs`; [ComicVine API](https://comicvine.gamespot.com/api/) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline; no live probe recorded (credentials unavailable on 2026-09-22) |
+| `hardcover` | books (`Book` → EPUB/PDF) | server Bearer token in `metadata_provider_configs`, or separate personal PAT for Connections/unified search; [Hardcover API account](https://hardcover.app/account/api) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline; no live probe recorded (credentials unavailable on 2026-09-22) |
+| `anilist` | manga (`Manga`, `LightNovel`) | no token | Identify, Lookup, Search | yes | **Shipped**, **Contract-tested** offline; live probe passed 2026-09-22 |
+| `mal` | manga (`Manga`, `LightNovel`, `Webtoon`) | `X-MAL-CLIENT-ID` encrypted token; [MAL API config](https://myanimelist.net/apiconfig) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline; no live probe recorded (credentials unavailable on 2026-09-22) |
+| `mangadex` | manga (`Manga`, `Manhwa`) | no token | Identify, Lookup, Search | yes | **Shipped**, **Contract-tested** offline; live probe passed 2026-09-22 |
+| `mangaupdates` | manga (`Manga`, `Manhwa`, `Webtoon`) | no token | Identify, Lookup, Search | yes | **Shipped**, **Contract-tested** offline; live probe passed 2026-09-22 |
+| `openlibrary` | books (`Book` → EPUB/PDF) | no token | Identify, Lookup, Search; ISBN-first | yes | **Shipped**, **Contract-tested** offline; live probe passed 2026-09-22 |
+| `googlebooks` | books (`Book` → EPUB/PDF) | optional API key raises project quota; [Google credentials](https://console.cloud.google.com/apis/credentials) | Identify, Lookup, Search; ISBN-first | yes | **Shipped**, **Contract-tested** offline; live probe returned HTTP 429 on 2026-09-22 |
+| `metron` | comics (`Comic` → CBZ/CBR) | Basic credentials as encrypted token; [Metron signup](https://metron.cloud/accounts/signup/) | Identify, Lookup, Search | no | **Shipped**, **Contract-tested** offline; no live probe recorded (credentials unavailable on 2026-09-22) |
+| `audible` | audiobooks | keyless Audnexus + Audible catalogue | Identify, Lookup, Search; ASIN-first | yes | **Shipped**, **Contract-tested** offline; live probe passed 2026-09-22 |
 | `llm` | all media kinds, including `Unknown` | `api_key` secret setting; local endpoint may be keyless | Identify, Lookup; Search returns zero hits | no | **Shipped**, **Contract-tested** offline |
 
 Provider mappers fill candidate fields; they do not make a catalog/source
 provider or fulfillment connector. Series mapping adds fields such as
 `alternative_titles`, `status`, `publisher`, `volume_count`, and `age_rating`
-where that provider exposes them. The offline test records are not live-vendor
-verification.
+where that provider exposes them. Historical live probes on 2026-09-22 are
+recorded in `.omp/PROJECT_STATE.md`; they are not a current retest, and offline
+fixtures alone are not live-vendor verification.
 
 ### Hardcover boundary
 
 Hardcover metadata lookup and field mapping are **Shipped** and
-**Contract-tested** against offline payloads. Live credential verification and
-the owner-scoped Connections flow are implemented but remain **Blocked** until
-an operator supplies a PAT; no external-network smoke is run without one.
-Manual journal import is read-only and preserves unresolved provenance when no
-exact media link/page locator exists. Progress projection is opt-in and
-non-regressing. Remote quote writes are not shipped.
+**Contract-tested** against offline payloads. The global ingest credential in
+`metadata_provider_configs` and the owner-scoped encrypted PAT in
+`hardcover_connections` are distinct; a personal PAT can back unified search
+when no server Hardcover config is enabled, though this search fallback does
+not currently check the personal `use_for_metadata` toggle. The Connections
+screen supports PAT verification, explicit media-to-remote-book links,
+toggle-gated linked metadata lookup, and a manual read-only import of
+`me.user_books` quote/note/page fields with optional **local** progress
+projection. Despite the UI label "Import journals", it does not read
+`reading_journals`. Entries without an exact link and valid page remain
+unresolved provenance. No Hardcover network probe with credentials is
+recorded in the 2026-09-22 results, and no outbound quote/progress write is
+shipped. See
+[Hardcover integration](/docs/developer/hardcover-integration).
 
 ### How the ingest trait works
 
@@ -106,8 +115,11 @@ phases (`crates/ingest/src/coordinator.rs:342-359,433-447`). A user recipe of
 `FieldPick`s (`crates/ingest/src/providers/contract.rs:367-396`) is validated,
 resolved against the same drop item and source digest, the locked-field list,
 and the existing `MergeStrategy`, then written with an audit row in one
-transaction. Only `STORABLE_FIELDS` reach `media_metadata`/tags; `CoverUrl` and
-`Identifiers` remain candidate-only (`crates/ingest/src/providers/apply.rs:28-46`).
+transaction. `STORABLE_FIELDS` includes `CoverUrl`: selected artwork is
+validated and staged in the thumbnail directory by
+`prepare_cover_with_previous`, then the media cover reference is updated with
+commit/rollback handling. `Identifiers` and status remain candidate-only
+(`crates/ingest/src/providers/apply.rs`).
 
 #### What the policy layer covers
 
@@ -122,7 +134,7 @@ Design and mapping: [Modular ingest — Policy](/docs/developer/modular-ingest#p
 | Field/provider priority | **Contract-tested** | `FieldPolicy { providers, strategy, lock_respected }`; offers are collected in list order, then by confidence (`priority_order_decides_the_winner`) |
 | Merge tags/genres | **Contract-tested** | `MERGE_UNION` unions stored and provider values case-insensitively, keeping first spelling (`union_dedupes_case_insensitively_and_keeps_stored_values`) |
 | Title language preference | **Planned** | Current choices are fixed per client (AniList English → Romaji → native; MangaDex `en` → `ja-ro`); no user setting |
-| Cover pick / thumbnail replacement | **Shipped**, **Planned** | `HIGHEST_RESOLUTION` ranks candidates and is the `COVER` default, but `CoverUrl` is outside `STORABLE_FIELDS`, so the decision returns `applied: false`; writing the chosen cover is **Planned** |
+| Cover pick / thumbnail replacement | **Shipped**, **Contract-tested** | `HIGHEST_RESOLUTION` ranks candidates and is the `COVER` default; a selected `CoverUrl` is staged and applied through `prepare_cover_with_previous` with media thumbnail metadata and transaction-aware commit/rollback (`crates/ingest/src/providers/apply.rs`) |
 | Per-library provider rules | **Contract-tested** | `library_configs.metadata_policy` overrides server defaults; `metadataPolicy`/`setMetadataPolicy` and the editor Policy tab read/write it |
 | Auto-match | **Contract-tested** | `approveIngestItem` stages the policy plan as pending fields; `applyBestIngestMetadata` runs the same resolver on demand |
 
@@ -184,10 +196,17 @@ with the contract evidence linked in the table above:
   `ENABLE_OPDS_PROGRESSION=true`. Strict compliance and additional facets are
   **Planned**.
 - **OPDS 2.0:** `/opds/v2.0/*`; JSON catalog, auth document, acquisition, and
-  explicit progression GET/PUT. Every feed pages on `page`/`page_size`, search
-  has a paged route per kind (`/libraries/search`, `/series/search`,
-  `/books/search`), and a feed links only to pages and routes that exist.
-  Facets, chapter/resource streaming, and a v2 key-in-path alias are
+  the stable `http://opds-spec.org/progression` GET/PUT service with
+  `application/opds-progression+json`. Its flat document uses a required
+  whole-publication fraction; native GraphQL/Readium locators remain separate.
+  GET is 200 (empty before a head); PUT is 201/200 with a receipt and
+  400/403/409 Problem Details for invalid input, a foreign device, or a stale
+  backward update. Paginated feeds retain numbering/size, omit final `next`,
+  and recover past-end requests; library series previews link to the scoped
+  `/libraries/{id}/series` feed. Per-kind paged search remains
+  `/libraries/search`, `/series/search`, `/books/search`. See the exact
+  [progression contract and smoke recipe](/docs/developer/standards#progression-wire-contract-and-smoke-recipe).
+  Facets, OPDS chapter/resource streaming, and a v2 key-in-path alias are
   **Planned**.
 - **Kobo:** `/kobo/{api_key}/*`; initialization, sync, ReadingState, metadata,
   thumbnails, EPUB/KEPUB and `Range`. Device-auth persistence, tags/shelves,
@@ -197,10 +216,18 @@ with the contract evidence linked in the table above:
   GET by document hash; binary partial-MD5 matching for EPUB/PDF when library
   hash generation is enabled. Filename-MD5, ZIP/RAR hashes, x-pointer
   translation, and device-management UI are **Planned**.
-- **liseur-sync:** `/v1/*`; login, token lifecycle, work/edition resolution,
-  positions, changes, heads, sessions, CAS annotations, and device catalog.
-  Attachment blobs, upload/delete, insights, and series claims are **Planned**;
-  Kobo markup is described but not transported.
+- **liseur-sync:** `/v1/*`; login, token lifecycle, account settings,
+  work/edition resolution, positions, changes, heads, sessions, CAS
+  annotations, attachment upload/list, and the device catalog. The server
+  also supplies folder/book listing and search, covers, ranged downloads,
+  explicit catalog-book resolve, book series layers, and per-account
+  `personal` series-name overlays (PUT/DELETE); these are **Shipped** with
+  contract evidence, not newly device-tested. The 2026-09-04 Liseur device
+  run covered a narrower login/token/catalog/download/position scope;
+  current v0.20.0 source and 2026-10-04 replay remain separate evidence.
+  `/v1/events`, series ordering, insights, library upload/delete, and
+  attachment deletion remain **Planned**; Kobo markup is not transported
+  merely because attachment storage exists.
 
 For route-level detail use [Standards and protocols](/docs/developer/standards),
 [Client apps](/docs/developer/clients), and the individual compatibility pages.

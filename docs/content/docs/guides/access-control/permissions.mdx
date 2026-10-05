@@ -2,17 +2,58 @@
 title: Permissions
 ---
 
-Users can be assigned permissions that grant (or deny) them access to various features or actions within Coppice. This allows for granular and flexible control over who can do what within your server.
+Users can be assigned permissions that grant access to features or actions within Coppice. Without a grant, an action may be refused; there is no separate explicit-deny permission.
+
+## Granting permissions
+
+The server owner, or a user with `MANAGE_USERS`, grants permissions on the Home
+app's **Users** screen (`/app/users`): **New user** creates a local account and
+**Edit** changes an existing one. Permissions are grouped by area. Ticking one
+also grants the permissions it includes, which the editor shows as *Included*
+and saves with it. Saving an edit replaces the account's permissions, age
+restriction, and session limit and signs the account out everywhere, so the
+change applies at its next sign-in.
+
+- Nobody changes their own permissions: the server ignores permission, age
+  restriction, and session-limit changes to your own account, so another user
+  manager or the server owner makes them.
+- The server owner's account cannot be edited; the owner already holds every
+  permission.
+- Locking an account, signing it out everywhere, and deleting it are reserved
+  for the server owner. `READ_USERS` alone shows the list without edit controls.
+- For accounts that sign in through OIDC, [permission synchronization](#oidc-group-mappings)
+  can replace these permissions at every sign-in.
+
+| Granting                                     | Also includes                                                       |
+| -------------------------------------------- | ------------------------------------------------------------------- |
+| `CREATE_BOOK_CLUB`, `SHARE_BOOK_CLUB_READER` | `ACCESS_BOOK_CLUB`                                                  |
+| `EMAILER_MANAGE`                             | `EMAILER_CREATE`, `EMAILER_READ`, `EMAIL_SEND`                      |
+| `EMAILER_CREATE`                             | `EMAILER_READ`, `EMAIL_SEND`                                        |
+| `EMAILER_READ`, `EMAIL_ARBITRARY_SEND`       | `EMAIL_SEND`                                                        |
+| `DELETE_LIBRARY`                             | `MANAGE_LIBRARY`, `SCAN_LIBRARY`, `EDIT_LIBRARY`, `EDIT_THUMBNAILS` |
+| `MANAGE_LIBRARY`                             | `SCAN_LIBRARY`, `EDIT_LIBRARY`, `EDIT_THUMBNAILS`                   |
+| `CREATE_LIBRARY`                             | `EDIT_LIBRARY`, `SCAN_LIBRARY`                                      |
+| `MANAGE_NOTIFIER`, `DELETE_NOTIFIER`         | Each other, `CREATE_NOTIFIER`, `READ_NOTIFIER`                      |
+| `CREATE_NOTIFIER`                            | `READ_NOTIFIER`                                                     |
+| `MANAGE_USERS`                               | `READ_USERS`                                                        |
+| `READ_PERSISTED_LOGS`                        | `READ_JOBS`                                                         |
+| `WRITE_BACK_METADATA`                        | `EDIT_METADATA`                                                     |
 
 ## Available Permissions
 
 | Permission          | Enum Value             | Description                                                 |
 | ------------------- | ---------------------- | ----------------------------------------------------------- |
+| Change own password | `CHANGE_PASSWORD` | Allows updating the account's own password through the API (Home currently has no password-change form) |
+| Change own username | `CHANGE_USERNAME` | Allows renaming the account's own username |
+| Change own avatar | `CHANGE_AVATAR` | Allows replacing the account's own avatar |
 | API Keys            | `ACCESS_API_KEYS`      | Allows access to read/create their own API keys             |
 | KoReader Sync       | `ACCESS_KOREADER_SYNC` | Allows access to the KoReader sync integration              |
 | Kobo Sync           | `ACCESS_KOBO_SYNC`     | Allows access to the Kobo sync integration                  |
+| Remote source | `ACCESS_REMOTE_SOURCE` | Allows a source worker to advertise configured roots and serve explicitly authorized reads |
+| Remote worker | `ACCESS_WORKER` | Allows a worker to claim jobs and upload outputs |
 | Access Book Club    | `ACCESS_BOOK_CLUB`     | Allows access to the Book Club feature                      |
 | Create Book Club    | `CREATE_BOOK_CLUB`     | Allows creating new Book Clubs                              |
+| Share Book Club Reader | `SHARE_BOOK_CLUB_READER` | Allows club Admins/Creators to issue [guest reading links](/docs/guides/features/book-clubs/guest-reader) (implies `ACCESS_BOOK_CLUB`) |
 | Read Emailers       | `EMAILER_READ`         | Allows access to read any emailers in the system            |
 | Create Emailers     | `EMAILER_CREATE`       | Allows creating new emailers                                |
 | Manage Emailers     | `EMAILER_MANAGE`       | Allows managing existing emailers                           |
@@ -26,11 +67,17 @@ Users can be assigned permissions that grant (or deny) them access to various fe
 | Edit Library        | `EDIT_LIBRARY`         | Allows editing basic details about libraries                |
 | Scan Library        | `SCAN_LIBRARY`         | Allows scanning libraries for new files                     |
 | Manage Library      | `MANAGE_LIBRARY`       | Allows managing libraries (scan, edit, manage relations)    |
+| Edit thumbnails | `EDIT_THUMBNAILS` | Allows changing media and series thumbnails |
 | Edit Metadata       | `EDIT_METADATA`        | Allows editing database-level metadata for media/series     |
 | Write Back Metadata | `WRITE_BACK_METADATA`  | Allows writing database metadata back to files              |
+| View metadata fetches | `METADATA_FETCH_RECORD_READ` | Allows reading metadata fetch status |
+| Manage metadata fetches | `METADATA_FETCH_RECORD_MANAGE` | Allows managing metadata fetch records |
+| View metadata providers | `METADATA_PROVIDER_READ` | Allows reading configured metadata providers |
+| Manage metadata providers | `METADATA_PROVIDER_MANAGE` | Allows managing metadata provider configurations |
 | Delete Library      | `DELETE_LIBRARY`       | Allows deleting libraries                                   |
 | Read Users          | `READ_USERS`           | Allows reading user information via user-specific endpoints |
-| Manage Users        | `MANAGE_USERS`         | Allows managing users (create, edit, delete)                |
+| Manage Users        | `MANAGE_USERS`         | Allows creating users and editing other users' permissions, age restriction, and session limit (locking, signing out, and deleting stay with the server owner) |
+| Acquire releases | `ACQUIRE_RELEASES` | Allows manager-only search and confirmed grabs for approved requests via Coppice's GraphQL API; see [acquisition](/docs/guides/integrations/acquisition) |
 | Read Notifier       | `READ_NOTIFIER`        | Allows reading configured notifiers                         |
 | Create Notifier     | `CREATE_NOTIFIER`      | Allows creating new notifiers                               |
 | Manage Notifier     | `MANAGE_NOTIFIER`      | Allows managing existing notifiers                          |

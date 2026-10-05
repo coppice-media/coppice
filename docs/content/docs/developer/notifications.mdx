@@ -67,10 +67,12 @@ every (user, channel) target and:
 
 - loads the channel registry (ntfy + webhook always; email when a primary
   emailer is configured, its password decrypted with the server key),
-- merges the user's stored `notification_channel_settings` over the channel
-  defaults, decrypting `secret` values, then
+- resolves the recipient and stored `notification_channel_settings` for a
+  still-existing, non-deleted account before each send attempt; deletion while
+  queued or sleeping between retries stops delivery (other users keep theirs),
+  merging settings over the channel defaults and decrypting `secret` values,
 - retries retryable failures (transport) after 1s / 2s / 4s; rejections
-  (4xx, bad config, unknown channel) are never retried.
+  (4xx, bad config, unknown channel, deleted recipient) are never retried.
 
 A delivery that exhausts its attempts is logged and counted in the job
 output (`sent`/`failed`); one bad channel never fails the job or blocks the

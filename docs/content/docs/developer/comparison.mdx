@@ -37,10 +37,10 @@ gap list, and they feed [Roadmap › Future](/docs/developer/roadmap#future).
 | Merge a split audiobook into one M4B | yes — `audio-assemble`, pure-Rust AAC remux, `ffmpeg` only to re-encode `dev/state.mdx:37` | [n/e][bo-what] | [n/e][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [yes][abs-readme] |
 | Audiobook quality report | yes — seven checks in their own scoring family `dev/state.mdx:38` | [n/e][bo-what] | [n/e][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [n/e][abs-readme] |
 | Per-device audio delivery (Opus transcode) | yes — `AudioOutput::{Passthrough,Opus}`, cached and swept `dev/state.mdx:40` | [n/e][bo-what] | [n/e][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [partial: "stream all audio formats on the fly", no per-device preset][abs-readme] |
-| Home ebook reader | yes — Foliate reader in Home `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [yes][cwa-readme] | [yes][abs-intro] |
-| Home comic reader | yes — image reader in Home `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
-| Home PDF reader | yes — PDF reader in Home `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
-| Home audio player | yes — audio lane in Home `dev/home-app.mdx:58` | [yes][bo-what] | [yes][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [yes][abs-readme] |
+| Home ebook reader | yes — Readium-backed Foliate reader in Home `dev/home-app.mdx:56` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [yes][cwa-readme] | [yes][abs-intro] |
+| Home comic reader | yes — paged image reader in Home `dev/home-app.mdx:56` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
+| Home PDF reader | yes — paged PDF reader in Home `dev/home-app.mdx:56` | [yes][bo-what] | [yes][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: "multiple formats"][cwa-readme] | [yes][abs-intro] |
+| Home audio player | yes — audio lane in Home `dev/home-app.mdx:56,118-124` | [yes][bo-what] | [yes][gr-readme] | [no][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [yes][abs-readme] |
 | Read-aloud (ebook ↔ audiobook position sync) | **partial** — pairing, editable chapter maps, sync-map import/enqueue, SMIL import, deterministic cache delivery, worker protocol, and optional configured Storyteller/native-CTC runners ship; readiness quality, virtual composite, synchronized playback/UI, and deployment/device evidence remain open | [n/e][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [no][komga-intro] | [n/e][cwa-readme] | [n/e][abs-readme] |
 
 ## Protocols, sync, delivery
@@ -78,13 +78,13 @@ capability, so the cells are mostly `n/e` by construction.
 
 | Feature | Coppice | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Metadata providers | 12 catalogued — embedded, Comic Vine, Hardcover, AniList, MAL, MangaDex, MangaUpdates, Open Library, Google Books, Metron, Audible/Audnexus, LLM `dev/state.mdx:58` | [9 — Google Books, Amazon, Goodreads, Hardcover, Open Library, iTunes, Audible, AudNexus, ComicVine][bo-meta] | [3 — Google Books, Open Library, Amazon][gr-readme] | [partial: paid Kavita+ only][kav-plus] | [no — external Komf][komga-readme] | [yes — Calibre plugins + ISBNdb, Hardcover, Kobo, LitRes][cwa-readme] | [yes — "several providers" + Audnexus chapters][abs-readme] |
-| Per-field provider rules + merge | yes — ordered providers per field, five strategies, `lock_respected`, per-library override `dev/state.mdx:57` | [yes — priority list + per-field overwrite control][bo-meta] | [n/e][gr-readme] | [n/e][kav-plus] | [n/e][komga-readme] | [partial: provider hierarchy + overwrite/fill-missing][cwa-readme] | [n/e][abs-intro] |
-| Cover selection written back | **partial**: `HIGHEST_RESOLUTION` ranks candidates but `CoverUrl` is outside `STORABLE_FIELDS`, so the decision returns `applied: false` `dev/provider-status.mdx:77` | [yes — cover policy][bo-meta] | [n/e][gr-readme] | [n/e][kav-plus] | [partial: metadata editing][komga-readme] | [yes — provider hierarchy applies to covers][cwa-readme] | [yes — "fetch metadata and cover art"][abs-readme] |
-| Bulk metadata edit | **partial**: `bulkApplyIngestMetadata` over staged items only `dev/state.mdx:59` | [partial: per-book editor + field locks][bo-meta] | [n/e][gr-readme] | [n/e][kav-readme] | [partial: metadata editing][komga-readme] | [yes — batch edit & delete][cwa-readme] | [n/e][abs-intro] |
-| Ingest / staging dock | yes — drop folder, preprocess hook, quality report, review, approve `dev/state.mdx:56` | [yes — Book Dock][bo-dock] | [yes — BookDrop][gr-readme] | [n/e][kav-readme] | [partial: manual import][komga-readme] | [yes — automatic ingest][cwa-readme] | [partial: bulk upload][abs-readme] |
+| Metadata providers | 12 catalogued — embedded, Comic Vine, Hardcover, AniList, MAL, MangaDex, MangaUpdates, Open Library, Google Books, Metron, Audible/Audnexus, LLM `dev/state.mdx#ingest-metadata-and-policy` | [9 — Google Books, Amazon, Goodreads, Hardcover, Open Library, iTunes, Audible, AudNexus, ComicVine][bo-meta] | [3 — Google Books, Open Library, Amazon][gr-readme] | [partial: paid Kavita+ only][kav-plus] | [no — external Komf][komga-readme] | [yes — Calibre plugins + ISBNdb, Hardcover, Kobo, LitRes][cwa-readme] | [yes — "several providers" + Audnexus chapters][abs-readme] |
+| Per-field provider rules + merge | yes — ordered providers per field, five strategies, `lock_respected`, per-library override `dev/state.mdx#ingest-metadata-and-policy` | [yes — priority list + per-field overwrite control][bo-meta] | [n/e][gr-readme] | [n/e][kav-plus] | [n/e][komga-readme] | [partial: provider hierarchy + overwrite/fill-missing][cwa-readme] | [n/e][abs-intro] |
+| Cover selection written back | yes — `HIGHEST_RESOLUTION` selects artwork, then the cover is staged and written with media metadata `crates/ingest/src/providers/apply.rs:98-110,563-635` | [yes — cover policy][bo-meta] | [n/e][gr-readme] | [n/e][kav-plus] | [partial: metadata editing][komga-readme] | [yes — provider hierarchy applies to covers][cwa-readme] | [yes — "fetch metadata and cover art"][abs-readme] |
+| Bulk metadata edit | **partial**: `bulkApplyIngestMetadata` over staged items only `dev/state.mdx#ingest-metadata-and-policy` | [partial: per-book editor + field locks][bo-meta] | [n/e][gr-readme] | [n/e][kav-readme] | [partial: metadata editing][komga-readme] | [yes — batch edit & delete][cwa-readme] | [n/e][abs-intro] |
+| Ingest / staging dock | yes — drop folder, preprocess hook, quality report and Editor settings, review, approve `dev/state.mdx#ingest-metadata-and-policy` | [yes — Book Dock][bo-dock] | [yes — BookDrop][gr-readme] | [n/e][kav-readme] | [partial: manual import][komga-readme] | [yes — automatic ingest][cwa-readme] | [partial: bulk upload][abs-readme] |
 | Duplicate detection | yes — source digest + 8×8 dHash page groups `dev/modular-ingest.mdx:95,97,101-112` | [n/e][bo-dock] | [n/e][gr-readme] | [n/e][kav-readme] | [yes — files and pages][komga-readme] | [yes — SQL + fuzzy][cwa-readme] | [n/e][abs-intro] |
-| Library maintenance tools | yes — 17 tools behind one plan/apply contract (`epub2cbz`, `cbzit`, `webp-convert`, `mobi2epub`, `audio-assemble`, calibre shell-outs, …) `dev/state.mdx:60` | [n/e][bo-dock] | [n/e][gr-readme] | [n/e][kav-tasks] | [n/e][komga-readme] | [yes — Calibre conversion pipeline][cwa-readme] | [partial: embed metadata into audio files][abs-readme] |
+| Library maintenance tools | yes — 17 tools behind one plan/apply contract (`epub2cbz`, `cbzit`, `webp-convert`, `mobi2epub`, `audio-assemble`, calibre shell-outs, …) `dev/state.mdx#ingest-metadata-and-policy` | [n/e][bo-dock] | [n/e][gr-readme] | [n/e][kav-tasks] | [n/e][komga-readme] | [yes — Calibre conversion pipeline][cwa-readme] | [partial: embed metadata into audio files][abs-readme] |
 
 ## Annotations and reading data
 
@@ -92,17 +92,17 @@ capability, so the cells are mostly `n/e` by construction.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | One reading head across protocols | yes — `reading_heads` + append-only provenance, `source_protocol` per write, locator *or* `position_ms` `dev/state.mdx:79` | [n/e][bo-ann] | [n/e][gr-readme] | [n/e][kav-readme] | [partial: read progress only][komga-readme] | [n/e][cwa-readme] | [partial: per-user progress synced across devices][abs-readme] |
 | Annotations model | **partial**: native `media_annotations`/`bookmarks` plus liseur CAS rows, surfaced together but never reconciled into one head with a repair state `dev/state.mdx:82` | [yes — CFI + KOReader XPointer + Kobo span, repair states][bo-ann] | [yes][gr-readme] | [partial: EPUB only][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
-| Cross-book annotation workspace | yes — annotation hub with kind/source/book/`since`/text filters, in-place edit, deep link into the reader `dev/home-app.mdx:57` | [yes — annotations page with search/filter/bulk][bo-ann] | [yes][gr-readme] | [yes][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
-| Annotation export (Markdown/Obsidian/git) | yes — markdown + git sinks, Obsidian block ids `dev/annotation-sync.mdx:11-13,61-104` | [yes — Markdown, CSV, JSON][bo-ann] | [n/e][gr-readme] | [partial: third-party Obsidian importer][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
-| Reading sessions + stats | yes — `readingStats(span, deviceId)`, streaks, per-device split `dev/devices.mdx:163,168`, `dev/home-app.mdx:52` | [yes][bo-home] | [n/e][gr-readme] | [yes][kav-readme] | [partial: read progress only][komga-readme] | [yes — deep stats][cwa-readme] | [yes — listening sessions][abs-sess] |
-| Dashboards / analytics | **partial**: one fixed composition (stat cards, 53-week heatmap, shelves, device sync, job queue), no user-arranged widgets `dev/home-app.mdx:49` | [yes — widget-based dashboard + statistics page][bo-what] | [n/e][gr-readme] | [yes — customizable dashboard][kav-readme] | [n/e][komga-readme] | [yes — analytics centre + CSV][cwa-readme] | [partial: sessions view][abs-sess] |
-| Achievements | **missing** — console nav is Dashboard, Library, Reading, Annotations, Devices, Account `dev/home-app.mdx:64` | [yes — goals, streaks, diversity score][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Cross-book annotation workspace | yes — annotation hub with kind/source/book/`since`/text filters, in-place edit, deep link into the reader `dev/home-app.mdx:58` | [yes — annotations page with search/filter/bulk][bo-ann] | [yes][gr-readme] | [yes][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Annotation export (Markdown/Obsidian/git) | yes — Markdown + git sinks, Obsidian block ids `dev/annotation-sync.mdx:11-13,61-104`; sink configuration is in Home Connections `dev/home-app.mdx:60` | [yes — Markdown, CSV, JSON][bo-ann] | [n/e][gr-readme] | [partial: third-party Obsidian importer][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
+| Reading sessions + stats | yes — `readingStats(span, deviceId)`, streaks, per-device split `dev/devices.mdx:163,168`, `dev/home-app.mdx:57` | [yes][bo-home] | [n/e][gr-readme] | [yes][kav-readme] | [partial: read progress only][komga-readme] | [yes — deep stats][cwa-readme] | [yes — listening sessions][abs-sess] |
+| Dashboards / analytics | **partial**: one fixed composition (stat cards, 53-week heatmap, shelves, device sync, job queue), no user-arranged widgets `dev/home-app.mdx:51` | [yes — widget-based dashboard + statistics page][bo-what] | [n/e][gr-readme] | [yes — customizable dashboard][kav-readme] | [n/e][komga-readme] | [yes — analytics centre + CSV][cwa-readme] | [partial: sessions view][abs-sess] |
+| Achievements | **missing** — Home has no achievements screen; it presents reading statistics/streaks rather than goals or gamified achievement tracking `dev/home-app.mdx:47-85` | [yes — goals, streaks, diversity score][bo-what] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [n/e][cwa-readme] | [n/e][abs-intro] |
 
 ## Library, users, operations
 
 | Feature | Coppice | BookOrbit | Grimmory | Kavita | Komga | CWA | ABS |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Series and authors browsing | yes `dev/state.mdx:20`, `dev/home-app.mdx:54-56` | [yes][bo-what] | [n/e][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: search and filtering][cwa-readme] | [yes — series management][abs-libs] |
+| Series and authors browsing | yes `dev/state.mdx:20`, `dev/home-app.mdx:54,71` | [yes][bo-what] | [n/e][gr-readme] | [yes][kav-readme] | [yes][komga-readme] | [partial: search and filtering][cwa-readme] | [yes — series management][abs-libs] |
 | Collections / reading lists / shelves | yes — two canonical containers projected to Komga, Kobo, native `dev/shelves-and-collections.mdx:6-11,53-58` | [yes — collections + Smart Scopes][bo-what] | [yes — smart shelves][gr-readme] | [yes][kav-lists] | [yes][komga-readme] | [yes — magic shelves][cwa-readme] | [yes — playlists][abs-libs] |
 | One event bus with pluggable sinks | yes — one `CoreEvent` broadcast, sinks subscribe and translate to GraphQL subscriptions, Komga SSE, and notification routing; producer crates emit their own vocabulary through installed sink traits `dev/server-architecture.mdx:187-253` | [n/e][bo-home] | [n/e][gr-readme] | [n/e][kav-readme] | [partial: Komga SSE event stream][komga-readme] | [n/e][cwa-readme] | [partial: websocket required, no documented sink model][abs-readme] |
 | Notifications (ntfy / email / webhook) | yes — all three built in, per-user routing rules `dev/notifications.mdx:25-29` | [n/e][bo-home] | [n/e][gr-readme] | [n/e][kav-readme] | [n/e][komga-readme] | [partial: in-app update notices][cwa-readme] | [partial: external Apprise API][abs-notif] |
@@ -132,18 +132,19 @@ The highest-priority remaining gaps are:
    connection" ([README][abs-readme]); our Engine.IO v4 / Socket.IO v5 lane is
    implemented for the profile and covered by authenticated frame tests, but
    broader official-client/device verification remains open.
-3. **Achievements** — the console has statistics, not goals or streak
-   gamification (`dev/home-app.mdx:64`). BookOrbit ships reading goals, a daily
+3. **Achievements** — Home presents reading statistics and streaks, but no
+   goals or gamified achievement tracking (`dev/home-app.mdx:47-85`). BookOrbit ships reading goals, a daily
    streak and a diversity score.
 4. **Backup / restore** — no surface at all (`dev/state.mdx#known-limitations`); ABS ships
    metadata backups with an automated daily schedule.
 
-Five rows are **partial**, i.e. something real exists but a peer does more: the
-annotations model (two stores, never reconciled), cover selection (decided but
-not written), bulk metadata edit (staged items only), dashboards (fixed
-composition), and Cloudflare-challenged sources (automatic browser-worker
-solve, with reqwest TLS fingerprint limits on some hosts). Each is carried in
-[Roadmap › Future](/docs/developer/roadmap#future).
+Four rows are **partial**, i.e. something real exists but a peer does more:
+the annotations model (two stores, never reconciled), bulk metadata edit
+(staged items only), dashboards (fixed composition), and
+Cloudflare-challenged sources (automatic browser-worker solve, with reqwest
+TLS fingerprint limits on some hosts). Each is carried in
+[Roadmap › Future](/docs/developer/roadmap#future). Cover selection/writeback
+now ships and is no longer part of this gap list.
 
 Rows where nothing in this list matches us: OPDS 2.0 alongside Komga *and*
 Kavita *and* Audiobookshelf profiles on one server, the provider host with

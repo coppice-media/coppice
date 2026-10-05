@@ -11,9 +11,10 @@ description: Home-worker discovery, verified ingest, and server-proxied direct o
 
 Coppice may use a worker on an operator-controlled home machine to discover and
 serve media from configured local roots. This is a Coppice worker capability,
-not an acquisition feature. A provider sidecar such as the planned MAM service
-may deliver files into a configured root, but it never owns Coppice identity,
-matching, publication, storage policy, or reader access.
+not an acquisition feature. The separately authenticated MAM Bridge may
+deliver files to a configured root; it does not own Coppice identity, matching,
+publication, storage policy, or reader access. See the
+[request and acquisition boundary](/docs/guides/integrations/acquisition).
 
 The worker is a **remote source agent**, not a mounted VPS filesystem. Absolute
 paths, arbitrary file reads, and a second library database never cross the
@@ -32,6 +33,13 @@ permission to expose roots. A source worker uses a revocable source-role
 credential; its roots are separately allowlisted in local worker configuration.
 The same binary may implement compute and source roles, but authorization and
 protocol messages remain separate.
+
+The source control and byte-tunnel WebSockets recheck the key, its device
+binding, the active account, and both the account's and key's
+`ACCESS_REMOTE_SOURCE` permission before processing frames; outbound read
+grants are checked again before delivery. Revocation closes idle sockets
+within five seconds, so a previously paired agent cannot keep serving roots
+after its account or credentials are removed.
 
 ## Roots and privacy
 
@@ -277,8 +285,11 @@ additional complexity and should be added only after measured demand.
 
 ## Security invariants
 
-- Source API-key plaintext, acquisition credentials, and absolute root paths
-  remain worker-local; Coppice stores only the normal credential hash.
+- Source API-key plaintext and absolute root paths remain worker-local;
+  Coppice stores only the source credential hash. MAM Bridge authentication is
+  separate: the bearer token stays in a Coppice server-side token file, while
+  MAM credentials, torrent transport, and seeding belong to the bridge, not
+  the source worker or browser.
 - The credential is revocable and grants only the source role. Each read grant
   is further bound to one device, root, opaque item, lineage token, byte
   interval, byte ceiling, transport, expiry, and an optional server-verified

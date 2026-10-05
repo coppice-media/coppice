@@ -575,17 +575,29 @@ The exact endpoint and retention store are **implemented**. SSE must enforce the
 
 ## Editor screen map
 
-The editor is GraphQL-first; it does not need to know SeaORM tables or job runtime internals. Existing operations listed in the last column remain available during migration.
+This map lists the current Editor route pages and their UI-facing operations;
+GraphQL resolvers remain the authorization boundary.
 
-| Screen | Initial query reads | User mutations | Live progress | Existing compatibility fallback |
-| --- | --- | --- | --- | --- |
-| Drop folder | `ingestDropFolder(libraryId)`, `ingestDropItems(libraryId,status,pagination)`, `ingestItem(id)` | `stageIngestUploads`, `scanIngestDropFolder`, `enqueueIngestAnalysis`, `discardIngestItem` | `ingestProgress(libraryId: $libraryId, dropItemId: $dropItemId)` | `listDirectory`, `uploadBooks`, `uploadSeries`, `readEvents`, and then `scanLibrary` ([observed — `crates/graphql/schema.graphql:1883-1884,1965-1969,2539-2540,3493-3511`]). |
-| Analysis queue | `ingestAnalysisQueue(status,pagination)`, `ingestAnalysisJob(id)` | `enqueueIngestAnalysis`, `pauseIngestAnalysis`, `resumeIngestAnalysis`, `retryIngestAnalysis`, `cancelIngestAnalysis` | `ingestProgress(analysisJobId)` | `jobs`, `jobById`, `cancelJob`, and `readEvents` ([observed — `crates/graphql/schema.graphql:2073-2077,2522-2524`]). |
-| Rework list | `ingestReworkItems(minScore,pagination)`, `ingestItem(id)`; each item includes `qualityReport.checks` and candidates | `applyIngestMetadata`, `approveIngestItem`, `rejectIngestItem`, `requeueIngestAnalysis` | `ingestProgress(dropItemId)` | `pendingMetadataMatches`, `metadataFetchRecord`, `acceptMediaMatch`/`rejectMediaMatch`, `acceptAllPendingMatches`/`rejectAllPendingMatches` ([observed — `crates/graphql/schema.graphql:1892-1896,2089-2094,2533-2537`]). |
-| Bulk metadata editor | `ingestBulkItems(ids)` plus `ingestItem(id)` for detail/revision | `bulkApplyIngestMetadata`; after commit, existing `updateMediaMetadata`, `setMediaTags`, or `setSeriesTags` remain valid | `ingestProgress` for jobs started by the edit; synchronous field applications return payloads directly | Existing locked-field bulk mutations and current per-media/series metadata mutations ([observed — `crates/graphql/schema.graphql:1959-1964,1883-1908,2008-2016`]). |
-| Provider settings | `ingestProviderCatalog`, `ingestProviderSettings(providerId)`, `ingestQualityCheckCatalog`, `ingestQualityCheckSettings(checkId)` | `setIngestProviderSettings`, `verifyIngestProvider`, `setIngestQualityCheckSettings` | `ingestProgress` when a settings change triggers re-analysis; verification itself is synchronous | `metadataProviderConfigs`, `metadataProviderConfigById`, `createMetadataProvider`, `updateMetadataProvider`, `deleteMetadataProvider`, `validateProviderConfig` ([observed — `crates/graphql/schema.graphql:2086-2090,2533-2535`]). |
+| Route | UI scope and operations |
+| --- | --- |
+| `/` | Landing page with links to `/drop` and `/queue`; it does not redirect (`editor/src/routes/+page.svelte`). |
+| `/login` | Cookie-session login through `POST /api/v2/auth/login`; successful login enters the editor shell (`editor/src/routes/login/+page.svelte`). |
+| `/drop` | Stages file uploads, scans the selected drop folder, filters staged items, queues analysis, or discards items. GraphQL: `IngestDropFolderAndItems`, multipart `StageIngestUploads`, `ScanIngestDropFolder`, `EnqueueIngestAnalysis`, `DiscardIngestItem`; shared layout subscriptions provide live `ingestProgress`/item updates (`editor/src/routes/(app)/drop/+page.svelte`, `editor/src/lib/ingest/uploads.ts`). |
+| `/queue` | Lists analysis jobs with status filter and pause/resume/retry/cancel controls; `IngestAnalysisQueue`, `PauseIngestAnalysis`, `ResumeIngestAnalysis`, `RetryIngestAnalysis`, `CancelIngestAnalysis` (`editor/src/routes/(app)/queue/+page.svelte`). |
+| `/rework` | Lists low-scoring staged items and opens the per-item review sheet for evidence, provider candidates, metadata choices, and commit/reject/requeue (`IngestReworkItems`; review actions in `ReworkDetailSheet`, `editor/src/routes/(app)/rework/+page.svelte`). |
+| `/bulk` | Requires manually entered drop-item IDs; selects loaded rows and applies a bounded metadata recipe, with per-item failures and provider search (`IngestBulkItems`, `BulkApplyIngestMetadata`; `editor/src/routes/(app)/bulk/+page.svelte`). |
+| `/library` | Browses committed media, performs library-wide quality/provider rework, and provides duplicate-page review (`editor/src/routes/(app)/library/+page.svelte`, `DuplicatePagesPanel`). |
+| `/settings/providers` | Provider catalog/configuration and verification, per-field metadata policy, and server-wide quality checks. GraphQL: `IngestProviderCatalog`, `IngestProviderSettings`, `SetIngestProviderSettings`, `VerifyIngestProvider`, `MetadataPolicy`, `SetMetadataPolicy`, `IngestQualityCheckCatalog`, `IngestQualityCheckSettings`, `SetIngestQualityCheckSettings` (`editor/src/routes/(app)/settings/providers/+page.svelte`, `QualityCheckCard`). Each check card has an enabled switch (sends only `enabled`) and renders one typed control per descriptor setting — bounded number for `INTEGER`/`NUMBER` (`minimum`/`maximum`), switch for `BOOLEAN`, select over `options` for `ENUM`, text for `STRING`, JSON text for `JSON` — prefilled from the stored row or the default, validated client-side (`editor/src/lib/ingest/settings.ts`) and again by the server, with per-setting reset that drops the key so the default applies. Settings are one server-wide row per check that every analysis, library rework, and quality fix reads; saving needs `METADATA_PROVIDER_MANAGE` and `MANAGE_LIBRARY`. |
+| `/settings/sources` | Reads provider-source health and configures request headers or requests a worker challenge solve: `ProviderSources`, `ProviderSourceHealthRows`, `SetProviderSourceHeaders`, `SolveSourceChallenge` (`editor/src/routes/(app)/settings/sources/+page.svelte`). |
+| `/settings/keys` | Enters and clears provider API credentials using provider catalog/settings and legacy provider config operations; secret values are write-only (`IngestProviderCatalog`, `IngestProviderSettings`, `SetIngestProviderSettings`, `MetadataProviderConfigs`, `CreateMetadataProvider`, `UpdateMetadataProvider`, `DeleteMetadataProvider`, `VerifyIngestProvider`; `editor/src/routes/(app)/settings/keys/+page.svelte`). |
 
-The proposed permission mapping is conservative: staging/configuring the drop folder uses the existing upload/manage-library checks; reading queue/rework uses `READ_JOBS` and metadata-fetch read permissions; queue controls use `MANAGE_JOBS`; field edits use `EDIT_METADATA`; provider settings use metadata-provider read/manage. A future deployment may introduce narrower ingest permissions, but it must not weaken existing authorization.
+The `(app)` layout loads `me` and libraries, tracks ingest progress, and
+provides the selected-library context used by the routes. It does not impose a
+single route-level role gate: GraphQL resolvers enforce the relevant
+operation-level permissions. Upload/ingest workflow actions retain their
+upload/`MANAGE_LIBRARY` guards, and metadata writes require the server owner or
+`EDIT_METADATA` (`editor/README.md:98-100`). The shared GraphQL client redirects
+unauthenticated `401` responses to login.
 
 ## Additive GraphQL contract
 
@@ -780,6 +792,7 @@ enum IngestSettingValueType {
   INTEGER
   NUMBER
   STRING
+  ENUM
   JSON
 }
 
@@ -791,6 +804,10 @@ type IngestSettingDefinition {
   secret: Boolean!
   defaultValue: JSON
   description: String
+  helpUrl: String
+  minimum: Float
+  maximum: Float
+  options: [String!]!
 }
 
 type IngestProviderSetting {

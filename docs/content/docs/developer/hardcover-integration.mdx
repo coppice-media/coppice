@@ -1,23 +1,46 @@
 ---
 title: Hardcover integration
-description: Proposed account, progress, highlights, and Readium locator integration with Hardcover
+description: Shipped personal PAT, metadata lookup, and manual read-only journal import; future outbound sync and exact locator mapping
 ---
 
-This page is the design for a future, optional Hardcover integration. **The integration is proposed and not implemented.** Stump does not currently provide a Hardcover account link, Personal Access Token (PAT) store, Hardcover journal importer, or Hardcover outbound-sync job. The models and APIs cited below are existing source facts; the account, mapping, queue, reconciliation, and rollout decisions are proposals.
+Hardcover has two distinct **Shipped** paths in the current working tree:
+server-configured metadata lookup for ingest and a per-user Connections flow.
+The latter verifies a personal access token (PAT), stores it encrypted,
+supports explicit media links and opted-in interactive metadata lookup, and
+manually imports `reading_journals` quote events as unresolved provenance.
+Optional `sync_progress` projects dated, explicit journal-position fractions
+into **local** reading state; it does not write back to Hardcover or fabricate
+an EPUB page/anchor. Outbound progress/quote writes, automatic polling,
+remote-change reconciliation, and exact Kobo/Readium locator conversion remain
+**Planned**. A 2026-10-05 authenticated, read-only live probe confirmed the
+`reading_journals` schema and an empty query with the shipped selection set.
+It did not read personal journal rows or test real-data pagination/import.
 
-The server remains authoritative and light, consistent with the [server architecture](/docs/developer/server-architecture). A device or optional worker may do expensive EPUB/KEPUB parsing and locator reconstruction, but no remote worker or Hardcover account is a prerequisite for storing, reading, or syncing local Stump data.
+The server remains authoritative and light, consistent with the
+[server architecture](/docs/developer/server-architecture). A device or
+optional worker may eventually do expensive EPUB/KEPUB parsing and locator
+reconstruction, but neither is a prerequisite for local reading and sync.
 
 ## Scope and non-goals
 
-### Proposed scope (not implemented)
+### Current scope and future directions
 
-The integration should provide three independently enabled capabilities:
-
-1. **Account and progress sync:** a user-authorized PAT connects one Stump user to one Hardcover account. Stump may read the account's library/read-through data and, when separately enabled, write progress to Hardcover's `user_book_reads` records.
-2. **Read-only journal import:** Stump reads Hardcover `reading_journals` rows whose event is `quote`, resolves them to local media, and imports resolvable highlights/notes into `media_annotations` with provider provenance. Stump should consume and reconcile journals already written by NickelHardcover rather than create a second copy of each Kobo highlight.
-3. **Locator normalization:** when an uploader has the exact Kobo EPUB/KEPUB resource, it may convert Kobo Bookmark CFI-like paths and byte offsets into a Readium locator. A `koboSpan` ID alone is not sufficient to identify a stable highlight range.
-
-These capabilities must have separate opt-in switches. Read-only journal import must not implicitly enable progress writes, and progress writes must not implicitly publish highlights or notes.
+1. **Shipped — owner-scoped account and metadata:** the authenticated user's
+   PAT is verified via `me`, encrypted server-side, and used for interactive
+   metadata lookup on explicitly linked media. An enabled global Hardcover
+   configuration serves ingest and takes precedence in unified search and
+   narrator lookup; only an opted-in personal PAT is a fallback. The
+   credential-scoped caches never let an opted-out PAT supply a hit.
+2. **Shipped — manual, read-only journal import:** `import_journals` authorizes
+   the owner's `syncHardcoverNow` query of `reading_journals` quote events.
+   It stores remote journal IDs and the original payload in unresolved
+   provenance (no guessed local annotation). `sync_progress` additionally
+   projects *dated, explicit fractions* for linked books; it does nothing
+   without `import_journals`. Neither toggle authorizes a remote write.
+3. **Planned — outbound progress and exact locator mapping:** authenticated
+   `user_book_reads` mutations and digest-bound Kobo Bookmark-to-Readium ranges
+   require separate verification and implementation. A `koboSpan` ID alone
+   cannot establish a stable highlight range.
 
 ### Non-goals
 
@@ -29,17 +52,28 @@ These capabilities must have separate opt-in switches. Read-only journal import 
 
 ## Evidence boundary
 
-### Existing Stump facts
+### Existing Coppice facts
 
-The existing Stump models establish the local projection that a future adapter would consume:
+The shipped account flow is in `crates/graphql/src/mutation/hardcover.rs` and
+`home/src/lib/components/ConnectionsHardcover.svelte`. Its storage lives in
+`hardcover_connections`, `hardcover_media_links`,
+`hardcover_metadata_cache`, and `hardcover_journal_provenance`
+(`crates/migrations/src/m20260950_000000_add_connections.rs`). The public
+metadata cache is keyed by provider, remote ID, and schema version with a
+24-hour TTL; it does not cache the user's journal or credential. Global
+`metadata_provider_configs` credentials remain independent of this personal
+account; `crates/graphql/src/query/unified_search.rs::get_hardcover_provider`
+uses an enabled global Hardcover configuration first and an opted-in personal
+PAT otherwise. Interactive search and narrator results are scoped to the
+credential identity, so a replaced token cannot inherit a former account's
+in-memory cached hits; the narrator cache checks selection *before* lookup.
 
-- `reading_session::Model` stores `session_date`, optional `start_locator`/`end_locator`, pages, percentages, cumulative `elapsed_seconds`, `readthrough_number`, `ReadingStatus`, notes, contributing `device_ids`, `media_id`, `user_id`, and creation/update timestamps. See [`crates/models/src/entity/reading_session.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/reading_session.rs#L22-L74).
-- `upsert_reading_session` extends the latest logical-day session, stores the incoming end position, and creates a new read-through after a finalized session. `elapsed_seconds` is accumulated per session rather than overwritten. See [`crates/models/src/services/reading_progress.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/services/reading_progress.rs#L13-L139).
-- `ReadthroughRecord` aggregates sessions sharing a `readthrough_number` and exposes `started_at`, `completed_at`, `elapsed_seconds`, and `dnf`. See [`crates/graphql/src/object/readthrough_record.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/object/readthrough_record.rs#L4-L14).
-- `media_annotation::Model` currently stores a local annotation ID, a required `ReadiumLocator`, optional `annotation_text`, `media_id`, `user_id`, and local timestamps. It has no provider or remote-object columns. See [`crates/models/src/entity/media_annotation.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_annotation.rs#L5-L23).
-- Stump's `ReadiumLocator` contains `href`, `type`, optional `title`, `locations`, `text`, and an optional `kobo_span`. `ReadiumLocation` currently has `progression`, `position`, `total_progression`, `css_selector`, and `partial_cfi`; `ReadiumText` has `before`, `after`, and `highlight`. See [`crates/models/src/shared/readium.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/shared/readium.rs#L118-L176).
-- Existing annotation creation accepts a media ID, a complete locator, and optional annotation text; the highlighted passage is represented by `ReadiumText.highlight`, while `annotation_text` is the separate note field accepted by the annotation input. See [`crates/graphql/src/input/media.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/input/media.rs#L157-L180) and [`crates/models/src/shared/readium.rs`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/shared/readium.rs#L134-L145).
-- Stump already names Hardcover as a metadata provider and stores metadata provider/external IDs, including ISBN and MOBI ASIN. That metadata-provider path is not account or progress synchronization. See [`MetadataProvider`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/shared/enums.rs#L467-L480) and [`media_metadata::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_metadata.rs#L47-L101).
+`media_annotation::Model` has no provider/remote-object columns; the separate
+provenance row records a user, remote journal ID, optional media/annotation ID,
+remote page key, status/reason, and raw journal payload. No EPUB/KEPUB `href`,
+CFI, or page within the local publication is inferred from Hardcover's
+edition-relative page/percent metadata. Existing reading sessions and local
+annotation writes remain separate from remote Hardcover writes.
 
 ### Current external source facts
 
@@ -50,7 +84,16 @@ The research baseline pins the external sources used by this design:
 - The pinned Hardcover [`schema.graphql`](https://github.com/hardcoverapp/hardcover-docs/blob/767b56a5f313f57f904bcebac647b32e7e4f4338/schema.graphql) defines `ReadingJournalCreateType`, `ReadingJournalUpdateType`, `reading_journals`, `DatesReadInput`, `user_book_reads`, and the corresponding mutations.
 - NickelHardcover v0.5.3, commit `149ab0ec224b8cf49da269338731b8eade1a809a`, reads Kobo bookmarks and writes Hardcover journal/progress data. Its source is evidence of an existing device integration, not Stump behavior.
 
-## Hardcover API contract to target
+On 2026-10-05, an authorized probe used the existing personal PAT with the
+fixture database opened read-only. Hardcover returned HTTP 200 with no GraphQL
+errors for `__type(reading_journals)` (all eight requested fields present) and
+for the shipped journal selection set with fixed `user_id = -1` and `limit: 0`
+(empty result). No identity, journal content, or credential was emitted, and
+no connection flags or remote data were changed. The owner's
+`import_journals` flag remains disabled; the probe does **not** prove access
+to personal journal rows, row values, live cursor pagination, or an import.
+
+## Hardcover API research baseline and future write contract
 
 ### Endpoint and authentication (observed facts)
 
@@ -58,18 +101,24 @@ The current API endpoint is `https://api.hardcover.app/v1/graphql`. Hardcover's 
 
 The same guide states that the API is beta and in flux, tokens may be reset without notice, the token must stay private, requests must come from a code backend rather than browser code, access is currently limited to localhost or APIs, and queries have a 30-second maximum timeout. It also describes ownership and commercial/public-product restrictions for user-owned data; see [response codes and important notes](https://github.com/hardcoverapp/hardcover-docs/blob/767b56a5f313f57f904bcebac647b32e7e4f4338/src/content/docs/api/Getting-Started.mdx#L63-L121) and [commercial-use restrictions](https://github.com/hardcoverapp/hardcover-docs/blob/767b56a5f313f57f904bcebac647b32e7e4f4338/src/content/docs/api/Getting-Started.mdx#L122-L163).
 
-### Scope and capability handling (observed facts and proposal)
+### Scope and capability handling
 
-The capabilities document currently exposes read scopes for the account, library, and journal surfaces, and lists `write:library` operations including `insert_reading_journal`, `update_reading_journal`, `insert_user_book`, `update_user_book`, `insert_user_book_read`, `update_user_book_read`, and `upsert_user_book_reads`. See the [`write:library` capability entry](https://api.hardcover.app/capabilities.json).
+The capabilities document lists read scopes for account, library, and journal
+surfaces, and `write:library` operations including `insert_reading_journal`,
+`update_reading_journal`, `insert_user_book_read`, and
+`update_user_book_read`. See the
+[`write:library` capability entry](https://api.hardcover.app/capabilities.json).
+The shipped account connect verifies `me`, records reported capabilities (or
+falls back to `me`/`metadata` if inspection fails), and does not invoke remote
+write operations. The manual importer fetches journal entries only when the
+`user_books` capability was reported; this capability check is not proof of a
+complete scope/permission negotiation.
 
-**Proposed (not implemented):** Stump should request only the minimum PAT permissions for the switches the user selected:
-
-- account verification: the currently documented account-read permission needed for `me`;
-- read-only journal import: the currently documented journal-read permission and the library-read permission needed to resolve book/edition ownership;
-- progress writes: the currently documented `write:library` permission, plus the read permissions needed for matching;
-- quote writes, if ever added: the journal/library write permission only after the write contract passes the gates in [Unknowns and rollout gates](#unknowns-and-rollout-gates).
-
-The implementation must inspect the current capability document and surface missing or changed permissions instead of assuming that a scope or operation list is permanent. An account with a valid PAT but insufficient scope must remain connected for permitted read-only operations while reporting the blocked capability.
+**Proposed for outbound integration:** request only the permissions required
+for each consented direction, surface unsupported/missing scopes, and verify
+the current capability document before any write. Journal export would need a
+separate opt-in and contract review; see [Unknowns and rollout
+gates](#unknowns-and-rollout-gates).
 
 ### Request limits (observed facts)
 
@@ -106,51 +155,61 @@ The pinned schema exposes the following relevant shapes:
 
 Sources: [`ReadingJournalCreateType`](https://github.com/hardcoverapp/hardcover-docs/blob/767b56a5f313f57f904bcebac647b32e7e4f4338/schema.graphql#L569-L597), [`reading_journals`](https://github.com/hardcoverapp/hardcover-docs/blob/767b56a5f313f57f904bcebac647b32e7e4f4338/schema.graphql#L17141-L17213), [`DatesReadInput`](https://github.com/hardcoverapp/hardcover-docs/blob/767b56a5f313f57f904bcebac647b32e7e4f4338/schema.graphql#L220-L240), and the [current capabilities document](https://api.hardcover.app/capabilities.json).
 
-## Proposed Stump architecture (not implemented)
+## Shipped Coppice account, links, and manual sync
 
-### Account record and consent
+`connectHardcover` validates a nonblank PAT with Hardcover `me`, stores the
+token encrypted for the authenticated user, and records remote user identity,
+reported capabilities, verification time, and the three independent
+`use_for_metadata`, `import_journals`, and `sync_progress` toggles. The token
+is never returned in a GraphQL connection response or job payload. The
+Connections screen supports updating toggles and disconnecting; disconnect
+removes the connection row but retains existing local data. Users must revoke
+the PAT at Hardcover separately if needed.
 
-Add a per-user Hardcover account record rather than a server-wide token. The preferred future record contains:
+`linkHardcoverMedia` requires media visible to that user and a nonblank
+remote book ID. It stores one explicit per-user mapping to a local media row;
+it does **not** verify the supplied remote ID or edition against Hardcover,
+nor auto-link by title/ISBN. `lookupHardcoverMetadata` requires this link and
+the personal metadata toggle, fetching or reusing a 24-hour public-data cache.
+The global ingest metadata provider is a distinct configuration.
 
-- the Stump `user_id` as its owner;
-- encrypted PAT ciphertext and an encryption-key version, never plaintext in a response, job payload, or log;
-- the verified Hardcover `me.id` and `username`;
-- the enabled switches (`import_journals`, `sync_progress`, and any future `export_journals`), selected/observed scopes, and PAT expiration if supplied;
-- last successful verification/import/write times, a remote cursor or watermark if one is eventually proven, and the last classified error;
-- a disable/disconnect timestamp and a schema/integration version for migrations.
+`syncHardcoverNow` is an explicit owner-only mutation, not a scheduled job.
+When `import_journals` is enabled, it re-verifies `me.id`, checks the advertised
+`reading_journals` query capability, and fetches that user's `event = "quote"`
+rows by ascending journal ID with a 100-row keyset cursor. The pinned
+[GraphQL schema](https://github.com/hardcoverapp/hardcover-docs/blob/767b56a5f313f57f904bcebac647b32e7e4f4338/schema.graphql)
+defines `id`, `user_id`, `book_id`, `edition_id`, `event`, `entry`, `action_at`,
+and JSON `metadata` on `reading_journals`; it does **not** define `quote`,
+`note`, or `page` fields on `user_books`. The client decodes plain quote
+`entry` or NickelHardcover's `highlight + "\n━━━\n" + note` convention,
+preserving the complete source payload. It parses page positions only from
+`metadata.position` with `type: "pages"`; `percent / 100` (or a valid
+`value / possible`) can yield an edition-relative fraction, not a local
+page locator. Journal rows with a missing link/text/anchor remain unresolved.
+New provenance keys the true journal ID as `reading_journals:{id}` so legacy
+bare `user_books.id` rows with the same number cannot suppress a quote.
+There is **no** manufactured `media_annotation`: `imported` remains zero
+until an exact publication-resource locator can be proven.
 
-This record and its migration are **proposed (not implemented)**. PAT entry should be a one-time authenticated Stump operation. The API must never return the PAT after initial storage, and tracing must redact authorization headers and GraphQL variables. Disconnect should remove the local ciphertext and mapping state; it should also tell the user to revoke the remote PAT because Stump cannot assume that a remote token-revocation mutation exists.
+The optional `sync_progress` switch projects fractions for linked books only
+when the source `action_at` is valid, not in the future, and newer than the current head, with
+`Position::None` (no page, href, or completion claim). Blank-text quote rows
+can thus be unresolved provenance *and* project explicit progress. Quote
+import alone never touches a reading head. Upstream/capability failures return
+`status: "error"`, persist `last_error`, keep the prior successful
+`last_sync_at`, and do not save a partial fetched page as an import.
+Successful local writes are transactional and clear `last_error`. No remote
+progress is modified.
 
-A user must explicitly enable each data direction. Disconnecting or disabling the provider must leave local sessions and annotations intact. A failed remote sync must never prevent a local reading-progress or annotation write.
+### Proposed outbound progress and remote reconciliation
 
-### Media, book, and edition linking
-
-A future adapter must resolve a local `media_id` to a Hardcover `book_id` and, where needed, an `edition_id`. **Proposed (not implemented):** keep this in an explicit per-user link record with `media_id`, remote IDs, match method, verification time, and link status. Use this precedence:
-
-1. a user-confirmed link;
-2. a previously verified link that still resolves;
-3. a matching Stump metadata external ID where the source is Hardcover;
-4. an exact ISBN or ASIN match from `media_metadata`;
-5. a manual selection flow.
-
-Do not auto-link solely on title, filename, author text, or page count. Do not create a remote library item merely because a local title looks similar. If more than one edition/book remains possible, keep the item unresolved and ask for a user-confirmed link. This avoids writing a progress event to the wrong edition.
-
-### Lightweight server job
-
-**Proposed (not implemented):** a local reading-session or annotation change may enqueue a small provider job in Stump's existing background-job infrastructure. The job should:
-
-1. load one user's provider record and the explicit media/book/edition link;
-2. coalesce pending progress changes by `(user_id, media_id, readthrough_number)`;
-3. fetch only the remote rows needed for that link;
-4. issue bounded GraphQL requests under the five-operation limit;
-5. persist an idempotent attempt/result, classified error, next retry time, and source watermark if one is available;
-6. release the PAT from memory after the request completes.
-
-If background jobs are disabled, local writes remain successful and the provider work stays pending. The provider must not become a required startup dependency, health dependency, or database transaction participant. The job may be scheduled or manually retried; it must not poll continuously by default.
-
-The initial import job is read-only. Progress writes are a separate switch and a separate job path. Journal mutations are not part of the initial implementation.
-
-The remote `user_book` should be treated as the user's library relationship, while `user_book_read` is the proposed progress record. The local link should therefore retain `user_book_id` in addition to `book_id` and `edition_id` when the API returns it. NickelHardcover's `updateread` mutation updates a `user_book_read` and its journal path can set a user-book status, but that is behavior of that external client; Stump must not project `Reading` into a remote status until the current Hardcover status mutation and scope are verified. See [`updateread.graphql`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/graphql/mutations/updateread.graphql) and [`updatejournal.rs`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/commands/updatejournal.rs#L73-L236).
+Future remote writes would require a separately consented direction, a
+verified edition/read-through mapping, idempotent attempts, bounded
+requests/retries, and remote scope checks. A local session/annotation write
+must not depend on a provider job, health check, or Hardcover availability.
+These remain future work; the existing `sync_progress` switch means **local
+fraction-only projection from explicitly positioned, dated `reading_journals`
+quote rows**, not these proposed writes.
 
 ## Proposed progress mapping (not implemented)
 
@@ -186,27 +245,37 @@ NickelHardcover v0.5.3 opens the Kobo database read-only, selects Bookmark rows 
 
 Its [`updatejournal.rs`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/commands/updatejournal.rs#L73-L236) reads existing Hardcover journal quotes for the same user/book, compares bookmark and journal timestamps to the second, and inserts or updates quote rows. It uses `event: "quote"`; the entry is the highlight alone or `highlight + "\n━━━\n" + note`; optional metadata contains a page-position object. It chunks insert/update operations in groups of five, matching Hardcover's documented top-level operation limit. Its GraphQL shapes are visible in [`insertreadingjournal.graphql`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/graphql/mutations/insertreadingjournal.graphql) and [`updatereadingjournal.graphql`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/graphql/mutations/updatereadingjournal.graphql).
 
-This establishes an important integration rule: **a Kobo highlight may already exist in Hardcover as a quote journal row before Stump sees it.** Stump should import/reconcile that row and must not immediately publish a second quote for the same source event.
+This establishes an input boundary for **shipped** read-only journal import:
+a Kobo highlight may already be a Hardcover `reading_journals` quote before
+Coppice sees it. The manual importer reads only the PAT owner's quote rows,
+parses the known delimiter if present, and never publishes a second quote.
+The [`getjournalquotes.graphql`](https://codeberg.org/StrayRose/NickelHardcover/src/commit/149ab0ec224b8cf49da269338731b8eade1a809a/cli/src/graphql/queries/getjournalquotes.graphql)
+query demonstrates the source's `event`, `user_id`, `book_id`, and limit-100
+journal read; Coppice uses ordered IDs rather than offset paging.
 
-### Proposed journal import (not implemented)
+### Exact `reading_journals` annotation anchoring (not implemented)
 
-For a linked user/book, the read-only importer should:
+An exact locator lane must resolve the same user/book/edition and match text
+against the identical local EPUB/KEPUB bytes before creating an annotation.
+The shipped importer retains every quote as unresolved provenance. Even with
+a numeric page and a link to a local book, a Hardcover edition page cannot be
+treated as a local EPUB/KEPUB `href`, `partialCfi`, or verified text range.
 
-1. query `reading_journals` for rows visible to that user and filter `event = "quote"` in the request or locally, according to the current supported query shape;
-2. retain the remote journal ID, book/edition IDs, action date, entry, metadata, privacy setting, and source update timestamp needed for reconciliation;
-3. resolve the remote book/edition to exactly one Stump `media_id`;
-4. parse the known NickelHardcover delimiter when it is present: the text before the first `\n━━━\n` is the highlight and the text after it is the note;
-5. otherwise treat `entry` as the quoted text and leave the note empty unless a future, documented source format supplies a separate note field;
-6. resolve a valid Readium locator using the exact-locator lane below or a unique text match; and
-7. create or update a local `media_annotation` only after the locator and identity checks pass.
+### Provenance and future reconciliation
 
-The importer should preserve the original `entry` digest and raw position metadata in provenance even when it splits the user-facing highlight and note. It should not rewrite the remote journal, alter its privacy, or create a new remote journal during import.
+**Shipped:** `hardcover_journal_provenance` has `(user_id,
+remote_entry_id)` uniqueness. New rows use source-qualified
+`reading_journals:{id}` identifiers and preserve the raw numeric `id` in the
+payload; preexisting bare `user_books.id` records remain intact. It stores
+optional linked media, remote page key, unresolved reason, and queried journal
+fields. Existing rows are skipped on a manual retry; remote updates/deletes
+and conflicting edits are not reconciled. A link is book-level, not proof
+that the local edition or locator matches.
 
-A page/progression-only journal is not automatically an exact annotation. If it has no resource `href` and its text cannot be uniquely located in the exact local publication, keep it in a pending/unresolved source table and show the reason. Do not insert a locator with a fabricated `href`, and do not place a page number in `partialCfi`.
-
-### Proposed provenance and reconciliation state (not implemented)
-
-The current `media_annotations` row has no source columns. The preferred future migration is a provider-neutral relation, for example `media_annotation_sources`, keyed by local annotation ID and containing:
+**Proposed:** a future provider-neutral annotation-source relation, for
+example `media_annotation_sources`, could track exact journal identities,
+remote changes, and conflict history. The fields below are design targets,
+not columns in the current schema:
 
 | Field | Purpose |
 | --- | --- |
@@ -224,16 +293,13 @@ The current `media_annotations` row has no source columns. The preferred future 
 | `local_content_hash` / `conflict_state` | Detects local edits and records unresolved source/local conflicts. |
 | `last_seen_at` | Supports non-destructive remote deletion/orphan detection. |
 
-The relation name and exact column types are proposed, not an existing schema. A future implementation may instead add equivalent nullable provenance columns to `media_annotations`, but it must preserve the same remote identity, source digest, locator mode, and conflict state. The local annotation remains the user-facing canonical row; provenance must not replace its Readium locator or text fields.
-
-**Proposed reconciliation policy (not implemented):**
-
-- Primary identity is `(provider, remote_user_id, object_type, remote_id)`. If a historical API response lacks a usable ID, use a clearly marked fingerprint of remote user, book/edition, event, action date, and canonical entry; never silently merge an uncertain fingerprint.
-- If the local content hash still equals the last imported hash, a changed remote entry or locator may update the local annotation and provenance.
-- If the user edited the local note/highlight after import and the remote digest also changed, preserve the local content, mark a conflict, and retain the new remote payload for review. Do not use timestamp-only last-writer-wins.
-- A remote deletion marks the source link orphaned and leaves the local annotation intact. Deletion requires an explicit user action.
-- A local annotation with matching text or position but no source identity is a duplicate candidate, not an automatic merge. This protects local annotations from accidental attachment to a NickelHardcover row.
-- Imported Hardcover annotations are never sent back to Hardcover by the initial implementation. If a future journal-export switch is added, it must exclude `provider = hardcover` rows and use an explicit remote mapping to prevent import/export loops.
+These relation names and field types are proposed; the current per-user
+Hardcover provenance has a remote journal ID but neither a content hash nor
+remote-change reconciliation. Future reconciliation should preserve local
+edits on concurrent remote changes, leave local annotations intact on remote
+deletion, and never attach an unlinked local annotation by text or page alone.
+If journal export is ever added, imported source rows must be excluded to
+prevent loops.
 
 ## Kobo Bookmark to Readium locator mapping
 
@@ -273,20 +339,30 @@ When only a Hardcover journal and its text/progression metadata are available:
 - attach progression as supporting evidence only;
 - if zero or multiple ranges are found, leave the source unresolved and explain whether the text was absent or ambiguous.
 
-A page number or whole-book percentage alone is not enough to invent a chapter `href` or exact `partialCfi`. The importer may show an unresolved journal for manual linking, but it must not create a misleading user-visible annotation.
+A page number or whole-book percentage cannot establish an exact chapter
+`href` or `partialCfi`. Shipped quote import never creates an annotation from
+those fields; exact Kobo/Readium ranges remain future work.
 
 ## Privacy, failures, and operational behavior
 
-### Proposed privacy rules (not implemented)
+### Shipped privacy boundary and future rules
 
-- PATs are per-user secrets and are sent only from the Stump backend. They are never put in browser bundles, client-side sync payloads, URLs, logs, or error messages.
-- The provider is off by default. Enabling it is explicit consent for the selected direction; importing a quote journal imports user-owned text into the user's Stump account and must respect Stump's normal visibility and authorization checks.
-- The first release does not publish Stump notes/highlights to Hardcover. A future write direction must expose the remote event/privacy choice before sending any text and must not inherit a hidden default.
-- The imported annotation's local visibility follows Stump's existing user ownership. Remote `privacy_setting_id` is retained as provenance and is not silently changed.
-- Disconnect removes local credentials and future provider jobs; it does not delete remote journals or local annotations automatically.
-- Stump must honor Hardcover's current ownership restrictions for user libraries, dates read, journal entries, and other user data. Any future public/commercial deployment must re-check the current policy before enabling this provider.
+- Personal PATs are encrypted server-side and are not returned to the browser.
+  The personal metadata toggle controls linked-media lookup, unified-search
+  fallback, and Hardcover narrator lookup; enabled global provider credentials
+  are independent of the user's personal toggle.
+- Manual import is connection-owner scoped, off by default, and read-only
+  against Hardcover. Stored provenance and local progress remain after
+  disconnect; disconnect removes the stored PAT, not the remote token.
+- `hardcover_journal_provenance` retains the owner's queried
+  `reading_journals` quote payload (not the full provider object);
+  `privacy_setting_id` is not requested. It never publishes text back to
+  Hardcover.
+- **Future:** journal reads/writes must honor remote ownership and privacy,
+  require separate consent, avoid loops and implicit publication, and recheck
+  current Hardcover policy before public/commercial deployment.
 
-### Proposed error classes (not implemented)
+### Proposed outbound error classes (not implemented)
 
 | Condition | Local state | Retry behavior |
 | --- | --- | --- |
@@ -299,17 +375,29 @@ A page number or whole-book percentage alone is not enough to invent a chapter `
 | Timeout (`408`) or transport failure | Attempt is indeterminate; do not regress local data. | Re-read/reconcile before retrying a mutation. |
 | Invalid locator/text mapping | Source row is unresolved; no fake annotation. | Reprocess only with exact bytes or user review. |
 
-## Staged rollout and gates
+## Staged status and remaining gates
 
-Every stage below is **proposed and not implemented**. The first user-facing data stage is intentionally read-only.
+1. **Shipped (pinned schema, authenticated schema/zero-row probe, and offline
+   contract tests):** per-user encrypted PAT, `me` verification, opt-in
+   metadata fallback, explicit media-book links, linked metadata lookup,
+   public-data cache, and manual `reading_journals` quote import with unresolved
+   provenance and optional local fraction-only progress projection.
+2. **Still unproven against personal data:** the read-only live probe checked
+   the schema and a zero-row journal selection, not real quote payloads or
+   multi-page behavior. The existing owner's `import_journals` is disabled;
+   do not override consent to run an import. Mocked contract tests exercise
+   row mapping, pagination, and upstream failures; failures are reported as
+   errors, not successful empty imports.
+3. **Planned:** exact Kobo/Readium annotation locator reconstruction and
+   remote-change reconciliation without overwriting locally edited data.
+4. **Planned, separate consent:** outbound `user_book_reads` progress writes
+   with verified edition/read-through mappings, idempotent bounded attempts,
+   and an explicit remote-write switch. Existing `sync_progress` is local
+   projection only. Remote quote export has no default implementation or
+   approved write contract.
 
-1. **Contract fixtures and capability probe.** Pin sanitized GraphQL response fixtures for `me`, book/edition resolution, `user_book_reads`, and `reading_journals`. Add a capability check that detects missing scopes/operations. No production PAT storage or remote writes.
-2. **Read-only account verification and journal import.** Add encrypted per-user PAT storage, account verification, explicit media links, provenance state, unresolved rows, and `event = "quote"` import. Do not call journal or progress mutations. NickelHardcover-originated quotes must reconcile by remote journal ID and never be duplicated.
-3. **Opt-in progress writes.** After read-only reconciliation is stable, enable `user_book_reads` writes behind a separate setting. Start with existing linked remote read-throughs; coalesce updates, cap batches at five, honor rate headers, and provide a dry-run/last-attempt view. Do not publish highlights or notes.
-4. **Exact Kobo locator lane.** Accept digest-bound uploader/worker records containing raw Kobo paths and exact resource bytes or a verified conversion artifact. Create exact Readium locators only when the reconstructed text matches. Keep text/progression fallback visibly approximate.
-5. **Review-only journal export gate.** Do not implement by default. A future proposal may consider exporting Stump-authored annotations only after Hardcover documents stable write scopes, quote semantics, size limits, privacy behavior, duplicate handling, and a safe idempotency strategy. Imported Hardcover rows must remain excluded.
-
-Disabling any stage must not remove local sessions, media, or annotations. A provider migration can be rolled back by stopping jobs and retaining provenance for later reconciliation.
+Disabling the connection must not remove local sessions, media, annotations,
+or previously imported provenance.
 
 ## Unknowns and rollout gates
 
@@ -318,7 +406,7 @@ The following are explicit unknowns, not implied behavior:
 - **Hardcover API stability:** the API is beta/in flux; the schema, capabilities, operation names, PAT scopes, token reset policy, and response details may change. The integration must re-check them at implementation and upgrade time.
 - **Journal write contract:** the inspected schema exposes journal mutations, but the long-term scope enforcement, retention, maximum `entry` size, duplicate/update behavior, quote-event semantics, and privacy defaults for a Stump client are not documented sufficiently to authorize journal writes.
 - **Dedicated highlight support:** no first-class highlight/annotation resource or locator field was found in the inspected schema/capabilities. This is a version-specific observation, not a promise about future API versions.
-- **Incremental journal reads:** the supported filter, ordering, pagination, cursor/watermark, and meaning of `updated_at` for incremental import must be verified. NickelHardcover's offset paging is evidence of one client strategy, not a Hardcover guarantee.
+- **Incremental journal reads:** shipped manual import uses schema-backed `id > last_id`, `order_by: id asc`, and `limit: 100`; the semantics of `updated_at`, deletes, and changed entries for incremental reconciliation remain unverified.
 - **Remote read-through semantics:** the relationship between multiple `user_book_reads` rows, `readthrough_number`, user-book status, progress percentage, page indexing, and DNF/abandoned state is not fully documented for this adapter.
 - **Edition selection:** a reliable ISBN/ASIN/book/edition matching policy and the behavior of a remote user-book creation must be confirmed against representative books, including editions with different page counts.
 - **Date precision:** `DatesReadInput` and journal creation inputs expose dates while Stump stores timestamps/time zones. The desired timezone and truncation policy is not fixed.
@@ -332,8 +420,9 @@ No stage may turn any of these unknowns into an undocumented compatibility claim
 
 ## Source index
 
-| Area | Authoritative source used by this design |
+| Area | Authoritative source used by this page |
 | --- | --- |
+| Shipped personal account, links, importer, and cache | `crates/graphql/src/mutation/hardcover.rs`, `crates/integrations/metadata/src/providers/hardcover.rs`, `crates/graphql/src/query/{unified_search,audiobook_narrators}.rs`, and `crates/migrations/src/m20260950_000000_add_connections.rs` |
 | Stump sessions and status | [`reading_session::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/reading_session.rs#L22-L74), [`upsert_reading_session`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/services/reading_progress.rs#L71-L139), [`ReadingStatus`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/shared/enums.rs#L573-L584), [`ReadthroughRecord`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/object/readthrough_record.rs#L4-L14) |
 | Stump annotations and locators | [`media_annotation::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_annotation.rs#L5-L23), [`ReadiumLocator`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/shared/readium.rs#L118-L176), [`CreateAnnotationInput`](https://github.com/stumpapp/stump/blob/nightly/crates/graphql/src/input/media.rs#L157-L180) |
 | Stump media identity | [`MetadataProvider`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/shared/enums.rs#L467-L480), [`media_metadata::Model`](https://github.com/stumpapp/stump/blob/nightly/crates/models/src/entity/media_metadata.rs#L47-L101) |

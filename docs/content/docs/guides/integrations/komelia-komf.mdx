@@ -5,9 +5,19 @@ description: Connect Komelia to Coppice's built-in Komf-compatible API
 
 # Connect Komelia to Coppice's Komf-compatible API
 
-Coppice includes the Komf 2.0.1 HTTP contract used by Komelia 0.19.3. You do
-not need to run a separate Komf service. Komelia's Komf URL is a credential:
-keep it private and treat it like a password.
+Coppice includes a native Komf-compatible API; you do not need a separate Komf
+service. Its source inventory now targets [Komf 2.1.0](https://github.com/Snd-R/komf/tree/d8a34e9df29ddaa6941c302df216812ee6d525e9)
+and [Komelia 0.20.0](https://github.com/Snd-R/Komelia/tree/9216fd18dec1a36ba42e7d810f47210a41d8ad99),
+not the whole upstream Komf feature set. Keep Komelia's credential-bearing
+Komf URL private and treat it like a password.
+
+**The published Komelia 0.20.0 native app cannot use the device URL below
+unchanged.** Its bundled `komf-client` 2.1.0 appends `/` to the raw base URL,
+turning `?apiKey=<device-key>` into `?apiKey=<device-key>/`. Coppice correctly
+rejects that changed credential. Use the earlier Komelia 0.19.3 / Komf-client
+2.0.0 combination, or a locally rebuilt 0.20.0 client with the pinned fix
+below. Merely updating Coppice or the source inventory does not patch an
+installed APK or desktop application.
 
 ## Prerequisites
 
@@ -17,6 +27,10 @@ keep it private and treat it like a password.
   `STUMP_ENABLE_KOMF=true`. Komf is off by default.
 - The server must be reachable from the device or desktop running Komelia. For
   access beyond a trusted private network, use HTTPS through a trusted proxy.
+- For Komelia 0.20.0 device authentication, build and install the corrected
+  client described below before entering its URL.
+- Keep Komelia's optional **MangaBaka** integration disabled. It defaults to
+  disabled and is not supported by Coppice.
 
 ## Create the Komelia device and add its URL
 
@@ -28,17 +42,102 @@ keep it private and treat it like a password.
    **Komf metadata editing**. The creating or approving user must already hold
    `EditMetadata`. The device then receives only the additional
    `EditMetadata` permission, not provider-configuration access.
-4. Copy the one-time revealed Komf URL and paste it into Komelia's Komf URL
-   setting. For a server listening on port 25600, the URL has this form:
+4. In a compatible client, copy the one-time revealed Komf URL into Komelia's
+   Komf URL setting. An HTTPS reverse-proxy deployment has this form:
 
    ```text
-   http://<server>:25600/?apiKey=<device-key>
+   https://<server>/?apiKey=<device-key>
    ```
 
-   Keep the query string intact. Coppice accepts this query key only on Komf
-   routes, and request tracing redacts it; reverse-proxy logs and browser URL
-   history may still record it. Rotate or revoke the device credential if the
-   URL is exposed.
+   Use the actual public server origin, including its port when necessary.
+   Keep the query string intact. Coppice accepts this query key only on
+   registered Komf routes, and request tracing redacts it; reverse-proxy logs
+   and browser URL history may still record it. Rotate or revoke the device
+   credential if the URL is exposed.
+
+   Do not add a slash to the key, append a dummy query parameter, or rewrite
+   credentials through redirects. None is a supported fix for the client bug.
+
+## Build the pinned client fix
+
+The supplied `scripts/patches/komf-client-2.1.0-query-url.patch` applies to
+Komf commit `d8a34e9df29ddaa6941c302df216812ee6d525e9`. It parses the base URL
+first and normalizes **only** `url.encodedPath`; it leaves query credentials,
+encoded path segments, and the other URL components intact. Ktor 3.6.0's
+[DefaultRequest implementation](https://github.com/ktorio/ktor/blob/111c5807d0a9004c8e0f17ae01e12a71aae56a29/ktor-client/ktor-client-core/common/src/io/ktor/client/plugins/DefaultRequest.kt)
+then joins relative `api/...` routes and inherits base query parameters not
+overridden by the individual request. No server authentication change is
+needed.
+
+Use separate upstream checkouts, not Coppice's source or dependency graph:
+
+```sh
+export COPPICE_ROOT=/path/to/coppice/stump
+git clone --no-checkout https://github.com/Snd-R/komf.git /tmp/coppice-komf-client
+git -C /tmp/coppice-komf-client checkout --detach d8a34e9df29ddaa6941c302df216812ee6d525e9
+git -C /tmp/coppice-komf-client apply --check "$COPPICE_ROOT/scripts/patches/komf-client-2.1.0-query-url.patch"
+git -C /tmp/coppice-komf-client apply "$COPPICE_ROOT/scripts/patches/komf-client-2.1.0-query-url.patch"
+git clone --no-checkout https://github.com/Snd-R/Komelia.git /tmp/coppice-komelia-client
+git -C /tmp/coppice-komelia-client checkout --detach 9216fd18dec1a36ba42e7d810f47210a41d8ad99
+```
+
+In that **temporary Komelia checkout**, append this composite-build
+substitution to `settings.gradle.kts`. Both modules are necessary: the client
+has an API dependency on the matching model project.
+
+```kotlin
+includeBuild("../coppice-komf-client") {
+    dependencySubstitution {
+        substitute(module("io.github.snd-r.komf:client")).using(project(":komf-client"))
+        substitute(module("io.github.snd-r.komf:api-models")).using(project(":komf-api-models"))
+    }
+}
+```
+
+The pinned sources use Kotlin 2.4.20, Ktor 3.6.0, AGP 9.1.1, JVM target 17,
+and Android SDK 37; Komelia's wrapper selects Gradle 9.7.1. Supply the upstream
+platform toolchains and native resources before building. For an Android
+development APK, the module target is:
+
+```sh
+/tmp/coppice-komelia-client/gradlew -p /tmp/coppice-komelia-client \
+  --no-daemon --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process \
+  :komelia-app:androidApp:assembleDebug
+```
+
+Install the resulting local build, not the unchanged published APK. Debug
+signing differs from release signing, so preserve your settings before any
+replacement installation. No Maven publishing, upstream commit, or server
+embedding is required. Desktop uses the same composite dependency; its
+application module is `:komelia-app:desktopApp`.
+
+Before treating the rebuilt client as verified, exercise Ktor 3.6.0
+`DefaultRequest` with `MockEngine`: root and subpath bases, with and without
+trailing slashes; a query-bearing base plus a relative config/search route;
+encoded credentials; and an absolute URL that must not inherit the base key.
+The old expression must reproduce the changed key, while the patch must keep
+the exact credential and request query. Then exercise config, connection,
+visible libraries, metadata search, and job events against Coppice with the
+rebuilt client. Source review and HTTP contract tests are not a live-client
+run.
+
+## Other authentication paths are not a native-device workaround
+
+The pinned native `AppModule` gives Komga its own persisted login cookies and
+API-key supplier, but gives Komf only a URL and a bare HTTP client.
+`KomfClientFactory` installs a separate `AcceptAllCookiesStorage`; Komga login
+cookies and its `X-API-Key` setting do not automatically authenticate Komf.
+There is no separate native Komf header/password field to configure.
+
+Coppice already authenticates query-free Komf requests using an actual
+Coppice browser session or native user `Authorization: Bearer` access token.
+This does not make a Komelia device's Komga API key valid as a Komf header.
+A Komelia web deployment on the **same origin**, with a query-free Komf URL
+and a live Coppice browser session, can use browser cookies; that acts as the signed-in
+user, not a restricted device. Coppice does not bundle or deploy that Komelia
+web application. This is not evidence that a native app shares the session,
+nor a recommendation to inject headers at a proxy or to send keys to another
+origin.
 
 ## What the device can do
 
@@ -63,6 +162,13 @@ not a downloader or acquisition service.
   start.
 - Only native provider-backed metadata is available. There are no separate
   Komf credentials or an in-process acquisition connector.
+- Komelia 0.20.0's optional MangaBaka enrichment, linking, tags, covers,
+  favicon proxy, and database download are not implemented. Its series and
+  collection-series pages call `POST /api/mangabaka/series/linked/batch` when
+  the toggle is enabled; the client does not catch that request's `404`, so
+  those pages fail instead of silently omitting enrichment. Keep the toggle
+  off. The source inventory includes the upstream routes and models to make
+  this gap visible; their presence there is not a support claim.
 - The optional `removeComicInfo=true` reset mode is not supported and returns
   `422`; the ordinary reset mode clears Coppice's native metadata and provider
   fetch history without editing archive files.

@@ -6,8 +6,9 @@ description: The Coppice integration taxonomy, request contract, acquisition bou
 Coppice is one Rust server process with explicit integration boundaries. A
 protocol adapter, metadata provider, catalog source, worker backend, or request
 system may have a different owner and evidence level, but none silently owns
-another class's job. The server remains authoritative for identity, permissions,
-storage, and publication.
+another class's job. In the shipped standalone mode, the server remains
+authoritative for identity, permissions, storage, and publication. Optional
+stack links below are planned, not a transfer of those responsibilities today.
 
 ## Evidence labels
 
@@ -32,7 +33,7 @@ Harness, source, and repository evidence never becomes app or device proof.
 | Class | Owns | Current boundary and evidence | Does not imply |
 | --- | --- | --- | --- |
 | **Protocol adapters** | Translate an external client's routes, authentication, DTOs, and progress model at the HTTP/WebSocket edge. | `crates/komga`, `crates/kavita`, `crates/abs`, `crates/kobo`, `crates/koreader`, `crates/opds`, `crates/liseur-sync`, plus native GraphQL/REST/Readium. Profiles are **Shipped**; their harness and client records are separated in [Client verification](/docs/developer/client-verification). | A protocol adapter is not a search provider, downloader, metadata authority, or alignment engine. |
-| **Metadata providers** | Identify and look up metadata candidates, map fields, retain provenance, and participate in ingest policy. | `crates/integrations/metadata` and `crates/ingest` implement the candidate/apply boundary. Hardcover metadata is **Shipped** and **Contract-tested** offline; live credentials are **Blocked**, and account, progress, and journal sync are **Planned**. See [Provider status](/docs/developer/provider-status). | Metadata lookup does not create a wanted request, fetch copyrighted files, or synchronize a provider account. |
+| **Metadata providers** | Identify and look up metadata candidates, map fields, retain provenance, and participate in ingest policy. | Coppice still consumes `crates/integrations/metadata`; `crates/ingest` implements the candidate/apply boundary. Hardcover metadata and personal connection/manual import are **Shipped**; offline and live evidence are separated in [Provider status](/docs/developer/provider-status) and [Hardcover integration](/docs/developer/hardcover-integration). The shared-crate cutover and linked MetaMeta configuration are not shipped in Coppice. | Metadata lookup does not create a wanted request or acquire files; personal-account sync is a separate consent-gated path. |
 | **Catalog/source providers** | Discover popular/latest/search/details/chapters/pages from a remote source and expose a materialized or virtual library. | `crates/provider`, `crates/provider-mangadex`, and `crates/provider-themes` own the `Source` contract and source definitions. The host and catalog path are **Shipped** when enabled; see [Provider host](/docs/developer/provider-host) and [Source definitions](/docs/developer/source-definitions). | A source provider is not the metadata-provider registry. It does not turn a search result into a fulfillment, and Storyteller never belongs here. |
 | **Worker backends** | Execute heavy or hardware-bound jobs outside the server process and return validated, digest-bound results. | `crates/worker`, `worker_jobs`, `transcode`, and `challenge_solve` are **Shipped**. The typed `align` contract and optional operator-configured Storyteller and external native-CTC worker runners are **Shipped**. See [Read-aloud](/docs/developer/read-aloud) for the configuration boundary. | Alignment runners are not bundled ML and are not a default server-side runtime. |
 | **Request system** | Store metadata-backed requests, enforce permissions and per-user visibility, record approval/rejection decisions, notify users, and accept social recommendation handoff. | The ledger, GraphQL create/list/detail/approve/reject contract, and Home request UI are **Shipped**. | Approval alone does not trigger release search, a grab, or publication. |
@@ -125,6 +126,34 @@ profile may omit both applications while retaining the backend contracts that
 its Cargo features include. See [Server architecture](/docs/developer/server-architecture)
 for the feature/profile matrix and lifecycle rules.
 
+## Optional stack links — planned in Coppice
+
+Every program must remain usable alone. Shared code belongs in a crate;
+shared state crosses an explicit versioned, scoped link API. This is the
+accepted integration direction, not a claim that the following links work
+in this checkout:
+
+| Concern | Standalone behavior today | Accepted linked-mode direction |
+| --- | --- | --- |
+| Metadata and search | Direct metadata adapters with Coppice-owned configuration; book/comic/manga search stays in Coppice. | Prefer `MetametaProvider` against MetaMeta's catalog service, with explicitly configured direct-adapter fallback. Provider keys stay where the adapter executes. |
+| Requests | Coppice owns its request and approval ledger. | Hub becomes request authority; Coppice creates requests there and mirrors their status for mapped users. Historical import is an explicit link-time operation. |
+| Acquisition | Coppice orchestrates manager-confirmed MAM Bridge calls and reviewed staged-ingest handoff. | Factor the orchestration into a shared crate for Coppice and a future dler consumer; MAM Bridge remains separate. |
+| Progress, devices, notes, annotations, and files | Coppice owns device sync, reading state, annotations, permissions, and file serving. | A scoped link lets hub read widgets and deep-link to Coppice; hub does not write progress. Annotation export targets W3C Web Annotation selectors. |
+| Identity | Existing Coppice users and authentication. | Explicit reviewed Coppice↔hub user mapping; network-peer identity alone is not user identity or an authorization bypass. |
+
+A sibling `metadata_integrations` crate and its `MetametaProvider` already
+exist outside this repository. That is not a Coppice cutover: `apps/server`,
+`core`, `crates/graphql`, `crates/ingest`, and `crates/library` still depend
+on the in-repo metadata crate. Replacing it requires an immutable source
+revision fetchable by Coppice CI and Docker builds, plus publication
+authorization. An external local path is not a deployable dependency.
+Linked operation additionally needs provider configuration, catalog-service
+credentials, and the provider-selection policy. Request linking, scoped
+reading-state export, user mapping, and acquisition extraction remain
+**Planned** here; no folder move, credential copy, or data migration follows
+from this design.
+
+
 ## Connections: personal delivery and provider state
 
 Connections are split between a shared system sender and user-owned targets:
@@ -138,15 +167,20 @@ Connections are split between a shared system sender and user-owned targets:
   device-id sends continue unchanged. Deleting a destination never deletes
   delivery history.
 - A Hardcover PAT is encrypted per user and verified through `me` before it is
-  stored. Personal status is redacted, clients are scoped by user and
-  credential version, and metadata use is opt-in for interactive lookups only.
-  Public metadata may use a provider/query/schema/expiry cache; journal,
-  quote, and progress responses never enter it.
-- Manual Hardcover sync is read-only for remote data. A quote becomes a local
-  annotation only when an explicit media link and exact page locator are
-  available; otherwise unresolved provider-neutral provenance is retained.
-  Progress projection is opt-in, page-bounded, and uses the shared
-  non-regressing reading-head conflict rule.
+  stored. Personal status is redacted; clients are scoped by user and credential
+  version. The metadata-lookup mutation checks the user's opt-in, but unified
+  external search currently falls back to their PAT without checking that flag.
+  Closing this consent gap remains open. Public metadata may use a
+  provider/query/schema/expiry cache; private imported records never enter it.
+- Manual Hardcover import is read-only remotely and currently reads optional
+  quote/note/page fields from `me.user_books`, not `reading_journals`. Its live
+  authenticated wire shape remains unverified. With an explicit media
+  link and an in-bounds page, it creates a page-position annotation using a
+  synthetic `hardcover://<entry-id>` locator; that is not a real EPUB spine
+  href, exact text range, or Kobo anchor. Otherwise unresolved provenance is
+  retained. Local progress projection is opt-in, page-bounded, and uses the
+  shared non-regressing reading-head rule. Remote writes and exact-edition
+  locator reconciliation remain planned.
 
 ## Source of truth
 

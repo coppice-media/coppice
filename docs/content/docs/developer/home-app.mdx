@@ -44,28 +44,48 @@ build time). In development `bun run home dev` serves on port 5175 and proxies
 
 Routes are relative to the base.
 
-| Route      | What it does                                                                                                                                                                                                                                                                                                                                              |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/dashboard` | The landing screen. `readingStats` for a selectable span (today, week, month, year, all time) as four cards; a 53-week activity heatmap over `readingStats(span: YEAR).days` with a minutes/pages toggle and the streak; a *Continue reading* shelf (`keepReading`) and a *Recently added* shelf (`recentlyAddedMedia`); a condensed per-device sync list (`devices`); and the job queue (`jobs`, gated on `READ_JOBS`) with live progress. Links to `/settings/notifications`. |
-| `/login`   | Cookie session via `POST /api/v2/auth/login`. Reads `GET /api/v2/auth/oidc/config`: when `enabled`, automatically starts OIDC sign-in unless the URL has `?error=` or (with local auth enabled) `?manual=1`; the *Sign in with single sign-on* button remains available. It preserves the 401 `returnTo` route through the validated OIDC `return_to` state (`home/src/routes/login/+page.svelte`; `apps/server/src/routers/api/v2/oidc.rs`) and falls back to `/`. When `disableLocalAuth`, hides the password form. |
-| `/devices` | Cards for every device from the `devices` query (kind, credential hint and protocol, last seen, last sync + summary, registered). *Add client* runs `createDevice` and reveals the one-time secret with an endpoint card per `DeviceEndpoint` (URL, username, secret, copy buttons, QR code of the URL). Rename (`renameDevice`), rotate (`rotateDeviceCredential`, same reveal), revoke (`revokeDevice`). Kobo and KOReader cards get a comic transform preset selector (`setDeviceTransformProfile`). Pending pairings (`pendingDevicePairings`, polled every 10 s) are approved with the device's code (`approveDevicePairing`) or denied. |
-| `/reading` | `readingStats` for a selectable span (7/30/90 days, year, all time): totals, streak, a per-day bar strip, and a per-device table.                                                                                                                                                                                                                          |
-| `/library` | Every library from `libraries` as a card with its `stats` (series, books, finished, bytes on disk), the last scan, and *Scan* / *Analyze* (`scanLibrary`, `analyzeLibrary`). *New library* posts `createLibrary` with the three choices the dialog exposes (type, layout, watch) on top of the defaults the Home form starts from — `LibraryConfigInput` has no optional flags. |
-| `/library/[id]` | The browser for one library (`prerender = false`). A *Series* tab (`series`, grid or table) and a *Books* tab (`media`, table with progress and mark read/unread), a grid/table toggle, and filters for read status, format, tag, publisher, author, and title. Every filter, the tab, the view, and the page live in the query string, so the entity grids can link straight into a filtered view and the back button works. `SeriesFilterInput` carries no book-level fields, so setting format, tag, publisher, or author switches to the *Books* tab instead of silently dropping the filter. |
-| `/series/[id]` | One series (`prerender = false`): cover, progress, tags, metadata, and its books with per-book *Mark read* / *Mark unread* (`finishMediaProgress`; `clearMediaProgress` + `deleteMediaReadingHistory`), plus `finishSeriesProgress` and `clearSeriesReadingHistory` for the whole series. *Reshape* opens the sheet described in [Series reshape](#series-reshape). |
-| `/entities/{authors,publishers,tags}` | Grids of the metadata behind the books, each tile linking into `/library/[id]` pre-filtered. Authors come from `authors(search, libraryId)` and count the books the query already carries; publishers from `libraryById.publishers`; tags from `tags`. Neither publishers nor tags have an aggregate on the server, so those tiles count their own books with one small `media` query each (bounded by the page size of 24). A library selector scopes the grid and the links. |
-| `/annotations` | The annotation hub: every highlight, note, and bookmark the user has from one `annotations(filter, pagination)` query, grouped by book with a kind badge, a source badge, and the chapter/page/percentage the anchor carries. Filters for kind, source, book, `since`, and a text search live in the query string; notes on native rows are edited in place (`updateAnnotation`) or removed (`deleteAnnotation`), and *Open in reader* deep-links into `/reader/[mediaId]`. *Export now* runs `runAnnotationSync` and the settings route configures its sinks. |
-| `/reader/[mediaId]` | The reader. EPUBs render with [foliate-js](https://github.com/johnfactotum/foliate-js) over the server's Readium routes; comics and PDFs render as paged images. Position is persisted through `updateMediaProgress`; combined native and liseur annotations come from `annotations(filter: { mediaId })`. Readium-shaped liseur rows overlay beside native rows and carry their source device name; opaque device locators stay in a read-only side panel. See [Reader](#reader). |
-| `/settings/notifications` | The routing matrix (`notificationRules` × `notificationChannels`, one `setNotificationRule` per switch) and a settings form per channel built from the channel's `IngestSettingDefinition` schema (`notificationChannelSettings`, `setNotificationChannelSettings`, `testNotificationChannel`). Administrative kinds are owner-only, mirroring `NotificationKind::is_administrative`; a `*` rule is reported, not edited. |
-| `/settings/annotations` | The [annotation-sync](/docs/developer/annotation-sync) export sinks: one card per `annotationSinks` entry with a form built from its `IngestSettingDefinition` schema, the per-sink `annotationSyncStatus` (enabled, last run, last error), *Enable*/*Disable*/*Save settings* through `setAnnotationSinkSettings`, and *Export now* (`runAnnotationSync`). Stored values are never returned, so secret fields are write-only and an empty one keeps what is stored. |
-| `/account` | Profile from `me` (username, owner badge, OIDC email, last login, active sessions) and the user's own sign-in history from `loginActivityById(id: me.id)`.                                                                                                                                                                                                  |
+| Route | What it does; data, operations, and access |
+| --- | --- |
+| `/` | Immediately replaces the URL with `/dashboard` (`home/src/routes/+page.svelte`). |
+| `/login` | Cookie-session login and OIDC entry point: reads `/api/v2/auth/oidc/config` through `createOidcConfigQuery` (`home/src/lib/oidc.ts`, shared with `/users`), posts local credentials to `/api/v2/auth/login`, and starts OIDC when enabled. Hides password login when `disableLocalAuth` is true; see `home/src/routes/login/+page.svelte`. |
+| `/club-reader/[sessionId]` | Accountless book-club guest reader, outside the signed-in `(app)` shell: no `MeDocument`, no native GraphQL, no login redirect. Removes `#token=` from the URL, redeems it (`POST /api/v2/club-reader/redeem`), then reuses the EPUB/paged/audio reader components through a session-scoped resource adapter. Shows the active book, the reader's alias and opt-in coarse group progress, private/shared highlights and notes (EPUB text selection, page or audio position), and a session-only Discussion card (plain-text messages under aliases, load older, edit/delete own; `home/src/lib/components/social/ClubReaderDiscussion.svelte`). Live: an `EventSource` on `/api/v2/club-reader/sessions/{id}/events` receives content-free `changed` hints (debounced 250 ms, then the snapshot and/or messages are refetched; every (re)connect refetches both) and `revoked` (shows the unavailable state); while the stream is down it polls every 60 s and reconnects with backoff. Mutations send `X-Club-Reader-Participant`; a `409` resets the reader. Client: `home/src/lib/club-reader-api.ts`; see [Guest reading links](/docs/guides/features/book-clubs/guest-reader). |
+| `/dashboard` | Reading stats and heatmap, continue-reading/recent shelves, device summary, recent highlights, and job panel. GraphQL: `ReadingStats`, `DashboardKeepReading`, `DashboardRecentlyAdded`, `Devices`, `DashboardRecentAnnotations`, and `DashboardLiveEvents`; job details are shown only with `READ_JOBS` or owner bypass (`home/src/routes/(app)/dashboard/+page.svelte`). Notification settings link to `/connections#notifications`. |
+| `/library` | Lists libraries (`ConsoleLibraries`) and opens the create-library form. Create/scan/analyze controls follow server library permissions; authorization is enforced by GraphQL (`home/src/routes/(app)/library/+page.svelte`). |
+| `/library/[id]` | Library browser with series/books tabs, filters, sort, pagination, and book progress actions. Uses `ConsoleLibraryDetail`, `ConsoleLibrarySeries`, and `ConsoleBooks` plus library mutation operations; mutations are server-permission checked (`home/src/routes/(app)/library/[id]/+page.svelte`). |
+| `/series/[id]` | Series metadata/progress and paged books; marks or clears reading history and opens the reshape sheet. GraphQL: `ConsoleSeriesDetail`, `ConsoleBooks`, `ConsoleFinishSeries`, `ConsoleClearSeriesHistory`; reshape mutations require `ManageLibrary` (`home/src/routes/(app)/series/[id]/+page.svelte`). |
+| `/book/[mediaId]` | Book detail tabs for metadata/reviews/similar titles, metadata editing, files, reading log, and highlights. GraphQL: `BookDetail`, `BookCover`, `BookReadingLog`, `BookHighlights`, `SimilarBooks`, metadata candidate/apply, and review operations. Mutation controls are permission-checked by the server (`home/src/routes/(app)/book/[mediaId]/+page.svelte`). |
+| `/reader/[mediaId]` | Audio player when `book.audio` is present; otherwise EPUB reader or paged comic/PDF reader. Reads media/progress/annotations and visible page count through GraphQL; progress uses `updateMediaProgress`, while EPUB resources and pages use the serving endpoints in [Reader](#reader). The annotation panel (`src/lib/components/reader/ReaderAnnotations.svelte`) lists every annotation on the book: selecting EPUB text drafts a highlight with an optional note, a paged book offers a note on the visible page, and an audiobook offers a note at the playhead (`positionMs`, seeked by Go to) (`ReaderCreateAnnotation`); rows the server marks `editable` get go-to, note/colour edit and delete (`ReaderUpdateAnnotation`, `ReaderDeleteAnnotation` with `expectedRevision`), and a revision conflict refetches and tells the user. Device-owned rows and bookmarks stay read-only. Chapter-map edits are shown only to `MANAGE_LIBRARY` users (`home/src/routes/(app)/reader/[mediaId]/+page.svelte`). |
+| `/reading` | Current reading and history views with stats, date/device filters and progress records. GraphQL: `ReadingStats`, `DashboardKeepReading`, `ConsoleBooks`; focused-device filtering comes from the query string (`home/src/routes/(app)/reading/+page.svelte`). |
+| `/annotations` | Filterable cross-book annotation hub; edits/deletes every row the server marks `editable` and deep-links to the reader. Note edits send `""` to clear (the one clear every lane applies) and highlight colours use the shared `AnnotationColorPicker` over `ANNOTATION_COLORS` in `src/lib/annotations.ts`, the same picker the reader panel uses. GraphQL: `ConsoleAnnotations`, `ConsoleUpdateAnnotation`, `ConsoleDeleteAnnotation`; export controls link to `/connections#exports` (`home/src/routes/(app)/annotations/+page.svelte`). |
+| `/devices` | Device registry, capability display, pairing approvals, add/rename/rotate/revoke controls and transform presets. GraphQL device/pairing operations plus `deviceSeen`; actions are permission-checked by the server (`home/src/routes/(app)/devices/+page.svelte`). |
+| `/connections` | Personal Kindle destinations/delivery, Hardcover connection, notification routing/channel settings, annotation export sink configuration, and owner-only server integrations. Notification UI uses `NotificationSettings`, `SetNotificationRule`, `SetNotificationChannelSettings`, `TestNotificationChannel`; exports use `ConsoleAnnotationSinks`, `ConsoleSetAnnotationSinkSettings`, `ConsoleRunAnnotationSync`. Server integrations are gated by `isServerOwner`; personal controls rely on their GraphQL authorization (`home/src/routes/(app)/connections/+page.svelte`, `home/src/lib/components/ConnectionsNotifications.svelte`, `ConnectionsAnnotationExports.svelte`). |
+| `/social` | Private recommendations, read-only sharing grants/overlays, and BookClubs: membership/invitations, the club book queue (local-library chooser, add, reorder, complete), and guest reader sessions (create, publish, advance, account-member join, one-time invite issue/rotate/revoke, close, and a per-session Discussion disclosure to read and moderation-delete session messages). Queue uses `AddBookToClub`, `CompleteBook`, `ReorderBooks`; sessions use `/api/v2/book-clubs/{clubId}/reader-sessions` (messages under `.../{sessionId}/messages`). Session management and moderation need `SHARE_BOOK_CLUB_READER` plus club Admin/Creator (server `canManage`); one-time invites stay in memory only (`home/src/routes/(app)/social/+page.svelte`, `home/src/lib/components/social/BookClubPanel.svelte`, `ReaderSessionDiscussion.svelte`). |
+| `/requests` | Search/filter the visible request ledger and open/create requests. GraphQL: `BookRequests`; review controls require owner, `MANAGE_SERVER`, or `MANAGE_LIBRARY` (`home/src/routes/(app)/requests/+page.svelte`). |
+| `/requests/new` | Creates a request from local media or external metadata, optionally targeting a shelf/device or recommendation. GraphQL: `RequestDestinations`, `CreateBookRequest`; creation/visibility is server-authorized (`home/src/routes/(app)/requests/new/+page.svelte`). |
+| `/requests/[id]` | Request detail/history, manager approve/reject, requester-or-manager narrator changes while eligible, and approved-request acquisition. GraphQL: `BookRequest`, `RequestDestinations`, `ApproveBookRequest`, `RejectBookRequest`, `SetBookRequestPreferredNarrator`; acquire controls require `ACQUIRE_RELEASES` or owner (`home/src/routes/(app)/requests/[id]/+page.svelte`). |
+| `/settings/notifications` | Legacy path that redirects (307) to `/connections#notifications`; the settings UI is on `/connections` (`home/src/routes/(app)/settings/notifications/+page.ts`). |
+| `/settings/annotations` | Legacy path that redirects (307) to `/connections#exports`; the export-sink UI is on `/connections` (`home/src/routes/(app)/settings/annotations/+page.ts`). |
+| `/search` | Unified search for visible library books and external request candidates; result behavior and external destinations are provided by `UnifiedSearchResults` (`home/src/routes/(app)/search/+page.svelte`, `home/src/lib/components/UnifiedSearchResults.svelte`). |
+| `/workers` | Worker jobs and status with live `WorkerJobEvents`; cancels active jobs through `CancelWorkerJob`. Job visibility and cancellation follow server worker permissions (`home/src/routes/(app)/workers/+page.svelte`). |
+| `/account` | Current profile/session details and recent sign-in history (`me`, `MyLoginActivity`); shows at most 20 newest login records (`home/src/routes/(app)/account/+page.svelte`). |
+| `/components` | Server component status, desired/effective state, lifecycle requirements and owned gauges; toggle operations are available only to the server owner. Not a developer showcase; the route is linked in Manage navigation only for owners (`home/src/routes/(app)/components/+page.svelte`, `home/src/routes/(app)/+layout.svelte`). |
+| `/users` | Server accounts: a table (owner/You/OIDC badges, Active/Locked/Deleted, last sign-in, active sessions and limit, permission count and age restriction), a create/edit sheet with permissions grouped by area, age restriction and session limit, and owner actions (lock/unlock, sign out everywhere, delete, and permanent delete behind a typed username). GraphQL `UsersList`, `UsersCreate`, `UsersUpdate`, `UsersSetLock`, `UsersRevokeSessions`, `UsersDelete` (`home/src/lib/graphql/users.graphql`); `UsersList` selects `permissions`/`ageRestriction` only when `$manage` is true, because those fields need `MANAGE_USERS` and a denied field fails the whole list. Listing needs the owner or `READ_USERS`; create/edit need `MANAGE_USERS` and are never offered for your own account (the server ignores privileged fields on a self-update) or the owner's; lock, sign-out, and delete are owner-only. The editor ticks the minimal set and shows what it implies as *Included*, mirroring the server's `AssociatedPermission` table, and saves the expanded set (`home/src/lib/users.ts`). With OIDC enabled (`createOidcConfigQuery`, `home/src/lib/oidc.ts`) a note warns that `STUMP_OIDC_SYNC_PERMISSIONS` can replace an OIDC account's permissions at sign-in; the browser cannot read that setting (`home/src/routes/(app)/users/+page.svelte`, `home/src/lib/components/users/`). |
+| `/entities/authors` | Searchable, library-scoped author grid and paging from `ConsoleAuthors`; each author links to a filtered library browser (`home/src/routes/(app)/entities/authors/+page.svelte`). |
+| `/entities/publishers` | Library-scoped publisher list from `ConsoleLibraryPublishers`, with client-side search/paging and filtered book links (`home/src/routes/(app)/entities/publishers/+page.svelte`). |
+| `/entities/tags` | Server tags from `ConsoleTags`, with client-side search/paging and links to matching books in the selected library (`home/src/routes/(app)/entities/tags/+page.svelte`). |
 
-`/` redirects to `/dashboard`. The nav is Dashboard, Library, Reading,
-Annotations, Devices, Account. The `(app)` layout loads `me`, exposes it through
-a Svelte context (`src/lib/session.svelte.ts`), and logs out through
-`POST /api/v2/auth/logout`. A `401` from any GraphQL request redirects to
-`/login?returnTo=…` (shared client); successful OIDC sign-in returns to that
-requested route.
+`/settings/notifications` and `/settings/annotations` are redirect routes, not
+settings screens; they send users to the notification and export sections on
+`/connections`. `/` redirects to `/dashboard`. The signed-in shell nav is
+Dashboard, Library, Reading, Annotations, Devices, Connections, Social,
+Requests, Workers, and Account; its Manage group additionally links to the
+Editor for users with `MANAGE_LIBRARY` (or server owner), `/components` for
+the server owner, and `/users` for the server owner or `READ_USERS`
+(`home/src/routes/(app)/+layout.svelte:54-77,131-189`). The
+`(app)` layout loads `me`, exposes it through a Svelte context
+(`src/lib/session.svelte.ts`), and logs out through `POST /api/v2/auth/logout`.
+A `401` from GraphQL redirects to `/login?returnTo=…` (shared client);
+successful OIDC sign-in returns to that requested route.
 
 ### Series reshape
 
@@ -90,13 +110,27 @@ All three mutations need `ManageLibrary` and are covered by
 
 ### Reader
 
-`/reader/[mediaId]` (`prerender = false`; the id only exists at runtime) picks
-its lane from `Media.extension`: anything matching `epub` opens the EPUB
-reader, everything else the paged image reader. Both drive the one unified
-reading-state mutation, `updateMediaProgress`, whose `oneOf` input selects the
-EPUB (Readium locator) or paged (page number) lane, and both coalesce writes
-with a 1.2 s debounce that also carries an `elapsedSecondsDelta` so the
-reading-activity screen counts the session.
+`/reader/[mediaId]` (`prerender = false`; the id only exists at runtime) selects
+audio, EPUB, or paged reading from the loaded book. Audio uses `AudioReader`;
+EPUBs use the Readium-backed reader, and comics/PDFs use paged images. Position
+is persisted through `updateMediaProgress`; reader position writes coalesce
+with a 1.2 s debounce and include `elapsedSecondsDelta` so the reading-activity
+screen counts the session.
+
+Annotation authoring writes native `media_annotations` rows through
+`createAnnotation`, anchored by the reader's own locator: an EPUB selection
+(`href`, `progression`, `text.before/highlight/after`) or a paged book's
+visible page in `locations.position`, which the hub projects as `page`. An
+audiobook offers "Note at mm:ss" at the `AudioReader` playhead
+(`getCurrentPositionMs`), sent as `positionMs` with no locator; the panel and
+the hub show the time (`clockLabel`), "Go to" calls `jumpToPosition`, and the
+hub deep-links with `?positionMs=`.
+Edits and deletes route by id exactly as `/annotations` does and pass the row's
+`revision` as `expectedRevision`. Colours come from `ANNOTATION_COLORS`
+(`yellow`, `green`, … `gray`, the only values a Liseur-backed row accepts)
+through the `AnnotationColorPicker` shared with the hub; notes carry no colour,
+and a cleared note is sent as `""`. The EPUB overlay paints each row in its
+colour and removes deleted rows without reopening the section.
 
 | Surface | Route | Used for |
 | ------- | ----- | -------- |
@@ -104,6 +138,7 @@ reading-activity screen counts the session.
 | Positions | `GET /api/v2/epub/{id}/positions.json` | per-resource `position` and `totalProgression` |
 | Resource | `GET /api/v2/epub/{id}/resource/{*path}` | spine XHTML and every subresource |
 | Page | `GET /api/v2/media/{id}/page/{n}` | one **visible** comic/PDF page |
+| Audio track | `GET /api/v2/media/{id}/audio/track/{index}` | One same-origin track from `MediaAudioTrack.url`; the player maps each track's offset to the publication timeline (`home/src/lib/components/reader/AudioReader.svelte`). |
 
 On a confirmed ebook↔audiobook pair, the **Chapter map** editor (visible to users with `MANAGE_LIBRARY`) reviews `chapterMap` rows and writes corrections with `setChapterMapEntry` or removes them with `clearChapterMapEntry`.
 
@@ -148,7 +183,9 @@ with duplicate-page `SKIP` marks never offers a page that 404s — and pages
 with the arrow keys, `Home`/`End`, a swipe, or the toolbar, with fit
 height/width/actual modes.
 
-Reader annotations are read-only in this pass. The reader fetches the combined
+The reader creates, edits, and deletes the user's own annotations (see the
+`/reader/[mediaId]` row); rows the server marks non-editable stay read-only.
+The reader fetches the combined
 native and liseur rows through `annotations(filter: { mediaId })`. EPUB
 overlays accept a native Readium locator with an `href` plus its quote, CSS
 selector, or fragment, or a liseur Readium-shaped row with an `href` plus its
@@ -170,6 +207,7 @@ highlight":
 | `fragment` | EPUB | Fragment id inside that resource — the only precise in-resource anchor an annotation carries |
 | `progression` | EPUB | Whole-publication fraction in `0..=1`; picks the closest resource when `href` is absent or gone from this edition |
 | `page` | paged | Visible page number |
+| `positionMs` | audio | Milliseconds from the start of the publication; the player opens there (an audiobook note's or audio bookmark's anchor) |
 
 The override replaces the stored position for the **opening** only, and the
 relocation it causes is dropped instead of being written back, so following a
@@ -340,3 +378,10 @@ bun run home check && bun run home build
 Then start the fixture (`scripts/dev-fixture-server.sh`) and open
 `http://127.0.0.1:25600/app` — sign in, register a client, and watch its card
 update after the client's first authenticated request.
+
+The 2026-10-04 uncommitted-tree gate in `.omp/PROJECT_STATE.md` records
+Home/Editor/docs builds and a separate loopback browser smoke of guest
+EPUB/CBZ reading with live updates, `/app/users` account actions, and account
+reader EPUB highlights and audiobook notes. That smoke is not a live
+Pangolin deployment or physical-device test; the dated [client verification
+matrix](/docs/developer/client-verification) remains the device record.

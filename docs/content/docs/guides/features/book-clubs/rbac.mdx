@@ -2,16 +2,17 @@
 title: Roles and Permissions
 ---
 
-There are two relevant user permissions that affect access to the book club feature as a whole:
+These user permissions affect access to the book club feature as a whole:
 
     1. Any managed account with the `ACCESS_BOOK_CLUB` permission may access the book club feature. This means that they can view and join book clubs
     2. Any managed account with the `CREATE_BOOK_CLUB` permission may create book clubs (and therefore inherently has the `ACCESS_BOOK_CLUB` permission)
+    3. `SHARE_BOOK_CLUB_READER` lets a club Admin or Creator issue [guest reading links](/docs/guides/features/book-clubs/guest-reader) to people without accounts. It is opt-in and also implies `ACCESS_BOOK_CLUB`
 
-The server owner can assign these permissions to other users in the user management settings page. For more information about that process, see the [user permissions](/docs/guides/access-control/permissions) guide.
+The server owner, or a user with `MANAGE_USERS`, assigns these on the Home app's **Users** screen (`/app/users`), where the *Book clubs and smart lists* group shows `ACCESS_BOOK_CLUB` as included once `CREATE_BOOK_CLUB` or `SHARE_BOOK_CLUB_READER` is ticked. [OIDC group mapping](/docs/guides/access-control/oidc) can assign them too, and while OIDC permission sync is on it replaces an OIDC account's permissions at every sign-in. For the full list, see the [user permissions](/docs/guides/access-control/permissions) guide.
 
 ## Club Visibility
 
-A club can be either public or private. Public clubs are visible to all users who have access to the book club feature, and they can join at any time. Private clubs are only visible to members of the club, and users must be invited by a club member to join. As with everything else, a server owner is not bound by these restrictions.
+A club can be public or private. Public clubs are visible to managed users with book-club access, who can join; private clubs are visible to their members, and an Admin or Creator must invite a user to join (`crates/graphql/src/mutation/book_club_invitation.rs::validate_book_club_invitation_input`). The server owner is not bound by those visibility restrictions. Guest-reader links are separate and do not make their holders club members.
 
 ## Club Roles
 

@@ -11,10 +11,10 @@ position changes, sessions, and annotation revision endpoints. Personal series
 display-name overrides are supported; uploads/deletes, insights, token
 listing/scope updates, series ordering, and series-claim mutations remain
 deferred. Protocol evidence is pinned to liseur-sync
-`906889ffe11fc7260b071c1f142aeee1fa8a1419`, Liseur v0.19.0
-`62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6`, and Liseur v0.13.0
-`799a8c7afac022d49388cb637f091765557b0acf`. The compatibility changes await
-device replay against a rebuilt Stump server.
+`d8000293ffcfa70072a3ce5543cc57e66e0d039b` and released Liseur v0.20.0
+`d8f0304c1c03ecdd0f4ed4ec1daf246f3dfb6d9f`. Earlier immutable references
+below retain their original source evidence. This source refresh does not
+upgrade historical device runs or imply insight/SSE support.
 
 The server remains authoritative and the adapter remains optional, consistent
 with the [server architecture](/docs/developer/server-architecture). This
@@ -49,7 +49,10 @@ The current Stump adapter:
 - keeps native `media_annotations` and `bookmarks` as the original rows, and
   exports linked, visible rows with valid Readium locators as CAS annotations
   under deterministic `stump-native:annotation:<native-id>` and
-  `stump-native:bookmark:<native-id>` IDs;
+  `stump-native:bookmark:<native-id>` IDs; a native note anchored at a moment
+  in an audiobook (`media_annotations.position_ms`, Home's "Note at mm:ss") is
+  never exported, because its locator names no resource and a Liseur record
+  has no time anchor;
 - keeps Liseur-created CAS rows authoritative and projects supported linked
   notes, highlights, and bookmarks into Stump under
   `liseur-sync:<user>:<annotation>` IDs;
@@ -70,11 +73,11 @@ full palette is returned only when the request opts in with
 clients receive the same annotation with unsupported extended colors omitted.
 
 The current liseur-sync source baseline is commit
-`906889ffe11fc7260b071c1f142aeee1fa8a1419`; its OpenAPI document reports API
-version 1.0. Source links below distinguish that document from the Go routes
-and handlers. Liseur client source pins are v0.19.0
-`62ecb5a5c9dd8eb4e7fa6d97ce50d1bddae0bcd6` and v0.13.0
-`799a8c7afac022d49388cb637f091765557b0acf`; neither is device-test evidence.
+`d8000293ffcfa70072a3ce5543cc57e66e0d039b`; the annotation, token, and
+session wire contracts remain unchanged in this review. Liseur's released
+client pin is v0.20.0 `d8f0304c1c03ecdd0f4ed4ec1daf246f3dfb6d9f`.
+The v0.19.0 and v0.13.0 references below are historical source evidence,
+not current device-test evidence.
 The existing 2026-09-04 device-tested run remains separately pinned to Liseur
 `31f8182d`.
 The protocol's annotation ADR explicitly keeps annotations beside, rather than inside, the append-only
@@ -84,7 +87,7 @@ annotations ([`docs/adr/0028-annotation-sync.md`](https://github.com/chmouel/lis
 The other observed lanes are insufficient as annotation contracts:
 
 - **Komga:** the Liseur Komga client uses an API key and synchronizes catalog/file and `R2Progression` position data. Its position fallback can fetch saved positions, but the client has no annotation endpoint or annotation object ([ResearchLiseurSync, `docs/SERVER_CAPABILITIES.md:10-74`; Liseur `KomgaCatalogClient.kt:1-180`, `KomgaProgressionClient.kt:1-220`).
-- **Kobo:** Stump's current Kobo surface is a library/metadata/download compatibility adapter. Its advertised reading-state and tag routes are handled by compatibility stubs, and its inbound contract does not provide annotation text, notes, bookmarks, or Readium ranges ([`sync-platforms.mdx`](/docs/developer/sync-platforms) and ResearchLiseurSync, `docs/SERVER_CAPABILITIES.md:10-74`).
+- **Kobo:** Stump's Kobo adapter handles library, metadata, download, per-book reading-state GET/PUT, and shelf/tag writes. Its inbound contract still does not provide annotation text, notes, bookmarks, or Readium ranges ([`clients.mdx`](/docs/developer/clients) and ResearchLiseurSync, `docs/SERVER_CAPABILITIES.md:10-74`).
 - **OPDS:** OPDS 1.2/2.0 surfaces catalog and progression/download capabilities; they do not define a user-scoped, revisioned annotation resource or delta feed. OPDS progression therefore cannot be stretched into annotation replication without inventing a second protocol ([`server-architecture.mdx`](/docs/developer/server-architecture) and ResearchLiseurSync, `docs/adr/0028-annotation-sync.md:266-280`).
 
 This is a protocol distinction, not a claim that those clients cannot display local annotations. Stump now bridges its existing native GraphQL/EPUB annotations through the Liseur CAS contract; Komga, Kobo, and OPDS remain unsuitable annotation transports without changing their public protocols ([`sync-platforms.mdx`](/docs/developer/sync-platforms)).
@@ -98,14 +101,14 @@ The following matrix records observed external behavior, not current Stump route
 | Session writes | `POST /v1/sessions` accepts up to 1000 immutable closed sessions. Optional `active_ms` is authoritative, may be zero, and is independent of span/idle; `idle_ms` still cannot exceed the wall span. `GET /v1/token` advertises support with `session_active_ms: true`. | liseur-sync `906889ff` `docs/openapi.yaml:810-861,3181-3199,3626-3641`; `internal/api/sessions.go:14-29,47-106`; Liseur `62ecb5a5` `SessionUploads.kt:66-78` |
 | Batch refusals | `POST /v1/ops` and `POST /v1/sessions` refuse the complete batch on the first invalid item; item responses include `code` and zero-based `item_index`, plus `op_id` or `session_id` and `work_id`/`limit` where applicable. `unknown_work` supports re-resolution; `locator_too_large` supports retry without the locator. | liseur-sync `906889ff` `docs/openapi.yaml:704-713,848-861,2599-2641`; `internal/api/ops.go:31-103`; `internal/api/sessions.go:77-106` |
 | Account settings | `GET/PUT /v1/me/settings` uses the authenticated account's map `{settings:{key:{value,updated_at}}}`. Per-key strict LWW accepts only newer client timestamps; missing `value` means `""`, null is invalid, updates return the merged snapshot, and the default cap is 256 keys / 128-byte keys / 4-KiB values. | Liseur `62ecb5a5` `LiseurSyncApi.kt:25-66`, `LiseurSyncSettings.kt:267-308,366-384`; liseur-sync `906889ff` `internal/api/routes.go:358-359`, `internal/api/settings.go:17-26,28-137,163-201`, `internal/config/config.go:98-127,269-283` |
-| OpenAPI coverage | The current server's Go routes implement the settings API, but the pinned `docs/openapi.yaml` does not yet describe `/v1/me/settings`; use the client plus Go handler source for that route rather than inferring it from OpenAPI. | liseur-sync `906889ff` `internal/api/routes.go:358-359`, `internal/api/settings.go:28-137`; Liseur `62ecb5a5` `LiseurSyncSettings.kt` |
-| Push notification | The current liseur-sync server exposes authenticated `GET /v1/events` as SSE topic invalidations. Liseur has opened it once per foreground session since v0.15.0 and stops for the session on 401/403/404/501 but retries with capped backoff on anything else, so Stump mounts `GET /v1/events` behind the bearer boundary as an explicit `404 {"error":"live event stream is not implemented"}` rather than letting the SPA fallback answer. | liseur-sync `906889ff` `docs/openapi.yaml:51-89`, `internal/api/routes.go:365-367`, `internal/api/events.go:75-119`; Liseur `62ecb5a5` `LiseurSyncLive.kt:142-149`, `LiveRetry.kt:19-20`, `LiveSyncConnector.kt:131-152` |
+| OpenAPI coverage | The Go handler at the historical `906889ff` pin implements the settings API, but its pinned `docs/openapi.yaml` omits `/v1/me/settings`; use the client and handler source for that route rather than inferring it from that OpenAPI revision. | liseur-sync `906889ff` `internal/api/routes.go:358-359`, `internal/api/settings.go:28-137`; Liseur `62ecb5a5` `LiseurSyncSettings.kt` |
+| Push notification | The cited liseur-sync server exposes authenticated `GET /v1/events` as SSE topic invalidations. Liseur opens it once per foreground session and stops for the session on 401/403/404/501 but retries otherwise, so Coppice mounts an explicit bearer-authenticated `404 {"error":"live event stream is not implemented"}` rather than letting the SPA fallback answer. | liseur-sync `906889ff` `docs/openapi.yaml:51-89`, `internal/api/routes.go:365-367`, `internal/api/events.go:75-119`; Liseur `62ecb5a5` `LiseurSyncLive.kt:142-149`, `LiveRetry.kt:19-20`, `LiveSyncConnector.kt:131-152` |
 
 A successful write starts at revision 1 and increments the revision. The changes feed is state, not history: an edit moves the current record to the feed head. Deletes are tombstones containing identity/revision/sequence and deletion timestamps, retained for 180 days by default and then swept. A client that was offline longer than retention must reconcile its local set against the live-work endpoint ([ResearchLiseurSync, `docs/integrating.md:298-338`; `docs/adr/0028-annotation-sync.md:107-226`; `internal/store/sqlite/annotations.go:358+`).
 
 ### Current event route; explicit refusal
 
-The current liseur-sync server (`906889ffe11fc7260b071c1f142aeee1fa8a1419`)
+The 2026-09-24 liseur-sync snapshot (`906889ffe11fc7260b071c1f142aeee1fa8a1419`)
 does expose authenticated `GET /v1/events` as an SSE topic-invalidation feed
 ([`openapi.yaml:51-89`](https://github.com/chmouel/liseur-sync/blob/906889ffe11fc7260b071c1f142aeee1fa8a1419/docs/openapi.yaml#L51-L89),
 [`routes.go:365-367`](https://github.com/chmouel/liseur-sync/blob/906889ffe11fc7260b071c1f142aeee1fa8a1419/internal/api/routes.go#L365-L367)).
@@ -459,7 +462,7 @@ returns a secret. Missing, invalid, expired, or revoked credentials return
 token without `library-read` returns `403` from catalog routes.
 
 The current upstream API contract is pinned to liseur-sync
-[`906889ffe11fc7260b071c1f142aeee1fa8a1419`](https://github.com/chmouel/liseur-sync/blob/906889ffe11fc7260b071c1f142aeee1fa8a1419/docs/openapi.yaml).
+[`d8000293ffcfa70072a3ce5543cc57e66e0d039b`](https://github.com/chmouel/liseur-sync/blob/d8000293ffcfa70072a3ce5543cc57e66e0d039b/docs/openapi.yaml).
 Use the linked Go route/handler sources for `/v1/me/settings`, which that
 OpenAPI document currently omits.
 
@@ -513,9 +516,9 @@ Sources: ResearchLiseurSync, liseur-sync `docs/integrating.md:298-338`, `docs/op
    book pages/search, details, covers, downloads, and work resolution are
    mounted. Personal display-name changes overlay the scanned series name.
    Upload/delete, ordering, and series-claim routes remain deferred.
-5. **Token administration and insights — deferred.** The provider supports
-   login, device-token minting, self-introspection, and revocation, but not
-   `/v1/register`, token listing/scope updates, or `/v1/insights/*`.
+5. **Remaining token administration and insights — deferred.** Login,
+   device-token minting, self-introspection, and revocation are implemented;
+   `/v1/register`, token listing/scope updates, and `/v1/insights/*` are not.
 
 ## Explicit unknowns and gates
 
@@ -525,12 +528,13 @@ provider fully interoperable with the entire upstream server:
 - **Release stability:** the cited liseur-sync source is an unreleased commit.
   Pinning the OpenAPI and migration behavior to a released upstream contract
   remains a deployment decision.
-- **Partial-MD5 equivalence:** `media.koreader_hash` is retained as evidence,
-  but Stump has not proven that every value uses the exact upstream sampling
-  algorithm and byte ranges required by `partial-md5`.
-- **Alias lifecycle:** catalog/source IDs and `dc` identifiers are not
-  discovered by this pass, so their stability across imports and replacement
-  media remains unverified.
+- **Partial-MD5 alias equivalence:** Coppice's `media.koreader_hash` uses
+  the KOReader partial-MD5 routine and pinned test vectors
+  (`crates/media/src/hash.rs`); matching every imported Liseur
+  `partial-md5` alias across files and replacement media is not device-proven.
+- **Alias lifecycle:** catalog/source IDs participate in catalog work resolution,
+  but `dc` identifiers and stability across imports or replacement media are
+  not automatically proven by that mapping.
 - **TA normalization:** TA-only matching is intentionally not performed until
   the documented NFKD normalizer and the deployed upstream normalizer agree.
 - **Readium projection scope:** only non-empty hrefs with parsed `locations`
@@ -552,4 +556,4 @@ never make an approximate identity or locator appear exact.
 
 ## Audiobooks
 
-The catalogue routes never list audiobook rows (`models::entity::media::AUDIO_EXTENSIONS`): Liseur reads paginated documents, and a folder book has no single file to download. Audiobooks are served by the Audiobookshelf profile (`/docs/developer/abs-compat`).
+The catalogue routes exclude audiobook rows (`media::audio_extension_condition().not()` in `apps/server/src/routers/liseur_sync/storage.rs`): Liseur reads paginated documents, and a folder book has no single file to download. Audiobooks are served by the Audiobookshelf profile (`/docs/developer/abs-compat`).

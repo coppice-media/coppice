@@ -103,7 +103,7 @@ identity_providers:
 ```yaml
 services:
   stump:
-    image: aaronleopold/stump:latest
+    image: coppice:local
     environment:
       STUMP_OIDC_ENABLED: 'true'
       STUMP_OIDC_ISSUER_URL: 'https://your-zitadel-instance.com'
@@ -112,6 +112,14 @@ services:
       STUMP_OIDC_EXTRA_AUDIENCES: 'your-zitadel-project-id'
     ports:
       - '10801:10801'
+```
+
+The Compose examples use a locally built `coppice:local` image, not the
+upstream `aaronleopold/stump:latest` image. From this repository root, build
+one before starting the examples:
+
+```sh
+docker buildx build --load -f docker/Dockerfile --target full -t coppice:local .
 ```
 
 ## Home app sign-in
@@ -219,7 +227,7 @@ groups. Enable that claim for the Coppice client and keep
 ```yaml
 services:
   stump:
-    image: aaronleopold/stump:latest
+    image: coppice:local
     environment:
       STUMP_OIDC_ENABLED: 'true'
       STUMP_OIDC_ISSUER_URL: 'https://auth.example.com/application/o/stump/'
@@ -266,12 +274,12 @@ disable_local_auth = false
 
 ### Setting Passwords for OIDC Users
 
-OIDC users may optionally set a local password in Coppice. This can be useful for accessing features that require password-based authentication (such as OPDS feeds). Users with the appropriate permissions can set their own passwords through the Coppice interface.
-
-<Callout type="info">
-	For information about user permissions and managing who can set passwords, see the [User
-	Permissions](/docs/guides/access-control/permissions) guide
-</Callout>
+An OIDC account may have a local password for clients that use Basic auth,
+including OPDS. Home has no account password-change form: the server owner can
+use `./stump account reset-password --username <username>` through the
+[account CLI](/docs/developer/cli/account). Granting `CHANGE_PASSWORD` enables
+the self-service GraphQL mutation, not a Home form. OIDC sign-in does not by
+itself create a local password.
 
 ### Disabling Local Authentication
 
@@ -282,14 +290,22 @@ You can disable local username/password authentication globally by setting `STUM
 - Existing local users will be unable to log in via username/password
 
 <Callout type="warning">
-	Some features, such as OPDS feeds, still require username/password authentication. Users will need
-	to set a password (as described above) even when local authentication is disabled globally
+	OPDS Basic authentication still accepts a valid local password even when local Home login is
+	disabled. An OIDC-only account without a local password will need one set through the account
+	CLI before it can use a password-based OPDS reader. Turning off local Home login does not
+	turn off OPDS Basic authentication.
 </Callout>
 
 ### Account Migration
 
-Coppice does not support automatic linking of existing local accounts to OIDC accounts. If you have existing users with read history, preferences, or other data that you want to migrate to OIDC accounts, you can use the Coppice CLI migration tool.
-
-<Callout type="info">
-	For instructions on migrating existing accounts to OIDC, see the [CLI](/docs/developer/cli) guide
-</Callout>
+Coppice does not automatically link existing local accounts to OIDC accounts.
+The [account CLI](/docs/developer/cli/account) has a `migrate-oidc` command for
+two existing accounts. It transfers their database-owned user data atomically:
+reading heads, Liseur sync state and annotation attachments, device and provider
+connections, requests and approvals, memberships, preferences, and legacy
+reading data. The existing local username, permissions and preferences become
+the destination account's settings; its OIDC issuer, email and ID are retained.
+Conflicting personal credentials or populated Liseur sync histories cause a
+rollback instead of overwriting either account. Back up the SQLite database
+before running the command, and check separately for exported Markdown/Git
+vault files: those external copies are not moved by the database migration.

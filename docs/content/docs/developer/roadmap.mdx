@@ -21,31 +21,36 @@ for ownership boundaries.
 | Crate split | `stump_scanner`, `stump_watcher`, and `stump_jobs` have real Cargo feature boundaries; processor-sized feature splits remain future work. See [package seams](/docs/developer/server-architecture#package-seams). |
 | Provider host | The `Source` trait, MangaDex adapter, data-driven theme engines, definition schema, materialization/virtual-library modes, page cache, GC, health, and cross-source dedupe ship. Komga/Kavita federation and a wasmtime sandbox remain future work. See [provider host](/docs/developer/provider-host) and [source definitions](/docs/developer/source-definitions). |
 | Kobo comics transform | Per-device transform profiles and a byte-budgeted cache ship; the transform is disabled by default (`STUMP_TRANSFORM_ENABLED=false`). See [comics transform](/docs/developer/comics-transform). Physical-device evidence is separate in the matrix. |
-| Metadata engine | Catalogued providers, scoring, merge, and per-field policy with per-library override ship. Title-language selection, ordering, score/publisher tags, and writing the selected cover remain open. See [provider status](/docs/developer/provider-status). |
+| Metadata engine | Catalogued providers, scoring, merge, per-field policy with per-library override, and selected-cover download/writeback ship. Title-language selection, book ordering, and score/publisher tags remain open. See [provider status](/docs/developer/provider-status) and `crates/ingest/src/providers/apply.rs`. |
 | Kavita profile | The API-key and `Plugin/authenticate` profile contract ships. Turnleaf and Kamigura have scoped device runs; other client versions and their source/contract evidence remain distinct in the matrix. See [Kavita compatibility](/docs/developer/kavita-compat). |
 | Mihon extension | First-party extension remains **Planned** and out of tree. The source-analysis pin and replay-client pin are different records; no APK run is recorded. |
 | Deferred operations | Inbound rate limiting ships. Metrics/telemetry export, backup/restore, dependency-specific readiness, and a Cargo feature-profile CI matrix remain future work. |
 | Audiobookshelf profile | REST routes and the Engine.IO v4 / Socket.IO v5 lane ship. The scoped official-app run does not establish full ABS parity; current source pins and older device evidence are separated in the matrix. See [Audiobookshelf compatibility](/docs/developer/abs-compat). |
 | Ebook ↔ audiobook sync | Pairing, chapter maps, `SyncMapV1` import/enqueue, SMIL import, deterministic M4B-to-EPUB rendering/cache, status/download routes, worker protocol, transcode/challenge jobs, and optional configured Storyteller/native-CTC worker runners ship. A bundled in-process model runtime, virtual composite playback, readiness quality checks, synchronized reader UI, and deployment/device evidence remain open. Ordinary EPUB playback and audiobook playback remain separate. See [read-aloud](/docs/developer/read-aloud). |
-| KOReader plugin | `coppice.koplugin` in sibling repository `koreader-coppice` is source-derived against KOReader v2026.07.1 (`9192014d`); it has not been loaded into the native app. |
+| KOReader plugin | `coppice.koplugin` lives in the sibling `koreader-coppice` repository. Its 2026-09-26 build was exercised on a desktop KOReader app and an Android phone for scoped note/progress flows; the 2026-10-04 source/check gate does not extend that device run. E-ink-device verification remains open. See [client verification](/docs/developer/client-verification). |
 | Home-library source workers | Private source roots, revisioned manifests, verification, explicit linking/materialization, and direct/tunnel serving foundations are implemented. Automatic candidate policy, placement/cache policy, additional adapters, and replication/repair remain open. See [remote worker libraries](/docs/developer/remote-worker-libraries). |
 
 ## Open
 
 ### Hardware- and account-dependent evidence
 
-The remaining device gaps are a physical Kobo run against `/kobo/{api_key}`,
-loading `coppice.koplugin` into KOReader, and delivery to a real Kindle address.
-A scoped Audiobookshelf app run does not imply complete protocol parity. Exact
-client versions and evidence are recorded in the
+The remaining hardware gaps include a physical Kobo run against
+`/kobo/{api_key}`, an e-ink KOReader-plugin run, delivery to a real Kindle
+address, and broader official Audiobookshelf app coverage. The plugin's
+2026-09-26 desktop and Android-phone runs are separate dated evidence; the
+scoped Audiobookshelf run does not imply complete protocol parity. Exact
+client versions and flows are in the
 [client verification matrix](/docs/developer/client-verification).
 
 ### Live metadata credentials
 
-Hardcover, Metron, Open Library, and Google Books metadata clients are
-contract-tested against recorded payloads. No live request with a real
-credential is recorded. Hardcover account, progress, and journal synchronization
-remain separate work, dependent on a stable authenticated account API.
+Hardcover, Metron, Open Library, and Google Books metadata clients have
+recorded-payload contract tests, not live credential-backed verification of
+those mappers. Personal Hardcover PAT storage and a manual `me.user_books`
+importer ship with source/contract evidence: page/progression data can be
+applied locally, but there is no outbound progress write, exact annotation
+text-range import, or true `reading_journals` feed. No live PAT run is
+recorded. See [Hardcover integration](/docs/developer/hardcover-integration).
 
 ### Incremental upstream candidates
 
@@ -84,11 +89,12 @@ Unordered candidates; none are promised or scheduled.
 
 ### Engineering carried forward
 
-- Metadata post-processing: title-language selection, book ordering, score and
-  publisher tags, and writing the selected cover.
-- Home/Editor follow-up: reuse `metadata_integrations::CrossProviderScorer` for
-  best-first provider matches, confidence, provider-qualified external links,
-  and same-work grouping. This server change does not build or wire client UI.
+- Metadata post-processing: title-language selection, book ordering, and
+  score/publisher tags. Selected-cover writeback is already implemented.
+- Optional Home/Editor provider-match UX: best-first matches, confidence,
+  provider-qualified external links, and same-work grouping. The sibling
+  `metadata-integrations` prototype is not linked into this working tree;
+  linking its scorer or building client UI requires a separate decision.
 
 - Processor-sized Cargo features so protocol-only builds can omit unrelated
   metadata/PDF/archive dependencies.
