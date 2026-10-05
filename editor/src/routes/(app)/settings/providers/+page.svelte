@@ -14,6 +14,7 @@
 	import * as Tabs from '@stump/ui/components/ui/tabs';
 	import * as Select from '@stump/ui/components/ui/select';
 	import { getEditorSession } from '$lib/editor/session.svelte';
+	import QualityCheckCard from '$lib/components/QualityCheckCard.svelte';
 	import { request } from '@stump/ui/graphql/client';
 	import {
 		IngestProviderCatalogDocument,
@@ -21,7 +22,6 @@
 		IngestQualityCheckCatalogDocument,
 		MetadataPolicyDocument,
 		SetIngestProviderSettingsDocument,
-		SetIngestQualityCheckSettingsDocument,
 		SetMetadataPolicyDocument,
 		VerifyIngestProviderDocument,
 		type IngestSettingValueType,
@@ -97,15 +97,6 @@
 		},
 		onError: (error) => toast.error(error instanceof Error ? error.message : 'Provider verification failed.')
 	}));
-	const saveQualityMutation = createMutation(() => ({
-		mutationFn: ({ checkId, enabled }: { checkId: string; enabled: boolean }) =>
-			request(SetIngestQualityCheckSettingsDocument, { input: { checkId, enabled, settings: {} } }),
-		onSuccess: () => {
-				void queryClient.invalidateQueries({ queryKey: ['quality-catalog'] });
-				toast.success('Quality-check setting saved.');
-			},
-		onError: (error) => toast.error(error instanceof Error ? error.message : 'Unable to save quality-check setting.')
-	}));
 	const policyQuery = createQuery(() => ({
 		queryKey: ['metadata-policy', selectedLibraryId],
 		queryFn: () => request(MetadataPolicyDocument, { libraryId: selectedLibraryId }),
@@ -155,6 +146,15 @@
 
 	let providers = $derived(providerCatalogQuery.data?.ingestProviderCatalog ?? []);
 	let checks = $derived(qualityCatalogQuery.data?.ingestQualityCheckCatalog ?? []);
+	// Quality-check settings are server-wide, so saving them needs both
+	// grants the server enforces; this only hides controls that would fail.
+	let canManageQuality = $derived(
+		Boolean(
+			session.user?.isServerOwner ||
+				(session.user?.permissions.includes('METADATA_PROVIDER_MANAGE') &&
+					session.user.permissions.includes('MANAGE_LIBRARY'))
+		)
+	);
 	let selectedProvider = $derived(providers.find((provider) => provider.id === selectedProviderId));
 	let providerSettings = $derived(providerSettingsQuery.data?.ingestProviderSettings);
 	let libraries = $derived(session.libraries);
@@ -644,9 +644,9 @@
 			</Card>
 		</Tabs.Content>
 		<Tabs.Content value="quality" class="flex flex-col gap-4">
-			{#if qualityCatalogQuery.isPending}{#each Array(5) as _, index (index)}<Skeleton class="h-24 w-full" />{/each}{:else if qualityCatalogQuery.isError}<Alert variant="destructive"><AlertTitle>Unable to load quality checks</AlertTitle><AlertDescription>{qualityCatalogQuery.error instanceof Error ? qualityCatalogQuery.error.message : 'The server did not return quality descriptors.'}</AlertDescription></Alert>{:else if !checks.length}<Empty><EmptyHeader><EmptyTitle>No quality checks registered</EmptyTitle><EmptyDescription>The server build has no ingest quality checks available.</EmptyDescription></EmptyHeader></Empty>{:else}{#each checks as check (check.id)}<Card><CardContent class="flex flex-wrap items-start justify-between gap-4 p-5"><div><div class="flex items-center gap-2"><h2 class="font-medium">{check.name}</h2><span class="rounded bg-muted px-2 py-0.5 text-xs tabular-nums">weight {check.weight}</span></div><p class="mt-1 text-sm text-muted-foreground">{check.id} · version {check.version} · {check.supportedMediaTypes.join(', ') || 'all formats'}</p>{#if check.settings.length}<p class="mt-2 text-xs text-muted-foreground">Settings: {check.settings.map((setting) => setting.label).join(', ')}</p>{/if}</div><label class="flex items-center gap-2 text-sm">Enabled<Switch checked={check.enabled} onchange={(event) => saveQualityMutation.mutate({ checkId: check.id, enabled: (event.currentTarget as HTMLButtonElement).getAttribute('data-state') === 'checked' })} /></label></CardContent></Card>{/each}{/if}
+			{#if qualityCatalogQuery.isPending}{#each Array(5) as _, index (index)}<Skeleton class="h-24 w-full" />{/each}{:else if qualityCatalogQuery.isError}<Alert variant="destructive"><AlertTitle>Unable to load quality checks</AlertTitle><AlertDescription>{qualityCatalogQuery.error instanceof Error ? qualityCatalogQuery.error.message : 'The server did not return quality descriptors.'}</AlertDescription></Alert>{:else if !checks.length}<Empty><EmptyHeader><EmptyTitle>No quality checks registered</EmptyTitle><EmptyDescription>The server build has no ingest quality checks available.</EmptyDescription></EmptyHeader></Empty>{:else}{#each checks as check (check.id)}<QualityCheckCard {check} canManage={canManageQuality} />{/each}{/if}
 		</Tabs.Content>
 	</Tabs.Root>
 	<Separator />
-	<p class="text-sm text-muted-foreground">Changing a check setting invalidates affected reports and requeues items; the server preserves prior algorithm-versioned evidence.</p>
+	<p class="text-sm text-muted-foreground">Quality-check settings are server-wide and apply to the next analysis, library rework, or quality fix; existing reports keep the settings snapshot they were scored with.</p>
 </div>

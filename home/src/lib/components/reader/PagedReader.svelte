@@ -21,19 +21,27 @@
 	import { decimal, type ReaderLocator } from './locator';
 	import { pageUrl } from './rwpm';
 
-	type ReaderAnnotation = { id: string; annotationText?: string | null; locator: ReaderLocator };
+	type ReaderAnnotation = {
+		id: string;
+		kind?: string;
+		annotationText?: string | null;
+		page?: number | null;
+		locator?: ReaderLocator | null;
+	};
 
 	let {
 		mediaId,
 		pageCount,
 		startPage = 1,
 		annotations = [],
+		pageSource,
 		onPage
 	}: {
 		mediaId: string;
 		pageCount: number;
 		startPage?: number;
 		annotations?: ReaderAnnotation[];
+		pageSource?: (mediaId: string, page: number) => string;
 		onPage: (page: number) => void;
 	} = $props();
 	const SWIPE_THRESHOLD_PX = 48;
@@ -53,11 +61,11 @@
 	let stage = $state<HTMLDivElement | null>(null);
 
 	const fitClass = $derived(FITS.find((option) => option.value === fit)?.class ?? '');
-	const source = $derived(pageUrl(mediaId, page));
-	// Annotations on a paged book anchor to a page through the locator's
-	// `position`; anything else in the locator has no meaning on an image.
+	const source = $derived(pageSource?.(mediaId, page) ?? pageUrl(mediaId, page));
+	// Annotations on a paged book anchor to a visible page. Native records use
+	// the locator position; guest records carry their actual page directly.
 	const pageAnnotations = $derived(
-		annotations.filter((annotation) => annotation.locator.locations?.position === page)
+		annotations.filter((annotation) => (annotation.page ?? annotation.locator?.locations?.position) === page)
 	);
 
 	// Preload the neighbours so a page turn is not a blank frame.
@@ -65,7 +73,7 @@
 		for (const candidate of [page + 1, page - 1]) {
 			if (candidate < 1 || candidate > pageCount) continue;
 			const image = new Image();
-			image.src = pageUrl(mediaId, candidate);
+			image.src = pageSource?.(mediaId, candidate) ?? pageUrl(mediaId, candidate);
 		}
 	});
 
@@ -76,6 +84,10 @@
 		loading = true;
 		failed = false;
 		onPage(clamped);
+	}
+
+	export function jumpToPage(page: number): void {
+		goTo(page);
 	}
 
 	function onKeydown(event: KeyboardEvent): void {
@@ -163,7 +175,7 @@
 		<div class="ml-auto flex items-center gap-2">
 			{#if pageAnnotations.length}
 				<Badge variant="secondary">
-					{pageAnnotations.length} highlight{pageAnnotations.length === 1 ? '' : 's'}
+					{pageAnnotations.length} annotation{pageAnnotations.length === 1 ? '' : 's'}
 				</Badge>
 			{/if}
 			<span class="text-sm text-muted-foreground">Page {page} of {pageCount}</span>
@@ -203,13 +215,15 @@
 		{#if pageAnnotations.length}
 			<ul
 				class="absolute top-3 right-3 flex max-w-xs flex-col gap-2"
-				aria-label="Highlights on this page"
+				aria-label="Annotations on this page"
 			>
 				{#each pageAnnotations as annotation (annotation.id)}
 					<li class="rounded-md bg-amber-400/90 px-2 py-1 text-xs text-amber-950 shadow">
 						{annotation.annotationText ||
-							annotation.locator.text?.highlight ||
-							`Highlight at ${Math.round((decimal(annotation.locator.locations?.totalProgression) ?? 0) * 100)}%`}
+							annotation.locator?.text?.highlight ||
+							(annotation.kind?.toLowerCase() === 'note'
+								? 'Note'
+								: `Highlight at ${Math.round((decimal(annotation.locator?.locations?.totalProgression) ?? 0) * 100)}%`)}
 					</li>
 				{/each}
 			</ul>
@@ -217,6 +231,6 @@
 	</div>
 
 	<p class="text-xs text-muted-foreground">
-		Arrow keys, Home/End, or swipe to turn the page. Highlights are read-only here.
+		Arrow keys, Home/End, or swipe to turn the page.
 	</p>
 </div>

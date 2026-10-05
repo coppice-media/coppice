@@ -125,7 +125,9 @@
 	const saveNote = createMutation(() => ({
 		mutationFn: (variables: {
 			id: string;
-			annotationText: string | null;
+			/** `""` clears on every lane; see `AnnotationCard`. */
+			annotationText: string;
+			/** `null` leaves the colour, `""` clears it. */
 			color: string | null;
 			expectedRevision: number | null;
 		}) => {
@@ -203,7 +205,7 @@
 
 	function save(
 		id: string,
-		annotationText: string | null,
+		annotationText: string,
 		color: string | null,
 		expectedRevision: number | null
 	): void {

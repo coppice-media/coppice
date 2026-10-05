@@ -19,6 +19,9 @@ fragment ConsoleAnnotationFields on AnnotationEntry {
 	fragment
 	page
 	progression
+	# A moment in an audiobook (milliseconds from the start of the
+	# publication); such a row has no href, fragment, or page.
+	positionMs
 	excerpt
 	note
 	color

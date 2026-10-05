@@ -3,6 +3,7 @@ import type {
 	ConsoleAnnotationFieldsFragment,
 	DeviceKind,
 } from '$lib/graphql/generated/graphql'
+import { clockLabel } from '$lib/format'
 
 export type AnnotationSourceKind = DeviceKind | 'COPPICE'
 
@@ -16,6 +17,26 @@ export const KIND_OPTIONS = (Object.keys(KIND_LABELS) as AnnotationKind[]).map((
 	value,
 	label: KIND_LABELS[value],
 }))
+
+/**
+ * The colours `updateAnnotation` accepts on every lane: Liseur-backed rows
+ * refuse anything outside this palette (`LISEUR_ANNOTATION_COLORS` in
+ * `crates/graphql/src/mutation/epub.rs`), native rows store any string. Each
+ * token is also a CSS colour name, so it paints as-is. Only highlights carry
+ * a colour — Liseur refuses one on a note.
+ */
+export const ANNOTATION_COLORS = [
+	'yellow',
+	'green',
+	'blue',
+	'pink',
+	'purple',
+	'orange',
+	'red',
+	'olive',
+	'cyan',
+	'gray',
+] as const
 
 /**
  * How a source is labelled in the hub. Only two lanes carry annotations
@@ -172,6 +193,8 @@ export function groupByBook(items: ConsoleAnnotationFieldsFragment[]): Annotatio
  * following a link never rewrites the book's position.
  */
 export function readerAnchor(annotation: ConsoleAnnotationFieldsFragment): string {
+	// A moment in an audiobook is the whole anchor: the player opens there.
+	if (typeof annotation.positionMs === 'number') return `?positionMs=${annotation.positionMs}`
 	const params = new URLSearchParams()
 	if (annotation.href) params.set('href', annotation.href)
 	if (annotation.fragment) params.set('fragment', annotation.fragment)
@@ -183,17 +206,28 @@ export function readerAnchor(annotation: ConsoleAnnotationFieldsFragment): strin
 	return query ? `?${query}` : ''
 }
 
-/** `Chapter Three · page 42 · 62%` — whatever the anchor actually carries. */
-export function anchorLabel(annotation: ConsoleAnnotationFieldsFragment): string | null {
-	const { progression } = annotation
-	const percent =
-		typeof progression === 'number' && Number.isFinite(progression)
-			? `${Math.round(Math.min(1, Math.max(0, progression)) * 100)}%`
-			: null
+/**
+ * `Chapter Three · page 42 · 62%`, or `Chapter Three · 12:34` for a moment in
+ * an audiobook — whatever the anchor actually carries. A time replaces the
+ * percentage, which would only restate it less precisely.
+ */
+export function anchorLabel(
+	annotation: Pick<
+		ConsoleAnnotationFieldsFragment,
+		'chapterTitle' | 'page' | 'progression' | 'positionMs'
+	>,
+): string | null {
+	const { progression, positionMs } = annotation
+	const where =
+		typeof positionMs === 'number'
+			? clockLabel(positionMs)
+			: typeof progression === 'number' && Number.isFinite(progression)
+				? `${Math.round(Math.min(1, Math.max(0, progression)) * 100)}%`
+				: null
 	const parts = [
 		annotation.chapterTitle,
 		typeof annotation.page === 'number' ? `page ${annotation.page}` : null,
-		percent,
+		where,
 	].filter((part): part is string => Boolean(part))
 	return parts.length ? parts.join(' · ') : null
 }

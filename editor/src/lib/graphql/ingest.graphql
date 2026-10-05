@@ -186,6 +186,7 @@ enum IngestSettingValueType {
   INTEGER
   NUMBER
   STRING
+  ENUM
   JSON
 }
 
@@ -197,6 +198,10 @@ type IngestSettingDefinition {
   secret: Boolean!
   defaultValue: JSON
   description: String
+  helpUrl: String
+  minimum: Float
+  maximum: Float
+  options: [String!]!
 }
 
 type IngestProviderSetting {

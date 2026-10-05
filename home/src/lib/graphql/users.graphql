@@ -1,0 +1,72 @@
+# `/users`: server accounts. The server guards each field, not just the query
+# (`crates/graphql/src/{query,object,mutation}/user.rs`): `users`, `lastLogin`
+# and `loginSessionsCount` need READ_USERS (or the server owner), while another
+# account's `permissions` and `ageRestriction` need MANAGE_USERS. A denied
+# non-null field fails the whole list, so the manager-only fields are selected
+# only when `$manage` is true.
+
+# Unpaginated: a self-hosted server has tens of accounts, not thousands.
+query UsersList($manage: Boolean!) {
+	users(pagination: { none: { unpaginated: true } }) {
+		nodes {
+			id
+			username
+			isServerOwner
+			isLocked
+			createdAt
+			deletedAt
+			oidcEmail
+			maxSessionsAllowed
+			lastLogin
+			loginSessionsCount
+			permissions @include(if: $manage)
+			ageRestriction @include(if: $manage) {
+				age
+				restrictOnUnset
+			}
+		}
+	}
+}
+
+# MANAGE_USERS (or owner). The server expands `permissions` with everything
+# they imply before storing them.
+mutation UsersCreate($input: CreateUserInput!) {
+	createUser(input: $input) {
+		id
+		username
+	}
+}
+
+# MANAGE_USERS (or owner); only an owner may update a server owner's account.
+# On another account `permissions`, `ageRestriction` and `maxSessionsAllowed`
+# replace the stored values (an omitted restriction is deleted) and every
+# session of that account is revoked; on your own account they are ignored.
+mutation UsersUpdate($id: ID!, $input: UpdateUserInput!) {
+	updateUser(id: $id, input: $input) {
+		id
+		username
+	}
+}
+
+# Server owner only, never your own account. Locking also revokes sessions.
+mutation UsersSetLock($id: ID!, $lock: Boolean!) {
+	updateUserLockStatus(id: $id, lock: $lock) {
+		id
+		isLocked
+	}
+}
+
+# Server owner only.
+mutation UsersRevokeSessions($id: ID!) {
+	deleteUserSessions(id: $id)
+}
+
+# Server owner only, never yourself or the server owner. Both paths revoke
+# credentials and guest-reader capabilities. Soft delete retains account data;
+# hard delete removes private database records but preserves shared catalog
+# content, public/shared lists, server emoji, and closed club-reader history.
+mutation UsersDelete($id: ID!, $hardDelete: Boolean!) {
+	deleteUser(id: $id, hardDelete: $hardDelete) {
+		id
+	}
+}

@@ -262,6 +262,16 @@
 		}
 	}
 
+	/** Seek to a publication offset, across tracks when necessary. */
+	export function jumpToPosition(positionMs: number): void {
+		seek(positionMs);
+	}
+	/** Read the live playhead for a note without waiting for the progress-report interval. */
+	export function getCurrentPositionMs(): number {
+		return positionMs;
+	}
+
+
 	function stepChapter(delta: number): void {
 		if (!chapters.length) return;
 		if (delta < 0 && positionMs - chapters[chapterIndex].startMs > CHAPTER_RESTART_MS) {

@@ -73,7 +73,7 @@ interface FoliateRendererRelocateDetail {
 /** `event.detail` of `<foliate-view>`'s `draw-annotation`. */
 interface FoliateDrawAnnotationDetail {
 	draw(func: FoliateOverlayerDraw, options?: FoliateOverlayerOptions): void;
-	annotation: { value: string };
+	annotation: { value: string; color?: string | null };
 	doc: Document;
 	range: Range;
 }
@@ -92,7 +92,11 @@ interface FoliateView extends HTMLElement {
 		index: number,
 		range?: Range
 	): { tocItem?: { label: string; href: string } | null } | undefined;
-	addAnnotation(annotation: { value: string }): Promise<{ index: number; label: string }>;
+	addAnnotation(annotation: {
+		value: string;
+		color?: string | null;
+	}): Promise<{ index: number; label: string }>;
+	deleteAnnotation(annotation: { value: string }): Promise<unknown>;
 }
 
 interface HTMLElementTagNameMap {

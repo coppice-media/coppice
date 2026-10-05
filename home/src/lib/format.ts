@@ -50,6 +50,21 @@ export function minutesLabel(minutes: number): string {
 	return rest ? `${hours}h ${rest}m` : `${hours}h`;
 }
 
+/**
+ * `12:34` / `1:02:03` — a moment in an audiobook (milliseconds from the start
+ * of the publication) the way a listener reads it. Truncated, so it never
+ * claims a second the moment has not reached.
+ */
+export function clockLabel(positionMs: number): string {
+	const total = Math.max(0, Math.floor(positionMs / 1000));
+	const hours = Math.floor(total / 3600);
+	const minutes = Math.floor((total % 3600) / 60);
+	const seconds = String(total % 60).padStart(2, '0');
+	return hours > 0
+		? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}`
+		: `${minutes}:${seconds}`;
+}
+
 /** `1.4 GB` style size, in the SI units the server reports bytes in. */
 export function bytesLabel(bytes: number): string {
 	if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';

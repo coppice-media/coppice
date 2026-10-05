@@ -26,9 +26,11 @@ the default login path; local credentials remain available at
 | Library and series                                           | `src/routes/(app)/library/`, `src/routes/(app)/series/`, `src/lib/graphql/library.graphql`                                                                                                                                                                        |
 | Search (header palette, `/search`) and requests              | `src/lib/components/ShellSearch.svelte`, `src/routes/(app)/search/`, `src/routes/(app)/requests/`, `src/lib/search.svelte.ts` (three independent queries: `librarySearch` from 2 characters, `externalBookSearch` and `audibleBookSearch` from 3; the Audible group lists only works Hardcover lacks), `src/lib/components/{UnifiedSearchResults,ExternalBookRequestCard}.svelte`, `src/lib/components/requests/{ExternalHitActions,RequestFormatControl,RequestAcquisitionPanel}.svelte` (`RequestFormatControl` is the one format + narrator pill: toggles, availability dimming, the `audiobookNarrators` popover; it also edits `preferredNarrator` on a request), `src/lib/graphql/{unified-search,requests}.graphql` |
 | Reading, sessions, annotations                               | `src/routes/(app)/reading/`, `src/routes/(app)/annotations/`                                                                                                                                                                                                      |
-| EPUB reader and chapter maps                                 | `src/routes/(app)/reader/[mediaId]/`, `src/lib/components/reader/`, `src/lib/graphql/reader.graphql`                                                                                                                                                              |
+| EPUB/paged/audio reader, reader annotation authoring (create/edit/delete own highlights and page notes), and chapter maps | `src/routes/(app)/reader/[mediaId]/`, `src/lib/components/reader/` (annotation panel in `ReaderAnnotations.svelte`), `src/lib/graphql/reader.graphql`                                                                                                |
+| Book-club guest reader, live stream, session discussion, session REST transport, and BookClub controls        | `src/routes/club-reader/[sessionId]/`, `src/lib/club-reader-api.ts`, `src/lib/components/social/{BookClubPanel,ClubReaderDiscussion,ReaderSessionDiscussion}.svelte`, `src/lib/reader-sessions.ts`, `src/lib/graphql/social.graphql` |
 | Devices, protocol setup, CrossPoint pairing and LAN delivery | `src/routes/(app)/devices/`, one shared card for catalog options and paired devices in `src/lib/components/ClientCard.svelte` (status marks in `ClientStatusIcons.svelte`, Sync/Reads chips in `ClientCapabilities.svelte`; `DeviceCard.svelte` and `ClientPicker.svelte` compose it), plus `src/lib/components/{AddClientDialog,CredentialReveal,CrossPointTargetSetup,CrossPointDeliveryQueue}.svelte`, `src/lib/graphql/{operations,crosspoint}.graphql` |
 | Worker management                                            | `src/routes/(app)/workers/`                                                                                                                                                                                                                                       |
+| User management (`/users`)                                   | `src/routes/(app)/users/`, `src/lib/components/users/{UserEditor,PermissionPicker,UserActionDialog}.svelte`, `src/lib/users.ts` (permission areas, labels, and the client mirror of the server's implied-permission table), `src/lib/oidc.ts` (OIDC config query shared with `/login`), `src/lib/graphql/users.graphql` |
 | Account and settings                                         | `src/routes/(app)/account/`, `src/routes/(app)/settings/`                                                                                                                                                                                                         |
 | Shared GraphQL client and UI                                 | `src/lib/stump-ui` → `../packages/stump-ui/src`                                                                                                                                                                                                                   |
 
@@ -36,6 +38,30 @@ the default login path; local credentials remain available at
 
 - The server is authoritative. UI permission gates improve navigation but do not
   authorize GraphQL operations.
+- Book-club guest links are per-participant revocable capabilities. The SPA at
+  `/app/club-reader/{sessionId}#token=...` removes the fragment before redeeming
+  it; the capability is then carried only by the scoped HttpOnly cookie. This
+  route does not bootstrap `MeDocument`, use native GraphQL, or redirect to login.
+- Guest EPUB, paged/PDF, and audio resources use only
+  `/api/v2/club-reader/...`; guest progress and annotations remain in a separate
+  session ledger and never write account reading history. Progress and notes
+  are private by default; guests explicitly opt into coarse group progress or
+  sharing an individual annotation.
+- The guest page's live stream (`EventSource` on
+  `/api/v2/club-reader/sessions/{id}/events`) carries only change kinds; the page
+  refetches through the authorized snapshot/messages GETs, and a `revoked` event
+  shows the unavailable state. Session discussion is visible only to that
+  session's active participants (never the club's member discussions) and is
+  rendered as plain text; organizers read and moderation-delete it from the
+  BookClub panel.
+- Account members join a guest session explicitly with a chosen alias. Organizer
+  session, participant, publication, and queue controls require
+  `SHARE_BOOK_CLUB_READER` plus the club's Admin/Creator role. A changed queue
+  book can pause guest reading until the organizer publishes it.
+- Reverse-proxy deployments must keep resource authentication enabled and add
+  only the narrow guest SPA/API bypass plus required immutable Home assets.
+  Never bypass all of `/app/*` or `/api/*`; this repository does not apply a
+  live proxy rule.
 - Device credentials inherit their owner's permissions. A `library_scope` can
   narrow visible content; it cannot grant content or actions the owner lacks.
 - Requests store metadata intent. Unified search and approved MAM acquisition
@@ -50,6 +76,14 @@ the default login path; local credentials remain available at
 - Home's general Ingest editor navigation link is limited to the server owner
   or a user with `MANAGE_LIBRARY`. Acquisition review links are contextual;
   Editor authorization remains server-enforced.
+- `/app/users` is linked for the server owner or `READ_USERS`; create/edit
+  controls need `MANAGE_USERS` and lock, sign-out, and delete need the owner,
+  mirroring the `users`, `updateUser`, `updateUserLockStatus`,
+  `deleteUserSessions`, and `deleteUser` guards. The editor is never offered on
+  your own account (the server ignores privileged fields on a self-update) or
+  the owner's. The browser cannot see `STUMP_OIDC_SYNC_PERMISSIONS`, so with
+  OIDC enabled the screen warns that sync may replace an OIDC account's
+  permissions at sign-in.
 
 ## Shared design system
 

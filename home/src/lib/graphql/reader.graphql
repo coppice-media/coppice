@@ -94,6 +94,9 @@ query ReaderAnnotations($id: ID!) {
 			fragment
 			page
 			progression
+			# An audiobook note's anchor: milliseconds from the start of the
+			# publication, what "Go to" seeks the player to.
+			positionMs
 			excerpt
 			note
 			color
@@ -116,6 +119,32 @@ mutation ReaderUpdateProgress($id: ID!, $input: MediaProgressInput!) {
 		endLocator {
 			...ReaderLocatorFields
 		}
+	}
+}
+
+# Authoring the signed-in user's own annotations from the reader. Native rows
+# take the locator the reader produced (a text selection in an EPUB, a
+# `locations.position` page in a comic or PDF) or, in an audiobook, the
+# player's `positionMs` and no locator; edits and deletes route by id exactly
+# as the annotation hub does, and `expectedRevision` is the row's `revision`
+# so a stale edit of a Liseur-backed record is refused.
+mutation ReaderCreateAnnotation($input: CreateAnnotationInput!) {
+	createAnnotation(input: $input) {
+		id
+	}
+}
+
+mutation ReaderUpdateAnnotation($input: UpdateAnnotationInput!) {
+	updateAnnotation(input: $input) {
+		id
+		annotationText
+		color
+	}
+}
+
+mutation ReaderDeleteAnnotation($id: String!, $expectedRevision: Int) {
+	deleteAnnotation(id: $id, expectedRevision: $expectedRevision) {
+		id
 	}
 }
 

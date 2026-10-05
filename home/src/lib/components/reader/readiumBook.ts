@@ -1,30 +1,19 @@
 /**
  * A foliate-js "book" backed by Stump's Readium surfaces.
  *
- * foliate-js renders anything that implements its book interface (`sections`
- * with `load()`, plus `toc`/`resolveHref`/…), so the EPUB never has to be
- * downloaded as an archive: each spine resource is streamed from
- * `GET /api/v2/epub/{id}/resource/{*path}` with the session cookie.
- *
- * Sections are handed to the renderer as `blob:` documents rather than as the
- * server URL directly, for two reasons:
- *
- * 1. Scripted content. foliate's renderer must keep `allow-scripts` on its
- *    iframe (WebKit bug 218086), and the iframe is same-origin with this app,
- *    so an EPUB's own `<script>` would run with our session. Parsing the
- *    resource here lets us drop scripts, inline handlers and `javascript:`
- *    URLs before the document is ever live. foliate's own EPUB loader takes
- *    the same blob route.
- * 2. Subresources. An injected `<base href>` pointing back at the resource
- *    route keeps relative CSS/image/font references streaming from the server
- *    (same-origin, cookie attached) instead of being rewritten one by one.
+ * A publication adapter supplies its manifest, positions, and scoped
+ * resource URLs; the native EPUB routes remain the default. Each spine section
+ * is sanitized and rendered from a blob document so foliate's iframe never
+ * executes publisher content with the app's origin or session.
  */
+import DOMPurify from 'dompurify';
 import { annotationRange, positionFor, type ReaderAnchor, type ReaderLocator } from './locator';
 import {
 	fragmentFromHref,
 	packagePathFromHref,
 	resourceUrl,
 	type Publication,
+	type ReaderResourceAdapter,
 	type RwpmLink
 } from './rwpm';
 
@@ -79,28 +68,109 @@ function parseResource(source: string, mediaType: string): Document {
 	return parser.parseFromString(source, 'text/html');
 }
 
+const FORBIDDEN_TAGS = [
+	'script',
+	'iframe',
+	'frame',
+	'frameset',
+	'object',
+	'applet',
+	'embed',
+	'fencedframe',
+	'form',
+	'input',
+	'button',
+	'select',
+	'option',
+	'textarea',
+	'fieldset',
+	'legend',
+	'output',
+	'datalist',
+	'optgroup',
+	'keygen'
+];
+
 /**
- * Remove everything that could execute inside the renderer's iframe. The
- * iframe is same-origin with the console, so this is the only barrier between
- * an EPUB's scripted content and the reader's session.
+ * DOMPurify's HTML/SVG/MathML allowlist keeps normal EPUB markup and styles.
+ * Publisher bases and refresh/CSP directives are removed before the
+ * renderer adds its own base and scoped CSP to the blob document.
+ *
+ * In-place sanitizing needs an element root: passing the `Document` itself
+ * throws. `<link>` is allowed so package stylesheets survive, then every
+ * non-stylesheet link is dropped; `epub:type` is kept for footnote handling.
  */
-function stripScripting(doc: Document): void {
-	for (const element of doc.querySelectorAll('script, iframe, object, embed')) element.remove();
-	for (const element of doc.querySelectorAll('*')) {
-		for (const attribute of [...element.attributes]) {
-			const name = attribute.name.toLowerCase();
-			if (name.startsWith('on')) {
-				element.removeAttribute(attribute.name);
-				continue;
-			}
-			if (
-				(name === 'href' || name === 'src' || name === 'xlink:href') &&
-				/^\s*javascript:/i.test(attribute.value)
-			) {
-				element.removeAttribute(attribute.name);
-			}
-		}
+function sanitizeDocument(doc: Document): void {
+	for (const base of doc.querySelectorAll('base')) base.remove();
+	for (const meta of doc.querySelectorAll('meta[http-equiv]')) {
+		const directive = meta.getAttribute('http-equiv')?.trim().toLowerCase();
+		if (directive === 'refresh' || directive === 'content-security-policy') meta.remove();
 	}
+
+	DOMPurify.sanitize(doc.documentElement, {
+		IN_PLACE: true,
+		WHOLE_DOCUMENT: true,
+		ADD_TAGS: ['link'],
+		ADD_ATTR: ['epub:type'],
+		FORBID_TAGS: FORBIDDEN_TAGS,
+		FORBID_ATTR: [
+			'action',
+			'autofocus',
+			'form',
+			'formaction',
+			'formenctype',
+			'formmethod',
+			'formnovalidate',
+			'formtarget',
+			'ping',
+			'srcdoc',
+			'target'
+		]
+	});
+
+	for (const link of doc.querySelectorAll('link')) {
+		const rel = (link.getAttribute('rel') ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+		const stylesheet =
+			rel.includes('stylesheet') && rel.every((token) => token === 'stylesheet' || token === 'alternate');
+		if (!stylesheet) link.remove();
+	}
+}
+
+function resourceSource(resourcePrefix: string): string {
+	if (!resourcePrefix.trim()) return "'none'";
+	try {
+		const prefix = new URL(resourcePrefix, location.origin);
+		if (
+			prefix.origin !== location.origin ||
+			prefix.username ||
+			prefix.password ||
+			prefix.search ||
+			prefix.hash
+		) {
+			return "'none'";
+		}
+		const path = prefix.pathname.endsWith('/') ? prefix.pathname : `${prefix.pathname}/`;
+		return `${prefix.origin}${path}`;
+	} catch {
+		return "'none'";
+	}
+}
+
+function contentSecurityPolicy(resourcePrefix: string): string {
+	const source = resourceSource(resourcePrefix);
+	return [
+		"default-src 'none'",
+		"script-src 'none'",
+		"connect-src 'none'",
+		"form-action 'none'",
+		"frame-src 'none'",
+		"object-src 'none'",
+		`base-uri ${source}`,
+		`style-src ${source} 'unsafe-inline'`,
+		`img-src ${source} data:`,
+		`font-src ${source} data:`,
+		`media-src ${source} data:`
+	].join('; ');
 }
 
 function tocItems(links: RwpmLink[] | null | undefined): ReaderTocItem[] {
@@ -124,22 +194,50 @@ function tocItems(links: RwpmLink[] | null | undefined): ReaderTocItem[] {
  * so foliate's whole-publication progress matches the percentage the server
  * would compute for the same resource.
  */
-export function makeReadiumBook(mediaId: string, publication: Publication): ReadiumBook {
+export function makeReadiumBook(
+	mediaId: string,
+	publication: Publication,
+	resourceAdapter?: ReaderResourceAdapter
+): ReadiumBook {
 	const { manifest, positions } = publication;
 	const order = manifest.readingOrder ?? [];
 	const packagePaths = order.map((link) => packagePathFromHref(link.href));
 	const blobs = new Map<string, string>();
+	const resourceForPath = (path: string) =>
+		resourceAdapter?.resourceUrl(mediaId, path) ?? resourceUrl(mediaId, path);
+	const resourcePrefix =
+		resourceAdapter?.resourcePrefix ??
+		(resourceAdapter ? resourceForPath('') : resourceUrl(mediaId, ''));
+	const policy = contentSecurityPolicy(resourcePrefix);
 
 	const totals = packagePaths.map(
 		(path, index) => positionFor(positions, path)?.locations?.totalProgression ?? index / order.length
 	);
 
 	const loadDocument = async (packagePath: string, mediaType: string): Promise<Document> => {
-		const url = resourceUrl(mediaId, packagePath);
+		const url = resourceForPath(packagePath);
 		const response = await fetch(url, { credentials: 'include' });
 		if (!response.ok) throw new Error(`${packagePath} responded ${response.status}`);
 		const doc = parseResource(await response.text(), mediaType);
-		stripScripting(doc);
+		sanitizeDocument(doc);
+		return doc;
+	};
+
+	const createSectionDocument = async (packagePath: string, mediaType: string): Promise<Document> => {
+		const doc = await loadDocument(packagePath, mediaType);
+		const namespace = 'http://www.w3.org/1999/xhtml';
+		let head = doc.head;
+		if (!head) {
+			head = doc.createElementNS(namespace, 'head') as HTMLHeadElement;
+			doc.documentElement.insertBefore(head, doc.documentElement.firstChild);
+		}
+		const base = doc.createElementNS(namespace, 'base');
+		base.setAttribute('href', new URL(resourceForPath(packagePath), location.origin).href);
+		const csp = doc.createElementNS(namespace, 'meta');
+		csp.setAttribute('http-equiv', 'Content-Security-Policy');
+		csp.setAttribute('content', policy);
+		head.prepend(base);
+		head.prepend(csp);
 		return doc;
 	};
 
@@ -157,14 +255,11 @@ export function makeReadiumBook(mediaId: string, publication: Publication): Read
 			size: Math.max(1, Math.round((nextTotal - totalProgression) * SIZE_SCALE)),
 			position: positionFor(positions, packagePath)?.locations?.position ?? undefined,
 			totalProgression,
-			createDocument: () => loadDocument(packagePath, mediaType),
+			createDocument: () => createSectionDocument(packagePath, mediaType),
 			load: async () => {
 				const cached = blobs.get(packagePath);
 				if (cached) return cached;
-				const doc = await loadDocument(packagePath, mediaType);
-				const base = doc.createElement('base');
-				base.setAttribute('href', new URL(resourceUrl(mediaId, packagePath), location.origin).href);
-				(doc.head ?? doc.documentElement).prepend(base);
+				const doc = await createSectionDocument(packagePath, mediaType);
 				const isXml = doc.contentType === 'application/xhtml+xml';
 				const serialized = isXml
 					? new XMLSerializer().serializeToString(doc)

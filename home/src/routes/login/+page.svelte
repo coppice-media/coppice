@@ -2,18 +2,12 @@
 	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { createQuery } from '@tanstack/svelte-query';
 	import { Button } from '@stump/ui/components/ui/button';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
 	import { Input } from '@stump/ui/components/ui/input';
 	import { Label } from '@stump/ui/components/ui/label';
 	import { Separator } from '@stump/ui/components/ui/separator';
-
-	interface OidcConfig {
-		enabled: boolean;
-		allowRegistration: boolean;
-		disableLocalAuth: boolean;
-	}
+	import { createOidcConfigQuery } from '$lib/oidc';
 
 	let username = $state('');
 	let password = $state('');
@@ -41,16 +35,7 @@
 		);
 	}
 
-	const oidcQuery = createQuery(() => ({
-		queryKey: ['oidcConfig'],
-		queryFn: async (): Promise<OidcConfig> => {
-			const response = await fetch('/api/v2/auth/oidc/config', { credentials: 'include' });
-			if (!response.ok) return { enabled: false, allowRegistration: false, disableLocalAuth: false };
-			return (await response.json()) as OidcConfig;
-		},
-		enabled: browser,
-		staleTime: Number.POSITIVE_INFINITY
-	}));
+	const oidcQuery = createOidcConfigQuery();
 	const oidc = $derived(oidcQuery.data);
 
 	$effect(() => {

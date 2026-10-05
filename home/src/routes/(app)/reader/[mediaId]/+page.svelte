@@ -10,6 +10,12 @@
 	 * unified reading-state mutation, `updateMediaProgress`, whose `oneOf`
 	 * input picks the EPUB (Readium locator), paged (page number), or audio
 	 * (publication milliseconds) lane.
+	 *
+	 * Annotations: selecting EPUB text drafts a highlight, a paged book offers
+	 * a note on the visible page, and an audiobook a note at the playhead; all
+	 * save through `createAnnotation`. A recording has no Readium anchor, so a
+	 * time note sends `positionMs` and no locator, and "Go to" seeks the
+	 * player back to it.
 	 */
 	import { browser } from '$app/environment';
 	import { page as pageState } from '$app/state';
@@ -17,9 +23,7 @@
 	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
 	import { onDestroy } from 'svelte';
 	import { Alert, AlertDescription, AlertTitle } from '@stump/ui/components/ui/alert';
-	import { Badge } from '@stump/ui/components/ui/badge';
 	import { Button } from '@stump/ui/components/ui/button';
-	import { Card, CardContent, CardHeader, CardTitle } from '@stump/ui/components/ui/card';
 	import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@stump/ui/components/ui/empty';
 	import { Skeleton } from '@stump/ui/components/ui/skeleton';
 	import { request } from '@stump/ui/graphql/client';
@@ -28,37 +32,24 @@
 		ReaderBookDocument,
 		ReaderUpdateProgressDocument,
 		ReaderVisiblePagesDocument,
-		type AnnotationKind,
-		type DeviceKind,
-		type MediaProgressInput
+		type MediaProgressInput,
+		type ReadiumLocatorInput
 	} from '$lib/graphql/generated/graphql';
 	import AlsoAvailableAs from '$lib/components/reader/AlsoAvailableAs.svelte';
 	import AudioReader from '$lib/components/reader/AudioReader.svelte';
 	import EpubReader from '$lib/components/reader/EpubReader.svelte';
 	import PagedReader from '$lib/components/reader/PagedReader.svelte';
-	import { KIND_LABELS, SOURCE_LABELS } from '$lib/annotations';
+	import ReaderAnnotations, {
+		type ReaderAnnotationDraft,
+		type ReaderAnnotationRecord
+	} from '$lib/components/reader/ReaderAnnotations.svelte';
 	import { decimal, type ReaderLocator } from '$lib/components/reader/locator';
-	import { absoluteTime, relativeTime } from '$lib/format';
 
-	type ReaderAnnotationRecord = {
-		id: string;
-		kind: AnnotationKind;
-		source: DeviceKind;
-		sourceDeviceId: string | null;
-		sourceDeviceName: string | null;
-		revision: number | null;
-		lastEditedSource: DeviceKind | null;
-		lastEditedAt: string | null;
-		editable: boolean;
-		chapterTitle: string | null;
-		locator: ReaderLocator | null;
-		href: string | null;
-		fragment: string | null;
-		page: number | null;
-		progression: number | null;
-		excerpt: string | null;
-		note: string | null;
-		color: string | null;
+	type EpubReaderHandle = { jumpToAnnotation(locator: ReaderLocator): void };
+	type PagedReaderHandle = { jumpToPage(page: number): void };
+	type AudioReaderHandle = {
+		getCurrentPositionMs(): number;
+		jumpToPosition(positionMs: number): void;
 	};
 
 	type PositionedAnnotation = ReaderAnnotationRecord & {
@@ -200,10 +191,14 @@
 				: [];
 		});
 	});
-	const positionedIds = $derived(new Set(positionedAnnotations.map((annotation) => annotation.id)));
-	const panelAnnotations = $derived(
-		annotationRows.filter(
-			(annotation) => annotation.source !== 'WEB' || !positionedIds.has(annotation.id)
+	// A recording's rows are reached by time, the other readers' by locator.
+	const jumpableIds = $derived(
+		new Set(
+			isAudiobook
+				? annotationRows.flatMap((annotation) =>
+						annotation.positionMs !== null ? [annotation.id] : []
+					)
+				: positionedAnnotations.map((annotation) => annotation.id)
 		)
 	);
 
@@ -216,6 +211,67 @@
 		enabled: browser && mediaId.length > 0 && book !== undefined && !isEpub && !isAudiobook
 	}));
 	const pageCount = $derived(visiblePagesQuery.data?.mediaVisiblePages.length ?? 0);
+
+	// The visible page a page note anchors to: the page the paged reader
+	// opened at (clamped the same way) until it reports a turn. A turn is
+	// keyed to the mounted reader, so a remount for another book or deep link
+	// starts from its own opening page again.
+	const pagedReaderKey = $derived(`${mediaId}${pageState.url.search}`);
+	let turnedTo = $state<{ key: string; page: number } | null>(null);
+	const currentPage = $derived(
+		turnedTo?.key === pagedReaderKey
+			? turnedTo.page
+			: Math.min(
+					Math.max(1, deepLink?.page ?? book?.readProgress?.page ?? 1),
+					Math.max(1, pageCount)
+				)
+	);
+	const notePage = $derived(
+		book && !isEpub && !isAudiobook && pageCount > 0 ? currentPage : null
+	);
+
+	// Raw: the panel compares the draft it submitted against the live one.
+	let annotationDraft = $state.raw<ReaderAnnotationDraft | null>(null);
+	let readerArea = $state<HTMLDivElement | null>(null);
+	let epubReader = $state<EpubReaderHandle | null>(null);
+	let pagedReader = $state<PagedReaderHandle | null>(null);
+	let audioReader = $state<AudioReaderHandle | null>(null);
+
+	// The playhead a time note anchors to. `getCurrentPositionMs` reads the
+	// player's own playhead state, so the "Note at" label follows playback
+	// rather than the throttled progress reports.
+	const noteTimeMs = $derived(
+		isAudiobook && audioReader ? audioReader.getCurrentPositionMs() : null
+	);
+
+	function onSelection({ locator, excerpt }: { locator: ReadiumLocatorInput; excerpt: string }) {
+		if (!excerpt.trim()) return;
+		annotationDraft = {
+			mediaId,
+			locator,
+			positionMs: null,
+			excerpt,
+			label: locator.chapterTitle || null
+		};
+	}
+
+	function jumpToAnnotation(id: string): void {
+		if (isAudiobook) {
+			const positionMs = annotationRows.find((candidate) => candidate.id === id)?.positionMs;
+			if (positionMs === null || positionMs === undefined) return;
+			audioReader?.jumpToPosition(positionMs);
+		} else {
+			const annotation = positionedAnnotations.find((candidate) => candidate.id === id);
+			if (!annotation) return;
+			if (isEpub) {
+				epubReader?.jumpToAnnotation(annotation.locator);
+			} else {
+				const target = annotation.page ?? annotation.locator.locations?.position;
+				if (target !== null && target !== undefined) pagedReader?.jumpToPage(target);
+			}
+		}
+		readerArea?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
 
 	let saveError = $state<string | null>(null);
 	let savedAt = $state<Date | null>(null);
@@ -342,134 +398,107 @@
 		</Alert>
 	{/if}
 
-	{#if bookQuery.isPending}
-		<div class="flex flex-col gap-3">
-			<Skeleton class="h-9 w-64" />
+	<!-- `readerArea` is what "Go to" scrolls back to from the panel below. -->
+	<div bind:this={readerArea} class="scroll-mt-4">
+		{#if bookQuery.isPending}
+			<div class="flex flex-col gap-3">
+				<Skeleton class="h-9 w-64" />
+				<Skeleton class="h-[70vh] min-h-[420px] rounded-xl" />
+			</div>
+		{:else if bookQuery.isError}
+			<Alert variant="destructive">
+				<AlertTitle>Unable to load this book</AlertTitle>
+				<AlertDescription>
+					{bookQuery.error instanceof Error ? bookQuery.error.message : 'Request failed.'}
+				</AlertDescription>
+			</Alert>
+		{:else if !book}
+			<Empty class="rounded-xl border border-dashed bg-card">
+				<EmptyHeader>
+					<EmptyTitle>Book not found</EmptyTitle>
+					<EmptyDescription>
+						This book either does not exist or is not in a library you can read.
+					</EmptyDescription>
+				</EmptyHeader>
+			</Empty>
+		{:else if book.audio}
+			<!-- Keyed on the book rather than `anchorKey`: a recording has no
+			in-resource anchor to re-seek to, and remounting a playing element
+			because some unrelated query parameter changed would stop the audio. A
+			`?positionMs=` jump from the other edition is therefore read once, at
+			mount, exactly like a stored head. -->
+			{#key mediaId}
+				<AudioReader
+					bind:this={audioReader}
+					audio={book.audio}
+					startPositionMs={deepLink?.positionMs ?? book.readProgress?.positionMs ?? 0}
+					onPosition={({ positionMs, trackIndex, isComplete }) =>
+						schedule({ audio: { positionMs, trackIndex, isComplete } })}
+				/>
+			{/key}
+		{:else if isEpub}
+			{#key anchorKey}
+				<EpubReader
+					bind:this={epubReader}
+					{mediaId}
+					storedLocator={deepLink?.locator ?? book.readProgress?.locator ?? null}
+					storedPercentage={deepLink?.percentage ??
+						decimal(book.readProgress?.percentageCompleted)}
+					annotations={positionedAnnotations}
+					{onSelection}
+					onLocator={({ locator, percentage, isComplete }) =>
+						schedule({ epub: { locator, percentage, isComplete } })}
+				/>
+			{/key}
+		{:else if visiblePagesQuery.isPending}
 			<Skeleton class="h-[70vh] min-h-[420px] rounded-xl" />
-		</div>
-	{:else if bookQuery.isError}
-		<Alert variant="destructive">
-			<AlertTitle>Unable to load this book</AlertTitle>
-			<AlertDescription>
-				{bookQuery.error instanceof Error ? bookQuery.error.message : 'Request failed.'}
-			</AlertDescription>
-		</Alert>
-	{:else if !book}
-		<Empty class="rounded-xl border border-dashed bg-card">
-			<EmptyHeader>
-				<EmptyTitle>Book not found</EmptyTitle>
-				<EmptyDescription>
-					This book either does not exist or is not in a library you can read.
-				</EmptyDescription>
-			</EmptyHeader>
-		</Empty>
-	{:else if book.audio}
-		<!-- Keyed on the book rather than `anchorKey`: a recording has no
-		in-resource anchor to re-seek to, and remounting a playing element
-		because some unrelated query parameter changed would stop the audio. A
-		`?positionMs=` jump from the other edition is therefore read once, at
-		mount, exactly like a stored head. -->
-		{#key mediaId}
-			<AudioReader
-				audio={book.audio}
-				startPositionMs={deepLink?.positionMs ?? book.readProgress?.positionMs ?? 0}
-				onPosition={({ positionMs, trackIndex, isComplete }) =>
-					schedule({ audio: { positionMs, trackIndex, isComplete } })}
-			/>
-		{/key}
-	{:else if isEpub}
-		{#key anchorKey}
-			<EpubReader
-				{mediaId}
-				storedLocator={deepLink?.locator ?? book.readProgress?.locator ?? null}
-				storedPercentage={deepLink?.percentage ??
-					decimal(book.readProgress?.percentageCompleted)}
-				annotations={positionedAnnotations}
-				onLocator={({ locator, percentage, isComplete }) =>
-					schedule({ epub: { locator, percentage, isComplete } })}
-			/>
-		{/key}
-	{:else if visiblePagesQuery.isPending}
-		<Skeleton class="h-[70vh] min-h-[420px] rounded-xl" />
-	{:else if visiblePagesQuery.isError}
-		<Alert variant="destructive">
-			<AlertTitle>Unable to load the page list</AlertTitle>
-			<AlertDescription>
-				{visiblePagesQuery.error instanceof Error
-					? visiblePagesQuery.error.message
-					: 'Request failed.'}
-			</AlertDescription>
-		</Alert>
-	{:else if pageCount === 0}
-		<Empty class="rounded-xl border border-dashed bg-card">
-			<EmptyHeader>
-				<EmptyTitle>Nothing to read</EmptyTitle>
-				<EmptyDescription>
-					This file has no readable pages. It may be missing from disk or still awaiting analysis.
-				</EmptyDescription>
-			</EmptyHeader>
-		</Empty>
-	{:else}
-		{#key anchorKey}
-			<PagedReader
-				{mediaId}
-				{pageCount}
-				startPage={deepLink?.page ?? book.readProgress?.page ?? 1}
-				annotations={positionedAnnotations}
-				onPage={(value) => schedule({ paged: { page: value } })}
-			/>
-		{/key}
-	{/if}
-	{#if panelAnnotations.length}
-		<Card>
-			<CardHeader>
-				<CardTitle class="text-base">Reader annotations</CardTitle>
-				<p class="text-sm text-muted-foreground">
-					Device annotations are shown here with their source. Opaque locators cannot be placed
-					over the page, but Readium-shaped rows may also appear as overlays above.
-				</p>
-			</CardHeader>
-			<CardContent class="px-0">
-				<ul class="flex flex-col">
-					{#each panelAnnotations as annotation (annotation.id)}
-						<li class="flex flex-col gap-2 border-t px-4 py-3 first:border-t-0">
-							<div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-								<Badge variant="secondary">{KIND_LABELS[annotation.kind]}</Badge>
-								<Badge
-									variant="outline"
-									title={annotation.sourceDeviceName ?? SOURCE_LABELS[annotation.source]}
-								>
-									{annotation.sourceDeviceName ?? SOURCE_LABELS[annotation.source]}
-								</Badge>
-								<span class="ml-auto">Read-only</span>
-							</div>
-							{#if annotation.lastEditedSource && annotation.lastEditedSource !== annotation.source}
-								<p class="text-xs text-muted-foreground">
-									Edited in {SOURCE_LABELS[annotation.lastEditedSource]}
-									{#if annotation.lastEditedAt}
-										· <time
-											datetime={annotation.lastEditedAt}
-											title={absoluteTime(annotation.lastEditedAt)}
-										>
-											{relativeTime(annotation.lastEditedAt)}
-										</time>
-									{/if}
-								</p>
-							{/if}
-							{#if annotation.excerpt}
-								<blockquote class="border-l-2 pl-3 text-sm italic">
-									{annotation.excerpt}
-								</blockquote>
-							{/if}
-							{#if annotation.note}
-								<p class="text-sm whitespace-pre-wrap">{annotation.note}</p>
-							{:else if !annotation.excerpt}
-								<p class="text-sm text-muted-foreground">No text — this is a place marker.</p>
-							{/if}
-						</li>
-					{/each}
-				</ul>
-			</CardContent>
-		</Card>
+		{:else if visiblePagesQuery.isError}
+			<Alert variant="destructive">
+				<AlertTitle>Unable to load the page list</AlertTitle>
+				<AlertDescription>
+					{visiblePagesQuery.error instanceof Error
+						? visiblePagesQuery.error.message
+						: 'Request failed.'}
+				</AlertDescription>
+			</Alert>
+		{:else if pageCount === 0}
+			<Empty class="rounded-xl border border-dashed bg-card">
+				<EmptyHeader>
+					<EmptyTitle>Nothing to read</EmptyTitle>
+					<EmptyDescription>
+						This file has no readable pages. It may be missing from disk or still awaiting
+						analysis.
+					</EmptyDescription>
+				</EmptyHeader>
+			</Empty>
+		{:else}
+			{#key anchorKey}
+				<PagedReader
+					bind:this={pagedReader}
+					{mediaId}
+					{pageCount}
+					startPage={deepLink?.page ?? book.readProgress?.page ?? 1}
+					annotations={positionedAnnotations}
+					onPage={(value) => {
+						turnedTo = { key: pagedReaderKey, page: value };
+						schedule({ paged: { page: value } });
+					}}
+				/>
+			{/key}
+		{/if}
+	</div>
+	{#if book}
+		<ReaderAnnotations
+			{mediaId}
+			annotations={annotationRows}
+			bind:draft={annotationDraft}
+			selectable={isEpub}
+			{notePage}
+			{pageCount}
+			{noteTimeMs}
+			durationMs={book.audio?.durationMs ?? 0}
+			jumpable={jumpableIds}
+			onjump={jumpToAnnotation}
+		/>
 	{/if}
 </div>

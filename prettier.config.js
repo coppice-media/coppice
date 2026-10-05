@@ -5,7 +5,13 @@ module.exports = {
 	semi: false,
 	singleQuote: true,
 	tabWidth: 2,
-	tailwindStylesheet: './packages/components/tailwind/preset.css',
+	tailwindStylesheet: './home/src/routes/layout.css',
 	trailingComma: 'all',
 	useTabs: true,
+	overrides: [
+		{
+			files: 'docs/**/*.{ts,tsx,mdx}',
+			options: { tailwindStylesheet: './docs/src/styles/app.css' },
+		},
+	],
 }

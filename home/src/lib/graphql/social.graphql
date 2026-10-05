@@ -299,6 +299,30 @@ query SocialBookClubs($all: Boolean = false) {
 			bookClubId
 			user { id username }
 		}
+		currentBook {
+			id
+			position
+			completedAt
+			title
+			author
+			url
+			imageUrl
+			bookEntityId
+			addedAt
+			entity { id name resolvedName metadata { writers } }
+		}
+		books {
+			id
+			position
+			completedAt
+			title
+			author
+			url
+			imageUrl
+			bookEntityId
+			addedAt
+			entity { id name resolvedName metadata { writers } }
+		}
 	}
 }
 
@@ -364,5 +388,23 @@ mutation CreateBookClub($input: CreateBookClubInput!) {
 		isPrivate
 		emoji
 		membersCount
+	}
+}
+
+mutation SocialAddBookToClub($bookClubId: ID!, $input: AddBookToClubInput!) {
+	addBookToClub(bookClubId: $bookClubId, input: $input) {
+		id
+	}
+}
+
+mutation SocialCompleteBook($bookClubBookId: ID!) {
+	completeBook(bookClubBookId: $bookClubBookId) {
+		id
+	}
+}
+
+mutation SocialReorderBooks($bookClubId: ID!, $bookIds: [String!]!) {
+	reorderBooks(bookClubId: $bookClubId, bookIds: $bookIds) {
+		id
 	}
 }

@@ -154,6 +154,19 @@ export interface BookClubInvitation {
 	user?: { id: string; username: string } | null
 }
 
+export interface BookClubQueueBook {
+	id: string
+	position: number
+	completedAt: string | null
+	title: string | null
+	author: string | null
+	url: string | null
+	imageUrl: string | null
+	bookEntityId: string | null
+	addedAt: string
+	entity: { id: string; name: string; resolvedName: string; metadata: { writers: string[] | null } | null } | null
+}
+
 export interface BookClub {
 	id: string
 	name: string
@@ -165,6 +178,8 @@ export interface BookClub {
 	membership?: BookClubMember | null
 	members: BookClubMember[]
 	invitations: BookClubInvitation[]
+	currentBook: BookClubQueueBook | null
+	books: BookClubQueueBook[]
 }
 
 export const IncomingSocialRecommendationsDocument = operation<{
@@ -261,8 +276,28 @@ export const LeaveBookClubDocument = operation<{
 }>('LeaveBookClub')
 
 export const CreateBookClubDocument = operation<{
-	createBookClub: BookClub
+	createBookClub: {
+		id: string
+		name: string
+		slug: string
+		description: string | null
+		isPrivate: boolean
+		emoji: string | null
+		membersCount: number
+	}
 }>('CreateBookClub')
+
+export const SocialAddBookToClubDocument = operation<{
+	addBookToClub: { id: string }
+}>('SocialAddBookToClub')
+
+export const SocialCompleteBookDocument = operation<{
+	completeBook: { id: string }
+}>('SocialCompleteBook')
+
+export const SocialReorderBooksDocument = operation<{
+	reorderBooks: { id: string }
+}>('SocialReorderBooks')
 
 export const SOCIAL_SCOPES = [
 	{ key: 'METADATA', label: 'Book metadata', description: 'Title, authors, and cover' },

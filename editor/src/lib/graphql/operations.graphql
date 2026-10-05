@@ -321,6 +321,9 @@ query IngestQualityCheckCatalog($includeDisabled: Boolean!) {
 			secret
 			defaultValue
 			description
+			minimum
+			maximum
+			options
 		}
 	}
 }

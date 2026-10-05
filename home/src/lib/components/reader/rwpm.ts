@@ -120,6 +120,16 @@ export type Publication = {
 };
 
 /**
+ * Injectable publication routes for readers that do not use the native media
+ * endpoints. The native reader keeps using the helpers below by default.
+ */
+export type ReaderResourceAdapter = {
+	openPublication(mediaId: string, signal?: AbortSignal): Promise<Publication>;
+	resourceUrl(mediaId: string, packagePath: string): string;
+	resourcePrefix?: string;
+};
+
+/**
  * Load the manifest and its linked positions list.
  *
  * The positions list is discovered by media type on a `links[]` entry the way

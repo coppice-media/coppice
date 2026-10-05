@@ -25,6 +25,7 @@
 	import ServerCogIcon from '@lucide/svelte/icons/server-cog';
 	import SmartphoneIcon from '@lucide/svelte/icons/smartphone';
 	import UserIcon from '@lucide/svelte/icons/user';
+	import UserCogIcon from '@lucide/svelte/icons/user-cog';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import { Avatar, AvatarFallback } from '@stump/ui/components/ui/avatar';
 	import { Button } from '@stump/ui/components/ui/button';
@@ -34,6 +35,7 @@
 	import { MeDocument } from '@stump/ui/graphql/generated/graphql';
 	import { request } from '@stump/ui/graphql/client';
 	import { createHomeSession, setHomeSession } from '$lib/session.svelte';
+	import { canReadUsers } from '$lib/users';
 	import ShellSearch from '$lib/components/ShellSearch.svelte';
 	let { children } = $props();
 
@@ -69,7 +71,10 @@
 		Boolean(session.user?.isServerOwner || session.user?.permissions.includes('MANAGE_LIBRARY'))
 	);
 	const canManageComponents = $derived(Boolean(session.user?.isServerOwner));
-	const canUseManage = $derived(canUseEditor || canManageComponents);
+	// `/users` lists accounts through the `users` query, which answers only
+	// the server owner or READ_USERS (MANAGE_USERS includes it).
+	const canSeeUsers = $derived(canReadUsers(session.user));
+	const canUseManage = $derived(canUseEditor || canManageComponents || canSeeUsers);
 	const initial = $derived(session.user?.username.trim().charAt(0).toUpperCase() || '?');
 
 	let navOpen = $state(false);
@@ -156,6 +161,23 @@
 										>
 											<ServerCogIcon aria-hidden="true" />
 											<span>Components</span>
+										</a>
+									{/snippet}
+								</Sidebar.MenuButton>
+							</Sidebar.MenuItem>
+						{/if}
+						{#if canSeeUsers}
+							<Sidebar.MenuItem>
+								<Sidebar.MenuButton isActive={isCurrent(resolve('/users'))}>
+									{#snippet child({ props })}
+										<a
+											{...props}
+											href={resolve('/users')}
+											aria-current={isCurrent(resolve('/users')) ? 'page' : undefined}
+											onclick={() => (navOpen = false)}
+										>
+											<UserCogIcon aria-hidden="true" />
+											<span>Users</span>
 										</a>
 									{/snippet}
 								</Sidebar.MenuButton>

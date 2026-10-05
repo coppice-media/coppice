@@ -116,6 +116,79 @@ export function locatorInputFor(args: {
 	};
 }
 
+/**
+ * Build a book-relative locator from the selection's actual DOM range. The
+ * text quote and its surrounding context are the durable anchor; progression
+ * is measured from the range's text offset rather than the current page.
+ */
+export function locatorInputForSelection(args: {
+	doc: Document;
+	range: Range;
+	packagePath: string;
+	mediaType: string;
+	chapterTitle?: string | null;
+	title?: string | null;
+	position?: number | null;
+	totalProgressionStart: number;
+	totalProgressionEnd: number;
+}): { locator: ReadiumLocatorInput; excerpt: string } | null {
+	const root = args.doc.body ?? args.doc.documentElement;
+	const index = indexText(args.doc, root);
+	const excerpt = args.range.toString().trim();
+	if (!excerpt || !index.text.length) return null;
+
+	const offsetAt = (node: Node, offset: number): number | null => {
+		if (node.nodeType === Node.TEXT_NODE) {
+			const entry = index.nodes.find((candidate) => candidate.node === node);
+			return entry ? entry.start + Math.min(Math.max(offset, 0), entry.node.data.length) : null;
+		}
+		if (node !== root && !root.contains(node)) return null;
+		try {
+			const prefix = args.doc.createRange();
+			prefix.setStart(root, 0);
+			prefix.setEnd(node, offset);
+			return prefix.toString().length;
+		} catch {
+			return null;
+		}
+	};
+
+	const start = offsetAt(args.range.startContainer, args.range.startOffset);
+	const end = offsetAt(args.range.endContainer, args.range.endOffset);
+	if (start === null || end === null || end <= start) return null;
+
+	const progression = Math.min(1, Math.max(0, start / index.text.length));
+	const totalProgression =
+		args.totalProgressionStart +
+		progression * (args.totalProgressionEnd - args.totalProgressionStart);
+	const before = index.text.slice(Math.max(0, start - SELECTION_CONTEXT_LENGTH), start).trim();
+	const after = index.text.slice(end, end + SELECTION_CONTEXT_LENGTH).trim();
+	const startElement =
+		args.range.startContainer.nodeType === Node.ELEMENT_NODE
+			? (args.range.startContainer as Element)
+			: args.range.startContainer.parentElement;
+	const fragment = startElement?.closest('[id]')?.id;
+
+	return {
+		excerpt,
+		locator: {
+			...locatorInputFor({
+				packagePath: args.packagePath,
+				mediaType: args.mediaType,
+				chapterTitle: args.chapterTitle,
+				title: args.title,
+				position: args.position,
+				progression,
+				totalProgression,
+				fragment
+			}),
+			text: { highlight: excerpt, before, after }
+		}
+	};
+}
+
+const SELECTION_CONTEXT_LENGTH = 80;
+
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 type TextIndex = {
@@ -154,9 +227,9 @@ function rangeAt(doc: Document, index: TextIndex, start: number, end: number): R
  *
  * Highlights are matched by their quoted text, whitespace-insensitively so a
  * different line-wrapping of the same XHTML still matches, and disambiguated
- * with the stored `before` context when the quote repeats. A CSS selector or
- * a fragment id is used when there is no quote — that is all the anchoring
- * information a `ReadiumLocator` carries; anything else would be invented.
+ * with the stored `before` and `after` context when the quote repeats. A CSS
+ * selector or fragment id is used when there is no quote — that is all the
+ * anchoring information a `ReadiumLocator` carries; anything else is invented.
  */
 export function annotationRange(doc: Document, locator: ReaderLocator): Range | null {
 	const selector = locator.locations?.cssSelector;
@@ -167,16 +240,46 @@ export function annotationRange(doc: Document, locator: ReaderLocator): Range | 
 		const index = indexText(doc, scope);
 		const pattern = new RegExp(quote.split(/\s+/).map(escapeRegExp).join('\\s+'), 'g');
 		const before = locator.text?.before?.trim().split(/\s+/).join(' ');
+		const after = locator.text?.after?.trim().split(/\s+/).join(' ');
 		let fallback: Range | null = null;
+		let exactMatch: Range | null = null;
+		let exactDelta = Number.POSITIVE_INFINITY;
+		const targetProgression = decimal(locator.locations?.progression);
+		let contextualMatch: Range | null = null;
+		let contextualMatches = 0;
+		let occurrences = 0;
 		let match: RegExpExecArray | null;
 		while ((match = pattern.exec(index.text)) !== null) {
 			const range = rangeAt(doc, index, match.index, match.index + match[0].length);
 			if (!range) continue;
-			if (!before) return range;
-			const preceding = index.text.slice(0, match.index).split(/\s+/).join(' ');
-			if (preceding.endsWith(before)) return range;
+			occurrences += 1;
 			fallback ??= range;
+			const preceding = index.text.slice(0, match.index).split(/\s+/).join(' ').trimEnd();
+			const following = index.text
+				.slice(match.index + match[0].length)
+				.split(/\s+/)
+				.join(' ')
+				.trimStart();
+			const matchesBefore = !before || preceding.endsWith(before);
+			const matchesAfter = !after || following.startsWith(after);
+			if (matchesBefore && matchesAfter) {
+				const delta =
+					targetProgression === undefined
+						? 0
+						: Math.abs(match.index / index.text.length - targetProgression);
+				if (delta < exactDelta) {
+					exactMatch = range;
+					exactDelta = delta;
+				}
+			}
+			if (matchesBefore || matchesAfter) {
+				contextualMatch ??= range;
+				contextualMatches += 1;
+			}
 		}
+		if (exactMatch) return exactMatch;
+		if (contextualMatches === 1) return contextualMatch;
+		if (before || after) return occurrences === 1 ? fallback : null;
 		if (fallback) return fallback;
 	}
 

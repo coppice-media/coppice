@@ -23,6 +23,9 @@
 		AdaptiveRecommendationsDocument,
 		BookClubsDocument,
 		CreateBookClubDocument,
+		SocialAddBookToClubDocument,
+		SocialCompleteBookDocument,
+		SocialReorderBooksDocument,
 		CreateBookClubInvitationDocument,
 		CreateShareGrantDocument,
 		DismissRecommendationDocument,
@@ -231,6 +234,13 @@
 			queryClient.invalidateQueries({ queryKey: ['social-preferences'] }),
 			queryClient.invalidateQueries({ queryKey: ['social-book-club-invitations'] }),
 			queryClient.invalidateQueries({ queryKey: ['social-book-clubs'] })
+		]);
+	}
+
+	async function invalidateBookClubQueue(clubId: string): Promise<void> {
+		await Promise.all([
+			invalidateSocial(),
+			queryClient.invalidateQueries({ queryKey: ['book-club-reader-sessions', clubId] })
 		]);
 	}
 
@@ -503,6 +513,36 @@
 			socialRequest(CreateBookClubDocument, { input })
 		);
 		if (result) await invalidateSocial();
+	}
+
+	async function addQueueBook(clubId: string, mediaId: string): Promise<boolean> {
+		const result = await runAction(`club-queue-add:${clubId}`, () =>
+			socialRequest(SocialAddBookToClubDocument, {
+				bookClubId: clubId,
+				input: { book: { stored: { id: mediaId } } }
+			})
+		);
+		if (!result) return false;
+		await invalidateBookClubQueue(clubId);
+		return true;
+	}
+
+	async function reorderQueue(clubId: string, bookIds: string[]): Promise<boolean> {
+		const result = await runAction(`club-queue-reorder:${clubId}`, () =>
+			socialRequest(SocialReorderBooksDocument, { bookClubId: clubId, bookIds })
+		);
+		if (!result) return false;
+		await invalidateBookClubQueue(clubId);
+		return true;
+	}
+
+	async function completeQueueBook(clubId: string, bookClubBookId: string): Promise<boolean> {
+		const result = await runAction(`club-queue-complete:${clubId}`, () =>
+			socialRequest(SocialCompleteBookDocument, { bookClubBookId })
+		);
+		if (!result) return false;
+		await invalidateBookClubQueue(clubId);
+		return true;
 	}
 
 	function adaptiveReason(recommendation: AdaptiveRecommendation): string {
@@ -793,6 +833,31 @@
 
 	<section aria-labelledby="bookclubs-heading" class="flex flex-col gap-4">
 		<div><h2 id="bookclubs-heading" class="text-xl font-semibold tracking-tight">BookClubs</h2><p class="text-sm text-muted-foreground">Membership and invitations are explicit. They never substitute for a scoped sharing grant.</p></div>
-		{#if clubsQuery.isPending || invitationsQuery.isPending}<Skeleton class="h-80 rounded-xl" />{:else if clubsQuery.isError || invitationsQuery.isError}<Alert variant="destructive"><AlertTitle>Unable to load BookClubs</AlertTitle><AlertDescription>{errorMessage(clubsQuery.error ?? invitationsQuery.error, 'The server returned an error.')}</AlertDescription></Alert>{:else}<BookClubPanel clubs={clubs as readonly BookClub[]} invitations={invitations as readonly BookClubInvitation[]} canCreate={canCreateBookClub} busy={busyAction?.startsWith('club-') ?? false} error={actionError} onInvite={inviteMember} onRemove={removeMember} onLeave={leaveClub} onRespondInvitation={respondToInvitation} onCreate={createClub} />{/if}
+		{#if clubsQuery.isPending || invitationsQuery.isPending}
+			<Skeleton class="h-80 rounded-xl" />
+		{:else if clubsQuery.isError || invitationsQuery.isError}
+			<Alert variant="destructive">
+				<AlertTitle>Unable to load BookClubs</AlertTitle>
+				<AlertDescription>
+					{errorMessage(clubsQuery.error ?? invitationsQuery.error, 'The server returned an error.')}
+				</AlertDescription>
+			</Alert>
+		{:else}
+			<BookClubPanel
+				clubs={clubs as readonly BookClub[]}
+				invitations={invitations as readonly BookClubInvitation[]}
+				canCreate={canCreateBookClub}
+				busy={busyAction?.startsWith('club-') ?? false}
+				error={actionError}
+				onInvite={inviteMember}
+				onRemove={removeMember}
+				onLeave={leaveClub}
+				onRespondInvitation={respondToInvitation}
+				onCreate={createClub}
+				onAddQueueBook={addQueueBook}
+				onReorderQueue={reorderQueue}
+				onCompleteQueueBook={completeQueueBook}
+			/>
+		{/if}
 	</section>
 </div>

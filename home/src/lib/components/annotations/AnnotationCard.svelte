@@ -3,6 +3,11 @@
 	 * One highlight, note, or bookmark. All entries marked editable by the
 	 * server can be changed here; revisioned updates protect device-owned CAS
 	 * records from stale writes.
+	 *
+	 * `onsave` sends what the server applies on every lane: `note` is `""` to
+	 * clear (a Liseur body keeps its text on `null`), and `color` is `null` to
+	 * leave it, `""` to clear, or an `ANNOTATION_COLORS` token. Only
+	 * highlights carry a colour — Liseur refuses one on a note.
 	 */
 	import { resolve } from '$app/paths';
 	import BookOpenIcon from '@lucide/svelte/icons/book-open';
@@ -18,6 +23,7 @@
 	import { KIND_LABELS, SOURCE_LABELS, anchorLabel, readerAnchor } from '$lib/annotations';
 	import { DEVICE_KIND_ICONS } from '$lib/devices';
 	import { absoluteTime, relativeTime } from '$lib/format';
+	import AnnotationColorPicker from './AnnotationColorPicker.svelte';
 
 	let {
 		annotation,
@@ -29,7 +35,7 @@
 		annotation: ConsoleAnnotationFieldsFragment;
 		saving?: boolean;
 		deleting?: boolean;
-		onsave: (id: string, note: string | null, color: string | null, expectedRevision: number | null) => void;
+		onsave: (id: string, note: string, color: string | null, expectedRevision: number | null) => void;
 		ondelete: (id: string, expectedRevision: number | null) => void;
 	} = $props();
 
@@ -49,30 +55,31 @@
 
 	let editing = $state(false);
 	let draft = $state('');
-	let draftColor = $state('#f59e0b');
-	let hasDraftColor = $state(false);
-	let colorChanged = $state(false);
+	let draftColor = $state<string | null>(null);
+	let editError = $state<string | null>(null);
 
 	function startEditing(): void {
 		draft = annotation.note ?? '';
-		draftColor = /^#[0-9a-f]{6}$/i.test(annotation.color ?? '')
-			? annotation.color!
-			: '#f59e0b';
-		hasDraftColor = annotation.color != null;
-		colorChanged = false;
+		draftColor = annotation.color ?? null;
+		editError = null;
 		editing = true;
 	}
 
 	function save(): void {
 		const next = draft.trim();
-		const nextColor = hasDraftColor
-			? colorChanged || annotation.color == null
-				? draftColor
-				: annotation.color
-			: null;
+		// A revisioned note is CAS-backed, and that lane refuses an empty body.
+		if (annotation.kind === 'NOTE' && annotation.revision != null && !next) {
+			editError = 'This note needs text. Delete it instead to remove it.';
+			return;
+		}
+		const nextColor = annotation.kind === 'HIGHLIGHT' ? (draftColor ?? '') : null;
 		editing = false;
-		if (next === (annotation.note ?? '') && nextColor === (annotation.color ?? null)) return;
-		onsave(annotation.id, next ? next : null, nextColor, annotation.revision);
+		if (
+			next === (annotation.note ?? '') &&
+			(nextColor === null || nextColor === (annotation.color ?? ''))
+		)
+			return;
+		onsave(annotation.id, next, nextColor, annotation.revision);
 	}
 </script>
 
@@ -137,23 +144,12 @@
 				aria-label="Note"
 				placeholder="Your note on this passage"
 			/>
-			<div class="flex items-center gap-3">
-				<label class="flex items-center gap-2 text-sm text-muted-foreground">
-					<input
-						type="checkbox"
-						bind:checked={hasDraftColor}
-						aria-label="Set annotation colour"
-					/>
-					Colour
-				</label>
-				<input
-					type="color"
-					bind:value={draftColor}
-					oninput={() => (colorChanged = true)}
-					aria-label="Annotation colour"
-					class="size-8 cursor-pointer rounded border border-input bg-transparent p-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-				/>
-			</div>
+			{#if annotation.kind === 'HIGHLIGHT'}
+				<AnnotationColorPicker bind:value={draftColor} />
+			{/if}
+			{#if editError}
+				<p class="text-sm text-destructive">{editError}</p>
+			{/if}
 			<div class="flex gap-2">
 				<Button size="sm" disabled={saving} onclick={save}>
 					{saving ? 'Saving…' : 'Save note'}

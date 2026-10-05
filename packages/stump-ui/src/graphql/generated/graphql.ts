@@ -17,6 +17,11 @@ export type UserPermission =
   | 'ACCESS_KOBO_SYNC'
   /** Grant access to the koreader sync feature */
   | 'ACCESS_KOREADER_SYNC'
+  /**
+   * Grant access to act as a source worker: advertise configured roots and
+   * serve only explicitly authorized remote-source reads.
+   */
+  | 'ACCESS_REMOTE_SOURCE'
   /** Grant access to access the smart list feature. This includes the ability to create and edit smart lists */
   | 'ACCESS_SMART_LIST'
   /**
@@ -24,6 +29,8 @@ export type UserPermission =
    * socket, claim `worker_jobs`, and upload their outputs
    */
   | 'ACCESS_WORKER'
+  /** Search and grab releases for approved book requests. */
+  | 'ACQUIRE_RELEASES'
   /** Grant user access to change **their own** avatar */
   | 'CHANGE_AVATAR'
   /** Grant user access to change **their own** password */
@@ -98,6 +105,8 @@ export type UserPermission =
   | 'READ_USERS'
   /** Grant access to scan the library for new files */
   | 'SCAN_LIBRARY'
+  /** Grant authorized club organizers the ability to issue and manage guest-reader links. */
+  | 'SHARE_BOOK_CLUB_READER'
   /** Grant access to upload files to a library */
   | 'UPLOAD_FILE'
   /**

@@ -3,7 +3,7 @@ export const docsRoute = '/docs'
 export const docsImageRoute = '/og/docs'
 
 export const gitConfig = {
-	user: 'stumpapp',
-	repo: 'stump',
-	branch: 'nightly', // all edits flow through nightly
+	user: 'coppice-media',
+	repo: 'coppice',
+	branch: 'coppice/nightly',
 }

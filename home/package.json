@@ -43,6 +43,7 @@
 		"@internationalized/date": "^3.8.2",
 		"@tanstack/svelte-query": "^6.1.48",
 		"bits-ui": "^2.19.0",
+		"dompurify": "^3.4.16",
 		"fflate": "^0.8.2",
 		"foliate-js": "1.0.1",
 		"graphql": "^17.0.2",

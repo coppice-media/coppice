@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
-	 * EPUB reader: foliate-js rendering a publication streamed from the
-	 * server's Readium routes, with stored annotations drawn as overlays.
+	 * EPUB reader: foliate-js rendering a publication supplied by native Readium
+	 * routes or a scoped adapter, with stored annotations and optional selection.
 	 *
 	 * Position is reported to the parent as a Readium locator whose `href` is
 	 * the package-relative resource path and whose `locations` carry the
@@ -21,8 +21,10 @@
 	import { theme, type ResolvedTheme } from '@stump/ui/theme.svelte.js';
 	import type { ReadiumLocatorInput } from '$lib/graphql/generated/graphql';
 	import {
+		decimal,
 		annotationRange,
 		locatorInputFor,
+		locatorInputForSelection,
 		resolveInitialAnchor,
 		type ReaderLocator
 	} from './locator';
@@ -32,21 +34,31 @@
 		type ReaderTocItem,
 		type ReadiumBook
 	} from './readiumBook';
-	import { openPublication, packagePathFromHref } from './rwpm';
+	import { openPublication, packagePathFromHref, type ReaderResourceAdapter } from './rwpm';
 
-	type ReaderAnnotation = { id: string; annotationText?: string | null; locator: ReaderLocator };
+	type ReaderAnnotation = {
+		id: string;
+		annotationText?: string | null;
+		/** Any CSS colour; stored highlights without one draw in amber. */
+		color?: string | null;
+		locator: ReaderLocator;
+	};
 
 	let {
 		mediaId,
 		storedLocator = null,
 		storedPercentage,
 		annotations = [],
+		resourceAdapter,
+		onSelection,
 		onLocator
 	}: {
 		mediaId: string;
 		storedLocator?: ReaderLocator | null;
 		storedPercentage?: number;
 		annotations?: ReaderAnnotation[];
+		resourceAdapter?: ReaderResourceAdapter;
+		onSelection?: (payload: { locator: ReadiumLocatorInput; excerpt: string }) => void;
 		onLocator: (payload: {
 			locator: ReadiumLocatorInput;
 			percentage: number;
@@ -67,6 +79,7 @@
 	let flow = $state(FLOWS[0]!.value);
 	let chapter = $state('');
 	let fraction = $state(0);
+	let currentLocator = $state<ReadiumLocatorInput | null>(null);
 	/** The section whose annotation overlay is live, from `create-overlay`. */
 	let overlaidIndex = $state(-1);
 	let drawn = $state(0);
@@ -87,6 +100,7 @@
 	$effect(() => {
 		const container = host;
 		const id = mediaId;
+		const adapter = resourceAdapter;
 		if (!container) return;
 
 		const controller = new AbortController();
@@ -95,10 +109,12 @@
 
 		const open = async () => {
 			await import('foliate-js/view.js');
-			const publication = await openPublication(id, controller.signal);
+			const publication = adapter
+				? await adapter.openPublication(id, controller.signal)
+				: await openPublication(id, controller.signal);
 			if (controller.signal.aborted) return;
 
-			opened = makeReadiumBook(id, publication);
+			opened = makeReadiumBook(id, publication, adapter);
 			created = document.createElement('foliate-view');
 			created.className = 'block h-full w-full';
 			created.addEventListener('draw-annotation', onDrawAnnotation);
@@ -152,7 +168,9 @@
 			view = null;
 			book = null;
 			ready = false;
+			currentLocator = null;
 			overlaidIndex = -1;
+			shownIndex = -1;
 		};
 	});
 
@@ -181,26 +199,30 @@
 		fraction = start + progression * span;
 		chapter = label ?? current.title ?? '';
 
+		const locator = locatorInputFor({
+			packagePath: current.packagePath,
+			mediaType: current.mediaType,
+			chapterTitle: label ?? current.title,
+			title: current.title,
+			progression,
+			totalProgression: fraction,
+			position: current.position
+		});
+		currentLocator = locator;
 		if (!ready) return;
 
 		onLocator({
-			locator: locatorInputFor({
-				packagePath: current.packagePath,
-				mediaType: current.mediaType,
-				chapterTitle: label ?? current.title,
-				title: current.title,
-				progression,
-				totalProgression: fraction,
-				position: current.position
-			}),
+			locator,
 			percentage: fraction,
 			isComplete: start + pageEnd * span >= 0.999
 		});
 	}
 
+	const DEFAULT_HIGHLIGHT_COLOR = '#f59e0b';
+
 	function onDrawAnnotation(event: Event): void {
 		const detail = (event as CustomEvent<FoliateDrawAnnotationDetail>).detail;
-		detail.draw(Overlayer.highlight, { color: '#f59e0b' });
+		detail.draw(Overlayer.highlight, { color: detail.annotation.color || DEFAULT_HIGHLIGHT_COLOR });
 	}
 
 	/**
@@ -218,7 +240,12 @@
 	 *
 	 * A locator anchors to a resource plus a quote or selector, so it can only
 	 * be resolved against the document that is actually live in the renderer.
+	 * Re-adding an id replaces its overlay (so a colour change repaints), and
+	 * an id that has left the list is removed, so a deletion disappears
+	 * without reopening the section.
 	 */
+	let shownIndex = -1;
+	let shown = new Set<string>();
 	$effect(() => {
 		const reader = view;
 		const publication = book;
@@ -228,9 +255,14 @@
 
 		const contents = reader.renderer.getContents().find((item) => item.index === index);
 		if (!contents?.overlayer) return;
+		if (index !== shownIndex) {
+			shownIndex = index;
+			shown = new Set();
+		}
 
 		let resolved = 0;
 		let skipped = 0;
+		const live = new Set<string>();
 		for (const annotation of list) {
 			if (packagePathFromHref(annotation.locator.href) !== publication.packagePaths[index]) continue;
 			if (!annotationRange(contents.doc, annotation.locator)) {
@@ -238,15 +270,95 @@
 				continue;
 			}
 			publication.annotationLocators.set(annotation.id, annotation.locator);
+			live.add(annotation.id);
 			resolved += 1;
-			void reader.addAnnotation({ value: `${ANNOTATION_HREF}${annotation.id}` }).catch((cause) => {
-				unresolved += 1;
-				console.warn(`[reader] highlight ${annotation.id} could not be drawn`, cause);
-			});
+			void reader
+				.addAnnotation({ value: `${ANNOTATION_HREF}${annotation.id}`, color: annotation.color })
+				.catch((cause) => {
+					unresolved += 1;
+					console.warn(`[reader] highlight ${annotation.id} could not be drawn`, cause);
+				});
 		}
+		for (const id of shown) {
+			if (live.has(id)) continue;
+			// The removal resolves the synthetic href through the locator map,
+			// so the entry is dropped only once the overlay is gone.
+			void reader
+				.deleteAnnotation({ value: `${ANNOTATION_HREF}${id}` })
+				.catch((cause) => console.warn(`[reader] highlight ${id} could not be removed`, cause))
+				.finally(() => {
+					if (!shown.has(id)) publication.annotationLocators.delete(id);
+				});
+		}
+		shown = live;
 		drawn = resolved;
 		unresolved = skipped;
 	});
+
+	function emitSelection(doc: Document): void {
+		const callback = onSelection;
+		const reader = view;
+		const publication = book;
+		if (!callback || !reader || !publication) return;
+
+		const selection = doc.getSelection?.() ?? doc.defaultView?.getSelection();
+		if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+		const range = selection.getRangeAt(0).cloneRange();
+		if (range.startContainer.ownerDocument !== doc || range.endContainer.ownerDocument !== doc) return;
+
+		const contents = reader.renderer.getContents().find((item) => item.doc === doc);
+		const section = contents ? publication.sections[contents.index] : undefined;
+		if (!contents || !section) return;
+
+		const starts = reader.getSectionFractions();
+		const start = starts[contents.index] ?? section.totalProgression;
+		const end = starts[contents.index + 1] ?? 1;
+		const label = reader.getProgressOf(contents.index, range)?.tocItem?.label;
+		const result = locatorInputForSelection({
+			doc,
+			range,
+			packagePath: section.packagePath,
+			mediaType: section.mediaType,
+			chapterTitle: label ?? section.title,
+			title: section.title,
+			position: section.position,
+			totalProgressionStart: start,
+			totalProgressionEnd: end
+		});
+		if (!result) return;
+
+		const signature = [
+			result.locator.href,
+			result.locator.text?.before,
+			result.excerpt,
+			result.locator.text?.after
+		].join('\\u0000');
+		if (emittedSelections.get(doc) === signature) return;
+		emittedSelections.set(doc, signature);
+		callback(result);
+	}
+
+	const emittedSelections = new WeakMap<Document, string>();
+
+	export function getCurrentLocator(): ReadiumLocatorInput | null {
+		return currentLocator;
+	}
+
+	export function jumpToAnnotation(locator: ReaderLocator): void {
+		const reader = view;
+		const publication = book;
+		if (!reader || !publication) return;
+		const index = publication.packagePaths.indexOf(packagePathFromHref(locator.href));
+		if (index < 0) return;
+		void reader.renderer.goTo({
+			index,
+			anchor: (doc) => {
+				const range = annotationRange(doc, locator);
+				if (range || locator.text?.highlight?.trim()) return range;
+				return decimal(locator.locations?.progression) ?? 0;
+			}
+		});
+	}
 
 	function setFlow(value: string): void {
 		flow = value;
@@ -306,6 +418,15 @@
 	function onSectionLoad(event: Event): void {
 		const { doc } = (event as CustomEvent<{ doc: Document }>).detail;
 		doc.addEventListener('keydown', onKeydown);
+		doc.addEventListener('mouseup', () => emitSelection(doc));
+		doc.addEventListener('touchend', () => emitSelection(doc));
+		doc.addEventListener('keyup', (event) => {
+			if (event.key === 'Shift') emitSelection(doc);
+		});
+		doc.addEventListener('selectionchange', () => {
+			const selection = doc.getSelection?.() ?? doc.defaultView?.getSelection();
+			if (!selection || selection.isCollapsed) emittedSelections.delete(doc);
+		});
 	}
 </script>
 
@@ -390,7 +511,7 @@
 	{/if}
 
 	<p class="text-xs text-muted-foreground">
-		{chapter ? `${chapter} · ` : ''}Arrow keys or swipe to turn the page. Highlights are read-only
-		here.
+		{chapter ? `${chapter} · ` : ''}Arrow keys or swipe to turn the page.
+		{onSelection ? 'Select text to add a highlight.' : 'Highlights are read-only here.'}
 	</p>
 </div>

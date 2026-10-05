@@ -67,14 +67,19 @@ the base.
 ## Routes
 
 - `/login` — cookie-session login
+- `/` — ingest landing page with links to the drop folder and analysis queue
 - `/drop` — upload/stage, scan, queue, discard, and live item progress
 - `/queue` — analysis queue controls and live phase progress
 - `/rework` — book/audiobook metadata, quality evidence, provider candidates,
   field-level picks, and commit/reject/requeue
 - `/bulk` — TanStack Table v9 row selection and bulk manual-field recipe
 - `/library` — committed library media and supported metadata maintenance
-- `/settings/providers` — provider settings, verification, and quality-check
-  catalog/toggles
+- `/settings/providers` — provider settings, verification, per-field metadata
+  policy, and server-wide quality checks: an enabled switch per check plus
+  typed controls (bounded number, switch, option select, text, JSON) for each
+  descriptor setting, validated client-side before save, with per-setting
+  reset to the server default (`QualityCheckCard`, `$lib/ingest/settings.ts`).
+  Saving needs `METADATA_PROVIDER_MANAGE` and `MANAGE_LIBRARY`.
 - `/settings/sources` — ingest-source configuration
 - `/settings/keys` — provider secret configuration
 

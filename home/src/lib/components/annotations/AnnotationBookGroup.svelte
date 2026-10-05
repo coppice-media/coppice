@@ -22,7 +22,7 @@
 		group: AnnotationGroup;
 		savingId?: string | null;
 		deletingId?: string | null;
-		onsave: (id: string, note: string | null, color: string | null, expectedRevision: number | null) => void;
+		onsave: (id: string, note: string, color: string | null, expectedRevision: number | null) => void;
 		ondelete: (id: string, expectedRevision: number | null) => void;
 	} = $props();
 

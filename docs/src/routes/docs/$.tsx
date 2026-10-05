@@ -1,7 +1,6 @@
 import { createFileRoute, notFound } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import browserCollections from 'collections/browser'
-import Link from 'fumadocs-core/link'
 import { useFumadocsLoader } from 'fumadocs-core/source/client'
 import { DocsLayout } from 'fumadocs-ui/layouts/docs'
 import {
@@ -59,10 +58,10 @@ const clientLoader = browserCollections.docs.createClientLoader({
 	) {
 		return (
 			<>
-				<div className="inset-0 pointer-events-none absolute -z-10 h-full w-full overflow-x-clip">
-					<div className="top-0 xl:right-1/2 right-0 bg-amber-500/10 max-md:hidden w-5xl h-256 pointer-events-none absolute -z-10 translate-x-1/2 -translate-y-1/2 rounded-full [mask-image:var(--mask)] [--mask:radial-gradient(circle_at_center,red,transparent_69%)] [webkit-mask-image:var(--mask)]" />
-					<div className="top-0 xl:right-1/2 right-0 bg-amber-500/5 max-md:hidden w-5xl h-256 pointer-events-none fixed -z-10 translate-x-1/2 -translate-y-1/2 rounded-full [mask-image:var(--mask)] [--mask:radial-gradient(circle_at_center,red,transparent_69%)] [webkit-mask-image:var(--mask)]" />
-					<div className="top-0 xl:right-1/2 right-0 bg-dot-matrix-xl max-md:hidden w-5xl h-256 pointer-events-none absolute -z-10 translate-x-1/2 -translate-y-1/2 [mask-image:var(--mask)] [--mask:radial-gradient(circle_at_center_top,red,transparent)] [webkit-mask-image:var(--mask)] dark:opacity-80" />
+				<div className="pointer-events-none absolute inset-0 -z-10 h-full w-full overflow-x-clip">
+					<div className="pointer-events-none absolute top-0 right-0 -z-10 h-256 w-5xl translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-500/10 [mask-image:var(--mask)] [--mask:radial-gradient(circle_at_center,red,transparent_69%)] [webkit-mask-image:var(--mask)] max-md:hidden xl:right-1/2" />
+					<div className="pointer-events-none fixed top-0 right-0 -z-10 h-256 w-5xl translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-500/5 [mask-image:var(--mask)] [--mask:radial-gradient(circle_at_center,red,transparent_69%)] [webkit-mask-image:var(--mask)] max-md:hidden xl:right-1/2" />
+					<div className="bg-dot-matrix-xl pointer-events-none absolute top-0 right-0 -z-10 h-256 w-5xl translate-x-1/2 -translate-y-1/2 [mask-image:var(--mask)] [--mask:radial-gradient(circle_at_center_top,red,transparent)] [webkit-mask-image:var(--mask)] max-md:hidden xl:right-1/2 dark:opacity-80" />
 				</div>
 
 				<DocsPage
@@ -72,7 +71,7 @@ const clientLoader = browserCollections.docs.createClientLoader({
 					}}
 				>
 					{lastModified && (
-						<p className="text-sm text-fd-muted-foreground -mb-4">
+						<p className="-mb-4 text-sm text-fd-muted-foreground">
 							Last updated on{' '}
 							{Intl.DateTimeFormat('en-US', { dateStyle: 'long' }).format(new Date(lastModified))}
 						</p>
@@ -82,12 +81,10 @@ const clientLoader = browserCollections.docs.createClientLoader({
 							<DocsTitle>{frontmatter.title}</DocsTitle>
 							<DocsDescription>{frontmatter.description}</DocsDescription>
 						</div>
-						<div className="gap-2 flex items-center">
-							<Link
-								href={`https://github.com/${gitConfig.user}/${gitConfig.repo}/blob/${gitConfig.branch}/content/docs/${path}`}
-							>
-								<EditOnGitHub />
-							</Link>
+						<div className="flex items-center gap-2">
+							<EditOnGitHub
+								href={`https://github.com/${gitConfig.user}/${gitConfig.repo}/blob/${gitConfig.branch}/docs/content/docs/${path}`}
+							/>
 						</div>
 					</div>
 					<DocsBody>
@@ -100,11 +97,11 @@ const clientLoader = browserCollections.docs.createClientLoader({
 })
 
 function Page() {
-	const { path, pageTree, markdownUrl } = useFumadocsLoader(Route.useLoaderData())
+	const { path, pageTree, markdownUrl, lastModified } = useFumadocsLoader(Route.useLoaderData())
 
 	return (
 		<DocsLayout {...baseOptions()} tree={pageTree}>
-			<Suspense>{clientLoader.useContent(path, { markdownUrl, path })}</Suspense>
+			<Suspense>{clientLoader.useContent(path, { markdownUrl, path, lastModified })}</Suspense>
 		</DocsLayout>
 	)
 }
